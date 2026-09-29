@@ -530,19 +530,25 @@ func readSkillResource(dir, rel string) ([]byte, error) {
 	if err := checkReadable(st, rel, skillResourceMaxBytes); err != nil {
 		return nil, err
 	}
-	f, err := root.Open(name)
+	return readChecked(func(flag int) (*os.File, error) {
+		return root.OpenFile(name, flag, 0)
+	}, st, rel)
+}
+
+// readChecked opens a file through open and reads it whole, provided it is
+// still the file described by st.
+//
+// Between the stat and the open the path can be replaced, by a symbolic link
+// that the open follows or by a named pipe. Comparing the opened file against
+// the checked one refuses either substitute instead of reading it. The open is
+// non-blocking, since opening a named pipe for reading otherwise blocks until
+// a writer appears, and the comparison would never run.
+func readChecked(open func(flag int) (*os.File, error), st os.FileInfo, name string) ([]byte, error) {
+	f, err := open(os.O_RDONLY | openNonblock)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
-	return readChecked(f, st, rel)
-}
-
-// readChecked reads f whole, provided it is still the file described by st.
-// Between the stat and the open the path can be replaced, including by a
-// symbolic link that the open follows; comparing the opened file against the
-// checked one refuses the substitute instead of reading it.
-func readChecked(f *os.File, st os.FileInfo, name string) ([]byte, error) {
 	opened, err := f.Stat()
 	if err != nil {
 		return nil, err
@@ -765,12 +771,9 @@ func readSkillFile(p string) ([]byte, error) {
 	if err := checkReadable(fi, p, skillMaxBytes); err != nil {
 		return nil, err
 	}
-	f, err := os.Open(p)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	return readChecked(f, fi, p)
+	return readChecked(func(flag int) (*os.File, error) {
+		return os.OpenFile(p, flag, 0)
+	}, fi, p)
 }
 
 // validSkillName reports whether name meets the Agent Skills naming rules:

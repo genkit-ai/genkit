@@ -94,6 +94,33 @@ func TestSkillsResourceReadRefusesFifo(t *testing.T) {
 	}
 }
 
+// A named pipe swapped in after the type check must be refused, not opened
+// with a read that waits forever for a writer.
+func TestReadCheckedRefusesSwappedFifo(t *testing.T) {
+	dir := t.TempDir()
+	checked := filepath.Join(dir, "checked")
+	if err := os.WriteFile(checked, []byte("text"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	st, err := os.Lstat(checked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pipe := filepath.Join(dir, "pipe")
+	if err := syscall.Mkfifo(pipe, 0o644); err != nil {
+		t.Skipf("cannot create a FIFO here: %v", err)
+	}
+
+	if err := mustNotBlock(t, "readChecked", func() error {
+		_, err := readChecked(func(flag int) (*os.File, error) {
+			return os.OpenFile(pipe, flag, 0)
+		}, st, checked)
+		return err
+	}); err == nil {
+		t.Error("readChecked read a named pipe in place of the file it checked")
+	}
+}
+
 // mustNotBlock runs fn in a goroutine and fails the test if it does not return
 // within the deadline. Opening a named pipe blocks forever, so a regression
 // here must fail rather than hang the suite.

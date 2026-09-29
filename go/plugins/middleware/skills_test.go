@@ -1128,13 +1128,8 @@ func TestReadCheckedRefusesSwappedFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f, err := os.Open(swapped)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-
-	if _, err := readChecked(f, st, checked); err == nil {
+	open := func(flag int) (*os.File, error) { return os.OpenFile(swapped, flag, 0) }
+	if _, err := readChecked(open, st, checked); err == nil {
 		t.Error("readChecked read a file other than the one it checked")
 	}
 }
