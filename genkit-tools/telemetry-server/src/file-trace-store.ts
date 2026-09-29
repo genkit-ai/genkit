@@ -403,9 +403,9 @@ export class Index {
     if (rootSpan?.displayName) {
       indexData['status'] = rootSpan.status?.code ?? 'UNKNOWN';
     }
-    if (rootSpan?.attributes?.['genkit:metadata:agent:sessionId']) {
-      indexData['sessionId'] =
-        `${rootSpan.attributes['genkit:metadata:agent:sessionId']}`;
+    const sessionId = rootSpan?.attributes?.['genkit:metadata:agent:sessionId'];
+    if (sessionId) {
+      indexData['sessionId'] = `${sessionId}`;
     }
 
     Object.keys(rootSpan?.attributes ?? {})
