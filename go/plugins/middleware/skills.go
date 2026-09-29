@@ -491,6 +491,9 @@ func (s *Skills) newReadSkillFileTool(info map[string]skillInfo, available strin
 				return "", err
 			}
 			rel := normalizeRel(in.FilePath)
+			if hiddenPath(rel) {
+				return "", fmt.Errorf("%s is not readable: skills expose no path with a segment starting with \".\"", rel)
+			}
 			data, err := readSkillResource(si.Dir, rel)
 			if err != nil {
 				return "", fmt.Errorf("read %q from skill %q: %w", rel, in.SkillName, err)
@@ -505,6 +508,20 @@ func (s *Skills) newReadSkillFileTool(info map[string]skillInfo, available strin
 			return string(data), nil
 		},
 	)
+}
+
+// hiddenPath reports whether any segment of the slash-separated path rel
+// starts with ".". The resource listing leaves such entries out, and the reader
+// refuses them to match: a skill installed with git clone carries .git/config,
+// whose remote URL can hold a token, and os.Root does not help because the
+// file is inside the root.
+func hiddenPath(rel string) bool {
+	for seg := range strings.SplitSeq(rel, "/") {
+		if strings.HasPrefix(seg, ".") {
+			return true
+		}
+	}
+	return false
 }
 
 // readSkillResource reads one bundled file, confined to dir by [os.Root],

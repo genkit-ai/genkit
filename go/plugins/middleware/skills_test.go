@@ -1029,6 +1029,38 @@ func TestSkillsResourceReadIsConfinedToSkillDirectory(t *testing.T) {
 	}
 }
 
+// A skill installed with git clone carries .git/config, whose remote URL can
+// hold a token. The listing leaves dot-prefixed entries out, and the reader
+// must refuse them to match, since os.Root allows anything inside the root.
+func TestSkillsResourceReadRefusesHiddenPaths(t *testing.T) {
+	skillsDir := setupSkillsDir(t)
+	python := filepath.Join(skillsDir, "python")
+	for rel, body := range map[string]string{
+		".git/config":        "url = https://token@example.com/repo",
+		".env":               "API_KEY=secret",
+		"references/.secret": "secret",
+	} {
+		p := filepath.Join(python, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	h := mustHooks(t, &Skills{SkillPaths: []string{skillsDir}, AllowResourceAccess: true})
+	read := findTool(h, SkillResourceToolName)
+	r := newTestRegistry(t)
+	read.Register(r)
+
+	for _, bad := range []string{".git/config", ".env", "references/.secret", "references/../.env"} {
+		if got, err := read.RunRaw(ctx, map[string]any{"skillName": "python", "filePath": bad}); err == nil {
+			t.Errorf("reading %q = %q, want it refused", bad, got)
+		}
+	}
+}
+
 // node_modules sorts before references/ and scripts/, so listing it would fill
 // the cap with dependencies and hide the files the author wrote.
 func TestSkillsResourceListingSkipsNodeModules(t *testing.T) {
