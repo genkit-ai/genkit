@@ -22,21 +22,22 @@ non-recording spans / no-op instruments and the provider is inert.
 ## Installation
 
 ```bash
-npm i @genkit-ai/otel
+npm i @genkit-ai/otel @opentelemetry/sdk-node
 ```
 
 ## Usage
 
 ```ts
 import { NodeSDK } from '@opentelemetry/sdk-node';
-import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-proto';
 import { genkit } from 'genkit';
 import { configureInstrumentation } from 'genkit/tracing';
 import { googleAI } from '@genkit-ai/google-genai';
 import { GenAiInstrumentation } from '@genkit-ai/otel';
 
-// 1. The app owns the OTel SDK.
-const sdk = new NodeSDK({ traceExporter: new OTLPTraceExporter() });
+// 1. The app owns the OTel SDK. With no arguments it configures exporters
+//    from the standard OTEL_* env vars (endpoint, protocol), so it works
+//    against a local collector and under `genkit start --use-otel`.
+const sdk = new NodeSDK();
 sdk.start();
 
 // 2. Route Genkit telemetry through the GenAI provider. It composes with the
@@ -51,6 +52,14 @@ const { text } = await ai.generate({
 });
 console.log(text);
 ```
+
+## Compatibility
+
+`configureInstrumentation(...)` replaces Genkit's default OpenTelemetry
+instrumentation. `enableGoogleCloudTelemetry()` and `enableFirebaseTelemetry()`
+depend on that default (they read `genkit:*` span attributes), so don't combine
+them with `GenAiInstrumentation`. Their `genkit/*` metrics and logs would stop
+without an error.
 
 ## Options
 
@@ -82,7 +91,8 @@ When `contentCapturingMode` is omitted, the env var
 names); an explicit option overrides the env var. Content and raw IO may
 contain PII, so both are opt-in.
 
-> [!NOTE] > `EVENT_ONLY` emits content on the OpenTelemetry **logs** signal (a
+> [!NOTE]
+> `EVENT_ONLY` emits content on the OpenTelemetry **logs** signal (a
 > `gen_ai.client.inference.operation.details` log record), not on the span.
 > Trace-only backends like Jaeger cannot display it: the GenAI tab reads span
 > attributes, and the "Trace Logs" tab reads span events, neither of which is

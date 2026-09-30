@@ -1,7 +1,8 @@
 # Genkit + OpenTelemetry GenAI sample
 
 A minimal Genkit app wired to `@genkit-ai/otel`, which emits OpenTelemetry
-GenAI semantic-convention traces and metrics.
+GenAI semantic-convention traces and metrics. It defines a `weatherFlow` that
+calls the model with a `getWeather` tool.
 
 ## Run
 
@@ -13,8 +14,18 @@ export GEMINI_API_KEY=...
 # Optional, defaults to http://localhost:4318:
 # export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
 
-pnpm dev
+pnpm genkit:dev
 ```
+
+Then run `weatherFlow` from the Developer UI, or from another terminal:
+
+```bash
+genkit flow:run weatherFlow '"Paris"'
+```
+
+To preview what the OTel pipeline emits in the Developer UI itself (instead of
+an external collector), start with `genkit start --use-otel -- npx tsx --watch
+src/index.ts`.
 
 ## Local telemetry stack
 
@@ -30,17 +41,18 @@ It listens for OTLP on `http://localhost:4318` (http) and `localhost:4317`
 (grpc), forwards traces to Jaeger, and debug-logs metrics/logs to
 `.otel/collector.log`. Leave it running, then start the sample.
 
-Open http://localhost:16686 and look for `chat gemini-flash-latest` client
-spans carrying `gen_ai.*` attributes. Metrics
+Open http://localhost:16686 and look for `weatherFlow` traces. Metrics
 (`gen_ai.client.token.usage`, `gen_ai.client.operation.duration`) show up in
 the collector log (`tail -f .otel/collector.log`).
 
 ## What to expect
 
-- A `chat gemini-flash-latest` CLIENT span with `gen_ai.request.*` config and
-  `gen_ai.usage.*` token attributes.
-- `execute_tool <name>` spans if the model calls tools (this sample enables
-  `emitToolSpans`).
+- A `weatherFlow` span tagged `genkit.action.type=flow`.
+- `chat gemini-flash-latest` CLIENT spans (one per model turn) with
+  `gen_ai.request.*` config and `gen_ai.usage.*` token attributes. The first
+  turn reports `gen_ai.response.finish_reasons: ["tool_calls"]`.
+- An `execute_tool getWeather` span between the model turns (this sample
+  enables `emitToolSpans`).
 - The two GenAI client metrics per model call.
 - This sample uses `contentCapturingMode: 'SPAN_ONLY'`, so
   `gen_ai.input.messages` / `gen_ai.output.messages` land on the span (may
@@ -49,7 +61,7 @@ the collector log (`tail -f .otel/collector.log`).
 > [!NOTE]
 > Switching to `EVENT_ONLY` moves content to the OpenTelemetry logs signal, so
 > it no longer appears in Jaeger (neither the GenAI tab nor "Trace Logs"). The
-> collector still logs it via its debug exporter, so `tail -f
-.otel/collector.log` to see the `gen_ai.client.inference.operation.details`
-> record. Use `SPAN_ONLY` or `SPAN_AND_EVENT` to keep content visible in
-> Jaeger.
+> collector still logs it via its debug exporter, so run
+> `tail -f .otel/collector.log` to see the
+> `gen_ai.client.inference.operation.details` record. Use `SPAN_ONLY` or
+> `SPAN_AND_EVENT` to keep content visible in Jaeger.

@@ -15,6 +15,7 @@
  */
 
 import {
+  isSpanContextValid,
   metrics,
   SpanKind,
   SpanStatusCode,
@@ -499,16 +500,20 @@ export class GenAiInstrumentation implements Instrumentation {
   }
 
   /**
-   * Warns once if the SDK isn't collecting. When no TracerProvider is
-   * registered, `@opentelemetry/api` returns a non-recording span, so all
+   * Warns once if no SDK is registered. Without a TracerProvider,
+   * `@opentelemetry/api` returns a dummy span with all-zero ids and all
    * telemetry is silently dropped; surface that instead of failing quietly.
+   * Checks id validity rather than `isRecording()`: a span the sampler skipped
+   * is also non-recording but keeps real ids, and that isn't a missing SDK.
    */
   private maybeWarnNotRecording(span: Span): void {
-    if (span.isRecording() || this.warnedNotRecording) return;
+    if (isSpanContextValid(span.spanContext()) || this.warnedNotRecording) {
+      return;
+    }
     this.warnedNotRecording = true;
     logger.warn(
       'GenAiInstrumentation is configured but no OpenTelemetry SDK is ' +
-        'recording, so GenAI telemetry will not be exported. Initialize the ' +
+        'registered, so GenAI telemetry will not be exported. Initialize the ' +
         'OTel SDK (e.g. @opentelemetry/sdk-node) before constructing Genkit.'
     );
   }

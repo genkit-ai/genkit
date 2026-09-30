@@ -80,6 +80,11 @@ describe('mapFinishReason', () => {
     assert.strictEqual(mapFinishReason('other', true), 'error');
     assert.strictEqual(mapFinishReason(undefined, true), 'error');
   });
+
+  it('maps failed/aborted to error even when the call did not throw', () => {
+    assert.strictEqual(mapFinishReason('failed', false), 'error');
+    assert.strictEqual(mapFinishReason('aborted', false), 'error');
+  });
 });
 
 describe('parseContentCapturingMode', () => {

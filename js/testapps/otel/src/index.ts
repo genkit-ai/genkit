@@ -17,7 +17,7 @@
 import { googleAI } from '@genkit-ai/google-genai';
 import { GenAiInstrumentation } from '@genkit-ai/otel';
 import { NodeSDK } from '@opentelemetry/sdk-node';
-import { genkit } from 'genkit';
+import { genkit, z } from 'genkit';
 import { configureInstrumentation } from 'genkit/tracing';
 
 // The application owns the OTel SDK. With no arguments NodeSDK configures
@@ -40,17 +40,41 @@ configureInstrumentation(
 
 const ai = genkit({ plugins: [googleAI()] });
 
-async function main() {
-  const { text } = await ai.generate({
-    model: googleAI.model('gemini-flash-latest'),
-    prompt: 'Explain OpenTelemetry in one sentence.',
+// With emitToolSpans enabled, each call becomes an `execute_tool getWeather`
+// span nested under the flow.
+const getWeather = ai.defineTool(
+  {
+    name: 'getWeather',
+    description: 'Gets the current weather for a city.',
+    inputSchema: z.object({ city: z.string() }),
+    outputSchema: z.string(),
+  },
+  async ({ city }) => `It is 21C and sunny in ${city}.`
+);
+
+// Produces a flow span with `chat gemini-flash-latest` client spans (one per
+// model turn) and the tool span in between.
+export const weatherFlow = ai.defineFlow(
+  {
+    name: 'weatherFlow',
+    inputSchema: z.string().default('Paris'),
+    outputSchema: z.string(),
+  },
+  async (city) => {
+    const { text } = await ai.generate({
+      model: googleAI.model('gemini-flash-latest'),
+      prompt: `What's the weather in ${city}? Answer in one sentence.`,
+      tools: [getWeather],
+    });
+    return text;
+  }
+);
+
+// Best-effort flush on exit. Genkit registers its own SIGTERM/SIGINT handler
+// that calls process.exit, so this can lose the race; the batch span processor
+// exports periodically anyway, so at most the last few seconds are dropped.
+for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+  process.once(signal, () => {
+    sdk.shutdown().catch((e) => console.error('OTel SDK shutdown failed', e));
   });
-  console.log(text);
-
-  // Flush and shut down so spans and metrics reach the collector.
-  await sdk.shutdown();
 }
-
-main().catch((e) => {
-  console.error(e);
-});
