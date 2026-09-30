@@ -29,6 +29,7 @@ from genkit._core._model import (
     ModelRef,
     ModelRequest,
     ModelUsage,
+    OutputConfig,
 )
 from genkit._core._typing import (
     Constrained,
@@ -47,6 +48,7 @@ __all__ = [
     'BackgroundAction',
     'GenerateActionOptions',
     'ModelRequest',
+    'OutputConfig',
     # Usage and metadata
     'ModelUsage',
     'Candidate',

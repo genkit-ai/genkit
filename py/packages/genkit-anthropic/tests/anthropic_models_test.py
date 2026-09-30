@@ -28,8 +28,7 @@ from genkit_anthropic.utils import maybe_strip_fences, strip_markdown_fences
 from pydantic import ValidationError
 
 from genkit import FinishReason, Message, ModelResponseChunk, Part, Role
-from genkit._core._model import OutputConfig
-from genkit.model import Constrained, ModelConfig, ModelInfo, ModelRequest, Supports, ToolDefinition
+from genkit.model import Constrained, ModelConfig, ModelInfo, ModelRequest, OutputConfig, Supports, ToolDefinition
 
 
 def _create_sample_request() -> ModelRequest:

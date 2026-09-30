@@ -51,8 +51,7 @@ from pydantic import BaseModel, Field
 from pytest_mock import MockerFixture
 
 from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, Part, Role
-from genkit._core._model import OutputConfig
-from genkit.model import Constrained, ModelInfo, ModelRequest, Supports, ToolDefinition
+from genkit.model import Constrained, ModelInfo, ModelRequest, OutputConfig, Supports, ToolDefinition
 from genkit.plugin_api import to_json_schema
 
 ALL_VERSIONS = list(GoogleAIGeminiVersion) + list(VertexAIGeminiVersion)

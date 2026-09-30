@@ -73,6 +73,8 @@
 
 ::: genkit.model.ModelRequest
 
+::: genkit.model.OutputConfig
+
 ::: genkit.model.ModelUsage
 
 ::: genkit.model.Candidate

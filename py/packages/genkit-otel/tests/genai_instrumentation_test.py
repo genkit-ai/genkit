@@ -30,8 +30,7 @@ from opentelemetry._logs import LogRecord
 from opentelemetry.trace import StatusCode
 
 from genkit import FinishReason, Interrupt, Message, ModelResponse, Part, Role
-from genkit._core._model import OutputConfig
-from genkit.model import Candidate, ModelRequest, ModelUsage
+from genkit.model import Candidate, ModelRequest, ModelUsage, OutputConfig
 from genkit.telemetry import SpanMetadata, SpanNext
 
 
