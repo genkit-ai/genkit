@@ -44,7 +44,7 @@ def sample_request() -> ModelRequest:
             top_p=0.9,
             temperature=0.7,
             stop=['stop'],
-            max_tokens=100,
+            max_completion_tokens=100,
         ),
     )
 

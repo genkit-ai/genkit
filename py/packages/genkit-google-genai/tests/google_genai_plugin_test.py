@@ -51,7 +51,7 @@ from genkit_google_genai.models.gemini import (
 from genkit_google_genai.models.imagen import ImagenConfigSchema
 from genkit_google_genai.models.veo import VeoConfig, VeoModel
 
-from genkit import Genkit, GenkitError, Message, Operation, Part, Role
+from genkit import BaseDataPoint, Genkit, GenkitError, Message, Operation, Part, Role
 from genkit.model import ModelRequest
 from genkit.plugin_api import Action, ActionKind, to_json_schema
 
@@ -134,6 +134,35 @@ def test_vertexai_initialization_from_env() -> None:
         with patch('genkit_google_genai.google.genai.client.Client'):
             plugin = VertexAI()
             assert plugin.name == 'vertexai'
+
+
+@patch('genkit_google_genai.google.genai.client.Client')
+@patch('genkit_google_genai.google._list_genai_models')
+@pytest.mark.asyncio
+async def test_vertexai_with_api_key_and_no_project_starts(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
+    """VertexAI(api_key=...) with no project starts; init() does not raise."""
+    mock_list_models.return_value = GenaiModels()
+    with patch.dict(os.environ, {'GCLOUD_PROJECT': '', 'GOOGLE_CLOUD_PROJECT': ''}):
+        plugin = VertexAI(api_key='k')
+        Genkit(plugins=[plugin])
+        await plugin.init()
+
+
+@patch('genkit_google_genai.google.genai.client.Client')
+@patch('genkit_google_genai.google._list_genai_models')
+@pytest.mark.asyncio
+async def test_vertexai_with_api_key_and_no_project_evaluate_says_evaluator_not_found(
+    mock_list_models: MagicMock, mock_client: MagicMock
+) -> None:
+    """The same app does not register Vertex evaluators; evaluate says not found."""
+    mock_list_models.return_value = GenaiModels()
+    with patch.dict(os.environ, {'GCLOUD_PROJECT': '', 'GOOGLE_CLOUD_PROJECT': ''}):
+        ai = Genkit(plugins=[VertexAI(api_key='k')])
+        with pytest.raises(ValueError, match='Evaluator "vertexai/fluency" not found'):
+            await ai.evaluate(
+                evaluator='vertexai/fluency',
+                dataset=[BaseDataPoint(input='hi', output='hello')],
+            )
 
 
 @patch('genkit_google_genai.google.genai.client.Client')
