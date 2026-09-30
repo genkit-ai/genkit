@@ -33,7 +33,7 @@ var testTelemetryClient = tracing.NewTestOnlyTelemetryClient()
 // TestMain routes the package's spans through a Direct instrumentation over
 // testTelemetryClient. Tests that inspect traces use captureTraces instead.
 func TestMain(m *testing.M) {
-	tracing.ConfigureInstrumentation(
+	tracing.SetInstrumentation(
 		tracing.NewDirectTelemetryInstrumentation(testTelemetryClient))
 	os.Exit(m.Run())
 }
@@ -44,9 +44,9 @@ func TestMain(m *testing.M) {
 func captureTraces(t *testing.T) *tracing.TestOnlyTelemetryClient {
 	t.Helper()
 	client := tracing.NewTestOnlyTelemetryClient()
-	tracing.ConfigureInstrumentation(tracing.NewDirectTelemetryInstrumentation(client))
+	tracing.SetInstrumentation(tracing.NewDirectTelemetryInstrumentation(client))
 	t.Cleanup(func() {
-		tracing.ConfigureInstrumentation(
+		tracing.SetInstrumentation(
 			tracing.NewDirectTelemetryInstrumentation(testTelemetryClient))
 	})
 	return client

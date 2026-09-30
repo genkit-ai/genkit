@@ -24,6 +24,7 @@ import (
 	"log/slog"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/firebase/genkit/go/internal/base"
@@ -46,7 +47,9 @@ const maxInFlightStartExports = 16
 // In dev it is prepended to the chain when a telemetry server is configured.
 // One built with a nil client mints ids but exports nothing.
 type DirectTelemetryInstrumentation struct {
-	client TelemetryClient
+	// client is swapped in place when the dev telemetry server moves, so the
+	// instance (and with it parentage of spans still open) survives.
+	client atomic.Pointer[clientBox]
 	// parentKey is per instance: two Direct providers in one chain (the dev
 	// one plus a user-configured one) each track their own parentage and must
 	// not read each other's span ids.
@@ -55,20 +58,48 @@ type DirectTelemetryInstrumentation struct {
 	startSlots chan struct{}
 }
 
+// clientBox lets an interface value live in an atomic.Pointer.
+type clientBox struct {
+	c   TelemetryClient
+	url string // set for URL-built clients, so a repeated URL is a no-op
+}
+
 // NewDirectTelemetryInstrumentation returns a Direct provider that exports to
 // client. Useful for wiring a custom or in-memory [TelemetryClient] (e.g. in
-// tests via [ConfigureInstrumentation]); the dev wiring uses the URL-based
-// constructor.
+// tests via [SetInstrumentation]); the dev wiring is URL-based and internal.
 func NewDirectTelemetryInstrumentation(client TelemetryClient) *DirectTelemetryInstrumentation {
-	return &DirectTelemetryInstrumentation{
-		client:     client,
+	d := &DirectTelemetryInstrumentation{
 		parentKey:  base.NewContextKey[*directParent](),
 		startSlots: make(chan struct{}, maxInFlightStartExports),
 	}
+	if client != nil {
+		d.client.Store(&clientBox{c: client})
+	}
+	return d
 }
 
 func newDirectTelemetryInstrumentation(url string) *DirectTelemetryInstrumentation {
-	return NewDirectTelemetryInstrumentation(NewHTTPTelemetryClient(url))
+	d := NewDirectTelemetryInstrumentation(nil)
+	d.retarget(url)
+	return d
+}
+
+// retarget points the instance at the telemetry server at url, keeping the
+// instance itself. A url equal to the current one is a no-op.
+func (d *DirectTelemetryInstrumentation) retarget(url string) {
+	if cur := d.client.Load(); cur != nil && cur.url == url {
+		return
+	}
+	d.client.Store(&clientBox{c: NewHTTPTelemetryClient(url), url: url})
+}
+
+// currentClient returns the client to export to, or nil when exporting is off.
+// Read per export so a span that straddles a retarget ends on the new server.
+func (d *DirectTelemetryInstrumentation) currentClient() TelemetryClient {
+	if b := d.client.Load(); b != nil {
+		return b.c
+	}
+	return nil
 }
 
 // directParent carries the enclosing Direct span's ids down the context, so
@@ -80,6 +111,11 @@ type directParent struct {
 
 // directSpan is the Span handle over a Direct span.
 type directSpan struct {
+	d      *DirectTelemetryInstrumentation
+	info   *SpanInfo
+	parent *directParent
+	start  time.Time
+
 	traceID string
 	spanID  string
 	// startDone is closed when the start save finishes; nil when none was
@@ -105,47 +141,51 @@ func (s *directSpan) SetMetadata(md map[string]string) {
 	}
 }
 
-// RunInNewSpan mints ids, runs next, then builds and exports the span. It
-// exports on start too (as in progress) when realtime export is active, so a
-// long-lived root span shows up in the Dev UI before it closes.
-func (d *DirectTelemetryInstrumentation) RunInNewSpan(ctx context.Context, info *SpanInfo, next NextFunc) (out any, err error) {
+// End builds and exports the completed span. The dispatcher calls it from a
+// defer, so a panicking run still leaves the span finalized in the Dev UI
+// rather than stuck "in progress".
+func (s *directSpan) End(res *SpanResult) {
+	if client := s.d.currentClient(); client != nil {
+		s.d.exportEnd(client, s, time.Now(), res.Err())
+	}
+}
+
+// StartSpan mints ids (continuing the parent's trace) and, when realtime
+// export is active, exports the span as in progress so a long-lived root span
+// shows up in the Dev UI before it closes.
+func (d *DirectTelemetryInstrumentation) StartSpan(ctx context.Context, info *SpanInfo) (context.Context, Span) {
 	parent := d.parentKey.FromContext(ctx)
-	traceID := genID(16)
+	var traceID string
 	if parent != nil {
 		traceID = parent.traceID
+	} else {
+		traceID = genID(16)
 	}
-	spanID := genID(8)
-	span := &directSpan{traceID: traceID, spanID: spanID}
-
-	start := time.Now()
-	if d.client != nil && realtimeTelemetryEnabled() {
-		d.exportStart(info, span, parent, start)
+	span := &directSpan{
+		d:       d,
+		info:    info,
+		parent:  parent,
+		start:   time.Now(),
+		traceID: traceID,
+		spanID:  genID(8),
 	}
-	// Deferred so a panic in next still finalizes the span, matching the OTel
-	// provider's defer span.End(); otherwise the Dev UI shows it stuck "in
-	// progress".
-	defer func() {
-		if d.client != nil {
-			d.exportEnd(info, span, parent, start, time.Now(), err)
-		}
-	}()
-
-	ctx = d.parentKey.NewContext(ctx, &directParent{traceID: traceID, spanID: spanID})
-	out, err = next(ctx, span)
-	return out, err
+	if client := d.currentClient(); client != nil && realtimeTelemetryEnabled() {
+		d.exportStart(client, span)
+	}
+	return d.parentKey.NewContext(ctx, &directParent{traceID: traceID, spanID: span.spanID}), span
 }
 
 // buildData wraps one span in a Data envelope. Only the root (parentless) span
 // sets the trace-level fields, and the trace EndTime stays unset until the root
 // ends.
-func (d *DirectTelemetryInstrumentation) buildData(info *SpanInfo, span *directSpan, parent *directParent, start, end time.Time, runErr error) *Data {
+func buildData(span *directSpan, end time.Time, runErr error) *Data {
 	td := &Data{
 		TraceID: span.traceID,
-		Spans:   map[string]*SpanData{span.spanID: d.buildSpan(info, span, parent, start, end, runErr)},
+		Spans:   map[string]*SpanData{span.spanID: buildSpan(span, end, runErr)},
 	}
-	if parent == nil {
-		td.DisplayName = info.metadata.Name
-		td.StartTime = ToMilliseconds(start)
+	if span.parent == nil {
+		td.DisplayName = span.info.spanMeta().Name
+		td.StartTime = ToMilliseconds(span.start)
 		if !end.IsZero() {
 			td.EndTime = ToMilliseconds(end)
 		}
@@ -156,14 +196,14 @@ func (d *DirectTelemetryInstrumentation) buildData(info *SpanInfo, span *directS
 // exportStart ships the span as in progress (endTime 0), asynchronously, so
 // span creation never blocks on telemetry I/O. The preview is best-effort: it
 // is skipped when too many start saves are already in flight.
-func (d *DirectTelemetryInstrumentation) exportStart(info *SpanInfo, span *directSpan, parent *directParent, start time.Time) {
+func (d *DirectTelemetryInstrumentation) exportStart(client TelemetryClient, span *directSpan) {
 	select {
 	case d.startSlots <- struct{}{}:
 	default:
 		return
 	}
 	// Built synchronously: the goroutine only gets a plain value.
-	td := d.buildData(info, span, parent, start, time.Time{}, nil)
+	td := buildData(span, time.Time{}, nil)
 	done := make(chan struct{})
 	span.startDone = done
 	go func() {
@@ -171,24 +211,24 @@ func (d *DirectTelemetryInstrumentation) exportStart(info *SpanInfo, span *direc
 			<-d.startSlots
 			close(done)
 		}()
-		if err := d.client.Save(context.Background(), td); err != nil {
+		if err := client.Save(context.Background(), td); err != nil {
 			reportTraceSaveError(err)
 		}
 	}()
 }
 
 // exportEnd ships the completed span synchronously, so it has been handed to
-// the client once the span returns. It first waits for the span's own start
+// the client once the span ends. It first waits for the span's own start
 // save: otherwise a slow start save could land last and overwrite the
 // completed span in a client that does not merge (the telemetry server does,
 // but TelemetryClient implementations need not). A fresh context is used
 // because the action context is often canceled by the time the span ends.
-func (d *DirectTelemetryInstrumentation) exportEnd(info *SpanInfo, span *directSpan, parent *directParent, start, end time.Time, runErr error) {
+func (d *DirectTelemetryInstrumentation) exportEnd(client TelemetryClient, span *directSpan, end time.Time, runErr error) {
 	if span.startDone != nil {
 		<-span.startDone
 	}
-	td := d.buildData(info, span, parent, start, end, runErr)
-	if err := d.client.Save(context.Background(), td); err != nil {
+	td := buildData(span, end, runErr)
+	if err := client.Save(context.Background(), td); err != nil {
 		reportTraceSaveError(err)
 	}
 }
@@ -196,16 +236,17 @@ func (d *DirectTelemetryInstrumentation) exportEnd(info *SpanInfo, span *directS
 // buildSpan encodes the span in the shape telemetryServerExporter.convertSpan
 // produces for an OTel span, so the Dev UI renders both the same. A zero end
 // leaves EndTime at 0, which the telemetry server treats as in progress.
-func (d *DirectTelemetryInstrumentation) buildSpan(info *SpanInfo, span *directSpan, parent *directParent, start, end time.Time, runErr error) *SpanData {
-	sm := info.metadata
+func buildSpan(span *directSpan, end time.Time, runErr error) *SpanData {
+	info := span.info
+	sm := info.spanMeta()
 	final := !end.IsZero()
 
 	// Layered in the order an OTel span accumulates them, later writes
 	// winning: labels at start, mid-run custom metadata, then the genkit
 	// attributes. So a label can never clobber a genkit key such as
 	// genkit:state. An in-progress span carries only what is known at start.
-	attrs := make(map[string]any, len(info.Labels)+10)
-	for k, v := range info.Labels {
+	attrs := make(map[string]any, len(info.labels)+10)
+	for k, v := range info.labels {
 		attrs[k] = v
 	}
 	if final {
@@ -223,7 +264,7 @@ func (d *DirectTelemetryInstrumentation) buildSpan(info *SpanInfo, span *directS
 	sd := &SpanData{
 		SpanID:                  span.spanID,
 		TraceID:                 span.traceID,
-		StartTime:               ToMilliseconds(start),
+		StartTime:               ToMilliseconds(span.start),
 		Attributes:              attrs,
 		DisplayName:             sm.Name,
 		InstrumentationScope:    InstrumentationScope{Name: "genkit-tracer", Version: "v1"},
@@ -233,8 +274,8 @@ func (d *DirectTelemetryInstrumentation) buildSpan(info *SpanInfo, span *directS
 	if final {
 		sd.EndTime = ToMilliseconds(end)
 	}
-	if parent != nil {
-		sd.ParentSpanID = parent.spanID
+	if span.parent != nil {
+		sd.ParentSpanID = span.parent.spanID
 	}
 	// On error, the status and exception event OTel's span.SetStatus and
 	// span.RecordError produce. runErr is only set on the end export.

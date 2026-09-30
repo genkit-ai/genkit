@@ -40,6 +40,7 @@ import (
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal/base"
 	"github.com/firebase/genkit/go/internal/registry"
+	"github.com/firebase/genkit/go/internal/tracingbridge"
 )
 
 // genkitCtxKey is the context key for the Genkit instance.
@@ -77,7 +78,7 @@ func configureLogging(reflectionOn bool) {
 		// configureTelemetry enables export at that point. Read once here,
 		// not per span.
 		url := os.Getenv("GENKIT_TELEMETRY_SERVER")
-		tracing.EnableDevInstrumentation(url)
+		tracingbridge.SetDevTelemetryServer(url)
 		tracing.EnableLogExport(url)
 	}
 }

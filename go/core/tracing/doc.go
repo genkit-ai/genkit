@@ -56,7 +56,23 @@ use the Google Cloud / Firebase plugins, which configure OpenTelemetry for you.
 
 Genkit reads whatever provider you register (otel.GetTracerProvider) to create
 its spans; when nothing is configured, spans carry no trace ids and are not
-exported.
+exported. To keep Genkit spans on a dedicated provider instead of the global
+one:
+
+	tracing.SetInstrumentation(&tracing.OTelInstrumentation{TracerProvider: tp})
+
+# Custom Instrumentation
+
+[SetInstrumentation] replaces the OpenTelemetry default with one or more
+[Instrumentation] providers. A provider starts a backend span in
+[Instrumentation.StartSpan] and finalizes it in [Span.End]; Genkit runs the
+operation itself, so a provider cannot skip or alter it. List
+[OTelInstrumentation] alongside your own provider to keep OpenTelemetry:
+
+	tracing.SetInstrumentation(&tracing.OTelInstrumentation{}, myProvider)
+
+Annotate the running span from any provider-agnostic code with
+[SetSpanMetadata].
 
 # Dev UI Integration
 

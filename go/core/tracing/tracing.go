@@ -208,84 +208,95 @@ func RunInNewSpan[I, O any](
 		}
 	}
 
-	info := &SpanInfo{Labels: metadata.TelemetryLabels, metadata: sm}
+	info := &SpanInfo{labels: metadata.TelemetryLabels, metadata: sm}
 
-	// runBody is the center of the instrumentation chain: it runs the caller's
-	// f under the new span's context and records Genkit's success/error
-	// bookkeeping (state, output, failure source). Providers finalize their
-	// backend spans around it. All backend-independent semantics stay here so
-	// providers only encode.
-	var output O
-	runBody := func(ctx context.Context, span Span) (any, error) {
-		sm.TraceInfo = span.TraceInfo()
-		if sm.TraceInfo.TraceID == "" {
-			// No provider tracks ids (e.g. only OTel over its no-op provider).
-			// Framework mechanics still key off them: the reflection server's
-			// cancel registry and trace headers, log correlation, and error
-			// details. So mint Genkit-local ids, continuing the parent's trace.
-			sm.TraceInfo = fallbackTraceInfo(parentSM)
+	// The dispatcher owns the run: providers only start spans, f runs exactly
+	// once here, and every started span is ended by this defer with the same
+	// result, including when f (or a provider) panics. All backend-independent
+	// semantics (state, output, failure source) stay here so providers only
+	// encode.
+	chain := activeInstrumentations()
+	spans := make([]Span, 0, len(chain))
+	res := &SpanResult{}
+	defer func() {
+		r := recover()
+		if r != nil {
+			res.err = panicError(r)
+			sm.State = spanStateError
+			sm.Error = res.err.Error()
+			sm.IsFailureSource = true
 		}
-
-		// Fire the telemetry callback the moment ids are known.
-		if cb := telemetryCallback(ctx); cb != nil {
-			cb(sm.TraceInfo.TraceID, sm.TraceInfo.SpanID)
+		endSpans(spans, res)
+		if r != nil {
+			panic(r)
 		}
+	}()
+	ctx = startSpans(ctx, chain, info, &spans)
+	handle := handleFor(spans)
 
-		ctx = spanMetaKey.NewContext(ctx, sm)
-		// Expose the composite span so SetCustomMetadataAttributes can fan
-		// mid-run metadata out to every active provider.
-		ctx = currentSpanKey.NewContext(ctx, span)
+	sm.TraceInfo = handle.TraceInfo()
+	if sm.TraceInfo.TraceID == "" {
+		// No provider tracks ids (e.g. only OTel over its no-op provider).
+		// Framework mechanics still key off them: the reflection server's
+		// cancel registry and trace headers, log correlation, and error
+		// details. So mint Genkit-local ids, continuing the parent's trace.
+		sm.TraceInfo = fallbackTraceInfo(parentSM)
+	}
 
-		// These logs run under the new span's context, so they land on this
-		// span in the Dev UI. The deferred one fires while the span is still
-		// recording. This is the hottest path in the framework, so the log
-		// arguments are only built when some handler accepts debug records
-		// (the console at GENKIT_LOG_LEVEL=debug, or the Dev UI export sink).
-		start := time.Now()
-		logDebug := logger.FromContext(ctx).Enabled(ctx, slog.LevelDebug)
-		if logDebug {
-			startArgs := []any{"name", metadata.Name}
-			if metadata.Type != "" {
-				startArgs = append(startArgs, "type", metadata.Type)
-			}
-			if metadata.Subtype != "" {
-				startArgs = append(startArgs, "subtype", metadata.Subtype)
-			}
-			logger.Debug(ctx, "span started", startArgs...)
+	// Fire the telemetry callback the moment ids are known.
+	if cb := telemetryCallback(ctx); cb != nil {
+		cb(sm.TraceInfo.TraceID, sm.TraceInfo.SpanID)
+	}
+
+	ctx = spanMetaKey.NewContext(ctx, sm)
+	// Expose the span handle so SetSpanMetadata can fan mid-run metadata out
+	// to every active provider.
+	ctx = currentSpanKey.NewContext(ctx, handle)
+
+	// These logs run under the new span's context, so they land on this span
+	// in the Dev UI. The deferred one is registered after the span-ending
+	// defer, so it fires first, while the span is still open. This is the
+	// hottest path in the framework, so the log arguments are only built when
+	// some handler accepts debug records (the console at
+	// GENKIT_LOG_LEVEL=debug, or the Dev UI export sink).
+	start := time.Now()
+	logDebug := logger.FromContext(ctx).Enabled(ctx, slog.LevelDebug)
+	if logDebug {
+		startArgs := []any{"name", metadata.Name}
+		if metadata.Type != "" {
+			startArgs = append(startArgs, "type", metadata.Type)
 		}
+		if metadata.Subtype != "" {
+			startArgs = append(startArgs, "subtype", metadata.Subtype)
+		}
+		logger.Debug(ctx, "span started", startArgs...)
 		defer func() {
-			if !logDebug {
-				return
-			}
 			endArgs := []any{"name", metadata.Name, "state", string(sm.State), "duration", time.Since(start).Round(time.Millisecond)}
 			if sm.Error != "" {
 				endArgs = append(endArgs, "error", sm.Error)
 			}
 			logger.Debug(ctx, "span finished", endArgs...)
 		}()
-
-		var err error
-		output, err = f(ctx, input)
-		if err != nil {
-			sm.State = spanStateError
-			sm.Error = err.Error()
-			sm.IsFailureSource = true
-			// A failure can still carry a result: the generate loop returns the
-			// conversation it completed alongside its error. Record it so the
-			// span shows what the call produced and not only that it stopped.
-			// Guarded, because a function that returns nothing on error would
-			// otherwise stamp a null output on every failing span.
-			if !base.IsNil(output) {
-				sm.Output = output
-			}
-		} else {
-			sm.State = spanStateSuccess
-			sm.Output = output
-		}
-		return output, err
 	}
 
-	_, err := dispatch(ctx, activeInstrumentations(), info, runBody)
+	output, err := f(ctx, input)
+	if err != nil {
+		sm.State = spanStateError
+		sm.Error = err.Error()
+		sm.IsFailureSource = true
+		// A failure can still carry a result: the generate loop returns the
+		// conversation it completed alongside its error. Record it so the
+		// span shows what the call produced and not only that it stopped.
+		// Guarded, because a function that returns nothing on error would
+		// otherwise stamp a null output on every failing span.
+		if !base.IsNil(output) {
+			sm.Output = output
+		}
+	} else {
+		sm.State = spanStateSuccess
+		sm.Output = output
+	}
+	res.output, res.err = output, err
 	return output, err
 }
 
@@ -483,9 +494,9 @@ func (sm *spanMetadata) inputAttributes() []attribute.KeyValue {
 // spanMetaKey is for storing spanMetadatas in a context.
 var spanMetaKey = base.NewContextKey[*spanMetadata]()
 
-// currentSpanKey holds the composite Span of the running RunInNewSpan, so
-// SetCustomMetadataAttributes can reach it.
-var currentSpanKey = base.NewContextKey[Span]()
+// currentSpanKey holds the span handle of the running RunInNewSpan, so
+// SetSpanMetadata can reach it.
+var currentSpanKey = base.NewContextKey[spanHandle]()
 
 // telemetryCbKey is the context key for telemetry callbacks.
 var telemetryCbKey = base.NewContextKey[func(traceID, spanID string)]()
@@ -530,12 +541,12 @@ func SpanTraceInfo(ctx context.Context) TraceInfo {
 	return TraceInfo{}
 }
 
-// SetCustomMetadataAttributes records custom metadata on the current span,
-// fanning out to every active instrumentation provider. Each entry is stored as
-// a genkit:metadata:<key> span attribute. It is a no-op when called outside a
+// SetSpanMetadata records custom metadata on the current span, fanning out to
+// every active instrumentation provider. Each entry is stored as a
+// genkit:metadata:<key> span attribute. It is a no-op when called outside a
 // span. This is the backend-independent way to annotate the running span; it
 // replaces writing to an OpenTelemetry span directly.
-func SetCustomMetadataAttributes(ctx context.Context, md map[string]string) {
+func SetSpanMetadata(ctx context.Context, md map[string]string) {
 	if span := currentSpanKey.FromContext(ctx); span != nil {
 		span.SetMetadata(md)
 	}

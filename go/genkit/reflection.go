@@ -39,6 +39,7 @@ import (
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal"
 	"github.com/firebase/genkit/go/internal/base"
+	"github.com/firebase/genkit/go/internal/tracingbridge"
 )
 
 type streamingCallback[Stream any] = func(context.Context, Stream) error
@@ -657,7 +658,7 @@ func configureTelemetry(url string) {
 	if os.Getenv("GENKIT_TELEMETRY_SERVER") == "" && url != "" {
 		// Traces reach the Dev UI through the Direct instrumentation, which
 		// needs no OpenTelemetry SDK.
-		tracing.EnableDevInstrumentation(url)
+		tracingbridge.SetDevTelemetryServer(url)
 		tracing.EnableLogExport(url)
 		slog.Debug("connected to telemetry server", "url", url)
 	}

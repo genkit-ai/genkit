@@ -38,19 +38,15 @@ func withRealtime(t *testing.T) {
 	t.Cleanup(func() { realtimeTelemetryActive = prev })
 }
 
-// useChain sets the chain to [d, base] (or [base] when d is nil) for the test.
+// useChain sets the chain to [d, base] (or [base] when d is nil) for the test,
+// with d in the dev slot as setDevTelemetryServer would install it.
 func useChain(t *testing.T, d *DirectTelemetryInstrumentation, base Instrumentation) {
 	t.Helper()
-	t.Cleanup(ResetInstrumentation)
+	t.Cleanup(resetInstrumentation)
 	instrumentationMu.Lock()
 	defer instrumentationMu.Unlock()
-	configured = base
-	// Checked explicitly: a nil *DirectTelemetryInstrumentation stored in the
-	// interface would be a non-nil Instrumentation.
-	direct = nil
-	if d != nil {
-		direct = d
-	}
+	configured = []Instrumentation{base}
+	direct = d
 	rebuildChainLocked()
 }
 
@@ -277,7 +273,7 @@ func TestDirect_MatchesOTelExport(t *testing.T) {
 					},
 					"in",
 					func(ctx context.Context, _ string) (string, error) {
-						SetCustomMetadataAttributes(ctx, map[string]string{"mid": "run"})
+						SetSpanMetadata(ctx, map[string]string{"mid": "run"})
 						_, err := RunInNewSpan(ctx, &SpanMetadata{Name: "step", Type: "flowStep"}, 1,
 							func(ctx context.Context, _ int) (int, error) { return 2, tc.err })
 						return "out", err

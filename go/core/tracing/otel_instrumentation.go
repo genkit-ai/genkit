@@ -18,6 +18,7 @@ package tracing
 
 import (
 	"context"
+	"sync"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -25,21 +26,48 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// OTelInstrumentation is the default instrumentation: it encodes each Genkit
-// span as an OpenTelemetry span. It reads whatever provider the caller
-// registered via otel.SetTracerProvider (a user's OTel setup, or the GCP /
-// Firebase plugins) and installs none itself. When nothing is configured,
-// OTel's no-op provider yields all-zero, invalid ids, which TraceInfo reports
-// as empty. It also puts the OTel span in the context, so direct
-// trace.SpanFromContext writes (e.g. in ai/exp/agent.go) land on it.
+// OTelInstrumentation encodes each Genkit span as an OpenTelemetry span with
+// the genkit:* attributes. It is the implicit default (see
+// [SetInstrumentation]). It installs no TracerProvider itself: with
+// TracerProvider unset it reads the global one (otel.SetTracerProvider, set by
+// a user's OTel setup or the Google Cloud / Firebase plugins). When nothing is
+// configured, OTel's no-op provider yields all-zero, invalid ids, which
+// TraceInfo reports as empty. It also puts the OTel span in the context, so
+// direct trace.SpanFromContext writes land on it.
 //
-// Back-compat default; removed in the next major to reach the shared "not
-// instrumented by default" goal.
-type OTelInstrumentation struct{}
+// Back-compat default; removed as the default in the next major to reach the
+// shared "not instrumented by default" goal.
+type OTelInstrumentation struct {
+	// TracerProvider creates the spans. Nil means the global provider,
+	// resolved per span so a provider registered after this value was built
+	// is still picked up. Set it to keep Genkit spans on a dedicated provider
+	// (a different sampler or exporter) without touching the global.
+	TracerProvider trace.TracerProvider
+
+	// tracer caches the tracer for a non-nil TracerProvider.
+	tracerOnce sync.Once
+	tracer     trace.Tracer
+}
+
+const (
+	otelTracerName    = "genkit-tracer"
+	otelTracerVersion = "v1"
+)
+
+func (o *OTelInstrumentation) getTracer() trace.Tracer {
+	if o.TracerProvider == nil {
+		return otel.GetTracerProvider().Tracer(otelTracerName, trace.WithInstrumentationVersion(otelTracerVersion))
+	}
+	o.tracerOnce.Do(func() {
+		o.tracer = o.TracerProvider.Tracer(otelTracerName, trace.WithInstrumentationVersion(otelTracerVersion))
+	})
+	return o.tracer
+}
 
 // otelSpan is the Span handle over an OTel span.
 type otelSpan struct {
 	span trace.Span
+	sm   *spanMetadata
 }
 
 func (s *otelSpan) TraceInfo() TraceInfo {
@@ -59,50 +87,45 @@ func (s *otelSpan) SetMetadata(md map[string]string) {
 	}
 }
 
-// RunInNewSpan opens an OTel span, seeds the start-known genkit attributes,
-// runs next, then reasserts the full attribute set and records error status.
-func (o *OTelInstrumentation) RunInNewSpan(ctx context.Context, info *SpanInfo, next NextFunc) (any, error) {
-	sm := info.metadata
+// End reasserts the full attribute set (including the run-determined
+// output/state), records error status, and ends the OTel span. Encoding is
+// skipped for a non-recording span (the no-op provider, or unsampled), which
+// would discard the attributes after paying to JSON-encode them.
+func (s *otelSpan) End(res *SpanResult) {
+	if s.span.IsRecording() {
+		s.span.SetAttributes(s.sm.attributes()...)
+		if err := res.Err(); err != nil {
+			s.span.RecordError(err)
+			s.span.SetStatus(codes.Error, err.Error())
+		}
+	}
+	s.span.End()
+}
+
+// StartSpan opens an OTel span seeded with the start-known genkit attributes.
+func (o *OTelInstrumentation) StartSpan(ctx context.Context, info *SpanInfo) (context.Context, Span) {
+	sm := info.spanMeta()
 
 	var opts []trace.SpanStartOption
-	if len(info.Labels) > 0 {
-		attrs := make([]attribute.KeyValue, 0, len(info.Labels))
-		for k, v := range info.Labels {
+	if len(info.labels) > 0 {
+		attrs := make([]attribute.KeyValue, 0, len(info.labels))
+		for k, v := range info.labels {
 			attrs = append(attrs, attribute.String(k, v))
 		}
 		opts = append(opts, trace.WithAttributes(attrs...))
 	}
 	// Seed the start-known genkit attributes (including genkit:type) so a
 	// live-trace export taken the moment the span starts already carries its
-	// name, path, type, and subtype. The deferred end write below reasserts
-	// these and adds the run-determined output/state.
+	// name, path, type, and subtype. End reasserts these and adds the
+	// run-determined output/state.
 	opts = append(opts, trace.WithAttributes(sm.startAttributes()...))
 	// Input and init are known now too, but JSON-marshaled, so seed them at
-	// start only when a live exporter will read them; otherwise the end write
-	// records them once.
+	// start only when a live exporter will read them; otherwise End records
+	// them once.
 	if realtimeTelemetryEnabled() {
 		opts = append(opts, trace.WithAttributes(sm.inputAttributes()...))
 	}
 
-	// Read the provider the caller configured; do not install or manage one.
-	// With nothing configured this is OTel's no-op provider (empty ids).
-	tracer := otel.GetTracerProvider().Tracer("genkit-tracer", trace.WithInstrumentationVersion("v1"))
-	ctx, span := tracer.Start(ctx, sm.Name, opts...)
-	defer span.End()
-	// The deferred end write reasserts the full attribute set (including the
-	// run-determined output/state). Registered after span.End so it runs first.
-	// Skipped for a non-recording span (the no-op provider, or unsampled),
-	// which would discard the attributes after paying to JSON-encode them.
-	defer func() {
-		if span.IsRecording() {
-			span.SetAttributes(sm.attributes()...)
-		}
-	}()
-
-	out, err := next(ctx, &otelSpan{span: span})
-	if err != nil && span.IsRecording() {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-	}
-	return out, err
+	ctx, span := o.getTracer().Start(ctx, sm.Name, opts...)
+	return ctx, &otelSpan{span: span, sm: sm}
 }
