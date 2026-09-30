@@ -16,6 +16,8 @@
 
 import { SpanKind, type Span } from '@opentelemetry/api';
 import {
+  AlwaysOffSampler,
+  BasicTracerProvider,
   InMemorySpanExporter,
   type ReadableSpan,
 } from '@opentelemetry/sdk-trace-base';
@@ -361,6 +363,33 @@ describe('GenAiInstrumentation', () => {
       (w) => typeof w === 'string' && w.includes('no OpenTelemetry SDK')
     );
     assert.strictEqual(notRecording.length, 1);
+  });
+
+  it('does not warn when the SDK is registered but samples the span out', async () => {
+    const sampledOut = new BasicTracerProvider({
+      sampler: new AlwaysOffSampler(),
+    }).getTracer('test');
+    const inst = new GenAiInstrumentation({ tracer: sampledOut });
+    const warnings: unknown[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args[0]);
+    };
+    try {
+      await inst.runInNewSpan(
+        info({
+          metadata: { name: 'googleai/gemini-flash-latest' },
+          labels: { 'genkit:metadata:subtype': 'model' },
+        }),
+        async () => ({ finishReason: 'stop' })
+      );
+    } finally {
+      console.warn = originalWarn;
+    }
+    const notRecording = warnings.filter(
+      (w) => typeof w === 'string' && w.includes('no OpenTelemetry SDK')
+    );
+    assert.strictEqual(notRecording.length, 0);
   });
 
   it('exposes trace/span ids and setMetadata through the context', async () => {

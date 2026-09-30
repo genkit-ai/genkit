@@ -216,6 +216,11 @@ export function mapFinishReason(
     case 'interrupted':
       // No exact spec value; treat an interrupted turn as a normal stop.
       return 'stop';
+    case 'failed':
+      return 'error';
+    case 'aborted':
+      // No exact spec value; a cancelled turn isn't a clean completion.
+      return 'error';
     case 'other':
     case 'unknown':
     default:
