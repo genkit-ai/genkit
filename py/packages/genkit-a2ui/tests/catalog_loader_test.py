@@ -47,7 +47,7 @@ from helpers import (
 )
 from pydantic import ValidationError
 
-from genkit._core._error import RuntimeErrorReason
+from genkit import RuntimeErrorReason
 
 BANNER_CATALOG = A2uiCatalog(
     id='https://example.com/catalogs/banner.json',
@@ -80,9 +80,9 @@ async def test_generate_uses_the_bundled_catalog_when_nothing_is_registered() ->
 
 
 @pytest.mark.asyncio
-async def test_generate_uses_a_loaded_catalog() -> None:
+async def test_load_catalog_then_surfaces_renders_with_that_catalog() -> None:
     ai, pm = setup()
-    load_catalog(ai, BANNER_CATALOG)
+    await load_catalog(ai, BANNER_CATALOG)
     pm.responses = [model_ok(banner_fence())]
 
     response = await ai.generate(
@@ -99,7 +99,7 @@ async def test_generate_uses_a_loaded_catalog() -> None:
 @pytest.mark.asyncio
 async def test_generate_default_stays_basic_when_a_custom_catalog_is_registered() -> None:
     ai, pm = setup()
-    load_catalog(ai, BANNER_CATALOG)
+    await load_catalog(ai, BANNER_CATALOG)
     pm.responses = [model_ok(weather_fence())]
 
     response = await ai.generate(model='programmableModel', prompt='weather', use=[Surfaces()])
@@ -147,7 +147,7 @@ async def test_generate_catalog_basic_falls_back_without_register() -> None:
 async def test_generate_strict_rejects_a_component_the_loaded_catalog_lacks() -> None:
     """Strict mode refuses a component the catalog lacks and drops the turn."""
     ai, pm = setup()
-    load_catalog(ai, BANNER_CATALOG)
+    await load_catalog(ai, BANNER_CATALOG)
     pm.responses = [model_ok(weather_fence())]
 
     response = await ai.generate(
@@ -161,7 +161,7 @@ async def test_generate_strict_rejects_a_component_the_loaded_catalog_lacks() ->
 @pytest.mark.asyncio
 async def test_generate_warn_drops_a_component_the_loaded_catalog_lacks() -> None:
     ai, pm = setup()
-    load_catalog(ai, BANNER_CATALOG)
+    await load_catalog(ai, BANNER_CATALOG)
     pm.responses = [model_ok(weather_fence())]
 
     response = await ai.generate(
@@ -174,17 +174,19 @@ async def test_generate_warn_drops_a_component_the_loaded_catalog_lacks() -> Non
     assert not any('updateComponents' in env for env in envelopes(message.content))
 
 
-def test_load_catalog_appears_in_the_registry_the_dev_ui_lists() -> None:
+@pytest.mark.asyncio
+async def test_load_catalog_appears_in_the_registry_the_dev_ui_lists() -> None:
     ai, _ = setup()
-    load_catalog(ai, BANNER_CATALOG)
+    await load_catalog(ai, BANNER_CATALOG)
     listed = ai._registry.list_values(A2UI_CATALOG_VALUE_TYPE)
     assert BANNER_CATALOG.id in listed
     assert listed[BANNER_CATALOG.id] == BANNER_CATALOG.as_value()
 
 
-def test_register_basic_catalog_appears_in_the_registry_the_dev_ui_lists() -> None:
+@pytest.mark.asyncio
+async def test_register_basic_catalog_appears_in_the_registry_the_dev_ui_lists() -> None:
     ai, _ = setup()
-    register_basic_catalog(ai)
+    await register_basic_catalog(ai)
     listed = ai._registry.list_values(A2UI_CATALOG_VALUE_TYPE)
     assert BASIC_CATALOG_ID in listed
     basic = listed[BASIC_CATALOG_ID]
@@ -194,42 +196,47 @@ def test_register_basic_catalog_appears_in_the_registry_the_dev_ui_lists() -> No
     assert 'Text' in {item['name'] for item in components if isinstance(item, dict)}
 
 
-def test_load_catalog_file_registers_and_returns_the_catalog(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_load_catalog_file_registers_and_returns_the_catalog(tmp_path: Path) -> None:
     ai, _ = setup()
     path = tmp_path / 'catalog.json'
     path.write_text(json.dumps(BANNER_CATALOG.as_value()), encoding='utf-8')
-    loaded = load_catalog_file(ai, str(path))
+    loaded = await load_catalog_file(ai, str(path))
     assert loaded == BANNER_CATALOG
-    assert ai._registry.lookup_value(A2UI_CATALOG_VALUE_TYPE, BANNER_CATALOG.id) == BANNER_CATALOG.as_value()
+    assert await ai.lookup_value(A2UI_CATALOG_VALUE_TYPE, BANNER_CATALOG.id) == BANNER_CATALOG.as_value()
 
 
-def test_load_catalog_same_id_keeps_the_first() -> None:
+@pytest.mark.asyncio
+async def test_load_catalog_same_id_keeps_the_first() -> None:
     ai, _ = setup()
-    load_catalog(ai, BANNER_CATALOG)
+    await load_catalog(ai, BANNER_CATALOG)
     other = A2uiCatalog(
         id=BANNER_CATALOG.id,
         components=(A2uiCatalogComponent(name='Other', description='x', props='y'),),
     )
-    kept = load_catalog(ai, other)
+    kept = await load_catalog(ai, other)
     assert kept == BANNER_CATALOG
-    stored = A2uiCatalog.from_value(ai._registry.lookup_value(A2UI_CATALOG_VALUE_TYPE, BANNER_CATALOG.id))
+    stored = A2uiCatalog.from_value(await ai.lookup_value(A2UI_CATALOG_VALUE_TYPE, BANNER_CATALOG.id))
     assert stored == BANNER_CATALOG
 
 
-def test_load_catalog_same_catalog_twice_is_ok() -> None:
+@pytest.mark.asyncio
+async def test_load_catalog_same_catalog_twice_is_ok() -> None:
     ai, _ = setup()
-    assert load_catalog(ai, BANNER_CATALOG) == BANNER_CATALOG
-    assert load_catalog(ai, BANNER_CATALOG) == BANNER_CATALOG
+    assert await load_catalog(ai, BANNER_CATALOG) == BANNER_CATALOG
+    assert await load_catalog(ai, BANNER_CATALOG) == BANNER_CATALOG
 
 
-def test_load_catalog_raises_when_id_already_holds_something_else() -> None:
+@pytest.mark.asyncio
+async def test_load_catalog_raises_when_id_already_holds_something_else() -> None:
     ai, _ = setup()
     ai._registry.register_value(A2UI_CATALOG_VALUE_TYPE, BANNER_CATALOG.id, 'not-a-catalog')
     with pytest.raises(A2uiCatalogError, match='is not a catalog'):
-        load_catalog(ai, BANNER_CATALOG)
+        await load_catalog(ai, BANNER_CATALOG)
 
 
-def test_catalog_error_reports_invalid_argument() -> None:
+@pytest.mark.asyncio
+async def test_catalog_error_reports_invalid_argument() -> None:
     """A catalog you did not register is your configuration, so the status says so.
 
     INVALID_ARGUMENT tells a client the call itself needs fixing, which is
@@ -239,27 +246,29 @@ def test_catalog_error_reports_invalid_argument() -> None:
     ai, _ = setup()
     ai._registry.register_value(A2UI_CATALOG_VALUE_TYPE, BANNER_CATALOG.id, 'not-a-catalog')
     with pytest.raises(A2uiCatalogError, match='is not a catalog') as exc_info:
-        load_catalog(ai, BANNER_CATALOG)
+        await load_catalog(ai, BANNER_CATALOG)
     assert exc_info.value.status == 'INVALID_ARGUMENT'
 
 
-def test_load_catalog_file_names_the_path_when_the_file_is_not_utf8(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_load_catalog_file_names_the_path_when_the_file_is_not_utf8(tmp_path: Path) -> None:
     ai, _ = setup()
     path = tmp_path / 'catalog.json'
     path.write_bytes(b'\xff\xfe not utf-8')
     with pytest.raises(A2uiCatalogError, match=str(path)) as exc_info:
-        load_catalog_file(ai, str(path))
+        await load_catalog_file(ai, str(path))
     assert isinstance(exc_info.value.__cause__, UnicodeDecodeError)
 
 
-def test_load_catalog_file_names_the_path_when_a_component_has_no_name(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_load_catalog_file_names_the_path_when_a_component_has_no_name(tmp_path: Path) -> None:
     path = tmp_path / 'catalog.json'
     path.write_text(
         json.dumps({'id': BANNER_CATALOG.id, 'components': [{'description': 'no name'}]}),
         encoding='utf-8',
     )
     with pytest.raises(A2uiCatalogError, match=str(path)):
-        load_catalog_file(setup()[0], str(path))
+        await load_catalog_file(setup()[0], str(path))
 
 
 def test_a2ui_catalog_is_a_registry_id_string() -> None:

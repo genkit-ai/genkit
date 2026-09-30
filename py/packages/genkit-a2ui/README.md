@@ -44,7 +44,7 @@ catalog = A2uiCatalog(
         A2uiCatalogComponent(name='Banner', description='A prominent alert.', props='title: string.'),
     ),
 )
-load_catalog(ai, catalog)
+await load_catalog(ai, catalog)
 
 response = await ai.generate(
     model='googleai/gemini-flash-latest',
@@ -53,8 +53,8 @@ response = await ai.generate(
 )
 ```
 
-`load_catalog_file(ai, './my-catalog.json')` does the same from disk.
-`register_basic_catalog(ai)` puts the bundled catalog on the registry so the
+`await load_catalog_file(ai, './my-catalog.json')` does the same from disk.
+`await register_basic_catalog(ai)` puts the bundled catalog on the registry so the
 Developer UI can list it next to custom ones (`GET /api/values?type=a2ui-catalog`).
 
 > Status: experimental.

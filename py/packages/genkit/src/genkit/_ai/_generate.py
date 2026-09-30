@@ -262,6 +262,14 @@ class ScopedGenkitView:
     def current_session(self) -> SessionLike | None:
         return get_current_session()
 
+    async def lookup_value(self, type: str, name: str) -> object | None:
+        """Return this call's value, or the app's, or None.
+
+        Async because a lookup may later need to start a plugin that provides
+        the value without breaking callers.
+        """
+        return self._registry.lookup_value(type, name)
+
 
 def register_middleware(
     registry: Registry,
