@@ -36,7 +36,6 @@ from genkit._core._model import config_type_path, declared_config_type
 from genkit._core._schema import to_json_schema
 from genkit._core._telemetry._attrs import Attr, metadata_key
 from genkit._core._telemetry._instrumentation import (
-    ACTION_SPAN_MARKER,
     SpanContext,
     run_in_new_span,
     to_json_attr,
@@ -822,7 +821,6 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         attributes.update({metadata_key(k): v for k, v in extra_metadata.items()})
         if ctx.init is not None:
             attributes[Attr.INIT] = to_json_attr(ctx.init)
-        attributes[ACTION_SPAN_MARKER] = 'true'
 
         try:
             output = await run_in_new_span(
@@ -831,6 +829,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
                 action_type=str(self._kind),
                 input=input,
                 attributes=attributes,
+                is_action=True,
             )
             latency_ms = (time.perf_counter() - start_time) * 1000
             return ActionResponse(

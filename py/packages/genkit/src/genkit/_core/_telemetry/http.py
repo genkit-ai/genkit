@@ -32,7 +32,7 @@ from collections.abc import Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from queue import Full, Queue
-from typing import TypeVar
+from typing import Literal, TypeVar
 from urllib.parse import urljoin, urlparse
 
 from .._environment import is_dev_environment
@@ -106,7 +106,7 @@ class DirectSpanContext:
                 encoded = f'Error encoding metadata: {e}'
             self._span.attributes[metadata_key(str(key))] = encoded
 
-    def set_state(self, state: str) -> None:
+    def set_state(self, state: Literal['success', 'error']) -> None:
         self._span.attributes[Attr.STATE] = state
         if state == State.ERROR:
             self._span.status_code = 2

@@ -19,7 +19,6 @@ from genkit._core._action import Action, ActionRunContext
 from genkit._core._error import GenkitError
 from genkit._core._telemetry._attrs import metadata_key
 from genkit._core._telemetry._instrumentation import (
-    ACTION_SPAN_MARKER,
     SpanMetadata,
     parent_path_context,
     run_in_new_span,
@@ -117,7 +116,7 @@ async def test_writes_input_from_metadata(exporter) -> None:
         body,
         action_type='tool.v2',
         input=Payload(msg='hi'),
-        attributes={ACTION_SPAN_MARKER: 'true'},
+        is_action=True,
     )
 
     span = _by_name(exporter.get_finished_spans(), 'echo')
@@ -125,7 +124,6 @@ async def test_writes_input_from_metadata(exporter) -> None:
     assert attrs['genkit:input'] == '{"msg":"hi"}'
     assert attrs['genkit:path'] == '/{echo,t:action,s:tool.v2}'
     assert attrs['genkit:metadata:subtype'] == 'tool.v2'
-    assert ACTION_SPAN_MARKER not in attrs
 
 
 @pytest.mark.asyncio

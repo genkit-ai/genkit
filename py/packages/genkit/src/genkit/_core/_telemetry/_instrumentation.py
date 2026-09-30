@@ -22,13 +22,14 @@ keeps importing from ``genkit.telemetry``.
 
 from __future__ import annotations
 
+import atexit
 import contextlib
 import inspect
 import json
 from collections.abc import Awaitable, Callable, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Any, Protocol, TypeVar, runtime_checkable
+from typing import Any, Literal, Protocol, TypeVar, runtime_checkable
 
 from pydantic import BaseModel
 
@@ -36,6 +37,9 @@ from ._attrs import METADATA_PREFIX, Attr
 
 T = TypeVar('T')
 T_co = TypeVar('T_co', covariant=True)
+
+SpanAttributeValue = str | bool | int | float
+SpanState = Literal['success', 'error']
 
 
 class SpanNext(Protocol[T_co]):
@@ -56,7 +60,7 @@ class SpanMetadata:
     name: str
     action_type: str | None = None
     input: object | None = None
-    attributes: Mapping[str, str] = field(default_factory=dict)
+    attributes: Mapping[str, SpanAttributeValue] = field(default_factory=dict)
 
 
 class SpanContext(Protocol):
@@ -76,8 +80,8 @@ class SpanContext(Protocol):
         """Attach custom metadata. Safe to call multiple times."""
         ...
 
-    def set_state(self, state: str) -> None:
-        """Override genkit:state (e.g. State.ERROR)."""
+    def set_state(self, state: SpanState) -> None:
+        """Override genkit:state. ``error`` marks a failed generate that returned."""
         ...
 
 
@@ -120,10 +124,9 @@ instrumentations: list[Instrumentation] = []
 current_span: ContextVar[SpanContext | None] = ContextVar('genkit_span_context', default=None)
 parent_path_context: ContextVar[str] = ContextVar('genkit_parent_path', default='')
 
-# an action of kind 'util' and a plain 'util' span look the same to a provider,
-# but the Traces tab draws them differently, so the poster learns which is which
-# from span_is_action and providers never see this key.
-ACTION_SPAN_MARKER = '__genkit_action_span__'
+# an action of kind 'util' and a plain 'util' span look the same to a
+# provider, but the Traces tab draws them differently. run_in_new_span
+# sets this so the poster can tell them apart; providers never see it.
 span_is_action: ContextVar[bool] = ContextVar('genkit_span_is_action', default=False)
 
 
@@ -204,6 +207,9 @@ def dispose_instrumentations() -> None:
             inst.dispose()
 
 
+atexit.register(dispose_instrumentations)
+
+
 def flush_instrumentations() -> None:
     """Wait for in-flight exports on every configured backend."""
     for inst in instrumentations:
@@ -235,7 +241,7 @@ def set_custom_metadata_attributes(attributes: Mapping[str, object]) -> None:
         span.set_metadata(attributes)
 
 
-def set_span_state(state: str) -> None:
+def set_span_state(state: SpanState) -> None:
     """Write genkit:state on the active span. No-op outside a span."""
     span = current_span.get()
     if span is not None:
@@ -248,7 +254,8 @@ async def run_in_new_span(
     *,
     action_type: str | None = None,
     input: object | None = None,
-    attributes: Mapping[str, str] | None = None,
+    attributes: Mapping[str, SpanAttributeValue] | None = None,
+    is_action: bool = False,
 ) -> T:
     """Run ``fn`` inside a new span via the configured provider chain.
 
@@ -259,8 +266,7 @@ async def run_in_new_span(
     if not inspect.iscoroutinefunction(fn):
         name = getattr(fn, '__qualname__', type(fn).__name__)
         raise TypeError(f'run_in_new_span expected an async callback, got {name}')
-    attrs: dict[str, str] = dict(attributes) if attributes else {}
-    is_action = attrs.pop(ACTION_SPAN_MARKER, None) is not None
+    attrs: dict[str, SpanAttributeValue] = dict(attributes) if attributes else {}
     meta = SpanMetadata(
         name=name,
         action_type=action_type,
@@ -316,7 +322,7 @@ class NoopSpanContext:
     def set_metadata(self, metadata: Mapping[str, object]) -> None:
         return
 
-    def set_state(self, state: str) -> None:
+    def set_state(self, state: SpanState) -> None:
         return
 
 
@@ -339,7 +345,7 @@ class CompositeSpanContext:
             with contextlib.suppress(Exception):
                 span.set_metadata(metadata)
 
-    def set_state(self, state: str) -> None:
+    def set_state(self, state: SpanState) -> None:
         for span in self._spans:
             with contextlib.suppress(Exception):
                 span.set_state(state)

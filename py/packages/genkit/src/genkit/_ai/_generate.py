@@ -90,7 +90,6 @@ from genkit._core._model import (
 from genkit._core._protocols import RegistryLike, SessionLike
 from genkit._core._registry import Registry
 from genkit._core._schema import check_output_schema
-from genkit._core._telemetry._attrs import State
 from genkit._core._telemetry._instrumentation import SpanContext, run_in_new_span, set_span_state
 from genkit._core._typing import (
     Error,
@@ -635,7 +634,7 @@ def define_generate_action(registry: Registry) -> None:
             context=dict(ctx.context),
         )
         if response.error is not None:
-            set_span_state(State.ERROR)
+            set_span_state('error')
         return response
 
     _ = registry.register_action(
@@ -672,7 +671,7 @@ async def generate_action(
             context=context,
         )
         if result.error is not None:
-            set_span_state(State.ERROR)
+            set_span_state('error')
         return result
 
     return await run_in_new_span('generate', body, action_type='util', input=options)

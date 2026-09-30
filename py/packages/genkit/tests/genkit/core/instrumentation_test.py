@@ -14,7 +14,6 @@ import pytest
 from genkit import ActionKind
 from genkit._core._action import Action
 from genkit._core._telemetry._instrumentation import (
-    ACTION_SPAN_MARKER,
     SpanContext,
     SpanMetadata,
     flush_instrumentations,
@@ -266,8 +265,8 @@ async def test_provider_sees_real_action_kind() -> None:
 
 
 @pytest.mark.asyncio
-async def test_action_marker_hidden_from_providers() -> None:
-    """A provider's metadata.attributes never contains the action marker, for actions or plain spans."""
+async def test_is_action_does_not_appear_on_provider_attributes() -> None:
+    """is_action=True is not a key on metadata.attributes; providers see the real labels only."""
     rec = FakeInstrumentation('rec', [])
     configure_instrumentation(rec)
 
@@ -278,12 +277,28 @@ async def test_action_marker_hidden_from_providers() -> None:
     async def body(_span: SpanContext) -> None:
         return None
 
-    await run_in_new_span('plain', body, action_type='util', attributes={ACTION_SPAN_MARKER: 'true'})
+    await run_in_new_span('plain', body, action_type='util', is_action=True)
 
     assert len(rec.seen) == 2
-    for meta in rec.seen:
-        assert ACTION_SPAN_MARKER not in meta.attributes
     assert rec.seen[0].attributes == {'genkitx:ignore-trace': 'true', 'genkit:metadata:k': 'v'}
+    assert rec.seen[1].attributes == {}
+
+
+def test_telemetry_exports_run_in_new_span() -> None:
+    """from genkit.telemetry import run_in_new_span is how you wrap your own span."""
+    from genkit._core._telemetry._instrumentation import run_in_new_span as impl
+    from genkit.telemetry import run_in_new_span as exported
+
+    assert exported is impl
+    import genkit.telemetry as telemetry
+
+    assert 'run_in_new_span' in telemetry.__all__
+
+
+def test_span_metadata_attributes_keep_bool_int_and_float() -> None:
+    """SpanMetadata.attributes keeps bool, int, and float instead of requiring strings."""
+    meta = SpanMetadata(name='step', attributes={'cached': True, 'retries': 3, 'cost': 0.002})
+    assert meta.attributes == {'cached': True, 'retries': 3, 'cost': 0.002}
 
 
 def test_telemetry_exports_provider_types() -> None:

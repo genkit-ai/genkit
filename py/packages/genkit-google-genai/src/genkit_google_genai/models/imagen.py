@@ -42,8 +42,8 @@ from genkit import (
     Role,
     Supports,
 )
-from genkit._core._telemetry._instrumentation import run_in_new_span
 from genkit.plugin_api import ActionRunContext, wrap_http_error
+from genkit.telemetry import run_in_new_span
 from genkit_google_genai.models._sdk_config import (
     attach_leftovers,
     dump_family_config,
