@@ -3,6 +3,16 @@
 A Genkit plugin that brings [A2UI](https://a2ui.org/) ("Agent to UI"), a
 transport-agnostic, JSON-based streaming UI protocol, to Genkit agents.
 
+> **Building with a coding agent? Install the Genkit JS skill first.**
+>
+> ```bash
+> npx skills add genkit-ai/skills --skill developing-genkit-js
+> ```
+>
+> It teaches your agent the current Genkit JS APIs and common gotchas.
+> Source, manual install and skills for other languages:
+> [genkit-ai/skills](https://github.com/genkit-ai/skills).
+
 An A2UI-enabled agent can stream more than prose. It streams rich, interactive UI
 **surfaces** (cards, lists, forms, buttons) that a client renders incrementally
 as the model responds. The whole server-side integration is a single model

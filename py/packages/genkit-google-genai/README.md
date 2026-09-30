@@ -2,6 +2,16 @@
 
 This Genkit plugin provides a unified interface for Google AI (Gemini) and Vertex AI models, embedding, and other services.
 
+> **Building with a coding agent? Install the Genkit Python skill first.**
+>
+> ```bash
+> npx skills add genkit-ai/skills --skill developing-genkit-python
+> ```
+>
+> It teaches your agent the current Genkit Python APIs and common gotchas.
+> Source, manual install and skills for other languages:
+> [genkit-ai/skills](https://github.com/genkit-ai/skills).
+
 ## Setup environment
 
 ```bash
@@ -45,7 +55,7 @@ async def greet(name: str) -> str:
 
 ### Dynamic Models
 
-The plugin automatically discovers available models from the API upon initialization. You can use any model name supported by the API (e.g., `GoogleAI.gemini_model('gemini-flash-latest')`, `VertexAI.gemini_model('gemini-2.5-pro')`).
+The plugin automatically discovers available models from the API upon initialization. You can use any model name supported by the API (e.g., `GoogleAI.gemini_model('gemini-flash-latest')`, `VertexAI.gemini_model('gemini-3.1-pro-preview')`).
 
 ### Dynamic Configuration
 

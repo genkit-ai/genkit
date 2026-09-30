@@ -2,6 +2,16 @@
 
 Model Context Protocol (MCP) integration for Go Genkit
 
+> **Building with a coding agent? Install the Genkit Go skill first.**
+>
+> ```bash
+> npx skills add genkit-ai/skills --skill developing-genkit-go
+> ```
+>
+> It teaches your agent the current Genkit Go APIs and common gotchas.
+> Source, manual install and skills for other languages:
+> [genkit-ai/skills](https://github.com/genkit-ai/skills).
+
 Connect to MCP servers and expose Genkit tools as MCP servers.
 
 ## GenkitMCPClient - Single Server Connection

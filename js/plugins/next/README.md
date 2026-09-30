@@ -2,6 +2,16 @@
 
 See [official documentation](https://genkit.dev/docs/frameworks/nextjs/) for more.
 
+> **Building with a coding agent? Install the Genkit JS skill first.**
+>
+> ```bash
+> npx skills add genkit-ai/skills --skill developing-genkit-js
+> ```
+>
+> It teaches your agent the current Genkit JS APIs and common gotchas.
+> Source, manual install and skills for other languages:
+> [genkit-ai/skills](https://github.com/genkit-ai/skills).
+
 This plugin provides utilities for conveninetly exposing Genkit flows and actions via Next.js app routs for REST APIs.
 
 ```ts
@@ -10,7 +20,7 @@ const simpleFlow = ai.defineFlow(
   'simpleFlow',
   async (input, streamingCallback) => {
     const { text } = await ai.generate({
-      model: googleAI.model('gemini-2.5-flash'),
+      model: googleAI.model('gemini-flash-latest'),
       prompt: input,
       streamingCallback: (chunk) => streamingCallback(chunk.text),
     });

@@ -3,6 +3,16 @@
 This plugin provides Genkit support for Claude models through Anthropic's
 OpenAI-compatible Chat Completions endpoint.
 
+> **Building with a coding agent? Install the Genkit Go skill first.**
+>
+> ```bash
+> npx skills add genkit-ai/skills --skill developing-genkit-go
+> ```
+>
+> It teaches your agent the current Genkit Go APIs and common gotchas.
+> Source, manual install and skills for other languages:
+> [genkit-ai/skills](https://github.com/genkit-ai/skills).
+
 Anthropic positions that endpoint as a compatibility layer for testing and
 comparing Claude rather than a long-term integration surface: it does not
 return thinking content, ignores `response_format`, and hoists system

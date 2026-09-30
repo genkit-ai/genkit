@@ -6,6 +6,16 @@ Genkit is a Python SDK from Google. One API for generate, tools, structured outp
 
 Vertex AI, Cloud Trace, and Firestore are there if you want them. So are OpenAI, Anthropic, Ollama, and Bedrock.
 
+> **Building with a coding agent? Install the Genkit Python skill first.**
+>
+> ```bash
+> npx skills add genkit-ai/skills --skill developing-genkit-python
+> ```
+>
+> It teaches your agent the current Genkit Python APIs and common gotchas.
+> Source, manual install and skills for other languages:
+> [genkit-ai/skills](https://github.com/genkit-ai/skills).
+
 ## Install
 
 ```bash

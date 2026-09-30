@@ -5,6 +5,16 @@ is a transport-agnostic, JSON-based streaming UI protocol. An A2UI-enabled agent
 can stream not just prose, but rich, interactive UI **surfaces** that a client
 renders incrementally.
 
+> **Building with a coding agent? Install the Genkit Go skill first.**
+>
+> ```bash
+> npx skills add genkit-ai/skills --skill developing-genkit-go
+> ```
+>
+> It teaches your agent the current Genkit Go APIs and common gotchas.
+> Source, manual install and skills for other languages:
+> [genkit-ai/skills](https://github.com/genkit-ai/skills).
+
 > Status: in preview. The package lives under `go/plugins/a2ui/exp` and its
 > APIs may change in any minor version release. Samples import it as `a2uix`.
 

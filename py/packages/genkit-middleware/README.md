@@ -2,6 +2,16 @@
 
 A collection of middleware implementations for Genkit Python.
 
+> **Building with a coding agent? Install the Genkit Python skill first.**
+>
+> ```bash
+> npx skills add genkit-ai/skills --skill developing-genkit-python
+> ```
+>
+> It teaches your agent the current Genkit Python APIs and common gotchas.
+> Source, manual install and skills for other languages:
+> [genkit-ai/skills](https://github.com/genkit-ai/skills).
+
 ## Overview
 
 This plugin provides six concrete middleware implementations for common use cases:
@@ -29,7 +39,7 @@ response = await ai.generate(
     prompt='Hello!',
     use=[
         Retry(max_retries=5),
-        Fallback(models=['googleai/gemini-2.5-pro']),
+        Fallback(models=['googleai/gemini-3.1-pro-preview']),
     ],
 )
 ```
@@ -78,7 +88,7 @@ from genkit_middleware import Fallback
 
 fallback = Fallback(
     models=[
-        'googleai/gemini-2.5-pro',
+        'googleai/gemini-3.1-pro-preview',
         'googleai/gemini-flash-latest',
     ],
     statuses=['UNAVAILABLE', 'DEADLINE_EXCEEDED'],

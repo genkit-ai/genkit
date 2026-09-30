@@ -2,6 +2,16 @@
 
 This package provides a collection of useful middlewares for the Genkit JS SDK to enhance model execution, tool usage, and agentic workflows.
 
+> **Building with a coding agent? Install the Genkit JS skill first.**
+>
+> ```bash
+> npx skills add genkit-ai/skills --skill developing-genkit-js
+> ```
+>
+> It teaches your agent the current Genkit JS APIs and common gotchas.
+> Source, manual install and skills for other languages:
+> [genkit-ai/skills](https://github.com/genkit-ai/skills).
+
 ## Installation
 
 ```bash
@@ -42,7 +52,7 @@ const ai = genkit({ ... });
 // Define sub-agents
 const researcher = ai.defineAgent({
   name: 'researcher',
-  model: 'gemini-2.5-flash',
+  model: 'gemini-flash-latest',
   description: 'Searches the web and summarizes findings.',
   system: 'You are a research assistant.',
   tools: [webSearchTool],
@@ -50,7 +60,7 @@ const researcher = ai.defineAgent({
 
 const coder = ai.defineAgent({
   name: 'coder',
-  model: 'gemini-2.5-flash',
+  model: 'gemini-flash-latest',
   system: 'You are an expert programmer.',
 });
 
@@ -58,7 +68,7 @@ const coder = ai.defineAgent({
 // This injects `delegate_to_researcher` and `delegate_to_coder` tools.
 const orchestrator = ai.defineAgent({
   name: 'orchestrator',
-  model: 'gemini-2.5-flash',
+  model: 'gemini-flash-latest',
   system: 'Delegate research to the researcher and coding to the coder.',
   use: [
     agents({ agents: ['researcher', 'coder'] })
@@ -106,7 +116,7 @@ const ai = genkit({ ... });
 // Standalone: an agent that creates and reads artifacts.
 const builder = ai.defineAgent({
   name: 'builder',
-  model: 'gemini-2.5-flash',
+  model: 'gemini-flash-latest',
   system: 'You are a code generator. Use write_artifact to create files.',
   use: [artifacts()],
 });
@@ -114,7 +124,7 @@ const builder = ai.defineAgent({
 // Combined with the agents middleware (session strategy).
 const orchestrator = ai.defineAgent({
   name: 'orchestrator',
-  model: 'gemini-2.5-flash',
+  model: 'gemini-flash-latest',
   system: 'You coordinate sub-agents and review their work.',
   use: [
     agents({ agents: ['researcher', 'coder'], artifactStrategy: 'session' }),
@@ -134,7 +144,7 @@ import { filesystem } from '@genkit-ai/middleware';
 const ai = genkit({ ... });
 
 const response = await ai.generate({
-  model: 'gemini-2.5-flash',
+  model: 'gemini-flash-latest',
   prompt: 'Create a hello world node app in the workspace',
   use: [
     filesystem({ rootDirectory: './workspace', allowWriteAccess: true })
