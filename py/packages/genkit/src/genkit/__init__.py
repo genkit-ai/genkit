@@ -54,7 +54,14 @@ from genkit._core._action import Action as Flow, ActionRunContext, StreamRespons
 from genkit._core._context import ContextProvider, RequestData
 from genkit._core._dap import DynamicActionProvider
 from genkit._core._error import GenkitError, Interrupt, PublicError, RuntimeErrorReason
-from genkit._core._model import Document, Message, ModelResponse, ModelResponseChunk, Part
+from genkit._core._model import (
+    Document,
+    Message,
+    ModelResponse,
+    ModelResponseChunk,
+    Part,
+    ToolChoice,
+)
 from genkit._core._typing import (
     FinishReason,
     Media,
@@ -69,6 +76,7 @@ __all__ = [
     'Part',
     'Media',
     'Document',
+    'ToolChoice',
     # What came back
     'ModelResponse',
     'ModelResponseChunk',

@@ -17,6 +17,8 @@
 
 ::: genkit.Document
 
+::: genkit.ToolChoice
+
 ::: genkit.ModelResponse
 
 ::: genkit.ModelResponseChunk

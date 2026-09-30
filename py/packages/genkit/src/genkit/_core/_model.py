@@ -69,7 +69,6 @@ from genkit._core._typing import (
     Resume as ResumeData,
     Role,
     SnapshotStatus,
-    ToolChoice,
     ToolDefinition,
     ToolRequest,
     ToolResponse,
@@ -83,7 +82,7 @@ ModelConfig = GenerationCommonConfig
 ModelUsage = GenerationUsage  # public name for GenerationUsage
 
 # what callers pass as tool_choice; they type the string, not an enum.
-ToolChoiceName = Literal['auto', 'required', 'none']
+ToolChoice = Literal['auto', 'required', 'none']
 
 # A termination known to carry no conforming output. Every path that would
 # parse a response against its output schema consults this first: a schema
