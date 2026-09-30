@@ -18,10 +18,13 @@ package tracing
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace/noop"
 )
 
@@ -36,14 +39,9 @@ func TestOTelInstrumentation_EmptyIDsWhenUnconfigured(t *testing.T) {
 
 	o := &OTelInstrumentation{}
 	info := &SpanInfo{metadata: &spanMetadata{Name: "n"}}
-	var got TraceInfo
-	_, err := o.RunInNewSpan(context.Background(), info, func(_ context.Context, span Span) (any, error) {
-		got = span.TraceInfo()
-		return nil, nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	_, span := o.StartSpan(context.Background(), info)
+	got := span.TraceInfo()
+	span.End(&SpanResult{})
 	if got.TraceID != "" || got.SpanID != "" {
 		t.Errorf("TraceInfo = %+v, want empty (no provider configured)", got)
 	}
@@ -65,13 +63,9 @@ func TestOTelInstrumentation_SkipsEncodingWhenNotRecording(t *testing.T) {
 
 	sm := &spanMetadata{Name: "n", Input: "in"}
 	o := &OTelInstrumentation{}
-	_, err := o.RunInNewSpan(context.Background(), &SpanInfo{metadata: sm}, func(context.Context, Span) (any, error) {
-		sm.Output = "out"
-		return nil, nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	_, span := o.StartSpan(context.Background(), &SpanInfo{metadata: sm})
+	sm.Output = "out"
+	span.End(&SpanResult{output: "out"})
 	if sm.inputJSON != nil || sm.outputJSON != nil {
 		t.Error("input/output were JSON-encoded for a non-recording span")
 	}
@@ -87,15 +81,39 @@ func TestOTelInstrumentation_RealIDsWhenConfigured(t *testing.T) {
 
 	o := &OTelInstrumentation{}
 	info := &SpanInfo{metadata: &spanMetadata{Name: "n"}}
-	var got TraceInfo
-	_, err := o.RunInNewSpan(context.Background(), info, func(_ context.Context, span Span) (any, error) {
-		got = span.TraceInfo()
-		return nil, nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	_, span := o.StartSpan(context.Background(), info)
+	got := span.TraceInfo()
+	span.End(&SpanResult{})
 	if got.TraceID == "" || got.SpanID == "" {
 		t.Errorf("TraceInfo = %+v, want real ids (provider configured)", got)
+	}
+}
+
+// TestOTelInstrumentation_DedicatedTracerProvider checks that a provider set
+// on the field receives Genkit spans and the global one does not.
+func TestOTelInstrumentation_DedicatedTracerProvider(t *testing.T) {
+	globalExp := tracetest.NewInMemoryExporter()
+	prev := otel.GetTracerProvider()
+	t.Cleanup(func() { otel.SetTracerProvider(prev) })
+	otel.SetTracerProvider(sdktrace.NewTracerProvider(sdktrace.WithSyncer(globalExp)))
+
+	exp := tracetest.NewInMemoryExporter()
+	useInstrumentation(t, &OTelInstrumentation{
+		TracerProvider: sdktrace.NewTracerProvider(sdktrace.WithSyncer(exp)),
+	})
+
+	wantErr := errors.New("boom")
+	_, _ = RunInNewSpan(context.Background(), &SpanMetadata{Name: "root", Type: "action"}, "in",
+		func(ctx context.Context, _ string) (string, error) { return "", wantErr })
+
+	spans := exp.GetSpans()
+	if len(spans) != 1 || spans[0].Name != "root" {
+		t.Fatalf("dedicated provider got %v, want one span named root", spans)
+	}
+	if spans[0].Status.Code != codes.Error || spans[0].Status.Description != "boom" {
+		t.Errorf("status = %+v, want error boom", spans[0].Status)
+	}
+	if n := len(globalExp.GetSpans()); n != 0 {
+		t.Errorf("global provider got %d spans, want 0", n)
 	}
 }

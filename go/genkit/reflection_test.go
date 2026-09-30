@@ -53,7 +53,7 @@ func dec(_ context.Context, x int) (int, error) {
 // race it. TestRunActionWithoutProviderIDs swaps it out temporarily; it is not
 // parallel.
 func TestMain(m *testing.M) {
-	tracing.ConfigureInstrumentation(
+	tracing.SetInstrumentation(
 		tracing.NewDirectTelemetryInstrumentation(tracing.NewTestOnlyTelemetryClient()))
 	os.Exit(m.Run())
 }
@@ -576,15 +576,15 @@ func TestActionCancellation(t *testing.T) {
 
 // TestRunActionWithoutProviderIDs covers a chain where no provider supplies
 // ids: the default OTel instrumentation over OTel's no-op provider (e.g. under
-// `genkit start --use-otel` with no OTel SDK configured). The trace headers
+// `genkit start --experimental-use-otel` with no OTel SDK configured). The trace headers
 // and cancellation must still work, on the ids the dispatcher mints.
 func TestRunActionWithoutProviderIDs(t *testing.T) {
 	prevTP := otel.GetTracerProvider()
 	otel.SetTracerProvider(noop.NewTracerProvider())
-	tracing.ResetInstrumentation()
+	tracing.SetInstrumentation()
 	t.Cleanup(func() {
 		otel.SetTracerProvider(prevTP)
-		tracing.ConfigureInstrumentation(
+		tracing.SetInstrumentation(
 			tracing.NewDirectTelemetryInstrumentation(tracing.NewTestOnlyTelemetryClient()))
 	})
 

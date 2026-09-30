@@ -55,8 +55,8 @@ type spanCollector struct {
 func collectSpans(t *testing.T) *spanCollector {
 	t.Helper()
 	client := tracing.NewTestOnlyTelemetryClient()
-	tracing.ConfigureInstrumentation(tracing.NewDirectTelemetryInstrumentation(client))
-	t.Cleanup(tracing.ResetInstrumentation)
+	tracing.SetInstrumentation(tracing.NewDirectTelemetryInstrumentation(client))
+	t.Cleanup(func() { tracing.SetInstrumentation() })
 	return &spanCollector{client: client}
 }
 
