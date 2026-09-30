@@ -85,6 +85,7 @@ function pluginToCommander(p: ToolPlugin): Command {
   // Default action to catch unknown commands.
   cmd.action((_, { args }: { args: string[] }) => {
     logger.error(`"${clc.bold(args[0])}" is not a known ${p.name} command.`);
+    process.exitCode = 1;
   });
   return cmd;
 }

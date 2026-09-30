@@ -162,8 +162,9 @@ export async function startCLI(): Promise<void> {
   }
   // Handle unknown commands.
   program.on('command:*', (operands) => {
-    logger.error(`error: unknown command '${operands[0]}'`);
-    logger.info(program.help());
+    logger.error(`unknown command '${operands[0]}'`);
+    // helpInformation() returns the help text. help() would exit with code 0.
+    logger.info(program.helpInformation());
     process.exit(1);
   });
 

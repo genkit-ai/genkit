@@ -54,6 +54,7 @@ export const docsList = new Command('docs:list')
       logger.error(
         `Failed to load documentation: ${e instanceof Error ? e.message : String(e)}`
       );
+      process.exitCode = 1;
     }
   });
 
@@ -94,6 +95,7 @@ export const docsSearch = new Command('docs:search')
       logger.error(
         `Failed to load documentation: ${e instanceof Error ? e.message : String(e)}`
       );
+      process.exitCode = 1;
     }
   });
 
@@ -106,6 +108,7 @@ export const docsRead = new Command('docs:read')
       const doc = documents[filePath];
       if (!doc) {
         logger.error(`Document not found: ${filePath}`);
+        process.exitCode = 1;
         return;
       }
 
@@ -117,5 +120,6 @@ export const docsRead = new Command('docs:read')
       logger.error(
         `Failed to load documentation: ${e instanceof Error ? e.message : String(e)}`
       );
+      process.exitCode = 1;
     }
   });

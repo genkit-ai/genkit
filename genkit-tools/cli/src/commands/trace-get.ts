@@ -55,6 +55,7 @@ export const traceGet = new Command('trace:get')
         const response = await manager.getTrace({ traceId });
         if (!response) {
           logger.error(`Trace with ID '${traceId}' not found.`);
+          process.exitCode = 1;
           return;
         }
 
@@ -73,6 +74,7 @@ export const traceGet = new Command('trace:get')
         }
       } catch (e) {
         logger.error(`Error retrieving trace: ${e}`);
+        process.exitCode = 1;
       }
     };
 

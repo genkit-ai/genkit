@@ -64,6 +64,7 @@ config
       logger.error(
         `Unknown config tag "${clc.bold(tag)}".\nValid options: ${readableTagsHint()}`
       );
+      process.exitCode = 1;
       return;
     }
 
@@ -85,6 +86,7 @@ config
       logger.error(
         `Unknown config tag "${clc.bold(tag)}".\nValid options: ${readableTagsHint()}`
       );
+      process.exitCode = 1;
       return;
     }
 
@@ -93,6 +95,7 @@ config
       parsedValue = CONFIG_TAGS[tag](value);
     } catch (e: any) {
       logger.error(`Invalid type for "${clc.bold(tag)}".\n${e.message}`);
+      process.exitCode = 1;
       return;
     }
 

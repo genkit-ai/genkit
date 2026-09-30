@@ -159,6 +159,7 @@ export const logList = new Command('log:list')
         }
       } catch (e) {
         logger.error(`Error listing logs: ${e}`);
+        process.exitCode = 1;
       }
     };
 

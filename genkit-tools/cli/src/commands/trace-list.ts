@@ -150,6 +150,7 @@ export const traceList = new Command('trace:list')
         );
       } catch (e) {
         logger.error(`Error listing traces: ${e}`);
+        process.exitCode = 1;
       }
     };
 

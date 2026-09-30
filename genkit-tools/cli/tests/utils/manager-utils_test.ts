@@ -14,9 +14,18 @@
  * limitations under the License.
  */
 
-import { RuntimeEvent } from '@genkit-ai/tools-common/manager';
-import { beforeEach, describe, expect, it, jest } from '@jest/globals';
+import { RuntimeEvent, RuntimeManager } from '@genkit-ai/tools-common/manager';
+import { logger } from '@genkit-ai/tools-common/utils';
 import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  jest,
+} from '@jest/globals';
+import {
+  runWithManager,
   waitForActionKeys,
   waitForRuntime,
 } from '../../src/utils/manager-utils';
@@ -186,5 +195,65 @@ describe('waitForActionKeys', () => {
     ).resolves.toBeUndefined();
     // Should return well before the 30s deadline.
     expect(Date.now() - start).toBeLessThan(5000);
+  });
+});
+
+describe('runWithManager', () => {
+  let mockManager: any;
+  let origTelemetryServer: string | undefined;
+
+  beforeEach(() => {
+    process.exitCode = undefined;
+    origTelemetryServer = process.env.GENKIT_TELEMETRY_SERVER;
+    process.env.GENKIT_TELEMETRY_SERVER = 'http://localhost:4033';
+    mockManager = {
+      stop: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+    };
+    jest.spyOn(RuntimeManager, 'create').mockResolvedValue(mockManager);
+    jest.spyOn(logger, 'error').mockImplementation((() => {}) as any);
+    jest.spyOn(logger, 'debug').mockImplementation((() => {}) as any);
+  });
+
+  afterEach(() => {
+    process.exitCode = undefined;
+    if (origTelemetryServer === undefined) {
+      delete process.env.GENKIT_TELEMETRY_SERVER;
+    } else {
+      process.env.GENKIT_TELEMETRY_SERVER = origTelemetryServer;
+    }
+    jest.restoreAllMocks();
+  });
+
+  it('sets process.exitCode = 1, logs error.message, and stops manager when fn throws a standard Error', async () => {
+    await runWithManager('/mock/root', async () => {
+      throw new Error('Missing required argument <dataset>');
+    });
+
+    expect(process.exitCode).toBe(1);
+    expect(logger.error).toHaveBeenCalledWith('Command exited with an Error:');
+    expect(logger.error).toHaveBeenCalledWith(
+      '\tMessage: Missing required argument <dataset>\n'
+    );
+    expect(mockManager.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it('logs Status fields and stops manager when fn throws a GenkitToolsError with Status data', async () => {
+    const toolsError = Object.assign(new Error('Flow failed'), {
+      data: {
+        code: 13,
+        message: 'Internal flow error',
+        details: { traceId: 'trace-abc' },
+      },
+    });
+
+    await runWithManager('/mock/root', async () => {
+      throw toolsError;
+    });
+
+    expect(process.exitCode).toBe(1);
+    expect(logger.error).toHaveBeenCalledWith('\tCode: 13');
+    expect(logger.error).toHaveBeenCalledWith('\tMessage: Internal flow error');
+    expect(logger.error).toHaveBeenCalledWith('\tTrace ID: trace-abc\n');
+    expect(mockManager.stop).toHaveBeenCalledTimes(1);
   });
 });

@@ -19,7 +19,14 @@ import {
   logger,
   stackTraceSpans,
 } from '@genkit-ai/tools-common/utils';
-import { beforeEach, describe, expect, it, jest } from '@jest/globals';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  jest,
+} from '@jest/globals';
 import { traceList } from '../../src/commands/trace-list';
 import { runWithManager } from '../../src/utils/manager-utils';
 
@@ -31,6 +38,7 @@ describe('trace:list command', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    process.exitCode = undefined;
     traceList.setOptionValue('limit', 15);
     traceList.setOptionValue('status', undefined);
     traceList.setOptionValue('type', undefined);
@@ -52,6 +60,10 @@ describe('trace:list command', () => {
     jest.spyOn(logger, 'info').mockImplementation((() => {}) as any);
     jest.spyOn(logger, 'error').mockImplementation((() => {}) as any);
     jest.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    process.exitCode = undefined;
   });
 
   it('should list traces with default limit', async () => {
@@ -179,6 +191,7 @@ describe('trace:list command', () => {
     expect(logger.error).toHaveBeenCalledWith(
       expect.stringContaining('Error listing traces: Error: API failure')
     );
+    expect(process.exitCode).toBe(1);
   });
 
   it.each(['0', '-1', '1.5', '10abc'])(

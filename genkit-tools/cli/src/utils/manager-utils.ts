@@ -379,9 +379,15 @@ export async function runWithManager(
     }
     await fn(manager);
   } catch (err) {
+    process.exitCode = 1;
     logger.error('Command exited with an Error:');
     const error = err as GenkitToolsError;
-    if (typeof error.data === 'object') {
+    if (
+      error &&
+      typeof error === 'object' &&
+      typeof error.data === 'object' &&
+      error.data !== null
+    ) {
       const errorStatus = error.data as Status;
       const { code, details, message } = errorStatus;
       logger.error(`\tCode: ${code}`);
@@ -390,10 +396,12 @@ export async function runWithManager(
         logger.error(`\tTrace ID: ${details.traceId}\n`);
       }
     } else {
-      logger.error(`\tMessage: ${error.data}\n`);
+      logger.error(
+        `\tMessage: ${error?.data ?? error?.message ?? String(err)}\n`
+      );
     }
-    logger.error('Stack trace:');
-    logger.error(`${error.stack}`);
+    logger.debug('Stack trace:');
+    logger.debug(`${error?.stack ?? ''}`);
   } finally {
     if (manager) {
       await manager.stop();

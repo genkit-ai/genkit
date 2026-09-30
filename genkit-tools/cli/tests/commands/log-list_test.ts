@@ -15,7 +15,14 @@
  */
 
 import { findProjectRoot, logger } from '@genkit-ai/tools-common/utils';
-import { beforeEach, describe, expect, it, jest } from '@jest/globals';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  jest,
+} from '@jest/globals';
 import { logList } from '../../src/commands/log-list';
 import { runWithManager } from '../../src/utils/manager-utils';
 
@@ -27,6 +34,7 @@ describe('log:list command', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    process.exitCode = undefined;
 
     mockManager = {
       listLogs: jest.fn(),
@@ -43,6 +51,10 @@ describe('log:list command', () => {
     jest.spyOn(logger, 'info').mockImplementation((() => {}) as any);
     jest.spyOn(logger, 'error').mockImplementation((() => {}) as any);
     jest.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    process.exitCode = undefined;
   });
 
   it('should list logs with default limit', async () => {
@@ -248,6 +260,7 @@ describe('log:list command', () => {
     expect(logger.error).toHaveBeenCalledWith(
       expect.stringContaining('Error listing logs: Error: API failure')
     );
+    expect(process.exitCode).toBe(1);
   });
 
   it.each(['0', '-1', '1.5', '10abc'])(
