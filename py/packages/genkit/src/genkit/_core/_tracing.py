@@ -47,7 +47,7 @@ class SpanMetadata(GenkitModel):
     """Input parameters for opening a Genkit span via :func:`run_in_new_span`.
 
     Mapping from SpanMetadata to span attributes (see ``Attr`` for wire names):
-      - name                 -> Attr.NAME (and span name)
+      - name                 -> Attr.NAME (and default span name)
       - input / output       -> Attr.INPUT / Attr.OUTPUT (JSON-serialized)
       - type                 -> Attr.TYPE
       - subtype              -> Attr.SUBTYPE
@@ -229,6 +229,7 @@ def record_span_outcome(
 def run_in_new_span(
     metadata: SpanMetadata,
     links: list[trace_api.Link] | None = None,
+    display_name: str | None = None,
 ) -> Generator[trace_api.Span, None, None]:
     """Starts a new span context under the current trace.
 
@@ -238,6 +239,7 @@ def run_in_new_span(
     Args:
         metadata: Span metadata. See :class:`SpanMetadata` for field routing.
         links: Optional span links.
+        display_name: Optional OpenTelemetry span name; does not change Genkit attributes.
 
     Yields:
         The OpenTelemetry Span object.
@@ -251,7 +253,7 @@ def run_in_new_span(
         # record_span_outcome owns success/error attrs so control-flow
         # GenkitInterrupt can re-raise without OTEL painting the span red.
         with tracer.start_as_current_span(
-            name=metadata.name,
+            name=display_name or metadata.name,
             links=links,
             attributes=start_attrs,
             record_exception=False,

@@ -21,8 +21,12 @@ import {
 } from '@genkit-ai/core';
 import { initNodeFeatures } from '@genkit-ai/core/node';
 import { Registry } from '@genkit-ai/core/registry';
+import { enableTelemetry } from '@genkit-ai/core/tracing';
+import { SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import * as assert from 'assert';
 import { beforeEach, describe, it } from 'node:test';
+import { RealtimeSpanProcessor } from '../../../core/src/tracing/realtime-span-processor.js';
+import { TestSpanExporter } from '../../../core/tests/utils.js';
 import {
   generate,
   generateStream,
@@ -42,6 +46,15 @@ import { defineResource } from '../../src/resource.js';
 import { defineTool, tool } from '../../src/tool.js';
 
 initNodeFeatures();
+
+const spanExporter = new TestSpanExporter();
+const liveSpanExporter = new TestSpanExporter();
+enableTelemetry({
+  spanProcessors: [
+    new SimpleSpanProcessor(spanExporter),
+    new RealtimeSpanProcessor(liveSpanExporter),
+  ],
+});
 
 describe('toGenerateRequest', () => {
   const registry = new Registry();
@@ -664,6 +677,8 @@ describe('generate', () => {
   });
 
   it('should use custom stepName parameter in tracing', async () => {
+    spanExporter.exportedSpans = [];
+    liveSpanExporter.exportedSpans = [];
     const response = await generate(registry, {
       model: 'echo',
       prompt: 'Testing custom step name',
@@ -673,6 +688,15 @@ describe('generate', () => {
       response.messages.map((m) => m.content[0].text),
       ['Testing custom step name', 'Testing custom step name']
     );
+    const span = spanExporter.exportedSpans.find(
+      (span) => span.displayName === 'test-generate-custom'
+    );
+    assert.ok(span);
+    assert.strictEqual(span.attributes['genkit:name'], 'generate');
+    const firstSnapshot = liveSpanExporter.exportedSpans.find(
+      (snapshot) => snapshot.spanId === span.spanId
+    );
+    assert.strictEqual(firstSnapshot?.displayName, 'test-generate-custom');
   });
 
   it('should default to "generate" name when no stepName is provided', async () => {

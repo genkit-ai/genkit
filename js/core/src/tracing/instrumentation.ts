@@ -44,6 +44,7 @@ type SpanContext = {
 
 interface RunInNewSpanOpts {
   metadata: SpanMetadata;
+  displayName?: string;
   labels?: Record<string, string>;
   links?: Link[];
 }
@@ -108,7 +109,7 @@ export async function runInNewSpan<T>(
   }
 
   return await tracer.startActiveSpan(
-    opts.metadata.name,
+    opts.displayName || opts.metadata.name,
     spanOptions,
     async (otSpan) => {
       const spanContext = {

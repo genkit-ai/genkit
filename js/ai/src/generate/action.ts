@@ -142,14 +142,14 @@ export async function generateHelper(
   return await runInNewSpan(
     {
       metadata: {
-        name: options.rawRequest.stepName || 'generate',
+        name: 'generate',
       },
+      displayName: options.rawRequest.stepName,
       labels: {
         [SPAN_TYPE_ATTR]: 'util',
       },
     },
     async (metadata) => {
-      metadata.name = options.rawRequest.stepName || 'generate';
       metadata.input = options.rawRequest;
       const output = await generateActionImpl(registry, {
         rawRequest: options.rawRequest,

@@ -3518,6 +3518,9 @@ func TestResumeCarriesOptionsForward(t *testing.T) {
 		if got := len(spans.allByName("myStep")); got != 2 {
 			t.Errorf("got %d spans named %q, want 2 (one per iteration)", got, "myStep")
 		}
+		for _, span := range spans.allByName("myStep") {
+			assertSpanAttr(t, span, "genkit:name", "generate")
+		}
 	})
 
 	t.Run("resume survives a hook writing to its options", func(t *testing.T) {

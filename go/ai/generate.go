@@ -795,8 +795,9 @@ func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 		// No subtype, as in TypeScript: the type says it all, and a subtype
 		// would annotate the trace path as well.
 		spanMetadata := &tracing.SpanMetadata{
-			Name: name,
-			Type: "util",
+			Name:        "generate",
+			DisplayName: name,
+			Type:        "util",
 		}
 		spanInput := turnOptions(opts)
 		spanInput.Messages = params.Request.Messages
