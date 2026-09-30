@@ -70,8 +70,8 @@ export interface RuntimeManagerOptions {
    * When true, the manager keeps `telemetryServerUrl` for its own Dev UI reads
    * but does not hand it to the runtime over the reflection handshake. This
    * keeps Genkit's native direct-export instrumentation off, so only what the
-   * app's own OTel SDK exports (e.g. via `genkit start --use-otel`) reaches the
-   * telemetry server. Defaults to false.
+   * app's own OTel SDK exports (e.g. via `genkit start --experimental-use-otel`)
+   * reaches the telemetry server. Defaults to false.
    */
   suppressRuntimeTelemetry?: boolean;
 }
@@ -736,8 +736,9 @@ export class RuntimeManager extends BaseRuntimeManager {
   private async notifyRuntime(runtime: RuntimeInfo) {
     try {
       await axios.post(`${runtime.reflectionServerUrl}/api/notify`, {
-        // Withheld in --use-otel mode so the runtime keeps native direct export
-        // off; the manager still uses telemetryServerUrl for its own UI reads.
+        // Withheld in --experimental-use-otel mode so the runtime keeps native
+        // direct export off; the manager still uses telemetryServerUrl for its
+        // own UI reads.
         telemetryServerUrl: this.suppressRuntimeTelemetry
           ? undefined
           : this.telemetryServerUrl,
