@@ -111,10 +111,10 @@ async def test_embedder_factory_does_not_register() -> None:
     ai = Genkit()
     action = embedder('text-plugin-style', embed_fn)
 
-    assert await ai.registry.resolve_action(action.kind, action.name) is None
+    assert await ai._registry.resolve_action(action.kind, action.name) is None
 
-    ai.registry.register_action_from_instance(action)
-    resolved = await ai.registry.resolve_action(action.kind, action.name)
+    ai._registry.register_action_from_instance(action)
+    resolved = await ai._registry.resolve_action(action.kind, action.name)
     assert resolved is action
 
 
@@ -207,7 +207,7 @@ def mock_genkit_instance() -> tuple[Genkit, MockGenkitRegistry]:
     """Fixture for a Genkit instance with a mock registry."""
     registry = MockGenkitRegistry()
     genkit_instance = Genkit()
-    genkit_instance.registry = registry  # type: ignore[assignment]
+    genkit_instance._registry = registry  # type: ignore[assignment]
     return genkit_instance, registry
 
 

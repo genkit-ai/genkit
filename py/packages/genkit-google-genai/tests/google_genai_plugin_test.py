@@ -584,7 +584,7 @@ async def test_resolve_model_finds_veo_as_background(mock_list_models: MagicMock
     mock_list_models.return_value = GenaiModels()
 
     ai = Genkit(plugins=[GoogleAI(api_key='test-key')])
-    action = await ai.registry.resolve_model('googleai/veo-3.0-generate-001')
+    action = await ai._registry.resolve_model('googleai/veo-3.0-generate-001')
 
     assert action is not None
     assert action.kind == ActionKind.BACKGROUND_MODEL

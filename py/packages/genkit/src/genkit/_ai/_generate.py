@@ -251,13 +251,13 @@ async def run_logged_hook(
 class ScopedGenkitView:
     """A GenkitLike view over the call-scoped registry for one generate invocation.
 
-    Middleware reads ``ctx.ai.registry`` expecting the per-call child registry
-    (with this call's middleware/tool registrations), not the global one, so we
-    hand it this thin wrapper instead of the full Genkit veneer.
+    Middleware looks actions up on ``ctx.ai`` so it sees this call's child
+    registry (this call's middleware/tool registrations), not the app-wide one,
+    so we hand it this thin wrapper instead of the full Genkit veneer.
     """
 
     def __init__(self, reg: RegistryLike) -> None:
-        self.registry: RegistryLike = reg
+        self._registry: RegistryLike = reg
 
     def current_session(self) -> SessionLike | None:
         return get_current_session()

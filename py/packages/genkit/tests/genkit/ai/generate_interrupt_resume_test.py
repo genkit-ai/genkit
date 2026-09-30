@@ -104,7 +104,7 @@ async def test_normal_two_arg_tools_see_no_resume_context() -> None:
     )
 
     r = await generate_action(
-        ai.registry,
+        ai._registry,
         _gen_opts(
             ai, tools=['u1', 'u2'], messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'hi'}]})]
         ),
@@ -163,7 +163,7 @@ async def test_interrupt_wires_trp_metadata_interrupt_and_stops() -> None:
     )
 
     r = await generate_action(
-        ai.registry,
+        ai._registry,
         _gen_opts(ai, tools=['intr'], messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'hi'}]})]),
     )
     assert r.finish_reason == FinishReason.INTERRUPTED
@@ -218,7 +218,7 @@ async def test_resume_respond_trp_gets_resolved_interrupt_and_tool_trp() -> None
     )
 
     first = await generate_action(
-        ai.registry,
+        ai._registry,
         _gen_opts(ai, tools=['intr'], messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'hi'}]})]),
     )
     assert first.finish_reason == FinishReason.INTERRUPTED
@@ -242,7 +242,7 @@ async def test_resume_respond_trp_gets_resolved_interrupt_and_tool_trp() -> None
     reply = respond_to_interrupt({'bar': 2}, interrupt=first.interrupts[0])
 
     second = await generate_action(
-        ai.registry,
+        ai._registry,
         _gen_opts(ai, tools=['intr'], messages=list(first.messages), resume=Resume(respond=[reply])),
     )
 
@@ -300,7 +300,7 @@ async def _interrupted_generate() -> tuple[Genkit, ModelResponse]:
         )
     )
     first = await generate_action(
-        ai.registry,
+        ai._registry,
         _gen_opts(ai, tools=['intr'], messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'hi'}]})]),
     )
     assert first.finish_reason == FinishReason.INTERRUPTED
@@ -382,7 +382,7 @@ async def test_tool_either_interrupts_or_returns() -> None:
         )
     )
     r_fail = await generate_action(
-        ai.registry,
+        ai._registry,
         _gen_opts(
             ai,
             tools=['bank_transfer'],
@@ -436,7 +436,7 @@ async def test_tool_either_interrupts_or_returns() -> None:
         )
     )
     r_ok = await generate_action(
-        ai.registry,
+        ai._registry,
         _gen_opts(
             ai,
             tools=['bank_transfer'],
@@ -513,7 +513,7 @@ async def test_resume_restart_runs_tool_second_time_and_resolved_interrupt_on_mo
     # ^ Queued for the second generate call (after restart re-runs the tool).
 
     first = await generate_action(
-        ai.registry,
+        ai._registry,
         _gen_opts(ai, tools=['pay'], messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'hi'}]})]),
     )
     assert first.finish_reason == FinishReason.INTERRUPTED
@@ -539,7 +539,7 @@ async def test_resume_restart_runs_tool_second_time_and_resolved_interrupt_on_mo
     )
 
     second = await generate_action(
-        ai.registry,
+        ai._registry,
         _gen_opts(ai, tools=['pay'], messages=list(first.messages), resume=Resume(restart=[restart_trp])),
     )
 
@@ -606,13 +606,13 @@ async def test_resume_top_level_metadata_lands_on_tool_message() -> None:
     )
 
     first = await generate_action(
-        ai.registry,
+        ai._registry,
         _gen_opts(ai, tools=['pay'], messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'hi'}]})]),
     )
     restart_trp = restart_tool(interrupt=first.interrupts[0], replace_input={'ok': True})
 
     second = await generate_action(
-        ai.registry,
+        ai._registry,
         _gen_opts(
             ai,
             tools=['pay'],
@@ -665,7 +665,7 @@ async def test_mixed_resume_one_respond_one_restart() -> None:
     )
 
     first = await generate_action(
-        ai.registry,
+        ai._registry,
         _gen_opts(
             ai, tools=['a', 'b'], messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'hi'}]})]
         ),
@@ -696,7 +696,7 @@ async def test_mixed_resume_one_respond_one_restart() -> None:
     ib = next(p for p in first.interrupts if p.tool_request is not None and p.tool_request.name == 'b')
 
     second = await generate_action(
-        ai.registry,
+        ai._registry,
         _gen_opts(
             ai,
             tools=['a', 'b'],
@@ -790,7 +790,7 @@ async def test_mixed_one_interrupts_one_succeeds_pending_output_in_wire() -> Non
     )
 
     first = await generate_action(
-        ai.registry,
+        ai._registry,
         _gen_opts(
             ai, tools=['a', 'b'], messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'hi'}]})]
         ),
@@ -816,7 +816,7 @@ async def test_mixed_one_interrupts_one_succeeds_pending_output_in_wire() -> Non
 
     ia = first.interrupts[0]
     second = await generate_action(
-        ai.registry,
+        ai._registry,
         _gen_opts(
             ai,
             tools=['a', 'b'],
@@ -917,7 +917,7 @@ async def test_pending_multipart_response_survives_wire_round_trip() -> None:
         use=[MiddlewareRef(name='multipart_media')],
     )
 
-    first = await generate_action(ai.registry, options)
+    first = await generate_action(ai._registry, options)
 
     assert first.finish_reason == FinishReason.INTERRUPTED
     assert first.message is not None
@@ -938,7 +938,7 @@ async def test_pending_multipart_response_survives_wire_round_trip() -> None:
         part for part in messages[-1].content if part.tool_request is not None and part.tool_request.name == 'pause'
     )
     second = await generate_action(
-        ai.registry,
+        ai._registry,
         options.model_copy(
             update={
                 'messages': messages,
@@ -1008,7 +1008,7 @@ async def test_restarted_tools_run_concurrently_and_keep_request_order() -> None
         ),
     ]
     first = await generate_action(
-        ai.registry,
+        ai._registry,
         _gen_opts(
             ai,
             tools=['alpha', 'beta'],
@@ -1019,7 +1019,7 @@ async def test_restarted_tools_run_concurrently_and_keep_request_order() -> None
 
     second = await asyncio.wait_for(
         generate_action(
-            ai.registry,
+            ai._registry,
             _gen_opts(
                 ai,
                 tools=['alpha', 'beta'],
@@ -1066,7 +1066,7 @@ async def test_resume_without_matching_replies_is_still_resendable() -> None:
     ]
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=messages,
@@ -1095,7 +1095,7 @@ async def test_resume_on_empty_messages_is_still_resendable() -> None:
     _, _ = define_programmable_model(ai)
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[],
@@ -1118,7 +1118,7 @@ async def test_resume_on_user_turn_is_still_resendable() -> None:
     _, _ = define_programmable_model(ai)
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'only user'}]})],
@@ -1144,7 +1144,7 @@ async def test_resume_on_text_only_model_turn_is_still_resendable() -> None:
     _, _ = define_programmable_model(ai)
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[
@@ -1174,7 +1174,7 @@ async def test_resume_on_tool_turn_is_still_resendable() -> None:
     _, _ = define_programmable_model(ai)
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[
@@ -1226,7 +1226,7 @@ async def test_restarted_tool_that_interrupts_again_returns_interrupted() -> Non
         )
     )
     first = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'hi'}]})],
@@ -1235,7 +1235,7 @@ async def test_restarted_tool_that_interrupts_again_returns_interrupted() -> Non
     )
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=list(first.messages),
@@ -1288,7 +1288,7 @@ async def _screenshot_confirm_interrupted() -> tuple[Genkit, Any]:
     )
 
     first = await generate_action(
-        ai.registry,
+        ai._registry,
         _gen_opts(
             ai,
             tools=['confirm', 'screenshot'],
@@ -1320,7 +1320,7 @@ async def test_mixed_interrupt_preserves_sibling_media_on_resume() -> None:
     assert shot_meta.get('pendingMetadata') == {'src': 'cam'}
 
     second = await generate_action(
-        ai.registry,
+        ai._registry,
         _gen_opts(
             ai,
             tools=['confirm', 'screenshot'],
@@ -1342,7 +1342,7 @@ async def test_resume_rejects_hollow_pending_content() -> None:
     """A saved conversation whose pending screenshot has no live payload fails on the response."""
     ai, first = await _screenshot_confirm_interrupted()
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         _gen_opts(
             ai,
             tools=['confirm', 'screenshot'],
@@ -1366,7 +1366,7 @@ async def test_resume_rejects_text_and_media_pending_content() -> None:
     """A saved conversation whose pending screenshot is caption plus image on one part fails on the response."""
     ai, first = await _screenshot_confirm_interrupted()
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         _gen_opts(
             ai,
             tools=['confirm', 'screenshot'],
@@ -1393,7 +1393,7 @@ async def test_resume_rejects_non_dict_pending_metadata() -> None:
     """A saved conversation whose pending screenshot metadata is not a dict fails on the response."""
     ai, first = await _screenshot_confirm_interrupted()
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         _gen_opts(
             ai,
             tools=['confirm', 'screenshot'],
@@ -1454,7 +1454,7 @@ async def _restart_screenshot(*, with_passthrough: bool = False) -> tuple[Any, A
     )
 
     first = await generate_action(
-        ai.registry,
+        ai._registry,
         _gen_opts(
             ai,
             tools=['shot'],
@@ -1465,7 +1465,7 @@ async def _restart_screenshot(*, with_passthrough: bool = False) -> tuple[Any, A
     assert first.finish_reason == FinishReason.INTERRUPTED
 
     second = await generate_action(
-        ai.registry,
+        ai._registry,
         _gen_opts(
             ai,
             tools=['shot'],

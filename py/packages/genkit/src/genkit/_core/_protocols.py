@@ -108,7 +108,7 @@ class GenkitLike(Protocol):
     """Structural interface for the Genkit instance exposed on middleware context."""
 
     @property
-    def registry(self) -> RegistryLike:
+    def _registry(self) -> RegistryLike:
         """The call-scoped registry for this generate invocation."""
         ...
 

@@ -34,7 +34,7 @@ from genkit._core._typing import (
     FinishReason,
     Role,
 )
-from genkit.exp import Genkit
+from genkit.exp import Genkit, lookup_agent
 from genkit.exp.agent import (
     FileSessionStore,
     InMemorySessionStore,
@@ -164,3 +164,20 @@ async def test_exp_genkit_still_generates() -> None:
     response = await ai.generate(model='programmableModel', prompt='hello')
 
     assert response.text == 'gen'
+
+
+@pytest.mark.asyncio
+async def test_lookup_agent_from_genkit_exp_finds_a_defined_agent() -> None:
+    ai = Genkit()
+    define_programmable_model(ai)
+    defined = ai.define_agent(name='echoAgent', model='programmableModel')
+
+    found = await lookup_agent(ai, 'echoAgent')
+
+    assert found is defined
+
+
+@pytest.mark.asyncio
+async def test_lookup_agent_unknown_name_returns_none() -> None:
+    ai = Genkit()
+    assert await lookup_agent(ai, 'ghost') is None

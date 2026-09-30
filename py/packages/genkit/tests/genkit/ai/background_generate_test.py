@@ -400,7 +400,7 @@ async def test_generate_stamps_latency_from_action_run(ai: Genkit) -> None:
 
 
 def _register_raw_background(ai: Genkit, *, name: str, start: Callable[..., Awaitable[object]]) -> None:
-    ai.registry.register_action(name=name, kind=ActionKind.BACKGROUND_MODEL, fn=start)
+    ai._registry.register_action(name=name, kind=ActionKind.BACKGROUND_MODEL, fn=start)
 
 
 @pytest.mark.asyncio
@@ -414,7 +414,7 @@ async def test_box_stamps_operation_action_so_check_can_poll(ai: Genkit) -> None
         return Operation(id=op.id, done=True, action=op.action)
 
     _register_raw_background(ai, name='raw-bg', start=start)
-    ai.registry.register_action(name='raw-bg/check', kind=ActionKind.CHECK_OPERATION, fn=check)
+    ai._registry.register_action(name='raw-bg/check', kind=ActionKind.CHECK_OPERATION, fn=check)
 
     response = await ai.generate(model='raw-bg', prompt='a cat')
     assert response.operation is not None
