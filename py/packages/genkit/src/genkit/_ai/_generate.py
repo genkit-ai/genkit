@@ -92,11 +92,11 @@ from genkit._core._registry import Registry
 from genkit._core._schema import check_output_schema
 from genkit._core._telemetry._instrumentation import SpanContext, run_in_new_span, set_span_state
 from genkit._core._typing import (
-    Error,
     FinishReason,
     GenerateActionOutputConfig,
     MiddlewareRef,
     Operation,
+    OperationError,
     Role,
     ToolDefinition,
     ToolRequest,
@@ -1069,7 +1069,7 @@ def box_dead_turn(
     if out.operation is not None and out.operation.error is None:
         # The ticket already started. The failure why lives on the
         # handle so check/cancel is not a clean start.
-        out.operation = out.operation.model_copy(update={'error': Error(message=finish_message)})
+        out.operation = out.operation.model_copy(update={'error': OperationError(message=finish_message)})
     if request is not None:
         # The turn's own request wins. A provider may echo back the request its
         # middleware rewrote, and the caller asked about theirs. Go overrides

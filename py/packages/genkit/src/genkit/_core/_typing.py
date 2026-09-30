@@ -567,7 +567,7 @@ class Operation(GenkitModel):
     id: str = Field(...)
     done: bool | None = None
     output: Any | None = Field(default=None)
-    error: Error | None = None
+    error: OperationError | None = None
     metadata: Metadata | None = None
 
 
@@ -996,8 +996,8 @@ class Supports(GenkitModel):
     long_running: bool | None = None
 
 
-class Error(GenkitModel):
-    """Model for error data."""
+class OperationError(GenkitModel):
+    """Model for operationerror data."""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
     message: str = Field(...)

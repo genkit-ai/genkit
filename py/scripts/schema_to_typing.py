@@ -45,6 +45,8 @@ TRANSFORMATIONS = {
     'GenerateActionOptions': {'suffix': 'Data', 'omit': ['messages']},
     # RuntimeError would shadow Python's builtin exception.
     'RuntimeError': {'output_name': 'GenkitRuntimeError'},
+    # Error would shadow Python's builtin exception / generic naming.
+    'Error': {'output_name': 'OperationError'},
     # Documents take the same Part as messages. The schema names a
     # text|media subset; we do not emit a second type for that.
     'DocumentPart': {'output_name': 'PartData'},
@@ -124,7 +126,7 @@ def _models_allowing_extra(schema: dict) -> set[str]:
     defs = schema.get('$defs') or {}
     for name, defn in defs.items():
         if isinstance(defn, dict) and defn.get('additionalProperties') is True:
-            result.add(name)
+            result.add(_output_name(name))
         if not isinstance(defn, dict):
             continue
         for prop_name, prop_def in (defn.get('properties') or {}).items():
@@ -133,7 +135,7 @@ def _models_allowing_extra(schema: dict) -> set[str]:
                 and prop_def.get('type') == 'object'
                 and prop_def.get('additionalProperties') is True
             ):
-                result.add(_pascal(prop_name))
+                result.add(_output_name(_pascal(prop_name)))
     return result
 
 
@@ -248,7 +250,7 @@ def _py_type(prop: dict, schema: dict, defs: dict, class_name: str, field_name: 
         if field_name in ('custom',) and prop.get('additionalProperties') is not None:
             return 'Custom'
         if _pascal(field_name) in defs:
-            return _pascal(field_name)
+            return _output_name(_pascal(field_name))
         return 'dict[str, Any]'
     if 'enum' in prop:
         vals = prop['enum']

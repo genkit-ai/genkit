@@ -34,9 +34,9 @@ from genkit._core._model import (
 )
 from genkit._core._typing import (
     Constrained,
-    Error as OperationError,
     ModelInfo,
     Operation,
+    OperationError,
     Stage,
     Supports,
     ToolDefinition,

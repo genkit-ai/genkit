@@ -29,9 +29,9 @@ from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._middleware import BaseMiddleware, GenerateHookParams, GenerateMiddlewareContext, ModelHookParams
 from genkit._core._model import ModelRequest, ModelResponse, ModelResponseChunk
 from genkit._core._typing import (
-    Error,
     FinishReason,
     Operation,
+    OperationError,
     Role,
     ToolRequest,
 )
@@ -639,7 +639,7 @@ def test_model_response_eq_uses_operation_snapshot() -> None:
 
     in_flight = ModelResponse(operation=Operation(id='job1', done=False))
     finished = ModelResponse(operation=Operation(id='job1', done=True, output={'url': 'x'}))
-    failed = ModelResponse(operation=Operation(id='job1', done=True, error=Error(message='boom')))
+    failed = ModelResponse(operation=Operation(id='job1', done=True, error=OperationError(message='boom')))
     assert in_flight != finished
     assert finished != failed
 
