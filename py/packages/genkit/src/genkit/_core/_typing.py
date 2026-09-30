@@ -429,7 +429,7 @@ class GenerateActionOptionsData(GenkitModel):
     docs: list[DocumentData] | None = None
     tools: list[str] | None = None
     resources: list[str] | None = None
-    tool_choice: ToolChoice | None = None
+    tool_choice: Literal['auto', 'required', 'none'] | None = None
     config: Any | None = Field(default=None)
     output: GenerateActionOutputConfig | None = None
     resume: Resume | None = None
@@ -1091,14 +1091,6 @@ class Stage(StrEnum):
     UNSTABLE = 'unstable'
     LEGACY = 'legacy'
     DEPRECATED = 'deprecated'
-
-
-class ToolChoice(StrEnum):
-    """Tool choice for generation (auto, required, none)."""
-
-    AUTO = 'auto'
-    REQUIRED = 'required'
-    NONE = 'none'
 
 
 class MediaModel(RootModel[Any]):

@@ -34,7 +34,6 @@ from genkit._core._typing import (
     GenerateActionOutputConfig,
     GenerationUsage,
     Role,
-    ToolChoice,
     ToolRequest,
 )
 from genkit.middleware import (
@@ -4497,7 +4496,7 @@ async def test_generate_on_chunk_failure_echoes_full_request() -> None:
             docs=[Document(content=[Part.from_text('doc content 1')])],
             config={'temperature': 0.5},
             tools=['testTool'],
-            tool_choice=ToolChoice.REQUIRED,
+            tool_choice='required',
             output=GenerateActionOutputConfig(format='json'),
         ),
         on_chunk=on_chunk,
@@ -4509,7 +4508,7 @@ async def test_generate_on_chunk_failure_echoes_full_request() -> None:
     assert request.docs, 'docs dropped from echoed request'
     assert request.config == {'temperature': 0.5}, 'config dropped from echoed request'
     assert request.tools, 'tools dropped from echoed request'
-    assert request.tool_choice == ToolChoice.REQUIRED, 'tool_choice dropped from echoed request'
+    assert request.tool_choice == 'required', 'tool_choice dropped from echoed request'
     assert request.output is not None
     assert request.output.format == 'json', 'output dropped from echoed request'
 

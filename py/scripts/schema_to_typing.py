@@ -214,7 +214,8 @@ def _py_type(prop: dict, schema: dict, defs: dict, class_name: str, field_name: 
         if 'enum' in target:
             vals = target.get('enum', [])
             if field_name in ('tool_choice', 'toolChoice') and set(vals) == {'auto', 'required', 'none'}:
-                return 'ToolChoice'
+                # callers type one of these three strings
+                return "Literal['auto', 'required', 'none']"
             if field_name in ('constrained',) and set(vals) == {'none', 'all', 'no-tools'}:
                 return 'Constrained'
             if field_name in ('stage',) and set(vals) == {'featured', 'stable', 'unstable', 'legacy', 'deprecated'}:
@@ -255,7 +256,8 @@ def _py_type(prop: dict, schema: dict, defs: dict, class_name: str, field_name: 
     if 'enum' in prop:
         vals = prop['enum']
         if field_name in ('tool_choice', 'toolChoice') and set(vals) == {'auto', 'required', 'none'}:
-            return 'ToolChoice'
+            # callers type one of these three strings
+            return "Literal['auto', 'required', 'none']"
         if field_name in ('constrained',) and set(vals) == {'none', 'all', 'no-tools'}:
             return 'Constrained'
         if field_name in ('stage',) and set(vals) == {'featured', 'stable', 'unstable', 'legacy', 'deprecated'}:
@@ -460,13 +462,6 @@ def generate(schema_path: Path, _out: Path) -> str:
         '    UNSTABLE = "unstable"',
         '    LEGACY = "legacy"',
         '    DEPRECATED = "deprecated"',
-        '',
-        'class ToolChoice(StrEnum):',
-        '    """Tool choice for generation (auto, required, none)."""',
-        '',
-        '    AUTO = "auto"',
-        '    REQUIRED = "required"',
-        '    NONE = "none"',
         '',
         'class MediaModel(RootModel[Any]):',
         '    """Wrapper for media content (flexible structure)."""',
