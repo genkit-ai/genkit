@@ -768,8 +768,56 @@ describe('Google AI Gemini', () => {
         );
       });
 
-      it('passes previousInteractionId to the API (Interactions API)', async () => {
+      it('passes previousInteractionId to the API when store is true (Interactions API)', async () => {
         const model = defineModel('gemini-flash-latest', defaultPluginOptions);
+        mockFetchResponse(defaultApiResponse);
+        const request: GenerateRequest<typeof GeminiConfigSchema> = {
+          ...minimalRequest,
+          config: {
+            previousInteractionId: 'interaction-123',
+            store: true,
+          },
+        };
+        await model.run(request);
+
+        const apiRequest: CreateInteractionRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.strictEqual(
+          apiRequest.previous_interaction_id,
+          'interaction-123'
+        );
+        assert.strictEqual(apiRequest.store, true);
+      });
+
+      it('throws when store: true is omitted but previousInteractionId is set (Interactions API)', async () => {
+        const model = defineModel('gemini-flash-latest', defaultPluginOptions);
+        mockFetchResponse(defaultApiResponse);
+        const request: GenerateRequest<typeof GeminiConfigSchema> = {
+          ...minimalRequest,
+          config: {
+            previousInteractionId: 'interaction-123',
+          },
+        };
+        await assert.rejects(
+          () => model.run(request),
+          (err: any) => {
+            assert.strictEqual(err.status, 'INVALID_ARGUMENT');
+            assert.ok(
+              err.message.includes(
+                'store must be true when previousInteractionId is set'
+              )
+            );
+            return true;
+          }
+        );
+      });
+
+      it('allows previousInteractionId without config store when pluginOptions has store: true (Interactions API)', async () => {
+        const model = defineModel('gemini-flash-latest', {
+          ...defaultPluginOptions,
+          store: true,
+        });
         mockFetchResponse(defaultApiResponse);
         const request: GenerateRequest<typeof GeminiConfigSchema> = {
           ...minimalRequest,
@@ -789,28 +837,127 @@ describe('Google AI Gemini', () => {
         assert.strictEqual(apiRequest.store, true);
       });
 
-      it('throws when store is false but previousInteractionId is set (Interactions API)', async () => {
+      it('extracts previousInteractionId from message metadata when not in config (Interactions API)', async () => {
         const model = defineModel('gemini-flash-latest', defaultPluginOptions);
         mockFetchResponse(defaultApiResponse);
         const request: GenerateRequest<typeof GeminiConfigSchema> = {
-          ...minimalRequest,
+          messages: [
+            { role: 'user', content: [{ text: 'Hello' }] },
+            {
+              role: 'model',
+              content: [{ text: 'Hi' }],
+              metadata: { interactionId: 'extracted-id-456' },
+            },
+            { role: 'user', content: [{ text: 'How are you?' }] },
+          ],
           config: {
-            previousInteractionId: 'interaction-123',
+            store: true,
+          },
+        };
+        await model.run(request);
+
+        const apiRequest: CreateInteractionRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.strictEqual(
+          apiRequest.previous_interaction_id,
+          'extracted-id-456'
+        );
+        assert.strictEqual(apiRequest.store, true);
+        assert.deepStrictEqual(apiRequest.input, [
+          {
+            type: 'user_input',
+            content: [{ type: 'text', text: 'How are you?' }],
+          },
+        ]);
+      });
+
+      it('config previousInteractionId overrides message metadata when both are present (Interactions API)', async () => {
+        const model = defineModel('gemini-flash-latest', defaultPluginOptions);
+        mockFetchResponse(defaultApiResponse);
+        const request: GenerateRequest<typeof GeminiConfigSchema> = {
+          messages: [
+            { role: 'user', content: [{ text: 'Hello' }] },
+            {
+              role: 'model',
+              content: [{ text: 'Hi' }],
+              metadata: { interactionId: 'metadata-id-123' },
+            },
+            { role: 'user', content: [{ text: 'How are you?' }] },
+          ],
+          config: {
+            previousInteractionId: 'config-override-id-789',
+            store: true,
+          },
+        };
+        await model.run(request);
+
+        const apiRequest: CreateInteractionRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.strictEqual(
+          apiRequest.previous_interaction_id,
+          'config-override-id-789'
+        );
+        assert.strictEqual(apiRequest.store, true);
+        assert.deepStrictEqual(apiRequest.input, [
+          {
+            type: 'user_input',
+            content: [{ type: 'text', text: 'How are you?' }],
+          },
+        ]);
+      });
+
+      it('does not extract previousInteractionId from message metadata when store is false (Interactions API)', async () => {
+        const model = defineModel('gemini-flash-latest', defaultPluginOptions);
+        mockFetchResponse(defaultApiResponse);
+        const request: GenerateRequest<typeof GeminiConfigSchema> = {
+          messages: [
+            { role: 'user', content: [{ text: 'Hello' }] },
+            {
+              role: 'model',
+              content: [{ text: 'Hi' }],
+              metadata: { interactionId: 'metadata-id-123' },
+            },
+            { role: 'user', content: [{ text: 'How are you?' }] },
+          ],
+          config: {
             store: false,
           },
         };
-        await assert.rejects(
-          () => model.run(request),
-          (err: any) => {
-            assert.strictEqual(err.status, 'INVALID_ARGUMENT');
-            assert.ok(
-              err.message.includes(
-                'store must be true when previousInteractionId is set'
-              )
-            );
-            return true;
-          }
+        await model.run(request);
+
+        const apiRequest: CreateInteractionRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
         );
+        assert.strictEqual(apiRequest.previous_interaction_id, undefined);
+        assert.strictEqual(apiRequest.store, false);
+        assert.strictEqual((apiRequest.input as any[]).length, 3);
+      });
+
+      it('does not extract previousInteractionId from message metadata when store: true is omitted from config (Interactions API)', async () => {
+        const model = defineModel('gemini-flash-latest', defaultPluginOptions);
+        mockFetchResponse(defaultApiResponse);
+        const request: GenerateRequest<typeof GeminiConfigSchema> = {
+          messages: [
+            { role: 'user', content: [{ text: 'Hello' }] },
+            {
+              role: 'model',
+              content: [{ text: 'Hi' }],
+              metadata: { interactionId: 'metadata-id-123' },
+            },
+            { role: 'user', content: [{ text: 'How are you?' }] },
+          ],
+          config: {},
+        };
+        await model.run(request);
+
+        const apiRequest: CreateInteractionRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.strictEqual(apiRequest.previous_interaction_id, undefined);
+        assert.strictEqual(apiRequest.store, false);
+        assert.strictEqual((apiRequest.input as any[]).length, 3);
       });
 
       it('defaults store to false for Interactions API unless explicitly set', async () => {
