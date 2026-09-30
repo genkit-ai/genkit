@@ -46,6 +46,10 @@ TOOLS = [
 
 PAGE_SIZE = int(os.environ.get('MCP_FAKE_PAGE_SIZE', '2'))
 
+TOOL_NAME_PREFIX = os.environ.get('MCP_FAKE_TOOL_NAME_PREFIX', '')
+if TOOL_NAME_PREFIX:
+    TOOLS = [tool.model_copy(update={'name': TOOL_NAME_PREFIX + tool.name}) for tool in TOOLS]
+
 list_requests = 0
 
 rendezvous_arrivals = 0
