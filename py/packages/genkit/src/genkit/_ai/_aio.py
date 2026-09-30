@@ -506,6 +506,23 @@ class Genkit:
             return None
         return _model_ref_for_action(action)
 
+    def define_value(self, type: str, name: str, value: object) -> None:
+        """Register a named value for later lookup.
+
+        A second define under the same type and name raises ValueError and
+        keeps the first value.
+        """
+        self._registry.register_value(type, name, value)
+
+    async def lookup_value(self, type: str, name: str) -> object | None:
+        """Return the value registered under type and name, or None.
+
+        Async because a lookup may later need to start a plugin that provides
+        the value; keeping this awaitable leaves that possible without
+        breaking callers.
+        """
+        return self._registry.lookup_value(type, name)
+
     def define_format(self, format: FormatDef) -> None:
         """Register a custom output format."""
         self._registry.register_value('format', format.name, format)

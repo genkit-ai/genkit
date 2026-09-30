@@ -456,3 +456,65 @@ async def test_resolve_action_on_ctx_ai_finds_a_per_call_model() -> None:
 
     assert seen['child'] is not None
     assert seen['parent'] is None
+
+
+@pytest.mark.asyncio
+async def test_lookup_value_returns_the_value_defined_with_define_value() -> None:
+    ai = Genkit()
+    v = {'id': 'shop'}
+    ai.define_value('a2ui-catalog', 'shop', v)
+    assert await ai.lookup_value('a2ui-catalog', 'shop') is v
+
+
+@pytest.mark.asyncio
+async def test_lookup_value_unknown_name_returns_none() -> None:
+    ai = Genkit()
+    assert await ai.lookup_value('a2ui-catalog', 'ghost') is None
+
+
+@pytest.mark.asyncio
+async def test_define_value_twice_under_the_same_name_raises() -> None:
+    ai = Genkit()
+    first = {'id': 'shop'}
+    ai.define_value('a2ui-catalog', 'shop', first)
+    with pytest.raises(ValueError, match='already registered'):
+        ai.define_value('a2ui-catalog', 'shop', {'id': 'other'})
+    assert await ai.lookup_value('a2ui-catalog', 'shop') is first
+
+
+@pytest.mark.asyncio
+async def test_middleware_lookup_value_sees_a_value_defined_on_the_app() -> None:
+    ai = Genkit()
+    define_echo_model(ai, name='echo')
+    v = {'id': 'shop'}
+    ai.define_value('a2ui-catalog', 'shop', v)
+    seen: dict[str, object] = {}
+
+    class LookupShop(BaseMiddleware):
+        async def wrap_generate(self, params, ctx, next_fn):
+            seen['value'] = await ctx.ai.lookup_value('a2ui-catalog', 'shop')
+            return await next_fn(params, ctx)
+
+    await ai.generate(model='echo', prompt='hi', use=[LookupShop()])
+    assert seen['value'] is v
+
+
+@pytest.mark.asyncio
+async def test_middleware_lookup_value_sees_a_value_defined_for_that_call_only() -> None:
+    ai = Genkit()
+    define_echo_model(ai, name='echo')
+    seen: dict[str, object] = {}
+
+    class Probe(BaseMiddleware):
+        async def wrap_generate(self, params, ctx, next_fn):
+            names = [
+                name for name in ctx.ai._registry.list_values('middleware') if name.startswith('dynamic-middleware-')
+            ]
+            name = names[0]
+            seen['call'] = await ctx.ai.lookup_value('middleware', name)
+            seen['app'] = await ai.lookup_value('middleware', name)
+            return await next_fn(params, ctx)
+
+    await ai.generate(model='echo', prompt='hi', use=[Probe()])
+    assert seen['call'] is not None
+    assert seen['app'] is None

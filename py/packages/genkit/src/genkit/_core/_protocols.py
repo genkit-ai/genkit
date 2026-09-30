@@ -115,3 +115,7 @@ class GenkitLike(Protocol):
     def current_session(self) -> SessionLike | None:
         """Return the bound agent session, if running inside one."""
         ...
+
+    async def lookup_value(self, type: str, name: str) -> object | None:
+        """Return the value registered under type and name, or None."""
+        ...
