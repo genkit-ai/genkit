@@ -32,6 +32,7 @@ from genkit import GenkitError, ModelInfo
 from genkit.embedder import EmbedderRef
 from genkit.model import ModelRef, model_ref
 from genkit_google_genai.models._routing import classify_family, strip_ref_prefixes
+from genkit_google_genai.models.embedder import EmbeddingConfigSchema
 
 ConfigT = TypeVar('ConfigT', bound=BaseModel)
 
@@ -107,13 +108,14 @@ def family_embedder_ref(
     *,
     namespace: str,
     plugin_class: str,
-    config: dict[str, object] | None,
+    config: EmbeddingConfigSchema | dict[str, object] | None,
     version: str | None,
 ) -> EmbedderRef:
     """Strip, gate, and build an EmbedderRef for ai.embed().
 
     This deliberately returns an EmbedderRef, not a ModelRef: an embedder id
-    must never end up in generate(model=...).
+    must never end up in generate(model=...). A typed ``config`` is stored as
+    a dict, the form ``ai.embed()`` merges with per-call options.
     """
     if not isinstance(name, str):
         raise GenkitError(
@@ -127,4 +129,6 @@ def family_embedder_ref(
         raise wrong_family_error(
             plugin_class=plugin_class, method='embedding', family='embedder', local=local, actual=actual
         )
+    if isinstance(config, EmbeddingConfigSchema):
+        config = config.model_dump(exclude_none=True)
     return EmbedderRef(name=f'{namespace}/{local}', config=config, version=version)

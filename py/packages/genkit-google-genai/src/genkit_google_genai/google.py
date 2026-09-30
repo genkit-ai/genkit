@@ -102,6 +102,7 @@ from genkit_google_genai.models.deep_research import (
 from genkit_google_genai.models.embedder import (
     VERTEX_KNOWN_EMBEDDERS,
     Embedder,
+    EmbeddingConfigSchema,
     get_embedder_info,
 )
 from genkit_google_genai.models.gemini import (
@@ -496,10 +497,15 @@ class GoogleFamilyRefs:
 
     @classmethod
     def embedding(
-        cls, name: str, *, config: dict[str, object] | None = None, version: str | None = None
+        cls,
+        name: str,
+        *,
+        config: EmbeddingConfigSchema | dict[str, object] | None = None,
+        version: str | None = None,
     ) -> EmbedderRef:
         """EmbedderRef for ``ai.embed()``, e.g. ``GoogleAI.embedding('gemini-embedding-001')``.
 
+        ``config`` takes an ``EmbeddingConfigSchema`` or a dict of its fields.
         Returns an EmbedderRef, not a ModelRef: an embedder id must never
         end up in ``generate(model=...)``.
         """
