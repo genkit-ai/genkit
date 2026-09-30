@@ -327,6 +327,11 @@ def _emit_model(
             py_type_str = 'dict[str, Any]'
         if name == 'MessageData' and k == 'role':
             py_type_str = 'Role | str'
+        # The wire schema allows one Score or a list; _py_type drops the
+        # array branch of a mixed anyOf, so a multi-score evaluator result
+        # would fail validation without this.
+        if name == 'EvalFnResponse' and snake == 'evaluation':
+            py_type_str = 'Score | list[Score]'
         desc = v.get('description')
         desc_extra = f', description={repr(desc)}' if desc else ''
         if k in req:

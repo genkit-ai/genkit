@@ -1828,6 +1828,42 @@ async def test_evaluator_records_fail_then_still_runs_the_next_row(
     assert response.root[1].evaluation.score is True
 
 
+@pytest.mark.asyncio
+async def test_define_evaluator_accepts_evaluation_as_list_of_scores(setup_test: SetupFixture) -> None:
+    """An evaluator that returns a list of scores is accepted and evaluate reports that list."""
+    ai, _, _, *_ = setup_test
+
+    async def my_eval_fn(datapoint: BaseDataPoint, options: object | None) -> EvalFnResponse:
+        return EvalFnResponse(
+            test_case_id=datapoint.test_case_id or '',
+            evaluation=[
+                Score(id='accuracy', score=0.9),
+                Score(id='fluency', score=0.8),
+            ],
+        )
+
+    ai.define_evaluator(
+        name='list_eval',
+        display_name='List evaluator',
+        definition='Returns two scores per sample',
+        fn=my_eval_fn,
+    )
+
+    dataset = [
+        BaseDataPoint(input='hi', output='hi', test_case_id='case1'),
+    ]
+
+    response = await ai.evaluate(evaluator='list_eval', dataset=dataset)
+
+    assert isinstance(response, EvalResponse)
+    assert len(response.root) == 1
+    assert response.root[0].test_case_id == 'case1'
+    evaluation = response.root[0].evaluation
+    assert isinstance(evaluation, list)
+    assert [score.id for score in evaluation] == ['accuracy', 'fluency']
+    assert [score.score for score in evaluation] == [0.9, 0.8]
+
+
 def test_define_background_model_with_info(setup_test: SetupFixture) -> None:
     """Test that define_background_model correctly serializes info by alias and excludes None."""
     ai, _, _, *_ = setup_test
