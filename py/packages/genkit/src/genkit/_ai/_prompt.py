@@ -72,6 +72,7 @@ from genkit._core._model import (
     Message,
     OutputConfig,
     Part,
+    ToolChoiceName,
     resume_options_to_resume,
 )
 from genkit._core._registry import Registry
@@ -111,7 +112,7 @@ class PromptGenerateOptions(TypedDict, total=False):
     messages: list[Message] | None
     docs: list[Document] | None
     tools: Sequence[str | Tool] | None
-    tool_choice: ToolChoice | None
+    tool_choice: ToolChoiceName | None
     output: OutputOptions | None
     resume_respond: Part | list[Part] | None
     resume_restart: Part | list[Part] | None
@@ -203,7 +204,7 @@ class GenerateCall(BaseModel):
     return_tool_requests: bool | None = None
     metadata: dict[str, Any] | None = None
     tools: Sequence[str | Tool] | None = None
-    tool_choice: ToolChoice | None = None
+    tool_choice: ToolChoiceName | None = None
     use: Sequence[BaseMiddleware | MiddlewareRef] | None = None
     docs: list[Document] | None = None
     resume_respond: Part | list[Part] | None = None
@@ -234,7 +235,7 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         return_tool_requests: bool | None = None,
         metadata: dict[str, Any] | None = None,
         tools: Sequence[str | Tool] | None = None,
-        tool_choice: ToolChoice | None = None,
+        tool_choice: ToolChoiceName | None = None,
         use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
         docs: list[Document] | None = None,
         name: str | None = None,
@@ -259,7 +260,7 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         self._return_tool_requests = return_tool_requests
         self._metadata = metadata
         self._tools = tools
-        self._tool_choice = tool_choice
+        self._tool_choice: ToolChoiceName | None = tool_choice
         self._use = use
         self._docs = docs
         self._cache_prompt: PromptCache = PromptCache()
@@ -655,7 +656,7 @@ async def to_generate_options(
         config=config,
         tools=tools_refs,
         return_tool_requests=call.return_tool_requests,
-        tool_choice=call.tool_choice,
+        tool_choice=ToolChoice(call.tool_choice) if call.tool_choice else None,
         output=output,
         max_turns=call.max_turns,
         docs=merged_docs,  # type: ignore[arg-type]

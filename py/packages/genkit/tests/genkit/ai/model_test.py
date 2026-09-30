@@ -19,8 +19,7 @@ from genkit._core._typing import (
     ActionMetadata,
     ToolRequest,
 )
-from genkit.model import ModelRequest, ModelUsage, model_action_metadata
-from genkit.plugin_api import get_basic_usage_stats
+from genkit.model import ModelRequest, ModelUsage, get_basic_usage_stats, model_action_metadata
 
 
 class PluginConfig(BaseModel):

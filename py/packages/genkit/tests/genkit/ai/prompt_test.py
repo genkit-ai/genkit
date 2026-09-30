@@ -40,7 +40,7 @@ from genkit._core._dap import DapValue
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import GenerateActionOptions, ModelConfig
 from genkit._core._registry import define_dynamic_action_provider
-from genkit._core._typing import Role, ToolChoice
+from genkit._core._typing import Role
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, MiddlewareRef, ModelHookParams
 from genkit.plugin_api import MiddlewarePlugin, new_middleware
 
@@ -151,6 +151,18 @@ async def test_simple_prompt_with_override_config() -> None:
 
 
 @pytest.mark.asyncio
+async def test_prompt_tool_choice_string_reaches_the_model() -> None:
+    """A string tool_choice on the call overrides the prompt's and reaches the model."""
+    ai, *_ = setup_test()
+
+    my_prompt = ai.define_prompt(prompt='hi', tool_choice='required')
+    response = await my_prompt(tool_choice='none')
+
+    assert response.request is not None
+    assert response.request.tool_choice == 'none'
+
+
+@pytest.mark.asyncio
 async def test_prompt_with_system() -> None:
     """Test that the prompt utilises both prompt and system prompt."""
     ai, *_ = setup_test()
@@ -190,7 +202,7 @@ async def test_prompt_with_kitchensink() -> None:
         prompt='hi',
         messages=[Message(role=Role.USER, content=[Part.from_text('history')])],
         tools=['testTool'],
-        tool_choice=ToolChoice.REQUIRED,
+        tool_choice='required',
         max_turns=5,
         input_schema=PromptInput.model_json_schema(),
         output_constrained=True,

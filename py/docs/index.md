@@ -23,6 +23,8 @@
 
 ::: genkit.ModelStreamResponse
 
+::: genkit.StreamResponse
+
 ::: genkit.FinishReason
 
 ::: genkit.tool
@@ -101,6 +103,8 @@
 
 ::: genkit.model.model_ref
 
+::: genkit.model.get_basic_usage_stats
+
 ::: genkit.model.ModelRef
 
 ::: genkit.model.ModelConfig
@@ -150,8 +154,6 @@
 ::: genkit.plugin_api.get_callable_json
 
 ::: genkit.plugin_api.is_dev_environment
-
-::: genkit.plugin_api.get_basic_usage_stats
 
 ## genkit.evaluator
 

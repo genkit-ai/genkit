@@ -50,7 +50,7 @@ from genkit._ai._tools import (
     restart_tool,
     tool,
 )
-from genkit._core._action import Action as Flow, ActionRunContext
+from genkit._core._action import Action as Flow, ActionRunContext, StreamResponse
 from genkit._core._context import ContextProvider, RequestData
 from genkit._core._dap import DynamicActionProvider
 from genkit._core._error import GenkitError, Interrupt, PublicError, RuntimeErrorReason
@@ -73,6 +73,7 @@ __all__ = [
     'ModelResponse',
     'ModelResponseChunk',
     'ModelStreamResponse',
+    'StreamResponse',
     'FinishReason',
     # Tools and HITL
     'tool',

@@ -65,11 +65,9 @@ from genkit.model import (
     ModelUsage,
     Supports,
     ToolDefinition,
-)
-from genkit.plugin_api import (
     get_basic_usage_stats,
-    wrap_http_error,
 )
+from genkit.plugin_api import wrap_http_error
 
 
 def _to_dict(obj: JsonAny) -> JsonAny:  # noqa: ANN401

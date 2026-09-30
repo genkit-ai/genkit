@@ -30,6 +30,7 @@ from genkit._core._model import (
     ModelRequest,
     ModelUsage,
     OutputConfig,
+    get_basic_usage_stats,
 )
 from genkit._core._typing import (
     Constrained,
@@ -69,6 +70,7 @@ __all__ = [
     'background_model',
     'model_action_metadata',
     'model_ref',
+    'get_basic_usage_stats',
     # Reference types
     'ModelRef',
     # Config
