@@ -484,7 +484,10 @@ class SpeechConfigSchema(BaseModel):
 
 
 DEFAULT_TTS_VOICE_NAME = 'Kore'
-"""Prebuilt voice sent with a TTS request whose config names no voice."""
+"""Prebuilt voice sent when a TTS model that needs one gets a request naming no voice."""
+
+_GEMINI_API_TTS_MODELS_NEEDING_VOICE = frozenset({'gemini-3.1-flash-tts-preview'})
+"""Gemini API TTS models that reject a request naming no voice. On Vertex AI every TTS model gets the default."""
 
 
 class GeminiTtsConfigSchema(GeminiConfigSchema):
@@ -495,7 +498,7 @@ class GeminiTtsConfigSchema(GeminiConfigSchema):
         alias='speechConfig',
         description=(
             'Speech synthesis settings. Without a voice config or a multi-speaker voice config, '
-            f'the {DEFAULT_TTS_VOICE_NAME} prebuilt voice is used.'
+            f'models that reject a request without a voice get the {DEFAULT_TTS_VOICE_NAME} prebuilt voice.'
         ),
     )
 
@@ -1447,18 +1450,19 @@ class GeminiModel:
                 request_cfg = genai_types.GenerateContentConfig()
             if not request_cfg.response_modalities:
                 request_cfg.response_modalities = ['AUDIO']
-            speech = request_cfg.speech_config
-            if speech is None:
-                speech = genai_types.SpeechConfig()
-                request_cfg.speech_config = speech
-            if (
-                not isinstance(speech, str)
-                and speech.voice_config is None
-                and speech.multi_speaker_voice_config is None
-            ):
-                speech.voice_config = genai_types.VoiceConfig(
-                    prebuilt_voice_config=genai_types.PrebuiltVoiceConfig(voice_name=DEFAULT_TTS_VOICE_NAME)
-                )
+            if self._tts_needs_default_voice(model_name):
+                speech = request_cfg.speech_config
+                if speech is None:
+                    speech = genai_types.SpeechConfig()
+                    request_cfg.speech_config = speech
+                if (
+                    not isinstance(speech, str)
+                    and speech.voice_config is None
+                    and speech.multi_speaker_voice_config is None
+                ):
+                    speech.voice_config = genai_types.VoiceConfig(
+                        prebuilt_voice_config=genai_types.PrebuiltVoiceConfig(voice_name=DEFAULT_TTS_VOICE_NAME)
+                    )
 
         # Image models require response_modalities: ["TEXT", "IMAGE"]
         if is_image_model(model_name):
@@ -1497,6 +1501,19 @@ class GeminiModel:
         response.usage = self._create_usage_stats(request=request, response=response)
 
         return response
+
+    def _tts_needs_default_voice(self, model_name: str) -> bool:
+        """Whether a TTS request that names no voice is sent the default voice.
+
+        Args:
+            model_name: The TTS model the request goes to.
+
+        Returns:
+            True on Vertex AI, and for the Gemini API models in ``_GEMINI_API_TTS_MODELS_NEEDING_VOICE``.
+        """
+        if self._client.vertexai:
+            return True
+        return model_name.split('/')[-1].lower() in _GEMINI_API_TTS_MODELS_NEEDING_VOICE
 
     async def _resolve_request_client(
         self, request: ModelRequest, context: dict[str, Any] | None = None

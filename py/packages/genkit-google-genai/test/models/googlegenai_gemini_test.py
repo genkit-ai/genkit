@@ -71,6 +71,19 @@ ALL_VERSIONS = list(GoogleAIGeminiVersion) + list(VertexAIGeminiVersion)
 IMAGE_GENERATION_VERSIONS = [GoogleAIGeminiVersion.GEMINI_2_5_FLASH]
 
 
+def _kore_speech_config() -> genai.types.SpeechConfig:
+    return genai.types.SpeechConfig(
+        voice_config=genai.types.VoiceConfig(prebuilt_voice_config=genai.types.PrebuiltVoiceConfig(voice_name='Kore'))
+    )
+
+
+def _expected_gemini_api_tts_config(version: str) -> genai.types.GenerateContentConfig:
+    # On the Gemini API only 3.1 TTS gets the default voice.
+    if version == 'gemini-3.1-flash-tts-preview':
+        return genai.types.GenerateContentConfig(response_modalities=['AUDIO'], speech_config=_kore_speech_config())
+    return genai.types.GenerateContentConfig(response_modalities=['AUDIO'])
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize('version', [x for x in ALL_VERSIONS])
 async def test_generate_text_response(mocker: MockerFixture, version: str) -> None:
@@ -92,6 +105,7 @@ async def test_generate_text_response(mocker: MockerFixture, version: str) -> No
     resp = genai.types.GenerateContentResponse(candidates=[candidate])
 
     googleai_client_mock = mocker.AsyncMock()
+    googleai_client_mock.vertexai = False
     googleai_client_mock.aio.models.generate_content.return_value = resp
 
     gemini = GeminiModel(version, googleai_client_mock)
@@ -101,14 +115,7 @@ async def test_generate_text_response(mocker: MockerFixture, version: str) -> No
 
     # Determine expected config based on model type
     if is_tts_model(version):
-        expected_config = genai.types.GenerateContentConfig(
-            response_modalities=['AUDIO'],
-            speech_config=genai.types.SpeechConfig(
-                voice_config=genai.types.VoiceConfig(
-                    prebuilt_voice_config=genai.types.PrebuiltVoiceConfig(voice_name='Kore')
-                )
-            ),
-        )
+        expected_config = _expected_gemini_api_tts_config(version)
     elif is_image_model(version):
         expected_config = genai.types.GenerateContentConfig(response_modalities=['TEXT', 'IMAGE'])
     else:
@@ -148,6 +155,7 @@ async def test_generate_stream_text_response(mocker: MockerFixture, version: str
     resp = genai.types.GenerateContentResponse(candidates=[candidate])
 
     googleai_client_mock = mocker.AsyncMock()
+    googleai_client_mock.vertexai = False
     googleai_client_mock.aio.models.generate_content_stream.__aiter__.side_effect = [resp]
     on_chunk_mock = mocker.MagicMock()
     gemini = GeminiModel(version, googleai_client_mock)
@@ -157,14 +165,7 @@ async def test_generate_stream_text_response(mocker: MockerFixture, version: str
 
     # Determine expected config based on model type
     if is_tts_model(version):
-        expected_config = genai.types.GenerateContentConfig(
-            response_modalities=['AUDIO'],
-            speech_config=genai.types.SpeechConfig(
-                voice_config=genai.types.VoiceConfig(
-                    prebuilt_voice_config=genai.types.PrebuiltVoiceConfig(voice_name='Kore')
-                )
-            ),
-        )
+        expected_config = _expected_gemini_api_tts_config(version)
     elif is_image_model(version):
         expected_config = genai.types.GenerateContentConfig(response_modalities=['TEXT', 'IMAGE'])
     else:
@@ -1544,20 +1545,31 @@ async def test_generate_keeps_caller_response_modalities_on_image_model(mocker: 
     assert sent_config.response_modalities == ['IMAGE']
 
 
-def _tts_client_mock(mocker: MockerFixture) -> AsyncMock:
+def _tts_client_mock(mocker: MockerFixture, *, vertexai: bool) -> AsyncMock:
     candidate = genai.types.Candidate(content=genai.types.Content(parts=[genai.types.Part(text='ok')]))
     client_mock = mocker.AsyncMock()
+    client_mock.vertexai = vertexai
     client_mock.aio.models.generate_content.return_value = genai.types.GenerateContentResponse(candidates=[candidate])
     return client_mock
 
 
 @pytest.mark.asyncio
-async def test_generate_defaults_the_tts_voice_when_config_names_none(mocker: MockerFixture) -> None:
-    """A TTS request without a speech config is sent with the default prebuilt voice."""
+@pytest.mark.parametrize(
+    ('version', 'vertexai'),
+    [
+        ('gemini-3.1-flash-tts-preview', False),
+        ('gemini-3.1-flash-tts-preview', True),
+        ('gemini-2.5-flash-preview-tts', True),
+    ],
+)
+async def test_generate_defaults_the_tts_voice_where_one_is_needed(
+    mocker: MockerFixture, version: str, vertexai: bool
+) -> None:
+    """A TTS request without a speech config gets the default voice on Vertex AI and for 3.1 TTS."""
     request = ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('hi')])])
-    client_mock = _tts_client_mock(mocker)
+    client_mock = _tts_client_mock(mocker, vertexai=vertexai)
 
-    await GeminiModel('gemini-3.1-flash-tts-preview', client_mock).generate(request, ActionRunContext())
+    await GeminiModel(version, client_mock).generate(request, ActionRunContext())
 
     sent_config = client_mock.aio.models.generate_content.call_args.kwargs['config']
     assert isinstance(sent_config.speech_config, genai_types.SpeechConfig)
@@ -1567,13 +1579,31 @@ async def test_generate_defaults_the_tts_voice_when_config_names_none(mocker: Mo
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'version', ['gemini-2.5-flash-preview-tts', 'gemini-2.5-pro-preview-tts', 'gemini-3.8-flash-tts']
+)
+async def test_generate_sends_no_voice_to_gemini_api_tts_that_picks_its_own(
+    mocker: MockerFixture, version: str
+) -> None:
+    """On the Gemini API, a TTS model that accepts a voiceless request is sent no speech config."""
+    request = ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('hi')])])
+    client_mock = _tts_client_mock(mocker, vertexai=False)
+
+    await GeminiModel(version, client_mock).generate(request, ActionRunContext())
+
+    sent_config = client_mock.aio.models.generate_content.call_args.kwargs['config']
+    assert sent_config.response_modalities == ['AUDIO']
+    assert sent_config.speech_config is None
+
+
+@pytest.mark.asyncio
 async def test_generate_defaults_the_tts_voice_next_to_a_language_code(mocker: MockerFixture) -> None:
     """A speech config that sets only a language code still gets the default voice."""
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
         config=GeminiTtsConfigSchema.model_validate({'speechConfig': {'languageCode': 'en-US'}}),
     )
-    client_mock = _tts_client_mock(mocker)
+    client_mock = _tts_client_mock(mocker, vertexai=False)
 
     await GeminiModel('gemini-3.1-flash-tts-preview', client_mock).generate(request, ActionRunContext())
 
@@ -1587,14 +1617,14 @@ async def test_generate_defaults_the_tts_voice_next_to_a_language_code(mocker: M
 
 @pytest.mark.asyncio
 async def test_generate_keeps_the_caller_tts_voice(mocker: MockerFixture) -> None:
-    """A voice named by the caller is sent unchanged."""
+    """A voice named by the caller is sent unchanged where the default would otherwise apply."""
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
         config=GeminiTtsConfigSchema.model_validate({
             'speechConfig': {'voiceConfig': {'prebuiltVoiceConfig': {'voiceName': 'Puck'}}}
         }),
     )
-    client_mock = _tts_client_mock(mocker)
+    client_mock = _tts_client_mock(mocker, vertexai=True)
 
     await GeminiModel('gemini-2.5-flash-preview-tts', client_mock).generate(request, ActionRunContext())
 
@@ -1620,7 +1650,7 @@ async def test_generate_adds_no_voice_to_a_multi_speaker_config(mocker: MockerFi
             }
         }),
     )
-    client_mock = _tts_client_mock(mocker)
+    client_mock = _tts_client_mock(mocker, vertexai=True)
 
     await GeminiModel('gemini-2.5-flash-preview-tts', client_mock).generate(request, ActionRunContext())
 
