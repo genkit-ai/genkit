@@ -24,6 +24,7 @@ from collections.abc import Mapping
 from typing import TypeVar
 
 from opentelemetry import metrics as metrics_api, trace as trace_api
+from opentelemetry._logs import Logger, get_logger
 from opentelemetry.metrics import Meter
 from opentelemetry.trace import Span, SpanKind, StatusCode, Tracer
 from opentelemetry.util.types import AttributeValue
@@ -33,7 +34,6 @@ from genkit import Interrupt
 from genkit.model import ModelRequest, ModelResponse
 from genkit.telemetry import Instrumentation, SpanContext, SpanMetadata, SpanNext
 from genkit_otel._gen_ai_attributes import (
-    _CONTENT_CAPTURING_MODES,
     CAPTURE_CONTENT_ENV_VAR,
     GEN_AI_OPERATION_DETAILS_EVENT,
     ContentCapturingMode,
@@ -86,14 +86,20 @@ class GenAiInstrumentation(Instrumentation):
         scope_name: str = 'genkit-genai',
         tracer: Tracer | None = None,
         meter: Meter | None = None,
-        otel_logger: object | None = None,
+        otel_logger: Logger | None = None,
     ) -> None:
         # an explicit NO_CONTENT is the app's PII opt-out, so only an
         # omitted mode falls back to the env var.
         if content_capturing_mode is None:
             self.content_capturing_mode = _content_capturing_mode_from_env()
         else:
-            self.content_capturing_mode = content_capturing_mode
+            parsed = parse_content_capturing_mode(content_capturing_mode)
+            if parsed is None:
+                raise ValueError(
+                    f'unknown content_capturing_mode {content_capturing_mode!r}; '
+                    'expected NO_CONTENT, SPAN_ONLY, EVENT_ONLY, or SPAN_AND_EVENT'
+                )
+            self.content_capturing_mode = parsed
         self.capture_action_io = capture_action_io
         self.emit_tool_spans = emit_tool_spans
         self.emit_metrics = emit_metrics
@@ -103,7 +109,7 @@ class GenAiInstrumentation(Instrumentation):
         self._injected_logger = otel_logger
         self._cached_tracer: Tracer | None = None
         self._cached_metrics: GenAiMetrics | None = None
-        self._cached_logger: object | None = None
+        self._cached_logger: Logger | None = None
         self._warned_not_initialized = False
 
     @property
@@ -128,11 +134,11 @@ class GenAiInstrumentation(Instrumentation):
         return self._cached_metrics
 
     @property
-    def _otel_logger(self) -> object | None:
+    def _otel_logger(self) -> Logger:
         if self._injected_logger is not None:
             return self._injected_logger
         if self._cached_logger is None:
-            self._cached_logger = _resolve_logger(self.scope_name)
+            self._cached_logger = get_logger(self.scope_name)
         return self._cached_logger
 
     async def run_in_new_span(
@@ -219,6 +225,8 @@ class GenAiInstrumentation(Instrumentation):
             self._maybe_warn_not_recording(span)
             try:
                 output = await next(GenAiSpanContext(span))
+                if self.content_capturing_mode != 'NO_CONTENT':
+                    self._record_tool_content(span, metadata.input, output)
                 self._maybe_capture_action_io(span, metadata.input, output)
                 return output
             except Interrupt:
@@ -275,6 +283,18 @@ class GenAiInstrumentation(Instrumentation):
         if error_type is not None:
             duration_attrs[GenAiAttr.ERROR_TYPE] = error_type
         self._metrics.record_duration(elapsed, duration_attrs)
+
+    def _record_tool_content(self, span: Span, input: object, output: object) -> None:
+        # same opt-in as prompt text: tool args and results can be PII.
+        if self._capture_on_span:
+            _set_json_attribute(span, GenAiAttr.TOOL_CALL_ARGUMENTS, input)
+            _set_json_attribute(span, GenAiAttr.TOOL_CALL_RESULT, output)
+        if self._capture_on_event:
+            event_attrs: dict[str, AttributeValue] = {
+                GenAiAttr.TOOL_CALL_ARGUMENTS: json.dumps(input, default=str),
+                GenAiAttr.TOOL_CALL_RESULT: json.dumps(output, default=str),
+            }
+            _emit_operation_details(self._otel_logger, event_attrs)
 
     def _maybe_capture_action_io(self, span: Span, input: object, output: object) -> None:
         if not self.capture_action_io:
@@ -392,8 +412,8 @@ class GenAiSpanContext(SpanContext):
 
 def _content_capturing_mode_from_env() -> ContentCapturingMode:
     raw = os.environ.get(CAPTURE_CONTENT_ENV_VAR, '')
-    token = raw.strip().upper()
-    if token and token not in _CONTENT_CAPTURING_MODES:
+    parsed = parse_content_capturing_mode(raw)
+    if parsed is None:
         logger.warning(
             'Invalid %s=%r; expected one of NO_CONTENT, SPAN_ONLY, '
             'EVENT_ONLY, SPAN_AND_EVENT. Defaulting to NO_CONTENT.',
@@ -401,7 +421,7 @@ def _content_capturing_mode_from_env() -> ContentCapturingMode:
             raw,
         )
         return 'NO_CONTENT'
-    return parse_content_capturing_mode(raw)
+    return parsed
 
 
 def _add_request_config_attributes(attrs: dict[str, AttributeValue], request: ModelRequest) -> None:
@@ -482,22 +502,5 @@ def _set_json_attribute(span: Span, key: str, value: object) -> None:
     span.set_attribute(key, encoded)
 
 
-def _resolve_logger(scope_name: str) -> object | None:
-    try:
-        from opentelemetry._logs import get_logger
-
-        return get_logger(scope_name)
-    except Exception:
-        return None
-
-
-def _emit_operation_details(otel_logger: object | None, attributes: Mapping[str, object]) -> None:
-    if otel_logger is None:
-        return
-    emit = getattr(otel_logger, 'emit', None)
-    if emit is None:
-        return
-    try:
-        emit(event_name=GEN_AI_OPERATION_DETAILS_EVENT, attributes=dict(attributes))
-    except TypeError:
-        return
+def _emit_operation_details(otel_logger: Logger, attributes: Mapping[str, AttributeValue]) -> None:
+    otel_logger.emit(event_name=GEN_AI_OPERATION_DETAILS_EVENT, attributes=attributes)

@@ -26,6 +26,7 @@ from genkit_otel._gen_ai_attributes import (
     GenAiAttr,
     GenkitAttr,
 )
+from opentelemetry._logs import LogRecord
 from opentelemetry.trace import StatusCode
 
 from genkit import FinishReason, Interrupt, Part, Role
@@ -90,6 +91,14 @@ def _event_names(harness) -> list[str | None]:
         inner = getattr(record, 'log_record', record)
         names.append(getattr(inner, 'event_name', None))
     return names
+
+
+def _operation_details_record(harness) -> LogRecord | None:
+    for record in harness.logs.get_finished_logs():
+        log_record = getattr(record, 'log_record', record)
+        if log_record.event_name == GEN_AI_OPERATION_DETAILS_EVENT:
+            return log_record
+    return None
 
 
 @pytest.mark.asyncio
@@ -238,6 +247,10 @@ async def test_event_only_emits_event_not_span_content(harness) -> None:
     span = harness.span_named('chat gemini-flash-latest')
     assert span is not None
     assert harness.attr(span, GenAiAttr.INPUT_MESSAGES) is None
+    record = _operation_details_record(harness)
+    assert record is not None
+    assert record.trace_id == span.context.trace_id
+    assert record.span_id == span.context.span_id
 
 
 @pytest.mark.asyncio
@@ -318,6 +331,64 @@ async def test_tool_span_emitted_for_tool_v2_when_enabled(harness) -> None:
     assert span is not None
     assert harness.attr(span, GenAiAttr.OPERATION_NAME) == 'execute_tool'
     assert harness.attr(span, GenAiAttr.TOOL_NAME) == 'weather'
+    assert harness.attr(span, GenAiAttr.TOOL_CALL_ARGUMENTS) is None
+    assert harness.attr(span, GenAiAttr.TOOL_CALL_RESULT) is None
+
+
+async def _run_weather_tool(instr, *, query: str = 'the recipe') -> None:
+    async def lookup(span=None):
+        return 'classified'
+
+    await instr.run_in_new_span(
+        SpanMetadata(name='lookup', action_type='tool.v2', input={'query': query}),
+        lookup,
+    )
+
+
+@pytest.mark.asyncio
+async def test_span_only_records_tool_arguments_and_result_on_span(harness) -> None:
+    """SPAN_ONLY + emit_tool_spans writes tool args and result on the execute_tool span, not an event."""
+    instr = harness.instrumentation(content_capturing_mode='SPAN_ONLY', emit_tool_spans=True)
+    await _run_weather_tool(instr)
+    span = harness.span_named('execute_tool lookup')
+    assert span is not None
+    assert 'the recipe' in harness.attr(span, GenAiAttr.TOOL_CALL_ARGUMENTS)
+    assert 'classified' in harness.attr(span, GenAiAttr.TOOL_CALL_RESULT)
+    assert GEN_AI_OPERATION_DETAILS_EVENT not in _event_names(harness)
+
+
+@pytest.mark.asyncio
+async def test_event_only_records_tool_arguments_on_event_not_span(harness) -> None:
+    """EVENT_ONLY + emit_tool_spans writes tool args and result on the operation.details event, not the span."""
+    instr = harness.instrumentation(content_capturing_mode='EVENT_ONLY', emit_tool_spans=True)
+    await _run_weather_tool(instr)
+    span = harness.span_named('execute_tool lookup')
+    assert span is not None
+    assert harness.attr(span, GenAiAttr.TOOL_CALL_ARGUMENTS) is None
+    assert harness.attr(span, GenAiAttr.TOOL_CALL_RESULT) is None
+    record = _operation_details_record(harness)
+    assert record is not None
+    attrs = dict(record.attributes or {})
+    assert 'the recipe' in attrs[GenAiAttr.TOOL_CALL_ARGUMENTS]
+    assert 'classified' in attrs[GenAiAttr.TOOL_CALL_RESULT]
+    assert record.trace_id == span.context.trace_id
+    assert record.span_id == span.context.span_id
+
+
+@pytest.mark.asyncio
+async def test_span_and_event_records_tool_arguments_on_span_and_event(harness) -> None:
+    """SPAN_AND_EVENT + emit_tool_spans writes tool args and result on the span and the event."""
+    instr = harness.instrumentation(content_capturing_mode='SPAN_AND_EVENT', emit_tool_spans=True)
+    await _run_weather_tool(instr)
+    span = harness.span_named('execute_tool lookup')
+    assert span is not None
+    assert 'the recipe' in harness.attr(span, GenAiAttr.TOOL_CALL_ARGUMENTS)
+    assert 'classified' in harness.attr(span, GenAiAttr.TOOL_CALL_RESULT)
+    record = _operation_details_record(harness)
+    assert record is not None
+    attrs = dict(record.attributes or {})
+    assert 'the recipe' in attrs[GenAiAttr.TOOL_CALL_ARGUMENTS]
+    assert 'classified' in attrs[GenAiAttr.TOOL_CALL_RESULT]
 
 
 @pytest.mark.asyncio
@@ -497,6 +568,12 @@ async def test_omitted_mode_uses_env(harness, monkeypatch: pytest.MonkeyPatch) -
     assert 'secret' in harness.attr(span, GenAiAttr.INPUT_MESSAGES)
 
 
+def test_unknown_content_capturing_mode_on_constructor_raises() -> None:
+    """GenAiInstrumentation(content_capturing_mode='bogus') raises ValueError."""
+    with pytest.raises(ValueError, match='unknown content_capturing_mode'):
+        GenAiInstrumentation(content_capturing_mode='bogus')  # type: ignore[arg-type]
+
+
 @pytest.mark.asyncio
 async def test_invalid_env_token_defaults_to_no_content(harness, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(CAPTURE_CONTENT_ENV_VAR, 'bogus')
@@ -637,9 +714,9 @@ async def test_interrupt_does_not_leak_prompt_content_under_no_content(harness) 
     instr = harness.instrumentation(content_capturing_mode='NO_CONTENT')
 
     async def interrupt_body(span=None):
-        raise GenkitInterrupt('human approval required')
+        raise Interrupt({'reason': 'human approval required'})
 
-    with pytest.raises(GenkitInterrupt):
+    with pytest.raises(Interrupt):
         await _run_model(
             instr,
             'googleai/gemini-flash-latest',
@@ -689,13 +766,15 @@ async def test_tool_arguments_pii_isolation_under_no_content(harness) -> None:
         return {'status': 'updated'}
 
     await instr.run_in_new_span(
-        SpanMetadata(name='update_user', action_type='tool', input={'ssn': '000-12-3456', 'salary': 150000}),
+        SpanMetadata(name='update_user', action_type='tool.v2', input={'ssn': '000-12-3456', 'salary': 150000}),
         tool_fn,
     )
     tool_span = harness.span_named('execute_tool update_user')
     assert tool_span is not None
     assert harness.attr(tool_span, GenkitAttr.INPUT) is None
     assert harness.attr(tool_span, GenkitAttr.OUTPUT) is None
+    assert harness.attr(tool_span, GenAiAttr.TOOL_CALL_ARGUMENTS) is None
+    assert harness.attr(tool_span, GenAiAttr.TOOL_CALL_RESULT) is None
 
 
 @pytest.mark.asyncio

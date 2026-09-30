@@ -53,6 +53,8 @@ class GenAiAttr:
 
     TOOL_NAME = 'gen_ai.tool.name'
     TOOL_TYPE = 'gen_ai.tool.type'
+    TOOL_CALL_ARGUMENTS = 'gen_ai.tool.call.arguments'
+    TOOL_CALL_RESULT = 'gen_ai.tool.call.result'
 
     INPUT_MESSAGES = 'gen_ai.input.messages'
     OUTPUT_MESSAGES = 'gen_ai.output.messages'
@@ -102,15 +104,16 @@ _CONTENT_CAPTURING_MODES: dict[str, ContentCapturingMode] = {
 }
 
 
-def parse_content_capturing_mode(raw: str) -> ContentCapturingMode:
+def parse_content_capturing_mode(raw: str) -> ContentCapturingMode | None:
     """Parse a spec content-capturing token.
 
-    Empty or unknown → ``NO_CONTENT``. A known token (case-insensitive,
-    surrounding whitespace ignored) → that mode.
+    Empty → ``NO_CONTENT``. A known token (case-insensitive, surrounding
+    whitespace ignored) → that mode. Unknown → ``None`` so the caller
+    can warn (env) or raise (constructor).
     """
     if not raw.strip():
         return 'NO_CONTENT'
-    return _CONTENT_CAPTURING_MODES.get(raw.strip().upper(), 'NO_CONTENT')
+    return _CONTENT_CAPTURING_MODES.get(raw.strip().upper())
 
 
 def split_model_name(name: str) -> tuple[str | None, str]:
