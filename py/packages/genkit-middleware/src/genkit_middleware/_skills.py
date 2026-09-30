@@ -26,14 +26,9 @@ from typing import Any
 import yaml
 from pydantic import BaseModel as PydanticBaseModel, Field
 
-from genkit import Part
-from genkit._ai._model import Message
-from genkit._ai._tools import define_tool
-from genkit._core._action import Action
-from genkit._core._model import GenerateActionOptions, ModelResponse
-from genkit._core._registry import Registry
-from genkit._core._typing import Role
+from genkit import Message, ModelResponse, Part, Role, Tool, tool
 from genkit.middleware import BaseMiddleware, GenerateHookParams, GenerateMiddlewareContext
+from genkit.model import GenerateActionOptions
 
 _SKILLS_MARKER = 'skills-instructions'
 _MISSING_DESCRIPTION = 'No description provided.'
@@ -150,12 +145,11 @@ class Skills(BaseMiddleware[SkillsConfig]):
         new_options.messages = messages
         return new_options
 
-    def tools(self, ctx: GenerateMiddlewareContext) -> list[Action]:
+    def tools(self, ctx: GenerateMiddlewareContext) -> list[Tool]:
         if not self._scan_skills():
             return []
 
-        scratch = Registry()
-
+        @tool
         async def use_skill(input: _UseSkillInput) -> str:
             skill_name = input.skill_name
             skills = await asyncio.to_thread(self._scan_skills)
@@ -169,8 +163,7 @@ class Skills(BaseMiddleware[SkillsConfig]):
             except Exception as exc:
                 return f'Failed to read skill "{skill_name}": {exc}'
 
-        t = define_tool(scratch, use_skill, name='use_skill')
-        return [t.action()]
+        return [use_skill]
 
     async def wrap_generate(
         self,
