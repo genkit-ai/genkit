@@ -23,32 +23,104 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	oteltrace "go.opentelemetry.io/otel/trace"
 
+	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/plugins/otel/genai"
 )
 
+// genaiSpan is the tracing.Span over one OTel span. StartSpan records what is
+// known up front; End records the result (response, content, metrics, error)
+// and ends the OTel span.
+type genaiSpan struct {
+	g    *GenAiInstrumentation
+	span oteltrace.Span
+	// ctx carries span as the active span. Kept because End has no context of
+	// its own, and the content log record and metrics must correlate to this
+	// span, as they did when they were recorded inside the span's scope.
+	ctx   context.Context
+	input any
+	// model is set for model spans only.
+	model *modelCall
+}
+
+// modelCall is the model-span state End needs.
+type modelCall struct {
+	request *ai.ModelRequest
+	// metricAttrs are the low-cardinality attributes shared by both metrics.
+	metricAttrs []attribute.KeyValue
+	start       time.Time
+}
+
+func (s *genaiSpan) TraceInfo() tracing.TraceInfo {
+	sc := s.span.SpanContext()
+	if !sc.IsValid() {
+		return tracing.TraceInfo{}
+	}
+	return tracing.TraceInfo{TraceID: sc.TraceID().String(), SpanID: sc.SpanID().String()}
+}
+
+func (s *genaiSpan) SetMetadata(md map[string]string) {
+	for k, v := range md {
+		s.span.SetAttributes(attribute.String("genkit:metadata:"+k, v))
+	}
+}
+
+// End records the run's result and ends the OTel span.
+//
+// A failed model call can still return a response (e.g. output schema
+// validation fails after the model already ran and billed tokens), so the
+// response is recorded whenever present, not only on success.
+func (s *genaiSpan) End(res *tracing.SpanResult) {
+	defer s.span.End()
+	out, err := res.Output(), res.Err()
+	g := s.g
+
+	if m := s.model; m != nil {
+		response := asModelResponse(out)
+		if response != nil {
+			addResponseAttributes(s.span, response, err != nil)
+		}
+		if g.contentMode != genai.NoContent {
+			g.recordContent(s.ctx, s.span, m.request, response, err != nil)
+		}
+		if g.metrics != nil {
+			g.recordModelMetrics(s.ctx, m.start, m.metricAttrs, response, err)
+		}
+	}
+	// Includes a partial output returned alongside an error.
+	g.maybeCaptureActionIO(s.span, s.input, out)
+	if err != nil {
+		g.recordError(s.span, err)
+	}
+}
+
 // labelAttrs returns the span's telemetry labels as attributes, matching the
 // default OTel instrumentation.
 func labelAttrs(info *tracing.SpanInfo) []attribute.KeyValue {
-	attrs := make([]attribute.KeyValue, 0, len(info.Labels))
-	for k, v := range info.Labels {
+	labels := info.Labels()
+	attrs := make([]attribute.KeyValue, 0, len(labels))
+	for k, v := range labels {
 		attrs = append(attrs, attribute.String(k, v))
 	}
 	return attrs
 }
 
-// runModelSpan opens a gen_ai chat CLIENT span for a model action, records the
-// request config and (after next) the response attributes, content, and metrics.
-//
-// A failed call can still return a response (e.g. output schema validation
-// fails after the model already ran and billed tokens), so the response is
-// recorded whenever present, not only on success.
-func (g *GenAiInstrumentation) runModelSpan(ctx context.Context, info *tracing.SpanInfo, next tracing.NextFunc) (any, error) {
+// startSpan opens an OTel span and wraps it.
+func (g *GenAiInstrumentation) startSpan(ctx context.Context, info *tracing.SpanInfo, name string, kind oteltrace.SpanKind, attrs []attribute.KeyValue) (context.Context, *genaiSpan) {
+	ctx, span := g.tracer.Start(ctx, name,
+		oteltrace.WithSpanKind(kind),
+		oteltrace.WithAttributes(attrs...))
+	g.maybeWarnNotRecording(ctx, span)
+	return ctx, &genaiSpan{g: g, span: span, ctx: ctx, input: info.Input()}
+}
+
+// startModelSpan opens a gen_ai chat CLIENT span for a model action, carrying
+// the request config; End adds the response attributes, content, and metrics.
+func (g *GenAiInstrumentation) startModelSpan(ctx context.Context, info *tracing.SpanInfo) (context.Context, tracing.Span) {
 	prefix, model := genai.SplitModelName(info.Name())
 	provider := genai.DeriveProviderName(prefix)
 	request := asModelRequest(info.Input())
 
-	// Base metric attributes shared by both histograms: low cardinality only.
 	metricAttrs := []attribute.KeyValue{
 		attribute.String(genai.AttrOperationName, genai.OperationChat),
 		attribute.String(genai.AttrRequestModel, model),
@@ -62,72 +134,27 @@ func (g *GenAiInstrumentation) runModelSpan(ctx context.Context, info *tracing.S
 	}
 
 	start := time.Now()
-	ctx, span := g.tracer.Start(ctx, genai.OperationChat+" "+model,
-		oteltrace.WithSpanKind(oteltrace.SpanKindClient),
-		oteltrace.WithAttributes(attrs...))
-	defer span.End()
-	g.maybeWarnNotRecording(ctx, span)
-
-	out, err := next(ctx, spanHandle(span))
-	failed := err != nil
-
-	response := asModelResponse(out)
-	if response != nil {
-		addResponseAttributes(span, response, failed)
-	}
-	if g.contentMode != genai.NoContent {
-		g.recordContent(ctx, span, request, response, failed)
-	}
-	g.maybeCaptureActionIO(span, info.Input(), out)
-	if failed {
-		g.recordError(span, err)
-	}
-	if g.metrics != nil {
-		g.recordModelMetrics(ctx, start, metricAttrs, response, err)
-	}
-	return out, err
+	ctx, s := g.startSpan(ctx, info, genai.OperationChat+" "+model, oteltrace.SpanKindClient, attrs)
+	s.model = &modelCall{request: request, metricAttrs: metricAttrs, start: start}
+	return ctx, s
 }
 
-// runToolSpan opens an execute_tool INTERNAL span for a tool action.
-func (g *GenAiInstrumentation) runToolSpan(ctx context.Context, info *tracing.SpanInfo, next tracing.NextFunc) (any, error) {
+// startToolSpan opens an execute_tool INTERNAL span for a tool action.
+func (g *GenAiInstrumentation) startToolSpan(ctx context.Context, info *tracing.SpanInfo) (context.Context, tracing.Span) {
 	attrs := append(labelAttrs(info),
 		attribute.String(genai.AttrOperationName, genai.OperationExecuteTool),
 		attribute.String(genai.AttrToolName, info.Name()),
 		attribute.String(genai.AttrToolType, "function"),
 	)
-	ctx, span := g.tracer.Start(ctx, genai.OperationExecuteTool+" "+info.Name(),
-		oteltrace.WithSpanKind(oteltrace.SpanKindInternal),
-		oteltrace.WithAttributes(attrs...))
-	defer span.End()
-	g.maybeWarnNotRecording(ctx, span)
-
-	out, err := next(ctx, spanHandle(span))
-	return g.finishSpan(span, info, out, err)
+	return g.startSpan(ctx, info, genai.OperationExecuteTool+" "+info.Name(), oteltrace.SpanKindInternal, attrs)
 }
 
-// runGenericSpan opens a plain INTERNAL span for action types with no GenAI
+// startGenericSpan opens a plain INTERNAL span for action types with no GenAI
 // mapping (flow, util, ...), keeping the trace tree connected.
-func (g *GenAiInstrumentation) runGenericSpan(ctx context.Context, info *tracing.SpanInfo, next tracing.NextFunc, subtype string) (any, error) {
+func (g *GenAiInstrumentation) startGenericSpan(ctx context.Context, info *tracing.SpanInfo, subtype string) (context.Context, tracing.Span) {
 	attrs := labelAttrs(info)
 	if subtype != "" {
 		attrs = append(attrs, attribute.String(genai.AttrGenkitActionType, subtype))
 	}
-	ctx, span := g.tracer.Start(ctx, info.Name(),
-		oteltrace.WithSpanKind(oteltrace.SpanKindInternal),
-		oteltrace.WithAttributes(attrs...))
-	defer span.End()
-	g.maybeWarnNotRecording(ctx, span)
-
-	out, err := next(ctx, spanHandle(span))
-	return g.finishSpan(span, info, out, err)
-}
-
-// finishSpan records action IO (including a partial output returned alongside
-// an error) and the error status, then passes the result through.
-func (g *GenAiInstrumentation) finishSpan(span oteltrace.Span, info *tracing.SpanInfo, out any, err error) (any, error) {
-	g.maybeCaptureActionIO(span, info.Input(), out)
-	if err != nil {
-		g.recordError(span, err)
-	}
-	return out, err
+	return g.startSpan(ctx, info, info.Name(), oteltrace.SpanKindInternal, attrs)
 }

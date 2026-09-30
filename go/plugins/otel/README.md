@@ -39,11 +39,14 @@ otel.SetTracerProvider(sdktrace.NewTracerProvider(/* ... */))
 
 // 2. Route Genkit telemetry through the GenAI provider. It composes with the
 //    built-in dev instrumentation that feeds the Developer UI.
-tracing.ConfigureInstrumentation(genaiotel.NewGenAiInstrumentation(genaiotel.GenAiInstrumentationOptions{}))
+tracing.SetInstrumentation(genaiotel.NewGenAiInstrumentation(genaiotel.GenAiInstrumentationOptions{}))
 
 // 3. Use Genkit as usual.
 g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
 ```
+
+To also keep Genkit's default `genkit:*` OpenTelemetry spans, list both
+providers: `tracing.SetInstrumentation(&tracing.OTelInstrumentation{}, genaiProvider)`.
 
 The configuration is process-wide on purpose: Genkit actions can run without
 a Genkit instance (for example a model obtained directly from a plugin), and

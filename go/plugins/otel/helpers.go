@@ -29,7 +29,6 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/core/status"
-	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal/base"
 	"github.com/firebase/genkit/go/plugins/otel/genai"
 )
@@ -120,31 +119,6 @@ func resolveMessage(response *ai.ModelResponse) *ai.Message {
 		return nil
 	}
 	return response.Message
-}
-
-// spanHandle adapts an OTel span to the tracing.Span the dispatcher expects.
-func spanHandle(span oteltrace.Span) tracing.Span {
-	return &otelSpan{span: span}
-}
-
-// otelSpan is the tracing.Span handle over an OTel span, exposing the span's
-// ids and mapping SetMetadata to genkit:metadata:* attributes.
-type otelSpan struct {
-	span oteltrace.Span
-}
-
-func (s *otelSpan) TraceInfo() tracing.TraceInfo {
-	sc := s.span.SpanContext()
-	if !sc.IsValid() {
-		return tracing.TraceInfo{}
-	}
-	return tracing.TraceInfo{TraceID: sc.TraceID().String(), SpanID: sc.SpanID().String()}
-}
-
-func (s *otelSpan) SetMetadata(md map[string]string) {
-	for k, v := range md {
-		s.span.SetAttributes(attribute.String("genkit:metadata:"+k, v))
-	}
 }
 
 // recordError sets the error status, error.type attribute, and exception event.

@@ -121,8 +121,8 @@ func TestWarnWhenNoSDK(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var buf bytes.Buffer
 			ctx := logger.WithContext(context.Background(), slog.New(slog.NewTextHandler(&buf, nil)))
-			tracing.ConfigureInstrumentation(NewGenAiInstrumentation(GenAiInstrumentationOptions{Tracer: tt.provider.Tracer("test")}))
-			t.Cleanup(tracing.ResetInstrumentation)
+			tracing.SetInstrumentation(NewGenAiInstrumentation(GenAiInstrumentationOptions{Tracer: tt.provider.Tracer("test")}))
+			t.Cleanup(func() { tracing.SetInstrumentation() })
 
 			for range 2 {
 				_, err := tracing.RunInNewSpan(ctx, &tracing.SpanMetadata{Name: "myFlow", Type: "action", Subtype: "flow"}, "in",
