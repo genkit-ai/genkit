@@ -19,9 +19,18 @@ import { findProjectRoot, logger } from '@genkit-ai/tools-common/utils';
 import { Command } from 'commander';
 import getPort, { makeRange } from 'get-port';
 import open from 'open';
-import { getDevEnvVars, startDevProcessManager } from '../utils/manager-utils';
+import {
+  EXPERIMENTAL_AUTH_OPTION_HELP,
+  REFLECTION_V2_HOST_OPTION_HELP,
+  getDevEnvVars,
+  startDevProcessManager,
+} from '../utils/manager-utils';
 
 interface FlutterRunOptions {
+  /** --experimental-auth. */
+  experimentalAuth?: boolean;
+  /** --reflection-v2-host. */
+  reflectionV2Host?: string;
   port?: string;
   open?: boolean;
   corsOrigin?: string;
@@ -42,6 +51,8 @@ export const startFlutter = new Command('start:flutter')
     '--cors-origin <origin>',
     'specify the allowed origin for CORS requests'
   )
+  .option('--reflection-v2-host <host>', REFLECTION_V2_HOST_OPTION_HELP)
+  .option('--experimental-auth', EXPERIMENTAL_AUTH_OPTION_HELP)
   .action(async (options: FlutterRunOptions) => {
     const projectRoot = await findProjectRoot();
     if (projectRoot.includes('/.Trash/')) {
@@ -55,6 +66,7 @@ export const startFlutter = new Command('start:flutter')
       await getDevEnvVars(projectRoot, {
         ...options,
         experimentalReflectionV2: true,
+        auth: options.experimentalAuth,
       });
 
     const dartDefines = Object.entries(envVars).map(

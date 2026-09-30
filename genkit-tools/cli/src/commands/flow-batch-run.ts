@@ -19,9 +19,14 @@ import { findProjectRoot, logger } from '@genkit-ai/tools-common/utils';
 import * as clc from 'colorette';
 import { Command } from 'commander';
 import { readFile, writeFile } from 'fs/promises';
-import { runWithManager } from '../utils/manager-utils';
+import {
+  EXPERIMENTAL_AUTH_OPTION_HELP,
+  runWithManager,
+} from '../utils/manager-utils';
 
 interface FlowBatchRunOptions {
+  /** --experimental-auth. */
+  experimentalAuth?: boolean;
   wait?: boolean;
   output?: string;
   label?: string;
@@ -39,6 +44,7 @@ export const flowBatchRun = new Command('flow:batchRun')
   .option('-c, --context <JSON>', 'JSON object passed to context', '')
   .option('--output <filename>', 'name of the output file to store the output')
   .option('--label [label]', 'label flow run in this batch')
+  .option('--experimental-auth', EXPERIMENTAL_AUTH_OPTION_HELP)
   .action(
     async (
       flowName: string,
@@ -120,6 +126,7 @@ export const flowBatchRun = new Command('flow:batchRun')
       await runWithManager(projectRoot, runAction, {
         runtimeCommand,
         waitForActionKeys: [`/flow/${flowName}`],
+        auth: options.experimentalAuth,
       });
     }
   );
