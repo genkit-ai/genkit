@@ -417,9 +417,9 @@ export class RuntimeManagerV2 extends BaseRuntimeManager {
         JSON.stringify({
           jsonrpc: '2.0',
           result: {
-            // Withheld in --use-otel mode so the runtime keeps native direct
-            // export off; the manager still uses telemetryServerUrl for its own
-            // UI reads.
+            // Withheld in --experimental-use-otel mode so the runtime keeps
+            // native direct export off; the manager still uses
+            // telemetryServerUrl for its own UI reads.
             telemetryServerUrl: this.suppressRuntimeTelemetry
               ? undefined
               : this.telemetryServerUrl,

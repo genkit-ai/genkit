@@ -45,25 +45,27 @@ Open http://localhost:16686 and look for `weatherFlow` traces. Metrics
 (`gen_ai.client.token.usage`, `gen_ai.client.operation.duration`) show up in
 the collector log (`tail -f .otel/collector.log`).
 
-## Genkit Dev UI (`genkit start --use-otel`)
+## Genkit Dev UI (`genkit start --experimental-use-otel`)
 
 The Genkit Dev UI can render these OTel traces too, no Jaeger or collector
-needed. `genkit start --use-otel` points the app's own OTel SDK at the dev
-telemetry server's OTLP endpoint (via standard `OTEL_EXPORTER_OTLP_*` env vars)
-instead of enabling Genkit's native dev instrumentation:
+needed. `genkit start --experimental-use-otel` points the app's own OTel SDK at
+the dev telemetry server's OTLP endpoint (via standard `OTEL_EXPORTER_OTLP_*`
+env vars) instead of enabling Genkit's native dev instrumentation:
 
 ```bash
 export GEMINI_API_KEY=...
-genkit start --use-otel -- npx tsx src/index.ts
+genkit start --experimental-use-otel -- npx tsx src/index.ts
 ```
 
 This is the "what would my traces look like in prod" view: only what the app's
 own OTel instrumentation emits shows up (the `gen_ai.*` client spans), not
 Genkit's more detailed native dev spans. For the richer native view, run
-`genkit start` without `--use-otel`.
+`genkit start` without `--experimental-use-otel`.
 
-Note: the dev telemetry server ingests OTLP traces and logs (`http/json`) but
-ignores metrics, so the two GenAI client metrics won't appear in the Dev UI.
+Note: only traces and logs (`http/json`) are pointed at the dev telemetry
+server. Metrics are left alone and go wherever the app's OTel config sends them
+(the NodeSDK default is `localhost:4318`), so the two GenAI client metrics
+won't appear in the Dev UI.
 
 ## What to expect
 
