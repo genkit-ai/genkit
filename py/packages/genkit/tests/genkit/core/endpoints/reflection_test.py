@@ -349,7 +349,7 @@ async def test_values_middleware_includes_derived_config_schema() -> None:
     class _Fallback(BaseMiddleware[_FallbackConfig]):
         pass
 
-    client = await _registry_asgi_client(ai.registry)
+    client = await _registry_asgi_client(ai._registry)
     try:
         response = await client.get('/api/values?type=middleware')
         assert response.status_code == 200
@@ -383,7 +383,7 @@ async def test_values_middleware_uses_class_docstring_as_description_fallback() 
         Extra paragraphs end up in the description verbatim.
         """
 
-    client = await _registry_asgi_client(ai.registry)
+    client = await _registry_asgi_client(ai._registry)
     try:
         response = await client.get('/api/values?type=middleware')
         assert response.status_code == 200
@@ -408,7 +408,7 @@ async def test_values_middleware_empty_config_schema_for_no_op() -> None:
     class _NoOp(BaseMiddleware):
         pass
 
-    client = await _registry_asgi_client(ai.registry)
+    client = await _registry_asgi_client(ai._registry)
     try:
         response = await client.get('/api/values?type=middleware')
         assert response.status_code == 200

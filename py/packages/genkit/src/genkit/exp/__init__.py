@@ -31,8 +31,10 @@ agent = ai.define_agent(
 ```
 """
 
-from genkit.exp._api import Genkit
+from genkit.exp._api import Genkit, current_session, lookup_agent
 
 __all__ = [
     'Genkit',
+    'current_session',
+    'lookup_agent',
 ]

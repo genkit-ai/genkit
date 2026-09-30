@@ -99,7 +99,7 @@ async def test_simple_text_generate_request(
     )
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[
@@ -217,7 +217,7 @@ async def test_simulates_doc_grounding(
     )
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[
@@ -677,7 +677,7 @@ async def test_util_generate_action_runs_use_middleware() -> None:
     the veneer. Without that, a hook the user configured in the UI silently
     drops on the floor — exactly the bug this test pins down.
     """
-    action = await ai.registry.resolve_action(kind=ActionKind.UTIL, name='generate')
+    action = await ai._registry.resolve_action(kind=ActionKind.UTIL, name='generate')
     assert action is not None
 
     action_response = await action.run(
@@ -781,7 +781,7 @@ async def test_generate_applies_middleware() -> None:
     define_echo_model(ai)
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='echoModel',
             messages=[
@@ -804,7 +804,7 @@ async def test_generate_middleware_next_fn_args_optional() -> None:
     define_echo_model(ai)
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='echoModel',
             messages=[
@@ -955,7 +955,7 @@ async def test_generate_middleware_can_modify_context() -> None:
     define_echo_model(ai)
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='echoModel',
             messages=[
@@ -1038,7 +1038,7 @@ async def test_generate_middleware_can_modify_stream() -> None:
         got_chunks.append(text_from_content(c.content))
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[
@@ -1157,7 +1157,7 @@ async def test_stream_interception_chains_across_model_and_generate_hooks() -> N
         final_chunks.append(text_from_content(c.content))
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[
@@ -1241,7 +1241,7 @@ async def test_wrap_generate_called_per_turn() -> None:
         )
     )
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
@@ -1267,7 +1267,7 @@ async def test_wrap_generate_called_per_turn() -> None:
         )
     )
     response2 = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
@@ -1325,7 +1325,7 @@ async def test_wrap_tool_called_on_tool_execution() -> None:
     )
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
@@ -1390,7 +1390,7 @@ async def test_generate_context_reaches_tool_run() -> None:
     )
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
@@ -1429,7 +1429,7 @@ async def test_generate_resume_context_reaches_tool_run() -> None:
     )
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[
@@ -1487,7 +1487,7 @@ async def test_wrap_tool_middleware_custom_context_reaches_tool_run() -> None:
     )
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
@@ -1561,7 +1561,7 @@ async def test_wrap_tool_custom_context_visible_to_generate_and_model_on_next_tu
 
     caller_ctx = {'user_id': 'u-123'}
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
@@ -1621,7 +1621,7 @@ async def test_middleware_wrap_tool_interrupt_handled_as_interrupt_not_crash() -
     )
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('do it')])],
@@ -1690,7 +1690,7 @@ async def test_middleware_contributed_tools_available_to_model() -> None:
     )
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
@@ -1700,7 +1700,7 @@ async def test_middleware_contributed_tools_available_to_model() -> None:
     assert response.text == 'done'
 
     # The contributed tool must NOT be visible in the root registry after the call.
-    assert await ai.registry.resolve_action(ActionKind.TOOL, 'middleware_tool') is None
+    assert await ai._registry.resolve_action(ActionKind.TOOL, 'middleware_tool') is None
 
 
 @pytest.mark.asyncio
@@ -1793,11 +1793,11 @@ async def test_middleware_in_one_call_share_an_isolated_registry() -> None:
         ) -> ModelResponse:
             # Resolve the tool ProviderMW just contributed — only works if
             # both middleware share the same per-call registry scope.
-            tool = await ctx.ai.registry.resolve_action(ActionKind.TOOL, 'shared_tool')
+            tool = await ctx.ai._registry.resolve_action(ActionKind.TOOL, 'shared_tool')
             if tool is not None:
                 seen_by_b.append(tool.name)
             # Also exercise the write path: anything we register through
-            # ctx.ai.registry must not survive the call.
+            # ctx.ai._registry must not survive the call.
             scratch = Registry()
 
             async def leaky_tool() -> str:
@@ -1805,7 +1805,7 @@ async def test_middleware_in_one_call_share_an_isolated_registry() -> None:
                 return 'nope'
 
             leak = define_tool(scratch, leaky_tool, name='leaky_tool').action()
-            ctx.ai.registry.register_action_from_instance(leak)
+            ctx.ai._registry.register_action_from_instance(leak)
             return await next_fn(params, ctx)
 
     pm, _ = define_programmable_model(ai)
@@ -1817,7 +1817,7 @@ async def test_middleware_in_one_call_share_an_isolated_registry() -> None:
     )
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
@@ -1830,8 +1830,8 @@ async def test_middleware_in_one_call_share_an_isolated_registry() -> None:
     assert response.text == 'ok'
     assert seen_by_b == ['shared_tool'], f'looker middleware should have resolved shared_tool, saw: {seen_by_b}'
     # Neither tool may leak into the root registry after the call ends.
-    assert await ai.registry.resolve_action(ActionKind.TOOL, 'shared_tool') is None
-    assert await ai.registry.resolve_action(ActionKind.TOOL, 'leaky_tool') is None
+    assert await ai._registry.resolve_action(ActionKind.TOOL, 'shared_tool') is None
+    assert await ai._registry.resolve_action(ActionKind.TOOL, 'leaky_tool') is None
 
 
 @pytest.mark.asyncio
@@ -1911,7 +1911,7 @@ async def test_queue_drain_streams_each_message_at_one_index() -> None:
 
     streamed: list[ModelResponseChunk] = []
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('go')])],
@@ -1969,7 +1969,7 @@ async def test_restart_path_routes_through_wrap_tool_middleware() -> None:
     interrupt_part = Part.from_tool_request(name='approveMe', input={}, ref='r1', metadata={'interrupt': True})
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[
@@ -2143,7 +2143,7 @@ async def test_parallel_tool_requests_all_complete() -> None:
     )
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[
@@ -2187,7 +2187,7 @@ async def test_generate_inline_tool_without_root_registration() -> None:
 
     inline_tool = define_tool(other, inline_yell, name='inline_yell')
 
-    assert await ai.registry.resolve_action(ActionKind.TOOL, 'inline_yell') is None
+    assert await ai._registry.resolve_action(ActionKind.TOOL, 'inline_yell') is None
 
     pm.responses.append(
         ModelResponse(
@@ -2214,7 +2214,7 @@ async def test_generate_inline_tool_without_root_registration() -> None:
     )
 
     assert response.text == 'after_inline'
-    assert await ai.registry.resolve_action(ActionKind.TOOL, 'inline_yell') is None
+    assert await ai._registry.resolve_action(ActionKind.TOOL, 'inline_yell') is None
 
 
 @pytest.mark.asyncio
@@ -2252,7 +2252,7 @@ async def test_parallel_tool_requests_one_interrupt_keeps_pending_output_for_oth
     )
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[
@@ -2330,7 +2330,7 @@ async def test_generate_and_model_middleware_execution_order() -> None:
 
     pm.response_cb = model_side_effect
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
@@ -2427,7 +2427,7 @@ async def test_generate_model_tool_middleware_ordering_across_turns() -> None:
             return resp
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
@@ -2490,7 +2490,7 @@ async def test_middleware_contributed_tool_resolvable_during_restart() -> None:
     interrupt_part = Part.from_tool_request(name='injectedTool', input={}, ref='r1', metadata={'interrupt': True})
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[
@@ -2550,7 +2550,7 @@ async def test_generate_action_spec(spec: dict[str, Any]) -> None:
                     converted.append(TypeAdapter(ModelResponseChunk).validate_python(chunk))
             pm.chunks.append(converted)
 
-    action = await ai.registry.resolve_action(kind=ActionKind.UTIL, name='generate')
+    action = await ai._registry.resolve_action(kind=ActionKind.UTIL, name='generate')
     assert action is not None
 
     response = None
@@ -2699,7 +2699,7 @@ async def test_generate_with_empty_messages_lets_the_model_speak_first(
     )
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(model='programmableModel', messages=[]),
     )
     assert response.finish_reason == FinishReason.STOP
@@ -3639,7 +3639,7 @@ async def test_wrap_generate_cannot_replace_the_named_tool_action() -> None:
             ctx: GenerateMiddlewareContext,
             next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
         ) -> ModelResponse:
-            ctx.ai.registry.register_action_from_instance(leak)
+            ctx.ai._registry.register_action_from_instance(leak)
             return await next_fn(params, ctx)
 
         async def wrap_model(
@@ -3688,7 +3688,7 @@ async def test_wrap_generate_cannot_replace_the_named_tool_after_a_closed_round(
             ctx: GenerateMiddlewareContext,
             next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
         ) -> ModelResponse:
-            ctx.ai.registry.register_action_from_instance(leak)
+            ctx.ai._registry.register_action_from_instance(leak)
             return await next_fn(params, ctx)
 
         async def wrap_model(
@@ -3751,7 +3751,7 @@ async def test_resume_restart_cannot_replace_the_named_tool_action() -> None:
             ctx: GenerateMiddlewareContext,
             next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
         ) -> ModelResponse:
-            ctx.ai.registry.register_action_from_instance(leak)
+            ctx.ai._registry.register_action_from_instance(leak)
             return await next_fn(params, ctx)
 
         async def wrap_model(
@@ -4370,7 +4370,7 @@ async def test_midstream_model_failure_keeps_chunks_and_prior_closed_history() -
 
     ai.define_model(name='midstreamFailureModel', fn=midstream_failure_model)
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='midstreamFailureModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('start')])],
@@ -4447,7 +4447,7 @@ async def test_generate_on_chunk_failure_returns_closed_history() -> None:
         raise RuntimeError('model sink closed')
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
@@ -4489,7 +4489,7 @@ async def test_generate_on_chunk_failure_echoes_full_request() -> None:
         raise RuntimeError('model sink closed')
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
@@ -4534,7 +4534,7 @@ async def test_generate_on_chunk_genkit_error_is_internal_not_the_sink_reason() 
         )
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
@@ -4695,7 +4695,7 @@ async def test_abort_after_tool_turn_keeps_closed_rounds() -> None:
     ]
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('keep going')])],
@@ -4733,7 +4733,7 @@ async def test_abort_during_first_tool_drops_unfinished_round() -> None:
 
     async def run() -> ModelResponse:
         return await generate_action(
-            ai.registry,
+            ai._registry,
             GenerateActionOptions(
                 model='programmableModel',
                 messages=[Message(role=Role.USER, content=[Part.from_text('keep going')])],
@@ -4767,7 +4767,7 @@ async def test_already_cancelled_generate_returns_prompt() -> None:
     abort_signal.set()
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('keep going')])],
@@ -4811,7 +4811,7 @@ async def test_already_cancelled_generate_returns_prior_messages() -> None:
     abort_signal.set()
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[
@@ -4845,7 +4845,7 @@ async def test_already_cancelled_unknown_model_returns() -> None:
     abort_signal.set()
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='nope/ghost',
             messages=[Message(role=Role.USER, content=[Part.from_text('keep going')])],
@@ -4880,7 +4880,7 @@ async def test_abort_during_first_model_call_returns_prompt() -> None:
 
     async def run() -> ModelResponse:
         return await generate_action(
-            ai.registry,
+            ai._registry,
             GenerateActionOptions(
                 model='hangingModel',
                 messages=[Message(role=Role.USER, content=[Part.from_text('keep going')])],
@@ -4928,7 +4928,7 @@ async def test_abort_during_later_model_call_keeps_closed_round() -> None:
 
     async def run() -> ModelResponse:
         return await generate_action(
-            ai.registry,
+            ai._registry,
             GenerateActionOptions(
                 model='hangAfterToolModel',
                 messages=[Message(role=Role.USER, content=[Part.from_text('keep going')])],
@@ -6251,7 +6251,7 @@ async def test_generate_on_chunk_validation_error_returns_closed_history() -> No
         Recipe.model_validate({'nope': 1})
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
@@ -6341,7 +6341,7 @@ async def test_util_generate_dead_turn_paints_span_error(exporter) -> None:
         )
     ]
 
-    action = await ai.registry.resolve_action(kind=ActionKind.UTIL, name='generate')
+    action = await ai._registry.resolve_action(kind=ActionKind.UTIL, name='generate')
     assert action is not None
     action_response = await action.run(
         GenerateActionOptions(

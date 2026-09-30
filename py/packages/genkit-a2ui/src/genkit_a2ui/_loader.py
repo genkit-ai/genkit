@@ -54,7 +54,7 @@ class A2uiCatalogError(GenkitError):
 def load_catalog(ai: GenkitLike, catalog: A2uiCatalog) -> A2uiCatalog:
     if not catalog.id:
         raise A2uiCatalogError('a2ui: load_catalog: catalog has no id')
-    existing = ai.registry.lookup_value(A2UI_CATALOG_VALUE_TYPE, catalog.id)
+    existing = ai._registry.lookup_value(A2UI_CATALOG_VALUE_TYPE, catalog.id)
     if existing is not None:
         current = A2uiCatalog.from_value(existing)
         if current is None:
@@ -64,7 +64,7 @@ def load_catalog(ai: GenkitLike, catalog: A2uiCatalog) -> A2uiCatalog:
                 'a2ui: load_catalog: a different catalog is already registered under this id; keeping the existing one'
             )
         return current
-    ai.registry.register_value(A2UI_CATALOG_VALUE_TYPE, catalog.id, catalog.as_value())
+    ai._registry.register_value(A2UI_CATALOG_VALUE_TYPE, catalog.id, catalog.as_value())
     return catalog
 
 
