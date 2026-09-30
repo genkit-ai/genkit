@@ -39,7 +39,7 @@ func setupMetrics(t *testing.T) *sdkmetric.ManualReader {
 	setup(t, GenAiInstrumentationOptions{})
 	reader := sdkmetric.NewManualReader()
 	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
-	tracing.ConfigureInstrumentation(NewGenAiInstrumentation(GenAiInstrumentationOptions{Meter: mp.Meter("test")}))
+	tracing.SetInstrumentation(NewGenAiInstrumentation(GenAiInstrumentationOptions{Meter: mp.Meter("test")}))
 	return reader
 }
 
@@ -159,7 +159,7 @@ func TestMetricsDisabled(t *testing.T) {
 	setup(t, GenAiInstrumentationOptions{})
 	reader := sdkmetric.NewManualReader()
 	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
-	tracing.ConfigureInstrumentation(NewGenAiInstrumentation(GenAiInstrumentationOptions{Meter: mp.Meter("test"), DisableMetrics: true}))
+	tracing.SetInstrumentation(NewGenAiInstrumentation(GenAiInstrumentationOptions{Meter: mp.Meter("test"), DisableMetrics: true}))
 
 	runModelWith(t, modelResponse(), nil)
 	if got := collect(t, reader); len(got) != 0 {

@@ -22,9 +22,9 @@
 // provider is configured, go.opentelemetry.io/otel returns non-recording spans
 // and no-op instruments, so this provider is effectively inert.
 //
-// Wire it up with [tracing.ConfigureInstrumentation]:
+// Wire it up with [tracing.SetInstrumentation]:
 //
-//	tracing.ConfigureInstrumentation(otel.NewGenAiInstrumentation(otel.GenAiInstrumentationOptions{
+//	tracing.SetInstrumentation(otel.NewGenAiInstrumentation(otel.GenAiInstrumentationOptions{
 //		ContentCapturingMode: genai.SpanOnly,
 //		EmitToolSpans:        true,
 //	}))
@@ -172,12 +172,13 @@ func contentCapturingModeFromEnv() genai.ContentCapturingMode {
 	return mode
 }
 
-// RunInNewSpan dispatches on the Genkit action type and encodes the span using
-// the OTel GenAI conventions.
-func (g *GenAiInstrumentation) RunInNewSpan(ctx context.Context, info *tracing.SpanInfo, next tracing.NextFunc) (any, error) {
+// StartSpan dispatches on the Genkit action type and opens a span encoded with
+// the OTel GenAI conventions. The returned span records the result when Genkit
+// ends it.
+func (g *GenAiInstrumentation) StartSpan(ctx context.Context, info *tracing.SpanInfo) (context.Context, tracing.Span) {
 	if info == nil {
-		// Nothing to encode; keep the chain intact.
-		return next(ctx, nil)
+		// Nothing to encode; the dispatcher tolerates a nil span.
+		return ctx, nil
 	}
 	actionType := info.Subtype()
 	if actionType == "" {
@@ -185,14 +186,14 @@ func (g *GenAiInstrumentation) RunInNewSpan(ctx context.Context, info *tracing.S
 	}
 	switch actionType {
 	case string(api.ActionTypeModel):
-		return g.runModelSpan(ctx, info, next)
+		return g.startModelSpan(ctx, info)
 	case string(api.ActionTypeTool), string(api.ActionTypeToolV2):
 		// DefineTool registers tool.v2; plain "tool" is the legacy spelling.
 		if g.emitToolSpans {
-			return g.runToolSpan(ctx, info, next)
+			return g.startToolSpan(ctx, info)
 		}
 	}
-	return g.runGenericSpan(ctx, info, next, actionType)
+	return g.startGenericSpan(ctx, info, actionType)
 }
 
 var _ tracing.Instrumentation = (*GenAiInstrumentation)(nil)

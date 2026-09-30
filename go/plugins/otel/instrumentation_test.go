@@ -46,9 +46,9 @@ func setup(t *testing.T, opts GenAiInstrumentationOptions) *tracetest.SpanRecord
 	prev := otel.GetTracerProvider()
 	otel.SetTracerProvider(tp)
 
-	tracing.ConfigureInstrumentation(NewGenAiInstrumentation(opts))
+	tracing.SetInstrumentation(NewGenAiInstrumentation(opts))
 	t.Cleanup(func() {
-		tracing.ResetInstrumentation()
+		tracing.SetInstrumentation()
 		otel.SetTracerProvider(prev)
 	})
 	return sr
@@ -389,5 +389,67 @@ func runModel(t *testing.T) {
 		})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestChildSpansNestUnderParent checks that StartSpan hands the dispatcher a
+// context carrying the OTel span, so nested Genkit spans become its children.
+func TestChildSpansNestUnderParent(t *testing.T) {
+	sr := setup(t, GenAiInstrumentationOptions{EmitToolSpans: true})
+
+	_, err := tracing.RunInNewSpan(context.Background(),
+		&tracing.SpanMetadata{Name: "myFlow", Type: "action", Subtype: "flow"}, "in",
+		func(ctx context.Context, _ string) (string, error) {
+			return tracing.RunInNewSpan(ctx,
+				&tracing.SpanMetadata{Name: "lookup", Type: "action", Subtype: string(api.ActionTypeToolV2)}, "in",
+				func(ctx context.Context, _ string) (string, error) { return "out", nil })
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	flow, tool := findSpan(t, sr, "myFlow"), findSpan(t, sr, "execute_tool lookup")
+	if tool.Parent().SpanID() != flow.SpanContext().SpanID() {
+		t.Errorf("tool parent = %v, want the flow span %v", tool.Parent().SpanID(), flow.SpanContext().SpanID())
+	}
+	if tool.SpanContext().TraceID() != flow.SpanContext().TraceID() {
+		t.Error("tool span is in a different trace than its flow")
+	}
+}
+
+// TestModelSpanPanicRecordsError checks that a panicking model call still ends
+// its span with error status, since Genkit ends spans from a defer.
+func TestModelSpanPanicRecordsError(t *testing.T) {
+	sr := setup(t, GenAiInstrumentationOptions{})
+
+	func() {
+		defer func() { _ = recover() }()
+		_, _ = tracing.RunInNewSpan(context.Background(),
+			&tracing.SpanMetadata{Name: "googleai/gemini-flash-latest", Type: "action", Subtype: "model"},
+			modelRequest(),
+			func(ctx context.Context, _ *ai.ModelRequest) (*ai.ModelResponse, error) { panic("kaboom") })
+	}()
+
+	span := findSpan(t, sr, "chat gemini-flash-latest")
+	if span.Status().Code != codes.Error || !strings.Contains(span.Status().Description, "kaboom") {
+		t.Errorf("status = %+v, want an error mentioning the panic", span.Status())
+	}
+}
+
+// TestComposesWithOTelInstrumentation runs the GenAI provider next to Genkit's
+// default OTel encoding on one tracer provider: both spans are emitted, the
+// GenAI span nested under the genkit:* one.
+func TestComposesWithOTelInstrumentation(t *testing.T) {
+	sr := setup(t, GenAiInstrumentationOptions{})
+	tracing.SetInstrumentation(&tracing.OTelInstrumentation{}, NewGenAiInstrumentation(GenAiInstrumentationOptions{}))
+
+	runModel(t)
+
+	genkitSpan := findSpan(t, sr, "googleai/gemini-flash-latest")
+	chat := findSpan(t, sr, "chat gemini-flash-latest")
+	if got := attrMap(genkitSpan)["genkit:state"].AsString(); got != "success" {
+		t.Errorf("genkit:state = %q, want success", got)
+	}
+	if chat.Parent().SpanID() != genkitSpan.SpanContext().SpanID() {
+		t.Error("GenAI span is not nested under the genkit span")
 	}
 }

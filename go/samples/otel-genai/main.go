@@ -24,9 +24,8 @@
 //	export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
 //	go run .
 //
-// Genkit Dev UI, previewing exactly what your OTel instrumentation emits:
-//
-//	GEMINI_API_KEY=... genkit start --use-otel -- go run .
+// `genkit start --experimental-use-otel` is not supported yet: it sets the
+// OTLP protocol to http/json, which autoexport rejects (see README.md).
 package main
 
 import (
@@ -58,7 +57,7 @@ func main() {
 
 	// 2. Route Genkit telemetry through the GenAI instrumentation. SPAN_ONLY
 	// captures message content on spans (development-friendly; may contain PII).
-	tracing.ConfigureInstrumentation(genaiotel.NewGenAiInstrumentation(genaiotel.GenAiInstrumentationOptions{
+	tracing.SetInstrumentation(genaiotel.NewGenAiInstrumentation(genaiotel.GenAiInstrumentationOptions{
 		ContentCapturingMode: genai.SpanOnly,
 		EmitToolSpans:        true,
 	}))
@@ -79,9 +78,11 @@ func main() {
 
 // setupOTel initializes the OpenTelemetry SDK from the standard OTEL_* env vars,
 // the Go analog of JS's `new NodeSDK()`. With nothing set it defaults to OTLP
-// http/protobuf at localhost:4318 for traces, metrics, and logs; env vars
-// (including OTEL_EXPORTER_OTLP_*_PROTOCOL=http/json) override that. Returns a
-// shutdown func that flushes buffered telemetry before exit.
+// http/protobuf at localhost:4318 for traces, metrics, and logs; the endpoint
+// and exporter env vars override that. autoexport only accepts the grpc and
+// http/protobuf protocols: http/json is rejected at startup, even though the
+// underlying trace exporter supports it. Returns a shutdown func that flushes
+// buffered telemetry before exit.
 func setupOTel(ctx context.Context) func(context.Context) {
 	spanExp, err := autoexport.NewSpanExporter(ctx)
 	if err != nil {
