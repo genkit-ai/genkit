@@ -147,11 +147,7 @@
 
 ::: genkit.plugin_api.GENKIT_CLIENT_HEADER
 
-::: genkit.plugin_api.GENKIT_VERSION
-
 ::: genkit.plugin_api.loop_local_client
-
-::: genkit.plugin_api.to_display_path
 
 ::: genkit.plugin_api.to_json_schema
 

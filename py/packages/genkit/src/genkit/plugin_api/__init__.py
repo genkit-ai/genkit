@@ -18,7 +18,7 @@
 
 # Base class and framework primitives
 from genkit._core._action import Action, ActionKind
-from genkit._core._constants import GENKIT_CLIENT_HEADER, GENKIT_VERSION
+from genkit._core._constants import GENKIT_CLIENT_HEADER
 from genkit._core._environment import is_dev_environment
 from genkit._core._error import (
     ErrorResponseMetadata,
@@ -33,7 +33,6 @@ from genkit._core._loop_cache import _loop_local_client as loop_local_client
 from genkit._core._middleware import new_middleware
 from genkit._core._plugin import MiddlewarePlugin, Plugin
 from genkit._core._schema import to_json_schema
-from genkit._core._telemetry._path import to_display_path
 from genkit._core._typing import ActionMetadata
 
 __all__ = [
@@ -51,11 +50,8 @@ __all__ = [
     'wrap_http_error',
     # HTTP / version stamping
     'GENKIT_CLIENT_HEADER',
-    'GENKIT_VERSION',
     # Loop-local caching
     'loop_local_client',
-    # Tracing
-    'to_display_path',
     # Environment detection
     'is_dev_environment',
     # Schema utilities
