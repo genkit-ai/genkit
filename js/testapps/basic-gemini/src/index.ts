@@ -183,7 +183,7 @@ ai.defineFlow(
   }
 );
 
-// Demonstrates server-side conversation state continuity via previousInteractionId
+// Demonstrates server-side conversation state continuity via previousInteractionId extracted from message history
 ai.defineFlow('multi-turn-previous-interaction', async () => {
   // Turn 1: Explicitly opt in to store: true
   const turn1 = await ai.generate({
@@ -194,27 +194,21 @@ ai.defineFlow('multi-turn-previous-interaction', async () => {
     },
   });
 
-  const interactionId = turn1.message?.metadata?.interactionId;
-  if (!interactionId) {
-    throw new Error(
-      'Turn 1 did not return an interaction ID in message.metadata'
-    );
-  }
-
-  // Turn 2: Reference previousInteractionId from Turn 1 (continuing the stored conversation)
+  // Turn 2: Pass turn1.messages! previousInteractionId is automatically extracted from message metadata
   const turn2 = await ai.generate({
     model: googleAI.model('gemini-flash-latest'),
+    messages: turn1.messages,
     prompt: 'What was my secret code?',
     config: {
-      previousInteractionId: interactionId,
-      // store: true, // You can set it to true or omit it, but false gives errors.
+      // With store: true, previousInteractionId is automatically extracted from turn1.messages metadata!
+      store: true,
     },
   });
 
   return {
-    turn1InteractionId: interactionId,
     turn1Answer: turn1.text,
     turn2Answer: turn2.text,
+    turn1InteractionId: turn1.message?.metadata?.interactionId,
     turn2InteractionId: turn2.message?.metadata?.interactionId,
   };
 });

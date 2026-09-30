@@ -1070,21 +1070,23 @@ export function defineModel(
       );
 
       if (useInteractions) {
-        if (storeFromConfig === false && previousInteractionIdFromConfig) {
+        const storeOptedIn =
+          storeFromConfig === true || pluginOptions?.store === true;
+
+        if (previousInteractionIdFromConfig && !storeOptedIn) {
           throw new GenkitError({
             status: 'INVALID_ARGUMENT',
             message: 'store must be true when previousInteractionId is set.',
           });
         }
 
-        const store =
-          storeFromConfig ??
-          pluginOptions?.store ??
-          Boolean(previousInteractionIdFromConfig);
         let previousInteractionId = previousInteractionIdFromConfig;
         let newMessages = messages;
 
-        if (!previousInteractionId && store) {
+        // If previousInteractionId was not explicitly set in config,
+        // only extract previousInteractionId from the last model message's metadata
+        // if the caller explicitly opted in to store (store: true).
+        if (!previousInteractionId && storeOptedIn) {
           for (let i = messages.length - 1; i >= 0; i--) {
             const prevId = messages[i]?.metadata?.interactionId;
             if (
@@ -1097,7 +1099,18 @@ export function defineModel(
               break;
             }
           }
+        } else if (previousInteractionId) {
+          // Config overrides messages if both are present.
+          // Still slice messages if messages contains prior history up to that turn.
+          for (let i = messages.length - 1; i >= 0; i--) {
+            if (messages[i].role === 'model') {
+              newMessages = messages.slice(i + 1);
+              break;
+            }
+          }
         }
+
+        const store = storeOptedIn;
 
         const req: CreateInteractionRequest = {
           system_instruction: interactionsSystemInstruction,
