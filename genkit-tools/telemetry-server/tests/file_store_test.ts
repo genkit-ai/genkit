@@ -561,6 +561,52 @@ describe('index', () => {
     );
   });
 
+  it('should index and filter by sessionId', () => {
+    const spanA = span(TRACE_ID_1, SPAN_A, 100, 100);
+    spanA.displayName = 'agentA';
+    spanA.attributes['genkit:metadata:agent:sessionId'] = 'session-1';
+
+    const spanB = span(TRACE_ID_2, SPAN_B, 200, 200);
+    spanB.displayName = 'agentA';
+    spanB.attributes['genkit:metadata:agent:sessionId'] = 'session-2';
+
+    const spanC = span(TRACE_ID_3, SPAN_C, 200, 200);
+    spanC.displayName = 'flowB';
+
+    index.add({
+      traceId: TRACE_ID_1,
+      spans: { [SPAN_A]: spanA },
+    } as TraceData);
+    index.add({
+      traceId: TRACE_ID_2,
+      spans: { [SPAN_B]: spanB },
+    } as TraceData);
+    index.add({
+      traceId: TRACE_ID_3,
+      spans: { [SPAN_C]: spanC },
+    } as TraceData);
+
+    assert.deepStrictEqual(
+      index.search({
+        limit: 5,
+        filter: {
+          eq: { sessionId: 'session-1' },
+        },
+      }).data,
+      [
+        {
+          id: TRACE_ID_1,
+          type: 'flow',
+          name: 'agentA',
+          start: 1,
+          end: 2,
+          status: 0,
+          sessionId: 'session-1',
+        },
+      ]
+    );
+  });
+
   it('can filter out unknown types', () => {
     const spanA = span(TRACE_ID_1, SPAN_A, 100, 100);
     spanA.displayName = 'flowA';

@@ -403,6 +403,10 @@ export class Index {
     if (rootSpan?.displayName) {
       indexData['status'] = rootSpan.status?.code ?? 'UNKNOWN';
     }
+    const sessionId = rootSpan?.attributes?.['genkit:metadata:agent:sessionId'];
+    if (sessionId) {
+      indexData['sessionId'] = `${sessionId}`;
+    }
 
     Object.keys(rootSpan?.attributes ?? {})
       .filter((k) => k.startsWith('genkitx:'))
