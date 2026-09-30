@@ -1652,6 +1652,9 @@ google-cloud = [
 google-genai = [
     { name = "genkit-google-genai" },
 ]
+mcp = [
+    { name = "genkit-mcp" },
+]
 middleware = [
     { name = "genkit-middleware" },
 ]
@@ -1679,6 +1682,7 @@ requires-dist = [
     { name = "genkit-flask", marker = "extra == 'flask'", editable = "packages/genkit-flask" },
     { name = "genkit-google-cloud", marker = "extra == 'google-cloud'", editable = "packages/genkit-google-cloud" },
     { name = "genkit-google-genai", marker = "extra == 'google-genai'", editable = "packages/genkit-google-genai" },
+    { name = "genkit-mcp", marker = "extra == 'mcp'", editable = "packages/genkit-mcp" },
     { name = "genkit-middleware", marker = "extra == 'middleware'", editable = "packages/genkit-middleware" },
     { name = "genkit-ollama", marker = "extra == 'ollama'", editable = "packages/genkit-ollama" },
     { name = "genkit-openai", marker = "extra == 'openai'", editable = "packages/genkit-openai" },
@@ -1704,7 +1708,7 @@ requires-dist = [
     { name = "uvloop", marker = "sys_platform != 'win32'", specifier = ">=0.21.0" },
     { name = "websockets", specifier = ">=13.0.0" },
 ]
-provides-extras = ["a2ui", "amazon-bedrock", "anthropic", "django", "evaluators", "fastapi", "flask", "google-cloud", "google-genai", "middleware", "ollama", "openai", "vertex-ai"]
+provides-extras = ["a2ui", "amazon-bedrock", "anthropic", "django", "evaluators", "fastapi", "flask", "google-cloud", "google-genai", "mcp", "middleware", "ollama", "openai", "vertex-ai"]
 
 [[package]]
 name = "genkit-a2ui"
