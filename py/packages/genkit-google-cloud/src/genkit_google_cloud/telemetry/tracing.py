@@ -46,7 +46,7 @@ from typing import Any
 import structlog
 from opentelemetry.sdk.trace.sampling import Sampler
 
-from genkit._core._error import GenkitError
+from genkit import GenkitError
 
 from .config import GcpTelemetry
 

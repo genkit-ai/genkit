@@ -136,7 +136,7 @@ async def test_enable_google_cloud_telemetry_mints_ids_and_sends_the_action_to_c
 
 
 @pytest.mark.asyncio
-async def test_configure_genai_then_enable_sends_one_span_to_cloud() -> None:
+async def test_enable_google_cloud_telemetry_does_not_install_genai_instrumentation_twice() -> None:
     """configure_instrumentation(GenAiInstrumentation()) then enable(): Cloud sees one joke span."""
     yours = GenAiInstrumentation()
     configure_instrumentation(yours)

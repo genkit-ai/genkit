@@ -35,6 +35,7 @@ Example:
 """
 
 from genkit._ai._aio import Genkit
+from genkit._ai._formats._types import FormatDef, FormatterConfig
 from genkit._ai._prompt import (
     ExecutablePrompt,
     ModelStreamResponse,
@@ -51,7 +52,8 @@ from genkit._ai._tools import (
 )
 from genkit._core._action import Action as Flow, ActionRunContext
 from genkit._core._context import ContextProvider, RequestData
-from genkit._core._error import GenkitError, Interrupt, PublicError
+from genkit._core._dap import DynamicActionProvider
+from genkit._core._error import GenkitError, Interrupt, PublicError, RuntimeErrorReason
 from genkit._core._model import Document, Message, ModelResponse, ModelResponseChunk, Part
 from genkit._core._typing import (
     FinishReason,
@@ -88,7 +90,12 @@ __all__ = [
     'PromptGenerateOptions',
     'GenkitError',
     'PublicError',
+    'RuntimeErrorReason',
     # HTTP request context for flow handlers
     'ContextProvider',
     'RequestData',
+    # Custom output formats and dynamic providers
+    'FormatDef',
+    'FormatterConfig',
+    'DynamicActionProvider',
 ]

@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from genkit._core._error import GenkitError, RuntimeErrorReason
+from genkit import GenkitError, RuntimeErrorReason
 from genkit._core._logger import get_logger
 from genkit._core._protocols import GenkitLike, RegistryLike
 

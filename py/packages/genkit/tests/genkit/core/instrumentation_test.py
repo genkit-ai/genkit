@@ -16,14 +16,13 @@ from genkit._core._telemetry._instrumentation import (
     SpanContext,
     SpanMetadata,
     flush_instrumentations,
-    is_instrumented_by,
     reset_instrumentation,
     run_in_new_span,
     set_custom_metadata_attributes,
     set_span_state,
 )
 from genkit.plugin_api import ActionKind
-from genkit.telemetry import FlushableInstrumentation, configure_instrumentation
+from genkit.telemetry import FlushableInstrumentation, configure_instrumentation, is_instrumented_by
 
 
 class RecordedSpan:
@@ -193,6 +192,22 @@ def test_configure_rejects_the_class_instead_of_an_instance() -> None:
         match='FakeInstrumentation',
     ):
         configure_instrumentation(FakeInstrumentation)  # type: ignore[arg-type]
+
+
+def test_is_instrumented_by_is_true_only_after_configure_instrumentation() -> None:
+    """is_instrumented_by is False until configure_instrumentation installs that type."""
+
+    class Instance:
+        async def run_in_new_span(
+            self,
+            metadata: SpanMetadata,
+            next: Callable[..., Awaitable[object]],
+        ) -> object:
+            return await next(object())
+
+    assert is_instrumented_by(Instance) is False
+    configure_instrumentation(Instance())
+    assert is_instrumented_by(Instance) is True
 
 
 def test_is_instrumented_by_rejects_a_string_name() -> None:

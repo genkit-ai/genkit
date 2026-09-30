@@ -24,6 +24,7 @@ from genkit._ai._model import (
 from genkit._core._background import BackgroundAction, background_model
 from genkit._core._model import (
     Candidate,
+    GenerateActionOptions,
     ModelConfig,
     ModelRef,
     ModelRequest,
@@ -44,6 +45,7 @@ from genkit._core._typing import (
 __all__ = [
     # Request types
     'BackgroundAction',
+    'GenerateActionOptions',
     'ModelRequest',
     # Usage and metadata
     'ModelUsage',

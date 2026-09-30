@@ -42,9 +42,8 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcess
 from opentelemetry.sdk.trace.sampling import Sampler
 from opentelemetry.trace import get_current_span, span as trace_span
 
-from genkit._core._telemetry._instrumentation import is_instrumented_by
 from genkit.plugin_api import is_dev_environment
-from genkit.telemetry import configure_instrumentation
+from genkit.telemetry import configure_instrumentation, is_instrumented_by
 
 from .constants import (
     DEFAULT_METRIC_EXPORT_INTERVAL_MS,

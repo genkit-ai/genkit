@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from genkit._core._model import Part
+from genkit import Part
 
 from ._types import A2UI_MIME_TYPE, Envelope
 

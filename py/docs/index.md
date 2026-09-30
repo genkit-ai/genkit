@@ -53,13 +53,23 @@
 
 ::: genkit.PublicError
 
+::: genkit.RuntimeErrorReason
+
 ::: genkit.ContextProvider
 
 ::: genkit.RequestData
 
+::: genkit.FormatDef
+
+::: genkit.FormatterConfig
+
+::: genkit.DynamicActionProvider
+
 ## genkit.model
 
 ::: genkit.model.BackgroundAction
+
+::: genkit.model.GenerateActionOptions
 
 ::: genkit.model.ModelRequest
 
@@ -164,3 +174,33 @@
 ::: genkit.evaluator.evaluator_ref
 
 ::: genkit.evaluator.EvaluatorRef
+
+## genkit.telemetry
+
+::: genkit.telemetry.run_in_new_span
+
+::: genkit.telemetry.SpanMetadata
+
+## genkit.exp.agent
+
+::: genkit.exp.agent.apply_json_patch
+
+::: genkit.exp.agent.diff_json
+
+::: genkit.exp.agent.JsonPatchOp
+
+::: genkit.exp.agent.JsonPatchOperation
+
+::: genkit.exp.agent.StateT
+
+::: genkit.exp.agent.TERMINAL_STATUSES
+
+::: genkit.exp.agent.SaveFn
+
+::: genkit.exp.agent.apply_save
+
+::: genkit.exp.agent.iterate_statuses
+
+::: genkit.exp.agent.require_one_selector
+
+::: genkit.exp.agent.session_id_of

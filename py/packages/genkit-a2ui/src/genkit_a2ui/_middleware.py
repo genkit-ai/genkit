@@ -25,16 +25,10 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from genkit._core._model import (
-    ABNORMAL_FINISH_REASONS,
-    Message,
-    ModelRequest,
-    ModelResponse,
-    ModelResponseChunk,
-    Part,
-)
-from genkit._core._typing import FinishReason, Role
+from genkit import FinishReason, Message, ModelResponse, ModelResponseChunk, Part, Role
+from genkit._core._model import ABNORMAL_FINISH_REASONS
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
+from genkit.model import ModelRequest
 
 from ._catalog import A2uiCatalog, render_catalog_instructions
 from ._loader import resolve_catalog

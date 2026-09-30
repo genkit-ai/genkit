@@ -21,7 +21,7 @@ import re
 from typing import Any
 
 from genkit import Genkit
-from genkit._core._typing import (
+from genkit.evaluator import (
     BaseDataPoint,
     EvalFnResponse,
     EvalStatusEnum,

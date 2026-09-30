@@ -42,8 +42,7 @@ from typing import Any, Literal, Protocol, TypeVar, cast
 import structlog
 from botocore.exceptions import BotoCoreError, ClientError
 
-from genkit import GenkitError
-from genkit._core._model import Document, as_document
+from genkit import Document, GenkitError
 from genkit.embedder import (
     EmbedderInfo,
     EmbedderSupports,
@@ -209,8 +208,7 @@ def document_text(document: Document) -> str:
     Returns:
         The joined text, or an empty string when there is none.
     """
-    doc = as_document(document)
-    texts = [part.text for part in doc.content if part.text is not None and part.text.strip()]
+    texts = [part.text for part in document.content if part.text is not None and part.text.strip()]
     return '\n'.join(texts).strip()
 
 
@@ -230,7 +228,7 @@ def image_from_document(document: Document) -> tuple[str, str]:
     Raises:
         GenkitError: INVALID_ARGUMENT when an image part holds a remote URL.
     """
-    for part in as_document(document).content:
+    for part in document.content:
         if part.media is None:
             continue
         data_url = part.media.url

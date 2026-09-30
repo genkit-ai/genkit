@@ -54,31 +54,29 @@ from google.cloud.firestore import (
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
 
-from genkit._ai._agents._session import (
+from genkit import GenkitError, RuntimeErrorReason
+from genkit._core._typing import GenkitRuntimeError
+from genkit.exp.agent import (
+    TERMINAL_STATUSES,
+    AgentFinishReason,
+    JsonPatchOp,
+    JsonPatchOperation,
+    SaveFn,
+    SessionSnapshot,
+    SessionState,
     SessionStore,
+    SnapshotStatus,
     SnapshotStatusStream,
     SnapshotSubscriber,
     StateT,
-)
-from genkit._ai._agents._session_stores._util import (
-    TERMINAL_STATUSES,
-    SaveFn,
+    apply_json_patch,
     apply_save,
+    diff_json,
     iterate_statuses,
     require_one_selector,
     session_id_of,
 )
-from genkit._ai._json_patch import apply_json_patch, diff_json
-from genkit._core._error import GenkitError, RuntimeErrorReason
-from genkit._core._loop_cache import _loop_local_client
-from genkit._core._model import SessionSnapshot, SessionState
-from genkit._core._typing import (
-    AgentFinishReason,
-    GenkitRuntimeError,
-    JsonPatchOp,
-    JsonPatchOperation,
-    SnapshotStatus,
-)
+from genkit.plugin_api import loop_local_client
 
 DEFAULT_COLLECTION = 'genkit-sessions'
 DEFAULT_PREFIX = 'global'
@@ -826,7 +824,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
         """Loop-local lock for status subscription start/teardown."""
         getter = getattr(self, '_loop_lock_getter', None)
         if getter is None:
-            getter = _loop_local_client(lambda: asyncio.Lock())
+            getter = loop_local_client(lambda: asyncio.Lock())
             object.__setattr__(self, '_loop_lock_getter', getter)
         return getter()
 

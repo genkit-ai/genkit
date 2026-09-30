@@ -44,8 +44,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 from pydantic.alias_generators import to_camel
 
-from genkit import GenkitError
-from genkit._core._model import Document, Part, as_document, as_part
+from genkit import Document, GenkitError, Part
 from genkit_amazon_bedrock.embedders import InvokeModelTransport, document_text
 from genkit_amazon_bedrock.model_info import strip_inference_profile_prefix
 from genkit_amazon_bedrock.models import _from_botocore_error, _from_client_error
@@ -95,7 +94,7 @@ class RankedDocumentData(BaseModel):
     def _wrap_parts(cls, v: object) -> object:
         if not isinstance(v, list):
             return v
-        return [as_part(p) for p in v]
+        return [Part.model_validate(p) for p in v]
 
     """The score. The input document's own metadata is deliberately not carried."""
 
@@ -120,14 +119,14 @@ class RerankerRequest(BaseModel):
     @field_validator('query', mode='before')
     @classmethod
     def _wrap_query(cls, v: object) -> object:
-        return as_document(v)
+        return Document.model_validate(v)
 
     @field_validator('documents', mode='before')
     @classmethod
     def _wrap_documents(cls, v: object) -> object:
         if not isinstance(v, list):
             return v
-        return [as_document(d) for d in v]
+        return [Document.model_validate(d) for d in v]
 
 
 class RerankerResponse(BaseModel):
@@ -300,7 +299,7 @@ def build_rerank_response(payload: dict[str, Any], documents: list[Document]) ->
             )
         ranked.append(
             RankedDocumentData(
-                content=[as_part(p) for p in documents[index].content],
+                content=list(documents[index].content),
                 metadata=RankedDocumentMetadata(score=score),
             )
         )

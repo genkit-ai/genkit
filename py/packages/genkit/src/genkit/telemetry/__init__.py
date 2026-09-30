@@ -29,6 +29,7 @@ from genkit._core._telemetry._instrumentation import (
     SpanMetadata,
     SpanNext,
     configure_instrumentation,
+    is_instrumented_by,
     run_in_new_span,
 )
 
@@ -40,5 +41,6 @@ __all__ = [
     'SpanMetadata',
     'SpanNext',
     'configure_instrumentation',
+    'is_instrumented_by',
     'run_in_new_span',
 ]

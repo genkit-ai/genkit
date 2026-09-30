@@ -25,9 +25,21 @@ from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 from opentelemetry.trace import StatusCode
 from opentelemetry.util.types import Attributes, AttributeValue
+from typing_extensions import override
 
-from genkit._core._compat import override
-from genkit._core._telemetry._attrs import Attr, Subtype
+# Cloud Trace and the Dev UI read these exact wire keys.
+INPUT = 'genkit:input'
+OUTPUT = 'genkit:output'
+NAME = 'genkit:name'
+PATH = 'genkit:path'
+IS_ROOT = 'genkit:isRoot'
+IS_FAILURE_SOURCE = 'genkit:isFailureSource'
+FAILED_SPAN = 'genkit:failedSpan'
+FAILED_PATH = 'genkit:failedPath'
+FEATURE = 'genkit:feature'
+MODEL = 'genkit:model'
+SUBTYPE = 'genkit:metadata:subtype'
+SUBTYPE_MODEL = 'model'
 
 
 def _copy_attrs(span: ReadableSpan) -> dict[str, AttributeValue]:
@@ -99,7 +111,7 @@ class AdjustingTraceExporter(SpanExporter):
 
     def _redact_pii(self, span: ReadableSpan) -> ReadableSpan:
         attrs = _copy_attrs(span)
-        keys_to_redact = [k for k in (Attr.INPUT, Attr.OUTPUT) if k in attrs]
+        keys_to_redact = [k for k in (INPUT, OUTPUT) if k in attrs]
         if not keys_to_redact:
             return span
         for key in keys_to_redact:
@@ -115,24 +127,24 @@ class AdjustingTraceExporter(SpanExporter):
 
     def _mark_failure_source(self, span: ReadableSpan) -> ReadableSpan:
         attrs = _copy_attrs(span)
-        if not attrs.get(Attr.IS_FAILURE_SOURCE):
+        if not attrs.get(IS_FAILURE_SOURCE):
             return span
-        attrs[Attr.FAILED_SPAN] = attrs.get(Attr.NAME, '')
-        attrs[Attr.FAILED_PATH] = attrs.get(Attr.PATH, '')
+        attrs[FAILED_SPAN] = attrs.get(NAME, '')
+        attrs[FAILED_PATH] = attrs.get(PATH, '')
         return RedactedSpan(span, attrs)
 
     def _mark_feature(self, span: ReadableSpan) -> ReadableSpan:
         attrs = _copy_attrs(span)
-        if not attrs.get(Attr.IS_ROOT) or not attrs.get(Attr.NAME):
+        if not attrs.get(IS_ROOT) or not attrs.get(NAME):
             return span
-        attrs[Attr.FEATURE] = attrs[Attr.NAME]
+        attrs[FEATURE] = attrs[NAME]
         return RedactedSpan(span, attrs)
 
     def _mark_model(self, span: ReadableSpan) -> ReadableSpan:
         attrs = _copy_attrs(span)
-        if attrs.get(Attr.SUBTYPE) != Subtype.MODEL or not attrs.get(Attr.NAME):
+        if attrs.get(SUBTYPE) != SUBTYPE_MODEL or not attrs.get(NAME):
             return span
-        attrs[Attr.MODEL] = attrs[Attr.NAME]
+        attrs[MODEL] = attrs[NAME]
         return RedactedSpan(span, attrs)
 
     def _normalize_labels(self, span: ReadableSpan) -> ReadableSpan:
