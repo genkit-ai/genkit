@@ -28,6 +28,14 @@ Types exported from genkit, genkit.model, genkit.embedder, genkit.plugin_api, ge
 
 ::: genkit.FinishReason
 
+::: genkit.Embedding
+
+::: genkit.BaseDataPoint
+
+::: genkit.EvalResponse
+
+::: genkit.Operation
+
 ::: genkit.tool
 
 ::: genkit.Tool
@@ -82,8 +90,6 @@ Types exported from genkit, genkit.model, genkit.embedder, genkit.plugin_api, ge
 
 ::: genkit.model.Candidate
 
-::: genkit.model.Operation
-
 ::: genkit.model.OperationError
 
 ::: genkit.model.ToolRequest
@@ -110,8 +116,6 @@ Types exported from genkit, genkit.model, genkit.embedder, genkit.plugin_api, ge
 
 ::: genkit.embedder.EmbedResponse
 
-::: genkit.embedder.Embedding
-
 ::: genkit.embedder.EmbedderRef
 
 ::: genkit.embedder.EmbedderSupports
@@ -134,17 +138,11 @@ Types exported from genkit, genkit.model, genkit.embedder, genkit.plugin_api, ge
 
 ::: genkit.evaluator.EvalRequest
 
-::: genkit.evaluator.EvalResponse
-
 ::: genkit.evaluator.EvalFnResponse
 
 ::: genkit.evaluator.Score
 
 ::: genkit.evaluator.Details
-
-::: genkit.evaluator.BaseEvalDataPoint
-
-::: genkit.evaluator.BaseDataPoint
 
 ::: genkit.evaluator.EvalStatusEnum
 

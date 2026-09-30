@@ -23,11 +23,10 @@ from typing import Any, Literal, TypeAlias, cast
 from openai import APIStatusError, AsyncOpenAI
 from openai.types import Model
 
-from genkit import ActionRunContext, GenkitError, ModelResponse
+from genkit import ActionRunContext, Embedding, GenkitError, ModelResponse
 from genkit.embedder import (
     EmbedderInfo,
     EmbedderSupports,
-    Embedding,
     EmbedRequest,
     EmbedResponse,
     embedder,

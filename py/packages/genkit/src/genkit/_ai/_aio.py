@@ -1480,7 +1480,7 @@ class Genkit:
         """Evaluate a dataset using the specified evaluator.
 
         Example:
-            from genkit.evaluator import BaseDataPoint
+            from genkit import BaseDataPoint
 
             results = await ai.evaluate(
                 evaluator='my_eval',

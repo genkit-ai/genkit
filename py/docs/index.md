@@ -29,6 +29,14 @@
 
 ::: genkit.FinishReason
 
+::: genkit.Embedding
+
+::: genkit.BaseDataPoint
+
+::: genkit.EvalResponse
+
+::: genkit.Operation
+
 ::: genkit.tool
 
 ::: genkit.Tool
@@ -83,8 +91,6 @@
 
 ::: genkit.model.Candidate
 
-::: genkit.model.Operation
-
 ::: genkit.model.OperationError
 
 ::: genkit.model.ToolRequest
@@ -116,8 +122,6 @@
 ::: genkit.embedder.EmbedRequest
 
 ::: genkit.embedder.EmbedResponse
-
-::: genkit.embedder.Embedding
 
 ::: genkit.embedder.embedder_action_metadata
 
@@ -161,17 +165,11 @@
 
 ::: genkit.evaluator.EvalRequest
 
-::: genkit.evaluator.EvalResponse
-
 ::: genkit.evaluator.EvalFnResponse
 
 ::: genkit.evaluator.Score
 
 ::: genkit.evaluator.Details
-
-::: genkit.evaluator.BaseEvalDataPoint
-
-::: genkit.evaluator.BaseDataPoint
 
 ::: genkit.evaluator.EvalStatusEnum
 

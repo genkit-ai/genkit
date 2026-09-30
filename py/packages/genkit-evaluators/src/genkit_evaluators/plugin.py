@@ -20,9 +20,8 @@ import json
 import re
 from typing import Any
 
-from genkit import Genkit
+from genkit import BaseDataPoint, Genkit
 from genkit.evaluator import (
-    BaseDataPoint,
     EvalFnResponse,
     EvalStatusEnum,
     Score,

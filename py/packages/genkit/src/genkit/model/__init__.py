@@ -35,7 +35,6 @@ from genkit._core._model import (
 from genkit._core._typing import (
     Constrained,
     ModelInfo,
-    Operation,
     OperationError,
     Stage,
     Supports,
@@ -54,7 +53,6 @@ __all__ = [
     'ModelUsage',
     'Candidate',
     # Long-running operations
-    'Operation',
     'OperationError',
     # Tool types
     'ToolRequest',

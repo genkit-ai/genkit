@@ -38,16 +38,12 @@ from genkit._ai._embedding import (
     embedder_action_metadata,
 )
 from genkit._core._model import EmbedRequest
-from genkit._core._typing import (
-    Embedding,
-    EmbedResponse,
-)
+from genkit._core._typing import EmbedResponse
 
 __all__ = [
     # Request/Response types
     'EmbedRequest',
     'EmbedResponse',
-    'Embedding',
     # Factory functions and metadata
     'embedder',
     'embedder_action_metadata',

@@ -63,8 +63,12 @@ from genkit._core._model import (
     ToolChoice,
 )
 from genkit._core._typing import (
+    BaseDataPoint,
+    Embedding,
+    EvalResponse,
     FinishReason,
     Media,
+    Operation,
     Role,
 )
 
@@ -83,6 +87,11 @@ __all__ = [
     'ModelStreamResponse',
     'StreamResponse',
     'FinishReason',
+    # Embed, evaluate, and background jobs
+    'Embedding',
+    'BaseDataPoint',
+    'EvalResponse',
+    'Operation',
     # Tools and HITL
     'tool',
     'Tool',

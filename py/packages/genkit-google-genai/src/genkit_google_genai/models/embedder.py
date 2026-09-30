@@ -28,8 +28,8 @@ else:
 from google import genai
 from google.genai import types as genai_types
 
-from genkit import Document, Part
-from genkit.embedder import EmbedderInfo, EmbedderSupports, Embedding, EmbedRequest, EmbedResponse
+from genkit import Document, Embedding, Part
+from genkit.embedder import EmbedderInfo, EmbedderSupports, EmbedRequest, EmbedResponse
 from genkit_google_genai.models._routing import strip_ref_prefixes
 from genkit_google_genai.models.utils import PartConverter
 

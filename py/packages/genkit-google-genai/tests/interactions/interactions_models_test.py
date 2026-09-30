@@ -37,8 +37,8 @@ from genkit_google_genai.models.interactions_lyria import LyriaConfig, create_ly
 from genkit_google_genai.models.interactions_registry import deep_research_model_info, lyria_model_info
 from google.genai.interactions import Interaction
 
-from genkit import Genkit, GenkitError, Message, Part, Role
-from genkit.model import ModelRequest, Operation
+from genkit import Genkit, GenkitError, Message, Operation, Part, Role
+from genkit.model import ModelRequest
 from genkit.plugin_api import ActionKind
 
 

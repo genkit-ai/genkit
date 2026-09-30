@@ -19,8 +19,8 @@
 import pytest
 from genkit_evaluators import register_genkit_evaluators
 
-from genkit import Genkit
-from genkit.evaluator import BaseDataPoint, EvalRequest
+from genkit import BaseDataPoint, Genkit
+from genkit.evaluator import EvalRequest
 
 
 @pytest.fixture

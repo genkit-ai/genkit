@@ -22,7 +22,6 @@ and advanced users who need access to the evaluator protocol types.
 Example:
     from genkit.evaluator import (
         EvalRequest,
-        EvalResponse,
         evaluator_action_metadata,
     )
 """
@@ -33,12 +32,9 @@ from genkit._ai._evaluator import (
     evaluator_ref,
 )
 from genkit._core._typing import (
-    BaseDataPoint,
-    BaseEvalDataPoint,
     Details,
     EvalFnResponse,
     EvalRequest,
-    EvalResponse,
     EvalStatusEnum,
     Score,
 )
@@ -46,14 +42,10 @@ from genkit._core._typing import (
 __all__ = [
     # Request/Response types
     'EvalRequest',
-    'EvalResponse',
     'EvalFnResponse',
     # Score types
     'Score',
     'Details',
-    # Data point types
-    'BaseEvalDataPoint',
-    'BaseDataPoint',
     # Status
     'EvalStatusEnum',
     # Factory functions and metadata

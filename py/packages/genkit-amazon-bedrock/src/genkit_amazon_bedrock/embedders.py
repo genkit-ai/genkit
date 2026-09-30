@@ -42,11 +42,10 @@ from typing import Any, Literal, Protocol, TypeVar, cast
 import structlog
 from botocore.exceptions import BotoCoreError, ClientError
 
-from genkit import Document, GenkitError
+from genkit import Document, Embedding, GenkitError
 from genkit.embedder import (
     EmbedderInfo,
     EmbedderSupports,
-    Embedding,
     EmbedRequest,
     EmbedResponse,
 )

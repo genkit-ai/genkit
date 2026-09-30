@@ -118,8 +118,7 @@ Runnable version: [google-genai-media](https://github.com/genkit-ai/genkit/tree/
 Built-in evaluators for assessing model output quality. Evaluators are automatically registered when using the VertexAI plugin and are accessed via `ai.evaluate()`:
 
 ```python
-from genkit import Genkit
-from genkit.evaluator import BaseDataPoint
+from genkit import BaseDataPoint, Genkit
 from genkit_google_genai import VertexAI
 
 ai = Genkit(plugins=[VertexAI(project='my-project')])

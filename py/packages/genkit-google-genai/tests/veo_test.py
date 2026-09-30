@@ -31,8 +31,8 @@ from genkit_google_genai.models.veo import (
 from google.genai import types as genai_types
 from google.genai.errors import APIError
 
-from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, Part, Role
-from genkit.model import ModelRequest, Operation
+from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, Operation, Part, Role
+from genkit.model import ModelRequest
 
 
 def _sdk_op(

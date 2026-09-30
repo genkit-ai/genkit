@@ -23,7 +23,7 @@ fluency, safety, groundedness, and summarization quality.
 Example:
     ```python
     from genkit import Genkit
-    from genkit.evaluator import BaseDataPoint
+    from genkit import BaseDataPoint
     from genkit_google_genai import VertexAI
 
     ai = Genkit(plugins=[VertexAI(project='my-project')])
