@@ -27,7 +27,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 from genkit_google_genai import GoogleAI, VertexAI
-from genkit_google_genai.google import _inject_attribution_headers, googleai_name, vertexai_name
+from genkit_google_genai.google import _inject_attribution_headers, _list_genai_models, googleai_name, vertexai_name
 from genkit_google_genai.models.embedder import VERTEX_KNOWN_EMBEDDERS
 from genkit_google_genai.models.gemini import (
     DEFAULT_SUPPORTS_MODEL,
@@ -41,11 +41,13 @@ from genkit_google_genai.models.imagen import (
 )
 from google import genai
 from google.auth.credentials import Credentials
+from google.genai.errors import ClientError, ServerError
 from google.genai.types import HttpOptions
 
 from genkit import (
     ActionKind,
     Genkit,
+    GenkitError,
     Message,
     ModelInfo,
     ModelRequest,
@@ -947,3 +949,34 @@ async def test_system_prompt_handling() -> None:
     assert cfg.system_instruction.parts is not None  # type: ignore
     assert len(cfg.system_instruction.parts) == 1  # type: ignore
     assert cfg.system_instruction.parts[0].text == 'You are a helpful assistant'  # type: ignore
+
+
+@pytest.mark.asyncio
+async def test_list_genai_models_classifies_api_errors() -> None:
+    """An API error while listing models becomes a GenkitError carrying the service's status."""
+    error = ServerError(503, {'error': {'code': 503, 'status': 'UNAVAILABLE', 'message': 'overloaded'}})
+    mock_client = MagicMock()
+    mock_client.aio.models.list = AsyncMock(side_effect=error)
+
+    with pytest.raises(GenkitError) as raised:
+        await _list_genai_models(mock_client, is_vertex=False)
+
+    assert raised.value.status == 'UNAVAILABLE'
+    assert raised.value.cause is error
+
+
+@pytest.mark.asyncio
+async def test_list_genai_models_classifies_errors_raised_while_paging() -> None:
+    """An API error raised by the pager after the first page is classified too."""
+
+    async def pages() -> AsyncIterator[genai.types.Model]:
+        yield genai.types.Model(name='models/gemini-2.5-flash', supported_actions=['generateContent'])
+        raise ClientError(403, {'error': {'code': 403, 'status': 'PERMISSION_DENIED', 'message': 'denied'}})
+
+    mock_client = MagicMock()
+    mock_client.aio.models.list = AsyncMock(side_effect=pages)
+
+    with pytest.raises(GenkitError) as raised:
+        await _list_genai_models(mock_client, is_vertex=False)
+
+    assert raised.value.status == 'PERMISSION_DENIED'
