@@ -658,7 +658,7 @@ async def generate_action(
     """
     span_name = 'generate'
     span_metadata = SpanMetadata(name=span_name, type='util', input=options)
-    with run_in_new_span(span_metadata) as span:
+    with run_in_new_span(span_metadata, display_name=options.step_name) as span:
         result = await run_generate(
             registry=registry,
             options=options,

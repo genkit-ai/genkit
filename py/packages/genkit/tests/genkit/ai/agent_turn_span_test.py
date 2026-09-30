@@ -28,13 +28,15 @@ from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from genkit import Part
+from genkit import Genkit, Part
 from genkit._ai._agents._base import define_custom_agent
 from genkit._ai._agents._runtime import SessionRunner
 from genkit._ai._agents._session import Session
 from genkit._ai._agents._types import TurnContext, TurnResult
+from genkit._ai._generate import generate_action
+from genkit._ai._testing import define_echo_model
 from genkit._core._action import ActionRunContext
-from genkit._core._model import AgentInput, AgentResult, Message, SessionState
+from genkit._core._model import AgentInput, AgentResult, GenerateActionOptions, Message, SessionState
 from genkit._core._registry import Registry
 from genkit._core._trace._attrs import Attr, metadata_key
 from genkit.exp.agent import AgentFinishReason, InMemorySessionStore
@@ -67,6 +69,24 @@ def _by_name(spans: Sequence[ReadableSpan], name: str) -> ReadableSpan:
     matches = [s for s in spans if s.name == name]
     assert matches, f'no span named {name!r} in {[s.name for s in spans]}'
     return matches[-1]
+
+
+@pytest.mark.asyncio
+async def test_generate_step_name_changes_display_name_only(exporter: InMemorySpanExporter) -> None:
+    ai = Genkit()
+    define_echo_model(ai)
+    await generate_action(
+        ai.registry,
+        GenerateActionOptions(
+            model='echoModel',
+            messages=[Message(role='user', content=[Part.from_text('hi')])],
+            step_name='custom-generate',
+        ),
+    )
+
+    span = _by_name(exporter.get_finished_spans(), 'custom-generate')
+    assert span.attributes is not None
+    assert span.attributes[Attr.NAME] == 'generate'
 
 
 def _counter_agent(

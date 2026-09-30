@@ -22,6 +22,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExportResult
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from pydantic import BaseModel
 
+import genkit._core._tracing as tracing_module
 from genkit import ActionKind, Genkit
 from genkit._ai._tools import Interrupt, ToolRunContext
 from genkit._core._action import Action, ActionRunContext
@@ -117,10 +118,12 @@ def test_realtime_on_start_export_carries_identity_attrs(
         def __init__(self) -> None:
             super().__init__()
             self.snapshots: list[dict[str, object]] = []
+            self.names: list[str] = []
 
         def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
             for span in spans:
                 self.snapshots.append(dict(span.attributes or {}))
+                self.names.append(span.name)
             return super().export(spans)
 
     provider = TracerProvider()
@@ -129,6 +132,7 @@ def test_realtime_on_start_export_carries_identity_attrs(
     provider.add_span_processor(processor)
 
     tracer = provider.get_tracer('test_tracer')
+    monkeypatch.setattr(tracing_module, 'tracer', tracer)
     meta = SpanMetadata(
         name='liveAction',
         type='action',
@@ -136,12 +140,11 @@ def test_realtime_on_start_export_carries_identity_attrs(
         input={'prompt': 'hi'},
         metadata={'flow:name': 'liveAction'},
     )
-    start_attrs = start_attributes(meta, qualified_path='/{liveAction,t:action,s:flow}')
-
     try:
-        with tracer.start_as_current_span('liveAction', attributes=start_attrs):
+        with run_in_new_span(meta, display_name='customAction'):
             # on_start already fired; first snapshot is the live export.
             assert snap_exporter.snapshots, 'expected RealtimeSpanProcessor on_start export'
+            assert snap_exporter.names[0] == 'customAction'
             start_attrs_snapshot = snap_exporter.snapshots[0]
             assert start_attrs_snapshot['genkit:name'] == 'liveAction'
             assert start_attrs_snapshot['genkit:type'] == 'action'

@@ -188,8 +188,10 @@ const (
 
 // SpanMetadata contains metadata information for creating properly annotated spans
 type SpanMetadata struct {
-	// Name is the span name
+	// Name is the Genkit name used in span attributes and paths.
 	Name string
+	// DisplayName overrides the OpenTelemetry span name without changing Genkit metadata.
+	DisplayName string
 	// IsRoot indicates if this is a root span
 	IsRoot bool
 	// Type represents the kind of span (e.g., "action", "flowStep")
@@ -279,7 +281,11 @@ func RunInNewSpan[I, O any](
 		opts = append(opts, trace.WithAttributes(sm.inputAttributes()...))
 	}
 
-	ctx, span := Tracer().Start(ctx, metadata.Name, opts...)
+	displayName := metadata.DisplayName
+	if displayName == "" {
+		displayName = metadata.Name
+	}
+	ctx, span := Tracer().Start(ctx, displayName, opts...)
 	sm.TraceInfo = TraceInfo{
 		TraceID: span.SpanContext().TraceID().String(),
 		SpanID:  span.SpanContext().SpanID().String(),

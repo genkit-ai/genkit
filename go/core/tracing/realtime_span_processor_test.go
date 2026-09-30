@@ -157,6 +157,42 @@ func TestRealtimeSpanProcessorExportsOnStartAndEnd(t *testing.T) {
 	}
 }
 
+func TestRunInNewSpanUsesDisplayNameOnStart(t *testing.T) {
+	client := &recordingClient{}
+	rp := newRealtimeSpanProcessor(client)
+	tp := TracerProvider()
+	tp.RegisterSpanProcessor(rp)
+	t.Cleanup(func() { tp.UnregisterSpanProcessor(rp) })
+
+	var spanID string
+	_, err := RunInNewSpan(context.Background(), &SpanMetadata{
+		Name: "generate", DisplayName: "custom-generate", Type: "util",
+	}, "input", func(ctx context.Context, _ string) (string, error) {
+		spanID = trace.SpanFromContext(ctx).SpanContext().SpanID().String()
+		return "output", nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rp.ForceFlush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, save := range client.all() {
+		span := save.Spans[spanID]
+		if span != nil && span.EndTime == 0 {
+			if span.DisplayName != "custom-generate" {
+				t.Errorf("start display name = %q, want custom-generate", span.DisplayName)
+			}
+			if span.Attributes["genkit:name"] != "generate" {
+				t.Errorf("start genkit:name = %v, want generate", span.Attributes["genkit:name"])
+			}
+			return
+		}
+	}
+	t.Fatal("missing start export")
+}
+
 // TestRealtimeSpanProcessorChildSaveOmitsTraceMetadata guards the regression
 // the omitempty tags exist for: a save carrying only a child span must not
 // carry trace-level displayName/startTime/endTime, or it would clobber the
