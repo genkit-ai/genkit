@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 from genkit._ai._tools import Interrupt
 from genkit._core._action import ActionKind
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, MultipartToolResponse, ToolHookParams
-from genkit.telemetry import run_in_new_span
+from genkit.telemetry import SpanContext, run_in_new_span
 
 
 class ToolApprovalConfig(BaseModel):
@@ -59,7 +59,7 @@ class ToolApproval(BaseMiddleware[ToolApprovalConfig]):
             raise ValueError('wrap_tool needs a tool request part')
         tool_input = tool_req.input
 
-        async def body(_span: object) -> MultipartToolResponse:
+        async def body(_span: SpanContext) -> MultipartToolResponse:
             raise Interrupt({'message': f'Tool not in approved list: {tool_name}'})
 
         # the denied call should look like the tool ran and interrupted, so the

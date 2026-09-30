@@ -43,7 +43,7 @@ from genkit import (
     Supports,
 )
 from genkit.plugin_api import ActionRunContext, wrap_http_error
-from genkit.telemetry import run_in_new_span
+from genkit.telemetry import SpanContext, run_in_new_span
 from genkit_google_genai.models._sdk_config import (
     attach_leftovers,
     dump_family_config,
@@ -199,7 +199,7 @@ class ImagenModel:
         if request.tools:
             raise GenkitError(status='UNIMPLEMENTED', message='Tools are not supported for this model.')
 
-        async def call_imagen(_span: object) -> genai_types.GenerateImagesResponse:
+        async def call_imagen(_span: SpanContext) -> genai_types.GenerateImagesResponse:
             try:
                 return await self._client.aio.models.generate_images(model=self._version, prompt=prompt, config=config)
             except APIError as e:
