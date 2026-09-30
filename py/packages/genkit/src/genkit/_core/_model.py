@@ -397,6 +397,53 @@ class Part(GenkitModel):
     def from_reasoning(cls, reasoning: str, metadata: dict[str, Any] | None = None) -> Part:
         return cls(reasoning=reasoning, metadata=metadata)
 
+    def restart(
+        self,
+        *,
+        resumed_metadata: dict[str, Any] | None = None,
+        replace_input: Any | None = None,  # noqa: ANN401
+    ) -> Part:
+        """Build the tool-request part that runs this interrupt again.
+
+        Pass the result in ``generate(..., resume_restart=...)``.
+        """
+        tool_req = self.tool_request
+        if tool_req is None:
+            raise ValueError('restart needs a tool request part')
+        new_meta: dict[str, Any] = dict(self.metadata or {})
+        new_meta['resumed'] = resumed_metadata if resumed_metadata is not None else True
+        new_input = tool_req.input
+        if replace_input is not None:
+            new_meta['replacedInput'] = tool_req.input
+            new_input = replace_input
+        return Part.from_tool_request(
+            name=tool_req.name,
+            input=new_input,
+            ref=tool_req.ref,
+            metadata=new_meta,
+        )
+
+    def respond(
+        self,
+        output: Any,  # noqa: ANN401
+        *,
+        metadata: dict[str, Any] | None = None,
+    ) -> Part:
+        """Build the tool-response part that skips running this interrupt.
+
+        Pass the result in ``generate(..., resume_respond=...)``.
+        """
+        tool_req = self.tool_request
+        if tool_req is None:
+            raise ValueError('respond needs a tool request part')
+        interrupt_metadata = metadata if metadata is not None else True
+        return Part.from_tool_response(
+            name=tool_req.name,
+            output=output,
+            ref=tool_req.ref,
+            metadata={'interruptResponse': interrupt_metadata},
+        )
+
 
 def as_part(value: object) -> Part:
     if isinstance(value, Part):
@@ -543,12 +590,33 @@ def resume_options_to_resume(
     resume_restart: Part | list[Part] | None = None,
     resume_metadata: dict[str, Any] | None = None,
 ) -> Resume | None:
-    """Build Resume from flat keyword options (``generate`` / prompts)."""
+    """Build a Resume payload from flat resume kwargs."""
     respond = _normalize_resume_parts(resume_respond)
     restart = _normalize_resume_parts(resume_restart)
     if respond is None and restart is None and resume_metadata is None:
         return None
-    return Resume(respond=respond, restart=restart, metadata=resume_metadata)
+    resume = Resume(respond=respond, restart=restart, metadata=resume_metadata)
+    reject_unanswered_interrupts(resume)
+    return resume
+
+
+def unanswered_interrupt(part: Part) -> bool:
+    """True when this is still a pause, not a restart or response."""
+    meta = part.metadata or {}
+    return part.tool_request is not None and bool(meta.get('interrupt')) and not meta.get('resumed')
+
+
+def reject_unanswered_interrupts(resume: Resume) -> None:
+    for part in resume.restart or []:
+        if unanswered_interrupt(part):
+            name = part.tool_request.name if part.tool_request else 'tool'
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=(
+                    f'resume part for {name!r} is still an interrupt; '
+                    'use Part.restart(...) or Part.respond(...) before generate.'
+                ),
+            )
 
 
 class Message(GenkitModel):

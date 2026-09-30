@@ -420,6 +420,18 @@ def test_restart_tool_returns_part() -> None:
     assert restart.metadata.get('resumed') == {'k': 'v'}
 
 
+def test_part_restart_matches_restart_tool() -> None:
+    interrupt = Part.from_tool_request(name='pay', input={'amount': 10}, ref='r1')
+    assert interrupt.restart(resumed_metadata={'k': 'v'}) == restart_tool(
+        interrupt=interrupt, resumed_metadata={'k': 'v'}
+    )
+
+
+def test_part_respond_matches_respond_to_interrupt() -> None:
+    interrupt = Part.from_tool_request(name='ask', input={'q': 'ok?'}, ref='r1')
+    assert interrupt.respond('yes') == respond_to_interrupt('yes', interrupt=interrupt)
+
+
 def test_resume_respond_text_part_raises() -> None:
     with pytest.raises(ValueError, match='resume_respond needs a tool response part'):
         Resume(respond=[Part.from_text('hi')])

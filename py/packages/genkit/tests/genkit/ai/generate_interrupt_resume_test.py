@@ -23,7 +23,7 @@ from genkit._ai._tools import (
     response,
     restart_tool,
 )
-from genkit._core._error import RuntimeErrorReason
+from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import GenerateActionOptions, Resume
 from genkit._core._typing import (
     FinishReason,
@@ -1494,3 +1494,202 @@ async def test_resume_restart_keeps_parts_and_metadata_through_middleware() -> N
     assert tr.output == {'ok': True}
     assert tr.content == [WIRE_PNG]
     assert meta == {'camera': 'rear'}
+
+
+@pytest.mark.asyncio
+async def test_resume_restart_rejects_unanswered_interrupt() -> None:
+    """Passing the paused part itself on resume_restart is rejected before the model runs."""
+    ai, first = await _interrupted_generate()
+    with pytest.raises(GenkitError, match='still an interrupt'):
+        await ai.generate(
+            model='programmableModel',
+            messages=list(first.messages),
+            tools=['intr'],
+            resume_restart=[first.interrupts[0]],
+        )
+
+
+@pytest.mark.asyncio
+async def test_resume_restart_empty_list_fails_unanswered_holds() -> None:
+    """resume_restart=[] still enters resume: every pending pause must be answered or it fails."""
+    ai, first = await _interrupted_generate()
+    again = await ai.generate(
+        model='programmableModel',
+        messages=list(first.messages),
+        tools=['intr'],
+        resume_restart=[],
+    )
+    assert again.finish_reason == FinishReason.FAILED
+    assert again.finish_message is not None
+    assert 'not handled by the' in again.finish_message
+    assert 'resume' in again.finish_message
+
+
+@pytest.mark.asyncio
+async def test_part_restart_on_resume_restart_reruns_the_tool() -> None:
+    """interrupt.restart(...) on resume_restart re-runs the tool."""
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+    calls: list[str] = []
+
+    @ai.tool(name='pay')
+    async def pay(inp: dict) -> str:
+        calls.append('run')
+        if not inp.get('ok'):
+            raise Interrupt({'hold': True})
+        return 'paid'
+
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message.model_validate({
+                'role': 'model',
+                'content': [{'toolRequest': {'ref': 'p1', 'name': 'pay', 'input': {}}}],
+            }),
+        )
+    )
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message.model_validate({'role': 'model', 'content': [{'text': 'done'}]}),
+        )
+    )
+    first = await ai.generate(model='programmableModel', prompt='hi', tools=['pay'])
+    assert first.finish_reason == FinishReason.INTERRUPTED
+    second = await ai.generate(
+        model='programmableModel',
+        messages=list(first.messages),
+        tools=['pay'],
+        resume_restart=first.interrupts[0].restart(replace_input={'ok': True}),
+    )
+    assert second.finish_reason == FinishReason.STOP
+    assert calls == ['run', 'run']
+    assert second.text == 'done'
+
+
+@pytest.mark.asyncio
+async def test_part_respond_on_resume_respond_skips_the_tool() -> None:
+    """interrupt.respond(...) on resume_respond injects output without running the tool again."""
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+    calls: list[str] = []
+
+    @ai.tool(name='pay')
+    async def pay(_: dict) -> str:
+        calls.append('run')
+        raise Interrupt({'hold': True})
+
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message.model_validate({
+                'role': 'model',
+                'content': [{'toolRequest': {'ref': 'p1', 'name': 'pay', 'input': {}}}],
+            }),
+        )
+    )
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message.model_validate({'role': 'model', 'content': [{'text': 'declined'}]}),
+        )
+    )
+    first = await ai.generate(model='programmableModel', prompt='hi', tools=['pay'])
+    second = await ai.generate(
+        model='programmableModel',
+        messages=list(first.messages),
+        tools=['pay'],
+        resume_respond=first.interrupts[0].respond({'status': 'declined'}),
+    )
+    assert second.finish_reason == FinishReason.STOP
+    assert calls == ['run']
+    assert second.text == 'declined'
+
+
+@pytest.mark.asyncio
+async def test_resume_respond_and_restart_together() -> None:
+    """Flat kwargs can answer one pause and re-run another in the same generate."""
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+    transfer_calls: list[str] = []
+
+    @ai.tool(name='refund')
+    async def refund(_: dict) -> str:
+        raise Interrupt({'ask': 'refund'})
+
+    @ai.tool(name='transfer')
+    async def transfer(inp: dict) -> str:
+        transfer_calls.append('run')
+        if not inp.get('ok'):
+            raise Interrupt({'ask': 'transfer'})
+        return 'sent'
+
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message.model_validate({
+                'role': 'model',
+                'content': [
+                    {'toolRequest': {'ref': 'r1', 'name': 'refund', 'input': {}}},
+                    {'toolRequest': {'ref': 't1', 'name': 'transfer', 'input': {}}},
+                ],
+            }),
+        )
+    )
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message.model_validate({'role': 'model', 'content': [{'text': 'mixed'}]}),
+        )
+    )
+    first = await ai.generate(model='programmableModel', prompt='hi', tools=['refund', 'transfer'])
+    assert first.finish_reason == FinishReason.INTERRUPTED
+    assert [p.tool_request.name for p in first.interrupts if p.tool_request] == ['refund', 'transfer']
+    second = await ai.generate(
+        model='programmableModel',
+        messages=list(first.messages),
+        tools=['refund', 'transfer'],
+        resume_respond=first.interrupts[0].respond({'status': 'declined'}),
+        resume_restart=first.interrupts[1].restart(replace_input={'ok': True}),
+    )
+    assert second.finish_reason == FinishReason.STOP
+    assert transfer_calls == ['run', 'run']
+    assert second.text == 'mixed'
+
+
+@pytest.mark.asyncio
+async def test_resume_metadata_lands_on_the_tool_message() -> None:
+    """resume_metadata is the turn-level bag on the resumed tool message."""
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+
+    @ai.tool(name='intr')
+    async def intr(_: dict) -> str:  # noqa: ARG001
+        raise Interrupt({'reason': 'x'})
+
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message.model_validate({
+                'role': 'model',
+                'content': [{'toolRequest': {'ref': 'r1', 'name': 'intr', 'input': {}}}],
+            }),
+        )
+    )
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message.model_validate({'role': 'model', 'content': [{'text': 'ok'}]}),
+        )
+    )
+    first = await ai.generate(model='programmableModel', prompt='hi', tools=['intr'])
+    second = await ai.generate(
+        model='programmableModel',
+        messages=list(first.messages),
+        tools=['intr'],
+        resume_respond=first.interrupts[0].respond({'bar': 2}),
+        resume_metadata={'approved_by': 'jeff'},
+    )
+    assert second.finish_reason == FinishReason.STOP
+    tool_msg = next(m for m in second.messages if m.role == Role.TOOL)
+    assert tool_msg.metadata == {'resumed': {'approved_by': 'jeff'}}

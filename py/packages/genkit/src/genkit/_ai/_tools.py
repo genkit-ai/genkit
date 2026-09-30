@@ -382,41 +382,17 @@ class ToolRunContext(ActionRunContext):
         return self.resumed_metadata is not None
 
 
-def _tool_response_part(
-    interrupt: Part,
-    output: Any,  # noqa: ANN401 - arbitrary tool/interrupt reply payload (JSON)
-    metadata: dict[str, Any] | None = None,
-) -> Part:
-    """Build a tool-response Part for an interrupted tool request."""
-    part = as_part(interrupt)
-    tool_req = part.tool_request
-    if tool_req is None:
-        raise ValueError('respond_to_interrupt needs a tool request part')
-    interrupt_metadata = metadata if metadata is not None else True
-    return Part.from_tool_response(
-        name=tool_req.name,
-        output=output,
-        ref=tool_req.ref,
-        metadata={'interruptResponse': interrupt_metadata},
-    )
-
-
 def respond_to_interrupt(
-    response: Any,  # noqa: ANN401 - user reply or tool output for resume_respond
+    response: Any,  # noqa: ANN401 - user reply or tool output for resume
     *,
     interrupt: Part,
     metadata: dict[str, Any] | None = None,
 ) -> Part:
     """Build a tool-response Part for a pending tool interrupt.
 
-    Pass the return value to ``generate(..., resume_respond=interrupt_response)``.
-
-    Args:
-        response: Tool output / user reply for this interrupt.
-        interrupt: The interrupted tool request (e.g. from ``response.interrupts``).
-        metadata: Optional metadata for the interrupt response channel.
+    Prefer ``interrupt.respond(...)``. Pass the result to ``generate(..., resume_respond=...)``.
     """
-    return _tool_response_part(interrupt, response, metadata)
+    return as_part(interrupt).respond(response, metadata=metadata)
 
 
 def restart_tool(
@@ -427,39 +403,9 @@ def restart_tool(
 ) -> Part:
     """Build a restart tool-request Part for a pending tool interrupt.
 
-    Pass the return value to ``generate(..., resume_restart=...)``.
-
-    Args:
-        interrupt: The interrupted tool request (e.g. from ``response.interrupts``).
-        replace_input: Optional new ``tool_request.input`` for this run (previous input is
-            stored in ``metadata.replacedInput`` when this is set).
-        resumed_metadata: Passed to the tool as ``ToolRunContext.resumed_metadata``.
-
-    Returns:
-        A Part for ``resume_restart`` / message history.
-
-    Example:
-        ``restart_tool(interrupt=trp, resumed_metadata={"tool_approved": True})``
+    Prefer ``interrupt.restart(...)``. Pass the result to ``generate(..., resume_restart=...)``.
     """
-    part = as_part(interrupt)
-    tool_req = part.tool_request
-    if tool_req is None:
-        raise ValueError('restart_tool needs a tool request part')
-    new_meta: dict[str, Any] = dict(part.metadata or {})
-
-    new_meta['resumed'] = resumed_metadata if resumed_metadata is not None else True
-
-    new_input = tool_req.input
-    if replace_input is not None:
-        new_meta['replacedInput'] = tool_req.input
-        new_input = replace_input
-
-    return Part.from_tool_request(
-        name=tool_req.name,
-        input=new_input,
-        ref=tool_req.ref,
-        metadata=new_meta,
-    )
+    return as_part(interrupt).restart(resumed_metadata=resumed_metadata, replace_input=replace_input)
 
 
 def _resume_context_from_tool_request_part(
