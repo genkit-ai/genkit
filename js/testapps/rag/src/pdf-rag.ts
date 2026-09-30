@@ -95,7 +95,7 @@ async function extractText(filePath: string) {
 }
 
 // genkit flow:run synthesizeQuestions '"./docs/flume-java.pdf"' --output synthesizedQuestions.json
-// genkit flow:batchRun pdfQA synthesizedQuestions.json --output batchinput_small_out.json
+// genkit flow:batch-run pdfQA synthesizedQuestions.json --output batchinput_small_out.json
 export const synthesizeQuestions = ai.defineFlow(
   {
     name: 'synthesizeQuestions',
