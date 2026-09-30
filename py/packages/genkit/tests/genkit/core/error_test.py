@@ -167,6 +167,13 @@ def test_get_http_status() -> None:
     non_genkit_error = ValueError('Some other error')
     assert get_http_status(non_genkit_error) == 500
 
+    wrapped = GenkitError(
+        status='INTERNAL',
+        message='Error while running action boom',
+        cause=ValueError('secret'),
+    )
+    assert get_http_status(wrapped) == 500
+
 
 def test_get_callable_json() -> None:
     genkit_error = GenkitError(status='INVALID_ARGUMENT', message='Oops')
@@ -174,14 +181,27 @@ def test_get_callable_json() -> None:
     assert isinstance(json_data, dict)
     assert json_data['status'] == 'INVALID_ARGUMENT'
     assert json_data['message'] == 'Oops'
-    assert 'details' in json_data
+    assert 'stack' not in json_data.get('details', {})
 
     non_genkit_error = TypeError('Type error')
     json_data = get_callable_json(non_genkit_error)
-    assert isinstance(json_data, dict)
-    assert json_data['status'] == 'INTERNAL'
-    assert json_data['message'] == 'Type error'
-    assert 'details' in json_data
+    assert json_data == {'message': 'Internal Error', 'status': 'INTERNAL'}
+
+    wrapped = GenkitError(
+        status='INTERNAL',
+        message='Error while running action boom',
+        cause=ValueError('secret'),
+    )
+    json_data = get_callable_json(wrapped)
+    assert json_data == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert 'secret' not in str(json_data)
+
+    public = PublicError(status='NOT_FOUND', message='missing recipe')
+    json_data = get_callable_json(public)
+    assert json_data['message'] == 'missing recipe'
+    assert json_data['status'] == 'NOT_FOUND'
+    assert 'stack' not in json_data.get('details', {})
+    assert get_http_status(public) == 404
 
 
 def test_get_error_stack() -> None:

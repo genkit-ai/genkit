@@ -23,13 +23,24 @@ from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 from genkit_fastapi import genkit_fastapi_handler, serve_flow
 
-from genkit import ActionRunContext, Genkit
+from genkit import ActionRunContext, Genkit, GenkitError, RequestData
 
 
 def assert_is_error_response(parsed: dict) -> None:
-    """Assert parsed dict has HttpErrorWireFormat shape (message, status, details)."""
+    """Assert parsed dict has a callable error body (message + status)."""
     assert isinstance(parsed, dict)
-    assert all(k in parsed for k in ('message', 'status', 'details'))
+    assert all(k in parsed for k in ('message', 'status'))
+    assert 'stack' not in parsed.get('details', {})
+
+
+def sse_error_event(text: str) -> dict:
+    """Return the first SSE ``error`` payload, or fail."""
+    for line in text.splitlines():
+        if line.startswith('data: '):
+            payload = json.loads(line[6:])
+            if 'error' in payload:
+                return payload['error']
+    raise AssertionError(f'no SSE error event in {text!r}')
 
 
 def create_app() -> FastAPI:
@@ -74,12 +85,13 @@ def test_void_flow_accepts_explicit_null_data() -> None:
 
 
 def test_required_input_empty_body_fails_at_action_not_wire() -> None:
-    """Missing input on a required-parameter flow is an action error, not 400."""
+    """Missing input on a required-parameter flow is an action INVALID_ARGUMENT."""
     client = TestClient(create_app())
     response = client.post('/chat', json={})
-    assert response.status_code == 500
+    assert response.status_code == 400
     parsed = json.loads(response.text)
     assert_is_error_response(parsed)
+    assert parsed['status'] == 'INVALID_ARGUMENT'
 
 
 def test_unknown_body_shape_still_returns_400() -> None:
@@ -129,3 +141,121 @@ def test_context_dependency_value_reaches_action() -> None:
 
     assert response.status_code == 200
     assert response.json()['result'] == 'user-123'
+
+
+def test_fastapi_flow_raising_not_found_returns_404_with_the_genkit_message() -> None:
+    """FastAPI POST to a flow that raises GenkitError NOT_FOUND returns 404."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def missing(_: str) -> None:
+        raise GenkitError(status='NOT_FOUND', message='missing recipe')
+
+    app = FastAPI()
+    app.include_router(serve_flow(missing, base_path='/missing'))
+    response = TestClient(app).post('/missing', json={'data': 'x'})
+
+    assert response.status_code == 404
+    body = json.loads(response.text)
+    assert body['message'] == 'missing recipe'
+    assert body['status'] == 'NOT_FOUND'
+    assert 'stack' not in body.get('details', {})
+
+
+def test_fastapi_flow_raising_value_error_returns_500_internal_error_without_stack() -> None:
+    """FastAPI POST to a flow that raises ValueError returns a generic 500."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def boom(_: str) -> None:
+        raise ValueError('secret')
+
+    app = FastAPI()
+    app.include_router(serve_flow(boom, base_path='/boom'))
+    response = TestClient(app).post('/boom', json={'data': 'x'})
+
+    assert response.status_code == 500
+    body = json.loads(response.text)
+    assert body == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert 'secret' not in response.text
+    assert 'stack' not in body
+
+
+def test_fastapi_stream_flow_raising_not_found_sends_sse_error_with_the_genkit_message() -> None:
+    """FastAPI SSE to a flow that raises GenkitError NOT_FOUND sends that error."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def missing(_: str) -> None:
+        raise GenkitError(status='NOT_FOUND', message='missing recipe')
+
+    app = FastAPI()
+    app.include_router(serve_flow(missing, base_path='/missing'))
+    response = TestClient(app).post(
+        '/missing',
+        json={'data': 'x'},
+        headers={'Accept': 'text/event-stream'},
+    )
+
+    error = sse_error_event(response.text)
+    assert error['message'] == 'missing recipe'
+    assert error['status'] == 'NOT_FOUND'
+    assert 'stack' not in error.get('details', {})
+
+
+def test_fastapi_stream_flow_raising_value_error_sends_sse_internal_error_without_stack() -> None:
+    """FastAPI SSE to a flow that raises ValueError sends a generic Internal Error."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def boom(_: str) -> None:
+        raise ValueError('secret')
+
+    app = FastAPI()
+    app.include_router(serve_flow(boom, base_path='/boom'))
+    response = TestClient(app).post(
+        '/boom',
+        json={'data': 'x'},
+        headers={'Accept': 'text/event-stream'},
+    )
+
+    error = sse_error_event(response.text)
+    assert error == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert 'secret' not in response.text
+    assert 'stack' not in error
+
+
+def test_fastapi_context_provider_sees_method_lowercase_headers_and_input() -> None:
+    """FastAPI context_provider sees method, lowercase headers, and input."""
+    ai = Genkit()
+    app = FastAPI()
+
+    async def provider(request_data: RequestData) -> dict[str, object]:
+        return {
+            'method': request_data.method,
+            'authorization': request_data.headers['authorization'],
+            'input': request_data.input,
+        }
+
+    @app.post('/echo', response_model=None)
+    @genkit_fastapi_handler(ai, context_provider=provider)
+    @ai.flow()
+    async def echo(_: str, ctx: ActionRunContext) -> dict[str, object]:
+        return {
+            'method': ctx.context['method'],
+            'authorization': ctx.context['authorization'],
+            'input': ctx.context['input'],
+        }
+
+    response = TestClient(app).post(
+        '/echo',
+        json={'data': 'hello'},
+        headers={'Authorization': 'Bearer tok'},
+    )
+
+    assert response.status_code == 200
+    assert response.json()['result'] == {
+        'method': 'POST',
+        'authorization': 'Bearer tok',
+        'input': 'hello',
+    }

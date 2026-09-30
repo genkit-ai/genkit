@@ -30,13 +30,25 @@ from django.test.utils import override_settings
 from django.urls import path
 from genkit_django import genkit_django_handler
 
-from genkit import ActionRunContext, Genkit, RequestData
+from genkit import ActionRunContext, Genkit, GenkitError, RequestData
 
 
 def _assert_is_error_response(parsed: dict) -> None:
-    """Assert parsed dict has HttpErrorWireFormat shape (message, status, details)."""
+    """Assert parsed dict has a callable error body (message + status)."""
     assert isinstance(parsed, dict)
-    assert all(k in parsed for k in ('message', 'status', 'details'))
+    assert all(k in parsed for k in ('message', 'status'))
+    assert 'stack' not in parsed.get('details', {})
+
+
+def _sse_error_event(chunks: list[bytes]) -> dict:
+    """Return the first SSE ``error`` payload, or fail."""
+    text = b''.join(chunks).decode()
+    for line in text.splitlines():
+        if line.startswith('data: '):
+            payload = json.loads(line[6:])
+            if 'error' in payload:
+                return payload['error']
+    raise AssertionError(f'no SSE error event in {text!r}')
 
 
 def _build_views() -> dict[str, Any]:
@@ -61,7 +73,33 @@ def _build_views() -> dict[str, Any]:
     async def raise_error(_: str) -> None:
         raise ValueError('Intentional test error')
 
-    return {'say_hi': say_hi, 'raise_error': raise_error}
+    @genkit_django_handler(ai)
+    @ai.flow()
+    async def raise_invalid(_: str) -> None:
+        raise GenkitError(status='INVALID_ARGUMENT', message='bad input')
+
+    async def echo_context(request_data: RequestData[HttpRequest]) -> dict[str, Any]:
+        return {
+            'method': request_data.method,
+            'authorization': request_data.headers['authorization'],
+            'input': request_data.input,
+        }
+
+    @genkit_django_handler(ai, context_provider=echo_context)
+    @ai.flow()
+    async def echo_request(_: str, ctx: ActionRunContext) -> dict[str, Any]:
+        return {
+            'method': ctx.context['method'],
+            'authorization': ctx.context['authorization'],
+            'input': ctx.context['input'],
+        }
+
+    return {
+        'say_hi': say_hi,
+        'raise_error': raise_error,
+        'raise_invalid': raise_invalid,
+        'echo_request': echo_request,
+    }
 
 
 @pytest.fixture
@@ -75,6 +113,8 @@ def urlconf(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     module.urlpatterns = [  # type: ignore[attr-defined]  # pyrefly: ignore[missing-attribute]
         path('chat', views['say_hi']),
         path('error_flow', views['raise_error']),
+        path('invalid_flow', views['raise_invalid']),
+        path('echo_request', views['echo_request']),
     ]
     monkeypatch.setitem(sys.modules, 'genkit_django_tests_urls', module)
 
@@ -170,4 +210,83 @@ async def test_500_flow_exception_returns_valid_json(urlconf: None) -> None:  # 
         content_type='application/json',
     )
     assert response.status_code == 500
-    _assert_is_error_response(json.loads(response.content))
+    parsed = json.loads(response.content)
+    _assert_is_error_response(parsed)
+    assert parsed == {'message': 'Internal Error', 'status': 'INTERNAL'}
+
+
+@pytest.mark.asyncio
+async def test_django_flow_raising_invalid_argument_returns_400_with_the_genkit_message(
+    urlconf: None,
+) -> None:  # noqa: ARG001
+    """Django POST to a flow that raises GenkitError INVALID_ARGUMENT returns 400."""
+    client = AsyncClient()
+    response = await client.post(
+        '/invalid_flow',
+        data=json.dumps({'data': 'x'}),
+        content_type='application/json',
+    )
+    assert response.status_code == 400
+    body = json.loads(response.content)
+    assert body['message'] == 'bad input'
+    assert body['status'] == 'INVALID_ARGUMENT'
+    assert 'stack' not in body.get('details', {})
+
+
+@pytest.mark.asyncio
+async def test_django_flow_raising_value_error_returns_500_internal_error_without_stack(
+    urlconf: None,
+) -> None:  # noqa: ARG001
+    """Django POST to a flow that raises ValueError returns a generic 500."""
+    client = AsyncClient()
+    response = await client.post(
+        '/error_flow',
+        data=json.dumps({'data': 'secret'}),
+        content_type='application/json',
+    )
+    assert response.status_code == 500
+    body = json.loads(response.content)
+    assert body == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert b'secret' not in response.content
+    assert 'stack' not in body
+
+
+@pytest.mark.asyncio
+async def test_django_stream_flow_raising_value_error_sends_sse_internal_error_without_stack(
+    urlconf: None,
+) -> None:  # noqa: ARG001
+    """Django SSE to a flow that raises ValueError sends a generic Internal Error."""
+    client = AsyncClient()
+    response = await client.post(
+        '/error_flow',
+        data=json.dumps({'data': 'secret'}),
+        content_type='application/json',
+        headers={'accept': 'text/event-stream'},
+    )
+    chunks = [chunk async for chunk in response.streaming_content]
+    error = _sse_error_event(chunks)
+    assert error == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert b'secret' not in b''.join(chunks)
+    assert 'stack' not in error
+
+
+@pytest.mark.asyncio
+async def test_django_context_provider_sees_method_lowercase_headers_and_input(
+    urlconf: None,
+) -> None:  # noqa: ARG001
+    """Django context_provider sees method, lowercase headers, and input."""
+    client = AsyncClient()
+    response = await client.post(
+        '/echo_request',
+        data=json.dumps({'data': 'hello'}),
+        content_type='application/json',
+        headers={'Authorization': 'Bearer tok'},
+    )
+    assert response.status_code == 200
+    assert json.loads(response.content) == {
+        'result': {
+            'method': 'POST',
+            'authorization': 'Bearer tok',
+            'input': 'hello',
+        }
+    }
