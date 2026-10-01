@@ -256,6 +256,24 @@ export const ContextCompressionOptionsSchema = z.object({
     .string()
     .optional()
     .describe('Custom notice text for when messages are dropped.'),
+
+  /**
+   * Record compression state in `message.metadata.contextCompression` while
+   * keeping original uncompressed messages in `request.messages` and
+   * `response.messages`.
+   *
+   * The middleware automatically resolves the compressed view on subsequent turns.
+   * Use `resolveCompressedHistory(messages)` to resolve the active messages yourself.
+   *
+   * Set to `false` to overwrite `request.messages` directly (destructive).
+   * @default true
+   */
+  preserveOriginalMessages: z
+    .boolean()
+    .optional()
+    .describe(
+      'Preserve original messages and store compression state in metadata. Default: true.'
+    ),
 });
 
 export type ContextCompressionOptions = z.infer<
@@ -308,6 +326,348 @@ const DATA_URI_APPROX_CHARS = 1000;
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Tracks boundary messages stamped by `contextCompression` in the current process
+ * so `resolveCompressedHistory` can distinguish legitimate turn-0 stamps from
+ * untrusted client-supplied user messages.
+ */
+const trustedBoundaryMessages = new WeakSet<MessageData>();
+
+const COMPACTION_BOUNDARY_KEYS = [
+  'summary',
+  'stats',
+  'anchorUser',
+  'truncationNotice',
+  'preserveSystem',
+] as const;
+
+function findLastModelOrToolIndex(messages: MessageData[]): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const role = messages[i]?.role;
+    if (role === 'model' || role === 'tool') {
+      return i;
+    }
+  }
+  return -1;
+}
+
+function findLastNonSystemIndex(messages: MessageData[]): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]?.role !== 'system') {
+      return i;
+    }
+  }
+  return Math.max(0, messages.length - 1);
+}
+
+function isUntrustedTrailingUserMessage(
+  messages: MessageData[],
+  index: number,
+  lastModelOrToolIdx: number
+): boolean {
+  const msg = messages[index];
+  return (
+    Boolean(msg) &&
+    msg.role === 'user' &&
+    index > lastModelOrToolIdx &&
+    !trustedBoundaryMessages.has(msg)
+  );
+}
+
+/**
+ * Strips client-supplied compaction metadata (`compressedHistory` or boundary
+ * fields under `contextCompression`) from trailing `user` messages that appear
+ * after the last `model` or `tool` message in history.
+ */
+function sanitizeUntrustedUserMessages(messages: MessageData[]): {
+  messages: MessageData[];
+  sanitized: boolean;
+} {
+  const lastModelOrToolIdx = findLastModelOrToolIndex(messages);
+  let sanitized = false;
+
+  const result = messages.map((msg, idx) => {
+    if (!isUntrustedTrailingUserMessage(messages, idx, lastModelOrToolIdx)) {
+      return msg;
+    }
+    const meta = msg.metadata;
+    if (!meta) return msg;
+
+    const hasLegacyKey = 'compressedHistory' in meta;
+    const ccMeta = meta.contextCompression as
+      | Record<string, unknown>
+      | undefined;
+    const hasBoundaryField =
+      ccMeta !== undefined && COMPACTION_BOUNDARY_KEYS.some((k) => k in ccMeta);
+
+    if (!hasLegacyKey && !hasBoundaryField) {
+      return msg;
+    }
+
+    sanitized = true;
+    const { compressedHistory: _legacy, ...restMeta } = meta;
+    if (ccMeta && hasBoundaryField) {
+      const cleanedCc: Record<string, unknown> = { ...ccMeta };
+      for (const k of COMPACTION_BOUNDARY_KEYS) {
+        delete cleanedCc[k];
+      }
+      if (Object.keys(cleanedCc).length > 0) {
+        restMeta.contextCompression = cleanedCc;
+      } else {
+        delete restMeta.contextCompression;
+      }
+    }
+
+    return {
+      ...msg,
+      metadata: Object.keys(restMeta).length > 0 ? restMeta : undefined,
+    };
+  });
+
+  return { messages: sanitized ? result : messages, sanitized };
+}
+
+function withoutRawOutputFlag(target: {
+  metadata?: Record<string, unknown>;
+}): Record<string, unknown> | undefined {
+  if (!target.metadata) return undefined;
+  const ccMeta = target.metadata.contextCompression as
+    | Record<string, unknown>
+    | undefined;
+  if (!ccMeta || !('rawOutput' in ccMeta)) return target.metadata;
+  const { rawOutput: _raw, ...restCc } = ccMeta;
+  return {
+    ...target.metadata,
+    contextCompression: restCc,
+  };
+}
+
+function materializeToolPart(part: Part): Part {
+  if (!part.toolResponse) return part;
+  const ccMeta = part.metadata?.contextCompression as
+    | Record<string, unknown>
+    | undefined;
+  if (!ccMeta || !ccMeta.rawOutput) return part;
+
+  if (ccMeta.deduplicated) {
+    const notice =
+      typeof ccMeta.notice === 'string' ? ccMeta.notice : DEFAULT_DEDUP_NOTICE;
+    const { content: _content, ...restToolResponse } = part.toolResponse;
+    return {
+      ...part,
+      metadata: withoutRawOutputFlag(part),
+      toolResponse: {
+        ...restToolResponse,
+        output: notice,
+      },
+    };
+  }
+
+  if (ccMeta.truncated && typeof ccMeta.maxChars === 'number') {
+    const limit = ccMeta.maxChars;
+    const outputStr = stringifyOutput(part.toolResponse.output);
+    if (outputStr.length <= limit) {
+      return { ...part, metadata: withoutRawOutputFlag(part) };
+    }
+    const sliced = sliceCodePointSafe(outputStr, limit);
+    const omitted = outputStr.length - sliced.length;
+    const marker = `\n\n[Truncated ${omitted} characters]`;
+    return {
+      ...part,
+      metadata: withoutRawOutputFlag(part),
+      toolResponse: {
+        ...part.toolResponse,
+        output: sliced + marker,
+      },
+    };
+  }
+
+  if (ccMeta.capped && typeof ccMeta.maxChars === 'number') {
+    const limit = ccMeta.maxChars;
+    const outputStr = stringifyOutput(part.toolResponse.output);
+    if (outputStr.length <= limit) {
+      return { ...part, metadata: withoutRawOutputFlag(part) };
+    }
+    const sliced = sliceCodePointSafe(outputStr, limit);
+    const marker =
+      `\n\n---\n\n[TRUNCATED: Response was ${outputStr.length} chars ` +
+      `but only first ${limit} are shown.]`;
+    return {
+      ...part,
+      metadata: withoutRawOutputFlag(part),
+      toolResponse: {
+        ...part.toolResponse,
+        output: sliced + marker,
+      },
+    };
+  }
+
+  return part;
+}
+
+function materializeToolMessage(msg: MessageData): MessageData {
+  if (msg.role !== 'tool') return msg;
+  let changed = false;
+  const newContent = msg.content.map((part) => {
+    const updated = materializeToolPart(part);
+    if (updated !== part) changed = true;
+    return updated;
+  });
+  return changed ? { ...msg, content: newContent } : msg;
+}
+
+function resolveCompressedHistoryWithIndices(messages: MessageData[]): {
+  messages: MessageData[];
+  origIndexByMsg: WeakMap<MessageData, number>;
+  boundaryIndex: number;
+} {
+  const origIndexByMsg = new WeakMap<MessageData, number>();
+  const lastModelOrToolIdx = findLastModelOrToolIndex(messages);
+  let boundaryIndex = -1;
+
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (isUntrustedTrailingUserMessage(messages, i, lastModelOrToolIdx)) {
+      continue;
+    }
+    const ccMeta = messages[i]?.metadata?.contextCompression as
+      | Record<string, unknown>
+      | undefined;
+    if (ccMeta && typeof ccMeta.summary === 'string') {
+      boundaryIndex = i;
+      break;
+    }
+  }
+
+  if (boundaryIndex === -1) {
+    let anyChanged = false;
+    const materialized = messages.map((m, idx) => {
+      const updated = materializeToolMessage(m);
+      if (updated !== m) anyChanged = true;
+      origIndexByMsg.set(updated, idx);
+      origIndexByMsg.set(m, idx);
+      return updated;
+    });
+    return {
+      messages: anyChanged ? materialized : messages,
+      origIndexByMsg,
+      boundaryIndex: -1,
+    };
+  }
+
+  const ccMeta = messages[boundaryIndex].metadata!.contextCompression as Record<
+    string,
+    unknown
+  >;
+  const boundaryPreserveSystem = ccMeta.preserveSystem !== false;
+  const stats = ccMeta.stats as Record<string, unknown> | undefined;
+  const shouldInsertNotice = Boolean(
+    ccMeta.truncationNotice || stats?.truncationNoticeInserted
+  );
+  const noticeText =
+    typeof ccMeta.truncationNotice === 'string'
+      ? ccMeta.truncationNotice
+      : DEFAULT_TRUNCATION_NOTICE;
+
+  const resolvedMessages: MessageData[] = [];
+
+  let leadingSystemEnd = 0;
+  if (boundaryPreserveSystem) {
+    while (
+      leadingSystemEnd < messages.length &&
+      messages[leadingSystemEnd].role === 'system'
+    ) {
+      leadingSystemEnd++;
+    }
+    const leadingSystem = messages.slice(0, leadingSystemEnd);
+    if (shouldInsertNotice) {
+      if (leadingSystem.length > 0) {
+        const alreadyHasNotice = leadingSystem.some((m) =>
+          hasCompressionFlag(m, 'notice')
+        );
+        leadingSystem.forEach((msg, idx) => {
+          if (!alreadyHasNotice && idx === 0) {
+            const updatedSys: MessageData = {
+              ...msg,
+              metadata: withCompressionMetadata(msg, { notice: true }),
+              content: [...msg.content, { text: `\n\n${noticeText}` }],
+            };
+            origIndexByMsg.set(updatedSys, idx);
+            resolvedMessages.push(updatedSys);
+          } else {
+            origIndexByMsg.set(msg, idx);
+            resolvedMessages.push(msg);
+          }
+        });
+      } else {
+        const noticeMsg: MessageData = {
+          role: 'system',
+          metadata: withCompressionMetadata(
+            {},
+            { notice: true, standaloneNotice: true }
+          ),
+          content: [{ text: noticeText }],
+        };
+        origIndexByMsg.set(noticeMsg, -1);
+        resolvedMessages.push(noticeMsg);
+      }
+    } else {
+      leadingSystem.forEach((msg, idx) => {
+        origIndexByMsg.set(msg, idx);
+        resolvedMessages.push(msg);
+      });
+    }
+  }
+
+  const summaryText = ccMeta.summary as string;
+  if (summaryText.length > 0) {
+    const summaryMsg: MessageData = {
+      role: 'user',
+      metadata: withCompressionMetadata({}, { summaryMessage: true }),
+      content: [{ text: `${SUMMARY_PREFIX}\n${summaryText}` }],
+    };
+    origIndexByMsg.set(summaryMsg, -1);
+    resolvedMessages.push(summaryMsg);
+  }
+
+  if (ccMeta.anchorUser === true) {
+    for (let i = boundaryIndex; i >= leadingSystemEnd; i--) {
+      if (messages[i].role === 'user') {
+        origIndexByMsg.set(messages[i], i);
+        resolvedMessages.push(messages[i]);
+        break;
+      }
+    }
+  }
+
+  const tailStart = Math.max(leadingSystemEnd, boundaryIndex + 1);
+  for (let i = tailStart; i < messages.length; i++) {
+    if (!boundaryPreserveSystem && hasCompressionFlag(messages[i], 'notice')) {
+      continue;
+    }
+    const materialized = materializeToolMessage(messages[i]);
+    origIndexByMsg.set(materialized, i);
+    origIndexByMsg.set(messages[i], i);
+    resolvedMessages.push(materialized);
+  }
+
+  return {
+    messages: resolvedMessages,
+    origIndexByMsg,
+    boundaryIndex,
+  };
+}
+
+/**
+ * Resolves active messages from a history containing `contextCompression`
+ * metadata stamps, preserving current system messages and materializing
+ * compacted prefixes and tool response truncations.
+ */
+export function resolveCompressedHistory(
+  messages: MessageData[]
+): MessageData[] {
+  return resolveCompressedHistoryWithIndices(messages).messages;
+}
 
 /**
  * Stringify tool output, avoiding re-stringifying if already a string.
@@ -383,13 +743,19 @@ function withCompressionMetadata(
   target: { metadata?: Record<string, unknown> },
   fields: Record<string, unknown>
 ): Record<string, unknown> {
+  const nextCc: Record<string, unknown> = {
+    ...((target.metadata?.contextCompression as Record<string, unknown>) ?? {}),
+  };
+  for (const [k, v] of Object.entries(fields)) {
+    if (v === undefined) {
+      delete nextCc[k];
+    } else {
+      nextCc[k] = v;
+    }
+  }
   return {
     ...target.metadata,
-    contextCompression: {
-      ...((target.metadata?.contextCompression as Record<string, unknown>) ??
-        {}),
-      ...fields,
-    },
+    contextCompression: nextCc,
   };
 }
 
@@ -677,6 +1043,7 @@ export const contextCompression: GenerateMiddleware<
       Math.trunc(config?.preserveRecent ?? DEFAULT_PRESERVE_RECENT)
     );
     const preserveSystem = config?.preserveSystem !== false;
+    const preserveOriginalMessages = config?.preserveOriginalMessages !== false;
     const rawMaxToolResponseChars =
       config?.maxToolResponseChars ?? DEFAULT_MAX_TOOL_RESPONSE_CHARS;
     const maxToolResponseChars =
@@ -816,7 +1183,10 @@ export const contextCompression: GenerateMiddleware<
               part.toolResponse;
             return {
               ...part,
-              metadata: withCompressionMetadata(part, { deduplicated: true }),
+              metadata: withCompressionMetadata(part, {
+                deduplicated: true,
+                notice: dedupNotice,
+              }),
               toolResponse: {
                 ...restToolResponse,
                 output: dedupNotice,
@@ -904,7 +1274,10 @@ export const contextCompression: GenerateMiddleware<
             truncated++;
             return {
               ...part,
-              metadata: withCompressionMetadata(part, { truncated: true }),
+              metadata: withCompressionMetadata(part, {
+                truncated: true,
+                maxChars: limit,
+              }),
               toolResponse: {
                 ...part.toolResponse,
                 output: sliced + marker,
@@ -918,7 +1291,10 @@ export const contextCompression: GenerateMiddleware<
             capped++;
             return {
               ...part,
-              metadata: withCompressionMetadata(part, { capped: true }),
+              metadata: withCompressionMetadata(part, {
+                capped: true,
+                maxChars: limit,
+              }),
               toolResponse: {
                 ...part.toolResponse,
                 output: sliced + marker,
@@ -945,11 +1321,18 @@ export const contextCompression: GenerateMiddleware<
       messages: MessageData[];
       dropped: number;
       noticeInserted: boolean;
-      tailCount: number;
+      tailMessages: MessageData[];
+      usedAnchorUser: boolean;
     } {
       const cap = effectiveMaxMessages ?? maxMessages;
       if (!cap || cap <= 0 || messages.length <= cap) {
-        return { messages, dropped: 0, noticeInserted: false, tailCount: 0 };
+        return {
+          messages,
+          dropped: 0,
+          noticeInserted: false,
+          tailMessages: [],
+          usedAnchorUser: false,
+        };
       }
 
       const { systemMessages, nonSystemMessages } = partitionMessages(
@@ -970,6 +1353,9 @@ export const contextCompression: GenerateMiddleware<
       while (kept.length > 0 && kept[0].role === 'tool') {
         kept.shift();
       }
+
+      let tailMessages: MessageData[] | undefined;
+      let usedAnchorUser = false;
 
       // If keepCount was too small to capture the preceding model message for a
       // trailing tool turn (e.g. keepCount === 1), rescue the final [model, ...tool] group.
@@ -1011,6 +1397,14 @@ export const contextCompression: GenerateMiddleware<
               break;
             }
           }
+          if (!anchorUser) {
+            for (let i = droppedPrefix.length - 1; i >= 0; i--) {
+              if (droppedPrefix[i].role === 'user') {
+                anchorUser = droppedPrefix[i];
+                break;
+              }
+            }
+          }
           if (anchorUser) {
             let tail =
               keepCount > 1 ? nonSystemMessages.slice(-(keepCount - 1)) : [];
@@ -1024,12 +1418,15 @@ export const contextCompression: GenerateMiddleware<
               tail = kept;
             }
             kept = [anchorUser, ...tail];
+            tailMessages = tail;
+            usedAnchorUser = !hasCompressionFlag(anchorUser, 'summaryMessage');
           } else {
             kept = [];
           }
         }
       }
 
+      const finalTailMessages = tailMessages ?? kept;
       const dropped = nonSystemMessages.length - kept.length;
 
       let noticeInserted = false;
@@ -1057,7 +1454,8 @@ export const contextCompression: GenerateMiddleware<
             messages: [...updatedSystemMessages, ...kept],
             dropped,
             noticeInserted,
-            tailCount: kept.length,
+            tailMessages: finalTailMessages,
+            usedAnchorUser,
           };
         } else {
           const notice: MessageData = {
@@ -1072,7 +1470,8 @@ export const contextCompression: GenerateMiddleware<
             messages: [notice, ...kept],
             dropped,
             noticeInserted,
-            tailCount: kept.length,
+            tailMessages: finalTailMessages,
+            usedAnchorUser,
           };
         }
       }
@@ -1081,7 +1480,8 @@ export const contextCompression: GenerateMiddleware<
         messages: [...systemMessages, ...kept],
         dropped,
         noticeInserted,
-        tailCount: kept.length,
+        tailMessages: finalTailMessages,
+        usedAnchorUser,
       };
     }
 
@@ -1093,10 +1493,17 @@ export const contextCompression: GenerateMiddleware<
     ): Promise<{
       messages: MessageData[];
       summarized: boolean;
-      tailCount: number;
+      summaryText: string;
+      tailMessages: MessageData[];
     }> {
-      if (!summaryModelRef)
-        return { messages, summarized: false, tailCount: 0 };
+      if (!summaryModelRef) {
+        return {
+          messages,
+          summarized: false,
+          summaryText: '',
+          tailMessages: [],
+        };
+      }
 
       const summaryPreserveRecent = Math.max(
         1,
@@ -1115,13 +1522,23 @@ export const contextCompression: GenerateMiddleware<
       if (maxMessagesCap !== undefined && maxMessagesCap > 0) {
         const maxKeepForCap = maxMessagesCap - systemMessages.length - 1;
         if (maxKeepForCap < 1) {
-          return { messages, summarized: false, tailCount: 0 };
+          return {
+            messages,
+            summarized: false,
+            summaryText: '',
+            tailMessages: [],
+          };
         }
         targetKeep = Math.min(summaryPreserveRecent, maxKeepForCap);
       }
 
       if (nonSystemMessages.length <= targetKeep) {
-        return { messages, summarized: false, tailCount: 0 };
+        return {
+          messages,
+          summarized: false,
+          summaryText: '',
+          tailMessages: [],
+        };
       }
 
       let splitIdx = nonSystemMessages.length - targetKeep;
@@ -1132,7 +1549,12 @@ export const contextCompression: GenerateMiddleware<
       }
 
       if (splitIdx <= 0 || nonSystemMessages[splitIdx].role === 'tool') {
-        return { messages, summarized: false, tailCount: 0 };
+        return {
+          messages,
+          summarized: false,
+          summaryText: '',
+          tailMessages: [],
+        };
       }
 
       const toSummarize = nonSystemMessages.slice(0, splitIdx);
@@ -1143,7 +1565,12 @@ export const contextCompression: GenerateMiddleware<
         maxMessagesCap > 0 &&
         systemMessages.length + 1 + toKeep.length > maxMessagesCap
       ) {
-        return { messages, summarized: false, tailCount: 0 };
+        return {
+          messages,
+          summarized: false,
+          summaryText: '',
+          tailMessages: [],
+        };
       }
 
       try {
@@ -1208,7 +1635,8 @@ export const contextCompression: GenerateMiddleware<
             toKeep
           ),
           summarized: true,
-          tailCount: toKeep.length,
+          summaryText,
+          tailMessages: toKeep,
         };
       } catch (e: unknown) {
         logger.warn(
@@ -1218,13 +1646,28 @@ export const contextCompression: GenerateMiddleware<
           { 'genkit.middleware.name': 'contextCompression' },
           e
         );
-        return { messages, summarized: false, tailCount: 0 };
+        return {
+          messages,
+          summarized: false,
+          summaryText: '',
+          tailMessages: [],
+        };
       }
     }
 
     return {
       model: async (req, ctx, next) => {
-        const result = await next(req, ctx);
+        const { messages: resolvedMessages } = reconcileStandaloneNotices(
+          resolveCompressedHistory(req.messages || []),
+          preserveSystem,
+          truncationNoticeText
+        );
+        const modifiedReq =
+          resolvedMessages !== req.messages
+            ? { ...req, messages: resolvedMessages }
+            : req;
+
+        const result = await next(modifiedReq, ctx);
         if (result.usage?.inputTokens !== undefined) {
           lastInputTokens = result.usage.inputTokens;
           if (result.message && result.usage.inputTokens > 0) {
@@ -1252,37 +1695,54 @@ export const contextCompression: GenerateMiddleware<
         }
 
         const {
-          messages: rawMessages,
-          reconciled: reconciledStandaloneNotices,
+          messages: sanitizedMessages,
+          sanitized: sanitizedClientMetadata,
+        } = sanitizeUntrustedUserMessages(envelope.request.messages || []);
+        const { messages: rawMessages, reconciled: reconciledRawNotices } =
+          reconcileStandaloneNotices(
+            sanitizedMessages,
+            preserveSystem,
+            truncationNoticeText
+          );
+        const resolved = resolveCompressedHistoryWithIndices(rawMessages);
+        const prevBoundary = resolved.boundaryIndex;
+        const origIndexByMsg = resolved.origIndexByMsg;
+        const {
+          messages: activeMessages,
+          reconciled: reconciledActiveNotices,
         } = reconcileStandaloneNotices(
-          envelope.request.messages || [],
+          resolved.messages,
           preserveSystem,
           truncationNoticeText
         );
+        const reconciledStandaloneNotices =
+          reconciledRawNotices || reconciledActiveNotices;
         const stampedTokens =
-          lastInputTokens ?? lastReportedInputTokens(rawMessages);
-        let cachedRawChars: number | undefined;
-        const getRawChars = () => {
-          if (cachedRawChars === undefined) {
-            cachedRawChars = estimateMessageChars(rawMessages);
+          lastInputTokens ??
+          lastReportedInputTokens(activeMessages) ??
+          lastReportedInputTokens(rawMessages);
+        let cachedActiveChars: number | undefined;
+        const getActiveChars = () => {
+          if (cachedActiveChars === undefined) {
+            cachedActiveChars = estimateMessageChars(activeMessages);
           }
-          return cachedRawChars;
+          return cachedActiveChars;
         };
         const estimatedTokens =
           maxInputTokens === Infinity
             ? 0
-            : Math.ceil(getRawChars() / CHARS_PER_TOKEN_ESTIMATE);
+            : Math.ceil(getActiveChars() / CHARS_PER_TOKEN_ESTIMATE);
         const effectiveTokens = Math.max(stampedTokens ?? 0, estimatedTokens);
 
         const shouldCompress =
           effectiveTokens > maxInputTokens ||
           (maxMessages !== undefined &&
             maxMessages > 0 &&
-            rawMessages.length > maxMessages);
+            activeMessages.length > maxMessages);
 
         const hasOversizedToolResponse =
           maxToolResponseChars !== Infinity &&
-          rawMessages.some(
+          activeMessages.some(
             (m) =>
               m.role === 'tool' &&
               m.content.some(
@@ -1296,15 +1756,16 @@ export const contextCompression: GenerateMiddleware<
           );
 
         if (!shouldCompress && !hasOversizedToolResponse) {
-          const passthroughEnvelope = reconciledStandaloneNotices
-            ? {
-                ...envelope,
-                request: {
-                  ...envelope.request,
-                  messages: rawMessages,
-                },
-              }
-            : envelope;
+          const passthroughEnvelope =
+            reconciledStandaloneNotices || sanitizedClientMetadata
+              ? {
+                  ...envelope,
+                  request: {
+                    ...envelope.request,
+                    messages: rawMessages,
+                  },
+                }
+              : envelope;
           const response = await next(passthroughEnvelope, ctx);
           if (isTopLevel && latestCompressionMeta) {
             return {
@@ -1318,13 +1779,14 @@ export const contextCompression: GenerateMiddleware<
           return response;
         }
 
-        const originalCount = rawMessages.length;
+        const originalCount = activeMessages.length;
         const inputTokensBefore =
           effectiveTokens > 0
             ? effectiveTokens
-            : Math.ceil(getRawChars() / CHARS_PER_TOKEN_ESTIMATE);
+            : Math.ceil(getActiveChars() / CHARS_PER_TOKEN_ESTIMATE);
 
-        let compressedMessages: MessageData[] = rawMessages;
+        let compressedMessages: MessageData[] = activeMessages;
+        const updatedToolMessagesByRawIdx = new Map<number, MessageData>();
 
         const overshootRatio =
           maxInputTokens !== Infinity && maxInputTokens > 0
@@ -1343,18 +1805,28 @@ export const contextCompression: GenerateMiddleware<
           toolResponsesDeduplicated,
           toolResponsesTruncated,
           truncationNoticeInserted,
+          messagesTruncated,
+          truncBoundaryIdx,
+          usedAnchorUser,
           summarized,
+          summaryText,
+          sumBoundaryIdx,
           summarizationSkipped,
         } = await ai.run(
           'contextCompression',
           { messageCount: originalCount, effectiveTokens: inputTokensBefore },
           async () => {
-            let messages = [...rawMessages];
+            let messages = [...activeMessages];
             let capped = 0;
             let deduplicated = 0;
             let truncated = 0;
             let noticeInserted = false;
+            let msgTruncated = false;
+            let mBoundaryIdx = -1;
+            let mUsedAnchorUser = false;
             let isSummarized = false;
+            let sText = '';
+            let sBoundaryIdx = -1;
             let skippedSummary = false;
 
             // 1. Tool response deduplication (when shouldCompress is true)
@@ -1370,6 +1842,16 @@ export const contextCompression: GenerateMiddleware<
             capped = toolResult.capped;
             truncated = toolResult.truncated;
 
+            for (let k = 0; k < messages.length; k++) {
+              const origIdx = origIndexByMsg.get(activeMessages[k]);
+              if (origIdx !== undefined) {
+                origIndexByMsg.set(messages[k], origIdx);
+                if (messages[k] !== activeMessages[k] && origIdx >= 0) {
+                  updatedToolMessagesByRawIdx.set(origIdx, messages[k]);
+                }
+              }
+            }
+
             if (shouldCompress) {
               // 3. Check if cheap strategies saved enough to skip summarization
               let shouldSkipSummarization = false;
@@ -1379,7 +1861,7 @@ export const contextCompression: GenerateMiddleware<
                 skipSummarizationThreshold > 0 &&
                 skipSummarizationThreshold <= 1
               ) {
-                const charsBefore = getRawChars();
+                const charsBefore = getActiveChars();
                 const charsAfterCheap = estimateMessageChars(messages);
                 const charsSaved = charsBefore - charsAfterCheap;
                 const savingsRatio =
@@ -1406,6 +1888,16 @@ export const contextCompression: GenerateMiddleware<
                   );
                   messages = sumResult.messages;
                   isSummarized = sumResult.summarized;
+                  if (isSummarized) {
+                    sText = sumResult.summaryText;
+                    const firstKeptRawIdx = sumResult.tailMessages
+                      .map((m) => origIndexByMsg.get(m) ?? -1)
+                      .find((idx) => idx > prevBoundary);
+                    sBoundaryIdx =
+                      firstKeptRawIdx !== undefined
+                        ? firstKeptRawIdx - 1
+                        : findLastNonSystemIndex(rawMessages);
+                  }
                 }
               }
 
@@ -1463,6 +1955,17 @@ export const contextCompression: GenerateMiddleware<
                   );
                   messages = msgResult.messages;
                   noticeInserted = msgResult.noticeInserted;
+                  if (msgResult.dropped > 0) {
+                    msgTruncated = true;
+                    mUsedAnchorUser = msgResult.usedAnchorUser;
+                    const firstKeptRawIdx = msgResult.tailMessages
+                      .map((m) => origIndexByMsg.get(m) ?? -1)
+                      .find((idx) => idx > prevBoundary);
+                    mBoundaryIdx =
+                      firstKeptRawIdx !== undefined
+                        ? firstKeptRawIdx - 1
+                        : findLastNonSystemIndex(rawMessages);
+                  }
                 }
               }
             }
@@ -1475,7 +1978,12 @@ export const contextCompression: GenerateMiddleware<
               toolResponsesDeduplicated: deduplicated,
               toolResponsesTruncated: truncated,
               truncationNoticeInserted: noticeInserted,
+              messagesTruncated: msgTruncated,
+              truncBoundaryIdx: mBoundaryIdx,
+              usedAnchorUser: mUsedAnchorUser,
               summarized: isSummarized,
+              summaryText: sText,
+              sumBoundaryIdx: sBoundaryIdx,
               summarizationSkipped: skippedSummary,
             };
           }
@@ -1513,14 +2021,94 @@ export const contextCompression: GenerateMiddleware<
           latestCompressionMeta = turnCompressionMeta;
         }
 
+        let outgoingMessages: MessageData[];
+        if (wasCompressed && preserveOriginalMessages) {
+          const hasCompactionBoundary = summarized || messagesTruncated;
+          const cutIndex = hasCompactionBoundary
+            ? Math.max(prevBoundary, sumBoundaryIdx, truncBoundaryIdx)
+            : -1;
+
+          const hasSummaryMsg = compressedMessages.some((m) =>
+            hasCompressionFlag(m, 'summaryMessage')
+          );
+          const prevSummary =
+            prevBoundary >= 0
+              ? ((
+                  rawMessages[prevBoundary]?.metadata?.contextCompression as
+                    | Record<string, unknown>
+                    | undefined
+                )?.summary as string | undefined)
+              : undefined;
+          const activeSummary = hasSummaryMsg
+            ? summarized
+              ? summaryText
+              : (prevSummary ?? '')
+            : '';
+
+          outgoingMessages = rawMessages.map((m, idx) => {
+            let updatedMsg = m;
+
+            const toolEditedMsg = updatedToolMessagesByRawIdx.get(idx);
+            if (toolEditedMsg && m.role === 'tool') {
+              let partChanged = false;
+              const updatedContent = m.content.map((rawPart, pIdx) => {
+                const editedPart = toolEditedMsg.content[pIdx];
+                if (!editedPart || editedPart === rawPart) {
+                  return rawPart;
+                }
+                const editedCc = editedPart.metadata?.contextCompression as
+                  | Record<string, unknown>
+                  | undefined;
+                if (!editedCc) return rawPart;
+                partChanged = true;
+                return {
+                  ...rawPart,
+                  metadata: withCompressionMetadata(rawPart, {
+                    ...editedCc,
+                    rawOutput: true,
+                  }),
+                };
+              });
+              if (partChanged) {
+                updatedMsg = { ...updatedMsg, content: updatedContent };
+              }
+            }
+
+            if (hasCompactionBoundary && idx === cutIndex) {
+              const stampedMsg: MessageData = {
+                ...updatedMsg,
+                metadata: withCompressionMetadata(updatedMsg, {
+                  summary: activeSummary,
+                  stats: turnCompressionMeta,
+                  anchorUser: usedAnchorUser ? true : undefined,
+                  truncationNotice:
+                    truncationNoticeInserted &&
+                    truncationNoticeText !== DEFAULT_TRUNCATION_NOTICE
+                      ? truncationNoticeText
+                      : undefined,
+                  preserveSystem: preserveSystem ? undefined : false,
+                }),
+              };
+              trustedBoundaryMessages.add(stampedMsg);
+              return stampedMsg;
+            }
+
+            return updatedMsg;
+          });
+        } else {
+          outgoingMessages =
+            wasCompressed ||
+            reconciledStandaloneNotices ||
+            sanitizedClientMetadata
+              ? compressedMessages
+              : rawMessages;
+        }
+
         const modifiedEnvelope = {
           ...envelope,
           request: {
             ...envelope.request,
-            messages:
-              wasCompressed || reconciledStandaloneNotices
-                ? compressedMessages
-                : rawMessages,
+            messages: outgoingMessages,
           },
         };
 

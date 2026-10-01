@@ -129,6 +129,7 @@ export const researchAgent = ai.defineAgent({
         preserveRecent: 2,
       },
       skipSummarizationThreshold: 0.3, // Skip LLM summarization if cheap strategies save >= 30%
+      preserveOriginalMessages: true, // Non-destructively stores contextCompression state on message metadata
       maxMessages: 10,
     }),
   ],
