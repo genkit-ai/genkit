@@ -14,10 +14,11 @@
  * limitations under the License.
  */
 
-import { genkit, z, type GenerateRequest } from 'genkit';
+import { genkit, modelRef, z, type GenerateRequest } from 'genkit';
 import assert from 'node:assert';
 import { describe, it } from 'node:test';
 import {
+  ContextCompressionOptionsSchema,
   DeduplicateToolResponsesOptionsSchema,
   contextCompression,
 } from '../src/context-compression.js';
@@ -1691,6 +1692,212 @@ describe('contextCompression middleware', () => {
     );
   });
 
+  it('summarizes older messages using summary model', async () => {
+    const ai = genkit({});
+    let turn = 0;
+    const capturedRequests: GenerateRequest[] = [];
+
+    const summaryModel = ai.defineModel({ name: 'summaryModel' }, async () => ({
+      message: {
+        role: 'model',
+        content: [{ text: 'Summary of past events: steps were executed.' }],
+      },
+    }));
+
+    const dummyTool = ai.defineTool(
+      {
+        name: 'step',
+        description: 'step',
+        inputSchema: z.object({ step: z.number() }),
+        outputSchema: z.string(),
+      },
+      async (input) => `output ${input.step}`
+    );
+
+    const pm = ai.defineModel({ name: 'multiTurnModel' }, async (req) => {
+      capturedRequests.push(req);
+      turn++;
+      if (turn <= 3) {
+        return {
+          message: {
+            role: 'model',
+            content: [{ toolRequest: { name: 'step', input: { step: turn } } }],
+          },
+          usage: { inputTokens: 500 },
+        };
+      }
+      return {
+        message: { role: 'model', content: [{ text: 'all done' }] },
+        usage: { inputTokens: 200 },
+      };
+    });
+
+    const result = await ai.generate({
+      model: pm,
+      system: 'System instructions',
+      prompt: 'Run multi turn steps',
+      tools: [dummyTool],
+      use: [
+        contextCompression({
+          maxInputTokens: 100,
+          summarize: {
+            model: { name: 'summaryModel' },
+            preserveRecent: 2,
+          },
+        }),
+      ],
+    });
+
+    assert.strictEqual(result.text, 'all done');
+
+    const lastReq = capturedRequests[capturedRequests.length - 1];
+    const summaryMsg = lastReq.messages.find((m) =>
+      m.content.some((p) => p.text?.includes('Summary of past events'))
+    );
+    assert.ok(summaryMsg);
+  });
+
+  it('respects custom summarization prompt', async () => {
+    const ai = genkit({});
+    let capturedPrompt = '';
+
+    const summaryModel = ai.defineModel(
+      { name: 'customPromptModel' },
+      async (req) => {
+        capturedPrompt = req.messages[0]?.content[0]?.text ?? '';
+        return {
+          message: {
+            role: 'model',
+            content: [{ text: 'Custom summary result' }],
+          },
+        };
+      }
+    );
+
+    const pm = ai.defineModel({ name: 'testModel' }, async () => ({
+      message: { role: 'model', content: [{ text: 'done' }] },
+      usage: { inputTokens: 50 },
+    }));
+
+    await ai.generate({
+      model: pm,
+      messages: [
+        { role: 'user', content: [{ text: 'A long discussion part 1' }] },
+        { role: 'model', content: [{ text: 'A long discussion response 1' }] },
+        { role: 'user', content: [{ text: 'A long discussion part 2' }] },
+        { role: 'model', content: [{ text: 'A long discussion response 2' }] },
+      ],
+      use: [
+        contextCompression({
+          maxInputTokens: 10,
+          summarize: {
+            model: summaryModel,
+            preserveRecent: 1,
+            prompt: 'TLDR THIS: {conversation}\nEND TLDR',
+          },
+        }),
+      ],
+    });
+
+    assert.match(capturedPrompt, /^TLDR THIS:/);
+    assert.match(capturedPrompt, /A long discussion part 1/);
+    assert.match(capturedPrompt, /END TLDR$/);
+  });
+
+  it('skips summarization when cheap strategies achieve skipSummarizationThreshold', async () => {
+    const ai = genkit({});
+    let summaryCalled = false;
+
+    const summaryModel = ai.defineModel(
+      { name: 'trackedSummaryModel' },
+      async () => {
+        summaryCalled = true;
+        return {
+          message: { role: 'model', content: [{ text: 'Summary' }] },
+        };
+      }
+    );
+
+    const pm = ai.defineModel({ name: 'skipModel' }, async () => ({
+      message: { role: 'model', content: [{ text: 'done' }] },
+      usage: { inputTokens: 50 },
+    }));
+
+    const response = (await ai.generate({
+      model: pm,
+      messages: [
+        {
+          role: 'tool',
+          content: [
+            {
+              toolResponse: {
+                name: 'huge',
+                ref: '1',
+                output: 'X'.repeat(2000),
+              },
+            },
+          ],
+        },
+        { role: 'user', content: [{ text: 'msg 2' }] },
+        { role: 'model', content: [{ text: 'msg 3' }] },
+        { role: 'user', content: [{ text: 'msg 4' }] },
+      ],
+      use: [
+        contextCompression({
+          maxInputTokens: 100,
+          toolResponses: { maxChars: 100, preserveRecent: 0 },
+          summarize: {
+            model: summaryModel,
+            preserveRecent: 1,
+          },
+          skipSummarizationThreshold: 0.25, // 2000 chars reduced to ~100 is > 90% savings
+        }),
+      ],
+    })) as any;
+
+    assert.strictEqual(summaryCalled, false);
+    assert.strictEqual(
+      response.custom?.contextCompression?.summarizationSkipped,
+      true
+    );
+  });
+
+  it('dynamically adjusts preserveRecent window when token usage overshoots budget', async () => {
+    const ai = genkit({});
+    let capturedRequest: GenerateRequest | undefined;
+
+    const pm = ai.defineModel({ name: 'overshootModel' }, async (req) => {
+      capturedRequest = req;
+      return {
+        message: { role: 'model', content: [{ text: 'done' }] },
+        usage: { inputTokens: 50 },
+      };
+    });
+
+    // 10 messages, maxMessages = 6, basePreserveRecent = 4
+    // overshootRatio = 3000 estimated chars / 3.5 / 50 tokens = ~17x overshoot (>= 2.0)
+    // adjustForOvershoot caps preserveRecent to min(4, 2) = 2
+    // effectiveMaxMessages = min(maxMessages: 6, adjustedPreserveRecent: 2) = 2
+    await ai.generate({
+      model: pm,
+      messages: Array.from({ length: 10 }, (_, i) => ({
+        role: i % 2 === 0 ? ('user' as const) : ('model' as const),
+        content: [{ text: `Message number ${i}: ${'X'.repeat(300)}` }],
+      })),
+      use: [
+        contextCompression({
+          maxInputTokens: 50,
+          maxMessages: 6,
+          preserveRecent: 4,
+          insertTruncationNotice: false,
+        }),
+      ],
+    });
+
+    // Truncation should have clamped to 2 messages (last user/model pair) due to >= 2x overshoot
+    assert.strictEqual(capturedRequest?.messages.length, 2);
+  });
+
   it('preserves the latest [model, tool] turn when maxMessages is 3 (keepCount: 2) in a tool loop', async () => {
     const ai = genkit({});
     let capturedRequest: GenerateRequest | undefined;
@@ -2035,5 +2242,659 @@ describe('contextCompression middleware', () => {
         'Only response '
       )
     );
+  });
+
+  it('accepts model name string, ModelReference, and ModelAction for summarize.model', async () => {
+    const ai = genkit({});
+    let stringModelCalls = 0;
+    let refModelCalls = 0;
+
+    ai.defineModel({ name: 'stringSummarizer' }, async () => {
+      stringModelCalls++;
+      return {
+        message: { role: 'model', content: [{ text: 'Summary via string' }] },
+        finishReason: 'stop',
+      };
+    });
+
+    ai.defineModel({ name: 'refSummarizer' }, async () => {
+      refModelCalls++;
+      return {
+        message: { role: 'model', content: [{ text: 'Summary via modelRef' }] },
+        finishReason: 'stop',
+      };
+    });
+
+    const pm = ai.defineModel({ name: 'mainModel' }, async () => ({
+      message: { role: 'model', content: [{ text: 'done' }] },
+      usage: { inputTokens: 50 },
+    }));
+
+    await ai.generate({
+      model: pm,
+      messages: [
+        { role: 'user', content: [{ text: 'u1 ' + 'X'.repeat(200) }] },
+        { role: 'model', content: [{ text: 'm1 ' + 'X'.repeat(200) }] },
+        { role: 'user', content: [{ text: 'u2' }] },
+      ],
+      use: [
+        contextCompression({
+          maxInputTokens: 20,
+          summarize: {
+            model: 'stringSummarizer',
+            preserveRecent: 1,
+          },
+        }),
+      ],
+    });
+
+    const typedRef = modelRef({
+      name: 'refSummarizer',
+      config: { temperature: 0.1 },
+    });
+    await ai.generate({
+      model: pm,
+      messages: [
+        { role: 'user', content: [{ text: 'u1 ' + 'X'.repeat(200) }] },
+        { role: 'model', content: [{ text: 'm1 ' + 'X'.repeat(200) }] },
+        { role: 'user', content: [{ text: 'u2' }] },
+      ],
+      use: [
+        contextCompression({
+          maxInputTokens: 20,
+          summarize: {
+            model: typedRef,
+            preserveRecent: 1,
+          },
+        }),
+      ],
+    });
+
+    assert.strictEqual(stringModelCalls, 1);
+    assert.strictEqual(refModelCalls, 1);
+  });
+
+  it('validates preserveRecent and skipSummarizationThreshold in schema and clamps preserveRecent at runtime', async () => {
+    assert.strictEqual(
+      ContextCompressionOptionsSchema.safeParse({
+        preserveRecent: 0,
+      }).success,
+      false
+    );
+    assert.strictEqual(
+      ContextCompressionOptionsSchema.safeParse({
+        summarize: { model: 'some-model', preserveRecent: 0 },
+      }).success,
+      false
+    );
+    assert.strictEqual(
+      ContextCompressionOptionsSchema.safeParse({
+        skipSummarizationThreshold: 1.5,
+      }).success,
+      false
+    );
+    assert.strictEqual(
+      ContextCompressionOptionsSchema.safeParse({
+        skipSummarizationThreshold: -0.1,
+      }).success,
+      false
+    );
+    assert.strictEqual(
+      ContextCompressionOptionsSchema.safeParse({
+        preserveRecent: 4,
+        summarize: { model: 'some-model', preserveRecent: 2 },
+        skipSummarizationThreshold: 0.25,
+      }).success,
+      true
+    );
+
+    // Verify runtime clamping prevents slice(-0) from duplicating all messages
+    const ai = genkit({});
+    let capturedRequest: GenerateRequest | undefined;
+    ai.defineModel({ name: 'clampSummarizer' }, async () => ({
+      message: { role: 'model', content: [{ text: 'Condensed' }] },
+      finishReason: 'stop',
+    }));
+    const pm = ai.defineModel({ name: 'clampMain' }, async (req) => {
+      capturedRequest = req;
+      return {
+        message: { role: 'model', content: [{ text: 'ok' }] },
+        usage: { inputTokens: 50 },
+      };
+    });
+
+    await ai.generate({
+      model: pm,
+      messages: [
+        { role: 'user', content: [{ text: 'msg 1 ' + 'X'.repeat(200) }] },
+        { role: 'model', content: [{ text: 'msg 2 ' + 'X'.repeat(200) }] },
+        { role: 'user', content: [{ text: 'msg 3' }] },
+      ],
+      use: [
+        contextCompression({
+          maxInputTokens: 20,
+          summarize: {
+            model: 'clampSummarizer',
+            preserveRecent: 0 as number,
+          },
+        }),
+      ],
+    });
+
+    // Clamped to 1: [summary, msg 3] = 2 messages (never [summary, msg 1, msg 2, msg 3])
+    assert.strictEqual(capturedRequest?.messages.length, 2);
+  });
+
+  it('does not skip summarization when cheap strategies save >= threshold but remain over maxInputTokens', async () => {
+    const ai = genkit({});
+    let summaryCalled = false;
+
+    const summaryModel = ai.defineModel(
+      { name: 'stillOverBudgetSummarizer' },
+      async () => {
+        summaryCalled = true;
+        return {
+          message: { role: 'model', content: [{ text: 'Summary' }] },
+          finishReason: 'stop',
+        };
+      }
+    );
+
+    const pm = ai.defineModel(
+      { name: 'stillOverBudgetMainModel' },
+      async () => ({
+        message: { role: 'model', content: [{ text: 'done' }] },
+        usage: { inputTokens: 50 },
+      })
+    );
+
+    // Total before cheap strategies: ~1400 chars (~400 tokens).
+    // Cheap tool truncation reduces 700-char tool output to ~130 chars (~40% savings >= 0.25),
+    // but remaining context is ~830 chars (~238 tokens), still exceeding maxInputTokens: 150.
+    const response = await ai.generate({
+      model: pm,
+      messages: [
+        {
+          role: 'tool',
+          content: [
+            {
+              toolResponse: {
+                name: 'heavy',
+                ref: '1',
+                output: 'T'.repeat(700),
+              },
+            },
+          ],
+        },
+        { role: 'user', content: [{ text: 'U'.repeat(350) }] },
+        { role: 'model', content: [{ text: 'M'.repeat(350) }] },
+        { role: 'user', content: [{ text: 'latest question' }] },
+      ],
+      use: [
+        contextCompression({
+          maxInputTokens: 150,
+          toolResponses: { maxChars: 100, preserveRecent: 0 },
+          summarize: {
+            model: summaryModel,
+            preserveRecent: 1,
+          },
+          skipSummarizationThreshold: 0.25,
+        }),
+      ],
+    });
+
+    assert.strictEqual(summaryCalled, true);
+    const meta = (response.custom as Record<string, unknown> | undefined)
+      ?.contextCompression as Record<string, unknown> | undefined;
+    assert.strictEqual(meta?.summarized, true);
+    assert.strictEqual(meta?.summarizationSkipped, false);
+  });
+
+  it('renders reasoning, media, multipart tool responses, resource, and data parts for summarization', async () => {
+    const ai = genkit({});
+    let capturedSummaryPrompt = '';
+
+    const summaryModel = ai.defineModel(
+      { name: 'richPartSummarizer' },
+      async (req) => {
+        capturedSummaryPrompt = req.messages[0]?.content[0]?.text ?? '';
+        return {
+          message: { role: 'model', content: [{ text: 'Rich summary' }] },
+          finishReason: 'stop',
+        };
+      }
+    );
+
+    const pm = ai.defineModel({ name: 'richPartMain' }, async () => ({
+      message: { role: 'model', content: [{ text: 'ok' }] },
+      usage: { inputTokens: 50 },
+    }));
+
+    const base64Payload = 'QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo=';
+    await ai.generate({
+      model: pm,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { text: 'Check these attachments ' + 'X'.repeat(200) },
+            {
+              media: {
+                url: `data:image/png;base64,${base64Payload}`,
+              },
+            },
+            {
+              media: {
+                contentType: 'application/pdf',
+                url: 'https://example.com/spec.pdf',
+              },
+            },
+            {
+              resource: { uri: 'file:///workspace/README.md' },
+            },
+          ],
+        },
+        {
+          role: 'model',
+          content: [
+            { reasoning: 'Thinking through the spec carefully' },
+            { data: { status: 'analyzed' } },
+            { toolRequest: { name: 'inspect', input: { target: 'spec' } } },
+          ],
+        },
+        {
+          role: 'tool',
+          content: [
+            {
+              toolResponse: {
+                name: 'inspect',
+                output: { ok: true },
+                content: [{ text: 'Multipart tool content detail' }],
+              },
+            },
+          ],
+        },
+        { role: 'user', content: [{ text: 'Final question' }] },
+      ],
+      use: [
+        contextCompression({
+          maxInputTokens: 20,
+          summarize: {
+            model: summaryModel,
+            preserveRecent: 1,
+          },
+        }),
+      ],
+    });
+
+    assert.equal(capturedSummaryPrompt.includes('[other content]'), false);
+    assert.match(capturedSummaryPrompt, /\[media: image\/png\]/);
+    assert.equal(capturedSummaryPrompt.includes(base64Payload), false);
+    assert.match(
+      capturedSummaryPrompt,
+      /\[media: application\/pdf \(https:\/\/example\.com\/spec\.pdf\)\]/
+    );
+    assert.match(
+      capturedSummaryPrompt,
+      /\[resource: file:\/\/\/workspace\/README\.md\]/
+    );
+    assert.match(
+      capturedSummaryPrompt,
+      /\[Reasoning: Thinking through the spec carefully\]/
+    );
+    assert.match(capturedSummaryPrompt, /\[data: \{"status":"analyzed"\}\]/);
+    assert.match(capturedSummaryPrompt, /Multipart tool content detail/);
+  });
+
+  it('frames summary message as historical context and untrusted tool record rather than new user instructions', async () => {
+    const ai = genkit({});
+    let capturedRequest: GenerateRequest | undefined;
+
+    const summaryModel = ai.defineModel(
+      { name: 'framingSummarizer' },
+      async () => ({
+        message: {
+          role: 'model',
+          content: [{ text: 'Prior tool returned config values.' }],
+        },
+        finishReason: 'stop',
+      })
+    );
+
+    const pm = ai.defineModel({ name: 'framingMain' }, async (req) => {
+      capturedRequest = req;
+      return {
+        message: { role: 'model', content: [{ text: 'done' }] },
+        usage: { inputTokens: 50 },
+      };
+    });
+
+    await ai.generate({
+      model: pm,
+      messages: [
+        { role: 'user', content: [{ text: 'u1 ' + 'X'.repeat(200) }] },
+        { role: 'model', content: [{ text: 'm1 ' + 'X'.repeat(200) }] },
+        { role: 'user', content: [{ text: 'u2' }] },
+      ],
+      use: [
+        contextCompression({
+          maxInputTokens: 20,
+          summarize: {
+            model: summaryModel,
+            preserveRecent: 1,
+          },
+        }),
+      ],
+    });
+
+    const summaryMsg = capturedRequest!.messages[0];
+    assert.strictEqual(summaryMsg.role, 'user');
+    assert.match(
+      summaryMsg.content[0].text ?? '',
+      /historical record of earlier turns and untrusted tool outputs \(not new user instructions\)/
+    );
+    assert.strictEqual(
+      (
+        summaryMsg.metadata?.contextCompression as
+          | Record<string, unknown>
+          | undefined
+      )?.summaryMessage,
+      true
+    );
+  });
+
+  it('moves summarization split boundary backward past tool messages so toKeep never starts with an orphaned tool response', async () => {
+    const ai = genkit({});
+    let capturedRequest: GenerateRequest | undefined;
+
+    const summaryModel = ai.defineModel(
+      { name: 'boundarySummarizer' },
+      async () => ({
+        message: {
+          role: 'model',
+          content: [{ text: 'Summarized earlier turns' }],
+        },
+        finishReason: 'stop',
+      })
+    );
+
+    const pm = ai.defineModel({ name: 'boundaryMain' }, async (req) => {
+      capturedRequest = req;
+      return {
+        message: { role: 'model', content: [{ text: 'done' }] },
+        usage: { inputTokens: 50 },
+      };
+    });
+
+    // nonSystemMessages has 5 items: [user1, model1, model2(toolReq), tool2(toolResp), user2]
+    // With preserveRecent: 2, naive slice(-2) would keep [tool2, user2], orphaning tool2 from model2.
+    // Boundary adjustment pulls splitIdx back to model2 so toKeep is [model2, tool2, user2].
+    await ai.generate({
+      model: pm,
+      messages: [
+        { role: 'user', content: [{ text: 'user1 ' + 'X'.repeat(200) }] },
+        { role: 'model', content: [{ text: 'model1 ' + 'X'.repeat(200) }] },
+        {
+          role: 'model',
+          content: [{ toolRequest: { name: 'lookup', input: { id: 1 } } }],
+        },
+        {
+          role: 'tool',
+          content: [{ toolResponse: { name: 'lookup', output: 'found' } }],
+        },
+        { role: 'user', content: [{ text: 'user2' }] },
+      ],
+      use: [
+        contextCompression({
+          maxInputTokens: 80,
+          summarize: {
+            model: summaryModel,
+            preserveRecent: 2,
+          },
+        }),
+      ],
+    });
+
+    const msgs = capturedRequest!.messages;
+    // [summary, model2(toolReq), tool2(toolResp), user2]
+    assert.strictEqual(msgs.length, 4);
+    assert.strictEqual(msgs[1].role, 'model');
+    assert.strictEqual(msgs[1].content[0].toolRequest?.name, 'lookup');
+    assert.strictEqual(msgs[2].role, 'tool');
+    assert.strictEqual(msgs[3].role, 'user');
+  });
+
+  it('caps oversized summarizer input and appends conversation when custom prompt omits {conversation}', async () => {
+    const ai = genkit({});
+    let capturedPrompt = '';
+
+    const summaryModel = ai.defineModel(
+      { name: 'cappedInputSummarizer' },
+      async (req) => {
+        capturedPrompt = req.messages[0]?.content[0]?.text ?? '';
+        return {
+          message: { role: 'model', content: [{ text: 'Capped summary' }] },
+          finishReason: 'stop',
+        };
+      }
+    );
+
+    const pm = ai.defineModel({ name: 'cappedInputMain' }, async () => ({
+      message: { role: 'model', content: [{ text: 'ok' }] },
+      usage: { inputTokens: 50 },
+    }));
+
+    await ai.generate({
+      model: pm,
+      messages: [
+        { role: 'user', content: [{ text: 'H'.repeat(250_000) }] },
+        { role: 'model', content: [{ text: 'T'.repeat(250_000) }] },
+        { role: 'user', content: [{ text: 'Recent question' }] },
+      ],
+      use: [
+        contextCompression({
+          maxInputTokens: 100,
+          summarize: {
+            model: summaryModel,
+            preserveRecent: 1,
+            prompt: 'Custom prompt without placeholder.',
+          },
+        }),
+      ],
+    });
+
+    assert.match(capturedPrompt, /^Custom prompt without placeholder\./);
+    assert.match(
+      capturedPrompt,
+      /\.\.\.\[\d+ chars of conversation omitted\]\.\.\./
+    );
+    assert.ok(capturedPrompt.length < 410_000);
+  });
+
+  it('forwards abortSignal, context, and default maxOutputTokens to summarizer and falls back on non-stop or empty summary', async () => {
+    const ai = genkit({});
+    let capturedSummaryReq: GenerateRequest | undefined;
+    let capturedSummaryCtx: Record<string, unknown> | undefined;
+
+    const summaryModel = ai.defineModel(
+      { name: 'ctxCheckSummarizer', apiVersion: 'v2' },
+      async (req, ctx) => {
+        capturedSummaryReq = req;
+        capturedSummaryCtx = ctx as unknown as Record<string, unknown>;
+        return {
+          message: { role: 'model', content: [{ text: 'Valid summary' }] },
+          finishReason: 'stop',
+        };
+      }
+    );
+
+    const pm = ai.defineModel({ name: 'ctxCheckMain' }, async () => ({
+      message: { role: 'model', content: [{ text: 'done' }] },
+      usage: { inputTokens: 50 },
+    }));
+
+    const controller = new AbortController();
+    await ai.generate({
+      model: pm,
+      abortSignal: controller.signal,
+      context: { auth: { uid: 'user-123' } },
+      messages: [
+        { role: 'user', content: [{ text: 'u1 ' + 'X'.repeat(200) }] },
+        { role: 'model', content: [{ text: 'm1 ' + 'X'.repeat(200) }] },
+        { role: 'user', content: [{ text: 'u2' }] },
+      ],
+      use: [
+        contextCompression({
+          maxInputTokens: 20,
+          summarize: {
+            model: summaryModel,
+            preserveRecent: 1,
+          },
+        }),
+      ],
+    });
+
+    assert.strictEqual(
+      (capturedSummaryReq?.config as Record<string, unknown> | undefined)
+        ?.maxOutputTokens,
+      4096
+    );
+    assert.deepStrictEqual(
+      (capturedSummaryCtx?.context as Record<string, unknown> | undefined)
+        ?.auth,
+      { uid: 'user-123' }
+    );
+    assert.ok(capturedSummaryCtx?.abortSignal);
+
+    // Now test fallback when summarizer returns finishReason: 'blocked' or empty text
+    const blockedSummarizer = ai.defineModel(
+      { name: 'blockedSummarizer' },
+      async () => ({
+        message: { role: 'model', content: [{ text: 'Partial' }] },
+        finishReason: 'blocked',
+      })
+    );
+
+    let fallbackCapturedReq: GenerateRequest | undefined;
+    const pmFallback = ai.defineModel({ name: 'fallbackMain' }, async (req) => {
+      fallbackCapturedReq = req;
+      return {
+        message: { role: 'model', content: [{ text: 'ok' }] },
+        usage: { inputTokens: 50 },
+      };
+    });
+
+    await ai.generate({
+      model: pmFallback,
+      messages: [
+        { role: 'user', content: [{ text: 'u1 ' + 'X'.repeat(200) }] },
+        { role: 'model', content: [{ text: 'm1 ' + 'X'.repeat(200) }] },
+        { role: 'user', content: [{ text: 'u2' }] },
+        { role: 'model', content: [{ text: 'm2' }] },
+        { role: 'user', content: [{ text: 'u3' }] },
+      ],
+      use: [
+        contextCompression({
+          maxInputTokens: 100,
+          preserveRecent: 3,
+          insertTruncationNotice: false,
+          summarize: {
+            model: blockedSummarizer,
+            preserveRecent: 3,
+          },
+        }),
+      ],
+    });
+
+    // Summarization failed due to finishReason: 'blocked', so message truncation
+    // fallback preserved the 3 recent user-anchored messages ([u2, m2, u3]).
+    assert.strictEqual(fallbackCapturedReq?.messages.length, 3);
+    assert.strictEqual(fallbackCapturedReq?.messages[0].content[0].text, 'u2');
+  });
+
+  it('does not drop a newly generated summary when summarize and maxMessages are both configured', async () => {
+    const ai = genkit({});
+    let capturedRequest: GenerateRequest | undefined;
+
+    const summaryModel = ai.defineModel(
+      { name: 'coexistSummarizer' },
+      async () => ({
+        message: {
+          role: 'model',
+          content: [{ text: 'Preserved summary text' }],
+        },
+        finishReason: 'stop',
+      })
+    );
+
+    const pm = ai.defineModel({ name: 'coexistMain' }, async (req) => {
+      capturedRequest = req;
+      return {
+        message: { role: 'model', content: [{ text: 'done' }] },
+        usage: { inputTokens: 50 },
+      };
+    });
+
+    await ai.generate({
+      model: pm,
+      messages: Array.from({ length: 10 }, (_, i) => ({
+        role: i % 2 === 0 ? ('user' as const) : ('model' as const),
+        content: [{ text: `Turn ${i}: ${'X'.repeat(50)}` }],
+      })),
+      use: [
+        contextCompression({
+          maxInputTokens: 150,
+          maxMessages: 6,
+          summarize: {
+            model: summaryModel,
+            preserveRecent: 6,
+          },
+        }),
+      ],
+    });
+
+    const msgs = capturedRequest!.messages;
+    // Total messages must respect maxMessages: 6 and keep the summary at index 0
+    assert.strictEqual(msgs.length, 6);
+    assert.match(msgs[0].content[0].text ?? '', /Preserved summary text/);
+  });
+
+  it('truncates older messages to preserveRecent when maxInputTokens is exceeded without summarize or maxMessages', async () => {
+    const ai = genkit({});
+    let capturedRequest: GenerateRequest | undefined;
+
+    const pm = ai.defineModel({ name: 'preserveRecentOnly' }, async (req) => {
+      capturedRequest = req;
+      return {
+        message: { role: 'model', content: [{ text: 'done' }] },
+        usage: { inputTokens: 50 },
+      };
+    });
+
+    await ai.generate({
+      model: pm,
+      messages: [
+        { role: 'user', content: [{ text: 'u1 ' + 'X'.repeat(100) }] },
+        { role: 'model', content: [{ text: 'm1 ' + 'X'.repeat(100) }] },
+        { role: 'user', content: [{ text: 'u2 ' + 'X'.repeat(100) }] },
+        { role: 'model', content: [{ text: 'm2 ' + 'X'.repeat(100) }] },
+        { role: 'user', content: [{ text: 'u3' }] },
+        { role: 'model', content: [{ text: 'm3' }] },
+        { role: 'user', content: [{ text: 'u4' }] },
+      ],
+      use: [
+        contextCompression({
+          maxInputTokens: 100,
+          preserveRecent: 3,
+          insertTruncationNotice: false,
+        }),
+      ],
+    });
+
+    const msgs = capturedRequest!.messages;
+    assert.strictEqual(msgs.length, 3);
+    assert.strictEqual(msgs[0].content[0].text, 'u3');
+    assert.strictEqual(msgs[1].content[0].text, 'm3');
+    assert.strictEqual(msgs[2].content[0].text, 'u4');
   });
 });
