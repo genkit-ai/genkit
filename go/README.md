@@ -722,9 +722,11 @@ fmt.Println(response.Text())
 
 A tool error fails the whole generation rather than being reported to the model, so a miss the model could work around (no such city, no rows matched) belongs in the result rather than in an `error`.
 
-The `ai/tool` package adds to a tool without changing its signature. `tool.AttachParts` adds parts that are not values, such as an image or a document, to the tool's response; they reach the model and the client both, and must be media or data parts. `tool.SendChunk` streams an `ai.ModelResponseChunk` the tool builds itself, such as progress, to the client while the tool runs (a no-op when the caller isn't streaming; the return value is always authoritative). `*ai.ToolContext` embeds the context they take:
+The `ai/tool` package adds to a tool without changing its signature. `tool.AttachParts` adds parts that are not values, such as an image or a document, to the tool's response; they reach the client, and the model as far as its provider accepts them in a tool response. `tool.SendChunk` streams an `ai.ModelResponseChunk` the tool builds itself, such as progress, to the client while the tool runs (a no-op when the caller isn't streaming; the return value is always authoritative). `*ai.ToolContext` embeds the context they take:
 
 ```go
+import "github.com/firebase/genkit/go/ai/tool"
+
 analyzeTool := genkit.DefineTool(g, "analyzeStock",
     "Analyzes a stock and returns a summary with a chart.",
     func(ctx *ai.ToolContext, input AnalyzeInput) (string, error) {
