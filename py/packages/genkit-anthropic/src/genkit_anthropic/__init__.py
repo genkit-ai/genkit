@@ -58,7 +58,6 @@ from genkit_anthropic.config import (
     ToolChoice,
     ToolChoiceNone,
 )
-from genkit_anthropic.model_info import KnownClaude
 from genkit_anthropic.plugin import Anthropic, anthropic_name
 
 __all__ = [
@@ -66,7 +65,6 @@ __all__ = [
     'AnthropicConfig',
     'AutoToolChoice',
     'AnyToolChoice',
-    'KnownClaude',
     'OutputConfig',
     'RequestMetadata',
     'SpecificToolChoice',

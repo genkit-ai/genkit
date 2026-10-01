@@ -48,7 +48,6 @@ See Also:
     - OpenAI documentation: https://platform.openai.com/docs/
 """
 
-from .models.model_info import KnownGpt
 from .openai_plugin import OpenAI, openai_model
 from .typing import OpenAIConfig
 
@@ -58,4 +57,4 @@ def package_name() -> str:
     return 'genkit_openai'
 
 
-__all__ = ['KnownGpt', 'OpenAI', 'OpenAIConfig', 'openai_model', 'package_name']
+__all__ = ['OpenAI', 'OpenAIConfig', 'openai_model', 'package_name']
