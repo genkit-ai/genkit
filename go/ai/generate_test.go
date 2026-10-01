@@ -4774,3 +4774,98 @@ func TestResumeRejectsToolRequestPartWithoutRequest(t *testing.T) {
 		t.Errorf("resume error = %v, want ErrInvalidPart", err)
 	}
 }
+
+// TestResumeFailureRecordsFinishedSiblings pins that a resume whose
+// restarted tool fails waits for its restarted siblings and returns them on
+// the partial: a sibling that finishes after the failure is recorded as
+// pending output, so resuming from the partial replays it rather than
+// running it again.
+func TestResumeFailureRecordsFinishedSiblings(t *testing.T) {
+	r := newTestRegistry(t)
+	var modelCalls int
+	defineFakeModel(t, r, fakeModelConfig{
+		name: "test/twoInterrupts",
+		handler: func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+			modelCalls++
+			if modelCalls > 1 {
+				return &ModelResponse{Request: req, Message: NewModelTextMessage("done")}, nil
+			}
+			return &ModelResponse{Request: req, Message: &Message{
+				Role: RoleModel,
+				Content: []*Part{
+					NewToolRequestPart(&ToolRequest{Name: "charge", Ref: "1", Input: map[string]any{}}),
+					NewToolRequestPart(&ToolRequest{Name: "confirm", Ref: "2", Input: map[string]any{}}),
+				},
+			}}, nil
+		},
+	})
+	confirmFailed := make(chan struct{})
+	charges := 0
+	charge := defineTool(r, "charge", "charges a card",
+		func(ctx *ToolContext, _ map[string]any) (string, error) {
+			if !ctx.IsResumed() {
+				return "", ctx.Interrupt(nil)
+			}
+			<-confirmFailed // Finishes only after its sibling failed.
+			charges++
+			return "charged", nil
+		})
+	failConfirm := true
+	confirm := defineTool(r, "confirm", "asks to confirm",
+		func(ctx *ToolContext, _ map[string]any) (string, error) {
+			if !ctx.IsResumed() {
+				return "", ctx.Interrupt(nil)
+			}
+			if failConfirm {
+				close(confirmFailed)
+				return "", errors.New("confirmation service down")
+			}
+			return "confirmed", nil
+		})
+
+	res, err := Generate(testCtx, r,
+		WithModelName("test/twoInterrupts"), WithPrompt("go"), WithTools(charge, confirm))
+	assertNoError(t, err)
+	var restarts []*Part
+	for _, part := range res.Interrupts() {
+		if part.ToolRequest.Name == "charge" {
+			restarts = append(restarts, charge.Restart(part, nil))
+		} else {
+			restarts = append(restarts, confirm.Restart(part, nil))
+		}
+	}
+	partial, err := Generate(testCtx, r,
+		WithModelName("test/twoInterrupts"), WithMessages(res.History()...),
+		WithTools(charge, confirm), WithToolRestarts(restarts...))
+	if !errors.Is(err, ErrToolFailed) {
+		t.Fatalf("resume error = %v, want ErrToolFailed", err)
+	}
+	if charges != 1 {
+		t.Fatalf("charge ran %d times, want 1", charges)
+	}
+	if partial == nil || partial.Message == nil {
+		t.Fatalf("partial = %+v, want the resumed message", partial)
+	}
+	if got := partial.FinishReason; got != FinishReasonFailed {
+		t.Errorf("FinishReason = %q, want %q", got, FinishReasonFailed)
+	}
+	parts := partial.Message.Content
+	if _, ok := parts[0].Metadata["pendingOutput"]; !ok {
+		t.Errorf("charge part metadata = %v, want pendingOutput", parts[0].Metadata)
+	}
+	if !parts[1].IsInterrupt() {
+		t.Errorf("confirm part metadata = %v, want it still interrupted", parts[1].Metadata)
+	}
+
+	failConfirm = false
+	final, err := Generate(testCtx, r,
+		WithModelName("test/twoInterrupts"), WithMessages(partial.History()...),
+		WithTools(charge, confirm), WithToolRestarts(confirm.Restart(parts[1], nil)))
+	assertNoError(t, err)
+	if charges != 1 {
+		t.Errorf("charge ran %d times after resuming from the partial, want 1", charges)
+	}
+	if got := final.Text(); got != "done" {
+		t.Errorf("final text = %q, want %q", got, "done")
+	}
+}

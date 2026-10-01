@@ -167,6 +167,9 @@ type resumeOptionOutput struct {
 	revisedRequest      *GenerateActionOptions
 	interruptedResponse *ModelResponse
 	toolMessage         *Message
+	// failedMessage is the revised last message of a resume whose tool
+	// failed, set beside the error.
+	failedMessage *Message
 }
 
 // resumedToolRequestOutput is the return type for resolveResumedToolRequest.
@@ -647,7 +650,19 @@ func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 		if currentTurn == 0 && opts.Resume != nil && (len(opts.Resume.Respond) > 0 || len(opts.Resume.Restart) > 0) {
 			resumeOutput, err := handleResumeOption(ctx, r, opts, runTool)
 			if err != nil {
-				return nil, err
+				if resumeOutput == nil || resumeOutput.failedMessage == nil {
+					return nil, err
+				}
+				// The partial keeps the resumed message rather than
+				// ending at a turn seam: the caller's conversation
+				// already ends on it, and it records the siblings that
+				// finished, so a retry replays them instead of running
+				// them again.
+				failedReq := *req
+				failedReq.Messages = opts.Messages[:len(opts.Messages)-1]
+				partial := failurePartial(ctx, nil, &failedReq, err)
+				partial.Message = resumeOutput.failedMessage
+				return partial, err
 			}
 
 			if ir := resumeOutput.interruptedResponse; ir != nil {
@@ -1082,6 +1097,12 @@ func recordToolShortCircuit(ctx context.Context, name string, input any, resp *M
 // reason, and a resume whose restarted tool interrupted again, which keeps
 // FinishReason interrupted under its FAILED_PRECONDITION error and is
 // answered with [WithResume] rather than re-sent.
+//
+// A resume whose restarted tool failed also keeps the resumed message, with
+// the failed request as it was and its siblings' outcomes recorded on their
+// requests. A resume waits for every restarted tool before it returns, so
+// resuming from that response again replays the siblings that finished
+// instead of running them a second time.
 //
 // Errors reported before a request is made (unknown model or tool, invalid
 // options) carry a nil response.
@@ -2399,13 +2420,24 @@ func handleResumeOption(ctx context.Context, r api.Registry, genOpts *GenerateAc
 		}(i, step)
 	}
 
+	// Unlike a first run, a resume waits for every restarted sibling even
+	// after one fails: the caller approved these calls, and the failure
+	// below records how the others ended, so a retry of the resume does not
+	// run a finished one again.
 	respByIndex := make(map[int]*Part, toolReqCount)
 	interrupted := false
+	failedIndex := -1
+	var failure error
 
 	for range toolReqCount {
 		res := <-resultChan
 		if res.err != nil {
-			return nil, fmt.Errorf("handleResumeOption: failed to resolve resumed tool request: %w", res.err)
+			// The earliest failing request in the message is reported,
+			// so the error does not depend on which tool finished first.
+			if failure == nil || res.index < failedIndex {
+				failedIndex, failure = res.index, res.err
+			}
+			continue
 		}
 
 		if res.value.interrupt != nil {
@@ -2419,7 +2451,7 @@ func handleResumeOption(ctx context.Context, r api.Registry, genOpts *GenerateAc
 
 	lastMessage.Content = newContent
 
-	if interrupted {
+	if interrupted || failure != nil {
 		// Siblings resolved in this resume (restarted runs, supplied
 		// responses, replayed pending outputs) are preserved as
 		// pendingOutput on their request parts, the way a first-run
@@ -2432,6 +2464,21 @@ func handleResumeOption(ctx context.Context, r api.Registry, genOpts *GenerateAc
 				Metadata: respPart.Metadata,
 			})
 		}
+	}
+
+	if failure != nil {
+		// A failed request keeps its part from history, so the next
+		// resume answers it again.
+		for idx, step := range steps {
+			if newContent[idx] == nil {
+				newContent[idx] = step.request
+			}
+		}
+		return &resumeOptionOutput{failedMessage: lastMessage},
+			fmt.Errorf("handleResumeOption: failed to resolve resumed tool request: %w", failure)
+	}
+
+	if interrupted {
 		return &resumeOptionOutput{
 			interruptedResponse: &ModelResponse{
 				Message:       lastMessage,
