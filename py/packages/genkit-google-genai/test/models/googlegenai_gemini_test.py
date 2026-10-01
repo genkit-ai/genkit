@@ -1008,6 +1008,18 @@ class _Tree(BaseModel):
     children: list['_Tree'] = []
 
 
+class _RequiredTree(BaseModel):
+    children: list['_RequiredTree']
+
+
+class _OptionalTree(BaseModel):
+    children: list['_OptionalTree'] | None = None
+
+
+class _Grid(BaseModel):
+    rows: list[list['_Grid']] = []
+
+
 def test_gemini_model__create_tool_leaves_out_recursive_param(gemini_model_instance: GeminiModel) -> None:
     """A property that refers back to a model that contains it is left out."""
     tool = ToolDefinition(name='t', description='d', input_schema=to_json_schema(_LinkedList))
@@ -1023,18 +1035,40 @@ def test_gemini_model__create_tool_leaves_out_recursive_param(gemini_model_insta
     )
 
 
-def test_gemini_model__create_tool_leaves_out_recursive_items(gemini_model_instance: GeminiModel) -> None:
-    """Array items that refer back to a model that contains them are left out."""
-    tool = ToolDefinition(name='t', description='d', input_schema=to_json_schema(_Tree))
+@pytest.mark.parametrize('model', [_Tree, _OptionalTree, _Grid])
+def test_gemini_model__create_tool_leaves_out_recursive_items(
+    model: type[BaseModel],
+    gemini_model_instance: GeminiModel,
+) -> None:
+    """An array whose items refer back to a model that contains it is left out, as is an optional or nested one."""
+    tool = ToolDefinition(name='t', description='d', input_schema=to_json_schema(model))
 
     declarations = gemini_model_instance._create_tool(tool).function_declarations
 
     assert declarations is not None
     assert declarations[0].parameters == genai_types.Schema(
-        type=genai_types.Type.OBJECT,
-        title='_Tree',
-        properties={'children': genai_types.Schema(type=genai_types.Type.ARRAY, title='Children', default=[])},
+        type=genai_types.Type.OBJECT, title=model.__name__, properties={}
     )
+
+
+def test_gemini_model__convert_schema_property_strict_leaves_out_recursive_items(
+    gemini_model_instance: GeminiModel,
+) -> None:
+    """In strict mode an optional array whose items refer back to a model that contains it is left out."""
+    schema = gemini_model_instance._convert_schema_property(to_json_schema(_Tree), strict=True)
+
+    assert schema == genai_types.Schema(type=genai_types.Type.OBJECT, title='_Tree', properties={})
+
+
+def test_gemini_model__convert_schema_property_strict_rejects_required_recursive_items(
+    gemini_model_instance: GeminiModel,
+) -> None:
+    """In strict mode a required array whose items refer back to a model that contains it raises naming it."""
+    with pytest.raises(GenkitError) as exc_info:
+        gemini_model_instance._convert_schema_property(to_json_schema(_RequiredTree), strict=True)
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert 'children' in exc_info.value.original_message
 
 
 def test_gemini_model__convert_schema_property_strict_leaves_out_recursive_property(
@@ -1307,6 +1341,52 @@ def test_gemini_model__create_tool_leaves_out_untyped_param(gemini_model_instanc
     assert list(params.properties or {}) == ['count']
 
 
+class _RequiredValues(BaseModel):
+    count: int
+    values: list[Any]
+
+
+@pytest.mark.parametrize(
+    'input_schema, expected',
+    [
+        (
+            to_json_schema(_RequiredValues),
+            genai_types.Schema(
+                type=genai_types.Type.OBJECT,
+                title='_RequiredValues',
+                required=['count'],
+                properties={'count': genai_types.Schema(type=genai_types.Type.INTEGER, title='Count')},
+            ),
+        ),
+        (
+            to_json_schema(_RequiredTree),
+            genai_types.Schema(type=genai_types.Type.OBJECT, title='_RequiredTree', properties={}),
+        ),
+        (
+            to_json_schema(_RequiredLinkedList),
+            genai_types.Schema(
+                type=genai_types.Type.OBJECT,
+                title='_RequiredLinkedList',
+                required=['value'],
+                properties={'value': genai_types.Schema(type=genai_types.Type.INTEGER, title='Value')},
+            ),
+        ),
+    ],
+)
+def test_gemini_model__create_tool_drops_left_out_param_from_required(
+    input_schema: dict[str, object],
+    expected: genai_types.Schema,
+    gemini_model_instance: GeminiModel,
+) -> None:
+    """A required tool parameter that is left out is dropped from the declaration's required list."""
+    tool = ToolDefinition(name='t', description='d', input_schema=input_schema)
+
+    declarations = gemini_model_instance._create_tool(tool).function_declarations
+
+    assert declarations is not None
+    assert declarations[0].parameters == expected
+
+
 @pytest.mark.parametrize(
     'input_schema',
     [
@@ -1335,7 +1415,7 @@ def test_gemini_model__convert_schema_property_rejects_untyped_constraint(
             {'type': 'object', 'properties': {'x': {'allOf': [{'type': 'string'}]}}},
             genai_types.Schema(type=genai_types.Type.OBJECT, properties={}),
         ),
-        ({'type': 'array', 'items': {'not': {'type': 'null'}}}, genai_types.Schema(type=genai_types.Type.ARRAY)),
+        ({'type': 'array', 'items': {'not': {'type': 'null'}}}, None),
     ],
 )
 def test_gemini_model__convert_schema_property_leaves_out_untyped_constraint(
@@ -1624,9 +1704,14 @@ async def test_gemini_model__legacy_response_schema_sends_converted_schema() -> 
         ({'description': 'anything'}, 'response_schema'),
         ({'type': 'object', 'required': ['data'], 'properties': {'data': {'title': 'Data'}}}, 'data'),
         ({'type': 'object', 'properties': {'x': {'allOf': [{'type': 'string'}]}}}, 'no type'),
+        ({'type': 'array'}, 'cannot be converted'),
+        (to_json_schema(list[Any]), 'cannot be converted'),
+        (to_json_schema(tuple[int, str]), 'cannot be converted'),
     ],
 )
-async def test_gemini_model__legacy_untyped_output_schema_raises(json_schema: dict[str, Any], needle: str) -> None:
+async def test_gemini_model__legacy_unconvertible_output_schema_raises(
+    json_schema: dict[str, Any], needle: str
+) -> None:
     """A schema that response_schema cannot hold fails loudly instead of going out unconstrained."""
     model = GeminiModel('version', MagicMock(spec=genai.Client), legacy_response_schema=True)
     request = _output_request(format='json', json_schema=json_schema, constrained=True)

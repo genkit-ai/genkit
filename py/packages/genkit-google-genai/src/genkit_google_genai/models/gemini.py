@@ -1252,8 +1252,10 @@ class GeminiModel:
         to a one-value ``enum``. An ``enum`` is kept only on a STRING node
         whose members are all strings, dropping a ``null`` member; a node
         with such an ``enum`` and no ``type`` is treated as a string. Any
-        other node with no ``type``, and a ``$ref`` back to a definition that
-        contains it, converts to None and is left out of its parent.
+        other node with no ``type``, an array with no ``items`` object or
+        whose ``items`` convert to None, and a ``$ref`` back to a definition
+        that contains it convert to None and are left out of the parent's
+        ``properties`` and ``required``.
 
         Args:
             input_schema: A JSON Schema dict.
@@ -1359,6 +1361,8 @@ class GeminiModel:
                 schema.items = self._convert_schema_property(
                     cast(dict[str, object], items_value), defs, strict=strict, refs=refs
                 )
+            if schema.items is None:
+                return None
 
         if schema_type == genai_types.Type.OBJECT:
             schema.properties = {}
@@ -1369,11 +1373,13 @@ class GeminiModel:
                     nested_schema = self._convert_schema_property(properties[key], defs, strict=strict, refs=refs)
                     if nested_schema is not None:
                         schema.properties[key] = nested_schema
-                    elif strict and key in (schema.required or ()):
-                        raise GenkitError(
-                            status='INVALID_ARGUMENT',
-                            message=f'{self._version}: required property {key} cannot be converted',
-                        )
+                    elif key in (schema.required or ()):
+                        if strict:
+                            raise GenkitError(
+                                status='INVALID_ARGUMENT',
+                                message=f'{self._version}: required property {key} cannot be converted',
+                            )
+                        schema.required = [name for name in schema.required or () if name != key] or None
 
         return schema
 
@@ -2029,7 +2035,7 @@ class GeminiModel:
         if schema is None:
             raise GenkitError(
                 status='INVALID_ARGUMENT',
-                message=f'{self._version}: output_schema has no type and cannot be sent as response_schema',
+                message=f'{self._version}: output_schema cannot be converted to response_schema',
             )
         return schema
 

@@ -75,9 +75,10 @@ To send the schema as the older OpenAPI-style `responseSchema` field instead,
 construct the plugin with `GoogleAI(legacy_response_schema=True)` or
 `VertexAI(legacy_response_schema=True)`. The schema is converted to that shape.
 Keywords the conversion does not map, such as `pattern`, `minLength` and
-`additionalProperties`, are left out, as is a `$ref` back to a model that
-contains it. A constraint with no `type`, or a required property that cannot be
-converted, is rejected.
+`additionalProperties`, are left out, as are a `$ref` back to a model that
+contains it and an array with no convertible `items`. A constraint with no
+`type`, or a required property or whole schema that cannot be converted, is
+rejected.
 
 ### Video generation (Veo)
 
