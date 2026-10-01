@@ -522,12 +522,12 @@ func restartThen(t *testing.T, reg *registry.Registry, then func(ctx context.Con
 }
 
 // TestToolCall_NestedGenerateAnswersNoRestart pins that a Generate a restarted
-// tool runs is a fresh generation: its tools see no resume, so a tool that
-// asks for approval asks rather than taking the enclosing call's answer as
-// its own.
+// tool runs is a fresh generation: its model and its tools see no resume, so
+// a tool that asks for approval asks rather than taking the enclosing call's
+// answer as its own.
 func TestToolCall_NestedGenerateAnswersNoRestart(t *testing.T) {
 	reg := newToolTestRegistry(t)
-	innerResumed := false
+	innerResumed, modelResumed := false, false
 	inner := defineTestTool(reg, "inner", "inner",
 		func(ctx context.Context, _ struct{}) (string, error) {
 			if _, ok := tool.ResumeData[map[string]any](ctx); ok {
@@ -539,6 +539,9 @@ func TestToolCall_NestedGenerateAnswersNoRestart(t *testing.T) {
 	defineTestModel(reg, "test/inner",
 		&ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, Tools: true}},
 		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			if _, ok := tool.ResumeData[map[string]any](ctx); ok {
+				modelResumed = true
+			}
 			return &ai.ModelResponse{
 				Request: req,
 				Message: &ai.Message{Role: ai.RoleModel, Content: []*ai.Part{
@@ -557,6 +560,9 @@ func TestToolCall_NestedGenerateAnswersNoRestart(t *testing.T) {
 	})
 	if innerResumed {
 		t.Error("the nested tool took the enclosing restart's answer as its own")
+	}
+	if modelResumed {
+		t.Error("the nested model saw the enclosing restart's answer")
 	}
 	if out != string(ai.FinishReasonInterrupted) {
 		t.Errorf("nested generation finished %q, want %q", out, ai.FinishReasonInterrupted)
