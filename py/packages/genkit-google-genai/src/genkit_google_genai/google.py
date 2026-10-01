@@ -135,6 +135,7 @@ from genkit_google_genai.models.interactions_lyria import (
     create_lyria_action,
 )
 from genkit_google_genai.models.interactions_registry import (
+    KnownLyria,
     antigravity_model_info,
     deep_research_model_info,
     is_antigravity_model_name,
@@ -606,7 +607,7 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
 
     @classmethod
     def lyria_model(
-        cls, name: str, *, config: InteractionsLyriaConfig | None = None
+        cls, name: KnownLyria | str, *, config: InteractionsLyriaConfig | None = None
     ) -> ModelRef[InteractionsLyriaConfig]:
         """Typed ref for Google AI Interactions Lyria (lyria-3-clip-preview, …)."""
         return family_model_ref(

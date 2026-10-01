@@ -29,28 +29,6 @@ from genkit_google_genai.models._routing import strip_ref_prefixes
 from genkit_google_genai.models.utils import PartConverter
 
 
-class VertexEmbeddingModels(StrEnum):
-    """Embedding models supported by Google-Genai vertex."""
-
-    GECKO_003_ENG = 'textembedding-gecko@003'
-    TEXT_EMBEDDING_004_ENG = 'text-embedding-004'
-    TEXT_EMBEDDING_005_ENG = 'text-embedding-005'
-    GECKO_MULTILINGUAL = 'textembedding-gecko-multilingual@001'
-    TEXT_EMBEDDING_002_MULTILINGUAL = 'text-multilingual-embedding-002'
-    MULTIMODAL_EMBEDDING_001 = 'multimodalembedding@001'
-    GEMINI_EMBEDDING_001 = 'gemini-embedding-001'
-
-
-class GeminiEmbeddingModels(StrEnum):
-    """Embedding models supported by Google-Genai gemini."""
-
-    GEMINI_EMBEDDING_2_PREVIEW = 'gemini-embedding-2-preview'
-    GEMINI_EMBEDDING_2 = 'gemini-embedding-2'
-    GEMINI_EMBEDDING_EXP_03_07 = 'gemini-embedding-exp-03-07'
-    TEXT_EMBEDDING_004 = 'text-embedding-004'
-    GEMINI_EMBEDDING_001 = 'gemini-embedding-001'
-
-
 class EmbeddingTaskType(StrEnum):
     """Embedding task types supported by Google-Genai."""
 
@@ -135,7 +113,7 @@ class Embedder:
 
     def __init__(
         self,
-        version: VertexEmbeddingModels | GeminiEmbeddingModels | str,
+        version: str,
         client: genai.Client,
         is_vertex: bool = False,
     ) -> None:

@@ -24,8 +24,8 @@ read from this file.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import Literal, TypeAlias, get_args
 
-from genkit._core._compat import StrEnum
 from genkit.model import ModelInfo, Supports
 from genkit_google_genai.models.interactions_utils import extract_version
 
@@ -59,17 +59,14 @@ LYRIA_INFO = ModelInfo(
 )
 
 
-class LyriaVersion(StrEnum):
-    """Lyria model version identifiers."""
+# Quote autocomplete needs a Literal, so this alias is the Lyria catalog.
+# ``lyria_model`` takes ``KnownLyria | str`` so unlisted ids still work.
+KnownLyria: TypeAlias = Literal[
+    'lyria-3-clip-preview',
+    'lyria-3-pro-preview',
+]
 
-    LYRIA_3_CLIP = 'lyria-3-clip-preview'
-    LYRIA_3_PRO = 'lyria-3-pro-preview'
-
-
-KNOWN_LYRIA_MODELS: tuple[LyriaVersion, ...] = (
-    LyriaVersion.LYRIA_3_CLIP,
-    LyriaVersion.LYRIA_3_PRO,
-)
+KNOWN_LYRIA_MODELS: tuple[str, ...] = get_args(KnownLyria)
 
 
 def is_lyria_model_name(name: str | None) -> bool:
@@ -84,7 +81,7 @@ def lyria_model_info(version: str) -> ModelInfo:
 
 def list_known_lyria_models() -> list[str]:
     """Return statically known Interactions Lyria model names."""
-    return [str(version) for version in KNOWN_LYRIA_MODELS]
+    return list(KNOWN_LYRIA_MODELS)
 
 
 # ---------------------------------------------------------------------------

@@ -22,7 +22,6 @@ import json
 import pytest
 from genkit_google_genai.models.embedder import (
     Embedder,
-    GeminiEmbeddingModels,
     get_embedder_info,
 )
 from google import genai
@@ -33,8 +32,11 @@ from genkit.embedder import EmbedRequest, EmbedResponse
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('version', [x for x in GeminiEmbeddingModels])
-async def test_embedding(mocker: MockerFixture, version: GeminiEmbeddingModels) -> None:
+@pytest.mark.parametrize(
+    'version',
+    ['gemini-embedding-2-preview', 'gemini-embedding-2', 'gemini-embedding-001', 'text-embedding-004'],
+)
+async def test_embedding(mocker: MockerFixture, version: str) -> None:
     """Test the embedding method."""
     request_text = 'request text'
     embedding_values = [0.0017063986, -0.044727605, 0.043327782, 0.00044852644]
@@ -99,13 +101,13 @@ async def test_embedding_forwards_media_parts(mocker: MockerFixture) -> None:
     googleai_client_mock = mocker.AsyncMock()
     googleai_client_mock.aio.models.embed_content.return_value = api_response
 
-    embedder = Embedder(GeminiEmbeddingModels.GEMINI_EMBEDDING_2, googleai_client_mock)
+    embedder = Embedder('gemini-embedding-2', googleai_client_mock)
 
     response = await embedder.generate(request)
 
     googleai_client_mock.assert_has_calls([
         mocker.call.aio.models.embed_content(
-            model=GeminiEmbeddingModels.GEMINI_EMBEDDING_2,
+            model='gemini-embedding-2',
             contents=[
                 genai.types.Content(
                     parts=[
@@ -126,7 +128,7 @@ async def test_embedding_forwards_media_parts(mocker: MockerFixture) -> None:
 async def test_embedding_rejects_empty_input(mocker: MockerFixture) -> None:
     """Empty input must not call the API (avoids opaque BatchEmbedContents errors)."""
     googleai_client_mock = mocker.AsyncMock()
-    embedder = Embedder(GeminiEmbeddingModels.GEMINI_EMBEDDING_001, googleai_client_mock)
+    embedder = Embedder('gemini-embedding-001', googleai_client_mock)
     with pytest.raises(ValueError, match='Embed request input is empty'):
         await embedder.generate(EmbedRequest(input=[]))
     googleai_client_mock.aio.models.embed_content.assert_not_called()

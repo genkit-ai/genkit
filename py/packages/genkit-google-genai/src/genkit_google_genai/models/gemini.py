@@ -120,9 +120,6 @@ def _usage_from_metadata(usage_metadata: Any) -> ModelUsage:  # noqa: ANN401
     )
 
 
-from genkit_google_genai.models._deprecations import (  # noqa: E402
-    deprecated_enum_metafactory,
-)
 from genkit_google_genai.models.utils import PartConverter  # noqa: E402
 
 
@@ -834,75 +831,9 @@ GENERIC_GEMMA_MODEL = ModelInfo(
 )
 
 
-Deprecations = deprecated_enum_metafactory({})
-
-
-class VertexAIGeminiVersion(StrEnum, metaclass=Deprecations):  # pyrefly: ignore[invalid-inheritance]
-    """Vertex AI Gemini model IDs."""
-
-    GEMINI_2_5_PRO_EXP_03_25 = 'gemini-2.5-pro-exp-03-25'
-    GEMINI_2_5_PRO_PREVIEW_03_25 = 'gemini-2.5-pro-preview-03-25'
-    GEMINI_2_5_PRO_PREVIEW_05_06 = 'gemini-2.5-pro-preview-05-06'
-    GEMINI_3_FLASH_PREVIEW = 'gemini-3-flash-preview'
-    GEMINI_2_5_PRO = 'gemini-2.5-pro'
-    GEMINI_2_5_FLASH = 'gemini-2.5-flash'
-    GEMINI_2_5_FLASH_LITE = 'gemini-2.5-flash-lite'
-    GEMINI_2_5_FLASH_PREVIEW_TTS = 'gemini-2.5-flash-preview-tts'
-    GEMINI_2_5_PRO_PREVIEW_TTS = 'gemini-2.5-pro-preview-tts'
-    GEMINI_3_1_FLASH_TTS_PREVIEW = 'gemini-3.1-flash-tts-preview'
-    GEMINI_3_PRO_IMAGE = 'gemini-3-pro-image'
-    GEMINI_3_1_FLASH_IMAGE = 'gemini-3.1-flash-image'
-    GEMINI_3_PRO_IMAGE_PREVIEW = 'gemini-3-pro-image-preview'
-    GEMINI_2_5_FLASH_IMAGE_PREVIEW = 'gemini-2.5-flash-image-preview'
-    GEMINI_2_5_FLASH_IMAGE = 'gemini-2.5-flash-image'
-    GEMINI_3_5_FLASH = 'gemini-3.5-flash'
-    GEMINI_3_6_FLASH = 'gemini-3.6-flash'
-    GEMINI_3_7_FLASH = 'gemini-3.7-flash'
-    GEMINI_3_1_PRO_PREVIEW = 'gemini-3.1-pro-preview'
-    GEMINI_3_1_FLASH_LITE = 'gemini-3.1-flash-lite'
-    GEMMA_3_12B_IT = 'gemma-3-12b-it'
-    GEMMA_3_1B_IT = 'gemma-3-1b-it'
-    GEMMA_3_27B_IT = 'gemma-3-27b-it'
-    GEMMA_3_4B_IT = 'gemma-3-4b-it'
-    GEMMA_3N_E4B_IT = 'gemma-3n-e4b-it'
-
-
-class GoogleAIGeminiVersion(StrEnum, metaclass=Deprecations):  # pyrefly: ignore[invalid-inheritance]
-    """Google AI Gemini model IDs."""
-
-    GEMINI_2_5_PRO_EXP_03_25 = 'gemini-2.5-pro-exp-03-25'
-    GEMINI_2_5_PRO_PREVIEW_03_25 = 'gemini-2.5-pro-preview-03-25'
-    GEMINI_2_5_PRO_PREVIEW_05_06 = 'gemini-2.5-pro-preview-05-06'
-    GEMINI_3_FLASH_PREVIEW = 'gemini-3-flash-preview'
-    GEMINI_3_6_FLASH = 'gemini-3.6-flash'
-    GEMINI_3_7_FLASH = 'gemini-3.7-flash'
-    GEMINI_2_5_PRO = 'gemini-2.5-pro'
-    GEMINI_2_5_FLASH = 'gemini-2.5-flash'
-    GEMINI_2_5_FLASH_LITE = 'gemini-2.5-flash-lite'
-    GEMINI_2_5_FLASH_PREVIEW_TTS = 'gemini-2.5-flash-preview-tts'
-    GEMINI_2_5_PRO_PREVIEW_TTS = 'gemini-2.5-pro-preview-tts'
-    GEMINI_3_1_FLASH_TTS_PREVIEW = 'gemini-3.1-flash-tts-preview'
-    GEMINI_3_PRO_IMAGE = 'gemini-3-pro-image'
-    GEMINI_3_1_FLASH_IMAGE = 'gemini-3.1-flash-image'
-    GEMINI_3_1_FLASH_IMAGE_PREVIEW = 'gemini-3.1-flash-image-preview'
-    GEMINI_3_PRO_IMAGE_PREVIEW = 'gemini-3-pro-image-preview'
-    GEMINI_2_5_FLASH_IMAGE_PREVIEW = 'gemini-2.5-flash-image-preview'
-    GEMINI_2_5_FLASH_IMAGE = 'gemini-2.5-flash-image'
-    GEMINI_3_1_PRO_PREVIEW = 'gemini-3.1-pro-preview'
-    GEMINI_3_1_PRO_PREVIEW_CUSTOMTOOLS = 'gemini-3.1-pro-preview-customtools'
-    GEMINI_3_1_FLASH_LITE_PREVIEW = 'gemini-3.1-flash-lite-preview'
-    GEMMA_3_12B_IT = 'gemma-3-12b-it'
-    GEMMA_3_1B_IT = 'gemma-3-1b-it'
-    GEMMA_3_27B_IT = 'gemma-3-27b-it'
-    GEMMA_3_4B_IT = 'gemma-3-4b-it'
-    GEMMA_3N_E4B_IT = 'gemma-3n-e4b-it'
-    GEMMA_4_26B_A4B_IT = 'gemma-4-26b-a4b-it'
-    GEMMA_4_31B_IT = 'gemma-4-31b-it'
-
-
-# Quote autocomplete needs a Literal. The version enums above and the
-# ``_add_model`` names below are the catalog; a test requires each family
-# Literal to equal that catalog filtered by family.
+# Quote autocomplete needs a Literal, so these aliases are the model-id
+# catalog. Constructors take ``Known* | str``: listed ids autocomplete,
+# and an id Google ships after this release still type-checks and routes.
 KnownGemini: TypeAlias = Literal[
     'gemini-2.5-flash',
     'gemini-2.5-pro',
@@ -1227,7 +1158,7 @@ class GeminiModel:
 
     def __init__(
         self,
-        version: str | GoogleAIGeminiVersion | VertexAIGeminiVersion,
+        version: str,
         client: genai.Client,
         client_kwargs: dict[str, Any] | None = None,
         base_url_pinned: bool = False,

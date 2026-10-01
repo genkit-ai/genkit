@@ -17,7 +17,6 @@
 """Tests for the typed family ref constructors on GoogleAI / VertexAI."""
 
 from collections.abc import Callable
-from enum import Enum
 from typing import get_args
 
 import pytest
@@ -37,19 +36,18 @@ from genkit_google_genai.models.gemini import (
     GeminiImageConfigSchema,
     GeminiTtsConfigSchema,
     GemmaConfigSchema,
-    GoogleAIGeminiVersion,
-    VertexAIGeminiVersion,
     is_gemini_model,
     is_gemma_model,
     is_image_model,
     is_tts_model,
 )
 from genkit_google_genai.models.imagen import (
+    SUPPORTED_MODELS as IMAGEN_SUPPORTED_MODELS,
     ImagenConfigSchema,
-    ImagenVersion,
     is_imagen_model_name,
 )
-from genkit_google_genai.models.veo import VeoConfig, VeoVersion, is_veo_model
+from genkit_google_genai.models.interactions_registry import KnownLyria, is_lyria_model_name
+from genkit_google_genai.models.veo import VeoConfig, is_veo_model
 
 from genkit import GenkitError
 from genkit.embedder import EmbedderRef
@@ -69,12 +67,11 @@ class TestHappyPaths:
         assert googleai_ref.config_schema is GeminiConfigSchema
         assert vertexai_ref.name == 'vertexai/gemini-2.5-flash'
 
-    def test_enum_names_still_work(self) -> None:
-        """The existing version enums remain valid constructor input."""
-        assert GoogleAI.gemini_model(GoogleAIGeminiVersion.GEMINI_2_5_FLASH).name == 'googleai/gemini-2.5-flash'
-        assert GoogleAI.imagen_model(ImagenVersion.IMAGEN3).name == 'googleai/imagen-3.0-generate-002'
-        assert GoogleAI.veo_model(VeoVersion.VEO_3_1_FAST_PREVIEW).name == 'googleai/veo-3.1-fast-generate-preview'
-        assert VertexAI.veo_model(VeoVersion.VEO_3_1).name == 'vertexai/veo-3.1-generate-001'
+    def test_unlisted_ids_still_mint_refs(self) -> None:
+        """An id missing from the ``Known*`` Literal still works, so a new release needs no SDK bump."""
+        assert GoogleAI.gemini_model('gemini-9.9-flash').name == 'googleai/gemini-9.9-flash'
+        assert GoogleAI.veo_model('veo-9.9-generate-001').name == 'googleai/veo-9.9-generate-001'
+        assert GoogleAI.lyria_model('lyria-9-preview').name == 'googleai/lyria-9-preview'
 
     def test_family_constructors_type_their_config(self) -> None:
         """Each family constructor carries its own config schema."""
@@ -250,34 +247,31 @@ class TestEmbeddingConstructor:
             VertexAI.embedding('imagen-3.0-generate-002')
 
 
-def _enum_ids(*enums: type[Enum]) -> set[str]:
-    return {str(member.value) for enum in enums for member in enum}
-
-
-def _family_catalog(is_family: Callable[[str], bool]) -> set[str]:
-    """Version enums plus ``_add_model`` names for one family."""
-    enum_ids = _enum_ids(GoogleAIGeminiVersion, VertexAIGeminiVersion)
-    return {name for name in enum_ids | GEMINI_CATALOG_IDS if is_family(name)}
+def _registered(is_family: Callable[[str], bool]) -> set[str]:
+    """``_add_model`` names for one family."""
+    return {name for name in GEMINI_CATALOG_IDS if is_family(name)}
 
 
 class TestKnownIdLiterals:
     """Constructor name types are string Literals so quotes autocomplete."""
 
     def test_known_gemini_matches_catalog(self) -> None:
-        """Quote autocomplete and the text catalog are the same set of ids."""
+        """Quote autocomplete and the registered text catalog are the same set of ids."""
         known = set(get_args(KnownGemini))
-        assert known == _family_catalog(is_gemini_model)
+        assert known == _registered(is_gemini_model)
         assert not any(is_tts_model(value) or is_image_model(value) or is_gemma_model(value) for value in known)
 
     def test_family_literals_match_their_catalog(self) -> None:
-        """Sibling constructors autocomplete exactly their catalog ids."""
-        assert set(get_args(KnownGeminiTts)) == _family_catalog(is_tts_model)
-        assert set(get_args(KnownGeminiImage)) == _family_catalog(is_image_model)
-        assert set(get_args(KnownGemma)) == _family_catalog(is_gemma_model)
-        assert set(get_args(KnownImagen)) == {str(member.value) for member in ImagenVersion}
+        """Every registered id autocompletes, and every autocomplete id routes to its family."""
+        assert set(get_args(KnownGeminiTts)) == _registered(is_tts_model)
+        assert set(get_args(KnownGeminiImage)) == _registered(is_image_model)
+        # Gemma 3 ids resolve through the generic Gemma info, not _add_model.
+        assert _registered(is_gemma_model) <= set(get_args(KnownGemma))
+        assert all(is_gemma_model(value) for value in get_args(KnownGemma))
+        assert set(get_args(KnownImagen)) == set(IMAGEN_SUPPORTED_MODELS)
         assert all(is_imagen_model_name(value) for value in get_args(KnownImagen))
-        assert set(get_args(KnownVeo)) == {str(member.value) for member in VeoVersion}
         assert all(is_veo_model(value) for value in get_args(KnownVeo))
+        assert all(is_lyria_model_name(value) for value in get_args(KnownLyria))
 
     def test_latest_aliases_autocomplete_on_gemini_model(self) -> None:
         """Every rotating ``-latest`` alias is offered by ``gemini_model``."""

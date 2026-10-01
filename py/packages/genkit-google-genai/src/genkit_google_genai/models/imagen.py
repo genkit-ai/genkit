@@ -33,7 +33,6 @@ from genkit import (
     Part,
     Role,
 )
-from genkit._core._compat import StrEnum
 from genkit.model import ModelInfo, ModelRequest, Supports
 from genkit.plugin_api import wrap_http_error
 from genkit.telemetry import SpanContext, run_in_new_span
@@ -50,15 +49,8 @@ def _to_dict(obj: Any) -> Any:  # noqa: ANN401
     return obj.model_dump() if isinstance(obj, BaseModel) else obj
 
 
-class ImagenVersion(StrEnum):
-    """Supported text-to-image models."""
-
-    IMAGEN3 = 'imagen-3.0-generate-002'
-    IMAGEN3_FAST = 'imagen-3.0-fast-generate-001'
-
-
-# Quote autocomplete needs a Literal. The enum above is the catalog; a test
-# requires these members and the enum values to be the same set.
+# Quote autocomplete needs a Literal, so this alias is the Imagen catalog.
+# ``imagen_model`` takes ``KnownImagen | str`` so unlisted ids still work.
 KnownImagen: TypeAlias = Literal[
     'imagen-3.0-generate-002',
     'imagen-3.0-fast-generate-001',
@@ -66,7 +58,7 @@ KnownImagen: TypeAlias = Literal[
 
 
 SUPPORTED_MODELS = {
-    ImagenVersion.IMAGEN3: ModelInfo(
+    'imagen-3.0-generate-002': ModelInfo(
         label='Vertex AI - Imagen3',
         supports=Supports(
             media=True,
@@ -76,7 +68,7 @@ SUPPORTED_MODELS = {
             output=['media'],
         ),
     ),
-    ImagenVersion.IMAGEN3_FAST: ModelInfo(
+    'imagen-3.0-fast-generate-001': ModelInfo(
         label='Vertex AI - Imagen3 Fast',
         supports=Supports(
             media=False,
@@ -149,7 +141,7 @@ class ImagenConfigSchema(BaseModel):
 class ImagenModel:
     """Imagen text-to-image model."""
 
-    def __init__(self, version: str | ImagenVersion, client: genai.Client) -> None:
+    def __init__(self, version: str, client: genai.Client) -> None:
         """Initialize Imagen model.
 
         Args:

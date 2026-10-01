@@ -18,10 +18,11 @@
 """Tests for the Imagen model implementation."""
 
 import base64
+from typing import get_args
 from unittest.mock import MagicMock
 
 import pytest
-from genkit_google_genai.models.imagen import ImagenConfigSchema, ImagenModel, ImagenVersion
+from genkit_google_genai.models.imagen import ImagenConfigSchema, ImagenModel, KnownImagen
 from google import genai
 from pytest_mock import MockerFixture
 
@@ -30,8 +31,8 @@ from genkit.model import ModelRequest
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('version', [x for x in ImagenVersion])
-async def test_generate_media_response(mocker: MockerFixture, version: ImagenVersion) -> None:
+@pytest.mark.parametrize('version', get_args(KnownImagen))
+async def test_generate_media_response(mocker: MockerFixture, version: str) -> None:
     """Test generate method for media responses."""
     request_text = 'response question'
     response_byte_string = b'\x89PNG\r\n\x1a\n'
@@ -84,7 +85,7 @@ async def test_generate_media_response(mocker: MockerFixture, version: ImagenVer
 
 def test_imagen_unknown_extra_rides_on_extra_body() -> None:
     """Leftover keys ride on extra_body so a newly supported field still reaches the API."""
-    imagen = ImagenModel(ImagenVersion.IMAGEN3, MagicMock())
+    imagen = ImagenModel('imagen-3.0-generate-002', MagicMock())
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('a cat')])],
         config=ImagenConfigSchema.model_validate({'fooBar': 1}),
@@ -99,7 +100,7 @@ def test_imagen_unknown_extra_rides_on_extra_body() -> None:
 
 def test_imagen_rejects_raw_dicts() -> None:
     """A dict at the dump leaf means Action never produced the family instance."""
-    imagen = ImagenModel(ImagenVersion.IMAGEN3, MagicMock())
+    imagen = ImagenModel('imagen-3.0-generate-002', MagicMock())
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('a cat')])],
         config={'number_of_images': 1},  # type: ignore[arg-type]
@@ -114,7 +115,7 @@ def test_imagen_rejects_raw_dicts() -> None:
 
 def test_imagen_invalid_sdk_field_is_invalid_argument() -> None:
     """SDK type errors become a named INVALID_ARGUMENT."""
-    imagen = ImagenModel(ImagenVersion.IMAGEN3, MagicMock())
+    imagen = ImagenModel('imagen-3.0-generate-002', MagicMock())
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('a cat')])],
         config=ImagenConfigSchema.model_validate({'number_of_images': 'nope'}),

@@ -18,7 +18,7 @@
 """Tests for the Gemini model implementation."""
 
 import base64
-from typing import Any
+from typing import Any, get_args
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -29,9 +29,11 @@ from genkit_google_genai.models.gemini import (
     GeminiModel,
     GeminiTtsConfigSchema,
     GemmaConfigSchema,
-    GoogleAIGeminiVersion,
+    KnownGemini,
+    KnownGeminiImage,
+    KnownGeminiTts,
+    KnownGemma,
     SpeechConfigSchema,
-    VertexAIGeminiVersion,
     _to_finish_reason,
     get_model_config_schema,
     google_model_info,
@@ -49,8 +51,13 @@ from genkit._core._compat import StrEnum
 from genkit.model import Constrained, ModelInfo, ModelRequest, OutputConfig, Supports, ToolDefinition
 from genkit.plugin_api import to_json_schema
 
-ALL_VERSIONS = list(GoogleAIGeminiVersion) + list(VertexAIGeminiVersion)
-IMAGE_GENERATION_VERSIONS = [GoogleAIGeminiVersion.GEMINI_2_5_FLASH]
+ALL_VERSIONS = sorted({
+    *get_args(KnownGemini),
+    *get_args(KnownGeminiTts),
+    *get_args(KnownGeminiImage),
+    *get_args(KnownGemma),
+})
+IMAGE_GENERATION_VERSIONS = ['gemini-2.5-flash']
 
 
 def _kore_speech_config() -> genai.types.SpeechConfig:
@@ -381,7 +388,7 @@ async def test_generate_with_system_instructions(mocker: MockerFixture) -> None:
     response_text = 'request answer'
     request_text = 'response question'
     system_instruction = 'system instruction text'
-    version = GoogleAIGeminiVersion.GEMINI_2_5_FLASH
+    version = 'gemini-2.5-flash'
 
     request = ModelRequest(
         messages=[
@@ -610,7 +617,7 @@ def test_gemini_3_1_models_register_real_capabilities(model_name: str) -> None:
 def test_vertexai_gemini_3_x_text_models_register_real_capabilities(model_name: str) -> None:
     """VertexAI Gemini 3.1/3.5 text models resolve to explicit ModelInfo, not the generic fallback.
 
-    These names are now first-class ``VertexAIGeminiVersion`` members. The generic fallback
+    These names are registered in the Gemini catalog. The generic fallback
     (DEFAULT_SUPPORTS_MODEL) leaves ``output`` unset, so asserting ``output == ['text', 'json']``
     alongside tools/constrained proves they carry real capability metadata matching the JS Vertex
     registry, not the fallback.
@@ -1315,7 +1322,7 @@ async def test_streaming_generate_classifies_error_on_first_chunk(
 
     googleai_client_mock = mocker.AsyncMock()
     googleai_client_mock.aio.models.generate_content_stream.return_value = failing_stream()
-    gemini = GeminiModel(GoogleAIGeminiVersion.GEMINI_2_5_FLASH, googleai_client_mock)
+    gemini = GeminiModel('gemini-2.5-flash', googleai_client_mock)
     ctx = ActionRunContext(streaming_callback=mocker.MagicMock())
 
     with pytest.raises(GenkitError) as raised:
@@ -1339,7 +1346,7 @@ async def test_streaming_generate_classifies_mid_stream_error(mocker: MockerFixt
 
     googleai_client_mock = mocker.AsyncMock()
     googleai_client_mock.aio.models.generate_content_stream.return_value = mid_stream_fail()
-    gemini = GeminiModel(GoogleAIGeminiVersion.GEMINI_2_5_FLASH, googleai_client_mock)
+    gemini = GeminiModel('gemini-2.5-flash', googleai_client_mock)
     ctx = ActionRunContext(streaming_callback=mocker.MagicMock())
 
     with pytest.raises(GenkitError) as raised:
@@ -1355,7 +1362,7 @@ async def test_generate_classifies_503_as_unavailable(mocker: MockerFixture) -> 
     )
     googleai_client_mock = mocker.AsyncMock()
     googleai_client_mock.aio.models.generate_content.side_effect = APIError(503, {'error': {'message': 'overloaded'}})
-    gemini = GeminiModel(GoogleAIGeminiVersion.GEMINI_2_5_FLASH, googleai_client_mock)
+    gemini = GeminiModel('gemini-2.5-flash', googleai_client_mock)
 
     with pytest.raises(GenkitError) as raised:
         await gemini.generate(request, ActionRunContext())

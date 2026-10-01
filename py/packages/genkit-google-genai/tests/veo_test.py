@@ -16,15 +16,15 @@
 
 """Tests for Veo video generation model helpers and lifecycle."""
 
-from typing import Any
+from typing import Any, get_args
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from genkit_google_genai.constants import multi_regional_base_url
 from genkit_google_genai.models.veo import (
+    KnownVeo,
     VeoConfig,
     VeoModel,
-    VeoVersion,
     _from_veo_operation,
     is_veo_model,
 )
@@ -86,21 +86,13 @@ class TestIsVeoModel:
         assert is_veo_model('devotional-hymn') is False
 
 
-class TestVeoVersion:
-    """Tests for VeoVersion enum convenience constants."""
+class TestKnownVeo:
+    """Every id in the ``KnownVeo`` catalog routes to the Veo family."""
 
-    @pytest.mark.parametrize(
-        'version',
-        [
-            VeoVersion.VEO_3_1_PREVIEW,
-            VeoVersion.VEO_3_1_FAST_PREVIEW,
-            VeoVersion.VEO_3_0,
-            VeoVersion.VEO_3_0_FAST,
-        ],
-    )
-    def test_new_googleai_models_are_recognized(self, version: VeoVersion) -> None:
-        """New Veo 3.0/3.1 model constants map to valid Veo names."""
-        assert is_veo_model(version.value) is True
+    @pytest.mark.parametrize('version', get_args(KnownVeo))
+    def test_known_ids_are_veo_models(self, version: str) -> None:
+        """Each autocomplete id is recognized as a Veo model."""
+        assert is_veo_model(version) is True
 
 
 class TestFromVeoOperation:
