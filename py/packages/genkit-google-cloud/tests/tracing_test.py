@@ -27,12 +27,21 @@ from genkit_google_cloud.telemetry.tracing import (
     _reset_google_cloud_telemetry,
     enable_google_cloud_telemetry,
 )
+from genkit_otel import GenAiInstrumentation
+from opentelemetry import _logs
+from opentelemetry.sdk._logs import LoggerProvider
+from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor
 
 from genkit._core._error import GenkitError
-from genkit._core._telemetry._instrumentation import reset_instrumentation
+from genkit._core._telemetry._instrumentation import (
+    instrumentations,
+    is_instrumented_by,
+    reset_instrumentation,
+)
 from genkit._core._telemetry._log_exporter import reset_log_export
+from genkit.telemetry import configure_instrumentation
 
 # Environment variable and value constants (matching genkit._core._environment)
 _GENKIT_ENV = 'GENKIT_ENV'
@@ -49,6 +58,12 @@ def _reset_instrumentation() -> Generator[None, None, None]:
     reset_instrumentation()
     reset_log_export()
     _reset_google_cloud_telemetry()
+
+
+@pytest.fixture(autouse=True)
+def _stub_cloud_logging_exporter() -> Generator[MagicMock, None, None]:
+    with patch('genkit_google_cloud.telemetry.config.CloudLoggingExporter') as mock_exporter:
+        yield mock_exporter
 
 
 def test_enable_google_cloud_telemetry_wraps_with_gcp_adjusting_exporter() -> None:
@@ -86,40 +101,23 @@ def test_enable_google_cloud_telemetry_wraps_with_gcp_adjusting_exporter() -> No
         mock_adjusting.assert_called_once()
         call_kwargs = mock_adjusting.call_args.kwargs
         assert call_kwargs['exporter'] == mock_base_exporter
-        assert call_kwargs['log_input_and_output'] is False  # Default is redaction enabled
-        assert call_kwargs['project_id'] is None
 
         # Verify the wrapped exporter was added
         mock_add_exporter.assert_called_once_with(exporter=mock_wrapped_exporter)
 
 
-def test_enable_google_cloud_telemetry_with_log_input_and_output_enabled() -> None:
-    """log_input_and_output=True leaves prompt and response on the Cloud Trace span."""
-    with (
-        mock.patch.dict(os.environ, {_GENKIT_ENV: _ENV_PROD}),
-        patch('genkit_google_cloud.telemetry.config.GenkitGCPExporter'),
-        patch('genkit_google_cloud.telemetry.config.GcpAdjustingTraceExporter') as mock_adjusting,
-        patch('genkit_google_cloud.telemetry.config._hang_exporter_on_process_tracer'),
-        patch('genkit_google_cloud.telemetry.config.GoogleCloudResourceDetector'),
-        patch('genkit_google_cloud.telemetry.config.CloudMonitoringMetricsExporter'),
-        patch('genkit_google_cloud.telemetry.config.GenkitMetricExporter'),
-        patch('genkit_google_cloud.telemetry.config.PeriodicExportingMetricReader'),
-        patch('genkit_google_cloud.telemetry.config.metrics'),
-    ):
-        # Call with log_input_and_output=True (maps to JS: !disableLoggingInputAndOutput)
-        enable_google_cloud_telemetry(log_input_and_output=True)
-
-        # Verify log_input_and_output was passed correctly
-        call_kwargs = mock_adjusting.call_args.kwargs
-        assert call_kwargs['log_input_and_output'] is True
+def test_enable_google_cloud_telemetry_rejects_log_input_and_output() -> None:
+    """log_input_and_output= is gone. Prompt I/O is capture_action_io on GenAiInstrumentation."""
+    with pytest.raises(TypeError, match='log_input_and_output'):
+        enable_google_cloud_telemetry(log_input_and_output=True)  # ty: ignore[unknown-argument]
 
 
 def test_enable_google_cloud_telemetry_with_project_id() -> None:
     """project_id= lands on the Cloud Trace exporter they get."""
     with (
         mock.patch.dict(os.environ, {_GENKIT_ENV: _ENV_PROD}),
-        patch('genkit_google_cloud.telemetry.config.GenkitGCPExporter'),
-        patch('genkit_google_cloud.telemetry.config.GcpAdjustingTraceExporter') as mock_adjusting,
+        patch('genkit_google_cloud.telemetry.config.GenkitGCPExporter') as mock_gcp_exporter,
+        patch('genkit_google_cloud.telemetry.config.GcpAdjustingTraceExporter'),
         patch('genkit_google_cloud.telemetry.config._hang_exporter_on_process_tracer'),
         patch('genkit_google_cloud.telemetry.config.GoogleCloudResourceDetector'),
         patch('genkit_google_cloud.telemetry.config.CloudMonitoringMetricsExporter'),
@@ -127,12 +125,9 @@ def test_enable_google_cloud_telemetry_with_project_id() -> None:
         patch('genkit_google_cloud.telemetry.config.PeriodicExportingMetricReader'),
         patch('genkit_google_cloud.telemetry.config.metrics'),
     ):
-        # Call with project_id
         enable_google_cloud_telemetry(project_id='my-test-project')
 
-        # Verify project_id was passed correctly
-        call_kwargs = mock_adjusting.call_args.kwargs
-        assert call_kwargs['project_id'] == 'my-test-project'
+        assert mock_gcp_exporter.call_args.kwargs.get('project_id') == 'my-test-project'
 
 
 def test_enable_google_cloud_telemetry_skips_in_dev_without_force() -> None:
@@ -141,6 +136,7 @@ def test_enable_google_cloud_telemetry_skips_in_dev_without_force() -> None:
         mock.patch.dict(os.environ, {_GENKIT_ENV: _ENV_DEV}),
         patch('genkit_google_cloud.telemetry.config.GenkitGCPExporter') as mock_gcp_exporter,
         patch('genkit_google_cloud.telemetry.config._hang_exporter_on_process_tracer') as mock_add_exporter,
+        patch('genkit_google_cloud.telemetry.config._hang_exporter_on_process_logger') as mock_add_logger,
     ):
         # Call without force_dev_export (using legacy force_export)
         enable_google_cloud_telemetry(force_dev_export=False)
@@ -148,6 +144,8 @@ def test_enable_google_cloud_telemetry_skips_in_dev_without_force() -> None:
         # Verify nothing was called
         mock_gcp_exporter.assert_not_called()
         mock_add_exporter.assert_not_called()
+        mock_add_logger.assert_not_called()
+        assert not is_instrumented_by(GenAiInstrumentation)
 
 
 def test_enable_google_cloud_telemetry_exports_in_dev_with_force() -> None:
@@ -167,10 +165,30 @@ def test_enable_google_cloud_telemetry_exports_in_dev_with_force() -> None:
 
         mock_gcp_exporter.assert_called_once()
         mock_add_exporter.assert_called_once()
+        assert is_instrumented_by(GenAiInstrumentation)
 
 
-def test_enable_google_cloud_telemetry_disable_traces() -> None:
-    """disable_traces=True skips Cloud Trace and still turns metrics on."""
+def test_enable_disable_traces_with_force_dev_export_still_turns_on_genai() -> None:
+    """force_dev_export=True and disable_traces=True still turn GenAI on."""
+    with (
+        mock.patch.dict(os.environ, {_GENKIT_ENV: _ENV_DEV}),
+        patch('genkit_google_cloud.telemetry.config.GenkitGCPExporter') as mock_gcp_exporter,
+        patch('genkit_google_cloud.telemetry.config._hang_exporter_on_process_tracer') as mock_add_exporter,
+        patch('genkit_google_cloud.telemetry.config.GoogleCloudResourceDetector'),
+        patch('genkit_google_cloud.telemetry.config.CloudMonitoringMetricsExporter'),
+        patch('genkit_google_cloud.telemetry.config.GenkitMetricExporter'),
+        patch('genkit_google_cloud.telemetry.config.PeriodicExportingMetricReader'),
+        patch('genkit_google_cloud.telemetry.config.metrics'),
+    ):
+        enable_google_cloud_telemetry(force_dev_export=True, disable_traces=True)
+
+        mock_gcp_exporter.assert_not_called()
+        mock_add_exporter.assert_not_called()
+        assert is_instrumented_by(GenAiInstrumentation)
+
+
+def test_enable_disable_traces_skips_cloud_trace_and_still_turns_on_genai() -> None:
+    """disable_traces=True does not hang Cloud Trace; generate is still instrumented."""
     with (
         mock.patch.dict(os.environ, {_GENKIT_ENV: _ENV_PROD}),
         patch('genkit_google_cloud.telemetry.config.GenkitGCPExporter') as mock_gcp_exporter,
@@ -181,12 +199,54 @@ def test_enable_google_cloud_telemetry_disable_traces() -> None:
         patch('genkit_google_cloud.telemetry.config.PeriodicExportingMetricReader'),
         patch('genkit_google_cloud.telemetry.config.metrics'),
     ):
-        # Call with disable_traces=True (JS/Go: disableTraces)
         enable_google_cloud_telemetry(disable_traces=True)
 
-        # Verify trace exporter was NOT created
         mock_gcp_exporter.assert_not_called()
         mock_add_exporter.assert_not_called()
+        assert is_instrumented_by(GenAiInstrumentation)
+
+
+def test_enable_disable_traces_and_metrics_still_turns_on_genai() -> None:
+    """disable_traces=True and disable_metrics=True still turn GenAI on."""
+    with (
+        mock.patch.dict(os.environ, {_GENKIT_ENV: _ENV_PROD}),
+        patch('genkit_google_cloud.telemetry.config.GenkitGCPExporter') as mock_gcp_exporter,
+        patch('genkit_google_cloud.telemetry.config._hang_exporter_on_process_tracer') as mock_add_exporter,
+        patch('genkit_google_cloud.telemetry.config.GoogleCloudResourceDetector') as mock_detector,
+        patch('genkit_google_cloud.telemetry.config.CloudMonitoringMetricsExporter') as mock_metric_exp,
+        patch('genkit_google_cloud.telemetry.config.GenkitMetricExporter') as mock_genkit_metric,
+        patch('genkit_google_cloud.telemetry.config.PeriodicExportingMetricReader') as mock_reader,
+        patch('genkit_google_cloud.telemetry.config.metrics'),
+    ):
+        enable_google_cloud_telemetry(disable_traces=True, disable_metrics=True)
+
+        mock_gcp_exporter.assert_not_called()
+        mock_add_exporter.assert_not_called()
+        mock_detector.assert_not_called()
+        mock_metric_exp.assert_not_called()
+        mock_genkit_metric.assert_not_called()
+        mock_reader.assert_not_called()
+        assert is_instrumented_by(GenAiInstrumentation)
+
+
+def test_enable_disable_traces_keeps_their_genai_settings() -> None:
+    """A GenAiInstrumentation they registered before enable() keeps its settings."""
+    theirs = GenAiInstrumentation(emit_metrics=False)
+    configure_instrumentation(theirs)
+    with (
+        mock.patch.dict(os.environ, {_GENKIT_ENV: _ENV_PROD}),
+        patch('genkit_google_cloud.telemetry.config.GenkitGCPExporter'),
+        patch('genkit_google_cloud.telemetry.config._hang_exporter_on_process_tracer'),
+        patch('genkit_google_cloud.telemetry.config.GoogleCloudResourceDetector'),
+        patch('genkit_google_cloud.telemetry.config.CloudMonitoringMetricsExporter'),
+        patch('genkit_google_cloud.telemetry.config.GenkitMetricExporter'),
+        patch('genkit_google_cloud.telemetry.config.PeriodicExportingMetricReader'),
+        patch('genkit_google_cloud.telemetry.config.metrics'),
+    ):
+        enable_google_cloud_telemetry(disable_traces=True)
+
+    assert theirs in instrumentations
+    assert theirs.emit_metrics is False
 
 
 def test_enable_google_cloud_telemetry_disable_metrics() -> None:
@@ -202,7 +262,6 @@ def test_enable_google_cloud_telemetry_disable_metrics() -> None:
         patch('genkit_google_cloud.telemetry.config.PeriodicExportingMetricReader') as mock_reader,
         patch('genkit_google_cloud.telemetry.config.metrics'),
     ):
-        # Call with disable_metrics=True (JS/Go: disableMetrics)
         enable_google_cloud_telemetry(disable_metrics=True)
 
         # Verify metrics exporter was NOT created
@@ -210,6 +269,88 @@ def test_enable_google_cloud_telemetry_disable_metrics() -> None:
         mock_metric_exp.assert_not_called()
         mock_genkit_metric.assert_not_called()
         mock_reader.assert_not_called()
+        assert is_instrumented_by(GenAiInstrumentation)
+
+
+def test_enable_hangs_cloud_logging_so_an_emit_reaches_the_exporter(
+    _stub_cloud_logging_exporter: MagicMock,
+) -> None:
+    """enable() hangs Cloud Logging; an OTel emit reaches that exporter."""
+    memory = InMemoryLogRecordExporter()
+    _stub_cloud_logging_exporter.return_value = memory
+    with (
+        mock.patch.dict(os.environ, {_GENKIT_ENV: _ENV_PROD}),
+        patch('genkit_google_cloud.telemetry.config.GenkitGCPExporter'),
+        patch('genkit_google_cloud.telemetry.config.GcpAdjustingTraceExporter'),
+        patch('genkit_google_cloud.telemetry.config._hang_exporter_on_process_tracer'),
+        patch('genkit_google_cloud.telemetry.config.GoogleCloudResourceDetector'),
+        patch('genkit_google_cloud.telemetry.config.CloudMonitoringMetricsExporter'),
+        patch('genkit_google_cloud.telemetry.config.GenkitMetricExporter'),
+        patch('genkit_google_cloud.telemetry.config.PeriodicExportingMetricReader'),
+        patch('genkit_google_cloud.telemetry.config.metrics'),
+    ):
+        enable_google_cloud_telemetry()
+
+    _stub_cloud_logging_exporter.assert_called_once()
+    assert _stub_cloud_logging_exporter.call_args.kwargs.get('default_log_name') == 'genkit'
+    logger = _logs.get_logger('genkit-genai')
+    logger.emit(event_name='gen_ai.client.inference.operation.details', attributes={'probe': '1'})
+    provider = _logs.get_logger_provider()
+    if isinstance(provider, LoggerProvider):
+        provider.force_flush()
+    records = memory.get_finished_logs()
+    assert records
+
+
+def test_enable_adds_a_logging_processor_when_they_already_own_a_logger_provider(
+    _stub_cloud_logging_exporter: MagicMock,
+) -> None:
+    """A LoggerProvider they already set keeps their logger; Cloud hangs on it."""
+    existing = LoggerProvider()
+    added: list[object] = []
+    original = existing.add_log_record_processor
+
+    def _spy(processor: object) -> None:
+        added.append(processor)
+        original(processor)
+
+    existing.add_log_record_processor = _spy  # type: ignore[method-assign]
+    _stub_cloud_logging_exporter.return_value = InMemoryLogRecordExporter()
+    with (
+        mock.patch.dict(os.environ, {_GENKIT_ENV: _ENV_PROD}),
+        patch('genkit_google_cloud.telemetry.config._logs.get_logger_provider', return_value=existing),
+        patch('genkit_google_cloud.telemetry.config.GenkitGCPExporter'),
+        patch('genkit_google_cloud.telemetry.config.GcpAdjustingTraceExporter'),
+        patch('genkit_google_cloud.telemetry.config._hang_exporter_on_process_tracer'),
+        patch('genkit_google_cloud.telemetry.config.GoogleCloudResourceDetector'),
+        patch('genkit_google_cloud.telemetry.config.CloudMonitoringMetricsExporter'),
+        patch('genkit_google_cloud.telemetry.config.GenkitMetricExporter'),
+        patch('genkit_google_cloud.telemetry.config.PeriodicExportingMetricReader'),
+        patch('genkit_google_cloud.telemetry.config.metrics'),
+    ):
+        enable_google_cloud_telemetry()
+
+    assert added
+
+
+def test_enable_hangs_cloud_logging_when_traces_are_disabled(
+    _stub_cloud_logging_exporter: MagicMock,
+) -> None:
+    """disable_traces=True still hangs Cloud Logging."""
+    with (
+        mock.patch.dict(os.environ, {_GENKIT_ENV: _ENV_PROD}),
+        patch('genkit_google_cloud.telemetry.config.GenkitGCPExporter'),
+        patch('genkit_google_cloud.telemetry.config._hang_exporter_on_process_tracer'),
+        patch('genkit_google_cloud.telemetry.config.GoogleCloudResourceDetector'),
+        patch('genkit_google_cloud.telemetry.config.CloudMonitoringMetricsExporter'),
+        patch('genkit_google_cloud.telemetry.config.GenkitMetricExporter'),
+        patch('genkit_google_cloud.telemetry.config.PeriodicExportingMetricReader'),
+        patch('genkit_google_cloud.telemetry.config.metrics'),
+        patch('genkit_google_cloud.telemetry.config._hang_exporter_on_process_logger') as mock_add_logger,
+    ):
+        enable_google_cloud_telemetry(disable_traces=True)
+
+    mock_add_logger.assert_called_once()
 
 
 def test_enable_google_cloud_telemetry_custom_metric_interval() -> None:
@@ -225,7 +366,6 @@ def test_enable_google_cloud_telemetry_custom_metric_interval() -> None:
         patch('genkit_google_cloud.telemetry.config.PeriodicExportingMetricReader') as mock_reader,
         patch('genkit_google_cloud.telemetry.config.metrics'),
     ):
-        # Call with custom metric_export_interval_ms (JS/Go: metricExportIntervalMillis)
         enable_google_cloud_telemetry(metric_export_interval_ms=30000)
 
         # Verify metric reader was created with correct interval
@@ -402,6 +542,7 @@ def test_leftover_collector_env_in_prod_does_not_block_cloud() -> None:
         patch('genkit_google_cloud.telemetry.config.metrics'),
     ):
         enable_google_cloud_telemetry(project_id='my-project')
+        assert is_instrumented_by(GenAiInstrumentation)
 
 
 def _processors(provider: TracerProvider) -> tuple[object, ...]:

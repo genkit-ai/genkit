@@ -36,7 +36,7 @@ from typing import Literal, TypeVar
 from urllib.parse import urljoin, urlparse
 
 from .._environment import is_dev_environment
-from .._error import GenkitError, GenkitInterrupt
+from .._error import GenkitError, Interrupt
 from .._logger import get_logger
 from ._attrs import Attr, State, metadata_key
 from ._instrumentation import (
@@ -271,7 +271,7 @@ class DirectHttpInstrumentation:
                     span.attributes[Attr.STATE] = State.SUCCESS
                     span.status_code = 1
                 return result
-            except GenkitInterrupt:
+            except Interrupt:
                 span.attributes[Attr.STATE] = State.SUCCESS
                 span.status_code = 1
                 raise

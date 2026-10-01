@@ -45,7 +45,6 @@ from genkit._ai._prompt import (
     PromptGenerateOptions,
 )
 from genkit._ai._tools import (
-    Interrupt,
     MultipartToolResponse,
     Tool,
     ToolRunContext,
@@ -55,7 +54,13 @@ from genkit._ai._tools import (
     tool,
 )
 from genkit._core._action import Action, ActionRunContext, StreamResponse
-from genkit._core._error import ErrorResponseMetadata, GenkitError, PublicError, RuntimeErrorReason
+from genkit._core._error import (
+    ErrorResponseMetadata,
+    GenkitError,
+    Interrupt,
+    PublicError,
+    RuntimeErrorReason,
+)
 from genkit._core._model import Document, Part
 from genkit._core._plugin import Plugin
 from genkit._core._typing import (

@@ -59,9 +59,10 @@ class ErrorHandler:
             logger.error(f'{error_message}: {error}')
 
 
-# Singleton error handlers for tracing and metrics
+# Singleton error handlers for tracing, metrics, and logs
 _tracing_error_handler = ErrorHandler()
 _metrics_error_handler = ErrorHandler()
+_logging_error_handler = ErrorHandler()
 
 # Help text for tracing errors (GCP IAM requirements)
 TRACING_HELP_TEXT = 'Ensure the service account has the "Cloud Trace Agent" (roles/cloudtrace.agent) role.'
@@ -72,6 +73,8 @@ METRICS_HELP_TEXT = (
     '(roles/monitoring.metricWriter) or "Cloud Telemetry Metrics Writer" '
     '(roles/telemetry.metricsWriter) role.'
 )
+
+LOGGING_HELP_TEXT = 'Ensure the service account has the "Logs Writer" (roles/logging.logWriter) role.'
 
 
 def handle_tracing_error(error: Exception) -> None:
@@ -110,3 +113,22 @@ def handle_metric_error(error: Exception) -> None:
         )
     else:
         logger.error('Error exporting metrics to GCP', error=str(error))
+
+
+def handle_logging_error(error: Exception) -> None:
+    """Handle Cloud Logging export errors with helpful messages.
+
+    Only logs detailed instructions once to avoid spam.
+
+    Args:
+        error: The export error.
+    """
+    error_str = str(error).lower()
+    if 'permission' in error_str or 'denied' in error_str or '403' in error_str:
+        _logging_error_handler.handle(
+            error,
+            'Unable to send logs to Google Cloud.',
+            LOGGING_HELP_TEXT,
+        )
+    else:
+        logger.error('Error exporting logs to GCP', error=str(error))

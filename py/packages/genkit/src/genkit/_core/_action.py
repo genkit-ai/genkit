@@ -31,7 +31,7 @@ from typing_extensions import TypeVar
 
 from genkit._core._channel import Channel, CloseableQueue
 from genkit._core._compat import StrEnum
-from genkit._core._error import GenkitError, RuntimeErrorReason
+from genkit._core._error import GenkitError, Interrupt, RuntimeErrorReason
 from genkit._core._model import config_type_path, declared_config_type
 from genkit._core._schema import to_json_schema
 from genkit._core._telemetry._attrs import Attr, metadata_key
@@ -810,10 +810,15 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             if on_trace_start:
                 await on_trace_start(trace_id, span_id)
 
-            if execute is not None:
-                output = await execute()
-            else:
-                output = await self._invoke(input, ctx)
+            try:
+                if execute is not None:
+                    output = await execute()
+                else:
+                    output = await self._invoke(input, ctx)
+            except Interrupt as e:
+                if e.metadata:
+                    span.set_metadata({'interrupt': e.metadata})
+                raise
             latency_ms = (time.perf_counter() - start_time) * 1000
             return cast(OutputT, _record_latency(output, latency_ms))
 

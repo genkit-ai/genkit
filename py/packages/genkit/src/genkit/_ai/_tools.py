@@ -26,7 +26,7 @@ from typing import Any, Union, cast, get_args, get_origin, get_type_hints
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from genkit._core._action import Action, ActionKind, ActionRunContext
-from genkit._core._error import GenkitError, GenkitInterrupt, RuntimeErrorReason
+from genkit._core._error import GenkitError, Interrupt, RuntimeErrorReason
 from genkit._core._logger import get_logger
 from genkit._core._middleware import GenerateMiddlewareContext
 from genkit._core._model import MultipartToolResponse, OutputT, Part, as_part
@@ -380,30 +380,6 @@ class ToolRunContext(ActionRunContext):
     def is_resumed(self) -> bool:
         """Return True if this execution is resuming after an interrupt."""
         return self.resumed_metadata is not None
-
-
-class Interrupt(GenkitInterrupt):  # noqa: N818 - public Genkit name; not renamed *Error for style
-    """Exception for interrupting tool execution with user-facing API.
-
-    Raise ``Interrupt(metadata)`` from a tool or from tool middleware (e.g. ``wrap_tool``).
-    Exceptions from ``tool.run`` are wrapped in GenkitError
-    with ``cause=Interrupt``; generation attaches interrupt metadata to the pending tool
-    request.
-
-    To resume, use ``respond_to_interrupt`` or ``restart_tool``.
-    """
-
-    def __init__(self, metadata: dict[str, Any] | None = None) -> None:
-        """Initialize an Interrupt exception.
-
-        Args:
-            metadata: Attached to the tool request on the wire. Use a plain dict; for a
-                Pydantic model, pass ``m.model_dump(mode="json")``.
-        """
-        super().__init__()
-        self.metadata: dict[str, Any] = {} if metadata is None else metadata
-        if self.metadata:
-            set_custom_metadata_attributes({'interrupt': self.metadata})
 
 
 def _tool_response_part(

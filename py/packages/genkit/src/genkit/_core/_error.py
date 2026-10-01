@@ -327,13 +327,16 @@ class ErrorResponseMetadata(TypedDict, total=False):
     headers: dict[str, str]
 
 
-class GenkitInterrupt(Exception):  # noqa: N818 - marker base class; intentionally not suffixed *Error
-    """Marker base class for tool interrupts.
+class Interrupt(Exception):  # noqa: N818 - public Genkit name; not renamed *Error for style
+    """Pause a tool or generate so the caller can approve, reply, or restart.
 
-    Raised by tools to pause execution and hand control back to the caller.
-    The tracing wrapper uses this to distinguish control-flow interrupts from
-    real errors so they don't appear as red failures in the Dev UI.
+    Raise ``Interrupt(metadata)`` from a tool or from tool middleware.
+    Tracing treats this as control flow, not a failed span.
     """
+
+    def __init__(self, metadata: dict[str, Any] | None = None) -> None:
+        super().__init__()
+        self.metadata: dict[str, Any] = {} if metadata is None else metadata
 
 
 class GenkitError(Exception):
