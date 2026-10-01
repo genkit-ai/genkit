@@ -678,3 +678,37 @@ func TestToolApprovalUnansweredHoldIsNamed(t *testing.T) {
 		}
 	}
 }
+
+// TestToolApprovalHoldOnlyResumeIsNamed pins that a turn whose only interrupt
+// is a hold, which the documented claim loop skips, fails as unanswered
+// rather than reaching the model: the loop hands WithResume no parts.
+func TestToolApprovalHoldOnlyResumeIsNamed(t *testing.T) {
+	r := newTestRegistry(t)
+	modelCalls := 0
+	m := defineToolModel(t, r, "test/held", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		modelCalls++
+		return &ai.ModelResponse{Request: req, Message: &ai.Message{Role: ai.RoleModel, Content: []*ai.Part{
+			ai.NewToolRequestPart(&ai.ToolRequest{Name: "held", Ref: "1", Input: map[string]any{"v": "1"}}),
+		}}}, nil
+	})
+	held := defineTool(t, r, "held")
+	ta := &ToolApproval{}
+	registerTestMiddleware(r, "toolApproval", ta)
+
+	resp, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("go"), ai.WithTools(held), ai.WithUse(ta))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Interrupts()) != 1 {
+		t.Fatalf("got %d interrupts, want the hold", len(resp.Interrupts()))
+	}
+	// The claim loop over the tools declines the hold, so it builds no parts.
+	_, err = ai.Generate(ctx, r, ai.WithModel(m), ai.WithMessages(resp.History()...),
+		ai.WithTools(held), ai.WithResume(), ai.WithUse(ta))
+	if !errors.Is(err, ai.ErrUnresolvedToolRequest) || !strings.Contains(err.Error(), ta.Name()) {
+		t.Errorf("err = %v, want ErrUnresolvedToolRequest naming %s", err, ta.Name())
+	}
+	if modelCalls != 1 {
+		t.Errorf("model called %d times, want 1", modelCalls)
+	}
+}

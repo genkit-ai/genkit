@@ -1482,6 +1482,54 @@ func TestWithResume_MixedKinds(t *testing.T) {
 	}
 }
 
+// TestWithResume_RejectsPausedPart pins that an interrupt passed to
+// WithResume as is fails the call, naming the verbs that resolve it, rather
+// than re-running the tool with no answer.
+func TestWithResume_RejectsPausedPart(t *testing.T) {
+	reg := newTransferTestRegistry(t)
+	transfer, recorded := interruptOnce(t, reg)
+	resp, _ := generateUntilInterrupt(t, reg, transfer)
+
+	_, err := ai.Generate(context.Background(), reg,
+		ai.WithModelName("test/model"),
+		ai.WithMessages(resp.History()...),
+		ai.WithTools(transfer),
+		ai.WithResume(resp.Interrupts()...))
+	if !errors.Is(err, status.ErrInvalidArgument) || !strings.Contains(err.Error(), "ToToolRestart") {
+		t.Errorf("err = %v, want INVALID_ARGUMENT naming the resolving verbs", err)
+	}
+	if gotResume, _, _ := recorded(); gotResume != nil {
+		t.Errorf("the tool re-ran with %+v, want it not run", gotResume)
+	}
+}
+
+// TestWithResume_Empty pins that WithResume with no parts still resumes a
+// conversation that ends on interrupts, so one a claim loop skipped fails
+// as unresolved rather than reaching the model, and is a no-op on any other
+// conversation, so a caller may pass it on every turn.
+func TestWithResume_Empty(t *testing.T) {
+	reg := newTransferTestRegistry(t)
+	transfer, _ := interruptOnce(t, reg)
+	resp, _ := generateUntilInterrupt(t, reg, transfer)
+
+	_, err := ai.Generate(context.Background(), reg,
+		ai.WithModelName("test/model"),
+		ai.WithMessages(resp.History()...),
+		ai.WithTools(transfer),
+		ai.WithResume())
+	if !errors.Is(err, ai.ErrUnresolvedToolRequest) {
+		t.Errorf("unanswered interrupt: err = %v, want ErrUnresolvedToolRequest", err)
+	}
+
+	if _, err := ai.Generate(context.Background(), reg,
+		ai.WithModelName("test/model"),
+		ai.WithPrompt("go"),
+		ai.WithTools(transfer),
+		ai.WithResume()); err != nil {
+		t.Errorf("fresh conversation: err = %v, want nil", err)
+	}
+}
+
 // TestInterrupted_ClaimsOnlyOwnUnresolvedInterrupts checks that Interrupted
 // reports false for everything that is not an unresolved interrupt the tool
 // raised itself, a hold its middleware raised included, and on a nil tool.
