@@ -453,13 +453,16 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 
 // withoutToolCall returns ctx without the state of a tool call it may run
 // inside. A Generate called from a tool or a WrapTool hook is a call of its
-// own: its WrapGenerate hooks, its model, and its tools see no restart, and
-// none of them can attach parts to, stream through, or claim the enclosing
-// call. The enclosing call keeps its state on its own context.
+// own: its WrapGenerate hooks, its model, and its tools see no restart and
+// run in no hook stage, and none of them can attach parts to, stream
+// through, or claim the enclosing call. The enclosing call keeps its state on its own context.
 func withoutToolCall(ctx context.Context) context.Context {
 	ctx = base.ToolCallKey.NewContext(ctx, nil)
+	ctx = base.ToolRestartKey.NewContext(ctx, nil)
+	ctx = base.ToolHookKey.NewContext(ctx, "")
 	ctx = base.ToolResumeKey.NewContext(ctx, nil)
 	ctx = base.ToolOriginalInputKey.NewContext(ctx, nil)
+	ctx = base.ToolReleasedKey.NewContext(ctx, false)
 	ctx = base.ToolPartSinkKey.NewContext(ctx, nil)
 	ctx = base.ToolChunkSenderKey.NewContext(ctx, nil)
 	return base.ToolPartialSenderKey.NewContext(ctx, nil)
