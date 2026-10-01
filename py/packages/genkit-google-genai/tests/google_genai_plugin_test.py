@@ -28,12 +28,8 @@ import pytest
 from genkit_google_genai import (
     EmbeddingTaskType,
     GeminiConfigSchema,
-    GeminiEmbeddingModels,
     GoogleAI,
-    GoogleAIGeminiVersion,
     VertexAI,
-    VertexAIGeminiVersion,
-    VertexEmbeddingModels,
 )
 from genkit_google_genai.google import (
     GOOGLEAI_PLUGIN_NAME,
@@ -799,28 +795,46 @@ def test_embedding_task_types() -> None:
     assert EmbeddingTaskType.CLUSTERING is not None
 
 
-def test_gemini_embedding_models_enum() -> None:
-    """Test GeminiEmbeddingModels enum has values."""
-    # Check that the enum has at least one value
-    assert len(list(GeminiEmbeddingModels)) > 0
+def test_importing_googleai_gemini_version_raises() -> None:
+    """from genkit_google_genai import GoogleAIGeminiVersion raises ImportError."""
+    with pytest.raises(ImportError):
+        from genkit_google_genai import GoogleAIGeminiVersion  # type: ignore[attr-defined]  # noqa: F401
 
 
-def test_vertex_embedding_models_enum() -> None:
-    """Test VertexEmbeddingModels enum has values."""
-    # Check that the enum has at least one value
-    assert len(list(VertexEmbeddingModels)) > 0
+def test_importing_vertexai_gemini_version_raises() -> None:
+    """from genkit_google_genai import VertexAIGeminiVersion raises ImportError."""
+    with pytest.raises(ImportError):
+        from genkit_google_genai import VertexAIGeminiVersion  # type: ignore[attr-defined]  # noqa: F401
 
 
-def test_googleai_gemini_version_enum() -> None:
-    """Test GoogleAIGeminiVersion enum has values."""
-    # Check that the enum has at least one value
-    assert len(list(GoogleAIGeminiVersion)) > 0
+def test_importing_gemini_embedding_models_raises() -> None:
+    """from genkit_google_genai import GeminiEmbeddingModels raises ImportError."""
+    with pytest.raises(ImportError):
+        from genkit_google_genai import GeminiEmbeddingModels  # type: ignore[attr-defined]  # noqa: F401
 
 
-def test_vertexai_gemini_version_enum() -> None:
-    """Test VertexAIGeminiVersion enum has values."""
-    # Check that the enum has at least one value
-    assert len(list(VertexAIGeminiVersion)) > 0
+def test_importing_vertex_embedding_models_raises() -> None:
+    """from genkit_google_genai import VertexEmbeddingModels raises ImportError."""
+    with pytest.raises(ImportError):
+        from genkit_google_genai import VertexEmbeddingModels  # type: ignore[attr-defined]  # noqa: F401
+
+
+def test_importing_imagen_version_raises() -> None:
+    """from genkit_google_genai import ImagenVersion raises ImportError."""
+    with pytest.raises(ImportError):
+        from genkit_google_genai import ImagenVersion  # type: ignore[attr-defined]  # noqa: F401
+
+
+def test_importing_veo_version_raises() -> None:
+    """from genkit_google_genai import VeoVersion raises ImportError."""
+    with pytest.raises(ImportError):
+        from genkit_google_genai import VeoVersion  # type: ignore[attr-defined]  # noqa: F401
+
+
+def test_importing_lyria_version_raises() -> None:
+    """from genkit_google_genai import LyriaVersion raises ImportError."""
+    with pytest.raises(ImportError):
+        from genkit_google_genai import LyriaVersion  # type: ignore[attr-defined]  # noqa: F401
 
 
 def test_gemini_config_schema() -> None:

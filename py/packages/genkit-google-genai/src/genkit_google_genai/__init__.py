@@ -78,27 +78,20 @@ from genkit_google_genai.google import (
 )
 from genkit_google_genai.models.antigravity import AntigravityConfig
 from genkit_google_genai.models.deep_research import DeepResearchConfig
-from genkit_google_genai.models.embedder import (
-    EmbeddingTaskType,
-    GeminiEmbeddingModels,
-    VertexEmbeddingModels,
-)
+from genkit_google_genai.models.embedder import EmbeddingTaskType
 from genkit_google_genai.models.gemini import (
     GeminiConfigSchema,
     GeminiImageConfigSchema,
     GeminiTtsConfigSchema,
     GemmaConfigSchema,
-    GoogleAIGeminiVersion,
     KnownGemini,
     KnownGeminiImage,
     KnownGeminiTts,
     KnownGemma,
-    VertexAIGeminiVersion,
 )
-from genkit_google_genai.models.imagen import ImagenConfigSchema, ImagenVersion, KnownImagen
+from genkit_google_genai.models.imagen import ImagenConfigSchema, KnownImagen
 from genkit_google_genai.models.interactions_lyria import LyriaConfig
-from genkit_google_genai.models.interactions_registry import LyriaVersion
-from genkit_google_genai.models.veo import KnownVeo, VeoConfig, VeoVersion
+from genkit_google_genai.models.veo import KnownVeo, VeoConfig
 
 
 def package_name() -> str:
@@ -113,16 +106,13 @@ def package_name() -> str:
 __all__ = [
     'EmbeddingTaskType',
     'GeminiConfigSchema',
-    'GeminiEmbeddingModels',
     'GeminiImageConfigSchema',
     'GeminiTtsConfigSchema',
     'GemmaConfigSchema',
     'AntigravityConfig',
     'DeepResearchConfig',
     'GoogleAI',
-    'GoogleAIGeminiVersion',
     'ImagenConfigSchema',
-    'ImagenVersion',
     'KnownGemini',
     'KnownGeminiImage',
     'KnownGeminiTts',
@@ -130,11 +120,7 @@ __all__ = [
     'KnownImagen',
     'KnownVeo',
     'LyriaConfig',
-    'LyriaVersion',
     'VeoConfig',
-    'VeoVersion',
     'VertexAI',
-    'VertexAIGeminiVersion',
-    'VertexEmbeddingModels',
     'package_name',
 ]
