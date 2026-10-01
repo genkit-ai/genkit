@@ -28,11 +28,11 @@ import (
 // ToolApproval is a middleware that interrupts tool execution unless the tool
 // is in [AllowedTools] or the call has been explicitly approved on resume.
 //
-// To approve on resume, attach a "toolApproved" flag to the restart metadata:
+// To approve on resume, attach a "toolApproved" flag to the restart metadata,
+// through the held tool:
 //
-//	restart := tool.Restart(interruptPart, &ai.RestartOptions{
-//	    ResumedMetadata: map[string]any{"toolApproved": true},
-//	})
+//	restart, err := transferMoney.RestartWith(interruptPart,
+//	    ai.WithResumedMetadata[TransferInput](map[string]any{"toolApproved": true}))
 //
 // A bare restart, resumed with no payload, is NOT treated as approval; callers
 // must opt in so that unrelated resume flows (e.g. respond-only turns) cannot
