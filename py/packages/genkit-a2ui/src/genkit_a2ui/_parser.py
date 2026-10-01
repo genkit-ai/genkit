@@ -24,6 +24,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, cast
 
+from genkit import GenkitError, RuntimeErrorReason
 from genkit._core._logger import get_logger
 
 from ._catalog import A2uiCatalog
@@ -56,8 +57,28 @@ class ClosedBlock:
     prose: str = ''
 
 
-class A2uiParseError(ValueError):
-    """Raised in strict mode when a fence is malformed or names an unknown component."""
+class A2uiParseError(GenkitError):
+    """Raised in strict mode when a fence is malformed or names an unknown component.
+
+    You rarely catch this directly. Strict mode fails the turn, so `ai.generate`
+    boxes it into a failed `ModelResponse`: `finish_message` carries the reason
+    ("component 'X' is not in catalog 'Y'") and `messages` stops at your prompt,
+    keeping the unrenderable surface out of history you send again.
+    """
+
+    def __init__(self, message: str) -> None:
+        # Invalid output is an INTERNAL subtype, not a bad argument: the caller
+        # asked correctly and the model answered with something unrenderable.
+        # Same pairing as ModelResponse._mark_invalid_output and as Go's
+        # ErrInvalidOutput = ErrInternal.Subtype("invalid output").
+        #
+        # INTERNAL does not cost the message. Boxing only redacts an exception
+        # it does not recognize, or a GenkitError wrapping a foreign cause.
+        super().__init__(
+            status='INTERNAL',
+            message=message,
+            reason=RuntimeErrorReason.INVALID_OUTPUT,
+        )
 
 
 class StreamParser:

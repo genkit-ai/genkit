@@ -45,11 +45,16 @@ classifiers = [
 ]
 dependencies = [
   "genkit",
+  "genkit-otel",
   "google-cloud-firestore>=2.14.0",
   "google-cloud-logging>=3.10.0",
+  "opentelemetry-api>=1.20.0",
+  "opentelemetry-sdk>=1.20.0",
   "opentelemetry-exporter-gcp-trace>=1.9.0",
   "opentelemetry-exporter-gcp-monitoring>=1.9.0",
   "strenum>=0.4.15; python_version < '3.11'",
+  "opentelemetry-exporter-gcp-logging>=1.9.0a0",
+  "typing_extensions>=4.0",
 ]
 description = "Cloud Trace, Cloud Logging, and Firestore sessions for Genkit"
 keywords = [
@@ -62,7 +67,7 @@ license = "Apache-2.0"
 name = "genkit-google-cloud"
 readme = "README.md"
 requires-python = ">=3.10"
-version = "0.11.0"
+version = "0.12.0"
 
 [project.urls]
 "Bug Tracker"   = "https://github.com/genkit-ai/genkit/issues"

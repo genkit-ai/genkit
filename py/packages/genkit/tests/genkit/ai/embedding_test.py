@@ -33,7 +33,8 @@ from genkit._ai._embedding import (
 )
 from genkit._core._action import Action, ActionResponse
 from genkit._core._schema import to_json_schema
-from genkit._core._typing import ActionMetadata, Embedding, EmbedRequest, EmbedResponse
+from genkit._core._typing import ActionMetadata, Embedding, EmbedResponse
+from genkit.embedder import EmbedRequest
 
 
 def test_embedder_action_metadata() -> None:

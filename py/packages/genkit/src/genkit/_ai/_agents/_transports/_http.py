@@ -39,13 +39,9 @@ from genkit._ai._agents._types import StateManagement
 from genkit._core._channel import CloseableQueue
 from genkit._core._error import GenkitError
 from genkit._core._http_client import get_cached_client
+from genkit._core._model import AgentInit, AgentInput, AgentOutput, AgentStreamChunk, SessionSnapshot
 from genkit._core._typing import (
     AgentAbortResponse,
-    AgentInit,
-    AgentInput,
-    AgentOutput,
-    AgentStreamChunk,
-    SessionSnapshot,
     SnapshotStatus,
 )
 

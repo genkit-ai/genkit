@@ -29,20 +29,8 @@ from typing import Any
 
 import structlog
 
-from genkit import (
-    FinishReason,
-    Message,
-    ModelRequest,
-    ModelResponse,
-    ModelResponseChunk,
-    Part,
-    Role,
-    TextPart,
-    ToolDefinition,
-    ToolRequest,
-    ToolRequestPart,
-)
-from genkit.plugin_api import ActionRunContext, GenkitError
+from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
+from genkit.model import ModelRequest, ToolDefinition, ToolRequest
 from genkit_amazon_bedrock.converters import (
     bedrock_reasoning_part,
     coerce_tool_input,
@@ -134,7 +122,7 @@ async def consume_converse_stream(
 
     parts = _blocks_to_parts(blocks, request.tools)
     if not parts:
-        parts = [Part(root=TextPart(text=''))]
+        parts = [Part.from_text('')]
     # A stream that ends without messageStop stopped normally; the sync path's
     # mapping would call that OTHER.
     finish_reason = map_finish_reason(stop_reason) if stop_reason else FinishReason.STOP
@@ -172,7 +160,7 @@ def _append_delta(block: _StreamBlock, delta: dict[str, Any]) -> Part | None:
     """Accumulates one content delta; returns the part to stream, if any."""
     if (text := delta.get('text')) is not None:
         block.text.append(text)
-        return Part(root=TextPart(text=text))
+        return Part.from_text(text)
     if (tool_use := delta.get('toolUse')) is not None:
         block.is_tool = True
         block.tool_input.append(tool_use.get('input') or '')
@@ -218,7 +206,7 @@ def _blocks_to_parts(blocks: dict[int, _StreamBlock], tools: list[ToolDefinition
             parts.append(bedrock_reasoning_part(reasoning, block.signature, bytes(block.redacted) or None))
         text = ''.join(block.text)
         if text:
-            parts.append(Part(root=TextPart(text=text)))
+            parts.append(Part.from_text(text))
     return parts
 
 
@@ -230,9 +218,7 @@ def _tool_block_to_part(index: int, block: _StreamBlock, tools: list[ToolDefinit
         tool_input = {}
     if isinstance(tool_input, dict):
         tool_input = coerce_tool_input(block.tool_name, tool_input, tools)
-    return Part(
-        root=ToolRequestPart(tool_request=ToolRequest(ref=block.tool_id, name=block.tool_name, input=tool_input))
-    )
+    return Part(tool_request=ToolRequest(ref=block.tool_id, name=block.tool_name, input=tool_input))
 
 
 def _decode_tool_input(index: int, raw: str) -> Any:  # noqa: ANN401

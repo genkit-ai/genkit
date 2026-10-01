@@ -96,7 +96,7 @@ class OllamaEmbedder:
             client = self._get_client()
         input_raw: list[str] = []
         for doc in request.input:
-            input_raw.extend([str(content.root.text) for content in doc.content if content.root.text is not None])
+            input_raw.extend([str(content.text) for content in doc.content if content.text is not None])
         response = await client.embed(
             model=self.embedding_definition.name,
             input=input_raw,

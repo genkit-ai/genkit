@@ -22,8 +22,13 @@ AgentInit = _genkit_agent.AgentInit
 from genkit_fastapi import handle_genkit_request, serve_agent  # noqa: E402
 
 from genkit._ai._testing import define_programmable_model  # noqa: E402
-from genkit._core._model import Message, ModelResponse, ModelResponseChunk as ModelResponseChunkModel  # noqa: E402
-from genkit._core._typing import FinishReason, Part, Role, TextPart  # noqa: E402
+from genkit._core._model import (  # noqa: E402
+    Message,
+    ModelResponse,
+    ModelResponseChunk as ModelResponseChunkModel,
+    Part,
+)
+from genkit._core._typing import FinishReason, Role  # noqa: E402
 from genkit.exp import Genkit  # noqa: E402
 
 
@@ -37,10 +42,10 @@ def build_agent(name: str) -> Any:
     pm.responses.append(
         ModelResponse(
             finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='Hi there!'))]),
+            message=Message(role=Role.MODEL, content=[Part.from_text('Hi there!')]),
         )
     )
-    pm.chunks = [[ModelResponseChunkModel(role=Role.MODEL, content=[Part(root=TextPart(text='Hi there!'))])]]
+    pm.chunks = [[ModelResponseChunkModel(role=Role.MODEL, content=[Part.from_text('Hi there!')])]]
     return agent
 
 

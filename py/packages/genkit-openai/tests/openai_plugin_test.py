@@ -31,7 +31,9 @@ from genkit_openai.typing import SupportedOutputFormat
 from openai import APIStatusError, APITimeoutError
 from openai.types import Model
 
-from genkit import Document, EmbedRequest, GenkitError, Supports
+from genkit import Document, GenkitError
+from genkit.embedder import EmbedRequest, EmbedResponse
+from genkit.model import Supports
 from genkit.plugin_api import ActionKind, ActionMetadata, loop_local_client
 
 
@@ -274,21 +276,21 @@ def _embedder_client(error: Exception) -> MagicMock:
     return client
 
 
-def _embedding_client() -> MagicMock:
+def _embedding_client(embedding: list[float] | None = None) -> MagicMock:
     """Create a stub client whose embeddings call returns one vector."""
     client = MagicMock()
     item = MagicMock()
-    item.embedding = [0.1, 0.2]
+    item.embedding = [0.1, 0.2] if embedding is None else embedding
     result = MagicMock()
     result.data = [item]
     client.embeddings.create = AsyncMock(return_value=result)
     return client
 
 
-async def _run_embedder(client: MagicMock, options: dict[str, Any] | None = None) -> None:
+async def _run_embedder(client: MagicMock, options: dict[str, Any] | None = None) -> EmbedResponse:
     """Run the embedder action function against a stub client."""
     action = _plugin_with(client)._create_embedder_action('openai/text-embedding-3-small')
-    await action._fn(EmbedRequest(input=[Document.from_text('hello')], options=options))
+    return await action._fn(EmbedRequest(input=[Document.from_text('hello')], options=options))
 
 
 @pytest.mark.asyncio
@@ -311,6 +313,30 @@ async def test_embedder_maps_status_errors_for_every_option_shape(options: dict[
 
     assert exc_info.value.status == 'UNAUTHENTICATED'
     assert exc_info.value.__cause__ is api_error
+
+
+@pytest.mark.asyncio
+async def test_embedder_requesting_base64_omits_the_parameter() -> None:
+    """encodingFormat=base64 is not forwarded, so the SDK decodes the vector itself."""
+    values = [0.1, -0.25, 0.5]
+    client = _embedding_client(embedding=values)
+
+    response = await _run_embedder(client, options={'encodingFormat': 'base64'})
+
+    client.embeddings.create.assert_awaited_once_with(model='text-embedding-3-small', input=['hello'])
+    assert [e.embedding for e in response.embeddings] == [values]
+
+
+@pytest.mark.asyncio
+async def test_embedder_forwards_float_encoding_format() -> None:
+    """encodingFormat=float is a genuinely different request, so it is passed through."""
+    client = _embedding_client()
+
+    await _run_embedder(client, options={'encodingFormat': 'float'})
+
+    client.embeddings.create.assert_awaited_once_with(
+        model='text-embedding-3-small', input=['hello'], encoding_format='float'
+    )
 
 
 @pytest.mark.asyncio

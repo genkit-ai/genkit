@@ -49,7 +49,7 @@ export const EmbeddingConfigSchema = z
     version: z.string().optional(),
     /**
      * The `outputDimensionality` parameter allows you to specify the dimensionality of the embedding output.
-     * By default, the model generates embeddings with 768 dimensions.
+     * The default dimensions depend on the model (1408 for multimodalembedding@001).
      * By selecting a smaller output dimensionality, users can save memory and storage space, leading to more efficient computations.
      **/
     outputDimensionality: z.number().min(1).optional(),
@@ -91,7 +91,7 @@ const GENERIC_TEXT_MODEL = commonRef('text', {
   supports: { input: ['text'] },
 });
 const GENERIC_MULTIMODAL_MODEL = commonRef('multimodal', {
-  dimensions: 768,
+  dimensions: 1408,
   supports: { input: ['text', 'image', 'video'] },
 });
 
@@ -101,7 +101,7 @@ export const KNOWN_MODELS = {
     'text-multilingual-embedding-002'
   ),
   'multimodalembedding@001': commonRef('multimodalembedding@001', {
-    dimensions: 768,
+    dimensions: 1408,
     supports: { input: ['text', 'image', 'video'] },
   }),
   'gemini-embedding-001': commonRef('gemini-embedding-001', {

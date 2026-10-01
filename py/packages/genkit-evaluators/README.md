@@ -8,6 +8,16 @@ Provides three built-in rule-based evaluators:
 
 No LLM or API keys required.
 
+> **Building with a coding agent? Install the Genkit Python skill first.**
+>
+> ```bash
+> npx skills add genkit-ai/skills --skill developing-genkit-python
+> ```
+>
+> It teaches your agent the current Genkit Python APIs and common gotchas.
+> Source, manual install and skills for other languages:
+> [genkit-ai/skills](https://github.com/genkit-ai/skills).
+
 ## Installation
 
 ```bash
@@ -17,8 +27,7 @@ uv add genkit-evaluators
 ## Usage
 
 ```python
-from genkit import Genkit
-from genkit.evaluator import BaseDataPoint
+from genkit import BaseDataPoint, Genkit
 from genkit_evaluators import register_genkit_evaluators
 
 ai = Genkit()

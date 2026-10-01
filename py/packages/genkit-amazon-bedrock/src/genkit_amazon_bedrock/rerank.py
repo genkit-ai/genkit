@@ -44,11 +44,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 from pydantic.alias_generators import to_camel
 
-from genkit import DocumentPart
-
-# DocumentData has no public re-export yet; the reranker types are built on it.
-from genkit._core._typing import DocumentData
-from genkit.plugin_api import GenkitError
+from genkit import Document, GenkitError, Part
 from genkit_amazon_bedrock.embedders import InvokeModelTransport, document_text
 from genkit_amazon_bedrock.model_info import strip_inference_profile_prefix
 from genkit_amazon_bedrock.models import _from_botocore_error, _from_client_error
@@ -88,10 +84,18 @@ class RankedDocumentData(BaseModel):
 
     model_config = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
 
-    content: list[DocumentPart]
+    content: list[Part]
     """The ranked document's parts, taken verbatim from the input document."""
 
     metadata: RankedDocumentMetadata
+
+    @field_validator('content', mode='before')
+    @classmethod
+    def _wrap_parts(cls, v: object) -> object:
+        if not isinstance(v, list):
+            return v
+        return [Part.model_validate(p) for p in v]
+
     """The score. The input document's own metadata is deliberately not carried."""
 
 
@@ -103,14 +107,26 @@ class RerankerRequest(BaseModel):
 
     model_config = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
 
-    query: DocumentData
+    query: Document
     """The query to rank the documents against."""
 
-    documents: list[DocumentData]
+    documents: list[Document]
     """The documents to rank."""
 
     options: Any | None = None
     """Driver-specific options; this plugin reads ``BedrockRerankOptions``."""
+
+    @field_validator('query', mode='before')
+    @classmethod
+    def _wrap_query(cls, v: object) -> object:
+        return Document.model_validate(v)
+
+    @field_validator('documents', mode='before')
+    @classmethod
+    def _wrap_documents(cls, v: object) -> object:
+        if not isinstance(v, list):
+            return v
+        return [Document.model_validate(d) for d in v]
 
 
 class RerankerResponse(BaseModel):
@@ -247,7 +263,7 @@ def _result_fields(result: Any, position: int) -> tuple[int, float]:  # noqa: AN
     return index, float(score)
 
 
-def build_rerank_response(payload: dict[str, Any], documents: list[DocumentData]) -> RerankerResponse:
+def build_rerank_response(payload: dict[str, Any], documents: list[Document]) -> RerankerResponse:
     """Maps the scored results back onto the original documents.
 
     Both families answer with the same ``results`` shape, so one mapping serves
@@ -283,7 +299,7 @@ def build_rerank_response(payload: dict[str, Any], documents: list[DocumentData]
             )
         ranked.append(
             RankedDocumentData(
-                content=documents[index].content,
+                content=list(documents[index].content),
                 metadata=RankedDocumentMetadata(score=score),
             )
         )

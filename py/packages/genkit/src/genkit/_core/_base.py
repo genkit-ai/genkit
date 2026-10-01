@@ -19,10 +19,15 @@
 from __future__ import annotations
 
 import base64
+import inspect
 from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
+
+# Some pydantic builds reject fallback= on model_dump; skip it there so a
+# floor install still serializes.
+_DUMP_ACCEPTS_FALLBACK = 'fallback' in inspect.signature(BaseModel.model_dump).parameters
 
 
 def _default_serializer(obj: object) -> object:
@@ -33,6 +38,14 @@ def _default_serializer(obj: object) -> object:
         except Exception:
             return '<bytes>'
     return str(obj)
+
+
+def dump_keeping_unknown(model: BaseModel) -> dict[str, Any]:
+    # Keep values pydantic doesn't know how to serialize so a later JSON
+    # dump can reject them instead of turning them into strings here.
+    if _DUMP_ACCEPTS_FALLBACK:
+        return model.model_dump(fallback=lambda obj: obj)
+    return model.model_dump()
 
 
 class GenkitModel(BaseModel):
@@ -54,12 +67,18 @@ class GenkitModel(BaseModel):
         """Dump model with Genkit defaults (by_alias=True, exclude_none=True)."""
         kwargs.setdefault('by_alias', True)
         kwargs.setdefault('exclude_none', True)
-        kwargs.setdefault('fallback', _default_serializer)
+        if _DUMP_ACCEPTS_FALLBACK:
+            kwargs.setdefault('fallback', _default_serializer)
+        else:
+            kwargs.pop('fallback', None)
         return super().model_dump(**kwargs)
 
     def model_dump_json(self, **kwargs: Any) -> str:
         """Dump model to JSON with Genkit defaults."""
         kwargs.setdefault('by_alias', True)
         kwargs.setdefault('exclude_none', True)
-        kwargs.setdefault('fallback', _default_serializer)
+        if _DUMP_ACCEPTS_FALLBACK:
+            kwargs.setdefault('fallback', _default_serializer)
+        else:
+            kwargs.pop('fallback', None)
         return super().model_dump_json(**kwargs)

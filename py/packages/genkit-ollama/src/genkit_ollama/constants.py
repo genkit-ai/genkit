@@ -17,12 +17,7 @@
 
 """Ollama constants."""
 
-import sys
-
-if sys.version_info < (3, 11):
-    from strenum import StrEnum
-else:
-    from enum import StrEnum
+from genkit._core._compat import StrEnum
 
 DEFAULT_OLLAMA_SERVER_URL = 'http://127.0.0.1:11434'
 

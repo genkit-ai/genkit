@@ -21,13 +21,12 @@ from typing import Any, Literal, cast
 import structlog
 from anthropic import AsyncAnthropic
 
-from genkit import GenkitError, ModelRequest, ModelResponse
-from genkit.model import ModelRef, model as create_model, model_action_metadata, model_ref
+from genkit import ActionRunContext, GenkitError, ModelResponse
+from genkit.model import ModelRef, ModelRequest, model as create_model, model_action_metadata, model_ref
 from genkit.plugin_api import (
     Action,
     ActionKind,
     ActionMetadata,
-    ActionRunContext,
     Plugin,
     loop_local_client,
     to_json_schema,

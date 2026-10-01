@@ -26,6 +26,7 @@ from genkit_a2ui import A2uiParseError, Surfaces
 from helpers import (
     WEATHER_PROMPT,
     a2ui_parts,
+    assert_dead_turn,
     assert_finished_message,
     assert_no_a2ui_parts,
     assert_no_fence_in_text,
@@ -45,7 +46,9 @@ from helpers import (
 from pydantic import ValidationError
 
 from genkit import Message, ModelResponse, ModelResponseChunk
-from genkit._core._typing import Candidate, FinishReason, Role
+from genkit._core._error import RuntimeErrorReason
+from genkit._core._model import Candidate
+from genkit._core._typing import FinishReason, GenerationUsage, Role
 
 
 @pytest.mark.asyncio
@@ -208,22 +211,22 @@ async def test_generate_a2ui_drops_bad_block_and_keeps_prose() -> None:
 
 
 @pytest.mark.asyncio
-async def test_generate_a2ui_strict_raises_on_bad_block() -> None:
-    """Strict mode fails the generate call when the fence names an unknown component."""
+async def test_generate_a2ui_strict_fails_the_turn_on_bad_block() -> None:
+    """Strict mode kills the turn when the fence names an unknown component."""
     ai, pm = setup()
     pm.responses = [model_ok(bad_component_fence())]
 
-    with pytest.raises(A2uiParseError):
-        await ai.generate(
-            model='programmableModel',
-            prompt=WEATHER_PROMPT,
-            use=[Surfaces(validate='strict')],
-        )
+    response = await ai.generate(
+        model='programmableModel',
+        prompt=WEATHER_PROMPT,
+        use=[Surfaces(validate='strict')],
+    )
+    assert_dead_turn(response, reason=RuntimeErrorReason.INVALID_OUTPUT, match='NotAThing')
 
 
 @pytest.mark.asyncio
-async def test_generate_stream_strict_raises_on_bad_block() -> None:
-    """Strict mode fails generate_stream with A2uiParseError when the fence names an unknown component."""
+async def test_generate_stream_strict_fails_the_turn_on_bad_block() -> None:
+    """Strict mode kills a streaming turn too, and paints nothing on the way out."""
     ai, pm = setup()
     fence = bad_component_fence()
     pm.responses = [model_ok(fence)]
@@ -234,10 +237,58 @@ async def test_generate_stream_strict_raises_on_bad_block() -> None:
         prompt=WEATHER_PROMPT,
         use=[Surfaces(validate='strict')],
     )
-    with pytest.raises(A2uiParseError, match='NotAThing'):
-        async for _chunk in stream.stream:
-            pass
-        await stream.response
+    streamed_envs: list[dict[str, Any]] = []
+    async for chunk in stream.stream:
+        streamed_envs.extend(envelopes(chunk.content))
+    response = await stream.response
+
+    # The refusal fires at flush, before any envelope reaches the sink.
+    assert streamed_envs == []
+    assert_dead_turn(response, reason=RuntimeErrorReason.INVALID_OUTPUT, match='NotAThing')
+
+
+@pytest.mark.asyncio
+async def test_strict_refusal_keeps_the_tokens_the_turn_cost() -> None:
+    """Refusing the surface does not refund the call.
+
+    The model answered and the provider charged for it before a2ui looked at
+    the fence. The bad surface is dropped from `message` and from history, but
+    `usage` still reports what the turn cost, so a refused render shows up in
+    your spend like any other call.
+    """
+    ai, pm = setup()
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[text_part(bad_component_fence())]),
+            usage=GenerationUsage(input_tokens=11, output_tokens=22, total_tokens=33),
+        )
+    ]
+
+    response = await ai.generate(
+        model='programmableModel',
+        prompt=WEATHER_PROMPT,
+        use=[Surfaces(validate='strict')],
+    )
+
+    assert_dead_turn(response, reason=RuntimeErrorReason.INVALID_OUTPUT, match='NotAThing')
+    assert response.usage is not None
+    assert response.usage.output_tokens == 22
+    assert response.usage.total_tokens == 33
+
+
+def test_a2ui_parse_error_reports_invalid_output() -> None:
+    """A surface the catalog cannot render is a bad answer, not a bad request.
+
+    The status follows the failure: INTERNAL, the same pairing
+    `ai.generate` uses when structured output does not match its schema.
+    INVALID_ARGUMENT would tell a client to fix a request that was fine.
+    The message is not redacted — boxing only does that to exceptions it
+    does not recognize.
+    """
+    exc = A2uiParseError("A2UI: component 'NotAThing' is not in catalog 'basic'.")
+    assert exc.status == 'INTERNAL'
+    assert exc.reason == RuntimeErrorReason.INVALID_OUTPUT
 
 
 @pytest.mark.asyncio
@@ -529,3 +580,61 @@ def test_a2ui_rejects_unknown_version() -> None:
     """A typo version is rejected so it cannot stamp envelopes the renderer will drop."""
     with pytest.raises(ValidationError):
         Surfaces(version='v9')
+
+
+@pytest.mark.asyncio
+async def test_generate_a2ui_strict_fails_on_malformed_json_fence() -> None:
+    """Strict mode kills the turn when fence content is unparseable JSON."""
+    ai, pm = setup()
+    pm.responses = [model_ok('Here is a card:\n```a2ui\n{invalid json\n```\nDone.')]
+    response = await ai.generate(
+        model='programmableModel',
+        prompt=WEATHER_PROMPT,
+        use=[Surfaces(validate='strict')],
+    )
+    assert_dead_turn(response, reason=RuntimeErrorReason.INVALID_OUTPUT, match='failed to parse envelope block as JSON')
+
+
+@pytest.mark.asyncio
+async def test_generate_a2ui_warn_keeps_malformed_json_fence_as_prose() -> None:
+    """Default warn keeps unparseable JSON fence content as raw prose."""
+    ai, pm = setup()
+    raw = 'Here is a card:\n```a2ui\n{invalid json\n```\nDone.'
+    pm.responses = [model_ok(raw)]
+    response = await ai.generate(
+        model='programmableModel',
+        prompt=WEATHER_PROMPT,
+        use=[Surfaces(validate='warn')],
+    )
+    message = assert_finished_message(response)
+    assert_no_a2ui_parts(message.content)
+    assert '{invalid json' in joined_text(message.content)
+
+
+@pytest.mark.asyncio
+async def test_generate_a2ui_strict_fails_on_missing_root() -> None:
+    """Strict mode kills the turn when envelopes lack a root component."""
+    ai, pm = setup()
+    pm.responses = [model_ok(no_root_fence())]
+    response = await ai.generate(
+        model='programmableModel',
+        prompt=WEATHER_PROMPT,
+        use=[Surfaces(validate='strict')],
+    )
+    assert_dead_turn(response, reason=RuntimeErrorReason.INVALID_OUTPUT, match='id "root"')
+
+
+@pytest.mark.asyncio
+async def test_generate_a2ui_strict_empty_fence_does_not_fail_turn() -> None:
+    """An empty fence body returns no card and does not trigger strict refusal."""
+    ai, pm = setup()
+    pm.responses = [model_ok('before\n```a2ui\n   \n```\nafter')]
+    response = await ai.generate(
+        model='programmableModel',
+        prompt=WEATHER_PROMPT,
+        use=[Surfaces(validate='strict')],
+    )
+    message = assert_finished_message(response)
+    assert_no_a2ui_parts(message.content)
+    assert 'before' in joined_text(message.content)
+    assert 'after' in joined_text(message.content)

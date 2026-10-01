@@ -22,8 +22,8 @@ from genkit_evaluators import register_genkit_evaluators
 from genkit_google_genai import GoogleAI
 from pydantic import BaseModel
 
-from genkit import Genkit
-from genkit.evaluator import BaseDataPoint, Details, EvalFnResponse, EvalStatusEnum, Score
+from genkit import BaseDataPoint, Genkit
+from genkit.evaluator import Details, EvalFnResponse, EvalStatusEnum, Score
 
 ai = Genkit(
     plugins=[GoogleAI()],

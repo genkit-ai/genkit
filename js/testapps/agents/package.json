@@ -9,7 +9,8 @@
     "server": "npx tsx src/index.ts",
     "start": "pnpm run build:web && npx tsx src/index.ts",
     "web:dev": "cd web && pnpm run dev",
-    "genkit:dev": "genkit start -- npx tsx --watch src/index.ts"
+    "genkit:dev": "genkit start -- npx tsx --watch src/index.ts",
+    "genkit:dev:headless": "genkit start --non-interactive -- npx tsx --watch src/index.ts"
   },
   "dependencies": {
     "@genkit-ai/anthropic": "workspace:*",
@@ -23,6 +24,7 @@
   },
   "devDependencies": {
     "@types/express": "^4.17.21",
+    "genkit-cli": "link:../../../genkit-tools/cli",
     "typescript": "^5.9.3"
   }
 }

@@ -11,11 +11,12 @@ from typing import Any, cast
 import pytest
 from pydantic import BaseModel, ConfigDict
 
-from genkit import Message, ModelRequest, Part, TextPart
+from genkit import Message, Part
 from genkit._core._action import (
     Action,
     ActionKind,
     ActionRunContext,
+    BidiAction,
     DapQualifiedName,
     create_action_key,
     get_current_context,
@@ -23,8 +24,9 @@ from genkit._core._action import (
     parse_dap_qualified_name,
     parse_plugin_name_from_action_name,
 )
-from genkit._core._error import GenkitError
+from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import OutputConfig
+from genkit.model import ModelRequest
 
 
 def test_action_enum_behaves_like_str() -> None:
@@ -203,6 +205,17 @@ async def test_streaming_action_with_stream_method() -> None:
     assert chunks == ['1', '2']
 
 
+def test_action_stream_does_not_accept_timeout() -> None:
+    """action.stream has no timeout=; the async for waits until the run finishes."""
+
+    async def foo(input: str, ctx: ActionRunContext) -> int:
+        return 1
+
+    action = Action(name='foo', kind=ActionKind.CUSTOM, fn=foo)
+    with pytest.raises(TypeError, match='timeout'):
+        action.stream('foo', timeout=5)  # type: ignore[call-arg]
+
+
 def test_parse_plugin_name_from_action_name() -> None:
     """Parse plugin name from the action name."""
     assert parse_plugin_name_from_action_name('foo') is None
@@ -249,8 +262,21 @@ async def test_action_raises_errors() -> None:
         await action.run()
 
     assert 'stack' in e.value.details
-    assert 'trace_id' in e.value.details
+    # Default-off: no provider → empty/absent trace id.
+    assert not e.value.trace_id
     assert str(e.value.cause) == 'oops'
+
+
+@pytest.mark.asyncio
+async def test_action_error_includes_trace_id_when_instrumented(hex_ids) -> None:
+    async def foo(_: str | None, ctx: ActionRunContext) -> None:
+        raise Exception('oops')
+
+    action = Action(name='fooAction', kind=ActionKind.CUSTOM, fn=foo)
+    with pytest.raises(GenkitError) as e:
+        await action.run()
+    assert e.value.trace_id
+    assert 'trace_id' in e.value.details
 
 
 @pytest.mark.asyncio
@@ -384,7 +410,7 @@ async def test_action_revalidates_bare_model_request_into_plugin_config() -> Non
     action = Action(name='pluginModel', kind=ActionKind.MODEL, fn=model_fn)
     # generate may hand the action a bare request that still has a dict config.
     request = ModelRequest(
-        messages=[Message(role='user', content=[Part(root=TextPart(text='hi'))])],
+        messages=[Message(role='user', content=[Part.from_text('hi')])],
         config={'api_key': 'k'},
     )
     assert request.config == {'api_key': 'k'}
@@ -410,7 +436,7 @@ async def test_action_rejects_foreign_config_class() -> None:
 
     action = Action(name='gemini', kind=ActionKind.MODEL, fn=model_fn)
     request = ModelRequest[OpenAICfg](
-        messages=[Message(role='user', content=[Part(root=TextPart(text='hi'))])],
+        messages=[Message(role='user', content=[Part.from_text('hi')])],
         config=OpenAICfg(temperature=0.5),
     )
 
@@ -433,7 +459,7 @@ async def test_action_coerces_dict_config_from_other_request_type() -> None:
 
     action = Action(name='pluginModel', kind=ActionKind.MODEL, fn=model_fn)
     request = ModelRequest[dict](
-        messages=[Message(role='user', content=[Part(root=TextPart(text='hi'))])],
+        messages=[Message(role='user', content=[Part.from_text('hi')])],
         config={'temperature': 0.5},
         output=OutputConfig(format='json', constrained=True),
     )
@@ -443,3 +469,70 @@ async def test_action_coerces_dict_config_from_other_request_type() -> None:
     assert result.response == 'ok'
     assert isinstance(seen['config'], PluginCfg)
     assert seen['config'].temperature == 0.5
+
+
+def _counting_bidi() -> BidiAction:
+    async def count(_init: Any, input_stream: Any, send_chunk: Any) -> dict[str, int]:
+        turns = 0
+        async for item in input_stream:
+            turns += 1
+            send_chunk(item)
+        return {'turns': turns}
+
+    return BidiAction(ActionKind.CUSTOM, 'count', count)
+
+
+@pytest.mark.asyncio
+async def test_bidi_send_after_close_raises_connection_closed() -> None:
+    """close() then send() is CONNECTION_CLOSED; output() is still readable."""
+    conn = await _counting_bidi().stream_bidi()
+    await conn.close()
+
+    with pytest.raises(GenkitError) as raised:
+        await conn.send('late')
+    assert raised.value.status == 'FAILED_PRECONDITION'
+    assert raised.value.reason is RuntimeErrorReason.CONNECTION_CLOSED
+    assert 'already been closed' in raised.value.original_message
+    assert 'CONNECTION_CLOSED' not in raised.value.original_message
+    assert await conn.output() == {'turns': 0}
+
+
+@pytest.mark.asyncio
+async def test_bidi_send_after_a_turn_then_close_raises_connection_closed() -> None:
+    """A delivered turn, then close(), then send() is still CONNECTION_CLOSED."""
+    conn = await _counting_bidi().stream_bidi()
+    await conn.send('hi')
+    await conn.close()
+
+    with pytest.raises(GenkitError) as raised:
+        await conn.send('late')
+    assert raised.value.status == 'FAILED_PRECONDITION'
+    assert raised.value.reason is RuntimeErrorReason.CONNECTION_CLOSED
+    assert 'already been closed' in raised.value.original_message
+    assert 'CONNECTION_CLOSED' not in raised.value.original_message
+    assert await conn.output() == {'turns': 1}
+
+
+@pytest.mark.asyncio
+async def test_bidi_send_after_close_twice_raises_connection_closed() -> None:
+    """A second close() does not change send(): still CONNECTION_CLOSED."""
+    conn = await _counting_bidi().stream_bidi()
+    await conn.close()
+    await conn.close()
+
+    with pytest.raises(GenkitError) as raised:
+        await conn.send('late')
+    assert raised.value.status == 'FAILED_PRECONDITION'
+    assert raised.value.reason is RuntimeErrorReason.CONNECTION_CLOSED
+    assert 'already been closed' in raised.value.original_message
+    assert 'CONNECTION_CLOSED' not in raised.value.original_message
+    assert await conn.output() == {'turns': 0}
+
+
+@pytest.mark.asyncio
+async def test_bidi_send_before_close_delivers_the_turn() -> None:
+    """send() before close() is a delivered turn, not CONNECTION_CLOSED."""
+    conn = await _counting_bidi().stream_bidi()
+    await conn.send('hi')
+    await conn.close()
+    assert await conn.output() == {'turns': 1}

@@ -30,18 +30,13 @@ See Also:
     - Prompt Caching Guide: https://platform.openai.com/docs/guides/prompt-caching
 """
 
-import sys
 from typing import Any, ClassVar, Literal
-
-if sys.version_info < (3, 11):
-    from strenum import StrEnum
-else:
-    from enum import StrEnum
 
 from pydantic import ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
-from genkit.plugin_api import ModelConfig
+from genkit._core._compat import StrEnum
+from genkit.model import ModelConfig
 
 
 class ReasoningEffort(StrEnum):

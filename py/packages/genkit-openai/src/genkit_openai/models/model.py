@@ -26,21 +26,8 @@ from openai.lib._pydantic import _ensure_strict_json_schema
 from openai.types import CompletionUsage
 from openai.types.completion_usage import CompletionTokensDetails, PromptTokensDetails
 
-from genkit import (
-    FinishReason,
-    GenkitError,
-    Message,
-    ModelRequest,
-    ModelResponse,
-    ModelResponseChunk,
-    ModelUsage,
-    Part,
-    ReasoningPart,
-    Role,
-    TextPart,
-    ToolDefinition,
-)
-from genkit.plugin_api import ActionRunContext, ModelConfig
+from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
+from genkit.model import ModelConfig, ModelRequest, ModelUsage, ToolDefinition
 from genkit_openai.models.model_info import SUPPORTED_OPENAI_MODELS, KnownGpt
 from genkit_openai.models.utils import (
     DictMessageAdapter,
@@ -388,10 +375,10 @@ class OpenAIModel:
         cleaned_parts: list[Part] = []
         changed = False
         for part in response.message.content:
-            if isinstance(part.root, TextPart) and part.root.text:
-                cleaned_text = strip_markdown_fences(part.root.text)
-                if cleaned_text != part.root.text:
-                    cleaned_parts.append(Part(root=TextPart(text=cleaned_text)))
+            if part.text is not None and part.text:
+                cleaned_text = strip_markdown_fences(part.text)
+                if cleaned_text != part.text:
+                    cleaned_parts.append(Part.from_text(cleaned_text))
                     changed = True
                 else:
                     cleaned_parts.append(part)
@@ -517,7 +504,7 @@ class OpenAIModel:
             finish_message=finish_message,
             usage=_usage_from_completion(response.usage),
             custom=metadata or None,
-            raw=metadata or None,
+            raw=response.to_dict(),
         )
         return self._clean_json_response(result, request)
 
@@ -576,7 +563,7 @@ class OpenAIModel:
 
             # Reasoning content (DeepSeek R1 / reasoner models).
             if reasoning_text := MessageAdapter(delta).reasoning_content:
-                reasoning_part = Part(root=ReasoningPart(reasoning=reasoning_text))
+                reasoning_part = Part.from_reasoning(reasoning_text)
                 reasoning_parts.append(reasoning_part)
                 parts.append(reasoning_part)
 

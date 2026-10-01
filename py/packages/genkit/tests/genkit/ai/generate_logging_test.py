@@ -9,25 +9,20 @@ import pytest
 import structlog
 from structlog.testing import capture_logs
 
-from genkit import Genkit, Message, ModelResponse
+from genkit import Genkit, Message, ModelResponse, ModelResponseChunk, Part
 from genkit._ai._generate import generate_action
 from genkit._ai._model import resolve_model_arg
 from genkit._ai._testing import define_programmable_model
-from genkit._ai._tools import Interrupt, restart_tool
+from genkit._ai._tools import Interrupt, respond_to_interrupt, restart_tool
 from genkit._core._environment import GENKIT_ENV
-from genkit._core._error import GenkitError
 from genkit._core._logger import GENKIT_LOG, get_logger
-from genkit._core._model import GenerateActionOptions
+from genkit._core._model import GenerateActionOptions, Resume
 from genkit._core._registry import Registry
 from genkit._core._typing import (
     FinishReason,
     GenerateActionOutputConfig,
-    Part,
-    Resume,
     Role,
-    TextPart,
     ToolRequest,
-    ToolRequestPart,
 )
 
 BLOB = 'A' * 1_000_000
@@ -57,7 +52,7 @@ async def _generate_once() -> None:
     pm, _ = define_programmable_model(ai)
     pm.responses = [
         ModelResponse(
-            message=Message(role=Role.MODEL, content=[TextPart(text='hello there')]),
+            message=Message(role=Role.MODEL, content=[Part.from_text('hello there')]),
             custom={'audio': BLOB},
             raw={'audio': BLOB},
         )
@@ -109,7 +104,7 @@ async def test_blocked_finish_still_logs_model_responded(monkeypatch: pytest.Mon
         ModelResponse(
             finish_reason=FinishReason.BLOCKED,
             finish_message='safety',
-            message=Message(role=Role.MODEL, content=[TextPart(text='nope')]),
+            message=Message(role=Role.MODEL, content=[Part.from_text('nope')]),
         )
     ]
 
@@ -125,8 +120,8 @@ async def test_blocked_finish_still_logs_model_responded(monkeypatch: pytest.Mon
 
 
 @pytest.mark.asyncio
-async def test_leftover_logs_failed_finish_reason(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The breadcrumb uses the stamped finish, not the model's original stop."""
+async def test_invalid_output_logs_model_finish_reason(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Output validation does not replace the model's reason in its breadcrumb."""
     structlog.reset_defaults()
     monkeypatch.setenv(GENKIT_LOG, 'debug')
 
@@ -135,17 +130,18 @@ async def test_leftover_logs_failed_finish_reason(monkeypatch: pytest.MonkeyPatc
     pm.responses = [
         ModelResponse(
             finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[TextPart(text='not json')]),
+            message=Message(role=Role.MODEL, content=[Part.from_text('not json')]),
         )
     ]
 
     with capture_logs() as entries:
         response = await ai.generate(prompt='hi', output_schema={'type': 'object'})
-    assert response.finish_reason == FinishReason.FAILED
+    assert response.finish_reason == FinishReason.STOP
+    assert response.error is not None
 
     responded = [entry for entry in entries if entry['event'] == 'model responded']
     assert len(responded) == 1
-    assert responded[0]['finish_reason'] == FinishReason.FAILED
+    assert responded[0]['finish_reason'] == FinishReason.STOP
 
 
 @pytest.mark.asyncio
@@ -190,7 +186,7 @@ async def test_abnormal_finish_skips_output_parsing(monkeypatch: pytest.MonkeyPa
     pm, _ = define_programmable_model(ai)
     pm.responses = [
         ModelResponse(
-            message=Message(role=Role.MODEL, content=[TextPart(text='nope')]),
+            message=Message(role=Role.MODEL, content=[Part.from_text('nope')]),
             finish_reason=FinishReason.BLOCKED,
             finish_message='safety',
         )
@@ -201,7 +197,7 @@ async def test_abnormal_finish_skips_output_parsing(monkeypatch: pytest.MonkeyPa
             ai.registry,
             GenerateActionOptions(
                 model='programmableModel',
-                messages=[Message(role=Role.USER, content=[TextPart(text='hi')])],
+                messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
                 output=GenerateActionOutputConfig(format='json'),
             ),
         )
@@ -215,31 +211,52 @@ async def test_abnormal_finish_skips_output_parsing(monkeypatch: pytest.MonkeyPa
 
 
 @pytest.mark.asyncio
-async def test_other_finish_does_not_warn_as_abnormal(monkeypatch: pytest.MonkeyPatch) -> None:
-    """OTHER is an unmapped stop reason, not a refusal — do not warn at info."""
+async def test_other_finish_skips_parsing_even_when_text_is_valid(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An abnormal finish means response.output is None even if the text would have parsed.
+
+    Genkit decides on the finish reason alone, so a model that stopped for its
+    own reasons is never treated as having answered -- even when the text it
+    did emit happens to satisfy your schema. The skip is logged at info so an
+    empty output is traceable rather than silent.
+    """
     structlog.reset_defaults()
     monkeypatch.setenv(GENKIT_LOG, 'info')
     ai = Genkit()
     pm, _ = define_programmable_model(ai)
     pm.responses = [
         ModelResponse(
-            message=Message(role=Role.MODEL, content=[TextPart(text='{"ok": true}')]),
+            message=Message(role=Role.MODEL, content=[Part.from_text('{"ok": true}')]),
             finish_reason=FinishReason.OTHER,
         )
     ]
 
     with capture_logs() as entries:
-        await generate_action(
+        response = await generate_action(
             ai.registry,
             GenerateActionOptions(
                 model='programmableModel',
-                messages=[Message(role=Role.USER, content=[TextPart(text='hi')])],
-                output=GenerateActionOutputConfig(format='json'),
+                messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
+                output=GenerateActionOutputConfig(
+                    format='json',
+                    json_schema={
+                        'type': 'object',
+                        'properties': {'ok': {'type': 'boolean'}},
+                        'required': ['ok'],
+                    },
+                ),
             ),
         )
 
     warned = [e for e in entries if e['event'] == 'model finished abnormally, skipping output parsing']
-    assert warned == []
+    assert len(warned) == 1
+    assert warned[0]['finishReason'] == FinishReason.OTHER
+
+    # The text parses and matches, but the finish reason is what decides.
+    assert response.text == '{"ok": true}'
+    assert response.output is None
+    # Nothing is blamed on the output shape: the model's reason is the story.
+    assert response.error is None
+    assert 'model output does not match the expected schema' not in [e['event'] for e in entries]
 
 
 @pytest.mark.asyncio
@@ -251,7 +268,7 @@ async def test_schema_mismatch_logs_when_debug_enabled(monkeypatch: pytest.Monke
     pm, _ = define_programmable_model(ai)
     pm.responses = [
         ModelResponse(
-            message=Message(role=Role.MODEL, content=[TextPart(text='not json')]),
+            message=Message(role=Role.MODEL, content=[Part.from_text('not json')]),
             finish_reason=FinishReason.STOP,
         )
     ]
@@ -261,7 +278,7 @@ async def test_schema_mismatch_logs_when_debug_enabled(monkeypatch: pytest.Monke
             ai.registry,
             GenerateActionOptions(
                 model='programmableModel',
-                messages=[Message(role=Role.USER, content=[TextPart(text='hi')])],
+                messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
                 output=GenerateActionOutputConfig(format='json'),
             ),
         )
@@ -288,7 +305,7 @@ async def test_tool_interrupt_logs(monkeypatch: pytest.MonkeyPatch) -> None:
         ModelResponse(
             message=Message(
                 role=Role.MODEL,
-                content=[Part(root=ToolRequestPart(tool_request=ToolRequest(name='hold', input={}, ref='1')))],
+                content=[Part(tool_request=ToolRequest(name='hold', input={}, ref='1'))],
             ),
             finish_reason=FinishReason.STOP,
         )
@@ -299,7 +316,7 @@ async def test_tool_interrupt_logs(monkeypatch: pytest.MonkeyPatch) -> None:
             ai.registry,
             GenerateActionOptions(
                 model='programmableModel',
-                messages=[Message(role=Role.USER, content=[TextPart(text='hi')])],
+                messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
                 tools=['hold'],
             ),
         )
@@ -330,7 +347,7 @@ async def test_restarted_tool_interrupt_logs(monkeypatch: pytest.MonkeyPatch) ->
         ModelResponse(
             message=Message(
                 role=Role.MODEL,
-                content=[Part(root=ToolRequestPart(tool_request=ToolRequest(name='hold', input={}, ref='1')))],
+                content=[Part(tool_request=ToolRequest(name='hold', input={}, ref='1'))],
             ),
             finish_reason=FinishReason.STOP,
         )
@@ -339,13 +356,13 @@ async def test_restarted_tool_interrupt_logs(monkeypatch: pytest.MonkeyPatch) ->
         ai.registry,
         GenerateActionOptions(
             model='programmableModel',
-            messages=[Message(role=Role.USER, content=[TextPart(text='hi')])],
+            messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
             tools=['hold'],
         ),
     )
 
-    with capture_logs() as entries, pytest.raises(GenkitError, match='interrupted again'):
-        await generate_action(
+    with capture_logs() as entries:
+        response = await generate_action(
             ai.registry,
             GenerateActionOptions(
                 model='programmableModel',
@@ -355,6 +372,7 @@ async def test_restarted_tool_interrupt_logs(monkeypatch: pytest.MonkeyPatch) ->
             ),
         )
 
+    assert response.finish_reason == FinishReason.INTERRUPTED
     restarted = [e for e in entries if e['event'] == 'restarted tool triggered an interrupt']
     assert len(restarted) == 1
     assert restarted[0]['tool'] == 'hold'
@@ -362,7 +380,7 @@ async def test_restarted_tool_interrupt_logs(monkeypatch: pytest.MonkeyPatch) ->
 
 @pytest.mark.asyncio
 async def test_tool_stream_callback_failure_fails_generate(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A sinking callback fails generate the same way a model-chunk sink does."""
+    """A sinking tool-chunk pipe returns the closed tool round, not a raise."""
     structlog.reset_defaults()
     monkeypatch.setenv(GENKIT_LOG, 'debug')
     ai = Genkit()
@@ -376,12 +394,12 @@ async def test_tool_stream_callback_failure_fails_generate(monkeypatch: pytest.M
         ModelResponse(
             message=Message(
                 role=Role.MODEL,
-                content=[Part(root=ToolRequestPart(tool_request=ToolRequest(name='echo', input={}, ref='1')))],
+                content=[Part(tool_request=ToolRequest(name='echo', input={}, ref='1'))],
             ),
             finish_reason=FinishReason.STOP,
         ),
         ModelResponse(
-            message=Message(role=Role.MODEL, content=[TextPart(text='done')]),
+            message=Message(role=Role.MODEL, content=[Part.from_text('done')]),
             finish_reason=FinishReason.STOP,
         ),
     ]
@@ -390,13 +408,111 @@ async def test_tool_stream_callback_failure_fails_generate(monkeypatch: pytest.M
         if getattr(chunk, 'role', None) == Role.TOOL:
             raise RuntimeError('sink closed')
 
-    with pytest.raises(RuntimeError, match='sink closed'):
-        await generate_action(
-            ai.registry,
-            GenerateActionOptions(
-                model='programmableModel',
-                messages=[Message(role=Role.USER, content=[TextPart(text='hi')])],
-                tools=['echo'],
-            ),
-            on_chunk=on_chunk,
+    response = await generate_action(
+        ai.registry,
+        GenerateActionOptions(
+            model='programmableModel',
+            messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
+            tools=['echo'],
+        ),
+        on_chunk=on_chunk,
+    )
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.finish_message == 'sink closed'
+    assert response.message is None
+    assert response.error is not None
+    assert response.error.status == 'INTERNAL'
+    assert response.error.reason is None
+    assert response.error.message == response.finish_message
+    assert [message.role for message in response.messages] == [Role.USER, Role.MODEL, Role.TOOL]
+
+
+@pytest.mark.asyncio
+async def test_model_stream_callback_failure_returns_closed_history() -> None:
+    """A model chunk pipe failure returns the conversation entering that turn."""
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+    pm.responses = [
+        ModelResponse(
+            message=Message(role=Role.MODEL, content=[Part.from_text('done')]),
+            finish_reason=FinishReason.STOP,
         )
+    ]
+    pm.chunks = [[ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('partial')])]]
+
+    def on_chunk(_: object) -> None:
+        raise RuntimeError('model sink closed')
+
+    response = await generate_action(
+        ai.registry,
+        GenerateActionOptions(
+            model='programmableModel',
+            messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
+        ),
+        on_chunk=on_chunk,
+    )
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.finish_message == 'model sink closed'
+    assert response.message is None
+    assert response.error is not None
+    assert response.error.status == 'INTERNAL'
+    assert response.error.reason is None
+    assert response.error.message == response.finish_message
+    assert [message.role for message in response.messages] == [Role.USER]
+
+
+@pytest.mark.asyncio
+async def test_resumed_tool_stream_callback_failure_returns_closed_history() -> None:
+    """A resumed tool chunk pipe failure keeps the conversation that already closed."""
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+
+    @ai.tool(name='hold')
+    async def hold(_: dict) -> str:  # noqa: ARG001
+        raise Interrupt({'hold': True})
+
+    pm.responses = [
+        ModelResponse(
+            message=Message(
+                role=Role.MODEL,
+                content=[Part(tool_request=ToolRequest(name='hold', input={}, ref='1'))],
+            ),
+            finish_reason=FinishReason.STOP,
+        ),
+        ModelResponse(
+            message=Message(role=Role.MODEL, content=[Part.from_text('done')]),
+            finish_reason=FinishReason.STOP,
+        ),
+    ]
+    first = await generate_action(
+        ai.registry,
+        GenerateActionOptions(
+            model='programmableModel',
+            messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
+            tools=['hold'],
+        ),
+    )
+
+    def on_chunk(chunk: object) -> None:
+        if getattr(chunk, 'role', None) == Role.TOOL:
+            raise RuntimeError('resume sink closed')
+
+    reply = respond_to_interrupt({'approved': True}, interrupt=first.interrupts[0])
+    response = await generate_action(
+        ai.registry,
+        GenerateActionOptions(
+            model='programmableModel',
+            messages=list(first.messages),
+            tools=['hold'],
+            resume=Resume(respond=[reply]),
+        ),
+        on_chunk=on_chunk,
+    )
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.finish_message == 'resume sink closed'
+    assert response.message is None
+    assert response.error is not None
+    assert response.error.status == 'INTERNAL'
+    assert response.error.reason is None
+    assert response.error.message == response.finish_message
+    assert [message.role for message in response.messages] == [Role.USER, Role.MODEL, Role.TOOL]

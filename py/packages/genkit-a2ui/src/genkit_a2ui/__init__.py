@@ -17,7 +17,7 @@
 """A2UI generate middleware for Genkit."""
 
 from ._catalog import A2uiCatalog, A2uiCatalogComponent
-from ._loader import load_catalog, load_catalog_file, register_basic_catalog
+from ._loader import A2uiCatalogError, load_catalog, load_catalog_file, register_basic_catalog
 from ._middleware import Surfaces, SurfacesConfig
 from ._parser import A2uiParseError
 from ._part import a2ui_part, envelopes_from_parts, is_a2ui_part
@@ -29,6 +29,7 @@ __all__ = [
     'DEFAULT_CATALOG_ID',
     'A2uiCatalog',
     'A2uiCatalogComponent',
+    'A2uiCatalogError',
     'A2uiParseError',
     'Surfaces',
     'SurfacesConfig',

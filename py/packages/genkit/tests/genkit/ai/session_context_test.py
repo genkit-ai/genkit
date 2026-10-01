@@ -22,7 +22,7 @@ from genkit._ai._agents._session import Session, get_current_session, run_with_s
 from genkit._ai._agents._types import TurnContext
 from genkit._core._action import ActionRunContext
 from genkit._core._channel import CloseableQueue
-from genkit._core._typing import AgentInput, AgentResult, SessionState
+from genkit._core._model import AgentInput, AgentResult, SessionState
 from genkit.middleware import GenerateMiddlewareContext
 
 

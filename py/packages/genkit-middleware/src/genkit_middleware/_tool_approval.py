@@ -18,15 +18,15 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Awaitable, Callable
 
 from pydantic import BaseModel, Field
 
+from genkit import MultipartToolResponse
 from genkit._ai._tools import Interrupt
 from genkit._core._action import ActionKind
-from genkit._core._tracing import SpanMetadata, run_in_new_span
-from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, MultipartToolResponse, ToolHookParams
+from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ToolHookParams
+from genkit.telemetry import SpanContext, run_in_new_span
 
 
 class ToolApprovalConfig(BaseModel):
@@ -55,11 +55,20 @@ class ToolApproval(BaseMiddleware[ToolApprovalConfig]):
         if isinstance(resumed, dict) and (resumed.get('toolApproved') or resumed.get('tool_approved')):
             return await next_fn(params, ctx)
 
-        tool_input = params.tool_request_part.tool_request.input
-        with run_in_new_span(
-            SpanMetadata(name=tool_name, type='action', subtype=ActionKind.TOOL, input=tool_input),
-        ) as span:
-            if tool_input is not None:
-                inp_json = tool_input.model_dump_json() if isinstance(tool_input, BaseModel) else json.dumps(tool_input)
-                span.set_attribute('genkit:input', inp_json)
+        tool_req = params.tool_request_part.tool_request
+        if tool_req is None:
+            raise ValueError('wrap_tool needs a tool request part')
+        tool_input = tool_req.input
+
+        async def body(_span: SpanContext) -> MultipartToolResponse:
             raise Interrupt({'message': f'Tool not in approved list: {tool_name}'})
+
+        # the denied call should look like the tool ran and interrupted, so the
+        # trace shows a tool span rather than a bare step.
+        return await run_in_new_span(
+            tool_name,
+            body,
+            action_type=str(ActionKind.TOOL),
+            input=tool_input,
+            is_action=True,
+        )

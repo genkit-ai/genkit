@@ -5,6 +5,16 @@ Bedrock-hosted models (Anthropic Claude, Amazon Nova, Meta Llama, Mistral,
 Cohere, and others) through the Bedrock Converse and ConverseStream APIs, and
 embeddings, image generation, and reranking through InvokeModel.
 
+> **Building with a coding agent? Install the Genkit Python skill first.**
+>
+> ```bash
+> npx skills add genkit-ai/skills --skill developing-genkit-python
+> ```
+>
+> It teaches your agent the current Genkit Python APIs and common gotchas.
+> Source, manual install and skills for other languages:
+> [genkit-ai/skills](https://github.com/genkit-ai/skills).
+
 ## Installation
 
 ```bash
@@ -185,13 +195,13 @@ doing whenever a large static system prompt is sent repeatedly.
 `cache_point_part()` marks where the cacheable prefix ends:
 
 ```python
-from genkit import Part, TextPart
+from genkit import Part
 from genkit_amazon_bedrock import cache_point_part
 
 CLAUDE = 'bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0'
 
 # The cache point goes after the content it should cache.
-system = [Part(root=TextPart(text=LONG_STATIC_PROMPT)), cache_point_part()]
+system = [Part.from_text(LONG_STATIC_PROMPT), cache_point_part()]
 
 first = await ai.generate(model=CLAUDE, system=system, prompt='What are the delivery tiers?')
 second = await ai.generate(model=CLAUDE, system=system, prompt='Which tier needs a signature?')
@@ -378,7 +388,7 @@ response = await bedrock.rerank(
 )
 
 for document in response.documents:
-    print(document.metadata.score, document.content[0].root.text)
+    print(document.metadata.score, document.content[0].text)
 ```
 
 Genkit Python has no reranker primitive: `ActionKind.RERANKER` exists as a bare

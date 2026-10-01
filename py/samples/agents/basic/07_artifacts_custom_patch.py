@@ -32,7 +32,7 @@ from __future__ import annotations
 from genkit_google_genai import GoogleAI
 from pydantic import BaseModel, Field
 
-from genkit import ActionRunContext, FinishReason, Message, Part, TextPart
+from genkit import ActionRunContext, FinishReason, Part
 from genkit.exp import Genkit
 from genkit.exp.agent import (
     AgentFinishReason,
@@ -62,9 +62,8 @@ async def research_agent_fn(sess: SessionRunner, ctx: ActionRunContext) -> Agent
         prompt_text = ''
         if inp.message and inp.message.content:
             for p in inp.message.content:
-                root = p.root
-                if isinstance(root, TextPart) and root.text:
-                    prompt_text += root.text
+                if p.text:
+                    prompt_text += p.text
         topic = prompt_text.strip() or 'General Overview'
 
         # 1. Update custom state (typed ResearchState model)
@@ -83,9 +82,8 @@ async def research_agent_fn(sess: SessionRunner, ctx: ActionRunContext) -> Agent
             if art.name == 'research_brief.md':
                 log_parts: list[str] = []
                 for p in art.parts:
-                    root = p.root
-                    if isinstance(root, TextPart) and root.text:
-                        log_parts.append(root.text)
+                    if p.text:
+                        log_parts.append(p.text)
                 brief_content = ''.join(log_parts)
                 break
 
@@ -100,13 +98,13 @@ async def research_agent_fn(sess: SessionRunner, ctx: ActionRunContext) -> Agent
         await sess.add_artifacts([
             Artifact(
                 name='research_brief.md',
-                parts=[Part(TextPart(text=brief_content))],
+                parts=[Part.from_text(brief_content)],
             )
         ])
 
         # 3. Stream model response
         history = await sess.get_messages()
-        messages = [Message(m) for m in history] if history else None
+        messages = history or None
 
         stream_resp = ai.generate_stream(
             model=GoogleAI.gemini_model('gemini-flash-latest'),
@@ -150,9 +148,8 @@ async def main() -> None:
         if brief_art:
             log_parts: list[str] = []
             for p in brief_art.parts:
-                root = p.root
-                if isinstance(root, TextPart) and root.text:
-                    log_parts.append(root.text)
+                if p.text:
+                    log_parts.append(p.text)
             brief_text = ''.join(log_parts)
             print(f"\nGenerated Artifact 'research_brief.md':\n{brief_text}")
 

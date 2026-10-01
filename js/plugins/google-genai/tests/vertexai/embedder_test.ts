@@ -24,12 +24,21 @@ import { getVertexAIUrl } from '../../src/vertexai/client.js';
 import {
   EmbeddingConfig,
   defineEmbedder,
+  model,
 } from '../../src/vertexai/embedder.js';
 import {
   ClientOptions,
   EmbedContentResponse,
   EmbeddingInstance,
 } from '../../src/vertexai/types.js';
+
+it('reports the default dimensions for multimodal embedders', () => {
+  assert.strictEqual(model('multimodalembedding@001').info?.dimensions, 1408);
+  assert.strictEqual(
+    model('custom-multimodalembedding', { multimodal: true }).info?.dimensions,
+    1408
+  );
+});
 
 describe('defineEmbedder', () => {
   let fetchStub: sinon.SinonStub;

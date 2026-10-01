@@ -36,7 +36,7 @@ from collections.abc import Callable
 from typing import Any, Protocol, runtime_checkable
 
 from genkit._core._action import Action, ActionKind
-from genkit._core._typing import Artifact, MessageData
+from genkit._core._model import Artifact, Message
 
 
 @runtime_checkable
@@ -87,11 +87,11 @@ class SessionLike(Protocol):
         """Append artifacts, replacing any existing entry with the same name."""
         ...
 
-    async def get_messages(self) -> list[MessageData]:
+    async def get_messages(self) -> list[Message]:
         """Return a copy of messages currently stored on the session."""
         ...
 
-    async def add_messages(self, messages: list[MessageData]) -> None:
+    async def add_messages(self, messages: list[Message]) -> None:
         """Append messages to the session history."""
         ...
 

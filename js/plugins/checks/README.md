@@ -2,6 +2,16 @@
 
 **Checks** is an AI safety platform built by Google: [checks.google.com/ai-safety](https://checks.google.com/ai-safety).
 
+> **Building with a coding agent? Install the Genkit JS skill first.**
+>
+> ```bash
+> npx skills add genkit-ai/skills --skill developing-genkit-js
+> ```
+>
+> It teaches your agent the current Genkit JS APIs and common gotchas.
+> Source, manual install and skills for other languages:
+> [genkit-ai/skills](https://github.com/genkit-ai/skills).
+
 This plugin provides evaluators and middleware for each Checks AI safety policy. Text is classified by calling the [Checks Guardrails API](https://console.cloud.google.com/marketplace/product/google/checks.googleapis.com?project=_).
 
 > **Note**: The Guardrails API is currently in private preview, and you will need to request quota. To request quota, fill out this [Google form](https://docs.google.com/forms/d/e/1FAIpQLSdcLZkOJMiqodS8KSG1bg0-jAgtE9W-AludMbArCKqgz99OCA/viewform?usp=sf_link).
@@ -53,7 +63,7 @@ export const poemFlow = ai.defineFlow(
   },
   async (topic) => {
     const { text } = await ai.generate({
-      model: googleAI.model('gemini-2.5-flash'),
+      model: googleAI.model('gemini-flash-latest'),
       prompt: `Write a poem on this topic: ${topic}`,
       // Add checks middleware to your generate calls.
       use: [

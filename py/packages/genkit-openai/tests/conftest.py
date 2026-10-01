@@ -24,13 +24,8 @@ import pytest
 from genkit_openai.typing import OpenAIConfig
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 
-from genkit import (
-    Message,
-    ModelRequest,
-    Part,
-    Role,
-    TextPart,
-)
+from genkit import Message, Part, Role
+from genkit.model import ModelRequest
 
 
 @pytest.fixture
@@ -40,9 +35,9 @@ def sample_request() -> ModelRequest:
         messages=[
             Message(
                 role=Role.SYSTEM,
-                content=[Part(root=TextPart(text='You are an assistant'))],
+                content=[Part.from_text('You are an assistant')],
             ),
-            Message(role=Role.USER, content=[Part(root=TextPart(text='Hello, world!'))]),
+            Message(role=Role.USER, content=[Part.from_text('Hello, world!')]),
         ],
         config=OpenAIConfig(
             model='gpt-4',

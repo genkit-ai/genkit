@@ -24,10 +24,10 @@ from pydantic.alias_generators import to_camel
 from typing_extensions import Never
 
 from genkit._core._action import Action, ActionKind, get_func_description
-from genkit._core._model import Document
+from genkit._core._model import Document, EmbedRequest
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
-from genkit._core._typing import ActionMetadata, EmbedRequest, EmbedResponse
+from genkit._core._typing import ActionMetadata, EmbedResponse
 
 
 class EmbedderSupports(BaseModel):
@@ -74,7 +74,6 @@ class Embedder:
         options: dict[str, Any] | None = None,
     ) -> EmbedResponse:
         """Generate embeddings for a list of documents."""
-        # Document veneer is compatible with DocumentData at runtime
         return (
             await self._action.run(EmbedRequest(input=documents, options=options))  # type: ignore[arg-type]
         ).response

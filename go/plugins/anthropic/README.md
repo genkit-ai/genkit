@@ -4,6 +4,16 @@ This plugin provides Genkit support for Claude models through Anthropic's
 native Messages API, using the official Go SDK,
 `github.com/anthropics/anthropic-sdk-go`.
 
+> **Building with a coding agent? Install the Genkit Go skill first.**
+>
+> ```bash
+> npx skills add genkit-ai/skills --skill developing-genkit-go
+> ```
+>
+> It teaches your agent the current Genkit Go APIs and common gotchas.
+> Source, manual install and skills for other languages:
+> [genkit-ai/skills](https://github.com/genkit-ai/skills).
+
 Unlike the OpenAI-compatible `compat_oai/anthropic` plugin, this one speaks
 the Messages API itself: thinking content comes back as Genkit reasoning
 parts with their signatures preserved across turns, structured output uses

@@ -31,18 +31,8 @@ from genkit_google_genai.models.veo import (
 from google.genai import types as genai_types
 from google.genai.errors import APIError
 
-from genkit import (
-    ActionRunContext,
-    FinishReason,
-    GenkitError,
-    Message,
-    ModelRequest,
-    ModelResponse,
-    Part,
-    Role,
-    TextPart,
-)
-from genkit.model import Operation
+from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, Operation, Part, Role
+from genkit.model import ModelRequest
 
 
 def _sdk_op(
@@ -67,7 +57,7 @@ def _media(output: object) -> list:
 
 def _text_request(*, config: object | None = None) -> ModelRequest:
     return ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part(TextPart(text='a cat walking'))])],
+        messages=[Message(role=Role.USER, content=[Part.from_text('a cat walking')])],
         config=config,  # type: ignore[arg-type]
     )
 

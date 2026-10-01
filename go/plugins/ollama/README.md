@@ -2,6 +2,16 @@
 
 The Ollama plugin provides a unified interface to connect with locally hosted (or remote) models through the [Ollama](https://ollama.com/) API.
 
+> **Building with a coding agent? Install the Genkit Go skill first.**
+>
+> ```bash
+> npx skills add genkit-ai/skills --skill developing-genkit-go
+> ```
+>
+> It teaches your agent the current Genkit Go APIs and common gotchas.
+> Source, manual install and skills for other languages:
+> [genkit-ai/skills](https://github.com/genkit-ai/skills).
+
 The plugin supports a wide range of capabilities, relying on the models you have pulled:
 
 - **Language Models**: Chat and text generation models, including support for tools, vision (multimodal), and reasoning (thinking).

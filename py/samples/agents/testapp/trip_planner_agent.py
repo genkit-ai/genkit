@@ -76,7 +76,8 @@ async def test_trip_planner_agent(text: str, ctx: ActionRunContext) -> str:
     turn = chat.send_stream(text or 'I want to plan a trip to Paris. What should I see there?')
     async for chunk in turn:
         for call in chunk.tool_requests:
-            ctx.send_chunk(f'[tool] {call.tool_request.name}')
+            if call.tool_request is not None:
+                ctx.send_chunk(f'[tool] {call.tool_request.name}')
         if chunk.text:
             ctx.send_chunk(chunk.text)
     res = await turn

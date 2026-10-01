@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import json
 import logging
 import os
 import signal
@@ -29,7 +28,7 @@ import threading
 import uuid
 from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from pathlib import Path
-from typing import Any, TypeVar, overload
+from typing import Any, TypeVar, cast, overload
 
 import anyio
 import uvicorn
@@ -64,19 +63,14 @@ from genkit._ai._model import (
 )
 from genkit._ai._prompt import (
     ExecutablePrompt,
+    GenerateCall,
     ModelStreamResponse,
-    PromptConfig,
     define_helper,
     define_partial,
     define_schema,
     load_prompt_folder,
     register_prompt_actions,
-    to_generate_action_options,
-)
-from genkit._ai._resource import (
-    ResourceFn,
-    ResourceOptions,
-    define_resource,
+    to_generate_options,
 )
 from genkit._ai._tools import Tool, define_interrupt, define_tool
 from genkit._core._action import Action, ActionKind, get_current_context
@@ -91,39 +85,40 @@ from genkit._core._background import (
     missing_operation_error,
 )
 from genkit._core._channel import Channel, run_loop
-from genkit._core._dap import (
-    DapFn,
-    DynamicActionProvider,
-    define_dynamic_action_provider as define_dap_block,
-)
+from genkit._core._dap import DapFn, DynamicActionProvider
 from genkit._core._environment import is_dev_environment
-from genkit._core._error import GenkitError
+from genkit._core._error import GenkitError, RuntimeErrorReason, StatusName
 from genkit._core._logger import configure_logging, get_logger, resolve_level
 from genkit._core._middleware import (
     BaseMiddleware,
     GenerateMiddleware,
     _validate_middleware_key_segment,
 )
-from genkit._core._model import Document, ModelConfigDict, ModelRef, ModelRefConfigT
+from genkit._core._model import (
+    Document,
+    EmbedRequest,
+    ModelConfigDict,
+    ModelRef,
+    ModelRefConfigT,
+    Part,
+    ToolChoice,
+)
 from genkit._core._plugin import Plugin
 from genkit._core._protocols import SessionLike
 from genkit._core._reflection import ReflectionServer, ServerSpec, create_reflection_asgi_app
 from genkit._core._reflection_v2 import ReflectionServerV2
-from genkit._core._registry import Registry
-from genkit._core._tracing import SpanMetadata, run_in_new_span
+from genkit._core._registry import Registry, define_dynamic_action_provider as define_dap_block
+from genkit._core._telemetry._attrs import metadata_key
+from genkit._core._telemetry._instrumentation import run_in_new_span
+from genkit._core._telemetry.http import maybe_inject_dev_instrumentation
 from genkit._core._typing import (
     BaseDataPoint,
     Embedding,
-    EmbedRequest,
     EvalRequest,
     EvalResponse,
     MiddlewareRef,
     ModelInfo,
     Operation,
-    Part,
-    ToolChoice,
-    ToolRequestPart,
-    ToolResponsePart,
 )
 
 from ._decorators import _FlowDecorator, _FlowDecoratorWithChunk
@@ -181,6 +176,7 @@ class Genkit:
         # Ensure the default generate action is registered for async usage.
         define_generate_action(self.registry)
         self._register_plugin_middleware(plugins)
+        maybe_inject_dev_instrumentation()
         # In dev mode, start the reflection server immediately in a background
         # daemon thread so it's available regardless of which web framework (or
         # none) the user chooses.
@@ -830,31 +826,6 @@ class Genkit:
             output_schema=output_schema,
         )
 
-    def define_resource(
-        self,
-        *,
-        fn: ResourceFn,
-        name: str | None = None,
-        uri: str | None = None,
-        template: str | None = None,
-        description: str | None = None,
-        metadata: dict[str, object] | None = None,
-    ) -> Action:
-        """Register a resource action."""
-        opts: ResourceOptions = {}
-        if name:
-            opts['name'] = name
-        if uri:
-            opts['uri'] = uri
-        if template:
-            opts['template'] = template
-        if description:
-            opts['description'] = description
-        if metadata:
-            opts['metadata'] = metadata
-
-        return define_resource(self.registry, opts, fn)
-
     # -------------------------------------------------------------------------
     # Server infrastructure methods
     # -------------------------------------------------------------------------
@@ -1015,8 +986,8 @@ class Genkit:
         tools: Sequence[str | Tool] | None = None,
         return_tool_requests: bool | None = None,
         tool_choice: ToolChoice | None = None,
-        resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
-        resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
+        resume_respond: Part | list[Part] | None = None,
+        resume_restart: Part | list[Part] | None = None,
         resume_metadata: dict[str, Any] | None = None,
         config: ModelConfigDict,
         max_turns: int | None = None,
@@ -1042,8 +1013,8 @@ class Genkit:
         tools: Sequence[str | Tool] | None = None,
         return_tool_requests: bool | None = None,
         tool_choice: ToolChoice | None = None,
-        resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
-        resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
+        resume_respond: Part | list[Part] | None = None,
+        resume_restart: Part | list[Part] | None = None,
         resume_metadata: dict[str, Any] | None = None,
         config: ModelRefConfigT | Mapping[str, Any] | None = None,
         max_turns: int | None = None,
@@ -1069,8 +1040,8 @@ class Genkit:
         tools: Sequence[str | Tool] | None = None,
         return_tool_requests: bool | None = None,
         tool_choice: ToolChoice | None = None,
-        resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
-        resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
+        resume_respond: Part | list[Part] | None = None,
+        resume_restart: Part | list[Part] | None = None,
         resume_metadata: dict[str, Any] | None = None,
         config: ModelConfigDict,
         max_turns: int | None = None,
@@ -1096,8 +1067,8 @@ class Genkit:
         tools: Sequence[str | Tool] | None = None,
         return_tool_requests: bool | None = None,
         tool_choice: ToolChoice | None = None,
-        resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
-        resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
+        resume_respond: Part | list[Part] | None = None,
+        resume_restart: Part | list[Part] | None = None,
         resume_metadata: dict[str, Any] | None = None,
         config: ModelRefConfigT | Mapping[str, Any] | None = None,
         max_turns: int | None = None,
@@ -1121,8 +1092,8 @@ class Genkit:
         tools: Sequence[str | Tool] | None = None,
         return_tool_requests: bool | None = None,
         tool_choice: ToolChoice | None = None,
-        resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
-        resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
+        resume_respond: Part | list[Part] | None = None,
+        resume_restart: Part | list[Part] | None = None,
         resume_metadata: dict[str, Any] | None = None,
         config: BaseModel | ModelConfigDict | Mapping[str, Any] | None = None,
         max_turns: int | None = None,
@@ -1156,15 +1127,8 @@ class Genkit:
             print(res.text)
             print(res.output)
         """
-        # One call-scoped registry layer holds anything inline (tools +
-        # middleware) so it dies with the call and stays out of self.registry.
-        child_registry = self.registry.new_child()
-        await register_tools(child_registry, tools)
-        refs = register_middleware(child_registry, use)
-        resolved = await resolve_for_generate(model=model, config=config, registry=child_registry)
-        assert_correct_config_class(config=config, schema=resolved.config_schema, model=resolved.name)
-        prompt_config = PromptConfig(
-            model=resolved.name,
+        return await self._generate(
+            model=model,
             prompt=prompt,
             system=system,
             messages=messages,
@@ -1174,21 +1138,16 @@ class Genkit:
             resume_respond=resume_respond,
             resume_restart=resume_restart,
             resume_metadata=resume_metadata,
-            config=resolved.config,
+            config=config,
             max_turns=max_turns,
+            context=context,
+            output_schema=output_schema,
             output_format=output_format,
             output_content_type=output_content_type,
             output_instructions=output_instructions,
-            output_schema=output_schema,
             output_constrained=output_constrained,
+            use=use,
             docs=docs,
-            use=refs,
-        )
-        gen_options = await to_generate_action_options(child_registry, prompt_config)
-        return await generate_action(
-            child_registry,
-            gen_options,
-            context=context if context is not None else get_current_context(),
         )
 
     # Overload: config=ModelConfigDict, output_schema=type[T] -> ModelStreamResponse[T]
@@ -1203,8 +1162,8 @@ class Genkit:
         tools: Sequence[str | Tool] | None = None,
         return_tool_requests: bool | None = None,
         tool_choice: ToolChoice | None = None,
-        resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
-        resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
+        resume_respond: Part | list[Part] | None = None,
+        resume_restart: Part | list[Part] | None = None,
         resume_metadata: dict[str, Any] | None = None,
         config: ModelConfigDict,
         max_turns: int | None = None,
@@ -1216,7 +1175,6 @@ class Genkit:
         output_constrained: bool | None = None,
         use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
         docs: list[Document] | None = None,
-        timeout: float | None = None,
     ) -> ModelStreamResponse[OutputT]: ...
 
     # Overload: config=ModelRefConfigT | Mapping, output_schema=type[T] -> ModelStreamResponse[T]
@@ -1231,8 +1189,8 @@ class Genkit:
         tools: Sequence[str | Tool] | None = None,
         return_tool_requests: bool | None = None,
         tool_choice: ToolChoice | None = None,
-        resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
-        resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
+        resume_respond: Part | list[Part] | None = None,
+        resume_restart: Part | list[Part] | None = None,
         resume_metadata: dict[str, Any] | None = None,
         config: ModelRefConfigT | Mapping[str, Any] | None = None,
         max_turns: int | None = None,
@@ -1244,7 +1202,6 @@ class Genkit:
         output_constrained: bool | None = None,
         use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
         docs: list[Document] | None = None,
-        timeout: float | None = None,
     ) -> ModelStreamResponse[OutputT]: ...
 
     # Overload: config=ModelConfigDict, no output_schema -> ModelStreamResponse[Any]
@@ -1259,8 +1216,8 @@ class Genkit:
         tools: Sequence[str | Tool] | None = None,
         return_tool_requests: bool | None = None,
         tool_choice: ToolChoice | None = None,
-        resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
-        resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
+        resume_respond: Part | list[Part] | None = None,
+        resume_restart: Part | list[Part] | None = None,
         resume_metadata: dict[str, Any] | None = None,
         config: ModelConfigDict,
         max_turns: int | None = None,
@@ -1272,7 +1229,6 @@ class Genkit:
         output_constrained: bool | None = None,
         use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
         docs: list[Document] | None = None,
-        timeout: float | None = None,
     ) -> ModelStreamResponse[Any]: ...
 
     # Overload: config=ModelRefConfigT | Mapping, no output_schema -> ModelStreamResponse[Any]
@@ -1287,8 +1243,8 @@ class Genkit:
         tools: Sequence[str | Tool] | None = None,
         return_tool_requests: bool | None = None,
         tool_choice: ToolChoice | None = None,
-        resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
-        resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
+        resume_respond: Part | list[Part] | None = None,
+        resume_restart: Part | list[Part] | None = None,
         resume_metadata: dict[str, Any] | None = None,
         config: ModelRefConfigT | Mapping[str, Any] | None = None,
         max_turns: int | None = None,
@@ -1300,7 +1256,6 @@ class Genkit:
         output_constrained: bool | None = None,
         use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
         docs: list[Document] | None = None,
-        timeout: float | None = None,
     ) -> ModelStreamResponse[Any]: ...
 
     def generate_stream(
@@ -1313,8 +1268,8 @@ class Genkit:
         tools: Sequence[str | Tool] | None = None,
         return_tool_requests: bool | None = None,
         tool_choice: ToolChoice | None = None,
-        resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
-        resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
+        resume_respond: Part | list[Part] | None = None,
+        resume_restart: Part | list[Part] | None = None,
         resume_metadata: dict[str, Any] | None = None,
         config: BaseModel | ModelConfigDict | Mapping[str, Any] | None = None,
         max_turns: int | None = None,
@@ -1326,7 +1281,6 @@ class Genkit:
         output_constrained: bool | None = None,
         use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
         docs: list[Document] | None = None,
-        timeout: float | None = None,
     ) -> ModelStreamResponse[Any]:
         """Stream generated text, returning a ModelStreamResponse with .stream and .response.
 
@@ -1341,17 +1295,76 @@ class Genkit:
                 print(chunk.text)
             final = await stream.response
         """
-        channel: Channel[ModelResponseChunk, ModelResponse[Any]] = Channel(timeout=timeout)
+        channel: Channel[ModelResponseChunk, ModelResponse[Any]] = Channel()
 
         async def _run_generate() -> ModelResponse[Any]:
-            # One call-scoped registry layer holds anything inline (tools +
-            # middleware) so it dies with the call and stays out of self.registry.
-            child_registry = self.registry.new_child()
-            await register_tools(child_registry, tools)
-            refs = register_middleware(child_registry, use)
-            resolved = await resolve_for_generate(model=model, config=config, registry=child_registry)
-            assert_correct_config_class(config=config, schema=resolved.config_schema, model=resolved.name)
-            prompt_config = PromptConfig(
+            return await self._generate(
+                model=model,
+                prompt=prompt,
+                system=system,
+                messages=messages,
+                tools=tools,
+                return_tool_requests=return_tool_requests,
+                tool_choice=tool_choice,
+                resume_respond=resume_respond,
+                resume_restart=resume_restart,
+                resume_metadata=resume_metadata,
+                config=config,
+                max_turns=max_turns,
+                context=context,
+                output_schema=output_schema,
+                output_format=output_format,
+                output_content_type=output_content_type,
+                output_instructions=output_instructions,
+                output_constrained=output_constrained,
+                use=use,
+                docs=docs,
+                on_chunk=lambda c: channel.send(c),
+            )
+
+        response_future: asyncio.Future[ModelResponse[Any]] = asyncio.create_task(_run_generate())
+        channel.set_close_future(response_future)
+
+        return ModelStreamResponse[Any](channel=channel, response_future=response_future)
+
+    async def _generate(
+        self,
+        *,
+        model: str | ModelRef[BaseModel] | None = None,
+        prompt: str | list[Part] | None = None,
+        system: str | list[Part] | None = None,
+        messages: list[Message] | None = None,
+        tools: Sequence[str | Tool] | None = None,
+        return_tool_requests: bool | None = None,
+        tool_choice: ToolChoice | None = None,
+        resume_respond: Part | list[Part] | None = None,
+        resume_restart: Part | list[Part] | None = None,
+        resume_metadata: dict[str, Any] | None = None,
+        config: BaseModel | ModelConfigDict | Mapping[str, Any] | None = None,
+        max_turns: int | None = None,
+        context: dict[str, object] | None = None,
+        output_schema: type | dict | None = None,
+        output_format: str | None = None,
+        output_content_type: str | None = None,
+        output_instructions: bool | str | None = None,
+        output_constrained: bool | None = None,
+        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        docs: list[Document] | None = None,
+        on_chunk: Callable[[ModelResponseChunk], None] | None = None,
+    ) -> ModelResponse[Any]:
+        """Fold ``ai.generate`` kwargs into engine ``options`` and run generate_action.
+
+        Inline tools and middleware live on a child registry so they die
+        with the call and stay out of ``self.registry``.
+        """
+        registry = self.registry.new_child()
+        await register_tools(registry, tools)
+        use = register_middleware(registry, use)
+        resolved = await resolve_for_generate(model=model, config=config, registry=registry)
+        assert_correct_config_class(config=config, schema=resolved.config_schema, model=resolved.name)
+        options = await to_generate_options(
+            registry=registry,
+            call=GenerateCall(
                 model=resolved.name,
                 prompt=prompt,
                 system=system,
@@ -1370,20 +1383,15 @@ class Genkit:
                 output_schema=output_schema,
                 output_constrained=output_constrained,
                 docs=docs,
-                use=refs,
-            )
-            gen_options = await to_generate_action_options(child_registry, prompt_config)
-            return await generate_action(
-                child_registry,
-                gen_options,
-                on_chunk=lambda c: channel.send(c),
-                context=context if context is not None else get_current_context(),
-            )
-
-        response_future: asyncio.Future[ModelResponse[Any]] = asyncio.create_task(_run_generate())
-        channel.set_close_future(response_future)
-
-        return ModelStreamResponse[Any](channel=channel, response_future=response_future)
+                use=use,
+            ),
+        )
+        return await generate_action(
+            registry,
+            options,
+            on_chunk=on_chunk,
+            context=context if context is not None else get_current_context(),
+        )
 
     async def embed(
         self,
@@ -1428,7 +1436,7 @@ class Genkit:
         response = (
             await embed_action.run(
                 EmbedRequest(
-                    input=documents,  # pyright: ignore[reportArgumentType]
+                    input=documents,
                     options=final_options,
                 )
             )
@@ -1472,7 +1480,7 @@ class Genkit:
         """Evaluate a dataset using the specified evaluator.
 
         Example:
-            from genkit.evaluator import BaseDataPoint
+            from genkit import BaseDataPoint
 
             results = await ai.evaluate(
                 evaluator='my_eval',
@@ -1534,23 +1542,11 @@ class Genkit:
         if not inspect.iscoroutinefunction(fn):
             raise TypeError('fn must be a coroutine function')
 
-        span_metadata = SpanMetadata(name=name, type='flowStep', metadata=metadata)
-        with run_in_new_span(span_metadata) as span:
-            try:
-                result = await fn()
-                output = (
-                    result.model_dump_json(by_alias=True, exclude_none=True)
-                    if isinstance(result, BaseModel)
-                    else json.dumps(result)
-                )
-                span.set_attribute('genkit:output', output)
-                return result
-            except Exception:
-                # We catch all exceptions here to ensure they are captured by
-                # the trace span context manager before being re-raised.
-                # The run_in_new_span context manager handles recording
-                # the exception details.
-                raise
+        async def body(_span: object) -> T:
+            return await fn()
+
+        attributes = {metadata_key(k): str(v) for k, v in (metadata or {}).items()}
+        return await run_in_new_span(name, body, action_type='flowStep', attributes=attributes)
 
     async def check_operation(
         self,
@@ -1670,12 +1666,14 @@ class Genkit:
             raise GenkitError(
                 status='NOT_FOUND',
                 message=f"Model '{resolved.name}' not found.",
+                reason=RuntimeErrorReason.MODEL_NOT_FOUND,
             )
 
         if model_action.kind != ActionKind.BACKGROUND_MODEL:
             raise GenkitError(
                 status='INVALID_ARGUMENT',
                 message=f"Model '{model_action.name}' does not support long running operations.",
+                reason=RuntimeErrorReason.UNSUPPORTED_BY_MODEL,
             )
 
         # Call generate with already-resolved wire name + config.
@@ -1699,7 +1697,15 @@ class Genkit:
             docs=docs,
         )
 
+        if response.error is not None:
+            # This call is "give me the ticket." A start that already
+            # failed is not that ticket — while-not-done would poll it
+            # as a live job.
+            raise GenkitError(
+                status=cast(StatusName, response.error.status or 'INTERNAL'),
+                message=response.error.message,
+                reason=response.error.reason,
+            )
         if not response.operation:
             raise missing_operation_error(name=model_action.name)
-
         return response.operation

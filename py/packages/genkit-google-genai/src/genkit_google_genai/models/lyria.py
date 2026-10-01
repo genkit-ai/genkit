@@ -21,18 +21,12 @@ This module exposes config and request/response helpers for the predict-based
 audio API.
 """
 
-import sys
-
-if sys.version_info < (3, 11):
-    from strenum import StrEnum
-else:
-    from enum import StrEnum
-
 from typing import Any
 
 from pydantic import BaseModel, Field
 
-from genkit import ModelInfo, Supports
+from genkit._core._compat import StrEnum
+from genkit.model import ModelInfo, Supports
 
 
 class LyriaVersion(StrEnum):
@@ -117,8 +111,8 @@ def _extract_text(messages: list[Any]) -> str:
         return ''
     for message in messages:
         for part in message.content:
-            if hasattr(part.root, 'text') and part.root.text:
-                return str(part.root.text)
+            if part.text is not None and part.text:
+                return str(part.text)
     return ''
 
 

@@ -22,11 +22,10 @@ import json
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from typing import Any, Generic
 
-from opentelemetry import trace as trace_api
 from pydantic import BaseModel
 
 # Internal imports from sibling modules
-from genkit._ai._agents._client import AgentClient, part_roots
+from genkit._ai._agents._client import AgentClient
 from genkit._ai._agents._preamble import (
     apply_preamble_tags,
     tag_history_for_render,
@@ -62,33 +61,37 @@ from genkit._ai._agents._types import (
 from genkit._ai._prompt import (
     ExecutablePrompt,
     PromptGenerateOptions,
-    _prepare,
     lookup_prompt,
+    prepare_prompt,
     register_prompt_actions,
 )
 from genkit._ai._tools import Tool
 from genkit._core._action import Action, ActionKind, ActionRunContext, BidiAction, BidiFn, get_current_context
-from genkit._core._error import GenkitError
+from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._middleware import BaseMiddleware
-from genkit._core._model import ModelConfigDict, ModelRef, ModelRefConfigT
-from genkit._core._registry import Registry
-from genkit._core._trace._attrs import metadata_key
-from genkit._core._typing import (
-    AgentAbortRequest,
-    AgentAbortResponse,
-    AgentFinishReason,
+from genkit._core._model import (
     AgentInit,
     AgentInput,
     AgentOutput,
     AgentResult,
     AgentStreamChunk,
-    GetSnapshotRequest,
-    MessageData,
-    MiddlewareRef,
+    Message,
+    ModelConfigDict,
+    ModelRef,
+    ModelRefConfigT,
     Part,
     Resume,
-    Role,
     SessionSnapshot,
+)
+from genkit._core._registry import Registry
+from genkit._core._telemetry._instrumentation import set_custom_metadata_attributes
+from genkit._core._typing import (
+    AgentAbortRequest,
+    AgentAbortResponse,
+    AgentFinishReason,
+    GetSnapshotRequest,
+    MiddlewareRef,
+    Role,
     SnapshotStatus,
     ToolRequest,
 )
@@ -263,9 +266,7 @@ def define_custom_agent(
 
         state = await session.state()
         if state.session_id:
-            span = trace_api.get_current_span()
-            if span.is_recording():
-                span.set_attribute(metadata_key('agent:sessionId'), state.session_id)
+            set_custom_metadata_attributes({'agent:sessionId': state.session_id})
 
         rt = AgentRuntime(
             name=name,
@@ -308,7 +309,11 @@ def register_snapshot_actions(*, registry: Registry, name: str, agent: Agent) ->
             # an empty-but-successful read, so surface it as NOT_FOUND instead of a
             # null the caller has to re-interpret.
             target = sid or sess_id or 'unknown'
-            raise GenkitError(status='NOT_FOUND', message=f'Snapshot {target!r} not found for agent {name!r}.')
+            raise GenkitError(
+                status='NOT_FOUND',
+                message=f'Snapshot {target!r} not found for agent {name!r}.',
+                reason=RuntimeErrorReason.SNAPSHOT_NOT_FOUND,
+            )
         return snap
 
     async def abort_fn(req: AgentAbortRequest) -> AgentAbortResponse:
@@ -425,17 +430,17 @@ def define_prompt_agent(
                 'resume_metadata': resume_metadata,
                 'context': ctx.context,
             }
-            child_registry, gen_options = await _prepare(executable, {}, call_opts)
-            rendered_messages = list(gen_options.messages or [])
-            gen_options = gen_options.model_copy(
+            call_registry, options = await prepare_prompt(prompt=executable, input={}, opts=call_opts)
+            rendered_messages = list(options.messages or [])
+            options = options.model_copy(
                 update={'messages': apply_preamble_tags(rendered_messages)},
             )
 
             return await generate_prompt_agent_turn(
                 session_runner=session_runner,
                 ctx=ctx,
-                registry=child_registry,
-                gen_options=gen_options,
+                registry=call_registry,
+                options=options,
                 history=history,
             )
 
@@ -460,7 +465,7 @@ def tool_input_key(value: object) -> str:
     return json.dumps(value, sort_keys=True, default=str)
 
 
-def validate_resume_against_history(resume: Resume, history: list[MessageData]) -> None:
+def validate_resume_against_history(resume: Resume, history: list[Message]) -> None:
     """Reject a resume that doesn't line up with the tool requests in history.
 
     A resumed turn answers tool requests the model actually made, so every
@@ -481,8 +486,8 @@ def validate_resume_against_history(resume: Resume, history: list[MessageData]) 
     for msg in reversed(history):
         if msg.role != Role.MODEL:
             continue
-        for root in part_roots(msg.content):
-            tr = getattr(root, 'tool_request', None)
+        for part in msg.content:
+            tr = part.tool_request
             if isinstance(tr, ToolRequest):
                 tool_requests.append(tr)
 
@@ -494,6 +499,8 @@ def validate_resume_against_history(resume: Resume, history: list[MessageData]) 
 
     for restart_part in resume.restart or []:
         tr = restart_part.tool_request
+        if tr is None:
+            continue
         match = find(tr.name, tr.ref)
         if match is None:
             raise GenkitError(
@@ -515,6 +522,8 @@ def validate_resume_against_history(resume: Resume, history: list[MessageData]) 
 
     for respond_part in resume.respond or []:
         resp = respond_part.tool_response
+        if resp is None:
+            continue
         if find(resp.name, resp.ref) is None:
             raise GenkitError(
                 status='INVALID_ARGUMENT',

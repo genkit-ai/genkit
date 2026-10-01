@@ -30,16 +30,9 @@ from genkit_anthropic.model_info import (
     get_model_info,
 )
 
-from genkit import (
-    ActionKind,
-    Constrained,
-    Message,
-    ModelRequest,
-    Part,
-    Role,
-    TextPart,
-    ToolDefinition,
-)
+from genkit import Message, Part, Role
+from genkit.model import Constrained, ModelRequest, ToolDefinition
+from genkit.plugin_api import ActionKind
 
 
 def test_anthropic_name() -> None:
@@ -444,7 +437,7 @@ def _create_sample_request() -> ModelRequest:
         messages=[
             Message(
                 role=Role.USER,
-                content=[Part(root=TextPart(text='Hello, how are you?'))],
+                content=[Part.from_text('Hello, how are you?')],
             )
         ],
         config=AnthropicConfig(),

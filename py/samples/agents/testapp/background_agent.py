@@ -59,7 +59,7 @@ async def test_background_agent(text: str, ctx: ActionRunContext) -> dict[str, A
     preview = ''
     if msgs:
         parts = msgs[-1].content or []
-        preview = ''.join(getattr(p.root, 'text', '') or '' for p in parts)[:200]
+        preview = ''.join((p.text or '') or '' for p in parts)[:200]
     return {'snapshot_id': task.snapshot_id, 'status': str(snapshot.status if snapshot else None), 'preview': preview}
 
 

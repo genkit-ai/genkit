@@ -43,10 +43,19 @@ type SSEConfig struct {
 
 // StreamableHTTPConfig contains options for the Streamable HTTP transport
 type StreamableHTTPConfig struct {
-	BaseURL    string
-	Headers    map[string]string
-	HTTPClient *http.Client  // Optional custom HTTP client
-	Timeout    time.Duration // HTTP request timeout
+	BaseURL string
+	Headers map[string]string
+	// HTTPClient is an optional custom HTTP client. The transport takes a
+	// shallow copy of it, so later changes to the client's own fields
+	// (Timeout, Transport, Jar, ...) are not observed by an MCP client that
+	// has already been created. Note also that its Timeout, if set, bounds the
+	// entire response read - including the text/event-stream response the
+	// transport consumes until the final JSON-RPC message - so a short Timeout
+	// will abort long-running or streaming tool calls.
+	HTTPClient *http.Client
+	// Timeout is the HTTP request timeout. When set, it takes precedence over
+	// HTTPClient.Timeout and carries the same caveat.
+	Timeout time.Duration
 }
 
 // MCPClientOptions holds configuration for the MCPClient.
@@ -166,11 +175,23 @@ func (c *GenkitMCPClient) createTransport(options MCPClientOptions) (transport.I
 
 	if options.StreamableHTTP != nil {
 		var streamableHTTPOptions []transport.StreamableHTTPCOption
+		if httpClient := options.StreamableHTTP.HTTPClient; httpClient != nil {
+			// Shallow-copy the caller's client before handing it to the transport,
+			// so that applying the configured timeout below cannot mutate (or race
+			// on) a client shared elsewhere, e.g. http.DefaultClient.
+			clientCopy := *httpClient
+			// Set the timeout on the copy directly rather than via WithHTTPTimeout:
+			// that option mutates whichever client is installed at the time it runs,
+			// which would make the result depend on option ordering.
+			if options.StreamableHTTP.Timeout > 0 {
+				clientCopy.Timeout = options.StreamableHTTP.Timeout
+			}
+			streamableHTTPOptions = append(streamableHTTPOptions, transport.WithHTTPBasicClient(&clientCopy))
+		} else if options.StreamableHTTP.Timeout > 0 {
+			streamableHTTPOptions = append(streamableHTTPOptions, transport.WithHTTPTimeout(options.StreamableHTTP.Timeout))
+		}
 		if options.StreamableHTTP.Headers != nil {
 			streamableHTTPOptions = append(streamableHTTPOptions, transport.WithHTTPHeaders(options.StreamableHTTP.Headers))
-		}
-		if options.StreamableHTTP.Timeout > 0 {
-			streamableHTTPOptions = append(streamableHTTPOptions, transport.WithHTTPTimeout(options.StreamableHTTP.Timeout))
 		}
 
 		transportImpl, err := transport.NewStreamableHTTP(options.StreamableHTTP.BaseURL, streamableHTTPOptions...)
@@ -186,11 +207,7 @@ func (c *GenkitMCPClient) createTransport(options MCPClientOptions) (transport.I
 // initializeClient initializes the MCP client connection
 func (c *GenkitMCPClient) initializeClient(ctx context.Context, mcpClient *client.Client, version string) string {
 	initReq := mcp.InitializeRequest{
-		Params: struct {
-			ProtocolVersion string                 `json:"protocolVersion"`
-			Capabilities    mcp.ClientCapabilities `json:"capabilities"`
-			ClientInfo      mcp.Implementation     `json:"clientInfo"`
-		}{
+		Params: mcp.InitializeParams{
 			ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION,
 			ClientInfo: mcp.Implementation{
 				Name:    "genkit-mcp-client",

@@ -17,14 +17,6 @@
 """Imagen model implementation for Google GenAI plugin."""
 
 import base64
-import sys
-
-if sys.version_info < (3, 11):
-    from strenum import StrEnum
-else:
-    from enum import StrEnum
-
-import json
 from functools import cached_property
 from typing import Any, Literal, TypeAlias
 
@@ -34,19 +26,17 @@ from google.genai.errors import APIError
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from genkit import (
+    ActionRunContext,
     GenkitError,
-    Media,
-    MediaPart,
     Message,
-    ModelInfo,
-    ModelRequest,
     ModelResponse,
     Part,
     Role,
-    Supports,
-    TextPart,
 )
-from genkit.plugin_api import ActionRunContext, tracer, wrap_http_error
+from genkit._core._compat import StrEnum
+from genkit.model import ModelInfo, ModelRequest, Supports
+from genkit.plugin_api import wrap_http_error
+from genkit.telemetry import SpanContext, run_in_new_span
 from genkit_google_genai.models._sdk_config import (
     attach_leftovers,
     dump_family_config,
@@ -181,8 +171,8 @@ class ImagenModel:
         prompt = []
         for message in request.messages:
             for part in message.content:
-                if isinstance(part.root, TextPart):
-                    prompt.append(part.root.text)
+                if part.text is not None:
+                    prompt.append(part.text)
                 else:
                     raise GenkitError(status='INVALID_ARGUMENT', message='Non-text messages are not supported')
         return ' '.join(prompt)
@@ -202,22 +192,22 @@ class ImagenModel:
         if request.tools:
             raise GenkitError(status='UNIMPLEMENTED', message='Tools are not supported for this model.')
 
-        with tracer.start_as_current_span('generate_images') as span:
-            span.set_attribute(
-                'genkit:input',
-                json.dumps({
-                    'config': _to_dict(config),
-                    'contents': prompt,
-                    'model': self._version,
-                }),
-            )
+        async def call_imagen(_span: SpanContext) -> genai_types.GenerateImagesResponse:
             try:
-                response = await self._client.aio.models.generate_images(
-                    model=self._version, prompt=prompt, config=config
-                )
+                return await self._client.aio.models.generate_images(model=self._version, prompt=prompt, config=config)
             except APIError as e:
                 raise wrap_http_error(e, status_code=e.code, message=e.message or str(e)) from e
-            span.set_attribute('genkit:output', json.dumps(_to_dict(response), default=str))
+
+        response = await run_in_new_span(
+            'generate_images',
+            call_imagen,
+            action_type='util',
+            input={
+                'config': _to_dict(config),
+                'contents': prompt,
+                'model': self._version,
+            },
+        )
 
         content = self._contents_from_response(response)
 
@@ -259,13 +249,8 @@ class ImagenModel:
                 if image.image and image.image.image_bytes:
                     b64_data = base64.b64encode(image.image.image_bytes).decode('utf-8')
                     content.append(
-                        Part(
-                            root=MediaPart(
-                                media=Media(
-                                    url=f'data:{image.image.mime_type};base64,{b64_data}',
-                                    content_type=image.image.mime_type,
-                                )
-                            )
+                        Part.from_media(
+                            f'data:{image.image.mime_type};base64,{b64_data}', content_type=image.image.mime_type
                         )
                     )
 

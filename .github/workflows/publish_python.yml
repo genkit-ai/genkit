@@ -68,6 +68,7 @@ jobs:
             py/packages/genkit-google-cloud
             py/packages/genkit-google-genai
             py/packages/genkit-middleware
+            py/packages/genkit-otel
             py/packages/genkit-ollama
             py/packages/genkit-openai
             py/packages/genkit-vertexai

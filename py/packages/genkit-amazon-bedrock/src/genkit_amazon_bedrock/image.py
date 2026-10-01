@@ -33,18 +33,8 @@ from typing import Any, Literal, cast
 import structlog
 from botocore.exceptions import BotoCoreError, ClientError
 
-from genkit import (
-    FinishReason,
-    Media,
-    MediaPart,
-    Message,
-    ModelRequest,
-    ModelResponse,
-    Part,
-    Role,
-    TextPart,
-)
-from genkit.plugin_api import ActionRunContext, GenkitError, ModelConfig
+from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, Part, Role
+from genkit.model import ModelConfig, ModelRequest
 from genkit_amazon_bedrock.embedders import InvokeModelTransport
 from genkit_amazon_bedrock.model_info import strip_inference_profile_prefix
 from genkit_amazon_bedrock.models import _from_botocore_error, _from_client_error
@@ -116,7 +106,7 @@ def image_prompt(request: ModelRequest[Any]) -> str:
     for message in reversed(request.messages):
         if message.role != Role.USER:
             continue
-        prompt = ''.join(part.root.text for part in message.content if isinstance(part.root, TextPart))
+        prompt = ''.join(part.text for part in message.content if part.text is not None)
         if prompt:
             return prompt
     return ''
@@ -232,7 +222,7 @@ def _response_images(payload: dict[str, Any]) -> list[Any]:
 def _media_parts(images: list[Any], mime: str) -> list[Part]:
     """Wraps base64 image strings as Genkit media parts, skipping blanks."""
     return [
-        Part(root=MediaPart(media=Media(url=f'data:{mime};base64,{image}', content_type=mime)))
+        Part.from_media(f'data:{mime};base64,{image}', content_type=mime)
         for image in images
         if isinstance(image, str) and image
     ]

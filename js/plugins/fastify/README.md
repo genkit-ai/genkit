@@ -2,6 +2,16 @@
 
 This plugin provides utilities for conveniently exposing Genkit flows and actions via a [Fastify](https://fastify.dev/) HTTP server as REST APIs.
 
+> **Building with a coding agent? Install the Genkit JS skill first.**
+>
+> ```bash
+> npx skills add genkit-ai/skills --skill developing-genkit-js
+> ```
+>
+> It teaches your agent the current Genkit JS APIs and common gotchas.
+> Source, manual install and skills for other languages:
+> [genkit-ai/skills](https://github.com/genkit-ai/skills).
+
 Fastify is not Web Fetch native and has no built-in Genkit integration, so wiring a flow into Fastify by hand requires bridging Fastify's `request`/`reply` to the Genkit action protocol (including Server-Sent Events for streaming). This plugin does that bridging for you, so a flow mounts in one line, just like [`@genkit-ai/express`](https://www.npmjs.com/package/@genkit-ai/express) does for Express.
 
 See the [official documentation](https://genkit.dev/docs/frameworks/) for more.
@@ -22,7 +32,7 @@ import { fastifyHandler } from '@genkit-ai/fastify';
 
 const simpleFlow = ai.defineFlow('simpleFlow', async (input, { sendChunk }) => {
   const { text } = await ai.generate({
-    model: googleAI.model('gemini-2.5-flash'),
+    model: googleAI.model('gemini-flash-latest'),
     prompt: input,
     onChunk: (c) => sendChunk(c.text),
   });

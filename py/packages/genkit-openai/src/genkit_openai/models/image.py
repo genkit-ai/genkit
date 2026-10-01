@@ -27,19 +27,8 @@ from typing import Any
 from openai import APIStatusError, AsyncOpenAI
 from openai.types.images_response import ImagesResponse
 
-from genkit import (
-    Media,
-    MediaPart,
-    Message,
-    ModelInfo,
-    ModelRequest,
-    ModelResponse,
-    Part,
-    Role,
-    Supports,
-)
-from genkit.model import FinishReason
-from genkit.plugin_api import ActionRunContext
+from genkit import ActionRunContext, FinishReason, Message, ModelResponse, Part, Role
+from genkit.model import ModelInfo, ModelRequest, Supports
 from genkit_openai.models.utils import _extract_text, extract_config_dict, reraise_openai_error
 
 # GPT Image 1 has a different configuration surface from DALL-E models.
@@ -160,7 +149,7 @@ def _to_generate_response(result: ImagesResponse) -> ModelResponse:
             url = f'data:image/png;base64,{image.b64_json}'
 
         if url:
-            content.append(Part(root=MediaPart(media=Media(content_type='image/png', url=url))))
+            content.append(Part.from_media(url, content_type='image/png'))
 
     return ModelResponse(
         message=Message(role=Role.MODEL, content=content),

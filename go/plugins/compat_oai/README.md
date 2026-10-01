@@ -2,6 +2,16 @@
 
 This directory contains a package for building plugins that are compatible with the OpenAI API specification, along with plugins built on top of this package.
 
+> **Building with a coding agent? Install the Genkit Go skill first.**
+>
+> ```bash
+> npx skills add genkit-ai/skills --skill developing-genkit-go
+> ```
+>
+> It teaches your agent the current Genkit Go APIs and common gotchas.
+> Source, manual install and skills for other languages:
+> [genkit-ai/skills](https://github.com/genkit-ai/skills).
+
 ## Package Overview
 
 The `compat_oai` package provides a base implementation (`OpenAICompatible`) that handles:

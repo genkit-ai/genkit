@@ -26,7 +26,7 @@ from genkit_a2ui import (
     A2UI_CATALOG_VALUE_TYPE,
     A2uiCatalog,
     A2uiCatalogComponent,
-    A2uiParseError,
+    A2uiCatalogError,
     Surfaces,
     SurfacesConfig,
     load_catalog,
@@ -35,6 +35,7 @@ from genkit_a2ui import (
 )
 from helpers import (
     BASIC_CATALOG_ID,
+    assert_dead_turn,
     assert_finished_message,
     create_surface_ids,
     envelopes,
@@ -45,6 +46,8 @@ from helpers import (
     weather_fence,
 )
 from pydantic import ValidationError
+
+from genkit._core._error import RuntimeErrorReason
 
 BANNER_CATALOG = A2uiCatalog(
     id='https://example.com/catalogs/banner.json',
@@ -107,16 +110,26 @@ async def test_generate_default_stays_basic_when_a_custom_catalog_is_registered(
 
 
 @pytest.mark.asyncio
-async def test_generate_unknown_catalog_fails_before_the_model() -> None:
+async def test_generate_unknown_catalog_fails_the_turn_before_the_model() -> None:
+    """An unregistered catalog id kills the turn without ever reaching the model.
+
+    This one is your configuration, not the model's answer, so it reports
+    INVALID_ARGUMENT rather than the INTERNAL a strict-mode refusal uses.
+    """
     ai, pm = setup()
     pm.responses = [model_ok(weather_fence())]
 
-    with pytest.raises(ValueError, match='no catalog registered'):
-        await ai.generate(
-            model='programmableModel',
-            prompt='banner',
-            use=[Surfaces(catalog=BANNER_CATALOG.id)],
-        )
+    response = await ai.generate(
+        model='programmableModel',
+        prompt='banner',
+        use=[Surfaces(catalog=BANNER_CATALOG.id)],
+    )
+    assert_dead_turn(
+        response,
+        reason=RuntimeErrorReason.INVALID_INPUT,
+        match='no catalog registered',
+        status='INVALID_ARGUMENT',
+    )
     assert pm.last_request is None
 
 
@@ -132,16 +145,17 @@ async def test_generate_catalog_basic_falls_back_without_register() -> None:
 
 @pytest.mark.asyncio
 async def test_generate_strict_rejects_a_component_the_loaded_catalog_lacks() -> None:
+    """Strict mode refuses a component the catalog lacks and drops the turn."""
     ai, pm = setup()
     load_catalog(ai, BANNER_CATALOG)
     pm.responses = [model_ok(weather_fence())]
 
-    with pytest.raises(A2uiParseError, match='not in catalog'):
-        await ai.generate(
-            model='programmableModel',
-            prompt='weather',
-            use=[Surfaces(catalog=BANNER_CATALOG.id, validate='strict')],
-        )
+    response = await ai.generate(
+        model='programmableModel',
+        prompt='weather',
+        use=[Surfaces(catalog=BANNER_CATALOG.id, validate='strict')],
+    )
+    assert_dead_turn(response, reason=RuntimeErrorReason.INVALID_OUTPUT, match='not in catalog')
 
 
 @pytest.mark.asyncio
@@ -211,15 +225,29 @@ def test_load_catalog_same_catalog_twice_is_ok() -> None:
 def test_load_catalog_raises_when_id_already_holds_something_else() -> None:
     ai, _ = setup()
     ai.registry.register_value(A2UI_CATALOG_VALUE_TYPE, BANNER_CATALOG.id, 'not-a-catalog')
-    with pytest.raises(ValueError, match='is not a catalog'):
+    with pytest.raises(A2uiCatalogError, match='is not a catalog'):
         load_catalog(ai, BANNER_CATALOG)
+
+
+def test_catalog_error_reports_invalid_argument() -> None:
+    """A catalog you did not register is your configuration, so the status says so.
+
+    INVALID_ARGUMENT tells a client the call itself needs fixing, which is
+    true here and false for a strict-mode refusal — that one is the model's
+    answer and reports INTERNAL. The message is not redacted either way.
+    """
+    ai, _ = setup()
+    ai.registry.register_value(A2UI_CATALOG_VALUE_TYPE, BANNER_CATALOG.id, 'not-a-catalog')
+    with pytest.raises(A2uiCatalogError, match='is not a catalog') as exc_info:
+        load_catalog(ai, BANNER_CATALOG)
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
 
 
 def test_load_catalog_file_names_the_path_when_the_file_is_not_utf8(tmp_path: Path) -> None:
     ai, _ = setup()
     path = tmp_path / 'catalog.json'
     path.write_bytes(b'\xff\xfe not utf-8')
-    with pytest.raises(ValueError, match=str(path)) as exc_info:
+    with pytest.raises(A2uiCatalogError, match=str(path)) as exc_info:
         load_catalog_file(ai, str(path))
     assert isinstance(exc_info.value.__cause__, UnicodeDecodeError)
 
@@ -230,7 +258,7 @@ def test_load_catalog_file_names_the_path_when_a_component_has_no_name(tmp_path:
         json.dumps({'id': BANNER_CATALOG.id, 'components': [{'description': 'no name'}]}),
         encoding='utf-8',
     )
-    with pytest.raises(ValueError, match=str(path)):
+    with pytest.raises(A2uiCatalogError, match=str(path)):
         load_catalog_file(setup()[0], str(path))
 
 

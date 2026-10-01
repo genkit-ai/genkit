@@ -22,7 +22,7 @@ import asyncio
 import threading
 import weakref
 from collections.abc import Awaitable, Callable
-from typing import cast
+from typing import Any, cast
 
 from dotpromptz.dotprompt import Dotprompt
 from pydantic import BaseModel
@@ -40,9 +40,11 @@ from genkit._core._action import (
     parse_dap_qualified_name,
     set_action_name,
 )
-from genkit._core._error import GenkitError
+from genkit._core._dap import DapFn, DapMetadata, DynamicActionProvider
+from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._logger import get_logger
 from genkit._core._model import (
+    EmbedRequest,
     ModelRequest,
     ModelResponse,
     ModelResponseChunk,
@@ -50,7 +52,6 @@ from genkit._core._model import (
 from genkit._core._plugin import Plugin
 from genkit._core._typing import (
     ActionMetadata,
-    EmbedRequest,
     EmbedResponse,
     EvalRequest,
     EvalResponse,
@@ -58,6 +59,10 @@ from genkit._core._typing import (
 )
 
 logger = get_logger(__name__)
+
+# A provider backed by a remote or subprocess transport can stall indefinitely,
+# and the reflection server it is listed for must still answer.
+DEFAULT_DAP_LIST_TIMEOUT_SECONDS = 10.0
 
 # An action store is a nested dictionary mapping ActionKind to a dictionary of
 # action names and their corresponding Action instances.
@@ -96,6 +101,77 @@ def _action_metadata_for_registered_action(action: Action) -> ActionMetadata:
         output_schema=action.output_schema,
         metadata=dict(action.metadata) if action.metadata else None,
     )
+
+
+# The event loop holds only a weak reference to a running task.
+_dap_listing_tasks: set[asyncio.Task[dict[str, ActionMetadata]]] = set()
+
+
+def _release_listing_task(task: asyncio.Task[dict[str, ActionMetadata]]) -> None:
+    """Drop a finished listing and take its outcome so asyncio does not report it as never retrieved."""
+    _dap_listing_tasks.discard(task)
+    if not task.cancelled():
+        task.exception()
+
+
+def _is_runnable_dap_key(key: str) -> bool:
+    """Report whether ``resolve_action_by_key`` can resolve this DAP child key."""
+    try:
+        kind, name = parse_action_key(key)
+    except ValueError:
+        return False
+    return kind == ActionKind.DYNAMIC_ACTION_PROVIDER and parse_dap_qualified_name(name) is not None
+
+
+async def _list_dap_children(
+    provider_name: str,
+    provider: DynamicActionProvider,
+    timeout_seconds: float | None,
+) -> dict[str, ActionMetadata]:
+    """List one provider's children for the catalog, degrading to no rows on failure.
+
+    Children whose key ``resolve_action_by_key`` cannot parse are dropped, so the
+    catalog never offers a row that fails when it is run.
+
+    Args:
+        provider_name: Registered name of the provider action.
+        provider: The provider whose children to list.
+        timeout_seconds: How long to wait for the listing, or None to wait
+            indefinitely.
+
+    Returns:
+        Map of qualified child key to metadata, empty if the provider timed out,
+        failed, or had its listing cancelled.
+    """
+    task = asyncio.create_task(provider.list_action_metadata_by_key(provider_name))
+    _dap_listing_tasks.add(task)
+    task.add_done_callback(_release_listing_task)
+
+    # asyncio.wait rather than wait_for: cancelling would abort a fetch that
+    # concurrent callers share through the provider cache.
+    done, _pending = await asyncio.wait({task}, timeout=timeout_seconds)
+    if not done:
+        logger.warning('Timed out listing actions for dynamic action provider %s', provider_name)
+        return {}
+    if task.cancelled():
+        # Only a third party can have cancelled it: this coroutine's own
+        # cancellation surfaces at the await above and propagates from there.
+        logger.warning('Listing actions for dynamic action provider %s was cancelled', provider_name)
+        return {}
+    try:
+        children = task.result()
+    except Exception:
+        logger.exception('Error listing actions for dynamic action provider %s', provider_name)
+        return {}
+
+    runnable = {key: meta for key, meta in children.items() if _is_runnable_dap_key(key)}
+    if len(runnable) != len(children):
+        logger.warning(
+            'Skipped %d action(s) from dynamic action provider %s: their keys cannot be resolved',
+            len(children) - len(runnable),
+            provider_name,
+        )
+    return runnable
 
 
 class Registry:
@@ -144,7 +220,11 @@ class Registry:
         async def async_schema_resolver(name: str) -> dict[str, object]:
             schema = self.lookup_schema(name)
             if schema is None:
-                raise GenkitError(status='NOT_FOUND', message=f"Schema '{name}' not found")
+                raise GenkitError(
+                    status='NOT_FOUND',
+                    message=f"Schema '{name}' not found",
+                    reason=RuntimeErrorReason.INVALID_INPUT,
+                )
             return schema
 
         # Children share the parent's Dotprompt instance (prompts are global).
@@ -259,7 +339,7 @@ class Registry:
         """Register an existing Action instance.
 
         Allows registering a pre-configured Action object, such as one created via
-        `dynamic_resource` or other factory methods.
+        a factory method.
 
         Args:
            action: The action instance to register.
@@ -288,7 +368,7 @@ class Registry:
         ensures all action metadata is fully loaded before returning.
 
         Args:
-            kind: The type of actions to retrieve (e.g., TOOL, MODEL, RESOURCE).
+            kind: The type of actions to retrieve (e.g., TOOL, MODEL).
 
         Returns:
             A dictionary mapping action names to Action instances with fully loaded metadata.
@@ -299,14 +379,27 @@ class Registry:
             await self._trigger_lazy_loading(action)
         return actions
 
-    async def list_actions(self) -> dict[str, ActionMetadata]:
-        """Return reflection metadata for plugins and registered actions.
+    async def list_actions(
+        self,
+        *,
+        dap_timeout_seconds: float | None = DEFAULT_DAP_LIST_TIMEOUT_SECONDS,
+    ) -> dict[str, ActionMetadata]:
+        """Return reflection metadata for plugins, registered actions and DAP children.
 
         Initializes plugins, advertises plugin rows from each plugin's ``list_actions()``,
-        then fills registered :class:`Action` rows. DAP children are not catalog rows;
-        they become ``/tool.v2/<name>`` when generate binds them on a child registry.
-        Merges with the parent registry's catalog; entries from this registry win
-        on duplicate keys.
+        then fills registered :class:`Action` rows. Each registered dynamic action
+        provider contributes both its own row and one row per child, keyed
+        ``/dynamic-action-provider/<provider>:<kind>/<name>`` so the row can be run
+        through :meth:`resolve_action_by_key`.
+
+        Listing a provider's children reaches its backing transport, so providers are
+        listed concurrently and a provider that times out or fails contributes no rows
+        instead of failing the catalog. Merges with the parent registry's catalog;
+        entries from this registry win on duplicate keys.
+
+        Args:
+            dap_timeout_seconds: How long to wait for each dynamic action provider
+                to list its children, or None to wait indefinitely.
 
         Returns:
             Map of action key string to typed :class:`ActionMetadata`.
@@ -338,10 +431,21 @@ class Registry:
                 key = create_action_key(kind, name)
                 catalog[key] = _action_metadata_for_registered_action(action)
 
-        # 3. Merge in parent registry's catalog; entries from this registry win on duplicate keys.
+        # 3. Dynamic action provider children, one row per child.
+        providers: list[tuple[str, DynamicActionProvider]] = []
+        for name, action in (await self.resolve_actions_by_kind(ActionKind.DYNAMIC_ACTION_PROVIDER)).items():
+            provider = getattr(action, GENKIT_DYNAMIC_ACTION_PROVIDER_ATTR, None)
+            if provider is not None:
+                providers.append((name, provider))
+        for children in await asyncio.gather(
+            *(_list_dap_children(name, provider, dap_timeout_seconds) for name, provider in providers)
+        ):
+            catalog.update(children)
+
+        # 4. Merge in parent registry's catalog; entries from this registry win on duplicate keys.
         if self._parent is None:
             return catalog
-        parent_catalog = await self._parent.list_actions()
+        parent_catalog = await self._parent.list_actions(dap_timeout_seconds=dap_timeout_seconds)
         return {**parent_catalog, **catalog}
 
     def register_value(self, kind: str, name: str, value: object) -> None:
@@ -798,3 +902,34 @@ class Registry:
         if action is None:
             return None
         return cast(Action[EvalRequest, EvalResponse, Never], action)
+
+
+def define_dynamic_action_provider(
+    registry: Registry,
+    name: str,
+    fn: DapFn,
+    *,
+    description: str | None = None,
+    cache_ttl_millis: int | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> DynamicActionProvider:
+    """Define and register a Dynamic Action Provider for lazy action resolution."""
+
+    async def dap_action(input: DapMetadata) -> DapMetadata:
+        return input
+
+    action = registry.register_action(
+        name=name,
+        kind=ActionKind.DYNAMIC_ACTION_PROVIDER,
+        description=description,
+        fn=dap_action,
+        metadata={**(metadata or {}), 'type': 'dynamic-action-provider'},
+    )
+
+    dap = DynamicActionProvider(action, fn, cache_ttl_millis)
+    # Attach the provider to the registered Action so anyone holding the
+    # Action (e.g. ``Registry.resolve_action_by_key`` for a DAP-qualified key,
+    # or ``Registry.list_actions`` expanding children for reflection) can
+    # recover the cache and helpers via ``getattr(action, ATTR, None)``.
+    setattr(action, GENKIT_DYNAMIC_ACTION_PROVIDER_ATTR, dap)
+    return dap

@@ -5,12 +5,10 @@
 
 """Tests for the message utils."""
 
-from genkit import Message
+from genkit import Message, Part
 from genkit._ai._messages import inject_instructions
 from genkit._core._typing import (
-    Part,
     Role,
-    TextPart,
 )
 
 
@@ -20,7 +18,7 @@ def test_inject_instructions_user_message() -> None:
         messages=[
             Message(
                 role=Role.USER,
-                content=[Part(root=TextPart(text='hello')), Part(root=TextPart(text='world'))],
+                content=[Part.from_text('hello'), Part.from_text('world')],
             )
         ],
         instructions='injected',
@@ -30,14 +28,9 @@ def test_inject_instructions_user_message() -> None:
         Message(
             role=Role.USER,
             content=[
-                Part(root=TextPart(text='hello')),
-                Part(root=TextPart(text='world')),
-                Part(
-                    root=TextPart(
-                        text='injected',
-                        metadata={'purpose': 'output'},
-                    )
-                ),
+                Part.from_text('hello'),
+                Part.from_text('world'),
+                Part.from_text('injected', metadata={'purpose': 'output'}),
             ],
             metadata=None,
         )
@@ -50,11 +43,11 @@ def test_inject_instructions_system_message() -> None:
         messages=[
             Message(
                 role=Role.SYSTEM,
-                content=[Part(root=TextPart(text='system')), Part(root=TextPart(text='message'))],
+                content=[Part.from_text('system'), Part.from_text('message')],
             ),
             Message(
                 role=Role.USER,
-                content=[Part(root=TextPart(text='hello')), Part(root=TextPart(text='world'))],
+                content=[Part.from_text('hello'), Part.from_text('world')],
             ),
         ],
         instructions='injected',
@@ -64,22 +57,17 @@ def test_inject_instructions_system_message() -> None:
         Message(
             role=Role.SYSTEM,
             content=[
-                Part(root=TextPart(text='system')),
-                Part(root=TextPart(text='message')),
-                Part(
-                    root=TextPart(
-                        text='injected',
-                        metadata={'purpose': 'output'},
-                    )
-                ),
+                Part.from_text('system'),
+                Part.from_text('message'),
+                Part.from_text('injected', metadata={'purpose': 'output'}),
             ],
             metadata=None,
         ),
         Message(
             role=Role.USER,
             content=[
-                Part(root=TextPart(text='hello')),
-                Part(root=TextPart(text='world')),
+                Part.from_text('hello'),
+                Part.from_text('world'),
             ],
             metadata=None,
         ),
@@ -92,18 +80,13 @@ def test_inject_instructions_purpose() -> None:
         messages=[
             Message(
                 role=Role.SYSTEM,
-                content=[Part(root=TextPart(text='system')), Part(root=TextPart(text='message'))],
+                content=[Part.from_text('system'), Part.from_text('message')],
             ),
             Message(
                 role=Role.USER,
                 content=[
-                    Part(
-                        root=TextPart(
-                            text='will be overridden',
-                            metadata={'purpose': 'output', 'pending': True},
-                        )
-                    ),
-                    Part(root=TextPart(text='world')),
+                    Part.from_text('will be overridden', metadata={'purpose': 'output', 'pending': True}),
+                    Part.from_text('world'),
                 ],
             ),
         ],
@@ -114,21 +97,16 @@ def test_inject_instructions_purpose() -> None:
         Message(
             role=Role.SYSTEM,
             content=[
-                Part(root=TextPart(text='system')),
-                Part(root=TextPart(text='message')),
+                Part.from_text('system'),
+                Part.from_text('message'),
             ],
             metadata=None,
         ),
         Message(
             role=Role.USER,
             content=[
-                Part(
-                    root=TextPart(
-                        text='injected',
-                        metadata={'purpose': 'output'},
-                    )
-                ),
-                Part(root=TextPart(text='world')),
+                Part.from_text('injected', metadata={'purpose': 'output'}),
+                Part.from_text('world'),
             ],
             metadata=None,
         ),
@@ -141,18 +119,13 @@ def test_inject_instructions_short_circuit() -> None:
         messages=[
             Message(
                 role=Role.SYSTEM,
-                content=[Part(root=TextPart(text='system')), Part(root=TextPart(text='message'))],
+                content=[Part.from_text('system'), Part.from_text('message')],
             ),
             Message(
                 role=Role.USER,
                 content=[
-                    Part(
-                        root=TextPart(
-                            text='previously injected',
-                            metadata={'purpose': 'output'},
-                        )
-                    ),
-                    Part(root=TextPart(text='world')),
+                    Part.from_text('previously injected', metadata={'purpose': 'output'}),
+                    Part.from_text('world'),
                 ],
             ),
         ],
@@ -163,21 +136,16 @@ def test_inject_instructions_short_circuit() -> None:
         Message(
             role=Role.SYSTEM,
             content=[
-                Part(root=TextPart(text='system')),
-                Part(root=TextPart(text='message')),
+                Part.from_text('system'),
+                Part.from_text('message'),
             ],
             metadata=None,
         ),
         Message(
             role=Role.USER,
             content=[
-                Part(
-                    root=TextPart(
-                        text='previously injected',
-                        metadata={'purpose': 'output'},
-                    )
-                ),
-                Part(root=TextPart(text='world')),
+                Part.from_text('previously injected', metadata={'purpose': 'output'}),
+                Part.from_text('world'),
             ],
             metadata=None,
         ),

@@ -3,6 +3,16 @@
 This plugin provides Genkit support for OpenAI chat models and embedders
 through the Chat Completions API.
 
+> **Building with a coding agent? Install the Genkit Go skill first.**
+>
+> ```bash
+> npx skills add genkit-ai/skills --skill developing-genkit-go
+> ```
+>
+> It teaches your agent the current Genkit Go APIs and common gotchas.
+> Source, manual install and skills for other languages:
+> [genkit-ai/skills](https://github.com/genkit-ai/skills).
+
 ## Setup
 
 Set an OpenAI API key:

@@ -14,28 +14,26 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""runTurn / root agent span telemetry for store and client-managed agents."""
+"""Agent turn spans: session id on the root span, session state on runTurn."""
 
 from __future__ import annotations
 
 import json
 import re
-from collections.abc import Generator, Sequence
+from collections.abc import Sequence
 
 import pytest
-from opentelemetry import trace as trace_api
-from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
+from genkit import Part
 from genkit._ai._agents._base import define_custom_agent
 from genkit._ai._agents._runtime import SessionRunner
 from genkit._ai._agents._session import Session
 from genkit._ai._agents._types import TurnContext, TurnResult
 from genkit._core._action import ActionRunContext
+from genkit._core._model import AgentInput, AgentResult, Message, SessionState
 from genkit._core._registry import Registry
-from genkit._core._trace._attrs import Attr, metadata_key
-from genkit._core._typing import AgentInput, AgentResult, MessageData, Part, SessionState, TextPart
+from genkit._core._telemetry._attrs import Attr, metadata_key
+from genkit._core._telemetry.http import ActiveSpan
 from genkit.exp.agent import AgentFinishReason, InMemorySessionStore
 
 UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I)
@@ -43,26 +41,7 @@ SESSION_ID_ATTR = metadata_key('agent:sessionId')
 SNAPSHOT_ID_ATTR = metadata_key('agent:snapshotId')
 
 
-@pytest.fixture
-def exporter() -> Generator[InMemorySpanExporter, None, None]:
-    provider = trace_api.get_tracer_provider()
-    if not isinstance(provider, TracerProvider):
-        provider = TracerProvider()
-        trace_api.set_tracer_provider(provider)
-    exp = InMemorySpanExporter()
-    processor = SimpleSpanProcessor(exp)
-    provider.add_span_processor(processor)
-    try:
-        yield exp
-    finally:
-        exp.clear()
-        if hasattr(provider, '_active_span_processor'):
-            provider._active_span_processor._span_processors = tuple(
-                p for p in provider._active_span_processor._span_processors if p is not processor
-            )
-
-
-def _by_name(spans: Sequence[ReadableSpan], name: str) -> ReadableSpan:
+def _by_name(spans: Sequence[ActiveSpan], name: str) -> ActiveSpan:
     matches = [s for s in spans if s.name == name]
     assert matches, f'no span named {name!r} in {[s.name for s in spans]}'
     return matches[-1]
@@ -80,7 +59,7 @@ def _counter_agent(
                 return {'count': (custom or {}).get('count', 0) + 1}
 
             await session_runner.update_custom(bump)
-            await session_runner.add_messages([MessageData(role='model', content=[Part(root=TextPart(text='done'))])])
+            await session_runner.add_messages([Message(role='model', content=[Part.from_text('done')])])
             return TurnResult(finish_reason=AgentFinishReason.STOP)
 
         await session_runner.run(handle_turn)
@@ -90,18 +69,21 @@ def _counter_agent(
 
 
 def test_session_mints_session_id_when_missing() -> None:
+    """Session() without a session_id assigns one."""
     session = Session()
     assert session.session_state.session_id
     assert UUID_RE.match(session.session_state.session_id)
 
 
 def test_session_preserves_existing_session_id() -> None:
+    """Session(state) keeps the session_id they already set."""
     session = Session(SessionState(session_id='keep-me', custom={'x': 1}))
     assert session.session_state.session_id == 'keep-me'
     assert session.session_state.custom == {'x': 1}
 
 
 def test_session_does_not_mutate_caller_state() -> None:
+    """Session(state) does not write a session_id back onto the object they passed in."""
     seed = SessionState(custom={'n': 1})
     session = Session(seed)
     assert session.session_state.session_id
@@ -110,8 +92,9 @@ def test_session_does_not_mutate_caller_state() -> None:
 
 @pytest.mark.asyncio
 async def test_run_turn_span_output_is_session_state_with_store(
-    exporter: InMemorySpanExporter,
+    exporter,
 ) -> None:
+    """Session store: root span has session id; runTurn output is the stored state."""
     registry = Registry()
     store = InMemorySessionStore()
     agent = _counter_agent(registry=registry, name='turnSpanStore', store=store)
@@ -140,8 +123,9 @@ async def test_run_turn_span_output_is_session_state_with_store(
 
 @pytest.mark.asyncio
 async def test_run_turn_span_output_is_session_state_client_managed(
-    exporter: InMemorySpanExporter,
+    exporter,
 ) -> None:
+    """No store: root span still has session id; runTurn output is the in-memory state."""
     registry = Registry()
     agent = _counter_agent(registry=registry, name='turnSpanClient', store=None)
 
@@ -168,7 +152,26 @@ async def test_run_turn_span_output_is_session_state_client_managed(
 
 
 @pytest.mark.asyncio
+async def test_agent_turn_output_is_the_returned_state(exporter) -> None:
+    """runTurn-N's genkit:output is exactly the session state that turn handed back to the client."""
+    registry = Registry()
+    agent = _counter_agent(registry=registry, name='turnSpanReturned', store=None)
+
+    chat = agent.chat()
+    await chat.send('one')
+    out = await chat.send('two')
+    assert out.raw.state is not None
+
+    turn_span = _by_name(exporter.get_finished_spans(), 'runTurn-1')
+    assert turn_span.attributes is not None
+    payload = json.loads(turn_span.attributes[Attr.OUTPUT])
+    assert payload == {'state': out.raw.state.model_dump(by_alias=True, exclude_none=True, mode='json')}
+    assert payload['state']['custom'] == {'count': 2}
+
+
+@pytest.mark.asyncio
 async def test_client_managed_preserves_session_id_across_turns() -> None:
+    """Two send() calls on the same chat keep the same session_id."""
     registry = Registry()
     agent = _counter_agent(registry=registry, name='preserveClientSid', store=None)
 

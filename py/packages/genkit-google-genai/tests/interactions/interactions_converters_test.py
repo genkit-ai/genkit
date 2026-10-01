@@ -34,32 +34,21 @@ from genkit_google_genai._interactions.converters import (
     to_interaction_role,
     to_interaction_steps,
     to_interaction_tool,
+    to_thought_step,
     usage_from_interaction,
 )
 from google.genai.interactions import Content, Interaction, Step, ThoughtStep, Usage
 from pydantic import BaseModel, TypeAdapter
 
-from genkit import (
-    CustomPart,
-    GenkitError,
-    Media,
-    MediaPart,
-    Part,
-    ReasoningPart,
-    TextPart,
-    ToolRequest,
-    ToolRequestPart,
-    ToolResponse,
-    ToolResponsePart,
-)
-from genkit.model import Message, ToolDefinition
+from genkit import GenkitError, Message, Part
+from genkit.model import ToolDefinition, ToolRequest, ToolResponse
 
 ContentAdapter: TypeAdapter[Content] = TypeAdapter(Content)
 StepAdapter: TypeAdapter[Step] = TypeAdapter(Step)
 
 
 def part_dict(part: Part) -> dict:
-    return part.root.model_dump(by_alias=True, exclude_none=True)
+    return part.model_dump(by_alias=True, exclude_none=True)
 
 
 class TestEnsureToolIds:
@@ -68,14 +57,14 @@ class TestEnsureToolIds:
             Message(
                 role='model',
                 content=[
-                    Part(ToolRequestPart(tool_request=ToolRequest(name='tool1', input={}))),
-                    Part(ToolRequestPart(tool_request=ToolRequest(name='tool2', input={}))),
+                    Part(tool_request=ToolRequest(name='tool1', input={})),
+                    Part(tool_request=ToolRequest(name='tool2', input={})),
                 ],
             )
         ]
         result = ensure_tool_ids(messages)
-        req1 = result[0].content[0].root.tool_request
-        req2 = result[0].content[1].root.tool_request
+        req1 = result[0].content[0].tool_request
+        req2 = result[0].content[1].tool_request
         assert req1 is not None and req1.ref and req1.ref.startswith('genkit-auto-id-')
         assert req2 is not None and req2.ref and req2.ref.startswith('genkit-auto-id-')
         assert req1.ref != req2.ref
@@ -85,23 +74,23 @@ class TestEnsureToolIds:
             Message(
                 role='model',
                 content=[
-                    Part(ToolRequestPart(tool_request=ToolRequest(name='tool1', input={}))),
-                    Part(ToolRequestPart(tool_request=ToolRequest(name='tool2', input={}))),
+                    Part(tool_request=ToolRequest(name='tool1', input={})),
+                    Part(tool_request=ToolRequest(name='tool2', input={})),
                 ],
             ),
             Message(
                 role='tool',
                 content=[
-                    Part(ToolResponsePart(tool_response=ToolResponse(name='tool1', output={}))),
-                    Part(ToolResponsePart(tool_response=ToolResponse(name='tool2', output={}))),
+                    Part(tool_response=ToolResponse(name='tool1', output={})),
+                    Part(tool_response=ToolResponse(name='tool2', output={})),
                 ],
             ),
         ]
         result = ensure_tool_ids(messages)
-        req1 = result[0].content[0].root.tool_request
-        req2 = result[0].content[1].root.tool_request
-        res1 = result[1].content[0].root.tool_response
-        res2 = result[1].content[1].root.tool_response
+        req1 = result[0].content[0].tool_request
+        req2 = result[0].content[1].tool_request
+        res1 = result[1].content[0].tool_response
+        res2 = result[1].content[1].tool_response
         assert req1 and req1.ref and res1 and res1.ref == req1.ref
         assert req2 and req2.ref and res2 and res2.ref == req2.ref
 
@@ -109,22 +98,22 @@ class TestEnsureToolIds:
         messages = [
             Message(
                 role='tool',
-                content=[Part(ToolResponsePart(tool_response=ToolResponse(name='tool1', output={})))],
+                content=[Part(tool_response=ToolResponse(name='tool1', output={}))],
             )
         ]
         result = ensure_tool_ids(messages)
-        res1 = result[0].content[0].root.tool_response
+        res1 = result[0].content[0].tool_response
         assert res1 and res1.ref and res1.ref.startswith('genkit-orphan-id-')
 
     def test_preserves_existing_refs(self) -> None:
         messages = [
             Message(
                 role='model',
-                content=[Part(ToolRequestPart(tool_request=ToolRequest(name='tool1', input={}, ref='existing-id')))],
+                content=[Part(tool_request=ToolRequest(name='tool1', input={}, ref='existing-id'))],
             )
         ]
         result = ensure_tool_ids(messages)
-        req1 = result[0].content[0].root.tool_request
+        req1 = result[0].content[0].tool_request
         assert req1 and req1.ref == 'existing-id'
 
     def test_pairs_unreffed_responses_to_existing_request_refs(self) -> None:
@@ -132,23 +121,23 @@ class TestEnsureToolIds:
             Message(
                 role='model',
                 content=[
-                    Part(ToolRequestPart(tool_request=ToolRequest(name='a', input={}, ref='existing'))),
-                    Part(ToolRequestPart(tool_request=ToolRequest(name='b', input={}))),
+                    Part(tool_request=ToolRequest(name='a', input={}, ref='existing')),
+                    Part(tool_request=ToolRequest(name='b', input={})),
                 ],
             ),
             Message(
                 role='tool',
                 content=[
-                    Part(ToolResponsePart(tool_response=ToolResponse(name='a', output={}))),
-                    Part(ToolResponsePart(tool_response=ToolResponse(name='b', output={}))),
+                    Part(tool_response=ToolResponse(name='a', output={})),
+                    Part(tool_response=ToolResponse(name='b', output={})),
                 ],
             ),
         ]
         result = ensure_tool_ids(messages)
-        req_a = result[0].content[0].root.tool_request
-        req_b = result[0].content[1].root.tool_request
-        res_a = result[1].content[0].root.tool_response
-        res_b = result[1].content[1].root.tool_response
+        req_a = result[0].content[0].tool_request
+        req_b = result[0].content[1].tool_request
+        res_a = result[1].content[0].tool_response
+        res_b = result[1].content[1].tool_response
         assert req_a and req_a.ref == 'existing'
         assert req_b and req_b.ref and req_b.ref.startswith('genkit-auto-id-')
         assert res_a and res_a.ref == 'existing'
@@ -159,21 +148,21 @@ class TestEnsureToolIds:
             Message(
                 role='model',
                 content=[
-                    Part(ToolRequestPart(tool_request=ToolRequest(name='a', input={}, ref='existing'))),
-                    Part(ToolRequestPart(tool_request=ToolRequest(name='b', input={}))),
+                    Part(tool_request=ToolRequest(name='a', input={}, ref='existing')),
+                    Part(tool_request=ToolRequest(name='b', input={})),
                 ],
             ),
             Message(
                 role='tool',
                 content=[
-                    Part(ToolResponsePart(tool_response=ToolResponse(name='a', output={}, ref='existing'))),
-                    Part(ToolResponsePart(tool_response=ToolResponse(name='b', output={}))),
+                    Part(tool_response=ToolResponse(name='a', output={}, ref='existing')),
+                    Part(tool_response=ToolResponse(name='b', output={})),
                 ],
             ),
         ]
         result = ensure_tool_ids(messages)
-        req_b = result[0].content[1].root.tool_request
-        res_b = result[1].content[1].root.tool_response
+        req_b = result[0].content[1].tool_request
+        res_b = result[1].content[1].tool_response
         assert req_b and res_b and res_b.ref == req_b.ref
 
 
@@ -210,42 +199,32 @@ class TestToInteractionTool:
 
 class TestToInteractionContent:
     def test_text(self) -> None:
-        result = to_interaction_content(Part(TextPart(text='Hello')))
+        result = to_interaction_content(Part.from_text('Hello'))
         assert result == {'type': 'text', 'text': 'Hello'}
 
     def test_image_data(self) -> None:
-        result = to_interaction_content(
-            Part(MediaPart(media=Media(url='data:image/png;base64,DATA', content_type='image/png')))
-        )
+        result = to_interaction_content(Part.from_media('data:image/png;base64,DATA', content_type='image/png'))
         assert result == {'type': 'image', 'data': 'DATA', 'mime_type': 'image/png'}
 
     def test_image_data_missing_separator(self) -> None:
         with pytest.raises(ValueError, match='missing payload separator'):
-            to_interaction_content(
-                Part(MediaPart(media=Media(url='data:image/png;base64GARBAGE', content_type='image/png')))
-            )
+            to_interaction_content(Part.from_media('data:image/png;base64GARBAGE', content_type='image/png'))
 
     def test_image_uri(self) -> None:
-        result = to_interaction_content(
-            Part(MediaPart(media=Media(url='gs://bucket/image.png', content_type='image/png')))
-        )
+        result = to_interaction_content(Part.from_media('gs://bucket/image.png', content_type='image/png'))
         assert result == {'type': 'image', 'uri': 'gs://bucket/image.png', 'mime_type': 'image/png'}
 
     def test_audio(self) -> None:
-        result = to_interaction_content(
-            Part(MediaPart(media=Media(url='data:audio/mp3;base64,DATA', content_type='audio/mp3')))
-        )
+        result = to_interaction_content(Part.from_media('data:audio/mp3;base64,DATA', content_type='audio/mp3'))
         assert result == {'type': 'audio', 'data': 'DATA', 'mime_type': 'audio/mp3'}
 
     def test_document(self) -> None:
-        result = to_interaction_content(
-            Part(MediaPart(media=Media(url='gs://bucket/doc.pdf', content_type='application/pdf')))
-        )
+        result = to_interaction_content(Part.from_media('gs://bucket/doc.pdf', content_type='application/pdf'))
         assert result == {'type': 'document', 'uri': 'gs://bucket/doc.pdf', 'mime_type': 'application/pdf'}
 
     def test_unsupported_media_raises(self) -> None:
         with pytest.raises(ValueError, match='Unsupported media type'):
-            to_interaction_content(Part(MediaPart(media=Media(url='https://example.com/x', content_type='text/plain'))))
+            to_interaction_content(Part.from_media('https://example.com/x', content_type='text/plain'))
 
 
 class TestToInteractionSteps:
@@ -253,7 +232,7 @@ class TestToInteractionSteps:
         messages = [
             Message(
                 role='model',
-                content=[Part(ToolRequestPart(tool_request=ToolRequest(name='func', input={'a': 1}, ref='ref1')))],
+                content=[Part(tool_request=ToolRequest(name='func', input={'a': 1}, ref='ref1'))],
             )
         ]
         assert to_interaction_steps(messages) == [
@@ -264,9 +243,7 @@ class TestToInteractionSteps:
         messages = [
             Message(
                 role='tool',
-                content=[
-                    Part(ToolResponsePart(tool_response=ToolResponse(name='func', output={'result': 'ok'}, ref='ref1')))
-                ],
+                content=[Part(tool_response=ToolResponse(name='func', output={'result': 'ok'}, ref='ref1'))],
             )
         ]
         assert to_interaction_steps(messages) == [
@@ -277,7 +254,7 @@ class TestToInteractionSteps:
         messages = [
             Message(
                 role='model',
-                content=[Part(TextPart(text='Thinking')), Part(TextPart(text='Done'))],
+                content=[Part.from_text('Thinking'), Part.from_text('Done')],
             )
         ]
         assert to_interaction_steps(messages) == [
@@ -288,7 +265,7 @@ class TestToInteractionSteps:
         ]
 
     def test_system_role_rejected(self) -> None:
-        messages = [Message(role='system', content=[Part(TextPart(text='be terse'))])]
+        messages = [Message(role='system', content=[Part.from_text('be terse')])]
         with pytest.raises(ValueError, match='system_instruction'):
             to_interaction_steps(messages)
 
@@ -297,11 +274,8 @@ class TestToInteractionSteps:
             Message(
                 role='model',
                 content=[
-                    Part(
-                        CustomPart(
-                            custom={'executableCode': {'code': 'print(1)', 'language': 'PYTHON'}},
-                            metadata={'callId': 'c1'},
-                        )
+                    Part.from_custom(
+                        {'executableCode': {'code': 'print(1)', 'language': 'PYTHON'}}, metadata={'callId': 'c1'}
                     )
                 ],
             )
@@ -319,11 +293,9 @@ class TestToInteractionSteps:
             Message(
                 role='model',
                 content=[
-                    Part(
-                        CustomPart(
-                            custom={'googleSearchCall': {'id': 'gs1', 'arguments': {'queries': ['genkit']}}},
-                            metadata={'thoughtSignature': 'sig'},
-                        )
+                    Part.from_custom(
+                        {'googleSearchCall': {'id': 'gs1', 'arguments': {'queries': ['genkit']}}},
+                        metadata={'thoughtSignature': 'sig'},
                     )
                 ],
             )
@@ -341,14 +313,7 @@ class TestToInteractionSteps:
         messages = [
             Message(
                 role='model',
-                content=[
-                    Part(
-                        ReasoningPart(
-                            reasoning='plan the answer',
-                            metadata={'thoughtSignature': 'sig-t'},
-                        )
-                    )
-                ],
+                content=[Part.from_reasoning('plan the answer', metadata={'thoughtSignature': 'sig-t'})],
             )
         ]
         assert to_interaction_steps(messages) == [
@@ -365,10 +330,10 @@ class TestToInteractionSteps:
             Message(
                 role='model',
                 content=[
-                    Part(ReasoningPart(reasoning='think', metadata={'thoughtSignature': 's'})),
-                    Part(TextPart(text='calling tool')),
-                    Part(ToolRequestPart(tool_request=ToolRequest(name='lookup', input={'q': 1}, ref='c1'))),
-                    Part(TextPart(text='after')),
+                    Part.from_reasoning('think', metadata={'thoughtSignature': 's'}),
+                    Part.from_text('calling tool'),
+                    Part(tool_request=ToolRequest(name='lookup', input={'q': 1}, ref='c1')),
+                    Part.from_text('after'),
                 ],
             )
         ]
@@ -394,7 +359,7 @@ class TestToInteractionSteps:
         messages = [
             Message(
                 role='model',
-                content=[Part(CustomPart(custom={'unknownStep': blob}))],
+                content=[Part.from_custom({'unknownStep': blob})],
             )
         ]
         assert to_interaction_steps(messages) == [blob]
@@ -405,8 +370,8 @@ class TestToInteractionSteps:
             payload: dict
 
         parts = from_interaction_step(cast(Any, FutureStep(payload={'x': 1})))
-        root = parts[0].root
-        assert isinstance(root, CustomPart)
+        root = parts[0]
+        assert root.custom is not None
         assert (root.custom or {})['unknownStep']['type'] == 'future_step'
         assert to_interaction_steps([Message(role='model', content=parts)]) == [
             {'type': 'future_step', 'payload': {'x': 1}}
@@ -424,24 +389,29 @@ class TestToInteractionSteps:
         messages = [
             Message(
                 role='model',
-                content=[
-                    Part(
-                        ReasoningPart(
-                            reasoning='see this\n[Image]',
-                            metadata={'thoughtSignature': 'sig-img'},
-                            custom={'thought': thought_dump},
-                        )
-                    )
-                ],
+                content=[Part.from_custom({'thought': thought_dump}, metadata={'thoughtSignature': 'sig-img'})],
             )
         ]
         assert to_interaction_steps(messages) == [thought_dump]
+
+    def test_thought_with_image_replays_the_original_step(self) -> None:
+        """A thought whose summary has an image comes back as that same step."""
+        step = ThoughtStep.model_validate({
+            'type': 'thought',
+            'signature': 'sig-img',
+            'summary': [
+                {'type': 'text', 'text': 'see this'},
+                {'type': 'image', 'uri': 'gs://bucket/thumb.png', 'mime_type': 'image/png'},
+            ],
+        })
+        part = from_thought_step(step)
+        assert to_thought_step(part) == step.model_dump(mode='python')
 
     def test_json_array_function_result_is_boxed(self) -> None:
         messages = [
             Message(
                 role='tool',
-                content=[Part(ToolResponsePart(tool_response=ToolResponse(name='fn', output=[1, 2], ref='r1')))],
+                content=[Part(tool_response=ToolResponse(name='fn', output=[1, 2], ref='r1'))],
             )
         ]
         assert to_interaction_steps(messages) == [
@@ -461,7 +431,7 @@ class TestToInteractionSteps:
         messages = [
             Message(
                 role='tool',
-                content=[Part(ToolResponsePart(tool_response=ToolResponse(name='fn', output=blocks, ref='r1')))],
+                content=[Part(tool_response=ToolResponse(name='fn', output=blocks, ref='r1'))],
             )
         ]
         assert to_interaction_steps(messages) == [
@@ -479,10 +449,8 @@ class TestToInteractionSteps:
                 role='tool',
                 content=[
                     Part(
-                        ToolResponsePart(
-                            tool_response=ToolResponse(name='fn', output={'e': 'boom'}, ref='r1'),
-                            metadata={'isError': True},
-                        )
+                        tool_response=ToolResponse(name='fn', output={'e': 'boom'}, ref='r1'),
+                        metadata={'isError': True},
                     )
                 ],
             )
@@ -501,7 +469,7 @@ class TestToInteractionSteps:
         messages = [
             Message(
                 role='model',
-                content=[Part(ToolRequestPart(tool_request=ToolRequest(name='lookup', input='Paris', ref='c1')))],
+                content=[Part(tool_request=ToolRequest(name='lookup', input='Paris', ref='c1'))],
             )
         ]
         with pytest.raises(GenkitError, match='JSON object') as exc_info:
@@ -515,7 +483,7 @@ class TestToInteractionSteps:
         messages = [
             Message(
                 role='model',
-                content=[Part(ToolRequestPart(tool_request=ToolRequest(name='lookup', input=City(), ref='c1')))],
+                content=[Part(tool_request=ToolRequest(name='lookup', input=City(), ref='c1'))],
             )
         ]
         assert to_interaction_steps(messages) == [
@@ -529,9 +497,7 @@ class TestToInteractionSteps:
         messages = [
             Message(
                 role='tool',
-                content=[
-                    Part(ToolResponsePart(tool_response=ToolResponse(name='weather', output=Weather(), ref='r1')))
-                ],
+                content=[Part(tool_response=ToolResponse(name='weather', output=Weather(), ref='r1'))],
             )
         ]
         assert to_interaction_steps(messages) == [
@@ -545,13 +511,7 @@ class TestToInteractionSteps:
         messages = [
             Message(
                 role='tool',
-                content=[
-                    Part(
-                        ToolResponsePart(
-                            tool_response=ToolResponse(name='weather', output={'report': Weather()}, ref='r1')
-                        )
-                    )
-                ],
+                content=[Part(tool_response=ToolResponse(name='weather', output={'report': Weather()}, ref='r1'))],
             )
         ]
         assert to_interaction_steps(messages) == [
@@ -602,11 +562,11 @@ class TestFromInteractionContent:
             'summary': [{'type': 'text', 'text': 'Thinking...'}],
         })
         result = from_thought_step(step)
-        assert part_dict(result) == {
-            'reasoning': 'Thinking...',
-            'metadata': {'thoughtSignature': 'SIG'},
-            'custom': {'thought': step.model_dump(mode='python')},
-        }
+        dumped = part_dict(result)
+        assert dumped['reasoning'] == 'Thinking...'
+        assert dumped['metadata'] == {'thoughtSignature': 'SIG'}
+        assert dumped['custom']['thought']['type'] == 'thought'
+        assert dumped['custom']['thought']['summary'] == [{'type': 'text', 'text': 'Thinking...'}]
 
 
 class TestFromInteractionStep:
@@ -614,8 +574,8 @@ class TestFromInteractionStep:
         result = from_interaction_step(
             StepAdapter.validate_python({'type': 'model_output', 'content': [{'type': 'text', 'text': 'Hello'}]})
         )
-        root = result[0].root
-        assert isinstance(root, TextPart)
+        root = result[0]
+        assert root.text is not None
         assert root.text == 'Hello'
         assert root.metadata is not None
         assert 'annotations' in root.metadata
@@ -633,8 +593,8 @@ class TestFromInteractionStep:
                 ],
             })
         )
-        root = result[0].root
-        assert isinstance(root, TextPart)
+        root = result[0]
+        assert root.text is not None
         anns = (root.metadata or {}).get('annotations')
         assert isinstance(anns, list) and anns
         assert isinstance(anns[0], dict)
@@ -656,8 +616,8 @@ class TestFromInteractionStep:
                 'arguments': {'city': 'Austin'},
             })
         )
-        root = result[0].root
-        assert isinstance(root, ToolRequestPart)
+        root = result[0]
+        assert root.tool_request is not None
         assert root.tool_request is not None
         assert root.tool_request.name == 'get_weather'
         assert root.tool_request.input == {'city': 'Austin'}
@@ -673,9 +633,9 @@ class TestFromInteractionStep:
                 'is_error': False,
             })
         )
-        root = result[0].root
-        assert isinstance(root, CustomPart)
-        assert not isinstance(root, ToolResponsePart)
+        root = result[0]
+        assert root.custom is not None
+        assert root.tool_response is None
         stash = (root.custom or {})['serverFunctionResult']
         assert stash['name'] == 'get_weather'
         assert stash['result'] == {'temp': 92}
@@ -692,8 +652,8 @@ class TestFromInteractionStep:
                 'is_error': True,
             })
         )
-        root = result[0].root
-        assert isinstance(root, CustomPart)
+        root = result[0]
+        assert root.custom is not None
         stash = (root.custom or {})['serverFunctionResult']
         assert stash['is_error'] is True
         again = to_interaction_steps([Message(role='model', content=result)])
@@ -716,8 +676,8 @@ class TestFromInteractionStep:
                 'signature': 'sig',
             })
         )
-        root = result[0].root
-        assert isinstance(root, CustomPart)
+        root = result[0]
+        assert root.custom is not None
         assert root.custom == {'googleSearchCall': {'id': 'gs1', 'arguments': {'queries': ['genkit']}}}
         assert root.metadata == {'thoughtSignature': 'sig'}
 
@@ -729,8 +689,8 @@ class TestFromInteractionStep:
                 'arguments': {'code': 'print(1)', 'language': 'python'},
             })
         )
-        root = result[0].root
-        assert isinstance(root, CustomPart)
+        root = result[0]
+        assert root.custom is not None
         assert root.custom == {'executableCode': {'code': 'print(1)', 'language': 'python'}}
         assert root.metadata == {'callId': 'ce1'}
 
@@ -770,14 +730,12 @@ class TestInboundFlattensToSingleModelMessage:
             'environmentId': 'env-1',
             'interactionStatus': 'completed',
         }
-        assert [type(part.root).__name__ for part in message.content] == [
-            'ReasoningPart',
-            'TextPart',
-            'ToolRequestPart',
-        ]
-        assert message.content[0].root.reasoning == 'need a tool'
-        assert message.content[1].root.text == 'checking'
-        assert message.content[2].root.tool_request.ref == 'c1'
+        assert message.content[0].reasoning is not None
+        assert message.content[1].text is not None
+        assert message.content[2].tool_request is not None
+        assert message.content[0].reasoning == 'need a tool'
+        assert message.content[1].text == 'checking'
+        assert message.content[2].tool_request.ref == 'c1'
 
     def test_already_resolved_tool_pair_stays_inside_model_message(self) -> None:
         """A tape that already has function_result still flattens into one model turn."""
@@ -800,14 +758,10 @@ class TestInboundFlattensToSingleModelMessage:
             }),
         ]
         parts = parts_from_steps(steps)
-        assert [type(part.root).__name__ for part in parts] == [
-            'ToolRequestPart',
-            'CustomPart',
-            'TextPart',
-        ]
-        root = parts[1].root
-        assert isinstance(root, CustomPart)
-        stash = root.custom['serverFunctionResult']
+        assert parts[0].tool_request is not None
+        assert parts[1].custom is not None
+        assert parts[2].text is not None
+        stash = parts[1].custom['serverFunctionResult']
         assert stash['name'] == 'get_weather'
         assert stash['result'] == {'temp': 92}
 
@@ -819,20 +773,14 @@ class TestFunctionCallRoundTrip:
         messages = [
             Message(
                 role='model',
-                content=[
-                    Part(
-                        ToolRequestPart(
-                            tool_request=ToolRequest(name='get_weather', input={'city': 'Austin'}, ref='c1')
-                        )
-                    )
-                ],
+                content=[Part(tool_request=ToolRequest(name='get_weather', input={'city': 'Austin'}, ref='c1'))],
             )
         ]
         steps = to_interaction_steps(messages)
         assert steps == [{'type': 'function_call', 'name': 'get_weather', 'arguments': {'city': 'Austin'}, 'id': 'c1'}]
         inbound = from_interaction_step(StepAdapter.validate_python(steps[0]))
-        root = inbound[0].root
-        assert isinstance(root, ToolRequestPart)
+        root = inbound[0]
+        assert root.tool_request is not None
         assert root.tool_request is not None
         assert root.tool_request.name == 'get_weather'
         assert root.tool_request.input == {'city': 'Austin'}
@@ -846,7 +794,7 @@ class TestFunctionCallRoundTrip:
             'arguments': {'city': 'Austin'},
         })
         part = from_interaction_step(step)[0]
-        assert isinstance(part.root, ToolRequestPart)
+        assert part.tool_request is not None
         again = to_interaction_steps([Message(role='model', content=[part])])
         assert again == [{'type': 'function_call', 'name': 'get_weather', 'arguments': {'city': 'Austin'}, 'id': 'c1'}]
 
@@ -854,20 +802,13 @@ class TestFunctionCallRoundTrip:
         messages = [
             Message(
                 role='model',
-                content=[
-                    Part(
-                        ReasoningPart(
-                            reasoning='plan',
-                            metadata={'thoughtSignature': 'sig'},
-                        )
-                    )
-                ],
+                content=[Part.from_reasoning('plan', metadata={'thoughtSignature': 'sig'})],
             )
         ]
         steps = to_interaction_steps(messages)
         inbound = from_interaction_step(StepAdapter.validate_python(steps[0]))
-        root = inbound[0].root
-        assert isinstance(root, ReasoningPart)
+        root = inbound[0]
+        assert root.reasoning is not None
         assert root.reasoning == 'plan'
         assert root.metadata == {'thoughtSignature': 'sig'}
 
@@ -968,7 +909,7 @@ class TestFromInteractionStatusMapping:
         assert result.output.finish_reason == 'length'
         assert result.output.finish_message == 'Interaction incomplete (truncated output)'
         assert result.output.message is not None
-        assert result.output.message.content[0].root.text == 'partial'
+        assert result.output.message.content[0].text == 'partial'
         assert result.output.message.metadata is not None
         assert result.output.message.metadata.get('interactionStatus') == 'incomplete'
 
@@ -992,7 +933,7 @@ class TestFromInteractionStatusMapping:
         assert result.output.finish_reason == 'aborted'
         assert result.output.finish_message == 'Interaction exceeded its budget'
         assert result.output.message is not None
-        assert result.output.message.content[0].root.text == 'draft'
+        assert result.output.message.content[0].text == 'draft'
         assert result.output.message.metadata is not None
         assert result.output.message.metadata.get('interactionStatus') == 'budget_exceeded'
 
@@ -1025,7 +966,7 @@ class TestFromInteractionSync:
         assert result.finish_reason == 'length'
         assert result.finish_message == 'Interaction incomplete (truncated output)'
         assert result.message is not None
-        assert result.message.content[0].root.text == 'partial'
+        assert result.message.content[0].text == 'partial'
 
     def test_incomplete_without_steps_raises(self) -> None:
         with pytest.raises(ValueError, match='incomplete'):
@@ -1054,8 +995,8 @@ class TestFromInteractionSync:
 class TestSplitSystemInstruction:
     def test_lifts_system_turns(self) -> None:
         instruction, turns = split_system_instruction([
-            Message(role='system', content=[Part(TextPart(text='be terse'))]),
-            Message(role='user', content=[Part(TextPart(text='hi'))]),
+            Message(role='system', content=[Part.from_text('be terse')]),
+            Message(role='user', content=[Part.from_text('hi')]),
         ])
         assert instruction == 'be terse'
         assert len(turns) == 1
@@ -1063,8 +1004,8 @@ class TestSplitSystemInstruction:
 
     def test_joins_multiple_system_turns(self) -> None:
         instruction, turns = split_system_instruction([
-            Message(role='system', content=[Part(TextPart(text='one'))]),
-            Message(role='system', content=[Part(TextPart(text='two'))]),
+            Message(role='system', content=[Part.from_text('one')]),
+            Message(role='system', content=[Part.from_text('two')]),
         ])
         assert instruction == 'one\n\ntwo'
         assert turns == []

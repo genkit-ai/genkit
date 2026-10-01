@@ -32,7 +32,7 @@ from genkit._ai._model import (
     resolve_model_ref,
 )
 from genkit._core._action import ActionRunContext
-from genkit._core._error import GenkitError
+from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import ModelRequest, ModelResponse
 from genkit._core._registry import Registry
 from genkit.model import model_ref
@@ -159,16 +159,20 @@ def test_resolved_model_is_frozen() -> None:
 
 def test_normalize_config_rejects_unsupported_type() -> None:
     """A leftover int is INVALID_ARGUMENT, same class of reject as model=123."""
-    with pytest.raises(GenkitError, match='config is int, expected Mapping or BaseModel'):
+    with pytest.raises(GenkitError, match='config is int, expected Mapping or BaseModel') as exc_info:
         normalize_config(config=123)
+    assert exc_info.value.reason is RuntimeErrorReason.INVALID_INPUT
+    assert 'INVALID_INPUT' not in exc_info.value.original_message
 
 
 def test_resolve_model_name_raises_when_default_is_not_string() -> None:
     """A configured default of the wrong type says so, rather than 'not configured'."""
     registry = Registry()
     registry.register_value('defaultModel', 'defaultModel', 123)
-    with pytest.raises(GenkitError, match='defaultModel is int, expected str or ModelRef'):
+    with pytest.raises(GenkitError, match='defaultModel is int, expected str or ModelRef') as exc_info:
         resolve_model_name(model=None, registry=registry)
+    assert exc_info.value.reason is RuntimeErrorReason.INVALID_INPUT
+    assert 'INVALID_INPUT' not in exc_info.value.original_message
 
 
 def test_resolve_model_name_empty_string_falls_back_to_default() -> None:
@@ -192,10 +196,14 @@ def test_resolve_model_name_empty_default_means_not_configured() -> None:
     """
     registry = Registry()
     registry.register_value('defaultModel', 'defaultModel', '')
-    with pytest.raises(GenkitError, match='No model configured'):
+    with pytest.raises(GenkitError, match='No model configured') as empty:
         resolve_model_name(model='', registry=registry)
-    with pytest.raises(GenkitError, match='No model configured'):
+    with pytest.raises(GenkitError, match='No model configured') as omitted:
         resolve_model_name(model=None, registry=registry)
+    assert empty.value.reason is RuntimeErrorReason.MODEL_NOT_FOUND
+    assert omitted.value.reason is RuntimeErrorReason.MODEL_NOT_FOUND
+    assert 'MODEL_NOT_FOUND' not in empty.value.original_message
+    assert 'MODEL_NOT_FOUND' not in omitted.value.original_message
 
 
 def test_normalize_config_preserves_explicit_none_on_model_config() -> None:
@@ -437,8 +445,12 @@ def test_assert_correct_config_class_uses_schema_only() -> None:
     class OtherFamilyConfig(BaseModel):
         frequency_penalty: float | None = None
 
-    with pytest.raises(GenkitError, match=r'config must be .+\.CustomConfig or a mapping, got .+\.OtherFamilyConfig'):
+    with pytest.raises(
+        GenkitError, match=r'config must be .+\.CustomConfig or a mapping, got .+\.OtherFamilyConfig'
+    ) as exc_info:
         assert_correct_config_class(config=OtherFamilyConfig(frequency_penalty=0.2), schema=CustomConfig)
+    assert exc_info.value.reason is RuntimeErrorReason.INVALID_INPUT
+    assert 'INVALID_INPUT' not in exc_info.value.original_message
 
 
 def test_resolve_model_ref_keeps_other_family_keys() -> None:

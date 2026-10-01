@@ -21,7 +21,8 @@ from unittest.mock import Mock
 import ollama as ollama_api
 import pytest
 
-from genkit import ActionKind, Genkit, Message, ModelResponse, Part, Role, TextPart
+from genkit import Genkit, Message, ModelResponse, Part, Role
+from genkit.plugin_api import ActionKind
 
 
 @pytest.mark.asyncio
@@ -68,7 +69,7 @@ async def test_async_get_chat_model_response_from_llama_api_flow(
                 Message(
                     role=Role.USER,
                     content=[
-                        Part(root=TextPart(text='Test message')),
+                        Part.from_text('Test message'),
                     ],
                 )
             ]
@@ -78,7 +79,7 @@ async def test_async_get_chat_model_response_from_llama_api_flow(
 
     assert isinstance(response, ModelResponse)
     assert response.message is not None
-    assert response.message.content[0].root.text == mock_response_message
+    assert response.message.content[0].text == mock_response_message
 
 
 @pytest.mark.asyncio
@@ -100,7 +101,7 @@ async def test_async_get_generate_model_response_from_llama_api_flow(
                 Message(
                     role=Role.USER,
                     content=[
-                        Part(root=TextPart(text='Test message')),
+                        Part.from_text('Test message'),
                     ],
                 )
             ]
@@ -110,7 +111,7 @@ async def test_async_get_generate_model_response_from_llama_api_flow(
 
     assert isinstance(response, ModelResponse)
     assert response.message is not None
-    assert response.message.content[0].root.text == mock_response_message
+    assert response.message.content[0].text == mock_response_message
 
 
 # Integration tests are covered by the above test cases

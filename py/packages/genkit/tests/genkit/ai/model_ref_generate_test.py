@@ -13,10 +13,10 @@ from pydantic.alias_generators import to_camel
 
 from genkit import Genkit
 from genkit._ai._model import ModelConfig
-from genkit._ai._prompt import PromptConfig, to_generate_action_options
+from genkit._ai._prompt import GenerateCall, to_generate_options
 from genkit._ai._testing import EchoModel, define_echo_model
 from genkit._core._action import ActionRunContext
-from genkit._core._error import GenkitError
+from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import ModelRequest, ModelResponse
 from genkit._core._typing import Operation
 from genkit.exp import Genkit as ExpGenkit
@@ -623,6 +623,8 @@ async def test_non_name_model_is_hard_error_not_default() -> None:
         await ai.generate(model=123, prompt='hi')  # type: ignore[arg-type]
 
     assert 'model is int, expected str or ModelRef' in str(exc_info.value)
+    assert exc_info.value.reason is RuntimeErrorReason.INVALID_INPUT
+    assert 'INVALID_INPUT' not in exc_info.value.original_message
     assert echo.last_request is None
 
 
@@ -636,6 +638,8 @@ async def test_non_name_config_is_hard_error() -> None:
         await ai.generate(model='echo', prompt='hi', config=123)  # type: ignore[arg-type]
 
     assert 'config is int, expected Mapping or BaseModel' in str(exc_info.value)
+    assert exc_info.value.reason is RuntimeErrorReason.INVALID_INPUT
+    assert 'INVALID_INPUT' not in exc_info.value.original_message
     assert echo.last_request is None
 
 
@@ -734,8 +738,8 @@ async def test_prompt_uses_constructor_model_ref_config() -> None:
 
 
 @pytest.mark.asyncio
-async def test_to_generate_action_options_uses_constructor_ref() -> None:
-    """A stored ModelRef default still resolves when PromptConfig.model is omitted."""
+async def test_to_generate_options_uses_constructor_ref() -> None:
+    """A stored ModelRef default still resolves when GenerateCall.model is omitted."""
     flash = model_ref(
         'flash',
         config_schema=ModelConfig,
@@ -745,7 +749,7 @@ async def test_to_generate_action_options_uses_constructor_ref() -> None:
     ai = Genkit(model=flash)
     define_echo_model(ai, name='flash')
 
-    options = await to_generate_action_options(ai.registry, PromptConfig(prompt='hi'))
+    options = await to_generate_options(registry=ai.registry, call=GenerateCall(prompt='hi'))
 
     assert options.model == 'flash'
     assert _config_value(options.config, 'temperature') == 0.7
@@ -1007,8 +1011,12 @@ async def test_generate_rejects_wrong_config_class_on_ref() -> None:
     define_echo_model(ai, name='flash', config_schema=CustomConfig)
     ref = model_ref('flash', config_schema=CustomConfig)
 
-    with pytest.raises(GenkitError, match=r'config must be .+\.CustomConfig or a mapping, got .+\.OtherFamilyConfig'):
+    with pytest.raises(
+        GenkitError, match=r'config must be .+\.CustomConfig or a mapping, got .+\.OtherFamilyConfig'
+    ) as exc_info:
         await ai.generate(model=ref, prompt='hi', config=OtherFamilyConfig(frequency_penalty=0.2))
+    assert exc_info.value.reason is RuntimeErrorReason.INVALID_INPUT
+    assert 'INVALID_INPUT' not in exc_info.value.original_message
 
 
 @pytest.mark.asyncio

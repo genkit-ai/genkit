@@ -2,6 +2,16 @@
 
 This package provides Vertex AI integrations for [Genkit](https://github.com/genkit-ai/genkit), including Model Garden, Rerankers, Evaluation, and Vector Search.
 
+> **Building with a coding agent? Install the Genkit JS skill first.**
+>
+> ```bash
+> npx skills add genkit-ai/skills --skill developing-genkit-js
+> ```
+>
+> It teaches your agent the current Genkit JS APIs and common gotchas.
+> Source, manual install and skills for other languages:
+> [genkit-ai/skills](https://github.com/genkit-ai/skills).
+
 > **⚠️ Deprecation notice:** The main `vertexAI` plugin export (Gemini, Imagen, and embedder models) is **deprecated**. Please migrate to [`@genkit-ai/google-genai`](https://www.npmjs.com/package/@genkit-ai/google-genai):
 >
 > ```ts

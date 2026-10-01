@@ -2,6 +2,16 @@
 
 The Google AI plugin provides a unified interface to connect with Google's generative AI models through the **Gemini Developer API** or **Vertex AI** using API key authentication or Google Cloud credentials.
 
+> **Building with a coding agent? Install the Genkit Go skill first.**
+>
+> ```bash
+> npx skills add genkit-ai/skills --skill developing-genkit-go
+> ```
+>
+> It teaches your agent the current Genkit Go APIs and common gotchas.
+> Source, manual install and skills for other languages:
+> [genkit-ai/skills](https://github.com/genkit-ai/skills).
+
 The plugin supports a wide range of capabilities:
 
 - **Language Models**: Gemini models for text generation, reasoning, and multimodal tasks

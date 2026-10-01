@@ -1,0 +1,16 @@
+---
+model: googleai/imagen-4.0-fast-generate-001
+config:
+  numberOfImages: 2
+  personGeneration: "allow_adult"
+  aspectRatio: "16:9"
+input:
+  schema:
+    prompt: string
+  default:
+    prompt: A penguin strapped to a jetpack from the side profile, flying through the Earth's atmosphere.
+---
+
+Generate an image using the following description:
+
+{{prompt}}

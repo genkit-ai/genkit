@@ -52,7 +52,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from genkit import ActionRunContext, GenkitError, Message, Part, TextPart
+from genkit import ActionRunContext, GenkitError, Message, Part
 from genkit.exp import Genkit
 from genkit.exp.agent import (
     AgentChat,
@@ -72,9 +72,7 @@ store = InMemorySessionStore()
 
 
 def _text(content: list[Part] | None) -> str:
-    return ''.join(
-        root.text for p in (content or []) if isinstance((root := getattr(p, 'root', p)), TextPart) and root.text
-    )
+    return ''.join(p.text for p in (content or []) if p.text)
 
 
 async def flaky_fn(sess: SessionRunner, _: ActionRunContext) -> AgentResult:
@@ -85,7 +83,7 @@ async def flaky_fn(sess: SessionRunner, _: ActionRunContext) -> AgentResult:
         if 'slow' in text:
             await asyncio.sleep(1.0)  # leaves a window to abort while the turn runs
         msgs = await sess.get_messages()
-        await sess.set_messages(msgs + [Message(role='model', content=[Part(TextPart(text='reply'))])])
+        await sess.set_messages(msgs + [Message(role='model', content=[Part.from_text('reply')])])
         return TurnResult(finish_reason=AgentFinishReason.STOP)
 
     await sess.run(handle_turn)

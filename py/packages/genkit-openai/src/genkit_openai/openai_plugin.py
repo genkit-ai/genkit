@@ -23,14 +23,28 @@ from typing import Any, Literal, TypeAlias, cast
 from openai import APIStatusError, AsyncOpenAI
 from openai.types import Model
 
-from genkit import Embedding, EmbedRequest, EmbedResponse, GenkitError, ModelInfo, ModelRequest, ModelResponse, Supports
-from genkit.embedder import EmbedderInfo, EmbedderSupports, embedder, embedder_action_metadata
-from genkit.model import ModelRef, model as create_model, model_action_metadata, model_ref
+from genkit import ActionRunContext, Embedding, GenkitError, ModelResponse
+from genkit.embedder import (
+    EmbedderInfo,
+    EmbedderSupports,
+    EmbedRequest,
+    EmbedResponse,
+    embedder,
+    embedder_action_metadata,
+)
+from genkit.model import (
+    ModelInfo,
+    ModelRef,
+    ModelRequest,
+    Supports,
+    model as create_model,
+    model_action_metadata,
+    model_ref,
+)
 from genkit.plugin_api import (
     Action,
     ActionKind,
     ActionMetadata,
-    ActionRunContext,
     Plugin,
     loop_local_client,
     to_json_schema,
@@ -459,13 +473,13 @@ class OpenAI(Plugin):
             texts = []
             for doc in request.input:
                 doc_text = ''.join(  # type: ignore[arg-type]
-                    part.root.text for part in doc.content if hasattr(part.root, 'text') and part.root.text
+                    part.text for part in doc.content if part.text is not None and part.text
                 )
                 texts.append(doc_text)
 
             # Get optional parameters (omit when None; OpenAI create() uses Omit, not None)
             dimensions: int | None = None
-            encoding_format: Literal['base64', 'float'] | None = None
+            encoding_format: Literal['float'] | None = None
             if request.options:
                 dim_val = request.options.get('dimensions')
                 if dim_val is not None:
@@ -476,9 +490,10 @@ class OpenAI(Plugin):
                             message=f'dimensions must be an int, got {dim_val!r}',
                         )
                     dimensions = dim_val
-                enc_val = request.options.get('encodingFormat')
-                if enc_val in ('float', 'base64'):
-                    encoding_format = cast(Literal['base64', 'float'], enc_val)
+                # 'base64' is deliberately not forwarded: the SDK sends base64 either
+                # way and only decodes the response when it was not asked explicitly.
+                if request.options.get('encodingFormat') == 'float':
+                    encoding_format = 'float'
 
             # Call with only non-None optional params to satisfy strict typings
             try:

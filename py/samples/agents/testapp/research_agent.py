@@ -56,7 +56,7 @@ class SubQuestions(BaseModel):
 
 
 def _text(parts: list[Any] | None) -> str:
-    return ''.join(getattr(p.root, 'text', '') or '' for p in (parts or []))
+    return ''.join((p.text or '') or '' for p in (parts or []))
 
 
 async def research_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:

@@ -2,6 +2,16 @@
 
 This plugin provides a unified interface to connect with Google's generative AI models, offering access through both the **Gemini API** and the **Gemini Enterprise Agent Platform**. It is a replacement for the previous `googleAI` and `vertexAI` plugins.
 
+> **Building with a coding agent? Install the Genkit JS skill first.**
+>
+> ```bash
+> npx skills add genkit-ai/skills --skill developing-genkit-js
+> ```
+>
+> It teaches your agent the current Genkit JS APIs and common gotchas.
+> Source, manual install and skills for other languages:
+> [genkit-ai/skills](https://github.com/genkit-ai/skills).
+
 > **Note on Naming:** In April 2026, Google Cloud rebranded Vertex AI to the **Gemini Enterprise Agent Platform**. To maintain backward compatibility with Google Cloud's underlying API infrastructure and existing deployments, this plugin retains the `vertexAI` namespace, export names, and configuration keys.
 
 Official documentation:

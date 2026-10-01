@@ -28,15 +28,8 @@ from genkit_google_genai.models.embedder import (
 from google import genai
 from pytest_mock import MockerFixture
 
-from genkit import (
-    Document,
-    DocumentPart,
-    EmbedRequest,
-    EmbedResponse,
-    Media,
-    MediaPart,
-    TextPart,
-)
+from genkit import Document, Part
+from genkit.embedder import EmbedRequest, EmbedResponse
 
 
 @pytest.mark.asyncio
@@ -97,8 +90,8 @@ async def test_embedding_forwards_media_parts(mocker: MockerFixture) -> None:
 
     doc = Document(
         content=[
-            DocumentPart(root=TextPart(text=text)),
-            DocumentPart(root=MediaPart(media=Media(url=data_url, content_type='image/png'))),
+            Part.from_text(text),
+            Part.from_media(data_url, content_type='image/png'),
         ]
     )
     request = EmbedRequest(input=[doc])

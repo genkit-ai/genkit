@@ -276,6 +276,12 @@ func setupHarness(t *testing.T) *harness {
 			}); err != nil {
 				return nil, err
 			}
+			// An abort can land after the first turn but before Run starts the
+			// queued "block" turn. Run then returns nil; propagate the stop so
+			// this abortable fixture does not report a successful invocation.
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			return &exp.AgentResult{Message: ai.NewModelTextMessage("done")}, nil
 		}, newStore("customAgentAbortable"))
 
