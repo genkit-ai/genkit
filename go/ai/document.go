@@ -19,6 +19,7 @@ package ai
 import (
 	"encoding/json"
 	"maps"
+	"reflect"
 	"slices"
 	"strings"
 
@@ -529,7 +530,8 @@ func orTrue(v any) any {
 // reads these keys, by truthiness: an absent key, null, false, "" and 0 mean
 // no state, true means state with no payload, and any other value is the
 // payload itself. A part that carries "interrupt": null therefore reads as a plain
-// tool request, not as a bare interrupt.
+// tool request, not as a bare interrupt. Zero is zero of any numeric type, so
+// a Go int 0 in a hand-built map reads the same as a decoded JSON 0.
 func wirePayload(v any) (payload any, set bool) {
 	switch b := v.(type) {
 	case nil:
@@ -538,8 +540,17 @@ func wirePayload(v any) (payload any, set bool) {
 		return nil, b
 	case string:
 		return v, b != ""
-	case float64:
-		return v, b != 0
+	case json.Number:
+		f, err := b.Float64()
+		return v, err != nil || f != 0
+	}
+	switch rv := reflect.ValueOf(v); rv.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return v, rv.Int() != 0
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		return v, rv.Uint() != 0
+	case reflect.Float32, reflect.Float64:
+		return v, rv.Float() != 0
 	}
 	return v, true
 }
@@ -567,8 +578,10 @@ func (p *Part) interruptState() *ToolInterrupt {
 }
 
 // restartState is [Part.interruptState] for the restart state. A part marked
-// "resumed": false is not a restart: the tool re-executes without a resume
-// payload, as it would for a request the model made afresh.
+// "resumed": false is not a restart, even with a "replacedInput" key beside
+// it: the tool re-executes on the input the part carries, without a resume
+// payload, as it would for a request the model made afresh. The JS runtime
+// runs such a part the same way.
 func (p *Part) restartState() *ToolRestart {
 	if !p.IsToolRequest() || p.ToolRequest == nil {
 		return nil
@@ -577,11 +590,10 @@ func (p *Part) restartState() *ToolRestart {
 		return p.Restart
 	}
 	resume, resumed := wirePayload(p.Metadata[metaResumed])
-	original := p.Metadata[metaReplacedInput]
-	if !resumed && original == nil {
+	if !resumed {
 		return nil
 	}
-	return &ToolRestart{Resume: resume, OriginalInput: original}
+	return &ToolRestart{Resume: resume, OriginalInput: p.Metadata[metaReplacedInput]}
 }
 
 // liftWireMetadata moves the interrupt and restart state a tool request part

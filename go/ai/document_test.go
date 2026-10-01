@@ -886,6 +886,40 @@ func TestPartWireMarkersReadByTruthiness(t *testing.T) {
 	}
 }
 
+// TestPartWireMarkersHandBuilt pins that a part assembled in Go with the wire
+// keys reads the same as the decoded JSON: a zero of any numeric type is no
+// state, as JSON 0 is, and "resumed": false is no restart even with a
+// replaced input beside it.
+func TestPartWireMarkersHandBuilt(t *testing.T) {
+	tests := []struct {
+		name          string
+		meta          map[string]any
+		wantInterrupt bool
+		wantRestart   bool
+	}{
+		{"interrupt int zero", map[string]any{"interrupt": 0}, false, false},
+		{"interrupt int64 zero", map[string]any{"interrupt": int64(0)}, false, false},
+		{"resumed int zero", map[string]any{"resumed": 0}, false, false},
+		{"resumed uint8 zero", map[string]any{"resumed": uint8(0)}, false, false},
+		{"resumed float32 zero", map[string]any{"resumed": float32(0)}, false, false},
+		{"resumed json.Number zero", map[string]any{"resumed": json.Number("0")}, false, false},
+		{"resumed int one", map[string]any{"resumed": 1}, false, true},
+		{"resumed false with replaced input", map[string]any{"resumed": false, "replacedInput": map[string]any{"a": 1}}, false, false},
+		{"replaced input alone", map[string]any{"replacedInput": map[string]any{"a": 1}}, false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := &Part{Kind: PartToolRequest, ToolRequest: &ToolRequest{Name: "t"}, Metadata: tt.meta}
+			if got := p.IsInterrupt(); got != tt.wantInterrupt {
+				t.Errorf("IsInterrupt() = %v, want %v", got, tt.wantInterrupt)
+			}
+			if got := p.IsRestart(); got != tt.wantRestart {
+				t.Errorf("IsRestart() = %v, want %v", got, tt.wantRestart)
+			}
+		})
+	}
+}
+
 // TestPartWireState_Hygiene pins the cases where wire state could go stale
 // or vanish: decoding into a Part that already holds state replaces it, a
 // restart that keeps the input drops a stale "replacedInput" key, and a nil
