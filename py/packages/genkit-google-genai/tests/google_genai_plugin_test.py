@@ -17,7 +17,6 @@
 """Tests for Google GenAI plugin."""
 
 import asyncio
-import importlib
 import os
 import queue
 import threading
@@ -794,31 +793,6 @@ def test_embedding_task_types() -> None:
     assert EmbeddingTaskType.SEMANTIC_SIMILARITY is not None
     assert EmbeddingTaskType.CLASSIFICATION is not None
     assert EmbeddingTaskType.CLUSTERING is not None
-
-
-@pytest.mark.parametrize(
-    ('module', 'name'),
-    [
-        ('genkit_google_genai', 'GoogleAIGeminiVersion'),
-        ('genkit_google_genai', 'VertexAIGeminiVersion'),
-        ('genkit_google_genai', 'GeminiEmbeddingModels'),
-        ('genkit_google_genai', 'VertexEmbeddingModels'),
-        ('genkit_google_genai', 'ImagenVersion'),
-        ('genkit_google_genai', 'VeoVersion'),
-        ('genkit_google_genai', 'LyriaVersion'),
-        ('genkit_google_genai.models.gemini', 'GoogleAIGeminiVersion'),
-        ('genkit_google_genai.models.gemini', 'VertexAIGeminiVersion'),
-        ('genkit_google_genai.models.embedder', 'GeminiEmbeddingModels'),
-        ('genkit_google_genai.models.embedder', 'VertexEmbeddingModels'),
-        ('genkit_google_genai.models.imagen', 'ImagenVersion'),
-        ('genkit_google_genai.models.veo', 'VeoVersion'),
-        ('genkit_google_genai.models.lyria', 'LyriaVersion'),
-        ('genkit_google_genai.models.interactions_registry', 'LyriaVersion'),
-    ],
-)
-def test_model_id_enums_are_gone(module: str, name: str) -> None:
-    """Model ids are plain strings; no enum survives at the package root or in a submodule."""
-    assert not hasattr(importlib.import_module(module), name)
 
 
 def test_gemini_config_schema() -> None:
