@@ -665,7 +665,7 @@ func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 		// Resume on the first turn is handled here so that restarted tool
 		// execution is both wrapped by WrapGenerate and recorded under this
 		// turn's span (generate > tool > generate > model > tool).
-		if currentTurn == 0 && opts.Resume != nil && (len(opts.Resume.Respond) > 0 || len(opts.Resume.Restart) > 0) {
+		if currentTurn == 0 && resumeRequested(opts) {
 			resumeOutput, err := handleResumeOption(ctx, r, opts, runTool, wrappedCb)
 			if err != nil {
 				if resumeOutput == nil || resumeOutput.failedMessage == nil {
@@ -1307,7 +1307,15 @@ func Generate(ctx context.Context, r api.Registry, opts ...GenerateOption) (*Mod
 		},
 	}
 
-	if len(genOpts.RespondParts) > 0 || len(genOpts.RestartParts) > 0 {
+	if len(genOpts.pausedParts) > 0 {
+		req := genOpts.pausedParts[0].ToolRequest
+		refStr := req.Name
+		if req.Ref != "" {
+			refStr += "#" + req.Ref
+		}
+		return nil, status.Errorf(status.ErrInvalidArgument, "ai.Generate: WithResume got tool request %q, which is still interrupted; resolve it with InterruptedCall.Restart or InterruptedCall.Respond, or with Part.ToToolRestart or Part.ToToolResponse", refStr)
+	}
+	if genOpts.resume || len(genOpts.RespondParts) > 0 || len(genOpts.RestartParts) > 0 {
 		actionOpts.Resume = &GenerateActionResume{
 			Respond: genOpts.RespondParts,
 			Restart: genOpts.RestartParts,
@@ -2587,10 +2595,29 @@ func restartedToolResponse(ctx context.Context, tool Tool, p, restartPart *Part,
 	return newToolResp, nil, nil
 }
 
+// resumeRequested reports whether opts asks the loop to resume: a resume with
+// directives, or an empty one over a conversation that ends on the model's
+// tool requests, whose every request must then be resolved, by a pending
+// output, for the resume to go through. An empty resume over any other
+// conversation is a no-op, so a caller may pass one on every turn.
+func resumeRequested(opts *GenerateActionOptions) bool {
+	if opts.Resume == nil {
+		return false
+	}
+	if len(opts.Resume.Respond) > 0 || len(opts.Resume.Restart) > 0 {
+		return true
+	}
+	if len(opts.Messages) == 0 {
+		return false
+	}
+	last := opts.Messages[len(opts.Messages)-1]
+	return last != nil && last.Role == RoleModel && slices.ContainsFunc(last.Content, (*Part).IsToolRequest)
+}
+
 // handleResumeOption amends message history to handle `resume` arguments.
 // It returns the amended history.
 func handleResumeOption(ctx context.Context, r api.Registry, genOpts *GenerateActionOptions, runTool toolRunnerFunc, cb ModelStreamCallback) (*resumeOptionOutput, error) {
-	if genOpts.Resume == nil || (len(genOpts.Resume.Respond) == 0 && len(genOpts.Resume.Restart) == 0) {
+	if !resumeRequested(genOpts) {
 		return &resumeOptionOutput{revisedRequest: genOpts}, nil
 	}
 

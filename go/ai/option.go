@@ -1028,6 +1028,8 @@ type generateOptions struct {
 	RespondParts []*Part // Tool responses to return from interrupted tool calls.
 	RestartParts []*Part // Tool requests to restart interrupted tools with.
 	StepName     string  // Custom name for the generation step in traces.
+	resume       bool    // Set by WithResume, even with no parts.
+	pausedParts  []*Part // Still-interrupted parts given to WithResume; Generate rejects them.
 }
 
 // GenerateOption is an option for generating a model response. It applies only to Generate().
@@ -1044,6 +1046,8 @@ func (o *generateOptions) applyGenerate(genOpts *generateOptions) {
 
 	genOpts.RespondParts = append(genOpts.RespondParts, o.RespondParts...)
 	genOpts.RestartParts = append(genOpts.RestartParts, o.RestartParts...)
+	genOpts.pausedParts = append(genOpts.pausedParts, o.pausedParts...)
+	genOpts.resume = genOpts.resume || o.resume
 	if o.StepName != "" {
 		genOpts.StepName = o.StepName
 	}
@@ -1057,17 +1061,26 @@ func (o *generateOptions) applyGenerate(genOpts *generateOptions) {
 // with [Part.ToToolRestart] and [Part.ToToolResponse]. Repeating this option
 // appends.
 //
+// A part that is still paused, such as one from [ModelResponse.Interrupts]
+// passed as is, fails the call with INVALID_ARGUMENT: resolve it first. With
+// no parts, the call still resumes when the conversation ends on the model's
+// tool requests, so an interrupt left unanswered fails it the same way a
+// partial resume does, rather than reaching the model.
+//
 //	resp, err = genkit.Generate(ctx, g,
 //		ai.WithMessages(resp.History()...),
 //		ai.WithTools(transferMoney),
 //		ai.WithResume(parts...),
 //	)
 func WithResume(parts ...*Part) GenerateOption {
-	o := &generateOptions{}
+	o := &generateOptions{resume: true}
 	for _, p := range parts {
-		if p.IsToolResponse() {
+		switch {
+		case p.IsToolResponse():
 			o.RespondParts = append(o.RespondParts, p)
-		} else {
+		case p.IsInterrupt() && !p.IsRestart():
+			o.pausedParts = append(o.pausedParts, p)
+		default:
 			o.RestartParts = append(o.RestartParts, p)
 		}
 	}
