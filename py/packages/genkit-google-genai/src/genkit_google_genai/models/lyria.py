@@ -21,17 +21,11 @@ This module exposes config and request/response helpers for the predict-based
 audio API.
 """
 
-import sys
-
-if sys.version_info < (3, 11):
-    from strenum import StrEnum
-else:
-    from enum import StrEnum
-
 from typing import Any
 
 from pydantic import BaseModel, Field
 
+from genkit._core._compat import StrEnum
 from genkit.model import ModelInfo, Supports
 
 

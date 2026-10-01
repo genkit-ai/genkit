@@ -30,20 +30,15 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sys
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, ClassVar
-
-if sys.version_info >= (3, 11):
-    from enum import StrEnum
-else:
-    from strenum import StrEnum
 
 from google.auth import default as google_auth_default
 from google.auth.transport.requests import Request
 from pydantic import BaseModel, ConfigDict
 
 from genkit import BaseDataPoint, GenkitError
+from genkit._core._compat import StrEnum
 from genkit.evaluator import Details, EvalFnResponse, Score
 from genkit.plugin_api import GENKIT_CLIENT_HEADER, Action, get_cached_client
 from genkit_google_genai.constants import GLOBAL_LOCATION, is_multi_regional_location, vertex_api_host

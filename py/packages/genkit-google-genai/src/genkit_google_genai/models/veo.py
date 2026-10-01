@@ -20,14 +20,8 @@ Veo is Google's video generation model that creates videos from text prompts.
 """
 
 import base64
-import sys
 from collections.abc import Mapping
 from typing import Any, Literal, TypeAlias
-
-if sys.version_info < (3, 11):
-    from strenum import StrEnum
-else:
-    from enum import StrEnum
 
 from google import genai
 from google.genai import types as genai_types
@@ -35,6 +29,7 @@ from google.genai.errors import APIError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, Operation, Part, Role
+from genkit._core._compat import StrEnum
 from genkit.model import ModelInfo, ModelRequest, OperationError, Supports
 from genkit.plugin_api import wrap_http_error
 from genkit_google_genai.constants import is_multi_regional_location, multi_regional_base_url
