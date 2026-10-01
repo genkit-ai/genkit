@@ -34,6 +34,7 @@ from typing import Any, Literal, Protocol, TypeVar, runtime_checkable
 from pydantic import BaseModel
 
 from ._attrs import METADATA_PREFIX, Attr
+from ._log_exporter import reset_log_export
 
 T = TypeVar('T')
 T_co = TypeVar('T_co', covariant=True)
@@ -218,9 +219,18 @@ def flush_instrumentations() -> None:
 
 
 def reset_instrumentation() -> None:
-    """Remove all providers. Tests and re-init."""
+    """Start telemetry over, for tests and re-init.
+
+    Disposes and removes every configured provider, stops Dev UI log export,
+    and forgets the open trace so the next span is a new root.
+    """
+    from .http import PARENT_SPAN
+
     dispose_instrumentations()
     instrumentations.clear()
+    reset_log_export()
+    parent_path_context.set('')
+    PARENT_SPAN.set(None)
 
 
 def is_instrumented_by(kind: type) -> bool:
