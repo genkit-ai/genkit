@@ -40,13 +40,16 @@ from typing import Any
 
 from pydantic import BaseModel as PydanticBaseModel
 
-from genkit import MultipartToolResponse, Part
-from genkit._ai._tools import Interrupt, define_tool
-from genkit._core._action import Action
-from genkit._core._model import Message, ModelResponse, ModelResponseChunk
-from genkit._core._registry import Registry
-from genkit._core._typing import (
+from genkit import (
+    Interrupt,
+    Message,
+    ModelResponse,
+    ModelResponseChunk,
+    MultipartToolResponse,
+    Part,
     Role,
+    Tool,
+    tool,
 )
 from genkit.middleware import (
     BaseMiddleware,
@@ -265,9 +268,8 @@ class Filesystem(BaseMiddleware[FilesystemConfig]):
             fh.write(content)
         return f'File {file_path} edited successfully.'
 
-    def tools(self, ctx: GenerateMiddlewareContext) -> list[Action]:
-        """Return filesystem tool actions for this generate() call."""
-        scratch = Registry()
+    def tools(self, ctx: GenerateMiddlewareContext) -> list[Tool]:
+        """Return filesystem tools for this generate() call."""
 
         async def list_files(input: _ListFilesInput) -> list[dict[str, Any]]:
             return await asyncio.to_thread(self._list_files, input.dir_path, input.recursive)
@@ -280,19 +282,18 @@ class Filesystem(BaseMiddleware[FilesystemConfig]):
                 input.limit,
             )
 
-        t_list = define_tool(
-            scratch,
-            list_files,
-            name=self._tool_name('list_files'),
-            description='List files and directories under a path (optional recursive).',
-        )
-        t_read = define_tool(
-            scratch,
-            read_file,
-            name=self._tool_name('read_file'),
-            description='Read a text file, optionally from an offset/limit in lines.',
-        )
-        tools_out = [t_list.action(), t_read.action()]
+        tools_out = [
+            tool(
+                list_files,
+                name=self._tool_name('list_files'),
+                description='List files and directories under a path (optional recursive).',
+            ),
+            tool(
+                read_file,
+                name=self._tool_name('read_file'),
+                description='Read a text file, optionally from an offset/limit in lines.',
+            ),
+        ]
 
         if self.config.allow_write_access:
 
@@ -306,19 +307,18 @@ class Filesystem(BaseMiddleware[FilesystemConfig]):
                     [e.model_dump() for e in input.edits],
                 )
 
-            t_write = define_tool(
-                scratch,
-                write_file,
-                name=self._tool_name('write_file'),
-                description='Create or overwrite a text file with the given content.',
-            )
-            t_edit = define_tool(
-                scratch,
-                edit_file,
-                name=self._tool_name('edit_file'),
-                description='Apply search/replace edits to an existing text file.',
-            )
-            tools_out += [t_write.action(), t_edit.action()]
+            tools_out += [
+                tool(
+                    write_file,
+                    name=self._tool_name('write_file'),
+                    description='Create or overwrite a text file with the given content.',
+                ),
+                tool(
+                    edit_file,
+                    name=self._tool_name('edit_file'),
+                    description='Apply search/replace edits to an existing text file.',
+                ),
+            ]
 
         return tools_out
 
