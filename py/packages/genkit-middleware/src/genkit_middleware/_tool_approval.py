@@ -35,41 +35,40 @@ class ToolApprovalConfig(BaseModel):
     allowed_tools: list[str] = Field(default_factory=list)
 
 
-class ToolApprovalMiddleware(BaseMiddleware):
-    """Requires approval before a tool runs, unless the tool is on allowed_tools."""
+class ToolApproval(BaseMiddleware[ToolApprovalConfig]):
+    """Tool approval middleware that interrupts execution for non-allowed tools."""
 
-    def __init__(self, config: ToolApprovalConfig | None = None) -> None:
-        self.config = config or ToolApprovalConfig()
-
-    async def on_tool_call(
+    async def wrap_tool(
         self,
-        context: GenerateMiddlewareContext,
         params: ToolHookParams,
-        next: Callable[[ToolHookParams], Awaitable[MultipartToolResponse]],
+        ctx: GenerateMiddlewareContext,
+        next_fn: Callable[[ToolHookParams, GenerateMiddlewareContext], Awaitable[MultipartToolResponse]],
     ) -> MultipartToolResponse:
-        """Interrupts with tool approval request if tool is not in allowed list."""
-        tool_name = params.tool.name if hasattr(params.tool, 'name') else str(params.tool)
+        """Intercept tool execution and require approval if not in allowed list."""
+        tool_name = params.tool.name
 
         if tool_name in self.config.allowed_tools:
-            return await next(params)
+            return await next_fn(params, ctx)
 
-        metadata = getattr(params.context, 'resumed_metadata', None)
-        if metadata:
-            decision = metadata.get('decision')
-            if decision == 'approved':
-                return await next(params)
-            if decision == 'rejected':
-                reason = metadata.get('reason', 'Tool execution rejected by user')
-                return MultipartToolResponse(output=f'Tool execution rejected: {reason}')
+        metadata = params.tool_request_part.metadata or {}
+        resumed = metadata.get('resumed')
+        if isinstance(resumed, dict) and (resumed.get('toolApproved') or resumed.get('tool_approved')):
+            return await next_fn(params, ctx)
 
-        async def _call(span: SpanContext) -> MultipartToolResponse:
-            span.set_metadata({'tool_approval': {'tool': tool_name}})
-            raise Interrupt(
-                metadata={
-                    'type': 'tool_approval',
-                    'tool': tool_name,
-                    'input': params.input,
-                }
-            )
+        tool_req = params.tool_request_part.tool_request
+        if tool_req is None:
+            raise ValueError('wrap_tool needs a tool request part')
+        tool_input = tool_req.input
 
-        return await run_in_new_span('tool_approval', _call, action_type=ActionKind.CUSTOM)
+        async def body(_span: SpanContext) -> MultipartToolResponse:
+            raise Interrupt({'message': f'Tool not in approved list: {tool_name}'})
+
+        # the denied call should look like the tool ran and interrupted, so the
+        # trace shows a tool span rather than a bare step.
+        return await run_in_new_span(
+            tool_name,
+            body,
+            action_type=str(ActionKind.TOOL),
+            input=tool_input,
+            is_action=True,
+        )
