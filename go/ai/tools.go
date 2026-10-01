@@ -982,9 +982,12 @@ func (c *InterruptedCall[In, Out, Res]) Respond(output Out) *Part {
 // already a value of that type; or the WrapTool hook that held the
 // call, which reads it with [github.com/firebase/genkit/go/ai/tool.ResumeData],
 // after which the tool runs as a fresh call. It must serialize to a JSON object
-// (a struct or a map). nil is a bare restart, an empty object: restarting is
-// itself the approval for a tool that keys on the presence of a resume, while a
-// tool whose resume type has required fields needs them filled in.
+// (a struct or a map). nil is a bare restart, an empty object. For the tool's
+// own interrupt, restarting is itself the approval when the tool keys on the
+// presence of a resume, while a tool whose resume type has required fields
+// needs them filled in. A hook's hold needs the payload that hook names, such
+// as {"toolApproved": true} for [github.com/firebase/genkit/go/plugins/middleware.ToolApproval];
+// a bare restart holds the call again.
 //
 //	for _, part := range resp.Interrupts() {
 //		restart, err := part.ToToolRestart(map[string]any{"toolApproved": true})
