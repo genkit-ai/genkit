@@ -276,7 +276,7 @@ def put_poison_pill(*, queue: Queue[Any]) -> None:
 
 
 class LogServerExporter:
-    """Background OTLP log sink. Same worker shape as the quiet-TTY span exporter."""
+    """Background OTLP log sink. One worker drains a bounded queue so logging never blocks the app."""
 
     def __init__(self, *, telemetry_server_url: str) -> None:
         self.telemetry_server_url = telemetry_server_url

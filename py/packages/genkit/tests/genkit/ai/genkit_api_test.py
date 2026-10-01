@@ -48,7 +48,7 @@ async def test_genkit_run() -> None:
 
 @pytest.mark.asyncio
 async def test_genkit_run_tags_flow_step_action_type() -> None:
-    """ai.run leftover: the step span is typed so a later provider can classify it."""
+    """ai.run tells the provider its span is a flow step, so traces can label it."""
 
     class Recording:
         last: SpanMetadata | None = None
