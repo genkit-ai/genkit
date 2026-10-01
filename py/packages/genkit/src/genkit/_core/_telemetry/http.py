@@ -65,7 +65,12 @@ FLUSH_TIMEOUT_SECONDS = 2.0
 
 
 class GenkitBuiltinInstrumentation:
-    """Marker on the Developer UI poster so we never inject it twice."""
+    """Marker on the Developer UI trace poster.
+
+    ``is_instrumented_by(GenkitBuiltinInstrumentation)`` is True once traces
+    are flowing to the Developer UI, which is also how Genkit avoids adding
+    the poster twice.
+    """
 
 
 @dataclass
