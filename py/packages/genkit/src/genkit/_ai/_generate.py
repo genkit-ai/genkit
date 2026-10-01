@@ -21,7 +21,7 @@ import contextlib
 import copy
 import secrets
 import time
-from collections.abc import Awaitable, Callable, Generator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Generator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, TypeVar, cast
 
@@ -1375,6 +1375,20 @@ async def run_wrap_generate(
     )
 
 
+# Deep tool loops with several middleware would otherwise hit Python's
+# recursion limit; each turn gets a fresh stack.
+async def await_next_turn(*, coro: Coroutine[Any, Any, ModelResponse]) -> ModelResponse:
+    task = asyncio.create_task(coro)
+    try:
+        return await task
+    except BaseException:
+        if not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        raise
+
+
 async def generate_turn(
     *,
     params: GenerateHookParams,
@@ -1478,14 +1492,16 @@ async def generate_turn(
         return after_tools
     # Tools already ran. This is the conversation if a later pipe fails.
     call.set_messages(after_tools.messages)
-    return await run_wrap_generate(
-        registry=registry,
-        options=after_tools.options,
-        mw_pipeline=mw_pipeline,
-        current_turn=current_turn + 1,
-        message_index=after_tools.message_index,
-        call=call,
-        resolved=resolved,
+    return await await_next_turn(
+        coro=run_wrap_generate(
+            registry=registry,
+            options=after_tools.options,
+            mw_pipeline=mw_pipeline,
+            current_turn=current_turn + 1,
+            message_index=after_tools.message_index,
+            call=call,
+            resolved=resolved,
+        )
     )
 
 

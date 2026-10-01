@@ -4622,6 +4622,353 @@ async def test_task_cancel_after_tool_turn_raises() -> None:
     assert model_calls == 2
 
 
+class _NoopGenerateMiddleware(BaseMiddleware):
+    async def wrap_generate(
+        self,
+        params: GenerateHookParams,
+        ctx: GenerateMiddlewareContext,
+        next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+    ) -> ModelResponse:
+        return await next_fn(params, ctx)
+
+
+def _five_noop_middleware() -> list[BaseMiddleware]:
+    return [_NoopGenerateMiddleware() for _ in range(5)]
+
+
+def _always_requests_tool(pm: ProgrammableModel, *, name: str = 'step') -> None:
+    def always_tool(_request: ModelRequest) -> ModelResponse:
+        return _model_calls_tool(name=name, ref=str(pm.request_count + 1))
+
+    pm.response_cb = always_tool
+
+
+@pytest.mark.asyncio
+async def test_generate_with_five_middleware_and_max_turns_50_returns_aborted_after_51_model_calls() -> None:
+    """ai.generate with five no-op middleware and max_turns=50 aborts after 51 model calls."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+
+    @ai.tool(name='step')
+    async def step() -> str:
+        return 'ok'
+
+    _always_requests_tool(pm)
+    response = await ai.generate(
+        prompt='keep going',
+        tools=['step'],
+        max_turns=50,
+        use=_five_noop_middleware(),
+    )
+
+    assert response.finish_reason == FinishReason.ABORTED
+    assert response.finish_message == 'Exceeded maximum tool call iterations (50)'
+    assert response.error is not None
+    assert response.error.status == 'ABORTED'
+    assert response.error.reason is RuntimeErrorReason.MAX_TURNS_EXCEEDED
+    assert pm.request_count == 51
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_with_five_middleware_and_max_turns_50_returns_aborted_after_51_model_calls() -> None:
+    """ai.generate_stream with five no-op middleware and max_turns=50 closes aborted after 51 model calls."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+
+    @ai.tool(name='step')
+    async def step() -> str:
+        return 'ok'
+
+    _always_requests_tool(pm)
+    stream = ai.generate_stream(
+        prompt='keep going',
+        tools=['step'],
+        max_turns=50,
+        use=_five_noop_middleware(),
+    )
+    _ = [chunk async for chunk in stream]
+    response = await stream.response
+
+    assert response.finish_reason == FinishReason.ABORTED
+    assert response.finish_message == 'Exceeded maximum tool call iterations (50)'
+    assert response.error is not None
+    assert response.error.status == 'ABORTED'
+    assert response.error.reason is RuntimeErrorReason.MAX_TURNS_EXCEEDED
+    assert pm.request_count == 51
+
+
+@pytest.mark.asyncio
+async def test_generate_with_five_middleware_and_max_turns_200_returns_aborted() -> None:
+    """ai.generate with five middleware and max_turns=200 aborts at 200; no RecursionError."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+
+    @ai.tool(name='step')
+    async def step() -> str:
+        return 'ok'
+
+    _always_requests_tool(pm)
+    response = await ai.generate(
+        prompt='keep going',
+        tools=['step'],
+        max_turns=200,
+        use=_five_noop_middleware(),
+    )
+
+    assert response.finish_reason == FinishReason.ABORTED
+    assert response.finish_message == 'Exceeded maximum tool call iterations (200)'
+    assert response.error is not None
+    assert response.error.status == 'ABORTED'
+    assert response.error.reason is RuntimeErrorReason.MAX_TURNS_EXCEEDED
+    assert pm.request_count == 201
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_with_five_middleware_and_max_turns_200_returns_aborted() -> None:
+    """ai.generate_stream with five middleware and max_turns=200 closes aborted at 200."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+
+    @ai.tool(name='step')
+    async def step() -> str:
+        return 'ok'
+
+    _always_requests_tool(pm)
+    stream = ai.generate_stream(
+        prompt='keep going',
+        tools=['step'],
+        max_turns=200,
+        use=_five_noop_middleware(),
+    )
+    _ = [chunk async for chunk in stream]
+    response = await stream.response
+
+    assert response.finish_reason == FinishReason.ABORTED
+    assert response.finish_message == 'Exceeded maximum tool call iterations (200)'
+    assert response.error is not None
+    assert response.error.status == 'ABORTED'
+    assert response.error.reason is RuntimeErrorReason.MAX_TURNS_EXCEEDED
+    assert pm.request_count == 201
+
+
+@pytest.mark.asyncio
+async def test_generate_turn_0_middleware_after_next_sees_the_final_answer() -> None:
+    """wrap_generate after await next on the first wrap sees the final stop text."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+    after_next: list[tuple[FinishReason | None, str]] = []
+
+    class AfterNext(BaseMiddleware):
+        async def wrap_generate(
+            self,
+            params: GenerateHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ) -> ModelResponse:
+            response = await next_fn(params, ctx)
+            if params.iteration == 0:
+                after_next.append((response.finish_reason, response.text))
+            return response
+
+    @ai.tool(name='step')
+    async def step() -> str:
+        return 'ok'
+
+    pm.responses = [
+        _model_calls_tool(name='step', ref='r1'),
+        _model_calls_tool(name='step', ref='r2'),
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('final answer')]),
+        ),
+    ]
+
+    response = await ai.generate(prompt='go', tools=['step'], use=[AfterNext()], max_turns=5)
+
+    assert response.finish_reason == FinishReason.STOP
+    assert response.text == 'final answer'
+    assert after_next == [(FinishReason.STOP, 'final answer')]
+
+
+@pytest.mark.asyncio
+async def test_generate_error_on_a_later_turn_returns_failed_with_that_error() -> None:
+    """A later-turn model exception returns failed/INTERNAL; closed tool rounds stay on messages."""
+    ai = Genkit(model='laterBoomModel')
+    model_calls = 0
+
+    @ai.tool(name='step')
+    async def step() -> str:
+        return 'ok'
+
+    async def later_boom(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+        nonlocal model_calls
+        model_calls += 1
+        if model_calls <= 2:
+            return _model_calls_tool(name='step', ref=str(model_calls))
+        raise RuntimeError('boom-turn-3')
+
+    ai.define_model(name='laterBoomModel', fn=later_boom)
+    response = await ai.generate(
+        prompt='go',
+        tools=['step'],
+        max_turns=10,
+        use=_five_noop_middleware(),
+    )
+
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.finish_message == 'internal error'
+    assert response.message is None
+    assert response.error is not None
+    assert response.error.status == 'INTERNAL'
+    assert response.error.reason is None
+    assert response.error.message == response.finish_message
+    assert model_calls == 3
+    assert [message.role for message in response.messages] == [
+        Role.USER,
+        Role.MODEL,
+        Role.TOOL,
+        Role.MODEL,
+        Role.TOOL,
+    ]
+    assert _tool_output(response.messages[2]) == 'ok'
+    assert _tool_output(response.messages[4]) == 'ok'
+
+
+@pytest.mark.asyncio
+async def test_generate_middleware_awaiting_next_inside_taskgroup_returns_stop() -> None:
+    """Middleware that awaits next inside asyncio.TaskGroup still returns stop and the final text."""
+    task_group_cls = getattr(asyncio, 'TaskGroup', None)
+    if task_group_cls is None:
+        pytest.skip('asyncio.TaskGroup requires Python 3.11')
+
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+
+    class InTaskGroup(BaseMiddleware):
+        async def wrap_generate(
+            self,
+            params: GenerateHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ) -> ModelResponse:
+            async with task_group_cls() as tg:
+                nested = tg.create_task(next_fn(params, ctx))
+            return nested.result()
+
+    @ai.tool(name='step')
+    async def step() -> str:
+        return 'ok'
+
+    pm.responses = [
+        _model_calls_tool(name='step', ref='r1'),
+        _model_calls_tool(name='step', ref='r2'),
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('done via taskgroup')]),
+        ),
+    ]
+
+    response = await ai.generate(prompt='go', tools=['step'], use=[InTaskGroup()], max_turns=5)
+
+    assert response.finish_reason == FinishReason.STOP
+    assert response.text == 'done via taskgroup'
+
+
+@pytest.mark.asyncio
+async def test_generate_cancelled_during_a_later_turn_stops_calling_the_model() -> None:
+    """Cancelling generate while turn 3 runs cancels that turn; the model is not called again."""
+    ai = Genkit(model='hangOnTurn3Model')
+    started = asyncio.Event()
+    model_calls = 0
+
+    @ai.tool(name='step')
+    async def step() -> str:
+        return 'ok'
+
+    async def hang_on_turn_3(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+        nonlocal model_calls
+        model_calls += 1
+        if model_calls < 4:
+            return _model_calls_tool(name='step', ref=str(model_calls))
+        started.set()
+        await asyncio.Event().wait()
+        raise AssertionError('unreachable')
+
+    ai.define_model(name='hangOnTurn3Model', fn=hang_on_turn_3)
+    before = {id(task) for task in asyncio.all_tasks()}
+    task = asyncio.create_task(ai.generate(prompt='go', tools=['step'], max_turns=20))
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert model_calls == 4
+    await asyncio.sleep(0.05)
+    leftover = [
+        running
+        for running in asyncio.all_tasks()
+        if id(running) not in before and running is not asyncio.current_task() and not running.done()
+    ]
+    assert leftover == []
+
+
+@pytest.mark.asyncio
+async def test_generate_turn_0_middleware_sees_chunks_from_later_turns() -> None:
+    """A streaming wrap_generate on turn 0 still intercepts chunks emitted by later turns."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+    turn0_chunks: list[str] = []
+
+    class Turn0ChunkSpy(BaseMiddleware):
+        async def wrap_generate(
+            self,
+            params: GenerateHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ) -> ModelResponse:
+            if params.iteration != 0:
+                return await next_fn(params, ctx)
+            previous = ctx.on_chunk
+
+            def handler(chunk: ModelResponseChunk) -> None:
+                turn0_chunks.append(text_from_content(chunk.content))
+                if previous is not None:
+                    previous(chunk)
+
+            ctx.replace_on_chunk(handler)
+            try:
+                return await next_fn(params, ctx)
+            finally:
+                ctx.replace_on_chunk(previous)
+
+    @ai.tool(name='step')
+    async def step() -> str:
+        return 'ok'
+
+    pm.responses = [
+        _model_calls_tool(name='step', ref='r1'),
+        _model_calls_tool(name='step', ref='r2'),
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('final')]),
+        ),
+    ]
+    pm.chunks = [
+        [ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('c0')])],
+        [ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('c1')])],
+        [ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('c2')])],
+    ]
+
+    stream = ai.generate_stream(prompt='go', tools=['step'], use=[Turn0ChunkSpy()], max_turns=5)
+    _ = [chunk async for chunk in stream]
+    response = await stream.response
+
+    assert response.finish_reason == FinishReason.STOP
+    assert response.text == 'final'
+    assert 'c0' in turn0_chunks
+    assert 'c1' in turn0_chunks
+    assert 'c2' in turn0_chunks
+
+
 @pytest.mark.asyncio
 async def test_recovered_middleware_failure_uses_latest_closed_history() -> None:
     ai = Genkit(model='programmableModel')
