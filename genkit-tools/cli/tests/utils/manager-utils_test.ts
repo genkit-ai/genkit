@@ -14,9 +14,21 @@
  * limitations under the License.
  */
 
-import { RuntimeEvent } from '@genkit-ai/tools-common/manager';
-import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import {
+  REFLECTION_SECRET_ENV,
+  RuntimeEvent,
+} from '@genkit-ai/tools-common/manager';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  jest,
+} from '@jest/globals';
+import {
+  getDevEnvVars,
+  resolveReflectionSecret,
   waitForActionKeys,
   waitForRuntime,
 } from '../../src/utils/manager-utils';
@@ -186,5 +198,114 @@ describe('waitForActionKeys', () => {
     ).resolves.toBeUndefined();
     // Should return well before the 30s deadline.
     expect(Date.now() - start).toBeLessThan(5000);
+  });
+});
+
+describe('resolveReflectionSecret', () => {
+  const original = process.env[REFLECTION_SECRET_ENV];
+
+  afterEach(() => {
+    if (original === undefined) {
+      delete process.env[REFLECTION_SECRET_ENV];
+    } else {
+      process.env[REFLECTION_SECRET_ENV] = original;
+    }
+  });
+
+  it('does not generate a secret by default', () => {
+    delete process.env[REFLECTION_SECRET_ENV];
+    expect(resolveReflectionSecret({ generate: true })).toBeUndefined();
+  });
+
+  it('uses an operator-set secret even without --experimental-auth', () => {
+    process.env[REFLECTION_SECRET_ENV] = 'from-env';
+    expect(resolveReflectionSecret({ generate: true })).toBe('from-env');
+    expect(resolveReflectionSecret({ generate: false })).toBe('from-env');
+  });
+
+  it('prefers an operator-set secret over generating one', () => {
+    process.env[REFLECTION_SECRET_ENV] = 'from-env';
+    expect(resolveReflectionSecret({ auth: true, generate: true })).toBe(
+      'from-env'
+    );
+  });
+
+  it('generates a fresh secret with --experimental-auth', () => {
+    delete process.env[REFLECTION_SECRET_ENV];
+    const first = resolveReflectionSecret({ auth: true, generate: true });
+    const second = resolveReflectionSecret({ auth: true, generate: true });
+    expect(first).toBeDefined();
+    expect(first).not.toBe(second);
+  });
+
+  it('does not generate for commands that only attach to runtimes', () => {
+    delete process.env[REFLECTION_SECRET_ENV];
+    expect(
+      resolveReflectionSecret({ auth: true, generate: false })
+    ).toBeUndefined();
+  });
+});
+
+describe('getDevEnvVars', () => {
+  const original = process.env[REFLECTION_SECRET_ENV];
+  const originalTelemetry = process.env.GENKIT_TELEMETRY_SERVER;
+
+  beforeEach(() => {
+    // Pre-set so resolveTelemetryServer does not spin up a real server.
+    process.env.GENKIT_TELEMETRY_SERVER = 'http://127.0.0.1:4033';
+    delete process.env[REFLECTION_SECRET_ENV];
+  });
+
+  afterEach(() => {
+    if (original === undefined) {
+      delete process.env[REFLECTION_SECRET_ENV];
+    } else {
+      process.env[REFLECTION_SECRET_ENV] = original;
+    }
+    if (originalTelemetry === undefined) {
+      delete process.env.GENKIT_TELEMETRY_SERVER;
+    } else {
+      process.env.GENKIT_TELEMETRY_SERVER = originalTelemetry;
+    }
+  });
+
+  it('passes no secret by default', async () => {
+    const { envVars, reflectionSecret } = await getDevEnvVars('.');
+    expect(envVars[REFLECTION_SECRET_ENV]).toBeUndefined();
+    expect(reflectionSecret).toBeUndefined();
+    expect(envVars.GENKIT_ENV).toBe('dev');
+  });
+
+  it('passes a secret to the runtime it spawns with --experimental-auth', async () => {
+    const { envVars, reflectionSecret } = await getDevEnvVars('.', {
+      auth: true,
+    });
+    expect(envVars[REFLECTION_SECRET_ENV]).toBeTruthy();
+    expect(envVars[REFLECTION_SECRET_ENV]).toBe(reflectionSecret);
+  });
+
+  it('forwards an operator-set secret without --experimental-auth', async () => {
+    process.env[REFLECTION_SECRET_ENV] = 'from-env';
+    const { envVars } = await getDevEnvVars('.');
+    expect(envVars[REFLECTION_SECRET_ENV]).toBe('from-env');
+  });
+
+  it('points the v2 URL at loopback', async () => {
+    const { envVars } = await getDevEnvVars('.', {
+      experimentalReflectionV2: true,
+    });
+    expect(envVars.GENKIT_REFLECTION_V2_SERVER).toMatch(
+      /^ws:\/\/127\.0\.0\.1:\d+$/
+    );
+  });
+
+  it('advertises a wildcard --reflection-v2-host as loopback', async () => {
+    const { envVars } = await getDevEnvVars('.', {
+      experimentalReflectionV2: true,
+      reflectionV2Host: '0.0.0.0',
+    });
+    expect(envVars.GENKIT_REFLECTION_V2_SERVER).toMatch(
+      /^ws:\/\/127\.0\.0\.1:\d+$/
+    );
   });
 });
