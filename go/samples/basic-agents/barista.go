@@ -63,11 +63,11 @@ type BaristaOrder struct {
 func defineBaristaAgent(g *genkit.Genkit) *aix.Agent[BaristaOrder] {
 	const name = "barista"
 
-	// The write side, defined with the experimental tool API: the function
-	// takes a plain context.Context, so the session lookup reads the same way
+	// The write side, an ordinary genkit.DefineTool tool. *ai.ToolContext
+	// embeds the context.Context, so the session lookup reads the same way
 	// it does anywhere else. Use tool.AttachParts if a tool needs to return
-	// content alongside its output. The banker's resumable tool is the
-	// other half of this API.
+	// content alongside its output. The banker defines a resumable tool
+	// instead, for a call that waits for the customer's approval.
 	//
 	// A tool reaches the live session through its context and mutates the
 	// custom state; what it writes is visible to the next turn's prompt

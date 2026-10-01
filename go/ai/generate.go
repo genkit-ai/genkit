@@ -2086,9 +2086,12 @@ func (c *ModelResponseChunk) Interrupts() []*Part {
 	return parts
 }
 
-// ToolResponses returns the tool response parts from the chunk.
-// Use [Part.IsPartial] to distinguish streaming progress updates
-// from final tool results.
+// ToolResponses returns the tool response parts from the chunk. Progress a
+// tool streams with [github.com/firebase/genkit/go/ai/tool.SendChunk] is not
+// among them unless the tool builds it as a tool response itself: progress
+// is usually a [RoleTool] chunk of text parts. A tool that streams a
+// [NewPartialToolResponsePart] can be told from a final result with
+// [Part.IsPartial].
 func (c *ModelResponseChunk) ToolResponses() []*Part {
 	var parts []*Part
 	if c == nil {
