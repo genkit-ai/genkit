@@ -119,6 +119,7 @@ export const researchAgent = ai.defineAgent({
   use: [
     contextCompression({
       maxInputTokens: 200, // Triggers compression as tool responses accumulate in the generate loop
+      deduplicateToolResponses: { matchBy: 'name-and-input' },
       toolResponses: {
         maxChars: 120, // Truncate verbose tool responses beyond 120 chars
         preserveRecent: 1, // Keep most recent tool response intact
