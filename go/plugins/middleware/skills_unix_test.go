@@ -44,7 +44,7 @@ func TestSkillsSkipsFifoSkillMd(t *testing.T) {
 	}
 
 	mustNotBlock(t, "scanSkills", func() error {
-		if info := scanSkills(ctx, []string{skillsDir}, true, nil); len(info) != 0 {
+		if info := scanSkills(ctx, diskStore{}, []string{skillsDir}, true, nil); len(info) != 0 {
 			t.Errorf("scanned %v, want none", sortedNames(info))
 		}
 		return nil
@@ -89,7 +89,7 @@ func TestSkillsResourceReadRefusesFifo(t *testing.T) {
 	}
 
 	// The listing must not offer it either.
-	if got := listSkillResources(ctx, py, SkillResourceToolName); strings.Contains(got, "pipe") {
+	if got := listSkillResources(ctx, diskStore{}, py, SkillResourceToolName); strings.Contains(got, "pipe") {
 		t.Errorf("the resource listing advertises a FIFO: %q", got)
 	}
 }

@@ -23,6 +23,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"unicode/utf8"
 
 	"github.com/firebase/genkit/go/ai"
@@ -640,7 +641,7 @@ func TestSkillsRequiresExactSkillMdCasing(t *testing.T) {
 	}
 	writeSkill(t, skillsDir, "upper", "---\nname: upper\ndescription: d\n---\n")
 
-	info := scanSkills(ctx, []string{skillsDir}, true, nil)
+	info := scanSkills(ctx, diskStore{}, []string{skillsDir}, true, nil)
 	if _, ok := info["lower"]; ok {
 		t.Error("skill.md should not be discovered; SKILL.md is matched case-exactly")
 	}
@@ -671,7 +672,7 @@ func TestSkillsCollisionLaterPathWins(t *testing.T) {
 	writeSkill(t, first, "dup", "---\nname: dup\ndescription: from first\n---\nfirst body")
 	writeSkill(t, second, "dup", "---\nname: dup\ndescription: from second\n---\nsecond body")
 
-	info := scanSkills(ctx, []string{first, second}, true, nil)
+	info := scanSkills(ctx, diskStore{}, []string{first, second}, true, nil)
 	if got := info["dup"].Description; got != "from second" {
 		t.Errorf("description = %q, want the later path to win", got)
 	}
@@ -683,7 +684,7 @@ func TestSkillsSkipsOversizedSkillMd(t *testing.T) {
 	writeSkill(t, skillsDir, "big", big)
 	writeSkill(t, skillsDir, "small", "---\nname: small\ndescription: d\n---\nbody")
 
-	info := scanSkills(ctx, []string{skillsDir}, true, nil)
+	info := scanSkills(ctx, diskStore{}, []string{skillsDir}, true, nil)
 	if _, ok := info["big"]; ok {
 		t.Error("an oversized SKILL.md should be skipped, not truncated")
 	}
@@ -1379,7 +1380,7 @@ func TestSkillsSkipsSymlinkedSkillMd(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if info := scanSkills(ctx, []string{skillsDir}, true, nil); len(info) != 0 {
+	if info := scanSkills(ctx, diskStore{}, []string{skillsDir}, true, nil); len(info) != 0 {
 		t.Errorf("scanned %v, want none: a symlinked SKILL.md is not followed", sortedNames(info))
 	}
 }
@@ -1590,5 +1591,66 @@ func TestIsCatalogPart(t *testing.T) {
 				t.Errorf("isCatalogPart(%v, %q) = %v, want %v", tt.meta, SkillToolName, got, tt.want)
 			}
 		})
+	}
+}
+
+// skillFS is a skills tree as SkillFS sees it, with a skill under each default
+// path.
+func skillFS() fstest.MapFS {
+	return fstest.MapFS{
+		".agents/skills/js/SKILL.md":      {Data: []byte("---\nname: js\ndescription: JS help\n---\nJS body")},
+		"skills/python/SKILL.md":          {Data: []byte("---\nname: python\ndescription: Python help\n---\nPython body")},
+		"skills/python/references/api.md": {Data: []byte("reference body")},
+		"skills/other/SKILL.md":           {Data: []byte("---\nname: other\ndescription: Other help\n---\nOther body")},
+	}
+}
+
+// The default paths resolve inside SkillFS, as they would on disk, and an
+// activation leaves out the host directory line, since no tool can open the
+// path it would name.
+func TestSkillsReadsFromSkillFS(t *testing.T) {
+	s := &Skills{SkillFS: skillFS(), AllowResourceAccess: true}
+
+	catalog := systemText(runSkills(t, s, "skillfs-catalog", ai.WithPrompt("hello")))
+	for _, want := range []string{" - js - JS help", " - python - Python help"} {
+		if !strings.Contains(catalog, want) {
+			t.Errorf("catalog is missing %q: %q", want, catalog)
+		}
+	}
+
+	out := callSkillTool(t, s, "skillfs-activate", SkillToolName, map[string]any{"skillName": "python"})
+	for _, want := range []string{"Python body", `path="skills/python"`, "references/api.md"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("activation is missing %q: %q", want, out)
+		}
+	}
+	if strings.Contains(out, "Relative paths in this skill resolve against") {
+		t.Errorf("an embedded skill has no host directory to name: %q", out)
+	}
+}
+
+// The tool refuses a ".." segment before the store sees it, since such a
+// segment counts as hidden. The store must still refuse one on its own:
+// joining it onto the skill directory would resolve it into a sibling skill.
+func TestSkillsSkillFSReadIsConfined(t *testing.T) {
+	h := mustHooks(t, &Skills{SkillFS: skillFS(), AllowResourceAccess: true})
+	read := findTool(h, SkillResourceToolName)
+	if read == nil {
+		t.Fatalf("read_skill_file was not registered; tools=%v", toolNames(h))
+	}
+	read.Register(newTestRegistry(t))
+	got, err := read.RunRaw(ctx, map[string]any{"skillName": "python", "filePath": "references/api.md"})
+	if err != nil {
+		t.Fatalf("reading a bundled file failed: %v", err)
+	}
+	if got != "reference body" {
+		t.Errorf("read = %q, want %q", got, "reference body")
+	}
+
+	store := fsStore{skillFS()}
+	for _, bad := range []string{"../other/SKILL.md", "../../.agents/skills/js/SKILL.md", "/skills/other/SKILL.md"} {
+		if data, err := store.readResource("skills/python", bad); err == nil {
+			t.Errorf("reading %q should be refused, got %q", bad, data)
+		}
 	}
 }

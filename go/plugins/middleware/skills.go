@@ -23,6 +23,7 @@ import (
 	"io/fs"
 	"maps"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -135,10 +136,10 @@ const skillAlreadyLoadedStub = "Skill %q is already loaded in this conversation;
 // so a library authored for another agent still works here.
 //
 // Security: skill paths resolve against the process working directory by
-// default, and a discovered SKILL.md becomes instruction text the model
-// follows. Treat a skills tree the way you treat source code, and prefer an
-// absolute path over the default in a server process. Genkit applies no trust
-// gate of its own.
+// default, or inside SkillFS when it is set, and a discovered SKILL.md becomes
+// instruction text the model follows. Treat a skills tree the way you treat
+// source code, and prefer an absolute path over the default in a server
+// process. Genkit applies no trust gate of its own.
 //
 // Usage:
 //
@@ -181,7 +182,7 @@ type Skills struct {
 	// inside a skill directory (references/, scripts/, assets/, and anything
 	// else the skill ships), and appends a listing of those files to each
 	// activation. Paths resolve against that one skill's directory and are
-	// confined to it by [os.Root].
+	// confined to it: by [os.Root] on disk, and by path validation in SkillFS.
 	//
 	// Defaults to false: enabling it grants the model file access it does not
 	// otherwise have, and adds a tool name that [ToolApproval.AllowedTools]
@@ -194,18 +195,50 @@ type Skills struct {
 	// collision fails the whole request. A prefix breaks tool-name parity with
 	// the other Genkit runtimes; leave it empty unless you need it.
 	ToolNamePrefix string `json:"toolNamePrefix,omitempty" jsonschema_description:"Prepended to each tool name. Use distinct prefixes when attaching multiple skills middlewares to one call so their tool names do not collide."`
+
+	// SkillFS, when set, is the file system that SkillPaths are read from, in
+	// place of the operating system's. Use it to ship skills inside the binary
+	// with an [embed.FS]:
+	//
+	//	//go:embed skills
+	//	var skillsFS embed.FS
+	//
+	//	ai.WithUse(&middleware.Skills{SkillFS: skillsFS})
+	//
+	// SkillPaths are then slash-separated paths inside SkillFS, and the
+	// defaults apply unchanged. A go:embed pattern that names a directory
+	// leaves out the files in it whose names begin with "." or "_", so name
+	// ".agents/skills" in the pattern itself, and add the "all:" prefix if a
+	// skill bundles such a file.
+	//
+	// A skill in SkillFS has no path that another tool can open, so its
+	// activation does not tell the model where relative paths resolve. Its
+	// bundled files are reachable only through read_skill_file.
+	//
+	// Containment comes from path validation, which refuses ".." and absolute
+	// paths, and from SkillFS itself. An [os.DirFS] follows symbolic links out
+	// of its tree, so for a directory on disk, set SkillPaths and leave SkillFS
+	// unset.
+	//
+	// SkillFS is not part of the JSON configuration. A call that the Dev UI
+	// dispatches by name reads skills from disk.
+	SkillFS fs.FS `json:"-"`
 }
 
 // skillInfo records a discovered skill. Name is the directory name, which is
-// both what the catalog advertises and what the tools accept. Dir is the
-// absolute root that bundled-file reads resolve against. ShownDir is the same
-// directory as the SkillPaths entry names it, which is what the model sees.
+// both what the catalog advertises and what the tools accept. Dir is the root
+// that bundled-file reads resolve against, as store names it. ShownDir is the
+// same directory as the SkillPaths entry names it, which is what the model
+// sees.
 type skillInfo struct {
 	Name        string
 	Dir         string
 	ShownDir    string
 	Path        string
 	Description string
+
+	// store is where the skill was found, and where its files are read from.
+	store skillStore
 
 	// body holds the SKILL.md bytes the scan read. It is kept only for the
 	// skills the scan was asked to retain, which are the preloaded ones.
@@ -233,7 +266,7 @@ func (s Skills) Name() string { return provider + "/skills" }
 // requires. Unreadable paths, malformed frontmatter, and oversized files are
 // logged and skipped rather than reported as errors.
 func (s Skills) New(ctx context.Context) (*ai.Hooks, error) {
-	info := scanSkills(ctx, s.paths(), len(s.SkillPaths) > 0, s.Preload)
+	info := scanSkills(ctx, s.store(), s.paths(), len(s.SkillPaths) > 0, s.Preload)
 	if len(info) == 0 {
 		return &ai.Hooks{}, nil
 	}
@@ -316,12 +349,21 @@ func (s *Skills) paths() []string {
 	return s.SkillPaths
 }
 
+// store returns where skills are read from: SkillFS when it is set, and the
+// operating system's file system otherwise.
+func (s *Skills) store() skillStore {
+	if s.SkillFS != nil {
+		return fsStore{s.SkillFS}
+	}
+	return diskStore{}
+}
+
 // toolName returns suffix prefixed with s.ToolNamePrefix.
 func (s *Skills) toolName(suffix string) string { return s.ToolNamePrefix + suffix }
 
 // resolvePreload returns the discovered skills named in Skills.Preload, keyed
 // by skill name. Each carries the SKILL.md bytes the scan read, and rendering
-// from those rather than from disk means a discovered skill cannot fail to
+// from those rather than reading again means a discovered skill cannot fail to
 // preload, so no skill is left out of both the catalog and the request. An
 // unknown name is logged and dropped: New runs on the request path, so a name
 // that fails to resolve because a directory was briefly unreadable must not
@@ -382,10 +424,10 @@ func (s *Skills) newUseSkillTool(info map[string]skillInfo, act *activationSet, 
 	)
 }
 
-// renderSkill reads a skill from disk and returns the instructions to place in
-// the conversation.
+// renderSkill reads a skill from its store and returns the instructions to
+// place in the conversation.
 func (s *Skills) renderSkill(ctx context.Context, si skillInfo) (string, error) {
-	data, err := readSkillFile(si.Path)
+	data, err := si.store.readSkillFile(si.Path)
 	if err != nil {
 		return "", err
 	}
@@ -398,7 +440,7 @@ func (s *Skills) renderSkill(ctx context.Context, si skillInfo) (string, error) 
 func (s *Skills) skillContent(ctx context.Context, si skillInfo, body []byte) string {
 	var resources string
 	if s.AllowResourceAccess {
-		resources = listSkillResources(ctx, si.Dir, s.toolName(SkillResourceToolName))
+		resources = listSkillResources(ctx, si.store, si.Dir, s.toolName(SkillResourceToolName))
 	}
 	return wrapSkillContent(si, string(body), resources)
 }
@@ -501,9 +543,8 @@ type readSkillFileInput struct {
 	FilePath  string `json:"filePath" jsonschema_description:"Path to the file, relative to the skill directory (for example \"references/api.md\")."`
 }
 
-// newReadSkillFileTool builds the tier-3 resource reader. Each call opens an
-// [os.Root] on the one skill's directory, which rejects any path resolving
-// outside it, including via "..", an absolute path, or a symbolic link.
+// newReadSkillFileTool builds the tier-3 resource reader. Each read is confined
+// to the one skill's directory; see [skillStore.readResource].
 func (s *Skills) newReadSkillFileTool(info map[string]skillInfo, available string) ai.Tool {
 	return ai.NewTool(
 		s.toolName(SkillResourceToolName),
@@ -522,7 +563,7 @@ func (s *Skills) newReadSkillFileTool(info map[string]skillInfo, available strin
 			if hiddenPath(rel) {
 				return "", fmt.Errorf("%s is not readable: skills expose no path with a segment starting with \".\"", rel)
 			}
-			data, err := readSkillResource(si.Dir, rel)
+			data, err := si.store.readResource(si.Dir, rel)
 			if err != nil {
 				return "", fmt.Errorf("read %q from skill %q: %w", rel, in.SkillName, err)
 			}
@@ -550,6 +591,117 @@ func hiddenPath(rel string) bool {
 		}
 	}
 	return false
+}
+
+// skillStore is where skills are read from. Names are in the store's own
+// form: host paths for [diskStore], slash-separated paths for [fsStore].
+type skillStore interface {
+	// resolve turns a SkillPaths entry into the name the other methods take.
+	resolve(p string) (string, error)
+	join(elem ...string) string
+	readDir(name string) ([]fs.DirEntry, error)
+	stat(name string) (fs.FileInfo, error)
+
+	// readSkillFile reads a SKILL.md, refusing a symbolic link, anything that
+	// is not a regular file, and anything over skillMaxBytes.
+	readSkillFile(name string) ([]byte, error)
+
+	// readResource reads rel, a slash-separated path, from the skill
+	// directory dir. A path that resolves outside dir is refused.
+	readResource(dir, rel string) ([]byte, error)
+
+	// openDir returns the skill directory dir as an [fs.FS] confined to it,
+	// and a function that releases it.
+	openDir(dir string) (fs.FS, func(), error)
+
+	// hostPaths reports whether names are paths on the host, which other
+	// tools given to the model can open.
+	hostPaths() bool
+}
+
+// diskStore reads skills from the operating system's file system. A skills
+// tree on disk can be written while it is read, so its readers refuse a
+// symbolic link out of the skill, a named pipe, and a file swapped between the
+// check and the open.
+type diskStore struct{}
+
+func (diskStore) resolve(p string) (string, error)           { return filepath.Abs(p) }
+func (diskStore) join(elem ...string) string                 { return filepath.Join(elem...) }
+func (diskStore) readDir(name string) ([]fs.DirEntry, error) { return os.ReadDir(name) }
+func (diskStore) stat(name string) (fs.FileInfo, error)      { return os.Stat(name) }
+func (diskStore) readSkillFile(name string) ([]byte, error)  { return readSkillFile(name) }
+func (diskStore) readResource(dir, rel string) ([]byte, error) {
+	return readSkillResource(dir, rel)
+}
+func (diskStore) hostPaths() bool { return true }
+
+func (diskStore) openDir(dir string) (fs.FS, func(), error) {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, nil, err
+	}
+	return root.FS(), func() { root.Close() }, nil
+}
+
+// fsStore reads skills from an [fs.FS], typically an [embed.FS], which cannot
+// change while it is read. Containment of a bundled-file read comes from
+// [fs.Sub], which refuses a name that is not a valid path, so ".." and an
+// absolute path never reach the file system.
+type fsStore struct{ fsys fs.FS }
+
+func (fsStore) resolve(p string) (string, error) {
+	name := path.Clean(filepath.ToSlash(p))
+	if !fs.ValidPath(name) {
+		return "", fmt.Errorf("%q is not a path inside SkillFS: use a slash-separated relative path without \"..\"", p)
+	}
+	return name, nil
+}
+
+func (fsStore) join(elem ...string) string                   { return path.Join(elem...) }
+func (f fsStore) readDir(name string) ([]fs.DirEntry, error) { return fs.ReadDir(f.fsys, name) }
+func (f fsStore) stat(name string) (fs.FileInfo, error)      { return fs.Stat(f.fsys, name) }
+func (fsStore) hostPaths() bool                              { return false }
+
+func (f fsStore) readSkillFile(name string) ([]byte, error) {
+	st, err := fs.Lstat(f.fsys, name)
+	if err != nil {
+		return nil, err
+	}
+	return readFSChecked(f.fsys, name, st, skillMaxBytes)
+}
+
+func (f fsStore) readResource(dir, rel string) ([]byte, error) {
+	sub, err := fs.Sub(f.fsys, dir)
+	if err != nil {
+		return nil, err
+	}
+	st, err := fs.Stat(sub, rel)
+	if err != nil {
+		return nil, err
+	}
+	return readFSChecked(sub, rel, st, skillResourceMaxBytes)
+}
+
+func (f fsStore) openDir(dir string) (fs.FS, func(), error) {
+	sub, err := fs.Sub(f.fsys, dir)
+	return sub, func() {}, err
+}
+
+// readFSChecked reads name from fsys after st, its stat, passes
+// [checkReadable]. The length is checked again after the read, since an fs.FS
+// gives no way to tie the read to the file that was checked.
+func readFSChecked(fsys fs.FS, name string, st fs.FileInfo, maxBytes int64) ([]byte, error) {
+	if err := checkReadable(st, name, maxBytes); err != nil {
+		return nil, err
+	}
+	data, err := fs.ReadFile(fsys, name)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("%s is over the %d byte limit", name, maxBytes)
+	}
+	return data, nil
 }
 
 // readSkillResource reads one bundled file, confined to dir by [os.Root],
@@ -635,7 +787,7 @@ func checkReadable(st os.FileInfo, name string, maxBytes int64) error {
 // the catalog, or silently changes which instructions the model receives, is a
 // warning. Advisory lint that changes nothing is debug, so that a warning
 // remains worth reading.
-func scanSkills(ctx context.Context, paths []string, explicit bool, retain []string) map[string]skillInfo {
+func scanSkills(ctx context.Context, store skillStore, paths []string, explicit bool, retain []string) map[string]skillInfo {
 	result := make(map[string]skillInfo)
 	skipped := func(p string, err error) {
 		if explicit {
@@ -645,30 +797,30 @@ func scanSkills(ctx context.Context, paths []string, explicit bool, retain []str
 		}
 	}
 	for _, p := range paths {
-		abs, err := filepath.Abs(p)
+		abs, err := store.resolve(p)
 		if err != nil {
 			skipped(p, err)
 			continue
 		}
-		entries, err := os.ReadDir(abs)
+		entries, err := store.readDir(abs)
 		if err != nil {
 			skipped(abs, err)
 			continue
 		}
 		for _, entry := range entries {
-			if strings.HasPrefix(entry.Name(), ".") || !isDirEntry(abs, entry) {
+			if strings.HasPrefix(entry.Name(), ".") || !isDirEntry(store, abs, entry) {
 				continue
 			}
-			si, ok := readSkillDir(ctx, abs, entry.Name(), slices.Contains(retain, entry.Name()))
+			si, ok := readSkillDir(ctx, store, abs, entry.Name(), slices.Contains(retain, entry.Name()))
 			if !ok {
 				continue
 			}
-			si.ShownDir = filepath.Join(p, entry.Name())
+			si.ShownDir = store.join(p, entry.Name())
 			if prev, dup := result[si.Name]; dup {
 				// An installer that links one copy of a skill into several
 				// agents' directories makes the same skill appear twice.
 				// Nothing is shadowed then, so there is nothing to warn about.
-				if sameDir(prev.Dir, si.Dir) {
+				if sameDir(store, prev.Dir, si.Dir) {
 					logger.Debug(ctx, "skill found in more than one path through a symbolic link",
 						"skill", si.Name, "paths", []string{prev.Path, si.Path})
 				} else {
@@ -685,31 +837,36 @@ func scanSkills(ctx context.Context, paths []string, explicit bool, retain []str
 // isDirEntry reports whether entry, listed in parent, is a directory or a
 // symbolic link to one. Following a link is safe because the target is held to
 // the same rules as any skill: its SKILL.md must be a regular file, and
-// bundled-file reads are confined to it by [os.Root].
-func isDirEntry(parent string, entry os.DirEntry) bool {
+// bundled-file reads are confined to it.
+func isDirEntry(store skillStore, parent string, entry fs.DirEntry) bool {
 	if entry.IsDir() {
 		return true
 	}
 	if entry.Type()&fs.ModeSymlink == 0 {
 		return false
 	}
-	st, err := os.Stat(filepath.Join(parent, entry.Name()))
+	st, err := store.stat(store.join(parent, entry.Name()))
 	return err == nil && st.IsDir()
 }
 
-// sameDir reports whether a and b name the same directory.
-func sameDir(a, b string) bool {
-	sa, errA := os.Stat(a)
-	sb, errB := os.Stat(b)
+// sameDir reports whether a and b name the same directory. [os.SameFile]
+// reports false for a FileInfo that does not come from the os package, so in
+// an fs.FS, which has no links to compare through, only equal names match.
+func sameDir(store skillStore, a, b string) bool {
+	if a == b {
+		return true
+	}
+	sa, errA := store.stat(a)
+	sb, errB := store.stat(b)
 	return errA == nil && errB == nil && os.SameFile(sa, sb)
 }
 
 // readSkillDir loads one candidate skill directory, keeping the SKILL.md bytes
 // when retain is set. It reports false when the directory holds no SKILL.md,
 // or holds one that cannot be used.
-func readSkillDir(ctx context.Context, parent, name string, retain bool) (skillInfo, bool) {
-	dir := filepath.Join(parent, name)
-	entries, err := os.ReadDir(dir)
+func readSkillDir(ctx context.Context, store skillStore, parent, name string, retain bool) (skillInfo, bool) {
+	dir := store.join(parent, name)
+	entries, err := store.readDir(dir)
 	if err != nil {
 		logger.Debug(ctx, "skill directory could not be read, skipping", "path", dir, "error", err)
 		return skillInfo{}, false
@@ -722,31 +879,31 @@ func readSkillDir(ctx context.Context, parent, name string, retain bool) (skillI
 	// The entry must also be a regular file. A symbolic link here would read a
 	// file the skill author neither owns nor can write, and a named pipe would
 	// block the request that opened it.
-	var found os.DirEntry
+	var found fs.DirEntry
 	for _, e := range entries {
 		if e.Name() != skillFileName {
 			continue
 		}
 		if !e.Type().IsRegular() {
 			logger.Warn(ctx, "SKILL.md is not a regular file, skipping skill",
-				"path", filepath.Join(dir, skillFileName), "mode", e.Type())
+				"path", store.join(dir, skillFileName), "mode", e.Type())
 			break
 		}
 		found = e
 		break
 	}
 	if found == nil {
-		warnNestedSkills(ctx, dir, entries)
+		warnNestedSkills(ctx, store, dir, entries)
 		return skillInfo{}, false
 	}
 
-	skillMd := filepath.Join(dir, skillFileName)
+	skillMd := store.join(dir, skillFileName)
 	if fi, err := found.Info(); err == nil && fi.Size() > skillMaxBytes {
 		logger.Warn(ctx, "SKILL.md is over the size limit, skipping skill",
 			"path", skillMd, "bytes", fi.Size(), "limit", skillMaxBytes)
 		return skillInfo{}, false
 	}
-	data, err := readSkillFile(skillMd)
+	data, err := store.readSkillFile(skillMd)
 	if err != nil {
 		logger.Warn(ctx, "SKILL.md could not be read, skipping skill", "path", skillMd, "error", err)
 		return skillInfo{}, false
@@ -771,7 +928,7 @@ func readSkillDir(ctx context.Context, parent, name string, retain bool) (skillI
 	}
 
 	validateSkillMetadata(ctx, name, fm, desc, skillMd)
-	si := skillInfo{Name: name, Dir: dir, Path: skillMd, Description: desc}
+	si := skillInfo{Name: name, Dir: dir, Path: skillMd, Description: desc, store: store}
 	if retain {
 		si.body = data
 	}
@@ -805,12 +962,12 @@ func validateSkillMetadata(ctx context.Context, dirName string, fm skillFrontmat
 // warnNestedSkills reports a directory that holds no SKILL.md but does hold a
 // subdirectory that does. Scanning is one level deep, so those skills are
 // invisible; this is the diagnostic that explains why.
-func warnNestedSkills(ctx context.Context, dir string, entries []os.DirEntry) {
+func warnNestedSkills(ctx context.Context, store skillStore, dir string, entries []fs.DirEntry) {
 	for _, e := range entries {
 		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
-		if _, err := os.Stat(filepath.Join(dir, e.Name(), skillFileName)); err == nil {
+		if _, err := store.stat(store.join(dir, e.Name(), skillFileName)); err == nil {
 			logger.Debug(ctx, "directory holds nested skills, which are not scanned; "+
 				"add it to SkillPaths to expose them",
 				"path", dir)
@@ -1060,7 +1217,9 @@ func wrapSkillContent(si skillInfo, body, resources string) string {
 	if !strings.HasSuffix(body, "\n") {
 		b.WriteString("\n")
 	}
-	fmt.Fprintf(&b, "\nRelative paths in this skill resolve against %s\n", catalogText(si.ShownDir))
+	if si.store.hostPaths() {
+		fmt.Fprintf(&b, "\nRelative paths in this skill resolve against %s\n", catalogText(si.ShownDir))
+	}
 	b.WriteString(resources)
 	b.WriteString("</skill_content>")
 	return b.String()
@@ -1071,16 +1230,16 @@ func wrapSkillContent(si skillInfo, body, resources string) string {
 // the specification are conventions, not a closed set, so everything the skill
 // ships is listed.
 //
-// The walk goes through the [os.Root] the reader uses, so it applies the same
-// containment, and so a skill directory reached through a symbolic link is
-// walked rather than reported as a single link entry.
-func listSkillResources(ctx context.Context, dir, toolName string) string {
-	root, err := os.OpenRoot(dir)
+// The walk goes through the confined view the reader uses, so it applies the
+// same containment, and so a skill directory reached through a symbolic link
+// is walked rather than reported as a single link entry.
+func listSkillResources(ctx context.Context, store skillStore, dir, toolName string) string {
+	root, release, err := store.openDir(dir)
 	if err != nil {
 		logger.Debug(ctx, "skill resources could not be listed", "path", dir, "error", err)
 		return ""
 	}
-	defer root.Close()
+	defer release()
 	var (
 		files     []string
 		truncated bool
@@ -1089,10 +1248,10 @@ func listSkillResources(ctx context.Context, dir, toolName string) string {
 	// so WalkDir has nothing left to return. An unreadable corner of a skill
 	// directory costs the model that listing, not the activation, which is why
 	// this degrades rather than propagating.
-	_ = fs.WalkDir(root.FS(), ".", func(rel string, d fs.DirEntry, err error) error {
+	_ = fs.WalkDir(root, ".", func(rel string, d fs.DirEntry, err error) error {
 		if err != nil {
 			logger.Debug(ctx, "skill resource could not be listed, skipping",
-				"path", filepath.Join(dir, filepath.FromSlash(rel)), "error", err)
+				"path", store.join(dir, rel), "error", err)
 			return nil //nolint:nilerr // an unreadable entry is skipped, not fatal
 		}
 		if rel == "." {
@@ -1154,11 +1313,11 @@ func listSkillResources(ctx context.Context, dir, toolName string) string {
 // linksToRegularFile reports whether d is a symbolic link that resolves, inside
 // root, to a regular file. It applies the containment the reader applies, so
 // the listing never advertises a link the reader refuses.
-func linksToRegularFile(root *os.Root, rel string, d fs.DirEntry) bool {
+func linksToRegularFile(root fs.FS, rel string, d fs.DirEntry) bool {
 	if d.Type()&fs.ModeSymlink == 0 {
 		return false
 	}
-	st, err := root.Stat(filepath.FromSlash(rel))
+	st, err := fs.Stat(root, rel)
 	return err == nil && st.Mode().IsRegular()
 }
 
