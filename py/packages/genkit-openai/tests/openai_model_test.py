@@ -31,9 +31,18 @@ from openai.types import CompletionUsage
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 from pydantic import BaseModel, ValidationError
 
-from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
-from genkit._core._typing import GenerationUsage, Operation
-from genkit.model import ModelConfig, ModelRequest, OutputConfig, ToolRequest
+from genkit import (
+    ActionRunContext,
+    FinishReason,
+    GenkitError,
+    Message,
+    ModelResponse,
+    ModelResponseChunk,
+    Operation,
+    Part,
+    Role,
+)
+from genkit.model import ModelConfig, ModelRequest, ModelUsage, OutputConfig, ToolRequest
 
 
 def test_unknown_chat_id_json_mode_uses_json_object() -> None:
@@ -1552,7 +1561,7 @@ class TestCleanJsonResponse:
             finish_reason=FinishReason.LENGTH,
             finish_message='cut off',
             latency_ms=12.5,
-            usage=GenerationUsage(input_tokens=3, output_tokens=4),
+            usage=ModelUsage(input_tokens=3, output_tokens=4),
             custom={'id': 'chatcmpl-abc'},
             raw={'id': 'chatcmpl-abc'},
             operation=Operation(id='op-1', done=True),

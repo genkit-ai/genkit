@@ -19,7 +19,7 @@
 import pytest
 from genkit_django.handler import genkit_django_handler
 
-from genkit._core._error import GenkitError
+from genkit import GenkitError
 
 
 class TestGenkitDjangoHandlerValidation:

@@ -21,10 +21,17 @@ from typing import NoReturn
 import pytest
 from genkit_middleware import Fallback
 
-from genkit import Genkit, Message, ModelResponse, ModelResponseChunk, Part
-from genkit._core._action import ActionRunContext
-from genkit._core._error import GenkitError
-from genkit._core._typing import FinishReason, Role
+from genkit import (
+    ActionRunContext,
+    FinishReason,
+    Genkit,
+    GenkitError,
+    Message,
+    ModelResponse,
+    ModelResponseChunk,
+    Part,
+    Role,
+)
 from genkit.middleware import GenerateMiddlewareContext, ModelHookParams
 from genkit.model import ModelRequest
 

@@ -34,7 +34,7 @@ from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor
 
-from genkit._core._error import GenkitError
+from genkit import GenkitError
 from genkit.telemetry import configure_instrumentation, is_instrumented_by, reset_instrumentation
 
 _GENKIT_ENV = 'GENKIT_ENV'

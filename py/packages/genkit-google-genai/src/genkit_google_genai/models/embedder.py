@@ -23,8 +23,8 @@ from google import genai
 from google.genai import types as genai_types
 
 from genkit import Document, Embedding, Part
-from genkit._core._compat import StrEnum
 from genkit.embedder import EmbedderInfo, EmbedderSupports, EmbedRequest, EmbedResponse
+from genkit.plugin_api import StrEnum
 from genkit_google_genai.models._routing import strip_ref_prefixes
 from genkit_google_genai.models.utils import PartConverter
 

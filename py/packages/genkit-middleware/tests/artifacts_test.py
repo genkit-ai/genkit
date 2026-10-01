@@ -18,6 +18,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+
 import pytest
 from genkit_middleware import Artifacts
 from genkit_middleware._artifacts import (
@@ -26,11 +28,40 @@ from genkit_middleware._artifacts import (
     extract_artifact_text,
 )
 
-from genkit import ModelResponse, Part
-from genkit._ai._agents._session import Session, run_with_session
-from genkit._core._model import Artifact, GenerateActionOptions, SessionState
-from genkit._core._typing import Role
+from genkit import ActionRunContext, ModelResponse, Part, Role
+from genkit.exp import Genkit
+from genkit.exp.agent import (
+    AgentFinishReason,
+    AgentInput,
+    AgentResult,
+    Artifact,
+    SessionRunner,
+    TurnContext,
+    TurnResult,
+)
 from genkit.middleware import GenerateHookParams, GenerateMiddlewareContext
+from genkit.model import GenerateActionOptions
+
+
+async def _run_in_agent_turn(
+    check: Callable[[SessionRunner], Awaitable[None]],
+    *,
+    artifacts: list[Artifact] | None = None,
+) -> None:
+    """Run ``check`` inside a real agent turn so the middleware sees an active session."""
+    ai = Genkit()
+
+    async def agent_fn(session: SessionRunner, _ctx: ActionRunContext) -> AgentResult:
+        async def handle_turn(_inp: AgentInput, _turn: TurnContext) -> TurnResult:
+            if artifacts:
+                await session.add_artifacts(artifacts)
+            await check(session)
+            return TurnResult(finish_reason=AgentFinishReason.STOP)
+
+        await session.run(handle_turn)
+        return await session.result()
+
+    await ai.define_custom_agent(name='artifactsTest', fn=agent_fn).chat().send('go')
 
 
 def _make_params(options: GenerateActionOptions | None = None) -> GenerateHookParams:
@@ -67,9 +98,8 @@ def test_extract_artifact_text() -> None:
 @pytest.mark.asyncio
 async def test_write_artifact_uses_current_session(ctx: GenerateMiddlewareContext) -> None:
     mw = Artifacts()
-    session = Session(SessionState())
 
-    async def check() -> None:
+    async def check(session: SessionRunner) -> None:
         tools = {t.name: t for t in mw.tools(ctx)}
         assert set(tools) == {'read_artifact', 'write_artifact'}
 
@@ -81,16 +111,14 @@ async def test_write_artifact_uses_current_session(ctx: GenerateMiddlewareContex
         assert arts[0].name == 'poem.txt'
         assert arts[0].parts[0].text == 'roses are red'
 
-    await run_with_session(session=session, coro=check())
+    await _run_in_agent_turn(check)
 
 
 @pytest.mark.asyncio
 async def test_read_artifact_returns_found(ctx: GenerateMiddlewareContext) -> None:
     mw = Artifacts()
-    session = Session(SessionState())
-    await session.add_artifacts([Artifact(name='notes.txt', parts=[Part.from_text('hello')])])
 
-    async def check() -> None:
+    async def check(_session: SessionRunner) -> None:
         read = next(t for t in mw.tools(ctx) if t.name == 'read_artifact')
 
         result = await read.action().run(input={'name': 'notes.txt'})
@@ -98,7 +126,7 @@ async def test_read_artifact_returns_found(ctx: GenerateMiddlewareContext) -> No
         assert result.response.output['content'] == 'hello'
         assert result.response.output['found'] is True
 
-    await run_with_session(session=session, coro=check())
+    await _run_in_agent_turn(check, artifacts=[Artifact(name='notes.txt', parts=[Part.from_text('hello')])])
 
 
 @pytest.mark.asyncio
@@ -121,17 +149,13 @@ async def test_readonly_excludes_write_tool(ctx: GenerateMiddlewareContext) -> N
 @pytest.mark.asyncio
 async def test_wrap_generate_injects_listing(ctx: GenerateMiddlewareContext) -> None:
     mw = Artifacts()
-    session = Session(
-        SessionState(artifacts=[Artifact(name='poem.txt', parts=[Part.from_text('abc')])]),
-    )
-
     captured: list[GenerateActionOptions] = []
 
     async def next_fn(params, _ctx):
         captured.append(params.options)
         return ModelResponse(message=None)
 
-    async def check() -> None:
+    async def check(_session: SessionRunner) -> None:
         await mw.wrap_generate(_make_params(), ctx, next_fn)
 
         assert len(captured) == 1
@@ -146,13 +170,12 @@ async def test_wrap_generate_injects_listing(ctx: GenerateMiddlewareContext) -> 
         assert 'poem.txt' in (listing_parts[0].text or '')
         assert '(3 chars)' in (listing_parts[0].text or '')
 
-    await run_with_session(session=session, coro=check())
+    await _run_in_agent_turn(check, artifacts=[Artifact(name='poem.txt', parts=[Part.from_text('abc')])])
 
 
 @pytest.mark.asyncio
 async def test_wrap_generate_refreshes_listing(ctx: GenerateMiddlewareContext) -> None:
     mw = Artifacts()
-    session = Session(SessionState())
     envelope = GenerateActionOptions(messages=[])
 
     seen: list[str] = []
@@ -162,7 +185,7 @@ async def test_wrap_generate_refreshes_listing(ctx: GenerateMiddlewareContext) -
             seen.append(part.text or '')
         return ModelResponse(message=None)
 
-    async def check() -> None:
+    async def check(session: SessionRunner) -> None:
         await mw.wrap_generate(_make_params(envelope), ctx, next_fn)
         await session.add_artifacts([Artifact(name='b.txt', parts=[Part.from_text('x')])])
         await mw.wrap_generate(_make_params(envelope), ctx, next_fn)
@@ -172,24 +195,20 @@ async def test_wrap_generate_refreshes_listing(ctx: GenerateMiddlewareContext) -
         assert 'b.txt' in seen[1]
         assert len(_listing_parts(envelope.messages)) == 0
 
-    await run_with_session(session=session, coro=check())
+    await _run_in_agent_turn(check)
 
 
 @pytest.mark.asyncio
 async def test_wrap_generate_does_not_mutate_envelope(ctx: GenerateMiddlewareContext) -> None:
     mw = Artifacts()
     envelope = GenerateActionOptions(messages=[])
-    session = Session(
-        SessionState(artifacts=[Artifact(name='a.txt', parts=[Part.from_text('hi')])]),
-    )
-
     captured_request: list[GenerateActionOptions] = []
 
     async def next_fn(params, _ctx):
         captured_request.append(params.options)
         return ModelResponse(message=None)
 
-    async def check() -> None:
+    async def check(_session: SessionRunner) -> None:
         await mw.wrap_generate(_make_params(envelope), ctx, next_fn)
 
         assert len(_listing_parts(envelope.messages)) == 0
@@ -199,4 +218,4 @@ async def test_wrap_generate_does_not_mutate_envelope(ctx: GenerateMiddlewareCon
         assert listing is not None
         assert 'a.txt' in listing
 
-    await run_with_session(session=session, coro=check())
+    await _run_in_agent_turn(check, artifacts=[Artifact(name='a.txt', parts=[Part.from_text('hi')])])

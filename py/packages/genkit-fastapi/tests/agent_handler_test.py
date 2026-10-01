@@ -21,14 +21,15 @@ AgentInit = _genkit_agent.AgentInit
 
 from genkit_fastapi import handle_genkit_request, serve_agent  # noqa: E402
 
-from genkit import ActionRunContext  # noqa: E402
-from genkit._core._model import (  # noqa: E402
+from genkit import (  # noqa: E402
+    ActionRunContext,
+    FinishReason,
     Message,
     ModelResponse,
     ModelResponseChunk as ModelResponseChunkModel,
     Part,
+    Role,
 )
-from genkit._core._typing import FinishReason, Role  # noqa: E402
 from genkit.exp import Genkit  # noqa: E402
 from genkit.model import ModelRequest  # noqa: E402
 

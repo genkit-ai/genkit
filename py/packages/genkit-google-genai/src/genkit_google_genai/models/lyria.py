@@ -25,8 +25,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from genkit._core._compat import StrEnum
 from genkit.model import ModelInfo, Supports
+from genkit.plugin_api import StrEnum
 
 
 class LyriaVersion(StrEnum):

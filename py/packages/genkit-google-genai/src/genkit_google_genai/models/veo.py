@@ -29,9 +29,8 @@ from google.genai.errors import APIError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, Operation, Part, Role
-from genkit._core._compat import StrEnum
 from genkit.model import ModelInfo, ModelRequest, OperationError, Supports
-from genkit.plugin_api import wrap_http_error
+from genkit.plugin_api import StrEnum, wrap_http_error
 from genkit_google_genai.constants import is_multi_regional_location, multi_regional_base_url
 from genkit_google_genai.models._sdk_config import (
     dump_family_config,

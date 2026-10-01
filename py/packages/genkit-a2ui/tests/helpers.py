@@ -11,9 +11,17 @@ from typing import Any
 
 from genkit_a2ui import A2UI_MIME_TYPE
 
-from genkit import ActionRunContext, Genkit, Message, ModelResponse, ModelResponseChunk, Part
-from genkit._core._error import RuntimeErrorReason
-from genkit._core._typing import FinishReason, Role
+from genkit import (
+    ActionRunContext,
+    FinishReason,
+    Genkit,
+    Message,
+    ModelResponse,
+    ModelResponseChunk,
+    Part,
+    Role,
+    RuntimeErrorReason,
+)
 from genkit.model import ModelRequest
 
 BASIC_CATALOG_ID = 'https://a2ui.org/specification/v0_9/catalogs/basic/catalog.json'

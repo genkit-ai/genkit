@@ -235,7 +235,13 @@ select = [
   "S",     # flake8-bandit (security)
   "ASYNC", # flake8-async (async best practices)
   "T20",   # flake8-print (no print statements)
+  "TID251", # flake8-tidy-imports (banned private genkit modules)
 ]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"genkit._ai".msg = "genkit._ai is private; import from a public genkit module (genkit, genkit.model, genkit.plugin_api, ...)."
+"genkit._core".msg = "genkit._core is private; import from a public genkit module (genkit, genkit.model, genkit.plugin_api, ...)."
+"genkit.exp._api".msg = "genkit.exp._api is private; import from genkit.exp."
 
 [tool.ruff.lint.per-file-ignores]
 # Auto-generated file from schema
@@ -260,6 +266,9 @@ select = [
 "packages/genkit/tests/typing/*.py" = ["D", "F821", "F841", "B018", "ANN"]
 # Samples are demo code and can use blocking I/O, prints, top-level execution
 "samples/**/*.py" = ["ANN", "D", "E402", "ASYNC", "T201"]
+# The core package is the only place allowed to reach into its own private modules
+"packages/genkit/src/**" = ["TID251"]
+"packages/genkit/tests/**" = ["TID251"]
 
 
 [tool.ruff.lint.isort]

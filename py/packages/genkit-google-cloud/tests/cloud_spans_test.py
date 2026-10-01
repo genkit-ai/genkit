@@ -32,8 +32,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from genkit import Genkit
-from genkit._core._action import Action
-from genkit.plugin_api import ActionKind
+from genkit.plugin_api import Action, ActionKind
 from genkit.telemetry import (
     GenkitBuiltinInstrumentation,
     configure_instrumentation,

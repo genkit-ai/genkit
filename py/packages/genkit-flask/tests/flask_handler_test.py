@@ -19,7 +19,7 @@
 import pytest
 from genkit_flask.handler import genkit_flask_handler
 
-from genkit._core._error import GenkitError
+from genkit import GenkitError
 
 
 class TestGenkitFlaskHandlerValidation:
