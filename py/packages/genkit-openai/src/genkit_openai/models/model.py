@@ -68,9 +68,8 @@ def _openai_create_kwargs(*, config: OpenAIConfig, model: str | None = None) -> 
     was not set. ``version`` is peeled here and applied as ``model`` by the
     caller when ``OpenAIConfig.model`` is unset. Everything else, including
     extras, goes out under the Python field name. ``max_output_tokens`` is
-    not mapped to ``max_tokens`` — that knob is ``max_tokens`` / ``maxTokens``.
-    For reasoning models, ``max_tokens`` is emitted as ``max_completion_tokens``
-    because the OpenAI API rejects the deprecated field.
+    not a create() kwarg. If an extra still carries ``max_tokens``, reasoning
+    models get ``max_completion_tokens`` because the API rejects ``max_tokens``.
     """
     body: dict[str, Any] = {}
     for name in type(config).model_fields:
@@ -78,20 +77,19 @@ def _openai_create_kwargs(*, config: OpenAIConfig, model: str | None = None) -> 
             continue
         value = getattr(config, name)
         if value is not None:
-            if name == 'max_tokens':
-                # OpenAI reasoning models reject the deprecated max_tokens
-                # field. Keep the explicit max_completion_tokens value when
-                # both knobs are supplied so the request remains valid.
-                if config.max_completion_tokens is not None:
-                    continue
-                if _uses_max_completion_tokens(model) or config.reasoning_effort is not None:
-                    body['max_completion_tokens'] = value
-                    continue
             body[name] = value
     extras = config.model_extra
     if extras:
         for name, value in extras.items():
             if value is not None:
+                if name == 'max_tokens':
+                    # Reasoning models reject max_tokens on the wire. Prefer
+                    # an explicit max_completion_tokens when both are present.
+                    if config.max_completion_tokens is not None:
+                        continue
+                    if _uses_max_completion_tokens(model) or config.reasoning_effort is not None:
+                        body['max_completion_tokens'] = value
+                        continue
                 body[name] = value
     if 'stop' not in body and config.stop_sequences is not None:
         body['stop'] = config.stop_sequences
@@ -651,7 +649,9 @@ class OpenAIModel:
             return OpenAIConfig(
                 version=config.version,
                 temperature=config.temperature,
-                max_tokens=int(config.max_output_tokens) if config.max_output_tokens is not None else None,
+                # Genkit's token cap rides as max_completion_tokens so
+                # reasoning models (which reject max_tokens) still get a limit.
+                max_completion_tokens=int(config.max_output_tokens) if config.max_output_tokens is not None else None,
                 top_p=config.top_p,
                 stop=config.stop_sequences,
             )
