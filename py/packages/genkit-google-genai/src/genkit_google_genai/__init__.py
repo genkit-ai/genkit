@@ -84,14 +84,10 @@ from genkit_google_genai.models.gemini import (
     GeminiImageConfigSchema,
     GeminiTtsConfigSchema,
     GemmaConfigSchema,
-    KnownGemini,
-    KnownGeminiImage,
-    KnownGeminiTts,
-    KnownGemma,
 )
-from genkit_google_genai.models.imagen import ImagenConfigSchema, KnownImagen
+from genkit_google_genai.models.imagen import ImagenConfigSchema
 from genkit_google_genai.models.interactions_lyria import LyriaConfig
-from genkit_google_genai.models.veo import KnownVeo, VeoConfig
+from genkit_google_genai.models.veo import VeoConfig
 
 
 def package_name() -> str:
@@ -113,12 +109,6 @@ __all__ = [
     'DeepResearchConfig',
     'GoogleAI',
     'ImagenConfigSchema',
-    'KnownGemini',
-    'KnownGeminiImage',
-    'KnownGeminiTts',
-    'KnownGemma',
-    'KnownImagen',
-    'KnownVeo',
     'LyriaConfig',
     'VeoConfig',
     'VertexAI',

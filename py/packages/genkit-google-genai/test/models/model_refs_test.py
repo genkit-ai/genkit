@@ -22,12 +22,6 @@ from typing import get_args
 import pytest
 from genkit_google_genai import (
     GoogleAI,
-    KnownGemini,
-    KnownGeminiImage,
-    KnownGeminiTts,
-    KnownGemma,
-    KnownImagen,
-    KnownVeo,
     VertexAI,
 )
 from genkit_google_genai.models.gemini import (
@@ -36,6 +30,10 @@ from genkit_google_genai.models.gemini import (
     GeminiImageConfigSchema,
     GeminiTtsConfigSchema,
     GemmaConfigSchema,
+    KnownGemini,
+    KnownGeminiImage,
+    KnownGeminiTts,
+    KnownGemma,
     is_gemini_model,
     is_gemma_model,
     is_image_model,
@@ -44,10 +42,11 @@ from genkit_google_genai.models.gemini import (
 from genkit_google_genai.models.imagen import (
     SUPPORTED_MODELS as IMAGEN_SUPPORTED_MODELS,
     ImagenConfigSchema,
+    KnownImagen,
     is_imagen_model_name,
 )
 from genkit_google_genai.models.interactions_registry import KnownLyria, is_lyria_model_name
-from genkit_google_genai.models.veo import VeoConfig, is_veo_model
+from genkit_google_genai.models.veo import KnownVeo, VeoConfig, is_veo_model
 
 from genkit import GenkitError
 from genkit.embedder import EmbedderRef
