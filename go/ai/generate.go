@@ -2194,8 +2194,9 @@ type resumeStep struct {
 // Respond or Restart directive in genOpts.Resume that matches it. It runs for
 // every pending request before any tool runs, and so does everything that can
 // reject the resume without running a tool: a request with no resolution, a
-// tool that is not found, and a response that does not match the tool's
-// output schema. A rejected resume thus leaves no tool half-run next to it.
+// tool that is not found, a response that does not match the tool's output
+// schema, and a restart whose resume data is not a JSON object. A rejected
+// resume thus leaves no tool half-run next to it.
 func planResumedToolRequest(r api.Registry, genOpts *GenerateActionOptions, p *Part) (*resumeStep, error) {
 	if p == nil || !p.IsToolRequest() {
 		return nil, status.Errorf(ErrInvalidPart, "handleResumedToolRequest: part is not a tool request")
@@ -2234,6 +2235,11 @@ func planResumedToolRequest(r api.Registry, genOpts *GenerateActionOptions, p *P
 			}
 		}
 		return &resumeStep{request: p, tool: tool, respond: respondPart}, nil
+	}
+	if rs := restartPart.restartState(); rs != nil {
+		if _, err := resumePayload(rs); err != nil {
+			return nil, status.Errorf(status.ErrInvalidArgument, "handleResumedToolRequest: tool %q: %w; a bare restart carries true or no payload", tool.Name(), err)
+		}
 	}
 	return &resumeStep{request: p, tool: tool, restart: restartPart}, nil
 }
@@ -2313,20 +2319,17 @@ func resumePartFor(parts []*Part, req *ToolRequest, respond bool) *Part {
 }
 
 // resumePayload returns the payload restart rs delivers, as the map the
-// tool reads from [ToolContext.Resumed]: its resume data when that is a JSON
-// object, and an empty map for a bare restart, so the call still reads as a
-// resumption. ok is false when rs carries a marker that is not an object: a
-// peer runtime may mark a restart with any truthy JSON value (the JS
-// restartTool passes its resumedMetadata through as given), and Go delivers
-// only an object, so such a marker reads as a bare restart.
-func resumePayload(rs *ToolRestart) (payload map[string]any, ok bool) {
+// tool reads from [ToolContext.Resumed]: its resume data, which must be a JSON
+// object, or an empty map for a bare restart, so the call still reads as a
+// resumption. Any other marker is an error, not a bare restart: a peer
+// runtime may mark a restart with any truthy JSON value (the JS restartTool
+// passes its resumedMetadata through as given), and reading "denied" as a
+// bare restart would run the tool as if it had been approved.
+func resumePayload(rs *ToolRestart) (map[string]any, error) {
 	if base.IsNil(rs.Resume) {
-		return map[string]any{}, true
+		return map[string]any{}, nil
 	}
-	if m, err := base.ObjectPayload(rs.Resume, "resume data"); err == nil {
-		return m, true
-	}
-	return map[string]any{}, false
+	return base.ObjectPayload(rs.Resume, "resume data")
 }
 
 // restartedToolResponse re-executes tool for a Restart directive and builds
@@ -2338,9 +2341,11 @@ func restartedToolResponse(ctx context.Context, tool Tool, p, restartPart *Part,
 	name := restartPart.ToolRequest.Name
 	resumedCtx := ctx
 	if rs := restartPart.restartState(); rs != nil {
-		resume, ok := resumePayload(rs)
-		if !ok {
-			logger.Debug(ctx, "resume payload is not a JSON object; restarting with an empty payload", "tool", name, "type", fmt.Sprintf("%T", rs.Resume))
+		resume, err := resumePayload(rs)
+		if err != nil {
+			// Checked when the resume was planned; kept for a caller that
+			// runs a step it did not plan.
+			return nil, nil, status.Errorf(status.ErrInvalidArgument, "tool %q: %w", name, err)
 		}
 		resumedCtx = resumedCtxKey.NewContext(resumedCtx, resume)
 		if rs.OriginalInput != nil {

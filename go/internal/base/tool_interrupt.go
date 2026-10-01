@@ -17,6 +17,9 @@
 package base
 
 import (
+	"bytes"
+	"encoding"
+	"encoding/json"
 	"fmt"
 	"reflect"
 )
@@ -46,23 +49,32 @@ func ObjectPayload(data any, what string) (map[string]any, error) {
 
 // CheckObjectPayload is the check half of [ObjectPayload], for a caller that
 // leaves the conversion to the reader: it costs a type inspection, not a JSON
-// round trip. nil passes, as a bare interrupt or restart.
+// round trip, except for a type with its own encoding, which is encoded to
+// see what it produces. nil passes, as a bare interrupt or restart.
 func CheckObjectPayload(data any, what string) error {
 	if IsNil(data) || IsJSONObject(data) {
 		return nil
+	}
+	if t := reflect.TypeOf(data); encodesItself(t) {
+		// json.Marshal compacts a MarshalJSON result, so an object starts
+		// with its brace.
+		if b, err := json.Marshal(data); err == nil && bytes.HasPrefix(b, []byte("{")) {
+			return nil
+		}
 	}
 	return fmt.Errorf("%s must serialize to a JSON object (a struct or map), got %T", what, data)
 }
 
 // IsJSONObject reports whether v serializes to a JSON object by construction:
 // a struct, possibly behind pointers, or a map with string keys. Nil, scalars,
-// slices and arrays do not.
+// slices and arrays do not, and neither does a type with its own JSON or text
+// encoding, such as [time.Time], which can serialize to anything.
 func IsJSONObject(v any) bool {
 	t := reflect.TypeOf(v)
 	for t != nil && t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
-	if t == nil {
+	if t == nil || encodesItself(t) {
 		return false
 	}
 	switch t.Kind() {
@@ -72,4 +84,21 @@ func IsJSONObject(v any) bool {
 		return t.Key().Kind() == reflect.String
 	}
 	return false
+}
+
+var textMarshalerType = reflect.TypeFor[encoding.TextMarshaler]()
+
+// encodesItself reports whether t, a pointer type it points through, or a
+// pointer to it has its own JSON or text encoding, which overrides the shape
+// its kind suggests.
+func encodesItself(t reflect.Type) bool {
+	for t.Kind() == reflect.Pointer {
+		if t.Implements(jsonMarshalerType) || t.Implements(textMarshalerType) {
+			return true
+		}
+		t = t.Elem()
+	}
+	pt := reflect.PointerTo(t)
+	return t.Implements(jsonMarshalerType) || pt.Implements(jsonMarshalerType) ||
+		t.Implements(textMarshalerType) || pt.Implements(textMarshalerType)
 }

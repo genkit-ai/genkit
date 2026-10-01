@@ -4877,9 +4877,10 @@ func TestResumeFailureRecordsFinishedSiblings(t *testing.T) {
 
 // jsRestartOf builds the restart part the JS runtime's restartTool builds for
 // an interrupted request: the interrupted part's metadata spread onto the
-// restart, "interrupt" key included, with "resumed" added. It goes through
-// JSON so the part is exactly what a peer runtime would send.
-func jsRestartOf(t *testing.T, interrupt *Part, resumed any) *Part {
+// restart, "interrupt" key included, with "resumed" added, and
+// "replacedInput" too when it is not nil. It goes through JSON so the part is
+// exactly what a peer runtime would send.
+func jsRestartOf(t *testing.T, interrupt *Part, resumed, replacedInput any) *Part {
 	t.Helper()
 	raw, err := json.Marshal(interrupt)
 	assertNoError(t, err)
@@ -4891,6 +4892,9 @@ func jsRestartOf(t *testing.T, interrupt *Part, resumed any) *Part {
 		wire["metadata"] = meta
 	}
 	meta["resumed"] = resumed
+	if replacedInput != nil {
+		meta["replacedInput"] = replacedInput
+	}
 	raw, err = json.Marshal(wire)
 	assertNoError(t, err)
 	var restart Part
@@ -4901,20 +4905,26 @@ func jsRestartOf(t *testing.T, interrupt *Part, resumed any) *Part {
 // TestResumeReadsJSRestartMarkers pins how the loop reads a restart part as a
 // peer runtime sends it. The part still carries the interrupt it resolves,
 // and the restart supersedes it. The resumed marker is read by truthiness, as
-// the JS runtime reads it: an object is the payload, false is no resumption,
-// and any other value is a bare restart, delivered as an empty payload.
+// the JS runtime reads it: an object is the payload, true is a bare restart,
+// delivered as an empty payload, and false is no resumption, even with a
+// replaced input beside it. Any other value is rejected before the tool
+// runs, since Go delivers only an object and "denied" must not read as a
+// bare restart.
 func TestResumeReadsJSRestartMarkers(t *testing.T) {
 	for _, tc := range []struct {
-		name        string
-		marker      any
-		wantResumed map[string]any // nil: the tool re-executes afresh
+		name          string
+		marker        any
+		replacedInput any
+		wantResumed   map[string]any // nil: the tool re-executes afresh
+		wantErr       error          // the tool does not re-execute
 	}{
-		{"object", map[string]any{"approved": true}, map[string]any{"approved": true}},
-		{"true", true, map[string]any{}},
-		{"string", "approved", map[string]any{}},
-		{"number", 1.0, map[string]any{}},
-		{"array", []any{"a"}, map[string]any{}},
-		{"false", false, nil},
+		{name: "object", marker: map[string]any{"approved": true}, wantResumed: map[string]any{"approved": true}},
+		{name: "true", marker: true, wantResumed: map[string]any{}},
+		{name: "string", marker: "approved", wantErr: status.ErrInvalidArgument},
+		{name: "number", marker: 1.0, wantErr: status.ErrInvalidArgument},
+		{name: "array", marker: []any{"a"}, wantErr: status.ErrInvalidArgument},
+		{name: "false", marker: false},
+		{name: "false with replaced input", marker: false, replacedInput: map[string]any{"old": true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newTestRegistry(t)
@@ -4941,13 +4951,22 @@ func TestResumeReadsJSRestartMarkers(t *testing.T) {
 
 			res, err := Generate(testCtx, r, WithModelName("test/jsRestart"), WithPrompt("go"), WithTools(confirm))
 			assertNoError(t, err)
-			restart := jsRestartOf(t, res.Interrupts()[0], tc.marker)
+			restart := jsRestartOf(t, res.Interrupts()[0], tc.marker, tc.replacedInput)
 			if !restart.IsInterrupt() {
 				t.Fatalf("restart = %+v, want the interrupt it resolves still on it", restart)
 			}
 
 			_, err = Generate(testCtx, r, WithModelName("test/jsRestart"),
 				WithMessages(res.History()...), WithTools(confirm), WithToolRestarts(restart))
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("resume error = %v, want %v", err, tc.wantErr)
+				}
+				if len(resumed) != 1 {
+					t.Errorf("tool ran %d times, want 1", len(resumed))
+				}
+				return
+			}
 			if tc.wantResumed == nil {
 				if !errors.Is(err, status.ErrFailedPrecondition) {
 					t.Fatalf("resume error = %v, want the tool's fresh interrupt", err)
