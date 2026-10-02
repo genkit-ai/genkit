@@ -465,41 +465,34 @@ function materializeToolPart(part: Part): Part {
   }
 
   if (ccMeta.truncated && typeof ccMeta.maxChars === 'number') {
-    const limit = ccMeta.maxChars;
-    const outputStr = stringifyOutput(part.toolResponse.output);
-    if (outputStr.length <= limit) {
+    const truncatedToolResponse = truncateToolResponse(
+      part.toolResponse,
+      ccMeta.maxChars,
+      'truncated'
+    );
+    if (!truncatedToolResponse) {
       return { ...part, metadata: withoutRawOutputFlag(part) };
     }
-    const sliced = sliceCodePointSafe(outputStr, limit);
-    const omitted = outputStr.length - sliced.length;
-    const marker = `\n\n[Truncated ${omitted} characters]`;
     return {
       ...part,
       metadata: withoutRawOutputFlag(part),
-      toolResponse: {
-        ...part.toolResponse,
-        output: sliced + marker,
-      },
+      toolResponse: truncatedToolResponse,
     };
   }
 
   if (ccMeta.capped && typeof ccMeta.maxChars === 'number') {
-    const limit = ccMeta.maxChars;
-    const outputStr = stringifyOutput(part.toolResponse.output);
-    if (outputStr.length <= limit) {
+    const cappedToolResponse = truncateToolResponse(
+      part.toolResponse,
+      ccMeta.maxChars,
+      'capped'
+    );
+    if (!cappedToolResponse) {
       return { ...part, metadata: withoutRawOutputFlag(part) };
     }
-    const sliced = sliceCodePointSafe(outputStr, limit);
-    const marker =
-      `\n\n---\n\n[TRUNCATED: Response was ${outputStr.length} chars ` +
-      `but only first ${limit} are shown.]`;
     return {
       ...part,
       metadata: withoutRawOutputFlag(part),
-      toolResponse: {
-        ...part.toolResponse,
-        output: sliced + marker,
-      },
+      toolResponse: cappedToolResponse,
     };
   }
 
@@ -694,6 +687,142 @@ function sliceCodePointSafe(str: string, limit: number): string {
     }
   }
   return str.slice(0, limit);
+}
+
+function stringifyToolContentPart(part: Part): string {
+  if (typeof part.text === 'string') return part.text;
+  if (typeof part.reasoning === 'string') return part.reasoning;
+  if ('data' in part && part.data !== undefined) {
+    return stringifyOutput(part.data);
+  }
+  if ('custom' in part && part.custom !== undefined) {
+    return stringifyOutput(part.custom);
+  }
+  if (part.resource) return stringifyOutput(part.resource);
+  if (part.media) return stringifyOutput(part.media);
+  return stringifyOutput(part);
+}
+
+function getToolResponseCharLength(
+  toolResponse: NonNullable<Part['toolResponse']>
+): number {
+  if (!toolResponse.content?.length) {
+    return stringifyOutput(toolResponse.output).length;
+  }
+  const outputLen =
+    toolResponse.output !== undefined
+      ? stringifyOutput(toolResponse.output).length
+      : 0;
+  return (
+    outputLen +
+    toolResponse.content.reduce(
+      (sum, cPart) => sum + stringifyToolContentPart(cPart).length,
+      0
+    )
+  );
+}
+
+function formatToolTruncationMarker(
+  mode: 'truncated' | 'capped',
+  totalChars: number,
+  keptChars: number,
+  limit: number
+): string {
+  if (mode === 'truncated') {
+    const omitted = totalChars - keptChars;
+    return `\n\n[Truncated ${omitted} characters]`;
+  }
+  return (
+    `\n\n---\n\n[TRUNCATED: Response was ${totalChars} chars ` +
+    `but only first ${limit} are shown.]`
+  );
+}
+
+function truncateToolResponse(
+  toolResponse: NonNullable<Part['toolResponse']>,
+  limit: number,
+  mode: 'truncated' | 'capped'
+): NonNullable<Part['toolResponse']> | null {
+  if (!toolResponse.content?.length) {
+    const outputStr = stringifyOutput(toolResponse.output);
+    if (outputStr.length <= limit) return null;
+    const sliced = sliceCodePointSafe(outputStr, limit);
+    const marker = formatToolTruncationMarker(
+      mode,
+      outputStr.length,
+      sliced.length,
+      limit
+    );
+    return {
+      ...toolResponse,
+      output: sliced + marker,
+    };
+  }
+
+  const hasOutput = toolResponse.output !== undefined;
+  const outputStr = hasOutput ? stringifyOutput(toolResponse.output) : '';
+  const contentStrs = toolResponse.content.map(stringifyToolContentPart);
+  const contentTotalLen = contentStrs.reduce((sum, s) => sum + s.length, 0);
+  const totalChars = outputStr.length + contentTotalLen;
+
+  if (totalChars <= limit) return null;
+
+  if (hasOutput && (outputStr.length >= limit || contentTotalLen === 0)) {
+    const sliced = sliceCodePointSafe(outputStr, limit);
+    const marker = formatToolTruncationMarker(
+      mode,
+      totalChars,
+      sliced.length,
+      limit
+    );
+    const { content: _content, ...restToolResponse } = toolResponse;
+    return {
+      ...restToolResponse,
+      output: sliced + marker,
+    };
+  }
+
+  let remaining = limit - outputStr.length;
+  let keptChars = outputStr.length;
+  const newContent: Part[] = [];
+
+  for (let i = 0; i < toolResponse.content.length; i++) {
+    const cPart = toolResponse.content[i];
+    const partStr = contentStrs[i];
+
+    if (partStr.length < remaining) {
+      newContent.push(cPart);
+      remaining -= partStr.length;
+      keptChars += partStr.length;
+      continue;
+    }
+
+    const sliced = sliceCodePointSafe(partStr, remaining);
+    keptChars += sliced.length;
+    const marker = formatToolTruncationMarker(
+      mode,
+      totalChars,
+      keptChars,
+      limit
+    );
+
+    if (typeof cPart.text === 'string') {
+      newContent.push({ ...cPart, text: sliced + marker });
+    } else if (typeof cPart.reasoning === 'string') {
+      newContent.push({ ...cPart, reasoning: sliced + marker });
+    } else {
+      newContent.push({
+        ...(cPart.metadata ? { metadata: cPart.metadata } : {}),
+        text: sliced + marker,
+      });
+    }
+    break;
+  }
+
+  return {
+    ...toolResponse,
+    content: newContent,
+  };
 }
 
 /**
@@ -1295,17 +1424,19 @@ export const contextCompression: GenerateMiddleware<
             return part;
           }
 
-          const outputStr = stringifyOutput(part.toolResponse.output);
-          if (outputStr.length <= limit) return part;
-
-          const sliced = sliceCodePointSafe(outputStr, limit);
-          const omitted = outputStr.length - sliced.length;
-
           // If truncatable and clamped to toolMaxChars, it's context-compression truncation.
           // Otherwise, it was clamped by maxToolResponseChars (the hard safety cap).
-          if (isTruncatableMsg && limit === toolMaxChars) {
-            const marker = `\n\n[Truncated ${omitted} characters]`;
-            changed = true;
+          const mode =
+            isTruncatableMsg && limit === toolMaxChars ? 'truncated' : 'capped';
+          const updatedToolResponse = truncateToolResponse(
+            part.toolResponse,
+            limit,
+            mode
+          );
+          if (!updatedToolResponse) return part;
+
+          changed = true;
+          if (mode === 'truncated') {
             truncated++;
             return {
               ...part,
@@ -1313,16 +1444,9 @@ export const contextCompression: GenerateMiddleware<
                 truncated: true,
                 maxChars: limit,
               }),
-              toolResponse: {
-                ...part.toolResponse,
-                output: sliced + marker,
-              },
+              toolResponse: updatedToolResponse,
             };
           } else {
-            const marker =
-              `\n\n---\n\n[TRUNCATED: Response was ${outputStr.length} chars ` +
-              `but only first ${limit} are shown.]`;
-            changed = true;
             capped++;
             return {
               ...part,
@@ -1330,10 +1454,7 @@ export const contextCompression: GenerateMiddleware<
                 capped: true,
                 maxChars: limit,
               }),
-              toolResponse: {
-                ...part.toolResponse,
-                output: sliced + marker,
-              },
+              toolResponse: updatedToolResponse,
             };
           }
         });
@@ -1805,7 +1926,7 @@ export const contextCompression: GenerateMiddleware<
                   p.toolResponse &&
                   !hasCompressionFlag(p, 'capped') &&
                   !hasCompressionFlag(p, 'truncated') &&
-                  stringifyOutput(p.toolResponse.output).length >
+                  getToolResponseCharLength(p.toolResponse) >
                     maxToolResponseChars
               )
           );
