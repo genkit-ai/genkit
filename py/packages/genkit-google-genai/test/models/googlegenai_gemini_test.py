@@ -18,7 +18,7 @@
 """Tests for the Gemini model implementation."""
 
 import base64
-from typing import Any
+from typing import Any, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1176,6 +1176,94 @@ async def test_gemini_model__code_execution_translates_to_tool(
     assert len(code_exec_tools) == 1
     assert 'codeExecution' not in cfg.model_dump(exclude_none=True)
     assert 'code_execution' not in cfg.model_dump(exclude_none=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('with_config', [False, True])
+@pytest.mark.parametrize(
+    'tool_choice, expected_mode',
+    [(None, None), ('auto', 'AUTO'), ('required', 'ANY'), ('none', 'NONE')],
+)
+async def test_gemini_model__tool_choice_sets_function_calling_mode(
+    gemini_model_instance: GeminiModel,
+    tool_choice: Literal['auto', 'required', 'none'] | None,
+    expected_mode: str | None,
+    with_config: bool,
+) -> None:
+    """Top-level tool choice maps to Gemini without removing tool declarations."""
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
+        tools=[ToolDefinition(name='lookup', description='Look up data', input_schema={'type': 'object'})],
+        tool_choice=tool_choice,
+        config=GeminiConfigSchema.model_validate({'temperature': 0.5}) if with_config else None,
+    )
+
+    cfg = await gemini_model_instance._genkit_to_googleai_cfg(request)
+
+    assert cfg is not None
+    assert cfg.tools is not None
+    assert isinstance(cfg.tools[0], genai_types.Tool)
+    assert cfg.tools[0].function_declarations is not None
+    assert cfg.tools[0].function_declarations[0].name == 'lookup'
+    assert cfg.temperature == (0.5 if with_config else None)
+    if expected_mode is None:
+        assert cfg.tool_config is None
+    else:
+        assert cfg.tool_config is not None
+        assert cfg.tool_config.function_calling_config is not None
+        assert cfg.tool_config.function_calling_config.mode == expected_mode
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'tool_choice, expected_mode',
+    [(None, None), ('auto', 'AUTO'), ('required', 'ANY'), ('none', 'NONE')],
+)
+async def test_gemini_model__tool_choice_without_tools_or_config(
+    gemini_model_instance: GeminiModel,
+    tool_choice: Literal['auto', 'required', 'none'] | None,
+    expected_mode: str | None,
+) -> None:
+    """Tool choice alone creates config, while the default leaves it unset."""
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
+        tool_choice=tool_choice,
+    )
+
+    cfg = await gemini_model_instance._genkit_to_googleai_cfg(request)
+
+    if expected_mode is None:
+        assert cfg is None
+    else:
+        assert cfg is not None
+        assert cfg.tool_config is not None
+        assert cfg.tool_config.function_calling_config is not None
+        assert cfg.tool_config.function_calling_config.mode == expected_mode
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('tool_choice', [None, 'auto', 'required', 'none'])
+async def test_gemini_model__explicit_function_calling_config_overrides_tool_choice(
+    gemini_model_instance: GeminiModel,
+    tool_choice: Literal['auto', 'required', 'none'] | None,
+) -> None:
+    """Provider-specific mode and allowed function names take precedence."""
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
+        tools=[ToolDefinition(name='lookup', description='Look up data', input_schema={'type': 'object'})],
+        tool_choice=tool_choice,
+        config=GeminiConfigSchema.model_validate({
+            'function_calling_config': {'mode': 'ANY', 'allowed_function_names': ['lookup']},
+        }),
+    )
+
+    cfg = await gemini_model_instance._genkit_to_googleai_cfg(request)
+
+    assert cfg is not None
+    assert cfg.tool_config is not None
+    assert cfg.tool_config.function_calling_config is not None
+    assert cfg.tool_config.function_calling_config.mode == 'ANY'
+    assert cfg.tool_config.function_calling_config.allowed_function_names == ['lookup']
 
 
 def test_gemini_model__normalize_config_dumps_gemma_instance() -> None:
