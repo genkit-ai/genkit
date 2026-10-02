@@ -478,6 +478,7 @@ def test_reset_instrumentation_stops_dev_ui_log_export(monkeypatch: pytest.Monke
         assert _log_posts_with(posts, 'cart looked up after reset') == []
     finally:
         server.shutdown()
+        server.server_close()
 
 
 def _posted_spans(posts: list[str], name: str) -> list[dict[str, Any]]:
@@ -518,6 +519,7 @@ async def test_span_after_reset_starts_a_new_trace(monkeypatch: pytest.MonkeyPat
         posted = _posted_spans(posts, 'after')
     finally:
         server.shutdown()
+        server.server_close()
 
     assert posted
     assert trace_ids['after'] != trace_ids['before']
