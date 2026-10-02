@@ -72,43 +72,34 @@ See Also:
     - Vertex AI: https://cloud.google.com/vertex-ai
 """
 
-from genkit_google_genai.google import (
+from genkit_google_genai._evaluators import VertexAIEvaluationMetricType
+from genkit_google_genai._google import (
     GoogleAI,
     VertexAI,
 )
-from genkit_google_genai.models.antigravity import AntigravityConfig
-from genkit_google_genai.models.deep_research import DeepResearchConfig
-from genkit_google_genai.models.embedder import EmbeddingTaskType
-from genkit_google_genai.models.gemini import (
-    GeminiConfigSchema,
-    GeminiImageConfigSchema,
-    GeminiTtsConfigSchema,
-    GemmaConfigSchema,
+from genkit_google_genai._models._antigravity import AntigravityConfig
+from genkit_google_genai._models._deep_research import DeepResearchConfig
+from genkit_google_genai._models._embedder import EmbeddingTaskType
+from genkit_google_genai._models._gemini import (
+    GeminiConfig,
+    GeminiImageConfig,
+    GeminiTtsConfig,
+    GemmaConfig,
 )
-from genkit_google_genai.models.interactions_lyria import LyriaConfig
-from genkit_google_genai.models.veo import VeoConfig
-
-
-def package_name() -> str:
-    """Get the package name for the Vertex AI plugin.
-
-    Returns:
-        The fully qualified package name as a string.
-    """
-    return 'genkit_google_genai'
-
+from genkit_google_genai._models._interactions_lyria import LyriaConfig
+from genkit_google_genai._models._veo import VeoConfig
 
 __all__ = [
     'AntigravityConfig',
     'DeepResearchConfig',
     'EmbeddingTaskType',
-    'GeminiConfigSchema',
-    'GeminiImageConfigSchema',
-    'GeminiTtsConfigSchema',
-    'GemmaConfigSchema',
+    'GeminiConfig',
+    'GeminiImageConfig',
+    'GeminiTtsConfig',
+    'GemmaConfig',
     'GoogleAI',
     'LyriaConfig',
     'VeoConfig',
     'VertexAI',
-    'package_name',
+    'VertexAIEvaluationMetricType',
 ]

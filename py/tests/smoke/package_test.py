@@ -16,8 +16,8 @@
 
 """Smoke tests for package structure."""
 
+import genkit_google_genai
 from genkit_google_cloud import package_name as google_cloud_package_name
-from genkit_google_genai import package_name as google_genai_package_name
 from genkit_ollama import package_name as ollama_package_name
 from genkit_vertexai import package_name as vertex_ai_package_name
 
@@ -29,6 +29,7 @@ def test_package_names() -> None:
     end-user perspective.
     """
     assert google_cloud_package_name() == 'genkit_google_cloud'
-    assert google_genai_package_name() == 'genkit_google_genai'
+    assert genkit_google_genai.__name__ == 'genkit_google_genai'
+    assert not hasattr(genkit_google_genai, 'package_name')
     assert ollama_package_name() == 'genkit_ollama'
     assert vertex_ai_package_name() == 'genkit_vertexai'

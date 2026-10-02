@@ -27,7 +27,7 @@ from collections.abc import Mapping
 from typing import Literal, TypeAlias, get_args
 
 from genkit.model import ModelInfo, Supports
-from genkit_google_genai.models.interactions_utils import extract_version
+from genkit_google_genai._models._interactions_utils import extract_version
 
 
 def model_info(

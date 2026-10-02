@@ -22,13 +22,13 @@ from typing import Any, get_args
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from genkit_google_genai.models.gemini import (
+from genkit_google_genai._models._gemini import (
     DEFAULT_SUPPORTS_MODEL,
-    GeminiConfigSchema,
-    GeminiImageConfigSchema,
+    GeminiConfig,
+    GeminiImageConfig,
     GeminiModel,
-    GeminiTtsConfigSchema,
-    GemmaConfigSchema,
+    GeminiTtsConfig,
+    GemmaConfig,
     KnownGemini,
     KnownGeminiImage,
     KnownGeminiTts,
@@ -265,7 +265,7 @@ async def test_generate_media_response(mocker: MockerFixture, version: str) -> N
                 ],
             ),
         ],
-        config=GeminiConfigSchema.model_validate({'response_modalities': modalities}),
+        config=GeminiConfig.model_validate({'response_modalities': modalities}),
     )
 
     candidate = genai.types.Candidate(
@@ -678,7 +678,7 @@ def test_tts_models_register_per_name_capabilities(model_name: str, expected_lab
         constrained=Constrained.NONE,
         output=['media'],
     )
-    assert get_model_config_schema(model_name) is GeminiTtsConfigSchema
+    assert get_model_config_schema(model_name) is GeminiTtsConfig
 
 
 @pytest.mark.parametrize(
@@ -719,7 +719,7 @@ def test_gemma_4_models_register_per_name_capabilities(model_name: str, expected
         constrained=Constrained.ALL,
         output=['text', 'json'],
     )
-    assert get_model_config_schema(model_name) is GemmaConfigSchema
+    assert get_model_config_schema(model_name) is GemmaConfig
 
 
 @pytest.fixture
@@ -749,7 +749,7 @@ def test_gemini_model__init__() -> None:
     assert model._client == mock_client
 
 
-@patch('genkit_google_genai.models.gemini.GeminiModel._create_tool')
+@patch('genkit_google_genai._models._gemini.GeminiModel._create_tool')
 def test_gemini_model__get_tools(
     mock_create_tool: MagicMock,
     gemini_model_instance: GeminiModel,
@@ -803,7 +803,7 @@ def test_gemini_model__get_tools(
         assert isinstance(tool, genai_types.Tool)
 
 
-@patch('genkit_google_genai.models.gemini.GeminiModel._convert_schema_property')
+@patch('genkit_google_genai._models._gemini.GeminiModel._convert_schema_property')
 def test_gemini_model__create_tool(
     mock_convert_schema_property: MagicMock,
     gemini_model_instance: GeminiModel,
@@ -1066,11 +1066,11 @@ def test_gemini_model__convert_schema_property_raises_exception(
 
 @pytest.mark.asyncio
 @patch(
-    'genkit_google_genai.models.gemini.generate_cache_key',
+    'genkit_google_genai._models._gemini.generate_cache_key',
     new_callable=MagicMock,
 )
 @patch(
-    'genkit_google_genai.models.gemini.validate_context_cache_request',
+    'genkit_google_genai._models._gemini.validate_context_cache_request',
     new_callable=MagicMock,
 )
 @pytest.mark.parametrize(
@@ -1147,9 +1147,7 @@ def test_gemini_model__normalize_config_dumps_schema_instance(
     gemini_model_instance: GeminiModel,
 ) -> None:
     """A typed family config dumps to snake_case for the SDK."""
-    dumped = gemini_model_instance._normalize_config_to_dict(
-        GeminiConfigSchema.model_validate({'code_execution': True})
-    )
+    dumped = gemini_model_instance._normalize_config_to_dict(GeminiConfig.model_validate({'code_execution': True}))
 
     assert dumped == {'code_execution': True}
 
@@ -1172,7 +1170,7 @@ async def test_gemini_model__code_execution_translates_to_tool(
     """A typed ``code_execution`` flag becomes a tool and is not leaked to the SDK."""
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
-        config=GeminiConfigSchema.model_validate({'code_execution': True}),
+        config=GeminiConfig.model_validate({'code_execution': True}),
     )
 
     cfg = await gemini_model_instance._genkit_to_googleai_cfg(request)
@@ -1189,7 +1187,7 @@ def test_gemini_model__normalize_config_dumps_gemma_instance() -> None:
     """Gemma's relaxed temperature dumps through without re-validation."""
     gemma_model = GeminiModel(version='gemma-2-27b-it', client=MagicMock(spec=genai.Client))
 
-    dumped = gemma_model._normalize_config_to_dict(GemmaConfigSchema(temperature=3.0))
+    dumped = gemma_model._normalize_config_to_dict(GemmaConfig(temperature=3.0))
 
     assert dumped == {'temperature': 3.0}
 
@@ -1201,7 +1199,7 @@ async def test_gemini_model__unknown_extra_rides_on_extra_body(
     """Leftover keys ride on extra_body so a newly supported field still reaches the API."""
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
-        config=GeminiConfigSchema.model_validate({'temperature': 0.5, 'fooBar': 1}),
+        config=GeminiConfig.model_validate({'temperature': 0.5, 'fooBar': 1}),
     )
 
     cfg = await gemini_model_instance._genkit_to_googleai_cfg(request)
@@ -1250,23 +1248,23 @@ async def test_gemini_model__tts_json_output_skips_constrained_config() -> None:
 @pytest.mark.parametrize(
     ('version', 'expected_schema'),
     [
-        ('gemini-2.5-flash-preview-tts', GeminiTtsConfigSchema),
-        ('gemini-3.1-flash-tts-preview', GeminiTtsConfigSchema),
-        ('gemini-2.0-flash-preview-image-generation', GeminiImageConfigSchema),
-        ('gemini-3-pro-image', GeminiImageConfigSchema),
-        ('gemini-3.1-flash-image', GeminiImageConfigSchema),
-        ('gemini-3.1-flash-image-preview', GeminiImageConfigSchema),
-        ('gemini-3-pro-image-preview', GeminiImageConfigSchema),
-        ('gemini-2.5-flash-image', GeminiImageConfigSchema),
-        ('gemini-2.5-flash-image-preview', GeminiImageConfigSchema),
-        ('gemma-2-27b-it', GemmaConfigSchema),
-        ('gemma-4-31b-it', GemmaConfigSchema),
-        ('gemini-2.0-flash-001', GeminiConfigSchema),
+        ('gemini-2.5-flash-preview-tts', GeminiTtsConfig),
+        ('gemini-3.1-flash-tts-preview', GeminiTtsConfig),
+        ('gemini-2.0-flash-preview-image-generation', GeminiImageConfig),
+        ('gemini-3-pro-image', GeminiImageConfig),
+        ('gemini-3.1-flash-image', GeminiImageConfig),
+        ('gemini-3.1-flash-image-preview', GeminiImageConfig),
+        ('gemini-3-pro-image-preview', GeminiImageConfig),
+        ('gemini-2.5-flash-image', GeminiImageConfig),
+        ('gemini-2.5-flash-image-preview', GeminiImageConfig),
+        ('gemma-2-27b-it', GemmaConfig),
+        ('gemma-4-31b-it', GemmaConfig),
+        ('gemini-2.0-flash-001', GeminiConfig),
     ],
 )
 def test_get_model_config_schema_routes_by_model_family(
     version: str,
-    expected_schema: type[GeminiConfigSchema],
+    expected_schema: type[GeminiConfig],
 ) -> None:
     """Family routing lives on the name check, not a runtime re-validate."""
     assert get_model_config_schema(version) is expected_schema
@@ -1415,7 +1413,7 @@ def test_speech_config_schema_declares_sdk_fields() -> None:
 
 def test_tts_config_json_schema_exposes_speech_config_fields() -> None:
     """The Dev UI schema lists every speech config field the SDK accepts."""
-    schema = GeminiTtsConfigSchema.model_json_schema(by_alias=True)
+    schema = GeminiTtsConfig.model_json_schema(by_alias=True)
     speech = schema['$defs']['SpeechConfigSchema']['properties']
 
     assert {'voiceConfig', 'languageCode', 'multiSpeakerVoiceConfig'} <= set(speech)
@@ -1437,7 +1435,7 @@ async def test_gemini_model__speech_config_keeps_language_code(
     """A language code on the speech config reaches the SDK config."""
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
-        config=GeminiTtsConfigSchema.model_validate({
+        config=GeminiTtsConfig.model_validate({
             'speechConfig': {
                 'languageCode': 'en-US',
                 'voiceConfig': {'prebuiltVoiceConfig': {'voiceName': 'Kore'}},
@@ -1460,7 +1458,7 @@ async def test_gemini_model__speech_config_keeps_multi_speaker_voice_config(
     """A multi-speaker voice config on the speech config reaches the SDK config."""
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
-        config=GeminiTtsConfigSchema.model_validate({
+        config=GeminiTtsConfig.model_validate({
             'speechConfig': {
                 'multiSpeakerVoiceConfig': {
                     'speakerVoiceConfigs': [
@@ -1488,7 +1486,7 @@ async def test_gemini_model__unknown_speech_config_key_is_rejected(
     """An unknown speech config key is reported instead of silently dropped."""
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
-        config=GeminiTtsConfigSchema.model_validate({'speechConfig': {'languageCodes': 'en-US'}}),
+        config=GeminiTtsConfig.model_validate({'speechConfig': {'languageCodes': 'en-US'}}),
     )
 
     with pytest.raises(GenkitError) as exc_info:
@@ -1504,7 +1502,7 @@ async def test_generate_keeps_caller_response_modalities_on_tts_model(mocker: Mo
     version = 'gemini-2.5-flash-preview-tts'
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
-        config=GeminiTtsConfigSchema.model_validate({'responseModalities': ['AUDIO', 'TEXT']}),
+        config=GeminiTtsConfig.model_validate({'responseModalities': ['AUDIO', 'TEXT']}),
     )
     candidate = genai.types.Candidate(content=genai.types.Content(parts=[genai.types.Part(text='ok')]))
     client_mock = mocker.AsyncMock()
@@ -1522,7 +1520,7 @@ async def test_generate_keeps_caller_response_modalities_on_image_model(mocker: 
     version = 'gemini-2.5-flash-image'
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
-        config=GeminiImageConfigSchema.model_validate({'responseModalities': ['IMAGE']}),
+        config=GeminiImageConfig.model_validate({'responseModalities': ['IMAGE']}),
     )
     candidate = genai.types.Candidate(content=genai.types.Content(parts=[genai.types.Part(text='ok')]))
     client_mock = mocker.AsyncMock()
@@ -1590,7 +1588,7 @@ async def test_generate_defaults_the_tts_voice_next_to_a_language_code(mocker: M
     """A speech config that sets only a language code still gets the default voice."""
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
-        config=GeminiTtsConfigSchema.model_validate({'speechConfig': {'languageCode': 'en-US'}}),
+        config=GeminiTtsConfig.model_validate({'speechConfig': {'languageCode': 'en-US'}}),
     )
     client_mock = _tts_client_mock(mocker, vertexai=False)
 
@@ -1609,7 +1607,7 @@ async def test_generate_keeps_the_caller_tts_voice(mocker: MockerFixture) -> Non
     """A voice named by the caller is sent unchanged where the default would otherwise apply."""
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
-        config=GeminiTtsConfigSchema.model_validate({
+        config=GeminiTtsConfig.model_validate({
             'speechConfig': {'voiceConfig': {'prebuiltVoiceConfig': {'voiceName': 'Puck'}}}
         }),
     )
@@ -1629,7 +1627,7 @@ async def test_generate_adds_no_voice_to_a_multi_speaker_config(mocker: MockerFi
     """A multi-speaker voice config is sent without a single-voice config beside it."""
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
-        config=GeminiTtsConfigSchema.model_validate({
+        config=GeminiTtsConfig.model_validate({
             'speechConfig': {
                 'multiSpeakerVoiceConfig': {
                     'speakerVoiceConfigs': [

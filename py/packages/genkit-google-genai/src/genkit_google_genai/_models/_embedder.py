@@ -25,8 +25,8 @@ from google.genai import types as genai_types
 from genkit import Document, Embedding, Part
 from genkit._core._compat import StrEnum
 from genkit.embedder import EmbedderInfo, EmbedderSupports, EmbedRequest, EmbedResponse
-from genkit_google_genai.models._routing import strip_ref_prefixes
-from genkit_google_genai.models.utils import PartConverter
+from genkit_google_genai._models._routing import strip_ref_prefixes
+from genkit_google_genai._models._utils import PartConverter
 
 
 class EmbeddingTaskType(StrEnum):

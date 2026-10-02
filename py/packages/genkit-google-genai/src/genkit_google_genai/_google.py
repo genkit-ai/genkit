@@ -60,7 +60,7 @@ from google.genai.client import DebugConfig
 from google.genai.types import HttpOptions, HttpOptionsDict, Model as GenaiModel
 from pydantic import BaseModel
 
-import genkit_google_genai.constants as const
+import genkit_google_genai._constants as const
 from genkit import ActionRunContext, GenkitError, ModelResponse, Operation
 from genkit.embedder import EmbedderRef, embedder, embedder_action_metadata
 from genkit.evaluator import EvalFnResponse, EvalRequest
@@ -82,38 +82,29 @@ from genkit.plugin_api import (
     loop_local_client,
     to_json_schema,
 )
-from genkit_google_genai._interactions.options import ClientOptions
-from genkit_google_genai.evaluators import (
+from genkit_google_genai._evaluators import (
     VertexAIEvaluationMetricType,
     create_vertex_evaluators,
 )
-from genkit_google_genai.models._model_refs import (
-    family_embedder_ref,
-    family_model_ref,
-)
-from genkit_google_genai.models._routing import (
-    is_unroutable_model_id,
-    is_unsupported_image_model_name,
-    strip_ref_prefixes,
-)
-from genkit_google_genai.models.antigravity import AntigravityConfig, create_antigravity_action
-from genkit_google_genai.models.deep_research import (
+from genkit_google_genai._interactions._options import ClientOptions
+from genkit_google_genai._models._antigravity import AntigravityConfig, create_antigravity_action
+from genkit_google_genai._models._deep_research import (
     DeepResearchConfig,
     create_deep_research_background_action,
     deep_research_model,
 )
-from genkit_google_genai.models.embedder import (
+from genkit_google_genai._models._embedder import (
     VERTEX_KNOWN_EMBEDDERS,
     Embedder,
     get_embedder_info,
 )
-from genkit_google_genai.models.gemini import (
+from genkit_google_genai._models._gemini import (
     SUPPORTED_MODELS,
-    GeminiConfigSchema,
-    GeminiImageConfigSchema,
+    GeminiConfig,
+    GeminiImageConfig,
     GeminiModel,
-    GeminiTtsConfigSchema,
-    GemmaConfigSchema,
+    GeminiTtsConfig,
+    GemmaConfig,
     KnownGemini,
     KnownGeminiImage,
     KnownGeminiTts,
@@ -125,11 +116,11 @@ from genkit_google_genai.models.gemini import (
     is_tts_model,
     is_tuned_gemini_name,
 )
-from genkit_google_genai.models.interactions_lyria import (
+from genkit_google_genai._models._interactions_lyria import (
     LyriaConfig as InteractionsLyriaConfig,
     create_lyria_action,
 )
-from genkit_google_genai.models.interactions_registry import (
+from genkit_google_genai._models._interactions_registry import (
     KnownLyria,
     antigravity_model_info,
     deep_research_model_info,
@@ -141,7 +132,16 @@ from genkit_google_genai.models.interactions_registry import (
     list_known_lyria_models,
     lyria_model_info,
 )
-from genkit_google_genai.models.veo import (
+from genkit_google_genai._models._model_refs import (
+    family_embedder_ref,
+    family_model_ref,
+)
+from genkit_google_genai._models._routing import (
+    is_unroutable_model_id,
+    is_unsupported_image_model_name,
+    strip_ref_prefixes,
+)
+from genkit_google_genai._models._veo import (
     KnownVeo,
     VeoConfig,
     VeoModel,
@@ -389,9 +389,7 @@ class GoogleFamilyRefs:
     name: str  # plugin namespace ('googleai' or 'vertexai')
 
     @classmethod
-    def gemini_model(
-        cls, name: KnownGemini | str, *, config: GeminiConfigSchema | None = None
-    ) -> ModelRef[GeminiConfigSchema]:
+    def gemini_model(cls, name: KnownGemini | str, *, config: GeminiConfig | None = None) -> ModelRef[GeminiConfig]:
         """Typed ref for a Gemini text model, e.g. ``GoogleAI.gemini_model('gemini-2.5-flash')``.
 
         Unknown ids are allowed so a brand-new Gemini release works before
@@ -403,14 +401,14 @@ class GoogleFamilyRefs:
             plugin_class=cls.__name__,
             family='gemini',
             method='gemini_model',
-            config_schema=GeminiConfigSchema,
+            config_schema=GeminiConfig,
             config=config,
         )
 
     @classmethod
     def gemini_tts_model(
-        cls, name: KnownGeminiTts | str, *, config: GeminiTtsConfigSchema | None = None
-    ) -> ModelRef[GeminiTtsConfigSchema]:
+        cls, name: KnownGeminiTts | str, *, config: GeminiTtsConfig | None = None
+    ) -> ModelRef[GeminiTtsConfig]:
         """Typed ref for a Gemini TTS model (``gemini-…-tts``)."""
         return family_model_ref(
             name,
@@ -418,14 +416,14 @@ class GoogleFamilyRefs:
             plugin_class=cls.__name__,
             family='tts',
             method='gemini_tts_model',
-            config_schema=GeminiTtsConfigSchema,
+            config_schema=GeminiTtsConfig,
             config=config,
         )
 
     @classmethod
     def gemini_image_model(
-        cls, name: KnownGeminiImage | str, *, config: GeminiImageConfigSchema | None = None
-    ) -> ModelRef[GeminiImageConfigSchema]:
+        cls, name: KnownGeminiImage | str, *, config: GeminiImageConfig | None = None
+    ) -> ModelRef[GeminiImageConfig]:
         """Typed ref for a Gemini native-image model (``gemini-…-image``)."""
         return family_model_ref(
             name,
@@ -433,14 +431,12 @@ class GoogleFamilyRefs:
             plugin_class=cls.__name__,
             family='image',
             method='gemini_image_model',
-            config_schema=GeminiImageConfigSchema,
+            config_schema=GeminiImageConfig,
             config=config,
         )
 
     @classmethod
-    def gemma_model(
-        cls, name: KnownGemma | str, *, config: GemmaConfigSchema | None = None
-    ) -> ModelRef[GemmaConfigSchema]:
+    def gemma_model(cls, name: KnownGemma | str, *, config: GemmaConfig | None = None) -> ModelRef[GemmaConfig]:
         """Typed ref for a Gemma open model (``gemma-…``)."""
         return family_model_ref(
             name,
@@ -448,7 +444,7 @@ class GoogleFamilyRefs:
             plugin_class=cls.__name__,
             family='gemma',
             method='gemma_model',
-            config_schema=GemmaConfigSchema,
+            config_schema=GemmaConfig,
             config=config,
         )
 
@@ -816,31 +812,29 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
 
         if is_tts_model(clean_name):
 
-            async def _run_tts(request: ModelRequest[GeminiTtsConfigSchema], ctx: ActionRunContext) -> ModelResponse:
+            async def _run_tts(request: ModelRequest[GeminiTtsConfig], ctx: ActionRunContext) -> ModelResponse:
                 return await _new_gemini(self, clean_name).generate(request, ctx)
 
-            return _model_action(name, _run_tts, model_info, GeminiTtsConfigSchema)
+            return _model_action(name, _run_tts, model_info, GeminiTtsConfig)
 
         if is_image_model(clean_name):
 
-            async def _run_image(
-                request: ModelRequest[GeminiImageConfigSchema], ctx: ActionRunContext
-            ) -> ModelResponse:
+            async def _run_image(request: ModelRequest[GeminiImageConfig], ctx: ActionRunContext) -> ModelResponse:
                 return await _new_gemini(self, clean_name).generate(request, ctx)
 
-            return _model_action(name, _run_image, model_info, GeminiImageConfigSchema)
+            return _model_action(name, _run_image, model_info, GeminiImageConfig)
 
         if is_gemma_model(clean_name):
 
-            async def _run_gemma(request: ModelRequest[GemmaConfigSchema], ctx: ActionRunContext) -> ModelResponse:
+            async def _run_gemma(request: ModelRequest[GemmaConfig], ctx: ActionRunContext) -> ModelResponse:
                 return await _new_gemini(self, clean_name).generate(request, ctx)
 
-            return _model_action(name, _run_gemma, model_info, GemmaConfigSchema)
+            return _model_action(name, _run_gemma, model_info, GemmaConfig)
 
-        async def _run(request: ModelRequest[GeminiConfigSchema], ctx: ActionRunContext) -> ModelResponse:
+        async def _run(request: ModelRequest[GeminiConfig], ctx: ActionRunContext) -> ModelResponse:
             return await _new_gemini(self, clean_name).generate(request, ctx)
 
-        return _model_action(name, _run, model_info, GeminiConfigSchema)
+        return _model_action(name, _run, model_info, GeminiConfig)
 
     def _resolve_embedder(self, name: str) -> Action:
         """Create an Action object for a Google AI embedder.
@@ -1227,41 +1221,39 @@ class VertexAI(GoogleFamilyRefs, Plugin):
                 supports=google_model_info('gemini').supports,
             )
 
-            async def _run_tuned(request: ModelRequest[GeminiConfigSchema], ctx: ActionRunContext) -> ModelResponse:
+            async def _run_tuned(request: ModelRequest[GeminiConfig], ctx: ActionRunContext) -> ModelResponse:
                 return await _new_gemini(self, clean_name).generate(request, ctx)
 
-            return _model_action(name, _run_tuned, model_info, GeminiConfigSchema)
+            return _model_action(name, _run_tuned, model_info, GeminiConfig)
 
         model_info = google_model_info(clean_name)
         SUPPORTED_MODELS[clean_name] = model_info
 
         if is_tts_model(clean_name):
 
-            async def _run_tts(request: ModelRequest[GeminiTtsConfigSchema], ctx: ActionRunContext) -> ModelResponse:
+            async def _run_tts(request: ModelRequest[GeminiTtsConfig], ctx: ActionRunContext) -> ModelResponse:
                 return await _new_gemini(self, clean_name).generate(request, ctx)
 
-            return _model_action(name, _run_tts, model_info, GeminiTtsConfigSchema)
+            return _model_action(name, _run_tts, model_info, GeminiTtsConfig)
 
         if is_image_model(clean_name):
 
-            async def _run_image(
-                request: ModelRequest[GeminiImageConfigSchema], ctx: ActionRunContext
-            ) -> ModelResponse:
+            async def _run_image(request: ModelRequest[GeminiImageConfig], ctx: ActionRunContext) -> ModelResponse:
                 return await _new_gemini(self, clean_name).generate(request, ctx)
 
-            return _model_action(name, _run_image, model_info, GeminiImageConfigSchema)
+            return _model_action(name, _run_image, model_info, GeminiImageConfig)
 
         if is_gemma_model(clean_name):
 
-            async def _run_gemma(request: ModelRequest[GemmaConfigSchema], ctx: ActionRunContext) -> ModelResponse:
+            async def _run_gemma(request: ModelRequest[GemmaConfig], ctx: ActionRunContext) -> ModelResponse:
                 return await _new_gemini(self, clean_name).generate(request, ctx)
 
-            return _model_action(name, _run_gemma, model_info, GemmaConfigSchema)
+            return _model_action(name, _run_gemma, model_info, GemmaConfig)
 
-        async def _run(request: ModelRequest[GeminiConfigSchema], ctx: ActionRunContext) -> ModelResponse:
+        async def _run(request: ModelRequest[GeminiConfig], ctx: ActionRunContext) -> ModelResponse:
             return await _new_gemini(self, clean_name).generate(request, ctx)
 
-        return _model_action(name, _run, model_info, GeminiConfigSchema)
+        return _model_action(name, _run, model_info, GeminiConfig)
 
     def _resolve_embedder(self, name: str) -> Action:
         """Create an Action object for a Vertex AI embedder.

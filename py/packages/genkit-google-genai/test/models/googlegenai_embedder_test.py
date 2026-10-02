@@ -20,7 +20,7 @@ import base64
 import json
 
 import pytest
-from genkit_google_genai.models.embedder import (
+from genkit_google_genai._models._embedder import (
     Embedder,
     get_embedder_info,
 )

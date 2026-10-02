@@ -31,13 +31,13 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, Operation, Part, Role
 from genkit.model import ModelInfo, ModelRequest, OperationError, Supports
 from genkit.plugin_api import wrap_http_error
-from genkit_google_genai.constants import is_multi_regional_location, multi_regional_base_url
-from genkit_google_genai.models._sdk_config import (
+from genkit_google_genai._constants import is_multi_regional_location, multi_regional_base_url
+from genkit_google_genai._models._sdk_config import (
     dump_family_config,
     sdk_config_error,
     split_sdk_fields,
 )
-from genkit_google_genai.models._secrets import context_api_key, misplaced_key_error
+from genkit_google_genai._models._secrets import context_api_key, misplaced_key_error
 
 # Quote autocomplete needs a Literal, so this alias is the Veo catalog.
 # ``veo_model`` takes ``KnownVeo | str`` so unlisted ids still work.

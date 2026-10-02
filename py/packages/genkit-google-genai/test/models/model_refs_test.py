@@ -23,15 +23,15 @@ from typing import get_args
 import genkit_google_genai
 import pytest
 from genkit_google_genai import (
+    GeminiConfig,
+    GeminiImageConfig,
+    GeminiTtsConfig,
+    GemmaConfig,
     GoogleAI,
     VertexAI,
 )
-from genkit_google_genai.models.gemini import (
+from genkit_google_genai._models._gemini import (
     GEMINI_CATALOG_IDS,
-    GeminiConfigSchema,
-    GeminiImageConfigSchema,
-    GeminiTtsConfigSchema,
-    GemmaConfigSchema,
     KnownGemini,
     KnownGeminiImage,
     KnownGeminiTts,
@@ -41,8 +41,8 @@ from genkit_google_genai.models.gemini import (
     is_image_model,
     is_tts_model,
 )
-from genkit_google_genai.models.interactions_registry import KnownLyria, is_lyria_model_name
-from genkit_google_genai.models.veo import KnownVeo, VeoConfig, is_veo_model
+from genkit_google_genai._models._interactions_registry import KnownLyria, is_lyria_model_name
+from genkit_google_genai._models._veo import KnownVeo, VeoConfig, is_veo_model
 
 from genkit import GenkitError
 from genkit.embedder import EmbedderRef
@@ -59,7 +59,7 @@ class TestHappyPaths:
 
         assert isinstance(googleai_ref, ModelRef)
         assert googleai_ref.name == 'googleai/gemini-2.5-flash'
-        assert googleai_ref.config_schema is GeminiConfigSchema
+        assert googleai_ref.config_schema is GeminiConfig
         assert vertexai_ref.name == 'vertexai/gemini-2.5-flash'
 
     def test_unlisted_ids_still_mint_refs(self) -> None:
@@ -75,16 +75,16 @@ class TestHappyPaths:
         gemma = GoogleAI.gemma_model('gemma-3-12b-it')
         veo = GoogleAI.veo_model('veo-3.1-fast-generate-preview')
 
-        assert tts.config_schema is GeminiTtsConfigSchema
-        assert image.config_schema is GeminiImageConfigSchema
+        assert tts.config_schema is GeminiTtsConfig
+        assert image.config_schema is GeminiImageConfig
         assert image.name == 'vertexai/gemini-2.5-flash-image'
-        assert gemma.config_schema is GemmaConfigSchema
+        assert gemma.config_schema is GemmaConfig
         assert veo.config_schema is VeoConfig
         assert veo.name == 'googleai/veo-3.1-fast-generate-preview'
 
     def test_config_instance_rides_along(self) -> None:
         """A default config passed at construction survives into the ref."""
-        config = GeminiConfigSchema(temperature=0.3)
+        config = GeminiConfig(temperature=0.3)
         ref = GoogleAI.gemini_model('gemini-2.5-flash', config=config)
         assert ref.config == config
 
@@ -301,7 +301,7 @@ class TestNoImagenSurface:
     def test_no_imagen_module(self) -> None:
         """The Imagen model module is gone."""
         with pytest.raises(ModuleNotFoundError):
-            importlib.import_module('genkit_google_genai.models.imagen')
+            importlib.import_module('genkit_google_genai._models.imagen')
 
     @pytest.mark.parametrize('plugin', [GoogleAI, VertexAI])
     def test_every_constructor_rejects_imagen_ids(self, plugin: type[GoogleAI] | type[VertexAI]) -> None:
