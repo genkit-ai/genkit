@@ -382,32 +382,6 @@ class ToolRunContext(ActionRunContext):
         return self.resumed_metadata is not None
 
 
-def respond_to_interrupt(
-    response: Any,  # noqa: ANN401 - user reply or tool output for resume
-    *,
-    interrupt: Part,
-    metadata: dict[str, Any] | None = None,
-) -> Part:
-    """Build a tool-response Part for a pending tool interrupt.
-
-    Prefer ``interrupt.respond(...)``. Pass the result to ``generate(..., resume_respond=...)``.
-    """
-    return as_part(interrupt).respond(response, metadata=metadata)
-
-
-def restart_tool(
-    *,
-    interrupt: Part,
-    replace_input: Any | None = None,  # noqa: ANN401 - new tool input; shape is per tool
-    resumed_metadata: dict[str, Any] | None = None,
-) -> Part:
-    """Build a restart tool-request Part for a pending tool interrupt.
-
-    Prefer ``interrupt.restart(...)``. Pass the result to ``generate(..., resume_restart=...)``.
-    """
-    return as_part(interrupt).restart(resumed_metadata=resumed_metadata, replace_input=replace_input)
-
-
 def _resume_context_from_tool_request_part(
     tool_request_part: Part,
 ) -> tuple[dict[str, Any] | None, Any | None]:

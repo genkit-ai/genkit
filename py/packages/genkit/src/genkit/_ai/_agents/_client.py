@@ -32,7 +32,6 @@ from genkit._ai._agents._runtime import AgentInitError, seeded_init_fields
 from genkit._ai._agents._snapshot import lookup_label
 from genkit._ai._agents._types import StateManagement
 from genkit._ai._json_patch import apply_json_patch
-from genkit._ai._tools import restart_tool
 from genkit._core._channel import CloseableQueue
 from genkit._core._error import (
     _STATUS_CODE_MAP,
@@ -202,8 +201,7 @@ class AgentInterrupt(Generic[InputT, OutputT]):
             input=self.input,
         )
         if resumed_metadata is not None or replace_input is not None:
-            return restart_tool(
-                interrupt=part,
+            return part.restart(
                 resumed_metadata=resumed_metadata,
                 replace_input=replace_input,
             )

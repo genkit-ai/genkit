@@ -20,8 +20,6 @@ from genkit import (
     ModelResponse,
     ModelResponseChunk,
     Part,
-    respond_to_interrupt,
-    restart_tool,
 )
 from genkit._ai._formats._types import FormatDef, Formatter, FormatterConfig
 from genkit._ai._model import text_from_message
@@ -600,7 +598,7 @@ async def test_generate_with_interrupt_respond(
         ),
     ]
 
-    respond_wrapped = respond_to_interrupt({'bar': 2}, interrupt=interrupted_response.interrupts[0])
+    respond_wrapped = interrupted_response.interrupts[0].respond({'bar': 2})
     assert type(respond_wrapped) is Part
     response = await ai.generate(
         model='programmableModel',
@@ -2084,7 +2082,7 @@ async def test_generate_echoes_full_request_across_interrupt_and_resume(
     resumed = await ai.generate(
         model='programmableModel',
         messages=interrupted.messages,
-        resume_respond=[respond_to_interrupt({'bar': 2}, interrupt=interrupted.interrupts[0])],
+        resume_respond=[interrupted.interrupts[0].respond({'bar': 2})],
         tools=['test_interrupt'],
         **_echo_request_kwargs(),
     )
@@ -2128,7 +2126,7 @@ async def test_generate_echoes_full_request_when_restart_interrupts_again(
     again = await ai.generate(
         model='programmableModel',
         messages=interrupted.messages,
-        resume_restart=restart_tool(interrupt=interrupted.interrupts[0]),
+        resume_restart=interrupted.interrupts[0].restart(),
         tools=['test_interrupt'],
         **_echo_request_kwargs(),
     )
@@ -2150,7 +2148,7 @@ async def test_generate_echoes_full_request_when_restart_interrupts_again(
     answered = await ai.generate(
         model='programmableModel',
         messages=again.messages,
-        resume_respond=[respond_to_interrupt({'ok': True}, interrupt=again.interrupts[0])],
+        resume_respond=[again.interrupts[0].respond({'ok': True})],
         tools=['test_interrupt'],
         **_echo_request_kwargs(),
     )
@@ -2211,7 +2209,7 @@ async def test_generate_restart_can_pause_any_number_of_times(
         response = await ai.generate(
             model='programmableModel',
             messages=response.messages,
-            resume_restart=restart_tool(interrupt=response.interrupts[0]),
+            resume_restart=response.interrupts[0].restart(),
             tools=['gatekeeper'],
             **_echo_request_kwargs(),
         )
@@ -2230,7 +2228,7 @@ async def test_generate_restart_can_pause_any_number_of_times(
     answered = await ai.generate(
         model='programmableModel',
         messages=response.messages,
-        resume_restart=restart_tool(interrupt=response.interrupts[0]),
+        resume_restart=response.interrupts[0].restart(),
         tools=['gatekeeper'],
         **_echo_request_kwargs(),
     )
@@ -2313,7 +2311,7 @@ async def test_generate_resolved_sibling_survives_repeated_interrupts(
         response = await ai.generate(
             model='programmableModel',
             messages=response.messages,
-            resume_restart=restart_tool(interrupt=response.interrupts[0]),
+            resume_restart=response.interrupts[0].restart(),
             tools=['charge_card', 'approve'],
         )
         if attempt < 5 and response.interrupts:
