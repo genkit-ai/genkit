@@ -28,8 +28,8 @@ from openai.types.completion_usage import CompletionTokensDetails, PromptTokensD
 
 from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
 from genkit.model import ModelConfig, ModelRequest, ModelUsage, ToolDefinition
-from genkit_openai.models.model_info import SUPPORTED_OPENAI_MODELS, KnownGpt
-from genkit_openai.models.utils import (
+from genkit_openai._models._model_info import SUPPORTED_OPENAI_MODELS, KnownGpt
+from genkit_openai._models._utils import (
     DictMessageAdapter,
     MessageAdapter,
     MessageConverter,
@@ -37,7 +37,7 @@ from genkit_openai.models.utils import (
     reraise_openai_error,
     strip_markdown_fences,
 )
-from genkit_openai.typing import OpenAIConfig, SupportedOutputFormat
+from genkit_openai._typing import OpenAIConfig, SupportedOutputFormat
 
 logger = structlog.get_logger(__name__)
 

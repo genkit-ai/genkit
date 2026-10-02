@@ -21,8 +21,8 @@ from collections.abc import Awaitable, Callable
 from typing import cast
 
 from anthropic import AsyncAnthropic, AsyncAnthropicVertex
-from genkit_anthropic.config import AnthropicConfig
-from genkit_anthropic.models import AnthropicModel
+from genkit_anthropic import AnthropicConfig
+from genkit_anthropic._models import AnthropicModel
 from pydantic import ConfigDict
 from pydantic.config import JsonDict
 

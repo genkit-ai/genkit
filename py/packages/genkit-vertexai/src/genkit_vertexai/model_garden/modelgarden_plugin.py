@@ -20,8 +20,8 @@ import os
 import warnings
 from typing import cast
 
-from genkit_openai.models import SUPPORTED_OPENAI_COMPAT_MODELS
-from genkit_openai.typing import OpenAIConfig
+from genkit_openai import OpenAIConfig
+from genkit_openai._models import SUPPORTED_OPENAI_COMPAT_MODELS
 from genkit_vertexai import constants as const
 
 from genkit.model import model as create_model, model_action_metadata

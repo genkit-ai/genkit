@@ -28,11 +28,11 @@ if typing.TYPE_CHECKING:
     from genkit import ActionRunContext, ModelResponse
     from genkit.model import ModelRequest
 
-from genkit_openai.models import (
+from genkit_openai._models import (
     SUPPORTED_OPENAI_COMPAT_MODELS,
     get_default_model_info,
 )
-from genkit_openai.models.model import OpenAIModel
+from genkit_openai._models._model import OpenAIModel
 from genkit_vertexai.model_garden.client import OpenAIClient
 
 MODELGARDEN_PLUGIN_NAME = 'modelgarden'

@@ -23,10 +23,10 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, PropertyMock
 
 import pytest
-from genkit_openai.models import OpenAIModel
-from genkit_openai.models.model import _usage_from_completion
-from genkit_openai.models.utils import strip_markdown_fences
-from genkit_openai.typing import OpenAIConfig, ReasoningEffort
+from genkit_openai._models import OpenAIModel
+from genkit_openai._models._model import _usage_from_completion
+from genkit_openai._models._utils import strip_markdown_fences
+from genkit_openai._typing import OpenAIConfig, ReasoningEffort
 from openai.types import CompletionUsage
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 from pydantic import BaseModel

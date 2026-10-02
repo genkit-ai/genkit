@@ -93,7 +93,7 @@ def test_foreign_config_class_raises_validation_error() -> None:
 
 
 def test_config_type_path_uses_plugin_package_export() -> None:
-    """Error strings say genkit_openai.OpenAIConfig, not genkit_openai.typing.OpenAIConfig."""
+    """Error strings say genkit_openai.OpenAIConfig, not genkit_openai._typing.OpenAIConfig."""
     from genkit_google_genai import GeminiConfig
     from genkit_openai import OpenAIConfig
 
