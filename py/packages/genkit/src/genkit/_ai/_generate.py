@@ -731,7 +731,7 @@ async def run_generate(
     mw_pipeline: MiddlewarePipeline | None = None
     if middleware:
         mw_pipeline = prepare_middleware(middleware, ctx=ctx)
-        mw_tools: list[Action[Any, Any, Any, Any]] = []
+        mw_tools: list[Tool] = []
         for mw in mw_pipeline.middleware:
             mw_tools.extend(mw.tools(mw_pipeline.ctx))
 
@@ -747,7 +747,8 @@ async def run_generate(
                         message=(f"tool '{name}' is contributed by middleware but already declared elsewhere"),
                         reason=RuntimeErrorReason.INVALID_INPUT,
                     )
-                registry.register_action_from_instance(t)
+                # The child registry stores Actions; Tool is the handle authors return.
+                registry.register_action_from_instance(t.action())
                 contributed_names.append(name)
             options = options.model_copy()
             options.tools = existing + contributed_names
