@@ -1898,9 +1898,20 @@ class GeminiModel:
 
         has_output = bool(request.output_format or request.output_schema)
 
-        if cfg is not None or tools or system_instruction or request.output_format or leftovers:
+        if cfg is not None or tools or system_instruction or request.output_format or leftovers or request.tool_choice:
             if cfg is None:
                 cfg = genai_types.GenerateContentConfig()
+
+            if request.tool_choice is not None:
+                if cfg.tool_config is None:
+                    cfg.tool_config = genai_types.ToolConfig()
+                if cfg.tool_config.function_calling_config is None:
+                    mode = {
+                        'auto': genai_types.FunctionCallingConfigMode.AUTO,
+                        'required': genai_types.FunctionCallingConfigMode.ANY,
+                        'none': genai_types.FunctionCallingConfigMode.NONE,
+                    }[request.tool_choice]
+                    cfg.tool_config.function_calling_config = genai_types.FunctionCallingConfig(mode=mode)
 
             if has_output:
                 model_name = self._version
