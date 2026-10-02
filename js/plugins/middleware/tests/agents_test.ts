@@ -2932,6 +2932,58 @@ describe('agents middleware (continue)', () => {
     assert.strictEqual(wait.tasks[0].response, 'recovered later');
   });
 
+  it('refuses to recover an expired task its store cannot fence', async () => {
+    const ai = genkit({});
+    // A store without a change feed: the flip would land, but a worker that
+    // is only late would never see it.
+    const store = new InMemorySessionStore();
+    Object.defineProperty(store, 'onSnapshotStateChange', { value: undefined });
+    const { deadTask, pendingId } = await seedDeadKeeperTask(
+      ai,
+      store,
+      failNTimesModel(ai, 0, 'kept going')
+    );
+    const resp = await orchestrate(ai, { agents: ['keeper'] }, (messages) =>
+      lastOutput(messages, CONTINUE_TOOL)
+        ? textResponse('done')
+        : toolRequest(CONTINUE_TOOL, {
+            taskId: deadTask,
+            instructions: 'continue',
+          })
+    );
+    const [refused] = toolOutputs(resp.messages, CONTINUE_TOOL);
+    assert.match(refused.response, /cannot signal its worker/);
+    const row = await store.getSnapshot({ snapshotId: pendingId });
+    assert.strictEqual(row?.status, 'pending', 'no fence was written');
+  });
+
+  it('fails a cancelled continuation without fencing the task', async () => {
+    const ai = genkit({});
+    const store = new InMemorySessionStore();
+    const { deadTask, pendingId } = await seedDeadKeeperTask(
+      ai,
+      store,
+      failNTimesModel(ai, 0, 'kept going')
+    );
+    const def = agents.instantiate({
+      config: { agents: ['keeper'] },
+      ai,
+      pluginConfig: undefined,
+    });
+    const continueTool = def.tools!.find(
+      (t) => t.__action.name === CONTINUE_TOOL
+    )!;
+    await assert.rejects(
+      continueTool(
+        { taskId: deadTask, instructions: 'continue' },
+        { abortSignal: AbortSignal.abort() }
+      ),
+      (e: any) => e?.name === 'AbortError'
+    );
+    const row = await store.getSnapshot({ snapshotId: pendingId });
+    assert.strictEqual(row?.status, 'pending', 'no fence was written');
+  });
+
   it('refuses a recovery whose fence fails transiently and refunds its slot', async () => {
     const ai = genkit({});
     const flaky = flakyStore();

@@ -1910,8 +1910,9 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
       ): Promise<DelegationResult> {
         let snapshot: SessionSnapshot;
         try {
-          snapshot = await readSnapshotOnce(c.agent, snapshotId);
+          snapshot = await readSnapshotOnce(c.agent, snapshotId, c.abortSignal);
         } catch (e: unknown) {
+          c.abortSignal?.throwIfAborted();
           logger.debug(
             `agents middleware: reading task ${c.taskId} to continue it failed: ${errorMessage(e)}`
           );
@@ -2005,9 +2006,23 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
         c: Continuation,
         snapshotId: string
       ): Promise<DelegationResult> {
+        if (abortableOf(c.agent) === false) {
+          // The flip would land, but this store cannot signal a worker, so a
+          // worker that is only late would never see it and the recovery
+          // would race it. Retrying cannot change that, so the slot is kept.
+          return {
+            response: `Error: task '${c.taskId}' reads as expired, but this agent's store cannot signal its worker, so the recovery cannot be fenced against a worker that is only late. Delegate the task again if the work is still needed.`,
+          };
+        }
+        // A cancelled call must not fence a task on its way out.
+        c.abortSignal?.throwIfAborted();
         try {
-          await c.agent.abortAgentAction.run({ snapshotId });
+          await c.agent.abortAgentAction.run(
+            { snapshotId },
+            { abortSignal: c.abortSignal }
+          );
         } catch (e: unknown) {
+          c.abortSignal?.throwIfAborted();
           logger.debug(
             `agents middleware: fencing task ${c.taskId} failed: ${errorMessage(e)}`
           );
@@ -2018,8 +2033,9 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
         }
         let current: SessionSnapshot;
         try {
-          current = await readSnapshotOnce(c.agent, snapshotId);
+          current = await readSnapshotOnce(c.agent, snapshotId, c.abortSignal);
         } catch (e: unknown) {
+          c.abortSignal?.throwIfAborted();
           logger.debug(
             `agents middleware: re-reading task ${c.taskId} after its fence failed: ${errorMessage(e)}`
           );
@@ -2113,8 +2129,9 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
         }
         let parent: SessionSnapshot;
         try {
-          parent = await readSnapshotOnce(c.agent, parentId);
+          parent = await readSnapshotOnce(c.agent, parentId, c.abortSignal);
         } catch (e: unknown) {
+          c.abortSignal?.throwIfAborted();
           return refuseRead(
             e,
             `Error: task '${c.taskId}' kept its progress in snapshot '${parentId}', which could not be read (${errorMessage(e)}).`
@@ -2154,6 +2171,7 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
           if (refusal) return refusal;
         }
 
+        c.abortSignal?.throwIfAborted();
         logger.debug(
           `agents middleware: continuing task ${c.taskId} from snapshot ${snapshotId} (background: ${c.background}).`
         );
