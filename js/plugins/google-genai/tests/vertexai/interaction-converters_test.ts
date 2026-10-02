@@ -343,7 +343,7 @@ describe('Interaction Converters', () => {
       };
       const result = fromInteractionContent(content);
       assert.deepStrictEqual(result, {
-        reasoning: 'Thinking about...\n[Image]\n...this image.',
+        reasoning: 'Thinking about...[Image]...this image.',
         metadata: {
           thoughtSignature: 'SIG',
         },

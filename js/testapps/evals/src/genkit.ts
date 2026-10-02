@@ -63,7 +63,7 @@ export const ai = genkit({
     devLocalVectorstore([
       {
         indexName: 'pdfQA',
-        embedder: googleAI.embedder('gemini-embedding-001'),
+        embedder: googleAI.embedder('gemini-embedding-2'),
       },
     ]),
     langchain({
