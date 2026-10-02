@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import type { Span as ApiSpan } from '@opentelemetry/api';
+import { trace, TraceFlags, type Span as ApiSpan } from '@opentelemetry/api';
 import * as assert from 'assert';
 import * as http from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -23,6 +23,7 @@ import { logger } from '../src/logging.js';
 import { initNodeFeatures } from '../src/node.js';
 import {
   configureInstrumentation,
+  flushTracing,
   resetInstrumentation,
   runInNewSpan,
   setTelemetryServerUrl,
@@ -167,6 +168,32 @@ describe('instrumentation abstraction', () => {
     assert.equal(fake.logs[0].severity, 'info');
     assert.equal(fake.logs[0].body, 'hello world');
   });
+
+  it('fans out callback span attribute writes via setMetadata', async () => {
+    const written: Record<string, unknown>[] = [];
+    const recording: Instrumentation = {
+      runInNewSpan(info, next) {
+        const ctx: GenkitSpanContext = {
+          traceId: '3'.repeat(32),
+          spanId: '4'.repeat(16),
+          setMetadata: (values) => written.push(values),
+        };
+        const span = trace.wrapSpanContext({
+          traceId: ctx.traceId,
+          spanId: ctx.spanId,
+          traceFlags: TraceFlags.SAMPLED,
+        });
+        return next(span, ctx);
+      },
+    };
+    configureInstrumentation(recording);
+
+    await runInNewSpan({ metadata: { name: 'attrs' } }, async (_m, span) => {
+      span.setAttribute('a', 1).setAttributes({ b: 'two' });
+    });
+
+    assert.deepStrictEqual(written, [{ a: 1 }, { b: 'two' }]);
+  });
 });
 
 describe('DirectTelemetryInstrumentation realtime export', () => {
@@ -174,13 +201,18 @@ describe('DirectTelemetryInstrumentation realtime export', () => {
   let url: string;
   const posted: any[] = [];
   const prevRealtime = process.env.GENKIT_ENABLE_REALTIME_TELEMETRY;
+  // Simulates a slow telemetry server; a post is only recorded once it
+  // "lands", right before the response is sent.
+  let responseDelayMs = 0;
 
   beforeEach(async () => {
     posted.length = 0;
+    responseDelayMs = 0;
     server = http.createServer((req, res) => {
       let body = '';
       req.on('data', (c) => (body += c));
-      req.on('end', () => {
+      req.on('end', async () => {
+        if (responseDelayMs) await sleep(responseDelayMs);
         if (req.url === '/api/traces') posted.push(JSON.parse(body));
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end('{}');
@@ -281,5 +313,80 @@ describe('DirectTelemetryInstrumentation realtime export', () => {
       all.some((s: any) => s.endTime > 0),
       'still exports once on completion'
     );
+  });
+
+  it('flushTracing waits for in-flight posts', async () => {
+    delete process.env.GENKIT_ENABLE_REALTIME_TELEMETRY;
+    responseDelayMs = 200;
+
+    let spanId = '';
+    await runInNewSpan(
+      { metadata: { name: 'flushme' }, labels: { 'genkit:type': 'flow' } },
+      async (_m, span) => {
+        spanId = span.spanContext().spanId;
+      }
+    );
+    await flushTracing();
+
+    // No polling: the final root span must already be saved.
+    const spans = posted
+      .flatMap((t) => Object.values(t.spans ?? {}))
+      .filter((s: any) => s.spanId === spanId) as any[];
+    assert.equal(spans.length, 1);
+    assert.ok(spans[0].endTime > 0);
+  });
+
+  it('starts a new trace for an explicit isRoot span', async () => {
+    delete process.env.GENKIT_ENABLE_REALTIME_TELEMETRY;
+
+    let outer = { traceId: '', spanId: '' };
+    let inner = { traceId: '', spanId: '' };
+    await runInNewSpan(
+      { metadata: { name: 'outer' }, labels: { 'genkit:type': 'flow' } },
+      async (_m, outerSpan) => {
+        outer = outerSpan.spanContext();
+        await runInNewSpan(
+          {
+            metadata: { name: 'inner', isRoot: true },
+            labels: { 'genkit:type': 'flow' },
+          },
+          async (_m2, innerSpan) => {
+            inner = innerSpan.spanContext();
+          }
+        );
+      }
+    );
+    await flushTracing();
+
+    assert.notEqual(inner.traceId, outer.traceId);
+    const exported = posted
+      .flatMap((t) => Object.values(t.spans ?? {}))
+      .find((s: any) => s.spanId === inner.spanId) as any;
+    assert.ok(exported, 'expected the inner span to be exported');
+    assert.equal(exported.traceId, inner.traceId);
+    assert.equal(exported.parentSpanId, undefined);
+  });
+
+  it('exports attributes written on the callback span', async () => {
+    delete process.env.GENKIT_ENABLE_REALTIME_TELEMETRY;
+
+    let spanId = '';
+    await runInNewSpan(
+      { metadata: { name: 'attrs' }, labels: { 'genkit:type': 'flow' } },
+      async (_m, span) => {
+        spanId = span.spanContext().spanId;
+        span.setAttribute('custom:count', 3);
+        span.setAttributes({ 'custom:flag': true, 'genkit:name': 'spoofed' });
+      }
+    );
+    await flushTracing();
+
+    const exported = posted
+      .flatMap((t) => Object.values(t.spans ?? {}))
+      .find((s: any) => s.spanId === spanId) as any;
+    assert.equal(exported.attributes['custom:count'], 3);
+    assert.equal(exported.attributes['custom:flag'], true);
+    // Genkit's own attributes are not overridable.
+    assert.equal(exported.attributes['genkit:name'], 'attrs');
   });
 });

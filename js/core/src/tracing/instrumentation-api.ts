@@ -14,7 +14,12 @@
  * limitations under the License.
  */
 
-import type { Span as ApiSpan, Link } from '@opentelemetry/api';
+import type {
+  Span as ApiSpan,
+  Link,
+  SpanAttributes,
+  SpanAttributeValue,
+} from '@opentelemetry/api';
 import type { SpanMetadata } from './types.js';
 
 /**
@@ -37,6 +42,9 @@ export const spanMetadataAlsKey = 'core.tracing.instrumentation.span';
  *
  * `traceId` / `spanId` are the composite-resolved ids (first non-empty across
  * the active instrumentation chain); both are '' when nothing is instrumented.
+ *
+ * `setMetadata` receives custom attribute writes made on the span handed to the
+ * `runInNewSpan` callback (`span.setAttribute(s)`).
  *
  * @hidden
  */
@@ -84,16 +92,6 @@ export interface Instrumentation {
 }
 
 /**
- * Optional capability: a provider that needs cleanup on
- * {@link resetInstrumentation}.
- *
- * @hidden
- */
-export interface DisposableInstrumentation {
-  dispose(): void | Promise<void>;
-}
-
-/**
  * A correlation-free log record. Each provider attaches trace/span correlation
  * from its own context source (OTel active context vs Genkit ALS).
  *
@@ -121,15 +119,6 @@ export function hasRecordLog(
 ): p is Instrumentation & LogRecordingInstrumentation {
   return (
     typeof (p as Partial<LogRecordingInstrumentation>).recordLog === 'function'
-  );
-}
-
-/** @hidden */
-export function isDisposable(
-  p: Instrumentation
-): p is Instrumentation & DisposableInstrumentation {
-  return (
-    typeof (p as Partial<DisposableInstrumentation>).dispose === 'function'
   );
 }
 
@@ -176,6 +165,41 @@ export function metadataToAttributes(
     }
   });
   return out;
+}
+
+/**
+ * Normalizes custom attribute writes (`GenkitSpanContext.setMetadata`) into
+ * valid OTel attribute values. Primitives and homogeneous primitive arrays pass
+ * through as-is, matching what `span.setAttribute` would record; anything else
+ * is JSON-encoded. undefined/null are dropped.
+ *
+ * @hidden
+ */
+export function toSpanAttributes(
+  values: Record<string, unknown>
+): SpanAttributes {
+  const attrs: SpanAttributes = {};
+  for (const [k, v] of Object.entries(values)) {
+    if (v === undefined || v === null) continue;
+    attrs[k] = isAttributeValue(v) ? v : JSON.stringify(v);
+  }
+  return attrs;
+}
+
+function isPrimitiveAttribute(v: unknown): v is string | number | boolean {
+  return (
+    typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean'
+  );
+}
+
+function isAttributeValue(v: unknown): v is SpanAttributeValue {
+  if (isPrimitiveAttribute(v)) return true;
+  if (!Array.isArray(v)) return false;
+  const present = v.filter((x) => x !== null && x !== undefined);
+  return (
+    present.every(isPrimitiveAttribute) &&
+    new Set(present.map((x) => typeof x)).size <= 1
+  );
 }
 
 /** @hidden */
