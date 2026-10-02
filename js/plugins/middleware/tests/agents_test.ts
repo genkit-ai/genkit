@@ -1772,6 +1772,33 @@ describe('agents middleware (async)', () => {
     gate.release();
   });
 
+  it('fails a cancelled check or abort call without stopping the task', async () => {
+    const ai = genkit({});
+    const gate = makeGate();
+    const researcher = defineGatedResearcher(ai, 'researcher', gate.opened);
+    const task = await researcher.chat().detach('dig');
+    const def = agents.instantiate({
+      config: { agents: ['researcher'], async: true },
+      ai,
+      pluginConfig: undefined,
+    });
+    const taskIds = [`researcher:${task.snapshotId}`];
+    const cancelled = AbortSignal.abort();
+    for (const name of [CHECK_TOOL, ABORT_TOOL]) {
+      const t = def.tools!.find((t) => t.__action.name === name)!;
+      await assert.rejects(
+        t({ taskIds }, { abortSignal: cancelled }),
+        (e: any) => e?.name === 'AbortError',
+        `${name} must fail as a whole`
+      );
+    }
+    const row = await researcher.getSnapshotData({
+      snapshotId: task.snapshotId,
+    });
+    assert.strictEqual(row?.status, 'pending', 'the task must keep running');
+    gate.release();
+  });
+
   it('says when an abort cannot reach the worker', async () => {
     const ai = genkit({});
     const gate = makeGate();

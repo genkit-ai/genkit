@@ -1317,8 +1317,17 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
         signal?: AbortSignal
       ) => Promise<SessionSnapshot>;
 
-      const readSnapshotOnce: SnapshotFetch = async (agent, snapshotId) =>
-        (await agent.getSnapshotDataAction.run({ snapshotId })).result;
+      const readSnapshotOnce: SnapshotFetch = async (
+        agent,
+        snapshotId,
+        signal
+      ) =>
+        (
+          await agent.getSnapshotDataAction.run(
+            { snapshotId },
+            { abortSignal: signal }
+          )
+        ).result;
 
       // The companion action holds one request for at most the sub-agent's
       // maxSnapshotWaitMs and then answers with the row as it stands, so the
@@ -1343,12 +1352,21 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
       // aborting in the store and reads as expired, and aborting it would overwrite the one
       // signal telling the model the work is gone. A task that already
       // settled needs no abort at all and is answered from the row alone.
-      const abortSnapshot: SnapshotFetch = async (agent, snapshotId) => {
-        const current = await readSnapshotOnce(agent, snapshotId);
+      const abortSnapshot: SnapshotFetch = async (
+        agent,
+        snapshotId,
+        signal
+      ) => {
+        const current = await readSnapshotOnce(agent, snapshotId, signal);
         if (isSettled(current.status)) {
           return current;
         }
-        const { result } = await agent.abortAgentAction.run({ snapshotId });
+        // A cancelled call must not stop a task on its way out.
+        signal?.throwIfAborted();
+        const { result } = await agent.abortAgentAction.run(
+          { snapshotId },
+          { abortSignal: signal }
+        );
         // The abort action answers with the status the row had before the
         // attempt: `pending` means the flip to `aborting` landed, and
         // `aborting` means an earlier one had. Either way the stop is durable,
@@ -1361,7 +1379,7 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
         if (result.status === 'pending' || result.status === 'aborting') {
           return { ...current, status: 'aborting' };
         }
-        return readSnapshotOnce(agent, snapshotId);
+        return readSnapshotOnce(agent, snapshotId, signal);
       };
 
       /**
@@ -1611,17 +1629,23 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
        */
       async function reportTasks(
         taskIds: string[],
-        fetch: SnapshotFetch
+        fetch: SnapshotFetch,
+        toolSignal?: AbortSignal
       ): Promise<BackgroundTasksResult> {
         if (taskIds.length === 0) {
           return { note: NO_TASK_IDS_NOTE };
         }
-        return {
-          tasks: await collectReports(
-            taskIds,
-            async (taskId) => (await reportTask(taskId, fetch)).report
-          ),
-        };
+        const tasks = await collectReports(
+          taskIds,
+          async (taskId) => (await reportTask(taskId, fetch, toolSignal)).report
+        );
+        // A cancelled call fails its dispatches, and each failure reads back
+        // as "could not read this task, check again later". Reported together
+        // that is a settled-looking answer claiming live tasks are unreadable,
+        // so the cancellation is the result instead. The rule lives here,
+        // with the fan-out, so a tool added later cannot forget it.
+        toolSignal?.throwIfAborted();
+        return { tasks };
       }
 
       /**
@@ -1696,7 +1720,7 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
         // hangs.
         let timeoutSeconds = input.timeoutSeconds ?? 0;
         if (timeoutSeconds < 0) {
-          return reportTasks(taskIds, readSnapshotOnce);
+          return reportTasks(taskIds, readSnapshotOnce, toolSignal);
         }
         if (
           maxWaitSeconds !== undefined &&
@@ -2195,7 +2219,8 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
               inputSchema: backgroundTasksInputSchema,
               outputSchema: backgroundTasksResultSchema,
             },
-            (input) => reportTasks(input.taskIds ?? [], readSnapshotOnce)
+            (input, { abortSignal }) =>
+              reportTasks(input.taskIds ?? [], readSnapshotOnce, abortSignal)
           ),
           tool(
             {
@@ -2214,7 +2239,8 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
               inputSchema: backgroundTasksInputSchema,
               outputSchema: backgroundTasksResultSchema,
             },
-            (input) => reportTasks(input.taskIds ?? [], abortSnapshot)
+            (input, { abortSignal }) =>
+              reportTasks(input.taskIds ?? [], abortSnapshot, abortSignal)
           ),
         ];
       }
