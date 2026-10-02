@@ -15,7 +15,7 @@ import pytest
 import yaml
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
-from genkit import Document, Genkit, Message, ModelResponse, ModelResponseChunk, MultipartToolResponse, Part, tool
+from genkit import Document, Genkit, Message, ModelResponse, ModelResponseChunk, MultipartToolResponse, Part, Tool, tool
 from genkit._ai._formats._types import FormatDef, Formatter, FormatterConfig
 from genkit._ai._generate import DEFAULT_MAX_TURNS, ChunkAccumulator, augment_with_context, generate_action
 from genkit._ai._model import text_from_content, text_from_message
@@ -1658,13 +1658,12 @@ async def test_middleware_contributed_tools_available_to_model() -> None:
     class ToolProviderMiddleware(BaseMiddleware):
         """Middleware that contributes a tool dynamically per generate() call."""
 
-        def tools(self, ctx: GenerateMiddlewareContext) -> list:
-            @tool
+        def tools(self, ctx: GenerateMiddlewareContext) -> list[Tool]:
             async def middleware_tool() -> str:
                 """A tool injected by middleware."""
                 return 'from_middleware_tool'
 
-            return [middleware_tool]
+            return [tool(middleware_tool)]
 
     pm, _ = define_programmable_model(ai)
 
@@ -1701,15 +1700,14 @@ async def test_middleware_contributed_tools_available_to_model() -> None:
 
 @pytest.mark.asyncio
 async def test_middleware_tools_hook_returning_public_tool_runs_during_generate() -> None:
-    """A tools() hook that returns a public @tool handle is callable from generate."""
+    """A tools() hook that returns a public Tool handle is callable from generate."""
 
-    @tool
     async def my_tool() -> str:
         return 'from_public_tool'
 
     class PublicToolMw(BaseMiddleware):
-        def tools(self, ctx: GenerateMiddlewareContext) -> list:
-            return [my_tool]
+        def tools(self, ctx: GenerateMiddlewareContext) -> list[Tool]:
+            return [tool(my_tool)]
 
     ai = Genkit(model='programmableModel')
     pm, _ = define_programmable_model(ai)
@@ -1745,12 +1743,11 @@ async def test_middleware_tool_already_on_the_request_raises() -> None:
 
     @ai.middleware(name='also_ping')
     class AlsoPing(BaseMiddleware):
-        def tools(self, ctx: GenerateMiddlewareContext) -> list:
-            @tool
+        def tools(self, ctx: GenerateMiddlewareContext) -> list[Tool]:
             async def ping() -> str:
                 return 'from_mw'
 
-            return [ping]
+            return [tool(ping)]
 
     with pytest.raises(GenkitError, match="tool 'ping' is contributed by middleware") as raised:
         await ai.generate(prompt='hi', tools=['ping'], use=[AlsoPing()])
@@ -1768,12 +1765,11 @@ async def test_two_middleware_contributing_the_same_tool_raises() -> None:
     def _ping_mw(name: str) -> type[BaseMiddleware]:
         @ai.middleware(name=name)
         class PingMw(BaseMiddleware):
-            def tools(self, ctx: GenerateMiddlewareContext) -> list:
-                @tool
+            def tools(self, ctx: GenerateMiddlewareContext) -> list[Tool]:
                 async def ping() -> str:
                     return name
 
-                return [ping]
+                return [tool(ping)]
 
         return PingMw
 
@@ -1802,13 +1798,12 @@ async def test_middleware_in_one_call_share_an_isolated_registry() -> None:
 
     @ai.middleware(name='provider_mw')
     class ProviderMW(BaseMiddleware):
-        def tools(self, ctx: GenerateMiddlewareContext) -> list:
-            @tool
+        def tools(self, ctx: GenerateMiddlewareContext) -> list[Tool]:
             async def shared_tool() -> str:
                 """Shared by all middleware in the call."""
                 return 'shared_ok'
 
-            return [shared_tool]
+            return [tool(shared_tool)]
 
     @ai.middleware(name='looker_mw')
     class LookerMW(BaseMiddleware):
