@@ -62,7 +62,7 @@ def test_stable_genkit_keeps_graduated_methods() -> None:
 
 def test_genkit_exp_positional_argument_raises_type_error() -> None:
     with pytest.raises(TypeError):
-        Genkit('googleai/gemini-flash-latest')  # type: ignore[misc]  # ty: ignore[too-many-positional-arguments]
+        Genkit('googleai/gemini-flash-latest')  # type: ignore[misc]
 
 
 def test_exp_types_import() -> None:

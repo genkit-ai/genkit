@@ -348,9 +348,9 @@ async def test_current_context() -> None:
 
 def test_genkit_positional_argument_raises_type_error() -> None:
     with pytest.raises(TypeError):
-        Genkit('googleai/gemini-flash-latest')  # type: ignore[misc]  # ty: ignore[too-many-positional-arguments]
+        Genkit('googleai/gemini-flash-latest')  # type: ignore[misc]
     with pytest.raises(TypeError):
-        Genkit([])  # type: ignore[misc]  # ty: ignore[too-many-positional-arguments]
+        Genkit([])  # type: ignore[misc]
 
 
 @pytest.mark.asyncio
