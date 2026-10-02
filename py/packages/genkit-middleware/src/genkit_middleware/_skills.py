@@ -149,7 +149,6 @@ class Skills(BaseMiddleware[SkillsConfig]):
         if not self._scan_skills():
             return []
 
-        @tool
         async def use_skill(input: _UseSkillInput) -> str:
             skill_name = input.skill_name
             skills = await asyncio.to_thread(self._scan_skills)
@@ -163,7 +162,7 @@ class Skills(BaseMiddleware[SkillsConfig]):
             except Exception as exc:
                 return f'Failed to read skill "{skill_name}": {exc}'
 
-        return [use_skill]
+        return [tool(use_skill)]
 
     async def wrap_generate(
         self,
