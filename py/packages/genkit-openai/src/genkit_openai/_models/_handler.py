@@ -23,8 +23,8 @@ from openai import AsyncOpenAI
 
 from genkit import ActionRunContext, ModelResponse
 from genkit.model import ModelInfo, ModelRequest
-from genkit_openai.models.model import OpenAIModel
-from genkit_openai.models.model_info import (
+from genkit_openai._models._model import OpenAIModel
+from genkit_openai._models._model_info import (
     SUPPORTED_OPENAI_COMPAT_MODELS,
     SUPPORTED_OPENAI_MODELS,
     PluginSource,

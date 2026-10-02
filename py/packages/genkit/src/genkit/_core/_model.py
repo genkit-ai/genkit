@@ -155,7 +155,7 @@ def config_type_path(cls: type) -> str:
 
     Walks parent packages from the top and uses the first one that re-exports
     this class under the same name (``genkit_openai.OpenAIConfig``, not
-    ``genkit_openai.typing.OpenAIConfig``). Nested / test-local classes keep
+    ``genkit_openai._typing.OpenAIConfig``). Nested / test-local classes keep
     the defining path.
     """
     impl = f'{cls.__module__}.{cls.__qualname__}'

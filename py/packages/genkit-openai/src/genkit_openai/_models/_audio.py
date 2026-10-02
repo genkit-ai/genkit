@@ -34,7 +34,7 @@ from openai.types.audio import Transcription, Translation
 
 from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, Part, Role
 from genkit.model import ModelInfo, ModelRequest, Supports
-from genkit_openai.models.utils import (
+from genkit_openai._models._utils import (
     _extract_media,
     _extract_text,
     _find_text,

@@ -25,7 +25,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from genkit_anthropic import Anthropic, AnthropicConfig, anthropic_name
-from genkit_anthropic.model_info import (
+from genkit_anthropic._model_info import (
     SUPPORTED_ANTHROPIC_MODELS as SUPPORTED_MODELS,
     get_model_info,
 )
@@ -81,7 +81,7 @@ def test_custom_models() -> None:
     assert plugin.models == ['claude-sonnet-4']
 
 
-@patch('genkit_anthropic.plugin.AsyncAnthropic')
+@patch('genkit_anthropic._plugin.AsyncAnthropic')
 def test_api_version_is_stored_without_leaking_to_sdk(mock_client_ctor: MagicMock) -> None:
     """Plugin API version is a model default, not an AsyncAnthropic kwarg."""
     mock_client = MagicMock()
@@ -103,7 +103,7 @@ def test_invalid_api_version_fails_fast() -> None:
         Anthropic(api_version=cast(Any, 'Beta'))
 
 
-@patch('genkit_anthropic.plugin.AsyncAnthropic')
+@patch('genkit_anthropic._plugin.AsyncAnthropic')
 @pytest.mark.asyncio
 async def test_plugin_beta_default_routes_action_run_to_beta_surface(mock_client_ctor: MagicMock) -> None:
     """The plugin-wide beta default reaches models resolved as public actions."""
@@ -149,7 +149,7 @@ async def test_resolve_action_model() -> None:
     assert action.kind == ActionKind.MODEL
 
 
-@patch('genkit_anthropic.plugin.AsyncAnthropic')
+@patch('genkit_anthropic._plugin.AsyncAnthropic')
 @pytest.mark.asyncio
 async def test_anthropic_runtime_clients_are_loop_local(mock_client_ctor: MagicMock) -> None:
     """Runtime Anthropic clients are cached per event loop."""

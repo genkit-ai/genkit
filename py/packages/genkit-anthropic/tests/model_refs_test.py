@@ -20,7 +20,7 @@ from typing import get_args, get_type_hints
 
 import pytest
 from genkit_anthropic import Anthropic, AnthropicConfig
-from genkit_anthropic.model_info import SUPPORTED_ANTHROPIC_MODELS, KnownClaude
+from genkit_anthropic._model_info import SUPPORTED_ANTHROPIC_MODELS, KnownClaude
 
 from genkit import GenkitError
 from genkit.model import ModelRef

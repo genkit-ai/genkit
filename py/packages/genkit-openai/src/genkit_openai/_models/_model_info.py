@@ -21,7 +21,7 @@ from typing import Literal, TypeAlias
 
 from genkit._core._compat import StrEnum
 from genkit.model import ModelInfo, Supports
-from genkit_openai.typing import SupportedOutputFormat
+from genkit_openai._typing import SupportedOutputFormat
 
 OPENAI = 'openai'
 MODEL_GARDEN = 'model-garden'

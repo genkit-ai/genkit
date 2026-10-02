@@ -17,19 +17,19 @@
 
 """OpenAI Compatible Models for Genkit."""
 
-from .audio import (
+from ._audio import (
     SUPPORTED_STT_MODELS,
     SUPPORTED_TTS_MODELS,
     OpenAISTTModel,
     OpenAITTSModel,
 )
-from .handler import OpenAIModelHandler
-from .image import (
+from ._handler import OpenAIModelHandler
+from ._image import (
     SUPPORTED_IMAGE_MODELS,
     OpenAIImageModel,
 )
-from .model import OpenAIModel
-from .model_info import (
+from ._model import OpenAIModel
+from ._model_info import (
     SUPPORTED_EMBEDDING_MODELS,
     SUPPORTED_OPENAI_COMPAT_MODELS,
     SUPPORTED_OPENAI_MODELS,

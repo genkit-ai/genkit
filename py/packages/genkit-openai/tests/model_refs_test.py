@@ -21,8 +21,8 @@ from unittest.mock import MagicMock
 
 import pytest
 from genkit_openai import OpenAI, OpenAIConfig, openai_model
-from genkit_openai.models.model import OpenAIModel
-from genkit_openai.models.model_info import SUPPORTED_OPENAI_MODELS, KnownGpt
+from genkit_openai._models._model import OpenAIModel
+from genkit_openai._models._model_info import SUPPORTED_OPENAI_MODELS, KnownGpt
 
 from genkit import GenkitError
 from genkit.model import ModelRef

@@ -46,7 +46,7 @@ See Also:
     - Anthropic documentation: https://docs.anthropic.com/
 """
 
-from genkit_anthropic.config import (
+from genkit_anthropic._config import (
     AnthropicConfig,
     AnyToolChoice,
     AutoToolChoice,
@@ -58,7 +58,7 @@ from genkit_anthropic.config import (
     ToolChoice,
     ToolChoiceNone,
 )
-from genkit_anthropic.plugin import Anthropic, anthropic_name
+from genkit_anthropic._plugin import Anthropic, anthropic_name
 
 __all__ = [
     'Anthropic',
