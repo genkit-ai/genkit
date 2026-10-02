@@ -91,12 +91,10 @@ class FastAPIRequestData(RequestData):
 
     def __init__(self, request: Request, body: dict[str, Any] | None) -> None:
         """Initialize request data wrapper."""
-        super().__init__(
-            request=request,
-            method=request.method,
-            headers={k.lower(): v for k, v in request.headers.items()},
-            input=body.get('data') if body else None,
-        )
+        super().__init__(request=request)
+        self.method = request.method
+        self.headers = {k.lower(): v for k, v in request.headers.items()}
+        self.input = body.get('data') if body else None
 
 
 def json_error_response(error: Exception, status_code: int | None = None) -> Response:

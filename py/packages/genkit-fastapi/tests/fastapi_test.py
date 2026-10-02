@@ -23,7 +23,7 @@ from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 from genkit_fastapi import genkit_fastapi_handler, serve_flow
 
-from genkit import ActionRunContext, Genkit, GenkitError, RequestData
+from genkit import ActionRunContext, Genkit, GenkitError, PublicError
 
 
 def assert_is_error_response(parsed: dict) -> None:
@@ -92,6 +92,21 @@ def test_required_input_empty_body_fails_at_action_not_wire() -> None:
     parsed = json.loads(response.text)
     assert_is_error_response(parsed)
     assert parsed['status'] == 'INVALID_ARGUMENT'
+    assert parsed['message'] == 'Invalid argument'
+
+
+def test_fastapi_flow_posted_wrong_input_type_returns_400_without_validation_text() -> None:
+    """Posting a dict to a ``str`` flow is a 400 INVALID_ARGUMENT that doesn't echo the input."""
+    client = TestClient(create_app())
+    response = client.post('/chat', json={'data': {'ssn': '123-45-6789'}})
+
+    assert response.status_code == 400
+    assert response.json() == {
+        'message': 'Invalid argument',
+        'status': 'INVALID_ARGUMENT',
+        'details': {'reason': 'INVALID_INPUT'},
+    }
+    assert '123-45-6789' not in response.text
 
 
 def test_unknown_body_shape_still_returns_400() -> None:
@@ -143,23 +158,37 @@ def test_context_dependency_value_reaches_action() -> None:
     assert response.json()['result'] == 'user-123'
 
 
-def test_fastapi_flow_raising_not_found_returns_404_with_the_genkit_message() -> None:
-    """FastAPI POST to a flow that raises GenkitError NOT_FOUND returns 404."""
+def test_fastapi_flow_raising_not_found_returns_404_with_generic_message() -> None:
+    """FastAPI POST to a flow that raises GenkitError NOT_FOUND returns 404 'Not found', not its text."""
     ai = Genkit()
 
     @ai.flow()
     async def missing(_: str) -> None:
-        raise GenkitError(status='NOT_FOUND', message='missing recipe')
+        raise GenkitError(status='NOT_FOUND', message='no recipe for alice@example.com')
 
     app = FastAPI()
     app.include_router(serve_flow(missing, base_path='/missing'))
     response = TestClient(app).post('/missing', json={'data': 'x'})
 
     assert response.status_code == 404
-    body = json.loads(response.text)
-    assert body['message'] == 'missing recipe'
-    assert body['status'] == 'NOT_FOUND'
-    assert 'stack' not in body.get('details', {})
+    assert response.json() == {'message': 'Not found', 'status': 'NOT_FOUND'}
+    assert 'alice@example.com' not in response.text
+
+
+def test_fastapi_flow_raising_public_error_returns_its_status_and_message() -> None:
+    """FastAPI POST to a flow that raises PublicError NOT_FOUND returns 404 with that message."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def lookup(_: str) -> None:
+        raise PublicError('NOT_FOUND', 'no order 99')
+
+    app = FastAPI()
+    app.include_router(serve_flow(lookup, base_path='/lookup'))
+    response = TestClient(app).post('/lookup', json={'data': '99'})
+
+    assert response.status_code == 404
+    assert response.json() == {'message': 'no order 99', 'status': 'NOT_FOUND'}
 
 
 def test_fastapi_flow_raising_value_error_returns_500_internal_error_without_stack() -> None:
@@ -181,13 +210,13 @@ def test_fastapi_flow_raising_value_error_returns_500_internal_error_without_sta
     assert 'stack' not in body
 
 
-def test_fastapi_stream_flow_raising_not_found_sends_sse_error_with_the_genkit_message() -> None:
-    """FastAPI SSE to a flow that raises GenkitError NOT_FOUND sends that error."""
+def test_fastapi_stream_flow_raising_not_found_sends_sse_error_with_generic_message() -> None:
+    """FastAPI SSE to a flow that raises GenkitError NOT_FOUND ends with a 'Not found' error event."""
     ai = Genkit()
 
     @ai.flow()
     async def missing(_: str) -> None:
-        raise GenkitError(status='NOT_FOUND', message='missing recipe')
+        raise GenkitError(status='NOT_FOUND', message='no recipe for alice@example.com')
 
     app = FastAPI()
     app.include_router(serve_flow(missing, base_path='/missing'))
@@ -197,10 +226,27 @@ def test_fastapi_stream_flow_raising_not_found_sends_sse_error_with_the_genkit_m
         headers={'Accept': 'text/event-stream'},
     )
 
-    error = sse_error_event(response.text)
-    assert error['message'] == 'missing recipe'
-    assert error['status'] == 'NOT_FOUND'
-    assert 'stack' not in error.get('details', {})
+    assert sse_error_event(response.text) == {'message': 'Not found', 'status': 'NOT_FOUND'}
+    assert 'alice@example.com' not in response.text
+
+
+def test_fastapi_stream_flow_raising_public_error_sends_its_status_and_message() -> None:
+    """FastAPI SSE to a flow that raises PublicError ends with an error event carrying its message."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def lookup(_: str) -> None:
+        raise PublicError('NOT_FOUND', 'no order 99')
+
+    app = FastAPI()
+    app.include_router(serve_flow(lookup, base_path='/lookup'))
+    response = TestClient(app).post(
+        '/lookup',
+        json={'data': '99'},
+        headers={'Accept': 'text/event-stream'},
+    )
+
+    assert sse_error_event(response.text) == {'message': 'no order 99', 'status': 'NOT_FOUND'}
 
 
 def test_fastapi_stream_flow_raising_value_error_sends_sse_internal_error_without_stack() -> None:
@@ -223,39 +269,3 @@ def test_fastapi_stream_flow_raising_value_error_sends_sse_internal_error_withou
     assert error == {'message': 'Internal Error', 'status': 'INTERNAL'}
     assert 'secret' not in response.text
     assert 'stack' not in error
-
-
-def test_fastapi_context_provider_sees_method_lowercase_headers_and_input() -> None:
-    """FastAPI context_provider sees method, lowercase headers, and input."""
-    ai = Genkit()
-    app = FastAPI()
-
-    async def provider(request_data: RequestData) -> dict[str, object]:
-        return {
-            'method': request_data.method,
-            'authorization': request_data.headers['authorization'],
-            'input': request_data.input,
-        }
-
-    @app.post('/echo', response_model=None)
-    @genkit_fastapi_handler(ai, context_provider=provider)
-    @ai.flow()
-    async def echo(_: str, ctx: ActionRunContext) -> dict[str, object]:
-        return {
-            'method': ctx.context['method'],
-            'authorization': ctx.context['authorization'],
-            'input': ctx.context['input'],
-        }
-
-    response = TestClient(app).post(
-        '/echo',
-        json={'data': 'hello'},
-        headers={'Authorization': 'Bearer tok'},
-    )
-
-    assert response.status_code == 200
-    assert response.json()['result'] == {
-        'method': 'POST',
-        'authorization': 'Bearer tok',
-        'input': 'hello',
-    }

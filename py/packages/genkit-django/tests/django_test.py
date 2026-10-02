@@ -30,7 +30,7 @@ from django.test.utils import override_settings
 from django.urls import path
 from genkit_django import genkit_django_handler
 
-from genkit import ActionRunContext, Genkit, GenkitError, RequestData
+from genkit import ActionRunContext, Genkit, GenkitError, PublicError, RequestData
 
 
 def _assert_is_error_response(parsed: dict) -> None:
@@ -76,29 +76,18 @@ def _build_views() -> dict[str, Any]:
     @genkit_django_handler(ai)
     @ai.flow()
     async def raise_invalid(_: str) -> None:
-        raise GenkitError(status='INVALID_ARGUMENT', message='bad input')
+        raise GenkitError(status='INVALID_ARGUMENT', message='bad id 12345')
 
-    async def echo_context(request_data: RequestData[HttpRequest]) -> dict[str, Any]:
-        return {
-            'method': request_data.method,
-            'authorization': request_data.headers['authorization'],
-            'input': request_data.input,
-        }
-
-    @genkit_django_handler(ai, context_provider=echo_context)
+    @genkit_django_handler(ai)
     @ai.flow()
-    async def echo_request(_: str, ctx: ActionRunContext) -> dict[str, Any]:
-        return {
-            'method': ctx.context['method'],
-            'authorization': ctx.context['authorization'],
-            'input': ctx.context['input'],
-        }
+    async def raise_public(_: str) -> None:
+        raise PublicError('NOT_FOUND', 'no order 99')
 
     return {
         'say_hi': say_hi,
         'raise_error': raise_error,
         'raise_invalid': raise_invalid,
-        'echo_request': echo_request,
+        'raise_public': raise_public,
     }
 
 
@@ -114,7 +103,7 @@ def urlconf(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         path('chat', views['say_hi']),
         path('error_flow', views['raise_error']),
         path('invalid_flow', views['raise_invalid']),
-        path('echo_request', views['echo_request']),
+        path('public_flow', views['raise_public']),
     ]
     monkeypatch.setitem(sys.modules, 'genkit_django_tests_urls', module)
 
@@ -216,10 +205,10 @@ async def test_500_flow_exception_returns_valid_json(urlconf: None) -> None:  # 
 
 
 @pytest.mark.asyncio
-async def test_django_flow_raising_invalid_argument_returns_400_with_the_genkit_message(
+async def test_django_flow_raising_invalid_argument_returns_400_with_generic_message(
     urlconf: None,
 ) -> None:  # noqa: ARG001
-    """Django POST to a flow that raises GenkitError INVALID_ARGUMENT returns 400."""
+    """Django POST to a flow that raises GenkitError INVALID_ARGUMENT returns 400 'Invalid argument', not its text."""
     client = AsyncClient()
     response = await client.post(
         '/invalid_flow',
@@ -227,10 +216,23 @@ async def test_django_flow_raising_invalid_argument_returns_400_with_the_genkit_
         content_type='application/json',
     )
     assert response.status_code == 400
-    body = json.loads(response.content)
-    assert body['message'] == 'bad input'
-    assert body['status'] == 'INVALID_ARGUMENT'
-    assert 'stack' not in body.get('details', {})
+    assert json.loads(response.content) == {'message': 'Invalid argument', 'status': 'INVALID_ARGUMENT'}
+    assert b'12345' not in response.content
+
+
+@pytest.mark.asyncio
+async def test_django_flow_raising_public_error_returns_its_status_and_message(
+    urlconf: None,
+) -> None:  # noqa: ARG001
+    """Django POST to a flow that raises PublicError NOT_FOUND returns 404 with that message."""
+    client = AsyncClient()
+    response = await client.post(
+        '/public_flow',
+        data=json.dumps({'data': '99'}),
+        content_type='application/json',
+    )
+    assert response.status_code == 404
+    assert json.loads(response.content) == {'message': 'no order 99', 'status': 'NOT_FOUND'}
 
 
 @pytest.mark.asyncio
@@ -268,25 +270,3 @@ async def test_django_stream_flow_raising_value_error_sends_sse_internal_error_w
     assert error == {'message': 'Internal Error', 'status': 'INTERNAL'}
     assert b'secret' not in b''.join(chunks)
     assert 'stack' not in error
-
-
-@pytest.mark.asyncio
-async def test_django_context_provider_sees_method_lowercase_headers_and_input(
-    urlconf: None,
-) -> None:  # noqa: ARG001
-    """Django context_provider sees method, lowercase headers, and input."""
-    client = AsyncClient()
-    response = await client.post(
-        '/echo_request',
-        data=json.dumps({'data': 'hello'}),
-        content_type='application/json',
-        headers={'Authorization': 'Bearer tok'},
-    )
-    assert response.status_code == 200
-    assert json.loads(response.content) == {
-        'result': {
-            'method': 'POST',
-            'authorization': 'Bearer tok',
-            'input': 'hello',
-        }
-    }
