@@ -180,3 +180,42 @@ def test_flask_stream_flow_raising_value_error_sends_sse_internal_error_without_
     assert error == {'message': 'Internal Error', 'status': 'INTERNAL'}
     assert b'secret' not in b''.join(chunks)
     assert 'stack' not in error
+
+
+def test_flask_context_provider_sees_method_lowercase_headers_and_input() -> None:
+    """Flask context_provider sees method, lowercase headers, and input."""
+    ai = Genkit()
+    app = Flask(__name__)
+    app.config.update({'TESTING': True})
+
+    async def provider(request_data: RequestData[Request]) -> dict[str, Any]:
+        return {
+            'method': request_data.method,
+            'authorization': request_data.headers['authorization'],
+            'input': request_data.input,
+        }
+
+    @app.post('/echo')
+    @genkit_flask_handler(ai, context_provider=provider)
+    @ai.flow()
+    async def echo(_: str, ctx: ActionRunContext) -> dict[str, Any]:
+        return {
+            'method': ctx.context['method'],
+            'authorization': ctx.context['authorization'],
+            'input': ctx.context['input'],
+        }
+
+    response = app.test_client().post(
+        '/echo',
+        json={'data': 'hello'},
+        headers={'Authorization': 'Bearer tok'},
+    )
+
+    assert response.status_code == 200
+    assert response.json == {
+        'result': {
+            'method': 'POST',
+            'authorization': 'Bearer tok',
+            'input': 'hello',
+        }
+    }

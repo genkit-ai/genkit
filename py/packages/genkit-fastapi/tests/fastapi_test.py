@@ -23,7 +23,7 @@ from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 from genkit_fastapi import genkit_fastapi_handler, serve_flow
 
-from genkit import ActionRunContext, Genkit, GenkitError, PublicError
+from genkit import ActionRunContext, Genkit, GenkitError, PublicError, RequestData
 
 
 def assert_is_error_response(parsed: dict) -> None:
@@ -269,3 +269,39 @@ def test_fastapi_stream_flow_raising_value_error_sends_sse_internal_error_withou
     assert error == {'message': 'Internal Error', 'status': 'INTERNAL'}
     assert 'secret' not in response.text
     assert 'stack' not in error
+
+
+def test_fastapi_context_provider_sees_method_lowercase_headers_and_input() -> None:
+    """FastAPI context_provider sees method, lowercase headers, and input."""
+    ai = Genkit()
+    app = FastAPI()
+
+    async def provider(request_data: RequestData) -> dict[str, object]:
+        return {
+            'method': request_data.method,
+            'authorization': request_data.headers['authorization'],
+            'input': request_data.input,
+        }
+
+    @app.post('/echo', response_model=None)
+    @genkit_fastapi_handler(ai, context_provider=provider)
+    @ai.flow()
+    async def echo(_: str, ctx: ActionRunContext) -> dict[str, object]:
+        return {
+            'method': ctx.context['method'],
+            'authorization': ctx.context['authorization'],
+            'input': ctx.context['input'],
+        }
+
+    response = TestClient(app).post(
+        '/echo',
+        json={'data': 'hello'},
+        headers={'Authorization': 'Bearer tok'},
+    )
+
+    assert response.status_code == 200
+    assert response.json()['result'] == {
+        'method': 'POST',
+        'authorization': 'Bearer tok',
+        'input': 'hello',
+    }
