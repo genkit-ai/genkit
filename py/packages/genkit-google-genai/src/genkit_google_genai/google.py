@@ -62,7 +62,7 @@ from google.genai.types import HttpOptions, HttpOptionsDict, Model as GenaiModel
 from pydantic import BaseModel
 
 import genkit_google_genai.constants as const
-from genkit import ActionRunContext, ModelResponse, Operation
+from genkit import ActionRunContext, GenkitError, ModelResponse, Operation
 from genkit.embedder import EmbedderRef, embedder, embedder_action_metadata
 from genkit.evaluator import EvalFnResponse, EvalRequest
 from genkit.model import (
@@ -1232,9 +1232,13 @@ class VertexAI(GoogleFamilyRefs, Plugin):
         except ValueError:
             return None
 
+        # The name is a real Vertex metric, so "not found" would send people
+        # hunting for a typo. Say what's actually missing instead.
         if not self._project:
-            logger.debug('VertexAI has no project; Vertex evaluators are not available')
-            return None
+            raise GenkitError(
+                message='Vertex evaluators need a project; pass VertexAI(project=...) or set GOOGLE_CLOUD_PROJECT',
+                status='FAILED_PRECONDITION',
+            )
 
         from genkit import Genkit
 

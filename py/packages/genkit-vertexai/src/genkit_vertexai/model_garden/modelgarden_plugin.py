@@ -46,6 +46,8 @@ class ModelGarden(Plugin):
         location: str | None = None,
         models: list[str] | None = None,
         model_locations: dict[str, str] | None = None,
+        *,
+        project: str | None = None,
     ) -> None:
         """Initializes the plugin and sets up its configuration.
 
@@ -53,18 +55,31 @@ class ModelGarden(Plugin):
         location, and a list of models to be used.
 
         Args:
-            project_id: The Google Cloud project ID to use. If not provided, it attempts
-                to load from the `GCLOUD_PROJECT` environment variable.
+            project_id: The Google Cloud project ID to use. Same setting as
+                `project`. If neither is provided, it attempts to load from the
+                `GCLOUD_PROJECT` or `GOOGLE_CLOUD_PROJECT` environment variable.
             location: The Google Cloud region to use for services. If not provided,
                 it defaults to `DEFAULT_REGION`.
             models: An optional list of model names to register with the plugin.
             model_locations: An optional dictionary mapping model names to their specific
                 Google Cloud regions. This overrides the default `location` for the
                 specified models.
+            project: The Google Cloud project ID, spelled the way `VertexAI` takes it.
+
+        Raises:
+            ValueError: If `project` and `project_id` are both set to different values.
         """
+        # two different projects in one constructor is always a mistake, and
+        # picking one would bill whichever project the caller didn't mean.
+        if project is not None and project_id is not None and project != project_id:
+            raise ValueError(
+                f'ModelGarden got project={project!r} and project_id={project_id!r}; '
+                'they are the same setting, pass one'
+            )
+        explicit_project = project if project is not None else project_id
         self.project_id = (
-            project_id
-            if project_id is not None
+            explicit_project
+            if explicit_project is not None
             else os.getenv(const.GCLOUD_PROJECT) or os.getenv('GOOGLE_CLOUD_PROJECT')
         )
 

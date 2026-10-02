@@ -32,7 +32,7 @@ See Also:
 
 from typing import Any, ClassVar, Literal
 
-from pydantic import ConfigDict, Field, model_validator
+from pydantic import ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
 from genkit._core._compat import StrEnum
@@ -129,6 +129,10 @@ class OpenAIConfig(ModelConfig):
         top_p: Nucleus sampling probability (0.0 to 1.0).
             See: https://platform.openai.com/docs/api-reference/chat/create#chat-create-top_p
 
+        max_tokens: Maximum tokens to generate. Use this to cap reply length;
+            reasoning models receive it as max_completion_tokens.
+            See: https://platform.openai.com/docs/api-reference/chat/create#chat-create-max_tokens
+
         max_completion_tokens: Upper bound for tokens including reasoning tokens.
             See: https://platform.openai.com/docs/api-reference/chat/create#chat-create-max_completion_tokens
 
@@ -160,6 +164,8 @@ class OpenAIConfig(ModelConfig):
             See: https://platform.openai.com/docs/api-reference/chat/create#chat-create-seed
 
         safety_identifier: Stable identifier for detecting policy violations.
+            Use this instead of OpenAI's retired ``user`` field, which is no
+            longer an ``OpenAIConfig`` field.
             See: https://platform.openai.com/docs/api-reference/chat/create#chat-create-safety_identifier
 
         prompt_cache_key: Identifier for caching optimization.
@@ -207,31 +213,13 @@ class OpenAIConfig(ModelConfig):
 
     # Dev UI and reflection send camelCase. frequencyPenalty binds and goes
     # out as frequency_penalty. maxOutputTokens binds on the schema; it is
-    # not a create() kwarg (use max_completion_tokens for a token cap).
+    # not a create() kwarg (use max_tokens / maxTokens for a token cap).
     # populate_by_name keeps the snake_case Python fields working too.
     model_config: ClassVar[ConfigDict] = ConfigDict(
         alias_generator=to_camel,
         extra='allow',
         populate_by_name=True,
     )
-
-    # extra='allow' would otherwise swallow these as unknown knobs and send
-    # them on the wire. reasoning models reject max_tokens; user is the
-    # retired end-user id (use safety_identifier).
-    @model_validator(mode='before')
-    @classmethod
-    def _reject_retired_create_kwargs(cls, data: object) -> object:
-        if not isinstance(data, dict):
-            return data
-        replacements = {
-            'max_tokens': 'max_completion_tokens',
-            'maxTokens': 'max_completion_tokens',
-            'user': 'safety_identifier',
-        }
-        for key, replacement in replacements.items():
-            if key in data:
-                raise ValueError(f'{key} is not a valid OpenAIConfig field; use {replacement}')
-        return data
 
     # Core generation parameters
     # https://platform.openai.com/docs/api-reference/chat/create#chat-create-model
@@ -242,6 +230,9 @@ class OpenAIConfig(ModelConfig):
 
     # https://platform.openai.com/docs/api-reference/chat/create#chat-create-top_p
     top_p: float | None = Field(default=None, ge=0.0, le=1.0)
+
+    # https://platform.openai.com/docs/api-reference/chat/create#chat-create-max_tokens
+    max_tokens: int | None = None
 
     # https://platform.openai.com/docs/api-reference/chat/create#chat-create-max_completion_tokens
     max_completion_tokens: int | None = None

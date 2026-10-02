@@ -181,7 +181,7 @@ async def test_openai_plugin_list_actions() -> None:
     assert chat.metadata is not None
     chat_props = chat.metadata['model']['customOptions']['properties']
     assert 'frequencyPenalty' in chat_props
-    assert 'maxCompletionTokens' in chat_props
+    assert 'maxTokens' in chat_props
 
     image = next(a for a in actions if a.name == 'openai/gpt-image-1')
     assert image.metadata is not None
