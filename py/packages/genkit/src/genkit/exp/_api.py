@@ -33,11 +33,11 @@ from genkit._ai._agents._runtime import AgentFn
 from genkit._ai._agents._session import SessionStore, StateT
 from genkit._ai._agents._types import ChunkTransform, StateTransform
 from genkit._ai._aio import Genkit as StableGenkit
-from genkit._ai._tools import Tool
 from genkit._core._action import ActionKind
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._middleware import BaseMiddleware
 from genkit._core._model import ModelConfigDict, ModelRef, ModelRefConfigT, Part
+from genkit._core._tool import Tool
 from genkit._core._typing import MiddlewareRef
 
 

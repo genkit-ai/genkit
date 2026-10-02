@@ -43,7 +43,6 @@ from genkit._ai._prompt import (
 )
 from genkit._ai._tools import (
     MultipartToolResponse,
-    Tool,
     ToolRunContext,
     respond_to_interrupt,
     response,
@@ -62,6 +61,7 @@ from genkit._core._model import (
     Part,
     ToolChoice,
 )
+from genkit._core._tool import Tool
 from genkit._core._typing import (
     BaseDataPoint,
     Embedding,

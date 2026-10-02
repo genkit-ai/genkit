@@ -23,7 +23,7 @@ import inspect
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, ClassVar, Generic, NamedTuple, Protocol, TypeVar, cast, get_args, get_origin
+from typing import Any, ClassVar, Generic, NamedTuple, Protocol, TypeVar, cast, get_args, get_origin
 
 from pydantic import BaseModel, ConfigDict, PrivateAttr, field_validator
 
@@ -39,10 +39,8 @@ from genkit._core._model import (
     as_part,
 )
 from genkit._core._protocols import GenkitLike, RegistryLike
+from genkit._core._tool import Tool
 from genkit._core._typing import MiddlewareDesc
-
-if TYPE_CHECKING:
-    from genkit._ai._tools import Tool
 
 logger = get_logger(__name__)
 
