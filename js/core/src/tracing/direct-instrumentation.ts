@@ -19,6 +19,7 @@ import {
   trace,
   TraceFlags,
   type Span as ApiSpan,
+  type SpanAttributes,
 } from '@opentelemetry/api';
 import { randomBytes } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
@@ -27,7 +28,9 @@ import { logger } from '../logging.js';
 import { postToTelemetryServer } from './exporter.js';
 import {
   getErrorMessage,
+  isDisableRootSpanDetection,
   metadataToAttributes,
+  toSpanAttributes,
   type GenkitLogRecord,
   type GenkitSpanContext,
   type Instrumentation,
@@ -62,18 +65,27 @@ export class DirectTelemetryInstrumentation
     info: InstrumentationSpanInfo,
     next: InstrumentationNext<T>
   ): Promise<T> {
-    const parent = getAsyncContext().getStore<DirectParent>(directAlsKey);
+    // An explicit root starts a new trace even under an active parent, matching
+    // OTelInstrumentation (`spanOptions.root`).
+    const isRoot = info.metadata.isRoot && !isDisableRootSpanDetection();
+    const parent = isRoot
+      ? undefined
+      : getAsyncContext().getStore<DirectParent>(directAlsKey);
     const traceId = parent?.traceId ?? genId(16);
     const spanId = genId(8);
     const startTime = Date.now();
     const startPerf = performance.now();
 
+    // Custom attributes written via the callback span; picked up by every
+    // subsequent export of this span.
+    const customAttributes: SpanAttributes = {};
+
     // Ids surfaced to the composite and to log correlation.
     const spanCtx: GenkitSpanContext = {
       traceId,
       spanId,
-      setMetadata() {
-        // Direct encodes from metadata at span end; nothing to do live.
+      setMetadata(values) {
+        Object.assign(customAttributes, toSpanAttributes(values));
       },
     };
     // Non-recording OTel span carrying our ids, for providers/callbacks that
@@ -98,6 +110,7 @@ export class DirectTelemetryInstrumentation
       const endTime = final ? startTime + (performance.now() - startPerf) : 0;
       const spanData = buildSpanData({
         info,
+        customAttributes,
         traceId,
         spanId,
         parentSpanId: parent?.spanId,
@@ -125,8 +138,8 @@ export class DirectTelemetryInstrumentation
     };
 
     // Real-time updates: export the in-progress span on start too, so the Dev
-    // UI can show running traces. Gated on the same flag the OTel-backed
-    // RealtimeSpanProcessor used; the on-end export below is unconditional.
+    // UI can show running traces. Gated on GENKIT_ENABLE_REALTIME_TELEMETRY;
+    // the on-end export below is unconditional.
     if (process.env.GENKIT_ENABLE_REALTIME_TELEMETRY === 'true') {
       exportSpan(false);
     }
@@ -220,6 +233,7 @@ export class DirectTelemetryInstrumentation
 
 interface BuildSpanDataArgs {
   info: InstrumentationSpanInfo;
+  customAttributes: SpanAttributes;
   traceId: string;
   spanId: string;
   parentSpanId?: string;
@@ -235,8 +249,11 @@ interface BuildSpanDataArgs {
  */
 function buildSpanData(args: BuildSpanDataArgs): SpanData {
   const { info, exceptions } = args;
+  // Genkit's own attributes win over custom writes, as they did when
+  // OTelInstrumentation applied metadataToAttributes last (at span end).
   const attributes: Record<string, any> = {
     ...info.labels,
+    ...args.customAttributes,
     ...metadataToAttributes(info.metadata),
   };
   const spanData: SpanData = {

@@ -17,6 +17,7 @@
 import { GenkitError } from './error.js';
 import { logger } from './logging.js';
 import type { TelemetryConfig } from './telemetryTypes.js';
+import { flushTelemetryServerPosts } from './tracing/exporter.js';
 
 export * from './tracing/exporter.js';
 export * from './tracing/instrumentation.js';
@@ -114,7 +115,13 @@ export async function enableTelemetry(
  * @hidden
  */
 export async function flushTracing() {
-  return getTelemetryProvider().flushTracing();
+  // Also await DirectTelemetryInstrumentation's posts, which bypass the OTel
+  // processors. The reflection server relies on this so a trace is saved
+  // before its traceId is returned to the Dev UI.
+  await Promise.all([
+    getTelemetryProvider().flushTracing(),
+    flushTelemetryServerPosts(),
+  ]);
 }
 
 function isOTelInitializationDisabled(): boolean {

@@ -16,10 +16,13 @@
 
 import {
   ROOT_CONTEXT,
-  trace,
   TraceFlags,
+  trace,
   type Span as ApiSpan,
   type Link,
+  type SpanContext as OTelSpanContext,
+  type SpanAttributeValue,
+  type SpanAttributes,
 } from '@opentelemetry/api';
 import { performance } from 'node:perf_hooks';
 import { getAsyncContext } from '../async-context.js';
@@ -29,12 +32,12 @@ import { DirectTelemetryInstrumentation } from './direct-instrumentation.js';
 import { telemetryServerUrl } from './exporter.js';
 import {
   ATTR_PREFIX,
-  firstNonEmpty,
-  metadataToAttributes,
   SPAN_TYPE_ATTR,
-  spanMetadataAlsKey,
   TRACER_NAME,
   TRACER_VERSION,
+  firstNonEmpty,
+  metadataToAttributes,
+  spanMetadataAlsKey,
   type GenkitSpanContext,
   type Instrumentation,
   type InstrumentationSpanInfo,
@@ -45,13 +48,13 @@ import type { PathMetadata, SpanMetadata, TraceMetadata } from './types.js';
 export { DirectTelemetryInstrumentation } from './direct-instrumentation.js';
 export {
   ATTR_PREFIX,
-  disableOTelRootSpanDetection,
   SPAN_TYPE_ATTR,
+  disableOTelRootSpanDetection,
   spanMetadataAlsKey,
-  type DisposableInstrumentation,
   type GenkitLogRecord,
   type GenkitSpanContext,
   type Instrumentation,
+  type InstrumentationNext,
   type InstrumentationSpanInfo,
   type LogRecordingInstrumentation,
 } from './instrumentation-api.js';
@@ -113,8 +116,8 @@ function defaultOTelInstrumentation(): OTelInstrumentation {
 }
 
 /**
- * Lazily creates the dev instrumentation. Imported dynamically only when a
- * telemetry server is configured so the Direct sink stays out of prod paths.
+ * Lazily instantiates the dev instrumentation, only when a telemetry server is
+ * configured, so prod chains never include the Direct sink.
  */
 function directInstrumentation(): Instrumentation | undefined {
   const serverConfigured =
@@ -140,13 +143,6 @@ export function activeInstrumentations(): Instrumentation[] {
     global[configuredInstrumentationKey] ?? defaultOTelInstrumentation();
   const direct = directInstrumentation();
   return direct ? [direct, base] : [base];
-}
-
-/** @hidden */
-export function isInstrumentedBy(
-  ctor: new (...args: any[]) => Instrumentation
-): boolean {
-  return activeInstrumentations().some((i) => i instanceof ctor);
 }
 
 // ---------------------------------------------------------------------------
@@ -236,7 +232,7 @@ export async function runInNewSpan<T>(
     if (isGenkitSpan) {
       spanContext.spanId = compositeCtx.spanId || undefined;
     }
-    const compositeSpan = makeCompositeSpan(compositeCtx);
+    const compositeSpan = new CompositeSpan(compositeCtx);
 
     return await getAsyncContext().run(spanMetadataAlsKey, spanContext, () =>
       runWithGenkitState(opts.metadata, spanContext, compositeSpan, fn)
@@ -304,18 +300,60 @@ async function runWithGenkitState<T>(
 }
 
 /**
- * The span handed to `fn`. `spanContext()` returns the composite-resolved ids;
- * `fn` callers only ever read those. Attribute writes fan out to providers via
- * the composite context.
+ * The span handed to `fn`. `spanContext()` returns the composite-resolved ids
+ * and attribute writes fan out to every provider via `ctx.setMetadata`.
+ *
+ * Lifecycle (status, exceptions, end) is owned by the providers, so those
+ * methods are deliberate no-ops here.
  */
-function makeCompositeSpan(ctx: GenkitSpanContext): ApiSpan {
-  // Non-recording wrapper around the composite ids. Type-honest (real ApiSpan),
-  // and does not boot the OTel SDK.
-  return trace.wrapSpanContext({
-    traceId: ctx.traceId || '0'.repeat(32),
-    spanId: ctx.spanId || '0'.repeat(16),
-    traceFlags: TraceFlags.SAMPLED,
-  });
+class CompositeSpan implements ApiSpan {
+  constructor(private readonly ctx: GenkitSpanContext) {}
+
+  spanContext(): OTelSpanContext {
+    return {
+      traceId: this.ctx.traceId || '0'.repeat(32),
+      spanId: this.ctx.spanId || '0'.repeat(16),
+      traceFlags: TraceFlags.SAMPLED,
+    };
+  }
+
+  setAttribute(key: string, value: SpanAttributeValue): this {
+    this.ctx.setMetadata({ [key]: value });
+    return this;
+  }
+
+  setAttributes(attributes: SpanAttributes): this {
+    this.ctx.setMetadata(attributes);
+    return this;
+  }
+
+  addEvent(): this {
+    return this;
+  }
+
+  addLink(): this {
+    return this;
+  }
+
+  addLinks(): this {
+    return this;
+  }
+
+  setStatus(): this {
+    return this;
+  }
+
+  updateName(): this {
+    return this;
+  }
+
+  end(): void {}
+
+  isRecording(): boolean {
+    return true;
+  }
+
+  recordException(): void {}
 }
 
 function makeCompositeContext(

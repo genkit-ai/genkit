@@ -26,6 +26,7 @@ import {
   getErrorMessage,
   isDisableRootSpanDetection,
   metadataToAttributes,
+  toSpanAttributes,
   TRACER_NAME,
   TRACER_VERSION,
   type GenkitLogRecord,
@@ -77,11 +78,7 @@ export class OTelInstrumentation
             return otSpan.spanContext().spanId;
           },
           setMetadata(values: Record<string, unknown>) {
-            const attrs: Record<string, string> = {};
-            for (const [k, v] of Object.entries(values)) {
-              attrs[k] = typeof v === 'string' ? v : JSON.stringify(v);
-            }
-            otSpan.setAttributes(attrs);
+            otSpan.setAttributes(toSpanAttributes(values));
           },
         };
         try {

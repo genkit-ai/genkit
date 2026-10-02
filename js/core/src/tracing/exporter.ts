@@ -39,17 +39,54 @@ export function setTelemetryServerUrl(url: string) {
   telemetryServerUrl = url;
 }
 
+// Global-keyed (like the instrumentation registry) so flushTracing sees posts
+// started by a duplicated copy of this module.
+const pendingPostsKey = '__GENKIT_PENDING_TELEMETRY_POSTS';
+
+function pendingPosts(): Set<Promise<void>> {
+  if (!global[pendingPostsKey]) {
+    global[pendingPostsKey] = new Set<Promise<void>>();
+  }
+  return global[pendingPostsKey];
+}
+
 /**
- * Fire-and-forget POST to a telemetry server endpoint. Tracing is suppressed so
+ * POST to a telemetry server endpoint. Tracing is suppressed so
  * auto-instrumented fetch (e.g. undici) does not recurse into new spans.
- * Shared by TraceServerExporter and DirectTelemetryInstrumentation.
+ * Shared by TraceServerExporter, LogServerExporter and
+ * DirectTelemetryInstrumentation.
+ *
+ * Callers may fire-and-forget; in-flight posts are tracked so
+ * {@link flushTelemetryServerPosts} (via `flushTracing`) can await them.
  *
  * @hidden
  */
-export async function postToTelemetryServer(
+export function postToTelemetryServer(
   endpoint: string,
   payload: unknown
 ): Promise<void> {
+  const post = doPost(endpoint, payload);
+  const pending = pendingPosts();
+  pending.add(post);
+  // Errors are the caller's to handle; this branch only untracks.
+  post.then(
+    () => pending.delete(post),
+    () => pending.delete(post)
+  );
+  return post;
+}
+
+/**
+ * Resolves once every in-flight telemetry server post has settled. Never
+ * rejects.
+ *
+ * @hidden
+ */
+export async function flushTelemetryServerPosts(): Promise<void> {
+  await Promise.allSettled([...pendingPosts()]);
+}
+
+async function doPost(endpoint: string, payload: unknown): Promise<void> {
   // In dev the CLI passes the server URL via env; the handshake only calls
   // setTelemetryServerUrl when the env var is absent, so fall back to it here.
   const url = telemetryServerUrl ?? process.env.GENKIT_TELEMETRY_SERVER;
@@ -197,19 +234,7 @@ export class TraceServerExporter implements SpanExporter {
         data.endTime = convertedSpan.endTime;
       }
     }
-    // Suppress tracing to prevent infinite loops when auto-instrumentation
-    // (e.g., undici) is enabled. Without this, the fetch call would be traced,
-    // creating new spans that trigger more exports, causing stack overflow.
-    await context.with(suppressTracing(context.active()), () =>
-      fetch(`${telemetryServerUrl}/api/traces`, {
-        method: 'POST',
-        headers: {
-          Accept: 'application/json',
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(data),
-      })
-    );
+    await postToTelemetryServer('/api/traces', data);
   }
 }
 
@@ -302,16 +327,7 @@ export class LogServerExporter implements LogRecordExporter {
         ],
       };
 
-      await context.with(suppressTracing(context.active()), () =>
-        fetch(`${telemetryServerUrl}/api/otlp`, {
-          method: 'POST',
-          headers: {
-            Accept: 'application/json',
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(payload),
-        })
-      );
+      await postToTelemetryServer('/api/otlp', payload);
       if (done) done({ code: ExportResultCode.SUCCESS });
     } catch (e) {
       logger.error('Failed to export logs', e);
