@@ -25,20 +25,10 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from genkit._core._compat import StrEnum
 from genkit.model import ModelInfo, Supports
 
-
-class LyriaVersion(StrEnum):
-    """Supported Lyria audio generation models."""
-
-    LYRIA_002 = 'lyria-002'
-
-
 # Known Lyria models
-KNOWN_LYRIA_MODELS = {
-    LyriaVersion.LYRIA_002,
-}
+KNOWN_LYRIA_MODELS: frozenset[str] = frozenset({'lyria-002'})
 
 
 def is_lyria_model(name: str) -> bool:

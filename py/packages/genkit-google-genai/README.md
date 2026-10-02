@@ -62,9 +62,9 @@ The plugin automatically discovers available models from the API upon initializa
 Unrecognized provider parameters on the family config are forwarded to the API:
 
 ```python
-from genkit_google_genai import GeminiConfigSchema
+from genkit_google_genai import GeminiConfig
 
-config = GeminiConfigSchema.model_validate({
+config = GeminiConfig.model_validate({
     'temperature': 1.0,
     'response_modalities': ['TEXT', 'IMAGE'],
 })

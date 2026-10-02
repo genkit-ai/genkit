@@ -24,7 +24,7 @@ from typing import cast
 from urllib.parse import quote
 
 import httpx
-from genkit_google_genai._interactions.options import ClientOptions
+from genkit_google_genai._interactions._options import ClientOptions
 from google.genai.interactions import Interaction
 
 from genkit import GenkitError

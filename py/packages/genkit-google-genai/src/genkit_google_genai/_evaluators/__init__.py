@@ -45,7 +45,7 @@ Example:
     ```
 """
 
-from genkit_google_genai.evaluators.evaluation import (
+from genkit_google_genai._evaluators._evaluation import (
     VertexAIEvaluationMetricType,
     create_vertex_evaluators,
 )

@@ -29,37 +29,18 @@ from google.genai.errors import APIError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, Operation, Part, Role
-from genkit._core._compat import StrEnum
 from genkit.model import ModelInfo, ModelRequest, OperationError, Supports
 from genkit.plugin_api import wrap_http_error
-from genkit_google_genai.constants import is_multi_regional_location, multi_regional_base_url
-from genkit_google_genai.models._sdk_config import (
+from genkit_google_genai._constants import is_multi_regional_location, multi_regional_base_url
+from genkit_google_genai._models._sdk_config import (
     dump_family_config,
     sdk_config_error,
     split_sdk_fields,
 )
-from genkit_google_genai.models._secrets import context_api_key, misplaced_key_error
+from genkit_google_genai._models._secrets import context_api_key, misplaced_key_error
 
-
-class VeoVersion(StrEnum):
-    """Supported Veo video generation models.
-
-    Note: Models are discovered dynamically. This enum provides convenience
-    constants for commonly used Veo models.
-    """
-
-    VEO_2_0 = 'veo-2.0-generate-001'
-    VEO_2_0_EXP = 'veo-2.0-generate-exp'
-    VEO_3_0 = 'veo-3.0-generate-001'
-    VEO_3_0_FAST = 'veo-3.0-fast-generate-001'
-    VEO_3_1_PREVIEW = 'veo-3.1-generate-preview'
-    VEO_3_1_FAST_PREVIEW = 'veo-3.1-fast-generate-preview'
-    VEO_3_1 = 'veo-3.1-generate-001'
-    VEO_3_1_FAST = 'veo-3.1-fast-generate-001'
-
-
-# Quote autocomplete needs a Literal. The enum above is the catalog; a test
-# requires these members and the enum values to be the same set.
+# Quote autocomplete needs a Literal, so this alias is the Veo catalog.
+# ``veo_model`` takes ``KnownVeo | str`` so unlisted ids still work.
 KnownVeo: TypeAlias = Literal[
     'veo-2.0-generate-001',
     'veo-2.0-generate-exp',
