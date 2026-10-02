@@ -1799,6 +1799,18 @@ describe('agents middleware (async)', () => {
     gate.release();
   });
 
+  it('rejects an agent reference without a name', () => {
+    assert.throws(
+      () =>
+        agents.instantiate({
+          config: { agents: [''] },
+          ai: genkit({}),
+          pluginConfig: undefined,
+        }),
+      (e: any) => e.status === 'INVALID_ARGUMENT'
+    );
+  });
+
   it('says when an abort cannot reach the worker', async () => {
     const ai = genkit({});
     const gate = makeGate();

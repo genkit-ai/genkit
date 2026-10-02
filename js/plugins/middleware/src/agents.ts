@@ -509,6 +509,12 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
       }
 
       const agentRefs = config.agents.map(normalizeRef);
+      if (agentRefs.some((ref) => !ref.name)) {
+        throw new GenkitError({
+          status: 'INVALID_ARGUMENT',
+          message: 'agents middleware: every agent reference must have a name.',
+        });
+      }
       const prefix = config.toolPrefix ?? 'delegate_to';
       const maxDelegations = config.maxDelegations;
       const historyLength = config.historyLength ?? 0;
