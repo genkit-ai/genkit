@@ -20,7 +20,13 @@ import pytest
 from genkit_evaluators import register_genkit_evaluators
 
 from genkit import BaseDataPoint, Genkit
-from genkit.evaluator import EvalRequest
+from genkit.evaluator import EvalRequest, Score
+
+
+def _as_score(evaluation: Score | list[Score]) -> Score:
+    """These evaluators always return one Score; reject a list so .score is safe."""
+    assert isinstance(evaluation, Score)
+    return evaluation
 
 
 @pytest.fixture
@@ -38,7 +44,7 @@ async def test_deep_equal(ai: Genkit) -> None:
         {'input': 'sample', 'output': 'Foo bar', 'reference': 'gablorken'},
         {'input': 'sample', 'output': 'Foo bar'},
     ]
-    eval_action = await ai.registry.resolve_evaluator('genkitEval/deep_equal')
+    eval_action = await ai._registry.resolve_evaluator('genkitEval/deep_equal')
     assert eval_action is not None
     req = EvalRequest(
         dataset=[BaseDataPoint.model_validate(d) for d in dataset],
@@ -47,9 +53,9 @@ async def test_deep_equal(ai: Genkit) -> None:
     resp = await eval_action.run(input=req)
     results = resp.response.root
     assert len(results) == 3
-    assert results[0].evaluation.score is True
-    assert results[1].evaluation.score is False
-    assert results[2].evaluation.error is not None
+    assert _as_score(results[0].evaluation).score is True
+    assert _as_score(results[1].evaluation).score is False
+    assert _as_score(results[2].evaluation).error is not None
 
 
 @pytest.mark.asyncio
@@ -60,7 +66,7 @@ async def test_regex(ai: Genkit) -> None:
         {'input': 'sample', 'reference': 'ba?a?a', 'output': 'apple'},
         {'input': 'sample', 'reference': 12345, 'output': 'apple'},
     ]
-    eval_action = await ai.registry.resolve_evaluator('genkitEval/regex')
+    eval_action = await ai._registry.resolve_evaluator('genkitEval/regex')
     assert eval_action is not None
     req = EvalRequest(
         dataset=[BaseDataPoint.model_validate(d) for d in dataset],
@@ -69,9 +75,9 @@ async def test_regex(ai: Genkit) -> None:
     resp = await eval_action.run(input=req)
     results = resp.response.root
     assert len(results) == 3
-    assert results[0].evaluation.score is True
-    assert results[1].evaluation.score is False
-    assert results[2].evaluation.error is not None
+    assert _as_score(results[0].evaluation).score is True
+    assert _as_score(results[1].evaluation).score is False
+    assert _as_score(results[2].evaluation).error is not None
 
 
 @pytest.mark.asyncio
@@ -82,7 +88,7 @@ async def test_jsonata(ai: Genkit) -> None:
         {'input': 'sample', 'reference': 'age=31', 'output': {'name': 'Bob', 'age': 33}},
         {'input': 'sample', 'reference': 123456, 'output': {'name': 'Bob', 'age': 33}},
     ]
-    eval_action = await ai.registry.resolve_evaluator('genkitEval/jsonata')
+    eval_action = await ai._registry.resolve_evaluator('genkitEval/jsonata')
     assert eval_action is not None
     req = EvalRequest(
         dataset=[BaseDataPoint.model_validate(d) for d in dataset],
@@ -91,7 +97,9 @@ async def test_jsonata(ai: Genkit) -> None:
     resp = await eval_action.run(input=req)
     results = resp.response.root
     assert len(results) == 3
-    assert results[0].evaluation.score is not False and results[0].evaluation.score != ''
+    first = _as_score(results[0].evaluation)
+    assert first.score is not False and first.score != ''
     # age=31 with age 33 -> false or empty result -> FAIL
-    assert results[1].evaluation.score is False or results[1].evaluation.status == 'FAIL'
-    assert results[2].evaluation.error is not None
+    second = _as_score(results[1].evaluation)
+    assert second.score is False or second.status == 'FAIL'
+    assert _as_score(results[2].evaluation).error is not None

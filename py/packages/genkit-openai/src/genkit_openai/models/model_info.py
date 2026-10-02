@@ -19,8 +19,8 @@
 
 from typing import Literal, TypeAlias
 
-from genkit._core._compat import StrEnum
 from genkit.model import ModelInfo, Supports
+from genkit.plugin_api import StrEnum
 from genkit_openai.typing import SupportedOutputFormat
 
 OPENAI = 'openai'

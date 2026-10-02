@@ -749,7 +749,7 @@ async def test_to_generate_options_uses_constructor_ref() -> None:
     ai = Genkit(model=flash)
     define_echo_model(ai, name='flash')
 
-    options = await to_generate_options(registry=ai.registry, call=GenerateCall(prompt='hi'))
+    options = await to_generate_options(registry=ai._registry, call=GenerateCall(prompt='hi'))
 
     assert options.model == 'flash'
     assert _config_value(options.config, 'temperature') == 0.7
@@ -1092,9 +1092,9 @@ async def test_model_factory_stashes_class_without_registering() -> None:
     action = model('flash-plugin-style', model_fn, config_schema=CustomConfig)
 
     assert action._config_schema is CustomConfig
-    assert await ai.registry.resolve_action(action.kind, action.name) is None
+    assert await ai._registry.resolve_action(action.kind, action.name) is None
 
-    ai.registry.register_action_from_instance(action)
+    ai._registry.register_action_from_instance(action)
     with pytest.raises(GenkitError, match=r'config must be .+\.CustomConfig or a mapping, got .+\.OtherFamilyConfig'):
         await ai.generate(
             model='flash-plugin-style',
@@ -1291,7 +1291,7 @@ async def test_define_prompt_stored_wrong_class_not_a_hop_after_later_default() 
     joke = ai.define_prompt(name='joke', prompt='hi', config=OtherFamilyConfig(frequency_penalty=0.2))
     define_echo_model(ai, name='flash', config_schema=CustomConfig)
     define_echo_model(ai, name='gpt', config_schema=OtherFamilyConfig)
-    ai.registry.register_value('defaultModel', 'defaultModel', 'gpt')
+    ai._registry.register_value('defaultModel', 'defaultModel', 'gpt')
 
     with pytest.raises(GenkitError, match=r'config must be .+\.CustomConfig or a mapping, got .+\.OtherFamilyConfig'):
         await joke(model='flash')
@@ -1304,7 +1304,7 @@ async def test_prompt_lookup_stored_wrong_class_not_a_hop_after_later_default() 
     ai.define_prompt(name='joke', prompt='hi', config=OtherFamilyConfig(frequency_penalty=0.2))
     define_echo_model(ai, name='flash', config_schema=CustomConfig)
     define_echo_model(ai, name='gpt', config_schema=OtherFamilyConfig)
-    ai.registry.register_value('defaultModel', 'defaultModel', 'gpt')
+    ai._registry.register_value('defaultModel', 'defaultModel', 'gpt')
 
     with pytest.raises(GenkitError, match=r'config must be .+\.CustomConfig or a mapping, got .+\.OtherFamilyConfig'):
         await ai.prompt('joke')(model='flash')

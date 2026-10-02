@@ -21,7 +21,7 @@ import contextlib
 import copy
 import secrets
 import time
-from collections.abc import Awaitable, Callable, Generator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Generator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, TypeVar, cast
 
@@ -251,16 +251,24 @@ async def run_logged_hook(
 class ScopedGenkitView:
     """A GenkitLike view over the call-scoped registry for one generate invocation.
 
-    Middleware reads ``ctx.ai.registry`` expecting the per-call child registry
-    (with this call's middleware/tool registrations), not the global one, so we
-    hand it this thin wrapper instead of the full Genkit veneer.
+    Middleware looks actions up on ``ctx.ai`` so it sees this call's child
+    registry (this call's middleware/tool registrations), not the app-wide one,
+    so we hand it this thin wrapper instead of the full Genkit veneer.
     """
 
     def __init__(self, reg: RegistryLike) -> None:
-        self.registry: RegistryLike = reg
+        self._registry: RegistryLike = reg
 
     def current_session(self) -> SessionLike | None:
         return get_current_session()
+
+    async def lookup_value(self, type: str, name: str) -> object | None:
+        """Return this call's value, or the app's, or None.
+
+        Async because a lookup may later need to start a plugin that provides
+        the value without breaking callers.
+        """
+        return self._registry.lookup_value(type, name)
 
 
 def register_middleware(
@@ -731,7 +739,7 @@ async def run_generate(
     mw_pipeline: MiddlewarePipeline | None = None
     if middleware:
         mw_pipeline = prepare_middleware(middleware, ctx=ctx)
-        mw_tools: list[Action[Any, Any, Any, Any]] = []
+        mw_tools: list[Tool] = []
         for mw in mw_pipeline.middleware:
             mw_tools.extend(mw.tools(mw_pipeline.ctx))
 
@@ -747,7 +755,8 @@ async def run_generate(
                         message=(f"tool '{name}' is contributed by middleware but already declared elsewhere"),
                         reason=RuntimeErrorReason.INVALID_INPUT,
                     )
-                registry.register_action_from_instance(t)
+                # The child registry stores Actions; Tool is the handle authors return.
+                registry.register_action_from_instance(t.action())
                 contributed_names.append(name)
             options = options.model_copy()
             options.tools = existing + contributed_names
@@ -1367,6 +1376,20 @@ async def run_wrap_generate(
     )
 
 
+# Deep tool loops with several middleware would otherwise hit Python's
+# recursion limit; each turn gets a fresh stack.
+async def await_next_turn(*, coro: Coroutine[Any, Any, ModelResponse]) -> ModelResponse:
+    task = asyncio.create_task(coro)
+    try:
+        return await task
+    except BaseException:
+        if not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        raise
+
+
 async def generate_turn(
     *,
     params: GenerateHookParams,
@@ -1470,14 +1493,16 @@ async def generate_turn(
         return after_tools
     # Tools already ran. This is the conversation if a later pipe fails.
     call.set_messages(after_tools.messages)
-    return await run_wrap_generate(
-        registry=registry,
-        options=after_tools.options,
-        mw_pipeline=mw_pipeline,
-        current_turn=current_turn + 1,
-        message_index=after_tools.message_index,
-        call=call,
-        resolved=resolved,
+    return await await_next_turn(
+        coro=run_wrap_generate(
+            registry=registry,
+            options=after_tools.options,
+            mw_pipeline=mw_pipeline,
+            current_turn=current_turn + 1,
+            message_index=after_tools.message_index,
+            call=call,
+            resolved=resolved,
+        )
     )
 
 

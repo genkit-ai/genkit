@@ -30,7 +30,7 @@ from genkit._ai._agents._base import (
     define_prompt_agent,
 )
 from genkit._ai._agents._runtime import AgentFn
-from genkit._ai._agents._session import SessionStore, StateT
+from genkit._ai._agents._session import SessionStore, StateT, get_current_session
 from genkit._ai._agents._types import ChunkTransform, StateTransform
 from genkit._ai._aio import Genkit as StableGenkit
 from genkit._ai._tools import Tool
@@ -38,7 +38,25 @@ from genkit._core._action import ActionKind
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._middleware import BaseMiddleware
 from genkit._core._model import ModelConfigDict, ModelRef, ModelRefConfigT, Part
+from genkit._core._protocols import SessionLike
 from genkit._core._typing import MiddlewareRef
+
+
+async def lookup_agent(ai: StableGenkit, name: str) -> Agent | None:
+    """Return the agent registered as ``name``, or None.
+
+    Goes through the same lookup as generate so a plugin-provided agent is
+    found the first time someone asks for it.
+    """
+    resolved = await ai._registry.resolve_action(ActionKind.AGENT, name)
+    if isinstance(resolved, Agent):
+        return resolved
+    return None
+
+
+def current_session() -> SessionLike | None:
+    """Return the active agent session, or None if not inside a session."""
+    return get_current_session()
 
 
 class Genkit(StableGenkit):
@@ -48,9 +66,13 @@ class Genkit(StableGenkit):
     ``from genkit import Genkit`` does not grow these methods.
     """
 
+    @staticmethod
+    def current_session() -> SessionLike | None:
+        return get_current_session()
+
     async def agent(self, name: str) -> Agent:
         """Look up a registered agent by name."""
-        resolved = await self.registry.resolve_action(ActionKind.AGENT, name)
+        resolved = await self._registry.resolve_action(ActionKind.AGENT, name)
         if resolved is None:
             raise GenkitError(
                 status='NOT_FOUND',
@@ -86,7 +108,7 @@ class Genkit(StableGenkit):
         back as that model instead of a dict.
         """
         return define_custom_agent(
-            registry=self.registry,
+            registry=self._registry,
             name=name,
             fn=fn,
             store=store,
@@ -178,7 +200,7 @@ class Genkit(StableGenkit):
             res = await chat.send('Weather in Paris?')
         """
         return define_agent(
-            registry=self.registry,
+            registry=self._registry,
             name=name,
             model=model,
             system=system,
@@ -211,7 +233,7 @@ class Genkit(StableGenkit):
         is defined via ai.define_prompt() or loaded from a .prompt file.
         """
         return define_prompt_agent(
-            registry=self.registry,
+            registry=self._registry,
             name=name,
             store=store,
             state_transform=state_transform,

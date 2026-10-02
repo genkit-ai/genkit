@@ -34,16 +34,9 @@ from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor
 
-from genkit._core._error import GenkitError
-from genkit._core._telemetry._instrumentation import (
-    instrumentations,
-    is_instrumented_by,
-    reset_instrumentation,
-)
-from genkit._core._telemetry._log_exporter import reset_log_export
-from genkit.telemetry import configure_instrumentation
+from genkit import GenkitError
+from genkit.telemetry import configure_instrumentation, is_instrumented_by, reset_instrumentation
 
-# Environment variable and value constants (matching genkit._core._environment)
 _GENKIT_ENV = 'GENKIT_ENV'
 _ENV_DEV = 'dev'
 _ENV_PROD = 'prod'
@@ -52,11 +45,9 @@ _ENV_PROD = 'prod'
 @pytest.fixture(autouse=True)
 def _reset_instrumentation() -> Generator[None, None, None]:
     reset_instrumentation()
-    reset_log_export()
     _reset_google_cloud_telemetry()
     yield
     reset_instrumentation()
-    reset_log_export()
     _reset_google_cloud_telemetry()
 
 
@@ -138,7 +129,6 @@ def test_enable_google_cloud_telemetry_skips_in_dev_without_force() -> None:
         patch('genkit_google_cloud.telemetry.config._hang_exporter_on_process_tracer') as mock_add_exporter,
         patch('genkit_google_cloud.telemetry.config._hang_exporter_on_process_logger') as mock_add_logger,
     ):
-        # Call without force_dev_export (using legacy force_export)
         enable_google_cloud_telemetry(force_dev_export=False)
 
         # Verify nothing was called
@@ -245,7 +235,7 @@ def test_enable_disable_traces_keeps_their_genai_settings() -> None:
     ):
         enable_google_cloud_telemetry(disable_traces=True)
 
-    assert theirs in instrumentations
+    assert is_instrumented_by(GenAiInstrumentation)
     assert theirs.emit_metrics is False
 
 
@@ -442,32 +432,6 @@ def test_resolve_project_id_from_credentials() -> None:
         # Project ID from credentials
         credentials = {'project_id': 'creds-project'}
         assert resolve_project_id(credentials=credentials) == 'creds-project'
-
-
-def test_legacy_force_export_parameter() -> None:
-    """force_export= still works and warns; prefer force_dev_export=."""
-    with (
-        mock.patch.dict(os.environ, {_GENKIT_ENV: _ENV_DEV}),
-        patch('genkit_google_cloud.telemetry.config.GenkitGCPExporter') as mock_gcp_exporter,
-        patch('genkit_google_cloud.telemetry.config.GcpAdjustingTraceExporter'),
-        patch('genkit_google_cloud.telemetry.config._hang_exporter_on_process_tracer'),
-        patch('genkit_google_cloud.telemetry.config.GoogleCloudResourceDetector'),
-        patch('genkit_google_cloud.telemetry.config.CloudMonitoringMetricsExporter'),
-        patch('genkit_google_cloud.telemetry.config.GenkitMetricExporter'),
-        patch('genkit_google_cloud.telemetry.config.PeriodicExportingMetricReader'),
-        patch('genkit_google_cloud.telemetry.config.metrics'),
-        patch('genkit_google_cloud.telemetry.tracing.logger') as mock_logger,
-    ):
-        # Call with legacy force_export parameter
-        enable_google_cloud_telemetry(force_export=True)
-
-        # Verify warning was logged about deprecated parameter
-        mock_logger.warning.assert_called_once()
-        assert 'force_export' in str(mock_logger.warning.call_args)
-        assert 'deprecated' in str(mock_logger.warning.call_args)
-
-        # Verify exporter was still created
-        mock_gcp_exporter.assert_called_once()
 
 
 def test_enable_google_cloud_telemetry_is_fail_safe() -> None:

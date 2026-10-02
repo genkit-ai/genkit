@@ -43,14 +43,11 @@ See Also:
 
 from typing import Any
 
-import structlog
 from opentelemetry.sdk.trace.sampling import Sampler
 
 from genkit import GenkitError
 
 from .config import GcpTelemetry
-
-logger = structlog.get_logger(__name__)
 
 # Once per process: the app (or a test) may call enable_google_cloud_telemetry
 # once. A second call raises so Cloud Trace does not get two exporters.
@@ -72,8 +69,6 @@ def enable_google_cloud_telemetry(
     disable_traces: bool = False,
     metric_export_interval_ms: int | None = None,
     metric_export_timeout_ms: int | None = None,
-    # Legacy parameter name for backwards compatibility
-    force_export: bool | None = None,
 ) -> None:
     """Attach Cloud Trace and Cloud Monitoring exporters.
 
@@ -113,7 +108,6 @@ def enable_google_cloud_telemetry(
             GCP requires a minimum of 5000ms. Defaults to 60000ms.
         metric_export_timeout_ms: Timeout for metrics export in milliseconds.
             Defaults to the export interval if not specified.
-        force_export: Deprecated. Use force_dev_export instead.
 
     Example:
         ```python
@@ -147,11 +141,6 @@ def enable_google_cloud_telemetry(
             message='enable_google_cloud_telemetry() was already called. Call it once from the app.',
         )
     _enable_google_cloud_telemetry_already_called = True
-
-    # Handle legacy force_export parameter
-    if force_export is not None:
-        logger.warning('force_export is deprecated, use force_dev_export instead')
-        force_dev_export = force_export
 
     manager = GcpTelemetry(
         project_id=project_id,

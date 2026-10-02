@@ -153,7 +153,7 @@ async def test_evaluator_factory_evaluate_instances_structure() -> None:
 @pytest.mark.asyncio
 async def test_evaluator_factory_evaluate_instances_error_handling() -> None:
     """Test that evaluate_instances raises GenkitError on API failure."""
-    from genkit._core._error import GenkitError
+    from genkit import GenkitError
 
     factory = EvaluatorFactory(
         project_id='test-project',

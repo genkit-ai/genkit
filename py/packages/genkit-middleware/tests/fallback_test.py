@@ -21,9 +21,18 @@ from typing import NoReturn
 import pytest
 from genkit_middleware import Fallback
 
-from genkit import ModelResponse
-from genkit._core._error import GenkitError
-from genkit.middleware import ModelHookParams
+from genkit import (
+    ActionRunContext,
+    FinishReason,
+    Genkit,
+    GenkitError,
+    Message,
+    ModelResponse,
+    ModelResponseChunk,
+    Part,
+    Role,
+)
+from genkit.middleware import GenerateMiddlewareContext, ModelHookParams
 from genkit.model import ModelRequest
 
 
@@ -81,3 +90,66 @@ async def test_fallback_non_genkit_error(ctx) -> None:
 
     with pytest.raises(ConnectionError):
         await fallback.wrap_model(_make_params(), ctx, next_fn)
+
+
+@pytest.mark.asyncio
+async def test_fallback_streams_chunks_from_the_fallback_model() -> None:
+    ai = Genkit()
+
+    async def fail(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+        raise GenkitError(status='UNAVAILABLE', message='primary down')
+
+    async def backup(_request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('from-backup')]))
+        return ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('done')]),
+        )
+
+    ai.define_model(name='primary', fn=fail)
+    ai.define_model(name='backup', fn=backup)
+
+    stream = ai.generate_stream(model='primary', prompt='hi', use=[Fallback(models=['backup'])])
+    texts: list[str] = []
+    async for chunk in stream.stream:
+        texts.append(chunk.text)
+    final = await stream.response
+
+    assert 'from-backup' in ''.join(texts)
+    assert final.text == 'done'
+
+
+@pytest.mark.asyncio
+async def test_fallback_stops_when_aborted() -> None:
+    ai = Genkit()
+    ran: list[str] = []
+
+    async def fail(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+        raise GenkitError(status='UNAVAILABLE', message='primary down')
+
+    async def backup1(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+        ran.append('backup1')
+        raise GenkitError(status='UNAVAILABLE', message='backup1 down')
+
+    async def backup2(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+        ran.append('backup2')
+        return ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('backup2')]),
+        )
+
+    ai.define_model(name='primary', fn=fail)
+    ai.define_model(name='backup1', fn=backup1)
+    ai.define_model(name='backup2', fn=backup2)
+
+    ctx = GenerateMiddlewareContext(ai=ai)
+    ctx.abort_signal.set()
+    fallback = Fallback(models=['backup1', 'backup2'])
+
+    async def next_fn(_params, _ctx) -> ModelResponse:
+        raise GenkitError(status='UNAVAILABLE', message='primary down')
+
+    with pytest.raises(GenkitError, match='primary down'):
+        await fallback.wrap_model(_make_params(), ctx, next_fn)
+
+    assert ran == []

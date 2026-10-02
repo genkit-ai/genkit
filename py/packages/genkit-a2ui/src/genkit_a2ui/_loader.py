@@ -20,15 +20,18 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Protocol
 
-from genkit import GenkitError, RuntimeErrorReason
-from genkit._core._logger import get_logger
-from genkit._core._protocols import GenkitLike, RegistryLike
+from genkit import Genkit, GenkitError, RuntimeErrorReason, get_logger
 
 from ._catalog import BASIC_CATALOG, A2uiCatalog
 from ._types import A2UI_CATALOG_VALUE_TYPE, BASIC_CATALOG_ID, DEFAULT_CATALOG_ID
 
 logger = get_logger(__name__)
+
+
+class CatalogLookup(Protocol):
+    async def lookup_value(self, type: str, name: str) -> object | None: ...
 
 
 class A2uiCatalogError(GenkitError):
@@ -42,8 +45,7 @@ class A2uiCatalogError(GenkitError):
 
     def __init__(self, message: str) -> None:
         # A catalog you did not register, or a file that does not parse, is a
-        # bad argument, not a bad model answer. Mirrors Go's
-        # ErrInvalidInput = ErrInvalidArgument.Subtype("invalid input").
+        # bad argument, not a bad model answer.
         super().__init__(
             status='INVALID_ARGUMENT',
             message=message,
@@ -51,10 +53,10 @@ class A2uiCatalogError(GenkitError):
         )
 
 
-def load_catalog(ai: GenkitLike, catalog: A2uiCatalog) -> A2uiCatalog:
+async def load_catalog(ai: Genkit, catalog: A2uiCatalog) -> A2uiCatalog:
     if not catalog.id:
         raise A2uiCatalogError('a2ui: load_catalog: catalog has no id')
-    existing = ai.registry.lookup_value(A2UI_CATALOG_VALUE_TYPE, catalog.id)
+    existing = await ai.lookup_value(A2UI_CATALOG_VALUE_TYPE, catalog.id)
     if existing is not None:
         current = A2uiCatalog.from_value(existing)
         if current is None:
@@ -64,16 +66,16 @@ def load_catalog(ai: GenkitLike, catalog: A2uiCatalog) -> A2uiCatalog:
                 'a2ui: load_catalog: a different catalog is already registered under this id; keeping the existing one'
             )
         return current
-    ai.registry.register_value(A2UI_CATALOG_VALUE_TYPE, catalog.id, catalog.as_value())
+    ai.define_value(A2UI_CATALOG_VALUE_TYPE, catalog.id, catalog.as_value())
     return catalog
 
 
-def load_catalog_file(ai: GenkitLike, path: str) -> A2uiCatalog:
-    return load_catalog(ai, read_catalog_file(path=path))
+async def load_catalog_file(ai: Genkit, path: str) -> A2uiCatalog:
+    return await load_catalog(ai, read_catalog_file(path=path))
 
 
-def register_basic_catalog(ai: GenkitLike) -> A2uiCatalog:
-    return load_catalog(ai, BASIC_CATALOG)
+async def register_basic_catalog(ai: Genkit) -> A2uiCatalog:
+    return await load_catalog(ai, BASIC_CATALOG)
 
 
 def read_catalog_file(*, path: str) -> A2uiCatalog:
@@ -92,9 +94,9 @@ def read_catalog_file(*, path: str) -> A2uiCatalog:
     return catalog
 
 
-def resolve_catalog(*, registry: RegistryLike, catalog: str | None) -> A2uiCatalog:
+async def resolve_catalog(*, ai: CatalogLookup, catalog: str | None) -> A2uiCatalog:
     lookup = catalog or DEFAULT_CATALOG_ID
-    found = registry.lookup_value(A2UI_CATALOG_VALUE_TYPE, lookup)
+    found = await ai.lookup_value(A2UI_CATALOG_VALUE_TYPE, lookup)
     if found is not None:
         resolved = A2uiCatalog.from_value(found)
         if resolved is None:

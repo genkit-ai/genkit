@@ -23,8 +23,8 @@ import pytest
 from genkit_middleware import Skills
 
 from genkit import ModelResponse
-from genkit._core._model import GenerateActionOptions
 from genkit.middleware import GenerateHookParams, GenerateMiddlewareContext
+from genkit.model import GenerateActionOptions
 
 
 def _make_params() -> GenerateHookParams:

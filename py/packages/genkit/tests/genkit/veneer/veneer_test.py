@@ -1116,7 +1116,7 @@ async def test_generate_passes_through_current_action_context() -> None:
             use=[MiddlewareRef(name='inject_ctx')],
         )
 
-    action = ai.registry.register_action(name='test_action', kind=ActionKind.CUSTOM, fn=action_fn)
+    action = ai._registry.register_action(name='test_action', kind=ActionKind.CUSTOM, fn=action_fn)
     action_response = await action.run(context={'foo': 'bar'})
 
     assert action_response.response.text == '''[ECHO] user: "hi {'foo': 'bar'}"'''
@@ -1160,7 +1160,7 @@ async def test_generate_uses_explicitly_passed_in_context() -> None:
             context={'bar': 'baz'},
         )
 
-    action = ai.registry.register_action(name='test_action', kind=ActionKind.CUSTOM, fn=action_fn)
+    action = ai._registry.register_action(name='test_action', kind=ActionKind.CUSTOM, fn=action_fn)
     action_response = await action.run(context={'foo': 'bar'})
 
     assert action_response.response.text == '''[ECHO] user: "hi {'bar': 'baz'}"'''
@@ -1203,7 +1203,7 @@ async def test_generate_uses_inline_middleware_instance_with_context() -> None:
             context={'bar': 'baz'},
         )
 
-    action = ai.registry.register_action(name='test_action', kind=ActionKind.CUSTOM, fn=action_fn)
+    action = ai._registry.register_action(name='test_action', kind=ActionKind.CUSTOM, fn=action_fn)
     action_response = await action.run(context={'foo': 'bar'})
 
     assert action_response.response.text == '''[ECHO] user: "hi {'bar': 'baz'}"'''
@@ -1828,6 +1828,42 @@ async def test_evaluator_records_fail_then_still_runs_the_next_row(
     assert response.root[1].evaluation.score is True
 
 
+@pytest.mark.asyncio
+async def test_define_evaluator_accepts_evaluation_as_list_of_scores(setup_test: SetupFixture) -> None:
+    """An evaluator that returns a list of scores is accepted and evaluate reports that list."""
+    ai, _, _, *_ = setup_test
+
+    async def my_eval_fn(datapoint: BaseDataPoint, options: object | None) -> EvalFnResponse:
+        return EvalFnResponse(
+            test_case_id=datapoint.test_case_id or '',
+            evaluation=[
+                Score(id='accuracy', score=0.9),
+                Score(id='fluency', score=0.8),
+            ],
+        )
+
+    ai.define_evaluator(
+        name='list_eval',
+        display_name='List evaluator',
+        definition='Returns two scores per sample',
+        fn=my_eval_fn,
+    )
+
+    dataset = [
+        BaseDataPoint(input='hi', output='hi', test_case_id='case1'),
+    ]
+
+    response = await ai.evaluate(evaluator='list_eval', dataset=dataset)
+
+    assert isinstance(response, EvalResponse)
+    assert len(response.root) == 1
+    assert response.root[0].test_case_id == 'case1'
+    evaluation = response.root[0].evaluation
+    assert isinstance(evaluation, list)
+    assert [score.id for score in evaluation] == ['accuracy', 'fluency']
+    assert [score.score for score in evaluation] == [0.9, 0.8]
+
+
 def test_define_background_model_with_info(setup_test: SetupFixture) -> None:
     """Test that define_background_model correctly serializes info by alias and excludes None."""
     ai, _, _, *_ = setup_test
@@ -1874,7 +1910,7 @@ def test_background_model_factory_stashes_class_without_registering(setup_test: 
 
     action = background_model('veo-style', start_fn, check_fn, config_schema=BgConfig)
     assert action.start_action._config_schema is BgConfig
-    registered = ai.registry._entries.get(ActionKind.BACKGROUND_MODEL, {})
+    registered = ai._registry._entries.get(ActionKind.BACKGROUND_MODEL, {})
     assert 'veo-style' not in registered
 
 

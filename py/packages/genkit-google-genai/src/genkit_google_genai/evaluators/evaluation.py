@@ -38,9 +38,8 @@ from google.auth.transport.requests import Request
 from pydantic import BaseModel, ConfigDict
 
 from genkit import BaseDataPoint, GenkitError
-from genkit._core._compat import StrEnum
 from genkit.evaluator import Details, EvalFnResponse, Score
-from genkit.plugin_api import GENKIT_CLIENT_HEADER, Action, get_cached_client
+from genkit.plugin_api import GENKIT_CLIENT_HEADER, Action, StrEnum, get_cached_client
 from genkit_google_genai.constants import GLOBAL_LOCATION, is_multi_regional_location, vertex_api_host
 
 if TYPE_CHECKING:

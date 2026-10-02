@@ -25,8 +25,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from genkit._core._compat import StrEnum
 from genkit.model import ModelInfo, Supports
+from genkit.plugin_api import StrEnum
 from genkit_google_genai.models.interactions_utils import extract_version
 
 

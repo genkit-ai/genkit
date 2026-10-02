@@ -31,9 +31,9 @@ from google.api_core import exceptions as google_exceptions
 from google.cloud import firestore
 from google.cloud.firestore_v1._helpers import ReadAfterWriteError
 
-from genkit._core._error import GenkitError, RuntimeErrorReason
-from genkit._core._model import SessionSnapshot, SessionState
-from genkit._core._typing import SnapshotStatus
+from genkit import GenkitError, RuntimeErrorReason
+from genkit.exp.agent import SessionSnapshot, SessionState, SnapshotStatus
+from genkit.plugin_api import Action, ActionKind
 
 
 def test_from_genkit_google_cloud_import_has_no_firestore_session_store() -> None:
@@ -1236,6 +1236,44 @@ def _mk(sid: str, parent: str | None = None, custom: dict | None = None) -> Any:
         status=SnapshotStatus.COMPLETED,
         state=SessionState(session_id='sess-1', custom=custom or {}),
     )
+
+
+@pytest.mark.asyncio
+async def test_firestore_session_store_failed_snapshot_error_reads_back_with_status_and_message() -> None:
+    """A FAILED snapshot saved with an error reads back with the same status, message, and details."""
+    h = FakeStoreHarness()
+    store = h.store()
+    await store.save_snapshot(
+        'snap-1',
+        lambda _e: SessionSnapshot(
+            snapshot_id='snap-1',
+            session_id='sess-1',
+            created_at='2026-07-03T00:00:00Z',
+            status=SnapshotStatus.FAILED,
+            error={'status': 'INTERNAL', 'message': 'model exploded', 'details': {'attempt': 2}},
+            state=SessionState(session_id='sess-1'),
+        ),
+    )
+
+    loaded = await store.get_snapshot(snapshot_id='snap-1')
+
+    assert loaded is not None and loaded.error is not None
+    assert loaded.error.status == 'INTERNAL'
+    assert loaded.error.message == 'model exploded'
+    assert loaded.error.details == {'attempt': 2}
+
+
+@pytest.mark.asyncio
+async def test_firestore_session_store_snapshot_with_unreadable_error_raises_data_loss() -> None:
+    """A stored error missing its message is a corrupt doc: get_snapshot raises DATA_LOSS."""
+    h = FakeStoreHarness()
+    store = h.store()
+    await store.save_snapshot('snap-1', _mk('snap-1'))
+    h.docs[_snap_path('snap-1')]['error'] = {'status': 'INTERNAL'}
+
+    with pytest.raises(GenkitError) as exc_info:
+        await store.get_snapshot(snapshot_id='snap-1')
+    assert exc_info.value.status == 'DATA_LOSS'
 
 
 @pytest.mark.asyncio
@@ -2938,12 +2976,10 @@ async def test_firestore_session_store_no_context_defaults_to_global_prefix() ->
 @pytest.mark.asyncio
 async def test_firestore_session_store_omitted_context_ignores_ambient_action_context() -> None:
     """Omitting context= does not read ambient action context (callers must pass it)."""
-    from genkit._core._action import _action_context
-
     h = FakeStoreHarness()
     store = h.store(snapshot_path_prefix=lambda c: (c or {}).get('tenant', 'global'))
-    token = _action_context.set({'tenant': 'ambient-t'})
-    try:
+
+    async def save_and_load(_input: object) -> SessionSnapshot | None:
         await store.save_snapshot(
             'snap-1',
             lambda _e: SessionSnapshot(
@@ -2954,9 +2990,10 @@ async def test_firestore_session_store_omitted_context_ignores_ambient_action_co
                 state=SessionState(session_id='sess-1'),
             ),
         )
-        loaded = await store.get_snapshot(snapshot_id='snap-1')
-    finally:
-        _action_context.reset(token)
+        return await store.get_snapshot(snapshot_id='snap-1')
+
+    action = Action(name='saveAndLoad', kind=ActionKind.FLOW, fn=save_and_load)
+    loaded = (await action.run(context={'tenant': 'ambient-t'})).response
 
     assert loaded is not None and loaded.snapshot_id == 'snap-1'
     assert _snap_path('snap-1', prefix='global') in h.docs

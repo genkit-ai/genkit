@@ -6,14 +6,23 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from typing import Any
 
 from genkit_a2ui import A2UI_MIME_TYPE
 
-from genkit import Genkit, Message, ModelResponse, Part
-from genkit._ai._testing import ProgrammableModel, define_programmable_model
-from genkit._core._error import RuntimeErrorReason
-from genkit._core._typing import FinishReason, Role
+from genkit import (
+    ActionRunContext,
+    FinishReason,
+    Genkit,
+    Message,
+    ModelResponse,
+    ModelResponseChunk,
+    Part,
+    Role,
+    RuntimeErrorReason,
+)
+from genkit.model import ModelRequest
 
 BASIC_CATALOG_ID = 'https://a2ui.org/specification/v0_9/catalogs/basic/catalog.json'
 A2UI_FENCE = '```a2ui'
@@ -86,9 +95,33 @@ def model_ok(text: str = 'ok') -> ModelResponse:
     )
 
 
-def setup() -> tuple[Genkit, ProgrammableModel]:
+class ScriptedModel:
+    """Answers turn N with ``responses[N]`` (streaming ``chunks[N]`` first) and keeps the last request."""
+
+    def __init__(self) -> None:
+        self.responses: list[ModelResponse] = []
+        self.chunks: list[list[ModelResponseChunk]] | None = None
+        self.last_request: ModelRequest | None = None
+        self.turn = 0
+
+    async def answer(self, request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        self.last_request = deepcopy(request)
+        response = self.responses[self.turn]
+        if self.chunks and self.turn < len(self.chunks):
+            for chunk in self.chunks[self.turn]:
+                ctx.send_chunk(chunk)
+        self.turn += 1
+        return response
+
+
+def setup() -> tuple[Genkit, ScriptedModel]:
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm = ScriptedModel()
+
+    async def programmable_model(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        return await pm.answer(request, ctx)
+
+    ai.define_model(name='programmableModel', fn=programmable_model)
     return ai, pm
 
 
@@ -171,23 +204,23 @@ def assert_dead_turn(
     assert match in response.error.message
 
 
-def request_messages(pm: ProgrammableModel) -> list[Message]:
+def request_messages(pm: ScriptedModel) -> list[Message]:
     assert pm.last_request is not None
     return list(pm.last_request.messages)
 
 
-def request_has_a2ui_part(pm: ProgrammableModel) -> bool:
+def request_has_a2ui_part(pm: ScriptedModel) -> bool:
     return any(a2ui_parts(message.content) for message in request_messages(pm))
 
 
-def request_history_messages(pm: ProgrammableModel) -> list[Message]:
+def request_history_messages(pm: ScriptedModel) -> list[Message]:
     """Conversation leftover the model sees — not the injected catalog prompt."""
     return [message for message in request_messages(pm) if message.role != Role.SYSTEM]
 
 
-def request_joined_text(pm: ProgrammableModel) -> str:
+def request_joined_text(pm: ScriptedModel) -> str:
     return '\n'.join(joined_text(message.content) for message in request_history_messages(pm))
 
 
-def request_system_text(pm: ProgrammableModel) -> str:
+def request_system_text(pm: ScriptedModel) -> str:
     return '\n'.join(joined_text(message.content) for message in request_messages(pm) if message.role == Role.SYSTEM)

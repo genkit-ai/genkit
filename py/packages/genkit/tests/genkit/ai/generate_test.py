@@ -15,7 +15,7 @@ import pytest
 import yaml
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
-from genkit import Document, Genkit, Message, ModelResponse, ModelResponseChunk, MultipartToolResponse, Part
+from genkit import Document, Genkit, Message, ModelResponse, ModelResponseChunk, MultipartToolResponse, Part, tool
 from genkit._ai._formats._types import FormatDef, Formatter, FormatterConfig
 from genkit._ai._generate import DEFAULT_MAX_TURNS, ChunkAccumulator, augment_with_context, generate_action
 from genkit._ai._model import text_from_content, text_from_message
@@ -99,7 +99,7 @@ async def test_simple_text_generate_request(
     )
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[
@@ -217,7 +217,7 @@ async def test_simulates_doc_grounding(
     )
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[
@@ -677,7 +677,7 @@ async def test_util_generate_action_runs_use_middleware() -> None:
     the veneer. Without that, a hook the user configured in the UI silently
     drops on the floor — exactly the bug this test pins down.
     """
-    action = await ai.registry.resolve_action(kind=ActionKind.UTIL, name='generate')
+    action = await ai._registry.resolve_action(kind=ActionKind.UTIL, name='generate')
     assert action is not None
 
     action_response = await action.run(
@@ -781,7 +781,7 @@ async def test_generate_applies_middleware() -> None:
     define_echo_model(ai)
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='echoModel',
             messages=[
@@ -804,7 +804,7 @@ async def test_generate_middleware_next_fn_args_optional() -> None:
     define_echo_model(ai)
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='echoModel',
             messages=[
@@ -955,7 +955,7 @@ async def test_generate_middleware_can_modify_context() -> None:
     define_echo_model(ai)
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='echoModel',
             messages=[
@@ -1038,7 +1038,7 @@ async def test_generate_middleware_can_modify_stream() -> None:
         got_chunks.append(text_from_content(c.content))
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[
@@ -1157,7 +1157,7 @@ async def test_stream_interception_chains_across_model_and_generate_hooks() -> N
         final_chunks.append(text_from_content(c.content))
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[
@@ -1241,7 +1241,7 @@ async def test_wrap_generate_called_per_turn() -> None:
         )
     )
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
@@ -1267,7 +1267,7 @@ async def test_wrap_generate_called_per_turn() -> None:
         )
     )
     response2 = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
@@ -1325,7 +1325,7 @@ async def test_wrap_tool_called_on_tool_execution() -> None:
     )
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
@@ -1390,7 +1390,7 @@ async def test_generate_context_reaches_tool_run() -> None:
     )
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
@@ -1429,7 +1429,7 @@ async def test_generate_resume_context_reaches_tool_run() -> None:
     )
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[
@@ -1487,7 +1487,7 @@ async def test_wrap_tool_middleware_custom_context_reaches_tool_run() -> None:
     )
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
@@ -1561,7 +1561,7 @@ async def test_wrap_tool_custom_context_visible_to_generate_and_model_on_next_tu
 
     caller_ctx = {'user_id': 'u-123'}
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
@@ -1621,7 +1621,7 @@ async def test_middleware_wrap_tool_interrupt_handled_as_interrupt_not_crash() -
     )
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('do it')])],
@@ -1659,16 +1659,12 @@ async def test_middleware_contributed_tools_available_to_model() -> None:
         """Middleware that contributes a tool dynamically per generate() call."""
 
         def tools(self, ctx: GenerateMiddlewareContext) -> list:
-            # Build a tool action on a throw-away registry; the generate engine
-            # will adopt it into a call-scoped child registry.
-            scratch = Registry()
-
-            async def provided_tool() -> str:
+            @tool
+            async def middleware_tool() -> str:
                 """A tool injected by middleware."""
                 return 'from_middleware_tool'
 
-            t = define_tool(scratch, provided_tool, name='middleware_tool')
-            return [t.action()]
+            return [middleware_tool]
 
     pm, _ = define_programmable_model(ai)
 
@@ -1690,7 +1686,7 @@ async def test_middleware_contributed_tools_available_to_model() -> None:
     )
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
@@ -1700,7 +1696,41 @@ async def test_middleware_contributed_tools_available_to_model() -> None:
     assert response.text == 'done'
 
     # The contributed tool must NOT be visible in the root registry after the call.
-    assert await ai.registry.resolve_action(ActionKind.TOOL, 'middleware_tool') is None
+    assert await ai._registry.resolve_action(ActionKind.TOOL, 'middleware_tool') is None
+
+
+@pytest.mark.asyncio
+async def test_middleware_tools_hook_returning_public_tool_runs_during_generate() -> None:
+    """A tools() hook that returns a public @tool handle is callable from generate."""
+
+    @tool
+    async def my_tool() -> str:
+        return 'from_public_tool'
+
+    class PublicToolMw(BaseMiddleware):
+        def tools(self, ctx: GenerateMiddlewareContext) -> list:
+            return [my_tool]
+
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+    pm.responses.append(
+        ModelResponse(
+            message=Message(
+                role=Role.MODEL,
+                content=[Part(tool_request=ToolRequest(name='my_tool', input={}, ref='r1'))],
+            ),
+        )
+    )
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('done')]),
+        )
+    )
+
+    response = await ai.generate(prompt='hi', use=[PublicToolMw()])
+    assert _tool_output(response.messages[2]) == 'from_public_tool'
+    assert response.text == 'done'
 
 
 @pytest.mark.asyncio
@@ -1716,12 +1746,11 @@ async def test_middleware_tool_already_on_the_request_raises() -> None:
     @ai.middleware(name='also_ping')
     class AlsoPing(BaseMiddleware):
         def tools(self, ctx: GenerateMiddlewareContext) -> list:
-            scratch = Registry()
-
+            @tool
             async def ping() -> str:
                 return 'from_mw'
 
-            return [define_tool(scratch, ping, name='ping').action()]
+            return [ping]
 
     with pytest.raises(GenkitError, match="tool 'ping' is contributed by middleware") as raised:
         await ai.generate(prompt='hi', tools=['ping'], use=[AlsoPing()])
@@ -1740,12 +1769,11 @@ async def test_two_middleware_contributing_the_same_tool_raises() -> None:
         @ai.middleware(name=name)
         class PingMw(BaseMiddleware):
             def tools(self, ctx: GenerateMiddlewareContext) -> list:
-                scratch = Registry()
-
+                @tool
                 async def ping() -> str:
                     return name
 
-                return [define_tool(scratch, ping, name='ping').action()]
+                return [ping]
 
         return PingMw
 
@@ -1775,13 +1803,12 @@ async def test_middleware_in_one_call_share_an_isolated_registry() -> None:
     @ai.middleware(name='provider_mw')
     class ProviderMW(BaseMiddleware):
         def tools(self, ctx: GenerateMiddlewareContext) -> list:
-            scratch = Registry()
-
+            @tool
             async def shared_tool() -> str:
                 """Shared by all middleware in the call."""
                 return 'shared_ok'
 
-            return [define_tool(scratch, shared_tool, name='shared_tool').action()]
+            return [shared_tool]
 
     @ai.middleware(name='looker_mw')
     class LookerMW(BaseMiddleware):
@@ -1793,11 +1820,11 @@ async def test_middleware_in_one_call_share_an_isolated_registry() -> None:
         ) -> ModelResponse:
             # Resolve the tool ProviderMW just contributed — only works if
             # both middleware share the same per-call registry scope.
-            tool = await ctx.ai.registry.resolve_action(ActionKind.TOOL, 'shared_tool')
+            tool = await ctx.ai._registry.resolve_action(ActionKind.TOOL, 'shared_tool')
             if tool is not None:
                 seen_by_b.append(tool.name)
             # Also exercise the write path: anything we register through
-            # ctx.ai.registry must not survive the call.
+            # ctx.ai._registry must not survive the call.
             scratch = Registry()
 
             async def leaky_tool() -> str:
@@ -1805,7 +1832,7 @@ async def test_middleware_in_one_call_share_an_isolated_registry() -> None:
                 return 'nope'
 
             leak = define_tool(scratch, leaky_tool, name='leaky_tool').action()
-            ctx.ai.registry.register_action_from_instance(leak)
+            ctx.ai._registry.register_action_from_instance(leak)
             return await next_fn(params, ctx)
 
     pm, _ = define_programmable_model(ai)
@@ -1817,7 +1844,7 @@ async def test_middleware_in_one_call_share_an_isolated_registry() -> None:
     )
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
@@ -1830,8 +1857,8 @@ async def test_middleware_in_one_call_share_an_isolated_registry() -> None:
     assert response.text == 'ok'
     assert seen_by_b == ['shared_tool'], f'looker middleware should have resolved shared_tool, saw: {seen_by_b}'
     # Neither tool may leak into the root registry after the call ends.
-    assert await ai.registry.resolve_action(ActionKind.TOOL, 'shared_tool') is None
-    assert await ai.registry.resolve_action(ActionKind.TOOL, 'leaky_tool') is None
+    assert await ai._registry.resolve_action(ActionKind.TOOL, 'shared_tool') is None
+    assert await ai._registry.resolve_action(ActionKind.TOOL, 'leaky_tool') is None
 
 
 @pytest.mark.asyncio
@@ -1911,7 +1938,7 @@ async def test_queue_drain_streams_each_message_at_one_index() -> None:
 
     streamed: list[ModelResponseChunk] = []
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('go')])],
@@ -1969,7 +1996,7 @@ async def test_restart_path_routes_through_wrap_tool_middleware() -> None:
     interrupt_part = Part.from_tool_request(name='approveMe', input={}, ref='r1', metadata={'interrupt': True})
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[
@@ -2143,7 +2170,7 @@ async def test_parallel_tool_requests_all_complete() -> None:
     )
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[
@@ -2187,7 +2214,7 @@ async def test_generate_inline_tool_without_root_registration() -> None:
 
     inline_tool = define_tool(other, inline_yell, name='inline_yell')
 
-    assert await ai.registry.resolve_action(ActionKind.TOOL, 'inline_yell') is None
+    assert await ai._registry.resolve_action(ActionKind.TOOL, 'inline_yell') is None
 
     pm.responses.append(
         ModelResponse(
@@ -2214,7 +2241,7 @@ async def test_generate_inline_tool_without_root_registration() -> None:
     )
 
     assert response.text == 'after_inline'
-    assert await ai.registry.resolve_action(ActionKind.TOOL, 'inline_yell') is None
+    assert await ai._registry.resolve_action(ActionKind.TOOL, 'inline_yell') is None
 
 
 @pytest.mark.asyncio
@@ -2252,7 +2279,7 @@ async def test_parallel_tool_requests_one_interrupt_keeps_pending_output_for_oth
     )
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[
@@ -2330,7 +2357,7 @@ async def test_generate_and_model_middleware_execution_order() -> None:
 
     pm.response_cb = model_side_effect
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
@@ -2427,7 +2454,7 @@ async def test_generate_model_tool_middleware_ordering_across_turns() -> None:
             return resp
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
@@ -2467,13 +2494,11 @@ async def test_middleware_contributed_tool_resolvable_during_restart() -> None:
     @ai.middleware(name='tool_injector_mw')
     class ToolInjectorMiddleware(BaseMiddleware):
         def tools(self, ctx: GenerateMiddlewareContext) -> list:
-            scratch = Registry()
-
             async def injected_tool() -> str:
                 """A tool contributed by middleware."""
                 return 'injected_success'
 
-            return [define_tool(scratch, injected_tool, name='injectedTool').action()]
+            return [tool(injected_tool, name='injectedTool')]
 
     pm, _ = define_programmable_model(ai)
 
@@ -2490,7 +2515,7 @@ async def test_middleware_contributed_tool_resolvable_during_restart() -> None:
     interrupt_part = Part.from_tool_request(name='injectedTool', input={}, ref='r1', metadata={'interrupt': True})
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[
@@ -2550,7 +2575,7 @@ async def test_generate_action_spec(spec: dict[str, Any]) -> None:
                     converted.append(TypeAdapter(ModelResponseChunk).validate_python(chunk))
             pm.chunks.append(converted)
 
-    action = await ai.registry.resolve_action(kind=ActionKind.UTIL, name='generate')
+    action = await ai._registry.resolve_action(kind=ActionKind.UTIL, name='generate')
     assert action is not None
 
     response = None
@@ -2699,7 +2724,7 @@ async def test_generate_with_empty_messages_lets_the_model_speak_first(
     )
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(model='programmableModel', messages=[]),
     )
     assert response.finish_reason == FinishReason.STOP
@@ -3639,7 +3664,7 @@ async def test_wrap_generate_cannot_replace_the_named_tool_action() -> None:
             ctx: GenerateMiddlewareContext,
             next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
         ) -> ModelResponse:
-            ctx.ai.registry.register_action_from_instance(leak)
+            ctx.ai._registry.register_action_from_instance(leak)
             return await next_fn(params, ctx)
 
         async def wrap_model(
@@ -3688,7 +3713,7 @@ async def test_wrap_generate_cannot_replace_the_named_tool_after_a_closed_round(
             ctx: GenerateMiddlewareContext,
             next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
         ) -> ModelResponse:
-            ctx.ai.registry.register_action_from_instance(leak)
+            ctx.ai._registry.register_action_from_instance(leak)
             return await next_fn(params, ctx)
 
         async def wrap_model(
@@ -3751,7 +3776,7 @@ async def test_resume_restart_cannot_replace_the_named_tool_action() -> None:
             ctx: GenerateMiddlewareContext,
             next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
         ) -> ModelResponse:
-            ctx.ai.registry.register_action_from_instance(leak)
+            ctx.ai._registry.register_action_from_instance(leak)
             return await next_fn(params, ctx)
 
         async def wrap_model(
@@ -4370,7 +4395,7 @@ async def test_midstream_model_failure_keeps_chunks_and_prior_closed_history() -
 
     ai.define_model(name='midstreamFailureModel', fn=midstream_failure_model)
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='midstreamFailureModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('start')])],
@@ -4447,7 +4472,7 @@ async def test_generate_on_chunk_failure_returns_closed_history() -> None:
         raise RuntimeError('model sink closed')
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
@@ -4489,7 +4514,7 @@ async def test_generate_on_chunk_failure_echoes_full_request() -> None:
         raise RuntimeError('model sink closed')
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
@@ -4534,7 +4559,7 @@ async def test_generate_on_chunk_genkit_error_is_internal_not_the_sink_reason() 
         )
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
@@ -4622,6 +4647,353 @@ async def test_task_cancel_after_tool_turn_raises() -> None:
     assert model_calls == 2
 
 
+class _NoopGenerateMiddleware(BaseMiddleware):
+    async def wrap_generate(
+        self,
+        params: GenerateHookParams,
+        ctx: GenerateMiddlewareContext,
+        next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+    ) -> ModelResponse:
+        return await next_fn(params, ctx)
+
+
+def _five_noop_middleware() -> list[BaseMiddleware]:
+    return [_NoopGenerateMiddleware() for _ in range(5)]
+
+
+def _always_requests_tool(pm: ProgrammableModel, *, name: str = 'step') -> None:
+    def always_tool(_request: ModelRequest) -> ModelResponse:
+        return _model_calls_tool(name=name, ref=str(pm.request_count + 1))
+
+    pm.response_cb = always_tool
+
+
+@pytest.mark.asyncio
+async def test_generate_with_five_middleware_and_max_turns_50_returns_aborted_after_51_model_calls() -> None:
+    """ai.generate with five no-op middleware and max_turns=50 aborts after 51 model calls."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+
+    @ai.tool(name='step')
+    async def step() -> str:
+        return 'ok'
+
+    _always_requests_tool(pm)
+    response = await ai.generate(
+        prompt='keep going',
+        tools=['step'],
+        max_turns=50,
+        use=_five_noop_middleware(),
+    )
+
+    assert response.finish_reason == FinishReason.ABORTED
+    assert response.finish_message == 'Exceeded maximum tool call iterations (50)'
+    assert response.error is not None
+    assert response.error.status == 'ABORTED'
+    assert response.error.reason is RuntimeErrorReason.MAX_TURNS_EXCEEDED
+    assert pm.request_count == 51
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_with_five_middleware_and_max_turns_50_returns_aborted_after_51_model_calls() -> None:
+    """ai.generate_stream with five no-op middleware and max_turns=50 closes aborted after 51 model calls."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+
+    @ai.tool(name='step')
+    async def step() -> str:
+        return 'ok'
+
+    _always_requests_tool(pm)
+    stream = ai.generate_stream(
+        prompt='keep going',
+        tools=['step'],
+        max_turns=50,
+        use=_five_noop_middleware(),
+    )
+    _ = [chunk async for chunk in stream]
+    response = await stream.response
+
+    assert response.finish_reason == FinishReason.ABORTED
+    assert response.finish_message == 'Exceeded maximum tool call iterations (50)'
+    assert response.error is not None
+    assert response.error.status == 'ABORTED'
+    assert response.error.reason is RuntimeErrorReason.MAX_TURNS_EXCEEDED
+    assert pm.request_count == 51
+
+
+@pytest.mark.asyncio
+async def test_generate_with_five_middleware_and_max_turns_200_returns_aborted() -> None:
+    """ai.generate with five middleware and max_turns=200 aborts at 200; no RecursionError."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+
+    @ai.tool(name='step')
+    async def step() -> str:
+        return 'ok'
+
+    _always_requests_tool(pm)
+    response = await ai.generate(
+        prompt='keep going',
+        tools=['step'],
+        max_turns=200,
+        use=_five_noop_middleware(),
+    )
+
+    assert response.finish_reason == FinishReason.ABORTED
+    assert response.finish_message == 'Exceeded maximum tool call iterations (200)'
+    assert response.error is not None
+    assert response.error.status == 'ABORTED'
+    assert response.error.reason is RuntimeErrorReason.MAX_TURNS_EXCEEDED
+    assert pm.request_count == 201
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_with_five_middleware_and_max_turns_200_returns_aborted() -> None:
+    """ai.generate_stream with five middleware and max_turns=200 closes aborted at 200."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+
+    @ai.tool(name='step')
+    async def step() -> str:
+        return 'ok'
+
+    _always_requests_tool(pm)
+    stream = ai.generate_stream(
+        prompt='keep going',
+        tools=['step'],
+        max_turns=200,
+        use=_five_noop_middleware(),
+    )
+    _ = [chunk async for chunk in stream]
+    response = await stream.response
+
+    assert response.finish_reason == FinishReason.ABORTED
+    assert response.finish_message == 'Exceeded maximum tool call iterations (200)'
+    assert response.error is not None
+    assert response.error.status == 'ABORTED'
+    assert response.error.reason is RuntimeErrorReason.MAX_TURNS_EXCEEDED
+    assert pm.request_count == 201
+
+
+@pytest.mark.asyncio
+async def test_generate_turn_0_middleware_after_next_sees_the_final_answer() -> None:
+    """wrap_generate after await next on the first wrap sees the final stop text."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+    after_next: list[tuple[FinishReason | None, str]] = []
+
+    class AfterNext(BaseMiddleware):
+        async def wrap_generate(
+            self,
+            params: GenerateHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ) -> ModelResponse:
+            response = await next_fn(params, ctx)
+            if params.iteration == 0:
+                after_next.append((response.finish_reason, response.text))
+            return response
+
+    @ai.tool(name='step')
+    async def step() -> str:
+        return 'ok'
+
+    pm.responses = [
+        _model_calls_tool(name='step', ref='r1'),
+        _model_calls_tool(name='step', ref='r2'),
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('final answer')]),
+        ),
+    ]
+
+    response = await ai.generate(prompt='go', tools=['step'], use=[AfterNext()], max_turns=5)
+
+    assert response.finish_reason == FinishReason.STOP
+    assert response.text == 'final answer'
+    assert after_next == [(FinishReason.STOP, 'final answer')]
+
+
+@pytest.mark.asyncio
+async def test_generate_error_on_a_later_turn_returns_failed_with_that_error() -> None:
+    """A later-turn model exception returns failed/INTERNAL; closed tool rounds stay on messages."""
+    ai = Genkit(model='laterBoomModel')
+    model_calls = 0
+
+    @ai.tool(name='step')
+    async def step() -> str:
+        return 'ok'
+
+    async def later_boom(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+        nonlocal model_calls
+        model_calls += 1
+        if model_calls <= 2:
+            return _model_calls_tool(name='step', ref=str(model_calls))
+        raise RuntimeError('boom-turn-3')
+
+    ai.define_model(name='laterBoomModel', fn=later_boom)
+    response = await ai.generate(
+        prompt='go',
+        tools=['step'],
+        max_turns=10,
+        use=_five_noop_middleware(),
+    )
+
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.finish_message == 'internal error'
+    assert response.message is None
+    assert response.error is not None
+    assert response.error.status == 'INTERNAL'
+    assert response.error.reason is None
+    assert response.error.message == response.finish_message
+    assert model_calls == 3
+    assert [message.role for message in response.messages] == [
+        Role.USER,
+        Role.MODEL,
+        Role.TOOL,
+        Role.MODEL,
+        Role.TOOL,
+    ]
+    assert _tool_output(response.messages[2]) == 'ok'
+    assert _tool_output(response.messages[4]) == 'ok'
+
+
+@pytest.mark.asyncio
+async def test_generate_middleware_awaiting_next_inside_taskgroup_returns_stop() -> None:
+    """Middleware that awaits next inside asyncio.TaskGroup still returns stop and the final text."""
+    task_group_cls = getattr(asyncio, 'TaskGroup', None)
+    if task_group_cls is None:
+        pytest.skip('asyncio.TaskGroup requires Python 3.11')
+
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+
+    class InTaskGroup(BaseMiddleware):
+        async def wrap_generate(
+            self,
+            params: GenerateHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ) -> ModelResponse:
+            async with task_group_cls() as tg:
+                nested = tg.create_task(next_fn(params, ctx))
+            return nested.result()
+
+    @ai.tool(name='step')
+    async def step() -> str:
+        return 'ok'
+
+    pm.responses = [
+        _model_calls_tool(name='step', ref='r1'),
+        _model_calls_tool(name='step', ref='r2'),
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('done via taskgroup')]),
+        ),
+    ]
+
+    response = await ai.generate(prompt='go', tools=['step'], use=[InTaskGroup()], max_turns=5)
+
+    assert response.finish_reason == FinishReason.STOP
+    assert response.text == 'done via taskgroup'
+
+
+@pytest.mark.asyncio
+async def test_generate_cancelled_during_a_later_turn_stops_calling_the_model() -> None:
+    """Cancelling generate while turn 3 runs cancels that turn; the model is not called again."""
+    ai = Genkit(model='hangOnTurn3Model')
+    started = asyncio.Event()
+    model_calls = 0
+
+    @ai.tool(name='step')
+    async def step() -> str:
+        return 'ok'
+
+    async def hang_on_turn_3(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+        nonlocal model_calls
+        model_calls += 1
+        if model_calls < 4:
+            return _model_calls_tool(name='step', ref=str(model_calls))
+        started.set()
+        await asyncio.Event().wait()
+        raise AssertionError('unreachable')
+
+    ai.define_model(name='hangOnTurn3Model', fn=hang_on_turn_3)
+    before = {id(task) for task in asyncio.all_tasks()}
+    task = asyncio.create_task(ai.generate(prompt='go', tools=['step'], max_turns=20))
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert model_calls == 4
+    await asyncio.sleep(0.05)
+    leftover = [
+        running
+        for running in asyncio.all_tasks()
+        if id(running) not in before and running is not asyncio.current_task() and not running.done()
+    ]
+    assert leftover == []
+
+
+@pytest.mark.asyncio
+async def test_generate_turn_0_middleware_sees_chunks_from_later_turns() -> None:
+    """A streaming wrap_generate on turn 0 still intercepts chunks emitted by later turns."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+    turn0_chunks: list[str] = []
+
+    class Turn0ChunkSpy(BaseMiddleware):
+        async def wrap_generate(
+            self,
+            params: GenerateHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ) -> ModelResponse:
+            if params.iteration != 0:
+                return await next_fn(params, ctx)
+            previous = ctx.on_chunk
+
+            def handler(chunk: ModelResponseChunk) -> None:
+                turn0_chunks.append(text_from_content(chunk.content))
+                if previous is not None:
+                    previous(chunk)
+
+            ctx.replace_on_chunk(handler)
+            try:
+                return await next_fn(params, ctx)
+            finally:
+                ctx.replace_on_chunk(previous)
+
+    @ai.tool(name='step')
+    async def step() -> str:
+        return 'ok'
+
+    pm.responses = [
+        _model_calls_tool(name='step', ref='r1'),
+        _model_calls_tool(name='step', ref='r2'),
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('final')]),
+        ),
+    ]
+    pm.chunks = [
+        [ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('c0')])],
+        [ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('c1')])],
+        [ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('c2')])],
+    ]
+
+    stream = ai.generate_stream(prompt='go', tools=['step'], use=[Turn0ChunkSpy()], max_turns=5)
+    _ = [chunk async for chunk in stream]
+    response = await stream.response
+
+    assert response.finish_reason == FinishReason.STOP
+    assert response.text == 'final'
+    assert 'c0' in turn0_chunks
+    assert 'c1' in turn0_chunks
+    assert 'c2' in turn0_chunks
+
+
 @pytest.mark.asyncio
 async def test_recovered_middleware_failure_uses_latest_closed_history() -> None:
     ai = Genkit(model='programmableModel')
@@ -4695,7 +5067,7 @@ async def test_abort_after_tool_turn_keeps_closed_rounds() -> None:
     ]
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('keep going')])],
@@ -4733,7 +5105,7 @@ async def test_abort_during_first_tool_drops_unfinished_round() -> None:
 
     async def run() -> ModelResponse:
         return await generate_action(
-            ai.registry,
+            ai._registry,
             GenerateActionOptions(
                 model='programmableModel',
                 messages=[Message(role=Role.USER, content=[Part.from_text('keep going')])],
@@ -4767,7 +5139,7 @@ async def test_already_cancelled_generate_returns_prompt() -> None:
     abort_signal.set()
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('keep going')])],
@@ -4811,7 +5183,7 @@ async def test_already_cancelled_generate_returns_prior_messages() -> None:
     abort_signal.set()
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[
@@ -4845,7 +5217,7 @@ async def test_already_cancelled_unknown_model_returns() -> None:
     abort_signal.set()
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='nope/ghost',
             messages=[Message(role=Role.USER, content=[Part.from_text('keep going')])],
@@ -4880,7 +5252,7 @@ async def test_abort_during_first_model_call_returns_prompt() -> None:
 
     async def run() -> ModelResponse:
         return await generate_action(
-            ai.registry,
+            ai._registry,
             GenerateActionOptions(
                 model='hangingModel',
                 messages=[Message(role=Role.USER, content=[Part.from_text('keep going')])],
@@ -4928,7 +5300,7 @@ async def test_abort_during_later_model_call_keeps_closed_round() -> None:
 
     async def run() -> ModelResponse:
         return await generate_action(
-            ai.registry,
+            ai._registry,
             GenerateActionOptions(
                 model='hangAfterToolModel',
                 messages=[Message(role=Role.USER, content=[Part.from_text('keep going')])],
@@ -6251,7 +6623,7 @@ async def test_generate_on_chunk_validation_error_returns_closed_history() -> No
         Recipe.model_validate({'nope': 1})
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
@@ -6341,7 +6713,7 @@ async def test_util_generate_dead_turn_paints_span_error(exporter) -> None:
         )
     ]
 
-    action = await ai.registry.resolve_action(kind=ActionKind.UTIL, name='generate')
+    action = await ai._registry.resolve_action(kind=ActionKind.UTIL, name='generate')
     assert action is not None
     action_response = await action.run(
         GenerateActionOptions(

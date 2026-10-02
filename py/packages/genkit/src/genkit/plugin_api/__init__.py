@@ -18,6 +18,7 @@
 
 # Base class and framework primitives
 from genkit._core._action import Action, ActionKind
+from genkit._core._compat import StrEnum
 from genkit._core._constants import GENKIT_CLIENT_HEADER
 from genkit._core._environment import is_dev_environment
 from genkit._core._error import (
@@ -25,6 +26,7 @@ from genkit._core._error import (
     StatusName,
     from_http_code,
     get_callable_json,
+    get_http_status,
     parse_retry_after_ms,
     wrap_http_error,
 )
@@ -32,8 +34,15 @@ from genkit._core._http_client import get_cached_client
 from genkit._core._loop_cache import _loop_local_client as loop_local_client
 from genkit._core._middleware import new_middleware
 from genkit._core._plugin import MiddlewarePlugin, Plugin
+from genkit._core._protocols import GenkitLike
 from genkit._core._schema import to_json_schema
 from genkit._core._typing import ActionMetadata
+
+
+async def resolve_action(ai: GenkitLike, kind: ActionKind, name: str) -> Action | None:
+    """Look up an action on this app, including per-call registrations on ``ctx.ai``."""
+    return await ai._registry.resolve_action(kind, name)
+
 
 __all__ = [
     # Base class and framework primitives
@@ -44,6 +53,7 @@ __all__ = [
     'ActionMetadata',
     'ActionKind',
     'ErrorResponseMetadata',
+    'resolve_action',
     'StatusName',
     'from_http_code',
     'parse_retry_after_ms',
@@ -56,8 +66,11 @@ __all__ = [
     'is_dev_environment',
     # Schema utilities
     'to_json_schema',
+    # String enums that work the same on every supported Python
+    'StrEnum',
     # HTTP client
     'get_cached_client',
     # Error serialization
     'get_callable_json',
+    'get_http_status',
 ]

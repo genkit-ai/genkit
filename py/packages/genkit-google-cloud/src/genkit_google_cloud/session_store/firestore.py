@@ -51,11 +51,10 @@ from google.cloud.firestore import (
     AsyncTransaction,
     DocumentSnapshot,
 )
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic.alias_generators import to_camel
 
 from genkit import GenkitError, RuntimeErrorReason
-from genkit._core._typing import GenkitRuntimeError
 from genkit.exp.agent import (
     TERMINAL_STATUSES,
     AgentFinishReason,
@@ -194,7 +193,8 @@ class _SnapshotDoc(BaseModel):
     status: SnapshotStatus | None = None
     heartbeat_at: str | None = None
     finish_reason: AgentFinishReason | None = None
-    error: GenkitRuntimeError | None = None
+    # Kept as the stored map; SessionSnapshot owns the shape of a turn error.
+    error: dict[str, Any] | None = None
     kind: Literal['diff', 'checkpoint']
     checkpoint_id: str
     checkpoint_shard_count: int = Field(ge=1)
@@ -205,21 +205,28 @@ class _SnapshotDoc(BaseModel):
     # Typed loosely so pre-release array values reach the decode error path.
     state_patch: Any = None
 
+    @model_validator(mode='after')
+    def _error_loads_as_snapshot_error(self) -> _SnapshotDoc:
+        # A stored error that can't load back into a snapshot means the doc is
+        # corrupt, so reject it here where reads turn that into DATA_LOSS.
+        if self.error is not None:
+            self.to_session_snapshot()
+        return self
+
     def to_session_snapshot(self, state_raw: dict[str, Any] | SessionState | None = None) -> SessionSnapshot:
         """Convert Firestore snapshot document and reconstructed state to a SessionSnapshot."""
-        state = _state_from_dict(state_raw)
-        return SessionSnapshot(
-            snapshot_id=self.snapshot_id,
-            session_id=self.session_id,
-            parent_id=self.parent_id,
-            created_at=self.created_at,
-            updated_at=self.updated_at,
-            heartbeat_at=self.heartbeat_at,
-            status=self.status,
-            finish_reason=self.finish_reason,
-            error=self.error,
-            state=state,
-        )
+        return SessionSnapshot.model_validate({
+            'snapshot_id': self.snapshot_id,
+            'session_id': self.session_id,
+            'parent_id': self.parent_id,
+            'created_at': self.created_at,
+            'updated_at': self.updated_at,
+            'heartbeat_at': self.heartbeat_at,
+            'status': self.status,
+            'finish_reason': self.finish_reason,
+            'error': self.error,
+            'state': _state_from_dict(state_raw),
+        })
 
 
 class _PointerDoc(BaseModel):
@@ -1155,7 +1162,9 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
                 status=next_snapshot.status,
                 heartbeat_at=next_snapshot.heartbeat_at,
                 finish_reason=next_snapshot.finish_reason,
-                error=next_snapshot.error,
+                error=next_snapshot.error.model_dump(by_alias=True, exclude_none=True, mode='json')
+                if next_snapshot.error
+                else None,
                 kind=kind,
                 checkpoint_id=checkpoint_id,
                 checkpoint_shard_count=checkpoint_shard_count,

@@ -23,7 +23,7 @@ import inspect
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, ClassVar, Generic, NamedTuple, Protocol, TypeVar, cast, get_args, get_origin
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, NamedTuple, Protocol, TypeVar, cast, get_args, get_origin
 
 from pydantic import BaseModel, ConfigDict, PrivateAttr, field_validator
 
@@ -40,6 +40,9 @@ from genkit._core._model import (
 )
 from genkit._core._protocols import GenkitLike, RegistryLike
 from genkit._core._typing import MiddlewareDesc
+
+if TYPE_CHECKING:
+    from genkit._ai._tools import Tool
 
 logger = get_logger(__name__)
 
@@ -141,7 +144,7 @@ class GenerateMiddlewareContext:
     """Per-``generate()`` runtime services shared by every middleware in ``use=[...]``.
 
     ``ai`` is a lightweight Genkit-like view scoped to this one invocation: its
-    ``registry`` is the call's child registry (so middleware sees this call's own
+    ``_registry`` is the call's child registry (so middleware sees this call's own
     tool/middleware registrations, not the global ones), and ``current_session()``
     returns the active agent session when running inside one. Also carries
     caller-provided metadata (``custom_context``), streaming hooks, and the abort
@@ -264,7 +267,7 @@ class BaseMiddleware(Generic[TConfig]):
         else:
             self.config = cast(Any, self.Config(**kwargs))
 
-    def tools(self, ctx: GenerateMiddlewareContext) -> list[Action]:
+    def tools(self, ctx: GenerateMiddlewareContext) -> list[Tool]:
         """Return additional tools to expose to the model for this generate call."""
         return []
 
@@ -313,7 +316,7 @@ class MiddlewareDef(Protocol):
     against this protocol so it only calls hooks, not constructors or config.
     """
 
-    def tools(self, ctx: GenerateMiddlewareContext) -> list[Action]:
+    def tools(self, ctx: GenerateMiddlewareContext) -> list[Tool]:
         """Return additional tools to expose to the model for this generate call."""
         ...
 

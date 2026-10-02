@@ -28,7 +28,7 @@ from genkit._core._model import ModelRequest
 from genkit._core._registry import ActionKind
 from genkit._core._typing import ActionMetadata, FinishReason
 from genkit.middleware import BaseMiddleware, GenerateMiddleware
-from genkit.plugin_api import Plugin, new_middleware
+from genkit.plugin_api import Plugin, StrEnum, new_middleware
 
 
 class AsyncResolveOnlyPlugin(Plugin):
@@ -135,9 +135,9 @@ class MiddlewareListingPlugin(Plugin):
 async def test_plugin_list_middleware_registers_on_registry() -> None:
     """Descriptors from Plugin.list_middleware appear under list_values('middleware')."""
     ai = Genkit(plugins=[MiddlewareListingPlugin()])
-    names = ai.registry.list_values('middleware')
+    names = ai._registry.list_values('middleware')
     assert 'ai_plugin_test_mw' in names
-    desc = ai.registry.lookup_value('middleware', 'ai_plugin_test_mw')
+    desc = ai._registry.lookup_value('middleware', 'ai_plugin_test_mw')
     assert desc is not None
     assert isinstance(desc, GenerateMiddleware)
 
@@ -156,3 +156,13 @@ async def test_async_init_is_awaited_via_generate() -> None:
     ai = Genkit(plugins=[AsyncInitPlugin()])
     resp = await ai.generate(model='async-init-plugin/init-model', prompt='hello')
     assert resp.text == 'OK: resolve'
+
+
+def test_plugin_api_strenum_members_compare_equal_to_their_string_values() -> None:
+    """A StrEnum member from genkit.plugin_api is its string value, in comparisons and f-strings."""
+
+    class Color(StrEnum):
+        RED = 'red'
+
+    assert Color.RED == 'red'
+    assert f'{Color.RED}' == 'red'

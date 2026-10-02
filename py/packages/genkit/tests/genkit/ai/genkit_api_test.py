@@ -11,15 +11,19 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from genkit import Genkit
+from genkit._ai._testing import define_echo_model
 from genkit._core._action import ActionRunContext, _action_context
 from genkit._core._error import GenkitError, RuntimeErrorReason
-from genkit._core._model import ModelRequest, ModelResponse
+from genkit._core._model import Message, ModelRef, ModelRequest, ModelResponse, Part
 from genkit._core._telemetry._instrumentation import (
     SpanMetadata,
     SpanNext,
     reset_instrumentation,
 )
-from genkit._core._typing import Operation
+from genkit._core._typing import FinishReason, Operation, Role
+from genkit.middleware import BaseMiddleware, GenerateHookParams, GenerateMiddlewareContext
+from genkit.model import model
+from genkit.plugin_api import ActionKind, resolve_action
 from genkit.telemetry import configure_instrumentation
 
 
@@ -340,3 +344,160 @@ async def test_current_context() -> None:
         _action_context.reset(token)
 
     assert Genkit.current_context() is None
+
+
+@pytest.mark.asyncio
+async def test_lookup_model_returns_a_model_ref_that_generate_accepts() -> None:
+    ai = Genkit()
+    define_echo_model(ai, name='echo')
+
+    ref = await ai.lookup_model('echo')
+
+    assert isinstance(ref, ModelRef)
+    response = await ai.generate(model=ref, prompt='hi')
+    assert '[ECHO]' in response.text
+
+
+@pytest.mark.asyncio
+async def test_lookup_model_unknown_name_returns_none() -> None:
+    ai = Genkit()
+    assert await ai.lookup_model('ghost') is None
+
+
+@pytest.mark.asyncio
+async def test_lookup_background_model_returns_a_ref_that_generate_operation_accepts() -> None:
+    ai = Genkit()
+
+    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+        return Operation(id='job-1', done=False)
+
+    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+        return op
+
+    ai.define_background_model(name='bg', start=start, check=check)
+    ref = await ai.lookup_background_model('bg')
+
+    assert isinstance(ref, ModelRef)
+    operation = await ai.generate_operation(model=ref, prompt='hi')
+    assert operation.id == 'job-1'
+
+
+@pytest.mark.asyncio
+async def test_lookup_background_model_unknown_name_returns_none() -> None:
+    ai = Genkit()
+    assert await ai.lookup_background_model('ghost') is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_action_returns_the_registered_action() -> None:
+    ai = Genkit()
+    _echo, defined = define_echo_model(ai, name='echo')
+
+    found = await resolve_action(ai, ActionKind.MODEL, 'echo')
+
+    assert found is defined
+
+
+@pytest.mark.asyncio
+async def test_resolve_action_unknown_name_returns_none() -> None:
+    ai = Genkit()
+    assert await resolve_action(ai, ActionKind.MODEL, 'ghost') is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_action_on_ctx_ai_finds_a_per_call_model() -> None:
+    parent_ai = Genkit()
+
+    async def echo(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+        return ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('ok')]),
+        )
+
+    parent_ai.define_model(name='echo', fn=echo)
+    seen: dict[str, object] = {}
+
+    class RegisterPerCall(BaseMiddleware):
+        async def wrap_generate(
+            self,
+            params: GenerateHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn,
+        ) -> ModelResponse:
+            async def per_call(_request: ModelRequest, _run_ctx: ActionRunContext) -> ModelResponse:
+                return ModelResponse(
+                    finish_reason=FinishReason.STOP,
+                    message=Message(role=Role.MODEL, content=[Part.from_text('child')]),
+                )
+
+            ctx.ai._registry.register_action_from_instance(model('per-call', per_call))
+            seen['child'] = await resolve_action(ctx.ai, ActionKind.MODEL, 'per-call')
+            seen['parent'] = await resolve_action(parent_ai, ActionKind.MODEL, 'per-call')
+            return await next_fn(params, ctx)
+
+    await parent_ai.generate(model='echo', prompt='hi', use=[RegisterPerCall()])
+
+    assert seen['child'] is not None
+    assert seen['parent'] is None
+
+
+@pytest.mark.asyncio
+async def test_lookup_value_returns_the_value_defined_with_define_value() -> None:
+    ai = Genkit()
+    v = {'id': 'shop'}
+    ai.define_value('a2ui-catalog', 'shop', v)
+    assert await ai.lookup_value('a2ui-catalog', 'shop') is v
+
+
+@pytest.mark.asyncio
+async def test_lookup_value_unknown_name_returns_none() -> None:
+    ai = Genkit()
+    assert await ai.lookup_value('a2ui-catalog', 'ghost') is None
+
+
+@pytest.mark.asyncio
+async def test_define_value_twice_under_the_same_name_raises() -> None:
+    ai = Genkit()
+    first = {'id': 'shop'}
+    ai.define_value('a2ui-catalog', 'shop', first)
+    with pytest.raises(ValueError, match='already registered'):
+        ai.define_value('a2ui-catalog', 'shop', {'id': 'other'})
+    assert await ai.lookup_value('a2ui-catalog', 'shop') is first
+
+
+@pytest.mark.asyncio
+async def test_middleware_lookup_value_sees_a_value_defined_on_the_app() -> None:
+    ai = Genkit()
+    define_echo_model(ai, name='echo')
+    v = {'id': 'shop'}
+    ai.define_value('a2ui-catalog', 'shop', v)
+    seen: dict[str, object] = {}
+
+    class LookupShop(BaseMiddleware):
+        async def wrap_generate(self, params, ctx, next_fn):
+            seen['value'] = await ctx.ai.lookup_value('a2ui-catalog', 'shop')
+            return await next_fn(params, ctx)
+
+    await ai.generate(model='echo', prompt='hi', use=[LookupShop()])
+    assert seen['value'] is v
+
+
+@pytest.mark.asyncio
+async def test_middleware_lookup_value_sees_a_value_defined_for_that_call_only() -> None:
+    ai = Genkit()
+    define_echo_model(ai, name='echo')
+    seen: dict[str, object] = {}
+
+    class Probe(BaseMiddleware):
+        async def wrap_generate(self, params, ctx, next_fn):
+            names = [
+                name for name in ctx.ai._registry.list_values('middleware') if name.startswith('dynamic-middleware-')
+            ]
+            name = names[0]
+            seen['call'] = await ctx.ai.lookup_value('middleware', name)
+            seen['app'] = await ai.lookup_value('middleware', name)
+            return await next_fn(params, ctx)
+
+    await ai.generate(model='echo', prompt='hi', use=[Probe()])
+    assert seen['call'] is not None
+    assert seen['app'] is None

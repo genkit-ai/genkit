@@ -108,10 +108,14 @@ class GenkitLike(Protocol):
     """Structural interface for the Genkit instance exposed on middleware context."""
 
     @property
-    def registry(self) -> RegistryLike:
+    def _registry(self) -> RegistryLike:
         """The call-scoped registry for this generate invocation."""
         ...
 
     def current_session(self) -> SessionLike | None:
         """Return the bound agent session, if running inside one."""
+        ...
+
+    async def lookup_value(self, type: str, name: str) -> object | None:
+        """Return the value registered under type and name, or None."""
         ...

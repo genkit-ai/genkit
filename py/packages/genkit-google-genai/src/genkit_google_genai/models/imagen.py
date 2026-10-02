@@ -33,9 +33,8 @@ from genkit import (
     Part,
     Role,
 )
-from genkit._core._compat import StrEnum
 from genkit.model import ModelInfo, ModelRequest, Supports
-from genkit.plugin_api import wrap_http_error
+from genkit.plugin_api import StrEnum, wrap_http_error
 from genkit.telemetry import SpanContext, run_in_new_span
 from genkit_google_genai.models._sdk_config import (
     attach_leftovers,

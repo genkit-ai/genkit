@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from typing import Any, TypeVar, cast
 
@@ -29,7 +30,9 @@ from pydantic import BaseModel
 
 from genkit import ContextProvider, Genkit, GenkitError, RequestData
 from genkit.exp.agent import Agent, SessionSnapshot
-from genkit.plugin_api import Action, ActionKind, get_callable_json
+from genkit.plugin_api import Action, ActionKind, get_callable_json, get_http_status
+
+logger = logging.getLogger(__name__)
 
 
 def parse_snapshot_lookup_input(input_val: dict[str, Any] | str | None) -> tuple[str | None, str | None]:
@@ -88,18 +91,19 @@ class FastAPIRequestData(RequestData):
 
     def __init__(self, request: Request, body: dict[str, Any] | None) -> None:
         """Initialize request data wrapper."""
-        super().__init__(request=request)
-        self.method = request.method
-        self.headers = {k.lower(): v for k, v in request.headers.items()}
-        self.input = body.get('data') if body else None
+        super().__init__(
+            request=request,
+            method=request.method,
+            headers={k.lower(): v for k, v in request.headers.items()},
+            input=body.get('data') if body else None,
+        )
 
 
-def json_error_response(error: Exception, status_code: int = 400) -> Response:
+def json_error_response(error: Exception, status_code: int | None = None) -> Response:
     """Build a compact JSON error response from an exception."""
-    ex = error.cause if isinstance(error, GenkitError) else error
     return Response(
-        status_code=status_code,
-        content=json.dumps(get_callable_json(ex), separators=JSON_SEPARATORS),
+        status_code=get_http_status(error) if status_code is None else status_code,
+        content=json.dumps(get_callable_json(error), separators=JSON_SEPARATORS),
         media_type='application/json',
     )
 
@@ -157,8 +161,7 @@ def format_stream_result(result: object) -> str:
 
 def format_stream_error(error: Exception) -> str:
     """Format a stream failure as a canonical SSE data event."""
-    ex = error.cause if isinstance(error, GenkitError) else error
-    return f'data: {json.dumps({"error": get_callable_json(ex)}, separators=JSON_SEPARATORS)}\n\n'
+    return f'data: {json.dumps({"error": get_callable_json(error)}, separators=JSON_SEPARATORS)}\n\n'
 
 
 async def handle_genkit_request(
@@ -218,6 +221,7 @@ async def handle_genkit_request(
                 result = await stream_response.response
                 yield format_stream_result(result)
             except Exception as e:
+                logger.exception('served flow stream failed')
                 yield format_stream_error(e)
 
         return StreamingResponse(event_stream(), media_type='text/event-stream')
@@ -228,7 +232,8 @@ async def handle_genkit_request(
             return Response(status_code=404)
         return {'result': to_dict(response.response)}
     except Exception as e:
-        return json_error_response(e, status_code=500)
+        logger.exception('served flow failed')
+        return json_error_response(e)
 
 
 def genkit_fastapi_handler(

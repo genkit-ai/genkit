@@ -44,7 +44,7 @@ def test_server_starts_on_construction() -> None:
     """
     port = _find_free_port()
     with mock.patch.dict(os.environ, {GENKIT_ENV: GenkitEnvironment.DEV}):
-        ai = Genkit(reflection_server_spec=ServerSpec(scheme='http', host='127.0.0.1', port=port))
+        ai = Genkit(_reflection_server_spec=ServerSpec(scheme='http', host='127.0.0.1', port=port))
         resp = _wait_and_get(ai, '/api/__health')
     assert resp.status_code == 200
 
@@ -58,7 +58,7 @@ def test_flow_registered_after_construction_is_visible() -> None:
     """
     port = _find_free_port()
     with mock.patch.dict(os.environ, {GENKIT_ENV: GenkitEnvironment.DEV}):
-        ai = Genkit(reflection_server_spec=ServerSpec(scheme='http', host='127.0.0.1', port=port))
+        ai = Genkit(_reflection_server_spec=ServerSpec(scheme='http', host='127.0.0.1', port=port))
 
         @ai.flow()
         async def greet(name: str) -> str:
@@ -82,7 +82,7 @@ def test_registry_reads_concurrent_with_writes() -> None:
     errors: list[Exception] = []
 
     with mock.patch.dict(os.environ, {GENKIT_ENV: GenkitEnvironment.DEV}):
-        ai = Genkit(reflection_server_spec=ServerSpec(scheme='http', host='127.0.0.1', port=port))
+        ai = Genkit(_reflection_server_spec=ServerSpec(scheme='http', host='127.0.0.1', port=port))
         assert ai._reflection_ready.wait(timeout=5)  # pyright: ignore[reportPrivateUsage]
 
         stop = threading.Event()
@@ -119,8 +119,8 @@ def test_two_instances_serve_concurrently() -> None:
     """Two Genkit() instances in the same process don't interfere with each other."""
     port1, port2 = _find_free_port(), _find_free_port()
     with mock.patch.dict(os.environ, {GENKIT_ENV: GenkitEnvironment.DEV}):
-        ai1 = Genkit(reflection_server_spec=ServerSpec(scheme='http', host='127.0.0.1', port=port1))
-        ai2 = Genkit(reflection_server_spec=ServerSpec(scheme='http', host='127.0.0.1', port=port2))
+        ai1 = Genkit(_reflection_server_spec=ServerSpec(scheme='http', host='127.0.0.1', port=port1))
+        ai2 = Genkit(_reflection_server_spec=ServerSpec(scheme='http', host='127.0.0.1', port=port2))
 
         assert ai1._reflection_ready.wait(timeout=5)  # pyright: ignore[reportPrivateUsage]
         assert ai2._reflection_ready.wait(timeout=5)  # pyright: ignore[reportPrivateUsage]

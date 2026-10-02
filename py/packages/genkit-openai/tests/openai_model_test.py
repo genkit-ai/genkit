@@ -29,11 +29,20 @@ from genkit_openai.models.utils import strip_markdown_fences
 from genkit_openai.typing import OpenAIConfig, ReasoningEffort
 from openai.types import CompletionUsage
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
-from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
-from genkit._core._typing import GenerationUsage, Operation
-from genkit.model import ModelConfig, ModelRequest, OutputConfig, ToolRequest
+from genkit import (
+    ActionRunContext,
+    FinishReason,
+    GenkitError,
+    Message,
+    ModelResponse,
+    ModelResponseChunk,
+    Operation,
+    Part,
+    Role,
+)
+from genkit.model import ModelConfig, ModelRequest, ModelUsage, OutputConfig, ToolRequest
 
 
 def test_unknown_chat_id_json_mode_uses_json_object() -> None:
@@ -87,7 +96,7 @@ async def test_get_openai_config(sample_request: ModelRequest) -> None:
     assert openai_config['top_p'] == 0.9
     assert openai_config['temperature'] == 0.7
     assert openai_config['stop'] == ['stop']
-    assert openai_config['max_tokens'] == 100
+    assert openai_config['max_completion_tokens'] == 100
     assert 'topP' not in openai_config
     assert 'maxTokens' not in openai_config
     assert 'max_output_tokens' not in openai_config
@@ -136,11 +145,11 @@ async def test_get_openai_config_peels_genkit_keys_and_passes_the_rest() -> None
 async def test_get_openai_config_uses_max_completion_tokens_for_reasoning_models(
     model_name: str, reasoning_effort: ReasoningEffort | None
 ) -> None:
-    """Reasoning models reject the deprecated max_tokens request field."""
+    """Reasoning models receive max_completion_tokens on the wire."""
     model = OpenAIModel(model=model_name, client=MagicMock())
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
-        config=OpenAIConfig(max_tokens=32, reasoning_effort=reasoning_effort),
+        config=OpenAIConfig(max_completion_tokens=32, reasoning_effort=reasoning_effort),
     )
 
     body = await model._get_openai_request_config(request)
@@ -150,33 +159,34 @@ async def test_get_openai_config_uses_max_completion_tokens_for_reasoning_models
 
 
 @pytest.mark.asyncio
-async def test_get_openai_config_keeps_max_tokens_for_legacy_models() -> None:
-    """Legacy OpenAI-compatible models continue to receive max_tokens."""
+async def test_get_openai_config_keeps_max_completion_tokens_for_legacy_models() -> None:
+    """Legacy OpenAI-compatible models also receive max_completion_tokens."""
     model = OpenAIModel(model='gpt-4o', client=MagicMock())
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
-        config=OpenAIConfig(max_tokens=32),
+        config=OpenAIConfig(max_completion_tokens=32),
     )
 
     body = await model._get_openai_request_config(request)
 
-    assert body['max_tokens'] == 32
-    assert 'max_completion_tokens' not in body
-
-
-@pytest.mark.asyncio
-async def test_get_openai_config_prefers_explicit_max_completion_tokens() -> None:
-    """An explicit modern token limit wins when both fields are configured."""
-    model = OpenAIModel(model='gpt-4o', client=MagicMock())
-    request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
-        config=OpenAIConfig(max_tokens=32, max_completion_tokens=64),
-    )
-
-    body = await model._get_openai_request_config(request)
-
-    assert body['max_completion_tokens'] == 64
+    assert body['max_completion_tokens'] == 32
     assert 'max_tokens' not in body
+
+
+def test_openai_config_rejects_max_tokens() -> None:
+    """OpenAIConfig(max_tokens=32) raises; max_completion_tokens is accepted."""
+    with pytest.raises(ValidationError):
+        OpenAIConfig.model_validate({'max_tokens': 32})
+    config = OpenAIConfig(max_completion_tokens=32)
+    assert config.max_completion_tokens == 32
+
+
+def test_openai_config_rejects_user() -> None:
+    """OpenAIConfig(user='u') raises; safety_identifier is accepted."""
+    with pytest.raises(ValidationError):
+        OpenAIConfig.model_validate({'user': 'u'})
+    config = OpenAIConfig(safety_identifier='u')
+    assert config.safety_identifier == 'u'
 
 
 @pytest.mark.asyncio
@@ -932,6 +942,10 @@ async def test_generate_no_choices_reaches_the_caller(sample_request: ModelReque
             OpenAIConfig(version='gpt-4o-2024-08-06'),
         ),
         (
+            ModelConfig(max_output_tokens=32),
+            OpenAIConfig(max_completion_tokens=32),
+        ),
+        (
             None,
             Exception(),
         ),
@@ -1547,7 +1561,7 @@ class TestCleanJsonResponse:
             finish_reason=FinishReason.LENGTH,
             finish_message='cut off',
             latency_ms=12.5,
-            usage=GenerationUsage(input_tokens=3, output_tokens=4),
+            usage=ModelUsage(input_tokens=3, output_tokens=4),
             custom={'id': 'chatcmpl-abc'},
             raw={'id': 'chatcmpl-abc'},
             operation=Operation(id='op-1', done=True),
