@@ -77,12 +77,10 @@ class _DjangoRequestData(RequestData):
     """Wraps Django request data for Genkit context."""
 
     def __init__(self, request: HttpRequest, body: dict[str, Any] | None) -> None:
-        super().__init__(
-            request=request,
-            method=request.method or '',
-            headers={k.lower(): v for k, v in _request_headers(request).items()},
-            input=body.get('data') if body else None,
-        )
+        super().__init__(request=request)
+        self.method = request.method
+        self.headers = {k.lower(): v for k, v in _request_headers(request).items()}
+        self.input = body.get('data') if body else None
 
 
 def genkit_django_handler(

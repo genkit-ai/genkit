@@ -76,13 +76,15 @@ FlaskRouteReturn: TypeAlias = Response | dict[str, object] | Iterable[Any]
 
 class _FlaskRequestData(RequestData):
     def __init__(self) -> None:
+        super().__init__(request=request)
+        self.method = request.method
+
+        self.headers = {}
+        for key, value in request.headers:
+            self.headers[key.lower()] = value
+
         input_data = request.get_json()
-        super().__init__(
-            request=request,
-            method=request.method,
-            headers={key.lower(): value for key, value in request.headers.items()},
-            input=input_data.get('data') if input_data else None,
-        )
+        self.input = input_data.get('data') if input_data else None
 
 
 def genkit_flask_handler(

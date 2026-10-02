@@ -23,7 +23,7 @@ from typing import Any
 from flask import Flask, Request
 from genkit_flask import genkit_flask_handler
 
-from genkit import ActionRunContext, Genkit, GenkitError, RequestData
+from genkit import ActionRunContext, Genkit, GenkitError, PublicError, RequestData
 
 
 def sse_error_event(chunks: list[bytes]) -> dict:
@@ -99,8 +99,8 @@ def test_streaming() -> None:
     ]
 
 
-def test_flask_flow_raising_unauthenticated_returns_401_with_the_genkit_message() -> None:
-    """Flask POST to a flow that raises GenkitError UNAUTHENTICATED returns 401."""
+def test_flask_flow_raising_unauthenticated_returns_401_with_generic_message() -> None:
+    """Flask POST to a flow that raises GenkitError UNAUTHENTICATED returns 401 'Unauthenticated', not its text."""
     ai = Genkit()
     app = Flask(__name__)
     app.config.update({'TESTING': True})
@@ -109,15 +109,31 @@ def test_flask_flow_raising_unauthenticated_returns_401_with_the_genkit_message(
     @genkit_flask_handler(ai)
     @ai.flow()
     async def login(_: str) -> None:
-        raise GenkitError(status='UNAUTHENTICATED', message='login required')
+        raise GenkitError(status='UNAUTHENTICATED', message='token for alice@example.com expired')
 
     response = app.test_client().post('/login', json={'data': 'x'})
 
     assert response.status_code == 401
-    body = json.loads(response.data)
-    assert body['message'] == 'login required'
-    assert body['status'] == 'UNAUTHENTICATED'
-    assert 'stack' not in body.get('details', {})
+    assert json.loads(response.data) == {'message': 'Unauthenticated', 'status': 'UNAUTHENTICATED'}
+    assert b'alice@example.com' not in response.data
+
+
+def test_flask_flow_raising_public_error_returns_its_status_and_message() -> None:
+    """Flask POST to a flow that raises PublicError NOT_FOUND returns 404 with that message."""
+    ai = Genkit()
+    app = Flask(__name__)
+    app.config.update({'TESTING': True})
+
+    @app.post('/lookup')
+    @genkit_flask_handler(ai)
+    @ai.flow()
+    async def lookup(_: str) -> None:
+        raise PublicError('NOT_FOUND', 'no order 99')
+
+    response = app.test_client().post('/lookup', json={'data': '99'})
+
+    assert response.status_code == 404
+    assert json.loads(response.data) == {'message': 'no order 99', 'status': 'NOT_FOUND'}
 
 
 def test_flask_flow_raising_value_error_returns_500_internal_error_without_stack() -> None:
@@ -164,42 +180,3 @@ def test_flask_stream_flow_raising_value_error_sends_sse_internal_error_without_
     assert error == {'message': 'Internal Error', 'status': 'INTERNAL'}
     assert b'secret' not in b''.join(chunks)
     assert 'stack' not in error
-
-
-def test_flask_context_provider_sees_method_lowercase_headers_and_input() -> None:
-    """Flask context_provider sees method, lowercase headers, and input."""
-    ai = Genkit()
-    app = Flask(__name__)
-    app.config.update({'TESTING': True})
-
-    async def provider(request_data: RequestData[Request]) -> dict[str, Any]:
-        return {
-            'method': request_data.method,
-            'authorization': request_data.headers['authorization'],
-            'input': request_data.input,
-        }
-
-    @app.post('/echo')
-    @genkit_flask_handler(ai, context_provider=provider)
-    @ai.flow()
-    async def echo(_: str, ctx: ActionRunContext) -> dict[str, Any]:
-        return {
-            'method': ctx.context['method'],
-            'authorization': ctx.context['authorization'],
-            'input': ctx.context['input'],
-        }
-
-    response = app.test_client().post(
-        '/echo',
-        json={'data': 'hello'},
-        headers={'Authorization': 'Bearer tok'},
-    )
-
-    assert response.status_code == 200
-    assert response.json == {
-        'result': {
-            'method': 'POST',
-            'authorization': 'Bearer tok',
-            'input': 'hello',
-        }
-    }

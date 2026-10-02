@@ -35,16 +35,13 @@ T = TypeVar('T')
 
 @dataclass
 class RequestData(Generic[T]):
-    """What a context_provider sees for one HTTP request.
+    """A universal type that request handling extensions.
 
-    ``headers`` keys are lowercase so ``Authorization`` and ``authorization``
-    look the same on every served flow.
+    For example, Flask can map their request to this type.  This allows
+    ContextProviders to build consistent interfaces on any web framework.
     """
 
     request: T
-    method: str
-    headers: dict[str, str]
-    input: Any
     metadata: ContextMetadata | None = None
 
 
