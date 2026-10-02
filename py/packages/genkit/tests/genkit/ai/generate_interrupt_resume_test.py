@@ -532,7 +532,7 @@ async def test_resume_restart_runs_tool_second_time_and_resolved_interrupt_on_mo
         },
     ]
 
-    restart_trp = first.interrupts[0].restart(replace_input={'ok': True}, resumed_metadata={'by': 'test'})
+    restart_trp = first.interrupts[0].restart(replace_input={'ok': True}, metadata={'by': 'test'})
 
     second = await generate_action(
         ai.registry,

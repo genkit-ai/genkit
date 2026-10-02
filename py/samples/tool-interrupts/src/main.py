@@ -56,7 +56,7 @@ async def main() -> None:
     # restart() re-runs the tool after the human says yes.
     approved = await ai.generate(
         messages=response.messages,
-        resume_restart=interrupt.restart(resumed_metadata={'approved': True}),
+        resume_restart=interrupt.restart(metadata={'approved': True}),
         tools=[request_transfer],
     )
     print(approved.text)

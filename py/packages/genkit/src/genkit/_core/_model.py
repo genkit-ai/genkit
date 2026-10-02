@@ -400,7 +400,7 @@ class Part(GenkitModel):
     def restart(
         self,
         *,
-        resumed_metadata: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
         replace_input: Any | None = None,  # noqa: ANN401
     ) -> Part:
         """Build the tool-request part that runs this interrupt again.
@@ -411,7 +411,7 @@ class Part(GenkitModel):
         if tool_req is None:
             raise ValueError('restart needs a tool request part')
         new_meta: dict[str, Any] = dict(self.metadata or {})
-        new_meta['resumed'] = resumed_metadata if resumed_metadata is not None else True
+        new_meta['resumed'] = metadata if metadata is not None else True
         new_input = tool_req.input
         if replace_input is not None:
             new_meta['replacedInput'] = tool_req.input

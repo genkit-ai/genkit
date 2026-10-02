@@ -2058,7 +2058,7 @@ async def test_generate_restart_without_approval_returns_interrupted() -> None:
         tools=['sensitiveTool'],
         use=[ApprovalMW()],
         resume_restart=response.interrupts[0].restart(
-            resumed_metadata={'toolApproved': True},
+            metadata={'toolApproved': True},
         ),
     )
     assert approved.finish_reason == FinishReason.STOP

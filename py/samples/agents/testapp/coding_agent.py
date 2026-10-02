@@ -76,7 +76,7 @@ async def test_coding_agent(text: str, ctx: ActionRunContext) -> str:
         if not res.interrupts:
             break
         ctx.send_chunk(f'[auto-approving] {", ".join(i.name for i in res.interrupts)}')
-        restart = [i.restart(resumed_metadata={'tool_approved': True}) for i in res.interrupts]
+        restart = [i.restart(metadata={'tool_approved': True}) for i in res.interrupts]
         resume_turn = chat.resume_stream(restart=restart)
         async for chunk in resume_turn:
             if chunk.text:

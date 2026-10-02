@@ -873,7 +873,7 @@ async def test_session_handling_multiple_tool_interrupts() -> None:
         snapshot_id='snapshot_2',
         finish_reason=AgentFinishReason.STOP,
     )
-    restart_parts = [intr.restart(resumed_metadata={'tool_approved': True}) for intr in out.interrupts]
+    restart_parts = [intr.restart(metadata={'tool_approved': True}) for intr in out.interrupts]
     resume_turn = chat.resume_stream(restart=restart_parts)
     transport.push_chunk(
         AgentStreamChunk(turn_end=TurnEnd(snapshot_id='snapshot_2', finish_reason=AgentFinishReason.STOP))

@@ -180,18 +180,19 @@ class AgentInterrupt(Generic[InputT, OutputT]):
         self.ref = ref
         self.input = input_data
 
-    def respond(self, output: OutputT) -> Part:
+    def respond(self, output: OutputT, *, metadata: dict[str, Any] | None = None) -> Part:
         """Tool-response Part for batching into ``chat.resume(respond=[...])``."""
         return Part.from_tool_response(
             name=self.name,
             ref=self.ref,
             output=output,
+            metadata=metadata,
         )
 
     def restart(
         self,
         *,
-        resumed_metadata: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
         replace_input: Any | None = None,  # noqa: ANN401
     ) -> Part:
         """Restart tool-request Part for batching into ``chat.resume(restart=[...])``."""
@@ -200,9 +201,9 @@ class AgentInterrupt(Generic[InputT, OutputT]):
             ref=self.ref,
             input=self.input,
         )
-        if resumed_metadata is not None or replace_input is not None:
+        if metadata is not None or replace_input is not None:
             return part.restart(
-                resumed_metadata=resumed_metadata,
+                metadata=metadata,
                 replace_input=replace_input,
             )
         return part

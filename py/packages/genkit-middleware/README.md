@@ -134,7 +134,7 @@ first = await ai.generate(
 ```
 
 When a non-allowed tool is called, execution is interrupted. Approve and re-run the
-tool by restarting it with ``resumed_metadata`` that includes ``tool_approved``:
+tool by restarting it with ``metadata`` that includes ``tool_approved``:
 
 ```python
 response = await ai.generate(
@@ -143,7 +143,7 @@ response = await ai.generate(
     messages=list(first.messages),
     tools=['delete_database'],
     use=[approval],
-    resume_restart=first.interrupts[0].restart(resumed_metadata={'tool_approved': True}),
+    resume_restart=first.interrupts[0].restart(metadata={'tool_approved': True}),
 )
 ```
 

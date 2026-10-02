@@ -28,7 +28,7 @@ def test_restart_sets_resumed_metadata_and_preserves_interrupt() -> None:
     interrupt_trp = Part.from_tool_request(
         name='pay', ref='r1', input={'amount': 10}, metadata={'interrupt': {'reason': 'hold'}}
     )
-    out = interrupt_trp.restart(resumed_metadata={'k': 'v'})
+    out = interrupt_trp.restart(metadata={'k': 'v'})
     assert type(out) is Part
     assert out.metadata is not None
     assert out.metadata.get('resumed') == {'k': 'v'}
@@ -40,7 +40,7 @@ def test_restart_sets_resumed_metadata_and_preserves_interrupt() -> None:
 def test_restart_replace_input_sets_replaced_input() -> None:
     """Restart with new input sets ``replacedInput`` to prior input and updates ``tool_request.input``."""
     interrupt_trp = Part.from_tool_request(name='pay', ref='r1', input={'amount': 10}, metadata={'interrupt': True})
-    out = interrupt_trp.restart(replace_input={'amount': 99}, resumed_metadata={'by': 'u'})
+    out = interrupt_trp.restart(replace_input={'amount': 99}, metadata={'by': 'u'})
     assert type(out) is Part
     assert out.metadata is not None
     assert out.metadata.get('replacedInput') == {'amount': 10}
@@ -51,9 +51,9 @@ def test_restart_replace_input_sets_replaced_input() -> None:
 
 
 def test_restart_resumed_defaults_to_true() -> None:
-    """When ``resumed_metadata=None``, restart TRP sets ``metadata.resumed`` to True."""
+    """When ``metadata=None``, restart TRP sets ``metadata.resumed`` to True."""
     interrupt_trp = Part.from_tool_request(name='pay', ref='r1', input={}, metadata={'interrupt': True})
-    out = interrupt_trp.restart(resumed_metadata=None)
+    out = interrupt_trp.restart(metadata=None)
     assert type(out) is Part
     assert out.metadata is not None
     assert out.metadata.get('resumed') is True
@@ -233,7 +233,7 @@ def test_restart_directly() -> None:
     interrupt_trp = Part.from_tool_request(
         name='middleware_tool', ref='r1', input={'p': 1}, metadata={'interrupt': True}
     )
-    out = interrupt_trp.restart(resumed_metadata={'tool_approved': True})
+    out = interrupt_trp.restart(metadata={'tool_approved': True})
 
     assert out.tool_request is not None
     assert out.tool_request.name == 'middleware_tool'
