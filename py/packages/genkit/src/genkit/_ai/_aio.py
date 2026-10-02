@@ -166,10 +166,10 @@ class Genkit:
 
     def __init__(
         self,
+        *,
         plugins: list[Plugin] | None = None,
         model: ModelArg | None = None,
         prompt_dir: str | Path | None = None,
-        *,
         _reflection_server_spec: ServerSpec | None = None,
     ) -> None:
         # Before anything that logs, so plugin initialization is covered too.

@@ -66,10 +66,6 @@ class Genkit(StableGenkit):
     ``from genkit import Genkit`` does not grow these methods.
     """
 
-    @staticmethod
-    def current_session() -> SessionLike | None:
-        return get_current_session()
-
     async def agent(self, name: str) -> Agent:
         """Look up a registered agent by name."""
         resolved = await self._registry.resolve_action(ActionKind.AGENT, name)

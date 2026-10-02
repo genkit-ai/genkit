@@ -346,6 +346,23 @@ async def test_current_context() -> None:
     assert Genkit.current_context() is None
 
 
+def test_genkit_positional_argument_raises_type_error() -> None:
+    with pytest.raises(TypeError):
+        Genkit('googleai/gemini-flash-latest')  # type: ignore[misc]  # ty: ignore[too-many-positional-arguments]
+    with pytest.raises(TypeError):
+        Genkit([])  # type: ignore[misc]  # ty: ignore[too-many-positional-arguments]
+
+
+@pytest.mark.asyncio
+async def test_genkit_keyword_arguments_still_work() -> None:
+    ai = Genkit(plugins=[], model='echo', prompt_dir=None)
+    define_echo_model(ai, name='echo')
+
+    response = await ai.generate(prompt='hi')
+
+    assert '[ECHO]' in response.text
+
+
 @pytest.mark.asyncio
 async def test_lookup_model_returns_a_model_ref_that_generate_accepts() -> None:
     ai = Genkit()
