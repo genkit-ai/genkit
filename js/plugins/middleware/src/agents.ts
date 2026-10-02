@@ -1161,6 +1161,8 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
         started: (taskId: string) => string;
         /** The caller-chosen label to stamp on the result. */
         label?: string;
+        /** The handle a continuation picked up, for the launch log line. */
+        continuedFrom?: string;
       }
 
       /**
@@ -1212,7 +1214,12 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
           }
           const taskId = formatTaskId(ref.name, out.snapshotId);
           shared.launchedTaskIds.add(taskId);
-          logger.debug(`agents middleware: background task ${taskId} started.`);
+          logger.debug(
+            `agents middleware: background task ${taskId} started in session ${out.sessionId}` +
+              (words.continuedFrom
+                ? `, continued from ${words.continuedFrom}.`
+                : '.')
+          );
           const result: DelegationResult = {
             taskId,
             status: 'pending',
@@ -1295,6 +1302,9 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
         try {
           out = await runSubAgent(agent, task, { detach: true, abortSignal });
         } catch (e: unknown) {
+          logger.warn(
+            `agents middleware: background launch on '${ref.name}' failed: ${errorMessage(e)}`
+          );
           // A thrown rejection (e.g. a schema parse error on `run`) carries
           // the same status a graceful one does, so it takes the failed shape
           // and is judged once in foldDetachOutcome.
@@ -1460,6 +1470,9 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
 
         const resolved = resolveTaskId(taskId);
         if (!resolved) {
+          logger.debug(
+            `agents middleware: background task ID '${taskId}' did not resolve.`
+          );
           const error = `Task ID '${taskId}' does not match any configured agent (expected "<agent>:<snapshotId>").`;
           return {
             report: { taskId, status: TASK_STATUS_UNKNOWN, error },
@@ -1487,6 +1500,9 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
         // to delegate again into a delegation tool that fails identically.
         const agent = await resolveAgent(ref.name);
         if (!agent) {
+          logger.debug(
+            `agents middleware: agent '${ref.name}' of background task ${taskId} is not registered.`
+          );
           report.error =
             `Agent '${ref.name}' is configured on the agents middleware but is ` +
             `not registered. This task cannot be collected here; report it as ` +
@@ -2165,6 +2181,7 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
           // The continuation is the same undertaking; its label follows the
           // handle.
           label: shared.labels.get(c.taskId),
+          continuedFrom: c.taskId,
         };
         if (c.background) {
           const refusal = refuseUndetachable(c.ref, c.agent, words);
