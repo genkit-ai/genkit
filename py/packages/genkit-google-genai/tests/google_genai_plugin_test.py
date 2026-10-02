@@ -20,7 +20,7 @@ import asyncio
 import os
 import queue
 import threading
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import cast, get_args, get_type_hints
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -608,6 +608,30 @@ async def test_resolve_model_finds_veo_as_background(mock_list_models: MagicMock
     assert action is not None
     assert action.kind == ActionKind.BACKGROUND_MODEL
     assert action.name == 'googleai/veo-3.1-generate-preview'
+
+
+@patch('genkit_google_genai.google.genai.client.Client')
+@patch('genkit_google_genai.google._list_genai_models')
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('make_plugin', 'name'),
+    [
+        (lambda: GoogleAI(api_key='test-key'), 'googleai/veo-2.0-generate-001'),
+        (lambda: VertexAI(project='test-project'), 'vertexai/veo-3.0-generate-001'),
+    ],
+)
+async def test_resolve_model_finds_veo_outside_the_catalog(
+    mock_list_models: MagicMock, mock_client: MagicMock, make_plugin: Callable[[], GoogleAI | VertexAI], name: str
+) -> None:
+    """Veo routing is the ``veo-`` prefix, so an id the catalog no longer lists still resolves."""
+    mock_list_models.return_value = GenaiModels()
+
+    ai = Genkit(plugins=[make_plugin()])
+    action = await ai.registry.resolve_model(name)
+
+    assert action is not None
+    assert action.kind == ActionKind.BACKGROUND_MODEL
+    assert action.name == name
 
 
 @patch('genkit_google_genai.models.veo.genai.Client')
