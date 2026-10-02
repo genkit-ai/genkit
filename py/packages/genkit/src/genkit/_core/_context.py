@@ -19,7 +19,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Generic, TypeVar
 
 
@@ -35,13 +35,16 @@ T = TypeVar('T')
 
 @dataclass
 class RequestData(Generic[T]):
-    """A universal type that request handling extensions.
+    """What a context_provider sees for one HTTP request.
 
-    For example, Flask can map their request to this type.  This allows
-    ContextProviders to build consistent interfaces on any web framework.
+    ``headers`` keys are lowercase so ``Authorization`` and ``authorization``
+    look the same on every served flow.
     """
 
     request: T
+    method: str = ''
+    headers: dict[str, str] = field(default_factory=dict)
+    input: Any = None
     metadata: ContextMetadata | None = None
 
 
