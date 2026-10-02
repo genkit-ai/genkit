@@ -1310,6 +1310,81 @@ describe('contextCompression middleware', () => {
     );
   });
 
+  it('stamps inputTokens when the model returns candidates[0].message instead of message', async () => {
+    const ai = genkit({});
+    let capturedRequest: GenerateRequest | undefined;
+
+    // Mirrors @genkit-ai/google-genai, which returns `candidates` rather than
+    // a top-level `message` from the raw model action.
+    const pm = ai.defineModel({ name: 'candidatesModel' }, async (req) => {
+      capturedRequest = req;
+      return {
+        candidates: [
+          {
+            index: 0,
+            finishReason: 'stop',
+            message: {
+              role: 'model',
+              content: [{ text: 'reply' }],
+              metadata: { existing: true },
+            },
+          },
+        ],
+        usage: { inputTokens: 800 },
+      };
+    });
+
+    const mw = contextCompression({
+      maxInputTokens: 500,
+      toolResponses: { maxChars: 20, preserveRecent: 0 },
+    });
+
+    const res1 = await ai.generate({
+      model: pm,
+      messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+      use: [mw],
+    });
+
+    const stampedModelMsg = res1.message!.toJSON();
+    assert.strictEqual(
+      (stampedModelMsg.metadata?.contextCompression as any)?.inputTokens,
+      800
+    );
+    // Pre-existing message metadata must be preserved alongside the stamp.
+    assert.strictEqual(stampedModelMsg.metadata?.existing, true);
+
+    // Turn 0 of a separate generate call should read the stamp (not the
+    // character heuristic) and trigger compression.
+    const res2 = (await ai.generate({
+      model: pm,
+      messages: [
+        { role: 'user', content: [{ text: 'hi' }] },
+        {
+          role: 'tool',
+          content: [
+            {
+              toolResponse: {
+                name: 'search',
+                output: 'Short text exceeding 20 chars for truncation test',
+              },
+            },
+          ],
+        },
+        stampedModelMsg,
+        { role: 'user', content: [{ text: 'follow up' }] },
+      ],
+      use: [mw],
+    })) as any;
+
+    assert.strictEqual(res2.custom?.contextCompression?.triggered, true);
+    assert.strictEqual(res2.custom?.contextCompression?.inputTokensBefore, 800);
+    const toolMsg = capturedRequest!.messages.find((m) => m.role === 'tool');
+    assert.match(
+      String(toolMsg!.content[0].toolResponse?.output),
+      /\[Truncated \d+ characters\]/
+    );
+  });
+
   it('does not split UTF-16 surrogate pairs when slicing at maxChars boundary', async () => {
     const ai = genkit({});
     let capturedRequest: GenerateRequest | undefined;
