@@ -32,7 +32,7 @@ export async function defineDocsTool(server: McpServer) {
         'Use this to see a list of available Genkit documentation files. Returns `filePaths` that can be passed to `read_genkit_docs`.',
       inputSchema: {
         language: z
-          .enum(['js', 'go', 'python'])
+          .enum(['js', 'go', 'python', 'dart'])
           .describe(
             'Which language to list docs for (default js); type: string.'
           )
@@ -81,7 +81,7 @@ export async function defineDocsTool(server: McpServer) {
           .string()
           .describe('Keywords to search for in documentation; type: string.'),
         language: z
-          .enum(['js', 'go', 'python'])
+          .enum(['js', 'go', 'python', 'dart'])
           .describe(
             'Which language to search docs for (default js); type: string.'
           )

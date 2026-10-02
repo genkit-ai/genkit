@@ -23,9 +23,10 @@ import {
 } from '@genkit-ai/tools-common/utils';
 import { Command, Option } from 'commander';
 import { runWithManager } from '../utils/manager-utils';
+import { parsePositiveInt } from '../utils/option-parsers';
 
 export interface LogListOptions {
-  limit: string;
+  limit: number;
   traceId?: string;
   spanId?: string;
   severity?: string;
@@ -41,7 +42,12 @@ export const logList = new Command('log:list')
   .description(
     'list logs, in reverse chronological order. Filtering by trace-id is highly recommended.'
   )
-  .option('-l, --limit <number>', 'limit the number of returned logs', '15')
+  .option(
+    '-l, --limit <number>',
+    'limit the number of returned logs',
+    parsePositiveInt,
+    15
+  )
   .option('--trace-id <id>', 'filter by trace ID')
   .option('--span-id <id>', 'filter by span ID')
   .option(
@@ -85,16 +91,8 @@ export const logList = new Command('log:list')
           }
         }
 
-        const limit = Number.parseInt(options.limit, 10);
-        if (Number.isNaN(limit) || limit <= 0) {
-          logger.error(
-            `Invalid limit: "${options.limit}". It must be a positive integer.`
-          );
-          return;
-        }
-
         const listRequest = {
-          limit,
+          limit: options.limit,
           continuationToken: options.continuationToken,
           filter: Object.keys(filter).length > 0 ? filter : undefined,
         };
@@ -161,6 +159,7 @@ export const logList = new Command('log:list')
         }
       } catch (e) {
         logger.error(`Error listing logs: ${e}`);
+        process.exitCode = 1;
       }
     };
 

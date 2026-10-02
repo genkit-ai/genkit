@@ -23,6 +23,7 @@ import {
 } from '@genkit-ai/tools-common/utils';
 import { Command } from 'commander';
 import { runWithManager } from '../utils/manager-utils';
+import { parsePositiveInt, parseTraceStatus } from '../utils/option-parsers';
 
 function formatTruncated(val: any, maxLen = 100): string {
   if (val === undefined) return '';
@@ -33,8 +34,8 @@ function formatTruncated(val: any, maxLen = 100): string {
 }
 
 export interface TraceListOptions {
-  limit: string;
-  status?: string;
+  limit: number;
+  status?: number;
   type?: string;
   name?: string;
   continuationToken?: string;
@@ -46,8 +47,13 @@ export interface TraceListOptions {
  */
 export const traceList = new Command('trace:list')
   .description('list traces')
-  .option('-l, --limit <number>', 'limit the number of returned traces', '15')
-  .option('--status <status>', 'filter by root span status')
+  .option(
+    '-l, --limit <number>',
+    'limit the number of returned traces',
+    parsePositiveInt,
+    15
+  )
+  .option('--status <status>', 'filter by root span status', parseTraceStatus)
   .option('--type <type>', 'filter by root span type')
   .option('--name <name>', 'filter by root span name')
   .option('--continuation-token <token>', 'continuation token for pagination')
@@ -57,15 +63,8 @@ export const traceList = new Command('trace:list')
     const runAction = async (manager: BaseRuntimeManager) => {
       try {
         const eqFilter: Record<string, any[]> = {};
-        if (options.status) {
-          // Status mapped exactly as dev UI enum (Success: 0, Error: 2)
-          const statusVal =
-            options.status.toLowerCase() === 'error'
-              ? 2
-              : options.status.toLowerCase() === 'success'
-                ? 0
-                : Number(options.status);
-          eqFilter['status'] = [statusVal];
+        if (options.status !== undefined) {
+          eqFilter['status'] = [options.status];
         }
         if (options.type) {
           eqFilter['type'] = [options.type];
@@ -80,7 +79,7 @@ export const traceList = new Command('trace:list')
         };
 
         const listRequest = {
-          limit: Number.parseInt(options.limit, 10),
+          limit: options.limit,
           continuationToken: options.continuationToken,
           filter,
         };
@@ -151,6 +150,7 @@ export const traceList = new Command('trace:list')
         );
       } catch (e) {
         logger.error(`Error listing traces: ${e}`);
+        process.exitCode = 1;
       }
     };
 

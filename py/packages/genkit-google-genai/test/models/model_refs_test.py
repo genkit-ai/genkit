@@ -16,9 +16,11 @@
 
 """Tests for the typed family ref constructors on GoogleAI / VertexAI."""
 
+import importlib
 from collections.abc import Callable
 from typing import get_args
 
+import genkit_google_genai
 import pytest
 from genkit_google_genai import (
     GoogleAI,
@@ -38,12 +40,6 @@ from genkit_google_genai.models.gemini import (
     is_gemma_model,
     is_image_model,
     is_tts_model,
-)
-from genkit_google_genai.models.imagen import (
-    SUPPORTED_MODELS as IMAGEN_SUPPORTED_MODELS,
-    ImagenConfigSchema,
-    KnownImagen,
-    is_imagen_model_name,
 )
 from genkit_google_genai.models.interactions_registry import KnownLyria, is_lyria_model_name
 from genkit_google_genai.models.veo import KnownVeo, VeoConfig, is_veo_model
@@ -77,14 +73,12 @@ class TestHappyPaths:
         tts = GoogleAI.gemini_tts_model('gemini-2.5-flash-preview-tts')
         image = VertexAI.gemini_image_model('gemini-2.5-flash-image')
         gemma = GoogleAI.gemma_model('gemma-3-12b-it')
-        imagen = VertexAI.imagen_model('imagen-3.0-generate-002')
         veo = GoogleAI.veo_model('veo-3.1-fast-generate-preview')
 
         assert tts.config_schema is GeminiTtsConfigSchema
         assert image.config_schema is GeminiImageConfigSchema
+        assert image.name == 'vertexai/gemini-2.5-flash-image'
         assert gemma.config_schema is GemmaConfigSchema
-        assert imagen.config_schema is ImagenConfigSchema
-        assert imagen.name == 'vertexai/imagen-3.0-generate-002'
         assert veo.config_schema is VeoConfig
         assert veo.name == 'googleai/veo-3.1-fast-generate-preview'
 
@@ -100,7 +94,7 @@ class TestHappyPaths:
         assert GoogleAI.embedding('totally-new-embedder').name == 'googleai/totally-new-embedder'
 
         with pytest.raises(GenkitError):
-            GoogleAI.imagen_model('totally-new-model')
+            GoogleAI.gemma_model('totally-new-model')
 
 
 class TestStripThenPrefix:
@@ -165,7 +159,8 @@ class TestClosedRejectSet:
             'imagegeneration@006',  # retired June 2026
             'virtual-try-on-001',  # predict shape not implemented
             'gemini-embedding-001',  # embedder, not a generate model
-            'imagen-3.0-generate-002',  # wrong family: has its own constructor
+            'imagen-3.0-generate-002',  # not a supported model
+            'imagen-4.0-generate-001',  # not a supported model
             'gemini-2.5-flash-preview-tts',  # wrong family: TTS
             'gemini-2.5-flash-image',  # wrong family: native image
             'gemma-3-12b-it',  # wrong family: Gemma
@@ -182,7 +177,7 @@ class TestClosedRejectSet:
         with pytest.raises(GenkitError, match=r'gemini_tts_model'):
             GoogleAI.gemini_model('gemini-2.5-flash-preview-tts')
         with pytest.raises(GenkitError, match=r'VertexAI\.gemini_model'):
-            VertexAI.imagen_model('gemini-2.5-flash')
+            VertexAI.gemma_model('gemini-2.5-flash')
         with pytest.raises(GenkitError, match=r'embedding'):
             GoogleAI.gemini_model('gemini-embedding-001')
         with pytest.raises(GenkitError, match=r'veo_model'):
@@ -201,13 +196,15 @@ class TestClosedRejectSet:
             GoogleAI.gemini_model('imagegeneration@006')
         with pytest.raises(GenkitError, match=r'is not a supported model'):
             GoogleAI.gemini_model('virtual-try-on-001')
-        with pytest.raises(GenkitError, match=r'is not a imagen model'):
-            GoogleAI.imagen_model('totally-new-model')
+        with pytest.raises(GenkitError, match=r'GoogleAI\.gemini_image_model'):
+            GoogleAI.gemini_model('imagen-4.0-generate-001')
+        with pytest.raises(GenkitError, match=r'for image generation use VertexAI\.gemini_image_model\(\)'):
+            VertexAI.gemini_model('imagen-3.0-generate-002')
+        with pytest.raises(GenkitError, match=r'is not a gemma model'):
+            GoogleAI.gemma_model('totally-new-model')
 
     def test_family_constructors_reject_other_families(self) -> None:
         """Non-gemini constructors take only their own family ids."""
-        with pytest.raises(GenkitError):
-            GoogleAI.imagen_model('gemini-2.5-flash')
         with pytest.raises(GenkitError):
             GoogleAI.gemini_tts_model('gemini-2.5-flash')
         with pytest.raises(GenkitError):
@@ -267,8 +264,6 @@ class TestKnownIdLiterals:
         # Gemma 3 ids resolve through the generic Gemma info, not _add_model.
         assert _registered(is_gemma_model) <= set(get_args(KnownGemma))
         assert all(is_gemma_model(value) for value in get_args(KnownGemma))
-        assert set(get_args(KnownImagen)) == set(IMAGEN_SUPPORTED_MODELS)
-        assert all(is_imagen_model_name(value) for value in get_args(KnownImagen))
         assert all(is_veo_model(value) for value in get_args(KnownVeo))
         assert all(is_lyria_model_name(value) for value in get_args(KnownLyria))
 
@@ -284,3 +279,51 @@ class TestKnownIdLiterals:
     def test_gemma_4_autocompletes_on_gemma_model(self) -> None:
         """The gemma-4 ids are offered by ``gemma_model``."""
         assert {'gemma-4-26b-a4b-it', 'gemma-4-31b-it'} <= set(get_args(KnownGemma))
+
+
+class TestNoImagenSurface:
+    """Imagen has no export or module, and imagen_model only raises."""
+
+    def test_no_imagen_exports(self) -> None:
+        """The package exposes no Imagen name."""
+        assert not {name for name in genkit_google_genai.__all__ if 'Imagen' in name}
+
+    @pytest.mark.parametrize('plugin', [GoogleAI, VertexAI])
+    def test_imagen_model_raises_with_the_image_hint(self, plugin: type[GoogleAI] | type[VertexAI]) -> None:
+        """imagen_model raises INVALID_ARGUMENT pointing at gemini_image_model."""
+        cls = plugin.__name__
+        with pytest.raises(
+            GenkitError, match=rf'{cls}\.imagen_model: .* use {cls}\.gemini_image_model\(\)'
+        ) as exc_info:
+            plugin.imagen_model('imagen-4.0-generate-001')
+        assert exc_info.value.status == 'INVALID_ARGUMENT'
+
+    def test_no_imagen_module(self) -> None:
+        """The Imagen model module is gone."""
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module('genkit_google_genai.models.imagen')
+
+    @pytest.mark.parametrize('plugin', [GoogleAI, VertexAI])
+    def test_every_constructor_rejects_imagen_ids(self, plugin: type[GoogleAI] | type[VertexAI]) -> None:
+        """An imagen- id is refused by every other family constructor with the image hint."""
+        for method in ('gemini_model', 'gemini_tts_model', 'gemma_model'):
+            with pytest.raises(GenkitError, match=r'for image generation use \w+\.gemini_image_model\(\)'):
+                getattr(plugin, method)('imagen-4.0-generate-001')
+        with pytest.raises(GenkitError, match=r'for image generation use \w+\.gemini_image_model\(\)'):
+            plugin.embedding('imagen-4.0-generate-001')
+
+    @pytest.mark.parametrize('plugin', [GoogleAI, VertexAI])
+    def test_gemini_image_model_does_not_suggest_itself(self, plugin: type[GoogleAI] | type[VertexAI]) -> None:
+        """gemini_image_model refuses an imagen- id without pointing back at itself."""
+        with pytest.raises(GenkitError) as exc_info:
+            plugin.gemini_image_model('imagen-4.0-generate-001')
+        assert 'is not a supported model' in str(exc_info.value)
+        assert 'for image generation' not in str(exc_info.value)
+
+    @pytest.mark.parametrize('bad_id', ['imagegeneration@006', 'imagetext@001', 'virtual-try-on-001'])
+    def test_other_unsupported_ids_omit_the_image_hint(self, bad_id: str) -> None:
+        """Only imagen- ids are redirected to image generation."""
+        with pytest.raises(GenkitError) as exc_info:
+            GoogleAI.gemini_model(bad_id)
+        assert 'is not a supported model' in str(exc_info.value)
+        assert 'gemini_image_model' not in str(exc_info.value)

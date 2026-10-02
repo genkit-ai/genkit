@@ -85,7 +85,6 @@ from genkit_google_genai.models.gemini import (
     GeminiTtsConfigSchema,
     GemmaConfigSchema,
 )
-from genkit_google_genai.models.imagen import ImagenConfigSchema
 from genkit_google_genai.models.interactions_lyria import LyriaConfig
 from genkit_google_genai.models.veo import VeoConfig
 
@@ -100,15 +99,14 @@ def package_name() -> str:
 
 
 __all__ = [
+    'AntigravityConfig',
+    'DeepResearchConfig',
     'EmbeddingTaskType',
     'GeminiConfigSchema',
     'GeminiImageConfigSchema',
     'GeminiTtsConfigSchema',
     'GemmaConfigSchema',
-    'AntigravityConfig',
-    'DeepResearchConfig',
     'GoogleAI',
-    'ImagenConfigSchema',
     'LyriaConfig',
     'VeoConfig',
     'VertexAI',

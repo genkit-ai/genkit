@@ -95,16 +95,10 @@ export const poemFlow = ai.defineFlow(
 
 #### Test Your Flow
 
-Start the UI:
+Start your app and the Developer UI:
 
 ```bash
 cd your/project/directory
-genkit ui:start
-```
-
-#### Run Your App
-
-```bash
 genkit start -- tsx --watch src/index.ts
 ```
 

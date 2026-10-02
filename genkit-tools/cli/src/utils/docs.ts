@@ -29,7 +29,7 @@ import { version } from './version';
 
 export const DOCS_URL =
   process.env.GENKIT_DOCS_BUNDLE_URL ??
-  'http://genkit.dev/docs-bundle-experimental.json';
+  'https://genkit.dev/docs-bundle-experimental.json';
 
 export const DOCS_BUNDLE_FILE_PATH = path.resolve(
   os.homedir(),

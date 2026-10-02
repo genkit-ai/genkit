@@ -254,3 +254,75 @@ const response = await ai.generate({
   ]
 });
 ```
+
+### 8. Context Compression Middleware (`contextCompression`)
+
+Compresses conversation context when it grows too large, reducing token usage and costs in agentic workflows and tool loops. Compression triggers when estimated tokens or previous turn usage exceeds `maxInputTokens`.
+
+**Strategies applied:**
+
+1. **Safety cap**: Hard-truncates any single oversized tool response (`maxToolResponseChars`, default: 400,000 chars) on every turn with a `[TRUNCATED: ...]` marker.
+2. **Deduplication**: Replaces duplicate tool responses with a short notice (`deduplicateToolResponses`).
+3. **Tool response truncation**: Truncates tool responses exceeding a character limit (`toolResponses`), preserving the most recent tool response messages and appending a `[Truncated N characters]` marker.
+4. **Message count cap**: Drops older non-system messages when exceeding `maxMessages`, preserving system messages and ensuring conversation history begins with a user turn.
+5. **Summarization**: Summarizes older conversation history using an LLM (`summarize`), with optional threshold skipping (`skipSummarizationThreshold`) and dynamic overshoot adjustment.
+6. **Non-destructive session history**: By default (`preserveOriginalMessages: true`), compression state is saved in message metadata (`message.metadata.contextCompression`) rather than modifying original messages in place. Model calls receive the compressed view while session and UI logs retain full original messages. Use `resolveCompressedHistory(messages)` to extract active messages.
+
+> **Ordering note:** When combining `contextCompression` with context-injecting middleware (such as `filesystem()`, `skills()`, or `artifacts()`), place `contextCompression` **after** those middlewares in `use: [...]` so their injected instructions and tool outputs are accounted for during compression.
+
+```typescript
+import { genkit } from 'genkit';
+import { contextCompression, resolveCompressedHistory } from '@genkit-ai/middleware';
+
+const ai = genkit({ ... });
+
+const response = await ai.generate({
+  model: googleAI.model('gemini-flash-latest'),
+  prompt: 'Research and summarize...',
+  tools: [searchTool],
+  use: [
+    contextCompression({
+      maxInputTokens: 80000,
+      deduplicateToolResponses: { matchBy: 'name-and-input' },
+      toolResponses: { maxChars: 2000, preserveRecent: 2 },
+      summarize: {
+        model: googleAI.model('gemini-2.5-flash'),
+        preserveRecent: 6,
+      },
+      skipSummarizationThreshold: 0.25, // Skip LLM summary if cheap strategies save >= 25%
+      preserveOriginalMessages: true, // Non-destructive (default)
+      maxMessages: 20,
+    }),
+  ],
+});
+
+// Original uncompressed history is preserved in response.messages:
+console.log(response.messages.length);
+
+// Resolve the active compressed messages sent to the model:
+const activeMessages = resolveCompressedHistory(response.messages);
+```
+
+#### Options
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `maxInputTokens` | `number` | `Infinity` | Triggers compression when token count exceeds this threshold. |
+| `preserveRecent` | `number` | `10` | Number of most recent non-system messages to preserve when dropping older messages (and default for `summarize.preserveRecent`). |
+| `preserveSystem` | `boolean` | `true` | Always keep system instructions intact. |
+| `maxToolResponseChars` | `number` | `400000` | Hard cap on any single tool response size in characters. Set negative to disable. |
+| `deduplicateToolResponses` | `object` | — | Deduplication settings for repeated tool calls. |
+| `deduplicateToolResponses.matchBy` | `'name-and-input' \| 'name-only'` | `'name-and-input'` | How duplicate tool calls are matched. `'name-and-input'` matches calls with identical tool name and arguments. `'name-only'` groups all calls to a tool by name alone and discards earlier responses even when called with different inputs (use only for tools that return the latest state regardless of arguments). |
+| `deduplicateToolResponses.keepRecent` | `number` | `1` | Number of most recent responses to keep per duplicate group (minimum `1`). |
+| `deduplicateToolResponses.notice` | `string` | standard text | Custom replacement text for deduplicated tool responses. |
+| `toolResponses` | `object` | — | Truncation settings for older tool responses. |
+| `toolResponses.maxChars` | `number` | — | Max characters per older tool response. |
+| `toolResponses.preserveRecent` | `number` | `2` | Number of most recent tool response messages to keep untruncated. |
+| `summarize` | `object` | — | LLM summarization settings (`model`, `preserveRecent`, `prompt`). |
+| `skipSummarizationThreshold` | `number` | — | Skip summarization if cheap strategies save at least this fraction (`0..1`) of context and bring estimated tokens within `maxInputTokens`. |
+| `maxMessages` | `number` | — | Maximum message count target. Drops older non-system messages, ensuring history begins with a user turn. |
+| `insertTruncationNotice` | `boolean` | `true` | Inserts an advisory notice when messages are dropped. |
+| `truncationNotice` | `string` | standard text | Custom notice text to use when messages are dropped. |
+
+
+

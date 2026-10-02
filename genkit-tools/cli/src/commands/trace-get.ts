@@ -46,7 +46,7 @@ export const traceGet = new Command('trace:get')
   )
   .option('--keep-base64', 'do not strip base64 data URLs in output', false)
   .action(async (traceId: string, options: TraceGetOptions) => {
-    // Redirect logging to stdout for clean JSON
+    // Redirect logging to stderr for clean JSON
     forceStderr();
     const projectRoot = await findProjectRoot();
 
@@ -55,6 +55,7 @@ export const traceGet = new Command('trace:get')
         const response = await manager.getTrace({ traceId });
         if (!response) {
           logger.error(`Trace with ID '${traceId}' not found.`);
+          process.exitCode = 1;
           return;
         }
 
@@ -73,6 +74,7 @@ export const traceGet = new Command('trace:get')
         }
       } catch (e) {
         logger.error(`Error retrieving trace: ${e}`);
+        process.exitCode = 1;
       }
     };
 

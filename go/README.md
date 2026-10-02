@@ -91,6 +91,7 @@ Every sample below runs on its own with `go run .`, and its package comment expl
 | [basic](samples/basic/main.go) | Simple text generation with streaming |
 | [basic‑structured](samples/basic-structured/main.go) | Typed JSON output with `GenerateData` and `GenerateDataStream` |
 | [basic‑formats](samples/basic-formats/main.go) | Output formats and what each one makes a streamed chunk mean |
+| [basic‑decisions](samples/basic-decisions/main.go) | Decisions with TypeSafe jev: the output type is the question set, the answers carry calibrated probabilities, and the routing policy stays in code |
 | [basic‑media](samples/basic-media) | Reading, drawing, and redrawing pictures, plus generating video with a polled background model |
 | [basic‑prompts](samples/basic-prompts) | Prompt templates with Handlebars and `.prompt` files, shared partials and helpers, and prompts embedded in the binary |
 | [basic‑prompt‑content](samples/basic-prompt-content/main.go) | Prompt content computed from your data, with media and retrieved docs |
@@ -921,7 +922,7 @@ The `middleware` plugin also ships with:
 
 - [`ToolApproval`](plugins/middleware/tool_approval.go) — interrupts any tool not on an allow list and resumes once the call is explicitly approved on restart.
 - [`Filesystem`](samples/basic-middleware/filesystem) — gives the model `list_files` and `read_file` tools (plus `write_file` and `edit_file` when `AllowWriteAccess` is set), all confined to a single `RootDir` via `os.Root` (Go 1.25+) so paths cannot escape via `..`, absolute paths, or symlinks.
-- [`Skills`](samples/basic-middleware/skills) — exposes a library of `SKILL.md` files through a `use_skill` tool so the model can pull in specialised instructions on demand.
+- [`Skills`](samples/basic-middleware/skills) — exposes a library of `SKILL.md` files following the [Agent Skills](https://agentskills.io) specification, so a skill written for any compliant agent works here. Scans `.agents/skills` and `skills` by default, on disk or inside `SkillFS`, so skills can ship in the binary through `//go:embed`. The model sees each skill's name and description, loads one on demand through `use_skill`, and reads the files a skill bundles through `read_skill_file` when `AllowResourceAccess` is set. `Preload` injects a skill up front when the application, rather than the model, decides it applies.
 
 [See the retry + fallback sample](samples/basic-middleware/retry-fallback/main.go) for a full composition.
 
@@ -1367,6 +1368,7 @@ Genkit provides a unified interface across all major AI providers. Use whichever
 | **Vertex AI Model Garden** | `modelgarden.Anthropic`, `.Llama`, `.Mistral` | Claude, Llama, and Mistral via Google Cloud |
 | **Ollama** | `ollama.Ollama` | Llama 4, Qwen 3, DeepSeek, and other local models |
 | **OpenAI Compatible** | `compat_oai` | GPT-5.6, Grok, DeepSeek, Qwen, Kimi, GLM, the OpenRouter gateway, and any OpenAI-compatible API |
+| **TypeSafe** *(preview)* | `typesafex.TypeSafe` | jev, a decision model: typed questions about a state, calibrated answers back; see the [plugin README](plugins/typesafe/exp/README.md) |
 
 ```go
 // Google AI

@@ -38,8 +38,9 @@ import {
   logger,
 } from '@genkit-ai/tools-common/utils';
 import * as clc from 'colorette';
-import { Command } from 'commander';
+import { Command, Option } from 'commander';
 import { runWithManager } from '../utils/manager-utils';
+import { parseJson, parsePositiveInt } from '../utils/option-parsers';
 
 interface EvalFlowRunCliOptions {
   input?: string;
@@ -60,6 +61,7 @@ enum SourceType {
 
 /** Command to run a flow and evaluate the output */
 export const evalFlow = new Command('eval:flow')
+  .usage('[options] <flowName> [data] [-- <command...>]')
   .description(
     'evaluate a flow against configured evaluators using provided data as input'
   )
@@ -69,16 +71,17 @@ export const evalFlow = new Command('eval:flow')
     '--input <input>',
     'Input dataset ID or JSON file to be used for evaluation'
   )
-  .option('-c, --context <JSON>', 'JSON object passed to context', '')
+  .option('-c, --context <JSON>', 'JSON object passed to context', (val) =>
+    JSON.stringify(parseJson(val))
+  )
   .option(
     '-o, --output <filename>',
-    'Name of the output file to write evaluation results. Defaults to json output.'
+    'Name of the output file to write evaluation results'
   )
-  // TODO: Figure out why passing a new Option with choices doesn't work
-  .option(
-    '--output-format <format>',
-    'The output file format (csv, json)',
-    'json'
+  .addOption(
+    new Option('--output-format <format>', 'The output file format')
+      .choices(['json', 'csv'])
+      .default('json')
   )
   .option(
     '-e, --evaluators <evaluators>',
@@ -86,8 +89,8 @@ export const evalFlow = new Command('eval:flow')
   )
   .option(
     '--batchSize <batchSize>',
-    'batch size to use for parallel evals (default to 1, no parallelization)',
-    Number.parseInt
+    'batch size to use for parallel evals (defaults to 1, no parallelization)',
+    parsePositiveInt
   )
   .option('-f, --force', 'Automatically accept all interactive prompts')
   .action(
@@ -147,7 +150,7 @@ export const evalFlow = new Command('eval:flow')
               : `No evaluators found in your app`
           );
         }
-        logger.debug(
+        logger.info(
           `Using evaluators: ${evaluatorActions.map((action) => action.name).join(',')}`
         );
 
