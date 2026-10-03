@@ -402,7 +402,7 @@ export const GemmaConfigSchema = GeminiConfigSchema.extend({
   temperature: z
     .number()
     .min(0.0)
-    .max(1.0)
+    .max(2.0)
     .describe(
       GenerationCommonConfigDescriptions.temperature +
         ' The default value is 1.0.'
