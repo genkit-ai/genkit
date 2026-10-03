@@ -140,13 +140,9 @@ class Skills(BaseMiddleware[SkillsConfig]):
             new_content = []
             replaced = False
             for part in msg.content:
-                meta = part.metadata if part.text is not None else None
-                owner = meta.get(_SKILLS_TOOL_METADATA_KEY) if isinstance(meta, dict) else None
-                if (
-                    isinstance(meta, dict)
-                    and meta.get(_SKILLS_MARKER)
-                    and (not isinstance(owner, str) or owner == _USE_SKILL_TOOL_NAME)
-                ):
+                meta = part.metadata if part.text is not None and isinstance(part.metadata, dict) else None
+                owner = meta.get(_SKILLS_TOOL_METADATA_KEY) if meta else None
+                if meta and meta.get(_SKILLS_MARKER) and (not isinstance(owner, str) or owner == _USE_SKILL_TOOL_NAME):
                     new_content.append(new_part)
                     replaced = True
                 else:
