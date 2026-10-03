@@ -17,6 +17,7 @@
 import { GenkitError } from './error.js';
 import { logger } from './logging.js';
 import type { TelemetryConfig } from './telemetryTypes.js';
+import { flushTelemetryServerPosts } from './tracing/exporter.js';
 
 export * from './tracing/exporter.js';
 export * from './tracing/instrumentation.js';
@@ -27,16 +28,19 @@ const instrumentationKey = '__GENKIT_TELEMETRY_INSTRUMENTED';
 const telemetryProviderKey = '__GENKIT_TELEMETRY_PROVIDER';
 
 /**
+ * Ensures any implicit, flag-gated telemetry setup has run before a span is
+ * opened.
+ *
+ * Historically this also booted a NodeSDK (`enableTelemetry({})`) so the dev
+ * path had an exporter. That coupled instrumentation (span creation) to
+ * collection (export). Instrumentation is now pluggable and the Developer UI is
+ * fed by `DirectTelemetryInstrumentation`, so the only survivor here is the
+ * flag-gated Firebase auto-init.
+ *
  * @hidden
  */
 export async function ensureBasicTelemetryInstrumentation() {
   await checkFirebaseMonitoringAutoInit();
-
-  if (global[instrumentationKey]) {
-    return await global[instrumentationKey];
-  }
-
-  await enableTelemetry({});
 }
 
 /**
@@ -111,7 +115,13 @@ export async function enableTelemetry(
  * @hidden
  */
 export async function flushTracing() {
-  return getTelemetryProvider().flushTracing();
+  // Also await DirectTelemetryInstrumentation's posts, which bypass the OTel
+  // processors. The reflection server relies on this so a trace is saved
+  // before its traceId is returned to the Dev UI.
+  await Promise.all([
+    getTelemetryProvider().flushTracing(),
+    flushTelemetryServerPosts(),
+  ]);
 }
 
 function isOTelInitializationDisabled(): boolean {
