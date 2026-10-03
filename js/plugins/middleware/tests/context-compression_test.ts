@@ -3826,4 +3826,200 @@ describe('contextCompression middleware', () => {
     assert.strictEqual(msgs[1].content[0].text, 'm3');
     assert.strictEqual(msgs[2].content[0].text, 'u4');
   });
+
+  it('truncates multipart toolResponse.content via toolResponses.maxChars and materializes across turns', async () => {
+    const ai = genkit({});
+    let capturedRequest: GenerateRequest | undefined;
+
+    const pm = ai.defineModel({ name: 'multipartTruncModel' }, async (req) => {
+      capturedRequest = req;
+      return {
+        message: { role: 'model', content: [{ text: 'done' }] },
+        usage: { inputTokens: 50 },
+      };
+    });
+
+    const largeContentText = 'X'.repeat(200_000);
+    const res = await ai.generate({
+      model: pm,
+      messages: [
+        { role: 'user', content: [{ text: 'run multipart tool' }] },
+        {
+          role: 'model',
+          content: [
+            { toolRequest: { name: 'multiTool', ref: 'm1', input: {} } },
+          ],
+        },
+        {
+          role: 'tool',
+          content: [
+            {
+              toolResponse: {
+                name: 'multiTool',
+                ref: 'm1',
+                output: 'ok',
+                content: [{ text: largeContentText }],
+              },
+            },
+          ],
+        },
+      ],
+      use: [
+        contextCompression({
+          maxInputTokens: 1000,
+          maxToolResponseChars: 500,
+          toolResponses: { maxChars: 100, preserveRecent: 0 },
+        }),
+      ],
+    });
+
+    const cc = (res.custom as Record<string, unknown>)?.contextCompression as
+      | Record<string, unknown>
+      | undefined;
+    assert.ok(cc);
+    assert.strictEqual(cc.triggered, true);
+    assert.strictEqual(cc.toolResponsesTruncated, 1);
+    assert.strictEqual(cc.toolResponsesSafetyCapped, 0);
+
+    const modelToolMsg = capturedRequest!.messages.find(
+      (m) => m.role === 'tool'
+    );
+    assert.ok(modelToolMsg);
+    const modelToolResp = modelToolMsg.content[0].toolResponse!;
+    assert.strictEqual(modelToolResp.output, 'ok');
+    assert.strictEqual(modelToolResp.content?.length, 1);
+    assert.strictEqual(
+      modelToolResp.content?.[0].text,
+      `${'X'.repeat(98)}\n\n[Truncated 199902 characters]`
+    );
+
+    // Original message in response.messages preserves raw content
+    const rawToolMsg = res.messages.find((m) => m.role === 'tool')!;
+    assert.strictEqual(
+      rawToolMsg.content[0].toolResponse?.content?.[0].text,
+      largeContentText
+    );
+
+    // resolveCompressedHistory materializes the truncated multipart content
+    const resolved = resolveCompressedHistory(res.messages);
+    const resolvedToolMsg = resolved.find((m) => m.role === 'tool')!;
+    assert.strictEqual(
+      resolvedToolMsg.content[0].toolResponse?.content?.[0].text,
+      `${'X'.repeat(98)}\n\n[Truncated 199902 characters]`
+    );
+  });
+
+  it('enforces maxToolResponseChars safety cap on multipart toolResponse.content even when under maxInputTokens', async () => {
+    const ai = genkit({});
+    let capturedRequest: GenerateRequest | undefined;
+
+    const pm = ai.defineModel({ name: 'multipartCapModel' }, async (req) => {
+      capturedRequest = req;
+      return {
+        message: { role: 'model', content: [{ text: 'done' }] },
+        usage: { inputTokens: 50 },
+      };
+    });
+
+    const res = await ai.generate({
+      model: pm,
+      messages: [
+        { role: 'user', content: [{ text: 'run multipart tool' }] },
+        {
+          role: 'model',
+          content: [
+            { toolRequest: { name: 'multiTool', ref: 'm1', input: {} } },
+          ],
+        },
+        {
+          role: 'tool',
+          content: [
+            {
+              toolResponse: {
+                name: 'multiTool',
+                ref: 'm1',
+                output: 'ok',
+                content: [
+                  { text: 'A'.repeat(100) },
+                  { text: 'B'.repeat(1000) },
+                  { text: 'C'.repeat(500) },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+      use: [
+        contextCompression({
+          maxInputTokens: 100_000,
+          maxToolResponseChars: 500,
+        }),
+      ],
+    });
+
+    const cc = (res.custom as Record<string, unknown>)?.contextCompression as
+      | Record<string, unknown>
+      | undefined;
+    assert.ok(cc);
+    assert.strictEqual(cc.triggered, true);
+    assert.strictEqual(cc.toolResponsesSafetyCapped, 1);
+    assert.strictEqual(cc.toolResponsesTruncated, 0);
+
+    const modelToolMsg = capturedRequest!.messages.find(
+      (m) => m.role === 'tool'
+    )!;
+    const modelToolResp = modelToolMsg.content[0].toolResponse!;
+    assert.strictEqual(modelToolResp.output, 'ok');
+    assert.strictEqual(modelToolResp.content?.length, 2);
+    assert.strictEqual(modelToolResp.content?.[0].text, 'A'.repeat(100));
+    assert.strictEqual(
+      modelToolResp.content?.[1].text,
+      `${'B'.repeat(398)}\n\n---\n\n[TRUNCATED: Response was 1602 chars but only first 500 are shown.]`
+    );
+
+    // Also verify when output alone exhausts the limit, content is stripped
+    await ai.generate({
+      model: pm,
+      messages: [
+        { role: 'user', content: [{ text: 'run multipart tool 2' }] },
+        {
+          role: 'model',
+          content: [
+            { toolRequest: { name: 'multiTool', ref: 'm2', input: {} } },
+          ],
+        },
+        {
+          role: 'tool',
+          content: [
+            {
+              toolResponse: {
+                name: 'multiTool',
+                ref: 'm2',
+                output: 'O'.repeat(200),
+                content: [{ text: 'C'.repeat(300) }],
+              },
+            },
+          ],
+        },
+      ],
+      use: [
+        contextCompression({
+          maxInputTokens: 50,
+          maxToolResponseChars: 500,
+          toolResponses: { maxChars: 100, preserveRecent: 0 },
+        }),
+      ],
+    });
+
+    const secondToolMsg = capturedRequest!.messages.find(
+      (m) => m.role === 'tool'
+    )!;
+    const secondToolResp = secondToolMsg.content[0].toolResponse!;
+    assert.strictEqual(
+      secondToolResp.output,
+      `${'O'.repeat(100)}\n\n[Truncated 400 characters]`
+    );
+    assert.strictEqual(secondToolResp.content, undefined);
+    assert.strictEqual('content' in secondToolResp, false);
+  });
 });
