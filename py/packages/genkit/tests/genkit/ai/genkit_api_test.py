@@ -340,3 +340,22 @@ async def test_current_context() -> None:
         _action_context.reset(token)
 
     assert Genkit.current_context() is None
+
+
+def test_genkit_positional_argument_raises_type_error() -> None:
+    with pytest.raises(
+        TypeError,
+        match=(
+            r'Genkit\(\) takes no positional arguments, got 1\. '
+            r'Pass keyword arguments instead, e\.g\. Genkit\(model='
+        ),
+    ):
+        Genkit('googleai/gemini-flash-latest')  # type: ignore[misc]
+    with pytest.raises(
+        TypeError,
+        match=(
+            r'Genkit\(\) takes no positional arguments, got 1\. '
+            r'Pass keyword arguments instead, e\.g\. Genkit\(plugins='
+        ),
+    ):
+        Genkit([])  # type: ignore[misc]

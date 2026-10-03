@@ -33,6 +33,7 @@ from typing import Any, TypeVar, cast, overload
 import anyio
 import uvicorn
 from pydantic import BaseModel
+from typing_extensions import Never
 
 from genkit._ai._agents._session import get_current_session
 from genkit._ai._embedding import EmbedderFn, EmbedderInfo, EmbedderRef, define_embedder
@@ -162,11 +163,20 @@ class Genkit:
 
     def __init__(
         self,
+        *args: Never,
         plugins: list[Plugin] | None = None,
         model: ModelArg | None = None,
         prompt_dir: str | Path | None = None,
         reflection_server_spec: ServerSpec | None = None,
     ) -> None:
+        # Intercept positional args at runtime with `*args: Never` instead of bare `*`
+        # so we can provide actionable guidance while static type checkers still reject them.
+        if args:
+            example = f'Genkit(model={args[0]!r})' if isinstance(args[0], str) else 'Genkit(plugins=[...], model="...")'
+            raise TypeError(
+                f'Genkit() takes no positional arguments, got {len(args)}. '
+                f'Pass keyword arguments instead, e.g. {example}.'
+            )
         # Before anything that logs, so plugin initialization is covered too.
         configure_logging()
         self.registry: Registry = Registry()
