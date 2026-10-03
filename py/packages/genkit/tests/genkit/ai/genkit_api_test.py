@@ -5,7 +5,6 @@
 
 """Tests for the Genkit extra API methods."""
 
-from typing import TypeVar
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock
 
@@ -32,8 +31,6 @@ from genkit.middleware import BaseMiddleware, GenerateHookParams, GenerateMiddle
 from genkit.model import model
 from genkit.plugin_api import ActionKind
 from genkit.telemetry import configure_instrumentation
-
-T = TypeVar('T')
 
 
 @pytest.mark.asyncio
@@ -66,7 +63,7 @@ async def test_genkit_run_tags_flow_step_action_type() -> None:
     class Recording:
         last: SpanMetadata | None = None
 
-        async def run_in_new_span(self, metadata: SpanMetadata, next: SpanNext[T]) -> T:
+        async def run_in_new_span(self, metadata: SpanMetadata, next: SpanNext[str]) -> str:
             self.last = metadata
             return await next()
 
