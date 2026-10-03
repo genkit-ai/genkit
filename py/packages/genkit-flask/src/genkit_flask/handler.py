@@ -18,6 +18,7 @@
 
 import asyncio
 import json
+import logging
 from asyncio import AbstractEventLoop
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterable
 from typing import Any, TypeAlias, TypeVar
@@ -26,8 +27,9 @@ from flask import Response, request
 from pydantic import BaseModel
 
 from genkit import ContextProvider, Genkit, GenkitError, RequestData
-from genkit._core._action import Action
-from genkit.plugin_api import get_callable_json
+from genkit.plugin_api import Action, get_callable_json, get_http_status
+
+logger = logging.getLogger(__name__)
 
 # Compact JSON (no spaces) for smaller wire payload.
 _JSON_SEPARATORS = (',', ':')
@@ -147,10 +149,8 @@ def genkit_flask_handler(
                         result = await stream_response.response
                         yield f'data: {json.dumps({"result": _to_dict(result)}, separators=_JSON_SEPARATORS)}\n\n'
                     except Exception as e:
-                        ex = e
-                        if isinstance(ex, GenkitError):
-                            ex = ex.cause
-                        yield f'data: {json.dumps({"error": get_callable_json(ex)}, separators=_JSON_SEPARATORS)}\n\n'
+                        logger.exception('served flow stream failed')
+                        yield f'data: {json.dumps({"error": get_callable_json(e)}, separators=_JSON_SEPARATORS)}\n\n'
 
                 iter = _iter_over_async(async_gen(), loop)
                 return iter
@@ -159,12 +159,11 @@ def genkit_flask_handler(
                     response = await flow.run(input_data.get('data'), context=action_context, init=init)
                     return {'result': _to_dict(response.response)}
                 except Exception as e:
-                    ex = e
-                    if isinstance(ex, GenkitError):
-                        ex = ex.cause
+                    logger.exception('served flow failed')
                     return Response(
-                        status=500,
-                        response=json.dumps(get_callable_json(ex), separators=_JSON_SEPARATORS),
+                        status=get_http_status(e),
+                        response=json.dumps(get_callable_json(e), separators=_JSON_SEPARATORS),
+                        mimetype='application/json',
                     )
 
         return handler

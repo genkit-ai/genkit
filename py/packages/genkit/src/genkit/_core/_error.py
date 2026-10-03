@@ -479,17 +479,53 @@ class PublicError(GenkitError):
         super().__init__(status=status, message=message, details=details)
 
 
-def get_http_status(error: object) -> int:
-    """Get the HTTP status code for an error.
+_INTERNAL_CLIENT_BODY: dict[str, Any] = {'message': 'Internal Error', 'status': 'INTERNAL'}
 
-    Args:
-        error: The error to get the status code for.
 
-    Returns:
-        The HTTP status code (500 for non-Genkit errors).
+def _client_facing_error(error: object) -> GenkitError | None:
+    """The GenkitError whose status a served flow may show the caller, or None to redact.
+
+    The innermost GenkitError with a real status wins, so a PublicError the
+    action runner wrapped still reaches the caller. An INTERNAL wrapper with
+    nothing like that underneath is an unexpected failure and gets a plain 500.
     """
-    if isinstance(error, GenkitError):
-        return error.http_code
+    if not isinstance(error, GenkitError):
+        return None
+    if isinstance(error.cause, GenkitError):
+        inner = _client_facing_error(error.cause)
+        if inner is not None:
+            return inner
+    if error.status == 'INTERNAL' and error.cause is not None:
+        return None
+    return error
+
+
+def _generic_client_message(status: StatusName) -> str:
+    """'INVALID_ARGUMENT' -> 'Invalid argument'; INTERNAL keeps the familiar 'Internal Error'."""
+    if status == 'INTERNAL':
+        return 'Internal Error'
+    return status.replace('_', ' ').capitalize()
+
+
+def _client_details(details: Any) -> Any:  # noqa: ANN401
+    """Details safe to put on the wire: drop stack, omit an empty dict."""
+    if not details:
+        return None
+    if isinstance(details, dict):
+        cleaned = {key: value for key, value in details.items() if key != 'stack'}
+        return cleaned or None
+    return details
+
+
+def get_http_status(error: object) -> int:
+    """HTTP status for a served-flow error.
+
+    A GenkitError keeps its own status (NOT_FOUND is a 404); a plain
+    exception, or an INTERNAL wrapper around one, is a 500.
+    """
+    facing = _client_facing_error(error)
+    if facing is not None:
+        return facing.http_code
     return 500
 
 
@@ -512,23 +548,26 @@ def get_reflection_json(error: object) -> ReflectionError:
 
 
 def get_callable_json(error: object) -> dict[str, Any]:
-    """Get the JSON-serializable representation of an error for callable responses.
+    """JSON body for a served-flow HTTP or SSE error.
 
-    Args:
-        error: The error to convert to JSON.
-
-    Returns:
-        A dict ready for json.dumps (message, status, details keys).
+    Only a PublicError's message goes on the wire; it's the one error whose
+    author said the text is safe for callers. Any other GenkitError keeps its
+    status but gets a generic message, since framework errors can quote the
+    caller's input. Anything else — including an INTERNAL wrapper around a raw
+    exception — becomes ``{"message": "Internal Error", "status": "INTERNAL"}``.
     """
-    if isinstance(error, GenkitError):
-        wire = error.to_callable_serializable()
-    else:
-        wire = HttpErrorWireFormat(
-            message=str(error),
-            status=StatusCodes.INTERNAL.name,
-            details={'stack': get_error_stack(error)},
-        )
-    return wire.model_dump()
+    facing = _client_facing_error(error)
+    if facing is None:
+        return dict(_INTERNAL_CLIENT_BODY)
+    message = facing.original_message if isinstance(facing, PublicError) else _generic_client_message(facing.status)
+    body: dict[str, Any] = {
+        'message': message,
+        'status': facing.status,
+    }
+    details = _client_details(facing.details)
+    if details is not None:
+        body['details'] = details
+    return body
 
 
 def get_error_stack(error: object) -> str | None:

@@ -30,6 +30,7 @@ from genkit._core._error import (
     get_callable_json,
     get_error_stack,
     get_http_status,
+    get_reflection_json,
     parse_retry_after_ms,
     wrap_http_error,
 )
@@ -167,21 +168,73 @@ def test_get_http_status() -> None:
     non_genkit_error = ValueError('Some other error')
     assert get_http_status(non_genkit_error) == 500
 
+    wrapped = GenkitError(
+        status='INTERNAL',
+        message='Error while running action boom',
+        cause=ValueError('secret'),
+    )
+    assert get_http_status(wrapped) == 500
+
 
 def test_get_callable_json() -> None:
-    genkit_error = GenkitError(status='INVALID_ARGUMENT', message='Oops')
+    genkit_error = GenkitError(status='INVALID_ARGUMENT', message='bad id 12345')
     json_data = get_callable_json(genkit_error)
     assert isinstance(json_data, dict)
     assert json_data['status'] == 'INVALID_ARGUMENT'
-    assert json_data['message'] == 'Oops'
-    assert 'details' in json_data
+    assert json_data['message'] == 'Invalid argument'
+    assert '12345' not in str(json_data)
+    assert 'stack' not in json_data.get('details', {})
 
     non_genkit_error = TypeError('Type error')
     json_data = get_callable_json(non_genkit_error)
-    assert isinstance(json_data, dict)
-    assert json_data['status'] == 'INTERNAL'
-    assert json_data['message'] == 'Type error'
-    assert 'details' in json_data
+    assert json_data == {'message': 'Internal Error', 'status': 'INTERNAL'}
+
+    wrapped = GenkitError(
+        status='INTERNAL',
+        message='Error while running action boom',
+        cause=ValueError('secret'),
+    )
+    json_data = get_callable_json(wrapped)
+    assert json_data == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert 'secret' not in str(json_data)
+
+    public = PublicError(status='NOT_FOUND', message='missing recipe')
+    json_data = get_callable_json(public)
+    assert json_data['message'] == 'missing recipe'
+    assert json_data['status'] == 'NOT_FOUND'
+    assert 'stack' not in json_data.get('details', {})
+    assert get_http_status(public) == 404
+
+
+def test_served_error_body_for_internal_wrapper_around_wrapped_raw_error_is_internal_error() -> None:
+    """An INTERNAL wrapper around another wrapped raw raise sends neither wrapper's text."""
+    nested = GenkitError(
+        status='INTERNAL',
+        message='outer secret',
+        cause=GenkitError(status='INTERNAL', message='inner secret', cause=ValueError('raw secret')),
+    )
+
+    assert get_callable_json(nested) == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert get_http_status(nested) == 500
+
+
+def test_served_error_body_for_wrapped_public_error_is_its_status_and_message() -> None:
+    """A PublicError wrapped by the action runner still sends its own status and message."""
+    wrapped = GenkitError(
+        status='INTERNAL',
+        message='Error while running action lookup',
+        cause=PublicError(status='NOT_FOUND', message='no order 99'),
+    )
+
+    assert get_callable_json(wrapped) == {'message': 'no order 99', 'status': 'NOT_FOUND'}
+    assert get_http_status(wrapped) == 404
+
+
+def test_dev_ui_error_body_for_genkit_error_keeps_its_real_message() -> None:
+    """The Dev UI error body still shows a GenkitError's own message; only served flows redact it."""
+    error = GenkitError(status='INVALID_ARGUMENT', message='bad id 12345')
+
+    assert 'bad id 12345' in get_reflection_json(error).message
 
 
 def test_get_error_stack() -> None:
@@ -249,14 +302,16 @@ def test_wrap_http_error_reads_retry_after() -> None:
     assert error.to_callable_serializable().message == 'rate limited'
 
 
-def test_callable_wire_uses_original_message_when_cause_is_set() -> None:
-    """The callable wire shows the provider text, not the SDK repr."""
+def test_served_error_body_for_provider_error_keeps_status_without_provider_text() -> None:
+    """A provider 503 reaching a served flow is 'Unavailable', with neither the provider text nor the SDK repr."""
     error = GenkitError(
         status='UNAVAILABLE',
         message='overloaded',
         cause=RuntimeError('APIError(503 UNAVAILABLE)'),
     )
-    assert get_callable_json(error)['message'] == 'overloaded'
+
+    assert get_callable_json(error) == {'message': 'Unavailable', 'status': 'UNAVAILABLE'}
+    assert get_http_status(error) == 503
 
 
 @pytest.mark.parametrize(
