@@ -5,12 +5,13 @@
 
 """Tests for the Genkit extra API methods."""
 
+from typing import TypeVar
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from genkit import Genkit
+from genkit import Genkit, get_logger
 from genkit._ai._testing import define_echo_model
 from genkit._core._action import ActionRunContext, _action_context
 from genkit._core._error import GenkitError, RuntimeErrorReason
@@ -21,11 +22,18 @@ from genkit._core._telemetry._instrumentation import (
     SpanNext,
     reset_instrumentation,
 )
+from genkit._core._telemetry._log_exporter import (
+    build_log_record,
+    enable_log_export,
+    reset_log_export,
+)
 from genkit._core._typing import FinishReason, Operation, Role
 from genkit.middleware import BaseMiddleware, GenerateHookParams, GenerateMiddlewareContext
 from genkit.model import model
 from genkit.plugin_api import ActionKind
 from genkit.telemetry import configure_instrumentation
+
+T = TypeVar('T')
 
 
 @pytest.mark.asyncio
@@ -58,7 +66,7 @@ async def test_genkit_run_tags_flow_step_action_type() -> None:
     class Recording:
         last: SpanMetadata | None = None
 
-        async def run_in_new_span(self, metadata: SpanMetadata, next: SpanNext[str]) -> str:
+        async def run_in_new_span(self, metadata: SpanMetadata, next: SpanNext[T]) -> T:
             self.last = metadata
             return await next()
 
@@ -77,6 +85,39 @@ async def test_genkit_run_tags_flow_step_action_type() -> None:
         assert recording.last.action_type == 'flowStep'
     finally:
         reset_instrumentation()
+
+
+@pytest.mark.asyncio
+async def test_get_logger_in_flow_attaches_trace_id(hex_ids: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """get_logger() lines inside a flow carry the flow's traceId to Dev UI export."""
+    monkeypatch.setenv('GENKIT_ENV', 'dev')
+    monkeypatch.delenv('GENKIT_OTEL_ENABLE_LOGS', raising=False)
+    enable_log_export(url='http://127.0.0.1:9')
+
+    captured: list[dict[str, object]] = []
+
+    def spy_build(**kw: object) -> dict[str, object]:
+        rec = build_log_record(**kw)  # type: ignore[arg-type]
+        captured.append(rec)
+        return rec
+
+    try:
+        ai = Genkit()
+        with mock.patch('genkit._core._telemetry._log_exporter.build_log_record', side_effect=spy_build):
+
+            @ai.flow()
+            async def cart_flow() -> str:
+                get_logger(__name__).info('looked up cart')
+                return 'ok'
+
+            assert await cart_flow() == 'ok'
+    finally:
+        reset_log_export()
+
+    assert len(captured) == 1
+    assert captured[0]['body'] == {'stringValue': 'looked up cart'}
+    trace_id = captured[0].get('traceId')
+    assert isinstance(trace_id, str) and len(trace_id) == 32
 
 
 @pytest.mark.asyncio

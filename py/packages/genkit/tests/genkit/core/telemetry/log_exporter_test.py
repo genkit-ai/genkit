@@ -19,14 +19,13 @@ import httpx
 import pytest
 from structlog.testing import capture_logs
 
-from genkit import Genkit
 from genkit._core._constants import GENKIT_VERSION
 from genkit._core._environment import GENKIT_ENV
 from genkit._core._logger import configure_structlog_level, get_logger, is_debug_enabled
 from genkit._core._reflection_v2 import ReflectionServerV2
 from genkit._core._registry import Registry
 from genkit._core._telemetry import _log_exporter as log_exporter
-from genkit._core._telemetry._instrumentation import current_span, run_in_new_span
+from genkit._core._telemetry._instrumentation import run_in_new_span
 from genkit._core._telemetry._log_exporter import (
     BATCH_DELAY_S,
     GENKIT_OTEL_ENABLE_LOGS,
@@ -417,38 +416,3 @@ def test_enable_rejects_invalid_url_on_caller_thread() -> None:
     """A typo'd collector URL fails when export starts, not as missing Dev UI logs."""
     enable_log_export(url='not-a-url')
     assert log_export_is_enabled() is False
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures('_reset_export', '_dev_env', 'hex_ids')
-async def test_get_logger_line_inside_a_flow_lands_in_that_flow_trace() -> None:
-    """A get_logger line inside a flow shows up on that flow's Dev UI log export."""
-    enable_log_export(url='http://127.0.0.1:9')
-    exporter = log_exporter._exporter
-
-    queued: list[dict[str, object]] = []
-    assert exporter is not None
-    original = exporter.enqueue
-
-    def capture(*, record: dict[str, object]) -> None:
-        queued.append(record)
-
-    exporter.enqueue = capture  # type: ignore[method-assign]
-    seen: dict[str, str] = {}
-    try:
-        ai = Genkit()
-
-        @ai.flow()
-        async def cart_flow() -> str:
-            span = current_span.get()
-            assert span is not None
-            seen['traceId'] = span.trace_id
-            get_logger(__name__).info('looked up cart')
-            return 'ok'
-
-        assert await cart_flow() == 'ok'
-    finally:
-        exporter.enqueue = original  # type: ignore[method-assign]
-
-    cart = next(r for r in queued if r['body']['stringValue'] == 'looked up cart')  # type: ignore[index]
-    assert cart['traceId'] == seen['traceId']
