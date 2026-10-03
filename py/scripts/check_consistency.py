@@ -57,6 +57,31 @@ def get_toml_value(filepath: str, key: str) -> str:
     return match.group(1) if match else ''
 
 
+def get_toml_list(filepath: str, key: str) -> list[str]:
+    """Extract a string-list key from a package pyproject.toml."""
+    if not os.path.exists(filepath):
+        return []
+    if sys.version_info >= (3, 11):
+        try:
+            import tomllib
+
+            with open(filepath, 'rb') as f:
+                data = tomllib.load(f)
+            value = data.get('project', {}).get(key) or data.get(key) or []
+            if isinstance(value, list):
+                return [str(item) for item in value]
+            return []
+        except Exception:
+            pass
+
+    with open(filepath, 'r', encoding='utf-8') as f:
+        content = f.read()
+    block = re.search(rf'^\s*{re.escape(key)}\s*=\s*\[(.*?)\]', content, re.MULTILINE | re.DOTALL)
+    if not block:
+        return []
+    return re.findall(r'["\']([^"\']+)["\']', block.group(1))
+
+
 def main() -> None:
     print(f'{BLUE}=== Genkit Python Consistency Check ==={NC}\n')
 
@@ -83,6 +108,7 @@ def main() -> None:
         pkg_name = get_toml_value(toml_path, 'name')
         pkg_version = get_toml_value(toml_path, 'version')
         pkg_python = get_toml_value(toml_path, 'requires-python')
+        pkg_dependencies = get_toml_list(toml_path, 'dependencies')
 
         pkg_errors = 0
         if pkg_version != core_version:
@@ -91,6 +117,12 @@ def main() -> None:
             pkg_errors += 1
         if pkg_python != EXPECTED_PYTHON:
             print(f"  {RED}✗{NC} {pkg_name}: requires-python '{pkg_python}' (expected '{EXPECTED_PYTHON}')")
+            errors += 1
+            pkg_errors += 1
+        if pkg == 'genkit-flask' and any(
+            re.split(r'[\[>=<\s;]', dep, maxsplit=1)[0] == 'genkit-google-genai' for dep in pkg_dependencies
+        ):
+            print(f'  {RED}✗{NC} {pkg_name}: must not depend on genkit-google-genai')
             errors += 1
             pkg_errors += 1
         if not os.path.exists(os.path.join(pkg_path, 'README.md')):

@@ -129,7 +129,8 @@ class OpenAIConfig(ModelConfig):
         top_p: Nucleus sampling probability (0.0 to 1.0).
             See: https://platform.openai.com/docs/api-reference/chat/create#chat-create-top_p
 
-        max_tokens: Maximum tokens to generate (deprecated, use max_completion_tokens).
+        max_tokens: Maximum tokens to generate. Use this to cap reply length;
+            reasoning models receive it as max_completion_tokens.
             See: https://platform.openai.com/docs/api-reference/chat/create#chat-create-max_tokens
 
         max_completion_tokens: Upper bound for tokens including reasoning tokens.
@@ -162,10 +163,9 @@ class OpenAIConfig(ModelConfig):
         seed: Random seed for deterministic sampling (beta).
             See: https://platform.openai.com/docs/api-reference/chat/create#chat-create-seed
 
-        user: End-user identifier (deprecated, use safety_identifier).
-            See: https://platform.openai.com/docs/api-reference/chat/create#chat-create-user
-
         safety_identifier: Stable identifier for detecting policy violations.
+            Use this instead of OpenAI's retired ``user`` field, which is no
+            longer an ``OpenAIConfig`` field.
             See: https://platform.openai.com/docs/api-reference/chat/create#chat-create-safety_identifier
 
         prompt_cache_key: Identifier for caching optimization.
@@ -232,7 +232,6 @@ class OpenAIConfig(ModelConfig):
     top_p: float | None = Field(default=None, ge=0.0, le=1.0)
 
     # https://platform.openai.com/docs/api-reference/chat/create#chat-create-max_tokens
-    # Deprecated: use max_completion_tokens instead
     max_tokens: int | None = None
 
     # https://platform.openai.com/docs/api-reference/chat/create#chat-create-max_completion_tokens
@@ -267,11 +266,6 @@ class OpenAIConfig(ModelConfig):
     # Determinism (beta feature)
     # https://platform.openai.com/docs/api-reference/chat/create#chat-create-seed
     seed: int | None = None
-
-    # User identification
-    # https://platform.openai.com/docs/api-reference/chat/create#chat-create-user
-    # Deprecated: use safety_identifier and prompt_cache_key instead
-    user: str | None = None
 
     # https://platform.openai.com/docs/api-reference/chat/create#chat-create-safety_identifier
     safety_identifier: str | None = None

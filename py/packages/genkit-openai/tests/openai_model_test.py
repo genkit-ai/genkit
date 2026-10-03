@@ -180,6 +180,21 @@ async def test_get_openai_config_prefers_explicit_max_completion_tokens() -> Non
 
 
 @pytest.mark.asyncio
+async def test_get_openai_config_with_user_still_sends_user() -> None:
+    """OpenAIConfig(user='u') is no longer a declared field but still goes out as user."""
+    model = OpenAIModel(model='gpt-4o', client=MagicMock())
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
+        config=OpenAIConfig.model_validate({'user': 'u', 'safety_identifier': 's'}),
+    )
+
+    body = await model._get_openai_request_config(request)
+
+    assert body['user'] == 'u'
+    assert body['safety_identifier'] == 's'
+
+
+@pytest.mark.asyncio
 async def test_get_openai_config_model_field_overrides_version() -> None:
     """OpenAIConfig.model is the create() model id; it wins over version."""
     model = OpenAIModel(model='gpt-4o', client=MagicMock())
@@ -930,6 +945,10 @@ async def test_generate_no_choices_reaches_the_caller(sample_request: ModelReque
         (
             ModelConfig(version='gpt-4o-2024-08-06'),
             OpenAIConfig(version='gpt-4o-2024-08-06'),
+        ),
+        (
+            ModelConfig(max_output_tokens=32),
+            OpenAIConfig(max_completion_tokens=32),
         ),
         (
             None,

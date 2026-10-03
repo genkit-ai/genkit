@@ -48,6 +48,7 @@ Example:
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Callable
 from typing import Any, NoReturn
@@ -147,6 +148,8 @@ from genkit_google_genai.models.veo import (
     is_veo_model,
     veo_model_info,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class GenaiModels:
@@ -1083,24 +1086,24 @@ class VertexAI(GoogleFamilyRefs, Plugin):
         for name in VERTEX_KNOWN_EMBEDDERS:
             actions.append(self._resolve_embedder(vertexai_name(name)))
 
-        # Register Vertex AI evaluators
-        # Deferred import to avoid circular dependency
-        from genkit import Genkit
-
+        # Vertex evaluators talk to a project-scoped Evaluation API. Express
+        # mode (api_key, no project) can still start the app; those evaluators
+        # simply are not registered.
         if not self._project:
-            raise ValueError(
-                'VertexAI plugin requires a project ID to use evaluators. '
-                'Set the project parameter or GOOGLE_CLOUD_PROJECT environment variable.'
+            logger.debug('VertexAI has no project; skipping Vertex evaluator registration')
+        else:
+            # Deferred import to avoid circular dependency
+            from genkit import Genkit
+
+            registry = Genkit()
+            actions.extend(
+                create_vertex_evaluators(
+                    registry,
+                    list(VertexAIEvaluationMetricType),
+                    project_id=self._project,
+                    location=self._location,
+                )
             )
-        registry = Genkit()
-        actions.extend(
-            create_vertex_evaluators(
-                registry,
-                list(VertexAIEvaluationMetricType),
-                project_id=self._project,
-                location=self._location,
-            )
-        )
 
         return actions
 
@@ -1181,14 +1184,17 @@ class VertexAI(GoogleFamilyRefs, Plugin):
         except ValueError:
             return None
 
+        # The name is a real Vertex metric, so "not found" would send people
+        # hunting for a typo. Say what's actually missing instead.
+        if not self._project:
+            raise GenkitError(
+                message='Vertex evaluators need a project; pass VertexAI(project=...) or set GOOGLE_CLOUD_PROJECT',
+                status='FAILED_PRECONDITION',
+            )
+
         from genkit import Genkit
 
         registry = Genkit()
-        if not self._project:
-            raise ValueError(
-                'VertexAI plugin requires a project ID to use evaluators. '
-                'Set the project parameter or GOOGLE_CLOUD_PROJECT environment variable.'
-            )
 
         actions = create_vertex_evaluators(
             registry,
@@ -1312,18 +1318,19 @@ class VertexAI(GoogleFamilyRefs, Plugin):
                 )
             )
 
-        for metric in VertexAIEvaluationMetricType:
-            # create_vertex_evaluators handles namespacing but we only need metadata here.
-            evaluator_name = vertexai_name(metric.lower())
-            actions_list.append(
-                ActionMetadata(
-                    name=evaluator_name,
-                    action_type=ActionKind.EVALUATOR,
-                    input_json_schema=to_json_schema(EvalRequest),
-                    output_json_schema=to_json_schema(list[EvalFnResponse]),
-                    metadata={'type': 'evaluator'},
+        if self._project:
+            for metric in VertexAIEvaluationMetricType:
+                # create_vertex_evaluators handles namespacing but we only need metadata here.
+                evaluator_name = vertexai_name(metric.lower())
+                actions_list.append(
+                    ActionMetadata(
+                        name=evaluator_name,
+                        action_type=ActionKind.EVALUATOR,
+                        input_json_schema=to_json_schema(EvalRequest),
+                        output_json_schema=to_json_schema(list[EvalFnResponse]),
+                        metadata={'type': 'evaluator'},
+                    )
                 )
-            )
 
         self._list_actions_cache = actions_list
         return actions_list

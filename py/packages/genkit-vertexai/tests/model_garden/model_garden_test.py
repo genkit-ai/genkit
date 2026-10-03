@@ -16,15 +16,18 @@
 
 """Unittests for VertexAI Model Garden Models."""
 
-import warnings
+import os
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from anthropic import AsyncAnthropicVertex
 from genkit_anthropic.config import AnthropicConfig
-from genkit_vertexai.model_garden import ModelGarden, ModelGardenPlugin
+from genkit_vertexai.model_garden import ModelGarden
 from genkit_vertexai.model_garden.anthropic import AnthropicModelGarden
 from genkit_vertexai.model_garden.model_garden import ModelGardenModel
+
+from genkit import Genkit
 
 
 @pytest.fixture
@@ -90,15 +93,63 @@ def test_get_model_info(model_name: str, expected: dict[str, Any], model_garden_
     assert result == expected
 
 
-def test_model_garden_plugin_deprecated_alias() -> None:
-    """ModelGardenPlugin warns and delegates to ModelGarden."""
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter('always', DeprecationWarning)
-        plugin = ModelGardenPlugin(project_id='my-project', location='us-central1')
+_CLAUDE = 'modelgarden/anthropic/claude-sonnet-4-5'
 
-    assert len(caught) == 1
-    assert 'ModelGardenPlugin is deprecated' in str(caught[0].message)
-    assert isinstance(plugin, ModelGarden)
+
+async def _project_sent_to_vertex(plugin: ModelGarden) -> object:
+    """Run one Model Garden generate and return the project its Vertex client was built for."""
+    reply = MagicMock()
+    reply.content = [MagicMock(type='text', text='hello')]
+    reply.usage = MagicMock(input_tokens=1, output_tokens=1)
+    reply.stop_reason = 'end_turn'
+    client = MagicMock(spec=AsyncAnthropicVertex)
+    client.messages = MagicMock()
+    client.beta = MagicMock()
+    client.messages.create = AsyncMock(return_value=reply)
+    client.beta.messages.create = AsyncMock(return_value=reply)
+    with patch('genkit_vertexai.model_garden.anthropic.AsyncAnthropicVertex', return_value=client) as vertex:
+        ai = Genkit(plugins=[plugin])
+        response = await ai.generate(model=_CLAUDE, prompt='hi')
+    assert response.text == 'hello'
+    return vertex.call_args.kwargs['project_id']
+
+
+@pytest.mark.asyncio
+async def test_generate_model_garden_with_project_sends_it_to_vertex() -> None:
+    """ModelGarden(project='p') sends generate calls to project p."""
+    with patch.dict(os.environ, {'GCLOUD_PROJECT': 'env-proj', 'GOOGLE_CLOUD_PROJECT': 'env-proj'}):
+        assert await _project_sent_to_vertex(ModelGarden(project='p', location='us-central1')) == 'p'
+
+
+@pytest.mark.asyncio
+async def test_generate_model_garden_with_project_id_still_sends_it_to_vertex() -> None:
+    """ModelGarden(project_id='p') keeps sending generate calls to project p."""
+    with patch.dict(os.environ, {'GCLOUD_PROJECT': 'env-proj', 'GOOGLE_CLOUD_PROJECT': 'env-proj'}):
+        assert await _project_sent_to_vertex(ModelGarden(project_id='p', location='us-central1')) == 'p'
+
+
+@pytest.mark.asyncio
+async def test_generate_model_garden_with_project_and_project_id_same_value_works() -> None:
+    """ModelGarden(project='p', project_id='p') is fine and uses p."""
+    with patch.dict(os.environ, {'GCLOUD_PROJECT': 'env-proj', 'GOOGLE_CLOUD_PROJECT': 'env-proj'}):
+        plugin = ModelGarden(project='p', project_id='p', location='us-central1')
+        assert await _project_sent_to_vertex(plugin) == 'p'
+
+
+def test_model_garden_with_project_and_project_id_different_values_raises() -> None:
+    """ModelGarden(project='a', project_id='b') raises ValueError naming both."""
+    with pytest.raises(ValueError) as exc_info:
+        ModelGarden(project='a', project_id='b')
+    assert "project='a'" in str(exc_info.value)
+    assert "project_id='b'" in str(exc_info.value)
+    assert 'same setting' in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_generate_model_garden_with_no_project_uses_environment() -> None:
+    """ModelGarden() with neither set still sends generate calls to GCLOUD_PROJECT."""
+    with patch.dict(os.environ, {'GCLOUD_PROJECT': 'env-proj', 'GOOGLE_CLOUD_PROJECT': ''}):
+        assert await _project_sent_to_vertex(ModelGarden(location='us-central1')) == 'env-proj'
 
 
 def test_anthropic_model_garden_uses_anthropic_config_schema() -> None:

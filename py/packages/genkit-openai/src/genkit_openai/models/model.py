@@ -651,7 +651,9 @@ class OpenAIModel:
             return OpenAIConfig(
                 version=config.version,
                 temperature=config.temperature,
-                max_tokens=int(config.max_output_tokens) if config.max_output_tokens is not None else None,
+                # Genkit's token cap rides as max_completion_tokens so
+                # reasoning models (which reject max_tokens) still get a limit.
+                max_completion_tokens=int(config.max_output_tokens) if config.max_output_tokens is not None else None,
                 top_p=config.top_p,
                 stop=config.stop_sequences,
             )
