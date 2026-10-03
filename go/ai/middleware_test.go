@@ -29,6 +29,7 @@ import (
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/core/status"
+	"github.com/firebase/genkit/go/internal/base"
 )
 
 // --- counter: a config whose BuildMiddleware tracks hook invocations ---
@@ -745,7 +746,7 @@ func TestWrapToolInterrupts(t *testing.T) {
 	interrupter := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
 		return &Hooks{
 			WrapTool: func(ctx context.Context, p *ToolParams, next ToolNext) (*MultipartToolResponse, error) {
-				return nil, NewToolInterruptError(map[string]any{"reason": "blocked"})
+				return nil, &base.ToolInterruptError{Data: map[string]any{"reason": "blocked"}}
 			},
 		}, nil
 	})
@@ -803,7 +804,7 @@ func TestWrapToolShortCircuitEmitsToolSpan(t *testing.T) {
 		{
 			name: "interrupt",
 			hook: func(ctx context.Context, p *ToolParams, next ToolNext) (*MultipartToolResponse, error) {
-				return nil, NewToolInterruptError(map[string]any{"reason": "blocked"})
+				return nil, &base.ToolInterruptError{Data: map[string]any{"reason": "blocked"}}
 			},
 			wantState: "error",
 		},
