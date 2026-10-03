@@ -136,11 +136,24 @@ export class ToolFailureError extends GenkitError {}
  */
 export function errorDetailsOf(cause: unknown): unknown {
   if (!(cause instanceof GenkitError)) return undefined;
-  const detail = cause.detail;
+  return withoutPayloads(cause.detail);
+}
+
+/**
+ * An error's structured details without the `request` and `response`
+ * payloads a generation error carries, which are a conversation and have no
+ * place in a wire body or a persisted row. A detail that is not an object is
+ * returned as is; one left empty by the strip is dropped.
+ */
+export function withoutPayloads(detail: unknown): unknown {
   if (!detail || typeof detail !== 'object' || Array.isArray(detail)) {
     return detail;
   }
-  const { request: _request, response: _response, ...rest } = detail;
+  const {
+    request: _request,
+    response: _response,
+    ...rest
+  } = detail as Record<string, unknown>;
   return Object.keys(rest).length > 0 ? rest : undefined;
 }
 

@@ -1100,4 +1100,78 @@ describe('agents middleware', () => {
       'Orchestrator should be able to recover after the failure'
     );
   });
+
+  it('returns an aborted sub-agent run as an error tool response', async () => {
+    const ai = genkit({});
+
+    // A timeout out of the sub-agent's model is a stop, not a break: the
+    // agent resolves with finishReason: 'aborted' and the error that stopped
+    // it, and carries no message.
+    const subModel = ai.defineModel(
+      { name: 'sub-timeout-' + Math.random() },
+      async () => {
+        const err = new Error('sub-agent timed out');
+        err.name = 'TimeoutError';
+        throw err;
+      }
+    );
+
+    ai.defineAgent({
+      name: 'slowpoke',
+      model: subModel,
+      system: 'You are slow.',
+    });
+
+    let mainTurn = 0;
+    let capturedToolOutput: any;
+    const mainModel = ai.defineModel(
+      { name: 'main-timeout-' + Math.random() },
+      async (req) => {
+        mainTurn++;
+        if (mainTurn === 1) {
+          return {
+            message: {
+              role: 'model' as const,
+              content: [
+                {
+                  toolRequest: {
+                    name: 'delegate_to_slowpoke',
+                    input: { task: 'take your time' },
+                  },
+                },
+              ],
+            },
+          };
+        }
+        const toolMsg = req.messages?.find((m: any) => m.role === 'tool');
+        if (toolMsg) {
+          const toolResp = toolMsg.content.find((p: any) => p.toolResponse);
+          capturedToolOutput = toolResp?.toolResponse?.output;
+        }
+        return {
+          message: {
+            role: 'model' as const,
+            content: [{ text: 'recovered from the stop' }],
+          },
+        };
+      }
+    );
+
+    const result = await ai.generate({
+      model: mainModel,
+      prompt: 'delegate to a slow agent',
+      use: [agents({ agents: ['slowpoke'] })],
+    });
+
+    assert.ok(capturedToolOutput, 'Tool output should be captured');
+    assert.match(
+      capturedToolOutput.response,
+      /Error calling agent 'slowpoke': sub-agent timed out/,
+      'Tool response should surface what stopped the sub-agent'
+    );
+    assert.ok(
+      result.text.includes('recovered'),
+      'Orchestrator should be able to recover after the stop'
+    );
+  });
 });
