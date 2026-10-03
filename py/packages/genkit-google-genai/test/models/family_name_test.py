@@ -50,7 +50,7 @@ from genkit_google_genai.models.veo import is_veo_model
         ('gemini-2.5-flash-image', False),
         ('gemini-2.5-flash-image-preview', False),
         ('gemini-2.5-flash', False),
-        ('veo-3.0-generate-001', False),
+        ('veo-3.1-generate-001', False),
     ],
 )
 def test_is_unsupported_image_model_name(name: str, expected: bool) -> None:
@@ -141,9 +141,9 @@ def test_is_gemini_model(name: str, expected: bool) -> None:
 @pytest.mark.parametrize(
     ('name', 'expected'),
     [
-        ('veo-3.0-generate-001', True),
+        ('veo-3.1-generate-001', True),
         ('googleai/veo-3.1-generate-preview', True),
-        ('VEO-2.0-generate-001', True),
+        ('VEO-3.1-generate-001', True),
         ('gemini-2.0-flash', False),
         ('devotional-hymn', False),
     ],
@@ -180,7 +180,7 @@ def test_is_lyria_model(name: str, expected: bool) -> None:
         'virtual-try-on-001',
         'imagen-3.0-generate-002',
         'vertexai/imagen-4.0-generate-001',
-        'veo-3.0-generate-001',
+        'veo-3.1-generate-001',
         'googleai/lyria-002',
         'models/deep-research-pro-preview',
         'googleai/deep-research-pro-preview',
