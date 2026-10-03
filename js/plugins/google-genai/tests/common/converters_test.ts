@@ -1457,6 +1457,26 @@ describe('Part conversions back and forth', () => {
 });
 
 describe('toGeminiTool', () => {
+  it('omits parameters for an MCP tool with no arguments', () => {
+    for (const inputSchema of [
+      { type: 'object', properties: {}, required: [] },
+      { type: 'object' },
+    ]) {
+      assert.deepStrictEqual(
+        toGeminiTool({
+          name: 'read_graph',
+          description: 'Read the entire knowledge graph',
+          inputSchema,
+        }),
+        {
+          name: 'read_graph',
+          description: 'Read the entire knowledge graph',
+          parameters: undefined,
+        }
+      );
+    }
+  });
+
   it('should convert Genkit tool to Gemini FunctionDeclaration', async () => {
     const got = toGeminiTool({
       name: 'foo',
