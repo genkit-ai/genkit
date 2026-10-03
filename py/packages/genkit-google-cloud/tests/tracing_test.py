@@ -35,7 +35,12 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor
 
 from genkit._core._error import GenkitError
-from genkit.telemetry import configure_instrumentation, is_instrumented_by, reset_instrumentation
+from genkit.telemetry import (
+    configure_instrumentation,
+    instrumentations,
+    is_instrumented_by,
+    reset_instrumentation,
+)
 
 _GENKIT_ENV = 'GENKIT_ENV'
 _ENV_DEV = 'dev'
@@ -236,7 +241,7 @@ def test_enable_disable_traces_keeps_their_genai_settings() -> None:
     ):
         enable_google_cloud_telemetry(disable_traces=True)
 
-    assert is_instrumented_by(GenAiInstrumentation)
+    assert theirs in instrumentations
     assert theirs.emit_metrics is False
 
 

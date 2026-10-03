@@ -37,6 +37,7 @@ from genkit.plugin_api import ActionKind
 from genkit.telemetry import (
     GenkitBuiltinInstrumentation,
     configure_instrumentation,
+    instrumentations,
     is_instrumented_by,
     reset_instrumentation,
 )
@@ -137,7 +138,7 @@ async def test_enable_google_cloud_telemetry_does_not_install_genai_instrumentat
         result = await action.run()
         _force_flush()
 
-        assert is_instrumented_by(GenAiInstrumentation)
+        assert [i for i in instrumentations if isinstance(i, GenAiInstrumentation)] == [yours]
         assert _hex_id(result.trace_id, 32)
         joke = [span for span in cloud.get_finished_spans() if span.name == 'joke']
         assert len(joke) == 1
