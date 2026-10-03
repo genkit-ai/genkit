@@ -35,6 +35,7 @@ from genkit._ai._agents._types import StateManagement
 from genkit._ai._json_patch import apply_json_patch
 from genkit._ai._testing import define_programmable_model
 from genkit._core._channel import CloseableQueue
+from genkit._core._error import GenkitError
 from genkit._core._model import (
     AgentInit,
     AgentInput,
@@ -160,6 +161,33 @@ def test_restart_applies_replace_input() -> None:
     assert part.metadata is not None
     assert part.metadata.get('replacedInput') == {'amount': 100}
     assert part.metadata.get('resumed') is True
+
+
+def test_restart_with_no_args_marks_resumed() -> None:
+    """intr.restart() marks the tool request resumed."""
+    intr = AgentInterrupt('transfer', 'ref-1', {'amount': 100})
+    part = intr.restart()
+    assert part.tool_request is not None
+    assert part.tool_request.input == {'amount': 100}
+    assert part.metadata is not None
+    assert part.metadata.get('resumed') is True
+
+
+def test_respond_carries_output_only() -> None:
+    """intr.respond(output) carries the output and no interruptResponse metadata."""
+    intr = AgentInterrupt('transfer', 'ref-1', {'amount': 100})
+    part = intr.respond({'approved': True})
+    assert part.tool_response is not None
+    assert part.tool_response.output == {'approved': True}
+    assert part.metadata is None
+
+
+def test_chat_resume_rejects_paused_part() -> None:
+    """chat.resume(restart=[paused]) raises before the turn is sent."""
+    chat = AgentChat(MockAgentTransport())
+    paused = Part.from_tool_request(name='pay', ref='r1', input={}, metadata={'interrupt': True})
+    with pytest.raises(GenkitError, match='still an interrupt'):
+        chat.resume_stream(restart=[paused])
 
 
 # ---------------------------------------------------------------------------

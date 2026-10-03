@@ -108,7 +108,6 @@ Requires approval before executing tools (useful for sensitive operations):
 ```python
 from pydantic import BaseModel, Field
 
-from genkit import restart_tool
 from genkit_google_genai import GoogleAI
 from genkit_middleware import ToolApproval
 
@@ -144,10 +143,7 @@ response = await ai.generate(
     messages=list(first.messages),
     tools=['delete_database'],
     use=[approval],
-    resume_restart=restart_tool(
-        interrupt=first.interrupts[0],
-        resumed_metadata={'tool_approved': True},
-    ),
+    resume_restart=first.interrupts[0].restart(resumed_metadata={'tool_approved': True}),
 )
 ```
 
