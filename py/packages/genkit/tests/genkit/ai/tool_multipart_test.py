@@ -262,7 +262,7 @@ async def _tools_sent_to_model(ai: Genkit, tool_name: str, *, tool_input: dict |
         )
     )
     await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'go'}]})],
@@ -325,7 +325,7 @@ async def test_unserializable_tool_output_is_invalid_argument() -> None:
     )
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'snap'}]})],
@@ -355,8 +355,8 @@ async def test_tool_registers_under_tool() -> None:
     assert create_action_key(ActionKind.TOOL, 'weather') == '/tool.v2/weather'
     assert parse_action_key('/tool.v2/weather') == (ActionKind.TOOL, 'weather')
 
-    by_name = await ai.registry.resolve_action(ActionKind.TOOL, 'weather')
-    by_key = await ai.registry.resolve_action_by_key('/tool.v2/weather')
+    by_name = await ai._registry.resolve_action(ActionKind.TOOL, 'weather')
+    by_key = await ai._registry.resolve_action_by_key('/tool.v2/weather')
     assert by_name is weather.action()
     assert by_key is weather.action()
 
@@ -400,7 +400,7 @@ async def test_wrap_tool_can_substitute_a_response() -> None:
     )
 
     res = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'wx'}]})],
@@ -453,7 +453,7 @@ async def test_wrap_tool_receives_the_model_tool_request_part() -> None:
     )
 
     res = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='programmableModel',
             messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'wx'}]})],

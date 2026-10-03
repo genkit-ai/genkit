@@ -26,7 +26,6 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from genkit import FinishReason, Message, ModelResponse, ModelResponseChunk, Part, Role
-from genkit._core._model import ABNORMAL_FINISH_REASONS
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
 from genkit.model import ModelRequest
 
@@ -42,7 +41,14 @@ from ._types import DEFAULT_VERSION, SURFACE_KEYS, Envelope, SupportedVersion, V
 # unrecognized provider reasons to it, so core keeps validating in case the
 # model finished, while a turn that may have stopped mid-fence would paint a
 # half-written card.
-SKIP_REWRITE_FINISH_REASONS = ABNORMAL_FINISH_REASONS | {FinishReason.UNKNOWN}
+SKIP_REWRITE_FINISH_REASONS = frozenset({
+    FinishReason.BLOCKED,
+    FinishReason.ABORTED,
+    FinishReason.FAILED,
+    FinishReason.INTERRUPTED,
+    FinishReason.OTHER,
+    FinishReason.UNKNOWN,
+})
 
 
 class SurfacesConfig(BaseModel):
@@ -82,7 +88,7 @@ class Surfaces(BaseMiddleware[SurfacesConfig]):
         ctx: GenerateMiddlewareContext,
         next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
-        catalog = resolve_catalog(registry=ctx.ai.registry, catalog=self.config.catalog)
+        catalog = await resolve_catalog(ai=ctx.ai, catalog=self.config.catalog)
         version = self.config.version or DEFAULT_VERSION
         validate = self.config.validation
         # Chunks are rewritten as fences close. The finished message is parsed

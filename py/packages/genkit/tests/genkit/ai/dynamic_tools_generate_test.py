@@ -332,7 +332,7 @@ async def test_generate_mcp_tool_echo_runs_the_dap_tool() -> None:
     ai.define_dynamic_action_provider('mcp', dap_fn)
 
     # Precondition: `echo` is not a normal root TOOL registration (only in the DAP).
-    assert 'echo' not in ai.registry._entries.get(ActionKind.TOOL, {})
+    assert 'echo' not in ai._registry._entries.get(ActionKind.TOOL, {})
 
     pm.responses = [
         _tool_call_response('echo', {'text': 'hello'}),
@@ -353,8 +353,8 @@ async def test_generate_mcp_tool_echo_runs_the_dap_tool() -> None:
     assert pm.last_request.tools[0].output_schema == {'type': 'string'}
     # Postcondition: resolving/running the tool via DAP still does not
     # persist `echo` under the root registry as a static tool (same check as above).
-    assert 'echo' not in ai.registry._entries.get(ActionKind.TOOL, {})
-    root_catalog = await ai.registry.list_actions()
+    assert 'echo' not in ai._registry._entries.get(ActionKind.TOOL, {})
+    root_catalog = await ai._registry.list_actions()
     assert '/dynamic-action-provider/mcp' in root_catalog
     assert '/dynamic-action-provider/mcp:tool/echo' in root_catalog
     assert '/tool.v2/echo' not in root_catalog
@@ -389,9 +389,9 @@ async def test_generate_mcp_tool_does_not_leave_tool_v2_on_the_app() -> None:
     )
 
     # Root registry should NOT have dap_only_tool cached — it was never registered there
-    root_tools = ai.registry._entries.get(ActionKind.TOOL, {})
+    root_tools = ai._registry._entries.get(ActionKind.TOOL, {})
     assert 'dap_only_tool' not in root_tools
-    root_catalog = await ai.registry.list_actions()
+    root_catalog = await ai._registry.list_actions()
     assert '/dynamic-action-provider/mcp' in root_catalog
     assert '/dynamic-action-provider/mcp:tool/dap_only_tool' in root_catalog
     assert '/tool.v2/dap_only_tool' not in root_catalog
@@ -419,8 +419,12 @@ async def test_generate_mcp_tool_star_can_run_a_tool_from_that_provider() -> Non
         call_log.append(f'b:{inp.x}')
         return f'b:{inp.x}'
 
-    tool_a = ai.registry.register_action(name='tool_a', kind=ActionKind.TOOL, fn=tool_a_fn, metadata={'name': 'tool_a'})
-    tool_b = ai.registry.register_action(name='tool_b', kind=ActionKind.TOOL, fn=tool_b_fn, metadata={'name': 'tool_b'})
+    tool_a = ai._registry.register_action(
+        name='tool_a', kind=ActionKind.TOOL, fn=tool_a_fn, metadata={'name': 'tool_a'}
+    )
+    tool_b = ai._registry.register_action(
+        name='tool_b', kind=ActionKind.TOOL, fn=tool_b_fn, metadata={'name': 'tool_b'}
+    )
 
     async def dap_fn() -> DapValue:
         return {'tool': [tool_a, tool_b]}

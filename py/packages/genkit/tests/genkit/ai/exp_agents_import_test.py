@@ -34,7 +34,7 @@ from genkit._core._typing import (
     FinishReason,
     Role,
 )
-from genkit.exp import Genkit
+from genkit.exp import Genkit, current_session, lookup_agent
 from genkit.exp.agent import (
     FileSessionStore,
     InMemorySessionStore,
@@ -58,6 +58,11 @@ def test_stable_genkit_keeps_graduated_methods() -> None:
     assert hasattr(ai, 'define_interrupt')
     assert hasattr(ai, 'generate')
     assert hasattr(ai, 'generate_operation')
+
+
+def test_genkit_exp_positional_argument_raises_type_error() -> None:
+    with pytest.raises(TypeError):
+        Genkit('googleai/gemini-flash-latest')  # type: ignore[misc]
 
 
 def test_exp_types_import() -> None:
@@ -164,3 +169,45 @@ async def test_exp_genkit_still_generates() -> None:
     response = await ai.generate(model='programmableModel', prompt='hello')
 
     assert response.text == 'gen'
+
+
+@pytest.mark.asyncio
+async def test_lookup_agent_from_genkit_exp_finds_a_defined_agent() -> None:
+    ai = Genkit()
+    define_programmable_model(ai)
+    defined = ai.define_agent(name='echoAgent', model='programmableModel')
+
+    found = await lookup_agent(ai, 'echoAgent')
+
+    assert found is defined
+
+
+@pytest.mark.asyncio
+async def test_lookup_agent_unknown_name_returns_none() -> None:
+    ai = Genkit()
+    assert await lookup_agent(ai, 'ghost') is None
+
+
+@pytest.mark.asyncio
+async def test_current_session_from_genkit_exp_inside_an_agent_returns_that_session() -> None:
+    ai = Genkit()
+    seen: list[object] = []
+
+    async def fn(session_runner: SessionRunner, _: ActionRunContext) -> AgentResult:
+        async def handle_turn(_inp: AgentInput, __: TurnContext) -> TurnResult | None:
+            seen.append(current_session())
+            return TurnResult(finish_reason=AgentFinishReason.STOP)
+
+        await session_runner.run(handle_turn)
+        seen.append(session_runner.session)
+        return await session_runner.result()
+
+    agent = ai.define_custom_agent(name='sessionAgent', fn=fn)
+    await agent.chat().send('hi')
+
+    assert seen[0] is not None
+    assert seen[0] is seen[1]
+
+
+def test_current_session_from_genkit_exp_outside_an_agent_returns_none() -> None:
+    assert current_session() is None

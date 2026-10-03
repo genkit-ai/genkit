@@ -32,8 +32,15 @@ from genkit._core._http_client import get_cached_client
 from genkit._core._loop_cache import _loop_local_client as loop_local_client
 from genkit._core._middleware import new_middleware
 from genkit._core._plugin import MiddlewarePlugin, Plugin
+from genkit._core._protocols import GenkitLike
 from genkit._core._schema import to_json_schema
 from genkit._core._typing import ActionMetadata
+
+
+async def resolve_action(ai: GenkitLike, kind: ActionKind, name: str) -> Action | None:
+    """Look up an action on this app, including per-call registrations on ``ctx.ai``."""
+    return await ai._registry.resolve_action(kind, name)
+
 
 __all__ = [
     # Base class and framework primitives
@@ -44,6 +51,7 @@ __all__ = [
     'ActionMetadata',
     'ActionKind',
     'ErrorResponseMetadata',
+    'resolve_action',
     'StatusName',
     'from_http_code',
     'parse_retry_after_ms',

@@ -168,10 +168,10 @@ async def test_resolve_action_from_plugin() -> None:
 
     ai = Genkit(plugins=[MyPlugin()])
 
-    catalog = await ai.registry.list_actions()
+    catalog = await ai._registry.list_actions()
     assert catalog['/model/myplugin/foo'].name == 'myplugin/foo'
 
-    action = await ai.registry.resolve_action(ActionKind.MODEL, 'myplugin/foo')
+    action = await ai._registry.resolve_action(ActionKind.MODEL, 'myplugin/foo')
 
     assert action is not None
     assert len(resolver_calls) == 1
@@ -179,7 +179,7 @@ async def test_resolve_action_from_plugin() -> None:
     assert resolver_calls == [[ActionKind.MODEL, 'myplugin/foo']]
 
     # should be idempotent
-    await ai.registry.resolve_action(ActionKind.MODEL, 'myplugin/foo')
+    await ai._registry.resolve_action(ActionKind.MODEL, 'myplugin/foo')
     assert len(resolver_calls) == 1
 
 
@@ -491,7 +491,7 @@ async def test_resolve_model_finds_background_model() -> None:
     ai = Genkit()
     action = ai.define_background_model(name='bg-model', start=_bg_start, check=_bg_check)
 
-    got = await ai.registry.resolve_model('bg-model')
+    got = await ai._registry.resolve_model('bg-model')
 
     assert got is not None
     assert got is action.start_action
@@ -509,7 +509,7 @@ async def test_resolve_model_prefers_foreground_when_both_exist() -> None:
     foreground = ai.define_model(name='same-name', fn=fg)
     ai.define_background_model(name='same-name', start=_bg_start, check=_bg_check)
 
-    got = await ai.registry.resolve_model('same-name')
+    got = await ai._registry.resolve_model('same-name')
 
     assert got is not None
     assert got is foreground
@@ -520,7 +520,7 @@ async def test_resolve_model_prefers_foreground_when_both_exist() -> None:
 async def test_resolve_model_missing_is_none() -> None:
     """Unknown names stay None. This is not NOT_FOUND — callers decide the error."""
     ai = Genkit()
-    assert await ai.registry.resolve_model('no-such-model') is None
+    assert await ai._registry.resolve_model('no-such-model') is None
 
 
 @pytest.mark.asyncio
@@ -542,7 +542,7 @@ async def test_resolve_model_finds_plugin_background_model() -> None:
             return Action(name=name, kind=ActionKind.BACKGROUND_MODEL, fn=_bg_start)
 
     ai = Genkit(plugins=[VeoPlugin()])
-    got = await ai.registry.resolve_model('plug/veo-2.0-generate-001')
+    got = await ai._registry.resolve_model('plug/veo-2.0-generate-001')
 
     assert got is not None
     assert got.kind == ActionKind.BACKGROUND_MODEL

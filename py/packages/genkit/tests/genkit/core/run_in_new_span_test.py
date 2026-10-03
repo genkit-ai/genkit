@@ -270,7 +270,7 @@ async def test_tool_interrupt_is_not_recorded_as_span_error(exporter, caplog: py
     async def transfer(inp: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
         raise Interrupt({'reason': 'needs_approval'})
 
-    action = await ai.registry.resolve_action(kind=ActionKind.TOOL, name='transfer')
+    action = await ai._registry.resolve_action(kind=ActionKind.TOOL, name='transfer')
     assert action is not None
 
     with caplog.at_level(logging.DEBUG):

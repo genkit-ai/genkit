@@ -5,10 +5,11 @@
 
 import pytest
 
-from genkit.exp import Genkit
+from genkit import Genkit
+from genkit._ai._generate import ScopedGenkitView
 from genkit.middleware import GenerateMiddlewareContext
 
 
 @pytest.fixture
 def ctx() -> GenerateMiddlewareContext:
-    return GenerateMiddlewareContext(ai=Genkit())
+    return GenerateMiddlewareContext(ai=ScopedGenkitView(Genkit()._registry))
