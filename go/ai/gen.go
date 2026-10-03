@@ -48,7 +48,7 @@ type customPart struct {
 
 type dataPart struct {
 	// Data contains arbitrary structured data.
-	Data any `json:"data,omitempty"`
+	Data any `json:"data"`
 	// Metadata contains arbitrary key-value data for this part.
 	Metadata map[string]any `json:"metadata,omitempty"`
 }

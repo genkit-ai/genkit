@@ -724,6 +724,8 @@ A tool error fails the whole generation rather than being reported to the model,
 
 `genkit.DefineMultipartTool` is for a result that is more than one value. It returns an `ai.MultipartToolResponse` instead: `Output` is what a plain tool would have returned, and `Content` carries parts that are not values, such as an image or a document. Those parts reach the model and the client both, and must be media or data parts.
 
+`ai.NewDataPart` accepts any JSON value, including `nil`. A nil payload is encoded as `{"data":null}` and remains a data part when decoded.
+
 ```go
 chartTool := genkit.DefineMultipartTool(g, "chartWeather",
     "Charts a location's temperatures for the last week",
