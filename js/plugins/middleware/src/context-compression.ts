@@ -2158,7 +2158,10 @@ export const contextCompression: GenerateMiddleware<
                     (Boolean(summaryModelRef) && !skippedSummary));
 
                 let effectiveMaxMessages: number | undefined;
-                if (hasExplicitPreserveRecent || needsTokenFallbackTruncation) {
+                if (
+                  (hasExplicitPreserveRecent && !skippedSummary) ||
+                  needsTokenFallbackTruncation
+                ) {
                   const preserveCap = fixedSlots + adjustedPreserveRecent;
                   effectiveMaxMessages =
                     maxMessages !== undefined && maxMessages > 0
