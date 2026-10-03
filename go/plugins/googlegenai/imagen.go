@@ -19,6 +19,7 @@ package googlegenai
 import (
 	"context"
 	"encoding/base64"
+	"strings"
 
 	"google.golang.org/genai"
 
@@ -26,7 +27,15 @@ import (
 	"github.com/firebase/genkit/go/core/status"
 )
 
-// translateImagenCandidates translates the image generation response to [*ai.ModelResponse]
+// translateImagenCandidates translates the image generation response to
+// [*ai.ModelResponse].
+//
+// Not every candidate carries an image. A candidate filtered by Responsible AI
+// comes back with a reason and no payload - on Vertex as an empty Image rather
+// than a nil one, since the converter always populates the field - and a
+// request that wrote its output to Cloud Storage (outputGcsUri) gets a URI
+// instead of bytes. Filter reasons are always reported; they only turn the
+// response blocked when nothing survived.
 func translateImagenCandidates(images []*genai.GeneratedImage) *ai.ModelResponse {
 	m := &ai.ModelResponse{}
 	m.FinishReason = ai.FinishReasonStop
@@ -34,8 +43,30 @@ func translateImagenCandidates(images []*genai.GeneratedImage) *ai.ModelResponse
 	msg := &ai.Message{}
 	msg.Role = ai.RoleModel
 
+	var filtered []string
 	for _, img := range images {
-		msg.Content = append(msg.Content, ai.NewMediaPart(img.Image.MIMEType, "data:"+img.Image.MIMEType+";base64,"+base64.StdEncoding.EncodeToString(img.Image.ImageBytes)))
+		if img == nil {
+			continue
+		}
+		if img.RAIFilteredReason != "" {
+			filtered = append(filtered, img.RAIFilteredReason)
+		}
+		if img.Image == nil {
+			continue
+		}
+		switch {
+		case len(img.Image.ImageBytes) > 0:
+			msg.Content = append(msg.Content, ai.NewMediaPart(img.Image.MIMEType, "data:"+img.Image.MIMEType+";base64,"+base64.StdEncoding.EncodeToString(img.Image.ImageBytes)))
+		case img.Image.GCSURI != "":
+			msg.Content = append(msg.Content, ai.NewMediaPart(img.Image.MIMEType, img.Image.GCSURI))
+		}
+	}
+
+	if len(filtered) > 0 {
+		m.FinishMessage = strings.Join(filtered, "; ")
+		if len(msg.Content) == 0 {
+			m.FinishReason = ai.FinishReasonBlocked
+		}
 	}
 
 	m.Message = msg

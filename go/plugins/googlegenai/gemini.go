@@ -64,8 +64,8 @@ func configToMap(config any) map[string]any {
 
 // newModel creates a model without registering it. The model's config type
 // follows its modality: image models take a [genai.GenerateImagesConfig],
-// everything else speaks generateContent and takes a
-// [genai.GenerateContentConfig]. The framework validates and deserializes the
+// virtual try-on takes a [genai.RecontextImageConfig], and everything else
+// speaks generateContent and takes a [genai.GenerateContentConfig]. The framework validates and deserializes the
 // request's config into that type before the model function runs, which
 // yields the request's own copy; the plugin passes that copy by pointer from
 // here down rather than copying the struct again at every hop.
@@ -86,6 +86,16 @@ func newModel(client *genai.Client, id string, opts ai.ModelOptions) *ai.ModelAc
 		return ai.NewModelAction(api.NewName(provider, id), &opts,
 			func(ctx context.Context, input *ai.ModelRequest, config genai.GenerateImagesConfig, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 				return generateImage(ctx, client, id, input, &config, cb)
+			})
+	}
+
+	// Virtual try-on recontextualizes the person image with the product
+	// images on a Vertex-only endpoint, so it takes neither the
+	// generateContent path nor the media-download middleware.
+	if mt == ModelTypeVirtualTryOn {
+		return ai.NewModelAction(api.NewName(provider, id), &opts,
+			func(ctx context.Context, input *ai.ModelRequest, config genai.RecontextImageConfig, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+				return generateVirtualTryOn(ctx, client, id, input, &config, cb)
 			})
 	}
 
