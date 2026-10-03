@@ -22,8 +22,9 @@ import * as path from 'path';
 
 export const SkillsOptionsSchema = z.object({
   /**
-   * Paths to directories containing skills.
-   * @default ['skills']
+   * Paths to directories containing skills. Later paths override earlier ones
+   * when a skill name appears in more than one directory.
+   * @default ['.agents/skills', 'skills']
    */
   skillPaths: z
     .array(z.string())
@@ -45,7 +46,12 @@ export const skills: GenerateMiddleware<typeof SkillsOptionsSchema> =
       configSchema: SkillsOptionsSchema,
     },
     ({ config }) => {
-      const skillPaths = config?.skillPaths ?? ['skills'];
+      const skillPaths = config?.skillPaths ?? ['.agents/skills', 'skills'];
+      const activationToolName = 'use_skill';
+      const catalogMetadata = {
+        'skills-instructions': true,
+        skillsActivationTool: activationToolName,
+      };
       const skillCache = new Map<
         string,
         { path: string; description: string }
@@ -144,7 +150,7 @@ export const skills: GenerateMiddleware<typeof SkillsOptionsSchema> =
 
       const useSkillTool = tool(
         {
-          name: 'use_skill',
+          name: activationToolName,
           description: 'Use a skill by its name.',
           inputSchema: z.object({
             skillName: z.string().describe('The name of the skill to use.'),
@@ -155,7 +161,15 @@ export const skills: GenerateMiddleware<typeof SkillsOptionsSchema> =
           await ensureSkillsScanned();
           const info = skillCache.get(input.skillName);
           if (!info) {
-            throw new Error(`Skill '${input.skillName}' not found.`);
+            const names = Array.from(skillCache.keys())
+              .sort()
+              .map((name) => JSON.stringify(name));
+            return (
+              `Unknown skill ${JSON.stringify(input.skillName)}. ` +
+              (names.length
+                ? `Available skills: ${names.join(', ')}.`
+                : 'No skills available.')
+            );
           }
 
           try {
@@ -187,6 +201,7 @@ export const skills: GenerateMiddleware<typeof SkillsOptionsSchema> =
             `You have access to a library of skills that serve as specialized instructions/personas.\n` +
             `Strongly prefer to use them when working on anything related to them.\n` +
             `Only use them once to load the context.\n` +
+            `Call the ${activationToolName} tool with a skill's name to load its instructions.\n` +
             `Here are the available skills:\n` +
             `${skillsList}\n` +
             `</skills>`;
@@ -200,7 +215,12 @@ export const skills: GenerateMiddleware<typeof SkillsOptionsSchema> =
             const msg = messages[i];
             for (let j = 0; j < msg.content.length; j++) {
               const p = msg.content[j];
-              if (p.text && p.metadata?.['skills-instructions'] === true) {
+              if (
+                p.text &&
+                p.metadata?.['skills-instructions'] === true &&
+                (typeof p.metadata.skillsActivationTool !== 'string' ||
+                  p.metadata.skillsActivationTool === activationToolName)
+              ) {
                 injectedPart = p;
                 injectedMsgIndex = i;
                 injectedPartIndex = j;
@@ -211,11 +231,14 @@ export const skills: GenerateMiddleware<typeof SkillsOptionsSchema> =
           }
 
           if (injectedPart) {
-            if (injectedPart.text !== systemPromptText) {
+            if (
+              injectedPart.text !== systemPromptText ||
+              injectedPart.metadata?.skillsActivationTool !== activationToolName
+            ) {
               const newContent = [...messages[injectedMsgIndex].content];
               newContent[injectedPartIndex] = {
                 text: systemPromptText,
-                metadata: { 'skills-instructions': true },
+                metadata: catalogMetadata,
               };
               messages[injectedMsgIndex] = {
                 ...messages[injectedMsgIndex],
@@ -233,7 +256,7 @@ export const skills: GenerateMiddleware<typeof SkillsOptionsSchema> =
                   ...messages[systemMsgIndex].content,
                   {
                     text: systemPromptText,
-                    metadata: { 'skills-instructions': true },
+                    metadata: catalogMetadata,
                   },
                 ],
               };
@@ -243,7 +266,7 @@ export const skills: GenerateMiddleware<typeof SkillsOptionsSchema> =
                 content: [
                   {
                     text: systemPromptText,
-                    metadata: { 'skills-instructions': true },
+                    metadata: catalogMetadata,
                   },
                 ],
               });
