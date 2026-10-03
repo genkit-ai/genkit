@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from genkit import FinishReason, Message, ModelResponse, ModelResponseChunk, Part, Role
 from genkit._ai._model import text_from_content
 from genkit._core._error import RuntimeErrorReason
-from genkit._core._model import OutputConfig
+from genkit._core._model import OutputConfig, stream_chunk
 from genkit._core._schema import InvalidOutputSchemaError, to_json_schema
 from genkit._core._typing import (
     ActionMetadata,
@@ -117,9 +117,25 @@ def test_response_wrapper_output_uses_parser() -> None:
     assert wrapper.output == 'banana'
 
 
+def test_model_response_chunk_content_constructor_reads_text() -> None:
+    """ModelResponseChunk(content=[Part.from_text('hi')]) works."""
+    chunk = ModelResponseChunk(content=[Part.from_text('hi')])
+    assert chunk.text == 'hi'
+
+
+def test_stream_chunk_stamps_index_and_parser_on_a_copy() -> None:
+    """stream_chunk stamps index/parser on a copy."""
+    source = ModelResponseChunk(content=[Part.from_text('hi')])
+    wrapped = stream_chunk(source, index=0, previous_chunks=[], chunk_parser=lambda _c: 'parsed')
+    assert wrapped is not source
+    assert wrapped.index == 0
+    assert wrapped.text == 'hi'
+    assert wrapped.output == 'parsed'
+
+
 def test_chunk_wrapper_text() -> None:
     """Test text property of ModelResponseChunk."""
-    wrapper = ModelResponseChunk(
+    wrapper = stream_chunk(
         ModelResponseChunk(content=[Part.from_text('hello'), Part.from_text(' world')]),
         index=0,
         previous_chunks=[],
@@ -130,7 +146,7 @@ def test_chunk_wrapper_text() -> None:
 
 def test_chunk_wrapper_accumulated_text() -> None:
     """Test accumulated_text property of ModelResponseChunk."""
-    wrapper = ModelResponseChunk(
+    wrapper = stream_chunk(
         ModelResponseChunk(content=[Part.from_text(' PS: aliens')]),
         index=0,
         previous_chunks=[
@@ -144,7 +160,7 @@ def test_chunk_wrapper_accumulated_text() -> None:
 
 def test_chunk_wrapper_output() -> None:
     """Test output property of ModelResponseChunk."""
-    wrapper = ModelResponseChunk(
+    wrapper = stream_chunk(
         ModelResponseChunk(content=[Part.from_text(', "baz":[1,2,')]),
         index=0,
         previous_chunks=[
@@ -158,7 +174,7 @@ def test_chunk_wrapper_output() -> None:
 
 def test_chunk_wrapper_output_uses_parser() -> None:
     """Test that ModelResponseChunk uses the provided chunk_parser."""
-    wrapper = ModelResponseChunk(
+    wrapper = stream_chunk(
         ModelResponseChunk(content=[Part.from_text(', "baz":[1,2,')]),
         index=0,
         previous_chunks=[

@@ -7,6 +7,7 @@
 
 from genkit import Message, ModelResponseChunk, Part
 from genkit._ai._formats._text import TextFormat
+from genkit._core._model import stream_chunk
 
 
 class TestTextFormatStreaming:
@@ -19,12 +20,12 @@ class TestTextFormatStreaming:
 
         # Chunk 1: "Hello"
         chunk1 = ModelResponseChunk(content=[Part.from_text('Hello')])
-        result1 = fmt.parse_chunk(ModelResponseChunk(chunk1, index=0, previous_chunks=[]))
+        result1 = fmt.parse_chunk(stream_chunk(chunk1, index=0, previous_chunks=[]))
         assert result1 == 'Hello'
 
         # Chunk 2: " world" - should return only this chunk's text, not accumulated
         chunk2 = ModelResponseChunk(content=[Part.from_text(' world')])
-        result2 = fmt.parse_chunk(ModelResponseChunk(chunk2, index=0, previous_chunks=[chunk1]))
+        result2 = fmt.parse_chunk(stream_chunk(chunk2, index=0, previous_chunks=[chunk1]))
         assert result2 == ' world'
 
     def test_handles_empty_chunks(self) -> None:
@@ -33,7 +34,7 @@ class TestTextFormatStreaming:
         fmt = text_fmt.handle(None)
 
         chunk = ModelResponseChunk(content=[Part.from_text('')])
-        result = fmt.parse_chunk(ModelResponseChunk(chunk, index=0, previous_chunks=[]))
+        result = fmt.parse_chunk(stream_chunk(chunk, index=0, previous_chunks=[]))
         assert result == ''
 
 
