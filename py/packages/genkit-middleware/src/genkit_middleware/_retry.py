@@ -25,8 +25,7 @@ from collections.abc import Awaitable, Callable
 
 from pydantic import BaseModel, Field
 
-from genkit import GenkitError
-from genkit._core._model import ModelResponse
+from genkit import GenkitError, ModelResponse
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
 
 _DEFAULT_RETRY_STATUSES: list[str] = [

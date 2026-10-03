@@ -10,16 +10,22 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from genkit import Genkit
+from genkit import Genkit, get_logger
+from genkit._ai._testing import define_echo_model
 from genkit._core._action import ActionRunContext, _action_context
 from genkit._core._error import GenkitError, RuntimeErrorReason
-from genkit._core._model import ModelRequest, ModelResponse
+from genkit._core._model import Message, ModelRef, ModelRequest, ModelResponse, Part
+from genkit._core._registry import Registry
 from genkit._core._telemetry._instrumentation import (
     SpanMetadata,
     SpanNext,
     reset_instrumentation,
 )
-from genkit._core._typing import Operation
+from genkit._core._telemetry._log_exporter import build_log_record
+from genkit._core._typing import FinishReason, Operation, Role
+from genkit.middleware import BaseMiddleware, GenerateHookParams, GenerateMiddlewareContext
+from genkit.model import model
+from genkit.plugin_api import ActionKind
 from genkit.telemetry import configure_instrumentation
 
 
@@ -72,6 +78,30 @@ async def test_genkit_run_tags_flow_step_action_type() -> None:
         assert recording.last.action_type == 'flowStep'
     finally:
         reset_instrumentation()
+
+
+@pytest.mark.asyncio
+async def test_get_logger_in_flow_attaches_trace_id(hex_ids: None) -> None:
+    """get_logger() lines inside a flow attach the flow's trace ID to the log record."""
+    ai = Genkit()
+    captured: list[dict[str, object]] = []
+
+    def capture_log(*, level: int, event: str, attrs: dict[str, object] | None = None) -> None:
+        captured.append(build_log_record(level=level, event=event, attrs=attrs or {}))
+
+    with mock.patch('genkit._core._telemetry._log_exporter.emit_log', side_effect=capture_log):
+
+        @ai.flow()
+        async def cart_flow() -> str:
+            get_logger(__name__).info('looked up cart')
+            return 'ok'
+
+        assert await cart_flow() == 'ok'
+
+    assert len(captured) == 1
+    assert captured[0]['body'] == {'stringValue': 'looked up cart'}
+    trace_id = captured[0].get('traceId')
+    assert isinstance(trace_id, str) and len(trace_id) == 32
 
 
 @pytest.mark.asyncio
@@ -340,3 +370,137 @@ async def test_current_context() -> None:
         _action_context.reset(token)
 
     assert Genkit.current_context() is None
+
+
+@pytest.mark.asyncio
+async def test_lookup_model_returns_a_model_ref_that_generate_accepts() -> None:
+    ai = Genkit()
+    define_echo_model(ai, name='echo')
+
+    ref = await ai.lookup_model('echo')
+
+    assert isinstance(ref, ModelRef)
+    response = await ai.generate(model=ref, prompt='hi')
+    assert '[ECHO]' in response.text
+
+
+@pytest.mark.asyncio
+async def test_lookup_model_unknown_name_returns_none() -> None:
+    ai = Genkit()
+    assert await ai.lookup_model('ghost') is None
+
+
+@pytest.mark.asyncio
+async def test_lookup_background_model_returns_a_ref_that_generate_operation_accepts() -> None:
+    ai = Genkit()
+
+    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+        return Operation(id='job-1', done=False)
+
+    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+        return op
+
+    ai.define_background_model(name='bg', start=start, check=check)
+    ref = await ai.lookup_background_model('bg')
+
+    assert isinstance(ref, ModelRef)
+    operation = await ai.generate_operation(model=ref, prompt='hi')
+    assert operation.id == 'job-1'
+
+
+@pytest.mark.asyncio
+async def test_lookup_background_model_unknown_name_returns_none() -> None:
+    ai = Genkit()
+    assert await ai.lookup_background_model('ghost') is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_action_returns_the_registered_action() -> None:
+    ai = Genkit()
+    _echo, defined = define_echo_model(ai, name='echo')
+
+    found = await ai.registry.resolve_action(ActionKind.MODEL, 'echo')
+
+    assert found is defined
+
+
+@pytest.mark.asyncio
+async def test_resolve_action_unknown_name_returns_none() -> None:
+    ai = Genkit()
+    assert await ai.registry.resolve_action(ActionKind.MODEL, 'ghost') is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_action_on_ctx_ai_finds_a_per_call_model() -> None:
+    parent_ai = Genkit()
+
+    async def echo(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+        return ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('ok')]),
+        )
+
+    parent_ai.define_model(name='echo', fn=echo)
+    seen: dict[str, object] = {}
+
+    class RegisterPerCall(BaseMiddleware):
+        async def wrap_generate(
+            self,
+            params: GenerateHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn,
+        ) -> ModelResponse:
+            async def per_call(_request: ModelRequest, _run_ctx: ActionRunContext) -> ModelResponse:
+                return ModelResponse(
+                    finish_reason=FinishReason.STOP,
+                    message=Message(role=Role.MODEL, content=[Part.from_text('child')]),
+                )
+
+            ctx.ai.registry.register_action_from_instance(model('per-call', per_call))
+            seen['child'] = await ctx.ai.registry.resolve_action(ActionKind.MODEL, 'per-call')
+            seen['parent'] = await parent_ai.registry.resolve_action(ActionKind.MODEL, 'per-call')
+            return await next_fn(params, ctx)
+
+    await parent_ai.generate(model='echo', prompt='hi', use=[RegisterPerCall()])
+
+    assert seen['child'] is not None
+    assert seen['parent'] is None
+
+
+def test_ai_registry_is_accessible_and_registers_values() -> None:
+    ai = Genkit()
+    assert isinstance(ai.registry, Registry)
+    v = {'id': 'shop'}
+    ai.registry.register_value('a2ui-catalog', 'shop', v)
+    assert ai.registry.lookup_value('a2ui-catalog', 'shop') is v
+    assert ai.registry.lookup_value('a2ui-catalog', 'ghost') is None
+
+
+def test_ai_registry_duplicate_registration_raises() -> None:
+    ai = Genkit()
+    first = {'id': 'shop'}
+    ai.registry.register_value('a2ui-catalog', 'shop', first)
+    with pytest.raises(ValueError, match='already registered'):
+        ai.registry.register_value('a2ui-catalog', 'shop', {'id': 'other'})
+    assert ai.registry.lookup_value('a2ui-catalog', 'shop') is first
+
+
+@pytest.mark.asyncio
+async def test_middleware_ctx_ai_registry_sees_app_values_and_per_call_isolation() -> None:
+    ai = Genkit()
+    define_echo_model(ai, name='echo')
+    app_val = {'id': 'app-scope'}
+    ai.registry.register_value('custom', 'app', app_val)
+    seen: dict[str, object] = {}
+
+    class InspectRegistry(BaseMiddleware):
+        async def wrap_generate(self, params, ctx: GenerateMiddlewareContext, next_fn):
+            seen['app_from_ctx'] = ctx.ai.registry.lookup_value('custom', 'app')
+            ctx.ai.registry.register_value('custom', 'call', 'call-scope')
+            seen['call_from_ctx'] = ctx.ai.registry.lookup_value('custom', 'call')
+            return await next_fn(params, ctx)
+
+    await ai.generate(model='echo', prompt='hi', use=[InspectRegistry()])
+    assert seen['app_from_ctx'] is app_val
+    assert seen['call_from_ctx'] == 'call-scope'
+    assert ai.registry.lookup_value('custom', 'call') is None

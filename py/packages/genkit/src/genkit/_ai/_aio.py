@@ -97,6 +97,7 @@ from genkit._core._middleware import (
 from genkit._core._model import (
     Document,
     EmbedRequest,
+    ModelConfig,
     ModelConfigDict,
     ModelRef,
     ModelRefConfigT,
@@ -134,6 +135,11 @@ ChunkT = TypeVar('ChunkT')
 R = TypeVar('R')
 T = TypeVar('T')
 MiddlewareT = TypeVar('MiddlewareT', bound=BaseMiddleware)
+
+
+def _model_ref_for_action(action: Action) -> ModelRef[Any]:
+    schema = action._config_schema or ModelConfig
+    return ModelRef(name=action.name, config_schema=schema)
 
 
 class Genkit:
@@ -480,6 +486,26 @@ class Genkit:
     ) -> Action:
         """Register a custom embedder action."""
         return define_embedder(self.registry, name, fn, info, metadata, description)
+
+    async def lookup_model(self, name: str) -> ModelRef[Any] | None:
+        """Return a ModelRef for a registered model, or None.
+
+        Pass the ref to ``generate(model=...)``.
+        """
+        action = await self.registry.resolve_action(ActionKind.MODEL, name)
+        if action is None:
+            return None
+        return _model_ref_for_action(action)
+
+    async def lookup_background_model(self, name: str) -> ModelRef[Any] | None:
+        """Return a ModelRef for a registered background model, or None.
+
+        Pass the ref to ``generate_operation(model=...)``.
+        """
+        action = await self.registry.resolve_action(ActionKind.BACKGROUND_MODEL, name)
+        if action is None:
+            return None
+        return _model_ref_for_action(action)
 
     def define_format(self, format: FormatDef) -> None:
         """Register a custom output format."""
