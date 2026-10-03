@@ -18,7 +18,7 @@ from genkit import (
     Role,
     response,
 )
-from genkit._ai._testing import ProgrammableModel, define_programmable_model
+from genkit._ai._testing import ScriptedModel, define_scripted_model
 from genkit._core._schema import to_json_schema
 from genkit.model import ToolRequest, ToolResponse
 
@@ -75,7 +75,7 @@ def _assert_closed_tool_round(generated: ModelResponse) -> None:
 
 
 async def _generate_tool_turn(
-    ai: Genkit, pm: ProgrammableModel, *, name: str, tool_input: object | None = None
+    ai: Genkit, pm: ScriptedModel, *, name: str, tool_input: object | None = None
 ) -> ModelResponse:
     pm.responses = [_model_calls_tool(name=name, ref='t1', tool_input=tool_input), _ok()]
     return await ai.generate(prompt='go', tools=[name])
@@ -101,8 +101,8 @@ async def test_await_str_tool_returns_box_with_string_and_no_media() -> None:
 @pytest.mark.asyncio
 async def test_generate_str_tool_message_has_string_and_no_media() -> None:
     """Generate copies that string onto the tool message and tells the model string."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='weather')
     async def weather(city: str) -> str:
@@ -157,8 +157,8 @@ async def test_await_pydantic_tool_returns_box_with_dump_and_no_media() -> None:
 @pytest.mark.asyncio
 async def test_generate_pydantic_tool_message_has_dump_and_no_media() -> None:
     """Generate copies that dump onto the tool message and tells the model ShotOut."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='shot')
     async def shot() -> ShotOut:
@@ -197,8 +197,8 @@ async def test_await_multipart_shotout_returns_dump_and_png() -> None:
 @pytest.mark.asyncio
 async def test_generate_multipart_shotout_puts_png_on_the_tool_message() -> None:
     """Generate copies dump and PNG onto the tool message; the model is still told ShotOut."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='screenshot')
     async def screenshot() -> MultipartToolResponse[ShotOut]:
@@ -237,8 +237,8 @@ async def test_await_bare_multipart_returns_png_and_tells_model_no_schema() -> N
 @pytest.mark.asyncio
 async def test_generate_bare_multipart_puts_png_on_the_tool_message_with_no_schema() -> None:
     """Generate still puts the PNG on the tool message; the model is told no schema."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='screenshot')
     async def screenshot() -> MultipartToolResponse:
@@ -277,8 +277,8 @@ async def test_await_multipart_shotout_with_bare_return_has_dump_and_no_media() 
 @pytest.mark.asyncio
 async def test_generate_multipart_shotout_with_bare_return_has_dump_and_no_media() -> None:
     """Generate copies that dump with no media; the model is still told ShotOut."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='shot')
     async def shot() -> MultipartToolResponse[ShotOut]:
@@ -316,8 +316,8 @@ async def test_await_response_without_parts_has_dump_and_no_media() -> None:
 @pytest.mark.asyncio
 async def test_generate_response_without_parts_has_dump_and_no_media() -> None:
     """Generate copies that dump with no media; the model is still told ShotOut."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='shot')
     async def shot() -> MultipartToolResponse[ShotOut]:
@@ -354,8 +354,8 @@ async def test_action_run_multipart_shotout_returns_dump_and_png() -> None:
 @pytest.mark.asyncio
 async def test_generate_response_with_png_and_text_puts_both_on_the_tool_message() -> None:
     """Two parts on response() both land on the tool message."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='screenshot')
     async def screenshot() -> MultipartToolResponse[ShotOut]:
@@ -393,8 +393,8 @@ async def test_await_str_tool_may_return_png_without_changing_schema() -> None:
 @pytest.mark.asyncio
 async def test_generate_str_tool_may_put_png_on_the_tool_message_without_changing_schema() -> None:
     """Generate puts that PNG on the tool message; the model is still told string."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='weather')
     async def weather(city: str) -> str:
@@ -416,8 +416,8 @@ async def test_generate_str_tool_may_put_png_on_the_tool_message_without_changin
 @pytest.mark.asyncio
 async def test_optional_multipart_shotout_annotation_tells_model_shotout() -> None:
     """-> MultipartToolResponse[ShotOut] | None still tells the model ShotOut."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='screenshot')
     async def screenshot() -> MultipartToolResponse[ShotOut] | None:

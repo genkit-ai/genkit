@@ -72,7 +72,7 @@ async def test_generate_uses_the_bundled_catalog_when_nothing_is_registered() ->
     ai, pm = setup()
     pm.responses = [model_ok(weather_fence())]
 
-    response = await ai.generate(model='programmableModel', prompt='weather', use=[Surfaces()])
+    response = await ai.generate(model='scriptedModel', prompt='weather', use=[Surfaces()])
     message = assert_finished_message(response)
     assert create_surface_ids(message.content)
     assert '- Text:' in request_system_text(pm)
@@ -86,7 +86,7 @@ async def test_load_catalog_then_surfaces_renders_with_that_catalog() -> None:
     pm.responses = [model_ok(banner_fence())]
 
     response = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='banner',
         use=[Surfaces(catalog=BANNER_CATALOG.id)],
     )
@@ -102,7 +102,7 @@ async def test_generate_default_stays_basic_when_a_custom_catalog_is_registered(
     load_catalog(ai, BANNER_CATALOG)
     pm.responses = [model_ok(weather_fence())]
 
-    response = await ai.generate(model='programmableModel', prompt='weather', use=[Surfaces()])
+    response = await ai.generate(model='scriptedModel', prompt='weather', use=[Surfaces()])
     message = assert_finished_message(response)
     assert create_surface_ids(message.content)
     assert '- Text:' in request_system_text(pm)
@@ -120,7 +120,7 @@ async def test_generate_unknown_catalog_fails_the_turn_before_the_model() -> Non
     pm.responses = [model_ok(weather_fence())]
 
     response = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='banner',
         use=[Surfaces(catalog=BANNER_CATALOG.id)],
     )
@@ -138,7 +138,7 @@ async def test_generate_catalog_basic_falls_back_without_register() -> None:
     ai, pm = setup()
     pm.responses = [model_ok(weather_fence())]
 
-    response = await ai.generate(model='programmableModel', prompt='weather', use=[Surfaces(catalog='basic')])
+    response = await ai.generate(model='scriptedModel', prompt='weather', use=[Surfaces(catalog='basic')])
     message = assert_finished_message(response)
     assert create_surface_ids(message.content)
 
@@ -151,7 +151,7 @@ async def test_generate_strict_rejects_a_component_the_loaded_catalog_lacks() ->
     pm.responses = [model_ok(weather_fence())]
 
     response = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='weather',
         use=[Surfaces(catalog=BANNER_CATALOG.id, validate='strict')],
     )
@@ -165,7 +165,7 @@ async def test_generate_warn_drops_a_component_the_loaded_catalog_lacks() -> Non
     pm.responses = [model_ok(weather_fence())]
 
     response = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='weather',
         use=[Surfaces(catalog=BANNER_CATALOG.id)],
     )

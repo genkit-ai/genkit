@@ -111,22 +111,6 @@ def define_scripted_model(
     return (model, action)
 
 
-# Backward-compatible aliases for tests written against ProgrammableModel
-ProgrammableModel = ScriptedModel
-
-
-def define_programmable_model(
-    ai: Genkit,
-    name: str = 'programmableModel',
-    *,
-    responses: list[ModelResponse] | None = None,
-    chunks: list[list[ModelResponseChunk]] | None = None,
-    response_cb: ResponseCallback | None = None,
-) -> tuple[ProgrammableModel, Action]:
-    """Register a ScriptedModel under the legacy ProgrammableModel alias."""
-    return define_scripted_model(ai, name=name, responses=responses, chunks=chunks, response_cb=response_cb)
-
-
 class EchoModel:
     """A model implementation that echoes back the input with metadata."""
 

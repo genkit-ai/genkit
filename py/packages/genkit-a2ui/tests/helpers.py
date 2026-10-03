@@ -88,7 +88,7 @@ def model_ok(text: str = 'ok') -> ModelResponse:
 
 def setup() -> tuple[Genkit, ScriptedModel]:
     ai = Genkit()
-    model, _ = define_scripted_model(ai, name='programmableModel')
+    model, _ = define_scripted_model(ai, name='scriptedModel')
     return ai, model
 
 

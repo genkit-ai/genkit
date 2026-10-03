@@ -26,22 +26,18 @@ Example:
 
 from genkit.testing._models import (
     EchoModel,
-    ProgrammableModel,
     ScriptedModel,
     StaticResponseModel,
     define_echo_model,
-    define_programmable_model,
     define_scripted_model,
     define_static_response_model,
 )
 
 __all__ = [
     'EchoModel',
-    'ProgrammableModel',
     'ScriptedModel',
     'StaticResponseModel',
     'define_echo_model',
-    'define_programmable_model',
     'define_scripted_model',
     'define_static_response_model',
 ]

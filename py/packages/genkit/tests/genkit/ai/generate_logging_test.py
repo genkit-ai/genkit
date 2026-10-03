@@ -12,7 +12,7 @@ from structlog.testing import capture_logs
 from genkit import Genkit, Message, ModelResponse, ModelResponseChunk, Part
 from genkit._ai._generate import generate_action
 from genkit._ai._model import resolve_model_arg
-from genkit._ai._testing import define_programmable_model
+from genkit._ai._testing import define_scripted_model
 from genkit._ai._tools import Interrupt, respond_to_interrupt, restart_tool
 from genkit._core._environment import GENKIT_ENV
 from genkit._core._logger import GENKIT_LOG, get_logger
@@ -48,8 +48,8 @@ def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 async def _generate_once() -> None:
     """Run one generate call against a model returning a blob in raw and custom."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     pm.responses = [
         ModelResponse(
             message=Message(role=Role.MODEL, content=[Part.from_text('hello there')]),
@@ -98,8 +98,8 @@ async def test_blocked_finish_still_logs_model_responded(monkeypatch: pytest.Mon
     structlog.reset_defaults()
     monkeypatch.setenv(GENKIT_LOG, 'debug')
 
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     pm.responses = [
         ModelResponse(
             finish_reason=FinishReason.BLOCKED,
@@ -125,8 +125,8 @@ async def test_invalid_output_logs_model_finish_reason(monkeypatch: pytest.Monke
     structlog.reset_defaults()
     monkeypatch.setenv(GENKIT_LOG, 'debug')
 
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     pm.responses = [
         ModelResponse(
             finish_reason=FinishReason.STOP,
@@ -183,7 +183,7 @@ async def test_abnormal_finish_skips_output_parsing(monkeypatch: pytest.MonkeyPa
     structlog.reset_defaults()
     monkeypatch.setenv(GENKIT_LOG, 'debug')
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
     pm.responses = [
         ModelResponse(
             message=Message(role=Role.MODEL, content=[Part.from_text('nope')]),
@@ -196,7 +196,7 @@ async def test_abnormal_finish_skips_output_parsing(monkeypatch: pytest.MonkeyPa
         response = await generate_action(
             ai.registry,
             GenerateActionOptions(
-                model='programmableModel',
+                model='scriptedModel',
                 messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
                 output=GenerateActionOutputConfig(format='json'),
             ),
@@ -222,7 +222,7 @@ async def test_other_finish_skips_parsing_even_when_text_is_valid(monkeypatch: p
     structlog.reset_defaults()
     monkeypatch.setenv(GENKIT_LOG, 'info')
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
     pm.responses = [
         ModelResponse(
             message=Message(role=Role.MODEL, content=[Part.from_text('{"ok": true}')]),
@@ -234,7 +234,7 @@ async def test_other_finish_skips_parsing_even_when_text_is_valid(monkeypatch: p
         response = await generate_action(
             ai.registry,
             GenerateActionOptions(
-                model='programmableModel',
+                model='scriptedModel',
                 messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
                 output=GenerateActionOutputConfig(
                     format='json',
@@ -265,7 +265,7 @@ async def test_schema_mismatch_logs_when_debug_enabled(monkeypatch: pytest.Monke
     structlog.reset_defaults()
     monkeypatch.setenv(GENKIT_LOG, 'debug')
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
     pm.responses = [
         ModelResponse(
             message=Message(role=Role.MODEL, content=[Part.from_text('not json')]),
@@ -277,7 +277,7 @@ async def test_schema_mismatch_logs_when_debug_enabled(monkeypatch: pytest.Monke
         response = await generate_action(
             ai.registry,
             GenerateActionOptions(
-                model='programmableModel',
+                model='scriptedModel',
                 messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
                 output=GenerateActionOutputConfig(format='json'),
             ),
@@ -286,7 +286,7 @@ async def test_schema_mismatch_logs_when_debug_enabled(monkeypatch: pytest.Monke
     assert response.message is not None
     mismatched = [e for e in entries if e['event'] == 'model output does not match the expected schema']
     assert len(mismatched) == 1
-    assert mismatched[0]['model'] == 'programmableModel'
+    assert mismatched[0]['model'] == 'scriptedModel'
 
 
 @pytest.mark.asyncio
@@ -295,7 +295,7 @@ async def test_tool_interrupt_logs(monkeypatch: pytest.MonkeyPatch) -> None:
     structlog.reset_defaults()
     monkeypatch.setenv(GENKIT_LOG, 'debug')
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='hold')
     async def hold(_: dict) -> str:  # noqa: ARG001
@@ -315,7 +315,7 @@ async def test_tool_interrupt_logs(monkeypatch: pytest.MonkeyPatch) -> None:
         response = await generate_action(
             ai.registry,
             GenerateActionOptions(
-                model='programmableModel',
+                model='scriptedModel',
                 messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
                 tools=['hold'],
             ),
@@ -337,7 +337,7 @@ async def test_restarted_tool_interrupt_logs(monkeypatch: pytest.MonkeyPatch) ->
     structlog.reset_defaults()
     monkeypatch.setenv(GENKIT_LOG, 'debug')
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='hold')
     async def hold(_: dict) -> str:  # noqa: ARG001
@@ -355,7 +355,7 @@ async def test_restarted_tool_interrupt_logs(monkeypatch: pytest.MonkeyPatch) ->
     first = await generate_action(
         ai.registry,
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
             tools=['hold'],
         ),
@@ -365,7 +365,7 @@ async def test_restarted_tool_interrupt_logs(monkeypatch: pytest.MonkeyPatch) ->
         response = await generate_action(
             ai.registry,
             GenerateActionOptions(
-                model='programmableModel',
+                model='scriptedModel',
                 messages=list(first.messages),
                 tools=['hold'],
                 resume=Resume(restart=[restart_tool(interrupt=first.interrupts[0])]),
@@ -384,7 +384,7 @@ async def test_tool_stream_callback_failure_fails_generate(monkeypatch: pytest.M
     structlog.reset_defaults()
     monkeypatch.setenv(GENKIT_LOG, 'debug')
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='echo')
     async def echo(_: dict) -> str:  # noqa: ARG001
@@ -411,7 +411,7 @@ async def test_tool_stream_callback_failure_fails_generate(monkeypatch: pytest.M
     response = await generate_action(
         ai.registry,
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
             tools=['echo'],
         ),
@@ -431,7 +431,7 @@ async def test_tool_stream_callback_failure_fails_generate(monkeypatch: pytest.M
 async def test_model_stream_callback_failure_returns_closed_history() -> None:
     """A model chunk pipe failure returns the conversation entering that turn."""
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
     pm.responses = [
         ModelResponse(
             message=Message(role=Role.MODEL, content=[Part.from_text('done')]),
@@ -446,7 +446,7 @@ async def test_model_stream_callback_failure_returns_closed_history() -> None:
     response = await generate_action(
         ai.registry,
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
         ),
         on_chunk=on_chunk,
@@ -465,7 +465,7 @@ async def test_model_stream_callback_failure_returns_closed_history() -> None:
 async def test_resumed_tool_stream_callback_failure_returns_closed_history() -> None:
     """A resumed tool chunk pipe failure keeps the conversation that already closed."""
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='hold')
     async def hold(_: dict) -> str:  # noqa: ARG001
@@ -487,7 +487,7 @@ async def test_resumed_tool_stream_callback_failure_returns_closed_history() -> 
     first = await generate_action(
         ai.registry,
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
             tools=['hold'],
         ),
@@ -501,7 +501,7 @@ async def test_resumed_tool_stream_callback_failure_returns_closed_history() -> 
     response = await generate_action(
         ai.registry,
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=list(first.messages),
             tools=['hold'],
             resume=Resume(respond=[reply]),

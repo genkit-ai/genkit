@@ -33,13 +33,13 @@ Test Coverage
 │ test_echo_model_stream_countdown │ Stream countdown chunks                  │
 │ test_echo_model_stores_request   │ Stores last request for inspection       │
 ├──────────────────────────────────┼──────────────────────────────────────────┤
-│ ProgrammableModel Tests                                                     │
+│ ScriptedModel Tests                                                     │
 ├──────────────────────────────────┼──────────────────────────────────────────┤
-│ test_programmable_model_basic    │ Returns programmed responses             │
-│ test_programmable_model_multiple │ Multiple sequential responses            │
-│ test_programmable_model_chunks   │ Streams programmed chunks                │
-│ test_programmable_model_reset    │ Reset clears state                       │
-│ test_programmable_model_request  │ Stores deep copy of last request         │
+│ test_scripted_model_basic    │ Returns programmed responses             │
+│ test_scripted_model_multiple │ Multiple sequential responses            │
+│ test_scripted_model_chunks   │ Streams programmed chunks                │
+│ test_scripted_model_reset    │ Reset clears state                       │
+│ test_scripted_model_request  │ Stores deep copy of last request         │
 ├──────────────────────────────────┼──────────────────────────────────────────┤
 │ StaticResponseModel Tests                                                   │
 ├──────────────────────────────────┼──────────────────────────────────────────┤
@@ -61,11 +61,11 @@ from genkit import ActionRunContext, Genkit, Message, ModelResponse, ModelRespon
 from genkit._ai._testing import (
     EchoModel,
     GablorkenInput,
-    ProgrammableModel,
+    ScriptedModel,
     SkipTestError,
     StaticResponseModel,
     define_echo_model,
-    define_programmable_model,
+    define_scripted_model,
     define_static_response_model,
     skip,
     test_models as run_model_tests,
@@ -200,13 +200,13 @@ class TestEchoModel:
         assert echo.last_request is not None
 
 
-class TestProgrammableModel:
-    """Tests for ProgrammableModel functionality."""
+class TestScriptedModel:
+    """Tests for ScriptedModel functionality."""
 
     @pytest.mark.asyncio
-    async def test_programmable_model_basic(self) -> None:
-        """Test basic programmable model functionality."""
-        pm = ProgrammableModel()
+    async def test_scripted_model_basic(self) -> None:
+        """Test basic scripted model functionality."""
+        pm = ScriptedModel()
         pm.responses = [
             ModelResponse(
                 message=Message(
@@ -233,9 +233,9 @@ class TestProgrammableModel:
         assert pm.request_count == 1
 
     @pytest.mark.asyncio
-    async def test_programmable_model_multiple_responses(self) -> None:
+    async def test_scripted_model_multiple_responses(self) -> None:
         """Test multiple sequential responses."""
-        pm = ProgrammableModel()
+        pm = ScriptedModel()
         pm.responses = [
             ModelResponse(
                 message=Message(
@@ -271,9 +271,9 @@ class TestProgrammableModel:
         assert pm.request_count == 2
 
     @pytest.mark.asyncio
-    async def test_programmable_model_chunks(self) -> None:
+    async def test_scripted_model_chunks(self) -> None:
         """Test streaming programmed chunks."""
-        pm = ProgrammableModel()
+        pm = ScriptedModel()
         pm.responses = [
             ModelResponse(
                 message=Message(
@@ -307,9 +307,9 @@ class TestProgrammableModel:
         assert ctx.chunks[1].content[0].text == 'Chunk 2'
 
     @pytest.mark.asyncio
-    async def test_programmable_model_reset(self) -> None:
+    async def test_scripted_model_reset(self) -> None:
         """Test reset clears state."""
-        pm = ProgrammableModel()
+        pm = ScriptedModel()
         pm.responses = [
             ModelResponse(
                 message=Message(
@@ -341,9 +341,9 @@ class TestProgrammableModel:
         assert pm.chunks is None
 
     @pytest.mark.asyncio
-    async def test_programmable_model_stores_deep_copy(self) -> None:
+    async def test_scripted_model_stores_deep_copy(self) -> None:
         """Test that last_request is a deep copy."""
-        pm = ProgrammableModel()
+        pm = ScriptedModel()
         pm.responses = [
             ModelResponse(
                 message=Message(
@@ -376,9 +376,9 @@ class TestProgrammableModel:
         assert stored_part.text == 'original'
 
     @pytest.mark.asyncio
-    async def test_define_programmable_model(self, ai: Genkit) -> None:
-        """Test define_programmable_model helper function."""
-        pm, _action = define_programmable_model(ai, name='testPM')
+    async def test_define_scripted_model(self, ai: Genkit) -> None:
+        """Test define_scripted_model helper function."""
+        pm, _action = define_scripted_model(ai, name='testPM')
         pm.responses = [
             ModelResponse(
                 message=Message(
@@ -504,7 +504,7 @@ class TestTestModels:
     async def test_test_models_with_echo_model(self, ai: Genkit) -> None:
         """Test test_models with an echo model."""
         # Define an echo model that will pass the basic hi test
-        pm, _ = define_programmable_model(ai, name='testModel')
+        pm, _ = define_scripted_model(ai, name='testModel')
         pm.responses = [
             # For basic hi test
             ModelResponse(
@@ -574,7 +574,7 @@ class TestTestModels:
     @pytest.mark.asyncio
     async def test_test_models_report_format(self, ai: Genkit) -> None:
         """Test that report format matches JS implementation."""
-        pm, _ = define_programmable_model(ai, name='formatTestModel')
+        pm, _ = define_scripted_model(ai, name='formatTestModel')
         pm.responses = [
             ModelResponse(
                 message=Message(
@@ -602,7 +602,7 @@ class TestTestModels:
     @pytest.mark.asyncio
     async def test_test_models_multiple_models(self, ai: Genkit) -> None:
         """Test test_models with multiple models."""
-        pm1, _ = define_programmable_model(ai, name='model1')
+        pm1, _ = define_scripted_model(ai, name='model1')
         pm1.responses = [
             ModelResponse(
                 message=Message(
@@ -612,7 +612,7 @@ class TestTestModels:
             ),
         ] * 10
 
-        pm2, _ = define_programmable_model(ai, name='model2')
+        pm2, _ = define_scripted_model(ai, name='model2')
         pm2.responses = [
             ModelResponse(
                 message=Message(
@@ -634,7 +634,7 @@ class TestTestModels:
     @pytest.mark.asyncio
     async def test_test_models_handles_failures(self, ai: Genkit) -> None:
         """Test that test_models properly reports failures."""
-        pm, _ = define_programmable_model(ai, name='failingModel')
+        pm, _ = define_scripted_model(ai, name='failingModel')
         pm.responses = [
             # Return something that doesn't match expected pattern
             ModelResponse(

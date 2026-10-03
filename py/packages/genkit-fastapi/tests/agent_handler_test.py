@@ -37,7 +37,7 @@ def build_agent(name: str) -> Any:
     ai = Genkit()
     define_scripted_model(
         ai,
-        name='programmableModel',
+        name='scriptedModel',
         responses=[
             ModelResponse(
                 finish_reason=FinishReason.STOP,
@@ -46,7 +46,7 @@ def build_agent(name: str) -> Any:
         ],
         chunks=[[ModelResponseChunkModel(role=Role.MODEL, content=[Part.from_text('Hi there!')])]],
     )
-    ai.define_prompt(name=name, model='programmableModel', system='You echo things.')
+    ai.define_prompt(name=name, model='scriptedModel', system='You echo things.')
     return ai.define_prompt_agent(name=name, store=InMemorySessionStore())
 
 

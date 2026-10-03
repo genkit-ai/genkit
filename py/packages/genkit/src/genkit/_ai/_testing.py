@@ -27,14 +27,12 @@ from genkit._core._typing import (
 )
 from genkit.telemetry import run_in_new_span
 from genkit.testing import (
-    EchoModel as EchoModel,
-    ProgrammableModel as ProgrammableModel,
-    ScriptedModel as ScriptedModel,
-    StaticResponseModel as StaticResponseModel,
-    define_echo_model as define_echo_model,
-    define_programmable_model as define_programmable_model,
-    define_scripted_model as define_scripted_model,
-    define_static_response_model as define_static_response_model,
+    EchoModel,
+    ScriptedModel,
+    StaticResponseModel,
+    define_echo_model,
+    define_scripted_model,
+    define_static_response_model,
 )
 
 from ._aio import Genkit
