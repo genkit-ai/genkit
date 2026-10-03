@@ -45,10 +45,12 @@ FAMILY_METHOD: dict[str, str] = {
     'embedder': 'embedding',
 }
 
-INTERACTIONS_FAMILY_METHODS: dict[str, tuple[str, str]] = {
-    'deep-research': ('Deep Research', 'deep_research_model'),
-    'antigravity': ('Antigravity', 'antigravity_model'),
-    'lyria': ('Lyria', 'lyria_model'),
+# Families one plugin class serves: display name, constructor, and that class.
+PLUGIN_FAMILY_METHODS: dict[str, tuple[str, str, str]] = {
+    'deep-research': ('Deep Research', 'deep_research_model', 'GoogleAI'),
+    'antigravity': ('Antigravity', 'antigravity_model', 'GoogleAI'),
+    'lyria': ('Lyria', 'lyria_model', 'GoogleAI'),
+    'virtual-try-on': ('Virtual Try-On', 'virtual_try_on_model', 'VertexAI'),
 }
 
 
@@ -56,11 +58,11 @@ def wrong_family_error(*, plugin_class: str, method: str, family: str, local: st
     """Build the INVALID_ARGUMENT error naming the id and the way out."""
     if actual == 'embedder':
         hint = f"'{local}' is an embedder; use {plugin_class}.embedding()."
-    elif actual in INTERACTIONS_FAMILY_METHODS:
-        display, method_name = INTERACTIONS_FAMILY_METHODS[actual]
+    elif actual in PLUGIN_FAMILY_METHODS:
+        display, method_name, owner = PLUGIN_FAMILY_METHODS[actual]
         hint = (
             f"'{local}' is a {display} model; use {plugin_class}.{method_name}()."
-            if plugin_class == 'GoogleAI'
+            if plugin_class == owner
             else f"'{local}' has no ref constructor in this plugin."
         )
     elif actual == 'unsupported':

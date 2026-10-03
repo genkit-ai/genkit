@@ -20,7 +20,7 @@ Families with no generate path here resolve to nothing: Veo is
 background-only, embedders are a different action kind, and retired or
 unimplemented image ids must not fall through. Vertex keeps Lyria, Deep
 Research, and Antigravity closed; Google AI routes those families through
-Interactions.
+Interactions. Google AI keeps Virtual Try-On closed; Vertex serves it.
 """
 
 from genkit_google_genai.models.gemini import (
@@ -30,6 +30,7 @@ from genkit_google_genai.models.gemini import (
 )
 from genkit_google_genai.models.lyria import is_lyria_model
 from genkit_google_genai.models.veo import is_veo_model
+from genkit_google_genai.models.virtual_try_on import is_virtual_try_on_model
 
 # Prefixes people paste from action keys, Dev UI traces, or another plugin's
 # samples. Stripping them first means the constructor decides the namespace,
@@ -54,6 +55,7 @@ UNROUTABLE_FAMILIES = frozenset({
     'lyria',
     'deep-research',
     'antigravity',
+    'virtual-try-on',
 })
 
 
@@ -78,12 +80,12 @@ def is_imagen_model_name(name: str) -> bool:
 def is_unsupported_image_model_name(name: str) -> bool:
     """True for image ids with no generate path here.
 
-    Matches Imagen and the ``imagegeneration@``, ``imagetext@`` and
-    ``virtual-try-on-`` prefixes on the last path segment. Gemini native
-    image (``gemini-…-image``) is a different family and routes normally.
+    Matches Imagen and the ``imagegeneration@`` and ``imagetext@``
+    prefixes on the last path segment. Gemini native image
+    (``gemini-…-image``) is a different family and routes normally.
     """
     local = name.split('/')[-1].lower()
-    return is_imagen_model_name(local) or local.startswith(('imagegeneration@', 'imagetext@', 'virtual-try-on-'))
+    return is_imagen_model_name(local) or local.startswith(('imagegeneration@', 'imagetext@'))
 
 
 def classify_family(name: str) -> str:
@@ -95,6 +97,8 @@ def classify_family(name: str) -> str:
     leaf = name.split('/')[-1].lower()
     if 'embedding' in leaf:
         return 'embedder'
+    if is_virtual_try_on_model(leaf):
+        return 'virtual-try-on'
     if is_unsupported_image_model_name(leaf):
         return 'unsupported'
     if is_veo_model(leaf):
