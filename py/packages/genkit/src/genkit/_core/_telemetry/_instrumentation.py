@@ -34,7 +34,6 @@ from typing import Any, Literal, Protocol, TypeVar, runtime_checkable
 from pydantic import BaseModel
 
 from ._attrs import METADATA_PREFIX, Attr
-from ._http import PARENT_SPAN
 from ._log_exporter import reset_log_export
 
 T = TypeVar('T')
@@ -229,7 +228,6 @@ def reset_instrumentation() -> None:
     instrumentations.clear()
     reset_log_export()
     parent_path_context.set('')
-    PARENT_SPAN.set(None)
     current_span.set(None)
 
 

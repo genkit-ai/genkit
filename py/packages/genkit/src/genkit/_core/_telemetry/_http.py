@@ -32,17 +32,15 @@ from collections.abc import Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from queue import Full, Queue
-from typing import TYPE_CHECKING, Literal, TypeVar
+from typing import Literal, TypeVar
 from urllib.parse import urljoin, urlparse
-
-if TYPE_CHECKING:
-    from ._instrumentation import Instrumentation
 
 from .._environment import is_dev_environment
 from .._error import GenkitError, Interrupt
 from .._logger import get_logger
 from . import _instrumentation
 from ._attrs import Attr, State, metadata_key
+from ._instrumentation import Instrumentation
 from ._log_exporter import QUEUE_SIZE, put_poison_pill
 from ._path import build_path
 
@@ -289,6 +287,7 @@ class DirectHttpInstrumentation:
             _instrumentation.parent_path_context.reset(path_token)
 
     def dispose(self) -> None:
+        PARENT_SPAN.set(None)
         self.sink.shutdown()
 
     def flush(self) -> None:
