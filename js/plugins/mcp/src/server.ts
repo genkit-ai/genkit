@@ -43,6 +43,7 @@ import {
   GenkitError,
   Message,
   type Genkit,
+  type Flow,
   type MessageData,
   type Part,
   type PromptAction,
@@ -54,9 +55,9 @@ import { toToolDefinition, type ToolAction } from 'genkit/tool';
 import type { McpServerOptions } from './index.js';
 
 /**
- * Represents an MCP (Model Context Protocol) server that exposes Genkit tools
- * and prompts. This class wraps a Genkit instance and makes its registered
- * actions (tools, prompts) available to MCP clients. It handles the translation
+ * Represents an MCP (Model Context Protocol) server that exposes Genkit tools,
+ * flows, and prompts. This class wraps a Genkit instance and makes its
+ * registered actions available to MCP clients. It handles the translation
  * between Genkit's action definitions and MCP's expected formats.
  */
 export class GenkitMcpServer {
@@ -65,6 +66,8 @@ export class GenkitMcpServer {
   server?: Server;
   actionsResolved = false;
   toolActions: ToolAction[] = [];
+  flowActions: Flow[] = [];
+  mcpToolActions = new Map<string, ToolAction | Flow>();
   promptActions: PromptAction[] = [];
   resourceActions: ResourceAction[] = [];
 
@@ -82,10 +85,9 @@ export class GenkitMcpServer {
    * Initializes the MCP server instance and registers request handlers. It
    * dynamically imports MCP SDK components and sets up handlers for listing
    * tools, calling tools, listing prompts, and getting prompts. It also
-   * resolves and stores all tool and prompt actions from the Genkit instance.
+   * resolves and stores all tool, flow, and prompt actions from the Genkit instance.
    *
-   * This method is called by the constructor and ensures the server is ready
-   * before any requests are handled. It's idempotent.
+   * This method is called before requests are handled. It's idempotent.
    */
   async setup(): Promise<void> {
     if (this.actionsResolved) return;
@@ -146,18 +148,37 @@ export class GenkitMcpServer {
     // TODO -- use listResolvableActions.
     const allActions = await this.ai.registry.listActions();
     const toolList: ToolAction[] = [];
+    const flowList: Flow[] = [];
     const promptList: PromptAction[] = [];
     const resourceList: ResourceAction[] = [];
     for (const k in allActions) {
       if (k.startsWith('/tool/')) {
         toolList.push(allActions[k] as ToolAction);
+      } else if (k.startsWith('/flow/')) {
+        flowList.push(allActions[k] as Flow);
       } else if (k.startsWith('/prompt/')) {
         promptList.push(allActions[k] as PromptAction);
       } else if (k.startsWith('/resource/')) {
         resourceList.push(allActions[k] as ResourceAction);
       }
     }
+    const mcpToolActions = new Map<string, ToolAction | Flow>();
+    for (const action of [...toolList, ...flowList]) {
+      const actionName = action.__action.name;
+      const name = actionName.substring(actionName.lastIndexOf('/') + 1);
+      const mcpName =
+        action.__action.actionType === 'flow' ? `flow_${name}` : name;
+      if (mcpToolActions.has(mcpName)) {
+        throw new GenkitError({
+          status: 'FAILED_PRECONDITION',
+          message: `Multiple actions would be exposed as MCP tool '${mcpName}'.`,
+        });
+      }
+      mcpToolActions.set(mcpName, action);
+    }
     this.toolActions = toolList;
+    this.flowActions = flowList;
+    this.mcpToolActions = mcpToolActions;
     this.promptActions = promptList;
     this.resourceActions = resourceList;
     this.actionsResolved = true;
@@ -165,20 +186,39 @@ export class GenkitMcpServer {
 
   /**
    * Handles MCP requests to list available tools.
-   * It maps the resolved Genkit tool actions to the MCP Tool format.
+   * It maps the resolved Genkit tool and flow actions to the MCP Tool format.
    * @param req The MCP ListToolsRequest.
    * @returns A Promise resolving to an MCP ListToolsResult.
    */
   async listTools(req: ListToolsRequest): Promise<ListToolsResult> {
     await this.setup();
     return {
-      tools: this.toolActions.map((t): Tool => {
-        const def = toToolDefinition(t);
+      tools: Array.from(this.mcpToolActions, ([name, action]): Tool => {
+        const def = toToolDefinition(action);
+        let inputSchema = def.inputSchema as Tool['inputSchema'];
+        if (action.__action.actionType === 'flow') {
+          if (
+            !action.__action.inputSchema &&
+            !action.__action.inputJsonSchema
+          ) {
+            inputSchema = { type: 'object' };
+          } else if (inputSchema?.type !== 'object') {
+            inputSchema = {
+              type: 'object',
+              properties: { input: inputSchema },
+              required: ['input'],
+            };
+          }
+        }
         return {
-          name: def.name,
-          inputSchema: (def.inputSchema as any) || { type: 'object' },
-          description: def.description,
-          _meta: t.__action.metadata?.mcp?._meta,
+          name,
+          inputSchema: inputSchema || { type: 'object' },
+          description:
+            def.description ||
+            (action.__action.actionType === 'flow'
+              ? `Run the Genkit flow '${action.__action.name}'.`
+              : ''),
+          _meta: action.__action.metadata?.mcp?._meta,
         };
       }),
     };
@@ -186,7 +226,7 @@ export class GenkitMcpServer {
 
   /**
    * Handles MCP requests to call a specific tool. It finds the corresponding
-   * Genkit tool action and executes it with the provided arguments. The result
+   * Genkit tool or flow action and executes it with the provided arguments. The result
    * is then formatted as an MCP CallToolResult.
    * @param req The MCP CallToolRequest containing the tool name and arguments.
    * @returns A Promise resolving to an MCP CallToolResult.
@@ -194,20 +234,29 @@ export class GenkitMcpServer {
    */
   async callTool(req: CallToolRequest): Promise<CallToolResult> {
     await this.setup();
-    const tool = this.toolActions.find(
-      (t) => t.__action.name === req.params.name
-    );
+    const tool = this.mcpToolActions.get(req.params.name);
     if (!tool)
       throw new GenkitError({
         status: 'NOT_FOUND',
         message: `Tried to call tool '${req.params.name}' but it could not be found.`,
       });
-    const result = await tool(req.params.arguments);
+    let input: unknown = req.params.arguments;
+    if (tool.__action.actionType === 'flow') {
+      if (!tool.__action.inputSchema && !tool.__action.inputJsonSchema) {
+        input = undefined;
+      } else if (toToolDefinition(tool).inputSchema?.type !== 'object') {
+        input = req.params.arguments?.input;
+      }
+    }
+    const result = await tool(input);
     return {
       content: [
         {
           type: 'text',
-          text: typeof result === 'string' ? result : JSON.stringify(result),
+          text:
+            typeof result === 'string'
+              ? result
+              : (JSON.stringify(result) ?? ''),
         },
       ],
     };
