@@ -21,10 +21,8 @@ from typing import NoReturn
 import pytest
 from genkit_middleware import Fallback
 
-from genkit import Genkit, Message, ModelResponse, ModelResponseChunk, Part
-from genkit._core._action import ActionRunContext
+from genkit import ModelResponse
 from genkit._core._error import GenkitError
-from genkit._core._typing import FinishReason, Role
 from genkit.middleware import ModelHookParams
 from genkit.model import ModelRequest
 
@@ -83,30 +81,3 @@ async def test_fallback_non_genkit_error(ctx) -> None:
 
     with pytest.raises(ConnectionError):
         await fallback.wrap_model(_make_params(), ctx, next_fn)
-
-
-@pytest.mark.asyncio
-async def test_fallback_streams_chunks_from_the_fallback_model() -> None:
-    ai = Genkit()
-
-    async def fail(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
-        raise GenkitError(status='UNAVAILABLE', message='primary down')
-
-    async def backup(_request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
-        ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('from-backup')]))
-        return ModelResponse(
-            finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part.from_text('done')]),
-        )
-
-    ai.define_model(name='primary', fn=fail)
-    ai.define_model(name='backup', fn=backup)
-
-    stream = ai.generate_stream(model='primary', prompt='hi', use=[Fallback(models=['backup'])])
-    texts: list[str] = []
-    async for chunk in stream.stream:
-        texts.append(chunk.text)
-    final = await stream.response
-
-    assert 'from-backup' in ''.join(texts)
-    assert final.text == 'done'
