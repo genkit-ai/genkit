@@ -152,7 +152,7 @@ def define_evaluator(
                                 span_id=span.span_id,
                                 trace_id=span.trace_id,
                                 test_case_id=test_case_id,
-                                evaluation=evaluation,
+                                evaluation=[evaluation],
                             )
                         )
                         raise e

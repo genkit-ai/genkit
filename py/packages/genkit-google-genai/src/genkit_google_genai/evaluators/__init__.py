@@ -41,7 +41,7 @@ Example:
     )
 
     for result in results.root:
-        print(f'Score: {result.evaluation.score}')
+        print(f'Score: {result.evaluation[0].score}')
     ```
 """
 

@@ -93,7 +93,7 @@ from __future__ import annotations
 
 from typing import Any, ClassVar, Literal
 
-from pydantic import ConfigDict, Field, RootModel
+from pydantic import ConfigDict, Field, RootModel, field_validator
 from pydantic.alias_generators import to_camel
 
 from genkit._core._base import GenkitModel
@@ -327,11 +327,10 @@ def _emit_model(
             py_type_str = 'dict[str, Any]'
         if name == 'MessageData' and k == 'role':
             py_type_str = 'Role | str'
-        # The wire schema allows one Score or a list; _py_type drops the
-        # array branch of a mixed anyOf, so a multi-score evaluator result
-        # would fail validation without this.
+        # Every evaluator hands back the same shape, so readers always loop
+        # over scores instead of checking whether they got one or many.
         if name == 'EvalFnResponse' and snake == 'evaluation':
-            py_type_str = 'Score | list[Score]'
+            py_type_str = 'list[Score]'
         desc = v.get('description')
         desc_extra = f', description={repr(desc)}' if desc else ''
         if k in req:
@@ -347,6 +346,17 @@ def _emit_model(
         lines.extend([
             '    # Store Pydantic type for runtime validation (excluded from JSON)',
             '    schema_type: Any = Field(default=None, exclude=True)',
+        ])
+    if name == 'EvalFnResponse':
+        lines.extend([
+            '',
+            "    @field_validator('evaluation', mode='before')",
+            '    @classmethod',
+            '    def _wrap_single_score_object(cls, value: Any) -> Any:  # noqa: ANN401',
+            '        # saved runs and other tools may store one score object instead of',
+            '        # a list. only raw JSON gets wrapped; a Score built in code must be',
+            '        # passed as a list so the type checker and runtime agree.',
+            '        return [value] if isinstance(value, dict) else value',
         ])
     return lines + ['']
 
