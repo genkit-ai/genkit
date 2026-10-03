@@ -400,18 +400,21 @@ class Part(GenkitModel):
     def restart(
         self,
         *,
-        metadata: dict[str, Any] | None = None,
+        resumed_metadata: dict[str, Any] | None = None,
         replace_input: Any | None = None,  # noqa: ANN401
     ) -> Part:
         """Build the tool-request part that runs this interrupt again.
 
-        Pass the result in ``generate(..., resume_restart=...)``.
+        ``resumed_metadata`` is what the tool reads as ``ctx.resumed_metadata``.
+        Omit it and the tool still sees a resume (``ctx.is_resumed()`` is true).
+        ``replace_input`` swaps the tool input and keeps the previous input on
+        ``metadata['replacedInput']``.
         """
         tool_req = self.tool_request
         if tool_req is None:
             raise ValueError('restart needs a tool request part')
         new_meta: dict[str, Any] = dict(self.metadata or {})
-        new_meta['resumed'] = metadata if metadata is not None else True
+        new_meta['resumed'] = resumed_metadata if resumed_metadata is not None else True
         new_input = tool_req.input
         if replace_input is not None:
             new_meta['replacedInput'] = tool_req.input
@@ -429,9 +432,9 @@ class Part(GenkitModel):
         *,
         metadata: dict[str, Any] | None = None,
     ) -> Part:
-        """Build the tool-response part that skips running this interrupt.
+        """Build the tool-response part that answers this interrupt without running the tool.
 
-        Pass the result in ``generate(..., resume_respond=...)``.
+        ``metadata`` is stored under ``interruptResponse`` and defaults to true when omitted.
         """
         tool_req = self.tool_request
         if tool_req is None:
@@ -603,7 +606,10 @@ def resume_options_to_resume(
 def unanswered_interrupt(part: Part) -> bool:
     """True when this is still a pause, not a restart or response."""
     meta = part.metadata or {}
-    return part.tool_request is not None and bool(meta.get('interrupt')) and not meta.get('resumed')
+    raw_resumed = meta.get('resumed')
+    # An empty dict is a resume with no extra fields, so the tool's is_resumed() is true.
+    resumed = raw_resumed is True or isinstance(raw_resumed, dict)
+    return part.tool_request is not None and bool(meta.get('interrupt')) and not resumed
 
 
 def reject_unanswered_interrupts(resume: Resume) -> None:

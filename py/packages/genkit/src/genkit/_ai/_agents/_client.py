@@ -180,33 +180,38 @@ class AgentInterrupt(Generic[InputT, OutputT]):
         self.ref = ref
         self.input = input_data
 
-    def respond(self, output: OutputT, *, metadata: dict[str, Any] | None = None) -> Part:
-        """Tool-response Part for batching into ``chat.resume(respond=[...])``."""
+    def respond(self, output: OutputT) -> Part:
+        """Tool response for ``chat.resume(respond=[...])``.
+
+        Carries the output only. ``Part.respond`` is the call that attaches
+        ``interruptResponse`` metadata.
+        """
         return Part.from_tool_response(
             name=self.name,
             ref=self.ref,
             output=output,
-            metadata=metadata,
         )
 
     def restart(
         self,
         *,
-        metadata: dict[str, Any] | None = None,
+        resumed_metadata: dict[str, Any] | None = None,
         replace_input: Any | None = None,  # noqa: ANN401
     ) -> Part:
-        """Restart tool-request Part for batching into ``chat.resume(restart=[...])``."""
+        """Tool request for ``chat.resume(restart=[...])``.
+
+        The tool sees a resume (``ctx.is_resumed()`` is true). Pass
+        ``resumed_metadata`` when it needs the approval payload.
+        """
         part = Part.from_tool_request(
             name=self.name,
             ref=self.ref,
             input=self.input,
         )
-        if metadata is not None or replace_input is not None:
-            return part.restart(
-                metadata=metadata,
-                replace_input=replace_input,
-            )
-        return part
+        return part.restart(
+            resumed_metadata=resumed_metadata,
+            replace_input=replace_input,
+        )
 
 
 @dataclass

@@ -110,6 +110,15 @@ def test_ref_mismatch_raises() -> None:
     assert exc.value.status == 'INVALID_ARGUMENT'
 
 
+def test_paused_restart_part_raises() -> None:
+    """A still-paused part on resume.restart is rejected before history matching."""
+    paused = Part.from_tool_request(name='book', ref='1', input={'seat': '3A'}, metadata={'interrupt': True})
+    history = [model_message_with_tools(ToolRequest(name='book', ref='1', input={'seat': '3A'}))]
+    with pytest.raises(GenkitError, match='still an interrupt') as exc:
+        validate_resume_against_history(Resume(restart=[paused]), history)
+    assert exc.value.status == 'INVALID_ARGUMENT'
+
+
 def test_tool_request_in_non_model_message_does_not_count() -> None:
     # A tool request only counts if the *model* asked for it; a matching name in a
     # user message must not satisfy the resume.

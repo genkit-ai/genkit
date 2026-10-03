@@ -69,7 +69,7 @@ async def main() -> None:
     assert out1.finish_reason == AgentFinishReason.INTERRUPTED
 
     # Approve each pending tool call, then one resume continues the turn.
-    restart_parts = [intr.restart(metadata={'tool_approved': True}) for intr in out1.interrupts]
+    restart_parts = [intr.restart(resumed_metadata={'tool_approved': True}) for intr in out1.interrupts]
     out2 = await chat.resume(restart=restart_parts)
     assert out2.finish_reason == AgentFinishReason.STOP
 

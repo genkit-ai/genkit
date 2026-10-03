@@ -412,7 +412,7 @@ def test_part_respond_returns_part() -> None:
 
 def test_part_restart_returns_part() -> None:
     interrupt = Part.from_tool_request(name='pay', input={'amount': 10}, ref='r1')
-    restart = interrupt.restart(metadata={'k': 'v'})
+    restart = interrupt.restart(resumed_metadata={'k': 'v'})
     assert type(restart) is Part
     assert restart.tool_request is not None
     assert restart.tool_request.name == 'pay'
