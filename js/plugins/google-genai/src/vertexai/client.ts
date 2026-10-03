@@ -471,23 +471,6 @@ async function makeRequest(
         errorDetail = json;
         if (json.error && json.error.message) {
           errorMessage = json.error.message;
-          if (Array.isArray(json.error.details)) {
-            const detailsText = json.error.details
-              .map((d: any) => {
-                if (d.detail && typeof d.detail === 'string') {
-                  const match = d.detail.match(
-                    /\[ORIGINAL ERROR\]\s*(?:generic::[^:]+:\s*)?(.*?)(?:\s+\[|\s+\d+\s+\{|$)/
-                  );
-                  return match ? match[1].trim() : d.detail;
-                }
-                return JSON.stringify(d);
-              })
-              .filter(Boolean)
-              .join('\n');
-            if (detailsText) {
-              errorMessage += `\nDetails: ${detailsText}`;
-            }
-          }
         }
       } catch (e) {
         // Not JSON or expected format, use the raw text
