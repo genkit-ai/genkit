@@ -23,10 +23,9 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from genkit import GenkitError
-from genkit._core._action import Action, ActionKind
-from genkit._core._model import ModelResponse
+from genkit import GenkitError, ModelResponse
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
+from genkit.plugin_api import Action, ActionKind
 
 _DEFAULT_FALLBACK_STATUSES: list[str] = [
     'UNAVAILABLE',
