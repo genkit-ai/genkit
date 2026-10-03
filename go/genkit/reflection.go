@@ -39,6 +39,7 @@ import (
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal"
 	"github.com/firebase/genkit/go/internal/base"
+	"github.com/firebase/genkit/go/internal/tracingbridge"
 )
 
 type streamingCallback[Stream any] = func(context.Context, Stream) error
@@ -648,18 +649,11 @@ func handleCancelAction(activeActions *activeActionsMap) func(w http.ResponseWri
 // Shared between V1 and V2 reflection servers.
 func configureTelemetry(url string) {
 	if os.Getenv("GENKIT_TELEMETRY_SERVER") == "" && url != "" {
-		client := tracing.NewHTTPTelemetryClient(url)
-		// `genkit start` sets GENKIT_ENABLE_REALTIME_TELEMETRY so traces stream to
-		// the dev UI as spans start, not just when they end (which, for a
-		// long-lived agent connection, is only when it closes).
-		realtime := os.Getenv("GENKIT_ENABLE_REALTIME_TELEMETRY") == "true"
-		if realtime {
-			tracing.WriteTelemetryRealtime(client)
-		} else {
-			tracing.WriteTelemetryImmediate(client)
-		}
+		// Traces reach the Dev UI through the Direct instrumentation, which
+		// needs no OpenTelemetry SDK.
+		tracingbridge.SetDevTelemetryServer(url)
 		tracing.EnableLogExport(url)
-		slog.Debug("connected to telemetry server", "url", url, "realtime", realtime)
+		slog.Debug("connected to telemetry server", "url", url)
 	}
 }
 
