@@ -6,15 +6,14 @@
 from __future__ import annotations
 
 import json
-from copy import deepcopy
 from typing import Any
 
 from genkit_a2ui import A2UI_MIME_TYPE
 
-from genkit import ActionRunContext, Genkit, Message, ModelResponse, ModelResponseChunk, Part
+from genkit import Genkit, Message, ModelResponse, Part
 from genkit._core._error import RuntimeErrorReason
 from genkit._core._typing import FinishReason, Role
-from genkit.model import ModelRequest
+from genkit.testing import ScriptedModel, define_scripted_model
 
 BASIC_CATALOG_ID = 'https://a2ui.org/specification/v0_9/catalogs/basic/catalog.json'
 A2UI_FENCE = '```a2ui'
@@ -87,34 +86,10 @@ def model_ok(text: str = 'ok') -> ModelResponse:
     )
 
 
-class ScriptedModel:
-    """Answers turn N with ``responses[N]`` (streaming ``chunks[N]`` first) and keeps the last request."""
-
-    def __init__(self) -> None:
-        self.responses: list[ModelResponse] = []
-        self.chunks: list[list[ModelResponseChunk]] | None = None
-        self.last_request: ModelRequest | None = None
-        self.turn = 0
-
-    async def answer(self, request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
-        self.last_request = deepcopy(request)
-        response = self.responses[self.turn]
-        if self.chunks and self.turn < len(self.chunks):
-            for chunk in self.chunks[self.turn]:
-                ctx.send_chunk(chunk)
-        self.turn += 1
-        return response
-
-
 def setup() -> tuple[Genkit, ScriptedModel]:
     ai = Genkit()
-    pm = ScriptedModel()
-
-    async def programmable_model(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
-        return await pm.answer(request, ctx)
-
-    ai.define_model(name='programmableModel', fn=programmable_model)
-    return ai, pm
+    model, _ = define_scripted_model(ai, name='programmableModel')
+    return ai, model
 
 
 def a2ui_parts(content: list[Part]) -> list[Part]:

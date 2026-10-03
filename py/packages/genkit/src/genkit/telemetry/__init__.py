@@ -37,16 +37,18 @@ from genkit._core._telemetry._instrumentation import (
 )
 
 __all__ = [
+    # Runtime & provider SPI
     'DisposableInstrumentation',
     'FlushableInstrumentation',
-    'GenkitBuiltinInstrumentation',
     'Instrumentation',
     'SpanContext',
     'SpanMetadata',
     'SpanNext',
     'configure_instrumentation',
+    'run_in_new_span',
+    # Testing & test-inspection helpers
+    'GenkitBuiltinInstrumentation',
     'instrumentations',
     'is_instrumented_by',
     'reset_instrumentation',
-    'run_in_new_span',
 ]

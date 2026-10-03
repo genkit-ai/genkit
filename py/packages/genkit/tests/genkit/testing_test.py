@@ -70,9 +70,7 @@ from genkit._ai._testing import (
     skip,
     test_models as run_model_tests,
 )
-from genkit._core._typing import (
-    Role,
-)
+from genkit._core._typing import FinishReason, Role
 from genkit.model import ModelConfig, ModelRequest
 
 
@@ -659,3 +657,31 @@ class TestTestModels:
         error = model_result.get('error')
         assert error is not None
         assert 'message' in error
+
+    @pytest.mark.asyncio
+    async def test_define_scripted_model_with_upfront_responses_and_streaming(self, ai: Genkit) -> None:
+        """Test define_scripted_model initialized with responses and chunks upfront."""
+        from genkit.testing import define_scripted_model
+
+        model, _ = define_scripted_model(
+            ai,
+            name='scriptedHero',
+            responses=[
+                ModelResponse(
+                    finish_reason=FinishReason.STOP,
+                    message=Message(role=Role.MODEL, content=[Part.from_text('done')]),
+                ),
+            ],
+            chunks=[[ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('streamed')])]],
+        )
+
+        stream = ai.generate_stream(model='scriptedHero', prompt='go')
+        chunks: list[str] = []
+        async for chunk in stream.stream:
+            chunks.append(chunk.text)
+        res = await stream.response
+
+        assert ''.join(chunks) == 'streamed'
+        assert res.text == 'done'
+        assert model.last_request is not None
+        assert model.request_count == 1

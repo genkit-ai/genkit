@@ -21,7 +21,6 @@ AgentInit = _genkit_agent.AgentInit
 
 from genkit_fastapi import handle_genkit_request, serve_agent  # noqa: E402
 
-from genkit import ActionRunContext  # noqa: E402
 from genkit._core._model import (  # noqa: E402
     Message,
     ModelResponse,
@@ -30,21 +29,23 @@ from genkit._core._model import (  # noqa: E402
 )
 from genkit._core._typing import FinishReason, Role  # noqa: E402
 from genkit.exp import Genkit  # noqa: E402
-from genkit.model import ModelRequest  # noqa: E402
+from genkit.testing import define_scripted_model  # noqa: E402
 
 
 def build_agent(name: str) -> Any:
     """A server-backed prompt agent whose model replies with a fixed line."""
     ai = Genkit()
-
-    async def programmable_model(_request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
-        ctx.send_chunk(ModelResponseChunkModel(role=Role.MODEL, content=[Part.from_text('Hi there!')]))
-        return ModelResponse(
-            finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part.from_text('Hi there!')]),
-        )
-
-    ai.define_model(name='programmableModel', fn=programmable_model)
+    define_scripted_model(
+        ai,
+        name='programmableModel',
+        responses=[
+            ModelResponse(
+                finish_reason=FinishReason.STOP,
+                message=Message(role=Role.MODEL, content=[Part.from_text('Hi there!')]),
+            )
+        ],
+        chunks=[[ModelResponseChunkModel(role=Role.MODEL, content=[Part.from_text('Hi there!')])]],
+    )
     ai.define_prompt(name=name, model='programmableModel', system='You echo things.')
     return ai.define_prompt_agent(name=name, store=InMemorySessionStore())
 

@@ -34,8 +34,8 @@ from typing import Any, Literal, Protocol, TypeVar, runtime_checkable
 from pydantic import BaseModel
 
 from ._attrs import METADATA_PREFIX, Attr
-from ._log_exporter import reset_log_export
 from ._http import PARENT_SPAN
+from ._log_exporter import reset_log_export
 
 T = TypeVar('T')
 T_co = TypeVar('T_co', covariant=True)
