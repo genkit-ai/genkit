@@ -1,13 +1,7 @@
 {
   "extends": "../../tsconfig.json",
   "compilerOptions": {
-    // Google protobuf libraries have a transitive dependency on the long
-    // library, which incorrectly implements the ESM/CSM dual mode. This
-    // started in 5.0.0 and protobufjs requires ^5.0.0.
-    // This can be removed if https://github.com/dcodeIO/long.js/pull/130 gets
-    // approved, though it's been sitting around for over a year without
-    // acceptance.
-    "skipLibCheck": true
+    "skipLibCheck": false
   },
   "include": ["src"]
 }
