@@ -77,7 +77,7 @@ class ActiveSpan:
     status_message: str | None = None
 
 
-PARENT_SPAN: ContextVar[ActiveSpan | None] = ContextVar('genkit_direct_http_parent', default=None)
+_parent_span: ContextVar[ActiveSpan | None] = ContextVar('genkit_direct_http_parent', default=None)
 
 
 class DirectSpanContext:
@@ -243,7 +243,7 @@ class DirectHttpInstrumentation:
         metadata: _instrumentation.SpanMetadata,
         next: _instrumentation.SpanNext[T],
     ) -> T:
-        parent = PARENT_SPAN.get()
+        parent = _parent_span.get()
         is_action = _instrumentation.span_is_action.get()
         qualified_path = build_qualified_path(metadata, is_action=is_action)
         span = ActiveSpan(
@@ -256,7 +256,7 @@ class DirectHttpInstrumentation:
         )
         self.sink.export_spans([span], resource_attributes=self.resource_attributes)
         path_token = _instrumentation.parent_path_context.set(qualified_path)
-        parent_token = PARENT_SPAN.set(span)
+        parent_token = _parent_span.set(span)
         ctx = DirectSpanContext(span)
         try:
             try:
@@ -283,11 +283,11 @@ class DirectHttpInstrumentation:
         finally:
             span.end_time_unix_nano = now_unix_nano()
             self.sink.export_spans([span], resource_attributes=self.resource_attributes)
-            PARENT_SPAN.reset(parent_token)
+            _parent_span.reset(parent_token)
             _instrumentation.parent_path_context.reset(path_token)
 
     def dispose(self) -> None:
-        PARENT_SPAN.set(None)
+        _parent_span.set(None)
         self.sink.shutdown()
 
     def flush(self) -> None:

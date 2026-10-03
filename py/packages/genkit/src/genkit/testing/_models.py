@@ -143,15 +143,14 @@ class EchoModel:
         self.last_request = request
 
         merged_txt = ''
-        messages = request.messages.root if hasattr(request.messages, 'root') else request.messages  # pyright: ignore[reportAttributeAccessIssue]
-        for m in messages:  # ty: ignore[not-iterable]
+        for m in request.messages:
             merged_txt += f' {m.role}: ' + ','.join(
                 json.dumps(p.text) if p.text is not None else '""' for p in m.content
             )
         echo_resp = f'[ECHO]{merged_txt}'
 
         if request.config:
-            if hasattr(request.config, 'model_dump_json'):
+            if isinstance(request.config, BaseModel):
                 config_json = request.config.model_dump_json()
             else:
                 config_json = json.dumps(request.config, separators=(',', ':'))
@@ -159,9 +158,8 @@ class EchoModel:
             config_json = '{}'
         if request.config and config_json != '{}':
             echo_resp += f' {config_json}'
-        tools_list = request.tools.root if hasattr(request.tools, 'root') else request.tools  # pyright: ignore[reportAttributeAccessIssue,reportOptionalMemberAccess]
-        if tools_list:
-            echo_resp += f' tools={",".join(t.name for t in tools_list)}'  # ty: ignore[not-iterable]
+        if request.tools:
+            echo_resp += f' tools={",".join(t.name for t in request.tools)}'
         if request.tool_choice is not None:
             echo_resp += f' tool_choice={request.tool_choice}'
         output_dict: dict[str, object] = {}
