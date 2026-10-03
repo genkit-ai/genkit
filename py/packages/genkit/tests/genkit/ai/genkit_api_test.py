@@ -21,11 +21,7 @@ from genkit._core._telemetry._instrumentation import (
     SpanNext,
     reset_instrumentation,
 )
-from genkit._core._telemetry._log_exporter import (
-    build_log_record,
-    enable_log_export,
-    reset_log_export,
-)
+from genkit._core._telemetry._log_exporter import build_log_record
 from genkit._core._typing import FinishReason, Operation, Role
 from genkit.middleware import BaseMiddleware, GenerateHookParams, GenerateMiddlewareContext
 from genkit.model import model
@@ -85,31 +81,22 @@ async def test_genkit_run_tags_flow_step_action_type() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_logger_in_flow_attaches_trace_id(hex_ids: None, monkeypatch: pytest.MonkeyPatch) -> None:
-    """get_logger() lines inside a flow carry the flow's traceId to Dev UI export."""
-    monkeypatch.setenv('GENKIT_ENV', 'dev')
-    monkeypatch.delenv('GENKIT_OTEL_ENABLE_LOGS', raising=False)
-    enable_log_export(url='http://127.0.0.1:9')
-
+async def test_get_logger_in_flow_attaches_trace_id(hex_ids: None) -> None:
+    """get_logger() lines inside a flow attach the flow's trace ID to the log record."""
+    ai = Genkit()
     captured: list[dict[str, object]] = []
 
-    def spy_build(**kw: object) -> dict[str, object]:
-        rec = build_log_record(**kw)  # type: ignore[arg-type]
-        captured.append(rec)
-        return rec
+    def capture_log(*, level: int, event: str, attrs: dict[str, object] | None = None) -> None:
+        captured.append(build_log_record(level=level, event=event, attrs=attrs or {}))
 
-    try:
-        ai = Genkit()
-        with mock.patch('genkit._core._telemetry._log_exporter.build_log_record', side_effect=spy_build):
+    with mock.patch('genkit._core._telemetry._log_exporter.emit_log', side_effect=capture_log):
 
-            @ai.flow()
-            async def cart_flow() -> str:
-                get_logger(__name__).info('looked up cart')
-                return 'ok'
+        @ai.flow()
+        async def cart_flow() -> str:
+            get_logger(__name__).info('looked up cart')
+            return 'ok'
 
-            assert await cart_flow() == 'ok'
-    finally:
-        reset_log_export()
+        assert await cart_flow() == 'ok'
 
     assert len(captured) == 1
     assert captured[0]['body'] == {'stringValue': 'looked up cart'}
