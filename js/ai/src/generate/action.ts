@@ -62,7 +62,12 @@ import {
   resolveResources,
   type ResourceAction,
 } from '../resource.js';
-import { resolveTools, toToolDefinition, type ToolAction } from '../tool.js';
+import {
+  resolveTools,
+  toToolDefinition,
+  type MultipartToolAction,
+  type ToolAction,
+} from '../tool.js';
 import { GenerateMiddlewareDef, resolveMiddleware } from './middleware.js';
 import {
   assertValidToolNames,
@@ -356,15 +361,18 @@ async function generateActionTurn(
     sharedPreviousChunks: GenerateResponseChunkData[];
   }
 ): Promise<GenerateResponseData> {
-  const { model, tools, resources, format } = await resolveParameters(
-    registry,
-    rawRequest
-  );
+  const {
+    model,
+    tools: userTools,
+    resources,
+    format,
+  } = await resolveParameters(registry, rawRequest);
 
   // Append tools supplied by middleware
-  if (middleware) {
-    tools.push(...middleware.flatMap((m) => m.tools || []));
-  }
+  const tools = [
+    ...userTools,
+    ...(middleware?.flatMap((m) => m.tools || []) || []),
+  ];
   rawRequest = applyFormat(rawRequest, format);
   rawRequest = await applyResources(registry, rawRequest, resources);
 
@@ -571,7 +579,7 @@ async function generateActionTurn(
 
 async function actionToGenerateRequest(
   options: GenerateActionOptions,
-  resolvedTools: ToolAction[] | undefined,
+  resolvedTools: (ToolAction | MultipartToolAction)[] | undefined,
   resolvedFormat: Formatter | undefined,
   model: ModelAction
 ): Promise<GenerateRequest> {

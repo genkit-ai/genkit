@@ -584,7 +584,11 @@ export function maybeRegisterDynamicMiddlewareTools(
   middlewares?.forEach((mw) => {
     mw.tools?.forEach((t) => {
       if (isDynamicTool(t)) {
-        registry.registerAction('tool', t as Action);
+        if (isMultipartTool(t)) {
+          registry.registerAction('tool.v2', t);
+        } else {
+          registry.registerAction('tool', t);
+        }
       }
     });
   });
