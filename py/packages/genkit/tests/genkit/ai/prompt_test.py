@@ -26,7 +26,7 @@ from unittest.mock import ANY, MagicMock, patch
 import pytest
 from pydantic import BaseModel, Field
 
-from genkit import Genkit, Message, ModelResponse, Part
+from genkit import Document, FinishReason, Genkit, Message, ModelResponse, ModelResponseChunk, Part
 from genkit._ai._model import ModelRequest, text_from_message
 from genkit._ai._prompt import _parse_dotprompt_use, load_prompt_folder, lookup_prompt, prompt, resume_options_to_resume
 from genkit._ai._testing import (
@@ -591,10 +591,9 @@ async def test_config_merge_priority() -> None:
     assert rendered.config['banana'] == 'yellow'  # Preserved from prompt config
 
 
-# Tests for new PromptGenerateOptions API
 @pytest.mark.asyncio
-async def test_opts_can_override_model() -> None:
-    """Test that opts.model can override the prompt's default model."""
+async def test_prompt_call_model_keyword_switches_model() -> None:
+    """`await p(model='programmableModel')` runs the other model."""
     ai, _, pm = setup_test()
 
     pm.responses = [ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('pm response')]))]
@@ -666,33 +665,6 @@ async def test_generate_stream_response_api() -> None:
 
 
 @pytest.mark.asyncio
-async def test_opts_can_override_output() -> None:
-    """Test that opts.output can override output configuration."""
-    ai, *_ = setup_test()
-
-    class OutputSchema(BaseModel):
-        name: str = Field(description='A name')
-
-    my_prompt = ai.define_prompt(
-        prompt='Generate a name',
-        output_format='text',  # Default to text
-    )
-
-    # Override output via kwargs
-    rendered = await my_prompt.render(
-        output={
-            'format': 'json',
-            'schema': OutputSchema,
-        }
-    )
-
-    # Should have json format, not text
-    assert rendered.output is not None
-    assert rendered.output.format == 'json'
-    assert rendered.output.json_schema is not None
-
-
-@pytest.mark.asyncio
 async def test_executable_prompt_input_positional_opts_as_kwargs() -> None:
     """ExecutablePrompt: input is positional, opts via kwargs after *."""
     ai, *_ = setup_test()
@@ -702,19 +674,343 @@ async def test_executable_prompt_input_positional_opts_as_kwargs() -> None:
         output_format='text',
     )
 
-    # input = positional (template vars), output = kwarg (opts)
     rendered = await my_prompt.render(
         {'cuisine': 'Italian', 'dish': 'pasta'},
-        output={'format': 'text'},
+        config={'temperature': 0.1},
     )
 
-    # Template vars from input should be in the rendered prompt
     assert any('Italian' in str(m) for m in rendered.messages)
     assert any('pasta' in str(m) for m in rendered.messages)
-
-    # output kwarg should be respected
+    assert rendered.config is not None
+    assert rendered.config['temperature'] == 0.1
     assert rendered.output is not None
     assert rendered.output.format == 'text'
+
+
+class Recipe(BaseModel):
+    title: str
+
+
+class OtherOutput(BaseModel):
+    score: int
+
+
+def _text_reply(text: str) -> ModelResponse:
+    return ModelResponse(
+        finish_reason=FinishReason.STOP, message=Message(role=Role.MODEL, content=[Part.from_text(text)])
+    )
+
+
+def _tool_call_reply(name: str, ref: str) -> ModelResponse:
+    return ModelResponse(
+        finish_reason=FinishReason.STOP,
+        message=Message(role=Role.MODEL, content=[Part.from_tool_request(name=name, input={}, ref=ref)]),
+    )
+
+
+def _setup_prompt_call() -> tuple[Genkit, ProgrammableModel]:
+    """A Genkit whose default model records each request and has `oven` and `grill` tools."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+    pm.responses = [_text_reply('ok')]
+
+    @ai.tool(name='oven')
+    async def oven() -> str:
+        return 'baked'
+
+    @ai.tool(name='grill')
+    async def grill() -> str:
+        return 'grilled'
+
+    return ai, pm
+
+
+def _sent_tool_names(pm: ProgrammableModel) -> list[str]:
+    assert pm.last_request is not None
+    return [t.name for t in pm.last_request.tools or []]
+
+
+def _sent_doc_texts(pm: ProgrammableModel) -> list[str]:
+    assert pm.last_request is not None
+    return [d.text for d in pm.last_request.docs or []]
+
+
+@pytest.mark.asyncio
+async def test_prompt_call_returns_the_defined_output_schema_type() -> None:
+    """A prompt defined with `output_schema=Recipe` returns `res.output` as a `Recipe`, no per-call output needed."""
+    ai, pm = _setup_prompt_call()
+    pm.responses = [_text_reply('{"title": "pie"}')]
+    recipe = ai.define_prompt(prompt='Make {{dish}}', output_schema=Recipe)
+
+    res = await recipe({'dish': 'pie'})
+
+    assert res.output == Recipe(title='pie')
+
+
+@pytest.mark.asyncio
+async def test_prompt_call_output_schema_keyword_raises_type_error() -> None:
+    """`await p(output_schema=Other)` raises `TypeError` and the model is never called."""
+    ai, pm = _setup_prompt_call()
+    recipe = ai.define_prompt(prompt='Make pie', output_schema=Recipe)
+
+    with pytest.raises(TypeError, match='output_schema'):
+        await recipe(output_schema=OtherOutput)  # type: ignore[call-arg]
+
+    assert pm.request_count == 0
+
+
+@pytest.mark.asyncio
+async def test_prompt_call_output_format_keyword_raises_type_error() -> None:
+    """`await p(output_format='text')` raises `TypeError`; the prompt's format can't be overridden per call."""
+    ai, pm = _setup_prompt_call()
+    recipe = ai.define_prompt(prompt='Make pie', output_schema=Recipe)
+
+    with pytest.raises(TypeError, match='output_format'):
+        await recipe(output_format='text')  # type: ignore[call-arg]
+
+    assert pm.request_count == 0
+
+
+@pytest.mark.asyncio
+async def test_prompt_call_nested_output_raises_type_error() -> None:
+    """`await p(output={'schema': Other})` raises `TypeError` instead of swapping the schema."""
+    ai, pm = _setup_prompt_call()
+    recipe = ai.define_prompt(prompt='Make pie', output_schema=Recipe)
+
+    with pytest.raises(TypeError, match='output'):
+        await recipe(output={'schema': OtherOutput})  # type: ignore[call-arg]
+
+    assert pm.request_count == 0
+
+
+@pytest.mark.asyncio
+async def test_prompt_call_misspelled_keyword_raises_type_error() -> None:
+    """`await p(tool=['oven'])` raises `TypeError` naming `tool`, and the model is never called."""
+    ai, pm = _setup_prompt_call()
+    p = ai.define_prompt(prompt='hi', tools=['oven'])
+
+    with pytest.raises(TypeError, match="'tool'"):
+        await p(tool=['oven'])  # type: ignore[call-arg]
+
+    assert pm.request_count == 0
+
+
+@pytest.mark.asyncio
+async def test_prompt_call_prompt_or_system_keyword_raises_type_error() -> None:
+    """`prompt=` and `system=` aren't call options. The template owns them, so passing either raises `TypeError`."""
+    ai, pm = _setup_prompt_call()
+    p = ai.define_prompt(prompt='hi', system='be brief')
+
+    with pytest.raises(TypeError, match="'prompt'"):
+        await p(prompt='something else')  # type: ignore[call-arg]
+    with pytest.raises(TypeError, match="'system'"):
+        await p(system='be verbose')  # type: ignore[call-arg]
+
+    assert pm.request_count == 0
+
+
+@pytest.mark.asyncio
+async def test_prompt_call_metadata_keyword_raises_type_error() -> None:
+    """`await p(metadata={...})` raises `TypeError`; per-call metadata isn't a prompt option."""
+    ai, pm = _setup_prompt_call()
+    p = ai.define_prompt(prompt='hi {{@state.name}}', metadata={'state': {'name': 'bar'}})
+
+    with pytest.raises(TypeError, match="'metadata'"):
+        await p(metadata={'state': {'name': 'baz'}})  # type: ignore[call-arg]
+
+    assert pm.request_count == 0
+
+
+@pytest.mark.asyncio
+async def test_prompt_call_on_chunk_receives_each_chunk() -> None:
+    """`await p(on_chunk=cb)` calls `cb` once per streamed chunk (control)."""
+    ai, pm = _setup_prompt_call()
+    pm.chunks = [[ModelResponseChunk(content=[Part.from_text('a')]), ModelResponseChunk(content=[Part.from_text('b')])]]
+    p = ai.define_prompt(prompt='hi')
+    seen: list[str] = []
+
+    await p(on_chunk=lambda chunk: seen.append(chunk.text))
+
+    assert seen == ['a', 'b']
+
+
+def test_prompt_stream_on_chunk_raises_type_error() -> None:
+    """`p.stream(on_chunk=cb)` raises `TypeError`; chunks come from iterating the stream."""
+    ai, pm = _setup_prompt_call()
+    p = ai.define_prompt(prompt='hi')
+
+    with pytest.raises(TypeError, match="'on_chunk'"):
+        p.stream(on_chunk=lambda _chunk: None)  # type: ignore[call-arg]
+
+    assert pm.request_count == 0
+
+
+@pytest.mark.asyncio
+async def test_prompt_render_on_chunk_raises_type_error() -> None:
+    """`p.render(on_chunk=cb)` raises `TypeError`, since rendering never streams."""
+    ai, _ = _setup_prompt_call()
+    p = ai.define_prompt(prompt='hi')
+
+    with pytest.raises(TypeError, match="'on_chunk'"):
+        await p.render(on_chunk=lambda _chunk: None)  # type: ignore[call-arg]
+
+
+@pytest.mark.asyncio
+async def test_prompt_call_empty_tools_sends_no_tools() -> None:
+    """`await p(tools=[])` sends the model no tools even though the prompt defines `['oven']`."""
+    ai, pm = _setup_prompt_call()
+    p = ai.define_prompt(prompt='hi', tools=['oven'])
+
+    await p(tools=[])
+
+    assert _sent_tool_names(pm) == []
+
+
+@pytest.mark.asyncio
+async def test_prompt_call_tools_list_replaces_prompt_tools() -> None:
+    """`await p(tools=['grill'])` sends only `grill`."""
+    ai, pm = _setup_prompt_call()
+    p = ai.define_prompt(prompt='hi', tools=['oven'])
+
+    await p(tools=['grill'])
+
+    assert _sent_tool_names(pm) == ['grill']
+
+
+@pytest.mark.asyncio
+async def test_prompt_call_omitted_tools_keeps_prompt_tools() -> None:
+    """`await p()` sends the prompt's `oven` tool (control)."""
+    ai, pm = _setup_prompt_call()
+    p = ai.define_prompt(prompt='hi', tools=['oven'])
+
+    await p()
+
+    assert _sent_tool_names(pm) == ['oven']
+
+
+@pytest.mark.asyncio
+async def test_prompt_call_empty_use_runs_no_middleware() -> None:
+    """`await p(use=[])` runs none of the prompt's middleware."""
+    ai, *_ = setup_test()
+    p = ai.define_prompt(prompt='hi', use=[_PreMiddleware(), _PostMiddleware()])
+
+    res = await p(use=[])
+
+    assert res.text == '[ECHO] user: "hi"'
+
+
+@pytest.mark.asyncio
+async def test_prompt_call_omitted_use_runs_prompt_middleware() -> None:
+    """`await p()` runs the prompt's middleware (control)."""
+    ai, *_ = setup_test()
+    p = ai.define_prompt(prompt='hi', use=[_PreMiddleware(), _PostMiddleware()])
+
+    res = await p()
+
+    assert res.text == '[ECHO] user: "PRE hi" POST'
+
+
+@pytest.mark.asyncio
+async def test_prompt_call_empty_docs_sends_no_docs() -> None:
+    """`await p(docs=[])` sends no docs, even though the prompt defines one."""
+    ai, pm = _setup_prompt_call()
+    p = ai.define_prompt(prompt='hi', docs=[Document.from_text('prompt doc')])
+
+    await p(docs=[])
+
+    assert _sent_doc_texts(pm) == []
+
+
+@pytest.mark.asyncio
+async def test_prompt_call_docs_list_replaces_prompt_docs() -> None:
+    """`await p(docs=[other])` sends only `other`, not the prompt's doc plus `other`."""
+    ai, pm = _setup_prompt_call()
+    p = ai.define_prompt(prompt='hi', docs=[Document.from_text('prompt doc')])
+
+    await p(docs=[Document.from_text('other doc')])
+
+    assert _sent_doc_texts(pm) == ['other doc']
+
+
+@pytest.mark.asyncio
+async def test_prompt_call_omitted_docs_keeps_prompt_docs() -> None:
+    """`await p()` sends the prompt's doc (control)."""
+    ai, pm = _setup_prompt_call()
+    p = ai.define_prompt(prompt='hi', docs=[Document.from_text('prompt doc')])
+
+    await p()
+
+    assert _sent_doc_texts(pm) == ['prompt doc']
+
+
+@pytest.mark.asyncio
+async def test_prompt_call_config_merges_over_prompt_config() -> None:
+    """`await p(config={'temperature': 0.9})` keeps the prompt's other config keys and replaces temperature."""
+    ai, pm = _setup_prompt_call()
+    p = ai.define_prompt(prompt='hi', config={'temperature': 0.5, 'top_k': 3})
+
+    await p(config={'temperature': 0.9})
+
+    assert pm.last_request is not None
+    assert pm.last_request.config == {'temperature': 0.9, 'top_k': 3}
+
+
+@pytest.mark.asyncio
+async def test_prompt_call_return_tool_requests_false_overrides_prompt() -> None:
+    """A prompt defined with `return_tool_requests=True`, called with `False`, runs the tool loop."""
+    ai, pm = _setup_prompt_call()
+    pm.responses = [_tool_call_reply('oven', 'r1'), _text_reply('done')]
+    p = ai.define_prompt(prompt='hi', tools=['oven'], return_tool_requests=True)
+
+    res = await p(return_tool_requests=False)
+
+    assert res.text == 'done'
+    assert pm.request_count == 2
+
+
+@pytest.mark.asyncio
+async def test_prompt_call_max_turns_overrides_prompt() -> None:
+    """`await p(max_turns=1)` stops after one tool round even when the prompt says 5."""
+    ai, pm = _setup_prompt_call()
+    pm.responses = [_tool_call_reply('oven', str(i)) for i in range(6)]
+    p = ai.define_prompt(prompt='hi', tools=['oven'], max_turns=5)
+
+    res = await p(max_turns=1)
+
+    assert res.finish_reason == FinishReason.ABORTED
+    assert pm.request_count == 2
+
+
+@pytest.mark.asyncio
+async def test_prompt_stream_empty_tools_sends_no_tools() -> None:
+    """`p.stream(tools=[])` follows the same "empty clears" rule as the call."""
+    ai, pm = _setup_prompt_call()
+    p = ai.define_prompt(prompt='hi', tools=['oven'])
+
+    await p.stream(tools=[]).response
+
+    assert _sent_tool_names(pm) == []
+
+
+@pytest.mark.asyncio
+async def test_prompt_render_empty_docs_renders_no_docs() -> None:
+    """`await p.render(docs=[])` returns options with no docs."""
+    ai, _ = _setup_prompt_call()
+    p = ai.define_prompt(prompt='hi', docs=[Document.from_text('prompt doc')])
+
+    rendered = await p.render(docs=[])
+
+    assert not rendered.docs
+
+
+@pytest.mark.asyncio
+async def test_prompt_render_misspelled_keyword_raises_type_error() -> None:
+    """`await p.render(tool=[...])` raises `TypeError`."""
+    ai, _ = _setup_prompt_call()
+    p = ai.define_prompt(prompt='hi', tools=['oven'])
+
+    with pytest.raises(TypeError, match="'tool'"):
+        await p.render(tool=['oven'])  # type: ignore[call-arg]
 
 
 # Tests for file-based prompt loading and two-action structure
