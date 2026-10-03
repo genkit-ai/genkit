@@ -47,7 +47,7 @@ from helpers import (
 )
 from pydantic import ValidationError
 
-from genkit._core._error import RuntimeErrorReason
+from genkit import RuntimeErrorReason
 
 BANNER_CATALOG = A2uiCatalog(
     id='https://example.com/catalogs/banner.json',
@@ -80,7 +80,7 @@ async def test_generate_uses_the_bundled_catalog_when_nothing_is_registered() ->
 
 
 @pytest.mark.asyncio
-async def test_generate_uses_a_loaded_catalog() -> None:
+async def test_load_catalog_then_surfaces_renders_with_that_catalog() -> None:
     ai, pm = setup()
     load_catalog(ai, BANNER_CATALOG)
     pm.responses = [model_ok(banner_fence())]

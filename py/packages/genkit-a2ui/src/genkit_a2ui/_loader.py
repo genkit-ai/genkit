@@ -21,8 +21,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from genkit import GenkitError, RuntimeErrorReason
-from genkit._core._logger import get_logger
+from genkit import GenkitError, RuntimeErrorReason, get_logger
 from genkit._core._protocols import GenkitLike, RegistryLike
 
 from ._catalog import BASIC_CATALOG, A2uiCatalog
@@ -42,8 +41,7 @@ class A2uiCatalogError(GenkitError):
 
     def __init__(self, message: str) -> None:
         # A catalog you did not register, or a file that does not parse, is a
-        # bad argument, not a bad model answer. Mirrors Go's
-        # ErrInvalidInput = ErrInvalidArgument.Subtype("invalid input").
+        # bad argument, not a bad model answer.
         super().__init__(
             status='INVALID_ARGUMENT',
             message=message,
