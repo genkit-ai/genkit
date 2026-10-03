@@ -1107,33 +1107,68 @@ export const contextCompression: GenerateMiddleware<
       }
 
       const groups = new Map<string, { msgIdx: number; partIdx: number }[]>();
+      let prevToolRequests: NonNullable<Part['toolRequest']>[] = [];
+      let consumedReqIndices = new Set<number>();
+      let toolResponseOrdinal = 0;
+
       for (let i = 0; i < messages.length; i++) {
         const msg = messages[i];
-        if (msg.role !== 'tool') continue;
+        if (msg.role === 'model') {
+          prevToolRequests = msg.content
+            .filter((p) => p.toolRequest !== undefined)
+            .map((p) => p.toolRequest!);
+          consumedReqIndices = new Set<number>();
+          toolResponseOrdinal = 0;
+          continue;
+        }
+        if (msg.role !== 'tool') {
+          prevToolRequests = [];
+          consumedReqIndices = new Set<number>();
+          toolResponseOrdinal = 0;
+          continue;
+        }
 
         for (let j = 0; j < msg.content.length; j++) {
           const part = msg.content[j];
           if (!part.toolResponse) continue;
 
-          let toolInput = part.toolResponse.ref
-            ? toolInputByRef.get(part.toolResponse.ref)
+          const currentOrdinal = toolResponseOrdinal++;
+          const hasMatchedRef =
+            Boolean(part.toolResponse.ref) &&
+            toolInputByRef.has(part.toolResponse.ref!);
+          let toolInput = hasMatchedRef
+            ? toolInputByRef.get(part.toolResponse.ref!)
             : undefined;
 
-          // If no ref was matched, check if preceding model message had a matching toolRequest with input
-          if (
-            toolInput === undefined &&
-            i > 0 &&
-            messages[i - 1]?.role === 'model'
-          ) {
-            const prevParts = messages[i - 1].content;
-            const positionalPart =
-              prevParts[j]?.toolRequest?.name === part.toolResponse.name
-                ? prevParts[j]
-                : prevParts.find(
-                    (p) => p.toolRequest?.name === part.toolResponse?.name
-                  );
-            if (positionalPart?.toolRequest) {
-              toolInput = positionalPart.toolRequest.input;
+          if (part.toolResponse.ref && prevToolRequests.length > 0) {
+            const refIdx = prevToolRequests.findIndex(
+              (req, idx) =>
+                !consumedReqIndices.has(idx) &&
+                req.ref === part.toolResponse!.ref
+            );
+            if (refIdx >= 0) {
+              consumedReqIndices.add(refIdx);
+            }
+          }
+
+          // If no ref was matched, match against unconsumed toolRequests from the preceding model turn
+          if (!hasMatchedRef && prevToolRequests.length > 0) {
+            let matchedIdx = -1;
+            if (
+              !consumedReqIndices.has(currentOrdinal) &&
+              prevToolRequests[currentOrdinal]?.name === part.toolResponse.name
+            ) {
+              matchedIdx = currentOrdinal;
+            } else {
+              matchedIdx = prevToolRequests.findIndex(
+                (req, idx) =>
+                  !consumedReqIndices.has(idx) &&
+                  req.name === part.toolResponse?.name
+              );
+            }
+            if (matchedIdx >= 0) {
+              consumedReqIndices.add(matchedIdx);
+              toolInput = prevToolRequests[matchedIdx].input;
             }
           }
 

@@ -1775,6 +1775,197 @@ describe('contextCompression middleware', () => {
     );
   });
 
+  it('does not falsely deduplicate distinct parallel tool calls without ref when model message has leading reasoning or text parts', async () => {
+    const ai = genkit({});
+    let capturedRequest: GenerateRequest | undefined;
+
+    const pm = ai.defineModel(
+      { name: 'parallelReasoningDedupModel' },
+      async (req) => {
+        capturedRequest = req;
+        return {
+          message: { role: 'model', content: [{ text: 'done' }] },
+          usage: { inputTokens: 50 },
+        };
+      }
+    );
+
+    await ai.generate({
+      model: pm,
+      messages: [
+        { role: 'user', content: [{ text: 'fetch both reports' }] },
+        {
+          role: 'model',
+          content: [
+            { reasoning: 'Thinking...' },
+            {
+              toolRequest: {
+                name: 'fetchReport',
+                input: { reportId: 'report-101' },
+              },
+            },
+            {
+              toolRequest: {
+                name: 'fetchReport',
+                input: { reportId: 'report-102' },
+              },
+            },
+          ],
+        },
+        {
+          role: 'tool',
+          content: [
+            {
+              toolResponse: {
+                name: 'fetchReport',
+                output: 'Report 101 content',
+              },
+            },
+            {
+              toolResponse: {
+                name: 'fetchReport',
+                output: 'Report 102 content',
+              },
+            },
+          ],
+        },
+      ],
+      use: [
+        contextCompression({
+          maxMessages: 2,
+          deduplicateToolResponses: {
+            matchBy: 'name-and-input',
+            keepRecent: 1,
+          },
+        }),
+      ],
+    });
+
+    const toolMsg = capturedRequest!.messages.find((m) => m.role === 'tool');
+    assert.ok(toolMsg);
+    assert.strictEqual(toolMsg.content.length, 2);
+    assert.strictEqual(
+      toolMsg.content[0].toolResponse?.output,
+      'Report 101 content'
+    );
+    assert.strictEqual(
+      toolMsg.content[1].toolResponse?.output,
+      'Report 102 content'
+    );
+  });
+
+  it('accurately deduplicates repeated inputs across turns without ref when model messages have leading reasoning parts', async () => {
+    const ai = genkit({});
+    let capturedRequest: GenerateRequest | undefined;
+
+    const pm = ai.defineModel(
+      { name: 'crossTurnReasoningDedupModel' },
+      async (req) => {
+        capturedRequest = req;
+        return {
+          message: { role: 'model', content: [{ text: 'done' }] },
+          usage: { inputTokens: 50 },
+        };
+      }
+    );
+
+    await ai.generate({
+      model: pm,
+      messages: [
+        { role: 'user', content: [{ text: 'fetch reports' }] },
+        {
+          role: 'model',
+          content: [
+            { reasoning: 'First turn reasoning' },
+            { text: 'Fetching 101 and 102' },
+            {
+              toolRequest: {
+                name: 'fetchReport',
+                input: { reportId: 'report-101' },
+              },
+            },
+            {
+              toolRequest: {
+                name: 'fetchReport',
+                input: { reportId: 'report-102' },
+              },
+            },
+          ],
+        },
+        {
+          role: 'tool',
+          content: [
+            {
+              toolResponse: {
+                name: 'fetchReport',
+                output: 'Report 101 v1 ' + 'X'.repeat(100),
+              },
+            },
+            {
+              toolResponse: {
+                name: 'fetchReport',
+                output: 'Report 102 v1 ' + 'Y'.repeat(100),
+              },
+            },
+          ],
+        },
+        {
+          role: 'model',
+          content: [
+            { reasoning: 'Second turn reasoning' },
+            {
+              toolRequest: {
+                name: 'fetchReport',
+                input: { reportId: 'report-102' },
+              },
+            },
+          ],
+        },
+        {
+          role: 'tool',
+          content: [
+            {
+              toolResponse: {
+                name: 'fetchReport',
+                output: 'Report 102 v2 ' + 'Z'.repeat(100),
+              },
+            },
+          ],
+        },
+      ],
+      use: [
+        contextCompression({
+          maxInputTokens: 50,
+          deduplicateToolResponses: {
+            matchBy: 'name-and-input',
+            keepRecent: 1,
+          },
+        }),
+      ],
+    });
+
+    const toolMessages = capturedRequest!.messages.filter(
+      (m) => m.role === 'tool'
+    );
+    assert.strictEqual(toolMessages.length, 2);
+    // Turn 1: report-101 is unique so preserved; report-102 is repeated in turn 2 so deduplicated
+    assert.ok(
+      String(toolMessages[0].content[0].toolResponse?.output).startsWith(
+        'Report 101 v1 '
+      )
+    );
+    assert.match(
+      String(toolMessages[0].content[1].toolResponse?.output),
+      /Deduplicated/
+    );
+    // Turn 2: newest occurrence of report-102 is preserved
+    assert.ok(
+      String(toolMessages[1].content[0].toolResponse?.output).startsWith(
+        'Report 102 v2 '
+      )
+    );
+  });
+
   it('summarizes older messages using summary model', async () => {
     const ai = genkit({});
     let turn = 0;
