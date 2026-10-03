@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from typing import Any, ClassVar, Literal
 
-from pydantic import ConfigDict, Field, RootModel
+from pydantic import ConfigDict, Field, RootModel, field_validator
 from pydantic.alias_generators import to_camel
 
 from genkit._core._base import GenkitModel
@@ -310,7 +310,15 @@ class EvalFnResponse(GenkitModel):
     test_case_id: str = Field(...)
     trace_id: str | None = None
     span_id: str | None = None
-    evaluation: Score = Field(...)
+    evaluation: list[Score] = Field(...)
+
+    @field_validator('evaluation', mode='before')
+    @classmethod
+    def _wrap_single_score_object(cls, value: Any) -> Any:  # noqa: ANN401
+        # saved runs and other tools may store one score object instead of
+        # a list. only raw JSON gets wrapped; a Score built in code must be
+        # passed as a list so the type checker and runtime agree.
+        return [value] if isinstance(value, dict) else value
 
 
 class EvalRequest(GenkitModel):

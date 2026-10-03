@@ -974,6 +974,28 @@ class Genkit:
         else:
             raise ValueError('Embedder must be specified as a string name or an EmbedderRef.')
 
+    def _embedder_options(
+        self,
+        *,
+        embedder: str | EmbedderRef | None,
+        options: dict[str, object] | None,
+    ) -> dict[str, object]:
+        """Copy ref config plus version, then overlay call-site options.
+
+        The caller's EmbedderRef.config dict is left unchanged so they can
+        reuse the same ref on later embed / embed_many calls.
+        """
+        merged: dict[str, object] = {}
+        if isinstance(embedder, EmbedderRef):
+            config = embedder.config
+            if isinstance(config, dict):
+                merged.update(config)
+            if embedder.version:
+                merged['version'] = embedder.version
+        if options:
+            merged.update(options)
+        return merged
+
     # Overload: config=ModelConfigDict, output_schema=type[T] -> ModelResponse[T]
     @overload
     async def generate(
@@ -1413,16 +1435,7 @@ class Genkit:
             vector = embeddings[0].embedding
         """
         embedder_name = self._resolve_embedder_name(embedder)
-        embedder_config: dict[str, object] = {}
-
-        # Extract config and version from EmbedderRef (not done for embed_many per JS behavior)
-        if isinstance(embedder, EmbedderRef):
-            embedder_config = embedder.config or {}
-            if embedder.version:
-                embedder_config['version'] = embedder.version  # Handle version from ref
-
-        # Merge options passed to embed() with config from EmbedderRef
-        final_options = {**(embedder_config or {}), **(options or {})}
+        final_options = self._embedder_options(embedder=embedder, options=options)
 
         embed_action = await self.registry.resolve_embedder(embedder_name)
         if embed_action is None:
@@ -1460,14 +1473,16 @@ class Genkit:
             Document.from_text(item, metadata) if isinstance(item, str) else item for item in content
         ]
 
-        # Resolve embedder name (JS embedMany does not extract config/version from ref)
         embedder_name = self._resolve_embedder_name(embedder)
+        final_options = self._embedder_options(embedder=embedder, options=options)
 
         embed_action = await self.registry.resolve_embedder(embedder_name)
         if embed_action is None:
             raise ValueError(f'Embedder "{embedder_name}" not found')
 
-        response = (await embed_action.run(EmbedRequest(input=documents, options=options))).response  # type: ignore[arg-type]
+        response = (
+            await embed_action.run(EmbedRequest(input=documents, options=final_options))  # type: ignore[arg-type]
+        ).response
         return response.embeddings
 
     async def evaluate(
@@ -1486,7 +1501,8 @@ class Genkit:
                 evaluator='my_eval',
                 dataset=[BaseDataPoint(input='What is 2+2?', output='4')],
             )
-            print(results.root[0].evaluation.score)
+            for score in results.root[0].evaluation:
+                print(score.score)
         """
         evaluator_name: str = ''
         evaluator_config: dict[str, object] = {}
