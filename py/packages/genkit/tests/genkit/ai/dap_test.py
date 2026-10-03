@@ -759,3 +759,72 @@ def test_closed_loops_are_pruned_from_the_fetch_map(registry: Registry, tool1: A
 
     assert abandoned not in dap._fetch_tasks
     assert not stalled[0].done()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('finish_old_first', [True, False])
+async def test_invalidation_does_not_reuse_or_cache_an_inflight_fetch(
+    registry: Registry, tool1: Action, tool2: Action, finish_old_first: bool
+) -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+
+    async def dap_fn() -> DapValue:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            started.set()
+            await release.wait()
+            return {'tool': [tool1]}
+        return {'tool': [tool2]}
+
+    dap = define_dynamic_action_provider(registry, 'my-dap', dap_fn, cache_ttl_millis=60_000)
+    old = asyncio.create_task(dap.list_action_metadata_by_key('my-dap'))
+    try:
+        await asyncio.wait_for(started.wait(), 2)
+        dap.invalidate_cache()
+        if finish_old_first:
+            release.set()
+            await old
+        fresh = await asyncio.wait_for(dap.list_action_metadata_by_key('my-dap'), 2)
+        assert list(fresh) == ['/dynamic-action-provider/my-dap:tool/tool2']
+        release.set()
+        assert list(await old) == ['/dynamic-action-provider/my-dap:tool/tool1']
+        assert list(await dap.list_action_metadata_by_key('my-dap')) == list(fresh)
+        assert calls == 2
+    finally:
+        release.set()
+        await old
+
+
+def test_failed_fetch_on_another_loop_preserves_a_newer_cache(registry: Registry, tool1: Action) -> None:
+    started = threading.Event()
+    release: concurrent.futures.Future[None] = concurrent.futures.Future()
+    calls = 0
+
+    async def dap_fn() -> DapValue:
+        nonlocal calls
+        if asyncio.get_running_loop() is old_loop:
+            started.set()
+            await asyncio.wrap_future(release)
+            raise RuntimeError('old fetch failed')
+        calls += 1
+        return {'tool': [tool1]}
+
+    dap = define_dynamic_action_provider(registry, 'my-dap', dap_fn, cache_ttl_millis=60_000)
+    with _background_loop() as old_loop:
+        old = asyncio.run_coroutine_threadsafe(dap.list_action_metadata_by_key('my-dap'), old_loop)
+        try:
+            assert started.wait(timeout=5)
+            fresh = asyncio.run(dap.list_action_metadata_by_key('my-dap'))
+            release.set_result(None)
+            with pytest.raises(RuntimeError, match='old fetch failed'):
+                old.result(timeout=5)
+            assert asyncio.run(dap.list_action_metadata_by_key('my-dap')) == fresh
+            assert calls == 1
+        finally:
+            if not release.done():
+                release.set_result(None)
+            with pytest.raises(RuntimeError, match='old fetch failed'):
+                old.result(timeout=5)
