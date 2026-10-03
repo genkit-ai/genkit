@@ -37,6 +37,7 @@ interface RunOptions {
   corsOrigin?: string;
   experimentalReflectionV2?: boolean;
   writeEnvFile?: string;
+  experimentalUseOtel?: boolean;
 }
 
 /** Command to run code in dev mode and/or the Dev UI. */
@@ -67,6 +68,12 @@ export const start = new Command('start')
     '--write-env-file <file>',
     'write environment variables in .env format to the provided file'
   )
+  .option(
+    '--experimental-use-otel',
+    "point the app's own OpenTelemetry SDK at the dev telemetry server " +
+      '(via OTLP env vars) instead of enabling native direct telemetry; ' +
+      'renders only OTel-instrumented spans in the Dev UI'
+  )
   .action(async (options: RunOptions) => {
     const projectRoot = await findProjectRoot();
     if (projectRoot.includes('/.Trash/')) {
@@ -80,8 +87,19 @@ export const start = new Command('start')
       disableRealtimeTelemetry: options.disableRealtimeTelemetry,
       corsOrigin: options.corsOrigin,
       experimentalReflectionV2: options.experimentalReflectionV2,
+      experimentalUseOtel: options.experimentalUseOtel,
     });
     const { envVars, telemetryServerUrl, reflectionV2Port } = devEnv;
+
+    if (options.experimentalUseOtel) {
+      // Without an app-side OTel SDK the trace list just stays empty with no
+      // error anywhere, so call it out up front.
+      logger.warn(
+        'Native Genkit Dev UI tracing is off (--experimental-use-otel). Traces ' +
+          'show up only if your app starts an OpenTelemetry SDK that reads the ' +
+          'OTEL_EXPORTER_OTLP_* env vars.'
+      );
+    }
 
     if (options.writeEnvFile) {
       const content = Object.entries(envVars)
@@ -103,6 +121,7 @@ export const start = new Command('start')
           disableRealtimeTelemetry: options.disableRealtimeTelemetry,
           corsOrigin: options.corsOrigin,
           experimentalReflectionV2: options.experimentalReflectionV2,
+          experimentalUseOtel: options.experimentalUseOtel,
           envVars,
           telemetryServerUrl,
           reflectionV2Port,
@@ -118,6 +137,7 @@ export const start = new Command('start')
         experimentalReflectionV2: options.experimentalReflectionV2,
         reflectionV2Port,
         telemetryServerUrl,
+        experimentalUseOtel: options.experimentalUseOtel,
       });
       processPromise = new Promise(() => {});
     }

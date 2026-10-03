@@ -69,6 +69,7 @@ export async function startManager(options: {
   experimentalReflectionV2?: boolean;
   reflectionV2Port?: number;
   telemetryServerUrl?: string;
+  experimentalUseOtel?: boolean;
 }): Promise<BaseRuntimeManager> {
   const telemetryServerUrl =
     options.telemetryServerUrl ?? (await resolveTelemetryServer(options));
@@ -78,6 +79,7 @@ export async function startManager(options: {
     projectRoot: options.projectRoot,
     experimentalReflectionV2: options.experimentalReflectionV2,
     reflectionV2Port: options.reflectionV2Port,
+    suppressRuntimeTelemetry: options.experimentalUseOtel,
   });
   return manager;
 }
@@ -93,6 +95,12 @@ export interface DevProcessManagerOptions {
   envVars?: Record<string, string>;
   reflectionV2Port?: number;
   telemetryServerUrl?: string;
+  /**
+   * Point the app's own OpenTelemetry SDK at the dev telemetry server (via
+   * standard OTLP env vars) instead of enabling Genkit's native direct export.
+   * Renders only what the app's OTel instrumentation emits in the Dev UI.
+   */
+  experimentalUseOtel?: boolean;
 }
 
 export async function getDevEnvVars(
@@ -109,20 +117,45 @@ export async function getDevEnvVars(
   });
   const disableRealtimeTelemetry = options?.disableRealtimeTelemetry ?? false;
   const experimentalReflectionV2 = options?.experimentalReflectionV2 ?? false;
+  const useOtel = options?.experimentalUseOtel ?? false;
 
   let reflectionV2Port: number | undefined;
   const envVars: Record<string, string> = {
-    GENKIT_TELEMETRY_SERVER: telemetryServerUrl,
     GENKIT_ENV: 'dev',
   };
+
+  if (useOtel) {
+    // Drive the app's own OTel SDK to the dev telemetry server's OTLP endpoints.
+    // The server only parses JSON bodies (express.json), so http/json is
+    // required; per-signal endpoints are used verbatim (no /v1/* appended), so
+    // the full path is spelled out. Metrics are deliberately not redirected:
+    // the server doesn't ingest them, so they go wherever the app's own OTel
+    // config sends them.
+    //
+    // GENKIT_TELEMETRY_SERVER is blanked rather than omitted: the child
+    // inherits process.env, so a value exported in the shell (the
+    // reuse-a-server path) would otherwise re-enable native direct export.
+    // All runtimes treat '' as unset. The reflection handshake withholds the
+    // URL too (suppressRuntimeTelemetry), so only OTel-instrumented spans show
+    // up.
+    envVars.GENKIT_TELEMETRY_SERVER = '';
+    // Strip trailing slashes: a user-supplied GENKIT_TELEMETRY_SERVER may end
+    // with one, and naive concatenation would yield a double slash.
+    const baseUrl = telemetryServerUrl.replace(/\/+$/, '');
+    envVars.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = `${baseUrl}/api/otlp/v1/traces`;
+    envVars.OTEL_EXPORTER_OTLP_TRACES_PROTOCOL = 'http/json';
+    envVars.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT = `${baseUrl}/api/otlp/v1/logs`;
+    envVars.OTEL_EXPORTER_OTLP_LOGS_PROTOCOL = 'http/json';
+  } else {
+    envVars.GENKIT_TELEMETRY_SERVER = telemetryServerUrl;
+    if (!disableRealtimeTelemetry) {
+      envVars.GENKIT_ENABLE_REALTIME_TELEMETRY = 'true';
+    }
+  }
 
   if (experimentalReflectionV2) {
     reflectionV2Port = await getPort({ port: makeRange(3200, 3400) });
     envVars.GENKIT_REFLECTION_V2_SERVER = `ws://localhost:${reflectionV2Port}`;
-  }
-
-  if (!disableRealtimeTelemetry) {
-    envVars.GENKIT_ENABLE_REALTIME_TELEMETRY = 'true';
   }
 
   return { envVars, reflectionV2Port, telemetryServerUrl };
@@ -157,6 +190,7 @@ export async function startDevProcessManager(
     disableRealtimeTelemetry,
     experimentalReflectionV2,
     reflectionV2Port,
+    suppressRuntimeTelemetry: options?.experimentalUseOtel,
   });
   const processPromise = processManager.start({ ...options });
 

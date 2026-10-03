@@ -14,7 +14,11 @@
  * limitations under the License.
  */
 
-import { RuntimeEvent, RuntimeManager } from '@genkit-ai/tools-common/manager';
+import {
+  ProcessManager,
+  RuntimeEvent,
+  RuntimeManager,
+} from '@genkit-ai/tools-common/manager';
 import { logger } from '@genkit-ai/tools-common/utils';
 import {
   afterEach,
@@ -25,10 +29,97 @@ import {
   jest,
 } from '@jest/globals';
 import {
+  getDevEnvVars,
   runWithManager,
   waitForActionKeys,
   waitForRuntime,
 } from '../../src/utils/manager-utils';
+
+describe('getDevEnvVars', () => {
+  // Setting GENKIT_TELEMETRY_SERVER makes resolveTelemetryServer return it
+  // directly instead of spinning up a real telemetry server.
+  const TELEMETRY_URL = 'http://localhost:4033';
+  let prev: string | undefined;
+
+  beforeEach(() => {
+    prev = process.env.GENKIT_TELEMETRY_SERVER;
+    process.env.GENKIT_TELEMETRY_SERVER = TELEMETRY_URL;
+  });
+
+  afterEach(() => {
+    if (prev === undefined) {
+      delete process.env.GENKIT_TELEMETRY_SERVER;
+    } else {
+      process.env.GENKIT_TELEMETRY_SERVER = prev;
+    }
+  });
+
+  it('uses native direct telemetry env vars by default', async () => {
+    const { envVars, telemetryServerUrl } = await getDevEnvVars('/root');
+
+    expect(telemetryServerUrl).toBe(TELEMETRY_URL);
+    expect(envVars).toEqual({
+      GENKIT_ENV: 'dev',
+      GENKIT_TELEMETRY_SERVER: TELEMETRY_URL,
+      GENKIT_ENABLE_REALTIME_TELEMETRY: 'true',
+    });
+    expect(envVars.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT).toBeUndefined();
+  });
+
+  it('uses OTLP env vars (and drops native ones) when experimentalUseOtel is set', async () => {
+    const { envVars, telemetryServerUrl } = await getDevEnvVars('/root', {
+      experimentalUseOtel: true,
+    });
+
+    // Manager still gets the URL for its own Dev UI reads.
+    expect(telemetryServerUrl).toBe(TELEMETRY_URL);
+
+    // Blanked (not omitted) so a shell-exported value can't leak through.
+    expect(envVars.GENKIT_TELEMETRY_SERVER).toBe('');
+    expect(envVars.GENKIT_ENABLE_REALTIME_TELEMETRY).toBeUndefined();
+
+    expect(envVars.GENKIT_ENV).toBe('dev');
+    expect(envVars.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT).toBe(
+      `${TELEMETRY_URL}/api/otlp/v1/traces`
+    );
+    expect(envVars.OTEL_EXPORTER_OTLP_TRACES_PROTOCOL).toBe('http/json');
+    expect(envVars.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT).toBe(
+      `${TELEMETRY_URL}/api/otlp/v1/logs`
+    );
+    expect(envVars.OTEL_EXPORTER_OTLP_LOGS_PROTOCOL).toBe('http/json');
+  });
+
+  it('normalizes a trailing slash on the telemetry server URL for OTLP endpoints', async () => {
+    process.env.GENKIT_TELEMETRY_SERVER = `${TELEMETRY_URL}/`;
+
+    const { envVars } = await getDevEnvVars('/root', {
+      experimentalUseOtel: true,
+    });
+
+    expect(envVars.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT).toBe(
+      `${TELEMETRY_URL}/api/otlp/v1/traces`
+    );
+    expect(envVars.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT).toBe(
+      `${TELEMETRY_URL}/api/otlp/v1/logs`
+    );
+  });
+
+  it('hides a shell GENKIT_TELEMETRY_SERVER from the app when experimentalUseOtel is set', async () => {
+    // beforeEach exports GENKIT_TELEMETRY_SERVER in this process, mirroring the
+    // reuse-a-server path. The child inherits process.env, so check what it
+    // actually sees rather than just the envVars map.
+    const { envVars } = await getDevEnvVars('/root', {
+      experimentalUseOtel: true,
+    });
+
+    const app = new ProcessManager(
+      'node',
+      ['-e', 'process.exit(process.env.GENKIT_TELEMETRY_SERVER ? 1 : 0)'],
+      envVars
+    );
+    await expect(app.start({ nonInteractive: true })).resolves.toBeUndefined();
+  });
+});
 
 describe('waitForRuntime', () => {
   let mockManager: any;
