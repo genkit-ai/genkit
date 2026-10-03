@@ -298,6 +298,7 @@ export function toOpenAIMessages(
         if (toolCalls.length > 0) {
           apiMessages.push({
             role: role,
+            ...(msg.text ? { content: msg.text } : {}),
             tool_calls: toolCalls,
           });
         } else {
@@ -394,7 +395,10 @@ export function fromOpenAIChoice(
   let content: Part[] = [];
 
   if (toolRequestParts && toolRequestParts.length > 0) {
-    content = toolRequestParts as ToolRequestPart[];
+    if (choice.message.content) {
+      content.push({ text: choice.message.content });
+    }
+    content.push(...toolRequestParts);
   } else {
     // Handle reasoning_content if present
     if (
