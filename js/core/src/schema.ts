@@ -25,6 +25,10 @@ import { GenkitError } from './error.js';
 import type { Registry } from './registry.js';
 const ajv = new Ajv();
 addFormats(ajv);
+// Gemini structured output uses the non-standard `propertyOrdering` keyword as a
+// field-order hint. Register it so Ajv strict mode does not reject those schemas.
+// See https://ai.google.dev/gemini-api/docs/structured-output#property-ordering
+ajv.addVocabulary(['propertyOrdering']);
 
 export { z }; // provide a consistent zod to use throughout genkit
 

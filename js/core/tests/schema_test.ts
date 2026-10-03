@@ -105,6 +105,38 @@ describe('validate()', () => {
         { path: '(root)', message: "must have required property 'foo'" },
       ],
     },
+    {
+      it: 'should allow Gemini propertyOrdering keyword in json schema',
+      jsonSchema: {
+        type: 'object',
+        properties: {
+          answer: { type: 'number' },
+          x: { type: 'number' },
+          y: { type: 'number' },
+        },
+        required: ['x', 'y', 'answer'],
+        propertyOrdering: ['x', 'y', 'answer'],
+        additionalProperties: false,
+      },
+      data: { x: 1, y: 2, answer: 3 },
+      valid: true,
+    },
+    {
+      it: 'should still validate data when propertyOrdering is present',
+      jsonSchema: {
+        type: 'object',
+        properties: {
+          x: { type: 'number' },
+          y: { type: 'number' },
+        },
+        required: ['x', 'y'],
+        propertyOrdering: ['x', 'y'],
+        additionalProperties: false,
+      },
+      data: { x: 'nope', y: 2 },
+      valid: false,
+      errors: [{ path: 'x', message: 'must be number' }],
+    },
   ];
   for (const test of tests) {
     it(test.it, () => {
@@ -369,6 +401,27 @@ describe('disableSchemaCodeGeneration()', () => {
           type: 'object',
           properties: { foo: { type: 'string' }, bar: { type: 'string' } },
           required: ['foo'],
+        },
+      }
+    );
+    assert.strictEqual(result.valid, true);
+  });
+
+  it('should allow Gemini propertyOrdering keyword in interpret mode', () => {
+    disableSchemaCodeGeneration();
+    const result = validateSchema(
+      { x: 1, y: 2, answer: 3 },
+      {
+        jsonSchema: {
+          type: 'object',
+          properties: {
+            answer: { type: 'number' },
+            x: { type: 'number' },
+            y: { type: 'number' },
+          },
+          required: ['x', 'y', 'answer'],
+          propertyOrdering: ['x', 'y', 'answer'],
+          additionalProperties: false,
         },
       }
     );
