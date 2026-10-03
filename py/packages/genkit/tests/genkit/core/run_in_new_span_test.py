@@ -18,13 +18,13 @@ from genkit._ai._tools import Interrupt, ToolRunContext
 from genkit._core._action import Action, ActionRunContext
 from genkit._core._error import GenkitError
 from genkit._core._telemetry._attrs import metadata_key
+from genkit._core._telemetry._http import ActiveSpan
 from genkit._core._telemetry._instrumentation import (
     SpanMetadata,
     parent_path_context,
     run_in_new_span,
     start_attributes,
 )
-from genkit._core._telemetry.http import ActiveSpan
 from genkit.model import ModelRequest
 from genkit.plugin_api import ActionKind
 

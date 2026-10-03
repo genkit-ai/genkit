@@ -110,8 +110,8 @@ from genkit._core._reflection import ReflectionServer, ServerSpec, create_reflec
 from genkit._core._reflection_v2 import ReflectionServerV2
 from genkit._core._registry import Registry, define_dynamic_action_provider as define_dap_block
 from genkit._core._telemetry._attrs import metadata_key
+from genkit._core._telemetry._http import maybe_inject_dev_instrumentation
 from genkit._core._telemetry._instrumentation import run_in_new_span
-from genkit._core._telemetry.http import maybe_inject_dev_instrumentation
 from genkit._core._typing import (
     BaseDataPoint,
     Embedding,

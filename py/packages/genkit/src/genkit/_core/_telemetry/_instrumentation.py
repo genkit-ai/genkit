@@ -35,7 +35,7 @@ from pydantic import BaseModel
 
 from ._attrs import METADATA_PREFIX, Attr
 from ._log_exporter import reset_log_export
-from .http import PARENT_SPAN
+from ._http import PARENT_SPAN
 
 T = TypeVar('T')
 T_co = TypeVar('T_co', covariant=True)
