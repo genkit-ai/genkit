@@ -12,12 +12,12 @@ from typing import TypeVar
 import pytest
 
 from genkit._core._telemetry._http import ActiveSpan, DirectHttpInstrumentation
-from genkit._core._telemetry._instrumentation import (
+from genkit.telemetry import (
     SpanContext,
     SpanMetadata,
+    configure_instrumentation,
     reset_instrumentation,
 )
-from genkit.telemetry import configure_instrumentation
 
 T = TypeVar('T')
 

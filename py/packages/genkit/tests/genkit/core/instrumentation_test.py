@@ -12,20 +12,18 @@ from collections.abc import Awaitable, Callable, Mapping
 import pytest
 
 from genkit._core._action import Action
-from genkit._core._telemetry._instrumentation import (
-    SpanContext,
-    SpanMetadata,
-    flush_instrumentations,
-    run_in_new_span,
-    set_custom_metadata_attributes,
-    set_span_state,
-)
 from genkit.plugin_api import ActionKind
 from genkit.telemetry import (
     FlushableInstrumentation,
+    SpanContext,
+    SpanMetadata,
     configure_instrumentation,
+    flush_instrumentations,
     is_instrumented_by,
     reset_instrumentation,
+    run_in_new_span,
+    set_custom_metadata_attributes,
+    set_span_state,
 )
 
 
@@ -321,10 +319,20 @@ def test_span_metadata_attributes_keep_bool_int_and_float() -> None:
 
 
 def test_telemetry_exports_provider_types() -> None:
-    """SpanNext, DisposableInstrumentation, FlushableInstrumentation import from genkit.telemetry."""
+    """SpanNext, DisposableInstrumentation, FlushableInstrumentation, to_json_attr import from genkit.telemetry."""
     import genkit.telemetry as telemetry
 
-    for name in ('SpanNext', 'DisposableInstrumentation', 'FlushableInstrumentation'):
+    for name in (
+        'SpanNext',
+        'DisposableInstrumentation',
+        'FlushableInstrumentation',
+        'SpanAttributeValue',
+        'SpanState',
+        'to_json_attr',
+        'flush_instrumentations',
+        'set_custom_metadata_attributes',
+        'set_span_state',
+    ):
         assert name in telemetry.__all__
         assert getattr(telemetry, name) is not None
 

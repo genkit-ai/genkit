@@ -31,16 +31,16 @@ from genkit._core._telemetry._http import (
     GenkitBuiltinInstrumentation,
     direct_http_for_collector,
 )
-from genkit._core._telemetry._instrumentation import (
+from genkit._core._telemetry._instrumentation import parent_path_context
+from genkit._core._telemetry._log_exporter import reset_log_export
+from genkit.plugin_api import ActionKind
+from genkit.telemetry import (
+    configure_instrumentation,
     flush_instrumentations,
     instrumentations,
     is_instrumented_by,
-    parent_path_context,
     reset_instrumentation,
 )
-from genkit._core._telemetry._log_exporter import reset_log_export
-from genkit.plugin_api import ActionKind
-from genkit.telemetry import configure_instrumentation
 
 
 def _hex_id(value: str, length: int) -> bool:

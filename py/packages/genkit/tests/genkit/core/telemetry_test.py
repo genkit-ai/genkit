@@ -30,21 +30,19 @@ from genkit._core._action import Action
 from genkit._core._environment import GENKIT_ENV
 from genkit._core._reflection import create_reflection_asgi_app
 from genkit._core._registry import Registry
-from genkit._core._telemetry._instrumentation import (
-    NoopSpanContext,
-    instrumentations,
-    set_custom_metadata_attributes,
-    set_span_state,
-)
+from genkit._core._telemetry._instrumentation import NoopSpanContext
 from genkit.plugin_api import ActionKind
 from genkit.telemetry import (
     GenkitBuiltinInstrumentation,
     SpanContext,
     SpanMetadata,
     configure_instrumentation,
+    instrumentations,
     is_instrumented_by,
     reset_instrumentation,
     run_in_new_span,
+    set_custom_metadata_attributes,
+    set_span_state,
 )
 
 T = TypeVar('T')

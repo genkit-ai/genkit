@@ -22,10 +22,10 @@ from pydantic import BaseModel, Field
 
 from genkit import Message, Part
 from genkit._core._action import ActionKind
-from genkit._core._telemetry._instrumentation import run_in_new_span
 from genkit._core._typing import (
     ModelInfo,
 )
+from genkit.telemetry import run_in_new_span
 from genkit.testing import (
     EchoModel as EchoModel,
     ProgrammableModel as ProgrammableModel,

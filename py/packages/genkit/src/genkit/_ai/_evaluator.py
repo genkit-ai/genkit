@@ -29,7 +29,6 @@ from genkit._core._logger import get_logger
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
 from genkit._core._telemetry._attrs import metadata_key
-from genkit._core._telemetry._instrumentation import SpanContext, run_in_new_span
 from genkit._core._typing import (
     ActionMetadata,
     BaseDataPoint,
@@ -39,6 +38,7 @@ from genkit._core._typing import (
     EvalStatusEnum,
     Score,
 )
+from genkit.telemetry import SpanContext, run_in_new_span
 
 logger = get_logger(__name__)
 
