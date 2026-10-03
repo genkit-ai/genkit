@@ -32,8 +32,11 @@ from collections.abc import Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from queue import Full, Queue
-from typing import Literal, TypeVar
+from typing import TYPE_CHECKING, Literal, TypeVar
 from urllib.parse import urljoin, urlparse
+
+if TYPE_CHECKING:
+    from ._instrumentation import Instrumentation
 
 from .._environment import is_dev_environment
 from .._error import GenkitError, Interrupt
@@ -311,7 +314,7 @@ def direct_http_for_collector(*, url: str) -> DirectBuiltin:
     return DirectBuiltin(CollectorHttpSink(collector_otlp_url(url)))
 
 
-def genkit_dev_instrumentation() -> _instrumentation.Instrumentation | None:
+def genkit_dev_instrumentation() -> Instrumentation | None:
     """Developer UI poster, or None when no collector URL is set.
 
     ``genkit start -- python app.py`` sets ``GENKIT_TELEMETRY_SERVER``
