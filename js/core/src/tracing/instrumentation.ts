@@ -164,7 +164,7 @@ export async function runInNewSpan<T>(
         // Mark the first failing span as the source of failure. Prevent parent
         // spans that catch re-thrown exceptions from also claiming to be the
         // source.
-        if (typeof e === 'object') {
+        if (typeof e === 'object' && e !== null) {
           if (!(e as any).ignoreFailedSpan) {
             opts.metadata.isFailureSource = true;
           }
