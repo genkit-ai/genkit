@@ -81,6 +81,8 @@ class Fallback(BaseMiddleware[FallbackConfig]):
         assert last_error is not None  # noqa: S101
         on_chunk = ctx.on_chunk
         for model_name in self.config.models:
+            if ctx.abort_signal.is_set():
+                raise last_error
             fallback_action = await self._resolve_fallback_model(ctx, model_name)
             try:
                 result = await fallback_action.run(
