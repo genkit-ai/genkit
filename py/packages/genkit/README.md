@@ -42,6 +42,8 @@ async def review(code: str) -> Issue:
         prompt=f'Review this code:\n{code}',
         output_schema=Issue,
     )
+    if result.output is None:
+        raise ValueError(f'Model did not return an Issue: {result.text}')
     return result.output
 
 

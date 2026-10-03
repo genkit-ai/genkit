@@ -156,11 +156,16 @@ class ModelStreamResponse(Generic[OutputT]):
         Returns:
             An awaitable that resolves to a ModelResponse containing:
             - text: The complete generated text
-            - output: The typed output (when using Output[T])
+            - output: The typed output, or None when the reply isn't that shape
             - messages: The full message history
             - usage: Token usage statistics
             - finish_reason: Why generation stopped (e.g., 'stop', 'length')
             - Any tool calls or interrupts from the response
+
+        If the model fails partway through, this still resolves rather than
+        raising: ``finish_reason`` is FAILED, ``error`` is set, ``text`` is
+        empty, ``message`` is None, and ``messages`` ends at the last complete
+        turn. The chunks already streamed are the record of what was shown.
         """
         return self._response_future
 

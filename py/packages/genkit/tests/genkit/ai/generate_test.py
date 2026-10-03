@@ -14,6 +14,7 @@ from typing import Any, cast
 import pytest
 import yaml
 from pydantic import BaseModel, TypeAdapter, ValidationError
+from typing_extensions import assert_type
 
 from genkit import Document, Genkit, Message, ModelResponse, ModelResponseChunk, MultipartToolResponse, Part
 from genkit._ai._formats._types import FormatDef, Formatter, FormatterConfig
@@ -4346,12 +4347,91 @@ async def test_generate_stream_closes_with_structured_max_turns_response() -> No
     assert tool_calls == 0
 
 
+def _model_dies_after_hello_wor(ai: Genkit, name: str) -> None:
+    async def model(_request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('Hello, ')]))
+        ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('wor')]))
+        raise RuntimeError('stream died')
+
+    ai.define_model(name=name, fn=model)
+
+
 @pytest.mark.asyncio
-async def test_midstream_model_failure_keeps_chunks_and_prior_closed_history() -> None:
-    ai = Genkit(model='midstreamFailureModel')
+async def test_generate_stream_fails_midway_ends_loop_with_empty_text() -> None:
+    """The model dies after two chunks; the loop ends normally and the final reply holds no half answer."""
+    ai = Genkit(model='diesMidway')
+    _model_dies_after_hello_wor(ai, 'diesMidway')
+
+    stream = ai.generate_stream(prompt='start')
+    chunks = [chunk async for chunk in stream]
+    response = await stream.response
+
+    assert [chunk.text for chunk in chunks] == ['Hello, ', 'wor']
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.text == ''
+    assert response.message is None
+    assert response.output is None
+    assert [message.role for message in response.messages] == [Role.USER]
+    assert response.messages[0].text == 'start'
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_fails_midway_sets_failed_and_error() -> None:
+    """A stream that dies partway reports FAILED with an INTERNAL error on the final response."""
+    ai = Genkit(model='diesMidway')
+    _model_dies_after_hello_wor(ai, 'diesMidway')
+
+    stream = ai.generate_stream(prompt='start')
+    _ = [chunk async for chunk in stream]
+    response = await stream.response
+
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.finish_message == 'internal error'
+    assert response.error is not None
+    assert response.error.status == 'INTERNAL'
+    assert response.error.reason is None
+    assert response.error.message == response.finish_message
+    assert response.message is None
+    assert [message.role for message in response.messages] == [Role.USER]
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_fails_midway_with_schema_output_is_none() -> None:
+    """With output_schema, a stream that dies partway leaves final.output as None."""
+
+    class City(BaseModel):
+        name: str
+        population: int
+
+    ai = Genkit(model='diesMidJson')
+
+    async def model(_request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('{"name": "Pa')]))
+        ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('ris", "population": 21')]))
+        raise RuntimeError('stream died')
+
+    ai.define_model(name='diesMidJson', fn=model)
+
+    stream = ai.generate_stream(prompt='a city', output_schema=City)
+    chunks = [chunk async for chunk in stream]
+    response = await stream.response
+
+    assert len(chunks) == 2
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.error is not None
+    assert response.error.status == 'INTERNAL'
+    assert response.text == ''
+    assert response.message is None
+    assert response.output is None
+    assert [message.role for message in response.messages] == [Role.USER]
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_fails_after_tool_turn_keeps_closed_round() -> None:
+    """The model dies on its second turn; history keeps the finished tool round and drops the half answer."""
+    ai = Genkit(model='diesAfterTool')
     model_calls = 0
     tool_calls = 0
-    chunks: list[ModelResponseChunk] = []
 
     @ai.tool(name='lookup')
     async def lookup() -> str:
@@ -4359,7 +4439,7 @@ async def test_midstream_model_failure_keeps_chunks_and_prior_closed_history() -
         tool_calls += 1
         return '72F'
 
-    async def midstream_failure_model(_request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def model(_request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
         nonlocal model_calls
         model_calls += 1
         if model_calls == 1:
@@ -4368,57 +4448,64 @@ async def test_midstream_model_failure_keeps_chunks_and_prior_closed_history() -
         ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('partial-2')]))
         raise RuntimeError('stream broke')
 
-    ai.define_model(name='midstreamFailureModel', fn=midstream_failure_model)
-    response = await generate_action(
-        ai.registry,
-        GenerateActionOptions(
-            model='midstreamFailureModel',
-            messages=[Message(role=Role.USER, content=[Part.from_text('start')])],
-            tools=['lookup'],
-        ),
-        on_chunk=chunks.append,
-    )
+    ai.define_model(name='diesAfterTool', fn=model)
+
+    stream = ai.generate_stream(prompt='start', tools=['lookup'])
+    chunks = [chunk async for chunk in stream]
+    response = await stream.response
 
     model_chunks = [chunk for chunk in chunks if chunk.role == Role.MODEL]
-    assert [text_from_content(chunk.content) for chunk in model_chunks] == ['partial-1', 'partial-2']
-    assert [chunk.role for chunk in chunks] == [Role.TOOL, Role.MODEL, Role.MODEL]
+    assert [chunk.text for chunk in model_chunks] == ['partial-1', 'partial-2']
     assert response.finish_reason == FinishReason.FAILED
     assert response.finish_message == 'internal error'
-    assert response.message is None
     assert response.error is not None
     assert response.error.status == 'INTERNAL'
-    assert response.error.reason is None
-    assert response.error.message == response.finish_message
+    assert response.text == ''
+    assert response.message is None
     assert [message.role for message in response.messages] == [Role.USER, Role.MODEL, Role.TOOL]
     assert _tool_request(response.messages[1]).ref == 'closed'
     assert _tool_output(response.messages[2]) == '72F'
+    assert response.messages[-1].role == Role.TOOL
     assert model_calls == 2
     assert tool_calls == 1
 
 
 @pytest.mark.asyncio
-async def test_first_turn_midstream_failure_keeps_chunks_and_drops_unfinished_message() -> None:
-    """Chunks already sent; the unfinished model message is not on resendable history."""
-    ai = Genkit(model='firstTurnMidstreamModel')
+async def test_prompt_stream_fails_midway_ends_loop_with_empty_text() -> None:
+    """prompt.stream() ends the same way as ai.generate_stream when the model dies partway."""
+    ai = Genkit(model='diesMidway')
+    _model_dies_after_hello_wor(ai, 'diesMidway')
+    greet = ai.define_prompt(name='greet', prompt='start')
 
-    async def first_turn_midstream(_request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
-        ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('Hello, ')]))
-        ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('wor')]))
-        raise RuntimeError('stream died')
-
-    ai.define_model(name='firstTurnMidstreamModel', fn=first_turn_midstream)
-    stream = ai.generate_stream(prompt='start')
+    stream = greet.stream()
     chunks = [chunk async for chunk in stream]
     response = await stream.response
 
-    assert [text_from_content(chunk.content) for chunk in chunks] == ['Hello, ', 'wor']
+    assert [chunk.text for chunk in chunks] == ['Hello, ', 'wor']
     assert response.finish_reason == FinishReason.FAILED
-    assert response.finish_message == 'internal error'
-    assert response.message is None
     assert response.error is not None
     assert response.error.status == 'INTERNAL'
-    assert response.error.reason is None
-    assert response.error.message == response.finish_message
+    assert response.text == ''
+    assert response.message is None
+    assert response.output is None
+    assert [message.role for message in response.messages] == [Role.USER]
+    assert response.messages[0].text == 'start'
+
+
+@pytest.mark.asyncio
+async def test_generate_fails_midway_without_streaming_has_empty_text() -> None:
+    """ai.generate with the same mid-reply failure gives the same empty final reply as the stream."""
+    ai = Genkit(model='diesMidway')
+    _model_dies_after_hello_wor(ai, 'diesMidway')
+
+    response = await ai.generate(prompt='start')
+
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.error is not None
+    assert response.error.status == 'INTERNAL'
+    assert response.text == ''
+    assert response.message is None
+    assert response.output is None
     assert [message.role for message in response.messages] == [Role.USER]
     assert response.messages[0].text == 'start'
 
@@ -6452,11 +6539,39 @@ async def test_generate_returns_typed_output_when_schema_matches() -> None:
     assert response.finish_reason == FinishReason.STOP
     assert response.finish_message is None
     assert response.error is None
+    assert response.output is not None
     assert response.output.title == 'Soup'
     assert response.message is not None
     assert response.message.text == '{"title": "Soup"}'
     assert [message.role for message in response.messages] == [Role.USER, Role.MODEL]
     assert response.messages[1] == response.message
+
+
+@pytest.mark.asyncio
+async def test_model_response_output_is_typed_optional() -> None:
+    """ai.generate(output_schema=City).output is typed City | None, and a prose reply really is None."""
+
+    class City(BaseModel):
+        name: str
+        population: int
+
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('Paris is pretty big.')]),
+        )
+    ]
+
+    response = await ai.generate(prompt='a city', output_schema=City)
+
+    assert_type(response.output, City | None)
+    assert response.finish_reason == FinishReason.STOP
+    assert response.error is not None
+    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert response.text == 'Paris is pretty big.'
+    assert response.output is None
 
 
 @pytest.mark.asyncio

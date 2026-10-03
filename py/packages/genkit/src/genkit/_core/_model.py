@@ -1224,7 +1224,7 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
         return self.message.text
 
     @property
-    def output(self) -> OutputT:
+    def output(self) -> OutputT | None:
         """Parsed structured output, or None when the reply is not that shape.
 
         generate() does not throw when the text is not the schema. If you
@@ -1235,9 +1235,9 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
         # The rest of ABNORMAL_FINISH_REASONS can still hold usable parts (an
         # interrupt carries tool requests), so they only gate the schema path.
         if self.finish_reason in (FinishReason.BLOCKED, FinishReason.FAILED):
-            return cast(OutputT, None)
+            return None
         if self._wants_structure and self.finish_reason in ABNORMAL_FINISH_REASONS:
-            return cast(OutputT, None)
+            return None
 
         schema = self.request.output_schema if self.request is not None else None
 
@@ -1248,13 +1248,13 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
             # it back is never worth an exception: `.text` holds the raw reply
             # and `error` carries INVALID_OUTPUT when structure was requested.
             # Matches JS, where `extractJson` is called without the throw flag.
-            return cast(OutputT, None)
+            return None
 
         if schema is not None:
             try:
                 parse_schema(data=parsed, json_schema=schema)
             except GenkitError:
-                return cast(OutputT, None)
+                return None
 
         # A custom format's parser can return a scalar (e.g. enum string).
         # Skip Pydantic model validation for scalars.
@@ -1265,7 +1265,7 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
         try:
             return cast(OutputT, self._schema_type.model_validate(parsed))
         except ValidationError:
-            return cast(OutputT, None)
+            return None
 
     @property
     def messages(self) -> list[Message]:
