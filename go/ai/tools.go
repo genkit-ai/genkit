@@ -467,17 +467,19 @@ func (t *ToolAction[In, Out]) Definition() *ToolDefinition {
 		}
 	}
 
-	// Prefer the original output schema when present: the logical output the
-	// model consumes, as opposed to the action's wire-level output (for tools
-	// wrapping a plain function, and for multipart tools with a custom
-	// schema, that wire output is the multipart envelope).
-	outputSchema := desc.OutputSchema
+	// Every tool function is wrapped in the multipart envelope, so the action's
+	// own output schema describes that envelope, never the tool's real output.
+	// Advertise the schema recorded at construction time from the output type
+	// (or from an explicit [WithOutputSchema]), and nothing at all when the
+	// output type carries no schema, e.g. any: an unconstrained output is
+	// described by no schema, not by the envelope's.
+	var outputSchema map[string]any
 	if origSchema, ok := desc.Metadata["originalOutputSchema"].(map[string]any); ok {
 		outputSchema = origSchema
 	}
 
 	// Resolve the output schema if it contains a $ref.
-	if t.registry != nil {
+	if t.registry != nil && outputSchema != nil {
 		if resolved, err := core.ResolveSchema(t.registry, outputSchema); err == nil {
 			outputSchema = resolved
 		}
