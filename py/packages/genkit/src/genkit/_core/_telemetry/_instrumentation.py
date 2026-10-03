@@ -35,6 +35,7 @@ from pydantic import BaseModel
 
 from ._attrs import METADATA_PREFIX, Attr
 from ._log_exporter import reset_log_export
+from .http import PARENT_SPAN
 
 T = TypeVar('T')
 T_co = TypeVar('T_co', covariant=True)
@@ -224,13 +225,12 @@ def reset_instrumentation() -> None:
     Disposes and removes every configured provider, stops Dev UI log export,
     and forgets the open trace so the next span is a new root.
     """
-    from .http import PARENT_SPAN
-
     dispose_instrumentations()
     instrumentations.clear()
     reset_log_export()
     parent_path_context.set('')
     PARENT_SPAN.set(None)
+    current_span.set(None)
 
 
 def is_instrumented_by(kind: type) -> bool:
