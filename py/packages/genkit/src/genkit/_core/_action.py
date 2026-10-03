@@ -246,6 +246,44 @@ def extract_action_args_and_types(
     return action_args, arg_types
 
 
+def find_input_and_context(
+    func: Callable[..., object],
+    hints: Mapping[str, Any],
+    *,
+    context_type: type,
+    owner: str,
+) -> tuple[inspect.Parameter | None, str | None]:
+    """Split ``func``'s parameters into its one input and its context parameter.
+
+    The context is whichever parameter is annotated ``context_type``, in any
+    position, so reordering parameters never changes what they receive. Callers,
+    the model, and the Dev UI all send one input, so any other parameter is a
+    definition error that says how to fix it.
+    """
+    context_name = context_type.__name__
+    input_param: inspect.Parameter | None = None
+    context_param: str | None = None
+    for param in inspect.signature(func).parameters.values():
+        if param.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
+            continue
+        annotation = hints.get(param.name, param.annotation)
+        # a postponed annotation that couldn't be resolved is still the bare name
+        if annotation is context_type or annotation == context_name:
+            if context_param is not None:
+                raise TypeError(
+                    f"{owner} has two {context_name} parameters, '{context_param}' and '{param.name}'. Keep one."
+                )
+            context_param = param.name
+        elif input_param is None:
+            input_param = param
+        else:
+            raise TypeError(
+                f"{owner} takes one input, but '{param.name}' is a second parameter. "
+                f"Put the fields on one input model, or annotate '{param.name}' as {context_name}."
+            )
+    return input_param, context_param
+
+
 def _first_action_arg_has_default(input_spec: inspect.FullArgSpec, n_action_args: int) -> bool:
     """Return True if the action's first user-facing arg has a Python default.
 
@@ -448,6 +486,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         span_metadata: dict[str, SpanAttributeValue] | None = None,
         init_schema: type[BaseModel] | dict[str, object] | None = None,
         config_schema: type[BaseModel] | dict[str, object] | None = None,
+        context_type: type | None = None,
     ) -> None:
         self._kind: ActionKind = kind
         self._name: str = name
@@ -464,19 +503,34 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         if not inspect.iscoroutinefunction(fn):
             raise TypeError(f"Action handlers must be async functions. Got sync function for '{name}'.")
 
-        input_spec = inspect.getfullargspec(metadata_fn if metadata_fn else fn)
+        signature_fn = metadata_fn if metadata_fn else fn
+        input_spec = inspect.getfullargspec(signature_fn)
         try:
-            resolved_annotations = get_type_hints(metadata_fn if metadata_fn else fn)
+            resolved_annotations = get_type_hints(signature_fn)
         except (NameError, TypeError, AttributeError):
             resolved_annotations = input_spec.annotations
-        action_args, arg_types = extract_action_args_and_types(input_spec, resolved_annotations)
+        # With a context_type, the context goes to the parameter annotated with
+        # it and the input to the other one, both by name.
+        self._by_annotation: bool = context_type is not None
+        self._context_param: str | None = None
+        if context_type is not None:
+            kind_label = 'tool' if kind == ActionKind.TOOL else str(kind)
+            input_param, self._context_param = find_input_and_context(
+                signature_fn, resolved_annotations, context_type=context_type, owner=f"{kind_label} '{name}'"
+            )
+            action_args = [input_param.name] if input_param else []
+            arg_types = [resolved_annotations.get(input_param.name, Any)] if input_param else []
+            first_arg_optional = input_param is not None and input_param.default is not inspect.Parameter.empty
+        else:
+            action_args, arg_types = extract_action_args_and_types(input_spec, resolved_annotations)
+            first_arg_optional = _first_action_arg_has_default(input_spec, len(action_args))
         # Raw user fn; tracing/dispatch handled by _run_with_telemetry / _invoke.
         self._fn: Callable[..., Awaitable[OutputT]] = fn
         self._n_action_args: int = len(action_args)
         self._action_arg_names: list[str] = action_args
         # When True, calling the action without an input is legal because the
         # wrapped function will fall back to its own Python-level default.
-        self._first_arg_optional: bool = _first_action_arg_has_default(input_spec, len(action_args))
+        self._first_arg_optional: bool = first_arg_optional
         self._initialize_io_schemas(action_args, arg_types, resolved_annotations, input_spec)
         self._initialize_init_schema(init_schema)
 
@@ -862,6 +916,13 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         # parameter name) so the defaulted first arg isn't accidentally
         # supplanted by a positional.
         omit_input = input is None and self._first_arg_optional
+        if self._by_annotation:
+            kwargs: dict[str, object] = {}
+            if self._action_arg_names and not omit_input:
+                kwargs[self._action_arg_names[0]] = input
+            if self._context_param is not None:
+                kwargs[self._context_param] = ctx
+            return await self._fn(**kwargs)
         match self._n_action_args:
             case 0:
                 return await self._fn()

@@ -300,6 +300,8 @@ class Registry:
         description: str | None = None,
         metadata: dict[str, object] | None = None,
         span_metadata: dict[str, SpanAttributeValue] | None = None,
+        *,
+        context_type: type | None = None,
     ) -> Action[InputT, OutputT, ChunkT]:
         """Register a new action with the registry.
 
@@ -315,6 +317,8 @@ class Registry:
             description: Optional human-readable description of the action.
             metadata: Optional dictionary of metadata about the action.
             span_metadata: Optional dictionary of tracing span metadata.
+            context_type: When set, the function takes one input, and the
+                parameter annotated with this type receives the run context.
 
         Returns:
             The newly created and registered Action instance.
@@ -327,6 +331,7 @@ class Registry:
             description=description,
             metadata=metadata,
             span_metadata=span_metadata,
+            context_type=context_type,
         )
         action_typed = cast(Action[InputT, OutputT, ChunkT], action)
         with self._lock:

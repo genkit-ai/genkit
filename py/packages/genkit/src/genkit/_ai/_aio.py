@@ -229,6 +229,10 @@ class Genkit:
     ) -> _FlowDecorator | _FlowDecoratorWithChunk[Any]:
         """Decorator to register an async function as a flow.
 
+        A flow takes at most one input. To read the request context or stream
+        chunks, add a parameter annotated ``ActionRunContext``, in any position.
+        Any other second parameter raises ``TypeError`` when the flow is defined.
+
         Args:
             name: Optional name for the flow. Defaults to the function name.
             description: Optional description for the flow.
@@ -303,12 +307,27 @@ class Genkit:
 
         The return annotation is what the model binds as ``outputSchema``.
 
+        A tool takes at most one input, and that input's type is the schema the
+        model fills in. For several fields, use one Pydantic model. To read the
+        request context or interrupt, add a parameter annotated
+        ``ToolRunContext``, in any position. Any other second parameter raises
+        ``TypeError`` when the tool is defined.
+
         Example:
             @ai.tool()
             async def current_weather(city: str) -> str:
                 return f'Sunny in {city}'
 
-            res = await ai.generate(prompt='Weather in Paris?', tools=['current_weather'])
+            class Forecast(BaseModel):
+                city: str
+                days: int = 3
+
+            @ai.tool()
+            async def forecast(input: Forecast, ctx: ToolRunContext) -> str:
+                user = ctx.context.get('user_id')
+                return f'{input.days}-day forecast for {input.city} ({user})'
+
+            res = await ai.generate(prompt='Weather in Paris?', tools=['current_weather', 'forecast'])
         """
 
         def wrapper(func: Callable[..., Any]) -> Tool:
