@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"maps"
 	"reflect"
+	"sync/atomic"
 
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
@@ -67,9 +68,27 @@ func (t ToolName) Name() string {
 // the other primitives it holds its action in a named field rather than
 // embedding it, so its documented methods are its whole surface.
 type ToolAction[In, Out any] struct {
-	action    api.Action   // The underlying action.
-	multipart bool         // Whether this is a multipart-only tool.
-	registry  api.Registry // Registry for schema resolution. Set when registered.
+	action    api.Action // The underlying action.
+	multipart bool       // Whether this is a multipart-only tool.
+	// registry is the registry used for schema resolution, nil until the tool
+	// is registered with one. It is atomic because a detached tool shared
+	// across concurrent Generate calls is registered into a per-request child
+	// registry by each call, racing with readers like Definition.
+	registry atomic.Pointer[api.Registry]
+}
+
+// reg returns the registry the tool resolves schema references against, or
+// nil if the tool is not associated with one.
+func (t *ToolAction[In, Out]) reg() api.Registry {
+	if r := t.registry.Load(); r != nil {
+		return *r
+	}
+	return nil
+}
+
+// setReg records r as the tool's registry for schema resolution.
+func (t *ToolAction[In, Out]) setReg(r api.Registry) {
+	t.registry.Store(&r)
 }
 
 // Pinned here so that breaking either interface fails the build at the type
@@ -460,9 +479,10 @@ func (t *ToolAction[In, Out]) Definition() *ToolDefinition {
 	desc := t.action.Desc()
 
 	// Resolve the input schema if it contains a $ref.
+	r := t.reg()
 	inputSchema := desc.InputSchema
-	if t.registry != nil {
-		if resolved, err := core.ResolveSchema(t.registry, inputSchema); err == nil {
+	if r != nil {
+		if resolved, err := core.ResolveSchema(r, inputSchema); err == nil {
 			inputSchema = resolved
 		}
 	}
@@ -477,8 +497,8 @@ func (t *ToolAction[In, Out]) Definition() *ToolDefinition {
 	}
 
 	// Resolve the output schema if it contains a $ref.
-	if t.registry != nil {
-		if resolved, err := core.ResolveSchema(t.registry, outputSchema); err == nil {
+	if r != nil {
+		if resolved, err := core.ResolveSchema(r, outputSchema); err == nil {
 			outputSchema = resolved
 		}
 	}
@@ -501,9 +521,11 @@ func (t *ToolAction[In, Out]) Definition() *ToolDefinition {
 	}
 }
 
-// Register registers the tool with the given registry.
+// Register registers the tool with the given registry. Like
+// [core.Action.Register], it is safe to call while the tool is concurrently
+// in use.
 func (t *ToolAction[In, Out]) Register(r api.Registry) {
-	t.registry = r
+	t.setReg(r)
 	t.action.Register(r)
 	if !t.multipart {
 		// Also register under the "tool" key for backward compatibility.
@@ -598,7 +620,9 @@ func LookupTool(r api.Registry, name string) Tool {
 		}
 	}
 
-	return &ToolAction[any, any]{action: action, multipart: multipart, registry: r}
+	t := &ToolAction[any, any]{action: action, multipart: multipart}
+	t.setReg(r)
+	return t
 }
 
 // IsMultipart returns true if the tool is a multipart tool (tool.v2 only).

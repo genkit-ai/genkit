@@ -405,6 +405,11 @@ func pluginNames(plugins []api.Plugin) []string {
 // RegisterAction registers a [api.Action] that was previously created by calling
 // NewX instead of DefineX.
 //
+// It is safe to call while the action is concurrently in use, e.g. to
+// register a tool built at runtime after it has already been handed to
+// in-flight generate calls: readers observe the action's state from either
+// before or after registration.
+//
 // Example:
 //
 //	model := ai.NewModel(...)

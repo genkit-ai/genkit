@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"maps"
 	"reflect"
+	"sync/atomic"
 	"time"
 
 	"github.com/firebase/genkit/go/core/api"
@@ -52,10 +53,27 @@ type StreamCallback[Stream any] = func(context.Context, Stream) error
 //
 // For internal use only.
 type Action[In, Out, Stream any] struct {
-	fn       StreamingFunc[In, Out, Stream] // Function that is called during runtime. May not actually support streaming.
-	desc     *api.ActionDesc                // Descriptor of the action.
-	registry api.Registry                   // Registry for schema resolution. Set when registered.
+	fn   StreamingFunc[In, Out, Stream] // Function that is called during runtime. May not actually support streaming.
+	info *atomic.Pointer[actionInfo]    // Descriptor/registry pairing, shared across copies of this Action; see actionInfo.
 }
+
+// actionInfo is an action's descriptor paired with the registry it resolves
+// schema references against (nil until the action is registered). It is
+// immutable: [Action.Register] swaps in a replacement wholesale rather than
+// mutating either part, so goroutines using an action while it is being
+// registered (e.g. a detached tool registered into a per-request registry
+// while another request runs it) always observe a consistent pairing. Action
+// holds it behind a shared pointer, which keeps Action copyable and
+// registration state shared across copies (several ai types embed an Action
+// by value).
+type actionInfo struct {
+	desc     *api.ActionDesc
+	registry api.Registry
+}
+
+// desc returns the action's current descriptor. Descriptors are immutable;
+// registration swaps in a replacement rather than mutating one in place.
+func (a *Action[In, Out, Stream]) desc() *api.ActionDesc { return a.info.Load().desc }
 
 // ActionDef is the previous name for [Action].
 //
@@ -173,7 +191,8 @@ func newAction[In, Out, Stream any](atype api.ActionType, name string, opts *Act
 		}
 	}
 
-	return &Action[In, Out, Stream]{
+	info := &atomic.Pointer[actionInfo]{}
+	info.Store(&actionInfo{
 		desc: &api.ActionDesc{
 			Type:         atype,
 			Key:          api.KeyFromName(atype, name),
@@ -187,7 +206,8 @@ func newAction[In, Out, Stream any](atype api.ActionType, name string, opts *Act
 			StreamSchema: schemaFor[Stream](opts.StreamSchema, true),
 			Metadata:     opts.Metadata,
 		},
-	}
+	})
+	return &Action[In, Out, Stream]{info: info}
 }
 
 // schemaFor returns the JSON schema describing values of type T: the explicit
@@ -228,7 +248,7 @@ func isNilValue(v any) bool {
 }
 
 // Name returns the Action's Name.
-func (a *Action[In, Out, Stream]) Name() string { return a.desc.Name }
+func (a *Action[In, Out, Stream]) Name() string { return a.desc().Name }
 
 // Run executes the Action's function in a new trace span.
 //
@@ -247,6 +267,7 @@ func (a *Action[In, Out, Stream]) Run(ctx context.Context, input In, cb StreamCa
 // inject a per-call one-shot adapter; spanInit, when non-nil, is recorded as
 // the span's genkit:init attribute.
 func (a *Action[In, Out, Stream]) runWithTelemetry(ctx context.Context, input In, cb StreamCallback[Stream], fn StreamingFunc[In, Out, Stream], spanInit any) (output api.ActionRunResult[Out], err error) {
+	info := a.info.Load()
 	var traceID string
 	var spanID string
 	o, err := tracing.RunInNewSpan(ctx, a.spanMetadata(ctx, spanInit), input,
@@ -256,29 +277,29 @@ func (a *Action[In, Out, Stream]) runWithTelemetry(ctx context.Context, input In
 			spanID = traceInfo.SpanID
 
 			start := time.Now()
-			defer func() { recordActionMetrics(ctx, a.desc.Name, start, err) }()
+			defer func() { recordActionMetrics(ctx, info.desc.Name, start, err) }()
 
 			var inputSchema map[string]any
-			inputSchema, err = ResolveSchema(a.registry, a.desc.InputSchema)
+			inputSchema, err = ResolveSchema(info.registry, info.desc.InputSchema)
 			if err != nil {
-				return base.Zero[Out](), status.Errorf(status.ErrInvalidSchema, "invalid input schema for action %q: %w", a.desc.Key, err)
+				return base.Zero[Out](), status.Errorf(status.ErrInvalidSchema, "invalid input schema for action %q: %w", info.desc.Key, err)
 			}
 
 			var outputSchema map[string]any
-			outputSchema, err = a.resolveOutputSchema()
+			outputSchema, err = resolveOutputSchema(info)
 			if err != nil {
 				return base.Zero[Out](), err
 			}
 
 			if err = base.ValidateValue(input, inputSchema); err != nil {
-				return base.Zero[Out](), status.Errorf(status.ErrInvalidInput, "invalid input to action %q: %w", a.desc.Key, err)
+				return base.Zero[Out](), status.Errorf(status.ErrInvalidInput, "invalid input to action %q: %w", info.desc.Key, err)
 			}
 
 			output, err = fn(ctx, input, cb)
 			if err != nil {
 				return output, err
 			}
-			return output, a.validateOutput(output, outputSchema)
+			return output, validateOutput(info.desc.Key, output, outputSchema)
 		},
 	)
 
@@ -292,10 +313,11 @@ func (a *Action[In, Out, Stream]) runWithTelemetry(ctx context.Context, input In
 // spanMetadata builds the trace span metadata for one run of this action.
 // spanInit, when non-nil, is recorded as the span's genkit:init attribute.
 func (a *Action[In, Out, Stream]) spanMetadata(ctx context.Context, spanInit any) *tracing.SpanMetadata {
+	desc := a.desc()
 	sm := &tracing.SpanMetadata{
-		Name:            a.desc.Name,
+		Name:            desc.Name,
 		Type:            "action",
-		Subtype:         string(a.desc.Type), // The actual action type becomes the subtype.
+		Subtype:         string(desc.Type), // The actual action type becomes the subtype.
 		Init:            spanInit,
 		Metadata:        make(map[string]string),
 		TelemetryLabels: tracing.TelemetryLabelsFromContext(ctx),
@@ -316,21 +338,21 @@ func recordActionMetrics(ctx context.Context, name string, start time.Time, err 
 	}
 }
 
-// resolveOutputSchema resolves the action's OutputSchema $refs through the
-// registry.
-func (a *Action[In, Out, Stream]) resolveOutputSchema() (map[string]any, error) {
-	schema, err := ResolveSchema(a.registry, a.desc.OutputSchema)
+// resolveOutputSchema resolves the OutputSchema $refs of info's descriptor
+// through info's registry.
+func resolveOutputSchema(info *actionInfo) (map[string]any, error) {
+	schema, err := ResolveSchema(info.registry, info.desc.OutputSchema)
 	if err != nil {
-		return nil, status.Errorf(status.ErrInvalidSchema, "invalid output schema for action %q: %w", a.desc.Key, err)
+		return nil, status.Errorf(status.ErrInvalidSchema, "invalid output schema for action %q: %w", info.desc.Key, err)
 	}
 	return schema, nil
 }
 
-// validateOutput checks a final output value against the resolved output
-// schema.
-func (a *Action[In, Out, Stream]) validateOutput(out Out, schema map[string]any) error {
+// validateOutput checks a final output value of the action with key against
+// the resolved output schema.
+func validateOutput(key string, out any, schema map[string]any) error {
 	if err := base.ValidateValue(out, schema); err != nil {
-		return status.Errorf(status.ErrInvalidOutput, "invalid output from action %q: %w", a.desc.Key, err)
+		return status.Errorf(status.ErrInvalidOutput, "invalid output from action %q: %w", key, err)
 	}
 	return nil
 }
@@ -353,9 +375,10 @@ func (a *Action[In, Out, Stream]) RunJSONWithTelemetry(ctx context.Context, inpu
 // runJSONWithTelemetry is the shared JSON execution path. fn and spanInit
 // follow the same contract as runWithTelemetry.
 func (a *Action[In, Out, Stream]) runJSONWithTelemetry(ctx context.Context, input json.RawMessage, cb StreamCallback[json.RawMessage], fn StreamingFunc[In, Out, Stream], spanInit any) (*api.ActionRunResult[json.RawMessage], error) {
-	i, err := base.UnmarshalAndNormalize[In](input, a.desc.InputSchema)
+	desc := a.desc()
+	i, err := base.UnmarshalAndNormalize[In](input, desc.InputSchema)
 	if err != nil {
-		return nil, status.Errorf(status.ErrInvalidInput, "invalid input to action %q: %w", a.desc.Key, err)
+		return nil, status.Errorf(status.ErrInvalidInput, "invalid input to action %q: %w", desc.Key, err)
 	}
 
 	var scb StreamCallback[Stream]
@@ -382,7 +405,7 @@ func (a *Action[In, Out, Stream]) runJSONWithTelemetry(ctx context.Context, inpu
 		if !base.IsNil(r.Result) {
 			if bytes, merr := json.Marshal(r.Result); merr != nil {
 				logger.Error(ctx, "failed to marshal partial action result",
-					"action", a.desc.Key, "error", merr)
+					"action", desc.Key, "error", merr)
 			} else {
 				res.Result = json.RawMessage(bytes)
 			}
@@ -406,30 +429,45 @@ func (a *Action[In, Out, Stream]) runJSONWithTelemetry(ctx context.Context, inpu
 // Schema references that cannot be resolved (e.g., the action is not yet registered,
 // or the referenced schema has not been defined) are returned as-is.
 func (a *Action[In, Out, Stream]) Desc() api.ActionDesc {
-	desc := *a.desc
-	if a.registry == nil {
+	info := a.info.Load()
+	desc := *info.desc
+	if info.registry == nil {
 		return desc
 	}
 	for _, p := range []*map[string]any{&desc.InputSchema, &desc.OutputSchema, &desc.StreamSchema, &desc.InitSchema} {
-		if resolved, err := ResolveSchema(a.registry, *p); err == nil {
+		if resolved, err := ResolveSchema(info.registry, *p); err == nil {
 			*p = resolved
 		}
 	}
 	return desc
 }
 
-// Register registers the action with the given registry.
-//
-// Register writes the action's registry reference (and, on definition-time
-// registration, its metadata) without synchronization, like the constructors
-// it composes with. Register an action before sharing it across goroutines;
-// registering one that is concurrently in use is a data race.
+// Register registers the action with the given registry and records the
+// registry on the action for schema resolution. It is safe to register an
+// action that is concurrently in use, e.g. a detached tool that two
+// concurrent Generate calls each register into their own child registry:
+// the action's descriptor/registry pairing is swapped atomically, so readers
+// observe the pairing from either before or after registration, never a mix.
+// Definition-time registration also drops the "dynamic" metadata marker; see
+// shouldStripDynamicMarker.
 func (a *Action[In, Out, Stream]) Register(r api.Registry) {
-	if shouldStripDynamicMarker(a.desc.Metadata, r) {
-		a.desc.Metadata = withoutDynamicMarker(a.desc.Metadata)
+	r.RegisterAction(a.bindRegistry(r).Key, a)
+}
+
+// bindRegistry swaps in the action's post-registration descriptor/registry
+// pairing and returns the descriptor to register under. When definition-time
+// registration drops the "dynamic" marker, the descriptor is replaced by a
+// copy rather than mutated, so readers holding the old pairing keep a
+// consistent view.
+func (a *Action[In, Out, Stream]) bindRegistry(r api.Registry) *api.ActionDesc {
+	desc := a.desc()
+	if shouldStripDynamicMarker(desc.Metadata, r) {
+		stripped := *desc
+		stripped.Metadata = withoutDynamicMarker(desc.Metadata)
+		desc = &stripped
 	}
-	a.registry = r
-	r.RegisterAction(a.desc.Key, a)
+	a.info.Store(&actionInfo{desc: desc, registry: r})
+	return desc
 }
 
 // shouldStripDynamicMarker reports whether registering into r makes the
