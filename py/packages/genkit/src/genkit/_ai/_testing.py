@@ -16,196 +16,26 @@
 
 """Internal testing utilities for Genkit AI (mock models, test_models)."""
 
-import inspect
-import json
-from collections.abc import Awaitable, Callable
-from copy import deepcopy
-from typing import Any, TypedDict, cast
+from typing import Any, TypedDict
 
 from pydantic import BaseModel, Field
 
-from genkit import Message, ModelResponse, ModelResponseChunk, Part
-from genkit._core._action import Action, ActionKind, ActionRunContext
-from genkit._core._telemetry._instrumentation import run_in_new_span
+from genkit import Message, Part
+from genkit._core._action import ActionKind
 from genkit._core._typing import (
     ModelInfo,
-    Role,
 )
-from genkit.model import ModelRequest
+from genkit.telemetry import run_in_new_span
+from genkit.testing import (
+    EchoModel,
+    ScriptedModel,
+    StaticResponseModel,
+    define_echo_model,
+    define_scripted_model,
+    define_static_response_model,
+)
 
 from ._aio import Genkit
-
-
-class ProgrammableModel:
-    """A configurable model implementation for testing."""
-
-    def __init__(self) -> None:
-        self._request_idx: int = 0
-        self.request_count: int = 0
-        self.responses: list[ModelResponse] = []
-        self.chunks: list[list[ModelResponseChunk]] | None = None
-        self.last_request: ModelRequest | None = None
-        self.response_cb: Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]] | ModelResponse[Any]] | None = (
-            None
-        )
-
-    def reset(self) -> None:
-        self._request_idx = 0
-        self.request_count = 0
-        self.responses = []
-        self.chunks = None
-        self.last_request = None
-        self.response_cb = None
-
-    async def model_fn(
-        self,
-        request: ModelRequest,
-        ctx: ActionRunContext,
-    ) -> ModelResponse:
-        self.last_request = deepcopy(request)
-        self.request_count += 1
-
-        if self.response_cb is not None:
-            res = self.response_cb(request)
-            if inspect.isawaitable(res):
-                response = await res
-            else:
-                response = res
-        else:
-            response = self.responses[self._request_idx]
-        if self.chunks and self._request_idx < len(self.chunks):
-            for chunk in self.chunks[self._request_idx]:
-                ctx.send_chunk(chunk)
-        self._request_idx += 1
-        return cast(ModelResponse[object], response)
-
-
-def define_programmable_model(
-    ai: Genkit,
-    name: str = 'programmableModel',
-) -> tuple[ProgrammableModel, Action]:
-    pm = ProgrammableModel()
-
-    async def model_fn(
-        request: ModelRequest,
-        ctx: ActionRunContext,
-    ) -> ModelResponse:
-        return await pm.model_fn(request, ctx)
-
-    action = ai.define_model(name=name, fn=model_fn)
-
-    return (pm, action)
-
-
-class EchoModel:
-    """A model implementation that echoes back the input with metadata."""
-
-    def __init__(self, stream_countdown: bool = False) -> None:
-        self.last_request: ModelRequest | None = None
-        self.stream_countdown: bool = stream_countdown
-
-    async def model_fn(
-        self,
-        request: ModelRequest,
-        ctx: ActionRunContext,
-    ) -> ModelResponse:
-        self.last_request = request
-
-        merged_txt = ''
-        messages = request.messages.root if hasattr(request.messages, 'root') else request.messages  # pyright: ignore[reportAttributeAccessIssue]
-        for m in messages:  # ty: ignore[not-iterable]
-            merged_txt += f' {m.role}: ' + ','.join(
-                json.dumps(p.text) if p.text is not None else '""' for p in m.content
-            )
-        echo_resp = f'[ECHO]{merged_txt}'
-
-        if request.config:
-            if hasattr(request.config, 'model_dump_json'):
-                config_json = request.config.model_dump_json()
-            else:
-                config_json = json.dumps(request.config, separators=(',', ':'))
-        else:
-            config_json = '{}'
-        if request.config and config_json != '{}':
-            echo_resp += f' {config_json}'
-        tools_list = request.tools.root if hasattr(request.tools, 'root') else request.tools  # pyright: ignore[reportAttributeAccessIssue,reportOptionalMemberAccess]
-        if tools_list:
-            echo_resp += f' tools={",".join(t.name for t in tools_list)}'  # ty: ignore[not-iterable]
-        if request.tool_choice is not None:
-            echo_resp += f' tool_choice={request.tool_choice}'
-        output_dict: dict[str, object] = {}
-        if request.output_format:
-            output_dict['format'] = request.output_format
-        if request.output_schema:
-            output_dict['schema'] = request.output_schema
-        if request.output_constrained is not None:
-            output_dict['constrained'] = request.output_constrained
-        if request.output_content_type:
-            output_dict['contentType'] = request.output_content_type
-        output_json = json.dumps(output_dict, separators=(',', ':')) if output_dict else '{}'
-        if output_dict and output_json != '{}':
-            echo_resp += f' output={output_json}'
-
-        if self.stream_countdown:
-            for i, countdown in enumerate(['3', '2', '1']):
-                ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, index=i, content=[Part.from_text(countdown)]))
-
-        return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text(echo_resp)]))
-
-
-def define_echo_model(
-    ai: Genkit,
-    name: str = 'echoModel',
-    stream_countdown: bool = False,
-    config_schema: type[BaseModel] | None = None,
-) -> tuple[EchoModel, Action]:
-    echo = EchoModel(stream_countdown=stream_countdown)
-
-    async def model_fn(
-        request: ModelRequest,
-        ctx: ActionRunContext,
-    ) -> ModelResponse:
-        return await echo.model_fn(request, ctx)
-
-    action = ai.define_model(name=name, fn=model_fn, config_schema=config_schema)
-
-    return (echo, action)
-
-
-class StaticResponseModel:
-    """A model that always returns the same static response."""
-
-    def __init__(self, message: dict[str, Any]) -> None:
-        self.response_message: Message = Message.model_validate(message)
-        self.last_request: ModelRequest | None = None
-        self.request_count: int = 0
-
-    async def model_fn(
-        self,
-        request: ModelRequest,
-        _ctx: ActionRunContext,
-    ) -> ModelResponse:
-        self.last_request = request
-        self.request_count += 1
-        return ModelResponse(message=self.response_message)
-
-
-def define_static_response_model(
-    ai: Genkit,
-    message: dict[str, Any],
-    name: str = 'staticModel',
-) -> tuple[StaticResponseModel, Action]:
-    static = StaticResponseModel(message)
-
-    async def model_fn(
-        request: ModelRequest,
-        ctx: ActionRunContext,
-    ) -> ModelResponse:
-        return await static.model_fn(request, ctx)
-
-    action = ai.define_model(name=name, fn=model_fn)
-
-    return (static, action)
 
 
 class SkipTestError(Exception):

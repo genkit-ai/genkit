@@ -20,7 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator
 from pydantic.alias_generators import to_camel
 
 from genkit import Genkit, Message, ModelResponse, ModelResponseChunk, Part
-from genkit._ai._testing import define_programmable_model
+from genkit._ai._testing import define_scripted_model
 from genkit._core._action import ActionRunContext
 from genkit._core._typing import Role
 
@@ -414,8 +414,8 @@ class TestActionRunContextGenerics:
 
 @pytest.mark.asyncio
 async def test_generate_stream_with_output_schema_yields_typed_chunks() -> None:
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     final_text = '{"title": "Chocolate Cake", "steps": ["mix", "bake"]}'
     pm.chunks = [
@@ -454,8 +454,8 @@ async def test_generate_stream_with_output_schema_yields_typed_chunks() -> None:
 
 @pytest.mark.asyncio
 async def test_generate_stream_without_schema_chunks_unchanged() -> None:
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     pm.chunks = [[ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('{"a": 1}')])]]
     pm.responses = [
@@ -475,8 +475,8 @@ async def test_generate_stream_camel_case_alias_fills_fields() -> None:
         first_name: str
         last_name: str
 
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     final_text = '{"firstName": "Ada", "lastName": "Lovelace"}'
     pm.chunks = [
         [
@@ -508,8 +508,8 @@ async def test_generate_stream_camel_case_alias_fills_fields() -> None:
 @pytest.mark.asyncio
 async def test_generate_stream_dict_schema_chunks_stay_dicts() -> None:
     """A dict output_schema leaves chunk.output as extracted JSON, not a class."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     schema = {'type': 'object', 'properties': {'title': {'type': 'string'}}}
     pm.chunks = [
         [
@@ -537,8 +537,8 @@ async def test_generate_stream_dict_schema_chunks_stay_dicts() -> None:
 @pytest.mark.asyncio
 async def test_define_prompt_stream_yields_typed_chunks() -> None:
     """define_prompt(...).stream() yields the same Recipe holes as generate_stream."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     final_text = '{"title": "Chocolate Cake", "steps": ["mix", "bake"]}'
     pm.chunks = [

@@ -18,7 +18,7 @@ from pydantic.alias_generators import to_camel
 
 from genkit import Genkit, Message, ModelResponse, Part
 from genkit._ai._generate import generate_action, to_tool_definition
-from genkit._ai._testing import define_programmable_model
+from genkit._ai._testing import define_scripted_model
 from genkit._ai._tools import (
     ORIGINAL_OUTPUT_SCHEMA_KEY,
     MultipartToolResponse,
@@ -245,7 +245,7 @@ async def test_unserializable_metadata_is_invalid_argument() -> None:
 
 
 async def _tools_sent_to_model(ai: Genkit, tool_name: str, *, tool_input: dict | None = None) -> list:
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
     pm.responses.append(
         ModelResponse(
             finish_reason=FinishReason.STOP,
@@ -264,7 +264,7 @@ async def _tools_sent_to_model(ai: Genkit, tool_name: str, *, tool_input: dict |
     await generate_action(
         ai.registry,
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'go'}]})],
             tools=[tool_name],
         ),
@@ -305,7 +305,7 @@ async def test_input_schema_override_is_what_the_model_sees() -> None:
 @pytest.mark.asyncio
 async def test_unserializable_tool_output_is_invalid_argument() -> None:
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
     ran = False
 
     @ai.tool(name='screenshot')
@@ -327,7 +327,7 @@ async def test_unserializable_tool_output_is_invalid_argument() -> None:
     response = await generate_action(
         ai.registry,
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'snap'}]})],
             tools=['screenshot'],
         ),
@@ -367,7 +367,7 @@ async def test_tool_registers_under_tool() -> None:
 @pytest.mark.asyncio
 async def test_wrap_tool_can_substitute_a_response() -> None:
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     @ai.middleware(name='deny_mw')
     class DenyMW(BaseMiddleware):
@@ -402,7 +402,7 @@ async def test_wrap_tool_can_substitute_a_response() -> None:
     res = await generate_action(
         ai.registry,
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'wx'}]})],
             tools=['weather'],
             use=[MiddlewareRef(name='deny_mw')],
@@ -419,7 +419,7 @@ async def test_wrap_tool_receives_the_model_tool_request_part() -> None:
     """wrap_tool sees the same Part the model put on the message."""
     seen: list[Part] = []
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     @ai.middleware(name='capture_mw')
     class CaptureMW(BaseMiddleware):
@@ -455,7 +455,7 @@ async def test_wrap_tool_receives_the_model_tool_request_part() -> None:
     res = await generate_action(
         ai.registry,
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'wx'}]})],
             tools=['weather'],
             use=[MiddlewareRef(name='capture_mw')],

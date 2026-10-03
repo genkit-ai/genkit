@@ -24,23 +24,25 @@ from genkit._core._environment import GENKIT_ENV
 from genkit._core._reflection import create_reflection_asgi_app
 from genkit._core._reflection_v2 import ReflectionServerV2
 from genkit._core._registry import Registry
-from genkit._core._telemetry import http as http_telemetry
-from genkit._core._telemetry._instrumentation import (
-    flush_instrumentations,
-    instrumentations,
-    is_instrumented_by,
-    parent_path_context,
-    reset_instrumentation,
-)
-from genkit._core._telemetry._log_exporter import reset_log_export
-from genkit._core._telemetry.http import (
+from genkit._core._telemetry import _http as http_telemetry
+from genkit._core._telemetry._http import (
     ActiveSpan,
     CollectorHttpSink,
     GenkitBuiltinInstrumentation,
     direct_http_for_collector,
 )
+from genkit._core._telemetry._instrumentation import (
+    flush_instrumentations,
+    parent_path_context,
+)
+from genkit._core._telemetry._log_exporter import reset_log_export
 from genkit.plugin_api import ActionKind
-from genkit.telemetry import configure_instrumentation
+from genkit.telemetry import (
+    configure_instrumentation,
+    instrumentations,
+    is_instrumented_by,
+    reset_instrumentation,
+)
 
 
 def _hex_id(value: str, length: int) -> bool:

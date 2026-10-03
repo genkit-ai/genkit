@@ -540,7 +540,7 @@ def _two_kind_on_resume() -> Resume:
 
 _MESSAGE_WRAPS: dict[str, Callable[[Message], object]] = {
     'as_message': as_message,
-    'GenerateActionOptions': lambda m: GenerateActionOptions(model='programmableModel', messages=[m]),
+    'GenerateActionOptions': lambda m: GenerateActionOptions(model='scriptedModel', messages=[m]),
     'AgentInput': lambda m: AgentInput(message=m),
     'AgentOutput': lambda m: AgentOutput(message=m),
     'AgentResult': lambda m: AgentResult(message=m),
@@ -555,7 +555,7 @@ _ARTIFACT_WRAPS: dict[str, Callable[[Artifact], object]] = {
 }
 
 _RESUME_WRAPS: dict[str, Callable[[Resume], object]] = {
-    'GenerateActionOptions.resume': lambda r: GenerateActionOptions(model='programmableModel', messages=[], resume=r),
+    'GenerateActionOptions.resume': lambda r: GenerateActionOptions(model='scriptedModel', messages=[], resume=r),
     'AgentInput.resume': lambda r: AgentInput(resume=r),
 }
 
@@ -675,7 +675,7 @@ def test_require_model_response_rejects_a_two_kind_part_already_on_message() -> 
     assert resp.message is not None
     resp.message.content[0] = Part.model_construct(text='caption', media=Media(url='https://y'))
     with pytest.raises(ValidationError, match='exactly one'):
-        require_model_response(raw=resp, name='programmableModel')
+        require_model_response(raw=resp, name='scriptedModel')
 
 
 def test_as_candidate_rebuilds_and_keeps_message_text() -> None:
@@ -698,7 +698,7 @@ def test_as_model_request_rebuilds_and_keeps_message_text() -> None:
 
 def test_require_model_response_rebuilds_and_keeps_message_text() -> None:
     resp = ModelResponse(message=Message(role='model', content=[Part.from_text('ok')]), finish_reason=FinishReason.STOP)
-    walked = require_model_response(raw=resp, name='programmableModel')
+    walked = require_model_response(raw=resp, name='scriptedModel')
     assert walked is not resp
     assert walked.message is not None
     assert walked.message.content[0].text == 'ok'
@@ -832,7 +832,7 @@ def test_response_request_keeps_typed_config() -> None:
 def test_generate_options_without_messages_raises() -> None:
     """A /generate payload with no messages fails before it hits the model."""
     with pytest.raises(ValidationError, match='messages'):
-        GenerateActionOptions.model_validate({'model': 'programmableModel'})
+        GenerateActionOptions.model_validate({'model': 'scriptedModel'})
 
 
 def test_pending_content_reports_the_kind_rule() -> None:

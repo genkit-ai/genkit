@@ -16,17 +16,17 @@ from genkit._core._action import ActionRunContext, _action_context
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import Message, ModelRef, ModelRequest, ModelResponse, Part
 from genkit._core._registry import Registry
-from genkit._core._telemetry._instrumentation import (
-    SpanMetadata,
-    SpanNext,
-    reset_instrumentation,
-)
 from genkit._core._telemetry._log_exporter import build_log_record
 from genkit._core._typing import FinishReason, Operation, Role
 from genkit.middleware import BaseMiddleware, GenerateHookParams, GenerateMiddlewareContext
 from genkit.model import model
 from genkit.plugin_api import ActionKind
-from genkit.telemetry import configure_instrumentation
+from genkit.telemetry import (
+    SpanMetadata,
+    SpanNext,
+    configure_instrumentation,
+    reset_instrumentation,
+)
 
 
 @pytest.mark.asyncio

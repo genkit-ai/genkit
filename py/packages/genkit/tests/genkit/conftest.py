@@ -11,13 +11,13 @@ from typing import TypeVar
 
 import pytest
 
-from genkit._core._telemetry._instrumentation import (
+from genkit._core._telemetry._http import ActiveSpan, GenkitBuiltinInstrumentation
+from genkit.telemetry import (
     SpanContext,
     SpanMetadata,
+    configure_instrumentation,
     reset_instrumentation,
 )
-from genkit._core._telemetry.http import ActiveSpan, DirectHttpInstrumentation
-from genkit.telemetry import configure_instrumentation
 
 T = TypeVar('T')
 
@@ -68,9 +68,9 @@ class HexInstrumentation:
         return await next(HexSpanContext())
 
 
-def recording_http_instrumentation() -> tuple[DirectHttpInstrumentation, MemoryCollectorSink]:
+def recording_http_instrumentation() -> tuple[GenkitBuiltinInstrumentation, MemoryCollectorSink]:
     sink = MemoryCollectorSink()
-    return DirectHttpInstrumentation(sink), sink
+    return GenkitBuiltinInstrumentation(sink), sink
 
 
 @pytest.fixture

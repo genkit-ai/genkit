@@ -18,9 +18,10 @@
 
 Application code should call :class:`genkit.Genkit`. ``genkit start``
 records to the Developer UI. ``configure_instrumentation`` is the hook
-for a recording backend.
+for a recording backend; ``reset_instrumentation`` starts over between tests.
 """
 
+from genkit._core._telemetry._http import GenkitBuiltinInstrumentation
 from genkit._core._telemetry._instrumentation import (
     DisposableInstrumentation,
     FlushableInstrumentation,
@@ -29,11 +30,14 @@ from genkit._core._telemetry._instrumentation import (
     SpanMetadata,
     SpanNext,
     configure_instrumentation,
+    instrumentations,
     is_instrumented_by,
+    reset_instrumentation,
     run_in_new_span,
 )
 
 __all__ = [
+    # Runtime & provider SPI
     'DisposableInstrumentation',
     'FlushableInstrumentation',
     'Instrumentation',
@@ -41,6 +45,10 @@ __all__ = [
     'SpanMetadata',
     'SpanNext',
     'configure_instrumentation',
-    'is_instrumented_by',
     'run_in_new_span',
+    # Testing & test-inspection helpers
+    'GenkitBuiltinInstrumentation',
+    'instrumentations',
+    'is_instrumented_by',
+    'reset_instrumentation',
 ]
