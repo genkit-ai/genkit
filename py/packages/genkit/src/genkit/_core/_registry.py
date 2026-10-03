@@ -913,7 +913,13 @@ def define_dynamic_action_provider(
     cache_ttl_millis: int | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> DynamicActionProvider:
-    """Define and register a Dynamic Action Provider for lazy action resolution."""
+    """Define and register a Dynamic Action Provider for lazy action resolution.
+
+    The callback returns action lists keyed by selector, for example
+    ``{'tool': tools}``. Use ``'tool'`` for tools, rather than
+    ``ActionKind.TOOL`` (``'tool.v2'``). The provider name must be nonempty
+    and contain neither ``/`` nor ``:`` for its children to be resolvable.
+    """
 
     async def dap_action(input: DapMetadata) -> DapMetadata:
         return input

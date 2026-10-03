@@ -28,10 +28,14 @@ from genkit._core._action import (
     ActionKind,
     create_action_key,
 )
+from genkit._core._logger import get_logger
 from genkit._core._typing import ActionMetadata
+
+logger = get_logger(__name__)
 
 ActionMetadataLike = Mapping[str, object]
 DapValue = dict[str, list[Action[Any, Any]]]
+# The callback uses selector buckets, e.g. {'tool': [...]}, not ActionKind.TOOL.
 DapFn = Callable[[], Awaitable[DapValue]]
 DapMetadata = dict[str, list[ActionMetadataLike]]
 
@@ -45,6 +49,7 @@ class _Fetch:
 
     task: asyncio.Task[DapValue]
     generation: int
+    trace_task: asyncio.Task[None] | None = None
 
 
 class DynamicActionProvider:
@@ -55,6 +60,10 @@ class DynamicActionProvider:
     its own when it is called, not when it is listed. In-flight fetches are
     coalesced per loop, because a task cannot be awaited from a loop other than
     the one that created it.
+
+    Resolutions sharing a fetch record it once in the first resolver's context.
+    Reflection listings and cache hits do not record a provider span. Recording
+    failures are logged without failing resolution or dropping cached actions.
 
     The cache is one attribute holding both the value and its expiry, so a
     reader takes a consistent pair in a single read and an invalidation from
@@ -71,6 +80,7 @@ class DynamicActionProvider:
         self._dap_fn = dap_fn
         self._cache: tuple[DapValue, float] | None = None
         self._fetch_tasks: dict[asyncio.AbstractEventLoop, _Fetch] = {}
+        self._trace_tasks: set[asyncio.Task[None]] = set()
         self._generation = 0
         self._fetch_tasks_lock = threading.Lock()
         self._ttl_millis = (
@@ -100,17 +110,44 @@ class DynamicActionProvider:
             # A pending task strongly references its loop, so weak keys never fire.
             for ended in [known for known in self._fetch_tasks if known.is_closed()]:
                 del self._fetch_tasks[ended]
+            self._trace_tasks.difference_update([task for task in self._trace_tasks if task.get_loop().is_closed()])
             fetch = self._fetch_tasks.get(loop)
             if fetch is None or fetch.generation != self._generation or fetch.task.done():
-                task = asyncio.create_task(self._do_fetch(skip_trace, self._generation, self._cache))
+                task = asyncio.create_task(self._do_fetch(self._generation, self._cache))
                 fetch = _Fetch(task, self._generation)
                 self._fetch_tasks[loop] = fetch
                 task.add_done_callback(self._forget_fetch(loop))
             task = fetch.task
+            if not skip_trace and fetch.trace_task is None:
+                # Start in the resolver's context, even if reflection initiated
+                # the shared fetch. Listing never starts or waits for recording.
+                fetch.trace_task = asyncio.create_task(self._record_fetch(task))
+                self._trace_tasks.add(fetch.trace_task)
+                fetch.trace_task.add_done_callback(self._forget_trace)
 
         # Shielded, so a caller that is cancelled cannot cancel the fetch every
         # other caller on this loop is waiting on.
-        return await asyncio.shield(task)
+        value = await asyncio.shield(task)
+        if not skip_trace:
+            assert fetch.trace_task is not None
+            await asyncio.shield(fetch.trace_task)
+        return value
+
+    def _forget_trace(self, task: asyncio.Task[None]) -> None:
+        """Release a finished recording task and retrieve an abandoned outcome."""
+        with self._fetch_tasks_lock:
+            self._trace_tasks.discard(task)
+        if not task.cancelled():
+            task.exception()
+
+    async def _record_fetch(self, task: asyncio.Task[DapValue]) -> None:
+        """Record one successful fetch without making tracing load-bearing."""
+        value = await asyncio.shield(task)
+        metadata = {k: [a.metadata or {} for a in v] for k, v in value.items()}
+        try:
+            await self.action.run(metadata)
+        except Exception:
+            logger.warning('Failed to record dynamic action provider %s', self.action.name, exc_info=True)
 
     def _forget_fetch(self, loop: asyncio.AbstractEventLoop) -> Callable[[asyncio.Task[DapValue]], None]:
         """Build the callback that drops a finished fetch from the per-loop table.
@@ -132,9 +169,7 @@ class DynamicActionProvider:
 
         return forget
 
-    async def _do_fetch(
-        self, skip_trace: bool, generation: int, owned_cache: tuple[DapValue, float] | None
-    ) -> DapValue:
+    async def _do_fetch(self, generation: int, owned_cache: tuple[DapValue, float] | None) -> DapValue:
         try:
             value = await self._dap_fn()
             with self._fetch_tasks_lock:
@@ -143,9 +178,6 @@ class DynamicActionProvider:
                 if generation == self._generation:
                     owned_cache = (value, time.time() * 1000 + self._ttl_millis)
                     self._cache = owned_cache
-            if not skip_trace:
-                metadata = {k: [a.metadata or {} for a in v] for k, v in value.items()}
-                await self.action.run(metadata)
             return value
         except Exception:
             with self._fetch_tasks_lock:
