@@ -1710,6 +1710,9 @@ describe('Agent', () => {
 
       const output = await session.output;
       assert.ok(output.snapshotId);
+      // The pending row settles once the queued inputs drain and the input
+      // side closes; a client that detached has nothing more to send.
+      session.close();
 
       const snapDone = await waitForSnapshotStatus(
         store,
@@ -1722,8 +1725,6 @@ describe('Agent', () => {
         snapDone.state.messages[0].content[0].text,
         'appended message'
       );
-
-      session.close();
     });
 
     it('should accumulate message history across multiple turns in one invocation', async () => {
@@ -2322,6 +2323,7 @@ describe('Agent', () => {
 
       const output = await session.output;
       assert.ok(output.snapshotId);
+      session.close();
 
       // Detach-only messages are not forwarded to the runner - 2 turns, not 3.
       const snapDone = await waitForSnapshotStatus(
@@ -2331,8 +2333,11 @@ describe('Agent', () => {
       );
       assert.strictEqual(snapDone.status, 'completed');
       assert.strictEqual(processedCount, 2);
-
-      session.close();
+      // Both turns landed on the one row the detach wrote.
+      assert.deepStrictEqual(
+        snapDone.state?.messages?.map((m) => m.content[0].text),
+        ['task 1', 'task 2']
+      );
     });
   });
 
@@ -2626,23 +2631,30 @@ describe('Agent', () => {
 
       const output = await session.output;
       assert.ok(output.snapshotId);
-      // Server-managed agents don't return state in output (state is undefined)
-      // but the snapshot should have the transformed state
+      // Server-managed agents don't return state in output (state is
+      // undefined). The pending row carries no state either; the finalized
+      // row does, and it is read through the transform.
+      const pending = await flow.getSnapshotData({
+        snapshotId: output.snapshotId!,
+      });
+      assert.strictEqual(pending?.status, 'pending');
+      assert.strictEqual(pending?.state, undefined);
+
+      resolvePromise();
+      session.close();
+      await waitForSnapshotStatus(store, output.snapshotId!, 'completed');
       const snapshot = await flow.getSnapshotData({
         snapshotId: output.snapshotId!,
       });
       assert.ok(snapshot);
       assert.strictEqual(
-        (snapshot!.state.custom as any).publicField,
+        (snapshot!.state!.custom as any).publicField,
         'visible'
       );
       assert.strictEqual(
-        (snapshot!.state.custom as any).secretField,
+        (snapshot!.state!.custom as any).secretField,
         undefined
       );
-
-      resolvePromise();
-      session.close();
     });
 
     it('should pass clientTransform through definePromptAgent', async () => {
@@ -4240,5 +4252,197 @@ Now respond to the latest message.`,
       const snap = await task.wait({ intervalMs: 1 });
       assert.ok(snap.status);
     });
+  });
+});
+
+describe('detach finalize', () => {
+  const rowCount = (store: InMemorySessionStore<any>) =>
+    (store as any).snapshots.size as number;
+
+  it('writes the pending row without state and finalizes it with every turn', async () => {
+    const store = new InMemorySessionStore<{ count: number }>();
+    // The first turn waits until the detach has landed, so no per-turn row
+    // lands before the pending one and every turn's state goes to the finalize.
+    let release: () => void = () => {};
+    const released = new Promise<void>((resolve) => (release = resolve));
+    const flow = defineCustomAgent<{ count: number }>(
+      new Registry(),
+      { name: 'finalizeAllTurns', store },
+      async (sess) => {
+        await sess.run(async () => {
+          if (!sess.isDetached) await released;
+          sess.session.updateCustom((c) => ({ count: (c?.count ?? 0) + 1 }));
+        });
+        return { message: { role: 'model', content: [{ text: 'done' }] } };
+      }
+    );
+
+    const session = flow.streamBidi({});
+    for (const text of ['one', 'two', 'three']) {
+      session.send({ message: { role: 'user', content: [{ text }] } });
+    }
+    session.send({ detach: true });
+    const output = await session.output;
+    assert.strictEqual(output.finishReason, 'detached');
+    const pendingId = output.snapshotId!;
+    assert.ok(pendingId);
+
+    const pending = await store.getSnapshot({ snapshotId: pendingId });
+    assert.strictEqual(pending?.status, 'pending');
+    assert.strictEqual(pending?.state, undefined);
+    assert.ok(pending?.heartbeatAt);
+
+    // The row settles once the queued inputs drain and the input side closes.
+    release();
+    session.close();
+    const done = await waitForSnapshotStatus(store, pendingId, 'completed');
+    // One row holds the cumulative state of all three turns; no per-turn row
+    // was written beside it, and the row's lineage is intact.
+    assert.strictEqual(rowCount(store), 1);
+    assert.deepStrictEqual(
+      done.state?.messages?.map((m) => m.content[0].text),
+      ['one', 'two', 'three']
+    );
+    assert.strictEqual(done.state?.custom?.count, 3);
+    assert.strictEqual(done.parentId, undefined);
+    assert.strictEqual(done.heartbeatAt, undefined);
+    assert.strictEqual(done.createdAt, pending!.createdAt);
+    // The session resolves to the settled row.
+    const leaf = await store.getSnapshot({ sessionId: done.sessionId! });
+    assert.strictEqual(leaf?.snapshotId, pendingId);
+  });
+
+  it('keeps the pre-detach leaf as the pending row parent', async () => {
+    const store = new InMemorySessionStore<{}>();
+    const flow = defineCustomAgent<{}>(
+      new Registry(),
+      { name: 'finalizeParent', store },
+      async (sess) => {
+        await sess.run(async () => {});
+        return { message: { role: 'model', content: [{ text: 'done' }] } };
+      }
+    );
+
+    const session = flow.streamBidi({});
+    // Let the first turn land its own row before detaching. The stream is
+    // drained in the background: breaking out of it would close the input side.
+    const firstTurnEnd = new Promise<string | undefined>((resolve) => {
+      (async () => {
+        for await (const chunk of session.stream) {
+          if (chunk.turnEnd) resolve(chunk.turnEnd.snapshotId);
+        }
+        resolve(undefined);
+      })();
+    });
+    session.send({ message: { role: 'user', content: [{ text: 'one' }] } });
+    const firstTurnSnapshotId = await firstTurnEnd;
+    assert.ok(firstTurnSnapshotId);
+    session.send({
+      message: { role: 'user', content: [{ text: 'two' }] },
+      detach: true,
+    });
+    const output = await session.output;
+    session.close();
+    const pendingId = output.snapshotId!;
+    assert.notStrictEqual(pendingId, firstTurnSnapshotId);
+
+    const done = await waitForSnapshotStatus(store, pendingId, 'completed');
+    assert.strictEqual(done.parentId, firstTurnSnapshotId);
+    assert.deepStrictEqual(
+      done.state?.messages?.map((m) => m.content[0].text),
+      ['one', 'two']
+    );
+    assert.strictEqual(rowCount(store), 2);
+    const leaf = await store.getSnapshot({ sessionId: done.sessionId! });
+    assert.strictEqual(leaf?.snapshotId, pendingId);
+  });
+
+  it('lands a failure the agent function threw outside a turn on the pending row', async () => {
+    const store = new InMemorySessionStore<{}>();
+    const flow = defineCustomAgent<{}>(
+      new Registry(),
+      { name: 'finalizeOutsideThrow', store },
+      async (sess) => {
+        await sess.run(async () => {});
+        throw new Error('outside boom');
+      }
+    );
+
+    const session = flow.streamBidi({});
+    session.send({
+      message: { role: 'user', content: [{ text: 'go' }] },
+      detach: true,
+    });
+    const output = await session.output;
+    assert.strictEqual(output.finishReason, 'detached');
+    session.close();
+
+    const failed = await waitForSnapshotStatus(
+      store,
+      output.snapshotId!,
+      'failed'
+    );
+    assert.strictEqual(failed.finishReason, 'failed');
+    assert.strictEqual(failed.error?.message, 'outside boom');
+    assert.ok(failed.state?.messages?.length);
+  });
+
+  it('reuses the pending row for a second detach input', async () => {
+    const store = new InMemorySessionStore<{}>();
+    const flow = defineCustomAgent<{}>(
+      new Registry(),
+      { name: 'finalizeIdempotent', store },
+      async (sess) => {
+        await sess.run(async () => {});
+        return { message: { role: 'model', content: [{ text: 'done' }] } };
+      }
+    );
+
+    const session = flow.streamBidi({});
+    session.send({ message: { role: 'user', content: [{ text: 'go' }] } });
+    session.send({ detach: true });
+    session.send({ detach: true });
+    const output = await session.output;
+    session.close();
+    await waitForSnapshotStatus(store, output.snapshotId!, 'completed');
+    assert.strictEqual(rowCount(store), 1);
+  });
+
+  it('stamps the abort reason on a row the abort flipped', async () => {
+    const store = new InMemorySessionStore<{}>();
+    const flow = defineCustomAgent<{}>(
+      new Registry(),
+      { name: 'finalizeAborted', store },
+      async (sess, { abortSignal }) => {
+        await sess.run(async () => {
+          await new Promise<void>((resolve) => {
+            abortSignal?.addEventListener('abort', () => resolve(), {
+              once: true,
+            });
+          });
+        });
+        return { message: { role: 'model', content: [{ text: 'done' }] } };
+      }
+    );
+
+    const session = flow.streamBidi({});
+    session.send({
+      message: { role: 'user', content: [{ text: 'go' }] },
+      detach: true,
+    });
+    const output = await session.output;
+    session.close();
+    assert.strictEqual(await flow.abort(output.snapshotId!), 'pending');
+
+    const start = Date.now();
+    let snap: SessionSnapshot | undefined;
+    while (Date.now() - start < 5000) {
+      snap = await store.getSnapshot({ snapshotId: output.snapshotId! });
+      if (snap?.status === 'aborted' && snap.finishReason === 'aborted') break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    assert.strictEqual(snap?.status, 'aborted');
+    assert.strictEqual(snap?.finishReason, 'aborted');
+    assert.strictEqual(snap?.heartbeatAt, undefined);
   });
 });
