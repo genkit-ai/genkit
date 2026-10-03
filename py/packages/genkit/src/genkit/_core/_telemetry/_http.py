@@ -64,15 +64,6 @@ EXPORT_TIMEOUT_SECONDS = 300
 FLUSH_TIMEOUT_SECONDS = 2.0
 
 
-class GenkitBuiltinInstrumentation:
-    """Marker on the Developer UI trace poster.
-
-    ``is_instrumented_by(GenkitBuiltinInstrumentation)`` is True once traces
-    are flowing to the Developer UI, which is also how Genkit avoids adding
-    the poster twice.
-    """
-
-
 @dataclass
 class ActiveSpan:
     trace_id: str
@@ -235,8 +226,16 @@ class CollectorHttpSink:
         put_poison_pill(queue=self.queue)
 
 
-class DirectHttpInstrumentation:
-    """Mints its own ids and POSTs finished spans to the Developer UI collector."""
+class GenkitBuiltinInstrumentation:
+    """Developer UI trace poster for Genkit.
+
+    Runs spans through their lifecycle and exports traces directly to the
+    local Genkit Developer UI collector without requiring OpenTelemetry.
+
+    This instrumentation is automatically configured by Genkit in development
+    mode (when running under ``genkit start`` or connected to the Developer UI).
+    Developers do not need to instantiate or configure this class manually.
+    """
 
     def __init__(
         self,
@@ -303,8 +302,8 @@ class DirectHttpInstrumentation:
         self.sink.flush()
 
 
-class DirectBuiltin(DirectHttpInstrumentation, GenkitBuiltinInstrumentation):
-    """The auto-injected Developer UI poster."""
+# Backward compatibility alias for internal test fixtures.
+DirectHttpInstrumentation = GenkitBuiltinInstrumentation
 
 
 def build_qualified_path(metadata: SpanMetadata, *, is_action: bool = False) -> str:
@@ -318,8 +317,8 @@ def telemetry_server_url() -> str | None:
     return url or None
 
 
-def direct_http_for_collector(*, url: str) -> DirectBuiltin:
-    return DirectBuiltin(CollectorHttpSink(collector_otlp_url(url)))
+def direct_http_for_collector(*, url: str) -> GenkitBuiltinInstrumentation:
+    return GenkitBuiltinInstrumentation(CollectorHttpSink(collector_otlp_url(url)))
 
 
 def genkit_dev_instrumentation() -> Instrumentation | None:
