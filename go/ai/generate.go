@@ -455,8 +455,7 @@ func withoutToolCall(ctx context.Context) context.Context {
 	ctx = base.ToolOriginalInputKey.NewContext(ctx, nil)
 	ctx = base.ToolReleasedKey.NewContext(ctx, false)
 	ctx = base.ToolPartSinkKey.NewContext(ctx, nil)
-	ctx = base.ToolChunkSenderKey.NewContext(ctx, nil)
-	return base.ToolPartialSenderKey.NewContext(ctx, nil)
+	return base.ToolChunkSenderKey.NewContext(ctx, nil)
 }
 
 // generateWithRequest runs the tool loop. spanTurnZero reports whether the
@@ -1651,14 +1650,13 @@ func toolFailureError(ctx context.Context, name string, cause error) error {
 }
 
 // toolStreamer lets the tools of one round, which run concurrently, stream
-// through cb with [github.com/firebase/genkit/go/ai/tool.SendChunk] (model
-// response chunks) and the experimental ai/exp/tool.SendPartial (wrapped
-// partial responses). cb, the wrapped stream callback, mutates
-// shared role and index state and writes the single stream sink, neither of
-// which is safe for concurrent use, so every tool-originated send is
-// serialized under one mutex. Streaming is best effort, so a sink error is
-// logged and dropped rather than failing the tool's authoritative return
-// value. The zero value with a nil cb installs no senders.
+// model response chunks through cb with
+// [github.com/firebase/genkit/go/ai/tool.SendChunk]. cb, the wrapped stream
+// callback, mutates shared role and index state and writes the single stream
+// sink, neither of which is safe for concurrent use, so every tool-originated
+// send is serialized under one mutex. Streaming is best effort, so a sink
+// error is logged and dropped rather than failing the tool's authoritative
+// return value. The zero value with a nil cb installs no senders.
 type toolStreamer struct {
 	cb ModelStreamCallback
 	mu sync.Mutex
@@ -1673,22 +1671,12 @@ func (s *toolStreamer) send(ctx context.Context, chunk *ModelResponseChunk) {
 	}
 }
 
-// context returns ctx with the senders for the call to req installed, or ctx
-// itself when there is no stream to send to.
-func (s *toolStreamer) context(ctx context.Context, req *ToolRequest) context.Context {
+// context returns ctx with the chunk sender installed, or ctx itself when
+// there is no stream to send to.
+func (s *toolStreamer) context(ctx context.Context) context.Context {
 	if s == nil || s.cb == nil {
 		return ctx
 	}
-	ctx = base.ToolPartialSenderKey.NewContext(ctx, func(sendCtx context.Context, output any) {
-		s.send(sendCtx, &ModelResponseChunk{
-			Role: RoleTool,
-			Content: []*Part{NewPartialToolResponsePart(&ToolResponse{
-				Name:   req.Name,
-				Ref:    req.Ref,
-				Output: output,
-			})},
-		})
-	})
 	return base.ToolChunkSenderKey.NewContext(ctx, func(sendCtx context.Context, chunk any) {
 		if c, ok := chunk.(*ModelResponseChunk); ok {
 			s.send(sendCtx, c)
@@ -1798,7 +1786,7 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 				return
 			}
 
-			toolCtx := stream.context(ctx, toolReq)
+			toolCtx := stream.context(ctx)
 
 			// The part sink spans the whole call, WrapTool hooks included,
 			// so a hook can attach parts before or after running the tool.
@@ -2098,9 +2086,12 @@ func (c *ModelResponseChunk) Interrupts() []*Part {
 	return parts
 }
 
-// ToolResponses returns the tool response parts from the chunk.
-// Use [Part.IsPartial] to distinguish streaming progress updates
-// from final tool results.
+// ToolResponses returns the tool response parts from the chunk. Progress a
+// tool streams with [github.com/firebase/genkit/go/ai/tool.SendChunk] is not
+// among them unless the tool builds it as a tool response itself: progress
+// is usually a [RoleTool] chunk of text parts. A tool that streams a
+// [NewPartialToolResponsePart] can be told from a final result with
+// [Part.IsPartial].
 func (c *ModelResponseChunk) ToolResponses() []*Part {
 	var parts []*Part
 	if c == nil {
@@ -2532,7 +2523,7 @@ func resumePayload(rs *ToolRestart) (any, error) {
 // returns the interrupted copy of p instead of a response.
 func restartedToolResponse(ctx context.Context, tool Tool, p, restartPart *Part, runTool toolRunnerFunc, stream *toolStreamer) (resp, interrupt *Part, err error) {
 	name := restartPart.ToolRequest.Name
-	resumedCtx := stream.context(ctx, restartPart.ToolRequest)
+	resumedCtx := stream.context(ctx)
 	var restart *base.ToolRestart
 	if rs := restartPart.restartState(); rs != nil {
 		resume, err := resumePayload(rs)
