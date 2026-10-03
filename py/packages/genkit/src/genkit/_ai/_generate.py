@@ -109,6 +109,7 @@ logger = get_logger(__name__)
 
 HookParamsT = TypeVar('HookParamsT')
 HookResultT = TypeVar('HookResultT')
+HopT = TypeVar('HopT')
 HookWrap = Callable[
     [
         HookParamsT,
@@ -421,14 +422,18 @@ async def dispatch_hooks(
             _inner: Callable[[HookParamsT, GenerateMiddlewareContext], Awaitable[HookResultT]] = runner,
             _wrap: HookWrap[HookParamsT, HookResultT] = wrap,
         ) -> HookResultT:
-            return await run_logged_hook(
-                mw=_mw,
-                hook=hook,
-                params=p,
-                ctx=c,
-                wrap=_wrap,
-                inner=_inner,
-                extra=extra(p) if extra is not None else None,
+            # One task per layer. Hundreds of use= hooks would otherwise nest
+            # wrap_generate, wrap_model, and wrap_tool on one stack.
+            return await await_fresh_stack(
+                run_logged_hook(
+                    mw=_mw,
+                    hook=hook,
+                    params=p,
+                    ctx=c,
+                    wrap=_wrap,
+                    inner=_inner,
+                    extra=extra(p) if extra is not None else None,
+                )
             )
 
         runner = with_after_result(run_next)
@@ -1367,9 +1372,9 @@ async def run_wrap_generate(
     )
 
 
-# Deep tool loops with several middleware would otherwise hit Python's
-# recursion limit; each turn gets a fresh stack.
-async def await_next_turn(*, coro: Coroutine[Any, Any, ModelResponse]) -> ModelResponse:
+# A long use= list, or a long tool loop, would otherwise nest every hop on
+# one Python stack and hit the recursion limit. Each hop gets its own stack.
+async def await_fresh_stack(coro: Coroutine[Any, Any, HopT]) -> HopT:
     task = asyncio.create_task(coro)
     try:
         return await task
@@ -1484,8 +1489,8 @@ async def generate_turn(
         return after_tools
     # Tools already ran. This is the conversation if a later pipe fails.
     call.set_messages(after_tools.messages)
-    return await await_next_turn(
-        coro=run_wrap_generate(
+    return await await_fresh_stack(
+        run_wrap_generate(
             registry=registry,
             options=after_tools.options,
             mw_pipeline=mw_pipeline,
