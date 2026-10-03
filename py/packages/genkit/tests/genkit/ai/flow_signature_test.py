@@ -1,0 +1,106 @@
+# Copyright 2026 Google LLC
+# SPDX-License-Identifier: Apache-2.0
+
+"""A flow takes one input; the context arrives only on an ActionRunContext-annotated parameter."""
+
+import pytest
+
+from genkit import ActionRunContext, Genkit
+
+
+@pytest.mark.asyncio
+async def test_flow_with_one_input_returns_result() -> None:
+    """A one-input flow runs and returns, as before."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def greet(name: str) -> str:
+        return f'hello {name}'
+
+    assert greet.input_schema == {'type': 'string'}
+    assert await greet('ada') == 'hello ada'
+
+
+@pytest.mark.asyncio
+async def test_flow_with_input_then_action_run_context_gets_both() -> None:
+    """`(input, ctx: ActionRunContext)` receives both."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def greet(name: str, ctx: ActionRunContext) -> str:
+        return f'hello {name} as {ctx.context["user"]}'
+
+    result = await greet.run('ada', context={'user': 'u1'})
+
+    assert greet.input_schema == {'type': 'string'}
+    assert result.response == 'hello ada as u1'
+
+
+@pytest.mark.asyncio
+async def test_flow_with_action_run_context_first_then_input_gets_both() -> None:
+    """`(ctx: ActionRunContext, input)` receives both, and `flow.input_schema` is the input's."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def greet(ctx: ActionRunContext, name: str) -> str:
+        return f'hello {name} as {ctx.context["user"]}'
+
+    result = await greet.run('ada', context={'user': 'u1'})
+
+    assert greet.input_schema == {'type': 'string'}
+    assert result.response == 'hello ada as u1'
+
+
+@pytest.mark.asyncio
+async def test_flow_with_only_action_run_context_runs_with_context_and_no_input() -> None:
+    """`(ctx: ActionRunContext)` gets the context instead of the input."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def whoami(ctx: ActionRunContext) -> str:
+        return f'you are {ctx.context["user"]}'
+
+    result = await whoami.run(context={'user': 'u1'})
+
+    assert whoami.input_schema == {}
+    assert result.response == 'you are u1'
+
+
+def test_flow_with_two_plain_parameters_raises_type_error_at_definition() -> None:
+    """`(a: str, b: str)` raises TypeError naming `b`."""
+    ai = Genkit()
+
+    async def pair(a: str, b: str) -> str:
+        return a + b
+
+    with pytest.raises(TypeError, match="flow 'pair' takes one input, but 'b' is a second parameter") as exc:
+        ai.flow()(pair)
+    assert "annotate 'b' as ActionRunContext" in str(exc.value)
+
+
+def test_flow_with_unannotated_ctx_parameter_raises_type_error_at_definition() -> None:
+    """`(input, ctx)` with no annotation raises TypeError telling them to annotate ActionRunContext."""
+    ai = Genkit()
+
+    async def greet(name: str, ctx) -> str:  # noqa: ANN001
+        return name
+
+    with pytest.raises(TypeError, match="'ctx' is a second parameter") as exc:
+        ai.flow()(greet)
+    assert "annotate 'ctx' as ActionRunContext" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_flow_with_postponed_annotations_finds_action_run_context() -> None:
+    """The string annotation `'ActionRunContext'` under `from __future__ import annotations` still marks the context."""
+    ai = Genkit()
+
+    # Postponed annotations are stored as these strings.
+    @ai.flow()
+    async def greet(ctx: 'ActionRunContext', name: 'str') -> 'str':
+        return f'hello {name} as {ctx.context["user"]}'
+
+    result = await greet.run('ada', context={'user': 'u1'})
+
+    assert greet.input_schema == {'type': 'string'}
+    assert result.response == 'hello ada as u1'

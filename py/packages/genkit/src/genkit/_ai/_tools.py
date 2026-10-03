@@ -670,32 +670,20 @@ def _define_tool(
         raise ValueError(f'Cannot infer a tool name from {func!r}; pass name= explicitly.')
     tool_description = _get_func_description(func, description)
 
-    input_spec = inspect.getfullargspec(func)
-
-    async def tool_fn_wrapper(*args: Any) -> Any:  # noqa: ANN401 - arity dispatch; args/return follow registered tool
+    async def tool_fn_wrapper(**kwargs: Any) -> Any:  # noqa: ANN401 - kwargs/return follow registered tool
         # Record resumed metadata on the current span for observability.
         resumed_meta = _tool_resumed_metadata.get()
         if resumed_meta:
             set_custom_metadata_attributes({'resumed': resumed_meta})
 
-        # Dynamic dispatch by arity; payload types follow the registered tool (not expressible here).
-        match len(input_spec.args):
-            case 0:
-                raw = await func()
-            case 1:
-                raw = await func(args[0])
-            case 2:
-                original_input = _tool_original_input.get()
-                raw = await func(
-                    args[0],
-                    ToolRunContext(
-                        cast(ActionRunContext, args[1]),
-                        resumed_metadata=resumed_meta,
-                        original_input=original_input,
-                    ),
+        for key, value in kwargs.items():
+            if isinstance(value, ActionRunContext):
+                kwargs[key] = ToolRunContext(
+                    value,
+                    resumed_metadata=resumed_meta,
+                    original_input=_tool_original_input.get(),
                 )
-            case _:
-                raise ValueError('tool must have 0-2 args...')
+        raw = await func(**kwargs)
         return as_multipart_tool_response(raw, tool_name=tool_name)
 
     action = registry.register_action(
@@ -704,6 +692,7 @@ def _define_tool(
         description=tool_description,
         fn=tool_fn_wrapper,
         metadata_fn=func,
+        context_type=ToolRunContext,
     )
     if input_schema is not None:
         action._override_input_schema(input_schema)
@@ -734,12 +723,15 @@ def define_tool(
     Args:
         registry: The registry to register the tool in.
         func: The async function to register as a tool. Must be a coroutine function.
+            It takes at most one input, plus an optional parameter annotated
+            ``ToolRunContext`` in any position.
         name: Optional name for the tool. Defaults to the function name.
         description: Optional description. Defaults to the function's docstring.
         input_schema: Optional input schema override (Pydantic model or JSON-schema dict).
 
     Raises:
-        TypeError: If func is not an async function.
+        TypeError: If func is not an async function, has more than one input,
+            or has more than one ``ToolRunContext`` parameter.
     """
     return _define_tool(registry, func, name, description, input_schema=input_schema)
 
@@ -758,13 +750,13 @@ def tool(
     for one call.
 
     Args:
-        func: Async tool implementation (same 0–2 argument rules as :func:`define_tool`).
+        func: Async tool implementation (same one-input rule as :func:`define_tool`).
         name: Tool name for the model. Defaults to ``func.__name__``.
         description: Sent to the model. Defaults to the function docstring.
         input_schema: Optional input schema override (Pydantic model or JSON-schema dict).
 
     Raises:
-        TypeError: If ``func`` is not a coroutine function.
+        TypeError: If ``func`` is not a coroutine function or takes more than one input.
         ValueError: If no ``name`` is given and ``func`` has no ``__name__``.
 
     Example:
