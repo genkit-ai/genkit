@@ -29,18 +29,18 @@ import {
 } from '@genkit-ai/core';
 import { Channel } from '@genkit-ai/core/async';
 import type { Registry } from '@genkit-ai/core/registry';
-import {
-  createAgentAPI,
-  type AgentAPI,
-  type AgentTransport,
-  type SnapshotLookup,
-} from './agent-core.js';
-
 import { parseSchema, toJsonSchema } from '@genkit-ai/core/schema';
 import {
   setCustomMetadataAttribute,
   setCustomMetadataAttributes,
 } from '@genkit-ai/core/tracing';
+import {
+  createAgentAPI,
+  type AgentAPI,
+  type AgentServerTurnOptions,
+  type AgentTransport,
+  type SnapshotLookup,
+} from './agent-core.js';
 import {
   AgentAbortRequestSchema,
   AgentAbortResponseSchema,
@@ -691,7 +691,7 @@ export interface Agent<State = unknown>
       typeof AgentStreamChunkSchema,
       typeof AgentInitSchema
     >,
-    AgentAPI<State> {
+    AgentAPI<State, AgentServerTurnOptions> {
   getSnapshotData(
     opts: GetSnapshotDataInput
   ): Promise<SessionSnapshot<State> | undefined>;
@@ -1403,10 +1403,11 @@ export function defineCustomAgent<State = unknown>(
   const startBidi = (
     input: AgentInput,
     init: AgentInit,
-    opts: { abortSignal: AbortSignal }
+    opts: { abortSignal: AbortSignal; context?: ActionContext }
   ) => {
     const bidi = primaryAction.streamBidi(init, {
       abortSignal: opts.abortSignal,
+      context: opts.context,
     });
     bidi.send(input);
     bidi.close();
@@ -1433,7 +1434,7 @@ export function defineCustomAgent<State = unknown>(
     },
   };
 
-  const agentApi = createAgentAPI<State>(transport);
+  const agentApi = createAgentAPI<State, AgentServerTurnOptions>(transport);
 
   // Expose the AgentAPI surface on the composite. `abort`/`getSnapshotData`
   // already exist on the composite (richer signatures); we add `chat`,

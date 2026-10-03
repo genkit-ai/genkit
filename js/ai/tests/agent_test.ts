@@ -379,6 +379,55 @@ describe('Agent', () => {
       assert.strictEqual(agent.__action.metadata?.agent?.abortable, false);
     });
 
+    it('should pass context from chat().send() to the handler (in-process)', async () => {
+      const registry = new Registry();
+      let seenContext: any;
+      const agent = defineCustomAgent(
+        registry,
+        { name: 'contextViaChatTest' },
+        async (sess, { context }) => {
+          seenContext = context;
+          await sess.run(async () => {});
+          return {
+            artifacts: [],
+            message: { role: 'model', content: [{ text: 'done' }] },
+          };
+        }
+      );
+
+      const chat = agent.chat();
+      await chat.send('hello', { context: { auth: { uid: 'user-123' } } });
+
+      assert.deepStrictEqual(seenContext?.auth, { uid: 'user-123' });
+    });
+
+    it('should pass context from chat().sendStream() to the handler (in-process)', async () => {
+      const registry = new Registry();
+      let seenContext: any;
+      const agent = defineCustomAgent(
+        registry,
+        { name: 'contextViaSendStreamTest' },
+        async (sess, { context }) => {
+          seenContext = context;
+          await sess.run(async () => {});
+          return {
+            artifacts: [],
+            message: { role: 'model', content: [{ text: 'done' }] },
+          };
+        }
+      );
+
+      const chat = agent.chat();
+      const turn = chat.sendStream('hello', {
+        context: { auth: { uid: 'user-456' } },
+      });
+      for await (const _ of turn.stream) {
+      }
+      await turn.response;
+
+      assert.deepStrictEqual(seenContext?.auth, { uid: 'user-456' });
+    });
+
     it('should set server stateManagement and abortable=true when store with onSnapshotStateChange is provided', () => {
       const registry = new Registry();
       const store = new InMemorySessionStore();
