@@ -170,7 +170,10 @@ response = await ai.generate(
 )
 ```
 
-Skills are discovered by scanning for directories containing `SKILL.md` files. Each `SKILL.md` can have optional YAML frontmatter:
+Skills are discovered by scanning for directories containing `SKILL.md` files.
+By default, `Skills()` scans `.agents/skills` and then `skills`; a later directory
+wins when skill names overlap. Set `skill_paths` to replace these defaults, or to
+`[]` to disable discovery. Each `SKILL.md` can have optional YAML frontmatter:
 
 ```markdown
 ---
