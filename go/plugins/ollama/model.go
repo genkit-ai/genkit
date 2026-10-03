@@ -17,17 +17,8 @@
 package ollama
 
 import (
-	"errors"
-	"fmt"
 	"maps"
-
-	"github.com/firebase/genkit/go/ai"
 )
-
-var topLevelOpts = map[string]struct{}{
-	"think":      {},
-	"keep_alive": {},
-}
 
 // Ollama has two API endpoints, one with a chat interface and another with a generate response interface.
 // That's why have multiple request interfaces for the Ollama API below.
@@ -47,71 +38,46 @@ type ollamaChatRequest struct {
 	Images    []string         `json:"images,omitempty"`
 	Model     string           `json:"model"`
 	Stream    bool             `json:"stream"`
-	Format    string           `json:"format,omitempty"`
+	Format    any              `json:"format,omitempty"`
 	Tools     []ollamaTool     `json:"tools,omitempty"`
 	Think     *ThinkOption     `json:"think,omitempty"`
 	Options   map[string]any   `json:"options,omitempty"`
 	KeepAlive string           `json:"keep_alive,omitempty"`
 }
 
-func (o *ollamaChatRequest) ApplyOptions(cfg any) error {
-	if cfg == nil {
-		return nil
+func (o *ollamaChatRequest) ApplyOptions(config GenerateContentConfig) {
+	if config.Think != nil {
+		o.Think = config.Think
 	}
 
-	switch config := cfg.(type) {
-	case GenerateContentConfig:
-		return o.applyGenerateContentConfig(&config)
-	case *GenerateContentConfig:
-		return o.applyGenerateContentConfig(config)
-	case map[string]any:
-		return o.applyMapAny(config)
-	case *ai.GenerationCommonConfig:
-		return o.applyGenerationCommonConfig(config)
-	case ai.GenerationCommonConfig:
-		return o.applyGenerationCommonConfig(&config)
-	default:
-		return fmt.Errorf("unexpected config type: %T", cfg)
-	}
-}
-
-func (o *ollamaChatRequest) applyGenerateContentConfig(cfg *GenerateContentConfig) error {
-	if cfg == nil {
-		return nil
-	}
-
-	if cfg.Think != nil {
-		o.Think = cfg.Think
-	}
-
-	if cfg.KeepAlive != "" {
-		o.KeepAlive = cfg.KeepAlive
+	if config.KeepAlive != "" {
+		o.KeepAlive = config.KeepAlive
 	}
 
 	opts := make(map[string]any)
-	if cfg.Seed != nil {
-		opts["seed"] = *cfg.Seed
+	if config.Seed != nil {
+		opts["seed"] = *config.Seed
 	}
-	if cfg.Temperature != nil {
-		opts["temperature"] = *cfg.Temperature
+	if config.Temperature != nil {
+		opts["temperature"] = *config.Temperature
 	}
-	if cfg.TopK != nil {
-		opts["top_k"] = *cfg.TopK
+	if config.TopK != nil {
+		opts["top_k"] = *config.TopK
 	}
-	if cfg.TopP != nil {
-		opts["top_p"] = *cfg.TopP
+	if config.TopP != nil {
+		opts["top_p"] = *config.TopP
 	}
-	if cfg.MinP != nil {
-		opts["min_p"] = *cfg.MinP
+	if config.MinP != nil {
+		opts["min_p"] = *config.MinP
 	}
-	if len(cfg.Stop) > 0 {
-		opts["stop"] = cfg.Stop
+	if len(config.Stop) > 0 {
+		opts["stop"] = config.Stop
 	}
-	if cfg.NumCtx != nil {
-		opts["num_ctx"] = *cfg.NumCtx
+	if config.NumCtx != nil {
+		opts["num_ctx"] = *config.NumCtx
 	}
-	if cfg.NumPredict != nil {
-		opts["num_predict"] = *cfg.NumPredict
+	if config.NumPredict != nil {
+		opts["num_predict"] = *config.NumPredict
 	}
 
 	if len(opts) > 0 {
@@ -121,72 +87,4 @@ func (o *ollamaChatRequest) applyGenerateContentConfig(cfg *GenerateContentConfi
 		maps.Copy(o.Options, opts)
 	}
 
-	return nil
-}
-
-func (o *ollamaChatRequest) applyGenerationCommonConfig(cfg *ai.GenerationCommonConfig) error {
-	if cfg == nil {
-		return nil
-	}
-
-	m := make(map[string]any)
-
-	if cfg.MaxOutputTokens > 0 {
-		m["num_predict"] = cfg.MaxOutputTokens
-	}
-	if len(cfg.StopSequences) > 0 {
-		m["stop"] = cfg.StopSequences
-	}
-	if cfg.Temperature != 0 {
-		m["temperature"] = cfg.Temperature
-	}
-	if cfg.TopK > 0 {
-		m["top_k"] = cfg.TopK
-	}
-	if cfg.TopP > 0 {
-		m["top_p"] = cfg.TopP
-	}
-
-	return o.applyMapAny(m)
-}
-
-func (o *ollamaChatRequest) applyMapAny(m map[string]any) error {
-	if len(m) == 0 {
-		return nil
-	}
-	opts := o.Options
-	if opts == nil {
-		opts = make(map[string]any)
-	}
-	for k, v := range m {
-		if _, isTopLevel := topLevelOpts[k]; isTopLevel {
-			switch k {
-			case "think":
-				switch tv := v.(type) {
-				case bool:
-					o.Think = ThinkEnabled(tv)
-				case string:
-					o.Think = ThinkEffort(tv)
-				case *ThinkOption:
-					o.Think = tv
-				default:
-					return fmt.Errorf("think must be a boolean or string, got: %T", v)
-				}
-			case "keep_alive":
-				if s, ok := v.(string); ok {
-					o.KeepAlive = s
-				} else {
-					return errors.New("keep_alive must be string")
-				}
-			}
-			continue
-		}
-		opts[k] = v
-	}
-
-	if len(opts) > 0 {
-		o.Options = opts
-	}
-
-	return nil
 }

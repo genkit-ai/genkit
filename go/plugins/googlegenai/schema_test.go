@@ -158,6 +158,29 @@ func TestToGeminiSchema(t *testing.T) {
 			},
 		},
 		{
+			name: "definitions ref uses the definitions pool",
+			genkitSchema: map[string]any{
+				"$ref": "#/definitions/Tag",
+				"$defs": map[string]any{
+					"Tag": map[string]any{"type": "integer"},
+				},
+				"definitions": map[string]any{
+					"Tag": map[string]any{"type": "string"},
+				},
+			},
+			want: &genai.Schema{Type: genai.TypeString},
+		},
+		{
+			name: "unrelated local pointer is not resolved from defs",
+			genkitSchema: map[string]any{
+				"$ref": "#/properties/Tag",
+				"$defs": map[string]any{
+					"Tag": map[string]any{"type": "string"},
+				},
+			},
+			wantErr: true,
+		},
+		{
 			name: "unsupported type string",
 			genkitSchema: map[string]any{
 				"type": "bogus",
