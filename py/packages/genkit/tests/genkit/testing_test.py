@@ -14,46 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the testing utilities module.
-
-This module contains comprehensive tests for the testing utilities,
-ensuring parity with the JavaScript implementation in:
-    js/ai/src/testing/model-tester.ts
-
-Test Coverage
-=============
-
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ Test Case                        │ Description                              │
-├──────────────────────────────────┼──────────────────────────────────────────┤
-│ EchoModel Tests                                                             │
-├──────────────────────────────────┼──────────────────────────────────────────┤
-│ test_echo_model_basic            │ Basic echo functionality                 │
-│ test_echo_model_with_config      │ Echo includes config in response         │
-│ test_echo_model_stream_countdown │ Stream countdown chunks                  │
-│ test_echo_model_stores_request   │ Stores last request for inspection       │
-├──────────────────────────────────┼──────────────────────────────────────────┤
-│ ScriptedModel Tests                                                     │
-├──────────────────────────────────┼──────────────────────────────────────────┤
-│ test_scripted_model_basic    │ Returns programmed responses             │
-│ test_scripted_model_multiple │ Multiple sequential responses            │
-│ test_scripted_model_chunks   │ Streams programmed chunks                │
-│ test_scripted_model_reset    │ Reset clears state                       │
-│ test_scripted_model_request  │ Stores deep copy of last request         │
-├──────────────────────────────────┼──────────────────────────────────────────┤
-│ StaticResponseModel Tests                                                   │
-├──────────────────────────────────┼──────────────────────────────────────────┤
-│ test_static_model_basic          │ Returns same response always             │
-│ test_static_model_request_count  │ Counts requests                          │
-├──────────────────────────────────┼──────────────────────────────────────────┤
-│ test_models() Tests                                                         │
-├──────────────────────────────────┼──────────────────────────────────────────┤
-│ test_test_models_basic           │ Basic test suite execution               │
-│ test_test_models_report_format   │ Report structure matches JS              │
-│ test_skip_test_error             │ SkipTestError handling                   │
-│ test_gablorken_tool              │ Tool calculation test                    │
-└──────────────────────────────────┴──────────────────────────────────────────┘
-"""
+"""Tests for genkit.testing utilities."""
 
 import pytest
 
