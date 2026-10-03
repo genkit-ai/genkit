@@ -209,6 +209,10 @@ type AgentOutput[State any] struct {
 	// what the failed turn committed, or the last-good state through the last
 	// successful turn when the turn failed before committing anything.
 	State *SessionState[State] `json:"state,omitempty"`
+	// Usage is the usage of the agent's own model calls during this invocation,
+	// summed field by field, failed turns included. It excludes subagents. Nil
+	// when FinishReason is [AgentFinishReasonDetached], since the work continues.
+	Usage *ai.GenerationUsage `json:"usage,omitempty"`
 }
 
 // AgentResult is the return value from an AgentFunc.
@@ -401,6 +405,11 @@ type SessionState[State any] struct {
 	// state object opaquely. For server-managed agents the snapshot row's
 	// [SessionSnapshot.SessionID] is canonical and this field mirrors it.
 	SessionID string `json:"sessionId,omitempty"`
+	// Usage is the usage of the agent's own model calls in the turns this state
+	// includes, summed field by field. The framework owns it. A turn rolled back
+	// on failure takes its usage with it, as it does its messages. It excludes
+	// subagents, which report usage in their own sessions.
+	Usage *ai.GenerationUsage `json:"usage,omitempty"`
 }
 
 // SnapshotStatus describes the lifecycle state of a snapshot. A synchronous
@@ -499,4 +508,8 @@ type TurnEnd struct {
 	// configured, a turn that failed before committing anything, or snapshots
 	// were suspended after detach).
 	SnapshotID string `json:"snapshotId,omitempty"`
+	// Usage is the usage of the agent's own model calls during this turn, summed
+	// field by field, whether the turn succeeded or failed. It excludes
+	// subagents.
+	Usage *ai.GenerationUsage `json:"usage,omitempty"`
 }

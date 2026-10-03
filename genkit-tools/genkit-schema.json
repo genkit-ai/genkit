@@ -133,6 +133,9 @@
         },
         "error": {
           "$ref": "#/$defs/RuntimeError"
+        },
+        "usage": {
+          "$ref": "#/$defs/GenerationUsage"
         }
       },
       "additionalProperties": false
@@ -312,6 +315,9 @@
           "items": {
             "$ref": "#/$defs/Artifact"
           }
+        },
+        "usage": {
+          "$ref": "#/$defs/GenerationUsage"
         }
       },
       "additionalProperties": false
@@ -335,6 +341,9 @@
         },
         "finishReason": {
           "$ref": "#/$defs/AgentFinishReason"
+        },
+        "usage": {
+          "$ref": "#/$defs/GenerationUsage"
         }
       },
       "additionalProperties": false
@@ -994,6 +1003,9 @@
         "usage": {
           "$ref": "#/$defs/GenerationUsage"
         },
+        "totalUsage": {
+          "$ref": "#/$defs/GenerationUsage"
+        },
         "custom": {},
         "raw": {},
         "request": {
@@ -1318,6 +1330,9 @@
         },
         "usage": {
           "$ref": "#/$defs/GenerateResponse/properties/usage"
+        },
+        "totalUsage": {
+          "$ref": "#/$defs/GenerateResponse/properties/totalUsage"
         },
         "custom": {
           "$ref": "#/$defs/GenerateResponse/properties/custom"
