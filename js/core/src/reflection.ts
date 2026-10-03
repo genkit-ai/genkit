@@ -165,7 +165,7 @@ export class ReflectionServer {
       response.status(200).send('OK');
     });
 
-    server.get('/api/__quitquitquit', async (_, response) => {
+    server.post('/api/__quitquitquit', async (_, response) => {
       logger.debug('Received quitquitquit');
       response.status(200).send('OK');
       await this.stop();
