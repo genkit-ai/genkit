@@ -133,11 +133,11 @@ export class TraceServerExporter implements SpanExporter {
         error = true;
         logger.error(`Failed to save trace ${traceId}`, e);
       }
-      if (done) {
-        return done({
-          code: error ? ExportResultCode.FAILED : ExportResultCode.SUCCESS,
-        });
-      }
+    }
+    if (done) {
+      done({
+        code: error ? ExportResultCode.FAILED : ExportResultCode.SUCCESS,
+      });
     }
   }
 
