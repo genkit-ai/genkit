@@ -1549,21 +1549,36 @@ func toolFailureError(ctx context.Context, name string, cause error) error {
 // raw [MultipartToolResponse]. Returned by [buildToolRunner].
 type toolRunnerFunc = func(ctx context.Context, tool Tool, req *ToolRequest) (*MultipartToolResponse, error)
 
-// interruptedPart clones a tool request part and marks it interrupted. The
-// interrupt's metadata is the marker when it carries any; otherwise the
-// marker is true, since a nil value would make the part read as not
-// interrupted at all (see [Part.IsInterrupt]).
+// interruptedPart returns the copy of tool request p that records the
+// interrupt raised for it, carrying the interrupt's data (nil for a bare
+// interrupt) as typed state; the wire marker is written when the part is
+// marshaled.
 func interruptedPart(p *Part, tie *toolInterruptError) *Part {
-	newPart := clone(p)
-	if newPart.Metadata == nil {
-		newPart.Metadata = make(map[string]any)
-	}
-	if tie.Metadata != nil {
-		newPart.Metadata["interrupt"] = tie.Metadata
-	} else {
-		newPart.Metadata["interrupt"] = true
+	newPart := p.typedClone()
+	newPart.Interrupt = &ToolInterrupt{Data: bareIfNil(tie.Metadata)}
+	return newPart
+}
+
+// resolvedPart returns the copy of tool request p that records its interrupt,
+// if any, as resolved, for the message history.
+func resolvedPart(p *Part) *Part {
+	newPart := p.typedClone()
+	if newPart.Interrupt != nil {
+		newPart.Interrupt.Resolved = true
 	}
 	return newPart
+}
+
+// stripPendingKeys deletes the keys stampPendingToolOutcome writes from m in
+// place and returns m, or nil when nothing is left.
+func stripPendingKeys(m map[string]any) map[string]any {
+	for _, key := range [...]string{"pendingOutput", "pendingMetadata", "pendingContent"} {
+		delete(m, key)
+	}
+	if len(m) == 0 {
+		return nil
+	}
+	return m
 }
 
 // stampPendingToolOutcome records a resolved tool call's response on its
@@ -1677,7 +1692,10 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 				return
 			}
 
-			newPart := clone(p)
+			// p is already private to this call (revisedMsg is a deep clone of
+			// the model message), and the stamp writes only its metadata, so a
+			// shallow copy with its own map is enough.
+			newPart := p.typedClone()
 			stampPendingToolOutcome(newPart, multipartResp)
 			revisedMsg.Content[idx] = newPart
 
@@ -2176,8 +2194,9 @@ type resumeStep struct {
 // Respond or Restart directive in genOpts.Resume that matches it. It runs for
 // every pending request before any tool runs, and so does everything that can
 // reject the resume without running a tool: a request with no resolution, a
-// tool that is not found, and a response that does not match the tool's
-// output schema. A rejected resume thus leaves no tool half-run next to it.
+// tool that is not found, a response that does not match the tool's output
+// schema, and a restart whose resume data is not a JSON object. A rejected
+// resume thus leaves no tool half-run next to it.
 func planResumedToolRequest(r api.Registry, genOpts *GenerateActionOptions, p *Part) (*resumeStep, error) {
 	if p == nil || !p.IsToolRequest() {
 		return nil, status.Errorf(ErrInvalidPart, "handleResumedToolRequest: part is not a tool request")
@@ -2216,6 +2235,11 @@ func planResumedToolRequest(r api.Registry, genOpts *GenerateActionOptions, p *P
 			}
 		}
 		return &resumeStep{request: p, tool: tool, respond: respondPart}, nil
+	}
+	if rs := restartPart.restartState(); rs != nil {
+		if _, err := resumePayload(rs); err != nil {
+			return nil, status.Errorf(status.ErrInvalidArgument, "handleResumedToolRequest: tool %q: %w; a bare restart carries true or no payload", tool.Name(), err)
+		}
 	}
 	return &resumeStep{request: p, tool: tool, restart: restartPart}, nil
 }
@@ -2294,36 +2318,39 @@ func resumePartFor(parts []*Part, req *ToolRequest, respond bool) *Part {
 	return nil
 }
 
-// resolvedPart returns the copy of tool request p that records its interrupt,
-// if any, as resolved, for the message history.
-func resolvedPart(p *Part) *Part {
-	newPart := clone(p)
-	if interruptVal, ok := newPart.Metadata["interrupt"]; ok {
-		delete(newPart.Metadata, "interrupt")
-		newPart.Metadata["resolvedInterrupt"] = interruptVal
+// resumePayload returns the payload restart rs delivers, as the map the
+// tool reads from [ToolContext.Resumed]: its resume data, which must be a JSON
+// object, or an empty map for a bare restart, so the call still reads as a
+// resumption. Any other marker is an error, not a bare restart: a peer
+// runtime may mark a restart with any truthy JSON value (the JS restartTool
+// passes its resumedMetadata through as given), and reading "denied" as a
+// bare restart would run the tool as if it had been approved.
+func resumePayload(rs *ToolRestart) (map[string]any, error) {
+	if base.IsNil(rs.Resume) {
+		return map[string]any{}, nil
 	}
-	return newPart
+	return base.ObjectPayload(rs.Resume, "resume data")
 }
 
 // restartedToolResponse re-executes tool for a Restart directive and builds
-// its tool response. The tool sees the resume metadata the restart carries
+// its tool response. The tool sees the resume payload the restart carries (an
+// empty map for a bare restart, so the call still reads as a resumption)
 // and, when the caller replaced the input, the original one. A tool that
 // interrupts again returns the interrupted copy of p instead of a response.
 func restartedToolResponse(ctx context.Context, tool Tool, p, restartPart *Part, runTool toolRunnerFunc) (resp, interrupt *Part, err error) {
 	name := restartPart.ToolRequest.Name
 	resumedCtx := ctx
-	if resumedVal, ok := restartPart.Metadata["resumed"]; ok {
-		switch resumedVal := resumedVal.(type) {
-		case map[string]any:
-			resumedCtx = resumedCtxKey.NewContext(resumedCtx, resumedVal)
-		case bool:
-			if resumedVal {
-				resumedCtx = resumedCtxKey.NewContext(resumedCtx, map[string]any{})
-			}
+	if rs := restartPart.restartState(); rs != nil {
+		resume, err := resumePayload(rs)
+		if err != nil {
+			// Checked when the resume was planned; kept for a caller that
+			// runs a step it did not plan.
+			return nil, nil, status.Errorf(status.ErrInvalidArgument, "tool %q: %w", name, err)
 		}
-	}
-	if originalInputVal, ok := restartPart.Metadata["replacedInput"]; ok {
-		resumedCtx = origInputCtxKey.NewContext(resumedCtx, originalInputVal)
+		resumedCtx = resumedCtxKey.NewContext(resumedCtx, resume)
+		if rs.OriginalInput != nil {
+			resumedCtx = origInputCtxKey.NewContext(resumedCtx, rs.OriginalInput)
+		}
 	}
 
 	multipartResp, err := runTool(resumedCtx, tool, &ToolRequest{
@@ -2357,12 +2384,21 @@ func handleResumeOption(ctx context.Context, r api.Registry, genOpts *GenerateAc
 		return &resumeOptionOutput{revisedRequest: genOpts}, nil
 	}
 
+	// Validate runs first so that a nil part, which a deprecated verb returns
+	// for a request it cannot restart, is reported as nil rather than as the
+	// wrong kind.
 	for _, part := range genOpts.Resume.Respond {
+		if err := part.Validate(); err != nil {
+			return nil, status.Errorf(status.ErrInvalidArgument, "handleResumeOption: respond part: %w", err)
+		}
 		if !part.IsToolResponse() {
 			return nil, status.Errorf(status.ErrInvalidArgument, "handleResumeOption: respond part is not a tool response")
 		}
 	}
 	for _, part := range genOpts.Resume.Restart {
+		if err := part.Validate(); err != nil {
+			return nil, status.Errorf(ErrInvalidPart, "handleResumeOption: restart part: %w", err)
+		}
 		if !part.IsToolRequest() {
 			return nil, status.Errorf(ErrInvalidPart, "handleResumeOption: restart part is not a tool request")
 		}
@@ -2502,15 +2538,18 @@ func handleResumeOption(ctx context.Context, r api.Registry, genOpts *GenerateAc
 		}
 	}
 
+	// Message metadata, not part metadata: the typed restart state lives on the
+	// individual tool request parts, while this marks the whole tool message as
+	// the product of a resumption.
 	toolMessage := &Message{
 		Role:    RoleTool,
 		Content: toolResps,
 		Metadata: map[string]any{
-			"resumed": true,
+			metaResumed: true,
 		},
 	}
 	if genOpts.Resume.Metadata != nil {
-		toolMessage.Metadata["resumed"] = genOpts.Resume.Metadata
+		toolMessage.Metadata[metaResumed] = genOpts.Resume.Metadata
 	}
 	revisedMessages := append(slices.Clone(messages), toolMessage)
 

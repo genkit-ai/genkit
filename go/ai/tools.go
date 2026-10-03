@@ -242,22 +242,17 @@ func InterruptWith[T any](tc *ToolContext, meta T) error {
 	return tc.Interrupt(&InterruptOptions{Metadata: m})
 }
 
-// InterruptAs extracts strongly-typed metadata from an interrupted tool request [Part].
-// Returns the zero value and false if the part is not an interrupt or the type doesn't match.
+// InterruptAs returns the data an interrupted tool request carries, decoded
+// into T: what the tool chose to say about the pause, e.g. why it needs
+// approval. Returns the zero value and false if the part is not an interrupt,
+// the interrupt carries no data, or the data does not decode into T.
 func InterruptAs[T any](p *Part) (T, bool) {
 	var zero T
-	if p == nil || !p.IsInterrupt() {
+	it := p.interruptState()
+	if it == nil || it.Resolved || it.Data == nil {
 		return zero, false
 	}
-	meta, ok := p.Metadata["interrupt"].(map[string]any)
-	if !ok {
-		return zero, false
-	}
-	result, err := base.MapToStruct[T](meta)
-	if err != nil {
-		return zero, false
-	}
-	return result, true
+	return base.ConvertTo[T](it.Data)
 }
 
 // IsResumed returns true if this tool execution is a resumption after an interrupt.
@@ -613,70 +608,30 @@ func (t *ToolAction[In, Out]) IsMultipart() bool {
 //
 // Deprecated: Use [ToolAction.RespondWith] instead for strongly-typed options.
 func (t *ToolAction[In, Out]) Respond(toolReq *Part, output any, opts *RespondOptions) *Part {
-	if toolReq == nil || !toolReq.IsToolRequest() {
+	if !toolReq.IsToolRequest() || toolReq.ToolRequest == nil {
 		return nil
 	}
-
 	if opts == nil {
 		opts = &RespondOptions{}
 	}
-
-	newToolResp := NewResponseForToolRequest(toolReq, output)
-	newToolResp.Metadata = map[string]any{
-		"interruptResponse": true,
-	}
-	if opts.Metadata != nil {
-		newToolResp.Metadata["interruptResponse"] = opts.Metadata
-	}
-
-	return newToolResp
+	return newResponsePart(toolReq, output, opts.Metadata)
 }
 
 // Restart creates a part for [WithToolRestarts] to re-execute an interrupted tool call with additional context.
-// Returns nil if the part is not a tool request.
+// Returns nil if the part is not a tool request. The resume data is carried as
+// given: a value that is not a JSON object resumes the tool with an empty
+// payload, the way a peer runtime's marker would.
 //
 // Deprecated: Use [ToolAction.RestartWith] instead for strongly-typed options.
 func (t *ToolAction[In, Out]) Restart(p *Part, opts *RestartOptions) *Part {
-	if p == nil || !p.IsToolRequest() {
+	if !p.IsToolRequest() || p.ToolRequest == nil {
 		return nil
 	}
-
 	if opts == nil {
 		opts = &RestartOptions{}
 	}
-
-	newInput := p.ToolRequest.Input
-	var originalInput any
-
-	if opts.ReplaceInput != nil {
-		originalInput = newInput
-		newInput = opts.ReplaceInput
-	}
-
-	newMeta := maps.Clone(p.Metadata)
-	if newMeta == nil {
-		newMeta = make(map[string]any)
-	}
-
-	newMeta["resumed"] = true
-	if opts.ResumedMetadata != nil {
-		newMeta["resumed"] = opts.ResumedMetadata
-	}
-
-	if originalInput != nil {
-		newMeta["replacedInput"] = originalInput
-	}
-
-	delete(newMeta, "interrupt")
-
-	newToolReq := NewToolRequestPart(&ToolRequest{
-		Name:  p.ToolRequest.Name,
-		Ref:   p.ToolRequest.Ref,
-		Input: newInput,
-	})
-	newToolReq.Metadata = newMeta
-
-	return newToolReq
+	// ReplaceInput is optional, so a nil of any type means it was not set.
+	return buildRestartPart(p, opts.ResumedMetadata, opts.ReplaceInput, !base.IsNil(opts.ReplaceInput))
 }
 
 // RespondWith creates a part for [WithToolResponses] to provide a resolved response for an interrupted tool call.
@@ -685,30 +640,14 @@ func (t *ToolAction[In, Out]) Restart(p *Part, opts *RestartOptions) *Part {
 //
 //	part, err := myTool.RespondWith(toolReq, output, WithResponseMetadata[MyOutput](meta))
 func (t *ToolAction[In, Out]) RespondWith(toolReq *Part, output Out, opts ...RespondWithOption[Out]) (*Part, error) {
-	if toolReq == nil {
-		return nil, status.Errorf(status.ErrInvalidArgument, "ai.RespondWith: toolReq is nil")
+	if err := t.checkToolRequest("ai.RespondWith", toolReq); err != nil {
+		return nil, err
 	}
-	if !toolReq.IsToolRequest() {
-		return nil, status.Errorf(ErrInvalidPart, "ai.RespondWith: part is not a tool request")
-	}
-	if toolReq.ToolRequest.Name != t.Name() {
-		return nil, status.Errorf(status.ErrInvalidArgument, "ai.RespondWith: tool request is for %q, not %q", toolReq.ToolRequest.Name, t.Name())
-	}
-
 	cfg := &RespondOptions{}
 	for _, opt := range opts {
 		opt.applyRespondWith(cfg)
 	}
-
-	newToolResp := NewResponseForToolRequest(toolReq, output)
-	newToolResp.Metadata = map[string]any{
-		"interruptResponse": true,
-	}
-	if cfg.Metadata != nil {
-		newToolResp.Metadata["interruptResponse"] = cfg.Metadata
-	}
-
-	return newToolResp, nil
+	return newResponsePart(toolReq, output, cfg.Metadata), nil
 }
 
 // RestartWith creates a part for [WithToolRestarts] to re-execute an interrupted tool call with additional context.
@@ -717,53 +656,92 @@ func (t *ToolAction[In, Out]) RespondWith(toolReq *Part, output Out, opts ...Res
 //
 //	part, err := myTool.RestartWith(toolReq, WithNewInput(newInput), WithResumedMetadata[MyInput](meta))
 func (t *ToolAction[In, Out]) RestartWith(toolReq *Part, opts ...RestartWithOption[In]) (*Part, error) {
-	if toolReq == nil {
-		return nil, status.Errorf(status.ErrInvalidArgument, "ai.RestartWith: toolReq is nil")
+	const fnName = "ai.RestartWith"
+	if err := t.checkToolRequest(fnName, toolReq); err != nil {
+		return nil, err
 	}
-	if !toolReq.IsToolRequest() {
-		return nil, status.Errorf(ErrInvalidPart, "ai.RestartWith: part is not a tool request")
-	}
-	if toolReq.ToolRequest.Name != t.Name() {
-		return nil, status.Errorf(status.ErrInvalidArgument, "ai.RestartWith: tool request is for %q, not %q", toolReq.ToolRequest.Name, t.Name())
-	}
-
 	cfg := &RestartOptions{}
 	for _, opt := range opts {
 		opt.applyRestartWith(cfg)
 	}
+	if err := base.CheckObjectPayload(cfg.ResumedMetadata, "resume data"); err != nil {
+		return nil, status.Errorf(status.ErrInvalidArgument, "%s: %w", fnName, err)
+	}
+	// WithNewInput is optional, so a nil of any type means it was not given.
+	return buildRestartPart(toolReq, cfg.ResumedMetadata, cfg.ReplaceInput, !base.IsNil(cfg.ReplaceInput)), nil
+}
 
-	newInput := toolReq.ToolRequest.Input
-	var originalInput any
+// checkToolRequest is the guard RespondWith and RestartWith share: toolReq
+// must be a tool request for this tool. fnName names the verb in the error.
+func (t *ToolAction[In, Out]) checkToolRequest(fnName string, toolReq *Part) error {
+	if toolReq == nil {
+		return status.Errorf(status.ErrInvalidArgument, "%s: toolReq is nil", fnName)
+	}
+	if !toolReq.IsToolRequest() {
+		return status.Errorf(ErrInvalidPart, "%s: part is not a tool request", fnName)
+	}
+	if toolReq.ToolRequest == nil {
+		return status.Errorf(ErrInvalidPart, "%s: tool request part has no request", fnName)
+	}
+	if toolReq.ToolRequest.Name != t.Name() {
+		return status.Errorf(status.ErrInvalidArgument, "%s: tool request is for %q, not %q", fnName, toolReq.ToolRequest.Name, t.Name())
+	}
+	return nil
+}
 
-	if cfg.ReplaceInput != nil {
-		originalInput = newInput
-		newInput = cfg.ReplaceInput
+// buildRestartPart builds the tool request [Part] that re-executes an
+// interrupted call. The new part keeps the interrupted part's metadata, less
+// its interrupt state. resume is the payload delivered to the tool, or nil
+// for a bare restart; a nil map or pointer is a bare restart too. When
+// replace is set, newInput replaces the input the tool re-executes with,
+// whatever its value, and the original is preserved on
+// [ToolRestart.OriginalInput]; the verbs decide replacement, so that a nil
+// newInput is never mistaken for "keep the input" or the other way round.
+func buildRestartPart(interruptPart *Part, resume, newInput any, replace bool) *Part {
+	toolReq := interruptPart.ToolRequest
+	input, originalInput := toolReq.Input, any(nil)
+	if replace {
+		input, originalInput = newInput, input
 	}
 
-	newMeta := maps.Clone(toolReq.Metadata)
-	if newMeta == nil {
-		newMeta = make(map[string]any)
-	}
-
-	newMeta["resumed"] = true
-	if cfg.ResumedMetadata != nil {
-		newMeta["resumed"] = cfg.ResumedMetadata
-	}
-
-	if originalInput != nil {
-		newMeta["replacedInput"] = originalInput
-	}
-
-	delete(newMeta, "interrupt")
-
-	newToolReqPart := NewToolRequestPart(&ToolRequest{
-		Name:  toolReq.ToolRequest.Name,
-		Ref:   toolReq.ToolRequest.Ref,
-		Input: newInput,
+	restartPart := NewToolRequestPart(&ToolRequest{
+		Name:  toolReq.Name,
+		Ref:   toolReq.Ref,
+		Input: input,
 	})
-	newToolReqPart.Metadata = newMeta
+	// The restart keeps the interrupted part's metadata, less its interrupt
+	// state and less the loop's bookkeeping of a sibling's outcome
+	// (pendingOutput and its companions), which describes the request in
+	// history, not the restart.
+	restartPart.Metadata = stripPendingKeys(stripWireKeys(maps.Clone(interruptPart.Metadata)))
+	restartPart.Restart = &ToolRestart{Resume: bareIfNil(resume), OriginalInput: originalInput}
+	return restartPart
+}
 
-	return newToolReqPart, nil
+// bareIfNil normalizes an interrupt or resume payload: an untyped nil, a nil
+// map, or a nil pointer all mean a bare interrupt or restart, so they become
+// an untyped nil rather than a typed nil inside the interface, which would
+// serialize as JSON null instead of the bare marker.
+func bareIfNil(v any) any {
+	if base.IsNil(v) {
+		return nil
+	}
+	return v
+}
+
+// newResponsePart builds the tool response [Part] that resolves an interrupted
+// call with a pre-computed output. The generate loop resolves the interrupt by
+// the part's place in the Respond list, matched on tool name and ref; the
+// interruptResponse marker is the wire contract's mark of a caller-provided
+// response, which the JS runtime writes too, and metadata, when non-nil,
+// rides under it in place of the bare marker.
+func newResponsePart(interruptPart *Part, output any, metadata map[string]any) *Part {
+	resp := NewResponseForToolRequest(interruptPart, output)
+	resp.Metadata = map[string]any{metaInterruptResponse: true}
+	if metadata != nil {
+		resp.Metadata[metaInterruptResponse] = metadata
+	}
+	return resp
 }
 
 // resolveUniqueTools resolves the list of tool refs to a list of all tool names and new tools that must be registered.
