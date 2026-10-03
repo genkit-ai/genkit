@@ -84,6 +84,7 @@ from genkit._core._model import (
     SessionSnapshot,
 )
 from genkit._core._registry import Registry
+from genkit._core._telemetry._instrumentation import set_custom_metadata_attributes
 from genkit._core._typing import (
     AgentAbortRequest,
     AgentAbortResponse,
@@ -94,7 +95,6 @@ from genkit._core._typing import (
     SnapshotStatus,
     ToolRequest,
 )
-from genkit.telemetry import set_custom_metadata_attributes
 
 # ---------------------------------------------------------------------------
 # Agent Class

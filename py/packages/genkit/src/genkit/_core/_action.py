@@ -35,10 +35,10 @@ from genkit._core._error import GenkitError, Interrupt, RuntimeErrorReason
 from genkit._core._model import config_type_path, declared_config_type
 from genkit._core._schema import to_json_schema
 from genkit._core._telemetry._attrs import Attr, metadata_key
+from genkit._core._telemetry._instrumentation import to_json_attr
 from genkit.telemetry import (
     SpanContext,
     run_in_new_span,
-    to_json_attr,
 )
 
 # =============================================================================

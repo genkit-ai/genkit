@@ -38,9 +38,18 @@ from urllib.parse import urljoin, urlparse
 from .._environment import is_dev_environment
 from .._error import GenkitError, Interrupt
 from .._logger import get_logger
-from . import _instrumentation
 from ._attrs import Attr, State, metadata_key
-from ._instrumentation import Instrumentation
+from ._instrumentation import (
+    Instrumentation,
+    SpanMetadata,
+    SpanNext,
+    configure_instrumentation,
+    is_instrumented_by,
+    parent_path_context,
+    span_is_action,
+    start_attributes,
+    to_json_attr,
+)
 from ._log_exporter import QUEUE_SIZE, put_poison_pill
 from ._path import build_path
 
@@ -97,7 +106,7 @@ class DirectSpanContext:
     def set_metadata(self, metadata: Mapping[str, object]) -> None:
         for key, value in metadata.items():
             try:
-                encoded = value if isinstance(value, str) else _instrumentation.to_json_attr(value)
+                encoded = value if isinstance(value, str) else to_json_attr(value)
             except Exception as e:
                 encoded = f'Error encoding metadata: {e}'
             self._span.attributes[metadata_key(str(key))] = encoded
@@ -240,11 +249,11 @@ class DirectHttpInstrumentation:
 
     async def run_in_new_span(
         self,
-        metadata: _instrumentation.SpanMetadata,
-        next: _instrumentation.SpanNext[T],
+        metadata: SpanMetadata,
+        next: SpanNext[T],
     ) -> T:
         parent = _parent_span.get()
-        is_action = _instrumentation.span_is_action.get()
+        is_action = span_is_action.get()
         qualified_path = build_qualified_path(metadata, is_action=is_action)
         span = ActiveSpan(
             trace_id=parent.trace_id if parent is not None else new_trace_id(),
@@ -252,17 +261,17 @@ class DirectHttpInstrumentation:
             parent_span_id=parent.span_id if parent is not None else None,
             name=metadata.name,
             start_time_unix_nano=now_unix_nano(),
-            attributes=_instrumentation.start_attributes(metadata, qualified_path=qualified_path, is_action=is_action),
+            attributes=start_attributes(metadata, qualified_path=qualified_path, is_action=is_action),
         )
         self.sink.export_spans([span], resource_attributes=self.resource_attributes)
-        path_token = _instrumentation.parent_path_context.set(qualified_path)
+        path_token = parent_path_context.set(qualified_path)
         parent_token = _parent_span.set(span)
         ctx = DirectSpanContext(span)
         try:
             try:
                 result = await next(ctx)
                 if result is not None:
-                    span.attributes[Attr.OUTPUT] = _instrumentation.to_json_attr(result)
+                    span.attributes[Attr.OUTPUT] = to_json_attr(result)
                 if Attr.STATE not in span.attributes:
                     span.attributes[Attr.STATE] = State.SUCCESS
                     span.status_code = 1
@@ -284,7 +293,7 @@ class DirectHttpInstrumentation:
             span.end_time_unix_nano = now_unix_nano()
             self.sink.export_spans([span], resource_attributes=self.resource_attributes)
             _parent_span.reset(parent_token)
-            _instrumentation.parent_path_context.reset(path_token)
+            parent_path_context.reset(path_token)
 
     def dispose(self) -> None:
         _parent_span.set(None)
@@ -298,10 +307,10 @@ class DirectBuiltin(DirectHttpInstrumentation, GenkitBuiltinInstrumentation):
     """The auto-injected Developer UI poster."""
 
 
-def build_qualified_path(metadata: _instrumentation.SpanMetadata, *, is_action: bool = False) -> str:
+def build_qualified_path(metadata: SpanMetadata, *, is_action: bool = False) -> str:
     if is_action:
-        return build_path(metadata.name, _instrumentation.parent_path_context.get(), 'action', metadata.action_type)
-    return build_path(metadata.name, _instrumentation.parent_path_context.get(), metadata.action_type or '')
+        return build_path(metadata.name, parent_path_context.get(), 'action', metadata.action_type)
+    return build_path(metadata.name, parent_path_context.get(), metadata.action_type or '')
 
 
 def telemetry_server_url() -> str | None:
@@ -335,17 +344,17 @@ def connect_developer_ui_collector(*, url: str) -> None:
     """
     if not url:
         return
-    if _instrumentation.is_instrumented_by(GenkitBuiltinInstrumentation):
+    if is_instrumented_by(GenkitBuiltinInstrumentation):
         return
-    _instrumentation.configure_instrumentation(direct_http_for_collector(url=url))
+    configure_instrumentation(direct_http_for_collector(url=url))
 
 
 def maybe_inject_dev_instrumentation() -> None:
     """``Genkit()`` in dev installs the poster once when a collector URL is set."""
     if not is_dev_environment():
         return
-    if _instrumentation.is_instrumented_by(GenkitBuiltinInstrumentation):
+    if is_instrumented_by(GenkitBuiltinInstrumentation):
         return
     inst = genkit_dev_instrumentation()
     if inst is not None:
-        _instrumentation.configure_instrumentation(inst)
+        configure_instrumentation(inst)

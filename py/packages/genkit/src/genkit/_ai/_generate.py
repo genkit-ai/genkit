@@ -90,6 +90,7 @@ from genkit._core._model import (
 from genkit._core._protocols import RegistryLike, SessionLike
 from genkit._core._registry import Registry
 from genkit._core._schema import check_output_schema
+from genkit._core._telemetry._instrumentation import set_span_state
 from genkit._core._typing import (
     FinishReason,
     GenerateActionOutputConfig,
@@ -101,7 +102,7 @@ from genkit._core._typing import (
     ToolRequest,
     ToolResponse,
 )
-from genkit.telemetry import SpanContext, run_in_new_span, set_span_state
+from genkit.telemetry import SpanContext, run_in_new_span
 
 DEFAULT_MAX_TURNS = 50
 

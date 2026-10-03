@@ -52,6 +52,7 @@ from genkit._core._model import AgentInput, ModelRef
 from genkit._core._reflection import as_agent_input_dict, resolve_agent_init
 from genkit._core._registry import Registry
 from genkit._core._telemetry._http import connect_developer_ui_collector
+from genkit._core._telemetry._instrumentation import flush_instrumentations
 from genkit._core._telemetry._log_exporter import enable_log_export
 from genkit._core._typing import (
     ReflectionCancelActionParams,
@@ -66,7 +67,6 @@ from genkit._core._typing import (
     ReflectionStreamChunkParams,
     State,
 )
-from genkit.telemetry import flush_instrumentations
 
 logger = get_logger(__name__)
 

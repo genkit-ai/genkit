@@ -31,12 +31,14 @@ from genkit._core._telemetry._http import (
     GenkitBuiltinInstrumentation,
     direct_http_for_collector,
 )
-from genkit._core._telemetry._instrumentation import parent_path_context
+from genkit._core._telemetry._instrumentation import (
+    flush_instrumentations,
+    parent_path_context,
+)
 from genkit._core._telemetry._log_exporter import reset_log_export
 from genkit.plugin_api import ActionKind
 from genkit.telemetry import (
     configure_instrumentation,
-    flush_instrumentations,
     instrumentations,
     is_instrumented_by,
     reset_instrumentation,

@@ -32,13 +32,13 @@ from genkit._core._middleware import GenerateMiddlewareContext
 from genkit._core._model import MultipartToolResponse, OutputT, Part, as_part
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
+from genkit._core._telemetry._instrumentation import set_custom_metadata_attributes
 from genkit._core._typing import (
     Metadata,
     MultipartToolResponse as MultipartToolResponseData,
     ToolDefinition,
     ToolResponse,
 )
-from genkit.telemetry import set_custom_metadata_attributes
 
 
 def response(
