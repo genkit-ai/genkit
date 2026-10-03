@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/sdk/instrumentation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	otrace "go.opentelemetry.io/otel/trace"
@@ -178,9 +179,23 @@ func convertEvents(evs []sdktrace.Event) []TimeEvent {
 	return tes
 }
 
+// convertStatus translates an OTel Go SDK span status into the representation
+// expected by the telemetry server, which follows the OTLP wire format.
+// The Go SDK's codes.Code ordinals are internal (Error=1, Ok=2) and inverted
+// relative to OTLP (STATUS_CODE_OK=1, STATUS_CODE_ERROR=2), so they must be
+// mapped here instead of being cast directly.
 func convertStatus(s sdktrace.Status) Status {
+	var code uint32
+	switch s.Code {
+	case codes.Ok:
+		code = 1 // OTLP STATUS_CODE_OK
+	case codes.Error:
+		code = 2 // OTLP STATUS_CODE_ERROR
+	default:
+		code = 0 // OTLP STATUS_CODE_UNSET
+	}
 	return Status{
-		Code:        uint32(s.Code),
+		Code:        code,
 		Description: s.Description,
 	}
 }
