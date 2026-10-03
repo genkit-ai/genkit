@@ -11,7 +11,7 @@ from typing import TypeVar
 
 import pytest
 
-from genkit._core._telemetry._http import ActiveSpan, DirectHttpInstrumentation
+from genkit._core._telemetry._http import ActiveSpan, GenkitBuiltinInstrumentation
 from genkit.telemetry import (
     SpanContext,
     SpanMetadata,
@@ -68,9 +68,9 @@ class HexInstrumentation:
         return await next(HexSpanContext())
 
 
-def recording_http_instrumentation() -> tuple[DirectHttpInstrumentation, MemoryCollectorSink]:
+def recording_http_instrumentation() -> tuple[GenkitBuiltinInstrumentation, MemoryCollectorSink]:
     sink = MemoryCollectorSink()
-    return DirectHttpInstrumentation(sink), sink
+    return GenkitBuiltinInstrumentation(sink), sink
 
 
 @pytest.fixture

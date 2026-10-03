@@ -302,10 +302,6 @@ class GenkitBuiltinInstrumentation:
         self.sink.flush()
 
 
-# Backward compatibility alias for internal test fixtures.
-DirectHttpInstrumentation = GenkitBuiltinInstrumentation
-
-
 def build_qualified_path(metadata: SpanMetadata, *, is_action: bool = False) -> str:
     if is_action:
         return build_path(metadata.name, parent_path_context.get(), 'action', metadata.action_type)
