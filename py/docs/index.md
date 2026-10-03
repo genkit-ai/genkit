@@ -59,8 +59,6 @@
 
 ::: genkit.ExecutablePrompt
 
-::: genkit.PromptGenerateOptions
-
 ::: genkit.GenkitError
 
 ::: genkit.PublicError

@@ -60,7 +60,7 @@ from genkit._ai._agents._types import (
 # Imports from other genkit subsystems
 from genkit._ai._prompt import (
     ExecutablePrompt,
-    PromptGenerateOptions,
+    PromptCallOptions,
     lookup_prompt,
     prepare_prompt,
     register_prompt_actions,
@@ -423,7 +423,7 @@ def define_prompt_agent(
                 resume_metadata = inp.resume.metadata or None
 
             executable = await lookup_prompt(registry, name)
-            call_opts: PromptGenerateOptions = {
+            call_opts: PromptCallOptions = {
                 'messages': tag_history_for_render(history),
                 'resume_respond': resume_respond,
                 'resume_restart': resume_restart,

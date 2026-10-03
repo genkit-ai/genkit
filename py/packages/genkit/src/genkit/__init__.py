@@ -39,7 +39,6 @@ from genkit._ai._formats._types import FormatDef, FormatterConfig
 from genkit._ai._prompt import (
     ExecutablePrompt,
     ModelStreamResponse,
-    PromptGenerateOptions,
 )
 from genkit._ai._tools import (
     MultipartToolResponse,
@@ -105,7 +104,6 @@ __all__ = [
     'Flow',
     'ActionRunContext',
     'ExecutablePrompt',
-    'PromptGenerateOptions',
     'GenkitError',
     'PublicError',
     'RuntimeErrorReason',
