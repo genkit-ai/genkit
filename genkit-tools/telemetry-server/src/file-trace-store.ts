@@ -397,6 +397,10 @@ export class Index {
     if (rootSpan?.displayName) {
       indexData['name'] = rootSpan.displayName;
     }
+    const actionKey = rootSpan?.attributes?.['genkit:key'];
+    if (typeof actionKey === 'string') {
+      indexData['key'] = actionKey;
+    }
     if (rootSpan?.endTime) {
       indexData['end'] = rootSpan.endTime;
     }
