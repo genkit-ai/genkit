@@ -1,7 +1,7 @@
 # Copyright 2026 Google LLC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for serve_agent in genkit_fastapi."""
+"""Tests for serve_agent in genkit_fastapi.exp."""
 
 from __future__ import annotations
 
@@ -19,7 +19,8 @@ if not hasattr(_genkit_agent, 'InMemorySessionStore'):
 InMemorySessionStore = _genkit_agent.InMemorySessionStore
 AgentInit = _genkit_agent.AgentInit
 
-from genkit_fastapi import handle_genkit_request, serve_agent  # noqa: E402
+from genkit_fastapi import handle_genkit_request  # noqa: E402
+from genkit_fastapi.exp import serve_agent  # noqa: E402
 
 from genkit._ai._testing import define_programmable_model  # noqa: E402
 from genkit._core._model import (  # noqa: E402
@@ -65,6 +66,28 @@ def client(agent: Any, **kwargs: Any) -> TestClient:
     app = FastAPI()
     app.include_router(serve_agent(agent, base_path='/chat', **kwargs), prefix='/api')
     return TestClient(app)
+
+
+def test_serve_agent_from_exp_mounts_turn_snapshot_and_abort_routes() -> None:
+    """serve_agent(agent) from genkit_fastapi.exp serves the turn, /getSnapshot, and /abort."""
+    client_obj = client(build_agent('expAgent'))
+
+    turn = client_obj.post('/api/chat', json={'message': 'Hi'})
+    assert turn.status_code == 200
+    turn_result = turn.json()['result']
+    assert turn_result['message'] == {'role': 'model', 'content': [{'text': 'Hi there!'}]}
+    snapshot_id = turn_result['snapshotId']
+
+    snapshot = client_obj.post('/api/chat/getSnapshot', json={'data': {'snapshotId': snapshot_id}})
+    assert snapshot.status_code == 200
+    snapshot_result = snapshot.json()['result']
+    assert snapshot_result['snapshotId'] == snapshot_id
+    assert snapshot_result['sessionId'] == turn_result['sessionId']
+    assert [m['role'] for m in snapshot_result['state']['messages']] == ['user', 'model']
+
+    abort = client_obj.post('/api/chat/abort', json={'data': {'snapshotId': snapshot_id}})
+    assert abort.status_code == 200
+    assert abort.json()['result'] == {'snapshotId': snapshot_id, 'status': 'completed'}
 
 
 def test_turn_streams_sse_and_final_result() -> None:

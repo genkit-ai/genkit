@@ -18,6 +18,8 @@
 """Tests for the FastAPI plugin."""
 
 import json
+import subprocess  # noqa: S404
+import sys
 
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
@@ -55,6 +57,38 @@ def create_app() -> FastAPI:
     app.include_router(serve_flow(raise_error, base_path='/error_flow'))
 
     return app
+
+
+def test_import_genkit_fastapi_does_not_load_genkit_exp() -> None:
+    """In a fresh interpreter, import genkit_fastapi leaves genkit.exp out of sys.modules."""
+    script = (
+        'import sys\n'
+        'import genkit_fastapi\n'
+        "print(sorted(m for m in sys.modules if m == 'genkit.exp' or m.startswith('genkit.exp.')))\n"
+    )
+
+    result = subprocess.run(  # noqa: S603
+        [sys.executable, '-c', script], capture_output=True, text=True, check=True
+    )
+
+    assert result.stdout.strip() == '[]'
+
+
+def test_serve_flow_still_serves_flow() -> None:
+    """serve_flow from the genkit_fastapi root still serves a flow."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def greet(name: str) -> str:
+        return f'Hi {name}'
+
+    app = FastAPI()
+    app.include_router(serve_flow(greet), prefix='/api')
+
+    response = TestClient(app).post('/api/greet', json={'data': 'Ada'})
+
+    assert response.status_code == 200
+    assert response.json() == {'result': 'Hi Ada'}
 
 
 def test_void_flow_accepts_empty_body() -> None:

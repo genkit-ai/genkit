@@ -28,50 +28,11 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from genkit import ContextProvider, Genkit, GenkitError, RequestData
-from genkit.exp.agent import Agent, SessionSnapshot
 from genkit.plugin_api import Action, ActionKind, get_callable_json
-
-
-def parse_snapshot_lookup_input(input_val: dict[str, Any] | str | None) -> tuple[str | None, str | None]:
-    """Parse snapshot lookup params from payload dict or bare snapshot ID string."""
-    if isinstance(input_val, str):
-        return input_val, None
-    if isinstance(input_val, dict):
-        sid = input_val.get('snapshotId') or input_val.get('snapshot_id')
-        sess_id = input_val.get('sessionId') or input_val.get('session_id')
-        if bool(sid) == bool(sess_id):
-            raise GenkitError(
-                status='INVALID_ARGUMENT',
-                message=(
-                    "getSnapshot requires exactly one of 'snapshotId' (or 'snapshot_id') "
-                    "or 'sessionId' (or 'session_id')."
-                ),
-            )
-        return sid, sess_id
-    raise GenkitError(
-        status='INVALID_ARGUMENT',
-        message='getSnapshot input must be a dictionary or snapshot ID string.',
-    )
-
-
-def parse_abort_input(input_val: dict[str, Any] | str | None) -> str:
-    """Parse snapshot ID from payload dict or bare snapshot ID string."""
-    if isinstance(input_val, str):
-        return input_val
-    if isinstance(input_val, dict):
-        sid = input_val.get('snapshotId') or input_val.get('snapshot_id')
-        if sid:
-            return sid
-    raise GenkitError(
-        status='INVALID_ARGUMENT',
-        message="abort requires 'snapshotId' (or 'snapshot_id') in input.",
-    )
-
 
 # Compact JSON (no spaces) for smaller wire payload.
 JSON_SEPARATORS = (',', ':')
 
-StateT = TypeVar('StateT', bound=BaseModel)
 InputT = TypeVar('InputT')
 OutputT = TypeVar('OutputT')
 ChunkT = TypeVar('ChunkT')
@@ -378,76 +339,4 @@ def serve_flow(
         flow,
         context_dependency=context_dependency,
     )
-    return router
-
-
-def serve_agent(
-    agent: Agent[StateT],
-    *,
-    base_path: str | None = None,
-    context_dependency: Callable[..., Any] | None = None,
-) -> APIRouter:
-    """Build an APIRouter serving an agent and its snapshot/abort endpoints over HTTP.
-
-    Mount the returned router like any other::
-
-        app.include_router(serve_agent(weather_agent), prefix='/api')
-
-    Args:
-        agent: The agent to serve.
-        base_path: Route path. Defaults to /<agent name>.
-        context_dependency: A FastAPI dependency whose resolved value becomes the
-            action context, applied to the turn, getSnapshot, and abort routes.
-            Use this to reuse existing ``Depends``-based auth / resources.
-
-    Returns:
-        An APIRouter with the turn route plus snapshot/abort endpoints.
-    """
-    resolved_base_path = f'/{agent.name}' if base_path is None else base_path
-    router = APIRouter(tags=[agent.name])
-
-    _mount_action(
-        router,
-        resolved_base_path,
-        agent,
-        context_dependency=context_dependency,
-    )
-
-    if agent.store is not None:
-
-        async def snapshot_fn(input_val: dict[str, Any] | str | None = None) -> SessionSnapshot | None:
-            sid, sess_id = parse_snapshot_lookup_input(input_val)
-            return await agent.get_snapshot_data(snapshot_id=sid, session_id=sess_id)
-
-        async def abort_fn(input_val: dict[str, Any] | str | None = None) -> dict[str, object]:
-            snapshot_id = parse_abort_input(input_val)
-            status = await agent.abort_snapshot_data(snapshot_id)
-            return {'snapshotId': snapshot_id, 'status': str(status) if status else None}
-
-        snapshot_action = Action(
-            kind=ActionKind.AGENT_SNAPSHOT,
-            name=f'{agent.name}_snapshot',
-            fn=snapshot_fn,
-            description=f'Gets snapshot data for {agent.name}',
-        )
-        abort_action = Action(
-            kind=ActionKind.AGENT_ABORT,
-            name=f'{agent.name}_abort',
-            fn=abort_fn,
-            description=f'Aborts {agent.name} agent by snapshotId',
-        )
-
-        _mount_action(
-            router,
-            f'{resolved_base_path}/getSnapshot',
-            snapshot_action,
-            context_dependency=context_dependency,
-        )
-        _mount_action(
-            router,
-            f'{resolved_base_path}/abort',
-            abort_action,
-            context_dependency=context_dependency,
-        )
-
     return router

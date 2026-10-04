@@ -42,11 +42,16 @@ Example:
     # Mount flow endpoint at POST /api/chat_flow
     app.include_router(serve_flow(chat_flow), prefix='/api')
 
-    # serve_agent(agent) mounts the same JSON protocol for an agent, plus
-    # /getSnapshot and /abort when session storage is enabled.
-
     # For a custom route, decorate with @genkit_fastapi_handler(ai) over @ai.flow().
     ```
+
+Agents are experimental, so serving one comes from ``genkit_fastapi.exp``.
+``serve_agent(agent)`` mounts the same JSON protocol for an agent, plus
+``/getSnapshot`` and ``/abort`` when session storage is enabled::
+
+    from genkit_fastapi.exp import serve_agent
+
+    app.include_router(serve_agent(weather_agent), prefix='/api')
 
 Running:
     ```bash
@@ -58,7 +63,7 @@ Running:
     ```
 """
 
-from .handler import genkit_fastapi_handler, handle_genkit_request, serve_agent, serve_flow
+from .handler import genkit_fastapi_handler, handle_genkit_request, serve_flow
 
 
 def package_name() -> str:
@@ -70,6 +75,5 @@ __all__ = [
     'genkit_fastapi_handler',
     'handle_genkit_request',
     'package_name',
-    'serve_agent',
     'serve_flow',
 ]
