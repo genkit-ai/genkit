@@ -81,7 +81,7 @@ class _FlaskRequestData(RequestData):
             request=request,
             method=request.method,
             headers={key.lower(): value for key, value in request.headers.items()},
-            input=input_data.get('data') if input_data else None,
+            input=input_data.get('data') if isinstance(input_data, dict) else None,
         )
 
 
@@ -118,8 +118,8 @@ def genkit_flask_handler(
             raise GenkitError(status='INVALID_ARGUMENT', message='must apply @genkit_flask_handler on a @flow')
 
         async def handler() -> FlaskRouteReturn:
-            input_data = request.get_json()
-            if 'data' not in input_data:
+            input_data = request.get_json(silent=True)
+            if not isinstance(input_data, dict) or 'data' not in input_data:
                 return Response(status=400, response='flow request must be wrapped in {"data": data} object')
 
             request_data = _FlaskRequestData()
