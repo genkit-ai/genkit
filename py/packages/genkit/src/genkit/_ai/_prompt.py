@@ -611,18 +611,18 @@ async def to_generate_options(
     uses_ref = isinstance(call.model, ModelRef) or isinstance(default_model, ModelRef)
     config = resolved.config if uses_ref else call.config
 
-    cache = PromptCache()
+    # Plain generate has no input to fill, so braces in system/prompt are
+    # content the caller meant to send (JSON, code, another template).
+    # Templating only happens in define_prompt and .prompt files.
     resolved_msgs: list[Message] = []
     if call.system:
-        result = await render_system_prompt(registry=registry, input={}, call=call, cache=cache)
-        resolved_msgs.append(result)
+        resolved_msgs.append(Message(role=Role.SYSTEM, content=parts_from_prompt(call.system)))
     if call.messages:
         resolved_msgs.extend(
-            await render_message_prompt(registry=registry, input={}, call=call, cache=cache, history=None)
+            await render_message_prompt(registry=registry, input={}, call=call, cache=PromptCache(), history=None)
         )
     if call.prompt:
-        result = await render_user_prompt(registry=registry, input={}, call=call, cache=cache)
-        resolved_msgs.append(result)
+        resolved_msgs.append(Message(role=Role.USER, content=parts_from_prompt(call.prompt)))
 
     # If is schema is set but format is not explicitly set, default to
     # `json` format.
