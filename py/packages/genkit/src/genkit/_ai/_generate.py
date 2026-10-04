@@ -21,7 +21,7 @@ import contextlib
 import copy
 import secrets
 import time
-from collections.abc import Awaitable, Callable, Coroutine, Generator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Generator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, TypeVar, cast
 
@@ -109,7 +109,6 @@ logger = get_logger(__name__)
 
 HookParamsT = TypeVar('HookParamsT')
 HookResultT = TypeVar('HookResultT')
-HopT = TypeVar('HopT')
 HookWrap = Callable[
     [
         HookParamsT,
@@ -422,9 +421,9 @@ async def dispatch_hooks(
             _inner: Callable[[HookParamsT, GenerateMiddlewareContext], Awaitable[HookResultT]] = runner,
             _wrap: HookWrap[HookParamsT, HookResultT] = wrap,
         ) -> HookResultT:
-            # One task per layer. Hundreds of use= hooks would otherwise nest
-            # wrap_generate, wrap_model, and wrap_tool on one stack.
-            return await await_fresh_stack(
+            # A long use= list has to return a response. Nesting every middleware
+            # on this call fails the generate before max_turns.
+            task = asyncio.create_task(
                 run_logged_hook(
                     mw=_mw,
                     hook=hook,
@@ -435,6 +434,15 @@ async def dispatch_hooks(
                     extra=extra(p) if extra is not None else None,
                 )
             )
+            try:
+                return await task
+            except BaseException:
+                # Cancel waits for this middleware so its finally blocks finish first.
+                if not task.done():
+                    task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await task
+                raise
 
         runner = with_after_result(run_next)
     return await runner(params, ctx)
@@ -1372,20 +1380,6 @@ async def run_wrap_generate(
     )
 
 
-# A long use= list, or a long tool loop, would otherwise nest every hop on
-# one Python stack and hit the recursion limit. Each hop gets its own stack.
-async def await_fresh_stack(coro: Coroutine[Any, Any, HopT]) -> HopT:
-    task = asyncio.create_task(coro)
-    try:
-        return await task
-    except BaseException:
-        if not task.done():
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
-        raise
-
-
 async def generate_turn(
     *,
     params: GenerateHookParams,
@@ -1489,7 +1483,9 @@ async def generate_turn(
         return after_tools
     # Tools already ran. This is the conversation if a later pipe fails.
     call.set_messages(after_tools.messages)
-    return await await_fresh_stack(
+    # A long tool loop has to stop at max_turns. Nesting every turn on this
+    # call fails the generate before that.
+    task = asyncio.create_task(
         run_wrap_generate(
             registry=registry,
             options=after_tools.options,
@@ -1500,6 +1496,15 @@ async def generate_turn(
             resolved=resolved,
         )
     )
+    try:
+        return await task
+    except BaseException:
+        # Cancel waits for this turn so its finally blocks finish first.
+        if not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        raise
 
 
 async def call_model(
