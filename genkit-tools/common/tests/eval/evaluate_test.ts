@@ -154,4 +154,46 @@ describe('runEvaluation evaluator options', () => {
 
     expect(Object.hasOwn(evaluator.input(), 'options')).toBe(false);
   });
+
+  it.each([
+    [
+      'non-array required',
+      { required: {}, properties: { options: { type: 'object' } } },
+    ],
+    [
+      'null options schema',
+      { required: ['options'], properties: { options: null } },
+    ],
+  ])(
+    'defers malformed reflection metadata with %s to the runtime',
+    async (_name, inputSchema) => {
+      const runtimeError = new Error('Runtime rejected the evaluator request');
+      const runAction = jest
+        .fn<BaseRuntimeManager['runAction']>()
+        .mockRejectedValue(runtimeError);
+      const manager = {
+        getMostRecentRuntime: () => ({ genkitVersion: 'nodejs/1.43.0' }),
+        runAction,
+      } as unknown as BaseRuntimeManager;
+      const action: Action = {
+        key: '/evaluator/test',
+        name: 'test',
+        inputSchema,
+        metadata: { evaluator: {} },
+      };
+
+      await expect(
+        runEvaluation({
+          manager,
+          evaluatorActions: [action],
+          evalDataset: dataset,
+        })
+      ).rejects.toBe(runtimeError);
+
+      expect(runAction).toHaveBeenCalledTimes(1);
+      expect(Object.hasOwn(runAction.mock.calls[0][0].input, 'options')).toBe(
+        false
+      );
+    }
+  );
 });

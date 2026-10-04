@@ -189,7 +189,9 @@ export async function runEvaluation(params: {
     const optionsSchema = inputSchema?.properties?.options;
     // Keep optional/defaulted options omitted and leave validation to the runtime.
     const requiresObjectOptions =
-      inputSchema?.required?.includes('options') &&
+      Array.isArray(inputSchema?.required) &&
+      inputSchema.required.includes('options') &&
+      optionsSchema !== null &&
       typeof optionsSchema === 'object' &&
       optionsSchema.type === 'object';
     const response = await manager.runAction({
