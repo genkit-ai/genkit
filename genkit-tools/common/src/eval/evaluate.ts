@@ -16,6 +16,7 @@
 
 import * as clc from 'colorette';
 import { randomUUID } from 'crypto';
+import type { JSONSchema7 } from 'json-schema';
 import { z } from 'zod';
 import { getDatasetStore, getEvalStore } from '.';
 import type { BaseRuntimeManager } from '../manager/manager';
@@ -184,12 +185,20 @@ export async function runEvaluation(params: {
 
   for (const action of evaluatorActions) {
     const name = evaluatorName(action);
+    const inputSchema = action.inputSchema as JSONSchema7 | null | undefined;
+    const optionsSchema = inputSchema?.properties?.options;
+    // Keep optional/defaulted options omitted and leave validation to the runtime.
+    const requiresObjectOptions =
+      inputSchema?.required?.includes('options') &&
+      typeof optionsSchema === 'object' &&
+      optionsSchema.type === 'object';
     const response = await manager.runAction({
       key: name,
       input: {
         dataset: evalDataset.filter((row) => !row.error),
         evalRunId,
         batchSize: isNodeRuntime ? batchSize : undefined,
+        ...(requiresObjectOptions ? { options: {} } : {}),
       },
     });
     scores[name] = response.result;
