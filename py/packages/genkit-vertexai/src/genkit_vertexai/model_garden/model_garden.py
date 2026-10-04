@@ -17,16 +17,7 @@
 
 """Model Garden implementation."""
 
-from __future__ import annotations
-
-import typing
 from collections.abc import Callable
-
-if typing.TYPE_CHECKING:
-    from openai import AsyncOpenAI
-
-    from genkit import ActionRunContext, ModelResponse
-    from genkit.model import ModelRequest
 
 # Private import across packages, on purpose. genkit-openai and
 # genkit-vertexai release in lockstep, so Model Garden reuses the
@@ -37,6 +28,10 @@ from genkit_vertexai.model_garden._model_info import (
     get_default_model_info,
 )
 from genkit_vertexai.model_garden.client import OpenAIClient
+from openai import AsyncOpenAI
+
+from genkit import ActionRunContext, ModelResponse
+from genkit.model import ModelRequest
 
 MODELGARDEN_PLUGIN_NAME = 'modelgarden'
 
