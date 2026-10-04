@@ -37,9 +37,8 @@ Example:
 from genkit._ai._aio import Genkit
 from genkit._ai._formats._types import FormatDef, FormatterConfig
 from genkit._ai._prompt import (
-    ExecutablePrompt,
     ModelStreamResponse,
-    PromptGenerateOptions,
+    Prompt,
 )
 from genkit._ai._tools import (
     MultipartToolResponse,
@@ -104,8 +103,7 @@ __all__ = [
     # Flows, prompts, errors
     'Flow',
     'ActionRunContext',
-    'ExecutablePrompt',
-    'PromptGenerateOptions',
+    'Prompt',
     'GenkitError',
     'PublicError',
     'RuntimeErrorReason',
