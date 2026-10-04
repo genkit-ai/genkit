@@ -247,3 +247,18 @@ def test_flask_flow_rejects_non_dict_json_payload_with_400() -> None:
 
     assert response.status_code == 400
     assert b'flow request must be wrapped in {"data": data} object' in response.data
+
+
+def test_flask_request_data_accepts_explicit_input_data() -> None:
+    """_FlaskRequestData accepts explicit input_data dict without re-reading request."""
+    from genkit_flask.handler import _FlaskRequestData
+
+    app = Flask(__name__)
+    with app.test_request_context(
+        '/',
+        method='POST',
+        data=b'',
+        content_type='application/json',
+    ):
+        req_data = _FlaskRequestData({'data': 'custom_input'})
+        assert req_data.input == 'custom_input'

@@ -75,8 +75,9 @@ FlaskRouteReturn: TypeAlias = Response | dict[str, object] | Iterable[Any]
 
 
 class _FlaskRequestData(RequestData):
-    def __init__(self) -> None:
-        input_data = request.get_json()
+    def __init__(self, input_data: dict[str, Any] | None = None) -> None:
+        if input_data is None:
+            input_data = request.get_json(silent=True)
         super().__init__(
             request=request,
             method=request.method,
@@ -118,11 +119,12 @@ def genkit_flask_handler(
             raise GenkitError(status='INVALID_ARGUMENT', message='must apply @genkit_flask_handler on a @flow')
 
         async def handler() -> FlaskRouteReturn:
-            input_data = request.get_json(silent=True)
-            if not isinstance(input_data, dict) or 'data' not in input_data:
+            json_payload = request.get_json(silent=True)
+            if not isinstance(json_payload, dict) or 'data' not in json_payload:
                 return Response(status=400, response='flow request must be wrapped in {"data": data} object')
+            input_data: dict[str, Any] = json_payload
 
-            request_data = _FlaskRequestData()
+            request_data = _FlaskRequestData(input_data)
             context = None
             action_context: dict[str, object] | None = None
             if context_provider:
