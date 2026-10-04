@@ -436,7 +436,7 @@ async def dispatch_hooks(
             )
             try:
                 return await task
-            except BaseException:
+            except asyncio.CancelledError:
                 # Cancel waits for this middleware so its finally blocks finish first.
                 if not task.done():
                     task.cancel()
@@ -1498,7 +1498,7 @@ async def generate_turn(
     )
     try:
         return await task
-    except BaseException:
+    except asyncio.CancelledError:
         # Cancel waits for this turn so its finally blocks finish first.
         if not task.done():
             task.cancel()
