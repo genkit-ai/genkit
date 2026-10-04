@@ -60,7 +60,10 @@ uvicorn myproject.asgi:application
 ## Context provider
 
 ```python
-async def auth(request_data):
+from genkit import RequestData
+
+
+async def auth(request_data: RequestData) -> dict[str, object]:
     return {'username': request_data.headers.get('authorization')}
 
 

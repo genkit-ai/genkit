@@ -20,7 +20,7 @@
 import json
 from typing import Any
 
-from flask import Flask, Request
+from flask import Flask
 from genkit_flask import genkit_flask_handler
 
 from genkit import ActionRunContext, Genkit, GenkitError, PublicError, RequestData
@@ -46,9 +46,9 @@ def create_app() -> Flask:
         'TESTING': True,
     })
 
-    async def my_context_provider(request_data: RequestData[Request]) -> dict[str, Any]:
+    async def my_context_provider(request_data: RequestData) -> dict[str, Any]:
         """Provide a context for the flow."""
-        return {'username': request_data.request.headers.get('authorization')}
+        return {'username': request_data.headers.get('authorization')}
 
     @app.post('/chat')
     @genkit_flask_handler(ai, context_provider=my_context_provider)
@@ -188,7 +188,7 @@ def test_flask_context_provider_sees_method_lowercase_headers_and_input() -> Non
     app = Flask(__name__)
     app.config.update({'TESTING': True})
 
-    async def provider(request_data: RequestData[Request]) -> dict[str, Any]:
+    async def provider(request_data: RequestData) -> dict[str, Any]:
         return {
             'method': request_data.method,
             'authorization': request_data.headers['authorization'],

@@ -20,11 +20,10 @@
 import json
 import sys
 import types
-from collections.abc import Iterator, Mapping
-from typing import Any, cast
+from collections.abc import Iterator
+from typing import Any
 
 import pytest
-from django.http import HttpRequest
 from django.test import AsyncClient
 from django.test.utils import override_settings
 from django.urls import path
@@ -55,10 +54,9 @@ def _build_views() -> dict[str, Any]:
     """Build the Django views used by the integration tests."""
     ai = Genkit()
 
-    async def my_context_provider(request_data: RequestData[HttpRequest]) -> dict[str, Any]:
+    async def my_context_provider(request_data: RequestData) -> dict[str, Any]:
         """Provide a context for the flow."""
-        headers = cast(Mapping[str, str], request_data.request.headers)
-        return {'username': headers.get('authorization')}
+        return {'username': request_data.headers.get('authorization')}
 
     @genkit_django_handler(ai, context_provider=my_context_provider)
     @ai.flow()
@@ -83,7 +81,7 @@ def _build_views() -> dict[str, Any]:
     async def raise_public(_: str) -> None:
         raise PublicError('NOT_FOUND', 'no order 99')
 
-    async def echo_context(request_data: RequestData[HttpRequest]) -> dict[str, Any]:
+    async def echo_context(request_data: RequestData) -> dict[str, Any]:
         return {
             'method': request_data.method,
             'authorization': request_data.headers['authorization'],
