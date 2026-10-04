@@ -38,6 +38,12 @@ def test_request_data_subclass_with_super_init_still_builds() -> None:
 
 def test_request_data_defaults() -> None:
     """RequestData has default empty values for method, headers, and input."""
+    empty = RequestData()
+    assert empty.request is None
+    assert empty.method == ''
+    assert empty.headers == {}
+    assert empty.input is None
+
     data = RequestData(request='req')
     assert data.request == 'req'
     assert data.method == ''

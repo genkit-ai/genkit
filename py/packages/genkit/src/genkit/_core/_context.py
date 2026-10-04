@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, Generic, TypeVar
+from typing import Any
 
 
 @dataclass
@@ -30,25 +30,22 @@ class ContextMetadata:
     trace_id: str | None = None
 
 
-T = TypeVar('T')
-
-
 @dataclass
-class RequestData(Generic[T]):
+class RequestData:
     """What a context_provider sees for one HTTP request.
 
     ``headers`` keys are lowercase so ``Authorization`` and ``authorization``
     look the same on every served flow.
     """
 
-    request: T
+    request: Any = None
     method: str = ''
     headers: dict[str, str] = field(default_factory=dict)
     input: Any = None
     metadata: ContextMetadata | None = None
 
 
-ContextProvider = Callable[[RequestData[T]], dict[str, Any] | Awaitable[dict[str, Any]]]
+ContextProvider = Callable[[RequestData], dict[str, Any] | Awaitable[dict[str, Any]]]
 """Middleware can read request data and add information to the context that will be passed to the
 Action. If middleware throws an error, that error will fail the request and the Action will not
 be called.
