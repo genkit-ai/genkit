@@ -16,6 +16,8 @@
 
 """Tests for Retry middleware."""
 
+import asyncio
+import time
 from typing import NoReturn
 from unittest.mock import AsyncMock, patch
 
@@ -313,3 +315,71 @@ async def test_retry_does_not_retry_unauthenticated_error(ctx: GenerateMiddlewar
 
     assert call_count == 1
     sleep.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_retry_makes_no_new_attempt_after_caller_stops(ctx: GenerateMiddlewareContext) -> None:
+    """Model fails UNAVAILABLE after the caller stopped: one call, original error raised."""
+    retry = Retry(max_retries=3, no_jitter=True)
+    error = GenkitError(message='Service unavailable', status='UNAVAILABLE')
+    call_count = 0
+
+    async def next_fn(params, ctx) -> NoReturn:
+        nonlocal call_count
+        call_count += 1
+        ctx.abort_signal.set()
+        raise error
+
+    with (
+        patch('genkit_middleware._retry.sleep', new_callable=AsyncMock) as sleep,
+        pytest.raises(GenkitError) as exc_info,
+    ):
+        await retry.wrap_model(_make_params(), ctx, next_fn)
+
+    assert exc_info.value is error
+    assert call_count == 1
+    sleep.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_retry_backoff_wait_ends_when_caller_stops(ctx: GenerateMiddlewareContext) -> None:
+    """Caller stops during a 30s backoff: the wait ends right away and no second call runs."""
+    retry = Retry(max_retries=3, initial_delay_ms=30_000, no_jitter=True)
+    error = GenkitError(message='Service unavailable', status='UNAVAILABLE')
+    call_count = 0
+
+    async def next_fn(params, ctx) -> NoReturn:
+        nonlocal call_count
+        call_count += 1
+        asyncio.get_running_loop().call_later(0.05, ctx.abort_signal.set)
+        raise error
+
+    started = time.monotonic()
+    with pytest.raises(GenkitError) as exc_info:
+        await asyncio.wait_for(retry.wrap_model(_make_params(), ctx, next_fn), timeout=5)
+
+    assert time.monotonic() - started < 2
+    assert exc_info.value is error
+    assert call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_retry_still_retries_when_caller_has_not_stopped(ctx: GenerateMiddlewareContext) -> None:
+    """UNAVAILABLE then success, caller never stopped: the retry returns the success."""
+    retry = Retry(max_retries=3, no_jitter=True)
+    success = ModelResponse(message=None)
+    call_count = 0
+
+    async def next_fn(params, ctx) -> ModelResponse:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise GenkitError(message='Service unavailable', status='UNAVAILABLE')
+        return success
+
+    with patch('genkit_middleware._retry.sleep', new_callable=AsyncMock) as sleep:
+        result = await retry.wrap_model(_make_params(), ctx, next_fn)
+
+    assert result is success
+    assert call_count == 2
+    sleep.assert_awaited_once_with(1.0)
