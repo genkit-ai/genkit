@@ -93,7 +93,7 @@ from __future__ import annotations
 
 from typing import Any, ClassVar, Literal
 
-from pydantic import ConfigDict, Field, RootModel, field_validator
+from pydantic import ConfigDict, Field, RootModel
 from pydantic.alias_generators import to_camel
 
 from genkit._core._base import GenkitModel
@@ -239,9 +239,23 @@ def _py_type(prop: dict, schema: dict, defs: dict, class_name: str, field_name: 
     for key in ('anyOf', 'oneOf'):
         if key in prop:
             opts = prop[key]
-            refs = [o.get('$ref', '').split('/')[-1] for o in opts if o.get('$ref')]
-            if refs:
-                return ' | '.join(_output_name(r) for r in refs)
+            ref_names = [o.get('$ref', '').split('/')[-1] for o in opts if o.get('$ref')]
+            other = [o for o in opts if not o.get('$ref')]
+            if ref_names and not other:
+                return ' | '.join(_output_name(r) for r in ref_names)
+            if ref_names and other:
+                # One object or a list of them is a real value. Keeping only
+                # the ref branch would drop the list, so two scores could not come back.
+                parts: list[str] = []
+                for opt in opts:
+                    ref = opt.get('$ref')
+                    if ref:
+                        parts.append(_output_name(str(ref).split('/')[-1]))
+                        continue
+                    resolved = _py_type(opt, schema, defs, class_name, field_name)
+                    if resolved:
+                        parts.append(resolved)
+                return ' | '.join(parts) if parts else 'Any'
             types = sorted({_py_type(o, schema, defs, class_name, field_name) for o in opts} - {''})
             return ' | '.join(types) if types else 'Any'
     if prop.get('type') == 'array':
@@ -327,10 +341,6 @@ def _emit_model(
             py_type_str = 'dict[str, Any]'
         if name == 'MessageData' and k == 'role':
             py_type_str = 'Role | str'
-        # Every evaluator hands back the same shape, so readers always loop
-        # over scores instead of checking whether they got one or many.
-        if name == 'EvalFnResponse' and snake == 'evaluation':
-            py_type_str = 'list[Score]'
         desc = v.get('description')
         desc_extra = f', description={repr(desc)}' if desc else ''
         if k in req:
@@ -346,17 +356,6 @@ def _emit_model(
         lines.extend([
             '    # Store Pydantic type for runtime validation (excluded from JSON)',
             '    schema_type: Any = Field(default=None, exclude=True)',
-        ])
-    if name == 'EvalFnResponse':
-        lines.extend([
-            '',
-            "    @field_validator('evaluation', mode='before')",
-            '    @classmethod',
-            '    def _wrap_single_score_object(cls, value: Any) -> Any:  # noqa: ANN401',
-            '        # saved runs and other tools may store one score object instead of',
-            '        # a list. only raw JSON gets wrapped; a Score built in code must be',
-            '        # passed as a list so the type checker and runtime agree.',
-            '        return [value] if isinstance(value, dict) else value',
         ])
     return lines + ['']
 

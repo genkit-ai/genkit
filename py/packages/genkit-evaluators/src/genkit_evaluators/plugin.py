@@ -53,7 +53,7 @@ async def _regex_impl(datapoint: BaseDataPoint, _options: object | None = None) 
     status = EvalStatusEnum.PASS if match else EvalStatusEnum.FAIL
     return EvalFnResponse(
         test_case_id=datapoint.test_case_id or '',
-        evaluation=[Score(score=match, status=status)],
+        evaluation=Score(score=match, status=status),
     )
 
 
@@ -67,7 +67,7 @@ async def _deep_equal_impl(datapoint: BaseDataPoint, _options: object | None = N
     status = EvalStatusEnum.PASS if equal else EvalStatusEnum.FAIL
     return EvalFnResponse(
         test_case_id=datapoint.test_case_id or '',
-        evaluation=[Score(score=equal, status=status)],
+        evaluation=Score(score=equal, status=status),
     )
 
 
@@ -87,7 +87,7 @@ async def _jsonata_impl(datapoint: BaseDataPoint, _options: object | None = None
     status = EvalStatusEnum.PASS if passed else EvalStatusEnum.FAIL
     return EvalFnResponse(
         test_case_id=datapoint.test_case_id or '',
-        evaluation=[Score(score=result, status=status)],
+        evaluation=Score(score=result, status=status),
     )
 
 

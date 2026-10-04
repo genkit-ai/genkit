@@ -1501,8 +1501,7 @@ class Genkit:
                 evaluator='my_eval',
                 dataset=[BaseDataPoint(input='What is 2+2?', output='4')],
             )
-            for score in results.root[0].evaluation:
-                print(score.score)
+            print(results.root[0].evaluation.score)
         """
         evaluator_name: str = ''
         evaluator_config: dict[str, object] = {}

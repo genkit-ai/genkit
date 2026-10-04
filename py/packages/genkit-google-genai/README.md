@@ -138,7 +138,7 @@ results = await ai.evaluate(
 )
 
 for result in results.root:
-    print(f'Score: {result.evaluation[0].score}')
+    print(f'Score: {result.evaluation.score}')
 ```
 
 Runnable snippets are in [`py/samples`](../../samples).
