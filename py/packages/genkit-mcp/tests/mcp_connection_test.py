@@ -8,6 +8,7 @@
 
 import asyncio
 import gc
+import io
 import os
 import signal
 import sys
@@ -18,6 +19,7 @@ from typing import cast
 
 import anyio
 import pytest
+import structlog
 from genkit_mcp import _connection
 from genkit_mcp._config import McpStdioServerConfig
 from genkit_mcp._connection import McpConnection, _call_tool, _ConnectionState, _Request
@@ -89,6 +91,28 @@ def is_running(pid: int) -> bool:
     except ProcessLookupError:
         return False
     return True
+
+
+async def stdin_closed(marker: Path) -> None:
+    """Wait for the server to report that it closed its stdin."""
+
+    async def read() -> str:
+        while True:
+            try:
+                return await anyio.Path(marker).read_text(encoding='utf-8')
+            except FileNotFoundError:
+                await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(read(), timeout=LIMIT)
+
+
+async def start_with_closed_stdin(connection: McpConnection, marker: Path) -> asyncio.Task[None]:
+    """Finish the handshake, then wait until the server's stdin is closed, so the next write breaks."""
+    await asyncio.wait_for(connection._start(), timeout=LIMIT)
+    await stdin_closed(marker)
+    owner = connection._owner_task
+    assert owner is not None
+    return owner
 
 
 async def settle(owner: asyncio.Task[None]) -> None:
@@ -278,6 +302,18 @@ async def test_close_before_the_owner_task_starts_releases_the_waiter(tmp_path: 
 
 
 @pytest.mark.asyncio
+async def test_close_never_started_twice(tmp_path: Path) -> None:
+    connection = McpConnection(config(tmp_path))
+    await asyncio.wait_for(connection.close(), timeout=LIMIT)
+    await asyncio.wait_for(connection.close(), timeout=LIMIT)
+
+    assert connection._owner_task is None
+    with pytest.raises(McpConnectionClosedError, match='closed'):
+        await asyncio.wait_for(connection.list_tools(), timeout=LIMIT)
+    assert not (tmp_path / 'server.pid').exists()
+
+
+@pytest.mark.asyncio
 async def test_close_during_startup_releases_the_waiter(tmp_path: Path) -> None:
     pid_file = tmp_path / 'stalled.pid'
     connection = McpConnection(config(tmp_path, pid_file=pid_file, MCP_FAKE_STALL='1'))
@@ -323,16 +359,155 @@ async def test_server_death_makes_the_connection_terminal(tmp_path: Path) -> Non
 
     with pytest.raises(McpConnectionFailedError, match='failed') as first:
         await asyncio.wait_for(connection.call_tool('echo', {}), timeout=LIMIT)
-    assert first.value.__cause__ is not None
-    # Settled by the serve loop, not by the owner's unwinding, so callers
-    # arriving during the SDK's process teardown are turned away at once.
     assert connection._state is _ConnectionState.FAILED
 
     await settle(owner)
     assert connection._state is _ConnectionState.FAILED
-    with pytest.raises(McpConnectionFailedError, match='failed'):
+    with pytest.raises(McpConnectionFailedError, match='failed') as later:
         await asyncio.wait_for(connection.list_tools(), timeout=LIMIT)
+    # The reply stream and the stdin write race to notice the death; only the first cause is ever recorded.
+    assert isinstance(later.value.__cause__, (anyio.BrokenResourceError, anyio.ClosedResourceError, McpError))
+    assert first.value.__cause__ is later.value.__cause__
     await asyncio.wait_for(connection.close(), timeout=LIMIT)
+
+
+@pytest.mark.asyncio
+async def test_a_caller_cut_off_by_a_broken_stdin_carries_the_transport_error(tmp_path: Path) -> None:
+    """The SDK cancels the in-flight call before its task group reports why."""
+    marker = tmp_path / 'stdin.closed'
+    connection = McpConnection(config(tmp_path, MCP_FAKE_CLOSE_STDIN=str(marker)))
+    try:
+        owner = await start_with_closed_stdin(connection, marker)
+
+        with pytest.raises(McpConnectionFailedError, match='failed') as failure:
+            await asyncio.wait_for(connection.call_tool('echo', {}), timeout=LIMIT)
+        assert isinstance(failure.value.__cause__, anyio.BrokenResourceError)
+
+        await settle(owner)
+        with pytest.raises(McpConnectionFailedError, match='failed') as later:
+            await asyncio.wait_for(connection.list_tools(), timeout=LIMIT)
+        assert later.value.__cause__ is failure.value.__cause__
+    finally:
+        await asyncio.wait_for(connection.close(), timeout=LIMIT)
+
+
+@pytest.mark.asyncio
+async def test_a_caller_arriving_while_the_owner_unwinds_waits_for_the_transport_error(tmp_path: Path) -> None:
+    marker = tmp_path / 'stdin.closed'
+    connection = McpConnection(config(tmp_path, MCP_FAKE_CLOSE_STDIN=str(marker)))
+    try:
+        await start_with_closed_stdin(connection, marker)
+        seen: list[tuple[_ConnectionState, Exception | None]] = []
+        late: list[asyncio.Task[list[McpTool]]] = []
+
+        async def arrive() -> list[McpTool]:
+            seen.append((connection._state, connection._failure))
+            return await connection.list_tools()
+
+        async def cut_off(session: ClientSession) -> list[McpTool]:
+            try:
+                await session.send_ping()
+            except asyncio.CancelledError:
+                late.append(asyncio.create_task(arrive()))
+                raise
+            return []
+
+        with pytest.raises(McpConnectionFailedError, match='failed') as first:
+            await asyncio.wait_for(connection._request(cut_off), timeout=LIMIT)
+        with pytest.raises(McpConnectionFailedError, match='failed') as second:
+            await asyncio.wait_for(late[0], timeout=LIMIT)
+
+        assert seen == [(_ConnectionState.FAILED, None)]
+        assert isinstance(first.value.__cause__, anyio.BrokenResourceError)
+        assert second.value.__cause__ is first.value.__cause__
+    finally:
+        await asyncio.wait_for(connection.close(), timeout=LIMIT)
+
+
+@pytest.mark.asyncio
+async def test_close_while_the_owner_unwinds_releases_a_cut_off_caller_as_closed(tmp_path: Path) -> None:
+    marker = tmp_path / 'stdin.closed'
+    connection = McpConnection(config(tmp_path, MCP_FAKE_CLOSE_STDIN=str(marker)))
+    await start_with_closed_stdin(connection, marker)
+    cut = asyncio.Event()
+
+    async def cut_off(session: ClientSession) -> list[McpTool]:
+        try:
+            await session.send_ping()
+        except asyncio.CancelledError:
+            cut.set()
+            raise
+        return []
+
+    caller = asyncio.create_task(connection._request(cut_off))
+    await asyncio.wait_for(cut.wait(), timeout=LIMIT)
+    assert connection._state is _ConnectionState.FAILED
+    assert connection._failure is None
+
+    await asyncio.wait_for(connection.close(), timeout=LIMIT)
+    with pytest.raises(McpConnectionClosedError, match='closed') as closed:
+        await asyncio.wait_for(caller, timeout=LIMIT)
+    assert closed.value.__cause__ is None
+
+
+@pytest.mark.asyncio
+async def test_a_transport_failure_is_logged_without_the_server_env(tmp_path: Path) -> None:
+    secret = 'genkit-mcp-redaction-canary-7f3a'
+    marker = tmp_path / 'stdin.closed'
+    launch = config(tmp_path, MCP_FAKE_CLOSE_STDIN=str(marker))
+    assert launch.env is not None
+    # First, so the renderer's cap on how many dict entries it prints cannot hide it.
+    launch.env = {'GENKIT_MCP_TEST_API_KEY': secret, **launch.env}
+    connection = McpConnection(launch)
+    output = io.StringIO()
+    saved = structlog.get_config()
+    structlog.configure(logger_factory=structlog.PrintLoggerFactory(output))
+    try:
+        owner = await start_with_closed_stdin(connection, marker)
+        with pytest.raises(McpConnectionFailedError, match='failed'):
+            await asyncio.wait_for(connection.call_tool('echo', {}), timeout=LIMIT)
+        await settle(owner)
+    finally:
+        structlog.configure(**saved)
+        await asyncio.wait_for(connection.close(), timeout=LIMIT)
+
+    logged = output.getvalue()
+    assert 'MCP connection ended' in logged
+    assert 'BrokenResourceError' in logged
+    assert secret not in logged
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('raises', [False, True])
+async def test_a_caller_cancelled_after_dispatch_leaves_the_connection_open(tmp_path: Path, raises: bool) -> None:
+    connection = McpConnection(config(tmp_path))
+    try:
+        await asyncio.wait_for(connection.list_tools(), timeout=LIMIT)
+        running, release, returned = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+        async def abandoned(session: ClientSession) -> list[McpTool]:
+            running.set()
+            await release.wait()
+            # Nothing awaits between here and the outcome reaching the caller's future.
+            returned.set()
+            if raises:
+                raise ValueError('abandoned')
+            return []
+
+        caller = asyncio.create_task(connection._request(abandoned))
+        await asyncio.wait_for(running.wait(), timeout=LIMIT)
+        caller.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await caller
+        release.set()
+        await asyncio.wait_for(returned.wait(), timeout=LIMIT)
+
+        assert connection._state is _ConnectionState.OPEN
+        assert connection._failure is None
+        alive = await asyncio.wait_for(connection.call_tool('echo', {'message': 'alive'}), timeout=LIMIT)
+        assert text_of(alive) == 'alive'
+    finally:
+        await asyncio.wait_for(connection.close(), timeout=LIMIT)
 
 
 @pytest.mark.asyncio
@@ -528,22 +703,29 @@ async def test_a_tool_call_error_code_does_not_poison_a_live_connection(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_settle_makes_a_silent_owner_exit_terminal(tmp_path: Path) -> None:
+async def test_settle_makes_a_silent_owner_exit_terminal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     connection = McpConnection(config(tmp_path))
+
+    async def serve_nothing(session: ClientSession) -> None:
+        return None
+
+    # An owner that leaves its serve loop without raising, as when anyio's cancel scopes absorb the cause.
+    monkeypatch.setattr(connection, '_serve', serve_nothing)
     try:
-        await asyncio.wait_for(connection.list_tools(), timeout=LIMIT)
+        await asyncio.wait_for(connection._start(), timeout=LIMIT)
+        owner = connection._owner_task
+        assert owner is not None
 
         async def unreachable(session: ClientSession) -> list[McpTool]:
             return (await session.list_tools()).tools
 
         queued: asyncio.Future[list[McpTool]] = asyncio.get_running_loop().create_future()
+        assert not owner.done()
         connection._queue.put_nowait(_Request(unreachable, queued))
-
-        # What the owner's finally does when anyio's cancel scopes absorb
-        # whatever ended the serve loop.
-        connection._settle(None)
+        await settle(owner)
 
         assert connection._state is _ConnectionState.FAILED
+        assert connection._failure is None
         with pytest.raises(McpConnectionFailedError, match='failed'):
             await asyncio.wait_for(queued, timeout=LIMIT)
         with pytest.raises(McpConnectionFailedError, match='failed'):
@@ -574,6 +756,8 @@ async def test_request_rejects_a_state_change_after_start(
     async def start_then_terminate() -> None:
         await started()
         connection._state = state
+        if state is _ConnectionState.FAILED:
+            connection._failure = anyio.BrokenResourceError()
 
     monkeypatch.setattr(connection, '_start', start_then_terminate)
     with pytest.raises(error, match=message):
