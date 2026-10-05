@@ -98,6 +98,12 @@ from genkit_google_genai.models.gemini import (
 from genkit_google_genai.models.interactions_lyria import LyriaConfig
 from genkit_google_genai.models.interactions_registry import LyriaVersion
 from genkit_google_genai.models.veo import GoogleAIVeoVersion, KnownVeo, VeoConfig, VertexAIVeoVersion
+from genkit_google_genai.models.virtual_try_on import (
+    KnownVirtualTryOn,
+    VirtualTryOnConfig,
+    VirtualTryOnOutputOptions,
+    VirtualTryOnVersion,
+)
 
 
 def package_name() -> str:
@@ -126,6 +132,7 @@ __all__ = [
     'KnownGeminiTts',
     'KnownGemma',
     'KnownVeo',
+    'KnownVirtualTryOn',
     'LyriaConfig',
     'LyriaVersion',
     'VeoConfig',
@@ -133,5 +140,8 @@ __all__ = [
     'VertexAIGeminiVersion',
     'VertexAIVeoVersion',
     'VertexEmbeddingModels',
+    'VirtualTryOnConfig',
+    'VirtualTryOnOutputOptions',
+    'VirtualTryOnVersion',
     'package_name',
 ]
