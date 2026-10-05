@@ -43,7 +43,10 @@ async def review(code: str) -> Issue:
         output_schema=Issue,
     )
     if result.output is None:
-        raise PublicError('INTERNAL', f'Model did not return an Issue: {result.text}')
+        raise PublicError(
+            'INTERNAL',
+            f'Model did not return an Issue (finish_reason={result.finish_reason}, error={result.error})',
+        )
     return result.output
 
 

@@ -4456,12 +4456,14 @@ async def test_generate_stream_fails_after_tool_turn_keeps_closed_round() -> Non
 
     model_chunks = [chunk for chunk in chunks if chunk.role == Role.MODEL]
     assert [chunk.text for chunk in model_chunks] == ['partial-1', 'partial-2']
+    assert [chunk.role for chunk in chunks] == [Role.TOOL, Role.MODEL, Role.MODEL]
     assert response.finish_reason == FinishReason.FAILED
     assert response.finish_message == 'internal error'
     assert response.error is not None
     assert response.error.status == 'INTERNAL'
     assert response.text == ''
     assert response.message is None
+    assert response.output is None
     assert [message.role for message in response.messages] == [Role.USER, Role.MODEL, Role.TOOL]
     assert _tool_request(response.messages[1]).ref == 'closed'
     assert _tool_output(response.messages[2]) == '72F'
