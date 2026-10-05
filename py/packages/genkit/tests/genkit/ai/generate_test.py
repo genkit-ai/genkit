@@ -6923,3 +6923,166 @@ async def test_generate_json_format_with_tool_call_validates_only_final_turn() -
     assert response.error is None
     assert response.output == {'result': 'special ingredient'}
     assert response.messages[-1].text == '{"result": "special ingredient"}'
+
+
+_DOCS_NEED_USER = 'docs= needs a user message to attach to'
+
+
+def _context_text(message: Message) -> str | None:
+    for part in message.content:
+        if (part.metadata or {}).get('purpose') == 'context':
+            return part.text
+    return None
+
+
+@pytest.mark.asyncio
+async def test_generate_docs_with_system_only_raises_invalid_argument() -> None:
+    """`ai.generate(system=..., docs=[doc])` raises; the model is never called."""
+    ai = Genkit(model='echoModel')
+    echo, _ = define_echo_model(ai)
+    with pytest.raises(GenkitError, match=_DOCS_NEED_USER) as raised:
+        await ai.generate(system='Answer from the sources.', docs=[Document.from_text('cats sit on mats')])
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    assert raised.value.reason is RuntimeErrorReason.INVALID_INPUT
+    assert echo.last_request is None
+
+
+@pytest.mark.asyncio
+async def test_generate_docs_with_no_messages_raises_invalid_argument() -> None:
+    """`ai.generate(docs=[doc])` with no messages raises; the model is never called."""
+    ai = Genkit(model='echoModel')
+    echo, _ = define_echo_model(ai)
+    with pytest.raises(GenkitError, match=_DOCS_NEED_USER) as raised:
+        await ai.generate(docs=[Document.from_text('cats sit on mats')])
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    assert raised.value.reason is RuntimeErrorReason.INVALID_INPUT
+    assert echo.last_request is None
+
+
+@pytest.mark.asyncio
+async def test_generate_docs_with_only_model_history_raises_invalid_argument() -> None:
+    """History of only model turns plus `docs=` raises; the model is never called."""
+    ai = Genkit(model='echoModel')
+    echo, _ = define_echo_model(ai)
+    with pytest.raises(GenkitError, match=_DOCS_NEED_USER) as raised:
+        await ai.generate(
+            messages=[Message(role=Role.MODEL, content=[Part.from_text('already talking')])],
+            docs=[Document.from_text('cats sit on mats')],
+        )
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    assert raised.value.reason is RuntimeErrorReason.INVALID_INPUT
+    assert echo.last_request is None
+
+
+@pytest.mark.asyncio
+async def test_generate_docs_with_prompt_attaches_to_user_message() -> None:
+    """`ai.generate(prompt=..., docs=[doc])` sends the doc as a context part on the user message."""
+    ai = Genkit(model='echoModel')
+    echo, _ = define_echo_model(ai)
+    response = await ai.generate(prompt='summarize', docs=[Document.from_text('cats sit on mats')])
+    assert response.error is None
+    assert response.message is not None
+    assert echo.last_request is not None
+    context = _context_text(echo.last_request.messages[0])
+    assert context is not None
+    assert 'cats sit on mats' in context
+    assert echo.last_request.messages[0].role == Role.USER
+
+
+@pytest.mark.asyncio
+async def test_generate_docs_attach_to_earlier_user_message_in_history() -> None:
+    """History `[user, model]` plus `docs=` attaches to that earlier user message."""
+    ai = Genkit(model='echoModel')
+    echo, _ = define_echo_model(ai)
+    response = await ai.generate(
+        messages=[
+            Message(role=Role.USER, content=[Part.from_text('first')]),
+            Message(role=Role.MODEL, content=[Part.from_text('ok')]),
+        ],
+        docs=[Document.from_text('cats sit on mats')],
+    )
+    assert response.error is None
+    assert response.message is not None
+    assert echo.last_request is not None
+    context = _context_text(echo.last_request.messages[0])
+    assert context is not None
+    assert 'cats sit on mats' in context
+    assert echo.last_request.messages[0].role == Role.USER
+
+
+@pytest.mark.asyncio
+async def test_generate_empty_docs_without_user_message_runs() -> None:
+    """`ai.generate(system=..., docs=[])` runs; an empty list is not docs to attach."""
+    ai = Genkit(model='echoModel')
+    echo, _ = define_echo_model(ai)
+    response = await ai.generate(system='be concise', docs=[])
+    assert response.error is None
+    assert response.message is not None
+    assert echo.last_request is not None
+    assert [message.role for message in echo.last_request.messages] == [Role.SYSTEM]
+
+
+@pytest.mark.asyncio
+async def test_generate_docs_stay_on_user_message_after_tool_turn() -> None:
+    """A tool round followed by the final answer still carries the docs on the user message."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+
+    @ai.tool(name='lookup')
+    async def lookup() -> str:
+        return '72F'
+
+    pm.responses = [
+        _model_calls_tool(name='lookup', ref='r1'),
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('72F outside')]),
+        ),
+    ]
+    response = await ai.generate(
+        prompt='what is the weather',
+        docs=[Document.from_text('cats sit on mats')],
+        tools=['lookup'],
+    )
+    assert response.finish_reason == FinishReason.STOP
+    assert response.error is None
+    assert response.message is not None
+    assert response.messages[-1] == response.message
+    assert [message.role for message in response.messages] == [Role.USER, Role.MODEL, Role.TOOL, Role.MODEL]
+    assert _tool_output(response.messages[2]) == '72F'
+    assert pm.last_request is not None
+    context = _context_text(pm.last_request.messages[0])
+    assert context is not None
+    assert 'cats sit on mats' in context
+
+
+@pytest.mark.asyncio
+async def test_prompt_docs_with_system_only_template_raises_invalid_argument() -> None:
+    """A `define_prompt(system=..., docs=[doc])` with no user template raises when called."""
+    ai = Genkit(model='echoModel')
+    echo, _ = define_echo_model(ai)
+    prompt = ai.define_prompt(system='Answer from the sources.', docs=[Document.from_text('cats sit on mats')])
+    with pytest.raises(GenkitError, match=_DOCS_NEED_USER) as raised:
+        await prompt()
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    assert raised.value.reason is RuntimeErrorReason.INVALID_INPUT
+    assert echo.last_request is None
+
+
+@pytest.mark.asyncio
+async def test_generate_action_docs_without_user_message_raises_invalid_argument() -> None:
+    """The generate action with `docs=` and no user message raises before the model is called."""
+    ai = Genkit(model='echoModel')
+    echo, _ = define_echo_model(ai)
+    with pytest.raises(GenkitError, match=_DOCS_NEED_USER) as raised:
+        await generate_action(
+            ai.registry,
+            GenerateActionOptions(
+                model='echoModel',
+                messages=[Message(role=Role.SYSTEM, content=[Part.from_text('Answer from the sources.')])],
+                docs=[Document.from_text('cats sit on mats')],
+            ),
+        )
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    assert raised.value.reason is RuntimeErrorReason.INVALID_INPUT
+    assert echo.last_request is None
