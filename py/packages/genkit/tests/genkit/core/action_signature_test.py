@@ -11,7 +11,7 @@ import pytest
 
 from genkit import ActionRunContext, Genkit, Message, ModelResponse, Operation, Part
 from genkit._core._action import Action, ActionKind
-from genkit._core._background import StartModelOpFn
+from genkit._core._background import CheckModelOpFn, StartModelOpFn
 from genkit._core._typing import Role
 from genkit.model import ModelRequest
 
@@ -156,7 +156,7 @@ def test_action_with_positional_only_parameter_raises_type_error() -> None:
 
 @pytest.mark.asyncio
 async def test_background_model_with_context_first_start_gets_both() -> None:
-    """The background-model wrapper forwards by name, so `start(ctx, request)` works."""
+    """`start(ctx, request)` gets each by name, and the handle has the start action key."""
     ai = Genkit()
     seen: list[object] = []
 
@@ -173,6 +173,27 @@ async def test_background_model_with_context_first_start_gets_both() -> None:
 
     assert seen == [ModelRequest, {'table': 4}]
     assert result.response.id == 'render-1'
+    assert result.response.action == '/background-model/menu-video'
+
+
+@pytest.mark.asyncio
+async def test_background_model_with_context_first_check_gets_operation() -> None:
+    """`check(ctx, op)` gets each by name, same as start."""
+    ai = Genkit()
+    seen: list[object] = []
+
+    async def start(request: ModelRequest, ctx: ActionRunContext) -> Operation:
+        return Operation(id='render-1', done=False)
+
+    async def check(ctx: ActionRunContext, op: Operation) -> Operation:
+        seen.extend([op.id, ctx.context])
+        return op
+
+    action = ai.define_background_model(name='menu-video', start=start, check=cast(CheckModelOpFn, check))
+    started = await action.start_action.run(ModelRequest(messages=[]), context={'table': 4})
+    result = await action.check_action.run(started.response, context={'table': 4})
+
+    assert seen == ['render-1', {'table': 4}]
     assert result.response.action == '/background-model/menu-video'
 
 

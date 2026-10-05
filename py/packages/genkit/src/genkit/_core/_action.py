@@ -54,6 +54,7 @@ from genkit._core._telemetry._instrumentation import (
     run_in_new_span,
     to_json_attr,
 )
+from genkit._core._typing import Operation
 
 # =============================================================================
 # Span attribute types and tracing helpers
@@ -524,6 +525,16 @@ def parse_action_key(key: str) -> tuple[ActionKind, str]:
 def create_action_key(kind: ActionKind | str, name: str) -> str:
     """Create '/<kind>/<name>' key."""
     return f'/{kind}/{name}'
+
+
+def stamp_background_operation(*, output: object, kind: ActionKind, name: str) -> None:
+    """A start/check/cancel handle needs the start action key so later polls find the job."""
+    if kind not in (ActionKind.BACKGROUND_MODEL, ActionKind.CHECK_OPERATION, ActionKind.CANCEL_OPERATION):
+        return
+    if not isinstance(output, Operation) or output.action:
+        return
+    start_name = name.rsplit('/', 1)[0] if kind is not ActionKind.BACKGROUND_MODEL else name
+    output.action = create_action_key(ActionKind.BACKGROUND_MODEL, start_name)
 
 
 # =============================================================================
@@ -1059,9 +1070,9 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
 
     async def _invoke(self, input: object | None, ctx: ActionRunContext) -> OutputT:
         """Call ``self._fn`` with the input and context."""
-        if self._fn_is_wrapper:
-            return await self._fn(input, ctx)
-        return await self._params.call(self._fn, input, ctx)
+        output = await self._fn(input, ctx) if self._fn_is_wrapper else await self._params.call(self._fn, input, ctx)
+        stamp_background_operation(output=output, kind=self._kind, name=self._name)
+        return output
 
 
 async def single_item_stream(item: InputT) -> AsyncIterator[InputT]:

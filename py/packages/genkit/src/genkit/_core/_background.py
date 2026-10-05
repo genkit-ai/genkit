@@ -19,7 +19,6 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
-from functools import wraps
 from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel
@@ -249,8 +248,6 @@ def background_model(
     Plugin ``init`` / ``resolve`` return this. ``define_background_model``
     registers the start / check / cancel actions.
     """
-    action_key = _make_action_key(ActionKind.BACKGROUND_MODEL, name)
-
     # Build model metadata
     model_meta: dict[str, Any] = metadata.copy() if metadata else {}
     model_options: dict[str, Any] = {}
@@ -281,27 +278,10 @@ def background_model(
     output_schema_meta = to_json_schema(ModelResponse)
     model_meta['outputSchema'] = output_schema_meta
 
-    # Wrap the start function to add the action key and timing.
-    # Keep the caller's request annotation (ModelRequest[FamilyConfig]) so
-    # Action still types the config bag as that family.
-    @wraps(start)
-    async def wrapped_start(request: ModelRequest, ctx: ActionRunContext) -> Operation:
-        op = await start_action.params.call(start, request, ctx)
-        # The handle needs this key so check/cancel can find the job later.
-        op.action = action_key
-        return op
-
-    async def wrapped_check(op: Operation, ctx: ActionRunContext) -> Operation:
-        updated = await check(op, ctx)
-        # Preserve action key
-        updated.action = action_key
-        return updated
-
     start_action = Action(
         kind=ActionKind.BACKGROUND_MODEL,
         name=name,
-        fn=wrapped_start,
-        metadata_fn=start,
+        fn=start,
         metadata=model_meta,
         description=description or f'Background model: {label}',
         config_schema=config_schema,
@@ -310,24 +290,17 @@ def background_model(
     check_action = Action(
         kind=ActionKind.CHECK_OPERATION,
         name=f'{name}/check',
-        fn=wrapped_check,
+        fn=check,
         metadata={'outputSchema': output_schema_meta},
         description=f'Check operation status for {label}',
     )
 
     cancel_action = None
     if cancel is not None:
-        cancel_fn = cancel
-
-        async def wrapped_cancel(op: Operation, ctx: ActionRunContext) -> Operation:
-            cancelled = await cancel_fn(op, ctx)
-            cancelled.action = action_key
-            return cancelled
-
         cancel_action = Action(
             kind=ActionKind.CANCEL_OPERATION,
             name=f'{name}/cancel',
-            fn=wrapped_cancel,
+            fn=cancel,
             metadata={'outputSchema': output_schema_meta},
             description=f'Cancel operation for {label}',
         )

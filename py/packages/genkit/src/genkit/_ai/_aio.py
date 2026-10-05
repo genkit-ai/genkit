@@ -432,13 +432,17 @@ class Genkit:
         name: str,
         display_name: str,
         definition: str,
-        fn: BatchEvaluatorFn[Any],
+        fn: BatchEvaluatorFn,
         is_billed: bool = False,
         config_schema: type[BaseModel] | dict[str, object] | None = None,
         metadata: dict[str, object] | None = None,
         description: str | None = None,
     ) -> Action:
-        """Register a batch evaluator action."""
+        """Register a batch evaluator.
+
+        The function is an action: one ``EvalRequest``. Read options from
+        ``req.options``. A second parameter raises ``TypeError`` when defined.
+        """
         return define_batch_evaluator(
             self.registry,
             name=name,
