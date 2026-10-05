@@ -16,6 +16,7 @@
 
 """Tests for Veo video generation model helpers and lifecycle."""
 
+import base64
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -25,6 +26,8 @@ from genkit_google_genai.models.veo import (
     VeoConfig,
     VeoModel,
     VeoVersion,
+    _build_veo_source,
+    _extract_veo_image,
     _from_veo_operation,
     is_veo_model,
 )
@@ -358,6 +361,48 @@ class TestVeoModelLifecycle:
         called = client.aio.models.generate_videos.await_args
         assert called is not None
         assert called.kwargs['config'] is None
+
+    @pytest.mark.asyncio
+    async def test_start_sends_image_source_for_image_to_video(self) -> None:
+        """An image part in the last message reaches generate_videos as source.image."""
+        client = MagicMock()
+        client.aio.models.generate_videos = AsyncMock(return_value=_sdk_op(name='operations/1', done=False))
+        veo = VeoModel('veo-3.0-generate-001', client)
+        request = ModelRequest(
+            messages=[
+                Message(
+                    role=Role.USER,
+                    content=[
+                        Part.from_text('Animate this'),
+                        Part.from_media('gs://bucket/frame.png', content_type='image/png'),
+                    ],
+                )
+            ]
+        )
+
+        await veo.start(request, ActionRunContext())
+
+        called = client.aio.models.generate_videos.await_args
+        assert called is not None
+        assert 'prompt' not in called.kwargs
+        source = called.kwargs['source']
+        assert source.prompt == 'Animate this'
+        assert source.image is not None
+        assert source.image.gcs_uri == 'gs://bucket/frame.png'
+
+    @pytest.mark.asyncio
+    async def test_start_without_prompt_or_image_is_invalid_argument(self) -> None:
+        """A request with neither text nor an image is rejected before calling the SDK."""
+        client = MagicMock()
+        client.aio.models.generate_videos = AsyncMock()
+        veo = VeoModel('veo-3.0-generate-001', client)
+        request = ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_data({'a': 1})])])
+
+        with pytest.raises(GenkitError) as exc:
+            await veo.start(request, ActionRunContext())
+
+        assert exc.value.status == 'INVALID_ARGUMENT'
+        client.aio.models.generate_videos.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_check_polls_operation_by_sdk_name_and_returns_updated_operation(self) -> None:
@@ -835,3 +880,83 @@ class TestVeoContextClient:
         kwargs = ctor.call_args.kwargs
         assert kwargs['api_key'] == 'sk-tenant'
         assert _http_option_base_url(kwargs) is None
+
+
+def _user_request(*parts: Part) -> ModelRequest:
+    return ModelRequest(messages=[Message(role=Role.USER, content=list(parts))])
+
+
+class TestExtractVeoImage:
+    """Tests for _extract_veo_image / _build_veo_source (image-to-video)."""
+
+    def test_extracts_data_url_image(self) -> None:
+        """Base64 data: URL image becomes Image with image_bytes."""
+        raw = b'\x89PNG\r\n\x1a\n'
+        data_url = f'data:image/png;base64,{base64.b64encode(raw).decode()}'
+        request = _user_request(Part.from_text('Animate this'), Part.from_media(data_url, content_type='image/png'))
+
+        image = _extract_veo_image(request)
+        assert image is not None
+        assert image.mime_type == 'image/png'
+        assert image.image_bytes == raw
+
+        source = _build_veo_source(request)
+        assert source.prompt == 'Animate this'
+        assert source.image is not None
+        assert source.image.image_bytes == raw
+
+    def test_infers_content_type_from_data_url(self) -> None:
+        """A data: URL without content_type still resolves the image mime type."""
+        raw = b'img'
+        request = _user_request(Part.from_media(f'data:image/jpeg;base64,{base64.b64encode(raw).decode()}'))
+
+        image = _extract_veo_image(request)
+        assert image is not None
+        assert image.mime_type == 'image/jpeg'
+        assert image.image_bytes == raw
+
+    def test_extracts_gcs_image(self) -> None:
+        """gs:// image URIs map to Image.gcs_uri."""
+        request = _user_request(Part.from_media('gs://bucket/frame.png', content_type='image/png'))
+
+        image = _extract_veo_image(request)
+        assert image is not None
+        assert image.gcs_uri == 'gs://bucket/frame.png'
+        assert image.mime_type == 'image/png'
+
+    def test_ignores_video_media(self) -> None:
+        """Video media parts are not treated as image-to-video input."""
+        request = _user_request(Part.from_media('data:video/mp4;base64,AAAA', content_type='video/mp4'))
+        assert _extract_veo_image(request) is None
+
+    def test_uses_last_message_only(self) -> None:
+        """Only the last message is scanned for an image, matching JS."""
+        data_url = f'data:image/jpeg;base64,{base64.b64encode(b"img").decode()}'
+        request = ModelRequest(
+            messages=[
+                Message(role=Role.USER, content=[Part.from_media(data_url, content_type='image/jpeg')]),
+                Message(role=Role.USER, content=[Part.from_text('no image here')]),
+            ]
+        )
+        assert _extract_veo_image(request) is None
+
+    def test_image_only_source(self) -> None:
+        """Image without text prompt is a valid source."""
+        raw = b'frame'
+        data_url = f'data:image/jpeg;base64,{base64.b64encode(raw).decode()}'
+        source = _build_veo_source(_user_request(Part.from_media(data_url, content_type='image/jpeg')))
+
+        assert source.prompt is None
+        assert source.image is not None
+        assert source.image.image_bytes == raw
+
+    def test_skips_unsupported_url_and_uses_later_image(self) -> None:
+        """Unsupported http(s) image parts do not block a later supported image."""
+        request = _user_request(
+            Part.from_media('https://example.com/frame.png', content_type='image/png'),
+            Part.from_media('gs://bucket/frame.png', content_type='image/png'),
+        )
+
+        image = _extract_veo_image(request)
+        assert image is not None
+        assert image.gcs_uri == 'gs://bucket/frame.png'
