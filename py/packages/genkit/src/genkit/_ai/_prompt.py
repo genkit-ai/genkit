@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar, Generic, TypedDict, TypeVar, cast
 
-from dotpromptz.typing import (
+from dotpromptz import (
     DataArgument,
     PromptFunction,
     PromptInputConfig,

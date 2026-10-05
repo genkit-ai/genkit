@@ -1326,69 +1326,31 @@ wheels = [
 
 [[package]]
 name = "dotpromptz"
-version = "0.1.5"
+version = "0.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiofiles" },
     { name = "anyio" },
     { name = "dotpromptz-handlebars" },
+    { name = "jsonschema" },
     { name = "pydantic", extra = ["email"] },
     { name = "pyyaml" },
     { name = "structlog" },
     { name = "types-aiofiles" },
     { name = "types-pyyaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/54/7c/78d0c95c905c0ac62a6b64f00febe3e997584994608daa8e768573266781/dotpromptz-0.1.5.tar.gz", hash = "sha256:316a0e667953c07d512a31f7bff77cd601e2731df513f439f96cf3d66c96903a", size = 71206, upload-time = "2026-01-30T07:00:45.195Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b8/81/36da4a47d5be1b935fdec140a1675bf3825d0116f63b6d784b548bc6b4eb/dotpromptz-0.2.0.tar.gz", hash = "sha256:4414bd8a0e4636a48318c665b18418e60b6fd61a4d96d6e440f09fd6882eea59", size = 90844, upload-time = "2026-10-05T22:04:43.371Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/19/44/7a347c79f310aaa58372d700d0b8ce4d4a115e73a6445f77255315126447/dotpromptz-0.1.5-py3-none-any.whl", hash = "sha256:2f52c49542cc6645d8f6c42dbb6a057f39f3e374c6a2d1587d96d52fccfc6b03", size = 57612, upload-time = "2026-01-30T07:00:44Z" },
+    { url = "https://files.pythonhosted.org/packages/af/1c/41c11b559053e385f49bbcd7375b16937b887d6e6edbaf14630da1342c97/dotpromptz-0.2.0-py3-none-any.whl", hash = "sha256:0ea7f81161bafc72babae3ff50e3bdcc4eb26a16691a1be091f7a1cf0e88ce83", size = 70440, upload-time = "2026-10-05T22:04:41.764Z" },
 ]
 
 [[package]]
 name = "dotpromptz-handlebars"
-version = "0.1.8"
+version = "0.2.0"
 source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "structlog" },
-]
+sdist = { url = "https://files.pythonhosted.org/packages/22/40/c50f14ab97363667944c59f7bddc0c878068fc51ce5fa9fcdb4b5dffa45f/dotpromptz_handlebars-0.2.0.tar.gz", hash = "sha256:62528d768c9461f64fdf119a39121ebd0e6fec04f1a3578c7e3b832512d78423", size = 41135, upload-time = "2026-10-05T21:50:15.338Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d3/85/5adece8b8d541414bb4ce7390b112756352dfeaae709f85e85332d9c5234/dotpromptz_handlebars-0.1.8-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:69b8e39b7d4ff266490dd12b6a7419994e8f2d7c60ac7fcfbaa6859ae8e42754", size = 483284, upload-time = "2026-01-30T06:43:45.38Z" },
-    { url = "https://files.pythonhosted.org/packages/a6/bc/c14d9c0ac54cbfeeac279bb7b836e9372abde800b631f7a8f29b691a7879/dotpromptz_handlebars-0.1.8-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:f40a5f78c70e0907b858a1b0d20479da08a6b54a56f9d0f98b018b18ae0a956c", size = 457305, upload-time = "2026-01-30T06:43:47.036Z" },
-    { url = "https://files.pythonhosted.org/packages/92/b1/df8ba73290a7cf1654732ac808c68c54e1e05fc2082749d57febcbd3f478/dotpromptz_handlebars-0.1.8-cp310-abi3-manylinux_2_24_aarch64.whl", hash = "sha256:57b135029dfd0fd964e90e76c6b423fe8c457d6a069808c5dfa7bafbc00ca085", size = 561690, upload-time = "2026-01-30T06:43:48.609Z" },
-    { url = "https://files.pythonhosted.org/packages/d1/14/8a71ce404044de48b10b4aecaed533a41274038e0f6a7225c85157944818/dotpromptz_handlebars-0.1.8-cp310-abi3-manylinux_2_24_x86_64.whl", hash = "sha256:817dbef75a8ea0dc8d5e193135802523a93fa02206952261582e633c2ac6d885", size = 587846, upload-time = "2026-01-30T06:43:50.535Z" },
-    { url = "https://files.pythonhosted.org/packages/18/e4/b881dadfcfb83517b0d4ab6736f0d2c450234590cdee41850f019f1b02b3/dotpromptz_handlebars-0.1.8-cp310-abi3-manylinux_2_25_aarch64.whl", hash = "sha256:c22a5d77e378d99ff61ea121a24188c36f5241389091fd54d3bd409fdf394b64", size = 561690, upload-time = "2026-01-30T06:43:52.832Z" },
-    { url = "https://files.pythonhosted.org/packages/46/cb/9f8da0fb7006d97776c5dabd0d049ff6296130dd6d8dedcde0182c72bbd0/dotpromptz_handlebars-0.1.8-cp310-abi3-manylinux_2_25_x86_64.whl", hash = "sha256:b6f7c8d582b1e214379e40cc907b8d378aad2f59f3ff9b425e5351f86f51093f", size = 587846, upload-time = "2026-01-30T06:43:54.182Z" },
-    { url = "https://files.pythonhosted.org/packages/a2/1f/3389c48dca8c082e4e9663fb7b9ef5a5ec9d71c4da2577513c6f48899776/dotpromptz_handlebars-0.1.8-cp310-abi3-manylinux_2_26_aarch64.whl", hash = "sha256:698702b0cbd0bc7f5e280655fe4770f505aaf7b1d309bd630f9f3ed79be2222a", size = 561689, upload-time = "2026-01-30T06:43:56.155Z" },
-    { url = "https://files.pythonhosted.org/packages/b1/1d/ccb3bd48a6e0362d85cf142ad7e8e8ffdebe143e8c37ba2dda4d2bf40504/dotpromptz_handlebars-0.1.8-cp310-abi3-manylinux_2_26_x86_64.whl", hash = "sha256:f2e982de91ba7128e1f57ed7534bd4cb0b5d1d526f597385c98bb6977037deba", size = 587844, upload-time = "2026-01-30T06:43:57.772Z" },
-    { url = "https://files.pythonhosted.org/packages/fa/bc/64fc25574048684af5e7cc835c1d4f537d95320c1e3fb8ba6935d7113841/dotpromptz_handlebars-0.1.8-cp310-abi3-manylinux_2_27_aarch64.whl", hash = "sha256:5ad4d6a5fd1cb0ff202c4ca859f74ab4a637b74aa9c44da9937625f9fefb1b01", size = 561690, upload-time = "2026-01-30T06:43:59.805Z" },
-    { url = "https://files.pythonhosted.org/packages/34/88/1610ccb34a81c56974f162b70e99aa1a5f2137733d9a6c8567f26bd1b1ff/dotpromptz_handlebars-0.1.8-cp310-abi3-manylinux_2_27_x86_64.whl", hash = "sha256:57358a7981884535dbe38f76fc912462e332926128049078e3abe12b9f23ff15", size = 587845, upload-time = "2026-01-30T06:44:01.215Z" },
-    { url = "https://files.pythonhosted.org/packages/40/f4/e53f536f6a58a084b7ec079d88d631e2ae7b0843b6e8d682923cb315ff9f/dotpromptz_handlebars-0.1.8-cp310-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:c004e9bde89e3bc9fc86cd6f126d96cd0a95d4b1a5d39da81101f038781f25bb", size = 561690, upload-time = "2026-01-30T06:44:02.577Z" },
-    { url = "https://files.pythonhosted.org/packages/56/c1/00d127ba48149d9cc169d86428c18df7fac536c52a19ea295c32d08f41ba/dotpromptz_handlebars-0.1.8-cp310-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:24adcd9906170d1b1259744f8af9e36fcaf33b330cfff14974c52946dad4ba5d", size = 587844, upload-time = "2026-01-30T06:44:05.386Z" },
-    { url = "https://files.pythonhosted.org/packages/1d/e6/641fd01e34ef1823c47c3f9fa5ad554b42675b9b730884f9daf71a2d02d3/dotpromptz_handlebars-0.1.8-cp310-abi3-manylinux_2_29_aarch64.whl", hash = "sha256:915a19de93514c195772431ec553e3f7458fc7f176620fe68881779f947e07d4", size = 561689, upload-time = "2026-01-30T06:44:07.223Z" },
-    { url = "https://files.pythonhosted.org/packages/a3/eb/0f81cfa45fd77c6b88993c25653ec73fbb2ef0dd060d4922728cd2e128d8/dotpromptz_handlebars-0.1.8-cp310-abi3-manylinux_2_29_x86_64.whl", hash = "sha256:57e9642bcb9803d2b898fa1eb003d7264cea4afe7bd4e5a6d7209323f8b21dd2", size = 587845, upload-time = "2026-01-30T06:44:09.151Z" },
-    { url = "https://files.pythonhosted.org/packages/b2/84/d9fcfb4633249195efa72f3d4f55ce1d013a690480d6efc9ffb0eb889be4/dotpromptz_handlebars-0.1.8-cp310-abi3-manylinux_2_30_aarch64.whl", hash = "sha256:45df11dc5ca5e9398360840b0f39c2e29a45bf63616ccedfb6361fe7aa559736", size = 561688, upload-time = "2026-01-30T06:44:10.888Z" },
-    { url = "https://files.pythonhosted.org/packages/06/62/a593cea55764fff42b2271529ff51be69f42f7e8fc1e9971946fc5f7f768/dotpromptz_handlebars-0.1.8-cp310-abi3-manylinux_2_30_x86_64.whl", hash = "sha256:4f72473e11c0ef1301e2531ede4c1b6b701d5d0c5dffcc02af4c05e2cf3e4506", size = 587843, upload-time = "2026-01-30T06:44:12.316Z" },
-    { url = "https://files.pythonhosted.org/packages/1c/97/4b5755b6a072bad825f08f62e27d505075f5da406301dc31ddd2a62c32a5/dotpromptz_handlebars-0.1.8-cp310-abi3-manylinux_2_31_aarch64.whl", hash = "sha256:a5838de57358bcfedba605854dab6f1c45a6c8fd140d7241a0a2f167b36b0143", size = 561688, upload-time = "2026-01-30T06:44:13.895Z" },
-    { url = "https://files.pythonhosted.org/packages/cf/e5/163d5e5ffd520baf510ed85b3c6af08ea367e4dcc97a8d947ee74e6f6889/dotpromptz_handlebars-0.1.8-cp310-abi3-manylinux_2_31_x86_64.whl", hash = "sha256:92ff0c7a79d11519caaf67f961628d263256b3f73d404baba21c242dc13af9a8", size = 587845, upload-time = "2026-01-30T06:44:15.309Z" },
-    { url = "https://files.pythonhosted.org/packages/ab/11/19774c3155ec71a07e56059639968f043f3b9c383646ee0880e6963e8e67/dotpromptz_handlebars-0.1.8-cp310-abi3-manylinux_2_32_aarch64.whl", hash = "sha256:81761a1918278b3dc97b391941f5682b2d743ebd08fcf6f2a5526ffc769d1249", size = 561689, upload-time = "2026-01-30T06:44:16.68Z" },
-    { url = "https://files.pythonhosted.org/packages/9a/f1/622534a0baf12668185ee5368ade453257ba5e7e28362b473c1dc914d8d6/dotpromptz_handlebars-0.1.8-cp310-abi3-manylinux_2_32_x86_64.whl", hash = "sha256:449298eebeb5c37ee03688bf7721cd01544b4429f5e8d5078775e55e5cb7bc50", size = 587845, upload-time = "2026-01-30T06:44:18.606Z" },
-    { url = "https://files.pythonhosted.org/packages/7b/b5/4c6b1b270aa5266965d0c93f9bc680cbe259a93a8d2e291358326b7fee95/dotpromptz_handlebars-0.1.8-cp310-abi3-manylinux_2_33_aarch64.whl", hash = "sha256:d880b917465e0c0b615ed9419987e0d05d126dbf58875ed42004b0a17d035090", size = 561689, upload-time = "2026-01-30T06:44:19.907Z" },
-    { url = "https://files.pythonhosted.org/packages/ad/cb/b55c99cd1b9ee2dfd924a9c32c037b1e15ddf9a018a678d6c2998946587c/dotpromptz_handlebars-0.1.8-cp310-abi3-manylinux_2_33_x86_64.whl", hash = "sha256:bfabec379461347efc28cf27ba5362d174b53513e0c810a0ecade1596e2ef534", size = 587845, upload-time = "2026-01-30T06:44:21.213Z" },
-    { url = "https://files.pythonhosted.org/packages/64/a5/593fe5cc7331d9d63209d49db60206756b34b69ebdd2bec1fd766bfea835/dotpromptz_handlebars-0.1.8-cp310-abi3-manylinux_2_34_aarch64.whl", hash = "sha256:a3685e8dc6cc5b8f9a089bfc83b167d69a0f6c95daa895950d5691be028b570a", size = 561688, upload-time = "2026-01-30T06:44:22.566Z" },
-    { url = "https://files.pythonhosted.org/packages/18/92/a465375a7a7445db534acfe17011f278ec510f6fc9e30c2b0b3402ba0d89/dotpromptz_handlebars-0.1.8-cp310-abi3-manylinux_2_34_x86_64.whl", hash = "sha256:6f67dc0eebc4492b974cb777c74080a16d0f6d9420eb61c98085e4b347a13ffd", size = 587843, upload-time = "2026-01-30T06:44:24.138Z" },
-    { url = "https://files.pythonhosted.org/packages/f2/6b/e206b2d2b05b629cd8776ce92560a5243a0fe931b37c3e14e79acecb023f/dotpromptz_handlebars-0.1.8-cp310-abi3-manylinux_2_35_aarch64.whl", hash = "sha256:a47c1109c24bf84f4c7952b13e02486365149eab652a5da0652e506c154acd9f", size = 561688, upload-time = "2026-01-30T06:44:25.688Z" },
-    { url = "https://files.pythonhosted.org/packages/dc/93/b7119d09b2f29ad9313d252bc7922d75c89c2f9b2f987d4143cd1f4843bb/dotpromptz_handlebars-0.1.8-cp310-abi3-manylinux_2_35_x86_64.whl", hash = "sha256:4592e54f7e53820625b268b74264a7a35af889c001e2326f54ebfdf66460e2c2", size = 587843, upload-time = "2026-01-30T06:44:27.161Z" },
-    { url = "https://files.pythonhosted.org/packages/9c/7f/3e49cdbef62c3e17f61566da60530eb815140b1ff36b4de3e68e45577498/dotpromptz_handlebars-0.1.8-cp310-abi3-manylinux_2_36_aarch64.whl", hash = "sha256:c94aa8e3cb1a685dee1f0dd3cca92a16fbcd137c7dc8ee860dd8cc5e13c4d51f", size = 561688, upload-time = "2026-01-30T06:44:28.833Z" },
-    { url = "https://files.pythonhosted.org/packages/7a/4f/84f0a35211528597e72cbac05abb44799043b84b4a8afbd752e1bf75a859/dotpromptz_handlebars-0.1.8-cp310-abi3-manylinux_2_36_x86_64.whl", hash = "sha256:9aaae4a56c3453512c551e44edf74de3c6e4a22f48b87cc54d50170f1e640ff9", size = 587846, upload-time = "2026-01-30T06:44:30.195Z" },
-    { url = "https://files.pythonhosted.org/packages/ae/e5/a3563a9e9ea10021c8f026e0d613446ae9548a856fcd604efa49c25010b7/dotpromptz_handlebars-0.1.8-cp310-abi3-manylinux_2_37_aarch64.whl", hash = "sha256:ed47355f0b5aba327ee20e9df2868d7ca3c28bb88397244b83c8de22fa68b463", size = 561691, upload-time = "2026-01-30T06:44:32.036Z" },
-    { url = "https://files.pythonhosted.org/packages/8b/59/f0cf2a6290b1012854ec07b5725f39d642de76c79493172e9199e2468604/dotpromptz_handlebars-0.1.8-cp310-abi3-manylinux_2_37_x86_64.whl", hash = "sha256:959a4b35e5063310d8fd45d09ad803b0f5e54795b0a728ac5536a820250a4861", size = 587844, upload-time = "2026-01-30T06:44:34.145Z" },
-    { url = "https://files.pythonhosted.org/packages/e3/cb/1740c1cff03fb2fb39305d33c7156f5165c4af66db4d7e5c28a1453b9789/dotpromptz_handlebars-0.1.8-cp310-abi3-manylinux_2_38_aarch64.whl", hash = "sha256:61ec530c5681f2fee6903aa017c1c6c3a020226f37623249f165ed55be3b6388", size = 561689, upload-time = "2026-01-30T06:44:35.53Z" },
-    { url = "https://files.pythonhosted.org/packages/83/ed/23bb99f694f4c4bf817c9d706a5205e3c36a13e7102bd2b4271e93e6c55e/dotpromptz_handlebars-0.1.8-cp310-abi3-manylinux_2_38_x86_64.whl", hash = "sha256:5aeb3a334ab1eccdee74a0f9adbf3c1ed6dc01da4879412f8529a5f959f8260a", size = 587843, upload-time = "2026-01-30T06:44:37.662Z" },
-    { url = "https://files.pythonhosted.org/packages/32/58/7f9df3b5be3b0181a2d709913bd22597703f3360ff52e6bf68ced242a27b/dotpromptz_handlebars-0.1.8-cp310-abi3-manylinux_2_39_aarch64.whl", hash = "sha256:a5c7b8d7749b8abc1557c3f571940cb71723b0a38f359508aeb722b20deffa93", size = 561689, upload-time = "2026-01-30T06:44:39.054Z" },
-    { url = "https://files.pythonhosted.org/packages/41/51/4d621d7183470043173c733cd26462e117c0b2cc787eb90b0bbe200f1c00/dotpromptz_handlebars-0.1.8-cp310-abi3-manylinux_2_39_x86_64.whl", hash = "sha256:7ed0507a0ae0a374d5df289c5a989b0c6aba14fc814fb2e5b77b7ece36aa953d", size = 587843, upload-time = "2026-01-30T06:44:41.015Z" },
-    { url = "https://files.pythonhosted.org/packages/94/c3/9fde774bd0d83cc202c28c40971f896cbdb5b49d582d6d67e7234dfe920b/dotpromptz_handlebars-0.1.8-cp310-abi3-manylinux_2_40_aarch64.whl", hash = "sha256:378e82a275d3aaf5a24d64eca2efdc0a2f690fa00a4cbb67835d4e31805293b6", size = 561690, upload-time = "2026-01-30T06:44:42.405Z" },
-    { url = "https://files.pythonhosted.org/packages/fe/db/b5985db508dab3047ee266e076fc7b4dce1a8ab38b9a5f5e8040848da530/dotpromptz_handlebars-0.1.8-cp310-abi3-manylinux_2_40_x86_64.whl", hash = "sha256:bcfa359c5b694d6b858045aa087869c23acb927dbb77263f295222e35dfbbe89", size = 587843, upload-time = "2026-01-30T06:44:43.68Z" },
-    { url = "https://files.pythonhosted.org/packages/b5/7f/ce629f82b305f75e903b5050f678db48df91d0a4678ab14aa6f816198ff6/dotpromptz_handlebars-0.1.8-cp310-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:56eef7d063008b78d32038766933c240c85a365fde107338f4066cb600efa442", size = 628631, upload-time = "2026-01-30T06:44:45.505Z" },
-    { url = "https://files.pythonhosted.org/packages/89/09/d09dfaa2110884284be6006b7586ea519f7391de58ed5428f2bf457bcd03/dotpromptz_handlebars-0.1.8-cp310-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:f23498821610d443a67c860922aba00d20bdd80b8421bfef0ceff07b713f8198", size = 666257, upload-time = "2026-01-30T06:44:46.929Z" },
+    { url = "https://files.pythonhosted.org/packages/c1/69/bd20ac7246569d4634c052d5af3c1f06c82a2234e1f619c2cc36d33561e7/dotpromptz_handlebars-0.2.0-py3-none-any.whl", hash = "sha256:7da43a27a9fe095379d887ee6cf3ab4f2aefa43458064bee0dcf08282ed73c8c", size = 19956, upload-time = "2026-10-05T21:50:14.22Z" },
 ]
 
 [[package]]
@@ -1670,7 +1632,7 @@ vertex-ai = [
 requires-dist = [
     { name = "anyio", specifier = ">=4.9.0" },
     { name = "asgiref", specifier = ">=3.8.1" },
-    { name = "dotpromptz", specifier = ">=0.1.5" },
+    { name = "dotpromptz", specifier = ">=0.2.0,<0.3.0" },
     { name = "genkit-a2ui", marker = "extra == 'a2ui'", editable = "packages/genkit-a2ui" },
     { name = "genkit-amazon-bedrock", marker = "extra == 'amazon-bedrock'", editable = "packages/genkit-amazon-bedrock" },
     { name = "genkit-anthropic", marker = "extra == 'anthropic'", editable = "packages/genkit-anthropic" },
@@ -2071,7 +2033,7 @@ lint = [
 
 [package.metadata]
 requires-dist = [
-    { name = "dotpromptz", specifier = "==0.1.5" },
+    { name = "dotpromptz", specifier = "==0.2.0" },
     { name = "genkit", editable = "packages/genkit" },
     { name = "genkit-a2ui", editable = "packages/genkit-a2ui" },
     { name = "genkit-amazon-bedrock", editable = "packages/genkit-amazon-bedrock" },

@@ -56,7 +56,7 @@ dependencies = [
   "typing_extensions>=4.0",
   "strenum>=0.4.15; python_version < '3.11'",
 
-  "dotpromptz>=0.1.5",
+  "dotpromptz>=0.2.0,<0.3.0",
   "uvicorn>=0.34.0",
   "uvloop>=0.21.0; sys_platform != 'win32'",
   "anyio>=4.9.0",
