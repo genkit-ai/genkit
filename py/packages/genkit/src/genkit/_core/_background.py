@@ -128,8 +128,8 @@ def operation_context(
 class BackgroundAction(Generic[OutputT]):
     """A handle over a background model's start, check and cancel actions.
 
-    Like ``Tool``, it is built on registered actions but isn't itself an
-    ``Action``: each of start, check and cancel has its own registry key.
+    Built on registered actions but isn't itself an ``Action``: each of
+    start, check and cancel has its own registry key.
     ``start`` returns an Operation; pass it to ``check`` until it's done.
 
     Attributes:
