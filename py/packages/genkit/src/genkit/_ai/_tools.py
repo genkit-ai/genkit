@@ -33,7 +33,7 @@ from genkit._core._model import MultipartToolResponse, OutputT, Part, as_part
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
 from genkit._core._telemetry._instrumentation import set_custom_metadata_attributes
-from genkit._core._tool import Tool
+from genkit._core._tool import Tool as _Tool
 from genkit._core._typing import (
     Metadata,
     MultipartToolResponse as MultipartToolResponseData,
@@ -593,7 +593,7 @@ def _define_tool(
     description: str | None = None,
     *,
     input_schema: type[BaseModel] | dict[str, object] | None = None,
-) -> Tool:
+) -> _Tool:
     """Register a function as a tool.
 
     The return annotation is what the model binds. ``input_schema=`` is for
@@ -652,7 +652,7 @@ def _define_tool(
     action.metadata[ORIGINAL_OUTPUT_SCHEMA_KEY] = original_output_schema
     action.output_schema = TypeAdapter(MultipartToolResponseData).json_schema()
 
-    return Tool(action, original_output_schema=original_output_schema)
+    return _Tool(action, original_output_schema=original_output_schema)
 
 
 def define_tool(
@@ -662,7 +662,7 @@ def define_tool(
     description: str | None = None,
     *,
     input_schema: type[BaseModel] | dict[str, object] | None = None,
-) -> Tool:
+) -> _Tool:
     """Register a function as a tool.
 
     The model sees the handler's return annotation as ``outputSchema``.
@@ -688,7 +688,7 @@ def tool(
     name: str | None = None,
     description: str | None = None,
     input_schema: type[BaseModel] | dict[str, object] | None = None,
-) -> Tool:
+) -> _Tool:
     """Define an ephemeral tool for a single ``generate`` call.
 
     Unlike ``@ai.tool()``, this does not register the tool on the app, so it
@@ -724,7 +724,7 @@ def define_interrupt(
     description: str | None = None,
     request_metadata: dict[str, Any] | Callable[[Any], dict[str, Any]] | None = None,  # noqa: ANN401
     input_schema: type[BaseModel] | dict[str, object] | None = None,
-) -> Tool:
+) -> _Tool:
     """Register a tool that always interrupts execution.
 
     An interrupt tool is a special tool that always raises ``Interrupt`` with
