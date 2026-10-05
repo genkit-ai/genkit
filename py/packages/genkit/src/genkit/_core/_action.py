@@ -250,19 +250,15 @@ def parse_plugin_name_from_action_name(name: str) -> str | None:
 #
 # Rules for the function:
 #   - The context is the parameter annotated ActionRunContext or a subclass
-#     (ToolRunContext, ...). Importing it under TYPE_CHECKING is fine.
+#     (ToolRunContext, ...).
 #   - Any other parameter is the input, so there's only one. Put more fields
 #     on one input model.
 #   - Input and return types need a JSON schema: a Pydantic model, dataclass,
 #     TypedDict, or a basic type like str, int, list or dict.
-#   - Those types must exist at runtime. With `from __future__ import
-#     annotations`, define or import them at module level, not inside a
-#     function or under TYPE_CHECKING.
 #   - A default on the input lets the action run with no input.
 #   - No positional-only parameters ('/'): Genkit passes both by name.
 #
-# Breaking a rule raises TypeError when the action is defined, naming the
-# parameter and the fix.
+# Breaking a rule raises TypeError when the action is defined.
 # =============================================================================
 
 _CallT = TypeVar('_CallT')
