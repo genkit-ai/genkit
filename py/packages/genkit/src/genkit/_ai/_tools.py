@@ -723,15 +723,17 @@ def define_tool(
     Args:
         registry: The registry to register the tool in.
         func: The async function to register as a tool. Must be a coroutine function.
-            It takes at most one input, plus an optional parameter annotated
-            ``ToolRunContext`` in any position.
+            It takes at most one input, annotated with a type that has a JSON
+            schema (``Any`` accepts anything), plus an optional parameter
+            annotated ``ToolRunContext`` in any position.
         name: Optional name for the tool. Defaults to the function name.
         description: Optional description. Defaults to the function's docstring.
         input_schema: Optional input schema override (Pydantic model or JSON-schema dict).
 
     Raises:
         TypeError: If func is not an async function, has more than one input,
-            or has more than one ``ToolRunContext`` parameter.
+            has an input with no annotation or no JSON schema, or has more than
+            one ``ToolRunContext`` parameter.
     """
     return _define_tool(registry, func, name, description, input_schema=input_schema)
 
@@ -756,7 +758,8 @@ def tool(
         input_schema: Optional input schema override (Pydantic model or JSON-schema dict).
 
     Raises:
-        TypeError: If ``func`` is not a coroutine function or takes more than one input.
+        TypeError: If ``func`` is not a coroutine function, takes more than one input,
+            or its input has no annotation or no JSON schema.
         ValueError: If no ``name`` is given and ``func`` has no ``__name__``.
 
     Example:

@@ -90,6 +90,33 @@ def test_flow_with_unannotated_ctx_parameter_raises_type_error_at_definition() -
     assert "annotate 'ctx' as ActionRunContext" in str(exc.value)
 
 
+def test_flow_with_unannotated_input_raises_type_error_at_definition() -> None:
+    """`greet(name)` with no annotation raises TypeError naming `name` and the `Any` option."""
+    ai = Genkit()
+
+    async def greet(name) -> str:  # noqa: ANN001
+        return f'hello {name}'
+
+    with pytest.raises(TypeError, match="flow 'greet' input 'name' has no type annotation") as exc:
+        ai.flow()(greet)
+    assert 'or use Any to accept anything' in str(exc.value)
+
+
+def test_flow_with_plain_class_input_raises_type_error_naming_input() -> None:
+    """`read(t: Thermometer)` raises TypeError naming the flow, the input, and the kinds of types it can be."""
+    ai = Genkit()
+
+    class Thermometer:
+        pass
+
+    async def read(t: Thermometer) -> str:
+        return ''
+
+    with pytest.raises(TypeError, match="flow 'read' input 't' has type Thermometer, which has no JSON schema") as exc:
+        ai.flow()(read)
+    assert 'Use a Pydantic model, dataclass, TypedDict, or a basic type' in str(exc.value)
+
+
 @pytest.mark.asyncio
 async def test_flow_with_postponed_annotations_finds_action_run_context() -> None:
     """The string annotation `'ActionRunContext'` under `from __future__ import annotations` still marks the context."""

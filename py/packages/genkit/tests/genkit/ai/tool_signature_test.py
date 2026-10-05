@@ -1,14 +1,15 @@
 # Copyright 2026 Google LLC
 # SPDX-License-Identifier: Apache-2.0
 
-"""A tool takes one input; the context arrives only on a ToolRunContext-annotated parameter."""
+"""A tool takes one typed input; the context arrives only on a ToolRunContext-annotated parameter."""
 
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, TypedDict
 
 import pytest
 from pydantic import BaseModel
 
-from genkit import Genkit, Message, ModelResponse, Part, ToolRunContext, tool
+from genkit import Genkit, GenkitError, Message, ModelResponse, Part, ToolRunContext, tool
 from genkit._ai._testing import ProgrammableModel, define_programmable_model
 from genkit._core._typing import FinishReason, Role, ToolRequest
 
@@ -16,6 +17,21 @@ from genkit._core._typing import FinishReason, Role, ToolRequest
 class WeatherInput(BaseModel):
     city: str
     unit: str = 'C'
+
+
+@dataclass
+class WeatherQuery:
+    city: str
+    days: int
+
+
+class Forecast(TypedDict):
+    city: str
+    days: int
+
+
+class Thermometer:
+    """A plain class with no schema, so it can't be a tool's input."""
 
 
 WEATHER_SCHEMA = {
@@ -253,6 +269,156 @@ def test_ephemeral_tool_with_two_plain_parameters_raises_type_error() -> None:
 
     with pytest.raises(TypeError, match="tool 'weather' takes one input, but 'unit' is a second parameter"):
         tool(weather)
+
+
+def test_tool_with_unannotated_input_raises_type_error_at_definition() -> None:
+    """`search(query)` with no annotation raises TypeError naming `query` and the `Any` option."""
+    ai, _ = _app()
+
+    async def search(query) -> str:  # noqa: ANN001
+        return str(query)
+
+    with pytest.raises(TypeError, match="tool 'search' input 'query' has no type annotation") as exc:
+        ai.tool()(search)
+    assert 'or use Any to accept anything' in str(exc.value)
+
+
+def test_ephemeral_tool_with_unannotated_input_raises_type_error() -> None:
+    """`genkit.tool(search)` with an unannotated input raises the same TypeError as `@ai.tool()`."""
+
+    async def search(query) -> str:  # noqa: ANN001
+        return str(query)
+
+    with pytest.raises(TypeError, match="tool 'search' input 'query' has no type annotation"):
+        tool(search)
+
+
+@pytest.mark.asyncio
+async def test_tool_with_any_input_accepts_any_value() -> None:
+    """`search(query: Any)` advertises an empty schema and receives whatever the model sent."""
+    ai, pm = _app()
+    seen: list[object] = []
+
+    @ai.tool()
+    async def search(query: Any) -> str:  # noqa: ANN401
+        seen.append(query)
+        return 'found'
+
+    response = await _model_calls_tool(ai, pm, name='search', tool_input=5)
+
+    assert response.text == 'done'
+    assert [m.role for m in response.messages] == [Role.USER, Role.MODEL, Role.TOOL, Role.MODEL]
+    assert _advertised_schema(pm) == {}
+    assert seen == [5]
+    assert _tool_output(response) == 'found'
+
+
+def test_tool_with_plain_class_input_raises_type_error_naming_input() -> None:
+    """`read(t: Thermometer)` raises TypeError naming the tool, the input, and the kinds of types it can be."""
+    ai, _ = _app()
+
+    async def read(t: Thermometer) -> str:
+        return ''
+
+    with pytest.raises(TypeError, match="tool 'read' input 't' has type Thermometer, which has no JSON schema") as exc:
+        ai.tool()(read)
+    assert 'Use a Pydantic model, dataclass, TypedDict, or a basic type' in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_tool_with_int_input_rejects_string_with_invalid_argument() -> None:
+    """`await days_until(n: int)` called with 'abc' raises INVALID_ARGUMENT, and the tool advertises an integer."""
+    ai, _ = _app()
+
+    @ai.tool()
+    async def days_until(n: int) -> str:
+        return f'{n} days'
+
+    with pytest.raises(GenkitError, match="Invalid input for action 'days_until'") as exc:
+        await days_until('abc')
+    assert exc.value.status == 'INVALID_ARGUMENT'
+    assert days_until.input_schema == {'type': 'integer'}
+    assert (await days_until(3)).output == '3 days'
+
+
+@pytest.mark.asyncio
+async def test_tool_with_list_input_receives_list() -> None:
+    """`compare(cities: list[str])` advertises an array of strings and receives the list."""
+    ai, pm = _app()
+    seen: list[object] = []
+
+    @ai.tool()
+    async def compare(cities: list[str]) -> str:
+        seen.append(cities)
+        return ' vs '.join(cities)
+
+    response = await _model_calls_tool(ai, pm, name='compare', tool_input=['Paris', 'Rome'])
+
+    assert response.text == 'done'
+    assert [m.role for m in response.messages] == [Role.USER, Role.MODEL, Role.TOOL, Role.MODEL]
+    assert _advertised_schema(pm) == {'items': {'type': 'string'}, 'type': 'array'}
+    assert seen == [['Paris', 'Rome']]
+    assert _tool_output(response) == 'Paris vs Rome'
+
+
+@pytest.mark.asyncio
+async def test_tool_with_dataclass_input_receives_dataclass_instance() -> None:
+    """`forecast(q: WeatherQuery)` on a dataclass receives a WeatherQuery instance, not a dict."""
+    ai, pm = _app()
+    seen: list[object] = []
+
+    @ai.tool()
+    async def forecast(q: WeatherQuery) -> str:
+        seen.append(q)
+        return f'{q.days} days in {q.city}'
+
+    response = await _model_calls_tool(ai, pm, name='forecast', tool_input={'city': 'Paris', 'days': 3})
+
+    assert response.text == 'done'
+    assert [m.role for m in response.messages] == [Role.USER, Role.MODEL, Role.TOOL, Role.MODEL]
+    assert _advertised_schema(pm) == {
+        'properties': {'city': {'title': 'City', 'type': 'string'}, 'days': {'title': 'Days', 'type': 'integer'}},
+        'required': ['city', 'days'],
+        'title': 'WeatherQuery',
+        'type': 'object',
+    }
+    assert seen == [WeatherQuery(city='Paris', days=3)]
+    assert _tool_output(response) == '3 days in Paris'
+
+
+@pytest.mark.asyncio
+async def test_tool_with_typed_dict_input_receives_dict() -> None:
+    """`forecast(f: Forecast)` on a TypedDict receives a plain dict, and a missing field raises INVALID_ARGUMENT."""
+    ai, pm = _app()
+    seen: list[object] = []
+
+    @ai.tool()
+    async def forecast(f: Forecast) -> str:
+        seen.append(f)
+        return f'{f["days"]} days in {f["city"]}'
+
+    response = await _model_calls_tool(ai, pm, name='forecast', tool_input={'city': 'Paris', 'days': 3})
+
+    assert response.text == 'done'
+    assert [m.role for m in response.messages] == [Role.USER, Role.MODEL, Role.TOOL, Role.MODEL]
+    assert seen == [{'city': 'Paris', 'days': 3}]
+    assert _tool_output(response) == '3 days in Paris'
+    with pytest.raises(GenkitError) as exc:
+        await forecast({'city': 'Paris'})
+    assert exc.value.status == 'INVALID_ARGUMENT'
+
+
+@pytest.mark.asyncio
+async def test_tool_with_default_input_called_without_input_gets_default() -> None:
+    """`await weather()` on `weather(city: str = 'Paris')` runs with the default."""
+    ai, _ = _app()
+
+    @ai.tool()
+    async def weather(city: str = 'Paris') -> str:
+        return f'Sunny in {city}'
+
+    assert (await weather()).output == 'Sunny in Paris'
+    assert (await weather('Rome')).output == 'Sunny in Rome'
 
 
 @pytest.mark.asyncio

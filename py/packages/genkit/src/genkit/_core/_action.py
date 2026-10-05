@@ -27,6 +27,7 @@ from typing import Any, ClassVar, Generic, NamedTuple, cast, get_type_hints
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from pydantic.alias_generators import to_camel
+from pydantic.errors import PydanticInvalidForJsonSchema, PydanticSchemaGenerationError
 from typing_extensions import TypeVar
 
 from genkit._core._channel import Channel, CloseableQueue
@@ -259,6 +260,10 @@ def find_input_and_context(
     position, so reordering parameters never changes what they receive. Callers,
     the model, and the Dev UI all send one input, so any other parameter is a
     definition error that says how to fix it.
+
+    The input's type is the schema the model and Dev UI are shown, so it has to
+    be annotated with a type that has a JSON schema. ``Any`` opts into accepting
+    anything.
     """
     context_name = context_type.__name__
     input_param: inspect.Parameter | None = None
@@ -281,6 +286,22 @@ def find_input_and_context(
                 f"{owner} takes one input, but '{param.name}' is a second parameter. "
                 f"Put the fields on one input model, or annotate '{param.name}' as {context_name}."
             )
+    if input_param is not None:
+        input_type = hints.get(input_param.name, input_param.annotation)
+        if input_type is inspect.Parameter.empty:
+            # an unannotated input would show the model a tool with no fields
+            raise TypeError(
+                f"{owner} input '{input_param.name}' has no type annotation. "
+                f"Annotate it (e.g. '{input_param.name}: str'), or use Any to accept anything."
+            )
+        try:
+            TypeAdapter(input_type).json_schema()
+        except (PydanticSchemaGenerationError, PydanticInvalidForJsonSchema) as e:
+            type_name = getattr(input_type, '__name__', repr(input_type))
+            raise TypeError(
+                f"{owner} input '{input_param.name}' has type {type_name}, which has no JSON schema. "
+                'Use a Pydantic model, dataclass, TypedDict, or a basic type like str, int, list, or dict.'
+            ) from e
     return input_param, context_param
 
 
