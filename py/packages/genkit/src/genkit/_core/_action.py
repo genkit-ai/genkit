@@ -17,7 +17,6 @@
 """Action module for defining and managing remotely callable functions."""
 
 import asyncio
-import contextlib
 import inspect
 import json
 import re
@@ -240,97 +239,27 @@ def parse_plugin_name_from_action_name(name: str) -> str | None:
     return None
 
 
-# Body for the one-annotation functions resolve_type_hints builds.
-_PROBE_CODE = (lambda: None).__code__
-
-
-def signature_of(fn: Callable[..., object]) -> inspect.Signature:
-    """``fn``'s signature, without failing on annotation names missing at runtime.
-
-    From Python 3.14 annotations are evaluated when read, so a ``TYPE_CHECKING``-only
-    ``ctx: ToolRunContext`` would make a plain ``inspect.signature`` raise.
-    """
-    if sys.version_info >= (3, 14):
-        import annotationlib
-
-        return inspect.signature(fn, annotation_format=annotationlib.Format.FORWARDREF)
-    return inspect.signature(fn)
-
-
-def _raw_annotations(fn: Callable[..., object]) -> dict[str, Any]:
-    """``fn``'s annotations as written, with names missing at runtime left as strings."""
-    if sys.version_info >= (3, 14):
-        import annotationlib
-
-        annotations = annotationlib.get_annotations(fn, format=annotationlib.Format.FORWARDREF)
-        return {
-            name: a.__forward_arg__ if isinstance(a, annotationlib.ForwardRef) else a for name, a in annotations.items()
-        }
-    return dict(inspect.getfullargspec(fn).annotations)
-
-
-def resolve_type_hints(fn: Callable[..., object]) -> dict[str, Any]:
-    """``fn``'s annotations as types, resolving each name on its own if one is missing.
-
-    A name can be missing at runtime when it's imported under ``TYPE_CHECKING``
-    (Ruff's ``TC`` rules do this) or defined inside a function; only that name
-    stays a string, so a ``TYPE_CHECKING``-only ``ctx`` doesn't hide the input model.
-    """
-    with contextlib.suppress(Exception):
-        return get_type_hints(fn)
-    module_globals = getattr(inspect.unwrap(fn), '__globals__', {})
-    hints: dict[str, Any] = {}
-    for name, annotation in _raw_annotations(fn).items():
-        # a function in fn's module carrying only this annotation, so
-        # get_type_hints resolves it by the same rules as the batch call
-        probe = types.FunctionType(_PROBE_CODE, module_globals)
-        probe.__annotations__ = {name: annotation}
-        try:
-            hints[name] = get_type_hints(probe)[name]
-        except Exception:
-            hints[name] = annotation
-    return hints
-
-
-# Names of ActionRunContext and its subclasses (ToolRunContext, ...), added by
-# ActionRunContext.__init_subclass__. A ctx annotation resolve_type_hints
-# couldn't resolve is still a string, and this is how it's recognized without
-# importing the class it names.
-_CONTEXT_CLASS_NAMES: set[str] = {'ActionRunContext'}
+# =============================================================================
+# Reading an action's signature
+#
+# An action function takes at most one input and at most one run context:
+#
+#   async def lookup(order: Order, ctx: ActionRunContext) -> Receipt: ...
+#   async def lookup(ctx: ActionRunContext, order: Order) -> Receipt: ...  # same
+#   async def ping(ctx: ActionRunContext) -> str: ...                      # no input
+#
+# The context is whichever parameter is annotated ActionRunContext or a
+# subclass (ToolRunContext, ...). The other one is the input. Genkit calls the
+# function with both by name (ActionParams.call), so order never matters.
+#
+# A TypeError when an action is defined comes from one of two functions:
+#   - find_input_and_context: the signature's shape (a second input, two
+#     contexts, a positional-only parameter, a tool or flow input with no type)
+#   - json_schema_for: an input or output type with no JSON schema, or one
+#     whose name Genkit can't find at runtime
+# =============================================================================
 
 _CallT = TypeVar('_CallT')
-
-
-def _is_context_name(annotation: str) -> bool:
-    """True if a string annotation names a run context, e.g. ``'ToolRunContext | None'``."""
-    for part in annotation.split('|'):
-        part = part.strip().strip('\'"')
-        for prefix in ('Optional[', 'typing.Optional['):
-            if part.startswith(prefix) and part.endswith(']'):
-                part = part[len(prefix) : -1].strip()
-        # 'genkit.ToolRunContext' and 'ActionRunContext[str]' name the class too
-        if part.split('[', 1)[0].rsplit('.', 1)[-1] in _CONTEXT_CLASS_NAMES:
-            return True
-    return False
-
-
-def _is_context_annotation(annotation: object) -> bool:
-    """True if ``annotation`` marks the run-context parameter.
-
-    That's ActionRunContext or any subclass, parameterized
-    (``ActionRunContext[str]``) or in a union (``ToolRunContext | None``).
-    """
-    if isinstance(annotation, str):
-        return _is_context_name(annotation)
-    forward_arg = getattr(annotation, '__forward_arg__', None)
-    if isinstance(forward_arg, str):
-        return _is_context_name(forward_arg)
-    if isinstance(annotation, type):
-        return issubclass(annotation, ActionRunContext)
-    origin = get_origin(annotation)
-    if origin is Union or origin is types.UnionType:
-        return any(_is_context_annotation(arg) for arg in get_args(annotation))
-    return isinstance(origin, type) and issubclass(origin, ActionRunContext)
 
 
 class ActionParams(NamedTuple):
@@ -358,103 +287,226 @@ class ActionParams(NamedTuple):
         return fn(**kwargs)
 
 
+def _kind_label(kind: ActionKind) -> str:
+    """The action kind as error messages say it."""
+    # ActionKind.TOOL is 'tool.v2' (the catalog key); people call it a tool.
+    return 'tool' if kind == ActionKind.TOOL else str(kind)
+
+
+def describe_action(kind: ActionKind, name: str) -> str:
+    """How error messages name an action, e.g. ``"tool 'weather'"``."""
+    return f"{_kind_label(kind)} '{name}'"
+
+
 def find_input_and_context(
-    func: Callable[..., object],
+    fn: Callable[..., object],
     hints: Mapping[str, Any],
     *,
-    owner: str,
-    context_name: str,
-    require_input_type: bool,
+    kind: ActionKind,
+    name: str,
 ) -> ActionParams:
-    """Split ``func``'s parameters into its one input and its run context.
+    """Find ``fn``'s input and run-context parameters, or raise a TypeError saying how to fix it.
 
-    The context is whichever parameter is annotated ActionRunContext or a
-    subclass, in any position, so reordering parameters never changes what
-    they receive. Callers, the model, and the Dev UI all send one input, so any
-    other parameter is a definition error that says how to fix it.
-    ``context_name`` is the class the error messages suggest.
-
-    With ``require_input_type`` the input must be annotated; ``Any`` opts into
-    accepting anything. Its schema is built later, by json_schema_for.
+    ``hints`` is ``resolve_type_hints(fn)``. ``*args`` and ``**kwargs`` are ignored.
     """
-    input_param: inspect.Parameter | None = None
-    context_param: inspect.Parameter | None = None
-    for param in signature_of(func).parameters.values():
-        if param.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
-            continue
-        if param.kind is inspect.Parameter.POSITIONAL_ONLY:
+    owner = describe_action(kind, name)
+    context_class = 'ToolRunContext' if kind == ActionKind.TOOL else 'ActionRunContext'
+
+    params = [
+        p
+        for p in signature_of(fn).parameters.values()
+        if p.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+    ]
+
+    for p in params:
+        if p.kind is inspect.Parameter.POSITIONAL_ONLY:
             raise TypeError(
-                f"{owner} parameter '{param.name}' is positional-only, but Genkit passes the input "
+                f"{owner} parameter '{p.name}' is positional-only, but Genkit passes the input "
                 "and context by name. Remove the '/' from the signature."
             )
-        if _is_context_annotation(hints.get(param.name, param.annotation)):
-            if context_param is not None:
-                raise TypeError(
-                    f"{owner} has two {context_name} parameters, '{context_param.name}' and '{param.name}'. Keep one."
-                )
-            context_param = param
-        elif input_param is None:
-            input_param = param
+
+    contexts: list[inspect.Parameter] = []
+    inputs: list[inspect.Parameter] = []
+    for p in params:
+        if _is_context_annotation(hints.get(p.name, p.annotation)):
+            contexts.append(p)
         else:
-            raise TypeError(
-                f"{owner} takes one input, but '{param.name}' is a second parameter. "
-                f"Put the fields on one input model, or annotate '{param.name}' as {context_name}."
-            )
-    if (
-        require_input_type
-        and input_param is not None
-        and hints.get(input_param.name, input_param.annotation) is inspect.Parameter.empty
-    ):
-        # an unannotated input would show the model a tool with no fields
+            inputs.append(p)
+
+    if len(contexts) > 1:
+        first, second = contexts[0].name, contexts[1].name
+        raise TypeError(f"{owner} has two {context_class} parameters, '{first}' and '{second}'. Keep one.")
+    if len(inputs) > 1:
+        extra = inputs[1].name
         raise TypeError(
-            f"{owner} input '{input_param.name}' has no type annotation. "
-            f"Annotate it (e.g. '{input_param.name}: str'), or use Any to accept anything."
+            f"{owner} takes one input, but '{extra}' is a second parameter. "
+            f"Put the fields on one input model, or annotate '{extra}' as {context_class}."
         )
+
+    input_param = inputs[0] if inputs else None
+    context_param = contexts[0] if contexts else None
+
+    # A tool's input type is the schema the model sees, and a flow's is its
+    # public API, so those need one. Other actions (models, embedders, ...)
+    # get a fixed input from Genkit and may leave it unannotated.
+    if kind in (ActionKind.TOOL, ActionKind.FLOW) and input_param is not None:
+        if hints.get(input_param.name, input_param.annotation) is inspect.Parameter.empty:
+            raise TypeError(
+                f"{owner} input '{input_param.name}' has no type annotation. "
+                f"Annotate it (e.g. '{input_param.name}: str'), or use Any to accept anything."
+            )
+
     return ActionParams(input_param, context_param)
 
 
-def json_schema_for(annotation: object, *, owner: str, label: str) -> tuple[TypeAdapter[Any], dict[str, object]]:
-    """A validator and JSON schema for ``annotation``, or a TypeError naming ``label``.
+def json_schema_for(
+    annotation: object,
+    *,
+    kind: ActionKind,
+    name: str,
+    label: str,
+) -> tuple[TypeAdapter[Any], dict[str, object]]:
+    """A validator and JSON schema for an action's input or output type.
 
-    ``label`` is what the annotation is on, e.g. ``"input 'query'"`` or
-    ``'output'``. Pydantic's own errors here name neither the action nor
-    the fix.
+    ``label`` says which one, e.g. ``"input 'query'"`` or ``'output'``.
+    Pydantic's own errors here name neither the action nor the fix, so each
+    one is re-raised as a TypeError that does.
     """
+    owner = describe_action(kind, name)
     type_name = getattr(annotation, '__name__', repr(annotation))
     try:
         adapter: TypeAdapter[Any] = TypeAdapter(annotation)
         return adapter, adapter.json_schema()
     except (PydanticSchemaGenerationError, PydanticInvalidForJsonSchema) as e:
+        # e.g. `-> Thermometer`, where Thermometer is a plain class
         raise TypeError(
             f'{owner} {label} has type {type_name}, which has no JSON schema. '
             'Use a Pydantic model, dataclass, TypedDict, or a basic type like str, int, list, or dict.'
         ) from e
     except PydanticUserError as e:
         if isinstance(annotation, str):
-            # The annotation is still a bare name, so resolve_type_hints
-            # couldn't find it in the module at runtime. Typically:
-            #
-            #   from __future__ import annotations
-            #
-            #   def make_tools(ai):
-            #       class StepInput(BaseModel): ...
-            #
-            #       @ai.tool()
-            #       async def slow_work(input: StepInput) -> dict: ...
-            #
-            # The annotation is the string 'StepInput', and StepInput is a
-            # local of make_tools, which slow_work doesn't carry. Without
-            # the __future__ import Python would have stored the class
-            # itself while the local was in scope. The same happens to a
-            # return type imported only under `if TYPE_CHECKING:`.
-            kind = owner.split(' ', 1)[0]
+            # resolve_type_hints couldn't find this name, so it's still a
+            # string. Usually the file has `from __future__ import annotations`
+            # and the type is a class defined inside a function, or imported
+            # only under `if TYPE_CHECKING:`.
             raise TypeError(
                 f"{owner} {label} has type '{annotation}', which can't be found "
-                f'when the {kind} is defined. Define or import it at module level (outside '
+                f'when the {_kind_label(kind)} is defined. Define or import it at module level (outside '
                 "'if TYPE_CHECKING:'), or remove 'from __future__ import annotations' from this file."
             ) from e
         # e.g. typing.TypedDict on Python < 3.12; keep Pydantic's fix in the message
         raise TypeError(f'{owner} {label} has type {type_name}: {e.message}') from e
+
+
+# -----------------------------------------------------------------------------
+# Annotations
+#
+# A name in an annotation can be missing at runtime: imported only under
+# `if TYPE_CHECKING:` (Ruff's TC rules do this), or a class defined inside a
+# function in a file with `from __future__ import annotations`. These helpers
+# keep such a name as a string instead of failing, so the rest still resolves.
+# -----------------------------------------------------------------------------
+
+
+def signature_of(fn: Callable[..., object]) -> inspect.Signature:
+    """``inspect.signature(fn)``, without failing on a name missing at runtime.
+
+    From Python 3.14 annotations are evaluated when read, so a plain
+    ``inspect.signature`` raises on a TYPE_CHECKING-only ``ctx: ToolRunContext``.
+    """
+    if sys.version_info >= (3, 14):
+        import annotationlib
+
+        return inspect.signature(fn, annotation_format=annotationlib.Format.FORWARDREF)
+    return inspect.signature(fn)
+
+
+def resolve_type_hints(fn: Callable[..., object]) -> dict[str, Any]:
+    """``fn``'s annotations as types. A name that can't be found stays a string.
+
+    ``get_type_hints`` fails outright if any one name is missing, so then each
+    annotation is resolved on its own. A missing context class doesn't also
+    hide the input model.
+    """
+    try:
+        return get_type_hints(fn)
+    except Exception:
+        module_globals = getattr(inspect.unwrap(fn), '__globals__', {})
+        return {name: _resolve_one(a, module_globals) for name, a in _annotations_as_written(fn).items()}
+
+
+def _annotations_as_written(fn: Callable[..., object]) -> dict[str, Any]:
+    """``fn``'s annotations without evaluating them; a missing name is a string."""
+    if sys.version_info >= (3, 14):
+        import annotationlib
+
+        annotations = annotationlib.get_annotations(fn, format=annotationlib.Format.FORWARDREF)
+        return {
+            name: a.__forward_arg__ if isinstance(a, annotationlib.ForwardRef) else a for name, a in annotations.items()
+        }
+    return dict(inspect.getfullargspec(fn).annotations)
+
+
+# Code object of an empty function, for _resolve_one.
+_EMPTY_FUNCTION_CODE = (lambda: None).__code__
+
+
+def _resolve_one(annotation: object, module_globals: dict[str, Any]) -> object:
+    """Resolve one annotation the way ``get_type_hints`` would, or return it unchanged."""
+    # get_type_hints takes a function, so give it an empty one in fn's module
+    # whose only annotation is this one.
+    stand_in = types.FunctionType(_EMPTY_FUNCTION_CODE, module_globals)
+    stand_in.__annotations__ = {'x': annotation}
+    try:
+        return get_type_hints(stand_in)['x']
+    except Exception:
+        return annotation
+
+
+def _is_context_annotation(annotation: object) -> bool:
+    """True if ``annotation`` marks the run-context parameter.
+
+    That's ActionRunContext or any subclass, written any of these ways:
+    ``ToolRunContext``, ``ActionRunContext[str]``, ``ToolRunContext | None``,
+    or as a string (see _string_names_context).
+    """
+    # On 3.14 a name missing at runtime is a ForwardRef; use its text.
+    forward_arg = getattr(annotation, '__forward_arg__', None)
+    if isinstance(forward_arg, str):
+        annotation = forward_arg
+    if isinstance(annotation, str):
+        return _string_names_context(annotation)
+
+    origin = get_origin(annotation)
+    if origin is Union or origin is types.UnionType:
+        return any(_is_context_annotation(arg) for arg in get_args(annotation))
+    # ActionRunContext[str] -> ActionRunContext
+    cls = origin if origin is not None else annotation
+    return isinstance(cls, type) and issubclass(cls, ActionRunContext)
+
+
+# ActionRunContext and every subclass, by class name. ActionRunContext.__init_subclass__
+# adds each one, so a string annotation can be matched without importing it.
+_CONTEXT_CLASS_NAMES: set[str] = {'ActionRunContext'}
+
+
+def _string_names_context(annotation: str) -> bool:
+    """True if a string annotation names a run-context class.
+
+    'ToolRunContext', 'ToolRunContext | None', 'Optional[ToolRunContext]',
+    'ActionRunContext[str]' and 'genkit.ToolRunContext' all do. The class
+    doesn't have to be importable here, only listed in _CONTEXT_CLASS_NAMES.
+    """
+    for part in annotation.split('|'):
+        name = part.strip().strip('\'"')
+        for prefix in ('Optional[', 'typing.Optional['):
+            if name.startswith(prefix) and name.endswith(']'):
+                name = name[len(prefix) : -1].strip()  # Optional[X] -> X
+        name = name.split('[', 1)[0]  # ActionRunContext[str] -> ActionRunContext
+        name = name.rsplit('.', 1)[-1]  # genkit.ToolRunContext -> ToolRunContext
+        if name in _CONTEXT_CLASS_NAMES:
+            return True
+    return False
 
 
 # =============================================================================
@@ -528,13 +580,22 @@ def create_action_key(kind: ActionKind | str, name: str) -> str:
 
 
 def stamp_background_operation(*, output: object, kind: ActionKind, name: str) -> None:
-    """A start/check/cancel handle needs the start action key so later polls find the job."""
-    if kind not in (ActionKind.BACKGROUND_MODEL, ActionKind.CHECK_OPERATION, ActionKind.CANCEL_OPERATION):
-        return
+    """Point an Operation from a background model's start/check/cancel at its start action.
+
+    A caller polls by passing the Operation back, and Genkit finds the check
+    action from ``op.action``. For a model named 'veo', start ('veo'), check
+    ('veo/check') and cancel ('veo/cancel') all stamp '/background-model/veo'.
+    A value the function already set is kept.
+    """
     if not isinstance(output, Operation) or output.action:
         return
-    start_name = name.rsplit('/', 1)[0] if kind is not ActionKind.BACKGROUND_MODEL else name
-    output.action = create_action_key(ActionKind.BACKGROUND_MODEL, start_name)
+    if kind == ActionKind.BACKGROUND_MODEL:
+        model_name = name
+    elif kind in (ActionKind.CHECK_OPERATION, ActionKind.CANCEL_OPERATION):
+        model_name = name.rsplit('/', 1)[0]  # 'veo/check' -> 'veo'
+    else:
+        return
+    output.action = create_action_key(ActionKind.BACKGROUND_MODEL, model_name)
 
 
 # =============================================================================
@@ -574,6 +635,7 @@ class ActionRunContext(Generic[ChunkT]):
 
     def __init_subclass__(cls, **kwargs: Any) -> None:  # noqa: ANN401
         super().__init_subclass__(**kwargs)
+        # Lets a string annotation like 'ToolRunContext' mark the context.
         _CONTEXT_CLASS_NAMES.add(cls.__name__)
 
     def __init__(
@@ -673,27 +735,15 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         if not inspect.iscoroutinefunction(fn):
             raise TypeError(f"Action handlers must be async functions. Got sync function for '{name}'.")
 
-        signature_fn = metadata_fn if metadata_fn else fn
-        resolved_annotations = resolve_type_hints(signature_fn)
-        kind_label = 'tool' if kind == ActionKind.TOOL else str(kind)
-        owner = f"{kind_label} '{name}'"
-        self._params: ActionParams = find_input_and_context(
-            signature_fn,
-            resolved_annotations,
-            owner=owner,
-            context_name='ToolRunContext' if kind == ActionKind.TOOL else 'ActionRunContext',
-            # A tool's input type is the schema the model sees, a flow's is its
-            # public API. Plugin-defined actions like models get a fixed input
-            # (ModelRequest) from Genkit and may leave it unannotated.
-            require_input_type=kind in (ActionKind.TOOL, ActionKind.FLOW),
-        )
-        # Raw user fn; tracing/dispatch handled by _run_with_telemetry / _invoke.
+        # Genkit calls fn. With a metadata_fn, fn is a wrapper (the tool wrapper
+        # is one) and metadata_fn is the user's function, whose signature
+        # decides the input and context.
+        user_fn = metadata_fn if metadata_fn else fn
+        hints = resolve_type_hints(user_fn)
+        self._params: ActionParams = find_input_and_context(user_fn, hints, kind=kind, name=name)
         self._fn: Callable[..., Awaitable[OutputT]] = fn
-        # With a metadata_fn, fn is a wrapper called as fn(input, ctx). One that
-        # forwards to metadata_fn does it with self.params.call, so the user's
-        # function still gets both by name.
         self._fn_is_wrapper: bool = metadata_fn is not None
-        self._initialize_io_schemas(resolved_annotations, owner)
+        self._initialize_io_schemas(hints)
         self._initialize_init_schema(init_schema)
 
     @property
@@ -865,15 +915,11 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
 
         return StreamResponse(stream=channel, response=result_future)
 
-    def _initialize_io_schemas(
-        self,
-        annotations: dict[str, Any],
-        owner: str,
-    ) -> None:
+    def _initialize_io_schemas(self, annotations: dict[str, Any]) -> None:
         if self._params.input is not None:
             input_type = annotations.get(self._params.input.name, Any)
             type_adapter, self._input_schema = json_schema_for(
-                input_type, owner=owner, label=f"input '{self._params.input.name}'"
+                input_type, kind=self._kind, name=self._name, label=f"input '{self._params.input.name}'"
             )
             self._input_type: TypeAdapter[InputT] | None = cast(TypeAdapter[InputT], type_adapter)
             self._input_class: type | None = input_type if isinstance(input_type, type) else None
@@ -884,7 +930,9 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         self._metadata[ActionMetadataKey.INPUT_KEY] = self._input_schema
 
         if ActionMetadataKey.RETURN in annotations:
-            _, self._output_schema = json_schema_for(annotations[ActionMetadataKey.RETURN], owner=owner, label='output')
+            _, self._output_schema = json_schema_for(
+                annotations[ActionMetadataKey.RETURN], kind=self._kind, name=self._name, label='output'
+            )
         else:
             self._output_schema = TypeAdapter(object).json_schema()
         self._metadata[ActionMetadataKey.OUTPUT_KEY] = self._output_schema
@@ -1070,7 +1118,12 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
 
     async def _invoke(self, input: object | None, ctx: ActionRunContext) -> OutputT:
         """Call ``self._fn`` with the input and context."""
-        output = await self._fn(input, ctx) if self._fn_is_wrapper else await self._params.call(self._fn, input, ctx)
+        if self._fn_is_wrapper:
+            # The wrapper takes (input, ctx) and forwards to the user's
+            # function with self.params.call.
+            output = await self._fn(input, ctx)
+        else:
+            output = await self._params.call(self._fn, input, ctx)
         stamp_background_operation(output=output, kind=self._kind, name=self._name)
         return output
 
