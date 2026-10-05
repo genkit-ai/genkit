@@ -19,7 +19,7 @@ from genkit._core._action import ActionRunContext
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import ModelRequest, ModelResponse
 from genkit._core._typing import Operation
-from genkit.exp import Genkit as ExpGenkit
+from genkit.exp import Genkit as GenkitExp
 from genkit.model import model, model_ref
 
 
@@ -257,7 +257,7 @@ async def test_generate_operation_model_ref_rejects_non_lro(
 @pytest.mark.asyncio
 async def test_define_agent_with_model_ref() -> None:
     """define_agent accepts a ModelRef and uses resolved name/config on turns."""
-    ai = ExpGenkit()
+    ai = GenkitExp()
     echo, _ = define_echo_model(ai, name='testEcho')
     ref = model_ref(
         'testEcho',
@@ -1200,7 +1200,7 @@ def test_define_prompt_rejects_wrong_class_on_constructor_ref() -> None:
 
 def test_define_agent_rejects_wrong_config_class() -> None:
     """define_agent uses the same define-time check as define_prompt."""
-    ai = ExpGenkit()
+    ai = GenkitExp()
     define_echo_model(ai, name='flash', config_schema=CustomConfig)
     ref = model_ref('flash', config_schema=CustomConfig)
 
@@ -1214,7 +1214,7 @@ def test_define_agent_rejects_wrong_config_class() -> None:
 
 
 def test_define_agent_accepts_matching_class() -> None:
-    ai = ExpGenkit()
+    ai = GenkitExp()
     define_echo_model(ai, name='flash', config_schema=CustomConfig)
     ref = model_ref('flash', config_schema=CustomConfig)
 
