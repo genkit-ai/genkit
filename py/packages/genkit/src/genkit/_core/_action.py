@@ -488,18 +488,21 @@ def _is_context_annotation(annotation: object) -> bool:
     return isinstance(cls, type) and issubclass(cls, ActionRunContext)
 
 
-# ActionRunContext and every subclass, by class name. ActionRunContext.__init_subclass__
-# adds each one, so a string annotation can be matched without importing it.
-_CONTEXT_CLASS_NAMES: set[str] = {'ActionRunContext'}
-
-
 def _string_names_context(annotation: str) -> bool:
     """True if a string annotation names a run-context class.
 
     'ToolRunContext', 'ToolRunContext | None', 'Optional[ToolRunContext]',
-    'ActionRunContext[str]' and 'genkit.ToolRunContext' all do. The class
-    doesn't have to be importable here, only listed in _CONTEXT_CLASS_NAMES.
+    'ActionRunContext[str]' and 'genkit.ToolRunContext' all do.
     """
+    # The annotation couldn't be resolved to a class, so match by name against
+    # ActionRunContext and every subclass defined so far (ToolRunContext, ...).
+    context_names: set[str] = set()
+    classes: list[type] = [ActionRunContext]
+    while classes:
+        cls = classes.pop()
+        context_names.add(cls.__name__)
+        classes.extend(cls.__subclasses__())
+
     for part in annotation.split('|'):
         name = part.strip().strip('\'"')
         for prefix in ('Optional[', 'typing.Optional['):
@@ -507,7 +510,7 @@ def _string_names_context(annotation: str) -> bool:
                 name = name[len(prefix) : -1].strip()  # Optional[X] -> X
         name = name.split('[', 1)[0]  # ActionRunContext[str] -> ActionRunContext
         name = name.rsplit('.', 1)[-1]  # genkit.ToolRunContext -> ToolRunContext
-        if name in _CONTEXT_CLASS_NAMES:
+        if name in context_names:
             return True
     return False
 
@@ -616,11 +619,6 @@ class ActionRunContext(Generic[ChunkT]):
     Provides read-only access to action context (auth, metadata), streaming
     support, and an abort signal for cooperative cancellation.
     """
-
-    def __init_subclass__(cls, **kwargs: Any) -> None:  # noqa: ANN401
-        super().__init_subclass__(**kwargs)
-        # Lets a string annotation like 'ToolRunContext' mark the context.
-        _CONTEXT_CLASS_NAMES.add(cls.__name__)
 
     def __init__(
         self,
