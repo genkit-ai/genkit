@@ -303,6 +303,15 @@ def find_input_and_context(
                 'Use a Pydantic model, dataclass, TypedDict, or a basic type like str, int, list, or dict.'
             ) from e
         except PydanticUserError as e:
+            if isinstance(input_type, str):
+                # usually a model defined inside a function under
+                # `from __future__ import annotations`, which leaves only its name
+                kind = owner.split(' ', 1)[0]
+                raise TypeError(
+                    f"{owner} input '{input_param.name}' has type '{input_type}', which can't be found "
+                    f'when the {kind} is defined. Define it at module level, or remove '
+                    "'from __future__ import annotations' from this file."
+                ) from e
             # e.g. typing.TypedDict on Python < 3.12; keep Pydantic's fix in the message
             raise TypeError(f"{owner} input '{input_param.name}' has type {type_name}: {e.message}") from e
     return input_param, context_param

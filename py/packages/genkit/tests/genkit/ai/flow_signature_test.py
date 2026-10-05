@@ -4,6 +4,7 @@
 """A flow takes one input; the context arrives only on an ActionRunContext-annotated parameter."""
 
 import pytest
+from pydantic import BaseModel
 
 from genkit import ActionRunContext, Genkit
 
@@ -115,6 +116,24 @@ def test_flow_with_plain_class_input_raises_type_error_naming_input() -> None:
     with pytest.raises(TypeError, match="flow 'read' input 't' has type Thermometer, which has no JSON schema") as exc:
         ai.flow()(read)
     assert 'Use a Pydantic model, dataclass, TypedDict, or a basic type' in str(exc.value)
+
+
+def test_flow_with_input_model_defined_in_function_raises_type_error_naming_it() -> None:
+    """A flow whose input model is defined in the same function raises TypeError saying to move it to module level."""
+    ai = Genkit()
+
+    class StepInput(BaseModel):
+        step: int
+
+    # Postponed annotations are stored as this string, which can't see StepInput.
+    async def run_step(input: 'StepInput') -> int:
+        return input.step
+
+    with pytest.raises(
+        TypeError, match="flow 'run_step' input 'input' has type 'StepInput', which can't be found"
+    ) as exc:
+        ai.flow()(run_step)
+    assert 'Define it at module level' in str(exc.value)
 
 
 @pytest.mark.asyncio

@@ -328,6 +328,24 @@ def test_tool_with_plain_class_input_raises_type_error_naming_input() -> None:
     assert 'Use a Pydantic model, dataclass, TypedDict, or a basic type' in str(exc.value)
 
 
+def test_tool_with_input_model_defined_in_function_raises_type_error_naming_it() -> None:
+    """A tool whose input model is defined in the same function raises TypeError saying to move it to module level."""
+    ai, _ = _app()
+
+    class StepInput(BaseModel):
+        step: int
+
+    # Postponed annotations are stored as this string, which can't see StepInput.
+    async def slow_work(input: 'StepInput', ctx: ToolRunContext) -> dict:
+        return {'step': input.step}
+
+    with pytest.raises(
+        TypeError, match="tool 'slow_work' input 'input' has type 'StepInput', which can't be found"
+    ) as exc:
+        ai.tool()(slow_work)
+    assert 'Define it at module level' in str(exc.value)
+
+
 @pytest.mark.skipif(sys.version_info >= (3, 12), reason='Pydantic accepts typing.TypedDict on 3.12+')
 def test_tool_with_typing_typed_dict_input_raises_type_error_before_3_12() -> None:
     """`read(r: Reading)` on a `typing.TypedDict` raises TypeError naming the input and typing_extensions."""
