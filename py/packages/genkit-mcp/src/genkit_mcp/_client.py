@@ -30,7 +30,7 @@ from genkit.plugin_api import Action
 from genkit_mcp._config import McpStdioServerConfig
 from genkit_mcp._connection import DEFAULT_REQUEST_TIMEOUT_MILLIS, McpConnection
 from genkit_mcp._errors import McpConnectionClosedError
-from genkit_mcp._tools import mcp_tool_name, mcp_tool_to_action, validate_provider_name, validate_tool_prefix
+from genkit_mcp._tools import mcp_tool_name, mcp_tools_to_actions, validate_provider_name, validate_tool_prefix
 
 if TYPE_CHECKING:
     from genkit._core._dap import DynamicActionProvider
@@ -139,11 +139,13 @@ class McpClient:
         Raises:
             McpConnectionClosedError: If this client is closed.
             McpConnectionFailedError: If the server cannot be started.
+            ValueError: If two of the server's tools share a Genkit tool name
+                once the characters the model providers reject are rewritten.
         """
         if self._server.disabled:
             return []
         tools = await self._connection().list_tools()
-        return [mcp_tool_to_action(tool, self._tool_prefix, self._call_tool) for tool in tools]
+        return mcp_tools_to_actions(tools, self._tool_prefix, self._call_tool)
 
     async def restart(self) -> None:
         """Reconnect a live client to the server, replacing any connection it has.
@@ -155,6 +157,8 @@ class McpClient:
         Raises:
             McpConnectionClosedError: If this client is closed.
             McpConnectionFailedError: If the server cannot be started.
+            ValueError: If two of the server's tools share a Genkit tool name
+                once the characters the model providers reject are rewritten.
         """
         with self._connections_lock:
             self._refuse_when_closed()
@@ -166,8 +170,10 @@ class McpClient:
         """Disconnect from the server, stop its process, and keep it that way.
 
         A connection belongs to the event loop that opened it, so each one is
-        shut down on its own loop. A loop which has already stopped cancelled its
-        connection on the way out, taking the server process with it.
+        shut down on its own loop. A loop which has already stopped is skipped. A
+        loop run by ``asyncio.run`` cancelled its connection on the way out, taking
+        the server process with it; a loop stopped any other way did not, and this
+        call cannot reach its connection.
 
         Closing is final, as it is for a file or an ``httpx.AsyncClient``: a
         closed client cannot be restarted, so build a new one with
@@ -282,8 +288,9 @@ def define_mcp_client(
 
     The server's tools become ``tool.v2`` actions behind a dynamic action provider
     named ``name``. Select them from ``generate`` as ``<name>:tool/*`` for all of
-    them, or ``<name>:tool/<name>_<tool>`` for one. Connection is lazy: the child
-    process starts on the first tool listing.
+    them, or ``<name>:tool/<tool_prefix>_<tool>`` for one, where ``tool_prefix``
+    defaults to ``name``. Connection is lazy: the child process starts on the
+    first tool listing.
 
     This is a function rather than a Genkit plugin because the registry rewrites a
     plugin's action names to ``<plugin>/<action>``, and a provider name cannot
