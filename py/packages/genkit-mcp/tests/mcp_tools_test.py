@@ -76,7 +76,17 @@ def server_tool_of(action: Action) -> object:
             ),
             {'error': 'bad'},
             None,
-            {'requestId': 'r1', 'mcp': {'isError': True}},
+            {'requestId': 'r1', 'isError': True},
+        ),
+        (
+            CallToolResult(
+                content=[text('bad')],
+                isError=True,
+                _meta={'isError': False},  # ty: ignore[unknown-argument]
+            ),
+            {'error': 'bad'},
+            None,
+            {'isError': True},
         ),
     ],
 )
@@ -91,6 +101,31 @@ def test_call_result_to_multipart_text_and_errors(
     assert response.output == output
     assert response.content == content
     assert response.metadata == metadata
+
+
+def test_call_result_to_multipart_error_flag_is_top_level_and_keeps_server_mcp_meta() -> None:
+    """The error flag sits beside the server's _meta keys, so a server's own mcp key survives."""
+    result = CallToolResult(
+        content=[text('bad')],
+        isError=True,
+        _meta={'mcp': {'trace': 't1'}},  # ty: ignore[unknown-argument]
+    )
+
+    response = call_result_to_multipart(result)
+
+    assert response.metadata == {'mcp': {'trace': 't1'}, 'isError': True}
+
+
+def test_call_result_to_multipart_drops_server_error_flags_from_a_success() -> None:
+    """A server's own isError or is_error in _meta cannot mark a successful result as failed."""
+    result = CallToolResult(
+        content=[text('ok')],
+        _meta={'isError': True, 'is_error': True, 'trace': 't'},  # ty: ignore[unknown-argument]
+    )
+
+    response = call_result_to_multipart(result)
+
+    assert response.metadata == {'trace': 't'}
 
 
 def test_call_result_to_multipart_maps_multipart_content_and_meta() -> None:
@@ -178,7 +213,7 @@ async def test_mcp_tool_to_action_folds_a_tool_result_error_into_an_error_envelo
 
     assert response.output == {'error': 'MCP output did not match the declared schema'}
     assert response.content is None
-    assert response.metadata == {'mcp': {'isError': True}}
+    assert response.metadata == {'isError': True}
 
 
 @pytest.mark.asyncio

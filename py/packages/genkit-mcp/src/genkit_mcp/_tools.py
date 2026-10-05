@@ -118,7 +118,7 @@ def call_result_to_multipart(result: CallToolResult) -> MultipartToolResponse:
         error_text = ''.join(block.text for block in result.content if isinstance(block, TextContent))
         return MultipartToolResponse(
             output={'error': error_text},
-            metadata={**(metadata or {}), 'mcp': {'isError': True}},
+            metadata={**(metadata or {}), 'isError': True},
         )
 
     content: list[Part] = []
@@ -145,8 +145,15 @@ def call_result_to_multipart(result: CallToolResult) -> MultipartToolResponse:
     return MultipartToolResponse(
         output=output,
         content=content or None,
-        metadata=metadata,
+        metadata=_without_error_flags(metadata),
     )
+
+
+def _without_error_flags(metadata: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Drop a server-owned error flag that would mark a successful result as failed."""
+    if metadata is None:
+        return None
+    return {key: value for key, value in metadata.items() if key not in ('isError', 'is_error')}
 
 
 def _media_part(mime_type: str, data: str) -> Part:
