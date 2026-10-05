@@ -1703,10 +1703,12 @@ export const contextCompression: GenerateMiddleware<
       messages: MessageData[],
       effectiveSummaryPreserveRecent?: number,
       ctx?: { abortSignal?: AbortSignal; context?: ActionContext },
-      maxMessagesCap?: number
+      maxMessagesCap?: number,
+      fallbackPreserveRecent?: number
     ): Promise<{
       messages: MessageData[];
       summarized: boolean;
+      failed: boolean;
       summaryText: string;
       tailMessages: MessageData[];
     }> {
@@ -1714,6 +1716,7 @@ export const contextCompression: GenerateMiddleware<
         return {
           messages,
           summarized: false,
+          failed: false,
           summaryText: '',
           tailMessages: [],
         };
@@ -1723,33 +1726,52 @@ export const contextCompression: GenerateMiddleware<
         1,
         Math.trunc(effectiveSummaryPreserveRecent ?? baseSummaryPreserveRecent)
       );
+      const clampedFallback =
+        fallbackPreserveRecent !== undefined && fallbackPreserveRecent > 0
+          ? Math.max(1, Math.trunc(fallbackPreserveRecent))
+          : undefined;
 
       const { systemMessages, nonSystemMessages } = partitionMessages(
         messages,
         preserveSystem
       );
 
+      // When nonSystemMessages fits within summaryPreserveRecent (e.g. 5–6
+      // messages with default summarize.preserveRecent = 6), fall back to the
+      // general preserveRecent window (default 4) so over-budget histories are
+      // summarized rather than skipped.
+      let targetKeep = summaryPreserveRecent;
+      if (
+        nonSystemMessages.length <= targetKeep &&
+        clampedFallback !== undefined &&
+        clampedFallback < targetKeep
+      ) {
+        targetKeep = clampedFallback;
+      }
+
       // When maxMessagesCap is set, reserve 1 slot for the summary message and
       // systemMessages.length slots for preserved system messages so summarization
       // never exceeds maxMessages or produces a summary that truncation immediately drops.
-      let targetKeep = summaryPreserveRecent;
+      let maxKeepForCap: number | undefined;
       if (maxMessagesCap !== undefined && maxMessagesCap > 0) {
-        const maxKeepForCap = maxMessagesCap - systemMessages.length - 1;
+        maxKeepForCap = maxMessagesCap - systemMessages.length - 1;
         if (maxKeepForCap < 1) {
           return {
             messages,
             summarized: false,
+            failed: false,
             summaryText: '',
             tailMessages: [],
           };
         }
-        targetKeep = Math.min(summaryPreserveRecent, maxKeepForCap);
+        targetKeep = Math.min(targetKeep, maxKeepForCap);
       }
 
       if (nonSystemMessages.length <= targetKeep) {
         return {
           messages,
           summarized: false,
+          failed: false,
           summaryText: '',
           tailMessages: [],
         };
@@ -1762,10 +1784,30 @@ export const contextCompression: GenerateMiddleware<
         splitIdx--;
       }
 
+      if (
+        (splitIdx <= 0 ||
+          nonSystemMessages[splitIdx].role === 'tool' ||
+          (maxKeepForCap !== undefined &&
+            nonSystemMessages.length - splitIdx > maxKeepForCap)) &&
+        clampedFallback !== undefined &&
+        clampedFallback < targetKeep &&
+        nonSystemMessages.length > clampedFallback
+      ) {
+        targetKeep =
+          maxKeepForCap !== undefined
+            ? Math.min(clampedFallback, maxKeepForCap)
+            : clampedFallback;
+        splitIdx = nonSystemMessages.length - targetKeep;
+        while (splitIdx > 0 && nonSystemMessages[splitIdx].role === 'tool') {
+          splitIdx--;
+        }
+      }
+
       if (splitIdx <= 0 || nonSystemMessages[splitIdx].role === 'tool') {
         return {
           messages,
           summarized: false,
+          failed: false,
           summaryText: '',
           tailMessages: [],
         };
@@ -1782,6 +1824,7 @@ export const contextCompression: GenerateMiddleware<
         return {
           messages,
           summarized: false,
+          failed: false,
           summaryText: '',
           tailMessages: [],
         };
@@ -1849,6 +1892,7 @@ export const contextCompression: GenerateMiddleware<
             toKeep
           ),
           summarized: true,
+          failed: false,
           summaryText,
           tailMessages: toKeep,
         };
@@ -1863,6 +1907,7 @@ export const contextCompression: GenerateMiddleware<
         return {
           messages,
           summarized: false,
+          failed: true,
           summaryText: '',
           tailMessages: [],
         };
@@ -2065,6 +2110,7 @@ export const contextCompression: GenerateMiddleware<
             let mBoundaryIdx = -1;
             let mUsedAnchorUser = false;
             let isSummarized = false;
+            let summarizationFailed = false;
             let sText = '';
             let sBoundaryIdx = -1;
             let skippedSummary = false;
@@ -2132,10 +2178,14 @@ export const contextCompression: GenerateMiddleware<
                     messages,
                     adjustedSummaryPreserveRecent,
                     ctx,
-                    maxMessages
+                    maxMessages,
+                    effectiveTokens > maxInputTokens
+                      ? adjustedPreserveRecent
+                      : undefined
                   );
                   messages = sumResult.messages;
                   isSummarized = sumResult.summarized;
+                  summarizationFailed = sumResult.failed;
                   if (isSummarized) {
                     sText = sumResult.summaryText;
                     const firstKeptRawIdx = sumResult.tailMessages
@@ -2166,11 +2216,13 @@ export const contextCompression: GenerateMiddleware<
                 const needsTokenFallbackTruncation =
                   effectiveTokens > maxInputTokens &&
                   ((!dedupConfig && !toolResponseConfig && !summaryModelRef) ||
-                    (Boolean(summaryModelRef) && !skippedSummary));
+                    summarizationFailed);
 
                 let effectiveMaxMessages: number | undefined;
                 if (
-                  (hasExplicitPreserveRecent && !cheapSatisfiedBudget) ||
+                  (hasExplicitPreserveRecent &&
+                    !cheapSatisfiedBudget &&
+                    (!summaryModelRef || summarizationFailed)) ||
                   needsTokenFallbackTruncation
                 ) {
                   const preserveCap = fixedSlots + adjustedPreserveRecent;

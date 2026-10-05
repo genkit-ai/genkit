@@ -4237,4 +4237,184 @@ describe('contextCompression middleware', () => {
     });
     assert.strictEqual(summaryCalled, true);
   });
+
+  it('summarizes 5-6 message histories with default preserveRecent options instead of dropping Turn 1 via fallback truncation', async () => {
+    const ai = genkit({});
+    let capturedRequest: GenerateRequest | undefined;
+    let summaryCalled = 0;
+
+    const summaryModel = ai.defineModel(
+      { name: 'defaultPreserveRecentSummarizer' },
+      async () => {
+        summaryCalled++;
+        return {
+          message: {
+            role: 'model',
+            content: [{ text: 'Summary of turn 1' }],
+          },
+          finishReason: 'stop',
+        };
+      }
+    );
+
+    const pm = ai.defineModel(
+      { name: 'defaultPreserveRecentMain' },
+      async (req) => {
+        capturedRequest = req;
+        return {
+          message: { role: 'model', content: [{ text: 'done' }] },
+          usage: { inputTokens: 50 },
+        };
+      }
+    );
+
+    // 5 messages totaling ~875 chars (~250 tokens), maxInputTokens = 200 -> overshootRatio = 1.25 (< 1.5)
+    const fiveMessageHistory: MessageData[] = [
+      { role: 'user', content: [{ text: 'u1 ' + 'A'.repeat(170) }] },
+      { role: 'model', content: [{ text: 'm1 ' + 'B'.repeat(170) }] },
+      { role: 'user', content: [{ text: 'u2 ' + 'C'.repeat(170) }] },
+      { role: 'model', content: [{ text: 'm2 ' + 'D'.repeat(170) }] },
+      { role: 'user', content: [{ text: 'u3 ' + 'E'.repeat(170) }] },
+    ];
+
+    const res = await ai.generate({
+      model: pm,
+      messages: fiveMessageHistory,
+      use: [
+        contextCompression({
+          maxInputTokens: 200,
+          summarize: { model: summaryModel },
+        }),
+      ],
+    });
+
+    assert.strictEqual(summaryCalled, 1);
+    const cc = (res.custom as Record<string, unknown>)?.contextCompression as
+      | Record<string, unknown>
+      | undefined;
+    assert.ok(cc);
+    assert.strictEqual(cc.summarized, true);
+    assert.strictEqual(cc.truncationNoticeInserted, false);
+    assert.ok(
+      capturedRequest!.messages[0].content[0].text?.includes(
+        'Summary of turn 1'
+      )
+    );
+
+    // Verify cross-turn resolution and re-entry on next turn
+    const resolved = resolveCompressedHistory(res.messages);
+    assert.ok(resolved[0].content[0].text?.includes('Summary of turn 1'));
+
+    // Also verify a 7-message history where initial splitIdx (7 - 6 = 1) lands on a
+    // tool message and backs up to 0, recovering via fallbackPreserveRecent (4).
+    const sevenMsgToolPrefixHistory: MessageData[] = [
+      {
+        role: 'model',
+        content: [{ toolRequest: { name: 't', ref: '1', input: {} } }],
+      },
+      {
+        role: 'tool',
+        content: [
+          { toolResponse: { name: 't', ref: '1', output: 'A'.repeat(200) } },
+        ],
+      },
+      {
+        role: 'tool',
+        content: [
+          { toolResponse: { name: 't', ref: '2', output: 'B'.repeat(200) } },
+        ],
+      },
+      { role: 'user', content: [{ text: 'u1 ' + 'C'.repeat(120) }] },
+      { role: 'model', content: [{ text: 'm2 ' + 'D'.repeat(120) }] },
+      { role: 'user', content: [{ text: 'u2 ' + 'E'.repeat(120) }] },
+      { role: 'model', content: [{ text: 'm3 ' + 'F'.repeat(120) }] },
+    ];
+
+    const resToolPrefix = await ai.generate({
+      model: pm,
+      messages: sevenMsgToolPrefixHistory,
+      use: [
+        contextCompression({
+          maxInputTokens: 200,
+          summarize: { model: summaryModel },
+        }),
+      ],
+    });
+
+    assert.strictEqual(summaryCalled, 2);
+    const ccToolPrefix = (resToolPrefix.custom as Record<string, unknown>)
+      ?.contextCompression as Record<string, unknown> | undefined;
+    assert.strictEqual(ccToolPrefix?.summarized, true);
+    assert.strictEqual(ccToolPrefix?.truncationNoticeInserted, false);
+    assert.strictEqual(capturedRequest!.messages.length, 5);
+  });
+
+  it('does not trigger Step 5 fallback truncation when applySummarization returns summarized: false without failing', async () => {
+    const ai = genkit({});
+    let capturedRequest: GenerateRequest | undefined;
+    let summaryCalled = false;
+
+    const summaryModel = ai.defineModel(
+      { name: 'shortHistorySummarizer' },
+      async () => {
+        summaryCalled = true;
+        return {
+          message: { role: 'model', content: [{ text: 'Summary' }] },
+          finishReason: 'stop',
+        };
+      }
+    );
+
+    const pm = ai.defineModel({ name: 'shortHistoryMain' }, async (req) => {
+      capturedRequest = req;
+      return {
+        message: { role: 'model', content: [{ text: 'done' }] },
+        usage: { inputTokens: 50 },
+      };
+    });
+
+    // 4 messages: [model(toolReq), tool1, tool2, u1] with preserveRecent: 2 and summarize.preserveRecent: 6.
+    // Fallback targetKeep = 2 gives splitIdx = 4 - 2 = 2 (tool2), which backs up past tool2 and tool1 to 0,
+    // so applySummarization returns { summarized: false, failed: false }.
+    // Even though messages.length (4) > preserveCap (fixedSlots 1 + preserveRecent 2 = 3),
+    // Step 5 must not truncate because the summarizer did not fail.
+    const unSplittableToolHistory: MessageData[] = [
+      {
+        role: 'model',
+        content: [{ toolRequest: { name: 't', ref: '1', input: {} } }],
+      },
+      {
+        role: 'tool',
+        content: [
+          { toolResponse: { name: 't', ref: '1', output: 'A'.repeat(300) } },
+        ],
+      },
+      {
+        role: 'tool',
+        content: [
+          { toolResponse: { name: 't', ref: '2', output: 'B'.repeat(300) } },
+        ],
+      },
+      { role: 'user', content: [{ text: 'u1 ' + 'C'.repeat(300) }] },
+    ];
+
+    const res = await ai.generate({
+      model: pm,
+      messages: unSplittableToolHistory,
+      use: [
+        contextCompression({
+          maxInputTokens: 200,
+          preserveRecent: 2,
+          summarize: { model: summaryModel, preserveRecent: 6 },
+        }),
+      ],
+    });
+
+    assert.strictEqual(summaryCalled, false);
+    assert.strictEqual(
+      (res.custom as Record<string, unknown> | undefined)?.contextCompression,
+      undefined
+    );
+    assert.strictEqual(capturedRequest!.messages.length, 4);
+  });
 });
