@@ -256,11 +256,25 @@ _PROBE_CODE = (lambda: None).__code__
 def resolve_type_hints(fn: Callable[..., object]) -> dict[str, Any]:
     """``fn``'s annotations as types, resolved one name at a time if the batch fails.
 
-    ``get_type_hints`` is all or nothing: one name that isn't there at runtime
-    (a type imported under ``TYPE_CHECKING``, or a model defined inside a
-    function under ``from __future__ import annotations``) fails the whole call.
-    When it fails, each annotation is resolved on its own against ``fn``'s
-    module, so only the names that can't be found stay strings.
+    Under ``from __future__ import annotations`` every annotation is stored as
+    a string, and ``get_type_hints`` turns the strings back into classes by
+    looking each name up in ``fn``'s module globals. A name can be missing
+    there at runtime in two common ways:
+
+    - It's imported under ``if TYPE_CHECKING:``. Ruff's ``TC`` rules move an
+      import there when the name only appears in annotations, e.g.
+      ``ctx: ToolRunContext``, without knowing Genkit reads annotations at
+      runtime.
+    - It's defined inside a function, e.g. a tool factory that declares its
+      input model locally. The function object only carries its module
+      globals, not the local scope it was created in, so nothing can find it.
+
+    ``get_type_hints`` is all or nothing: one missing name fails the whole
+    call, and every other annotation would stay a string too, so a module-level
+    input model next to a ``TYPE_CHECKING``-only ``ToolRunContext`` couldn't be
+    resolved. When the batch call fails, each annotation is resolved on its own
+    against ``fn``'s module, so only the names that really are missing stay
+    strings. Signatures that resolve today never leave the batch call.
     """
     # whatever fails here, the per-name pass below leaves only that name unresolved
     with contextlib.suppress(Exception):
@@ -336,9 +350,22 @@ def find_input_and_context(
             ) from e
         except PydanticUserError as e:
             if isinstance(input_type, str):
-                # resolve_type_hints leaves a name as a string only when the
-                # module doesn't have it at runtime: a model defined inside a
-                # function, or a type imported under TYPE_CHECKING
+                # The input is still a bare name, so resolve_type_hints couldn't
+                # find it in the module at runtime. Typically:
+                #
+                #   from __future__ import annotations
+                #
+                #   def make_tools(ai):
+                #       class StepInput(BaseModel): ...
+                #
+                #       @ai.tool()
+                #       async def slow_work(input: StepInput) -> dict: ...
+                #
+                # The annotation is the string 'StepInput', and StepInput is a
+                # local of make_tools, which slow_work doesn't carry. Without
+                # the __future__ import Python would have stored the class
+                # itself while the local was in scope. Pydantic's own error
+                # here ("call .rebuild()") names neither the tool nor the fix.
                 kind = owner.split(' ', 1)[0]
                 raise TypeError(
                     f"{owner} input '{input_param.name}' has type '{input_type}', which can't be found "
