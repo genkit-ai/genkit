@@ -27,7 +27,8 @@ import httpx
 from genkit_google_genai._interactions.options import ClientOptions
 from google.genai.interactions import Interaction
 
-from genkit import GenkitError, get_logger
+from genkit import GenkitError
+from genkit._core._logger import get_logger
 from genkit.plugin_api import (
     GENKIT_CLIENT_HEADER,
     ErrorResponseMetadata,

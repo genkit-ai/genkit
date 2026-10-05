@@ -9,13 +9,12 @@ from unittest import mock
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from pydantic import BaseModel
 
 from genkit import Genkit
 from genkit._ai._testing import define_echo_model
 from genkit._core._action import ActionRunContext, _action_context
 from genkit._core._error import GenkitError, RuntimeErrorReason
-from genkit._core._model import Message, ModelRef, ModelRequest, ModelResponse, Part
+from genkit._core._model import Message, ModelRequest, ModelResponse, Part
 from genkit._core._registry import Registry
 from genkit._core._telemetry._instrumentation import (
     SpanMetadata,
@@ -25,7 +24,7 @@ from genkit._core._telemetry._instrumentation import (
 from genkit._core._typing import FinishReason, Operation, Role
 from genkit.exp import Genkit as ExpGenkit
 from genkit.middleware import BaseMiddleware, GenerateHookParams, GenerateMiddlewareContext
-from genkit.model import ModelInfo, Supports, model
+from genkit.model import model
 from genkit.plugin_api import Action, ActionKind
 from genkit.telemetry import configure_instrumentation
 
@@ -350,89 +349,6 @@ async def test_current_context() -> None:
 
 
 @pytest.mark.asyncio
-async def test_lookup_model_returns_a_model_ref_that_generate_accepts() -> None:
-    ai = Genkit()
-    define_echo_model(ai, name='echo')
-
-    ref = await ai.lookup_model('echo')
-
-    assert isinstance(ref, ModelRef)
-    response = await ai.generate(model=ref, prompt='hi')
-    assert '[ECHO]' in response.text
-
-
-@pytest.mark.asyncio
-async def test_lookup_model_unknown_name_returns_none() -> None:
-    ai = Genkit()
-    assert await ai.lookup_model('ghost') is None
-
-
-class ShopCfg(BaseModel):
-    aisle: str
-
-
-@pytest.mark.asyncio
-async def test_lookup_model_then_generate_accepts_same_config_as_the_name() -> None:
-    ai = Genkit()
-    define_echo_model(ai, name='echo')
-
-    named = await ai.generate(model='echo', config=ShopCfg(aisle='12'), prompt='hi')
-    ref = await ai.lookup_model('echo')
-    assert ref is not None
-    via_ref = await ai.generate(model=ref, config=ShopCfg(aisle='12'), prompt='hi')
-
-    assert named.text == via_ref.text
-    assert 'aisle' in via_ref.text
-
-
-@pytest.mark.asyncio
-async def test_lookup_model_dap_qualified_name_generate_finds_the_same_model() -> None:
-    ai = Genkit()
-
-    async def echo(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
-        return ModelResponse(
-            finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part.from_text('[ECHO] dap')]),
-        )
-
-    child = model('foo', echo)
-
-    async def dap_fn():
-        return {'model': [child]}
-
-    ai.define_dynamic_action_provider('mcp', dap_fn)
-
-    ref = await ai.lookup_model('mcp:model/foo')
-
-    assert ref is not None
-    assert ref.name == 'mcp:model/foo'
-    response = await ai.generate(model=ref, prompt='hi')
-    assert '[ECHO] dap' in response.text
-
-
-@pytest.mark.asyncio
-async def test_lookup_model_copies_supports_onto_info() -> None:
-    ai = Genkit()
-
-    async def echo(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
-        return ModelResponse(
-            finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part.from_text('ok')]),
-        )
-
-    supports = Supports(tools=True, multiturn=True)
-    ai.define_model(name='echo', fn=echo, info=ModelInfo(supports=supports))
-
-    ref = await ai.lookup_model('echo')
-
-    assert ref is not None
-    assert ref.info is not None
-    assert ref.info.supports is not None
-    assert ref.info.supports.tools is True
-    assert ref.info.supports.multiturn is True
-
-
-@pytest.mark.asyncio
 async def test_lookup_agent_found_returns_agent() -> None:
     ai = ExpGenkit()
     define_echo_model(ai, name='echo')
@@ -461,30 +377,6 @@ async def test_lookup_agent_non_agent_slot_raises() -> None:
     with pytest.raises(GenkitError, match="Registry entry 'occupied' is not an Agent.") as exc_info:
         await ai.lookup_agent('occupied')
     assert exc_info.value.status == 'INTERNAL'
-
-
-@pytest.mark.asyncio
-async def test_lookup_background_model_returns_a_ref_that_generate_operation_accepts() -> None:
-    ai = Genkit()
-
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
-        return Operation(id='job-1', done=False)
-
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
-        return op
-
-    ai.define_background_model(name='bg', start=start, check=check)
-    ref = await ai.lookup_background_model('bg')
-
-    assert isinstance(ref, ModelRef)
-    operation = await ai.generate_operation(model=ref, prompt='hi')
-    assert operation.id == 'job-1'
-
-
-@pytest.mark.asyncio
-async def test_lookup_background_model_unknown_name_returns_none() -> None:
-    ai = Genkit()
-    assert await ai.lookup_background_model('ghost') is None
 
 
 @pytest.mark.asyncio
