@@ -27,6 +27,7 @@ from django.views.decorators.csrf import csrf_exempt
 from pydantic import BaseModel
 
 from genkit import ContextProvider, Genkit, GenkitError, RequestData
+from genkit._core._context import joined_headers
 from genkit.plugin_api import Action, get_callable_json, get_http_status
 
 logger = logging.getLogger(__name__)
@@ -80,7 +81,7 @@ class _DjangoRequestData(RequestData):
         super().__init__(
             request=request,
             method=request.method or '',
-            headers={k.lower(): v for k, v in _request_headers(request).items()},
+            headers=joined_headers(_request_headers(request).items()),
             input=body.get('data') if body else None,
         )
 
@@ -167,7 +168,7 @@ def genkit_django_handler(
                     logger.exception('served flow context provider failed')
                     return _error_response(e)
 
-            accept = _request_headers(request).get('Accept', '')
+            accept = request_data.headers.get('accept', '')
             stream = 'text/event-stream' in accept or request.GET.get('stream') == 'true'
             init = body.get('init')
 

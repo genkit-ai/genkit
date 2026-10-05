@@ -29,6 +29,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from genkit import ContextProvider, Genkit, GenkitError, RequestData
+from genkit._core._context import joined_headers
 from genkit.exp.agent import Agent, SessionSnapshot
 from genkit.plugin_api import Action, ActionKind, get_callable_json, get_http_status
 
@@ -94,7 +95,9 @@ class FastAPIRequestData(RequestData):
         super().__init__(
             request=request,
             method=request.method,
-            headers={k.lower(): v for k, v in request.headers.items()},
+            headers=joined_headers(
+                (name.decode('latin-1'), value.decode('latin-1')) for name, value in request.headers.raw
+            ),
             input=body.get('data') if body else None,
         )
 

@@ -27,6 +27,7 @@ from flask import Response, request
 from pydantic import BaseModel
 
 from genkit import ContextProvider, Genkit, GenkitError, RequestData
+from genkit._core._context import joined_headers
 from genkit.plugin_api import Action, get_callable_json, get_http_status
 
 logger = logging.getLogger(__name__)
@@ -75,14 +76,12 @@ FlaskRouteReturn: TypeAlias = Response | dict[str, object] | Iterable[Any]
 
 
 class _FlaskRequestData(RequestData):
-    def __init__(self, input_data: dict[str, Any] | None = None) -> None:
-        if input_data is None:
-            input_data = request.get_json(silent=True)
+    def __init__(self, input_data: dict[str, Any]) -> None:
         super().__init__(
             request=request,
             method=request.method,
-            headers={key.lower(): value for key, value in request.headers.items()},
-            input=input_data.get('data') if isinstance(input_data, dict) else None,
+            headers=joined_headers(request.headers.items()),
+            input=input_data.get('data'),
         )
 
 

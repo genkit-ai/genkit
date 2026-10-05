@@ -305,3 +305,51 @@ def test_fastapi_context_provider_sees_method_lowercase_headers_and_input() -> N
         'authorization': 'Bearer tok',
         'input': 'hello',
     }
+
+
+def test_request_data_duplicate_authorization_is_comma_joined() -> None:
+    """Two Authorization values become one comma-joined string."""
+    ai = Genkit()
+    app = FastAPI()
+
+    async def provider(request_data: RequestData) -> dict[str, object]:
+        return {'authorization': request_data.headers.get('authorization')}
+
+    @app.post('/echo', response_model=None)
+    @genkit_fastapi_handler(ai, context_provider=provider)
+    @ai.flow()
+    async def echo(_: str, ctx: ActionRunContext) -> dict[str, object]:
+        return {'authorization': ctx.context['authorization']}
+
+    response = TestClient(app).post(
+        '/echo',
+        json={'data': 'hello'},
+        headers=[('Authorization', 'Bearer a'), ('Authorization', 'Bearer b')],
+    )
+
+    assert response.status_code == 200
+    assert response.json()['result'] == {'authorization': 'Bearer a, Bearer b'}
+
+
+def test_request_data_duplicate_x_forwarded_for_is_comma_joined() -> None:
+    """Two X-Forwarded-For values keep the full proxy chain."""
+    ai = Genkit()
+    app = FastAPI()
+
+    async def provider(request_data: RequestData) -> dict[str, object]:
+        return {'xff': request_data.headers.get('x-forwarded-for')}
+
+    @app.post('/echo', response_model=None)
+    @genkit_fastapi_handler(ai, context_provider=provider)
+    @ai.flow()
+    async def echo(_: str, ctx: ActionRunContext) -> dict[str, object]:
+        return {'xff': ctx.context['xff']}
+
+    response = TestClient(app).post(
+        '/echo',
+        json={'data': 'hello'},
+        headers=[('X-Forwarded-For', '203.0.113.1'), ('X-Forwarded-For', '198.51.100.2')],
+    )
+
+    assert response.status_code == 200
+    assert response.json()['result'] == {'xff': '203.0.113.1, 198.51.100.2'}

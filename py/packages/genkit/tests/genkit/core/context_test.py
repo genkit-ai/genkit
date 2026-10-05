@@ -49,3 +49,15 @@ def test_request_data_defaults() -> None:
     assert data.method == ''
     assert data.headers == {}
     assert data.input is None
+
+
+def test_request_data_constructor_lowercases_keys() -> None:
+    """Mixed-case constructor keys are readable via lowercase get."""
+    data = RequestData(headers={'Authorization': 't'})
+    assert data.headers.get('authorization') == 't'
+
+
+def test_request_data_duplicate_authorization_is_comma_joined() -> None:
+    """Two Authorization values become one comma-joined string."""
+    data = RequestData(headers={'Authorization': 'Bearer a', 'authorization': 'Bearer b'})
+    assert data.headers.get('authorization') == 'Bearer a, Bearer b'

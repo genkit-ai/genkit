@@ -221,21 +221,6 @@ def test_flask_context_provider_sees_method_lowercase_headers_and_input() -> Non
     }
 
 
-def test_flask_request_data_handles_non_dict_json_payload() -> None:
-    """When the request JSON is a non-dict (e.g. list), input safely falls back to None."""
-    from genkit_flask.handler import _FlaskRequestData
-
-    app = Flask(__name__)
-    with app.test_request_context(
-        '/',
-        method='POST',
-        data=json.dumps(['item1', 'item2']),
-        content_type='application/json',
-    ):
-        req_data = _FlaskRequestData()
-        assert req_data.input is None
-
-
 def test_flask_flow_rejects_non_dict_json_payload_with_400() -> None:
     """A JSON payload that is not an object (e.g. ['data']) returns 400."""
     client = create_app().test_client()
@@ -247,18 +232,3 @@ def test_flask_flow_rejects_non_dict_json_payload_with_400() -> None:
 
     assert response.status_code == 400
     assert b'flow request must be wrapped in {"data": data} object' in response.data
-
-
-def test_flask_request_data_accepts_explicit_input_data() -> None:
-    """_FlaskRequestData accepts explicit input_data dict without re-reading request."""
-    from genkit_flask.handler import _FlaskRequestData
-
-    app = Flask(__name__)
-    with app.test_request_context(
-        '/',
-        method='POST',
-        data=b'',
-        content_type='application/json',
-    ):
-        req_data = _FlaskRequestData({'data': 'custom_input'})
-        assert req_data.input == 'custom_input'
