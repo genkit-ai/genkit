@@ -34,11 +34,12 @@ kept in mind when modifying media handling or tool conversion logic:
    server-side references. Downloading them is unnecessary and would require
    authentication. They are passed through as ``file_data``.
 
-3. **Tool input schemas must use object types, not bare primitives**:
-   LLMs always send tool arguments as JSON objects with named keys (e.g.
-   ``{'celsius': 21.5}``). A tool with a bare ``float`` input generates
-   a ``{'type': 'number'}`` schema, which causes a validation mismatch when
-   the model sends ``{'celsius': 21.5}``. Use Pydantic models for tool inputs.
+3. **Tool inputs that aren't objects ride under an ``input`` field**:
+   Gemini reads a tool's parameters as named fields and always sends call
+   arguments as an object, so a bare ``{'type': 'number'}`` looks like a tool
+   that takes nothing. A non-object input is declared as
+   ``{'input': <schema>}``, unwrapped from ``args['input']`` when the model
+   calls the tool, and re-wrapped when an earlier call is sent back in history.
 
 4. **GoogleSearch vs GoogleSearchRetrieval type mismatch**:
    The ``google.genai`` SDK's ``Tool.google_search`` field expects a
@@ -58,6 +59,9 @@ from genkit.model import ToolRequest, ToolResponse
 from genkit.plugin_api import get_cached_client
 
 logger = logging.getLogger(__name__)
+
+# The field a non-object tool input rides under on the wire.
+TOOL_INPUT_FIELD = 'input'
 
 
 def _function_response_part(part: genai.types.Part) -> genai.types.FunctionResponsePart | None:
@@ -148,13 +152,18 @@ class PartConverter:
         if part.text is not None:
             return genai.types.Part(text=part.text or ' ')
         if part.tool_request is not None:
+            args = part.tool_request.input
+            # call args have to be an object, so a string or list input goes
+            # back under the same field the tool was declared with
+            if args is not None and not isinstance(args, dict):
+                args = {TOOL_INPUT_FIELD: args}
             # Round-trip the call id when we have one so the model can correlate
             # tool responses to the original request.
             return genai.types.Part(
                 function_call=genai.types.FunctionCall(
                     # Gemini throws on '/' in tool name
                     name=part.tool_request.name.replace('/', '__'),
-                    args=part.tool_request.input,
+                    args=args,
                     id=part.tool_request.ref,
                 ),
                 thought_signature=cls._extract_thought_signature(part.metadata),
@@ -311,7 +320,7 @@ class PartConverter:
         return genai.types.Part()
 
     @classmethod
-    def from_gemini(cls, part: genai.types.Part) -> Part:
+    def from_gemini(cls, part: genai.types.Part, *, wrapped_tools: frozenset[str] = frozenset()) -> Part:
         """Maps a Gemini Part back to a Genkit Part.
 
         This method inspects the type of the Gemini Part and converts it into
@@ -320,6 +329,8 @@ class PartConverter:
 
         Args:
             part: The `genai.types.Part` object to convert.
+            wrapped_tools: Names of tools whose input was declared under
+                ``TOOL_INPUT_FIELD``; their calls are unwrapped back to the input.
 
         Returns:
             A Genkit `Part` object representing the converted content.
@@ -332,12 +343,18 @@ class PartConverter:
             # Tool refs come only from the model's call id. A synthetic part
             # index isn't unique across turns, so resume can't tell repeated
             # calls to the same tool apart.
+            # restore slashes
+            name = (part.function_call.name or '').replace('__', '/')
+            args: object = part.function_call.args if part.function_call.args is not None else {}
+            # only tools we declared wrapped are unwrapped, so an object tool
+            # with its own `input` field still gets all of its args
+            if name in wrapped_tools and isinstance(args, dict) and TOOL_INPUT_FIELD in args:
+                args = args[TOOL_INPUT_FIELD]
             return Part(
                 tool_request=ToolRequest(
                     ref=getattr(part.function_call, 'id', None),
-                    # restore slashes
-                    name=(part.function_call.name or '').replace('__', '/'),
-                    input=part.function_call.args if part.function_call.args is not None else {},
+                    name=name,
+                    input=args,
                 ),
                 metadata=cls._encode_thought_signature(part.thought_signature),
             )

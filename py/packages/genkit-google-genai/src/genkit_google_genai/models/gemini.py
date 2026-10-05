@@ -123,7 +123,22 @@ def _usage_from_metadata(usage_metadata: Any) -> ModelUsage:  # noqa: ANN401
 from genkit_google_genai.models._deprecations import (  # noqa: E402
     deprecated_enum_metafactory,
 )
-from genkit_google_genai.models.utils import PartConverter  # noqa: E402
+from genkit_google_genai.models.utils import TOOL_INPUT_FIELD, PartConverter  # noqa: E402
+
+
+def _wraps_tool_input(input_schema: dict[str, object] | None) -> bool:
+    """Whether a tool's input has to be declared under ``TOOL_INPUT_FIELD``.
+
+    Gemini reads a tool's parameters as named fields, so a bare string or list
+    looks like a tool that takes nothing. Schemas with no top-level type (no
+    input, ``Any``, unions) are left as they are.
+    """
+    if not input_schema:
+        return False
+    raw_type = input_schema.get('type')
+    if isinstance(raw_type, list):
+        raw_type = next((t for t in raw_type if t != 'null'), None)
+    return raw_type is not None and raw_type != 'object'
 
 
 class HarmCategory(StrEnum):
@@ -1277,6 +1292,12 @@ class GeminiModel:
         # Empty params: Gemini requires type=OBJECT even for no-arg tools.
         if not params:
             params = genai_types.Schema(type=genai_types.Type.OBJECT, properties={})
+        elif _wraps_tool_input(tool.input_schema):
+            params = genai_types.Schema(
+                type=genai_types.Type.OBJECT,
+                properties={TOOL_INPUT_FIELD: params},
+                required=[TOOL_INPUT_FIELD],
+            )
 
         function = genai_types.FunctionDeclaration(
             name=tool.name,
@@ -1480,6 +1501,7 @@ class GeminiModel:
                 request_cfg = genai_types.GenerateContentConfig()
             request_cfg.cached_content = cached_content.name
 
+        wrapped_tools = frozenset(t.name for t in request.tools or [] if _wraps_tool_input(t.input_schema))
         if ctx.is_streaming:
             response = await self._streaming_generate(
                 request_contents=request_contents,
@@ -1487,10 +1509,15 @@ class GeminiModel:
                 ctx=ctx,
                 model_name=model_name,
                 client=client,
+                wrapped_tools=wrapped_tools,
             )
         else:
             response = await self._generate(
-                request_contents=request_contents, request_cfg=request_cfg, model_name=model_name, client=client
+                request_contents=request_contents,
+                request_cfg=request_cfg,
+                model_name=model_name,
+                client=client,
+                wrapped_tools=wrapped_tools,
             )
 
         response.usage = self._create_usage_stats(request=request, response=response)
@@ -1619,6 +1646,7 @@ class GeminiModel:
         request_cfg: genai_types.GenerateContentConfig | None,
         model_name: str,
         client: genai.Client | None = None,
+        wrapped_tools: frozenset[str] = frozenset(),
     ) -> ModelResponse:
         """Call google-genai generate.
 
@@ -1627,6 +1655,7 @@ class GeminiModel:
             request_cfg: request configuration
             model_name: name of generation model to use
             client: optional client to use for the request
+            wrapped_tools: tools whose input is declared under ``TOOL_INPUT_FIELD``
 
         Returns:
             genai response.
@@ -1652,7 +1681,7 @@ class GeminiModel:
                 message=f'Unexpected error during generation: {type(e).__name__}: {str(e)}',
             ) from e
 
-        content = await self._contents_from_response(response)
+        content = await self._contents_from_response(response, wrapped_tools=wrapped_tools)
 
         # Ensure we always have at least one content item to avoid UI errors
         if not content:
@@ -1665,7 +1694,7 @@ class GeminiModel:
                 c_content = []
                 if c.content and c.content.parts:
                     for part in c.content.parts:
-                        converted = PartConverter.from_gemini(part=part)
+                        converted = PartConverter.from_gemini(part=part, wrapped_tools=wrapped_tools)
                         if converted:
                             c_content.append(converted)
 
@@ -1702,6 +1731,7 @@ class GeminiModel:
         ctx: ActionRunContext,
         model_name: str,
         client: genai.Client | None = None,
+        wrapped_tools: frozenset[str] = frozenset(),
     ) -> ModelResponse:
         """Call google-genai generate for streaming.
 
@@ -1711,6 +1741,7 @@ class GeminiModel:
             ctx: action context
             model_name: name of generation model to use
             client: optional client to use for the request
+            wrapped_tools: tools whose input is declared under ``TOOL_INPUT_FIELD``
 
         Returns:
             empty genai response
@@ -1729,7 +1760,7 @@ class GeminiModel:
             finish_reason = FinishReason.UNKNOWN
             usage_metadata: Any = None
             async for response_chunk in generator:
-                content = await self._contents_from_response(response_chunk)
+                content = await self._contents_from_response(response_chunk, wrapped_tools=wrapped_tools)
                 if content:  # Only process if we have content
                     accumulated_content.extend(content)
                     ctx.send_chunk(
@@ -1825,11 +1856,14 @@ class GeminiModel:
 
         return request_contents, cache
 
-    async def _contents_from_response(self, response: genai_types.GenerateContentResponse) -> list:
+    async def _contents_from_response(
+        self, response: genai_types.GenerateContentResponse, *, wrapped_tools: frozenset[str] = frozenset()
+    ) -> list:
         """Retrieve contents from google-genai response.
 
         Args:
             response: google-genai response.
+            wrapped_tools: tools whose input is declared under ``TOOL_INPUT_FIELD``.
 
         Returns:
             list of generated contents.
@@ -1839,7 +1873,7 @@ class GeminiModel:
             for candidate in response.candidates:
                 if candidate.content and candidate.content.parts:
                     for part in candidate.content.parts:
-                        converted = PartConverter.from_gemini(part=part)
+                        converted = PartConverter.from_gemini(part=part, wrapped_tools=wrapped_tools)
                         if converted:  # Only append if conversion succeeded
                             content.append(converted)
 
