@@ -126,10 +126,11 @@ def operation_context(
 
 
 class BackgroundAction(Generic[OutputT]):
-    """A background action that can run for a long time.
+    """A handle over a background model's start, check and cancel actions.
 
-    Unlike regular actions, background actions can run for extended periods.
-    The returned operation can be used to check status and retrieve the response.
+    Like ``Tool``, it is built on registered actions but isn't itself an
+    ``Action``: each of start, check and cancel has its own registry key.
+    ``start`` returns an Operation; pass it to ``check`` until it's done.
 
     Attributes:
         __action: Action metadata.
