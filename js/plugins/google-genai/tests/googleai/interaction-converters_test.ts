@@ -15,7 +15,7 @@
  */
 
 import * as assert from 'assert';
-import { MessageData, Part } from 'genkit';
+import { GenkitError, MessageData, Part } from 'genkit';
 import { ToolDefinition } from 'genkit/model';
 import { describe, it } from 'node:test';
 import {
@@ -24,6 +24,7 @@ import {
   fromInteractionContent,
   fromInteractionDelta,
   fromInteractionStep,
+  fromInteractionSync,
   toInteractionConfigTool,
   toInteractionContent,
   toInteractionGenerationConfig,
@@ -691,6 +692,122 @@ describe('Interaction Converters', () => {
         },
       ]);
     });
+
+    it('should convert empty reasoning part with thoughtSignature to thought step without summary', () => {
+      const messages: MessageData[] = [
+        {
+          role: 'model',
+          content: [
+            {
+              reasoning: '',
+              metadata: {
+                thoughtSignature: 'sig-123',
+              },
+              custom: {
+                thought: {
+                  type: 'thought',
+                  summary: [],
+                  signature: 'sig-123',
+                },
+              },
+            },
+            {
+              toolRequest: {
+                name: 'getWeather',
+                ref: 'call-1',
+                input: { location: 'London' },
+              },
+            },
+          ],
+        },
+      ];
+      const result = toInteractionSteps(messages);
+      assert.deepStrictEqual(result, [
+        {
+          type: 'thought',
+          signature: 'sig-123',
+        },
+        {
+          type: 'function_call',
+          name: 'getWeather',
+          id: 'call-1',
+          arguments: { location: 'London' },
+        },
+      ]);
+    });
+
+    it('should convert non-empty reasoning part to thought step with summary and signature', () => {
+      const messages: MessageData[] = [
+        {
+          role: 'model',
+          content: [
+            {
+              reasoning: 'Looking up weather data',
+              metadata: {
+                thoughtSignature: 'sig-456',
+              },
+            },
+            {
+              text: 'The weather is sunny.',
+            },
+          ],
+        },
+      ];
+      const result = toInteractionSteps(messages);
+      assert.deepStrictEqual(result, [
+        {
+          type: 'thought',
+          summary: [{ type: 'text', text: 'Looking up weather data' }],
+          signature: 'sig-456',
+        },
+        {
+          type: 'model_output',
+          content: [{ type: 'text', text: 'The weather is sunny.' }],
+        },
+      ]);
+    });
+
+    it('should preserve rich summary from custom.thought when available', () => {
+      const messages: MessageData[] = [
+        {
+          role: 'model',
+          content: [
+            {
+              reasoning: 'Plan',
+              custom: {
+                thought: {
+                  type: 'thought',
+                  summary: [
+                    {
+                      type: 'text',
+                      text: 'Plan',
+                      annotations: [
+                        { title: 'Doc', url: 'https://example.com' },
+                      ],
+                    },
+                  ],
+                  signature: 'custom-sig-789',
+                },
+              },
+            },
+          ],
+        },
+      ];
+      const result = toInteractionSteps(messages);
+      assert.deepStrictEqual(result, [
+        {
+          type: 'thought',
+          summary: [
+            {
+              type: 'text',
+              text: 'Plan',
+              annotations: [{ title: 'Doc', url: 'https://example.com' }],
+            },
+          ],
+          signature: 'custom-sig-789',
+        },
+      ]);
+    });
   });
 
   describe('fromInteractionContent', () => {
@@ -1068,6 +1185,316 @@ describe('Interaction Converters', () => {
       assert.deepStrictEqual(result.output?.message?.content, [
         { text: 'Operation cancelled.' },
       ]);
+    });
+
+    it('should finish a failed operation with an error (no infinite polling)', () => {
+      const result = fromInteraction({
+        id: '123',
+        status: 'failed',
+        errors: [{ code: 'api_error', message: 'boom' }],
+      });
+      assert.strictEqual(result.done, true);
+      assert.strictEqual(result.output, undefined);
+      assert.ok(result.error?.message.includes('[api_error] boom'));
+      assert.strictEqual(result.error?.code, 'api_error');
+    });
+
+    it('should finish a failed operation without errors[] with a generic error', () => {
+      const result = fromInteraction({ id: '123', status: 'failed' });
+      assert.strictEqual(result.done, true);
+      assert.strictEqual(result.error?.message, 'Interaction failed');
+    });
+
+    it('should convert a content-blocked failed operation to finishReason blocked', () => {
+      const result = fromInteraction({
+        id: '123',
+        status: 'failed',
+        errors: [{ code: 'recitation', message: 'Recitation blocked.' }],
+        usage: { total_input_tokens: 7, total_tokens: 7 },
+      });
+      assert.strictEqual(result.done, true);
+      assert.strictEqual(result.error, undefined);
+      assert.strictEqual(result.output?.finishReason, 'blocked');
+      assert.strictEqual(result.output?.finishMessage, 'Recitation blocked.');
+      assert.strictEqual(result.output?.usage?.inputTokens, 7);
+    });
+
+    it('should carry usage on a cancelled operation', () => {
+      const result = fromInteraction({
+        id: '123',
+        status: 'cancelled',
+        usage: { total_input_tokens: 3, total_tokens: 3 },
+      });
+      assert.strictEqual(result.output?.usage?.inputTokens, 3);
+    });
+
+    it('should finish a requires_action operation (collaborative planning) and surface the plan', () => {
+      const result = fromInteraction({
+        id: '123',
+        status: 'requires_action',
+        steps: [
+          {
+            type: 'model_output',
+            content: [
+              {
+                type: 'text',
+                text: "Here is the research plan I've prepared: 1. ...",
+              },
+            ],
+          },
+        ],
+      });
+      assert.strictEqual(result.done, true);
+      assert.strictEqual(result.error, undefined);
+      assert.strictEqual(result.output?.finishReason, 'stop');
+      assert.deepStrictEqual(
+        result.output?.message?.content.map((p) => p.text),
+        ["Here is the research plan I've prepared: 1. ..."]
+      );
+      assert.strictEqual(
+        result.output?.message?.metadata?.interactionStatus,
+        'requires_action'
+      );
+      assert.strictEqual(
+        result.output?.message?.metadata?.interactionId,
+        '123'
+      );
+    });
+
+    it('should surface pending client function calls as toolRequests on requires_action', () => {
+      const result = fromInteraction({
+        id: '123',
+        status: 'requires_action',
+        steps: [
+          {
+            type: 'function_call',
+            id: 'call-1',
+            name: 'lookup',
+            arguments: { q: 'x' },
+          },
+        ],
+      });
+      assert.strictEqual(result.done, true);
+      assert.deepStrictEqual(result.output?.message?.content, [
+        { toolRequest: { name: 'lookup', ref: 'call-1', input: { q: 'x' } } },
+      ]);
+    });
+
+    it('should keep polling for in_progress', () => {
+      const result = fromInteraction({ id: '123', status: 'in_progress' });
+      assert.strictEqual(result.done, false);
+    });
+
+    it('should keep polling for queued (waiting for capacity)', () => {
+      const result = fromInteraction({ id: '123', status: 'queued' });
+      assert.strictEqual(result.done, false);
+      assert.strictEqual(result.error, undefined);
+    });
+
+    it('should finish with an error for an unknown status (no infinite polling)', () => {
+      const result = fromInteraction({
+        id: '123',
+        status: 'expired' as any,
+      });
+      assert.strictEqual(result.done, true);
+      assert.strictEqual(result.output, undefined);
+      assert.strictEqual(
+        result.error?.message,
+        'Unknown interaction status: expired'
+      );
+    });
+
+    it('should convert an incomplete operation to finishReason length', () => {
+      const result = fromInteraction({
+        id: '123',
+        status: 'incomplete',
+        steps: [
+          { type: 'model_output', content: [{ type: 'text', text: 'partial' }] },
+        ],
+      });
+      assert.strictEqual(result.done, true);
+      assert.strictEqual(result.output?.finishReason, 'length');
+      assert.deepStrictEqual(
+        result.output?.message?.content.map((p) => p.text),
+        ['partial']
+      );
+    });
+  });
+
+  describe('fromInteractionSync', () => {
+    it('returns finishReason blocked for a post-execution safety block', () => {
+      const result = fromInteractionSync({
+        id: 'int-1',
+        status: 'failed',
+        errors: [
+          {
+            code: 'safety',
+            message: 'Response blocked due to safety violations.',
+          },
+        ],
+      });
+      assert.strictEqual(result.finishReason, 'blocked');
+      assert.strictEqual(
+        result.finishMessage,
+        'Response blocked due to safety violations.'
+      );
+      assert.deepStrictEqual(result.message?.content, []);
+      assert.strictEqual(result.message?.metadata?.interactionId, 'int-1');
+    });
+
+    it('returns finishReason blocked for every content-block code', () => {
+      for (const code of [
+        'safety',
+        'recitation',
+        'language',
+        'prohibited_content',
+        'spii',
+        'blocklist',
+        'image_safety',
+        'image_prohibited_content',
+        'image_recitation',
+        'image_other',
+        'content_blocked',
+        'jailbreak',
+        'model_armor',
+      ]) {
+        const result = fromInteractionSync({
+          status: 'failed',
+          errors: [{ code, message: 'blocked' }],
+        });
+        assert.strictEqual(result.finishReason, 'blocked', `code "${code}"`);
+      }
+    });
+
+    it('throws a retryable ABORTED GenkitError for malformed_function_call', () => {
+      const advice =
+        'Model generated invalid JSON syntax and the output could not be parsed. Please retry the request.';
+      assert.throws(
+        () =>
+          fromInteractionSync({
+            status: 'failed',
+            errors: [{ code: 'malformed_function_call', message: advice }],
+          }),
+        (err: any) => {
+          assert.ok(err instanceof GenkitError);
+          assert.strictEqual(err.status, 'ABORTED');
+          assert.ok(err.message.includes('[malformed_function_call]'));
+          assert.ok(err.message.includes(advice));
+          return true;
+        }
+      );
+    });
+
+    it('throws ABORTED for unexpected_tool_call and no_image', () => {
+      for (const code of ['unexpected_tool_call', 'no_image']) {
+        assert.throws(
+          () =>
+            fromInteractionSync({
+              status: 'failed',
+              errors: [{ code, message: 'retry' }],
+            }),
+          (err: any) => err instanceof GenkitError && err.status === 'ABORTED',
+          `code "${code}"`
+        );
+      }
+    });
+
+    it('throws a non-retryable UNKNOWN GenkitError for a failure without errors[]', () => {
+      assert.throws(
+        () => fromInteractionSync({ status: 'failed' }),
+        (err: any) => {
+          assert.ok(err instanceof GenkitError);
+          assert.strictEqual(err.status, 'UNKNOWN');
+          assert.ok(err.message.includes('Interaction failed'));
+          return true;
+        }
+      );
+    });
+
+    it('throws a non-retryable UNKNOWN GenkitError for an unrecognized code', () => {
+      assert.throws(
+        () =>
+          fromInteractionSync({
+            status: 'failed',
+            errors: [{ code: 'something_new', message: 'huh' }],
+          }),
+        (err: any) =>
+          err instanceof GenkitError &&
+          err.status === 'UNKNOWN' &&
+          err.message.includes('[something_new] huh')
+      );
+    });
+
+    it('returns finishReason length with partial content for an incomplete interaction', () => {
+      const result = fromInteractionSync({
+        id: 'int-1',
+        status: 'incomplete',
+        steps: [
+          { type: 'model_output', content: [{ type: 'text', text: 'partial' }] },
+        ],
+      });
+      assert.strictEqual(result.finishReason, 'length');
+      assert.strictEqual(
+        result.finishMessage,
+        'Interaction incomplete (truncated output)'
+      );
+      assert.deepStrictEqual(
+        result.message?.content.map((p) => p.text),
+        ['partial']
+      );
+    });
+
+    it('carries usage (including per-modality counts) on a blocked response', () => {
+      const result = fromInteractionSync({
+        status: 'failed',
+        errors: [{ code: 'safety', message: 'blocked' }],
+        usage: {
+          total_input_tokens: 10,
+          total_output_tokens: 0,
+          total_tokens: 10,
+          input_tokens_by_modality: [
+            { modality: 'text', tokens: 8 },
+            { modality: 'image', tokens: 2 },
+          ],
+        },
+      });
+      assert.strictEqual(result.finishReason, 'blocked');
+      assert.deepStrictEqual(result.usage, {
+        inputTokens: 10,
+        outputTokens: 0,
+        totalTokens: 10,
+        cachedContentTokens: undefined,
+        thoughtsTokens: undefined,
+        inputCharacters: 8,
+        inputImages: 2,
+      });
+    });
+
+    it('carries usage on a cancelled response', () => {
+      const result = fromInteractionSync({
+        status: 'cancelled',
+        usage: { total_input_tokens: 4, total_tokens: 4 },
+      });
+      assert.strictEqual(result.finishReason, 'aborted');
+      assert.strictEqual(result.usage?.inputTokens, 4);
+    });
+
+    it('carries usage even when the interaction has no steps', () => {
+      const result = fromInteractionSync({
+        status: 'completed',
+        usage: { total_input_tokens: 5, total_tokens: 5 },
+      });
+      assert.strictEqual(result.usage?.inputTokens, 5);
+    });
+
+    it('still returns finishReason stop for a completed interaction', () => {
+      const result = fromInteractionSync({
+        status: 'completed',
+        steps: [
+          { type: 'model_output', content: [{ type: 'text', text: 'done' }] },
+        ],
+      });
+      assert.strictEqual(result.finishReason, 'stop');
     });
   });
 });

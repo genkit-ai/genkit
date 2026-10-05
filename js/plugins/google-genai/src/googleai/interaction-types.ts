@@ -745,8 +745,10 @@ export declare interface GeminiInteraction {
   /** The status of the interaction. */
   status?:
     | 'in_progress'
+    | 'queued'
     | 'requires_action'
     | 'completed'
+    | 'incomplete'
     | 'failed'
     | 'cancelled';
   /** The time at which the response was created in ISO 8601 format. */
@@ -759,4 +761,17 @@ export declare interface GeminiInteraction {
   steps?: Step[];
   /** Statistics on the interaction request's token usage. */
   usage?: Usage;
+  /**
+   * Output only. Errors recorded on the interaction. Populated when `status`
+   * is `failed` (e.g. a safety block or an unrecoverable tool-call error).
+   */
+  errors?: InteractionError[];
+}
+
+/** An error recorded on an interaction or sent in an SSE `error` event. */
+export declare interface InteractionError {
+  /** Error code, e.g. `safety` or `malformed_function_call`. */
+  code?: string;
+  /** Human-readable error message. */
+  message?: string;
 }

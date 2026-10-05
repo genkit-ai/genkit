@@ -368,6 +368,175 @@ export function cleanSchema(schema: JSONSchema | z.ZodTypeAny): JSONSchema {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// Interactions API stream processing (Interactions-only).
+//
+// Kept separate from the generateContent stream processing below so that the
+// generateContent path can be removed cleanly once those models are retired.
+// ---------------------------------------------------------------------------
+
+/**
+ * Interactions API content-policy codes. These are reported in two ways:
+ *  - prompt blocked before execution: HTTP 400 with `error.code` set;
+ *  - response blocked after execution: HTTP 200, `status: 'failed'`, with the
+ *    code in `interaction.errors[]`.
+ *
+ * In the second case the plugin returns `finishReason: 'blocked'` (matching
+ * the generateContent path) rather than throwing. When thrown (first case) they
+ * map to `FAILED_PRECONDITION`, which is not retryable: the same input will be
+ * blocked again.
+ */
+const INTERACTION_CONTENT_BLOCK_CODES = new Set([
+  'safety',
+  'recitation',
+  'language',
+  'prohibited_content',
+  'spii',
+  'blocklist',
+  'image_safety',
+  'image_prohibited_content',
+  'image_recitation',
+  'image_other',
+  'content_blocked',
+  'jailbreak',
+  'model_armor',
+]);
+
+/**
+ * Reports whether an Interactions API error code is a content-policy block
+ * (safety, recitation, blocklist, etc.).
+ *
+ * @param code The `code` field from an Interactions API error.
+ */
+export function isInteractionContentBlockCode(code: unknown): boolean {
+  return (
+    typeof code === 'string' &&
+    INTERACTION_CONTENT_BLOCK_CODES.has(code.trim().toLowerCase())
+  );
+}
+
+/**
+ * Interactions API error codes mapped to Genkit statuses.
+ *
+ * The Interactions API reports errors as `{ code: string, message: string }`.
+ * The public spec documents `code` only as "a URI that identifies the error
+ * type" and does not enumerate values; this table is the full set of codes the
+ * API returns (with the HTTP status the API pairs each one with).
+ */
+const INTERACTION_ERROR_CODE_TO_STATUS: Record<string, StatusName> = {
+  // Generation failures reported via `status: 'failed'` + `errors[]` after the
+  // server's own internal retries are exhausted. The server message advises
+  // retrying, so these map to ABORTED ("retry at a higher level"), which the
+  // retry middleware retries by default.
+  malformed_function_call: 'ABORTED',
+  unexpected_tool_call: 'ABORTED',
+  no_image: 'ABORTED',
+  // Content-policy blocks; see INTERACTION_CONTENT_BLOCK_CODES.
+  ...Object.fromEntries(
+    [...INTERACTION_CONTENT_BLOCK_CODES].map((code) => [
+      code,
+      'FAILED_PRECONDITION' as StatusName,
+    ])
+  ),
+  service_unavailable: 'UNAVAILABLE', // 503: server or model overloaded
+  rate_limit_exceeded: 'RESOURCE_EXHAUSTED', // 429: RPM/TPM limits
+  quota_exceeded: 'RESOURCE_EXHAUSTED', // 429: RPD/daily limits
+  invalid_request: 'INVALID_ARGUMENT', // 400: general bad request
+  parameter_unknown: 'INVALID_ARGUMENT', // 400: unrecognized field
+  failed_precondition: 'FAILED_PRECONDITION', // 400
+  out_of_range: 'OUT_OF_RANGE', // 400
+  // 400: exceeded the agent's max token limit. Deterministic for a given
+  // request, so deliberately not RESOURCE_EXHAUSTED (which is retryable).
+  agent_max_token_limit: 'INVALID_ARGUMENT',
+  model_not_found: 'NOT_FOUND', // 404
+  not_found: 'NOT_FOUND', // 404
+  authentication: 'UNAUTHENTICATED', // 401
+  permission_denied: 'PERMISSION_DENIED', // 403
+  already_exists: 'ALREADY_EXISTS', // 409
+  aborted: 'ABORTED', // 409
+  cancelled: 'CANCELLED', // 499
+  deadline_exceeded: 'DEADLINE_EXCEEDED', // 504
+  api_error: 'INTERNAL', // 500
+  unimplemented: 'UNIMPLEMENTED', // 501
+};
+
+/**
+ * Maps an Interactions API error `code` to a Genkit `StatusName`.
+ *
+ * Looks the code up (case-insensitively) in the known Interactions error codes.
+ * Also accepts numeric HTTP codes (e.g. `503` or `"503"`), in case the front
+ * end returns a Google-style error body instead.
+ *
+ * @param code The `code` field from an Interactions API error.
+ * @returns The matching `StatusName`, or `undefined` if it cannot be mapped.
+ */
+export function interactionErrorCodeToGenkitStatus(
+  code: unknown
+): StatusName | undefined {
+  if (typeof code === 'number') {
+    const status = httpStatusToGenkitStatus(code);
+    return status === 'UNKNOWN' ? undefined : status;
+  }
+  if (typeof code !== 'string' || !code.trim()) {
+    return undefined;
+  }
+  const normalized = code.trim().toLowerCase();
+  if (/^\d+$/.test(normalized)) {
+    return interactionErrorCodeToGenkitStatus(Number(normalized));
+  }
+  return Object.prototype.hasOwnProperty.call(
+    INTERACTION_ERROR_CODE_TO_STATUS,
+    normalized
+  )
+    ? INTERACTION_ERROR_CODE_TO_STATUS[normalized]
+    : undefined;
+}
+
+/**
+ * Builds an error for leftover, unparsed Interactions stream text. When the
+ * model is overloaded (or otherwise fails), the API may return a plain JSON
+ * error body (e.g. `{"error":{"code":"service_unavailable","message":"..."}}`)
+ * instead of SSE `data:` frames. Surfacing a `GenkitError` with the correct
+ * status lets downstream middleware (e.g. retry) react appropriately.
+ *
+ * @param text The leftover text that could not be parsed as an SSE event.
+ * @returns A `GenkitError` if the text is a recognizable API error body,
+ *  otherwise a generic `Error`.
+ */
+export function parseInteractionStreamErrorText(text: string): Error {
+  try {
+    const json = JSON.parse(text);
+    const apiError = json?.error;
+    if (
+      apiError &&
+      typeof apiError === 'object' &&
+      (apiError.code || apiError.status)
+    ) {
+      // Prefer an explicit Google-style `status` if present, otherwise map the
+      // Interactions `code`.
+      const status: StatusName = StatusNameSchema.safeParse(apiError.status)
+        .success
+        ? (apiError.status as StatusName)
+        : (interactionErrorCodeToGenkitStatus(apiError.code) ?? 'UNKNOWN');
+      const message =
+        typeof apiError.message === 'string'
+          ? apiError.message
+          : 'Error streaming from the model';
+      return new GenkitError({
+        status,
+        message,
+        detail: json,
+      });
+    }
+  } catch (e) {
+    // Not JSON or not a recognizable error body, fall through to generic error.
+  }
+  // Truncate to avoid memory/log bloat from large non-JSON payloads.
+  const truncatedText =
+    text.length > 500 ? text.substring(0, 500) + '...' : text;
+  return new Error('Failed to parse stream: ' + truncatedText);
+}
+
 export function interactionProcessStream(
   response: Response
 ): InteractionStreamResult {
@@ -404,7 +573,7 @@ function getInteractionResponseStream(
             if (done) {
               reader.releaseLock();
               if (currentText.trim()) {
-                controller.error(parseStreamErrorText(currentText));
+                controller.error(parseInteractionStreamErrorText(currentText));
                 return;
               }
               controller.close();
@@ -534,8 +703,12 @@ async function getInteractionResponsePromise(
 
       if (value.event_type === 'error') {
         throw new GenkitError({
-          status: 'INTERNAL',
+          // Map the error code so e.g. quota/overload errors get a retryable
+          // status; fall back to INTERNAL for unrecognized codes.
+          status:
+            interactionErrorCodeToGenkitStatus(value.error?.code) ?? 'INTERNAL',
           message: `Interaction API returned an error: [${value.error?.code}] ${value.error?.message}`,
+          detail: value,
         });
       }
 

@@ -16,6 +16,7 @@
 
 import {
   GenerateResponseData,
+  GenerationUsage,
   GenkitError,
   MessageData,
   Operation,
@@ -23,7 +24,11 @@ import {
   z,
 } from 'genkit';
 import { ToolDefinition } from 'genkit/model';
-import { extractMimeType } from '../common/utils.js';
+import {
+  extractMimeType,
+  interactionErrorCodeToGenkitStatus,
+  isInteractionContentBlockCode,
+} from '../common/utils.js';
 import {
   AudioContent,
   CodeExecutionCallStep,
@@ -49,6 +54,8 @@ import {
   StepDeltaData,
   TextContent,
   ThoughtContent,
+  ThoughtStep,
+  Usage,
   VideoContent,
 } from './interaction-types.js';
 import {
@@ -664,14 +671,30 @@ export function toInteractionSteps(messages: MessageData[]): Step[] {
             part.metadata?.thoughtSignature
           ),
         });
-      } else if (part.reasoning) {
-        steps.push({
+      } else if (
+        part.reasoning !== undefined ||
+        Boolean(part.custom?.thought)
+      ) {
+        const signature =
+          part.metadata?.thoughtSignature ?? part.custom?.thought?.signature;
+        const parsedSignature = OptionalStringSchema.parse(signature);
+
+        let summary: (TextContent | ImageContent)[] | undefined = undefined;
+        if (
+          Array.isArray(part.custom?.thought?.summary) &&
+          part.custom.thought.summary.length > 0
+        ) {
+          summary = part.custom.thought.summary;
+        } else if (part.reasoning) {
+          summary = [{ type: 'text', text: part.reasoning }];
+        }
+
+        const thoughtStep: ThoughtStep = {
           type: 'thought',
-          summary: [{ type: 'text', text: part.reasoning }],
-          signature: OptionalStringSchema.parse(
-            part.metadata?.thoughtSignature
-          ),
-        });
+          ...(summary ? { summary } : {}),
+          ...(parsedSignature ? { signature: parsedSignature } : {}),
+        };
+        steps.push(thoughtStep);
       } else {
         const content = toInteractionContent(part);
         if (content) {
@@ -1131,11 +1154,117 @@ function fromFunctionResultContent(content: FunctionResultContent): Part {
   };
 }
 
+/** Converts Interactions API token usage to Genkit usage. */
+function fromInteractionUsage(usage: Usage): GenerationUsage {
+  const result: GenerationUsage = {
+    inputTokens: usage.total_input_tokens,
+    outputTokens: usage.total_output_tokens,
+    totalTokens: usage.total_tokens,
+    cachedContentTokens: usage.total_cached_tokens,
+    thoughtsTokens: usage.total_thought_tokens,
+  };
+  for (const modalityToken of usage.input_tokens_by_modality ?? []) {
+    switch (modalityToken.modality) {
+      case 'text':
+        result.inputCharacters = modalityToken.tokens;
+        break;
+      case 'image':
+        result.inputImages = modalityToken.tokens;
+        break;
+      case 'audio':
+        result.inputAudioFiles = modalityToken.tokens;
+        break;
+    }
+  }
+  for (const modalityToken of usage.output_tokens_by_modality ?? []) {
+    switch (modalityToken.modality) {
+      case 'text':
+        result.outputCharacters = modalityToken.tokens;
+        break;
+      case 'image':
+        result.outputImages = modalityToken.tokens;
+        break;
+      case 'audio':
+        result.outputAudioFiles = modalityToken.tokens;
+        break;
+    }
+  }
+  return result;
+}
+
+const INTERACTION_FAILED_MESSAGE = 'Interaction failed';
+const INTERACTION_INCOMPLETE_MESSAGE =
+  'Interaction incomplete (truncated output)';
+
+/** Builds a human-readable message from a failed interaction's errors. */
+function interactionFailureMessage(interaction: GeminiInteraction): string {
+  const details = (interaction.errors ?? [])
+    .map((e) =>
+      [e.code ? `[${e.code}]` : '', e.message ?? ''].join(' ').trim()
+    )
+    .filter(Boolean)
+    .join('; ');
+  return details
+    ? `${INTERACTION_FAILED_MESSAGE}: ${details}`
+    : INTERACTION_FAILED_MESSAGE;
+}
+
+/**
+ * Converts a `status: 'failed'` interaction into a Genkit outcome:
+ *  - content-policy blocks (safety, recitation, ...) return a response with
+ *    `finishReason: 'blocked'`, matching the generateContent path;
+ *  - everything else throws a `GenkitError` with the status mapped from the
+ *    error code (`UNKNOWN` if unrecognized, which is not retried).
+ */
+function fromFailedInteraction(
+  interaction: GeminiInteraction
+): GenerateResponseData {
+  const firstError = interaction.errors?.[0];
+  if (isInteractionContentBlockCode(firstError?.code)) {
+    return {
+      finishReason: 'blocked',
+      finishMessage:
+        firstError?.message || interactionFailureMessage(interaction),
+      message: {
+        role: 'model',
+        content: [],
+        ...interactionMessageMetadata(interaction),
+      },
+      custom: interaction,
+      raw: interaction,
+      ...(interaction.usage
+        ? { usage: fromInteractionUsage(interaction.usage) }
+        : {}),
+    };
+  }
+  throw new GenkitError({
+    status: interactionErrorCodeToGenkitStatus(firstError?.code) ?? 'UNKNOWN',
+    message: interactionFailureMessage(interaction),
+    detail: interaction,
+  });
+}
+
+/** Message metadata carrying the interaction and environment IDs, if any. */
+function interactionMessageMetadata(
+  interaction: GeminiInteraction
+): Pick<MessageData, 'metadata'> {
+  return interaction.id || interaction.environment_id
+    ? {
+        metadata: {
+          ...(interaction.id ? { interactionId: interaction.id } : {}),
+          ...(interaction.environment_id
+            ? { environmentId: interaction.environment_id }
+            : {}),
+        },
+      }
+    : {};
+}
+
 export function fromInteractionSync(
   interaction: GeminiInteraction
 ): GenerateResponseData {
   if (interaction.status === 'failed') {
-    throw new Error('Interaction failed');
+    return fromFailedInteraction(interaction);
   }
 
   const response: GenerateResponseData = {
@@ -1156,6 +1285,9 @@ export function fromInteractionSync(
     },
     custom: interaction,
     raw: interaction,
+    ...(interaction.usage
+      ? { usage: fromInteractionUsage(interaction.usage) }
+      : {}),
   };
 
   if (interaction.status === 'cancelled') {
@@ -1163,6 +1295,12 @@ export function fromInteractionSync(
     response.finishMessage = 'Operation cancelled';
     response.message!.content = [{ text: 'Operation cancelled.' }];
     return response;
+  }
+
+  if (interaction.status === 'incomplete') {
+    // Token/step limit reached (MAX_TOKENS); partial content may be present.
+    response.finishReason = 'length';
+    response.finishMessage = INTERACTION_INCOMPLETE_MESSAGE;
   }
 
   const steps = interaction.steps;
@@ -1178,48 +1316,6 @@ export function fromInteractionSync(
         return fromInteractionStep(step, isPending);
       })
       .filter((p) => p && Object.keys(p).length > 0);
-
-    if (interaction.usage) {
-      response.usage = {
-        inputTokens: interaction.usage.total_input_tokens,
-        outputTokens: interaction.usage.total_output_tokens,
-        totalTokens: interaction.usage.total_tokens,
-        cachedContentTokens: interaction.usage.total_cached_tokens,
-        thoughtsTokens: interaction.usage.total_thought_tokens,
-      };
-      if (interaction.usage.input_tokens_by_modality) {
-        for (const modalityToken of interaction.usage
-          .input_tokens_by_modality) {
-          switch (modalityToken.modality) {
-            case 'text':
-              response.usage.inputCharacters = modalityToken.tokens;
-              break;
-            case 'image':
-              response.usage.inputImages = modalityToken.tokens;
-              break;
-            case 'audio':
-              response.usage.inputAudioFiles = modalityToken.tokens;
-              break;
-          }
-        }
-      }
-      if (interaction.usage.output_tokens_by_modality) {
-        for (const modalityToken of interaction.usage
-          .output_tokens_by_modality) {
-          switch (modalityToken.modality) {
-            case 'text':
-              response.usage.outputCharacters = modalityToken.tokens;
-              break;
-            case 'image':
-              response.usage.outputImages = modalityToken.tokens;
-              break;
-            case 'audio':
-              response.usage.outputAudioFiles = modalityToken.tokens;
-              break;
-          }
-        }
-      }
-    }
   }
   return response;
 }
@@ -1228,11 +1324,29 @@ export function fromInteraction(
   interaction: GeminiInteraction
 ): Operation<GenerateResponseData> {
   const op = { id: interaction.id } as Operation<GenerateResponseData>;
-  if (interaction.status === 'in_progress') {
+  if (interaction.status === 'in_progress' || interaction.status === 'queued') {
+    // Still running, or waiting for capacity (e.g. flex/deferred tiers).
     op.done = false;
+  } else if (interaction.status === 'failed') {
+    // Always finish the operation on failure; leaving `done` unset would make
+    // callers poll forever.
+    op.done = true;
+    if (isInteractionContentBlockCode(interaction.errors?.[0]?.code)) {
+      op.output = fromFailedInteraction(interaction);
+    } else {
+      op.error = {
+        message: interactionFailureMessage(interaction),
+        ...(interaction.errors?.[0]?.code
+          ? { code: interaction.errors[0].code }
+          : {}),
+      };
+    }
   } else if (interaction.status === 'cancelled') {
     op.done = true;
     op.output = {
+      ...(interaction.usage
+        ? { usage: fromInteractionUsage(interaction.usage) }
+        : {}),
       finishReason: 'aborted',
       finishMessage: 'Operation cancelled',
       message: {
@@ -1250,15 +1364,38 @@ export function fromInteraction(
           : {}),
       },
     };
-  } else if (interaction.status === 'completed') {
+  } else if (
+    interaction.status === 'completed' ||
+    interaction.status === 'incomplete' ||
+    interaction.status === 'requires_action'
+  ) {
+    // `requires_action` is a deliberate pause, not a failure: e.g. a
+    // collaborative-planning plan awaiting approval, a client-side function
+    // call, or an elicitation. The turn is over, so finish the operation and
+    // surface what was produced; the caller continues with
+    // `previousInteractionId`. Pending client function calls become
+    // `toolRequest` parts.
     op.done = true;
     const steps = interaction.steps;
     if (steps?.length) {
+      const pendingIds = getPendingFunctionCallIds(steps, interaction.status);
       const content = steps
-        .flatMap((step) => fromInteractionStep(step, false))
+        .flatMap((step) =>
+          fromInteractionStep(
+            step,
+            step.type === 'function_call' && step.id
+              ? pendingIds.has(step.id)
+              : false
+          )
+        )
         .filter((p) => p && Object.keys(p).length > 0);
       op.output = {
-        finishReason: 'stop',
+        ...(interaction.status === 'incomplete'
+          ? {
+              finishReason: 'length' as const,
+              finishMessage: INTERACTION_INCOMPLETE_MESSAGE,
+            }
+          : { finishReason: 'stop' as const }),
         message: {
           role: 'model',
           content,
@@ -1269,55 +1406,27 @@ export function fromInteraction(
                   ...(interaction.environment_id
                     ? { environmentId: interaction.environment_id }
                     : {}),
+                  ...(interaction.status === 'requires_action'
+                    ? { interactionStatus: interaction.status }
+                    : {}),
                 },
               }
             : {}),
         },
         custom: interaction,
         raw: interaction,
+        ...(interaction.usage
+          ? { usage: fromInteractionUsage(interaction.usage) }
+          : {}),
       };
-      if (interaction.usage) {
-        op.output.usage = {
-          inputTokens: interaction.usage.total_input_tokens,
-          outputTokens: interaction.usage.total_output_tokens,
-          totalTokens: interaction.usage.total_tokens,
-          cachedContentTokens: interaction.usage.total_cached_tokens,
-          thoughtsTokens: interaction.usage.total_thought_tokens,
-        };
-        if (interaction.usage.input_tokens_by_modality) {
-          for (const modalityToken of interaction.usage
-            .input_tokens_by_modality) {
-            switch (modalityToken.modality) {
-              case 'text':
-                op.output.usage.inputCharacters = modalityToken.tokens;
-                break;
-              case 'image':
-                op.output.usage.inputImages = modalityToken.tokens;
-                break;
-              case 'audio':
-                op.output.usage.inputAudioFiles = modalityToken.tokens;
-                break;
-            }
-          }
-        }
-        if (interaction.usage.output_tokens_by_modality) {
-          for (const modalityToken of interaction.usage
-            .output_tokens_by_modality) {
-            switch (modalityToken.modality) {
-              case 'text':
-                op.output.usage.outputCharacters = modalityToken.tokens;
-                break;
-              case 'image':
-                op.output.usage.outputImages = modalityToken.tokens;
-                break;
-              case 'audio':
-                op.output.usage.outputAudioFiles = modalityToken.tokens;
-                break;
-            }
-          }
-        }
-      }
     }
+  } else if (interaction.status) {
+    // A status this plugin doesn't know. Finish the operation rather than
+    // leaving `done` unset, which would make callers poll forever.
+    op.done = true;
+    op.error = {
+      message: `Unknown interaction status: ${interaction.status}`,
+    };
   }
   return op;
 }

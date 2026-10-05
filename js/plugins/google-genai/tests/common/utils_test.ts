@@ -34,12 +34,16 @@ import {
   extractText,
   extractVersion,
   httpStatusToGenkitStatus,
+  interactionErrorCodeToGenkitStatus,
   interactionProcessStream,
+  isInteractionContentBlockCode,
   modelName,
+  parseInteractionStreamErrorText,
   parseRetryAfterMs,
   parseStreamErrorText,
   processStream,
 } from '../../src/common/utils.js';
+import { fromInteractionSync } from '../../src/googleai/interaction-converters.js';
 import { InteractionSseEvent } from '../../src/googleai/interaction-types.js';
 
 const { aggregateResponses } = TEST_ONLY;
@@ -1113,10 +1117,92 @@ describe('Common Utils', () => {
       });
     });
 
+    // End-to-end through the streaming path: a stream that ends with a failed
+    // `interaction.completed` must reach `fromInteractionSync` with `status`
+    // and `errors[]` intact, giving the same result as the non-streaming path.
+    // The server includes `errors[]` on `interaction.completed` when populated.
+    describe('failed interaction.completed through fromInteractionSync', () => {
+      async function streamToFinalInteraction(chunks: string[]) {
+        const encoder = new TextEncoder();
+        const stream = new ReadableStream({
+          start(controller) {
+            for (const chunk of chunks) {
+              controller.enqueue(encoder.encode(chunk));
+            }
+            controller.close();
+          },
+        });
+        const { stream: asyncStream, response } = interactionProcessStream(
+          new Response(stream)
+        );
+        for await (const _ of asyncStream) {
+        }
+        return response;
+      }
+
+      it('returns finishReason blocked for a post-execution safety block', async () => {
+        const id = 'v1_abc123';
+        const safetyMessage =
+          'Request blocked due to safety violations (harmful content). Please modify your input and retry.';
+        const completed = {
+          event_type: 'interaction.completed',
+          interaction: {
+            id,
+            status: 'failed',
+            errors: [{ code: 'safety', message: safetyMessage }],
+            usage: { total_input_tokens: 12, total_tokens: 12 },
+          },
+        };
+        const interaction = await streamToFinalInteraction([
+          `event: interaction.created\ndata: {"event_type":"interaction.created","interaction":{"id":"${id}","status":"in_progress"}}\n\n`,
+          `event: interaction.completed\ndata: ${JSON.stringify(completed)}\n\n`,
+        ]);
+        assert.strictEqual(interaction.status, 'failed');
+        assert.deepStrictEqual(interaction.errors, [
+          { code: 'safety', message: safetyMessage },
+        ]);
+
+        const result = fromInteractionSync(interaction);
+        assert.strictEqual(result.finishReason, 'blocked');
+        assert.strictEqual(result.finishMessage, safetyMessage);
+        assert.strictEqual(result.message?.metadata?.interactionId, id);
+        assert.strictEqual(result.usage?.inputTokens, 12);
+        assert.strictEqual(result.usage?.totalTokens, 12);
+      });
+
+      it('throws a retryable ABORTED GenkitError for malformed_function_call', async () => {
+        const interaction = await streamToFinalInteraction([
+          'event: interaction.completed\ndata: {"event_type":"interaction.completed","interaction":{"id":"int-1","status":"failed","errors":[{"code":"malformed_function_call","message":"Model generated invalid JSON syntax. Please retry the request."}]}}\n\n',
+        ]);
+        assert.throws(
+          () => fromInteractionSync(interaction),
+          (err: any) =>
+            err instanceof GenkitError &&
+            err.status === 'ABORTED' &&
+            err.message.includes('Please retry the request.')
+        );
+      });
+
+      it('throws a non-retryable UNKNOWN GenkitError when errors[] is absent', async () => {
+        // `errors[]` is only included when populated, so a failed interaction
+        // may arrive without it.
+        const interaction = await streamToFinalInteraction([
+          'event: interaction.completed\ndata: {"event_type":"interaction.completed","interaction":{"id":"int-1","status":"failed"}}\n\n',
+        ]);
+        assert.throws(
+          () => fromInteractionSync(interaction),
+          (err: any) =>
+            err instanceof GenkitError &&
+            err.status === 'UNKNOWN' &&
+            err.message.includes('Interaction failed')
+        );
+      });
+    });
+
     it('surfaces an error event in final response', async () => {
       const encoder = new TextEncoder();
       const chunks = [
-        'event: error\ndata: {"event_type":"error","error":{"code":"RESOURCE_EXHAUSTED","message":"Quota exceeded"}}\n\n',
+        'event: error\ndata: {"event_type":"error","error":{"code":"quota_exceeded","message":"Quota exceeded"}}\n\n',
       ];
 
       const stream = new ReadableStream({
@@ -1141,16 +1227,107 @@ describe('Common Utils', () => {
         },
         (err: any) => {
           assert.ok(err instanceof GenkitError);
-          assert.strictEqual(err.status, 'INTERNAL');
+          assert.strictEqual(err.status, 'RESOURCE_EXHAUSTED');
           assert.ok(
-            err.message.includes('[RESOURCE_EXHAUSTED] Quota exceeded')
+            err.message.includes('[quota_exceeded] Quota exceeded')
           );
           return true;
         }
       );
     });
 
-    it('surfaces a JSON error body (HTTP 200 with error) using parseStreamErrorText', async () => {
+    it('maps an Interactions-style error event code (service_unavailable) to UNAVAILABLE', async () => {
+      const encoder = new TextEncoder();
+      const chunks = [
+        'event: error\ndata: {"event_type":"error","error":{"code":"service_unavailable","message":"high demand"}}\n\n',
+      ];
+      const stream = new ReadableStream({
+        start(controller) {
+          for (const chunk of chunks) {
+            controller.enqueue(encoder.encode(chunk));
+          }
+          controller.close();
+        },
+      });
+
+      const { stream: asyncStream, response } = interactionProcessStream(
+        new Response(stream)
+      );
+      for await (const _ of asyncStream) {
+      }
+
+      await assert.rejects(response, (err: any) => {
+        assert.ok(err instanceof GenkitError);
+        assert.strictEqual(err.status, 'UNAVAILABLE');
+        assert.ok(err.message.includes('high demand'));
+        return true;
+      });
+    });
+
+    it('falls back to INTERNAL for an unrecognized error event code', async () => {
+      const encoder = new TextEncoder();
+      const chunks = [
+        'event: error\ndata: {"event_type":"error","error":{"code":"something_weird","message":"boom"}}\n\n',
+      ];
+      const stream = new ReadableStream({
+        start(controller) {
+          for (const chunk of chunks) {
+            controller.enqueue(encoder.encode(chunk));
+          }
+          controller.close();
+        },
+      });
+
+      const { stream: asyncStream, response } = interactionProcessStream(
+        new Response(stream)
+      );
+      for await (const _ of asyncStream) {
+      }
+
+      await assert.rejects(response, (err: any) => {
+        assert.ok(err instanceof GenkitError);
+        assert.strictEqual(err.status, 'INTERNAL');
+        return true;
+      });
+    });
+
+    it('surfaces an Interactions JSON error body (service_unavailable) as a retryable UNAVAILABLE GenkitError', async () => {
+      // Real-world shape observed from /v1beta/interactions when overloaded.
+      const encoder = new TextEncoder();
+      const errorBody = JSON.stringify({
+        error: {
+          message:
+            'gemini-flash-latest is currently experiencing high demand, spikes in demand are usually temporary. Please try again later.',
+          code: 'service_unavailable',
+        },
+      });
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode(errorBody));
+          controller.close();
+        },
+      });
+
+      const { stream: asyncStream, response } = interactionProcessStream(
+        new Response(stream)
+      );
+      response.catch(() => {});
+
+      await assert.rejects(
+        async () => {
+          for await (const _ of asyncStream) {
+          }
+        },
+        (err: any) => {
+          assert.ok(err instanceof GenkitError, 'Expected GenkitError');
+          assert.strictEqual(err.status, 'UNAVAILABLE');
+          assert.ok(err.message.includes('high demand'));
+          return true;
+        }
+      );
+    });
+
+    it('surfaces a JSON error body (HTTP 200 with error) using parseInteractionStreamErrorText', async () => {
       const encoder = new TextEncoder();
       const errorBody = JSON.stringify({
         error: {
@@ -1332,6 +1509,159 @@ describe('Common Utils', () => {
 
     it('returns a generic Error for JSON that is not an error body', () => {
       const err = parseStreamErrorText(JSON.stringify({ hello: 'world' }));
+      assert.ok(!(err instanceof GenkitError));
+      assert.ok(err.message.includes('Failed to parse stream'));
+    });
+  });
+
+  describe('interactionErrorCodeToGenkitStatus', () => {
+    it('maps every known Interactions error code', () => {
+      const expected: Record<string, string> = {
+        service_unavailable: 'UNAVAILABLE',
+        rate_limit_exceeded: 'RESOURCE_EXHAUSTED',
+        quota_exceeded: 'RESOURCE_EXHAUSTED',
+        invalid_request: 'INVALID_ARGUMENT',
+        parameter_unknown: 'INVALID_ARGUMENT',
+        failed_precondition: 'FAILED_PRECONDITION',
+        out_of_range: 'OUT_OF_RANGE',
+        agent_max_token_limit: 'INVALID_ARGUMENT',
+        model_not_found: 'NOT_FOUND',
+        not_found: 'NOT_FOUND',
+        authentication: 'UNAUTHENTICATED',
+        permission_denied: 'PERMISSION_DENIED',
+        already_exists: 'ALREADY_EXISTS',
+        aborted: 'ABORTED',
+        cancelled: 'CANCELLED',
+        deadline_exceeded: 'DEADLINE_EXCEEDED',
+        api_error: 'INTERNAL',
+        unimplemented: 'UNIMPLEMENTED',
+        malformed_function_call: 'ABORTED',
+        unexpected_tool_call: 'ABORTED',
+        no_image: 'ABORTED',
+        safety: 'FAILED_PRECONDITION',
+        recitation: 'FAILED_PRECONDITION',
+        language: 'FAILED_PRECONDITION',
+        prohibited_content: 'FAILED_PRECONDITION',
+        spii: 'FAILED_PRECONDITION',
+        blocklist: 'FAILED_PRECONDITION',
+        image_safety: 'FAILED_PRECONDITION',
+        image_prohibited_content: 'FAILED_PRECONDITION',
+        image_recitation: 'FAILED_PRECONDITION',
+        image_other: 'FAILED_PRECONDITION',
+        content_blocked: 'FAILED_PRECONDITION',
+        jailbreak: 'FAILED_PRECONDITION',
+        model_armor: 'FAILED_PRECONDITION',
+      };
+      for (const [code, status] of Object.entries(expected)) {
+        assert.strictEqual(
+          interactionErrorCodeToGenkitStatus(code),
+          status,
+          `code "${code}"`
+        );
+      }
+    });
+
+    it('matches codes case-insensitively and ignores surrounding whitespace', () => {
+      assert.strictEqual(
+        interactionErrorCodeToGenkitStatus('SERVICE_UNAVAILABLE'),
+        'UNAVAILABLE'
+      );
+      assert.strictEqual(
+        interactionErrorCodeToGenkitStatus(' rate_limit_exceeded '),
+        'RESOURCE_EXHAUSTED'
+      );
+    });
+
+    it('does not match inherited object properties', () => {
+      assert.strictEqual(
+        interactionErrorCodeToGenkitStatus('constructor'),
+        undefined
+      );
+      assert.strictEqual(
+        interactionErrorCodeToGenkitStatus('__proto__'),
+        undefined
+      );
+    });
+
+    it('maps numeric and stringified numeric HTTP codes', () => {
+      assert.strictEqual(
+        interactionErrorCodeToGenkitStatus(503),
+        'UNAVAILABLE'
+      );
+      assert.strictEqual(
+        interactionErrorCodeToGenkitStatus('429'),
+        'RESOURCE_EXHAUSTED'
+      );
+    });
+
+    it('returns undefined for unmappable codes', () => {
+      assert.strictEqual(
+        interactionErrorCodeToGenkitStatus('weird'),
+        undefined
+      );
+      assert.strictEqual(interactionErrorCodeToGenkitStatus(418), undefined);
+      assert.strictEqual(interactionErrorCodeToGenkitStatus(''), undefined);
+      assert.strictEqual(
+        interactionErrorCodeToGenkitStatus(undefined),
+        undefined
+      );
+      assert.strictEqual(interactionErrorCodeToGenkitStatus({}), undefined);
+    });
+  });
+
+  describe('isInteractionContentBlockCode', () => {
+    it('recognizes content-policy codes case-insensitively', () => {
+      assert.strictEqual(isInteractionContentBlockCode('safety'), true);
+      assert.strictEqual(isInteractionContentBlockCode('MODEL_ARMOR'), true);
+      assert.strictEqual(isInteractionContentBlockCode('image_other'), true);
+    });
+
+    it('rejects non-content-policy codes and non-strings', () => {
+      assert.strictEqual(
+        isInteractionContentBlockCode('malformed_function_call'),
+        false
+      );
+      assert.strictEqual(
+        isInteractionContentBlockCode('service_unavailable'),
+        false
+      );
+      assert.strictEqual(isInteractionContentBlockCode(undefined), false);
+      assert.strictEqual(isInteractionContentBlockCode(400), false);
+    });
+  });
+
+  describe('parseInteractionStreamErrorText', () => {
+    it('maps an Interactions string code to a GenkitError status', () => {
+      const err = parseInteractionStreamErrorText(
+        JSON.stringify({
+          error: { code: 'service_unavailable', message: 'high demand' },
+        })
+      );
+      assert.ok(err instanceof GenkitError, 'Expected GenkitError');
+      assert.strictEqual(err.status, 'UNAVAILABLE');
+      assert.ok(err.message.includes('high demand'));
+    });
+
+    it('prefers an explicit Google-style status field', () => {
+      const err = parseInteractionStreamErrorText(
+        JSON.stringify({
+          error: { code: 503, message: 'overloaded', status: 'UNAVAILABLE' },
+        })
+      );
+      assert.ok(err instanceof GenkitError, 'Expected GenkitError');
+      assert.strictEqual(err.status, 'UNAVAILABLE');
+    });
+
+    it('returns UNKNOWN for an unrecognized string code', () => {
+      const err = parseInteractionStreamErrorText(
+        JSON.stringify({ error: { code: 'weird', message: 'hmm' } })
+      );
+      assert.ok(err instanceof GenkitError, 'Expected GenkitError');
+      assert.strictEqual(err.status, 'UNKNOWN');
+    });
+
+    it('returns a generic Error for non-JSON text', () => {
+      const err = parseInteractionStreamErrorText('not json at all');
       assert.ok(!(err instanceof GenkitError));
       assert.ok(err.message.includes('Failed to parse stream'));
     });
