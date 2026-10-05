@@ -14,10 +14,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Experimental FastAPI serving for Genkit agents.
+"""Experimental FastAPI handlers.
 
-Agents are still changing, so serving them lives here rather than on the
-``genkit_fastapi`` root. Apps that only serve flows never load the agent types.
+Handlers here serve APIs that are still experimental in Genkit and may change
+between minor releases. Importing ``genkit_fastapi`` does not load this module.
 
 ```python
 from genkit_fastapi.exp import serve_agent
