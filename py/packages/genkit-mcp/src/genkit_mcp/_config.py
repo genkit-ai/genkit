@@ -17,17 +17,20 @@
 """Connection configuration for MCP servers."""
 
 import os
+from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class McpStdioServerConfig(BaseModel):
     """How to launch an MCP server as a child process over stdio.
 
-    Field names match the `mcpServers` entries used by Claude Desktop, Cursor and
-    the JS plugin, so an existing config block can be passed through unchanged.
+    Field names match the stdio `mcpServers` entries used by Claude Desktop and
+    Cursor, so an existing config block can be passed through unchanged. Any
+    other key fails validation, and validation errors never echo input values.
 
     Attributes:
+        type: Transport marker some `mcpServers` blocks carry; only ``stdio``.
         command: Executable to run, for example ``npx`` or ``uv``.
         args: Arguments passed to ``command``.
         env: Extra environment for the child process, merged over the minimal
@@ -39,13 +42,16 @@ class McpStdioServerConfig(BaseModel):
             Windows. ``None`` leaves the child with that minimal set alone: the
             parent environment is never inherited, so a variable the server
             needs, an API key for example, has to be listed here even when this
-            process already has it.
+            process already has it. Omitted from ``repr``.
         cwd: Working directory for the child process.
         disabled: When true the client connects to nothing and advertises no tools.
     """
 
+    model_config = ConfigDict(extra='forbid', hide_input_in_errors=True)
+
+    type: Literal['stdio'] | None = None
     command: str
     args: list[str] | None = None
-    env: dict[str, str] | None = None
+    env: dict[str, str] | None = Field(default=None, repr=False)
     cwd: str | os.PathLike[str] | None = None
     disabled: bool = False
