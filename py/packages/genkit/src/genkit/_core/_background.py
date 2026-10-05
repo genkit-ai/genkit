@@ -174,6 +174,18 @@ class BackgroundAction(Generic[OutputT]):
         """Whether this background action supports cancellation."""
         return self.cancel_action is not None
 
+    @property
+    def actions(self) -> list[Action]:
+        """The start, check and (if any) cancel actions, for registering or listing.
+
+        A background model is three registered actions, not one. Register all
+        of them, or a poll fails later with the check action not found.
+        """
+        actions = [self.start_action, self.check_action]
+        if self.cancel_action is not None:
+            actions.append(self.cancel_action)
+        return actions
+
     async def start(
         self,
         input: ModelRequest | None = None,
@@ -378,10 +390,8 @@ def define_background_model(
         metadata=metadata,
         description=description,
     )
-    registry.register_action_from_instance(action.start_action)
-    registry.register_action_from_instance(action.check_action)
-    if action.cancel_action is not None:
-        registry.register_action_from_instance(action.cancel_action)
+    for each in action.actions:
+        registry.register_action_from_instance(each)
     return action
 
 

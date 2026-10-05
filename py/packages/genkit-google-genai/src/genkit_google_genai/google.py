@@ -368,14 +368,6 @@ def _create_veo_background_action(
     )
 
 
-def _background_actions(bg: BackgroundAction) -> list[Action]:
-    """Unpack a BackgroundAction into its constituent Action objects."""
-    actions = [bg.start_action, bg.check_action]
-    if bg.cancel_action is not None:
-        actions.append(bg.cancel_action)
-    return actions
-
-
 class GoogleFamilyRefs:
     """Typed ref constructors shared by GoogleAI and VertexAI.
 
@@ -688,19 +680,17 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
 
         # Veo Models (background models)
         for name in genai_models.veo:
-            actions.extend(_background_actions(self._resolve_veo_model(googleai_name(name))))
+            actions.extend(self._resolve_veo_model(googleai_name(name)).actions)
 
         client_options = self._interactions_client_options()
         plugin_api_key = self._plugin_api_key()
         for name in list_known_deep_research_models():
             actions.extend(
-                _background_actions(
-                    create_deep_research_background_action(
-                        googleai_name(name),
-                        plugin_api_key=plugin_api_key,
-                        client_options=client_options,
-                    )
-                )
+                create_deep_research_background_action(
+                    googleai_name(name),
+                    plugin_api_key=plugin_api_key,
+                    client_options=client_options,
+                ).actions
             )
         for name in list_known_antigravity_models():
             actions.append(
@@ -1076,9 +1066,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
 
         # Veo Models (background models)
         for name in genai_models.veo:
-            bg_action = self._resolve_veo_model(vertexai_name(name))
-            actions.append(bg_action.start_action)
-            actions.append(bg_action.check_action)
+            actions.extend(self._resolve_veo_model(vertexai_name(name)).actions)
 
         for name in VERTEX_KNOWN_EMBEDDERS:
             actions.append(self._resolve_embedder(vertexai_name(name)))

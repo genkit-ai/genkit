@@ -197,6 +197,23 @@ async def test_background_model_with_context_first_check_gets_operation() -> Non
     assert result.response.action == '/background-model/menu-video'
 
 
+def test_background_model_actions_lists_start_check_and_cancel() -> None:
+    """`actions` is every action a background model registers; cancel only when given."""
+    ai = Genkit()
+
+    async def start(request: ModelRequest, ctx: ActionRunContext) -> Operation:
+        return Operation(id='render-1')
+
+    async def check(op: Operation, ctx: ActionRunContext) -> Operation:
+        return op
+
+    video = ai.define_background_model(name='menu-video', start=start, check=check, cancel=check)
+    photo = ai.define_background_model(name='menu-photo', start=start, check=check)
+
+    assert [a.name for a in video.actions] == ['menu-video', 'menu-video/check', 'menu-video/cancel']
+    assert [a.name for a in photo.actions] == ['menu-photo', 'menu-photo/check']
+
+
 def test_action_params_names_input_and_context() -> None:
     """`Action.params` exposes which parameter gets the input and which gets the context."""
 
