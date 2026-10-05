@@ -4347,6 +4347,67 @@ describe('contextCompression middleware', () => {
     assert.strictEqual(ccToolPrefix?.summarized, true);
     assert.strictEqual(ccToolPrefix?.truncationNoticeInserted, false);
     assert.strictEqual(capturedRequest!.messages.length, 5);
+
+    // Verify maxKeepForCap is applied before fallbackPreserveRecent:
+    // 6 messages with maxMessages: 5 (maxKeepForCap = 4) and preserveRecent: 2
+    // keeps 4 recent messages ([summary, u2, m2, u3, m3]) instead of shrinking to 2.
+    const sixMsgHistory: MessageData[] = [
+      ...fiveMessageHistory,
+      { role: 'model', content: [{ text: 'm3 ' + 'F'.repeat(170) }] },
+    ];
+    await ai.generate({
+      model: pm,
+      messages: sixMsgHistory,
+      use: [
+        contextCompression({
+          maxInputTokens: 200,
+          maxMessages: 5,
+          preserveRecent: 2,
+          summarize: { model: summaryModel, preserveRecent: 6 },
+        }),
+      ],
+    });
+    assert.strictEqual(summaryCalled, 3);
+    assert.strictEqual(capturedRequest!.messages.length, 5);
+
+    // Verify maxMessages-only trigger (effectiveTokens <= maxInputTokens) recovers via
+    // fallbackPreserveRecent when tool-message backup pushes toKeep above maxKeepForCap.
+    const eightMsgMaxMessagesOnly: MessageData[] = [
+      { role: 'user', content: [{ text: 'u1' }] },
+      {
+        role: 'model',
+        content: [{ toolRequest: { name: 't', ref: '1', input: {} } }],
+      },
+      {
+        role: 'tool',
+        content: [{ toolResponse: { name: 't', ref: '1', output: 'ok1' } }],
+      },
+      {
+        role: 'tool',
+        content: [{ toolResponse: { name: 't', ref: '2', output: 'ok2' } }],
+      },
+      { role: 'user', content: [{ text: 'u2' }] },
+      { role: 'model', content: [{ text: 'm2' }] },
+      { role: 'user', content: [{ text: 'u3' }] },
+      { role: 'model', content: [{ text: 'm3' }] },
+    ];
+    const resMaxMessagesOnly = await ai.generate({
+      model: pm,
+      messages: eightMsgMaxMessagesOnly,
+      use: [
+        contextCompression({
+          maxMessages: 7,
+          summarize: { model: summaryModel },
+        }),
+      ],
+    });
+    assert.strictEqual(summaryCalled, 4);
+    const ccMaxMessagesOnly = (
+      resMaxMessagesOnly.custom as Record<string, unknown>
+    )?.contextCompression as Record<string, unknown> | undefined;
+    assert.strictEqual(ccMaxMessagesOnly?.summarized, true);
+    assert.strictEqual(ccMaxMessagesOnly?.truncationNoticeInserted, false);
+    assert.strictEqual(capturedRequest!.messages.length, 5);
   });
 
   it('does not trigger Step 5 fallback truncation when applySummarization returns summarized: false without failing', async () => {

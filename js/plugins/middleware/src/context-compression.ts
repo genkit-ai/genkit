@@ -1736,18 +1736,7 @@ export const contextCompression: GenerateMiddleware<
         preserveSystem
       );
 
-      // When nonSystemMessages fits within summaryPreserveRecent (e.g. 5–6
-      // messages with default summarize.preserveRecent = 6), fall back to the
-      // general preserveRecent window (default 4) so over-budget histories are
-      // summarized rather than skipped.
       let targetKeep = summaryPreserveRecent;
-      if (
-        nonSystemMessages.length <= targetKeep &&
-        clampedFallback !== undefined &&
-        clampedFallback < targetKeep
-      ) {
-        targetKeep = clampedFallback;
-      }
 
       // When maxMessagesCap is set, reserve 1 slot for the summary message and
       // systemMessages.length slots for preserved system messages so summarization
@@ -1765,6 +1754,18 @@ export const contextCompression: GenerateMiddleware<
           };
         }
         targetKeep = Math.min(targetKeep, maxKeepForCap);
+      }
+
+      // When nonSystemMessages fits within targetKeep (e.g. 5–6 messages with
+      // default summarize.preserveRecent = 6), fall back to the general
+      // preserveRecent window (default 4) so over-budget histories are
+      // summarized rather than skipped.
+      if (
+        nonSystemMessages.length <= targetKeep &&
+        clampedFallback !== undefined &&
+        clampedFallback < targetKeep
+      ) {
+        targetKeep = clampedFallback;
       }
 
       if (nonSystemMessages.length <= targetKeep) {
@@ -1793,10 +1794,7 @@ export const contextCompression: GenerateMiddleware<
         clampedFallback < targetKeep &&
         nonSystemMessages.length > clampedFallback
       ) {
-        targetKeep =
-          maxKeepForCap !== undefined
-            ? Math.min(clampedFallback, maxKeepForCap)
-            : clampedFallback;
+        targetKeep = clampedFallback;
         splitIdx = nonSystemMessages.length - targetKeep;
         while (splitIdx > 0 && nonSystemMessages[splitIdx].role === 'tool') {
           splitIdx--;
@@ -2179,9 +2177,7 @@ export const contextCompression: GenerateMiddleware<
                     adjustedSummaryPreserveRecent,
                     ctx,
                     maxMessages,
-                    effectiveTokens > maxInputTokens
-                      ? adjustedPreserveRecent
-                      : undefined
+                    adjustedPreserveRecent
                   );
                   messages = sumResult.messages;
                   isSummarized = sumResult.summarized;
