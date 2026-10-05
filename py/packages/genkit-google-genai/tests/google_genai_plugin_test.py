@@ -175,6 +175,70 @@ async def test_googleai_runtime_clients_are_loop_local(mock_client_ctor: MagicMo
     assert other_loop_client is not first
 
 
+@patch('genkit_google_genai.google.genai.client.Client')
+def test_googleai_model_action_survives_closed_event_loops(mock_client_ctor: MagicMock) -> None:
+    """Warm Cloud Run sync bridge must not raise Event loop is closed (#4925).
+
+    Simulates google-genai's aiohttp session binding: a client created on loop A
+    fails if reused after A is closed. Loop-local clients make each request use
+    a fresh Client for its live loop.
+    """
+    created: list[MagicMock] = []
+
+    def _new_client(*args: object, **kwargs: object) -> MagicMock:
+        client = MagicMock(name=f'client-{len(created)}')
+        client._bound_loop = asyncio.get_running_loop()
+
+        async def _generate_content(*_a: object, **_k: object) -> MagicMock:
+            if client._bound_loop.is_closed():
+                raise RuntimeError('Event loop is closed')
+            # Minimal GenerateContent-like response consumed by GeminiModel.
+            from google.genai import types as genai_types
+
+            return genai_types.GenerateContentResponse(
+                candidates=[
+                    genai_types.Candidate(
+                        content=genai_types.Content(
+                            parts=[genai_types.Part(text='ok')],
+                            role='model',
+                        ),
+                        finish_reason=genai_types.FinishReason.STOP,
+                    )
+                ]
+            )
+
+        client.aio.models.generate_content = _generate_content
+        created.append(client)
+        return client
+
+    mock_client_ctor.side_effect = _new_client
+    plugin = GoogleAI(api_key='test-key')
+    action = plugin._resolve_model('googleai/gemini-2.0-flash')
+
+    from genkit import Message, ModelRequest, Part, Role, TextPart
+
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
+    )
+
+    def call_once() -> object:
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(action.run(request))
+        finally:
+            loop.close()
+
+    # First warm-instance request
+    result1 = call_once()
+    # Second request on a new loop after the previous one was closed
+    result2 = call_once()
+
+    assert result1.response is not None
+    assert result2.response is not None
+    assert len(created) >= 2
+    assert created[0] is not created[1]
+
+
 def test_genai_models_container() -> None:
     """Test GenaiModels container initialization."""
     models = GenaiModels()
