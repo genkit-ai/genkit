@@ -60,7 +60,6 @@ from genkit._core._action import (
     ActionKind,
     StreamingCallback,
     create_action_key,
-    get_current_context,
 )
 from genkit._core._channel import Channel
 from genkit._core._error import GenkitError, RuntimeErrorReason
@@ -465,7 +464,7 @@ class Prompt(Generic[InputT, OutputT]):
             options,
             on_chunk=on_chunk,
             # context also goes to the run, not just the template, so tools and middleware see it.
-            context=context if context is not None else get_current_context(),
+            context=context,
         )
         return cast(ModelResponse[OutputT], result)
 
@@ -516,7 +515,7 @@ class Prompt(Generic[InputT, OutputT]):
                 options,
                 on_chunk=lambda c: channel.send(cast('ModelResponseChunk[OutputT]', c)),
                 # context also goes to the run, not just the template, so tools and middleware see it.
-                context=context if context is not None else get_current_context(),
+                context=context,
             )
             return cast(ModelResponse[OutputT], result)
 

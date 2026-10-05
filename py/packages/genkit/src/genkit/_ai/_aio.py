@@ -1390,7 +1390,7 @@ class Genkit:
             registry,
             options,
             on_chunk=on_chunk,
-            context=context if context is not None else get_current_context(),
+            context=context,
         )
 
     async def embed(

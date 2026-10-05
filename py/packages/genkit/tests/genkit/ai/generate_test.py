@@ -25,7 +25,7 @@ from genkit._ai._testing import (
     define_programmable_model,
 )
 from genkit._ai._tools import Interrupt, ToolRunContext, define_tool, restart_tool
-from genkit._core._action import ActionRunContext
+from genkit._core._action import Action, ActionRunContext
 from genkit._core._error import GenkitError, PublicError, RuntimeErrorReason
 from genkit._core._model import GenerateActionOptions, ModelRequest, Resume
 from genkit._core._registry import Registry
@@ -1401,6 +1401,63 @@ async def test_generate_context_reaches_tool_run() -> None:
 
     assert response.text == 'done'
     assert seen == [{'user_id': 'u-123'}]
+
+
+@pytest.mark.asyncio
+async def test_generate_without_context_uses_enclosing_flow_context() -> None:
+    """``ai.generate()`` inside a flow, with no ``context=``, gives middleware and tools the flow's context.
+
+    Tools would inherit it on their own; middleware only sees what reaches the run.
+    """
+    seen: list[tuple[str, dict[str, object]]] = []
+
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+
+    # The engine builds middleware from its class, so the recorder closes over `seen`.
+    class RecordContext(BaseMiddleware):
+        async def wrap_model(
+            self,
+            params: ModelHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ) -> ModelResponse:
+            seen.append(('middleware', dict(ctx.custom_context)))
+            return await next_fn(params, ctx)
+
+    @ai.tool(name='check_allergies')
+    async def check_allergies(_: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
+        seen.append(('tool', dict(ctx.context)))
+        return 'no nuts'
+
+    pm.responses = [
+        ModelResponse(
+            message=Message(
+                role=Role.MODEL,
+                content=[Part(tool_request=ToolRequest(name='check_allergies', input={}, ref='r1'))],
+            ),
+        ),
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('done')]),
+        ),
+    ]
+
+    async def plan_order(_: None) -> str:
+        return (
+            await ai.generate(
+                model='programmableModel',
+                prompt='Plan the order.',
+                tools=['check_allergies'],
+                use=[RecordContext()],
+            )
+        ).text
+
+    auth = {'auth': {'uid': 'diner-42'}}
+    await Action(name='planOrder', kind=ActionKind.FLOW, fn=plan_order).run(context=auth)
+
+    # Model turn that asks for the tool, the tool run, then the model turn that answers.
+    assert seen == [('middleware', auth), ('tool', auth), ('middleware', auth)]
 
 
 @pytest.mark.asyncio

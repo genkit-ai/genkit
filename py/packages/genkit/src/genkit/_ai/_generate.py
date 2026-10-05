@@ -57,6 +57,7 @@ from genkit._core._action import (
     ActionKind,
     ActionRunContext,
     create_action_key,
+    get_current_context,
     parse_action_key,
     parse_dap_qualified_name,
 )
@@ -658,7 +659,13 @@ async def generate_action(
     Thin wrapper so in-process callers get a trace span named ``generate``
     around the whole call.  The registered ``/util/generate`` action skips
     this wrapper because the action runtime already opens its own span.
+
+    With no ``context``, the run uses the enclosing action's (e.g. the flow
+    calling ``ai.generate`` or a prompt). Tools would inherit it anyway, but
+    middleware only sees what's passed here.
     """
+    if context is None:
+        context = get_current_context()
 
     async def body(_span: SpanContext) -> ModelResponse:
         result = await run_generate(
