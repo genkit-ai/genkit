@@ -347,15 +347,33 @@ def test_genkit_positional_argument_raises_type_error() -> None:
         TypeError,
         match=(
             r'Genkit\(\) takes no positional arguments, got 1\. '
-            r'Pass keyword arguments instead, e\.g\. Genkit\(model='
+            r'Pass keyword arguments instead, e\.g\. '
+            r"Genkit\(model='googleai/gemini-flash-latest'\)\."
         ),
     ):
-        Genkit('googleai/gemini-flash-latest')  # type: ignore[misc]
+        Genkit('googleai/gemini-flash-latest')  # type: ignore[reportCallIssue,too-many-positional-arguments]
     with pytest.raises(
         TypeError,
         match=(
             r'Genkit\(\) takes no positional arguments, got 1\. '
-            r'Pass keyword arguments instead, e\.g\. Genkit\(plugins='
+            r'Pass keyword arguments instead, e\.g\. '
+            r'Genkit\(plugins=\[...\], model="..."\)\.'
         ),
     ):
-        Genkit([])  # type: ignore[misc]
+        Genkit([])  # type: ignore[reportCallIssue,too-many-positional-arguments]
+
+
+def test_genkit_path_string_does_not_suggest_model_kwarg() -> None:
+    with pytest.raises(TypeError) as exc_info:
+        Genkit('./prompts')  # type: ignore[reportCallIssue,too-many-positional-arguments]
+    message = str(exc_info.value)
+    assert "model='./prompts'" not in message
+    assert 'Genkit(plugins=[...], model="...")' in message
+
+
+def test_genkit_two_positional_args_says_got_2() -> None:
+    with pytest.raises(
+        TypeError,
+        match=r'Genkit\(\) takes no positional arguments, got 2\.',
+    ):
+        Genkit('googleai/gemini-flash-latest', [])  # type: ignore[reportCallIssue,too-many-positional-arguments]

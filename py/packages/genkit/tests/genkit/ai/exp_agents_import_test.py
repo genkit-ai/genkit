@@ -60,17 +60,6 @@ def test_stable_genkit_keeps_graduated_methods() -> None:
     assert hasattr(ai, 'generate_operation')
 
 
-def test_genkit_exp_positional_argument_raises_type_error() -> None:
-    with pytest.raises(
-        TypeError,
-        match=(
-            r'Genkit\(\) takes no positional arguments, got 1\. '
-            r'Pass keyword arguments instead, e\.g\. Genkit\(model='
-        ),
-    ):
-        Genkit('googleai/gemini-flash-latest')  # type: ignore[misc]
-
-
 def test_exp_types_import() -> None:
     assert FileSessionStore is not None
     assert InMemorySessionStore is not None

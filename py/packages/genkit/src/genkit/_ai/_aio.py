@@ -28,12 +28,11 @@ import threading
 import uuid
 from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from pathlib import Path
-from typing import Any, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, TypeVar, cast, overload
 
 import anyio
 import uvicorn
 from pydantic import BaseModel
-from typing_extensions import Never
 
 from genkit._ai._agents._session import get_current_session
 from genkit._ai._embedding import EmbedderFn, EmbedderInfo, EmbedderRef, define_embedder
@@ -137,6 +136,18 @@ T = TypeVar('T')
 MiddlewareT = TypeVar('MiddlewareT', bound=BaseMiddleware)
 
 
+def init_keyword_example(value: object) -> str:
+    # Suggest model= only for a provider/name id or a ModelRef. A path like
+    # './prompts' is not a model, so don't put it on model=.
+    if isinstance(value, ModelRef):
+        return f'Genkit(model={value!r})'
+    if isinstance(value, str) and '/' in value and not value.startswith(('.', '/', '\\', '~')) and '\\' not in value:
+        parts = value.split('/')
+        if all(part and part not in ('.', '..') for part in parts):
+            return f'Genkit(model={value!r})'
+    return 'Genkit(plugins=[...], model="...")'
+
+
 class Genkit:
     """The main entry point for building AI-powered applications.
 
@@ -161,52 +172,77 @@ class Genkit:
             ai.run_main(my_flow('Weather in Paris?'))
     """
 
-    def __init__(
-        self,
-        *args: Never,
-        plugins: list[Plugin] | None = None,
-        model: ModelArg | None = None,
-        prompt_dir: str | Path | None = None,
-        reflection_server_spec: ServerSpec | None = None,
-    ) -> None:
-        # Intercept positional args at runtime with `*args: Never` instead of bare `*`
-        # so we can provide actionable guidance while static type checkers still reject them.
-        if args:
-            example = f'Genkit(model={args[0]!r})' if isinstance(args[0], str) else 'Genkit(plugins=[...], model="...")'
-            raise TypeError(
-                f'Genkit() takes no positional arguments, got {len(args)}. '
-                f'Pass keyword arguments instead, e.g. {example}.'
-            )
-        # Before anything that logs, so plugin initialization is covered too.
-        configure_logging()
-        self.registry: Registry = Registry()
-        self._reflection_server_spec: ServerSpec | None = reflection_server_spec
-        self._reflection_ready = threading.Event()
-        self._initialize_registry(model, plugins)
-        # Ensure the default generate action is registered for async usage.
-        define_generate_action(self.registry)
-        self._register_plugin_middleware(plugins)
-        maybe_inject_dev_instrumentation()
-        # In dev mode, start the reflection server immediately in a background
-        # daemon thread so it's available regardless of which web framework (or
-        # none) the user chooses.
-        if is_dev_environment():
-            # SIGINT (Ctrl+C) always hits handle_signal. SIGTERM inside the
-            # run_main wait loop is stolen by anyio (clean exit → atexit);
-            # elsewhere SIGTERM also goes through handle_signal. Both paths
-            # remove the runtime discovery files.
-            setup_signal_handlers()
-            self._start_reflection_background()
+    registry: Registry
+    _reflection_server_spec: ServerSpec | None
+    _reflection_ready: threading.Event
 
-        # Load prompts
-        load_path = prompt_dir
-        if load_path is None:
-            default_prompts_path = Path('./prompts')
-            if default_prompts_path.is_dir():
-                load_path = default_prompts_path
+    if TYPE_CHECKING:
 
-        if load_path:
-            load_prompt_folder(self.registry, dir_path=load_path)
+        def __init__(
+            self,
+            *,
+            plugins: list[Plugin] | None = None,
+            model: ModelArg | None = None,
+            prompt_dir: str | Path | None = None,
+            reflection_server_spec: ServerSpec | None = None,
+        ) -> None: ...
+
+    else:
+        # Type checkers see the keyword-only signature above. Runtime still
+        # accepts *args so we can raise a TypeError that names the keyword they
+        # probably meant, instead of silently binding a model id as plugins.
+        def __init__(
+            self,
+            *args: object,
+            plugins: list[Plugin] | None = None,
+            model: ModelArg | None = None,
+            prompt_dir: str | Path | None = None,
+            reflection_server_spec: ServerSpec | None = None,
+        ) -> None:
+            if args:
+                raise TypeError(
+                    f'Genkit() takes no positional arguments, got {len(args)}. '
+                    f'Pass keyword arguments instead, e.g. {init_keyword_example(args[0])}.'
+                )
+            # Before anything that logs, so plugin initialization is covered too.
+            configure_logging()
+            self.registry = Registry()
+            self._reflection_server_spec = reflection_server_spec
+            self._reflection_ready = threading.Event()
+            self._initialize_registry(model, plugins)
+            # Ensure the default generate action is registered for async usage.
+            define_generate_action(self.registry)
+            self._register_plugin_middleware(plugins)
+            maybe_inject_dev_instrumentation()
+            # In dev mode, start the reflection server immediately in a background
+            # daemon thread so it's available regardless of which web framework (or
+            # none) the user chooses.
+            if is_dev_environment():
+                # SIGINT (Ctrl+C) always hits handle_signal. SIGTERM inside the
+                # run_main wait loop is stolen by anyio (clean exit → atexit);
+                # elsewhere SIGTERM also goes through handle_signal. Both paths
+                # remove the runtime discovery files.
+                setup_signal_handlers()
+                self._start_reflection_background()
+
+            # Load prompts
+            load_path = prompt_dir
+            if load_path is None:
+                default_prompts_path = Path('./prompts')
+                if default_prompts_path.is_dir():
+                    load_path = default_prompts_path
+
+            if load_path:
+                load_prompt_folder(self.registry, dir_path=load_path)
+
+        # help(Genkit) should show the keyword-only constructor, not a phantom *args.
+        __init__.__signature__ = inspect.signature(__init__).replace(
+            parameters=[
+                parameter
+                for parameter in inspect.signature(__init__).parameters.values()
+                if parameter.kind != inspect.Parameter.VAR_POSITIONAL
+            ]
+        )
 
     # -------------------------------------------------------------------------
     # Registry methods
