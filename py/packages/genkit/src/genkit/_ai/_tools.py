@@ -666,20 +666,15 @@ def _define_tool(
         raise ValueError(f'Cannot infer a tool name from {func!r}; pass name= explicitly.')
     tool_description = _get_func_description(func, description)
 
-    async def tool_fn_wrapper(**kwargs: Any) -> Any:  # noqa: ANN401 - kwargs/return follow registered tool
+    async def tool_fn_wrapper(input: object, ctx: ActionRunContext) -> MultipartToolResponse[Any]:  # noqa: A002
         # Record resumed metadata on the current span for observability.
         resumed_meta = _tool_resumed_metadata.get()
         if resumed_meta:
             set_custom_metadata_attributes({'resumed': resumed_meta})
 
-        for key, value in kwargs.items():
-            if isinstance(value, ActionRunContext):
-                kwargs[key] = ToolRunContext(
-                    value,
-                    resumed_metadata=resumed_meta,
-                    original_input=_tool_original_input.get(),
-                )
-        raw = await func(**kwargs)
+        # A ctx annotated ActionRunContext gets the ToolRunContext too.
+        tool_ctx = ToolRunContext(ctx, resumed_metadata=resumed_meta, original_input=_tool_original_input.get())
+        raw = await action.params.call(func, input, tool_ctx)
         return as_multipart_tool_response(raw, tool_name=tool_name)
 
     action = registry.register_action(
@@ -688,7 +683,6 @@ def _define_tool(
         description=tool_description,
         fn=tool_fn_wrapper,
         metadata_fn=func,
-        context_type=ToolRunContext,
     )
     if input_schema is not None:
         action._override_input_schema(input_schema)

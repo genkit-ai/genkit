@@ -1,7 +1,7 @@
 # Copyright 2026 Google LLC
 # SPDX-License-Identifier: Apache-2.0
 
-"""A tool takes one typed input; the context arrives only on a ToolRunContext-annotated parameter."""
+"""A tool takes one typed input; the context arrives on a parameter annotated ToolRunContext or ActionRunContext."""
 
 import sys
 import typing
@@ -12,7 +12,7 @@ import pytest
 from pydantic import BaseModel
 from typing_extensions import TypedDict
 
-from genkit import Genkit, GenkitError, Message, ModelResponse, Part, ToolRunContext, tool
+from genkit import ActionRunContext, Genkit, GenkitError, Message, ModelResponse, Part, ToolRunContext, tool
 from genkit._ai._testing import ProgrammableModel, define_programmable_model
 from genkit._core._schema import to_json_schema
 from genkit._core._typing import FinishReason, Role, ToolRequest
@@ -169,6 +169,24 @@ async def test_tool_with_tool_run_context_first_then_input_gets_both() -> None:
     assert [m.role for m in response.messages] == [Role.USER, Role.MODEL, Role.TOOL, Role.MODEL]
     assert _advertised_schema(pm) == WEATHER_SCHEMA
     assert seen == [WeatherInput(city='Paris'), ToolRunContext, {'user': 'u1'}]
+    assert _tool_output(response) == '22C in Paris'
+
+
+@pytest.mark.asyncio
+async def test_tool_with_action_run_context_annotation_gets_tool_run_context() -> None:
+    """`ctx: ActionRunContext` on a tool marks the context too, and it receives a ToolRunContext."""
+    ai, pm = _app()
+    seen: list[object] = []
+
+    @ai.tool()
+    async def weather(input: WeatherInput, ctx: ActionRunContext) -> str:
+        seen.extend([type(ctx), ctx.context])
+        return f'22{input.unit} in {input.city}'
+
+    response = await _model_calls_tool(ai, pm, name='weather', tool_input={'city': 'Paris'}, context={'user': 'u1'})
+
+    assert _advertised_schema(pm) == WEATHER_SCHEMA
+    assert seen == [ToolRunContext, {'user': 'u1'}]
     assert _tool_output(response) == '22C in Paris'
 
 

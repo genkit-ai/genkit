@@ -85,5 +85,4 @@ def define_flow(
         fn=func,
         description=get_func_description(func, description),
         span_metadata={'flow:name': flow_name},
-        context_type=ActionRunContext,
     )

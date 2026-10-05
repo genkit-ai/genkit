@@ -205,10 +205,16 @@ def define_batch_evaluator(
         evaluator_dict['customOptions'] = to_json_schema(config_schema)
 
     evaluator_description = _get_func_description(fn, description)
+
+    # fn takes (request, options), like EvaluatorFn. The action itself takes
+    # one input, so pass the options from the request.
+    async def batch_eval_fn(req: EvalRequest) -> list[EvalFnResponse]:
+        return await fn(req, req.options)
+
     return registry.register_action(
         name=name,
         kind=ActionKind.EVALUATOR,
-        fn=fn,
+        fn=batch_eval_fn,
         metadata=evaluator_meta,
         description=evaluator_description,
     )

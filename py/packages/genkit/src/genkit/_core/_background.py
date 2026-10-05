@@ -286,7 +286,7 @@ def background_model(
     # Action still types the config bag as that family.
     @wraps(start)
     async def wrapped_start(request: ModelRequest, ctx: ActionRunContext) -> Operation:
-        op = await start(request, ctx)
+        op = await start_action.params.call(start, request, ctx)
         # The handle needs this key so check/cancel can find the job later.
         op.action = action_key
         return op
