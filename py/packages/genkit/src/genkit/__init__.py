@@ -54,6 +54,7 @@ from genkit._core._action import Action as Flow, ActionRunContext, StreamRespons
 from genkit._core._context import ContextProvider, RequestData
 from genkit._core._dap import DynamicActionProvider
 from genkit._core._error import GenkitError, Interrupt, PublicError, RuntimeErrorReason
+from genkit._core._logger import get_logger
 from genkit._core._model import (
     Document,
     Message,
@@ -109,6 +110,7 @@ __all__ = [
     'GenkitError',
     'PublicError',
     'RuntimeErrorReason',
+    'get_logger',
     # HTTP request context for flow handlers
     'ContextProvider',
     'RequestData',
