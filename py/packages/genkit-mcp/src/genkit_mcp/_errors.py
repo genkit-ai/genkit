@@ -28,7 +28,7 @@ class McpConnectionClosedError(McpClientError):
     """The client was shut down by :meth:`McpClient.close`.
 
     Closing is final: a closed client cannot be restarted. Build a new one with
-    :func:`define_mcp_client`.
+    :func:`create_mcp_client` or :func:`define_mcp_client`.
     """
 
 

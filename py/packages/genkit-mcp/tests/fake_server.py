@@ -47,6 +47,11 @@ TOOLS = [
     ),
 ]
 
+COLLIDING_TOOLS = [
+    Tool(name='look.up', description='Collides once rewritten.', inputSchema={'type': 'object'}),
+    Tool(name='look/up', description='Collides once rewritten.', inputSchema={'type': 'object'}),
+]
+
 PAGE_SIZE = int(os.environ.get('MCP_FAKE_PAGE_SIZE', '2'))
 
 list_requests = 0
@@ -60,6 +65,9 @@ stall_started = asyncio.Event()
 async def list_tools(req: ListToolsRequest) -> ListToolsResult:
     # The SDK passes None when it refreshes its own tool cache, and that refresh
     # must see every tool or call_tool skips input validation.
+    if os.environ.get('MCP_FAKE_COLLIDING_TOOLS'):
+        return ListToolsResult(tools=COLLIDING_TOOLS)
+
     if req is None:
         return ListToolsResult(tools=TOOLS)
 
