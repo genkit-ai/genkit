@@ -27,7 +27,7 @@ from typing import Any, ClassVar, Generic, NamedTuple, cast, get_type_hints
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from pydantic.alias_generators import to_camel
-from pydantic.errors import PydanticInvalidForJsonSchema, PydanticSchemaGenerationError
+from pydantic.errors import PydanticInvalidForJsonSchema, PydanticSchemaGenerationError, PydanticUserError
 from typing_extensions import TypeVar
 
 from genkit._core._channel import Channel, CloseableQueue
@@ -294,14 +294,17 @@ def find_input_and_context(
                 f"{owner} input '{input_param.name}' has no type annotation. "
                 f"Annotate it (e.g. '{input_param.name}: str'), or use Any to accept anything."
             )
+        type_name = getattr(input_type, '__name__', repr(input_type))
         try:
             TypeAdapter(input_type).json_schema()
         except (PydanticSchemaGenerationError, PydanticInvalidForJsonSchema) as e:
-            type_name = getattr(input_type, '__name__', repr(input_type))
             raise TypeError(
                 f"{owner} input '{input_param.name}' has type {type_name}, which has no JSON schema. "
                 'Use a Pydantic model, dataclass, TypedDict, or a basic type like str, int, list, or dict.'
             ) from e
+        except PydanticUserError as e:
+            # e.g. typing.TypedDict on Python < 3.12; keep Pydantic's fix in the message
+            raise TypeError(f"{owner} input '{input_param.name}' has type {type_name}: {e.message}") from e
     return input_param, context_param
 
 

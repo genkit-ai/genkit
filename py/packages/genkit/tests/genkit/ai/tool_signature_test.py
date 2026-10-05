@@ -3,11 +3,14 @@
 
 """A tool takes one typed input; the context arrives only on a ToolRunContext-annotated parameter."""
 
+import sys
+import typing
 from dataclasses import dataclass
-from typing import Any, TypedDict
+from typing import Any
 
 import pytest
 from pydantic import BaseModel
+from typing_extensions import TypedDict
 
 from genkit import Genkit, GenkitError, Message, ModelResponse, Part, ToolRunContext, tool
 from genkit._ai._testing import ProgrammableModel, define_programmable_model
@@ -323,6 +326,22 @@ def test_tool_with_plain_class_input_raises_type_error_naming_input() -> None:
     with pytest.raises(TypeError, match="tool 'read' input 't' has type Thermometer, which has no JSON schema") as exc:
         ai.tool()(read)
     assert 'Use a Pydantic model, dataclass, TypedDict, or a basic type' in str(exc.value)
+
+
+@pytest.mark.skipif(sys.version_info >= (3, 12), reason='Pydantic accepts typing.TypedDict on 3.12+')
+def test_tool_with_typing_typed_dict_input_raises_type_error_before_3_12() -> None:
+    """`read(r: Reading)` on a `typing.TypedDict` raises TypeError naming the input and typing_extensions."""
+    ai, _ = _app()
+
+    class Reading(typing.TypedDict):
+        celsius: float
+
+    async def read(r: Reading) -> str:
+        return ''
+
+    with pytest.raises(TypeError, match="tool 'read' input 'r' has type Reading: ") as exc:
+        ai.tool()(read)
+    assert 'typing_extensions.TypedDict' in str(exc.value)
 
 
 @pytest.mark.asyncio
