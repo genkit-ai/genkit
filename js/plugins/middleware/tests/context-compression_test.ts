@@ -3935,11 +3935,10 @@ describe('contextCompression middleware', () => {
     assert.strictEqual(msgs[2].content[0].text, 'u4');
   });
 
-  it('truncates multipart toolResponse.content via toolResponses.maxChars and materializes across turns', async () => {
+  it('enforces char limits, media approximation, and exact boundaries on multipart toolResponse.content', async () => {
     const ai = genkit({});
     let capturedRequest: GenerateRequest | undefined;
-
-    const pm = ai.defineModel({ name: 'multipartTruncModel' }, async (req) => {
+    const pm = ai.defineModel({ name: 'multipartModel' }, async (req) => {
       capturedRequest = req;
       return {
         message: { role: 'model', content: [{ text: 'done' }] },
@@ -3947,363 +3946,119 @@ describe('contextCompression middleware', () => {
       };
     });
 
-    const largeContentText = 'X'.repeat(200_000);
-    const res = await ai.generate({
-      model: pm,
-      messages: [
-        { role: 'user', content: [{ text: 'run multipart tool' }] },
-        {
-          role: 'model',
-          content: [
-            { toolRequest: { name: 'multiTool', ref: 'm1', input: {} } },
-          ],
-        },
-        {
-          role: 'tool',
-          content: [
-            {
-              toolResponse: {
-                name: 'multiTool',
-                ref: 'm1',
-                output: 'ok',
-                content: [{ text: largeContentText }],
-              },
-            },
-          ],
-        },
-      ],
-      use: [
-        contextCompression({
-          maxInputTokens: 1000,
-          maxToolResponseChars: 500,
-          toolResponses: { maxChars: 100, preserveRecent: 0 },
-        }),
-      ],
+    const runWithTool = (
+      output: unknown,
+      content: Part[],
+      opts: Parameters<typeof contextCompression>[0]
+    ) =>
+      ai.generate({
+        model: pm,
+        messages: [
+          { role: 'user', content: [{ text: 'run' }] },
+          {
+            role: 'model',
+            content: [{ toolRequest: { name: 't', ref: '1', input: {} } }],
+          },
+          {
+            role: 'tool',
+            content: [
+              { toolResponse: { name: 't', ref: '1', output, content } },
+            ],
+          },
+        ],
+        use: [contextCompression(opts)],
+      });
+    const sentToolResp = () =>
+      capturedRequest!.messages.find((m) => m.role === 'tool')!.content[0]
+        .toolResponse!;
+    const getCc = (res: { custom?: unknown }) =>
+      (res.custom as Record<string, unknown> | undefined)
+        ?.contextCompression as Record<string, unknown> | undefined;
+
+    // 1. Truncates content via toolResponses.maxChars and materializes via resolveCompressedHistory
+    const largeText = 'X'.repeat(200_000);
+    const truncRes = await runWithTool('ok', [{ text: largeText }], {
+      maxInputTokens: 1000,
+      maxToolResponseChars: 500,
+      toolResponses: { maxChars: 100, preserveRecent: 0 },
     });
-
-    const cc = (res.custom as Record<string, unknown>)?.contextCompression as
-      | Record<string, unknown>
-      | undefined;
-    assert.ok(cc);
-    assert.strictEqual(cc.triggered, true);
-    assert.strictEqual(cc.toolResponsesTruncated, 1);
-    assert.strictEqual(cc.toolResponsesSafetyCapped, 0);
-
-    const modelToolMsg = capturedRequest!.messages.find(
-      (m) => m.role === 'tool'
-    );
-    assert.ok(modelToolMsg);
-    const modelToolResp = modelToolMsg.content[0].toolResponse!;
-    assert.strictEqual(modelToolResp.output, 'ok');
-    assert.strictEqual(modelToolResp.content?.length, 1);
+    assert.strictEqual(getCc(truncRes)?.toolResponsesTruncated, 1);
+    assert.strictEqual(getCc(truncRes)?.toolResponsesSafetyCapped, 0);
+    const expectedTrunc = `${'X'.repeat(98)}\n\n[Truncated 199902 characters]`;
+    assert.strictEqual(sentToolResp().output, 'ok');
+    assert.deepStrictEqual(sentToolResp().content, [{ text: expectedTrunc }]);
     assert.strictEqual(
-      modelToolResp.content?.[0].text,
-      `${'X'.repeat(98)}\n\n[Truncated 199902 characters]`
+      truncRes.messages.find((m) => m.role === 'tool')!.content[0].toolResponse
+        ?.content?.[0].text,
+      largeText
     );
-
-    // Original message in response.messages preserves raw content
-    const rawToolMsg = res.messages.find((m) => m.role === 'tool')!;
     assert.strictEqual(
-      rawToolMsg.content[0].toolResponse?.content?.[0].text,
-      largeContentText
+      resolveCompressedHistory(truncRes.messages).find(
+        (m) => m.role === 'tool'
+      )!.content[0].toolResponse?.content?.[0].text,
+      expectedTrunc
     );
 
-    // resolveCompressedHistory materializes the truncated multipart content
-    const resolved = resolveCompressedHistory(res.messages);
-    const resolvedToolMsg = resolved.find((m) => m.role === 'tool')!;
-    assert.strictEqual(
-      resolvedToolMsg.content[0].toolResponse?.content?.[0].text,
-      `${'X'.repeat(98)}\n\n[Truncated 199902 characters]`
+    // 2. Enforces maxToolResponseChars safety cap even under maxInputTokens
+    const capRes = await runWithTool(
+      'ok',
+      [
+        { text: 'A'.repeat(100) },
+        { text: 'B'.repeat(1000) },
+        { text: 'C'.repeat(500) },
+      ],
+      { maxInputTokens: 100_000, maxToolResponseChars: 500 }
     );
-  });
-
-  it('enforces maxToolResponseChars safety cap on multipart toolResponse.content even when under maxInputTokens', async () => {
-    const ai = genkit({});
-    let capturedRequest: GenerateRequest | undefined;
-
-    const pm = ai.defineModel({ name: 'multipartCapModel' }, async (req) => {
-      capturedRequest = req;
-      return {
-        message: { role: 'model', content: [{ text: 'done' }] },
-        usage: { inputTokens: 50 },
-      };
-    });
-
-    const res = await ai.generate({
-      model: pm,
-      messages: [
-        { role: 'user', content: [{ text: 'run multipart tool' }] },
-        {
-          role: 'model',
-          content: [
-            { toolRequest: { name: 'multiTool', ref: 'm1', input: {} } },
-          ],
-        },
-        {
-          role: 'tool',
-          content: [
-            {
-              toolResponse: {
-                name: 'multiTool',
-                ref: 'm1',
-                output: 'ok',
-                content: [
-                  { text: 'A'.repeat(100) },
-                  { text: 'B'.repeat(1000) },
-                  { text: 'C'.repeat(500) },
-                ],
-              },
-            },
-          ],
-        },
-      ],
-      use: [
-        contextCompression({
-          maxInputTokens: 100_000,
-          maxToolResponseChars: 500,
-        }),
-      ],
-    });
-
-    const cc = (res.custom as Record<string, unknown>)?.contextCompression as
-      | Record<string, unknown>
-      | undefined;
-    assert.ok(cc);
-    assert.strictEqual(cc.triggered, true);
-    assert.strictEqual(cc.toolResponsesSafetyCapped, 1);
-    assert.strictEqual(cc.toolResponsesTruncated, 0);
-
-    const modelToolMsg = capturedRequest!.messages.find(
-      (m) => m.role === 'tool'
-    )!;
-    const modelToolResp = modelToolMsg.content[0].toolResponse!;
-    assert.strictEqual(modelToolResp.output, 'ok');
-    assert.strictEqual(modelToolResp.content?.length, 2);
-    assert.strictEqual(modelToolResp.content?.[0].text, 'A'.repeat(100));
-    assert.strictEqual(
-      modelToolResp.content?.[1].text,
-      `${'B'.repeat(398)}\n\n---\n\n[TRUNCATED: Response was 1602 chars but only first 500 are shown.]`
-    );
-
-    // Also verify when output alone exhausts the limit, content is stripped
-    await ai.generate({
-      model: pm,
-      messages: [
-        { role: 'user', content: [{ text: 'run multipart tool 2' }] },
-        {
-          role: 'model',
-          content: [
-            { toolRequest: { name: 'multiTool', ref: 'm2', input: {} } },
-          ],
-        },
-        {
-          role: 'tool',
-          content: [
-            {
-              toolResponse: {
-                name: 'multiTool',
-                ref: 'm2',
-                output: 'O'.repeat(200),
-                content: [{ text: 'C'.repeat(300) }],
-              },
-            },
-          ],
-        },
-      ],
-      use: [
-        contextCompression({
-          maxInputTokens: 50,
-          maxToolResponseChars: 500,
-          toolResponses: { maxChars: 100, preserveRecent: 0 },
-        }),
-      ],
-    });
-
-    const secondToolMsg = capturedRequest!.messages.find(
-      (m) => m.role === 'tool'
-    )!;
-    const secondToolResp = secondToolMsg.content[0].toolResponse!;
-    assert.strictEqual(
-      secondToolResp.output,
-      `${'O'.repeat(100)}\n\n[Truncated 400 characters]`
-    );
-    assert.strictEqual(secondToolResp.content, undefined);
-    assert.strictEqual('content' in secondToolResp, false);
-  });
-
-  it('uses DATA_URI_APPROX_CHARS for inline data: media in toolResponse.content and replaces with compact descriptor when truncated', async () => {
-    const ai = genkit({});
-    let capturedRequest: GenerateRequest | undefined;
-
-    const pm = ai.defineModel({ name: 'multipartMediaModel' }, async (req) => {
-      capturedRequest = req;
-      return {
-        message: { role: 'model', content: [{ text: 'done' }] },
-        usage: { inputTokens: 50 },
-      };
-    });
-
-    const largeBase64Screenshot = `data:image/png;base64,${'A'.repeat(500_000)}`;
-
-    // 1. Under default maxToolResponseChars (400,000) and ample maxInputTokens (2000),
-    // inline data: media uses DATA_URI_APPROX_CHARS (1000) so it does not trigger
-    // false-positive safety capping or token spikes.
-    const res1 = await ai.generate({
-      model: pm,
-      messages: [
-        { role: 'user', content: [{ text: 'take screenshot' }] },
-        {
-          role: 'model',
-          content: [
-            { toolRequest: { name: 'screenshot', ref: 's1', input: {} } },
-          ],
-        },
-        {
-          role: 'tool',
-          content: [
-            {
-              toolResponse: {
-                name: 'screenshot',
-                ref: 's1',
-                output: 'ok',
-                content: [
-                  {
-                    media: {
-                      url: largeBase64Screenshot,
-                      contentType: 'image/png',
-                    },
-                  },
-                ],
-              },
-            },
-          ],
-        },
-      ],
-      use: [contextCompression({ maxInputTokens: 2000 })],
-    });
-
-    assert.strictEqual(
-      (res1.custom as Record<string, unknown> | undefined)?.contextCompression,
-      undefined
-    );
-    const intactToolMsg = capturedRequest!.messages.find(
-      (m) => m.role === 'tool'
-    )!;
-    assert.strictEqual(
-      intactToolMsg.content[0].toolResponse?.content?.[0].media?.url,
-      largeBase64Screenshot
-    );
-
-    // 2. When truncated by toolResponses.maxChars, the media part is replaced
-    // with a compact [media: image/png] descriptor instead of raw sliced base64.
-    const res2 = await ai.generate({
-      model: pm,
-      messages: [
-        { role: 'user', content: [{ text: 'take screenshot' }] },
-        {
-          role: 'model',
-          content: [
-            { toolRequest: { name: 'screenshot', ref: 's1', input: {} } },
-          ],
-        },
-        {
-          role: 'tool',
-          content: [
-            {
-              toolResponse: {
-                name: 'screenshot',
-                ref: 's1',
-                output: 'ok',
-                content: [
-                  {
-                    media: {
-                      url: largeBase64Screenshot,
-                      contentType: 'image/png',
-                    },
-                  },
-                ],
-              },
-            },
-          ],
-        },
-      ],
-      use: [
-        contextCompression({
-          maxInputTokens: 100,
-          toolResponses: { maxChars: 100, preserveRecent: 0 },
-        }),
-      ],
-    });
-
-    const cc2 = (res2.custom as Record<string, unknown>)?.contextCompression as
-      | Record<string, unknown>
-      | undefined;
-    assert.strictEqual(cc2?.toolResponsesTruncated, 1);
-    const truncToolMsg = capturedRequest!.messages.find(
-      (m) => m.role === 'tool'
-    )!;
-    assert.deepStrictEqual(truncToolMsg.content[0].toolResponse?.content, [
+    assert.strictEqual(getCc(capRes)?.toolResponsesSafetyCapped, 1);
+    assert.deepStrictEqual(sentToolResp().content, [
+      { text: 'A'.repeat(100) },
       {
-        text: '[media: image/png]\n\n[Truncated 1000 characters]',
+        text: `${'B'.repeat(398)}\n\n---\n\n[TRUNCATED: Response was 1602 chars but only first 500 are shown.]`,
       },
     ]);
-  });
 
-  it('preserves structured and reasoning content parts intact when they fit exactly within remaining budget', async () => {
-    const ai = genkit({});
-    let capturedRequest: GenerateRequest | undefined;
+    // 3. Strips content when output alone exhausts the limit
+    await runWithTool('O'.repeat(200), [{ text: 'C'.repeat(300) }], {
+      maxInputTokens: 50,
+      maxToolResponseChars: 500,
+      toolResponses: { maxChars: 100, preserveRecent: 0 },
+    });
+    assert.strictEqual(
+      sentToolResp().output,
+      `${'O'.repeat(100)}\n\n[Truncated 400 characters]`
+    );
+    assert.strictEqual('content' in sentToolResp(), false);
 
-    const pm = ai.defineModel(
-      { name: 'multipartExactBoundaryModel' },
-      async (req) => {
-        capturedRequest = req;
-        return {
-          message: { role: 'model', content: [{ text: 'done' }] },
-          usage: { inputTokens: 50 },
-        };
+    // 4. Uses DATA_URI_APPROX_CHARS for inline data: media and compact descriptor when truncated
+    const dataUrl = `data:image/png;base64,${'A'.repeat(500_000)}`;
+    const mediaPart: Part = {
+      media: { url: dataUrl, contentType: 'image/png' },
+    };
+    const mediaOkRes = await runWithTool('ok', [mediaPart], {
+      maxInputTokens: 2000,
+    });
+    assert.strictEqual(getCc(mediaOkRes), undefined);
+    assert.strictEqual(sentToolResp().content?.[0].media?.url, dataUrl);
+
+    const mediaTruncRes = await runWithTool('ok', [mediaPart], {
+      maxInputTokens: 100,
+      toolResponses: { maxChars: 100, preserveRecent: 0 },
+    });
+    assert.strictEqual(getCc(mediaTruncRes)?.toolResponsesTruncated, 1);
+    assert.deepStrictEqual(sentToolResp().content, [
+      { text: '[media: image/png]\n\n[Truncated 1000 characters]' },
+    ]);
+
+    // 5. Preserves structured part intact when it fits exactly within remaining budget (2 + 18 === 20)
+    await runWithTool(
+      'ok',
+      [{ data: { status: 'ready' } }, { text: 'X'.repeat(200) }],
+      {
+        maxInputTokens: 20,
+        toolResponses: { maxChars: 20, preserveRecent: 0 },
       }
     );
-
-    // output: 'ok' (2 chars), data: {"status":"ready"} (18 chars) => 20 chars exact fit for maxChars: 20
-    await ai.generate({
-      model: pm,
-      messages: [
-        { role: 'user', content: [{ text: 'check exact boundary' }] },
-        {
-          role: 'model',
-          content: [
-            { toolRequest: { name: 'multiTool', ref: 'm1', input: {} } },
-          ],
-        },
-        {
-          role: 'tool',
-          content: [
-            {
-              toolResponse: {
-                name: 'multiTool',
-                ref: 'm1',
-                output: 'ok',
-                content: [
-                  { data: { status: 'ready' } },
-                  { text: 'X'.repeat(200) },
-                ],
-              },
-            },
-          ],
-        },
-      ],
-      use: [
-        contextCompression({
-          maxInputTokens: 20,
-          toolResponses: { maxChars: 20, preserveRecent: 0 },
-        }),
-      ],
-    });
-
-    const toolMsg = capturedRequest!.messages.find((m) => m.role === 'tool')!;
-    const toolResp = toolMsg.content[0].toolResponse!;
-    assert.strictEqual(toolResp.output, 'ok');
-    assert.deepStrictEqual(toolResp.content, [
+    assert.deepStrictEqual(sentToolResp().content, [
       { data: { status: 'ready' } },
       { text: '\n\n[Truncated 200 characters]' },
     ]);
