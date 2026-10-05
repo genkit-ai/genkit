@@ -59,6 +59,7 @@ from genkit._ai._model import (
     ModelResponseChunk,
     assert_correct_config_class,
     define_model,
+    python_config_schema,
     resolve_for_generate,
 )
 from genkit._ai._prompt import (
@@ -97,7 +98,6 @@ from genkit._core._middleware import (
 from genkit._core._model import (
     Document,
     EmbedRequest,
-    ModelConfig,
     ModelConfigDict,
     ModelRef,
     ModelRefConfigT,
@@ -137,9 +137,29 @@ T = TypeVar('T')
 MiddlewareT = TypeVar('MiddlewareT', bound=BaseMiddleware)
 
 
-def _model_ref_for_action(action: Action) -> ModelRef[Any]:
-    schema = action._config_schema or ModelConfig
-    return ModelRef(name=action.name, config_schema=schema)
+def _model_info_from_action(action: Action) -> ModelInfo | None:
+    raw = action.metadata.get('model') if action.metadata else None
+    if not isinstance(raw, dict):
+        return None
+    model_meta = cast(dict[str, object], raw)
+    payload: dict[str, object] = {}
+    for key in ('supports', 'label', 'stage'):
+        value = model_meta.get(key)
+        if value is not None:
+            payload[key] = value
+    if not payload:
+        return None
+    return ModelInfo.model_validate(payload)
+
+
+def _model_ref_for_action(action: Action, *, name: str) -> ModelRef[Any]:
+    # Stamp the string they looked up so generate(model=ref) finds that same
+    # slot. A DAP child action's own name is only the inner name.
+    # Attach a config class only when the action declared one. Inventing
+    # ModelConfig here would reject a shop-specific Pydantic config that
+    # generate(model='echo', config=...) still accepts.
+    schema = python_config_schema(action._config_schema) or BaseModel
+    return ModelRef(name=name, config_schema=schema, info=_model_info_from_action(action))
 
 
 class Genkit:
@@ -495,7 +515,7 @@ class Genkit:
         action = await self.registry.resolve_action(ActionKind.MODEL, name)
         if action is None:
             return None
-        return _model_ref_for_action(action)
+        return _model_ref_for_action(action, name=name)
 
     async def lookup_background_model(self, name: str) -> ModelRef[Any] | None:
         """Return a ModelRef for a registered background model, or None.
@@ -505,7 +525,7 @@ class Genkit:
         action = await self.registry.resolve_action(ActionKind.BACKGROUND_MODEL, name)
         if action is None:
             return None
-        return _model_ref_for_action(action)
+        return _model_ref_for_action(action, name=name)
 
     def define_format(self, format: FormatDef) -> None:
         """Register a custom output format."""

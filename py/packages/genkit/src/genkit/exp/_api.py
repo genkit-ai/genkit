@@ -30,7 +30,7 @@ from genkit._ai._agents._base import (
     define_prompt_agent,
 )
 from genkit._ai._agents._runtime import AgentFn
-from genkit._ai._agents._session import SessionStore, StateT, get_current_session
+from genkit._ai._agents._session import SessionStore, StateT
 from genkit._ai._agents._types import ChunkTransform, StateTransform
 from genkit._ai._aio import Genkit as StableGenkit
 from genkit._ai._tools import Tool
@@ -38,7 +38,6 @@ from genkit._core._action import ActionKind
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._middleware import BaseMiddleware
 from genkit._core._model import ModelConfigDict, ModelRef, ModelRefConfigT, Part
-from genkit._core._protocols import SessionLike
 from genkit._core._typing import MiddlewareRef
 
 
@@ -68,18 +67,18 @@ class Genkit(StableGenkit):
     async def lookup_agent(self, name: str) -> Agent | None:
         """Return an Agent registered under ``name``, or None.
 
-        Passes through the registry's action resolution to ensure plugin
-        and dynamic action providers can resolve the agent on demand.
+        Unknown is None. A name that resolved to something that is not an
+        Agent is a broken registry slot, same as ``agent()``.
         """
         resolved = await self.registry.resolve_action(ActionKind.AGENT, name)
-        if isinstance(resolved, Agent):
-            return resolved
-        return None
-
-    @staticmethod
-    def current_session() -> SessionLike | None:
-        """Return the active agent session, or None if not inside a session."""
-        return get_current_session()
+        if resolved is None:
+            return None
+        if not isinstance(resolved, Agent):
+            raise GenkitError(
+                status='INTERNAL',
+                message=f"Registry entry '{name}' is not an Agent.",
+            )
+        return resolved
 
     def define_custom_agent(
         self,

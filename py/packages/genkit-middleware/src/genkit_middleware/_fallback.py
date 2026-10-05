@@ -23,9 +23,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from genkit import GenkitError
+from genkit import GenkitError, ModelResponse
 from genkit._core._action import Action, ActionKind
-from genkit._core._model import ModelResponse
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
 
 _DEFAULT_FALLBACK_STATUSES: list[str] = [

@@ -40,14 +40,10 @@ from typing import Any
 
 from pydantic import BaseModel as PydanticBaseModel
 
-from genkit import MultipartToolResponse, Part
-from genkit._ai._tools import Interrupt, define_tool
+from genkit import Interrupt, Message, ModelResponse, ModelResponseChunk, MultipartToolResponse, Part, Role
+from genkit._ai._tools import define_tool
 from genkit._core._action import Action
-from genkit._core._model import Message, ModelResponse, ModelResponseChunk
 from genkit._core._registry import Registry
-from genkit._core._typing import (
-    Role,
-)
 from genkit.middleware import (
     BaseMiddleware,
     GenerateHookParams,
