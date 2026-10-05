@@ -36,11 +36,19 @@ class McpClient:
         raise NotImplementedError
 
     async def restart(self) -> None:
-        """Reconnect to the server, replacing any connection it already has."""
+        """Reconnect to the server, replacing any connection it already has.
+
+        Raises:
+            McpConnectionClosedError: If this client is closed.
+        """
         raise NotImplementedError
 
     async def close(self) -> None:
-        """Disconnect from the server and stop its process, for good."""
+        """Disconnect from the server and stop its process.
+
+        Closing is final: a closed client cannot be restarted. Build a new one
+        with :func:`define_mcp_client`.
+        """
         raise NotImplementedError
 
 
@@ -57,8 +65,9 @@ def define_mcp_client(
 
     The server's tools become ``tool.v2`` actions behind a dynamic action provider
     named ``name``. Select them from ``generate`` as ``<name>:tool/*`` for all of
-    them, or ``<name>:tool/<name>_<tool>`` for one. Connection is lazy: the child
-    process starts on the first tool listing.
+    them, or ``<name>:tool/<tool_prefix>_<tool>`` for one, where ``tool_prefix``
+    defaults to ``name``. Connection is lazy: the child process starts on the
+    first tool listing.
 
     This is a function rather than a Genkit plugin because the registry rewrites a
     plugin's action names to ``<plugin>/<action>``, and a provider name cannot
