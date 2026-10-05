@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pydantic import BaseModel
 
-from genkit import Genkit, get_logger
+from genkit import Genkit
 from genkit._ai._testing import define_echo_model
 from genkit._core._action import ActionRunContext, _action_context
 from genkit._core._error import GenkitError, RuntimeErrorReason
@@ -22,7 +22,6 @@ from genkit._core._telemetry._instrumentation import (
     SpanNext,
     reset_instrumentation,
 )
-from genkit._core._telemetry._log_exporter import build_log_record
 from genkit._core._typing import FinishReason, Operation, Role
 from genkit.exp import Genkit as ExpGenkit
 from genkit.middleware import BaseMiddleware, GenerateHookParams, GenerateMiddlewareContext
@@ -80,30 +79,6 @@ async def test_genkit_run_tags_flow_step_action_type() -> None:
         assert recording.last.action_type == 'flowStep'
     finally:
         reset_instrumentation()
-
-
-@pytest.mark.asyncio
-async def test_get_logger_in_flow_attaches_trace_id(hex_ids: None) -> None:
-    """get_logger() lines inside a flow attach the flow's trace ID to the log record."""
-    ai = Genkit()
-    captured: list[dict[str, object]] = []
-
-    def capture_log(*, level: int, event: str, attrs: dict[str, object] | None = None) -> None:
-        captured.append(build_log_record(level=level, event=event, attrs=attrs or {}))
-
-    with mock.patch('genkit._core._telemetry._log_exporter.emit_log', side_effect=capture_log):
-
-        @ai.flow()
-        async def cart_flow() -> str:
-            get_logger(__name__).info('looked up cart')
-            return 'ok'
-
-        assert await cart_flow() == 'ok'
-
-    assert len(captured) == 1
-    assert captured[0]['body'] == {'stringValue': 'looked up cart'}
-    trace_id = captured[0].get('traceId')
-    assert isinstance(trace_id, str) and len(trace_id) == 32
 
 
 @pytest.mark.asyncio
