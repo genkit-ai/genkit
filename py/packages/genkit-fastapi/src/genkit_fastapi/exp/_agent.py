@@ -14,18 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Experimental FastAPI serving for Genkit agents.
-
-Agents are still changing, so serving them lives here rather than on the
-``genkit_fastapi`` root. Apps that only serve flows never load the agent types.
-
-Example:
-    ```python
-    from genkit_fastapi.exp import serve_agent
-
-    app.include_router(serve_agent(weather_agent), prefix='/api')
-    ```
-"""
+"""``serve_agent`` and its snapshot/abort input parsing. Public via ``genkit_fastapi.exp``."""
 
 from __future__ import annotations
 
@@ -38,13 +27,12 @@ from pydantic import BaseModel
 from genkit import GenkitError
 from genkit.exp.agent import Agent, SessionSnapshot
 from genkit.plugin_api import Action, ActionKind
-
-from .handler import _mount_action
+from genkit_fastapi.handler import _mount_action
 
 StateT = TypeVar('StateT', bound=BaseModel)
 
 
-def parse_snapshot_lookup_input(input_val: dict[str, Any] | str | None) -> tuple[str | None, str | None]:
+def _parse_snapshot_lookup_input(input_val: dict[str, Any] | str | None) -> tuple[str | None, str | None]:
     """Parse snapshot lookup params from payload dict or bare snapshot ID string."""
     if isinstance(input_val, str):
         return input_val, None
@@ -66,7 +54,7 @@ def parse_snapshot_lookup_input(input_val: dict[str, Any] | str | None) -> tuple
     )
 
 
-def parse_abort_input(input_val: dict[str, Any] | str | None) -> str:
+def _parse_abort_input(input_val: dict[str, Any] | str | None) -> str:
     """Parse snapshot ID from payload dict or bare snapshot ID string."""
     if isinstance(input_val, str):
         return input_val
@@ -115,11 +103,11 @@ def serve_agent(
     if agent.store is not None:
 
         async def snapshot_fn(input_val: dict[str, Any] | str | None = None) -> SessionSnapshot | None:
-            sid, sess_id = parse_snapshot_lookup_input(input_val)
+            sid, sess_id = _parse_snapshot_lookup_input(input_val)
             return await agent.get_snapshot_data(snapshot_id=sid, session_id=sess_id)
 
         async def abort_fn(input_val: dict[str, Any] | str | None = None) -> dict[str, object]:
-            snapshot_id = parse_abort_input(input_val)
+            snapshot_id = _parse_abort_input(input_val)
             status = await agent.abort_snapshot_data(snapshot_id)
             return {'snapshotId': snapshot_id, 'status': str(status) if status else None}
 
@@ -150,8 +138,3 @@ def serve_agent(
         )
 
     return router
-
-
-__all__ = [
-    'serve_agent',
-]
