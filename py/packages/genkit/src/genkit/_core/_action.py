@@ -253,10 +253,6 @@ def parse_plugin_name_from_action_name(name: str) -> str | None:
 #     (ToolRunContext, ...). Importing it under TYPE_CHECKING is fine.
 #   - Any other parameter is the input, so there's only one. Put more fields
 #     on one input model.
-#   - Tools and flows must annotate the input: its type is the schema the
-#     model or HTTP caller sees. Use Any to accept anything. Other actions
-#     (models, embedders, ...) get a fixed input from Genkit and may leave it
-#     unannotated.
 #   - Input and return types need a JSON schema: a Pydantic model, dataclass,
 #     TypedDict, or a basic type like str, int, list or dict.
 #   - Those types must exist at runtime. With `from __future__ import
