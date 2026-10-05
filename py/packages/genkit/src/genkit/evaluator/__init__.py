@@ -32,6 +32,7 @@ from genkit._ai._evaluator import (
     evaluator_ref,
 )
 from genkit._core._typing import (
+    BaseEvalDataPoint,
     Details,
     EvalFnResponse,
     EvalRequest,
@@ -43,6 +44,7 @@ __all__ = [
     # Request/Response types
     'EvalRequest',
     'EvalFnResponse',
+    'BaseEvalDataPoint',
     # Score types
     'Score',
     'Details',

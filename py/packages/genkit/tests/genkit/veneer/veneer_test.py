@@ -35,6 +35,7 @@ from genkit._core._action import ActionKind, ActionRunContext
 from genkit._core._model import ModelRequest, OutputConfig
 from genkit._core._typing import (
     BaseDataPoint,
+    BaseEvalDataPoint,
     Details,
     EvalFnResponse,
     EvalRequest,
@@ -1603,9 +1604,9 @@ def test_define_evaluator_simple(setup_test: SetupFixture) -> None:
     """Test that the define evaluator function works."""
     ai, _, _, *_ = setup_test
 
-    async def my_eval_fn(datapoint: BaseDataPoint, options: dict[str, Any] | None = None) -> EvalFnResponse:
+    async def my_eval_fn(datapoint: BaseEvalDataPoint, options: dict[str, Any] | None = None) -> EvalFnResponse:
         return EvalFnResponse(
-            test_case_id=datapoint.test_case_id or '',
+            test_case_id=datapoint.test_case_id,
             evaluation=Score(score=True, details=Details(reasoning='I think it is true')),
         )
 
@@ -1631,9 +1632,9 @@ def test_define_evaluator_custom_config(setup_test: SetupFixture) -> None:
     class CustomOption(BaseModel):
         foo_bar: str = Field('baz', description='foo_bar field')
 
-    async def my_eval_fn(datapoint: BaseDataPoint, options: dict[str, Any] | None = None) -> EvalFnResponse:
+    async def my_eval_fn(datapoint: BaseEvalDataPoint, options: dict[str, Any] | None = None) -> EvalFnResponse:
         return EvalFnResponse(
-            test_case_id=datapoint.test_case_id or '',
+            test_case_id=datapoint.test_case_id,
             evaluation=Score(
                 score=True, details=Details(reasoning=options.get('foo_bar', 'baz') if options else 'baz')
             ),
@@ -1757,9 +1758,9 @@ async def test_evaluate(setup_test: SetupFixture) -> None:
     """Test that the evaluate function works."""
     ai, _, _, *_ = setup_test
 
-    async def my_eval_fn(datapoint: BaseDataPoint, options: object | None) -> EvalFnResponse:
+    async def my_eval_fn(datapoint: BaseEvalDataPoint, options: object | None) -> EvalFnResponse:
         return EvalFnResponse(
-            test_case_id=datapoint.test_case_id or '',
+            test_case_id=datapoint.test_case_id,
             evaluation=Score(score=True, details=Details(reasoning='I think it is true')),
         )
 
@@ -1794,11 +1795,11 @@ async def test_evaluator_records_fail_then_still_runs_the_next_row(
     """A row that raises is recorded as FAIL; the next row still runs."""
     ai, *_ = setup_test
 
-    async def my_eval_fn(datapoint: BaseDataPoint, options: object | None) -> EvalFnResponse:
+    async def my_eval_fn(datapoint: BaseEvalDataPoint, options: object | None) -> EvalFnResponse:
         if datapoint.test_case_id == 'case1':
             raise RuntimeError('row boom')
         return EvalFnResponse(
-            test_case_id=datapoint.test_case_id or '',
+            test_case_id=datapoint.test_case_id,
             evaluation=Score(score=True),
         )
 
@@ -1826,6 +1827,39 @@ async def test_evaluator_records_fail_then_still_runs_the_next_row(
     assert response.root[1].test_case_id == 'case2'
     assert isinstance(response.root[1].evaluation, Score)
     assert response.root[1].evaluation.score is True
+
+
+@pytest.mark.asyncio
+async def test_evaluate_fills_missing_test_case_id_as_base_eval_datapoint(
+    setup_test: SetupFixture,
+) -> None:
+    """Evaluator callbacks receive BaseEvalDataPoint with a guaranteed test_case_id (#5991)."""
+    ai, *_ = setup_test
+    seen: list[BaseEvalDataPoint] = []
+
+    async def my_eval_fn(datapoint: BaseEvalDataPoint, options: object | None) -> EvalFnResponse:
+        seen.append(datapoint)
+        return EvalFnResponse(
+            test_case_id=datapoint.test_case_id,
+            evaluation=Score(score=True),
+        )
+
+    ai.define_evaluator(
+        name='my_eval',
+        display_name='Test evaluator',
+        definition='Captures callback datapoint type',
+        fn=my_eval_fn,
+    )
+
+    dataset = [BaseDataPoint(input='hi', output='hi')]
+    response = await ai.evaluate(evaluator='my_eval', dataset=dataset)
+
+    assert len(seen) == 1
+    assert isinstance(seen[0], BaseEvalDataPoint)
+    assert seen[0].test_case_id
+    assert response.root[0].test_case_id == seen[0].test_case_id
+    # Dataset input type stays BaseDataPoint with optional id (unmutated).
+    assert dataset[0].test_case_id is None
 
 
 def test_define_background_model_with_info(setup_test: SetupFixture) -> None:
