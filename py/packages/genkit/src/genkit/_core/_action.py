@@ -21,6 +21,7 @@ import inspect
 import json
 import re
 import time
+import types
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextvars import ContextVar
 from typing import Any, ClassVar, Generic, NamedTuple, cast, get_type_hints
@@ -247,6 +248,37 @@ def extract_action_args_and_types(
     return action_args, arg_types
 
 
+# Body for the one-annotation functions resolve_type_hints builds.
+_PROBE_CODE = (lambda: None).__code__
+
+
+def resolve_type_hints(fn: Callable[..., object], annotations: Mapping[str, Any]) -> dict[str, Any]:
+    """``fn``'s annotations as types, resolved one name at a time if the batch fails.
+
+    ``get_type_hints`` is all or nothing: one name that isn't there at runtime
+    (a type imported under ``TYPE_CHECKING``, or a model defined inside a
+    function under ``from __future__ import annotations``) fails the whole call.
+    When it fails, each of ``annotations`` is resolved on its own against
+    ``fn``'s module, so only the names that can't be found stay strings.
+    """
+    try:
+        return get_type_hints(fn)
+    except (NameError, TypeError, AttributeError):
+        pass
+    module_globals = getattr(inspect.unwrap(fn), '__globals__', {})
+    hints: dict[str, Any] = {}
+    for name, annotation in annotations.items():
+        # a function in fn's module carrying only this annotation, so
+        # get_type_hints resolves it by the same rules as the batch call
+        probe = types.FunctionType(_PROBE_CODE, module_globals)
+        probe.__annotations__ = {name: annotation}
+        try:
+            hints[name] = get_type_hints(probe)[name]
+        except Exception:
+            hints[name] = annotation
+    return hints
+
+
 def find_input_and_context(
     func: Callable[..., object],
     hints: Mapping[str, Any],
@@ -304,12 +336,13 @@ def find_input_and_context(
             ) from e
         except PydanticUserError as e:
             if isinstance(input_type, str):
-                # usually a model defined inside a function under
-                # `from __future__ import annotations`, which leaves only its name
+                # resolve_type_hints leaves a name as a string only when the
+                # module doesn't have it at runtime: a model defined inside a
+                # function, or a type imported under TYPE_CHECKING
                 kind = owner.split(' ', 1)[0]
                 raise TypeError(
                     f"{owner} input '{input_param.name}' has type '{input_type}', which can't be found "
-                    f'when the {kind} is defined. Define it at module level, or remove '
+                    f'when the {kind} is defined. Define or import it at module level, or remove '
                     "'from __future__ import annotations' from this file."
                 ) from e
             # e.g. typing.TypedDict on Python < 3.12; keep Pydantic's fix in the message
@@ -538,10 +571,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
 
         signature_fn = metadata_fn if metadata_fn else fn
         input_spec = inspect.getfullargspec(signature_fn)
-        try:
-            resolved_annotations = get_type_hints(signature_fn)
-        except (NameError, TypeError, AttributeError):
-            resolved_annotations = input_spec.annotations
+        resolved_annotations = resolve_type_hints(signature_fn, input_spec.annotations)
         # With a context_type, the context goes to the parameter annotated with
         # it and the input to the other one, both by name.
         self._by_annotation: bool = context_type is not None

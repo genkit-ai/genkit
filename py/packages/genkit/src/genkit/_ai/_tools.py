@@ -21,11 +21,11 @@ import inspect
 from collections.abc import Callable, Sequence
 from contextvars import ContextVar
 from types import UnionType
-from typing import Any, Union, cast, get_args, get_origin, get_type_hints
+from typing import Any, Union, cast, get_args, get_origin
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
-from genkit._core._action import Action, ActionKind, ActionRunContext
+from genkit._core._action import Action, ActionKind, ActionRunContext, resolve_type_hints
 from genkit._core._error import GenkitError, Interrupt, RuntimeErrorReason
 from genkit._core._logger import get_logger
 from genkit._core._middleware import GenerateMiddlewareContext
@@ -627,10 +627,11 @@ def model_schema_from_return_annotation(
     inferred: dict[str, object] | None,
 ) -> dict[str, object] | None:
     """JSON Schema the model should bind, from the handler's return annotation."""
+    annotations = dict(getattr(func, '__annotations__', {}))
     try:
-        hints = get_type_hints(func)
+        hints = resolve_type_hints(func, annotations)
     except Exception:
-        hints = dict(getattr(func, '__annotations__', {}))
+        hints = annotations
     inner = envelope_output_type(hints.get('return'))
     if inner is NOT_ENVELOPE:
         return inferred

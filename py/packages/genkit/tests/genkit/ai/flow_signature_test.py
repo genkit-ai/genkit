@@ -3,6 +3,9 @@
 
 """A flow takes one input; the context arrives only on an ActionRunContext-annotated parameter."""
 
+from collections.abc import Awaitable, Callable
+from typing import Any
+
 import pytest
 from pydantic import BaseModel
 
@@ -133,7 +136,7 @@ def test_flow_with_input_model_defined_in_function_raises_type_error_naming_it()
         TypeError, match="flow 'run_step' input 'input' has type 'StepInput', which can't be found"
     ) as exc:
         ai.flow()(run_step)
-    assert 'Define it at module level' in str(exc.value)
+    assert 'Define or import it at module level' in str(exc.value)
 
 
 @pytest.mark.asyncio
@@ -149,4 +152,44 @@ async def test_flow_with_postponed_annotations_finds_action_run_context() -> Non
     result = await greet.run('ada', context={'user': 'u1'})
 
     assert greet.input_schema == {'type': 'string'}
+    assert result.response == 'hello ada as u1'
+
+
+class Greeting(BaseModel):
+    name: str
+
+
+# A user module that imports the context type only for type checkers, so
+# 'ActionRunContext' can't be resolved at runtime but 'Greeting' can.
+_TYPE_CHECKING_CONTEXT_MODULE = """
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from genkit import ActionRunContext
+
+
+async def greet(input: Greeting, ctx: ActionRunContext) -> str:
+    return f'hello {input.name} as {ctx.context["user"]}'
+"""
+
+
+@pytest.mark.asyncio
+async def test_flow_with_type_checking_only_context_still_resolves_module_level_input() -> None:
+    """A `TYPE_CHECKING`-only `ActionRunContext` doesn't stop the module-level `Greeting` from resolving."""
+    ai = Genkit()
+    module_globals: dict[str, Any] = {'Greeting': Greeting}
+    exec(_TYPE_CHECKING_CONTEXT_MODULE, module_globals)  # noqa: S102 - builds a module with postponed annotations
+
+    greet_fn: Callable[[Greeting, ActionRunContext], Awaitable[str]] = module_globals['greet']
+    greet = ai.flow()(greet_fn)
+    result = await greet.run(Greeting(name='ada'), context={'user': 'u1'})
+
+    assert greet.input_schema == {
+        'properties': {'name': {'title': 'Name', 'type': 'string'}},
+        'required': ['name'],
+        'title': 'Greeting',
+        'type': 'object',
+    }
     assert result.response == 'hello ada as u1'

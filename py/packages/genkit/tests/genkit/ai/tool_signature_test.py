@@ -343,7 +343,38 @@ def test_tool_with_input_model_defined_in_function_raises_type_error_naming_it()
         TypeError, match="tool 'slow_work' input 'input' has type 'StepInput', which can't be found"
     ) as exc:
         ai.tool()(slow_work)
-    assert 'Define it at module level' in str(exc.value)
+    assert 'Define or import it at module level' in str(exc.value)
+
+
+# A user module that imports the context type only for type checkers, so
+# 'ToolRunContext' can't be resolved at runtime but 'WeatherInput' can.
+_TYPE_CHECKING_CONTEXT_MODULE = """
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from genkit import ToolRunContext
+
+
+async def weather(input: WeatherInput, ctx: ToolRunContext) -> str:
+    return f'22{input.unit} in {input.city} for {ctx.context["user"]}'
+"""
+
+
+@pytest.mark.asyncio
+async def test_tool_with_type_checking_only_context_still_resolves_module_level_input() -> None:
+    """A `TYPE_CHECKING`-only `ToolRunContext` doesn't stop the module-level `WeatherInput` from resolving."""
+    ai, pm = _app()
+    module_globals: dict[str, Any] = {'WeatherInput': WeatherInput}
+    exec(_TYPE_CHECKING_CONTEXT_MODULE, module_globals)  # noqa: S102 - builds a module with postponed annotations
+
+    ai.tool()(module_globals['weather'])
+    response = await _model_calls_tool(ai, pm, name='weather', tool_input={'city': 'Paris'}, context={'user': 'u1'})
+
+    assert response.text == 'done'
+    assert _advertised_schema(pm) == WEATHER_SCHEMA
+    assert _tool_output(response) == '22C in Paris for u1'
 
 
 @pytest.mark.skipif(sys.version_info >= (3, 12), reason='Pydantic accepts typing.TypedDict on 3.12+')
