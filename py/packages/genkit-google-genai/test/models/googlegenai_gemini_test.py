@@ -1640,3 +1640,49 @@ async def test_generate_adds_no_voice_to_a_multi_speaker_config(mocker: MockerFi
     assert isinstance(sent_config.speech_config, genai_types.SpeechConfig)
     assert sent_config.speech_config.voice_config is None
     assert sent_config.speech_config.multi_speaker_voice_config is not None
+
+
+@pytest.mark.asyncio
+async def test_gemini_model__speech_config_accepts_snake_case_keys(
+    tts_model_instance: GeminiModel,
+) -> None:
+    """Nested snake_case speech keys, the form the media sample sends, reach the SDK config."""
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
+        config=GeminiTtsConfigSchema.model_validate({
+            'speech_config': {
+                'language_code': 'de-DE',
+                'voice_config': {'prebuilt_voice_config': {'voice_name': 'Kore'}},
+            }
+        }),
+    )
+
+    cfg = await tts_model_instance._genkit_to_googleai_cfg(request)
+
+    assert cfg is not None
+    assert isinstance(cfg.speech_config, genai_types.SpeechConfig)
+    assert cfg.speech_config.language_code == 'de-DE'
+    assert cfg.speech_config.voice_config is not None
+    assert cfg.speech_config.voice_config.prebuilt_voice_config is not None
+    assert cfg.speech_config.voice_config.prebuilt_voice_config.voice_name == 'Kore'
+
+
+@pytest.mark.asyncio
+async def test_gemini_model__untyped_voice_config_field_reaches_sdk(
+    tts_model_instance: GeminiModel,
+) -> None:
+    """A nested field the SDK knows but the schema does not still reaches the SDK."""
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
+        config=GeminiTtsConfigSchema.model_validate({
+            'speechConfig': {'voiceConfig': {'replicatedVoiceConfig': {'mimeType': 'audio/wav'}}}
+        }),
+    )
+
+    cfg = await tts_model_instance._genkit_to_googleai_cfg(request)
+
+    assert cfg is not None
+    assert isinstance(cfg.speech_config, genai_types.SpeechConfig)
+    assert cfg.speech_config.voice_config is not None
+    assert cfg.speech_config.voice_config.replicated_voice_config is not None
+    assert cfg.speech_config.voice_config.replicated_voice_config.mime_type == 'audio/wav'

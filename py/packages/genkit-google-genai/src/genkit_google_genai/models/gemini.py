@@ -471,12 +471,6 @@ class SpeechConfigSchema(BaseModel):
     language_code: str | None = Field(None, alias='languageCode')
     multi_speaker_voice_config: MultiSpeakerVoiceConfigSchema | None = Field(None, alias='multiSpeakerVoiceConfig')
 
-    http_options: Any | None = Field(None, exclude=True)
-    tools: Any | None = Field(None, exclude=True)
-    tool_config: Any | None = Field(None, exclude=True)
-    response_schema: Any | None = Field(None, exclude=True)
-    response_json_schema: Any | None = Field(None, exclude=True)
-
 
 DEFAULT_TTS_VOICE_NAME = 'Kore'
 """Prebuilt voice sent when a TTS model that needs one gets a request naming no voice."""
