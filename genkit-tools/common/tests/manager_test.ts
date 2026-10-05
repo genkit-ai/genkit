@@ -33,6 +33,7 @@ import {
   secretForRuntime,
 } from '../src/manager/reflection-auth';
 import { RuntimeEvent, type RuntimeInfo } from '../src/manager/types';
+import { logger } from '../src/utils/logger';
 
 jest.mock('chokidar', () => ({
   watch: jest.fn().mockReturnValue({
@@ -155,6 +156,42 @@ describe('RuntimeManager reflection auth', () => {
     await mgr.listActions();
     expect(seenSecrets).toContain('cli-secret');
   });
+
+  it('does not log the secret from an invalid discovery file', async () => {
+    const errorSpy = jest
+      .spyOn(logger, 'error')
+      .mockImplementation(() => logger);
+    try {
+      // Missing required fields (pid, reflectionServerUrl, ...).
+      await withRuntimeFile({ id: 'rt-bad', reflectionSecret: 'top-secret' });
+      expect(errorSpy).toHaveBeenCalled();
+      expect(JSON.stringify(errorSpy.mock.calls)).not.toContain('top-secret');
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it('does not log the secret from a corrupt discovery file', async () => {
+    const errorSpy = jest
+      .spyOn(logger, 'error')
+      .mockImplementation(() => logger);
+    try {
+      const created = (await RuntimeManager.create({
+        projectRoot,
+        manageHealth: false,
+      })) as RuntimeManager;
+      manager = created;
+      const dir = path.join(projectRoot, '.genkit', 'runtimes');
+      await fs.mkdir(dir, { recursive: true });
+      const file = path.join(dir, 'corrupt.json');
+      await fs.writeFile(file, '{"reflectionSecret": "top-secret", "id": ');
+      await (created as any).handleNewRuntime(file);
+      expect(errorSpy).toHaveBeenCalled();
+      expect(JSON.stringify(errorSpy.mock.calls)).not.toContain('top-secret');
+    } finally {
+      errorSpy.mockRestore();
+    }
+  }, 15_000);
 
   it('explains a 401 from the runtime', async () => {
     const mgr = await withRuntimeFile(runtimeFile());

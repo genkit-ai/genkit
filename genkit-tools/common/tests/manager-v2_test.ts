@@ -24,7 +24,10 @@ import {
 } from '@jest/globals';
 import WebSocket from 'ws';
 import { RuntimeManagerV2 } from '../src/manager/manager-v2';
-import { REFLECTION_AUTH_ERROR_CODE } from '../src/manager/reflection-auth';
+import {
+  REFLECTION_AUTH_ERROR_CODE,
+  REFLECTION_SECRET_ENV,
+} from '../src/manager/reflection-auth';
 import { RuntimeEvent } from '../src/manager/types';
 
 describe('RuntimeManagerV2', () => {
@@ -603,6 +606,7 @@ describe('RuntimeManagerV2 reflection auth', () => {
     });
     expect(message.error.code).toBe(REFLECTION_AUTH_ERROR_CODE);
     expect(message.error.message).toContain('--experimental-auth');
+    expect(message.error.message).toContain(REFLECTION_SECRET_ENV);
     expect(closeCode).toBe(1008);
     expect(manager.listRuntimes()).toEqual([]);
   });

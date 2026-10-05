@@ -338,7 +338,7 @@ export class RuntimeManagerV2 extends BaseRuntimeManager {
             code: REFLECTION_AUTH_ERROR_CODE,
             message:
               failure === 'missing'
-                ? 'Reflection secret required. Upgrade Genkit, or restart the CLI without --experimental-auth.'
+                ? `Reflection secret required. Upgrade Genkit, or restart the CLI without --experimental-auth and with ${REFLECTION_SECRET_ENV} unset.`
                 : 'Invalid reflection secret.',
           },
           id: request.id,

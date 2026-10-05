@@ -886,7 +886,7 @@ export class RuntimeManager extends BaseRuntimeManager {
         // file already got deleted, ignore...
         return;
       }
-      const { content, runtimeInfo, reflectionSecret } = await retriable(
+      const { runtimeInfo, reflectionSecret } = await retriable(
         async () => {
           const content = await fs.readFile(filePath, 'utf-8');
           // Dev runtimes advertise the secret they enforce so any local CLI
@@ -896,7 +896,7 @@ export class RuntimeManager extends BaseRuntimeManager {
             content
           ) as RuntimeFileData;
           runtimeInfo.projectName = projectNameFromGenkitFilePath(filePath);
-          return { content, runtimeInfo, reflectionSecret };
+          return { runtimeInfo, reflectionSecret };
         },
         { maxRetries: 10, delayMs: 500 }
       );
@@ -947,10 +947,20 @@ export class RuntimeManager extends BaseRuntimeManager {
           await this.removeRuntime(fileName);
         }
       } else {
-        logger.error(`Unexpected file in the runtimes directory: ${content}`);
+        // Never log the raw file: it may carry reflectionSecret.
+        logger.error(
+          `Unexpected file in the runtimes directory: ${path.basename(filePath)} ` +
+            `(fields: ${Object.keys(runtimeInfo).join(', ') || 'none'})`
+        );
       }
     } catch (error) {
-      logger.error(`Error processing file ${filePath}:`, error);
+      // V8 quotes part of the input in JSON SyntaxErrors, which could expose
+      // the secret from a truncated or corrupt runtime file.
+      if (error instanceof SyntaxError) {
+        logger.error(`Error processing file ${filePath}: invalid JSON.`);
+      } else {
+        logger.error(`Error processing file ${filePath}:`, error);
+      }
     }
   }
 

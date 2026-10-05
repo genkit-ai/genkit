@@ -14,7 +14,9 @@
  * limitations under the License.
  */
 
+import type { BaseRuntimeManager } from '@genkit-ai/tools-common/manager';
 import { startServer } from '@genkit-ai/tools-common/server';
+import { logger } from '@genkit-ai/tools-common/utils';
 import {
   afterEach,
   beforeEach,
@@ -23,6 +25,9 @@ import {
   it,
   jest,
 } from '@jest/globals';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import { start } from '../../src/commands/start';
 import * as managerUtils from '../../src/utils/manager-utils';
 
@@ -32,6 +37,7 @@ jest.mock('@genkit-ai/tools-common/utils', () => ({
   logger: {
     warn: jest.fn(),
     error: jest.fn(),
+    info: jest.fn(),
   },
 }));
 jest.mock('get-port', () => ({
@@ -63,8 +69,11 @@ describe('start command', () => {
       .mockResolvedValue({} as any);
     startServerSpy = startServer as unknown as jest.Mock;
 
-    // Reset args
+    // Reset args and options; commander keeps them across parseAsync calls.
     start.args = [];
+    start.setOptionValue('experimentalAuth', undefined);
+    start.setOptionValue('writeEnvFile', undefined);
+    start.setOptionValue('noui', false);
   });
 
   afterEach(() => {
@@ -105,7 +114,7 @@ describe('start command', () => {
       reflectionV2Port: 3200,
       reflectionV2Host: undefined,
       telemetryServerUrl: 'http://localhost:4033',
-      auth: undefined,
+      auth: false,
       reflectionSecret: undefined,
     });
     expect(startDevProcessManagerSpy).not.toHaveBeenCalled();
@@ -148,4 +157,72 @@ describe('start command', () => {
       expect.objectContaining({ disableRealtimeTelemetry: true })
     );
   });
+
+  describe('--experimental-auth', () => {
+    it('generates a secret for a spawned runtime', async () => {
+      await start.parseAsync([
+        'node',
+        'genkit',
+        '--experimental-auth',
+        'run',
+        'app',
+      ]);
+
+      expect(managerUtils.getDevEnvVars).toHaveBeenCalledWith(
+        '/mock/root',
+        expect.objectContaining({ auth: true })
+      );
+      expect(logger.warn).not.toHaveBeenCalled();
+    });
+
+    it('generates a secret for --write-env-file', async () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'genkit-start-'));
+      const envFile = path.join(dir, '.env');
+      try {
+        startManagerSpy.mockImplementation(() =>
+          Promise.resolve({} as BaseRuntimeManager)
+        );
+        start.parseAsync([
+          'node',
+          'genkit',
+          '--noui',
+          '--experimental-auth',
+          '--write-env-file',
+          envFile,
+        ]);
+        await waitForCall(startManagerSpy);
+
+        expect(managerUtils.getDevEnvVars).toHaveBeenCalledWith(
+          '/mock/root',
+          expect.objectContaining({ auth: true })
+        );
+        expect(logger.warn).not.toHaveBeenCalled();
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('does not generate a secret nobody can receive, and warns', async () => {
+      start.parseAsync(['node', 'genkit', '--noui', '--experimental-auth']);
+      await waitForCall(startManagerSpy);
+
+      expect(managerUtils.getDevEnvVars).toHaveBeenCalledWith(
+        '/mock/root',
+        expect.objectContaining({ auth: false })
+      );
+      expect(startManagerSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ auth: false })
+      );
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('--experimental-auth has no effect')
+      );
+    });
+  });
 });
+
+/** Resolves once `spy` has been called (start never resolves without args). */
+async function waitForCall(spy: jest.Mock): Promise<void> {
+  for (let i = 0; i < 50 && spy.mock.calls.length === 0; i++) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+}
