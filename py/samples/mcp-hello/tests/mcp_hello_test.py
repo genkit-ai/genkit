@@ -137,6 +137,35 @@ async def test_browse_shelves_offers_every_tool_and_returns_a_structured_result(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('title', 'expected'),
+    [
+        ('piranesi', {'title': 'Piranesi', 'stocked': True, 'copies': 2}),
+        ('Dune', {'title': 'Dune', 'stocked': False, 'copies': 0}),
+    ],
+    ids=['wrong_case_hit', 'unknown_title_miss'],
+)
+async def test_check_stock_ignores_the_case_of_the_title(
+    monkeypatch: pytest.MonkeyPatch, title: str, expected: dict[str, object]
+) -> None:
+    """A wrong-case title finds the book in the catalogue's spelling; an unknown one keeps the caller's."""
+    sample = load_sample(monkeypatch)
+    pm = fake_model(sample, monkeypatch)
+    pm.responses = [
+        tool_call_response('bookshop_check_stock', {'title': title}),
+        text_response('noted'),
+    ]
+
+    try:
+        await sample.browse_shelves('fantasy')
+    finally:
+        await sample.client.close()
+
+    assert pm.last_request is not None
+    assert tool_output(pm.last_request) == expected
+
+
+@pytest.mark.asyncio
 async def test_browse_shelves_passes_tool_arguments_to_the_server(monkeypatch: pytest.MonkeyPatch) -> None:
     sample = load_sample(monkeypatch)
     pm = fake_model(sample, monkeypatch)
