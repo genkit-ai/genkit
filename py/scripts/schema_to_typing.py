@@ -56,9 +56,10 @@ TRANSFORMATIONS = {
 }
 
 # Per-field Python types that are stricter than the shared schema.
+# Override keys are the emitted class name and the schema property key.
 FIELD_TYPE_OVERRIDES = {
-    # The Dev UI and plugins pick how to ask for output from these words, so a
-    # typo or provider-specific word would silently hide a capability.
+    # These three words are the Dev UI output chips, not generate() format
+    # names. json_mode or a provider-specific word would hide a real chip.
     ('Supports', 'output'): "list[Literal['text', 'json', 'media']]",
 }
 
