@@ -1,4 +1,4 @@
-# Copyright 2025 Google LLC
+# Copyright 2026 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -79,7 +79,7 @@ class Tool:
 
     async def __call__(self, *args: Any, **kwargs: Any) -> MultipartToolResponse:  # noqa: ANN401
         """Run the tool and return the envelope (structured output plus optional media)."""
+        from genkit._ai._tools import as_multipart_tool_response  # noqa: PLC0415
+
         result = (await self._action.run(*args, **kwargs)).response
-        if isinstance(result, MultipartToolResponse):
-            return result
-        return MultipartToolResponse(output=result)
+        return as_multipart_tool_response(result, tool_name=self.name)

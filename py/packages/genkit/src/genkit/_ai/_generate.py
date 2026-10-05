@@ -41,7 +41,6 @@ from genkit._ai._model import (
 from genkit._ai._tools import (
     ORIGINAL_OUTPUT_SCHEMA_KEY,
     Interrupt,
-    Tool,
     as_multipart_tool_response,
     dump_tool_metadata,
     dump_tool_output,
@@ -91,6 +90,7 @@ from genkit._core._protocols import RegistryLike, SessionLike
 from genkit._core._registry import Registry
 from genkit._core._schema import check_output_schema
 from genkit._core._telemetry._instrumentation import SpanContext, run_in_new_span, set_span_state
+from genkit._core._tool import Tool
 from genkit._core._typing import (
     FinishReason,
     GenerateActionOutputConfig,

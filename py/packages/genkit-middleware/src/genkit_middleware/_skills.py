@@ -162,7 +162,7 @@ class Skills(BaseMiddleware[SkillsConfig]):
             except Exception as exc:
                 return f'Failed to read skill "{skill_name}": {exc}'
 
-        return [tool(use_skill)]
+        return [tool(use_skill, description='Load a skill by name.')]
 
     async def wrap_generate(
         self,
