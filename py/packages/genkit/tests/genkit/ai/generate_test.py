@@ -4356,43 +4356,39 @@ def _model_dies_after_hello_wor(ai: Genkit, name: str) -> None:
     ai.define_model(name=name, fn=model)
 
 
-@pytest.mark.asyncio
-async def test_generate_stream_fails_midway_ends_loop_with_empty_text() -> None:
-    """The model dies after two chunks; the loop ends normally and the final reply holds no half answer."""
+async def _run_dies_midway(surface: str) -> tuple[list[str] | None, ModelResponse[Any]]:
+    """Run the dies-after-'Hello, wor' model through one generate surface."""
     ai = Genkit(model='diesMidway')
     _model_dies_after_hello_wor(ai, 'diesMidway')
-
-    stream = ai.generate_stream(prompt='start')
-    chunks = [chunk async for chunk in stream]
-    response = await stream.response
-
-    assert [chunk.text for chunk in chunks] == ['Hello, ', 'wor']
-    assert response.finish_reason == FinishReason.FAILED
-    assert response.text == ''
-    assert response.message is None
-    assert response.output is None
-    assert [message.role for message in response.messages] == [Role.USER]
-    assert response.messages[0].text == 'start'
+    if surface == 'generate':
+        return None, await ai.generate(prompt='start')
+    if surface == 'generate_stream':
+        stream = ai.generate_stream(prompt='start')
+    else:
+        stream = ai.define_prompt(name='greet', prompt='start').stream()
+    chunks = [chunk.text async for chunk in stream]
+    return chunks, await stream.response
 
 
 @pytest.mark.asyncio
-async def test_generate_stream_fails_midway_sets_failed_and_error() -> None:
-    """A stream that dies partway reports FAILED with an INTERNAL error on the final response."""
-    ai = Genkit(model='diesMidway')
-    _model_dies_after_hello_wor(ai, 'diesMidway')
+@pytest.mark.parametrize('surface', ['generate_stream', 'prompt.stream', 'generate'])
+async def test_model_dies_midway_ends_failed_with_empty_reply(surface: str) -> None:
+    """The model dies after two chunks; each surface ends FAILED/INTERNAL with no half answer in history."""
+    chunks, response = await _run_dies_midway(surface)
 
-    stream = ai.generate_stream(prompt='start')
-    _ = [chunk async for chunk in stream]
-    response = await stream.response
-
+    if chunks is not None:
+        assert chunks == ['Hello, ', 'wor']
     assert response.finish_reason == FinishReason.FAILED
     assert response.finish_message == 'internal error'
     assert response.error is not None
     assert response.error.status == 'INTERNAL'
     assert response.error.reason is None
     assert response.error.message == response.finish_message
+    assert response.text == ''
     assert response.message is None
+    assert response.output is None
     assert [message.role for message in response.messages] == [Role.USER]
+    assert response.messages[0].text == 'start'
 
 
 @pytest.mark.asyncio
@@ -4470,46 +4466,6 @@ async def test_generate_stream_fails_after_tool_turn_keeps_closed_round() -> Non
     assert response.messages[-1].role == Role.TOOL
     assert model_calls == 2
     assert tool_calls == 1
-
-
-@pytest.mark.asyncio
-async def test_prompt_stream_fails_midway_ends_loop_with_empty_text() -> None:
-    """prompt.stream() ends the same way as ai.generate_stream when the model dies partway."""
-    ai = Genkit(model='diesMidway')
-    _model_dies_after_hello_wor(ai, 'diesMidway')
-    greet = ai.define_prompt(name='greet', prompt='start')
-
-    stream = greet.stream()
-    chunks = [chunk async for chunk in stream]
-    response = await stream.response
-
-    assert [chunk.text for chunk in chunks] == ['Hello, ', 'wor']
-    assert response.finish_reason == FinishReason.FAILED
-    assert response.error is not None
-    assert response.error.status == 'INTERNAL'
-    assert response.text == ''
-    assert response.message is None
-    assert response.output is None
-    assert [message.role for message in response.messages] == [Role.USER]
-    assert response.messages[0].text == 'start'
-
-
-@pytest.mark.asyncio
-async def test_generate_fails_midway_without_streaming_has_empty_text() -> None:
-    """ai.generate with the same mid-reply failure gives the same empty final reply as the stream."""
-    ai = Genkit(model='diesMidway')
-    _model_dies_after_hello_wor(ai, 'diesMidway')
-
-    response = await ai.generate(prompt='start')
-
-    assert response.finish_reason == FinishReason.FAILED
-    assert response.error is not None
-    assert response.error.status == 'INTERNAL'
-    assert response.text == ''
-    assert response.message is None
-    assert response.output is None
-    assert [message.role for message in response.messages] == [Role.USER]
-    assert response.messages[0].text == 'start'
 
 
 def test_generate_stream_does_not_accept_timeout() -> None:
