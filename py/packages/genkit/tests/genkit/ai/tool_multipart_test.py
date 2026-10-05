@@ -55,8 +55,6 @@ def test_response_data_and_reasoning_parts_are_live() -> None:
     assert parts_to_wire(data.content) == [{'data': {'rows': [1]}}]
     thought = response({'ok': True}, parts=[Part.from_reasoning('checking the label')])
     assert parts_to_wire(thought.content) == [{'reasoning': 'checking the label'}]
-    res = response({'ok': True}, parts=[Part.model_validate({'resource': {'uri': 'file://shot.png'}})])
-    assert parts_to_wire(res.content) == [{'resource': {'uri': 'file://shot.png'}}]
 
 
 def test_response_rejects_hollow_parts() -> None:

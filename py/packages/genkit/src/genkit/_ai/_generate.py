@@ -705,6 +705,12 @@ async def run_generate(
             message=f'max turns cannot be negative, got {options.max_turns}',
             reason=RuntimeErrorReason.INVALID_INPUT,
         )
+    if options.resources:
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message="resources= isn't supported yet",
+            reason=RuntimeErrorReason.INVALID_INPUT,
+        )
     registry = registry if registry.is_child else registry.new_child()
 
     if options.tools:

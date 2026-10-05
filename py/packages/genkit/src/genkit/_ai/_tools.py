@@ -148,9 +148,6 @@ def wire_part_is_live(dumped: dict[str, Any]) -> bool:
         return True
     if isinstance(dumped.get('reasoning'), str):
         return True
-    resource = dumped.get('resource')
-    if isinstance(resource, dict) and _usable_locator(resource.get('uri')):
-        return True
     tool_request = dumped.get('toolRequest')
     if isinstance(tool_request, dict) and _usable_locator(tool_request.get('name')):
         return True

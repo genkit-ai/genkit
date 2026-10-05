@@ -403,7 +403,6 @@ class CustomPart(GenkitModel):
     metadata: Metadata | None = None
     custom: Custom = Field(...)
     reasoning: Any | None = Field(default=None)
-    resource: Any | None = Field(default=None)
 
 
 class DataPart(GenkitModel):
@@ -418,7 +417,6 @@ class DataPart(GenkitModel):
     metadata: Metadata | None = None
     custom: Custom | None = None
     reasoning: Any | None = Field(default=None)
-    resource: Any | None = Field(default=None)
 
 
 class GenerateActionOptionsData(GenkitModel):
@@ -508,7 +506,6 @@ class MediaPart(GenkitModel):
     metadata: Metadata | None = None
     custom: Custom | None = None
     reasoning: Any | None = Field(default=None)
-    resource: Any | None = Field(default=None)
 
 
 class MessageData(GenkitModel):
@@ -595,22 +592,6 @@ class ReasoningPart(GenkitModel):
     metadata: Metadata | None = None
     custom: Custom | None = None
     reasoning: str = Field(...)
-    resource: Any | None = Field(default=None)
-
-
-class ResourcePart(GenkitModel):
-    """Model for resourcepart data."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
-    text: Any | None = Field(default=None)
-    media: Any | None = Field(default=None)
-    tool_request: Any | None = Field(default=None)
-    tool_response: Any | None = Field(default=None)
-    data: Any | None = Field(default=None)
-    metadata: Metadata | None = None
-    custom: Custom | None = None
-    reasoning: Any | None = Field(default=None)
-    resource: Resource = Field(...)
 
 
 class TextPart(GenkitModel):
@@ -625,7 +606,6 @@ class TextPart(GenkitModel):
     metadata: Metadata | None = None
     custom: Custom | None = None
     reasoning: Any | None = Field(default=None)
-    resource: Any | None = Field(default=None)
 
 
 class ToolDefinition(GenkitModel):
@@ -656,7 +636,6 @@ class ToolRequestPart(GenkitModel):
     metadata: Metadata | None = None
     custom: Custom | None = None
     reasoning: Any | None = Field(default=None)
-    resource: Any | None = Field(default=None)
 
 
 class ToolResponsePart(GenkitModel):
@@ -671,7 +650,6 @@ class ToolResponsePart(GenkitModel):
     metadata: Metadata | None = None
     custom: Custom | None = None
     reasoning: Any | None = Field(default=None)
-    resource: Any | None = Field(default=None)
 
 
 class Media(GenkitModel):
@@ -1053,9 +1031,7 @@ Spans = dict[str, SpanData]  # type alias for spans (typed string map)
 
 
 class PartData(
-    RootModel[
-        TextPart | MediaPart | ToolRequestPart | ToolResponsePart | DataPart | CustomPart | ReasoningPart | ResourcePart
-    ]
+    RootModel[TextPart | MediaPart | ToolRequestPart | ToolResponsePart | DataPart | CustomPart | ReasoningPart]
 ):
     """A single piece of content in a message or document."""
 

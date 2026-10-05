@@ -24,7 +24,7 @@ from genkit._ai._testing import (
     define_echo_model,
     define_programmable_model,
 )
-from genkit._ai._tools import Interrupt, ToolRunContext, define_tool, restart_tool
+from genkit._ai._tools import Interrupt, ToolRunContext, define_tool, response as tool_response, restart_tool
 from genkit._core._action import ActionRunContext
 from genkit._core._error import GenkitError, PublicError, RuntimeErrorReason
 from genkit._core._model import GenerateActionOptions, ModelRequest, Resume
@@ -6923,3 +6923,78 @@ async def test_generate_json_format_with_tool_call_validates_only_final_turn() -
     assert response.error is None
     assert response.output == {'result': 'special ingredient'}
     assert response.messages[-1].text == '{"result": "special ingredient"}'
+
+
+@pytest.mark.asyncio
+async def test_tool_returning_resource_part_fails_generate() -> None:
+    """A tool that returns a resource part fails the generate call."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+
+    @ai.tool(name='notes')
+    async def notes() -> MultipartToolResponse:
+        return tool_response({'ok': True}, parts=[Part.model_validate({'resource': {'uri': 'file://notes.txt'}})])
+
+    pm.responses = [_model_calls_tool(name='notes', ref='r1')]
+    response = await ai.generate(prompt='load notes', tools=['notes'])
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.error is not None
+    assert response.error.reason is RuntimeErrorReason.TOOL_FAILED
+    assert response.message is None
+    assert [message.role for message in response.messages] == [Role.USER]
+
+
+@pytest.mark.asyncio
+async def test_generate_action_resource_part_in_wire_message_raises() -> None:
+    """A resource part in a Dev UI / generate-action wire message raises."""
+    with pytest.raises(ValidationError):
+        GenerateActionOptions.model_validate({
+            'model': 'echoModel',
+            'messages': [
+                {
+                    'role': 'user',
+                    'content': [
+                        {'text': 'summarize'},
+                        {'resource': {'uri': 'file:///notes.txt'}},
+                    ],
+                }
+            ],
+        })
+
+
+@pytest.mark.asyncio
+async def test_generate_action_resources_list_raises_invalid_argument() -> None:
+    """The generate action called with `resources=['notes']` raises `INVALID_ARGUMENT`."""
+    ai = Genkit(model='echoModel')
+    echo, _ = define_echo_model(ai)
+    with pytest.raises(GenkitError, match="resources= isn't supported yet") as raised:
+        await generate_action(
+            ai.registry,
+            GenerateActionOptions(
+                model='echoModel',
+                messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
+                resources=['notes'],
+            ),
+        )
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    assert raised.value.reason is RuntimeErrorReason.INVALID_INPUT
+    assert echo.last_request is None
+
+
+@pytest.mark.asyncio
+async def test_generate_action_empty_resources_list_runs() -> None:
+    """The generate action called with `resources=[]` runs (Dev UI default)."""
+    ai = Genkit(model='echoModel')
+    echo, _ = define_echo_model(ai)
+    response = await generate_action(
+        ai.registry,
+        GenerateActionOptions(
+            model='echoModel',
+            messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
+            resources=[],
+        ),
+    )
+    assert response.error is None
+    assert response.message is not None
+    assert echo.last_request is not None
+    assert echo.last_request.messages[0].text == 'hi'

@@ -65,7 +65,6 @@ from genkit._core._typing import (
     Operation,
     OutputConfig as OutputConfigData,
     PartData,
-    Resource,
     Resume as ResumeData,
     Role,
     SnapshotStatus,
@@ -239,7 +238,8 @@ class ModelRef(Generic[ModelRefConfigT]):
 # exclusive kinds is a validation error so a Message never carries an
 # ambiguous part the model would have to guess at. A wire part with no
 # kind (empty or metadata-only) is dropped when reading a message so a
-# junk {} doesn't fail generate. Constructing Part() with no kind still
+# junk {} doesn't fail generate. A key that isn't a kind raises so a
+# resource or typo can't disappear. Constructing Part() with no kind still
 # raises. JSON null is a real data payload, so data: null is a data part.
 PART_KIND_KEYS = frozenset({
     'text',
@@ -249,7 +249,6 @@ PART_KIND_KEYS = frozenset({
     'toolResponse',
     'tool_response',
     'reasoning',
-    'resource',
     'data',
 })
 PART_KIND_FIELDS = (
@@ -258,16 +257,14 @@ PART_KIND_FIELDS = (
     'tool_request',
     'tool_response',
     'reasoning',
-    'resource',
     'data',
 )
 PART_KIND_ALIASES = {
     'tool_request': 'toolRequest',
     'tool_response': 'toolResponse',
 }
-EXACTLY_ONE_KIND = (
-    'a part must have exactly one of text, media, toolRequest, toolResponse, reasoning, resource, data, or custom'
-)
+PART_KNOWN_WIRE_KEYS = PART_KIND_KEYS | {'custom', 'metadata'}
+EXACTLY_ONE_KIND = 'a part must have exactly one of text, media, toolRequest, toolResponse, reasoning, data, or custom'
 
 
 def present_part_kinds(raw: dict[str, object]) -> list[str]:
@@ -309,7 +306,6 @@ class Part(GenkitModel):
     metadata: dict[str, Any] | None = None
     custom: dict[str, Any] | None = None
     reasoning: str | None = None
-    resource: Resource | None = None
 
     @model_validator(mode='before')
     @classmethod
@@ -430,6 +426,8 @@ def inbound_part_is_empty(value: object) -> bool:
     elif isinstance(value, BaseModel):
         raw = dump_keeping_unknown(value)
     else:
+        return False
+    if any(key not in PART_KNOWN_WIRE_KEYS for key in raw):
         return False
     return not present_part_kinds(raw) and raw.get('custom') is None
 

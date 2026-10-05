@@ -65,7 +65,6 @@ from genkit._core._typing import (
     MessageData,
     ModelResponseChunk as ModelResponseChunkData,
     PartData,
-    Resource,
     Resume as ResumeData,
     TextPart,
 )
@@ -80,7 +79,6 @@ _PART_OF = {
     'tool_request': lambda: Part.from_tool_request(name='lookup'),
     'tool_response': lambda: Part.from_tool_response(name='lookup'),
     'reasoning': lambda: Part.from_reasoning('think'),
-    'resource': lambda: Part.model_validate({'resource': {'uri': 'file://x'}}),
     'data': lambda: Part.from_data({'payload': 1}),
     'custom': lambda: Part.from_custom({'vendor': True}),
 }
@@ -90,7 +88,6 @@ _KIND_VALUE = {
     'tool_request': ToolRequest(name='other'),
     'tool_response': ToolResponse(name='other'),
     'reasoning': 'other think',
-    'resource': Resource(uri='file://y'),
     'data': {'payload': 2},
     'custom': {'vendor': False},
 }
@@ -465,11 +462,17 @@ def test_message_drops_empty_inbound_parts_and_keeps_the_rest() -> None:
     assert msg.content[0].text == 'hello'
 
 
-def test_message_drops_metadata_only_inbound_part() -> None:
+def test_message_metadata_only_part_still_dropped() -> None:
     """A metadata-only inbound part has no kind, so it is dropped."""
     msg = Message(role='model', content=[{'metadata': {'src': 'gemini'}}, {'text': 'hello'}])
     assert len(msg.content) == 1
     assert msg.content[0].text == 'hello'
+
+
+def test_message_unknown_key_part_raises_validation_error() -> None:
+    """A part with an unrecognized key next to a text part raises instead of being dropped."""
+    with pytest.raises(ValidationError):
+        Message(role='user', content=[{'text': 'hello'}, {'foo': 1}])
 
 
 def test_model_response_with_only_empty_parts_loads() -> None:
@@ -803,10 +806,25 @@ def test_message_text_skips_reasoning_and_media() -> None:
     assert msg.text == 'hello'
 
 
-def test_resource_wire_part_has_no_public_getters() -> None:
-    p = Part.model_validate({'resource': {'uri': 'test://x'}})
-    for name in _GETTERS:
-        assert getattr(p, name) is None
+def test_part_resource_raises_validation_error() -> None:
+    """A resource key is not a Part kind, so constructing that part raises."""
+    with pytest.raises(ValidationError):
+        Part.model_validate({'resource': {'uri': 'file://x'}})
+
+
+def test_message_with_resource_part_raises_validation_error() -> None:
+    """A resource part inside a Message raises instead of disappearing."""
+    with pytest.raises(ValidationError):
+        Message(
+            role='user',
+            content=[{'text': 'summarize'}, {'resource': {'uri': 'file:///notes.txt'}}],
+        )
+
+
+def test_document_with_resource_part_raises_validation_error() -> None:
+    """A resource part inside a Document raises instead of disappearing."""
+    with pytest.raises(ValidationError):
+        Document(content=[{'text': 'notes'}, {'resource': {'uri': 'file:///notes.txt'}}])
 
 
 def test_response_request_keeps_typed_config() -> None:
