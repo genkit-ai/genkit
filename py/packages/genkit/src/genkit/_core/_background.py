@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
+from functools import wraps
 from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel
@@ -55,6 +56,44 @@ def stamp_operation_action(*, operation: Operation, name: str) -> None:
     if operation.action:
         return
     operation.action = _make_action_key(ActionKind.BACKGROUND_MODEL, name)
+
+
+def _operation_action(
+    *,
+    kind: ActionKind,
+    name: str,
+    fn: Callable[..., Awaitable[Operation]],
+    model_name: str,
+    description: str,
+    metadata: dict[str, object],
+    config_schema: type[BaseModel] | dict[str, Any] | None = None,
+) -> Action:
+    """An Action for start/check/cancel that stamps the returned Operation.
+
+    ``fn``'s signature is still the Action's (``metadata_fn``), so
+    ``(ctx, request)`` and ``(request, ctx)`` both work: the wrapper forwards
+    through ``params.call``. The stamp is the start action key, so a caller
+    who passes the Operation back reaches the right check/cancel.
+    """
+
+    # wraps keeps fn's annotations on the wrapper, e.g. ModelRequest[VeoConfig].
+    @wraps(fn)
+    async def run_and_stamp(input: object, ctx: ActionRunContext) -> Operation:  # noqa: A002
+        op = await action.params.call(fn, input, ctx)
+        if isinstance(op, Operation):
+            stamp_operation_action(operation=op, name=model_name)
+        return op
+
+    action = Action(
+        kind=kind,
+        name=name,
+        fn=run_and_stamp,
+        metadata_fn=fn,
+        metadata=metadata,
+        description=description,
+        config_schema=config_schema,
+    )
+    return action
 
 
 StartModelOpFn = Callable[[ModelRequest, ActionRunContext], Awaitable[Operation]]
@@ -278,29 +317,32 @@ def background_model(
     output_schema_meta = to_json_schema(ModelResponse)
     model_meta['outputSchema'] = output_schema_meta
 
-    start_action = Action(
+    start_action = _operation_action(
         kind=ActionKind.BACKGROUND_MODEL,
         name=name,
         fn=start,
+        model_name=name,
         metadata=model_meta,
         description=description or f'Background model: {label}',
         config_schema=config_schema,
     )
 
-    check_action = Action(
+    check_action = _operation_action(
         kind=ActionKind.CHECK_OPERATION,
         name=f'{name}/check',
         fn=check,
+        model_name=name,
         metadata={'outputSchema': output_schema_meta},
         description=f'Check operation status for {label}',
     )
 
     cancel_action = None
     if cancel is not None:
-        cancel_action = Action(
+        cancel_action = _operation_action(
             kind=ActionKind.CANCEL_OPERATION,
             name=f'{name}/cancel',
             fn=cancel,
+            model_name=name,
             metadata={'outputSchema': output_schema_meta},
             description=f'Cancel operation for {label}',
         )

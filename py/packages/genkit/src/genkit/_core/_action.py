@@ -53,7 +53,6 @@ from genkit._core._telemetry._instrumentation import (
     run_in_new_span,
     to_json_attr,
 )
-from genkit._core._typing import Operation
 
 # =============================================================================
 # Span attribute types and tracing helpers
@@ -577,25 +576,6 @@ def parse_action_key(key: str) -> tuple[ActionKind, str]:
 def create_action_key(kind: ActionKind | str, name: str) -> str:
     """Create '/<kind>/<name>' key."""
     return f'/{kind}/{name}'
-
-
-def stamp_background_operation(*, output: object, kind: ActionKind, name: str) -> None:
-    """Point an Operation from a background model's start/check/cancel at its start action.
-
-    A caller polls by passing the Operation back, and Genkit finds the check
-    action from ``op.action``. For a model named 'veo', start ('veo'), check
-    ('veo/check') and cancel ('veo/cancel') all stamp '/background-model/veo'.
-    A value the function already set is kept.
-    """
-    if not isinstance(output, Operation) or output.action:
-        return
-    if kind == ActionKind.BACKGROUND_MODEL:
-        model_name = name
-    elif kind in (ActionKind.CHECK_OPERATION, ActionKind.CANCEL_OPERATION):
-        model_name = name.rsplit('/', 1)[0]  # 'veo/check' -> 'veo'
-    else:
-        return
-    output.action = create_action_key(ActionKind.BACKGROUND_MODEL, model_name)
 
 
 # =============================================================================
@@ -1124,7 +1104,6 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             output = await self._fn(input, ctx)
         else:
             output = await self._params.call(self._fn, input, ctx)
-        stamp_background_operation(output=output, kind=self._kind, name=self._name)
         return output
 
 
