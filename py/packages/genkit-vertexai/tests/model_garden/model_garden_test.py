@@ -44,14 +44,13 @@ def model_garden_instance(client: MagicMock) -> ModelGardenModel:
                 'supports': {
                     'constrained': None,
                     'content_type': None,
-                    'context': None,
                     'long_running': False,
                     'multiturn': True,
                     'media': False,
                     'tools': True,
                     'system_role': True,
                     'output': [
-                        'json_mode',
+                        'json',
                         'text',
                     ],
                     'tool_choice': None,
@@ -65,14 +64,13 @@ def model_garden_instance(client: MagicMock) -> ModelGardenModel:
                 'supports': {
                     'constrained': None,
                     'content_type': None,
-                    'context': None,
                     'long_running': None,
                     'multiturn': True,
                     'media': True,
                     'tools': True,
                     'system_role': True,
                     'output': [
-                        'json_mode',
+                        'json',
                         'text',
                     ],
                     'tool_choice': None,

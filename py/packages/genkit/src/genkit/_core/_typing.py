@@ -988,9 +988,8 @@ class Supports(GenkitModel):
     media: bool | None = None
     tools: bool | None = None
     system_role: bool | None = None
-    output: list[str] | None = None
+    output: list[Literal['text', 'json', 'media']] | None = None
     content_type: list[str] | None = None
-    context: bool | None = None
     constrained: Constrained | None = None
     tool_choice: bool | None = None
     long_running: bool | None = None

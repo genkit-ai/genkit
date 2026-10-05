@@ -21,7 +21,6 @@ from typing import Literal, TypeAlias
 
 from genkit._core._compat import StrEnum
 from genkit.model import ModelInfo, Supports
-from genkit_openai.typing import SupportedOutputFormat
 
 OPENAI = 'openai'
 MODEL_GARDEN = 'model-garden'
@@ -39,7 +38,7 @@ MULTIMODAL_MODEL_SUPPORTS = Supports(
     media=True,
     tools=True,
     system_role=True,
-    output=[SupportedOutputFormat.JSON_MODE, SupportedOutputFormat.STRUCTURED_OUTPUTS, SupportedOutputFormat.TEXT],
+    output=['json', 'text'],
 )
 
 GPT_4_MODEL_SUPPORTS = Supports(
@@ -47,7 +46,7 @@ GPT_4_MODEL_SUPPORTS = Supports(
     media=False,
     tools=True,
     system_role=True,
-    output=[SupportedOutputFormat.TEXT],
+    output=['text'],
 )
 
 GPT_35_MODEL_SUPPORTS = Supports(
@@ -55,7 +54,7 @@ GPT_35_MODEL_SUPPORTS = Supports(
     media=False,
     tools=True,
     system_role=True,
-    output=[SupportedOutputFormat.JSON_MODE, SupportedOutputFormat.TEXT],
+    output=['json', 'text'],
 )
 
 O_SERIES_MODEL_SUPPORTS = Supports(
@@ -63,7 +62,7 @@ O_SERIES_MODEL_SUPPORTS = Supports(
     media=True,
     tools=True,
     system_role=False,
-    output=[SupportedOutputFormat.JSON_MODE, SupportedOutputFormat.TEXT],
+    output=['json', 'text'],
 )
 
 GPT_5_MODEL_SUPPORTS = Supports(
@@ -71,7 +70,7 @@ GPT_5_MODEL_SUPPORTS = Supports(
     media=True,
     tools=True,
     system_role=True,
-    output=[SupportedOutputFormat.JSON_MODE, SupportedOutputFormat.TEXT],
+    output=['json', 'text'],
 )
 
 GPT_OSS_MODEL_SUPPORTS = Supports(
@@ -79,7 +78,7 @@ GPT_OSS_MODEL_SUPPORTS = Supports(
     media=False,
     tools=True,
     system_role=True,
-    output=[SupportedOutputFormat.JSON_MODE, SupportedOutputFormat.TEXT],
+    output=['json', 'text'],
 )
 
 LLAMA_3_1 = 'meta/llama-3.1-405b-instruct-maas'
@@ -159,7 +158,7 @@ SUPPORTED_OPENAI_MODELS: dict[KnownGpt, ModelInfo] = {
             media=False,
             tools=True,
             system_role=False,
-            output=[SupportedOutputFormat.JSON_MODE, SupportedOutputFormat.TEXT],
+            output=['json', 'text'],
         ),
     ),
     'o4-mini': ModelInfo(label='OpenAI - o4-mini', supports=O_SERIES_MODEL_SUPPORTS),
@@ -174,7 +173,7 @@ SUPPORTED_OPENAI_MODELS: dict[KnownGpt, ModelInfo] = {
             media=True,
             tools=False,
             system_role=True,
-            output=[SupportedOutputFormat.TEXT],
+            output=['text'],
         ),
     ),
     'gpt-5.1': ModelInfo(label='OpenAI - gpt-5.1', supports=GPT_5_MODEL_SUPPORTS),
@@ -189,7 +188,7 @@ SUPPORTED_OPENAI_MODELS: dict[KnownGpt, ModelInfo] = {
             media=True,
             tools=False,
             system_role=True,
-            output=[SupportedOutputFormat.JSON_MODE, SupportedOutputFormat.TEXT],
+            output=['json', 'text'],
         ),
     ),
     # --- OSS models (hosted) ---
@@ -224,7 +223,7 @@ SUPPORTED_OPENAI_COMPAT_MODELS: dict[str, ModelInfo] = {
             tools=True,
             system_role=True,
             long_running=False,
-            output=[SupportedOutputFormat.JSON_MODE, SupportedOutputFormat.TEXT],
+            output=['json', 'text'],
         ),
     ),
     LLAMA_3_2: ModelInfo(
@@ -234,7 +233,7 @@ SUPPORTED_OPENAI_COMPAT_MODELS: dict[str, ModelInfo] = {
             media=True,
             tools=True,
             system_role=True,
-            output=[SupportedOutputFormat.JSON_MODE, SupportedOutputFormat.TEXT],
+            output=['json', 'text'],
         ),
     ),
 }
@@ -245,7 +244,7 @@ DEFAULT_SUPPORTS = Supports(
     media=True,
     tools=True,
     system_role=True,
-    output=[SupportedOutputFormat.JSON_MODE, SupportedOutputFormat.TEXT],
+    output=['json', 'text'],
 )
 
 

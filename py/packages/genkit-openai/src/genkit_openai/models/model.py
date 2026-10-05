@@ -37,7 +37,7 @@ from genkit_openai.models.utils import (
     reraise_openai_error,
     strip_markdown_fences,
 )
-from genkit_openai.typing import OpenAIConfig, SupportedOutputFormat
+from genkit_openai.typing import OpenAIConfig
 
 logger = structlog.get_logger(__name__)
 
@@ -351,7 +351,7 @@ class OpenAIModel:
             # the provider reject it if that model cannot do it.
             if model is None:
                 return {'type': 'json_object'}
-            if model.supports and model.supports.output and SupportedOutputFormat.JSON_MODE in model.supports.output:
+            if model.supports and model.supports.output and 'json' in model.supports.output:
                 return {'type': 'json_object'}
 
         return {'type': 'text'}

@@ -27,11 +27,11 @@ import httpx
 import pytest
 from genkit_openai.models.model_info import SUPPORTED_OPENAI_MODELS
 from genkit_openai.openai_plugin import OpenAI, openai_model
-from genkit_openai.typing import SupportedOutputFormat
 from openai import APIStatusError, APITimeoutError
 from openai.types import Model
+from openai.types.chat import ChatCompletion
 
-from genkit import Document, GenkitError
+from genkit import Document, Genkit, GenkitError
 from genkit.embedder import EmbedRequest, EmbedResponse
 from genkit.model import Supports
 from genkit.plugin_api import ActionKind, ActionMetadata, loop_local_client
@@ -89,7 +89,7 @@ GPT_6_ASTRA_SUPPORTS = {
     'media': True,
     'tools': False,
     'systemRole': True,
-    'output': [SupportedOutputFormat.JSON_MODE, SupportedOutputFormat.TEXT],
+    'output': ['json', 'text'],
 }
 
 
@@ -103,7 +103,7 @@ def test_gpt_6_astra_catalog_entry() -> None:
         media=True,
         tools=False,
         system_role=True,
-        output=[SupportedOutputFormat.JSON_MODE, SupportedOutputFormat.TEXT],
+        output=['json', 'text'],
     )
 
 
@@ -122,6 +122,61 @@ async def test_gpt_6_astra_registered_without_tools() -> None:
         model_meta = cast(dict[str, Any], action.metadata['model'])
         assert model_meta['label'] == 'OpenAI - gpt-6-astra'
         assert model_meta['supports'] == GPT_6_ASTRA_SUPPORTS
+
+
+@pytest.mark.asyncio
+async def test_openai_json_capable_model_lists_json_output() -> None:
+    """`openai/gpt-4o` model info lists `output == ['json', 'text']`."""
+    plugin = OpenAI(api_key='test-key')
+
+    action = await plugin.resolve(ActionKind.MODEL, 'openai/gpt-4o')
+
+    assert action is not None
+    assert action.metadata is not None
+    model_meta = cast(dict[str, Any], action.metadata['model'])
+    assert model_meta['supports']['output'] == ['json', 'text']
+
+
+def _completion_client(content: str) -> MagicMock:
+    """Create a stub client whose chat completion returns one message."""
+    completion = ChatCompletion.model_validate({
+        'id': '1',
+        'object': 'chat.completion',
+        'created': 1,
+        'model': 'stub',
+        'choices': [
+            {'index': 0, 'message': {'role': 'assistant', 'content': content}, 'finish_reason': 'stop'},
+        ],
+    })
+    client = MagicMock()
+    client.chat.completions.create = AsyncMock(return_value=completion)
+    return client
+
+
+@pytest.mark.asyncio
+async def test_openai_generate_json_without_schema_sends_json_object() -> None:
+    """A JSON request with no schema to a JSON-capable model still sends `response_format={'type': 'json_object'}`."""
+    plugin = OpenAI(api_key='test-key')
+    client = _completion_client('{"ok": true}')
+    plugin._runtime_client = lambda: client
+    ai = Genkit(plugins=[plugin])
+
+    await ai.generate(model='openai/gpt-4o', prompt='hi', output_format='json')
+
+    assert client.chat.completions.create.call_args.kwargs['response_format'] == {'type': 'json_object'}
+
+
+@pytest.mark.asyncio
+async def test_openai_generate_json_on_text_only_model_sends_text() -> None:
+    """Control: a JSON request to a text-only model (`gpt-4`) still sends `{'type': 'text'}`."""
+    plugin = OpenAI(api_key='test-key')
+    client = _completion_client('{"ok": true}')
+    plugin._runtime_client = lambda: client
+    ai = Genkit(plugins=[plugin])
+
+    await ai.generate(model='openai/gpt-4', prompt='hi', output_format='json')
+
+    assert client.chat.completions.create.call_args.kwargs['response_format'] == {'type': 'text'}
 
 
 @pytest.mark.asyncio

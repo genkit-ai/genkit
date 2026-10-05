@@ -50,6 +50,16 @@ TRANSFORMATIONS = {
     # Documents take the same Part as messages. The schema names a
     # text|media subset; we do not emit a second type for that.
     'DocumentPart': {'output_name': 'PartData'},
+    # Nothing in Python reads supports.context, and a model author who set it
+    # would expect it to change how docs reach the model.
+    'Supports': {'omit': ['context']},
+}
+
+# Per-field Python types that are stricter than the shared schema.
+FIELD_TYPE_OVERRIDES = {
+    # The Dev UI and plugins pick how to ask for output from these words, so a
+    # typo or provider-specific word would silently hide a capability.
+    ('Supports', 'output'): "list[Literal['text', 'json', 'media']]",
 }
 
 
@@ -341,6 +351,7 @@ def _emit_model(
             py_type_str = 'dict[str, Any]'
         if name == 'MessageData' and k == 'role':
             py_type_str = 'Role | str'
+        py_type_str = FIELD_TYPE_OVERRIDES.get((name, k), py_type_str)
         desc = v.get('description')
         desc_extra = f', description={repr(desc)}' if desc else ''
         if k in req:
