@@ -545,8 +545,12 @@ class BedrockEmbedder:
             for task in tasks:
                 task.cancel()
             # Same reason as below: retrieve the outcomes before letting the
-            # cancellation through.
-            await asyncio.gather(*tasks, return_exceptions=True)
+            # cancellation through. A second cancel can land on this gather,
+            # so swallow it and let the original exception surface.
+            try:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            except BaseException:  # noqa: S110
+                pass
             raise
         for task in pending:
             # Without this the rest of the batch still bills one call each.
