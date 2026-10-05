@@ -4956,6 +4956,60 @@ async def test_generate_cancelled_during_a_later_turn_stops_calling_the_model() 
     await _assert_no_extra_tasks(before)
 
 
+def test_generate_system_exit_on_a_later_turn_unwinds_middleware_before_the_loop_exits() -> None:
+    """SystemExit from the model on turn 2 unwinds through middleware and the caller in order.
+
+    asyncio re-raises SystemExit out of the loop instead of into the awaiting task.
+    Without carrying it back across each hop, outer frames would only see
+    CancelledError when asyncio.run shuts down.
+    """
+    seen: list[str] = []
+
+    class RecordExit(BaseMiddleware):
+        async def wrap_generate(
+            self,
+            params: GenerateHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ) -> ModelResponse:
+            try:
+                return await next_fn(params, ctx)
+            except BaseException as exc:
+                seen.append(f'middleware:{type(exc).__name__}')
+                raise
+
+    async def main() -> None:
+        ai = Genkit(model='exitOnTurn2Model')
+        model_calls = 0
+
+        @ai.tool(name='step')
+        async def step() -> str:
+            return 'ok'
+
+        async def exit_on_turn_2(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+            nonlocal model_calls
+            model_calls += 1
+            if model_calls == 1:
+                return _model_calls_tool(name='step', ref='r1')
+            raise SystemExit(3)
+
+        ai.define_model(name='exitOnTurn2Model', fn=exit_on_turn_2)
+        try:
+            await ai.generate(prompt='go', tools=['step'], use=[RecordExit()])
+        except BaseException as exc:
+            seen.append(f'caller:{type(exc).__name__}')
+            raise
+
+    with pytest.raises(SystemExit) as raised:
+        asyncio.run(main())
+
+    assert raised.value.code == 3
+    assert seen
+    assert seen[-1] == 'caller:SystemExit'
+    assert all(entry.endswith(':SystemExit') for entry in seen)
+    assert 'middleware:SystemExit' in seen
+
+
 @pytest.mark.asyncio
 async def test_generate_with_400_middleware_returns_the_model_text() -> None:
     """ai.generate with 400 middleware returns the model text, and the outer wrap sees it after next."""

@@ -386,13 +386,24 @@ async def hop(*, body: Awaitable[T]) -> T:
 
     The child yields once before ``body`` so an eager task factory does not
     keep stacking hops on this call.
+
+    asyncio re-raises KeyboardInterrupt and SystemExit out of the event loop
+    instead of into the awaiting task. The child returns them as a value and
+    the parent raises them here, so outer turn and middleware frames unwind
+    in order, the same as before the hop.
     """
 
-    async def child() -> T:
+    async def child() -> tuple[T | None, KeyboardInterrupt | SystemExit | None]:
         await asyncio.sleep(0)
-        return await body
+        try:
+            return await body, None
+        except (KeyboardInterrupt, SystemExit) as exc:
+            return None, exc
 
-    return await asyncio.create_task(child())
+    result, exc = await asyncio.create_task(child())
+    if exc is not None:
+        raise exc
+    return cast(T, result)
 
 
 async def dispatch_hooks(
