@@ -241,21 +241,32 @@ def parse_plugin_name_from_action_name(name: str) -> str | None:
 # =============================================================================
 # Reading an action's signature
 #
-# An action function takes at most one input and at most one run context:
+# An action function takes at most one input and at most one run context, in
+# either order:
 #
 #   async def lookup(order: Order, ctx: ActionRunContext) -> Receipt: ...
 #   async def lookup(ctx: ActionRunContext, order: Order) -> Receipt: ...  # same
 #   async def ping(ctx: ActionRunContext) -> str: ...                      # no input
 #
-# The context is whichever parameter is annotated ActionRunContext or a
-# subclass (ToolRunContext, ...). The other one is the input. Genkit calls the
-# function with both by name (ActionParams.call), so order never matters.
+# Rules for the function:
+#   - The context is the parameter annotated ActionRunContext or a subclass
+#     (ToolRunContext, ...). Importing it under TYPE_CHECKING is fine.
+#   - Any other parameter is the input, so there's only one. Put more fields
+#     on one input model.
+#   - Tools and flows must annotate the input: its type is the schema the
+#     model or HTTP caller sees. Use Any to accept anything. Other actions
+#     (models, embedders, ...) get a fixed input from Genkit and may leave it
+#     unannotated.
+#   - Input and return types need a JSON schema: a Pydantic model, dataclass,
+#     TypedDict, or a basic type like str, int, list or dict.
+#   - Those types must exist at runtime. With `from __future__ import
+#     annotations`, define or import them at module level, not inside a
+#     function or under TYPE_CHECKING.
+#   - A default on the input lets the action run with no input.
+#   - No positional-only parameters ('/'): Genkit passes both by name.
 #
-# A TypeError when an action is defined comes from one of two functions:
-#   - find_input_and_context: the signature's shape (a second input, two
-#     contexts, a positional-only parameter, a tool or flow input with no type)
-#   - json_schema_for: an input or output type with no JSON schema, or one
-#     whose name Genkit can't find at runtime
+# Breaking a rule raises TypeError when the action is defined, naming the
+# parameter and the fix.
 # =============================================================================
 
 _CallT = TypeVar('_CallT')
