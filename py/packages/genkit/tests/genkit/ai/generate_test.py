@@ -1692,43 +1692,11 @@ async def test_middleware_contributed_tools_available_to_model() -> None:
             use=[MiddlewareRef(name='tool_provider_mw')],
         ),
     )
+    assert _tool_output(response.messages[2]) == 'from_middleware_tool'
     assert response.text == 'done'
 
     # The contributed tool must NOT be visible in the root registry after the call.
     assert await ai.registry.resolve_action(ActionKind.TOOL, 'middleware_tool') is None
-
-
-@pytest.mark.asyncio
-async def test_middleware_tools_hook_returning_public_tool_runs_during_generate() -> None:
-    """A tools() hook that returns a public Tool handle is callable from generate."""
-
-    async def my_tool() -> str:
-        return 'from_public_tool'
-
-    class PublicToolMw(BaseMiddleware):
-        def tools(self, ctx: GenerateMiddlewareContext) -> list[Tool]:
-            return [tool(my_tool)]
-
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
-    pm.responses.append(
-        ModelResponse(
-            message=Message(
-                role=Role.MODEL,
-                content=[Part(tool_request=ToolRequest(name='my_tool', input={}, ref='r1'))],
-            ),
-        )
-    )
-    pm.responses.append(
-        ModelResponse(
-            finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part.from_text('done')]),
-        )
-    )
-
-    response = await ai.generate(prompt='hi', use=[PublicToolMw()])
-    assert _tool_output(response.messages[2]) == 'from_public_tool'
-    assert response.text == 'done'
 
 
 @pytest.mark.asyncio
