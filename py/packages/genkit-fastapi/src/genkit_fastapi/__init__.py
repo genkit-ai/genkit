@@ -14,53 +14,37 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""FastAPI Plugin for Genkit.
+"""Serve Genkit flows as FastAPI routes.
 
-This plugin provides FastAPI integration for Genkit, enabling you to expose
-Genkit flows as HTTP endpoints in a FastAPI application.
+With ``GENKIT_ENV=dev``, the Dev UI reflection server starts on a background
+thread. No lifespan wiring needed.
 
-The Dev UI reflection server starts automatically in a background thread when
-``GENKIT_ENV=dev`` is set — no lifespan wiring needed.
+```python
+from fastapi import FastAPI
+from genkit import Genkit
+from genkit_fastapi import serve_flow
+from genkit_google_genai import GoogleAI
 
-Example:
-    ```python
-    from fastapi import FastAPI
-    from genkit import Genkit
-    from genkit_fastapi import serve_flow
-    from genkit_google_genai import GoogleAI
-
-    ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
-    app = FastAPI()
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
+app = FastAPI()
 
 
-    @ai.flow()
-    async def chat_flow(prompt: str) -> str:
-        res = await ai.generate(prompt=prompt)
-        return res.text
+@ai.flow()
+async def suggest_dish(cuisine: str) -> str:
+    response = await ai.generate(prompt=f'Suggest one {cuisine} dish.')
+    return response.text
 
 
-    # Mount flow endpoint at POST /api/chat_flow
-    app.include_router(serve_flow(chat_flow), prefix='/api')
+# POST /api/suggest_dish
+app.include_router(serve_flow(suggest_dish), prefix='/api')
+```
 
-    # For a custom route, decorate with @genkit_fastapi_handler(ai) over @ai.flow().
-    ```
+For a custom route, stack ``@genkit_fastapi_handler(ai)`` over ``@ai.flow()``.
 
-Agents are experimental, so serving one comes from ``genkit_fastapi.exp``.
-``serve_agent(agent)`` mounts the same JSON protocol for an agent, plus
-``/getSnapshot`` and ``/abort`` when session storage is enabled::
-
-    from genkit_fastapi.exp import serve_agent
-
-    app.include_router(serve_agent(weather_agent), prefix='/api')
-
-Running:
-    ```bash
-    # With Genkit Dev UI
-    genkit start -- uvicorn main:app --reload
-
-    # Production (no Dev UI)
-    uvicorn main:app
-    ```
+```bash
+genkit start -- uvicorn main:app --reload  # with Dev UI
+uvicorn main:app                           # production
+```
 """
 
 from .handler import genkit_fastapi_handler, handle_genkit_request, serve_flow
