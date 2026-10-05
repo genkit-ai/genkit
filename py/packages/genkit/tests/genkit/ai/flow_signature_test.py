@@ -3,6 +3,7 @@
 
 """A flow takes one input; the context arrives only on an ActionRunContext-annotated parameter."""
 
+import sys
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -181,6 +182,28 @@ async def test_flow_with_type_checking_only_context_still_resolves_module_level_
     ai = Genkit()
     module_globals: dict[str, Any] = {'Greeting': Greeting}
     exec(_TYPE_CHECKING_CONTEXT_MODULE, module_globals)  # noqa: S102 - builds a module with postponed annotations
+
+    greet_fn: Callable[[Greeting, ActionRunContext], Awaitable[str]] = module_globals['greet']
+    greet = ai.flow()(greet_fn)
+    result = await greet.run(Greeting(name='ada'), context={'user': 'u1'})
+
+    assert greet.input_schema == {
+        'properties': {'name': {'title': 'Name', 'type': 'string'}},
+        'required': ['name'],
+        'title': 'Greeting',
+        'type': 'object',
+    }
+    assert result.response == 'hello ada as u1'
+
+
+@pytest.mark.skipif(sys.version_info < (3, 14), reason='annotations are evaluated lazily from Python 3.14')
+@pytest.mark.asyncio
+async def test_flow_with_type_checking_only_context_runs_without_future_import() -> None:
+    """On 3.14, a `TYPE_CHECKING`-only `ActionRunContext` without the `__future__` import still runs."""
+    ai = Genkit()
+    module_globals: dict[str, Any] = {'Greeting': Greeting}
+    source = _TYPE_CHECKING_CONTEXT_MODULE.replace('from __future__ import annotations\n', '')
+    exec(source, module_globals)  # noqa: S102 - builds a module whose annotations are evaluated lazily
 
     greet_fn: Callable[[Greeting, ActionRunContext], Awaitable[str]] = module_globals['greet']
     greet = ai.flow()(greet_fn)

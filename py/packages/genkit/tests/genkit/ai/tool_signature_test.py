@@ -387,9 +387,12 @@ async def forecast(input: WeatherInput, ctx: ToolRunContext) -> MultipartToolRes
 """
 
 
-def _type_checking_context_module() -> dict[str, Any]:
+def _type_checking_context_module(*, postponed: bool = True) -> dict[str, Any]:
+    source = _TYPE_CHECKING_CONTEXT_MODULE
+    if not postponed:
+        source = source.replace('from __future__ import annotations\n', '')
     module_globals: dict[str, Any] = {'WeatherInput': WeatherInput, 'Forecast': Forecast}
-    exec(_TYPE_CHECKING_CONTEXT_MODULE, module_globals)  # noqa: S102 - builds a module with postponed annotations
+    exec(source, module_globals)  # noqa: S102 - builds a module with postponed annotations
     return module_globals
 
 
@@ -399,6 +402,20 @@ async def test_tool_with_type_checking_only_context_still_resolves_module_level_
     ai, pm = _app()
 
     ai.tool()(_type_checking_context_module()['weather'])
+    response = await _model_calls_tool(ai, pm, name='weather', tool_input={'city': 'Paris'}, context={'user': 'u1'})
+
+    assert response.text == 'done'
+    assert _advertised_schema(pm) == WEATHER_SCHEMA
+    assert _tool_output(response) == '22C in Paris for u1'
+
+
+@pytest.mark.skipif(sys.version_info < (3, 14), reason='annotations are evaluated lazily from Python 3.14')
+@pytest.mark.asyncio
+async def test_tool_with_type_checking_only_context_runs_without_future_import() -> None:
+    """On 3.14, a `TYPE_CHECKING`-only `ToolRunContext` without the `__future__` import still runs."""
+    ai, pm = _app()
+
+    ai.tool()(_type_checking_context_module(postponed=False)['weather'])
     response = await _model_calls_tool(ai, pm, name='weather', tool_input={'city': 'Paris'}, context={'user': 'u1'})
 
     assert response.text == 'done'

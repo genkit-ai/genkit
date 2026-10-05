@@ -21,6 +21,7 @@ import contextlib
 import inspect
 import json
 import re
+import sys
 import time
 import types
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
@@ -28,7 +29,6 @@ from contextvars import ContextVar
 from typing import (
     Any,
     ClassVar,
-    ForwardRef,
     Generic,
     NamedTuple,
     Union,
@@ -243,35 +243,43 @@ def parse_plugin_name_from_action_name(name: str) -> str | None:
 _PROBE_CODE = (lambda: None).__code__
 
 
-def resolve_type_hints(fn: Callable[..., object]) -> dict[str, Any]:
-    """``fn``'s annotations as types, resolved one name at a time if the batch fails.
+def signature_of(fn: Callable[..., object]) -> inspect.Signature:
+    """``fn``'s signature, without failing on annotation names missing at runtime.
 
-    Under ``from __future__ import annotations`` every annotation is stored as
-    a string, and ``get_type_hints`` turns the strings back into classes by
-    looking each name up in ``fn``'s module globals. A name can be missing
-    there at runtime in two common ways:
-
-    - It's imported under ``if TYPE_CHECKING:``. Ruff's ``TC`` rules move an
-      import there when the name only appears in annotations, e.g.
-      ``ctx: ToolRunContext``, without knowing Genkit reads annotations at
-      runtime.
-    - It's defined inside a function, e.g. a tool factory that declares its
-      input model locally. The function object only carries its module
-      globals, not the local scope it was created in, so nothing can find it.
-
-    ``get_type_hints`` is all or nothing: one missing name fails the whole
-    call, and every other annotation would stay a string too, so a module-level
-    input model next to a ``TYPE_CHECKING``-only ``ToolRunContext`` couldn't be
-    resolved. When the batch call fails, each annotation is resolved on its own
-    against ``fn``'s module, so only the names that really are missing stay
-    strings. Signatures that resolve today never leave the batch call.
+    From Python 3.14 annotations are evaluated when read, so a ``TYPE_CHECKING``-only
+    ``ctx: ToolRunContext`` would make a plain ``inspect.signature`` raise.
     """
-    # whatever fails here, the per-name pass below leaves only that name unresolved
+    if sys.version_info >= (3, 14):
+        import annotationlib
+
+        return inspect.signature(fn, annotation_format=annotationlib.Format.FORWARDREF)
+    return inspect.signature(fn)
+
+
+def _raw_annotations(fn: Callable[..., object]) -> dict[str, Any]:
+    """``fn``'s annotations as written, with names missing at runtime left as strings."""
+    if sys.version_info >= (3, 14):
+        import annotationlib
+
+        annotations = annotationlib.get_annotations(fn, format=annotationlib.Format.FORWARDREF)
+        return {
+            name: a.__forward_arg__ if isinstance(a, annotationlib.ForwardRef) else a for name, a in annotations.items()
+        }
+    return dict(inspect.getfullargspec(fn).annotations)
+
+
+def resolve_type_hints(fn: Callable[..., object]) -> dict[str, Any]:
+    """``fn``'s annotations as types, resolving each name on its own if one is missing.
+
+    A name can be missing at runtime when it's imported under ``TYPE_CHECKING``
+    (Ruff's ``TC`` rules do this) or defined inside a function; only that name
+    stays a string, so a ``TYPE_CHECKING``-only ``ctx`` doesn't hide the input model.
+    """
     with contextlib.suppress(Exception):
         return get_type_hints(fn)
     module_globals = getattr(inspect.unwrap(fn), '__globals__', {})
     hints: dict[str, Any] = {}
-    for name, annotation in inspect.getfullargspec(fn).annotations.items():
+    for name, annotation in _raw_annotations(fn).items():
         # a function in fn's module carrying only this annotation, so
         # get_type_hints resolves it by the same rules as the batch call
         probe = types.FunctionType(_PROBE_CODE, module_globals)
@@ -313,8 +321,9 @@ def _is_context_annotation(annotation: object) -> bool:
     """
     if isinstance(annotation, str):
         return _is_context_name(annotation)
-    if isinstance(annotation, ForwardRef):
-        return _is_context_name(annotation.__forward_arg__)
+    forward_arg = getattr(annotation, '__forward_arg__', None)
+    if isinstance(forward_arg, str):
+        return _is_context_name(forward_arg)
     if isinstance(annotation, type):
         return issubclass(annotation, ActionRunContext)
     origin = get_origin(annotation)
@@ -369,7 +378,7 @@ def find_input_and_context(
     """
     input_param: inspect.Parameter | None = None
     context_param: inspect.Parameter | None = None
-    for param in inspect.signature(func).parameters.values():
+    for param in signature_of(func).parameters.values():
         if param.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
             continue
         if param.kind is inspect.Parameter.POSITIONAL_ONLY:

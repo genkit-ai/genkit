@@ -3,6 +3,7 @@
 
 """Every action takes at most one input; the context goes to the parameter annotated ActionRunContext."""
 
+import sys
 from collections.abc import Awaitable, Callable
 from typing import Optional, cast
 
@@ -88,6 +89,20 @@ async def test_action_with_unresolvable_context_subclass_union_gets_context() ->
     """An unresolvable `'ToolRunContext | None'` still marks the context, by class name."""
     module_globals: dict[str, object] = {}
     exec(_TYPE_CHECKING_CONTEXT_MODULE, module_globals)  # noqa: S102 - builds a module with postponed annotations
+    plate = cast(Callable[[str, ActionRunContext], Awaitable[str]], module_globals['plate'])
+
+    result = await Action(ActionKind.CUSTOM, 'plate', plate).run('soup', context={'table': 4})
+
+    assert result.response == 'soup for table 4'
+
+
+@pytest.mark.skipif(sys.version_info < (3, 14), reason='annotations are evaluated lazily from Python 3.14')
+@pytest.mark.asyncio
+async def test_action_with_type_checking_only_context_runs_without_future_import() -> None:
+    """On 3.14, a `TYPE_CHECKING`-only `ToolRunContext` without the `__future__` import still runs."""
+    module_globals: dict[str, object] = {}
+    source = _TYPE_CHECKING_CONTEXT_MODULE.replace('from __future__ import annotations\n', '')
+    exec(source, module_globals)  # noqa: S102 - builds a module whose annotations are evaluated lazily
     plate = cast(Callable[[str, ActionRunContext], Awaitable[str]], module_globals['plate'])
 
     result = await Action(ActionKind.CUSTOM, 'plate', plate).run('soup', context={'table': 4})
