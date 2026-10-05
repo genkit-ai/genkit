@@ -256,7 +256,6 @@ def parse_plugin_name_from_action_name(name: str) -> str | None:
 #   - Input and return types need a JSON schema: a Pydantic model, dataclass,
 #     TypedDict, or a basic type like str, int, list or dict.
 #   - A default on the input lets the action run with no input.
-#   - No positional-only parameters ('/'): Genkit passes both by name.
 #
 # Breaking a rule raises TypeError when the action is defined.
 # =============================================================================
