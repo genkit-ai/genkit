@@ -627,12 +627,7 @@ def model_schema_from_return_annotation(
     inferred: dict[str, object] | None,
 ) -> dict[str, object] | None:
     """JSON Schema the model should bind, from the handler's return annotation."""
-    annotations = dict(getattr(func, '__annotations__', {}))
-    try:
-        hints = resolve_type_hints(func, annotations)
-    except Exception:
-        hints = annotations
-    inner = envelope_output_type(hints.get('return'))
+    inner = envelope_output_type(resolve_type_hints(func).get('return'))
     if inner is NOT_ENVELOPE:
         return inferred
     if inner is Any or inner is object:

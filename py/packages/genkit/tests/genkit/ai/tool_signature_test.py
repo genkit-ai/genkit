@@ -14,6 +14,7 @@ from typing_extensions import TypedDict
 
 from genkit import Genkit, GenkitError, Message, ModelResponse, Part, ToolRunContext, tool
 from genkit._ai._testing import ProgrammableModel, define_programmable_model
+from genkit._core._schema import to_json_schema
 from genkit._core._typing import FinishReason, Role, ToolRequest
 
 
@@ -347,11 +348,13 @@ def test_tool_with_input_model_defined_in_function_raises_type_error_naming_it()
 
 
 # A user module that imports the context type only for type checkers, so
-# 'ToolRunContext' can't be resolved at runtime but 'WeatherInput' can.
+# 'ToolRunContext' can't be resolved at runtime but every other name can.
 _TYPE_CHECKING_CONTEXT_MODULE = """
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+
+from genkit import MultipartToolResponse, response
 
 if TYPE_CHECKING:
     from genkit import ToolRunContext
@@ -359,22 +362,39 @@ if TYPE_CHECKING:
 
 async def weather(input: WeatherInput, ctx: ToolRunContext) -> str:
     return f'22{input.unit} in {input.city} for {ctx.context["user"]}'
+
+
+async def forecast(input: WeatherInput, ctx: ToolRunContext) -> MultipartToolResponse[Forecast]:
+    return response(Forecast(city=input.city, days=3))
 """
+
+
+def _type_checking_context_module() -> dict[str, Any]:
+    module_globals: dict[str, Any] = {'WeatherInput': WeatherInput, 'Forecast': Forecast}
+    exec(_TYPE_CHECKING_CONTEXT_MODULE, module_globals)  # noqa: S102 - builds a module with postponed annotations
+    return module_globals
 
 
 @pytest.mark.asyncio
 async def test_tool_with_type_checking_only_context_still_resolves_module_level_input() -> None:
     """A `TYPE_CHECKING`-only `ToolRunContext` doesn't stop the module-level `WeatherInput` from resolving."""
     ai, pm = _app()
-    module_globals: dict[str, Any] = {'WeatherInput': WeatherInput}
-    exec(_TYPE_CHECKING_CONTEXT_MODULE, module_globals)  # noqa: S102 - builds a module with postponed annotations
 
-    ai.tool()(module_globals['weather'])
+    ai.tool()(_type_checking_context_module()['weather'])
     response = await _model_calls_tool(ai, pm, name='weather', tool_input={'city': 'Paris'}, context={'user': 'u1'})
 
     assert response.text == 'done'
     assert _advertised_schema(pm) == WEATHER_SCHEMA
     assert _tool_output(response) == '22C in Paris for u1'
+
+
+def test_tool_with_type_checking_only_context_still_reads_multipart_return() -> None:
+    """A `TYPE_CHECKING`-only `ToolRunContext` doesn't hide a `-> MultipartToolResponse[Forecast]` return."""
+    ai, _ = _app()
+
+    forecast = ai.tool()(_type_checking_context_module()['forecast'])
+
+    assert forecast.output_schema == to_json_schema(Forecast)
 
 
 @pytest.mark.skipif(sys.version_info >= (3, 12), reason='Pydantic accepts typing.TypedDict on 3.12+')

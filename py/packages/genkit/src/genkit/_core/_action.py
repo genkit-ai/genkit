@@ -17,6 +17,7 @@
 """Action module for defining and managing remotely callable functions."""
 
 import asyncio
+import contextlib
 import inspect
 import json
 import re
@@ -252,22 +253,21 @@ def extract_action_args_and_types(
 _PROBE_CODE = (lambda: None).__code__
 
 
-def resolve_type_hints(fn: Callable[..., object], annotations: Mapping[str, Any]) -> dict[str, Any]:
+def resolve_type_hints(fn: Callable[..., object]) -> dict[str, Any]:
     """``fn``'s annotations as types, resolved one name at a time if the batch fails.
 
     ``get_type_hints`` is all or nothing: one name that isn't there at runtime
     (a type imported under ``TYPE_CHECKING``, or a model defined inside a
     function under ``from __future__ import annotations``) fails the whole call.
-    When it fails, each of ``annotations`` is resolved on its own against
-    ``fn``'s module, so only the names that can't be found stay strings.
+    When it fails, each annotation is resolved on its own against ``fn``'s
+    module, so only the names that can't be found stay strings.
     """
-    try:
+    # whatever fails here, the per-name pass below leaves only that name unresolved
+    with contextlib.suppress(Exception):
         return get_type_hints(fn)
-    except (NameError, TypeError, AttributeError):
-        pass
     module_globals = getattr(inspect.unwrap(fn), '__globals__', {})
     hints: dict[str, Any] = {}
-    for name, annotation in annotations.items():
+    for name, annotation in inspect.getfullargspec(fn).annotations.items():
         # a function in fn's module carrying only this annotation, so
         # get_type_hints resolves it by the same rules as the batch call
         probe = types.FunctionType(_PROBE_CODE, module_globals)
@@ -571,7 +571,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
 
         signature_fn = metadata_fn if metadata_fn else fn
         input_spec = inspect.getfullargspec(signature_fn)
-        resolved_annotations = resolve_type_hints(signature_fn, input_spec.annotations)
+        resolved_annotations = resolve_type_hints(signature_fn)
         # With a context_type, the context goes to the parameter annotated with
         # it and the input to the other one, both by name.
         self._by_annotation: bool = context_type is not None
