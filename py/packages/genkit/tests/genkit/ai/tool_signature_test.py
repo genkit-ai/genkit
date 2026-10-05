@@ -415,6 +415,43 @@ def test_tool_with_type_checking_only_context_still_reads_multipart_return() -> 
     assert forecast.output_schema == to_json_schema(Forecast)
 
 
+# A user module whose return type is imported only for type checkers.
+_TYPE_CHECKING_RETURN_MODULE = """
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from reports import Report
+
+
+async def weekly_report(input: WeatherInput) -> Report:
+    raise NotImplementedError
+"""
+
+
+def test_tool_with_type_checking_only_return_type_raises_type_error_naming_it() -> None:
+    """A return type imported under `TYPE_CHECKING` raises TypeError naming it, not Pydantic's `.rebuild()` error."""
+    ai, _ = _app()
+    module_globals: dict[str, Any] = {'WeatherInput': WeatherInput}
+    exec(_TYPE_CHECKING_RETURN_MODULE, module_globals)  # noqa: S102 - builds a module with postponed annotations
+
+    with pytest.raises(TypeError, match="tool 'weekly_report' output has type 'Report', which can't be found") as exc:
+        ai.tool()(module_globals['weekly_report'])
+    assert "outside 'if TYPE_CHECKING:'" in str(exc.value)
+
+
+def test_tool_with_plain_class_return_type_raises_type_error_naming_it() -> None:
+    """`-> Thermometer` raises TypeError naming the tool and the return type."""
+    ai, _ = _app()
+
+    async def read(city: str) -> Thermometer:
+        return Thermometer()
+
+    with pytest.raises(TypeError, match="tool 'read' output has type Thermometer, which has no JSON schema"):
+        ai.tool()(read)
+
+
 @pytest.mark.skipif(sys.version_info >= (3, 12), reason='Pydantic accepts typing.TypedDict on 3.12+')
 def test_tool_with_typing_typed_dict_input_raises_type_error_before_3_12() -> None:
     """`read(r: Reading)` on a `typing.TypedDict` raises TypeError naming the input and typing_extensions."""

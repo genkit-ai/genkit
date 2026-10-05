@@ -364,9 +364,8 @@ def find_input_and_context(
     other parameter is a definition error that says how to fix it.
     ``context_name`` is the class the error messages suggest.
 
-    An annotated input needs a type with a JSON schema. With
-    ``require_input_type`` the input must be annotated at all; ``Any`` opts
-    into accepting anything.
+    With ``require_input_type`` the input must be annotated; ``Any`` opts into
+    accepting anything. Its schema is built later, by json_schema_for.
     """
     input_param: inspect.Parameter | None = None
     context_param: inspect.Parameter | None = None
@@ -391,51 +390,61 @@ def find_input_and_context(
                 f"{owner} takes one input, but '{param.name}' is a second parameter. "
                 f"Put the fields on one input model, or annotate '{param.name}' as {context_name}."
             )
-    if input_param is not None:
-        input_type = hints.get(input_param.name, input_param.annotation)
-        if input_type is inspect.Parameter.empty:
-            if require_input_type:
-                # an unannotated input would show the model a tool with no fields
-                raise TypeError(
-                    f"{owner} input '{input_param.name}' has no type annotation. "
-                    f"Annotate it (e.g. '{input_param.name}: str'), or use Any to accept anything."
-                )
-            return ActionParams(input_param, context_param)
-        type_name = getattr(input_type, '__name__', repr(input_type))
-        try:
-            TypeAdapter(input_type).json_schema()
-        except (PydanticSchemaGenerationError, PydanticInvalidForJsonSchema) as e:
-            raise TypeError(
-                f"{owner} input '{input_param.name}' has type {type_name}, which has no JSON schema. "
-                'Use a Pydantic model, dataclass, TypedDict, or a basic type like str, int, list, or dict.'
-            ) from e
-        except PydanticUserError as e:
-            if isinstance(input_type, str):
-                # The input is still a bare name, so resolve_type_hints couldn't
-                # find it in the module at runtime. Typically:
-                #
-                #   from __future__ import annotations
-                #
-                #   def make_tools(ai):
-                #       class StepInput(BaseModel): ...
-                #
-                #       @ai.tool()
-                #       async def slow_work(input: StepInput) -> dict: ...
-                #
-                # The annotation is the string 'StepInput', and StepInput is a
-                # local of make_tools, which slow_work doesn't carry. Without
-                # the __future__ import Python would have stored the class
-                # itself while the local was in scope. Pydantic's own error
-                # here ("call .rebuild()") names neither the tool nor the fix.
-                kind = owner.split(' ', 1)[0]
-                raise TypeError(
-                    f"{owner} input '{input_param.name}' has type '{input_type}', which can't be found "
-                    f'when the {kind} is defined. Define or import it at module level, or remove '
-                    "'from __future__ import annotations' from this file."
-                ) from e
-            # e.g. typing.TypedDict on Python < 3.12; keep Pydantic's fix in the message
-            raise TypeError(f"{owner} input '{input_param.name}' has type {type_name}: {e.message}") from e
+    if (
+        require_input_type
+        and input_param is not None
+        and hints.get(input_param.name, input_param.annotation) is inspect.Parameter.empty
+    ):
+        # an unannotated input would show the model a tool with no fields
+        raise TypeError(
+            f"{owner} input '{input_param.name}' has no type annotation. "
+            f"Annotate it (e.g. '{input_param.name}: str'), or use Any to accept anything."
+        )
     return ActionParams(input_param, context_param)
+
+
+def json_schema_for(annotation: object, *, owner: str, label: str) -> tuple[TypeAdapter[Any], dict[str, object]]:
+    """A validator and JSON schema for ``annotation``, or a TypeError naming ``label``.
+
+    ``label`` is what the annotation is on, e.g. ``"input 'query'"`` or
+    ``'output'``. Pydantic's own errors here name neither the action nor
+    the fix.
+    """
+    type_name = getattr(annotation, '__name__', repr(annotation))
+    try:
+        adapter: TypeAdapter[Any] = TypeAdapter(annotation)
+        return adapter, adapter.json_schema()
+    except (PydanticSchemaGenerationError, PydanticInvalidForJsonSchema) as e:
+        raise TypeError(
+            f'{owner} {label} has type {type_name}, which has no JSON schema. '
+            'Use a Pydantic model, dataclass, TypedDict, or a basic type like str, int, list, or dict.'
+        ) from e
+    except PydanticUserError as e:
+        if isinstance(annotation, str):
+            # The annotation is still a bare name, so resolve_type_hints
+            # couldn't find it in the module at runtime. Typically:
+            #
+            #   from __future__ import annotations
+            #
+            #   def make_tools(ai):
+            #       class StepInput(BaseModel): ...
+            #
+            #       @ai.tool()
+            #       async def slow_work(input: StepInput) -> dict: ...
+            #
+            # The annotation is the string 'StepInput', and StepInput is a
+            # local of make_tools, which slow_work doesn't carry. Without
+            # the __future__ import Python would have stored the class
+            # itself while the local was in scope. The same happens to a
+            # return type imported only under `if TYPE_CHECKING:`.
+            kind = owner.split(' ', 1)[0]
+            raise TypeError(
+                f"{owner} {label} has type '{annotation}', which can't be found "
+                f'when the {kind} is defined. Define or import it at module level (outside '
+                "'if TYPE_CHECKING:'), or remove 'from __future__ import annotations' from this file."
+            ) from e
+        # e.g. typing.TypedDict on Python < 3.12; keep Pydantic's fix in the message
+        raise TypeError(f'{owner} {label} has type {type_name}: {e.message}') from e
 
 
 # =============================================================================
@@ -647,10 +656,11 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         signature_fn = metadata_fn if metadata_fn else fn
         resolved_annotations = resolve_type_hints(signature_fn)
         kind_label = 'tool' if kind == ActionKind.TOOL else str(kind)
+        owner = f"{kind_label} '{name}'"
         self._params: ActionParams = find_input_and_context(
             signature_fn,
             resolved_annotations,
-            owner=f"{kind_label} '{name}'",
+            owner=owner,
             context_name='ToolRunContext' if kind == ActionKind.TOOL else 'ActionRunContext',
             # A tool's input type is the schema the model sees, a flow's is its
             # public API. Plugin-defined actions like models get a fixed input
@@ -663,7 +673,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         # forwards to metadata_fn does it with self.params.call, so the user's
         # function still gets both by name.
         self._fn_is_wrapper: bool = metadata_fn is not None
-        self._initialize_io_schemas(resolved_annotations)
+        self._initialize_io_schemas(resolved_annotations, owner)
         self._initialize_init_schema(init_schema)
 
     @property
@@ -838,27 +848,26 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
     def _initialize_io_schemas(
         self,
         annotations: dict[str, Any],
+        owner: str,
     ) -> None:
         if self._params.input is not None:
             input_type = annotations.get(self._params.input.name, Any)
-            type_adapter = TypeAdapter(input_type)
-            self._input_schema: dict[str, object] = type_adapter.json_schema()
+            type_adapter, self._input_schema = json_schema_for(
+                input_type, owner=owner, label=f"input '{self._params.input.name}'"
+            )
             self._input_type: TypeAdapter[InputT] | None = cast(TypeAdapter[InputT], type_adapter)
             self._input_class: type | None = input_type if isinstance(input_type, type) else None
-            self._metadata[ActionMetadataKey.INPUT_KEY] = self._input_schema
         else:
             self._input_schema = TypeAdapter(object).json_schema()
             self._input_type = None
             self._input_class = None
-            self._metadata[ActionMetadataKey.INPUT_KEY] = self._input_schema
+        self._metadata[ActionMetadataKey.INPUT_KEY] = self._input_schema
 
         if ActionMetadataKey.RETURN in annotations:
-            type_adapter = TypeAdapter(annotations[ActionMetadataKey.RETURN])
-            self._output_schema: dict[str, object] = type_adapter.json_schema()
-            self._metadata[ActionMetadataKey.OUTPUT_KEY] = self._output_schema
+            _, self._output_schema = json_schema_for(annotations[ActionMetadataKey.RETURN], owner=owner, label='output')
         else:
             self._output_schema = TypeAdapter(object).json_schema()
-            self._metadata[ActionMetadataKey.OUTPUT_KEY] = self._output_schema
+        self._metadata[ActionMetadataKey.OUTPUT_KEY] = self._output_schema
 
     def _initialize_init_schema(
         self,
