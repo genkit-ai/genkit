@@ -27,7 +27,7 @@ from genkit._ai._testing import (
 from genkit._ai._tools import Interrupt, ToolRunContext, define_tool, restart_tool
 from genkit._core._action import ActionRunContext
 from genkit._core._error import GenkitError, PublicError, RuntimeErrorReason
-from genkit._core._model import GenerateActionOptions, ModelRequest, Resume
+from genkit._core._model import AgentInput, GenerateActionOptions, ModelRequest, Resume
 from genkit._core._registry import Registry
 from genkit._core._typing import (
     FinishReason,
@@ -6925,7 +6925,7 @@ async def test_generate_json_format_with_tool_call_validates_only_final_turn() -
     assert response.messages[-1].text == '{"result": "special ingredient"}'
 
 
-_DOCS_NEED_USER = 'docs= needs a user message to attach to'
+_DOCS_NEED_USER = 'docs need a user message to attach to'
 
 
 def _context_text(message: Message) -> str | None:
@@ -6972,6 +6972,43 @@ async def test_generate_docs_with_only_model_history_raises_invalid_argument() -
     assert raised.value.status == 'INVALID_ARGUMENT'
     assert raised.value.reason is RuntimeErrorReason.INVALID_INPUT
     assert echo.last_request is None
+
+
+@pytest.mark.asyncio
+async def test_generate_docs_after_middleware_adds_user_message_attaches() -> None:
+    """A wrap_generate that inserts a user message after start attaches docs and calls the model."""
+
+    class AddUserMessage(BaseMiddleware):
+        async def wrap_generate(
+            self,
+            params: GenerateHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ) -> ModelResponse:
+            options = params.options.model_copy(
+                update={
+                    'messages': [
+                        *(params.options.messages or []),
+                        Message(role=Role.USER, content=[Part.from_text('summarize')]),
+                    ],
+                }
+            )
+            return await next_fn(params.model_copy(update={'options': options}), ctx)
+
+    ai = Genkit(model='echoModel')
+    echo, _ = define_echo_model(ai)
+    response = await ai.generate(
+        system='Answer from the sources.',
+        docs=[Document.from_text('cats sit on mats')],
+        use=[AddUserMessage()],
+    )
+    assert response.error is None
+    assert response.message is not None
+    assert echo.last_request is not None
+    context = _context_text(echo.last_request.messages[-1])
+    assert context is not None
+    assert 'cats sit on mats' in context
+    assert echo.last_request.messages[-1].role == Role.USER
 
 
 @pytest.mark.asyncio
@@ -7083,6 +7120,27 @@ async def test_generate_action_docs_without_user_message_raises_invalid_argument
                 docs=[Document.from_text('cats sit on mats')],
             ),
         )
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    assert raised.value.reason is RuntimeErrorReason.INVALID_INPUT
+    assert echo.last_request is None
+
+
+@pytest.mark.asyncio
+async def test_prompt_agent_system_and_docs_empty_first_send_fails() -> None:
+    """Prompt agent, system+docs, empty first send: failed; the model is never called."""
+    from genkit.exp import Genkit as ExpGenkit
+    from genkit.exp.agent import AgentError
+
+    ai = ExpGenkit(model='echoModel')
+    echo, _ = define_echo_model(ai)
+    ai.define_prompt(
+        name='docsAgent',
+        system='Answer from the sources.',
+        docs=[Document.from_text('cats sit on mats')],
+    )
+    agent = ai.define_prompt_agent(name='docsAgent')
+    with pytest.raises(AgentError, match=_DOCS_NEED_USER) as raised:
+        await agent.chat().send(AgentInput())
     assert raised.value.status == 'INVALID_ARGUMENT'
     assert raised.value.reason is RuntimeErrorReason.INVALID_INPUT
     assert echo.last_request is None

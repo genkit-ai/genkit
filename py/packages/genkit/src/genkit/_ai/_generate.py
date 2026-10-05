@@ -536,6 +536,7 @@ async def register_tools(registry: Registry, tools: Sequence[str | Tool] | None)
 
 
 CONTEXT_PREFACE = '\n\nUse the following information to complete your task:\n\n'
+DOCS_NEED_USER_MESSAGE = 'docs need a user message to attach to'
 
 
 def last_user_message(*, messages: list[Message]) -> Message | None:
@@ -564,15 +565,21 @@ def augment_with_context(
 ) -> ModelRequest:
     """Return a deepcopy of ``request`` with ``request.docs`` injected as a context part on the last user message.
 
-    No-op (returns ``request`` unchanged) when there are no docs, no user message, or the last user message
-    already has a non-pending ``purpose: 'context'`` part.
+    No-op (returns ``request`` unchanged) when there are no docs, or the last user message
+    already has a non-pending ``purpose: 'context'`` part. Raises when docs are present
+    and there is no user message — docs attach as a context part on a user message, so
+    without one there is nowhere to put them.
     """
     if not request.docs:
         return request
 
     user_message = last_user_message(messages=request.messages)
     if user_message is None:
-        return request
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=DOCS_NEED_USER_MESSAGE,
+            reason=RuntimeErrorReason.INVALID_INPUT,
+        )
 
     # Find any existing context part in the last user message
     context_idx = -1
@@ -703,12 +710,6 @@ async def run_generate(
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message=f'max turns cannot be negative, got {options.max_turns}',
-            reason=RuntimeErrorReason.INVALID_INPUT,
-        )
-    if options.docs and last_user_message(messages=options.messages) is None:
-        raise GenkitError(
-            status='INVALID_ARGUMENT',
-            message='docs= needs a user message to attach to',
             reason=RuntimeErrorReason.INVALID_INPUT,
         )
     registry = registry if registry.is_child else registry.new_child()
@@ -1340,6 +1341,8 @@ async def run_wrap_generate(
         )
     except (Exception, asyncio.CancelledError) as exc:
         raise_if_foreign_cancel(exc=exc, abort_signal=ctx.abort_signal)
+        if isinstance(exc, GenkitError) and exc.original_message == DOCS_NEED_USER_MESSAGE:
+            raise
         # A hook can raise before the model ever built a request. Build it here
         # so the caller still gets back what they asked for; the cost is only
         # paid on the failure path.
@@ -1428,6 +1431,8 @@ async def generate_turn(
         )
     except (Exception, asyncio.CancelledError) as exc:
         raise_if_foreign_cancel(exc=exc, abort_signal=ctx.abort_signal)
+        if isinstance(exc, GenkitError) and exc.original_message == DOCS_NEED_USER_MESSAGE:
+            raise
         return box_from_exc(
             response=call.earned(),
             messages=call.messages,
