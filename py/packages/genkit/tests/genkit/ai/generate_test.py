@@ -4768,6 +4768,41 @@ async def test_generate_stream_with_five_middleware_and_max_turns_200_returns_ab
 
 
 @pytest.mark.asyncio
+async def test_generate_eager_task_factory_two_hundred_tool_turns_returns() -> None:
+    """max_turns=200 under eager factory returns ABORTED; no RecursionError."""
+    eager_factory = getattr(asyncio, 'eager_task_factory', None)
+    if eager_factory is None:
+        pytest.skip('asyncio.eager_task_factory requires Python 3.12')
+
+    loop = asyncio.get_running_loop()
+    previous = loop.get_task_factory()
+    loop.set_task_factory(eager_factory)
+    try:
+        ai = Genkit(model='programmableModel')
+        pm, _ = define_programmable_model(ai)
+
+        @ai.tool(name='step')
+        async def step() -> str:
+            return 'ok'
+
+        _always_requests_tool(pm)
+        response = await ai.generate(
+            prompt='keep going',
+            tools=['step'],
+            max_turns=200,
+        )
+
+        assert response.finish_reason == FinishReason.ABORTED
+        assert response.finish_message == 'Exceeded maximum tool call iterations (200)'
+        assert response.error is not None
+        assert response.error.status == 'ABORTED'
+        assert response.error.reason is RuntimeErrorReason.MAX_TURNS_EXCEEDED
+        assert pm.request_count == 201
+    finally:
+        loop.set_task_factory(previous)
+
+
+@pytest.mark.asyncio
 async def test_generate_turn_0_middleware_after_next_sees_the_final_answer() -> None:
     """wrap_generate after await next on the first wrap sees the final stop text."""
     ai = Genkit(model='programmableModel')
@@ -4918,13 +4953,7 @@ async def test_generate_cancelled_during_a_later_turn_stops_calling_the_model() 
     with pytest.raises(asyncio.CancelledError):
         await task
     assert model_calls == 4
-    await asyncio.sleep(0.05)
-    leftover = [
-        running
-        for running in asyncio.all_tasks()
-        if id(running) not in before and running is not asyncio.current_task() and not running.done()
-    ]
-    assert leftover == []
+    await _assert_no_extra_tasks(before)
 
 
 @pytest.mark.asyncio
@@ -4960,6 +4989,28 @@ async def test_generate_with_400_middleware_returns_the_model_text() -> None:
     assert response.finish_reason == FinishReason.STOP
     assert response.text == 'from a deep list'
     assert after_next == ['from a deep list']
+
+
+@pytest.mark.asyncio
+async def test_generate_eager_task_factory_four_hundred_middleware_returns() -> None:
+    """400 middleware under the eager task factory returns; no RecursionError."""
+    eager_factory = getattr(asyncio, 'eager_task_factory', None)
+    if eager_factory is None:
+        pytest.skip('asyncio.eager_task_factory requires Python 3.12')
+
+    loop = asyncio.get_running_loop()
+    previous = loop.get_task_factory()
+    loop.set_task_factory(eager_factory)
+    try:
+        ai = Genkit(model='programmableModel')
+        pm, _ = define_programmable_model(ai)
+        pm.responses = [_model_says('from a deep list')]
+        response = await ai.generate(prompt='go', use=_four_hundred_noop_middleware())
+
+        assert response.finish_reason == FinishReason.STOP
+        assert response.text == 'from a deep list'
+    finally:
+        loop.set_task_factory(previous)
 
 
 @pytest.mark.asyncio
@@ -5255,6 +5306,51 @@ async def test_generate_outer_middleware_after_next_still_reads_the_value_it_set
 
     assert response.finish_reason == FinishReason.STOP
     assert response.text == 'outer'
+
+
+@pytest.mark.asyncio
+async def test_generate_without_use_and_with_logging_use_leave_same_contextvar() -> None:
+    """A model-set ContextVar is the same after generate with use=[] and with use=[LogMw()]."""
+    marker: contextvars.ContextVar[str] = contextvars.ContextVar('marker', default='unset')
+
+    class LogMw(BaseMiddleware):
+        async def wrap_generate(
+            self,
+            params: GenerateHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ) -> ModelResponse:
+            return await next_fn(params, ctx)
+
+    async def run(*, use: list[BaseMiddleware]) -> tuple[list[str], str]:
+        ai = Genkit(model='programmableModel')
+        pm, _ = define_programmable_model(ai)
+
+        @ai.tool(name='step')
+        async def step() -> str:
+            return 'ok'
+
+        seen: list[str] = []
+
+        def reply(_request: ModelRequest) -> ModelResponse:
+            seen.append(marker.get())
+            marker.set('from-model')
+            if pm.request_count == 1:
+                return _model_calls_tool(name='step', ref='r1')
+            return _model_says('done')
+
+        pm.response_cb = reply
+        token = marker.set('before')
+        try:
+            await ai.generate(prompt='go', tools=['step'], use=use)
+            return seen, marker.get()
+        finally:
+            marker.reset(token)
+
+    seen_empty, after_empty = await run(use=[])
+    seen_log, after_log = await run(use=[LogMw()])
+    assert after_empty == after_log
+    assert seen_empty == seen_log
 
 
 @pytest.mark.asyncio

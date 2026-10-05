@@ -107,6 +107,7 @@ DEFAULT_MAX_TURNS = 50
 
 logger = get_logger(__name__)
 
+T = TypeVar('T')
 HookParamsT = TypeVar('HookParamsT')
 HookResultT = TypeVar('HookResultT')
 HookWrap = Callable[
@@ -380,6 +381,20 @@ def hook_wrap(mw: MiddlewareDef, hook: str) -> HookWrap[HookParamsT, HookResultT
     return cast(HookWrap[HookParamsT, HookResultT], wrap)
 
 
+async def hop(*, body: Awaitable[T]) -> T:
+    """Run ``body`` on a child task so a long use= list or tool loop can return.
+
+    The child yields once before ``body`` so an eager task factory does not
+    keep stacking hops on this call.
+    """
+
+    async def child() -> T:
+        await asyncio.sleep(0)
+        return await body
+
+    return await asyncio.create_task(child())
+
+
 async def dispatch_hooks(
     *,
     middleware: list[MiddlewareDef],
@@ -410,7 +425,15 @@ async def dispatch_hooks(
 
         return stamped
 
-    runner = with_after_result(next_fn)
+    async def leaf(
+        p: HookParamsT,
+        c: GenerateMiddlewareContext,
+    ) -> HookResultT:
+        # Hop even when use=[] so a logging middleware cannot change whether
+        # a ContextVar the model set is still set after generate.
+        return await hop(body=next_fn(p, c))
+
+    runner = with_after_result(leaf)
     for mw in reversed(middleware):
         wrap = hook_wrap(mw, hook)
 
@@ -421,10 +444,8 @@ async def dispatch_hooks(
             _inner: Callable[[HookParamsT, GenerateMiddlewareContext], Awaitable[HookResultT]] = runner,
             _wrap: HookWrap[HookParamsT, HookResultT] = wrap,
         ) -> HookResultT:
-            # A long use= list has to return a response. Nesting every middleware
-            # on this call fails the generate before max_turns.
-            task = asyncio.create_task(
-                run_logged_hook(
+            return await hop(
+                body=run_logged_hook(
                     mw=_mw,
                     hook=hook,
                     params=p,
@@ -434,15 +455,6 @@ async def dispatch_hooks(
                     extra=extra(p) if extra is not None else None,
                 )
             )
-            try:
-                return await task
-            except asyncio.CancelledError:
-                # Cancel waits for this middleware so its finally blocks finish first.
-                if not task.done():
-                    task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await task
-                raise
 
         runner = with_after_result(run_next)
     return await runner(params, ctx)
@@ -1483,10 +1495,8 @@ async def generate_turn(
         return after_tools
     # Tools already ran. This is the conversation if a later pipe fails.
     call.set_messages(after_tools.messages)
-    # A long tool loop has to stop at max_turns. Nesting every turn on this
-    # call fails the generate before that.
-    task = asyncio.create_task(
-        run_wrap_generate(
+    return await hop(
+        body=run_wrap_generate(
             registry=registry,
             options=after_tools.options,
             mw_pipeline=mw_pipeline,
@@ -1496,15 +1506,6 @@ async def generate_turn(
             resolved=resolved,
         )
     )
-    try:
-        return await task
-    except asyncio.CancelledError:
-        # Cancel waits for this turn so its finally blocks finish first.
-        if not task.done():
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
-        raise
 
 
 async def call_model(
