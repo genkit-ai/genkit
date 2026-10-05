@@ -45,6 +45,8 @@ SHELF = {
     'Longitude': 7,
 }
 
+SHELF_TITLES = {title.lower(): title for title in SHELF}
+
 HOURS = {
     'saturday': '9am to 6pm',
     'sunday': 'closed',
@@ -61,10 +63,11 @@ def search_books(topic: str, limit: int = 3) -> list[dict[str, str]]:
 @mcp.tool()
 def check_stock(title: str) -> dict[str, object]:
     """Report how many copies of a title are on the shelf right now."""
-    copies = SHELF.get(title)
-    if copies is None:
+    shelf_title = SHELF_TITLES.get(title.lower())
+    if shelf_title is None:
         return {'title': title, 'stocked': False, 'copies': 0}
-    return {'title': title, 'stocked': copies > 0, 'copies': copies}
+    copies = SHELF[shelf_title]
+    return {'title': shelf_title, 'stocked': copies > 0, 'copies': copies}
 
 
 @mcp.tool()

@@ -3855,7 +3855,7 @@ requires-dist = [
     { name = "genkit", editable = "packages/genkit" },
     { name = "genkit-google-genai", editable = "packages/genkit-google-genai" },
     { name = "genkit-mcp", editable = "packages/genkit-mcp" },
-    { name = "mcp", specifier = ">=1.26.0" },
+    { name = "mcp", specifier = ">=1.26.0,<2" },
 ]
 
 [[package]]
