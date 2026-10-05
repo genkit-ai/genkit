@@ -290,7 +290,7 @@ response = await ai.generate(
     model='bedrock/stability.sd3-5-large-v1:0',
     prompt='A tabby cat asleep on a sunlit windowsill, watercolour.',
 )
-image = response.media[0].url  # data:image/png;base64,...
+image = response.media.url  # data:image/png;base64,...
 ```
 
 Declaring is optional here too. An undeclared ID in one of the two families
@@ -315,7 +315,7 @@ top-level key is dropped. Your entries are merged key by key over these
 defaults:
 
 ```python
-config={
+config = {
     'imageGenerationConfig': {
         'numberOfImages': 1,
         'height': 1024,
@@ -335,7 +335,7 @@ defaults (`{'prompt': ..., 'output_format': 'png'}`), so `aspect_ratio`,
 `seed`, `negative_prompt`, `output_format` and the rest all apply:
 
 ```python
-config={'aspect_ratio': '16:9', 'output_format': 'jpeg', 'seed': 42}
+config = {'aspect_ratio': '16:9', 'output_format': 'jpeg', 'seed': 42}
 ```
 
 The media part's MIME type follows `output_format`.

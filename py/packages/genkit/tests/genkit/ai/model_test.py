@@ -40,6 +40,48 @@ def test_message_wrapper_text() -> None:
     assert wrapper.text == 'hello world'
 
 
+def test_message_media_is_first_or_none() -> None:
+    """Test media property of Message: first part, or None."""
+    msg = Message(role='model', content=[Part.from_media('https://example.com/a.png', content_type='image/png')])
+    assert msg.media is not None
+    assert msg.media.url == 'https://example.com/a.png'
+    assert msg.media.content_type == 'image/png'
+    assert msg.text == ''
+
+    two = Message(
+        role='model',
+        content=[
+            Part.from_media('https://example.com/first.jpg'),
+            Part.from_media('https://example.com/second.jpg'),
+        ],
+    )
+    assert two.media is not None
+    assert two.media.url == 'https://example.com/first.jpg'
+
+    text_only = Message(role='user', content=[Part.from_text('hi')])
+    assert text_only.media is None
+
+    data_only = Message(role='model', content=[Part.from_data({'k': 1})])
+    assert data_only.media is None
+
+
+def test_model_response_media_is_first_or_none() -> None:
+    """Test media property of ModelResponse: first part, or None."""
+    assert ModelResponse(message=None).media is None
+
+    resp = ModelResponse(
+        message=Message(
+            role='model',
+            content=[
+                Part.from_media('https://example.com/out.png', content_type='image/png'),
+                Part.from_media('https://example.com/extra.png'),
+            ],
+        )
+    )
+    assert resp.media is not None
+    assert resp.media.url == 'https://example.com/out.png'
+
+
 def test_response_wrapper_text() -> None:
     """Test text property of ModelResponse."""
     wrapper = ModelResponse(

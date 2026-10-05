@@ -574,6 +574,14 @@ class Message(GenkitModel):
         return text_from_message(self)
 
     @property
+    def media(self) -> Media | None:
+        """First media part, or None."""
+        for p in self.content:
+            if p.media is not None:
+                return p.media
+        return None
+
+    @property
     def tool_requests(self) -> list[Part]:
         """All tool request parts in this message."""
         return [p for p in self.content if p.tool_request is not None]
@@ -1291,11 +1299,11 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
         return self.message.tool_requests
 
     @property
-    def media(self) -> list[Media]:
-        """All media parts in the response message."""
+    def media(self) -> Media | None:
+        """First media part in the response message, or None."""
         if self.message is None:
-            return []
-        return [part.media for part in self.message.content if part.media is not None]
+            return None
+        return self.message.media
 
     @property
     def interrupts(self) -> list[Part]:

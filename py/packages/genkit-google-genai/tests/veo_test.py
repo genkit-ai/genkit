@@ -52,7 +52,8 @@ def _sdk_op(
 def _media(output: object) -> list:
     assert isinstance(output, ModelResponse)
     assert output.finish_reason == FinishReason.STOP
-    return output.media
+    assert output.message is not None
+    return [p.media for p in output.message.content if p.media is not None]
 
 
 def _text_request(*, config: object | None = None) -> ModelRequest:

@@ -32,14 +32,14 @@ async def main() -> None:
         prompt='Welcome to the Genkit media sample.',
         config={'speech_config': {'voice_config': {'prebuilt_voice_config': {'voice_name': 'Kore'}}}},
     )
-    print(voice.media[0].url if voice.media else 'no audio')
+    print(voice.media.url if voice.media else 'no audio')
 
     # Image: same generate(), different model.
     poster = await ai.generate(
         model=GoogleAI.gemini_image_model('gemini-2.5-flash-image'),
         prompt='A watercolor postcard of San Francisco at sunrise',
     )
-    print(poster.media[0].url if poster.media else 'no image')
+    print(poster.media.url if poster.media else 'no image')
 
     # Video is a job, not a round-trip. generate_operation hands back a
     # ticket; check_operation is how you find out when the video is ready.

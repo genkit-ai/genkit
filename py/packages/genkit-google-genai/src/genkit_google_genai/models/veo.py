@@ -195,7 +195,7 @@ def _from_veo_operation(*, api_op: genai_types.GenerateVideosOperation) -> Opera
     """Turn a GenerateVideosOperation into the Genkit ticket.
 
     ``output`` is a ModelResponse so pollers read
-    ``operation.output.media[0].url`` the same way they read a still off
+    ``operation.output.media.url`` the same way they read a still off
     ``generate()``.
     """
     op = Operation(id=api_op.name or '', done=bool(api_op.done))

@@ -613,7 +613,7 @@ def test_model_response_views_see_message_set_after_first_read() -> None:
     assert resp.text == ''
     assert resp.interrupts == []
     assert resp.tool_requests == []
-    assert resp.media == []
+    assert resp.media is None
     assert resp.output is None
 
     resp.message = Message(
