@@ -202,8 +202,16 @@ class ReflectionServerV2:
             logger.debug('reflection V2: reconnect scheduled', delay_s=delay, attempt=attempt)
             await asyncio.sleep(delay)
 
-    def stop(self) -> None:
+    async def stop(self) -> None:
+        """Stop for good: no reconnect, and close the live socket so read_loop returns.
+
+        Setting the flag alone is not enough: read_loop blocks on the socket,
+        so run_forever would not see it until the peer hung up.
+        """
         self.stopped = True
+        ws = self.ws
+        if ws is not None:
+            await ws.close(1000, 'stopped')
 
     def spawn(self, coro: Coroutine[Any, Any, Any]) -> None:
         """Run a fire-and-forget coroutine while keeping a reference to its task."""
@@ -282,7 +290,9 @@ class ReflectionServerV2:
             # retrying just loops against a CLI that keeps refusing.
             if e.code == REFLECTION_AUTH_ERROR_CODE:
                 logger.error('reflection API rejected this runtime; not reconnecting', message=e.message)
-                self.stop()
+                # Closing ends read_loop, and run_forever's cleanup then cancels
+                # this task (it is a background task). Fine: nothing follows.
+                await self.stop()
                 return
             logger.error('reflection V2: register failed', code=e.code, message=e.message)
         except Exception as e:

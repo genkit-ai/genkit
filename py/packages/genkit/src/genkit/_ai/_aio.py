@@ -187,6 +187,7 @@ class Genkit:
     _reflection_config: ReflectionConfig
     _reflection_ready: threading.Event
     _reflection_stopped: threading.Event
+    _reflection_bound_addr: str | None
 
     if TYPE_CHECKING:
 
@@ -231,6 +232,9 @@ class Genkit:
             # Set when the reflection thread exits for any reason (v2 auth
             # rejection, server crash), so run_main stops waiting on nothing.
             self._reflection_stopped = threading.Event()
+            # host:port the v1 socket is bound to, set in the constructor so
+            # run_main can log it without waiting on the server thread.
+            self._reflection_bound_addr = None
             self._initialize_registry(model, plugins)
             # Ensure the default generate action is registered for async usage.
             define_generate_action(self.registry)
@@ -977,6 +981,10 @@ class Genkit:
         sock: socket.socket | None = None
         if config.mode == 'v1':
             sock = self._bind_reflection_socket(config.host, config.port, pinned=config.pinned)
+            bound_host, bound_port = sock.getsockname()[:2]
+            if ':' in bound_host:
+                bound_host = f'[{bound_host}]'
+            self._reflection_bound_addr = f'{bound_host}:{bound_port}'
 
         async def _run_server() -> None:
             if config.mode == 'v2':
@@ -1098,7 +1106,7 @@ class Genkit:
         if not self._reflection_config.enabled:
             return run_loop(coro)
 
-        async def dev_runner() -> T | None:
+        async def reflection_runner() -> T | None:
             user_result: T | None = None
             try:
                 user_result = await coro
@@ -1111,7 +1119,7 @@ class Genkit:
 
             # Block until Ctrl+C (SIGINT handled by anyio) or SIGTERM, keeping
             # the daemon reflection thread alive.
-            logger.info('Dev UI ready. Press Ctrl+C to stop.')
+            logger.info(self._reflection_ready_message())
             try:
                 async with anyio.create_task_group() as tg:
 
@@ -1134,10 +1142,21 @@ class Genkit:
             except anyio.get_cancelled_exc_class():
                 pass
 
-            logger.debug('Dev UI server stopped.')
+            logger.debug('Reflection server stopped.')
             return user_result
 
-        return anyio.run(dev_runner)
+        return anyio.run(reflection_runner)
+
+    def _reflection_ready_message(self) -> str:
+        """The line run_main logs once it starts waiting on the reflection server."""
+        config = self._reflection_config
+        # Only dev writes the runtime file the Dev UI discovers, so only dev
+        # can promise the Dev UI will find this runtime.
+        if is_dev_environment():
+            return 'Dev UI ready. Press Ctrl+C to stop.'
+        if config.mode == 'v2':
+            return f'Reflection API connecting to {config.v2_url}. Press Ctrl+C to stop.'
+        return f'Reflection API listening on {self._reflection_bound_addr}. Press Ctrl+C to stop.'
 
     # -------------------------------------------------------------------------
     # Genkit-specific methods (generation, embedding, retrieval, etc.)

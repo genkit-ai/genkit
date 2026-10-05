@@ -174,8 +174,13 @@ def test_programmatic_port_is_bound_exactly() -> None:
             Genkit(reflection_server_spec=ServerSpec(scheme='http', host='127.0.0.1', port=port))
 
 
-def test_run_main_returns_when_the_cli_rejects_the_runtime() -> None:
-    """A -32001 register rejection stops reflection, and run_main returns instead of hanging."""
+@pytest.mark.parametrize('manager_closes', [True, False], ids=['manager-closes', 'manager-keeps-open'])
+def test_run_main_returns_when_the_cli_rejects_the_runtime(manager_closes: bool) -> None:
+    """A -32001 register rejection stops reflection, and run_main returns instead of hanging.
+
+    The real CLI closes the socket after rejecting, but the runtime must not
+    rely on that: with the socket left open, it has to hang up itself.
+    """
     loop = asyncio.new_event_loop()
     started = threading.Event()
     stop = asyncio.Event()
@@ -192,8 +197,9 @@ def test_run_main_returns_when_the_cli_rejects_the_runtime() -> None:
                         'error': {'code': -32001, 'message': 'Invalid reflection secret.'},
                     })
                 )
-                await ws.close(1008, 'unauthorized')
-                return
+                if manager_closes:
+                    await ws.close(1008, 'unauthorized')
+                    return
 
     async def _serve() -> None:
         async with serve(_reject, '127.0.0.1', 0) as server:
@@ -232,6 +238,26 @@ def test_run_main_returns_when_the_cli_rejects_the_runtime() -> None:
     finally:
         loop.call_soon_threadsafe(stop.set)
         manager.join(timeout=5)
+
+
+def test_ready_message_outside_dev_names_the_bound_address() -> None:
+    """Outside dev there is no runtime file, so run_main must not claim the Dev UI is ready."""
+    port = _find_free_port()
+    env = {'GENKIT_REFLECTION_ENABLED': 'true', 'GENKIT_REFLECTION_PORT': str(port)}
+    with mock.patch.dict(os.environ, env, clear=True):
+        ai = Genkit()
+        message = ai._reflection_ready_message()  # pyright: ignore[reportPrivateUsage]
+    assert message.startswith(f'Reflection API listening on 127.0.0.1:{port}.')
+    assert 'Dev UI' not in message
+
+
+def test_ready_message_in_dev_mentions_the_dev_ui() -> None:
+    """Under dev the runtime file is written, so the Dev UI can find the runtime."""
+    port = _find_free_port()
+    with mock.patch.dict(os.environ, {GENKIT_ENV: GenkitEnvironment.DEV}):
+        ai = Genkit(reflection_server_spec=ServerSpec(scheme='http', host='127.0.0.1', port=port))
+        message = ai._reflection_ready_message()  # pyright: ignore[reportPrivateUsage]
+    assert message.startswith('Dev UI ready.')
 
 
 def test_no_server_in_prod_mode() -> None:
