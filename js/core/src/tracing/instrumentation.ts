@@ -48,6 +48,17 @@ interface RunInNewSpanOpts {
   links?: Link[];
 }
 
+/**
+ * Tracks errors that have already been recorded via ``recordException`` / marked
+ * as ``isFailureSource`` while bubbling up nested ``runInNewSpan`` catches.
+ *
+ * Maps error object → OpenTelemetry ``traceId`` so:
+ * - We avoid mutating caller-owned Error objects (old ``ignoreFailedSpan`` flag).
+ * - Shared/sentinel errors reused across independent traces are still recorded
+ *   once per trace (a global WeakSet would suppress later traces).
+ */
+const failureSourceErrors = new WeakMap<object, string>();
+
 type RunInNewSpanFn<T> = (
   metadata: SpanMetadata,
   otSpan: ApiSpan,
@@ -153,22 +164,26 @@ export async function runInNewSpan<T>(
       } catch (e) {
         recordPath(opts.metadata, spanContext, e);
         opts.metadata.state = 'error';
+        // Parent spans still get ERROR status as the failure bubbles up; only
+        // the original failure-source span should record the exception event
+        // (matches Go's isErrorAlreadyMarked / RecordError gating).
         otSpan.setStatus({
           code: SpanStatusCode.ERROR,
           message: getErrorMessage(e),
         });
-        if (e instanceof Error) {
-          otSpan.recordException(e);
-        }
 
         // Mark the first failing span as the source of failure. Prevent parent
         // spans that catch re-thrown exceptions from also claiming to be the
-        // source.
-        if (typeof e === 'object') {
-          if (!(e as any).ignoreFailedSpan) {
+        // source or re-recording the same exception timeEvent within this trace.
+        if (e !== null && typeof e === 'object') {
+          const traceId = otSpan.spanContext().traceId;
+          if (failureSourceErrors.get(e) !== traceId) {
             opts.metadata.isFailureSource = true;
+            if (e instanceof Error) {
+              otSpan.recordException(e);
+            }
+            failureSourceErrors.set(e, traceId);
           }
-          (e as any).ignoreFailedSpan = true;
         }
 
         throw e;
