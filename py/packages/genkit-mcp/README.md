@@ -59,8 +59,13 @@ server on every call, registered or not, so what it returns is what the server s
 Every tool is named `<prefix>_<tool>`, so the tool above is `everything_echo`. The prefix is the
 provider name you registered the server under, `everything` here, and `tool_prefix=` overrides it.
 The separator is an underscore because Gemini and OpenAI reject a `/` in a function declaration
-name, and the prefix is checked against the same rules when the client is defined, so a name a model
-would refuse fails there rather than on your first `generate`.
+name. The prefix is checked against the same rules when the client is defined, so a prefix a
+model would refuse fails there rather than on your first `generate`. A tool name the server lists
+with such a character, such as `look.up`, has it rewritten to an underscore with a warning. Two
+tools that then share a name, such as `look.up` and `look/up`, fail the listing. Length is not
+checked at definition, because the tool half of the name is unknown until the server lists it. A
+`<prefix>_<tool>` longer than 64 characters is warned about when the tools are listed and passed
+through, so the provider's 400 arrives on `generate`.
 
 The prefix is deliberately not the name the server advertises for itself, which is arbitrary
 server-controlled text: `@modelcontextprotocol/server-everything` above calls itself
@@ -69,10 +74,12 @@ server-controlled text: `@modelcontextprotocol/server-everything` above calls it
 ## Connecting and disconnecting
 
 Connecting is lazy. The child process starts the first time something lists the tools, once per
-event loop, and the Dev UI's reflection server has a loop of its own.
+event loop, and the Dev UI's reflection server has a loop of its own. So under `genkit start`, a
+flow run from the Dev UI and your `main()` talk to two separate server processes. A server that
+keeps state, such as a session or an open file, keeps one copy of it for each.
 
 `await client.restart()` reconnects a live client, for a server whose configuration or state
-changed underneath you. `await client.close()` disconnects and stops the child process for good: a
+changed underneath you. `await client.close()` disconnects and stops the child process: a
 closed client cannot be restarted, and anything that asks for a tool afterwards fails with
 `McpConnectionClosedError`. To use that server again, build a new client with `create_mcp_client`
 or `define_mcp_client`. A connection that died on its own is replaced on next use, so one bad

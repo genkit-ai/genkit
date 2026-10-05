@@ -567,3 +567,18 @@ async def test_get_active_tools_asks_the_server_every_call(tmp_path: Path) -> No
 
     assert listings == '3'
     assert cached == '3'
+
+
+@pytest.mark.asyncio
+async def test_tools_sharing_a_genkit_name_fail_the_listing(tmp_path: Path) -> None:
+    """The provider keeps one action per name, so a collision would hide a tool."""
+    ai = Genkit()
+    client = define_mcp_client(ai, 'bookshop', config(tmp_path, MCP_FAKE_COLLIDING_TOOLS='1'))
+    collision = r"MCP tools 'look\.up' and 'look/up' both map to the Genkit tool name 'bookshop_look_up'"
+    try:
+        with pytest.raises(ValueError, match=collision):
+            await client.get_active_tools()
+        with pytest.raises(ValueError, match=collision):
+            await expand_wildcard_tools(ai.registry, ['bookshop:tool/*'])
+    finally:
+        await client.close()
