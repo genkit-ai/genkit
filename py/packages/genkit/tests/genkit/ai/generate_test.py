@@ -1646,7 +1646,7 @@ async def test_middleware_wrap_tool_interrupt_handled_as_interrupt_not_crash() -
 
 @pytest.mark.asyncio
 async def test_middleware_contributed_tools_available_to_model() -> None:
-    """Middleware.tools() contributes actions scoped to the generate call (child registry).
+    """Middleware.tools() returns Tool handles scoped to the generate call (child registry).
 
     The contributed tool is resolvable by the model during the call but must not
     appear in the root registry afterward — mirroring Go's Hooks.Tools + NewChild.
