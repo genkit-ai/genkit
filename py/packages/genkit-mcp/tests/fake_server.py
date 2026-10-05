@@ -7,7 +7,10 @@
 """A small subprocess MCP server used by connection lifecycle tests."""
 
 import asyncio
+import json
 import os
+import sys
+import threading
 
 import anyio
 from mcp.server import Server
@@ -121,6 +124,29 @@ if os.environ.get('MCP_FAKE_APP_ERROR_CALL'):
     app.request_handlers[CallToolRequest] = failing_call
 
 
+def close_stdin_after_handshake(marker: str) -> None:
+    """Answer initialize, then close stdin while stdout stays open, so the client's next write breaks."""
+    while True:
+        message = json.loads(sys.stdin.buffer.readline())
+        if message.get('method') == 'initialize':
+            reply = {
+                'jsonrpc': '2.0',
+                'id': message['id'],
+                'result': {
+                    'protocolVersion': message['params']['protocolVersion'],
+                    'capabilities': {'tools': {}},
+                    'serverInfo': {'name': 'fake-server', 'version': '0'},
+                },
+            }
+            os.write(1, (json.dumps(reply) + '\n').encode())
+        elif message.get('method') == 'notifications/initialized':
+            break
+    os.close(0)
+    with open(marker, 'w', encoding='utf-8') as closed:
+        closed.write('closed')
+    threading.Event().wait()
+
+
 async def main() -> None:
     if os.environ.get('MCP_FAKE_BAD_UTF8'):
         # Bypasses the SDK's text stream deliberately: this is a byte a strict
@@ -129,6 +155,9 @@ async def main() -> None:
     pid_file = os.environ.get('MCP_FAKE_PID_FILE')
     if pid_file:
         await anyio.Path(pid_file).write_text(str(os.getpid()), encoding='utf-8')
+    close_stdin_marker = os.environ.get('MCP_FAKE_CLOSE_STDIN')
+    if close_stdin_marker:
+        close_stdin_after_handshake(close_stdin_marker)
     if os.environ.get('MCP_FAKE_STALL'):
         # Never answers initialize, so the client stays in its connecting state.
         await asyncio.Event().wait()
