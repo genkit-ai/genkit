@@ -19,14 +19,16 @@
 import asyncio
 import contextvars
 import os
+import sys
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import timedelta
 from enum import Enum
 from importlib import metadata
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, TypeVar, cast
 
 import anyio
+import structlog
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.shared.exceptions import McpError
@@ -47,7 +49,12 @@ from genkit_mcp._errors import (
     McpToolResultError,
 )
 
+if sys.version_info < (3, 11):
+    from exceptiongroup import BaseExceptionGroup  # pyright: ignore[reportMissingImports]
+
 _T = TypeVar('_T')
+
+logger = structlog.get_logger(__name__)
 
 _TRANSPORT_ERRORS = (anyio.BrokenResourceError, anyio.ClosedResourceError, anyio.EndOfStream)
 
@@ -136,6 +143,25 @@ async def _transport_is_dead(session: ClientSession, error: Exception) -> bool:
     return False
 
 
+def _transport_cause(error: Exception) -> Exception:
+    """Find the transport error inside the task groups the SDK wraps it in.
+
+    Args:
+        error: What ended the owner task.
+
+    Returns:
+        The first transport or MCP error leaf, or ``error`` itself when there is none.
+    """
+    if isinstance(error, BaseExceptionGroup):
+        for leaf in cast('BaseExceptionGroup[BaseException]', error).exceptions:
+            if not isinstance(leaf, Exception):
+                continue
+            found = _transport_cause(leaf)
+            if isinstance(found, (*_TRANSPORT_ERRORS, McpError)):
+                return found
+    return error
+
+
 async def _call_tool(
     session: ClientSession,
     name: str,
@@ -197,6 +223,7 @@ class McpConnection:
         self._closed = asyncio.Event()
         self._state_lock = asyncio.Lock()
         self._owner_task: asyncio.Task[None] | None = None
+        self._unwinding: list[_Request[Any]] = []
 
     @property
     def is_terminal(self) -> bool:
@@ -309,13 +336,17 @@ class McpConnection:
         loop = asyncio.get_running_loop()
         result: asyncio.Future[_T] = loop.create_future()
         async with self._state_lock:
-            if self._state is _ConnectionState.FAILED:
-                raise self._failed_error()
             if self._state is _ConnectionState.CLOSED:
                 raise self._closed_error()
-            # Enqueueing must not await: ``_settle`` runs between awaits and
-            # would otherwise drain the queue before this request joined it.
-            self._queue.put_nowait(_Request(operation, result))
+            if self._state is _ConnectionState.FAILED:
+                if self._failure is not None or self._owner_task is None or self._owner_task.done():
+                    raise self._failed_error()
+                # The owner is still unwinding toward the cause, so wait for it like a cut-off caller.
+                self._unwinding.append(_Request(operation, result))
+            else:
+                # Enqueueing must not await: ``_settle`` runs between awaits and
+                # would otherwise drain the queue before this request joined it.
+                self._queue.put_nowait(_Request(operation, result))
         return await result
 
     async def _start(self) -> None:
@@ -352,9 +383,15 @@ class McpConnection:
                     self._ready.set()
                     await self._serve(session)
         except BaseException as error:
-            self._settle(error if isinstance(error, Exception) else None)
             if not isinstance(error, Exception):
+                self._settle(None)
                 raise
+            cause = _transport_cause(error)
+            # A rendered traceback would print frame locals, and those hold the server's env.
+            logger.warning(
+                'MCP connection ended', command=self._config.command, error=type(error).__name__, cause=repr(cause)
+            )
+            self._settle(cause)
         finally:
             # anyio cancel scopes inside the SDK can absorb whatever ended the
             # serve loop, so this is the only settlement guaranteed to run.
@@ -373,6 +410,7 @@ class McpConnection:
     async def _execute(self, session: ClientSession, request: _Request[Any], serving: anyio.CancelScope) -> None:
         """Run one operation and release its caller, however the body is left."""
         _serving.set(self)
+        deferred = False
         try:
             try:
                 value = await request.operation(session)
@@ -388,11 +426,17 @@ class McpConnection:
                     request.result.set_result(value)
         except BaseException:
             # Only an ending connection cancels a child, and the state must say so before any caller is released.
-            self._settle(None)
+            if self._state is _ConnectionState.CLOSED or self._failure is not None:
+                self._settle(None)
+            else:
+                # The SDK cancels this child before its task group hands the owner the transport error.
+                self._state = _ConnectionState.FAILED
+                self._unwinding.append(request)
+                deferred = True
             raise
         finally:
-            # Nothing else releases a started request, and a caller must never see the child's own CancelledError.
-            if not request.result.done():
+            # A caller must never see the child's own CancelledError.
+            if not deferred and not request.result.done():
                 request.result.set_exception(self._terminal_error())
 
     def _terminal_error(self) -> McpConnectionClosedError | McpConnectionFailedError:
@@ -420,11 +464,15 @@ class McpConnection:
         self._fail_queued(self._failed_error)
 
     def _fail_queued(self, build_error: Callable[[], BaseException]) -> None:
-        """Release callers whose work was not yet started.
+        """Release callers whose work was not yet started, or who wait for a failure's cause.
 
         Args:
             build_error: Makes one error per caller, so tracebacks stay separate.
         """
+        unwinding, self._unwinding = self._unwinding, []
+        for request in unwinding:
+            if not request.result.done():
+                request.result.set_exception(build_error())
         while True:
             try:
                 request = self._queue.get_nowait()
