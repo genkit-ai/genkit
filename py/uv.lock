@@ -1691,7 +1691,7 @@ requires-dist = [
     { name = "partial-json-parser", specifier = ">=0.2.1.1.post5" },
     { name = "pillow", specifier = ">=12.1.1" },
     { name = "psutil", specifier = ">=7.0.0" },
-    { name = "pydantic", specifier = ">=2.10.5" },
+    { name = "pydantic", specifier = ">=2.11" },
     { name = "python-multipart", specifier = ">=0.0.22" },
     { name = "rich", specifier = ">=13.0.0" },
     { name = "sse-starlette", specifier = ">=2.2.1" },

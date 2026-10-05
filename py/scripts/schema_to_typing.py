@@ -343,6 +343,11 @@ def _emit_model(
             '    # Store Pydantic type for runtime validation (excluded from JSON)',
             '    schema_type: Any = Field(default=None, exclude=True)',
         ])
+    if name == 'GenerationCommonConfig':
+        lines.extend([
+            '    # An explicit None clears a model ref default, so config dumps keep it.',
+            '    _keep_none_fields: ClassVar[bool] = True',
+        ])
     return lines + ['']
 
 

@@ -332,9 +332,9 @@ def assert_contains_subsequence(*, actual: list[Any], expected: list[Any], path:
 def dump(*, model: BaseModel) -> dict[str, Any]:
     """Serialize a wire model to its camelCase JSON form for spec comparison.
 
-    Unset fields stay off the object. A field that was set to null stays null,
-    so a spec can tell "not present" from an explicit ``~``. Wire models
-    default to dropping nulls, so this has to opt out.
+    Unset fields stay off the object. On spec step models a field that was set
+    to null stays null, so a spec can tell "not present" from an explicit
+    ``~``. Genkit wire types never send null, so there it drops either way.
     """
     return model.model_dump(by_alias=True, exclude_unset=True, exclude_none=False, mode='json')
 
@@ -984,11 +984,10 @@ def test_has_id_false_means_absent() -> None:
         assert_has_id(actual='snap-1', want=False, path='output.snapshotId')
 
 
-def test_dump_keeps_explicit_null_and_drops_unset() -> None:
+def test_dump_of_snapshot_with_explicit_null_finish_reason_omits_it_like_the_wire() -> None:
+    """A Genkit wire type never sends null, so an explicit None compares like unset."""
     pinned = SessionSnapshotSchema(snapshot_id='s', created_at='t', finish_reason=None)
-    dumped = dump(model=pinned)
-    assert 'finishReason' in dumped
-    assert dumped['finishReason'] is None
+    assert 'finishReason' not in dump(model=pinned)
     omitted = SessionSnapshotSchema(snapshot_id='s', created_at='t')
     assert 'finishReason' not in dump(model=omitted)
 

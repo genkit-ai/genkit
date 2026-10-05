@@ -42,9 +42,6 @@ def model_garden_instance(client: MagicMock) -> ModelGardenModel:
             {
                 'name': 'ModelGarden - Meta - llama-3.1',
                 'supports': {
-                    'constrained': None,
-                    'content_type': None,
-                    'context': None,
                     'long_running': False,
                     'multiturn': True,
                     'media': False,
@@ -54,7 +51,6 @@ def model_garden_instance(client: MagicMock) -> ModelGardenModel:
                         'json_mode',
                         'text',
                     ],
-                    'tool_choice': None,
                 },
             },
         ),
@@ -63,10 +59,6 @@ def model_garden_instance(client: MagicMock) -> ModelGardenModel:
             {
                 'name': 'ModelGarden - meta/lazaro-model-pro-max',
                 'supports': {
-                    'constrained': None,
-                    'content_type': None,
-                    'context': None,
-                    'long_running': None,
                     'multiturn': True,
                     'media': True,
                     'tools': True,
@@ -75,7 +67,6 @@ def model_garden_instance(client: MagicMock) -> ModelGardenModel:
                         'json_mode',
                         'text',
                     ],
-                    'tool_choice': None,
                 },
             },
         ),
