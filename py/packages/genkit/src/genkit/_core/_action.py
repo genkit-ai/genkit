@@ -25,6 +25,7 @@ import time
 import types
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import (
     Any,
     ClassVar,
@@ -263,7 +264,8 @@ def parse_plugin_name_from_action_name(name: str) -> str | None:
 _CallT = TypeVar('_CallT')
 
 
-class ActionParams(NamedTuple):
+@dataclass(frozen=True, slots=True)
+class ActionParams:
     """An action function's input and run-context parameters, either may be absent."""
 
     input: inspect.Parameter | None
@@ -357,7 +359,7 @@ def find_input_and_context(
                 f"Annotate it (e.g. '{input_param.name}: str'), or use Any to accept anything."
             )
 
-    return ActionParams(input_param, context_param)
+    return ActionParams(input=input_param, context=context_param)
 
 
 def json_schema_for(
