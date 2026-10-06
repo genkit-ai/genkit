@@ -377,8 +377,10 @@ def json_schema_for(
     """
     owner = describe_action(kind, name)
     # A generic's __name__ is the origin (list), so list[Thermometer]
-    # would show up in the error as "list".
-    type_name = annotation.__name__ if isinstance(annotation, type) else repr(annotation)
+    # would show up in the error as "list". get_origin also catches 3.10,
+    # where isinstance(list[X], type) is True.
+    is_generic = get_origin(annotation) is not None
+    type_name = annotation.__name__ if isinstance(annotation, type) and not is_generic else repr(annotation)
     try:
         adapter: TypeAdapter[Any] = TypeAdapter(annotation)
         return adapter, adapter.json_schema()
