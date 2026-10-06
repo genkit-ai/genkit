@@ -97,12 +97,21 @@ def _build_views() -> dict[str, Any]:
             'input': ctx.context['input'],
         }
 
+    async def deny(_request: RequestData) -> dict[str, Any]:
+        raise PublicError('UNAUTHENTICATED', 'not signed in')
+
+    @genkit_django_handler(ai, context_provider=deny)
+    @ai.flow()
+    async def gated(_: str) -> str:
+        return 'ok'
+
     return {
         'say_hi': say_hi,
         'raise_error': raise_error,
         'raise_invalid': raise_invalid,
         'raise_public': raise_public,
         'echo_request': echo_request,
+        'gated': gated,
     }
 
 
@@ -120,6 +129,7 @@ def urlconf(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         path('invalid_flow', views['raise_invalid']),
         path('public_flow', views['raise_public']),
         path('echo_request', views['echo_request']),
+        path('gated', views['gated']),
     ]
     monkeypatch.setitem(sys.modules, 'genkit_django_tests_urls', module)
 
@@ -179,7 +189,10 @@ async def test_400_missing_data_returns_valid_json(urlconf: None) -> None:  # no
         content_type='application/json',
     )
     assert response.status_code == 400
-    _assert_is_error_response(json.loads(response.content))
+    assert json.loads(response.content) == {
+        'message': 'Action request must be wrapped in {"data": ...} object',
+        'status': 'INVALID_ARGUMENT',
+    }
 
 
 @pytest.mark.asyncio
@@ -192,7 +205,10 @@ async def test_400_invalid_json_returns_valid_json(urlconf: None) -> None:  # no
         content_type='application/json',
     )
     assert response.status_code == 400
-    _assert_is_error_response(json.loads(response.content))
+    assert json.loads(response.content) == {
+        'message': 'request body must be valid JSON',
+        'status': 'INVALID_ARGUMENT',
+    }
 
 
 @pytest.mark.asyncio
@@ -201,7 +217,10 @@ async def test_405_non_post_returns_valid_json(urlconf: None) -> None:  # noqa: 
     client = AsyncClient()
     response = await client.get('/chat')
     assert response.status_code == 405
-    _assert_is_error_response(json.loads(response.content))
+    assert json.loads(response.content) == {
+        'message': 'only POST is supported',
+        'status': 'INVALID_ARGUMENT',
+    }
 
 
 @pytest.mark.asyncio
@@ -308,3 +327,19 @@ async def test_django_context_provider_sees_method_lowercase_headers_and_input(
             'input': 'hello',
         }
     }
+
+
+@pytest.mark.asyncio
+async def test_django_context_provider_public_error_returns_its_status_and_message(
+    urlconf: None,
+) -> None:  # noqa: ARG001
+    """A PublicError from Django's context_provider is mapped like a flow failure."""
+    client = AsyncClient()
+    response = await client.post(
+        '/gated',
+        data=json.dumps({'data': 'x'}),
+        content_type='application/json',
+    )
+
+    assert response.status_code == 401
+    assert json.loads(response.content) == {'message': 'not signed in', 'status': 'UNAUTHENTICATED'}

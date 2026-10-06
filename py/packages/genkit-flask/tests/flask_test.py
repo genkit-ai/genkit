@@ -231,4 +231,39 @@ def test_flask_flow_rejects_non_dict_json_payload_with_400() -> None:
     )
 
     assert response.status_code == 400
-    assert b'flow request must be wrapped in {"data": data} object' in response.data
+    assert json.loads(response.data) == {
+        'message': 'flow request must be wrapped in {"data": data} object',
+        'status': 'INVALID_ARGUMENT',
+    }
+
+
+def test_flask_missing_data_wrapper_returns_the_wrap_message() -> None:
+    """A POST without ``{"data": ...}`` tells the caller to wrap the body."""
+    response = create_app().test_client().post('/chat', json={'foo': 'bar'})
+
+    assert response.status_code == 400
+    assert json.loads(response.data) == {
+        'message': 'flow request must be wrapped in {"data": data} object',
+        'status': 'INVALID_ARGUMENT',
+    }
+
+
+def test_flask_context_provider_public_error_returns_its_status_and_message() -> None:
+    """A PublicError from Flask's context_provider is mapped like a flow failure."""
+    ai = Genkit()
+    app = Flask(__name__)
+    app.config.update({'TESTING': True})
+
+    def deny(_request: RequestData) -> dict[str, Any]:
+        raise PublicError('UNAUTHENTICATED', 'not signed in')
+
+    @app.post('/chat')
+    @genkit_flask_handler(ai, context_provider=deny)
+    @ai.flow()
+    async def chat(_: str) -> str:
+        return 'ok'
+
+    response = app.test_client().post('/chat', json={'data': 'x'})
+
+    assert response.status_code == 401
+    assert json.loads(response.data) == {'message': 'not signed in', 'status': 'UNAUTHENTICATED'}

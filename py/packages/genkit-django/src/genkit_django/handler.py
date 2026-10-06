@@ -26,7 +26,7 @@ from django.http import HttpRequest, HttpResponse, HttpResponseBase, JsonRespons
 from django.views.decorators.csrf import csrf_exempt
 from pydantic import BaseModel
 
-from genkit import ContextProvider, Genkit, GenkitError, RequestData
+from genkit import ContextProvider, Genkit, PublicError, RequestData
 from genkit._core._context import joined_headers
 from genkit.plugin_api import Action, get_callable_json, get_http_status
 
@@ -62,6 +62,13 @@ def _error_response(err: Exception, status: int | None = None) -> HttpResponse:
         content=json.dumps(get_callable_json(err), separators=_JSON_SEPARATORS),  # pyright: ignore[reportArgumentType]
         content_type='application/json',
     )
+
+
+def _log_served_failure(error: Exception, *, where: str) -> None:
+    if get_http_status(error) >= 500:
+        logger.exception('served flow %s failed', where)
+    else:
+        logger.warning('served flow %s failed: %s', where, error)
 
 
 def _request_headers(request: HttpRequest) -> Mapping[str, str]:
@@ -127,13 +134,13 @@ def genkit_django_handler(
 
     def decorator(flow: Action) -> Callable[[HttpRequest], Awaitable[HttpResponseBase]]:
         if not isinstance(flow, Action):
-            raise GenkitError(status='INVALID_ARGUMENT', message='must apply @genkit_django_handler on a @flow')
+            raise PublicError('INVALID_ARGUMENT', 'must apply @genkit_django_handler on a @flow')
 
         @csrf_exempt
         async def handler(request: HttpRequest) -> HttpResponseBase:
             if request.method != 'POST':
                 return _error_response(
-                    GenkitError(status='INVALID_ARGUMENT', message='only POST is supported'),
+                    PublicError('INVALID_ARGUMENT', 'only POST is supported'),
                     status=405,
                 )
 
@@ -141,15 +148,15 @@ def genkit_django_handler(
                 body = json.loads(request.body.decode('utf-8')) if request.body else {}
             except (json.JSONDecodeError, UnicodeDecodeError):
                 return _error_response(
-                    GenkitError(status='INVALID_ARGUMENT', message='request body must be valid JSON'),
+                    PublicError('INVALID_ARGUMENT', 'request body must be valid JSON'),
                     status=400,
                 )
 
             if not isinstance(body, dict) or 'data' not in body:
                 return _error_response(
-                    GenkitError(
-                        status='INVALID_ARGUMENT',
-                        message='Action request must be wrapped in {"data": ...} object',
+                    PublicError(
+                        'INVALID_ARGUMENT',
+                        'Action request must be wrapped in {"data": ...} object',
                     ),
                     status=400,
                 )
@@ -165,7 +172,7 @@ def genkit_django_handler(
                     if isinstance(context, dict):
                         action_context = context
                 except Exception as e:
-                    logger.exception('served flow context provider failed')
+                    _log_served_failure(e, where='context provider')
                     return _error_response(e)
 
             accept = request_data.headers.get('accept', '')
@@ -183,7 +190,7 @@ def genkit_django_handler(
                         result = await stream_response.response
                         yield f'data: {json.dumps({"result": _to_dict(result)}, separators=_JSON_SEPARATORS)}\n\n'
                     except Exception as e:
-                        logger.exception('served flow stream failed')
+                        _log_served_failure(e, where='stream')
                         err_payload = json.dumps(
                             {'error': get_callable_json(e)},
                             separators=_JSON_SEPARATORS,
@@ -196,7 +203,7 @@ def genkit_django_handler(
                 response = await flow.run(body.get('data'), context=action_context, init=init)
                 return JsonResponse({'result': _to_dict(response.response)})
             except Exception as e:
-                logger.exception('served flow failed')
+                _log_served_failure(e, where='run')
                 return _error_response(e)
 
         return handler

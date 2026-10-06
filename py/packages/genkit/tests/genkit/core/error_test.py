@@ -299,7 +299,8 @@ def test_wrap_http_error_reads_retry_after() -> None:
     error = wrap_http_error(FakeError(), status_code=429, message='rate limited')
     assert error.status == 'RESOURCE_EXHAUSTED'
     assert error.response_metadata == {'retry_after_ms': 60000.0}
-    assert error.to_callable_serializable().message == 'rate limited'
+    assert error.original_message == 'rate limited'
+    assert error.to_callable_serializable().message == 'Resource exhausted'
 
 
 def test_served_error_body_for_provider_error_keeps_status_without_provider_text() -> None:
@@ -312,6 +313,86 @@ def test_served_error_body_for_provider_error_keeps_status_without_provider_text
 
     assert get_callable_json(error) == {'message': 'Unavailable', 'status': 'UNAVAILABLE'}
     assert get_http_status(error) == 503
+
+
+def test_served_error_body_omits_details_on_non_public_genkit_error() -> None:
+    """A provider dump in details does not leave the process on a non-PublicError."""
+    error = GenkitError(
+        status='INVALID_ARGUMENT',
+        message='bad key',
+        details={'error': {'message': 'API key expired'}},
+    )
+
+    assert get_callable_json(error) == {'message': 'Invalid argument', 'status': 'INVALID_ARGUMENT'}
+
+
+def test_served_error_body_includes_public_error_details_without_stack() -> None:
+    """A PublicError's details go on the wire; stack does not."""
+    error = PublicError('NOT_FOUND', 'no order 99', details={'id': '99', 'stack': 'trace'})
+
+    assert get_callable_json(error) == {
+        'message': 'no order 99',
+        'status': 'NOT_FOUND',
+        'details': {'id': '99'},
+    }
+
+
+def test_served_error_body_for_not_found_wrapping_unavailable_keeps_not_found() -> None:
+    """A NOT_FOUND that wraps UNAVAILABLE stays 404 Not found."""
+    error = GenkitError(
+        status='NOT_FOUND',
+        message='no order',
+        cause=GenkitError(status='UNAVAILABLE', message='store down'),
+    )
+
+    assert get_callable_json(error) == {'message': 'Not found', 'status': 'NOT_FOUND'}
+    assert get_http_status(error) == 404
+
+
+def test_served_error_body_dumps_pydantic_details_on_public_error() -> None:
+    """A PublicError whose details hold a model still JSON-encodes."""
+    import json
+
+    from pydantic import BaseModel
+
+    class Extra(BaseModel):
+        id: str
+
+    error = PublicError('NOT_FOUND', 'no order 99', details={'m': Extra(id='99')})
+    body = get_callable_json(error)
+
+    assert body == {
+        'message': 'no order 99',
+        'status': 'NOT_FOUND',
+        'details': {'m': {'id': '99'}},
+    }
+    json.dumps(body)
+
+
+def test_to_callable_serializable_redacts_like_get_callable_json() -> None:
+    """A non-public error's wire body drops the message and details, same as get_callable_json."""
+    error = GenkitError(
+        status='INVALID_ARGUMENT',
+        message='bad id 12345',
+        details={'secret': 'ssn'},
+    )
+
+    body = error.to_callable_serializable()
+    assert body.model_dump(exclude_none=True) == get_callable_json(error)
+    # => {'message': 'Invalid argument', 'status': 'INVALID_ARGUMENT'}
+    assert error.original_message == 'bad id 12345'
+
+
+def test_to_callable_serializable_keeps_public_error_text() -> None:
+    """A PublicError keeps its message and details; stack is stripped."""
+    error = PublicError('NOT_FOUND', 'no order 99', details={'reason': 'MISSING', 'stack': 'trace'})
+
+    body = error.to_callable_serializable()
+    assert body.model_dump(exclude_none=True) == {
+        'message': 'no order 99',
+        'status': 'NOT_FOUND',
+        'details': {'reason': 'MISSING'},
+    }
 
 
 @pytest.mark.parametrize(
