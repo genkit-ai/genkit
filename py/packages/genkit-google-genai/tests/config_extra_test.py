@@ -20,6 +20,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from genkit_google_genai._models._gemini import GeminiConfig, GeminiModel
+from genkit_google_genai._models._sdk_config import attach_config_extra, attach_leftovers
 from genkit_google_genai._models._secrets import reject_request_config_api_key
 from google.genai import types as genai_types
 from pydantic import ValidationError
@@ -125,3 +126,30 @@ async def test_extra_keeps_plugin_level_extra_body() -> None:
 
     assert cfg is not None
     assert _extra_body(cfg) == {'labels': {'env': 'prod', 'team': 'search'}, 'keep': 1}
+
+
+@pytest.mark.asyncio
+async def test_generate_gemini_extra_snake_case_generation_config_keeps_other_generation_fields() -> None:
+    """`extra={'generation_config': {'newKnob': 2}}` merges into generationConfig instead of replacing it."""
+    cfg = genai_types.GenerateContentConfig()
+    cfg = attach_leftovers(cfg, {'futureKnob': 1}, nest='generationConfig')
+    cfg = attach_config_extra(cfg, {'generation_config': {'newKnob': 2}}, action_name='gemini-2.5-flash')
+
+    assert _extra_body(cfg)['generationConfig'] == {'futureKnob': 1, 'newKnob': 2}
+    assert 'generation_config' not in _extra_body(cfg)
+
+
+@pytest.mark.asyncio
+async def test_generate_gemini_extra_keeps_plugin_extra_body_in_other_casing() -> None:
+    """Plugin `extra_body={'generation_config': {...}}` plus request `generationConfig` keeps both sets of keys."""
+    plugin_http = genai_types.HttpOptions(extra_body={'generation_config': {'pluginKnob': 1}})
+    model = GeminiModel('gemini-2.5-flash', MagicMock(), client_kwargs={'http_options': plugin_http})
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
+        config=GeminiConfig.model_validate({'extra': {'generationConfig': {'newKnob': 2}}}),
+    )
+
+    cfg = await model._genkit_to_googleai_cfg(request=request)
+
+    assert cfg is not None
+    assert _extra_body(cfg) == {'generation_config': {'pluginKnob': 1, 'newKnob': 2}}

@@ -22,33 +22,45 @@ supporting models like DALL-E 3 and GPT-Image-1.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from openai import APIStatusError, AsyncOpenAI
 from openai.types.images_response import ImagesResponse
+from pydantic import Field
 
 from genkit import ActionRunContext, FinishReason, Message, ModelResponse, Part, Role
-from genkit.model import ModelInfo, ModelRequest, Supports
+from genkit.model import ModelConfig, ModelInfo, ModelRequest, Supports
 from genkit_openai._models._utils import _extract_text, extract_config_dict, pop_extra_body, reraise_openai_error
 
-# GPT Image 1 has a different configuration surface from DALL-E models.
-_GPT_IMAGE_1_CONFIG_SCHEMA: dict[str, Any] = {
-    'type': 'object',
-    'properties': {
-        'size': {
-            'type': 'string',
-            'enum': ['1024x1024', '1536x1024', '1024x1536', 'auto'],
-        },
-        'style': {'type': 'string', 'enum': ['vivid', 'natural']},
-        'user': {'type': 'string'},
-        'n': {'type': 'integer', 'minimum': 1, 'maximum': 10, 'default': 1},
-        'quality': {'type': 'string', 'enum': ['low', 'medium', 'high']},
-        'background': {'type': 'string', 'enum': ['transparent', 'opaque', 'auto']},
-        'moderation': {'type': 'string', 'enum': ['low', 'auto']},
-        'output_compression': {'type': 'integer', 'minimum': 1, 'maximum': 100},
-        'output_format': {'type': 'string', 'enum': ['png', 'jpeg', 'web']},
-    },
-}
+
+class OpenAIDalleConfig(ModelConfig):
+    """Settings the DALL-E image endpoint reads from config."""
+
+    size: str | None = None
+    quality: Literal['standard', 'hd'] | None = None
+    style: Literal['vivid', 'natural'] | None = None
+    n: int | None = None
+    user: str | None = None
+    response_format: str | None = None
+
+
+class OpenAIGptImageConfig(ModelConfig):
+    """Settings the GPT Image endpoint reads from config."""
+
+    size: Literal['1024x1024', '1536x1024', '1024x1536', 'auto'] | None = None
+    style: Literal['vivid', 'natural'] | None = None
+    user: str | None = None
+    n: int | None = None
+    quality: Literal['low', 'medium', 'high'] | None = Field(
+        default=None,
+        json_schema_extra={'enum': ['low', 'medium', 'high']},
+    )
+    background: Literal['transparent', 'opaque', 'auto'] | None = None
+    moderation: Literal['low', 'auto'] | None = None
+    output_compression: int | None = None
+    output_format: Literal['png', 'jpeg', 'webp'] | None = None
+    response_format: str | None = None
+
 
 # Supported image generation models with their metadata.
 SUPPORTED_IMAGE_MODELS: dict[str, ModelInfo] = {
@@ -64,7 +76,6 @@ SUPPORTED_IMAGE_MODELS: dict[str, ModelInfo] = {
     ),
     'gpt-image-1': ModelInfo(
         label='OpenAI - GPT Image 1',
-        config_schema=_GPT_IMAGE_1_CONFIG_SCHEMA,
         supports=Supports(
             media=False,
             output=['media'],
@@ -98,7 +109,7 @@ def _to_image_generate_params(
     """
     prompt = _extract_prompt_text(request)
     config = extract_config_dict(request)
-    extra_body = pop_extra_body(config, managed=('prompt',), label='openai image')
+    extra_body = pop_extra_body(config, managed=('prompt', 'model'), label='openai image')
 
     # Start with required params.
     effective_model = config.pop('version', None) or model_name

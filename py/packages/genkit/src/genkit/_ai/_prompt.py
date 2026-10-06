@@ -51,6 +51,7 @@ from genkit._ai._model import (
     assert_correct_config_class,
     check_call_config,
     check_config_dict,
+    config_field_names,
     config_schema_at_define,
     normalize_config,
     resolve_call_model,
@@ -377,15 +378,23 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
             model=resolved.name,
         )
         # Re-check the stored typed config unless this call hops models.
-        # The prompt's own dict is always checked against the model this call
-        # hits, before the call's config is merged over it.
+        # A None override clears that default, so the prompt's copy of the
+        # key is not checked against the model this call hits.
         if self._defined_model_name is None or self._defined_model_name == resolved.name:
             assert_correct_config_class(
                 config=self._config,
                 schema=resolved.config_schema,
                 model=resolved.name,
             )
-        check_config_dict(config=self._config, schema=resolved.config_schema, model=resolved.name)
+        check_config_dict(
+            config=prompt_config_after_clears(
+                stored=self._config,
+                override=opts.get('config'),
+                schema=resolved.config_schema,
+            ),
+            schema=resolved.config_schema,
+            model=resolved.name,
+        )
 
         merged_metadata = (
             {**(self._metadata or {}), **(opts.get('metadata') or {})} if opts.get('metadata') else self._metadata
@@ -449,6 +458,26 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         call_opts: PromptGenerateOptions = opts  # type: ignore[assignment]
         _registry, options = await prepare_prompt(prompt=self, input=input, opts=call_opts)
         return options
+
+
+def prompt_config_after_clears(
+    *,
+    stored: Mapping[str, Any] | BaseModel | None,
+    override: object,
+    schema: type[BaseModel] | None,
+) -> dict[str, Any]:
+    """The prompt's config minus keys this call set to None.
+
+    None means "clear the default". The prompt still names the key, but
+    this call does not send it, so it must not fail the model's check.
+    """
+    stored_bag = normalize_config(config=stored)
+    if override is None:
+        return {key: value for key, value in stored_bag.items() if value is not None}
+    override_bag = normalize_config(config=override)
+    names = config_field_names(schema) if schema is not None else {}
+    cleared = {names.get(key, key) for key, value in override_bag.items() if value is None}
+    return {key: value for key, value in stored_bag.items() if value is not None and names.get(key, key) not in cleared}
 
 
 def _register_prompt_action_pair(
