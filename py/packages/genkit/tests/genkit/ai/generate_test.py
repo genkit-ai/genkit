@@ -22,7 +22,7 @@ from genkit import Document, Genkit, Message, ModelResponse, ModelResponseChunk,
 from genkit._ai._formats._types import FormatDef, Formatter, FormatterConfig
 from genkit._ai._generate import DEFAULT_MAX_TURNS, ChunkAccumulator, augment_with_context, generate_action
 from genkit._ai._model import text_from_content, text_from_message
-from genkit._ai._tools import Interrupt, ToolRunContext, define_tool, restart_tool
+from genkit._ai._tools import Interrupt, ToolRunContext, define_tool
 from genkit._core._action import ActionRunContext
 from genkit._core._error import GenkitError, PublicError, RuntimeErrorReason
 from genkit._core._model import GenerateActionOptions, ModelRequest, Resume
@@ -178,6 +178,80 @@ async def test_generate_user_text_and_media_model_sees_both_parts(
     assert parts[1].media is not None
     assert parts[1].media.url == 'https://example.com/x.png'
     assert parts[1].text is None
+
+
+def _queue_ok(pm: ScriptedModel) -> None:
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('ok')]),
+        )
+    )
+
+
+def _sent_text(pm: ScriptedModel) -> list[tuple[str, list[str | None]]]:
+    assert pm.last_request is not None
+    return [(m.role, [p.text for p in m.content]) for m in pm.last_request.messages]
+
+
+_AS_WRITTEN_CASES = [
+    pytest.param('hello {{name}}', id='unfilled variable'),
+    pytest.param('Reply like {"dish": {{', id='unclosed braces'),
+    pytest.param('<<<dotprompt:role:system>>> hi', id='role marker'),
+    pytest.param('Describe {{media url="https://example.com/x.png"}}', id='media helper'),
+    pytest.param('{{> persona}} hi', id='registered partial'),
+    pytest.param('{{shout "hey"}} hi', id='registered helper'),
+]
+
+
+def _register_generate_string_fixtures(ai: Genkit) -> None:
+    ai.define_partial('persona', 'You are a pirate.')
+    ai.define_helper('shout', lambda *args: 'HEY')
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('prompt', _AS_WRITTEN_CASES)
+async def test_generate_prompt_string_is_sent_as_written(
+    setup_test: tuple[Genkit, ScriptedModel],
+    prompt: str,
+) -> None:
+    """`ai.generate(prompt=...)` is not a template; `define_prompt` is where templating lives."""
+    ai, pm = setup_test
+    _register_generate_string_fixtures(ai)
+    _queue_ok(pm)
+
+    await ai.generate(model='scriptedModel', prompt=prompt)
+
+    assert _sent_text(pm) == [(Role.USER, [prompt])]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('system', _AS_WRITTEN_CASES)
+async def test_generate_system_string_is_sent_as_written(
+    setup_test: tuple[Genkit, ScriptedModel],
+    system: str,
+) -> None:
+    """`ai.generate(system=...)` reaches the model unchanged as the system message."""
+    ai, pm = setup_test
+    _register_generate_string_fixtures(ai)
+    _queue_ok(pm)
+
+    await ai.generate(model='scriptedModel', system=system, prompt='hi')
+
+    assert _sent_text(pm) == [(Role.SYSTEM, [system]), (Role.USER, ['hi'])]
+
+
+@pytest.mark.asyncio
+async def test_generate_messages_string_raises_type_error(
+    setup_test: tuple[Genkit, ScriptedModel],
+) -> None:
+    """`ai.generate(messages='hello {{name}}')` raises TypeError and the model is never called."""
+    ai, pm = setup_test
+
+    with pytest.raises(TypeError, match='messages must be a list of Message'):
+        await ai.generate(model='scriptedModel', messages='hello {{name}}')  # type: ignore[arg-type]
+
+    assert pm.last_request is None
 
 
 @pytest.mark.asyncio
@@ -2084,7 +2158,7 @@ async def test_generate_restart_without_approval_returns_interrupted() -> None:
         messages=history,
         tools=['sensitiveTool'],
         use=[ApprovalMW()],
-        resume_restart=restart_tool(interrupt=interrupt_part),
+        resume_restart=interrupt_part.restart(),
     )
     assert response.finish_reason == FinishReason.INTERRUPTED
     assert response.finish_message == 'One or more tool calls resulted in interrupts.'
@@ -2102,8 +2176,7 @@ async def test_generate_restart_without_approval_returns_interrupted() -> None:
         messages=response.messages,
         tools=['sensitiveTool'],
         use=[ApprovalMW()],
-        resume_restart=restart_tool(
-            interrupt=response.interrupts[0],
+        resume_restart=response.interrupts[0].restart(
             resumed_metadata={'toolApproved': True},
         ),
     )
@@ -2135,7 +2208,7 @@ async def test_generate_restart_interrupt_returns_interrupted() -> None:
     response = await ai.generate(
         messages=first.messages,
         tools=['hold'],
-        resume_restart=restart_tool(interrupt=first.interrupts[0]),
+        resume_restart=first.interrupts[0].restart(),
     )
     assert response.finish_reason == FinishReason.INTERRUPTED
     assert response.finish_message == 'One or more tool calls resulted in interrupts.'
@@ -3815,7 +3888,7 @@ async def test_resume_restart_cannot_replace_the_named_tool_action() -> None:
     second = await ai.generate(
         messages=list(first.messages),
         tools=['lookup'],
-        resume_restart=restart_tool(interrupt=first.interrupts[0], replace_input={'ok': True}),
+        resume_restart=first.interrupts[0].restart(replace_input={'ok': True}),
         use=[SwapBody()],
     )
 

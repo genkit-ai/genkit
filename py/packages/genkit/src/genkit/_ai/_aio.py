@@ -69,6 +69,7 @@ from genkit._ai._prompt import (
     define_partial,
     define_schema,
     load_prompt_folder,
+    parts_from_prompt,
     register_prompt_actions,
     to_generate_options,
 )
@@ -120,6 +121,7 @@ from genkit._core._typing import (
     MiddlewareRef,
     ModelInfo,
     Operation,
+    Role,
 )
 
 from ._decorators import _FlowDecorator, _FlowDecoratorWithChunk
@@ -1218,6 +1220,14 @@ class Genkit:
             )
             print(res.text)
             print(res.output)
+
+        ``prompt`` and ``system`` strings are sent exactly as written. Braces
+        are content (JSON, code, or another template), not Handlebars. If a
+        generate string used to rely on a registered partial (``{{> persona}}``),
+        a ``define_helper`` helper, or ``{{media url=...}}``, move it into
+        ``define_prompt`` (or a ``.prompt`` file), or build the text /
+        ``Part.from_media(...)`` yourself. ``{{role}}`` in a generate string
+        already raised; it now goes to the model as written too.
         """
         return await self._generate(
             model=model,
@@ -1456,18 +1466,31 @@ class Genkit:
         Inline tools and middleware live on a child registry so they die
         with the call and stay out of ``self.registry``.
         """
+        if isinstance(messages, str):
+            raise TypeError('messages must be a list of Message; pass text with prompt=')
+
         registry = self.registry.new_child()
         await register_tools(registry, tools)
         use = register_middleware(registry, use)
         resolved = await resolve_for_generate(model=model, config=config, registry=registry)
         assert_correct_config_class(config=config, schema=resolved.config_schema, model=resolved.name)
+        # strings passed at call time are content, not templates: braces may be
+        # JSON, code, or another template. templates are what you define up
+        # front (define_prompt, .prompt files, define_agent's system).
+        resolved_msgs: list[Message] = []
+        if system:
+            resolved_msgs.append(Message(role=Role.SYSTEM, content=parts_from_prompt(system)))
+        if messages:
+            resolved_msgs.extend(messages)
+        if prompt:
+            resolved_msgs.append(Message(role=Role.USER, content=parts_from_prompt(prompt)))
         options = await to_generate_options(
             registry=registry,
             call=GenerateCall(
                 model=resolved.name,
-                prompt=prompt,
-                system=system,
-                messages=messages,
+                prompt=None,
+                system=None,
+                messages=resolved_msgs,
                 tools=tools,
                 return_tool_requests=return_tool_requests,
                 tool_choice=tool_choice,

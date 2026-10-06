@@ -86,6 +86,7 @@ from genkit._core._model import (
     Part,
     as_message,
     chunk_for_stream,
+    reject_unanswered_interrupts,
 )
 from genkit._core._protocols import RegistryLike, SessionLike
 from genkit._core._registry import Registry
@@ -2291,6 +2292,7 @@ async def resolve_resume_options(
     """Handle resume options by resolving pending tool calls from a previous turn."""
     if not options.resume:
         return (options, None, None)
+    reject_unanswered_interrupts(options.resume)
 
     messages = list(options.messages or [])
     last_message = messages[-1] if messages else None

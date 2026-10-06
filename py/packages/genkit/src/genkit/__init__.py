@@ -44,9 +44,7 @@ from genkit._ai._prompt import (
 from genkit._ai._tools import (
     MultipartToolResponse,
     ToolRunContext,
-    respond_to_interrupt,
     response,
-    restart_tool,
     tool,
 )
 from genkit._core._action import Action as Flow, ActionRunContext, StreamResponse
@@ -99,8 +97,6 @@ __all__ = [
     'Tool',
     'ToolRunContext',
     'Interrupt',
-    'respond_to_interrupt',
-    'restart_tool',
     'response',
     'MultipartToolResponse',
     # Flows, prompts, errors
