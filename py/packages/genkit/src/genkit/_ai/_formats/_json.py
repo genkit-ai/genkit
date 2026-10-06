@@ -104,7 +104,7 @@ class JsonFormat(FormatDef):
                 A JSON object extracted from the chunk's accumulated text,
                 or None if no valid JSON is found.
             """
-            return extract_json(chunk.accumulated_text, throw_on_bad_json=False)
+            return extract_json(chunk.accumulated_text, throw_on_bad_json=False, allow_partial=True)
 
         instructions: str | None = None
 

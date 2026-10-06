@@ -31,8 +31,12 @@ def parse_partial_json(json_string: str) -> Any:  # noqa: ANN401
     return loads(json_string)
 
 
-def extract_json(text: str, throw_on_bad_json: bool = True) -> Any:  # noqa: ANN401
-    """Extract JSON from text with lenient parsing (handles trailing commas, partial JSON, etc.)."""
+def extract_json(text: str, throw_on_bad_json: bool = True, allow_partial: bool = False) -> Any:  # noqa: ANN401
+    """Extract JSON from text with lenient parsing (trailing commas, code fences, surrounding prose).
+
+    A finished reply cut off mid-object isn't JSON, so it only gets filled
+    in when ``allow_partial`` is set, which is what streaming chunks want.
+    """
     if not text.strip():
         return None
 
@@ -75,10 +79,14 @@ def extract_json(text: str, throw_on_bad_json: bool = True) -> Any:  # noqa: ANN
         elif char == closing_char:
             nesting_count -= 1
             if not nesting_count:
-                return json5.loads(text[start_pos or 0 : i + 1])
+                try:
+                    return json5.loads(text[start_pos or 0 : i + 1])
+                except ValueError:
+                    if throw_on_bad_json:
+                        raise
+                    return None
 
-    # Handle incomplete JSON structure
-    if start_pos is not None and nesting_count > 0:
+    if allow_partial and start_pos is not None and nesting_count > 0:
         try:
             return parse_partial_json(text[start_pos:])
         except Exception as e:

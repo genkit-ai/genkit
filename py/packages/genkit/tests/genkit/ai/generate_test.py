@@ -6995,3 +6995,161 @@ async def test_generate_json_format_with_tool_call_validates_only_final_turn() -
     assert response.error is None
     assert response.output == {'result': 'special ingredient'}
     assert response.messages[-1].text == '{"result": "special ingredient"}'
+
+
+class _City(BaseModel):
+    name: str
+    population: int
+
+
+def _reply(text: str, finish_reason: FinishReason = FinishReason.STOP) -> ModelResponse:
+    return ModelResponse(
+        finish_reason=finish_reason,
+        message=Message(role=Role.MODEL, content=[Part.from_text(text)]),
+    )
+
+
+@pytest.mark.asyncio
+async def test_generate_output_schema_cut_off_with_length_returns_none() -> None:
+    """A reply cut off at `{"name":"X","population": 21` with finish LENGTH gives `output is None` and INVALID_OUTPUT.
+
+    `finish_reason` stays LENGTH, so the caller can tell a token cap from bad JSON.
+    """
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+    pm.responses = [_reply('{"name":"X","population": 21', FinishReason.LENGTH)]
+
+    response = await ai.generate(prompt='a city', output_schema=_City)
+
+    assert response.output is None
+    assert response.finish_reason == FinishReason.LENGTH
+    assert response.error is not None
+    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert response.text == '{"name":"X","population": 21'
+
+
+@pytest.mark.asyncio
+async def test_generate_output_schema_cut_off_with_stop_returns_none() -> None:
+    """The same cut-off reply with finish STOP also gives `output is None` and INVALID_OUTPUT."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+    pm.responses = [_reply('{"name":"X","population": 21')]
+
+    response = await ai.generate(prompt='a city', output_schema=_City)
+
+    assert response.output is None
+    assert response.finish_reason == FinishReason.STOP
+    assert response.error is not None
+    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+
+
+@pytest.mark.asyncio
+async def test_generate_output_schema_complete_json_with_length_returns_instance() -> None:
+    """A complete object that also hit the token cap is still a City with no error."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+    pm.responses = [_reply('{"name":"X","population": 2100}', FinishReason.LENGTH)]
+
+    response = await ai.generate(prompt='a city', output_schema=_City)
+
+    assert response.output == _City(name='X', population=2100)
+    assert response.error is None
+    assert response.finish_reason == FinishReason.LENGTH
+
+
+@pytest.mark.asyncio
+async def test_generate_output_in_code_fence_returns_instance() -> None:
+    """A complete object inside a ```json fence with prose around it still parses to a City."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+    pm.responses = [_reply('Here you go:\n```json\n{"name": "Paris", "population": 2100000}\n```\nEnjoy!')]
+
+    response = await ai.generate(prompt='a city', output_schema=_City)
+
+    assert response.output == _City(name='Paris', population=2100000)
+    assert response.error is None
+
+
+@pytest.mark.asyncio
+async def test_generate_json_format_cut_off_returns_none() -> None:
+    """`output_format='json'` with no schema gives `output is None` and INVALID_OUTPUT for a cut-off object."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+    pm.responses = [_reply('{"a": 1, "b": [1, 2', FinishReason.LENGTH)]
+
+    response = await ai.generate(prompt='json please', output_format='json')
+
+    assert response.output is None
+    assert response.error is not None
+    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+
+
+@pytest.mark.asyncio
+async def test_generate_json_format_complete_returns_dict() -> None:
+    """`output_format='json'` with no schema returns the dict for a complete object."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+    pm.responses = [_reply('{"a": 1, "b": [1, 2]}')]
+
+    response = await ai.generate(prompt='json please', output_format='json')
+
+    assert response.output == {'a': 1, 'b': [1, 2]}
+    assert response.error is None
+
+
+@pytest.mark.asyncio
+async def test_generate_items_format_cut_off_array_returns_none() -> None:
+    """`output_format='array'` gives `output is None` for an array cut off mid-item."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+    pm.responses = [_reply('[{"name": "a"}, {"name": "b', FinishReason.LENGTH)]
+
+    response = await ai.generate(prompt='a list', output_format='array')
+
+    assert response.output is None
+    assert response.error is not None
+    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+
+
+@pytest.mark.asyncio
+async def test_generate_jsonl_format_drops_cut_off_last_line() -> None:
+    """`output_format='jsonl'` keeps the complete lines and drops a cut-off last line."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+    pm.responses = [_reply('{"name": "a"}\n{"name": "b"}\n{"name": "c', FinishReason.LENGTH)]
+
+    response = await ai.generate(prompt='lines', output_format='jsonl')
+
+    assert response.output == [{'name': 'a'}, {'name': 'b'}]
+    assert response.error is None
+
+
+@pytest.mark.asyncio
+async def test_generate_custom_format_parser_keeps_its_own_repair() -> None:
+    """A custom FormatDef whose parser closes a cut-off object still gets its City back."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+
+    class ClosingFormat(FormatDef):
+        def __init__(self) -> None:
+            super().__init__('closing', FormatterConfig(format='json'))
+
+        def handle(self, schema: dict[str, object] | None) -> Formatter[object, object]:
+            return Formatter(
+                message_parser=lambda msg: json.loads(msg.text + '}'),
+                chunk_parser=lambda _chunk: None,
+                instructions=None,
+            )
+
+    ai.define_format(ClosingFormat())
+    pm.responses = [_reply('{"name":"X","population": 21', FinishReason.LENGTH)]
+
+    response = await ai.generate(
+        prompt='a city',
+        output_schema=_City,
+        output_format='closing',
+        output_instructions=False,
+    )
+
+    assert response.output == _City(name='X', population=21)
+    assert response.error is None

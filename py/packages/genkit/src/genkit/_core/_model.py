@@ -1229,6 +1229,8 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
 
         generate() does not throw when the text is not the schema. If you
         asked for a schema and this is not it, read ``error`` / ``.text``.
+        Only complete JSON counts: a reply cut off mid-object is None (check
+        ``finish_reason == 'length'`` to tell a token cap from bad JSON).
         """
         # BLOCKED and FAILED carry no legitimate content at all, so there is
         # nothing to hand back even when the caller only asked for a format.
@@ -1382,21 +1384,27 @@ class ModelResponseChunk(GenkitModel, Generic[OutputT]):
 
     @cached_property
     def output(self) -> OutputT | None:
-        """Parsed output from accumulated text.
+        """The reply so far, parsed as far as it goes. Never raises.
 
-        With no ``output_schema`` class, this is the extracted JSON value
-        (a dict, list, scalar, or ``None`` if an object has not started).
+        With ``output_schema=Recipe``, this is a partly built ``Recipe``:
+        fields that haven't arrived are ``None`` even when typed ``str``,
+        values may be cut short (``'Fluffy Panc'``), and nothing is
+        validated. Guard each field you read. ``(await stream.response).output``
+        is the only validated ``Recipe``.
 
-        When ``output_schema`` is a Pydantic model, this is an instance of
-        that class with missing fields set to ``None``. Values may still be
-        prefixes, and constraints are not enforced. Guard each field you
-        use. ``(await sr.response).output`` is the only fully validated value.
+        With no schema class, this is the JSON value so far (dict, list,
+        or scalar). It's ``None`` before an object starts or while the text
+        can't be parsed.
         """
-        parsed = (
-            self.chunk_parser(self)
-            if self.chunk_parser
-            else extract_json(self.accumulated_text, throw_on_bad_json=False)
-        )
+        try:
+            parsed = (
+                self.chunk_parser(self)
+                if self.chunk_parser
+                else extract_json(self.accumulated_text, throw_on_bad_json=False, allow_partial=True)
+            )
+        except Exception:
+            # one odd chunk shouldn't end a stream whose final reply may still parse.
+            return None
         if self.schema_type is not None and isinstance(parsed, dict) and not issubclass(self.schema_type, RootModel):
             return cast(
                 'OutputT | None',
