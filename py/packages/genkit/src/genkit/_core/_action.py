@@ -376,7 +376,9 @@ def json_schema_for(
     one is re-raised as a TypeError that does.
     """
     owner = describe_action(kind, name)
-    type_name = getattr(annotation, '__name__', repr(annotation))
+    # A generic's __name__ is the origin (list), so list[Thermometer]
+    # would show up in the error as "list".
+    type_name = annotation.__name__ if isinstance(annotation, type) else repr(annotation)
     try:
         adapter: TypeAdapter[Any] = TypeAdapter(annotation)
         return adapter, adapter.json_schema()

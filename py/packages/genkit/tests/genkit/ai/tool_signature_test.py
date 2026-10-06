@@ -469,6 +469,17 @@ def test_tool_with_plain_class_return_type_raises_type_error_naming_it() -> None
         ai.tool()(read)
 
 
+def test_tool_with_list_of_plain_class_return_type_names_the_generic() -> None:
+    """`-> list[Thermometer]` raises TypeError naming the generic, not just `list`."""
+    ai, _ = _app()
+
+    async def read(city: str) -> list[Thermometer]:
+        return []
+
+    with pytest.raises(TypeError, match=r"tool 'read' output has type list\[.*Thermometer\], which has no JSON schema"):
+        ai.tool()(read)
+
+
 @pytest.mark.skipif(sys.version_info >= (3, 12), reason='Pydantic accepts typing.TypedDict on 3.12+')
 def test_tool_with_typing_typed_dict_input_raises_type_error_before_3_12() -> None:
     """`read(r: Reading)` on a `typing.TypedDict` raises TypeError naming the input and typing_extensions."""
