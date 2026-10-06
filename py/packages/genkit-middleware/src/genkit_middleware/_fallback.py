@@ -23,10 +23,10 @@ from typing import Any, cast
 
 from pydantic import BaseModel, Field, field_validator
 
-from genkit import GenkitError
-from genkit._core._action import Action, ActionKind
-from genkit._core._model import ModelRef, ModelResponse
+from genkit import GenkitError, ModelResponse
+from genkit._core._model import ModelRef
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
+from genkit.plugin_api import Action, ActionKind
 
 _DEFAULT_FALLBACK_STATUSES: list[str] = [
     'UNAVAILABLE',
@@ -123,6 +123,8 @@ class Fallback(BaseMiddleware[FallbackConfig]):
         assert last_error is not None  # noqa: S101
         on_chunk = ctx.on_chunk
         for entry in self.config.models:
+            if ctx.abort_signal.is_set():
+                raise last_error
             model_name = entry if isinstance(entry, str) else entry.name
             fallback_action = await self._resolve_fallback_model(ctx, model_name)
             fallback_request = params.request.model_copy(update={'config': fallback_request_config(entry)})

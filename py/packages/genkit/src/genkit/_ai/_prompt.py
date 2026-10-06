@@ -642,25 +642,21 @@ async def to_generate_options(
     registry: Registry,
     call: GenerateCall,
 ) -> GenerateActionOptions:
-    """Fold a ``GenerateCall`` into the ``options`` the engine runs."""
+    """Fold a ``GenerateCall`` into the ``options`` the engine runs.
+
+    ``call.messages`` must already be the final list. ``system`` / ``prompt``
+    and a string ``messages`` belong on the caller that renders or builds them.
+    """
+    if call.system is not None or call.prompt is not None or isinstance(call.messages, str):
+        raise TypeError('render the prompt before building generate options')
+
     resolved = resolve_call_model(model=call.model, config=call.config, registry=registry)
     model = resolved.name
     default_model = registry.lookup_value('defaultModel', 'defaultModel')
     uses_ref = isinstance(call.model, ModelRef) or isinstance(default_model, ModelRef)
     config = resolved.config if uses_ref else call.config
 
-    cache = PromptCache()
-    resolved_msgs: list[Message] = []
-    if call.system:
-        result = await render_system_prompt(registry=registry, input={}, call=call, cache=cache)
-        resolved_msgs.append(result)
-    if call.messages:
-        resolved_msgs.extend(
-            await render_message_prompt(registry=registry, input={}, call=call, cache=cache, history=None)
-        )
-    if call.prompt:
-        result = await render_user_prompt(registry=registry, input={}, call=call, cache=cache)
-        resolved_msgs.append(result)
+    resolved_msgs: list[Message] = list(call.messages or [])
 
     # If is schema is set but format is not explicitly set, default to
     # `json` format.
