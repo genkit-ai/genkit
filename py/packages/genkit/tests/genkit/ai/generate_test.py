@@ -8408,17 +8408,116 @@ async def test_generate_json_format_complete_returns_dict() -> None:
 
 
 @pytest.mark.asyncio
-async def test_generate_items_format_cut_off_array_returns_none() -> None:
-    """`output_format='array'` gives `output is None` for an array cut off mid-item."""
+async def test_generate_json_format_brace_in_prose_returns_later_object() -> None:
+    """generate(output_format='json') returns {'a': 1} when the model replies `Fill in {name}: {"a": 1}`."""
     ai = Genkit(model='scriptedModel')
     pm, _ = define_scripted_model(ai)
-    pm.responses = [_reply('[{"name": "a"}, {"name": "b', FinishReason.LENGTH)]
+    pm.responses = [_reply('Fill in {name}: {"a": 1}')]
 
-    response = await ai.generate(prompt='a list', output_format='array')
+    response = await ai.generate(prompt='fill the template', output_format='json')
+
+    assert response.output == {'a': 1}
+    assert response.error is None
+
+
+@pytest.mark.asyncio
+async def test_generate_output_schema_brace_in_prose_wrong_shape_returns_none() -> None:
+    """generate(output_schema=City) on `{x} {"other": 1}` gives output is None and INVALID_OUTPUT."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [_reply('{x} {"other": 1}')]
+
+    response = await ai.generate(prompt='a city', output_schema=_City)
 
     assert response.output is None
     assert response.error is not None
     assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+
+
+@pytest.mark.asyncio
+async def test_generate_output_schema_cut_off_with_length_error_says_cut_off() -> None:
+    """generate(output_schema=City) cut off at the token limit says so in the INVALID_OUTPUT message."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [_reply('{"name":"X","population": 21', FinishReason.LENGTH)]
+
+    response = await ai.generate(prompt='a city', output_schema=_City)
+
+    assert response.output is None
+    assert response.error is not None
+    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert 'cut off at the token limit' in response.error.message
+    assert 'finish_reason=length' in response.error.message
+
+
+@pytest.mark.asyncio
+async def test_generate_output_schema_bad_json_with_stop_error_says_not_valid_json() -> None:
+    """generate(output_schema=City) on `{not json}` with finish stop keeps the not-valid-JSON message."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [_reply('{not json}')]
+
+    response = await ai.generate(prompt='a city', output_schema=_City)
+
+    assert response.output is None
+    assert response.error is not None
+    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert 'not valid JSON' in response.error.message
+
+
+@pytest.mark.asyncio
+async def test_generate_array_format_cut_off_keeps_finished_items() -> None:
+    """generate(output_format='array') keeps finished items when the model hits the token cap mid-item."""
+    text = '[{"a":1},{"a":2},{"a":'
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [_reply(text, FinishReason.LENGTH)]
+
+    response = await ai.generate(prompt='list 50 recipes', output_format='array')
+
+    assert response.output == [{'a': 1}, {'a': 2}]
+    assert response.error is None
+    assert response.finish_reason == FinishReason.LENGTH
+
+    stream_ai = Genkit(model='scriptedModel')
+    stream_pm, _ = define_scripted_model(stream_ai)
+    stream_pm.responses = [_reply(text, FinishReason.LENGTH)]
+    stream_pm.chunks = [[ModelResponseChunk(role=Role.MODEL, content=[Part.from_text(text)])]]
+    stream = stream_ai.generate_stream(prompt='list 50 recipes', output_format='array')
+    chunks = [chunk.output async for chunk in stream.stream]
+    streamed = await stream.response
+    assert streamed.output == response.output
+    assert chunks[-1] == response.output
+    assert streamed.finish_reason == FinishReason.LENGTH
+    assert streamed.error is None
+
+
+@pytest.mark.asyncio
+async def test_generate_array_format_cut_off_before_first_item_returns_none() -> None:
+    """generate(output_format='array') gives output is None and INVALID_OUTPUT when the model stops at `[{"a":`."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [_reply('[{"a":', FinishReason.LENGTH)]
+
+    response = await ai.generate(prompt='list 50 recipes', output_format='array')
+
+    assert response.output is None
+    assert response.error is not None
+    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert response.finish_reason == FinishReason.LENGTH
+
+
+@pytest.mark.asyncio
+async def test_generate_array_format_string_items_returns_list() -> None:
+    """generate(output_format='array') returns ["a", "b"] when the model replies with that array."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [_reply('["a", "b"]')]
+
+    response = await ai.generate(prompt='a list', output_format='array')
+
+    assert response.output == ['a', 'b']
+    assert response.error is None
 
 
 @pytest.mark.asyncio
@@ -8435,7 +8534,7 @@ async def test_generate_jsonl_format_drops_cut_off_last_line() -> None:
 
 
 @pytest.mark.asyncio
-async def test_generate_custom_format_parser_keeps_its_own_repair() -> None:
+async def test_generate_custom_format_parser_output_is_used_for_cut_off_reply() -> None:
     """A custom FormatDef whose parser closes a cut-off object still gets its City back."""
     ai = Genkit(model='scriptedModel')
     pm, _ = define_scripted_model(ai)

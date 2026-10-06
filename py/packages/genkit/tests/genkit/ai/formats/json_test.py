@@ -83,8 +83,8 @@ class TestJsonFormatMessage:
         )
         assert result == {'id': 1}
 
-    def test_json_format_cut_off_message_raises_instead_of_repairing(self) -> None:
-        """A finished message cut off at `{"foo": "bar"` is not JSON, so the json format refuses to guess."""
+    def test_json_format_cut_off_message_raises(self) -> None:
+        """A finished message cut off at `{"foo": "bar"` is not JSON, so the json format raises."""
         json_fmt = JsonFormat()
         fmt = json_fmt.handle({'type': 'object'})
 

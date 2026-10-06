@@ -627,11 +627,37 @@ async def test_stream_chunk_output_is_none_before_object_starts() -> None:
 
 
 @pytest.mark.asyncio
-async def test_stream_chunk_output_unparseable_text_is_none() -> None:
-    """A chunk whose text is `{1, 2}` has `chunk.output is None`, and the loop keeps going to the next chunk."""
+async def test_stream_chunk_output_skips_non_json_braces() -> None:
+    """Chunks `{1, 2}` then ` then {"a": 1}` give chunk.output None then {'a': 1}."""
     outputs, _ = await _stream_outputs(['{1, 2}', ' then {"a": 1}'], '{1, 2} then {"a": 1}')
 
-    assert outputs == [None, None]
+    assert outputs == [None, {'a': 1}]
+
+
+@pytest.mark.asyncio
+async def test_stream_chunk_output_schema_post_init_error_is_none() -> None:
+    """generate_stream(output_schema=Recipe) whose model_post_init reads title.
+
+    A chunk missing title gives chunk.output is None and the loop keeps going.
+    """
+
+    class RecipeNeedsTitle(BaseModel):
+        title: str
+
+        def model_post_init(self, __context: Any) -> None:
+            _ = self.title.lower()
+
+    outputs, response = await _stream_outputs(
+        ['{"other": 1', ', "title": "X"}'],
+        '{"other": 1, "title": "X"}',
+        output_schema=RecipeNeedsTitle,
+    )
+
+    assert outputs[0] is None
+    assert isinstance(outputs[1], RecipeNeedsTitle)
+    assert outputs[1].title == 'X'
+    assert response.output == RecipeNeedsTitle(title='X')
+    assert response.error is None
 
 
 @pytest.mark.asyncio

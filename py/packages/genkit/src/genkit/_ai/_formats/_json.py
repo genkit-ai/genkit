@@ -25,7 +25,7 @@ from genkit._ai._model import (
     ModelResponseChunk,
 )
 from genkit._core._compat import override
-from genkit._core._extract_json import extract_json
+from genkit._core._extract_json import extract_json, extract_partial_json
 
 
 class JsonFormat(FormatDef):
@@ -104,7 +104,7 @@ class JsonFormat(FormatDef):
                 A JSON object extracted from the chunk's accumulated text,
                 or None if no valid JSON is found.
             """
-            return extract_json(chunk.accumulated_text, throw_on_bad_json=False, allow_partial=True)
+            return extract_partial_json(chunk.accumulated_text)
 
         instructions: str | None = None
 

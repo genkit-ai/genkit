@@ -45,7 +45,8 @@ from typing_extensions import TypedDict, TypeVar
 from genkit._core import _typing as typing_mod
 from genkit._core._base import GenkitModel, dump_keeping_unknown
 from genkit._core._error import GenkitError, GenkitRuntimeError, RuntimeErrorReason
-from genkit._core._extract_json import extract_json
+from genkit._core._extract_json import extract_json, extract_partial_json
+from genkit._core._logger import get_logger
 from genkit._core._partial import construct_partial
 from genkit._core._schema import parse_schema
 from genkit._core._typing import (
@@ -102,6 +103,8 @@ ABNORMAL_FINISH_REASONS = frozenset({
     FinishReason.INTERRUPTED,
     FinishReason.OTHER,
 })
+
+logger = get_logger(__name__)
 
 
 class ModelConfigDict(TypedDict, extra_items=Any, total=False):
@@ -1126,6 +1129,7 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
             return
 
         schema = self.request.output_schema if self.request is not None else None
+        cut_off = self.finish_reason == FinishReason.LENGTH
 
         try:
             parsed = self._raw_parsed_output()
@@ -1133,12 +1137,25 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
             if isinstance(exc, GenkitError) and (exc.original_message or '').startswith('Invalid output_schema'):
                 raise
             preview = (self.text or '')[:200]
-            self._mark_invalid_output(f'Model output was not valid JSON for the requested schema: {preview}')
+            if cut_off:
+                self._mark_invalid_output(
+                    'Model output was cut off at the token limit '
+                    f'(finish_reason=length) before the JSON was complete: {preview}'
+                )
+            else:
+                target = 'schema' if schema is not None else 'format'
+                self._mark_invalid_output(f'Model output was not valid JSON for the requested {target}: {preview}')
             return
 
         if parsed is None:
             preview = (self.text or '')[:200]
-            self._mark_invalid_output(f'Model output was not valid for the requested format: {preview}')
+            if cut_off:
+                self._mark_invalid_output(
+                    'Model output was cut off at the token limit '
+                    f'(finish_reason=length) before the JSON was complete: {preview}'
+                )
+            else:
+                self._mark_invalid_output(f'Model output was not valid for the requested format: {preview}')
             return
 
         if schema is not None:
@@ -1217,7 +1234,6 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
             # Text that is not the shape they asked for is still text. Reading
             # it back is never worth an exception: `.text` holds the raw reply
             # and `error` carries INVALID_OUTPUT when structure was requested.
-            # Matches JS, where `extractJson` is called without the throw flag.
             return None
 
         if schema is not None:
@@ -1365,20 +1381,21 @@ class ModelResponseChunk(GenkitModel, Generic[OutputT]):
         can't be parsed.
         """
         try:
-            parsed = (
-                self.chunk_parser(self)
-                if self.chunk_parser
-                else extract_json(self.accumulated_text, throw_on_bad_json=False, allow_partial=True)
-            )
+            parsed = self.chunk_parser(self) if self.chunk_parser else extract_partial_json(self.accumulated_text)
+            if (
+                self.schema_type is not None
+                and isinstance(parsed, dict)
+                and not issubclass(self.schema_type, RootModel)
+            ):
+                return cast(
+                    'OutputT | None',
+                    construct_partial(schema_type=self.schema_type, data=parsed),
+                )
+            return cast('OutputT | None', parsed)
         except Exception:
             # one odd chunk shouldn't end a stream whose final reply may still parse.
+            logger.debug('chunk.output could not be parsed; returning None', exc_info=True)
             return None
-        if self.schema_type is not None and isinstance(parsed, dict) and not issubclass(self.schema_type, RootModel):
-            return cast(
-                'OutputT | None',
-                construct_partial(schema_type=self.schema_type, data=parsed),
-            )
-        return cast('OutputT | None', parsed)
 
 
 def as_model_response_chunk(value: object) -> ModelResponseChunk:

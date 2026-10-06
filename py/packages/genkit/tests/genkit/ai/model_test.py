@@ -67,7 +67,7 @@ def test_response_wrapper_output() -> None:
 
 
 def test_response_output_cut_off_reply_is_none() -> None:
-    """A finished reply cut off at `{"foo": "bar` gives `output is None` instead of a repaired dict."""
+    """A finished reply cut off at `{"foo": "bar` gives `output is None`."""
     wrapper = ModelResponse(
         message=Message(
             role='model',
