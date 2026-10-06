@@ -181,7 +181,8 @@ type GenerationCommonConfig struct {
 // InputTokens is the whole prompt, cached tokens included, and
 // CachedContentTokens and CacheWriteTokens are parts of it. OutputTokens and
 // ThoughtsTokens do not overlap: together they are every token the model
-// generated. TotalTokens is InputTokens + OutputTokens + ThoughtsTokens.
+// generated. TotalTokens is the provider's own total when it reports one, and
+// otherwise InputTokens + OutputTokens + ThoughtsTokens.
 type GenerationUsage struct {
 	// CacheWriteTokens counts the input tokens written to the provider's cache,
 	// which some providers bill above the base input rate. They are part of
@@ -221,7 +222,9 @@ type GenerationUsage struct {
 	// that the provider reported no reasoning count, not that the model did not
 	// reason.
 	ThoughtsTokens int `json:"thoughtsTokens,omitempty"`
-	// TotalTokens is InputTokens + OutputTokens + ThoughtsTokens.
+	// TotalTokens is the provider's own total when it reports one, so a billed
+	// bucket the other counts leave out is not lost, and otherwise InputTokens +
+	// OutputTokens + ThoughtsTokens.
 	TotalTokens int `json:"totalTokens,omitempty"`
 }
 

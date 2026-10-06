@@ -705,7 +705,10 @@ func translateResponse(resp *genai.GenerateContentResponse) (*ai.ModelResponse, 
 		r.Usage.OutputTokens = int(u.CandidatesTokenCount)
 		r.Usage.ThoughtsTokens = int(u.ThoughtsTokenCount)
 		r.Usage.CachedContentTokens = int(u.CachedContentTokenCount)
-		r.Usage.TotalTokens = r.Usage.InputTokens + r.Usage.OutputTokens + r.Usage.ThoughtsTokens
+		r.Usage.TotalTokens = int(u.TotalTokenCount)
+		if r.Usage.TotalTokens == 0 {
+			r.Usage.TotalTokens = r.Usage.InputTokens + r.Usage.OutputTokens + r.Usage.ThoughtsTokens
+		}
 		custom["usageMetadata"] = resp.UsageMetadata
 	}
 
