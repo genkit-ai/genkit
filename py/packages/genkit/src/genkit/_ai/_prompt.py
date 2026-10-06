@@ -31,7 +31,7 @@ from dotpromptz.typing import (
     PromptInputConfig,
     PromptMetadata,
 )
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import Never, Self
 
 from genkit._ai._generate import (
@@ -75,7 +75,7 @@ from genkit._core._model import (
     resume_options_to_resume,
 )
 from genkit._core._registry import Registry
-from genkit._core._schema import to_json_schema
+from genkit._core._schema import parse_schema, to_json_schema
 from genkit._core._tool import Tool
 from genkit._core._typing import (
     GenerateActionOutputConfig,
@@ -274,6 +274,7 @@ class Prompt(Generic[InputT, OutputT]):
         config: Mapping[str, Any] | BaseModel | None = None,
         description: str | None = None,
         input_schema: type | dict[str, Any] | str | None = None,
+        input_default: dict[str, Any] | None = None,
         system: str | list[Part] | None = None,
         prompt: str | list[Part] | None = None,
         messages: str | list[Message] | None = None,
@@ -296,6 +297,11 @@ class Prompt(Generic[InputT, OutputT]):
         self._registry = registry
         # Identity: how the prompt is registered and looked up. Not part of _def,
         # which only holds what goes into a generate.
+        # Keys the caller leaves out take these values before the template runs.
+        self._input_default = dict(input_default) if input_default else None
+        # Set when a lookup also passed input_schema=; the file's schema still
+        # has to pass so a required file field can't slip through.
+        self._file_input_schema: type | dict[str, Any] | str | None = None
         self._name = name
         self._ns = ns
         self._variant = variant
@@ -351,8 +357,15 @@ class Prompt(Generic[InputT, OutputT]):
         schema = self._def.output_schema
         if isinstance(schema, type) and issubclass(schema, BaseModel):
             keep['output_schema'] = schema
+        original_input = self._def.input_schema
+        if original_input is not None:
+            keep['input_schema'] = original_input
+            self._file_input_schema = resolved._file_input_schema or resolved._def.input_schema
+        else:
+            self._file_input_schema = resolved._file_input_schema
         self._def = resolved._def.model_copy(update=keep)
         self._defined_model_name = resolved._defined_model_name
+        self._input_default = resolved._input_default
         self._prompt_action = resolved._prompt_action
 
     async def _resolve_model(self, call: GenerateCall, opts: ModelSettings) -> GenerateCall:
@@ -790,6 +803,84 @@ def coerce_prompt_template_input(template_input: Any) -> dict[str, Any]:  # noqa
     return cast(dict[str, Any], template_input)
 
 
+def filled_prompt_input(*, input: Any, defaults: dict[str, Any] | None) -> dict[str, Any]:  # noqa: ANN401
+    """Merge the file's ``input.default`` under keys the caller left out.
+
+    For a model instance: fields the caller set > file default > class default.
+    """
+    passed = coerce_prompt_template_input(input)
+    if not defaults:
+        return passed
+    if isinstance(input, BaseModel):
+        caller_set = {k: passed[k] for k in input.model_fields_set if k in passed}
+        return {**passed, **defaults, **caller_set}
+    return {**defaults, **passed}
+
+
+def resolve_prompt_input_schema(
+    *,
+    schema: type | dict[str, Any] | str | None,
+    registry: Registry,
+) -> type | dict[str, Any] | None:
+    """Turn a class, JSON schema, or registered name into something we can check."""
+    if schema is None:
+        return None
+    if isinstance(schema, str):
+        schema_type = registry.lookup_schema_type(schema)
+        if schema_type is not None:
+            return schema_type
+        return registry.lookup_schema(schema)
+    return schema
+
+
+def check_prompt_input(
+    *,
+    name: str,
+    data: dict[str, Any],
+    schema: type | dict[str, Any],
+) -> None:
+    """Raise ``INVALID_ARGUMENT`` naming the prompt and field when input doesn't match."""
+    if isinstance(schema, type) and issubclass(schema, BaseModel):
+        try:
+            TypeAdapter(schema).validate_python(data)
+        except ValidationError as error:
+            raise GenkitError(
+                message=f"Invalid input for action '{name}': {error}",
+                status='INVALID_ARGUMENT',
+                cause=error,
+                reason=RuntimeErrorReason.INVALID_INPUT,
+            ) from error
+        return
+    if isinstance(schema, dict):
+        try:
+            parse_schema(data=data, json_schema=schema)
+        except GenkitError as error:
+            raise GenkitError(
+                message=f"Invalid input for action '{name}': {error.original_message}",
+                status='INVALID_ARGUMENT',
+                cause=error,
+                reason=RuntimeErrorReason.INVALID_INPUT,
+            ) from error
+
+
+def validate_prompt_input(
+    *,
+    name: str,
+    data: dict[str, Any],
+    schema: type | dict[str, Any] | str | None,
+    file_schema: type | dict[str, Any] | str | None,
+    registry: Registry,
+) -> None:
+    """Check the filled input against the lookup/define schema and the file's schema."""
+    seen: list[object] = []
+    for candidate in (schema, file_schema):
+        resolved = resolve_prompt_input_schema(schema=candidate, registry=registry)
+        if resolved is None or resolved in seen:
+            continue
+        seen.append(resolved)
+        check_prompt_input(name=name, data=data, schema=resolved)
+
+
 async def to_prompt_model_request(*, registry: Registry, options: GenerateActionOptions) -> ModelRequest:
     """Convert GenerateActionOptions to ModelRequest, resolving tool names."""
     tools = await resolve_tools_from_options(registry, options.tools)
@@ -999,7 +1090,14 @@ async def render_call(
     call). Sets final ``messages`` and clears template source fields, before
     :func:`to_generate_options`.
     """
-    template_input = coerce_prompt_template_input(input)
+    template_input = filled_prompt_input(input=input, defaults=prompt._input_default)
+    validate_prompt_input(
+        name=prompt._name or 'prompt',
+        data=template_input,
+        schema=prompt._def.input_schema,
+        file_schema=prompt._file_input_schema,
+        registry=registry,
+    )
     # An omitted context= uses the enclosing flow's auth, so render() shows
     # what the run will send.
     render_context = context if context is not None else get_current_context()
@@ -1341,6 +1439,15 @@ def load_prompt(registry: Registry, path: Path, filename: str, prefix: str = '',
         raw_metadata = await registry.dotprompt.render_metadata(parsed_prompt)
         metadata = _transform_prompt_metadata(raw_metadata, variant, parsed_prompt.template, registry_key, name)
 
+        raw = raw_metadata.raw if hasattr(raw_metadata, 'raw') else None
+        raw_output = raw.get('output') if isinstance(raw, dict) else None
+        raw_output_schema = raw_output.get('schema') if isinstance(raw_output, dict) else None
+        file_default = metadata.get('input', {}).get('default')
+        # Keep a named schema as the name so a registered class becomes .output.
+        output_schema = (
+            raw_output_schema if isinstance(raw_output_schema, str) else metadata.get('output', {}).get('jsonSchema')
+        )
+
         executable_prompt = Prompt(
             registry=registry,
             variant=metadata.get('variant'),
@@ -1348,7 +1455,8 @@ def load_prompt(registry: Registry, path: Path, filename: str, prefix: str = '',
             config=metadata.get('config'),
             description=metadata.get('description'),
             input_schema=metadata.get('input', {}).get('jsonSchema'),
-            output_schema=metadata.get('output', {}).get('jsonSchema'),
+            input_default=file_default if isinstance(file_default, dict) else None,
+            output_schema=output_schema,
             output_constrained=True if metadata.get('output', {}).get('jsonSchema') else None,
             output_format=metadata.get('output', {}).get('format'),
             output_instructions=metadata.get('output', {}).get('instructions'),

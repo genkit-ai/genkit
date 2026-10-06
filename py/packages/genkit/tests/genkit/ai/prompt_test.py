@@ -617,6 +617,119 @@ class OtherOutput(BaseModel):
     score: int
 
 
+class OtherRecipe(BaseModel):
+    title: str
+
+
+class ChefInput(BaseModel):
+    food: str | None = None
+    style: str | None = None
+
+
+class RequiredFood(BaseModel):
+    food: str
+
+
+class RequiredDiet(BaseModel):
+    diet: str
+    food: str | None = None
+
+
+class RamenOrder(BaseModel):
+    dish: str
+    size: str = 'regular'
+
+
+_RECIPE_PROMPT = """---
+input:
+  schema:
+    food: string
+    style?: string
+  default:
+    food: banana bread
+output:
+  schema: Recipe
+---
+Make {{food}}{{#if style}} {{style}}{{/if}}.
+"""
+
+_RECIPE_JSON_PROMPT = """---
+input:
+  schema:
+    food: string
+  default:
+    food: banana bread
+output:
+  schema: RecipeJson
+---
+Make {{food}}.
+"""
+
+_INLINE_OUTPUT_PROMPT = """---
+input:
+  schema:
+    food: string
+  default:
+    food: banana bread
+output:
+  schema:
+    title: string
+---
+Make {{food}}.
+"""
+
+_NO_DEFAULT_PROMPT = """---
+input:
+  schema:
+    food: string
+---
+Make {{food}}.
+"""
+
+_NULLABLE_FOOD_PROMPT = """---
+input:
+  schema:
+    food?: string
+  default:
+    food: banana bread
+---
+Make {{food}}.
+"""
+
+_RAMEN_ORDER_PROMPT = """---
+input:
+  schema:
+    dish: string
+    size?: string
+  default:
+    size: large
+---
+{{size}} {{dish}}
+"""
+
+
+def _prompt_file_ai(
+    *files: tuple[str, str],
+) -> tuple[Genkit, ScriptedModel, tempfile.TemporaryDirectory[str]]:
+    """A Genkit that loads the given ``.prompt`` files and replies ``{"title": "pie"}``."""
+    tmp = tempfile.TemporaryDirectory()
+    root = Path(tmp.name)
+    for name, body in files:
+        (root / name).write_text(body)
+    ai = Genkit(prompt_dir=str(root), model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [_text_reply('{"title": "pie"}')]
+    return ai, pm, tmp
+
+
+def _assert_invalid_prompt_input(error: GenkitError, *, prompt_name: str, field: str) -> None:
+    assert error.status == 'INVALID_ARGUMENT'
+    assert error.reason is RuntimeErrorReason.INVALID_INPUT
+    assert 'INVALID_INPUT' not in error.original_message
+    assert f"Invalid input for action '{prompt_name}'" in error.original_message
+    assert field in error.original_message
+
+
 def _text_reply(text: str) -> ModelResponse:
     return ModelResponse(
         finish_reason=FinishReason.STOP, message=Message(role=Role.MODEL, content=[Part.from_text(text)])
@@ -2056,3 +2169,243 @@ def test_resume_options_to_resume_metadata_only_still_builds() -> None:
 def test_resume_options_to_resume_none_when_all_empty() -> None:
     """No respond, restart, or metadata -> no Resume."""
     assert resume_options_to_resume() is None
+
+
+@pytest.mark.asyncio
+async def test_prompt_file_named_schema_returns_registered_class() -> None:
+    """With `ai.define_schema('Recipe', Recipe)` and `schema: Recipe` in the file, `res.output` is a `Recipe`."""
+    ai, _pm, tmp = _prompt_file_ai(('recipe.prompt', _RECIPE_PROMPT))
+    with tmp:
+        ai.define_schema('Recipe', Recipe)
+        res = await ai.prompt('recipe')({})
+
+        assert isinstance(res.output, Recipe)
+        assert res.output == Recipe(title='pie')
+        assert res.error is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('prompt_body', 'json_schema_name'),
+    [
+        pytest.param(_RECIPE_JSON_PROMPT, 'RecipeJson', id='named_json_schema'),
+        pytest.param(_INLINE_OUTPUT_PROMPT, None, id='inline_picoschema'),
+    ],
+)
+async def test_prompt_file_output_without_registered_class_returns_dict(
+    prompt_body: str, json_schema_name: str | None
+) -> None:
+    """A file schema with no class behind it (`define_json_schema` name or inline picoschema) returns a dict."""
+    ai, _pm, tmp = _prompt_file_ai(('recipe.prompt', prompt_body))
+    with tmp:
+        if json_schema_name:
+            ai.define_json_schema(json_schema_name, Recipe.model_json_schema())
+        res = await ai.prompt('recipe')({})
+
+        assert res.output == {'title': 'pie'}
+        assert res.error is None
+
+
+@pytest.mark.asyncio
+async def test_prompt_lookup_output_schema_class_wins_over_file_named_schema() -> None:
+    """`ai.prompt('recipe', output_schema=OtherRecipe)` returns `OtherRecipe` even when the file names `Recipe`."""
+    ai, _pm, tmp = _prompt_file_ai(('recipe.prompt', _RECIPE_PROMPT))
+    with tmp:
+        ai.define_schema('Recipe', Recipe)
+        res = await ai.prompt('recipe', output_schema=OtherRecipe)({})
+
+        assert type(res.output) is OtherRecipe
+        assert res.output == OtherRecipe(title='pie')
+        assert res.error is None
+
+
+@pytest.mark.asyncio
+async def test_prompt_file_omitted_input_uses_default() -> None:
+    """`render()` with no input renders `Make banana bread.` from `input.default`."""
+    ai, _pm, tmp = _prompt_file_ai(('recipe.prompt', _RECIPE_PROMPT))
+    with tmp:
+        ai.define_schema('Recipe', Recipe)
+        rendered = await ai.prompt('recipe').render()
+
+        assert rendered.messages is not None
+        assert rendered.messages[0].text == 'Make banana bread.'
+
+
+@pytest.mark.asyncio
+async def test_prompt_file_partial_input_fills_missing_keys_from_default() -> None:
+    """Passing `{'style': 'vegan'}` keeps the default `food` and uses the given `style`."""
+    ai, _pm, tmp = _prompt_file_ai(('recipe.prompt', _RECIPE_PROMPT))
+    with tmp:
+        ai.define_schema('Recipe', Recipe)
+        rendered = await ai.prompt('recipe').render({'style': 'vegan'})
+
+        assert rendered.messages is not None
+        assert rendered.messages[0].text == 'Make banana bread vegan.'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('passed', 'expected'),
+    [
+        pytest.param({'food': 'pie'}, 'Make pie.', id='value'),
+        pytest.param({'food': None}, 'Make .', id='explicit_none'),
+    ],
+)
+async def test_prompt_file_passed_key_overrides_default(passed: dict[str, Any], expected: str) -> None:
+    """A key the caller passes wins over `input.default`, including an explicit `None`."""
+    ai, _pm, tmp = _prompt_file_ai(('recipe.prompt', _NULLABLE_FOOD_PROMPT))
+    with tmp:
+        rendered = await ai.prompt('recipe').render(passed)
+
+        assert rendered.messages is not None
+        assert rendered.messages[0].text == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('instance', 'expected'),
+    [
+        pytest.param(ChefInput(food='pie'), 'Make pie.', id='set_field_wins'),
+        pytest.param(ChefInput(style='vegan'), 'Make banana bread vegan.', id='unset_field_takes_default'),
+    ],
+)
+async def test_prompt_model_instance_unset_fields_take_file_default(instance: ChefInput, expected: str) -> None:
+    """Fields set on a model instance win; fields the caller left unset take the file `input.default`."""
+    ai, _pm, tmp = _prompt_file_ai(('recipe.prompt', _RECIPE_PROMPT))
+    with tmp:
+        ai.define_schema('Recipe', Recipe)
+        rendered = await ai.prompt('recipe', input_schema=ChefInput).render(instance)
+
+        assert rendered.messages is not None
+        assert rendered.messages[0].text == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('from_file', 'order', 'expected'),
+    [
+        pytest.param(False, RamenOrder(dish='ramen'), 'regular ramen', id='class_default_without_file_default'),
+        pytest.param(True, RamenOrder(dish='ramen'), 'large ramen', id='file_default_beats_class_default'),
+        pytest.param(True, RamenOrder(dish='ramen', size='small'), 'small ramen', id='caller_set_beats_both'),
+    ],
+)
+async def test_prompt_model_instance_default_precedence(from_file: bool, order: RamenOrder, expected: str) -> None:
+    """For a model instance: fields the caller set > file `input.default` > class default."""
+    ai, _pm, tmp = _prompt_file_ai(('order.prompt', _RAMEN_ORDER_PROMPT))
+    with tmp:
+        if from_file:
+            prompt = ai.prompt('order', input_schema=RamenOrder)
+        else:
+            prompt = ai.define_prompt(name='inline_order', prompt='{{size}} {{dish}}', input_schema=RamenOrder)
+        rendered = await prompt.render(order)
+
+        assert rendered.messages is not None
+        assert rendered.messages[0].text == expected
+
+
+@pytest.mark.asyncio
+async def test_prompt_file_default_satisfies_required_field() -> None:
+    """A field the class requires but the file defaults passes validation once the default is filled."""
+    ai, pm, tmp = _prompt_file_ai(('recipe.prompt', _RECIPE_PROMPT))
+    with tmp:
+        ai.define_schema('Recipe', Recipe)
+        res = await ai.prompt('recipe', input_schema=RequiredFood)({})
+
+        assert isinstance(res.output, Recipe)
+        assert res.output == Recipe(title='pie')
+        assert pm.request_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('call_args', [pytest.param(({},), id='empty_dict'), pytest.param((), id='no_input')])
+async def test_prompt_file_input_schema_rejects_missing_required_field(call_args: tuple[Any, ...]) -> None:
+    """A required file field with no default raises `INVALID_ARGUMENT` before the model is called."""
+    ai, pm, tmp = _prompt_file_ai(('recipe.prompt', _NO_DEFAULT_PROMPT))
+    with tmp:
+        with pytest.raises(GenkitError) as raised:
+            await ai.prompt('recipe')(*call_args)
+        _assert_invalid_prompt_input(raised.value, prompt_name='recipe', field='food')
+        assert pm.request_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('entry_point', ['call', 'render', 'stream'])
+async def test_prompt_file_input_schema_rejects_wrong_type(entry_point: str) -> None:
+    """A file with `food: string` rejects `{'food': 1}` from call, `render()`, and `stream()` alike."""
+    ai, pm, tmp = _prompt_file_ai(('recipe.prompt', _RECIPE_PROMPT))
+    with tmp:
+        ai.define_schema('Recipe', Recipe)
+        prompt = ai.prompt('recipe')
+        with pytest.raises(GenkitError) as raised:
+            if entry_point == 'call':
+                await prompt({'food': 1})
+            elif entry_point == 'render':
+                await prompt.render({'food': 1})
+            else:
+                await prompt.stream({'food': 1}).response
+        _assert_invalid_prompt_input(raised.value, prompt_name='recipe', field='food')
+        assert pm.request_count == 0
+
+
+@pytest.mark.asyncio
+async def test_prompt_file_input_schema_rejects_unknown_key() -> None:
+    """A key the file schema does not declare raises `INVALID_ARGUMENT`."""
+    ai, pm, tmp = _prompt_file_ai(('recipe.prompt', _RECIPE_PROMPT))
+    with tmp:
+        ai.define_schema('Recipe', Recipe)
+        with pytest.raises(GenkitError) as raised:
+            await ai.prompt('recipe')({'food': 'pie', 'surprise': 1})
+        _assert_invalid_prompt_input(raised.value, prompt_name='recipe', field='surprise')
+        assert pm.request_count == 0
+
+
+@pytest.mark.asyncio
+async def test_prompt_lookup_input_schema_rejects_missing_required_field() -> None:
+    """A required lookup-class field that the file does not default raises `INVALID_ARGUMENT`, naming the field."""
+    ai, pm, tmp = _prompt_file_ai(('recipe.prompt', _RECIPE_PROMPT))
+    with tmp:
+        ai.define_schema('Recipe', Recipe)
+        with pytest.raises(GenkitError) as raised:
+            await ai.prompt('recipe', input_schema=RequiredDiet)({})
+        _assert_invalid_prompt_input(raised.value, prompt_name='recipe', field='diet')
+        assert pm.request_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'input_schema',
+    [
+        pytest.param(ChefInput, id='class'),
+        pytest.param(
+            {
+                'type': 'object',
+                'properties': {'food': {'type': 'string'}},
+                'required': ['food'],
+                'additionalProperties': False,
+            },
+            id='json_schema',
+        ),
+    ],
+)
+async def test_define_prompt_input_schema_rejects_wrong_input(input_schema: type | dict[str, Any]) -> None:
+    """`ai.define_prompt(input_schema=...)` rejects `{'food': 1}` for both a class and a JSON schema."""
+    ai, pm = _setup_prompt_call()
+    p = ai.define_prompt(name='chef', prompt='Make {{food}}.', input_schema=input_schema)
+
+    with pytest.raises(GenkitError) as raised:
+        await p({'food': 1})
+    _assert_invalid_prompt_input(raised.value, prompt_name='chef', field='food')
+    assert pm.request_count == 0
+
+
+@pytest.mark.asyncio
+async def test_prompt_without_input_schema_accepts_any_input() -> None:
+    """A `define_prompt` with no `input_schema=` renders whatever dict the caller passed."""
+    ai, pm = _setup_prompt_call()
+    p = ai.define_prompt(prompt='Make {{food}}.')
+
+    rendered = await p.render({'food': 1, 'surprise': True})
+
+    assert rendered.messages is not None
+    assert rendered.messages[0].text == 'Make 1.'
+    assert pm.request_count == 0
