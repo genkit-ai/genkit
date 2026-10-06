@@ -18,9 +18,11 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from genkit_openai import OpenAI
 from genkit_openai._models._image import (
     SUPPORTED_IMAGE_MODELS,
     OpenAIImageModel,
@@ -28,8 +30,9 @@ from genkit_openai._models._image import (
     _to_generate_response,
     _to_image_generate_params,
 )
+from genkit_openai._openai_plugin import _ModelType, _multimodal_action_metadata
 
-from genkit import Message, Part, Role
+from genkit import Genkit, GenkitError, Message, Part, Role
 from genkit.model import ModelRequest
 
 
@@ -257,18 +260,43 @@ class TestSupportedImageModels:
             assert 'media' in (info.supports.output or []), f"{name} should support 'media' output"
 
     def test_gpt_image_1_exposes_config_schema(self) -> None:
-        """Verify GPT Image 1 advertises its model-specific config constraints."""
-        schema = SUPPORTED_IMAGE_MODELS['gpt-image-1'].config_schema
-
-        assert schema is not None
+        """Verify GPT Image 1 advertises the constraints of its registered config class."""
+        metadata = _multimodal_action_metadata('gpt-image-1', SUPPORTED_IMAGE_MODELS, _ModelType.IMAGE).metadata
+        assert metadata is not None
+        schema = metadata['model']['customOptions']
         properties = schema['properties']
-        assert properties['size']['enum'] == ['1024x1024', '1536x1024', '1024x1536', 'auto']
-        assert properties['quality']['enum'] == ['low', 'medium', 'high']
-        assert properties['background']['enum'] == ['transparent', 'opaque', 'auto']
-        assert properties['moderation']['enum'] == ['low', 'auto']
-        assert properties['output_compression'] == {'type': 'integer', 'minimum': 1, 'maximum': 100}
-        assert properties['output_format']['enum'] == ['png', 'jpeg', 'web']
+
+        def _enum(name: str) -> list[str]:
+            return properties[name]['anyOf'][0]['enum']
+
+        def _int_bounds(name: str) -> dict[str, Any]:
+            return properties[name]['anyOf'][0]
+
+        assert _enum('size') == ['1024x1024', '1536x1024', '1024x1536', 'auto']
+        assert _enum('quality') == ['low', 'medium', 'high']
+        assert _enum('background') == ['transparent', 'opaque', 'auto']
+        assert _enum('moderation') == ['low', 'auto']
+        assert _int_bounds('outputCompression') == {'type': 'integer', 'minimum': 1, 'maximum': 100}
+        assert _enum('outputFormat') == ['png', 'jpeg', 'webp']
+        assert 'responseFormat' not in properties
         assert 'response_format' not in properties
+
+    @pytest.mark.asyncio
+    async def test_gpt_image_1_response_format_raises_before_model_call(self) -> None:
+        """`response_format` on gpt-image-1 raises INVALID_ARGUMENT before the endpoint runs."""
+        ai = Genkit(plugins=[OpenAI(api_key='test-key')])
+
+        with patch.object(OpenAIImageModel, 'generate', new_callable=AsyncMock) as generate:
+            with pytest.raises(GenkitError) as err:
+                await ai.generate(
+                    model='openai/gpt-image-1',
+                    prompt='a lighthouse at dusk',
+                    config={'response_format': 'b64_json'},
+                )
+
+        assert err.value.status == 'INVALID_ARGUMENT'
+        assert 'response_format' in str(err.value)
+        generate.assert_not_called()
 
 
 class TestOpenAIImageModel:

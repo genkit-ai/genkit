@@ -57,9 +57,8 @@ class OpenAIGptImageConfig(ModelConfig):
     )
     background: Literal['transparent', 'opaque', 'auto'] | None = None
     moderation: Literal['low', 'auto'] | None = None
-    output_compression: int | None = None
+    output_compression: int | None = Field(default=None, ge=1, le=100)
     output_format: Literal['png', 'jpeg', 'webp'] | None = None
-    response_format: str | None = None
 
 
 # Supported image generation models with their metadata.
