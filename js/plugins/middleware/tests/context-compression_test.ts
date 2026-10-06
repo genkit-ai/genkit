@@ -1971,6 +1971,107 @@ describe('contextCompression middleware', () => {
         'Report 102 v2 '
       )
     );
+
+    // Reused per-turn ref ("0" in both turns with different inputs), mixed [no-ref, ref] ordering,
+    // and unmatched tool responses must not falsely deduplicate under name-and-input
+    await ai.generate({
+      model: pm,
+      messages: [
+        { role: 'user', content: [{ text: 'run' }] },
+        {
+          role: 'tool',
+          content: [
+            { toolResponse: { name: 'orphan', output: 'Orphan 1' } },
+            { toolResponse: { name: 'orphan', output: 'Orphan 2' } },
+          ],
+        },
+        {
+          role: 'model',
+          content: [
+            {
+              toolRequest: {
+                name: 'fetchReport',
+                ref: '0',
+                input: { id: 'a' },
+              },
+            },
+            {
+              toolRequest: {
+                name: 'fetchReport',
+                input: { id: 'b' },
+              },
+            },
+          ],
+        },
+        {
+          role: 'tool',
+          content: [
+            { toolResponse: { name: 'fetchReport', output: 'Out B' } },
+            {
+              toolResponse: {
+                name: 'fetchReport',
+                ref: '0',
+                output: 'Out A',
+              },
+            },
+          ],
+        },
+        {
+          role: 'model',
+          content: [
+            {
+              toolRequest: {
+                name: 'fetchReport',
+                ref: '0',
+                input: { id: 'c' },
+              },
+            },
+          ],
+        },
+        {
+          role: 'tool',
+          content: [
+            {
+              toolResponse: {
+                name: 'fetchReport',
+                ref: '0',
+                output: 'Out C ' + 'X'.repeat(200),
+              },
+            },
+          ],
+        },
+      ],
+      use: [
+        contextCompression({
+          maxInputTokens: 20,
+          deduplicateToolResponses: {
+            matchBy: 'name-and-input',
+            keepRecent: 1,
+          },
+        }),
+      ],
+    });
+
+    const edgeToolMsgs = capturedRequest!.messages.filter(
+      (m) => m.role === 'tool'
+    );
+    assert.strictEqual(edgeToolMsgs.length, 3);
+    assert.strictEqual(
+      edgeToolMsgs[0].content[0].toolResponse?.output,
+      'Orphan 1'
+    );
+    assert.strictEqual(
+      edgeToolMsgs[0].content[1].toolResponse?.output,
+      'Orphan 2'
+    );
+    assert.strictEqual(
+      edgeToolMsgs[1].content[0].toolResponse?.output,
+      'Out B'
+    );
+    assert.strictEqual(
+      edgeToolMsgs[1].content[1].toolResponse?.output,
+      'Out A'
+    );
   });
 
   it('summarizes older messages using summary model', async () => {
