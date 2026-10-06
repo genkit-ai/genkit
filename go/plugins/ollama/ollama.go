@@ -741,19 +741,19 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 				return nil, fmt.Errorf("reading response stream: %v", err)
 			}
 			chunkCount++
-			var u ollamaUsage
-			if err := json.Unmarshal(raw, &u); err == nil && (u.PromptEvalCount > 0 || u.EvalCount > 0) {
-				usage = u
-			}
 
 			var chunk *ai.ModelResponseChunk
+			var u ollamaUsage
 			if isChatModel {
-				chunk, err = translateChatChunk(string(raw))
+				chunk, u, err = translateChatChunk(string(raw))
 			} else {
-				chunk, err = translateGenerateChunk(string(raw))
+				chunk, u, err = translateGenerateChunk(string(raw))
 			}
 			if err != nil {
 				return nil, fmt.Errorf("failed to translate chunk: %v", err)
+			}
+			if u != (ollamaUsage{}) {
+				usage = u
 			}
 			chunks = append(chunks, chunk)
 			cb(ctx, chunk)
@@ -911,19 +911,21 @@ func translateModelResponse(responseData []byte) (*ai.ModelResponse, error) {
 		Message: &ai.Message{
 			Role: ai.RoleModel,
 		},
+		Usage: response.toGenkit(),
 	}
 
 	aiPart := ai.NewTextPart(response.Response)
 	modelResponse.Message.Content = append(modelResponse.Message.Content, aiPart)
-	modelResponse.Usage = response.toGenkit()
 	return modelResponse, nil
 }
 
-func translateChatChunk(input string) (*ai.ModelResponseChunk, error) {
+// translateChatChunk translates an Ollama chat stream chunk into a genkit
+// chunk, and returns the token counts it carries, which only the last has.
+func translateChatChunk(input string) (*ai.ModelResponseChunk, ollamaUsage, error) {
 	var response ollamaChatResponse
 
 	if err := json.Unmarshal([]byte(input), &response); err != nil {
-		return nil, fmt.Errorf("failed to parse response JSON: %v", err)
+		return nil, ollamaUsage{}, fmt.Errorf("failed to parse response JSON: %v", err)
 	}
 	chunk := &ai.ModelResponseChunk{}
 
@@ -948,19 +950,22 @@ func translateChatChunk(input string) (*ai.ModelResponseChunk, error) {
 		}
 	}
 
-	return chunk, nil
+	return chunk, response.ollamaUsage, nil
 }
 
-func translateGenerateChunk(input string) (*ai.ModelResponseChunk, error) {
+// translateGenerateChunk translates an Ollama generate stream chunk into a
+// genkit chunk, and returns the token counts it carries, which only the last
+// has.
+func translateGenerateChunk(input string) (*ai.ModelResponseChunk, ollamaUsage, error) {
 	var response ollamaModelResponse
 
 	if err := json.Unmarshal([]byte(input), &response); err != nil {
-		return nil, fmt.Errorf("failed to parse response JSON: %v", err)
+		return nil, ollamaUsage{}, fmt.Errorf("failed to parse response JSON: %v", err)
 	}
 	chunk := &ai.ModelResponseChunk{}
 	aiPart := ai.NewTextPart(response.Response)
 	chunk.Content = append(chunk.Content, aiPart)
-	return chunk, nil
+	return chunk, response.ollamaUsage, nil
 }
 
 // concatMessages translates a list of messages into a prompt-style format

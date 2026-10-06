@@ -118,7 +118,7 @@ func TestTranslateGenerateChunk(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := translateGenerateChunk(tt.input)
+			got, _, err := translateGenerateChunk(tt.input)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("translateGenerateChunk() error = %v, wantErr %v", err, tt.wantErr)
 				return
