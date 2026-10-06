@@ -218,13 +218,14 @@ system prompt. It only works inside an agent, so it's experimental and lives in
 register it, so it isn't listed in the Dev UI and a `.prompt` file can't name it:
 
 ```python
+from genkit_middleware import Middleware
 from genkit_middleware.exp import Artifacts
 
 from genkit.exp import Genkit
 from genkit.exp.agent import InMemorySessionStore
 from genkit_google_genai import GoogleAI
 
-ai = Genkit(plugins=[GoogleAI()])
+ai = Genkit(plugins=[GoogleAI(), Middleware()])
 
 agent = ai.define_agent(
     name='workspaceAgent',

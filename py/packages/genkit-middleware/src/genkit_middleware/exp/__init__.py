@@ -21,9 +21,10 @@
 
     ```python
     from genkit.exp import Genkit
+    from genkit_middleware import Middleware
     from genkit_middleware.exp import Artifacts
 
-    ai = Genkit(plugins=[GoogleAI()])
+    ai = Genkit(plugins=[GoogleAI(), Middleware()])
     agent = ai.define_agent(name='workspaceAgent', model=..., use=[Artifacts()])
     ```
 
