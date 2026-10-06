@@ -53,15 +53,8 @@ uvicorn main:app                           # production
 
 from .handler import genkit_fastapi_handler, handle_genkit_request, serve_flow
 
-
-def package_name() -> str:
-    """Get the package name for the FastAPI plugin."""
-    return 'genkit_fastapi'
-
-
 __all__ = [
     'genkit_fastapi_handler',
     'handle_genkit_request',
-    'package_name',
     'serve_flow',
 ]
