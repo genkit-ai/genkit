@@ -63,7 +63,11 @@ func OpenRouter() *Endpoint {
 		Path:      "/api/alpha/decisions",
 		APIKeyEnv: "OPENROUTER_API_KEY",
 		Models:    []string{"jev-latest", "jev-1.13"},
-		ModelID:   openRouterModelID,
+		Route: func(model string, body map[string]any) (string, any, error) {
+			id, err := openRouterModelID(model)
+			body["model"] = id
+			return "", body, err
+		},
 	}}
 }
 
@@ -80,9 +84,11 @@ func Cloudflare(accountID string) *Endpoint {
 		AccountEnv: "CLOUDFLARE_ACCOUNT_ID",
 		APIKeyEnv:  "CLOUDFLARE_API_TOKEN",
 		Models:     []string{"jev-latest"},
-		ModelID:    cloudflareModelID,
-		Body: func(model string, req *systemone.Request) any {
-			return map[string]any{"model": model, "input": req.Body("")}
+		// jev takes the native body under input, with the model beside it.
+		Route: func(model string, body map[string]any) (string, any, error) {
+			id, err := cloudflareModelID(model)
+			delete(body, "model")
+			return "", map[string]any{"model": id, "input": body}, err
 		},
 		Unwrap: cloudflareUnwrap,
 	}}

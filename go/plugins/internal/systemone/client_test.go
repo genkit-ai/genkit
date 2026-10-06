@@ -150,6 +150,48 @@ func TestDecide(t *testing.T) {
 	}
 }
 
+func TestRoute(t *testing.T) {
+	rec := &recorder{reply: cannedReply}
+	ep := testEndpoint()
+	ep.Route = func(model string, body map[string]any) (string, any, error) {
+		delete(body, "model")
+		return model, map[string]any{"input": body}, nil
+	}
+	c := newClient(t, rec, ep)
+	if _, err := c.Decide(t.Context(), "clef", &Request{State: "hi", Questions: testQuestions}); err != nil {
+		t.Fatal(err)
+	}
+	req, body := rec.last(t)
+	if req.URL.Path != "/v1/systemone/clef" {
+		t.Errorf("path = %s, want the route's suffix joined to the endpoint's path", req.URL.Path)
+	}
+	if input, _ := body["input"].(map[string]any); input["state"] != "hi" || body["state"] != nil {
+		t.Errorf("body = %v, want the route's body", body)
+	}
+}
+
+func TestUnwrapErrorNamesTheEndpoint(t *testing.T) {
+	ep := testEndpoint()
+	ep.Unwrap = func([]byte) ([]byte, error) { return nil, errors.New("Authentication error") }
+	c := newClient(t, &recorder{reply: cannedReply}, ep)
+	_, err := c.Decide(t.Context(), "clef", &Request{State: "hi", Questions: testQuestions})
+	if !errors.Is(err, status.ErrUnknown) || !strings.Contains(err.Error(), "test: Authentication error") {
+		t.Errorf("error = %v, want UNKNOWN naming the endpoint", err)
+	}
+}
+
+func TestNoKeyNoAuthorization(t *testing.T) {
+	rec := &recorder{reply: cannedReply}
+	c := newClient(t, rec, testEndpoint())
+	c.APIKey = ""
+	if _, err := c.Decide(t.Context(), "clef", &Request{State: "hi", Questions: testQuestions}); err != nil {
+		t.Fatal(err)
+	}
+	if req, _ := rec.last(t); req.Header.Values("Authorization") != nil {
+		t.Errorf("Authorization = %q, want no header without a key", req.Header.Values("Authorization"))
+	}
+}
+
 func TestExtraMergesTopLevelFields(t *testing.T) {
 	rec := &recorder{reply: cannedReply}
 	c := newClient(t, rec, testEndpoint())
@@ -231,6 +273,7 @@ func TestErrorsMapToStatus(t *testing.T) {
 		{400, `[{"code":"invalid_union","path":["questions","u","criteria","false"],"message":"Invalid input"},{"path":[],"message":"Unrecognized key"}]`, status.ErrInvalidArgument, "questions.u.criteria.false: Invalid input; Unrecognized key"},
 		{400, `{"error":{"message":"HTTP 400: {\"detail\":\"Too many score levels\"}"}}`, status.ErrInvalidArgument, "Too many score levels"},
 		{429, `{"error":"rate limited"}`, status.ErrResourceExhausted, "rate limited"},
+		{403, `{"result":null,"success":false,"errors":[{"code":10000,"message":"Authentication error"}],"messages":[]}`, status.ErrPermissionDenied, "HTTP 403: Authentication error"},
 		{503, `service unavailable`, status.ErrUnavailable, "service unavailable"},
 		{500, ``, status.ErrInternal, "HTTP 500: Internal Server Error"},
 		{501, `not implemented`, status.ErrUnimplemented, "not implemented"},
