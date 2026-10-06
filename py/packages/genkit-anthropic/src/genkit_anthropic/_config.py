@@ -39,11 +39,6 @@ from genkit.model import ModelConfig
 _STABLE_BODY_KEYS = frozenset(MessageCreateParamsBase.__annotations__)
 _BETA_BODY_KEYS = frozenset(BetaMessageCreateParamsBase.__annotations__)
 
-# Accepted by create() alongside the body fields; `stream` is excluded because Genkit owns streaming.
-_REQUEST_KWARG_KEYS = frozenset({'extra_body', 'extra_headers', 'extra_query', 'timeout'})
-
-STABLE_KWARG_KEYS = _STABLE_BODY_KEYS | _REQUEST_KWARG_KEYS
-BETA_KWARG_KEYS = _BETA_BODY_KEYS | _REQUEST_KWARG_KEYS
 BETA_ONLY_KEYS = _BETA_BODY_KEYS - _STABLE_BODY_KEYS
 
 _NESTED_CONFIG = ConfigDict(extra='allow', populate_by_name=True)
