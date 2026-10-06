@@ -75,10 +75,26 @@ from genkit._core._typing import (
     TurnEnd,
 )
 
-# Runtime schema for common generate knobs. ModelConfigDict is the
-# hand-copied autocomplete list — keep the keys matching so a new knob
-# shows up in the IDE the same day it becomes legal.
-ModelConfig = GenerationCommonConfig
+
+# ModelConfigDict is the hand-copied autocomplete list for this class — keep
+# the keys matching so a new knob shows up in the IDE the same day it becomes legal.
+class ModelConfig(GenerationCommonConfig):
+    """Settings every model understands, plus ``extra`` for provider-only ones.
+
+    Unknown keyword arguments raise, so ``ModelConfig(temprature=0.2)`` fails
+    where it was typed instead of being sent or silently dropped.
+    """
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra='forbid')
+
+    extra: dict[str, Any] | None = None
+    """Provider settings the model's config class doesn't declare, sent as-is and not checked.
+
+    Don't put API keys or other secrets here: config travels with the request
+    into traces.
+    """
+
+
 ModelUsage = GenerationUsage  # public name for GenerationUsage
 
 # what callers pass as tool_choice; they type the string, not an enum.
@@ -107,11 +123,12 @@ ABNORMAL_FINISH_REASONS = frozenset({
 class ModelConfigDict(TypedDict, extra_items=Any, total=False):
     """Common knobs for dict-literal autocomplete on ``config={...}``.
 
-    ``None`` clears a ModelRef default. Extra keys (provider-specific) stay
-    in the bag and are forwarded.
+    ``None`` clears a ModelRef default. Other keys have to be declared by the
+    model's own config class, or the call raises before the model runs;
+    provider settings the class doesn't declare go in ``extra``.
 
-    Keys match ``GenerationCommonConfig`` / ``ModelConfig``. If a common
-    knob is added there and not here, autocomplete quietly drops it.
+    Keys match ``ModelConfig``. If a common knob is added there and not here,
+    autocomplete quietly drops it.
     """
 
     version: str | None
@@ -121,6 +138,7 @@ class ModelConfigDict(TypedDict, extra_items=Any, total=False):
     top_p: float | None
     stop_sequences: Sequence[str] | None
     api_key: str | None
+    extra: dict[str, Any] | None
 
 
 # TypeVars for generic types

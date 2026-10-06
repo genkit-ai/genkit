@@ -23,7 +23,8 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 from typing import Annotated, Any, TypeAlias, cast, get_args, get_origin, get_type_hints
 
-from pydantic import BaseModel
+from pydantic import AliasChoices, BaseModel, ValidationError
+from pydantic_core import ErrorDetails
 
 from genkit._core._action import (
     Action,
@@ -49,7 +50,7 @@ from genkit._core._model import (
 )
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
-from genkit._core._typing import ActionMetadata, ModelInfo
+from genkit._core._typing import ActionMetadata, GenerationCommonConfig, ModelInfo
 
 # Type alias for model functions (must be async)
 # Use ctx.send_chunk() for streaming
@@ -72,6 +73,14 @@ class ResolvedModel:
 
 
 def python_config_schema(schema: object) -> type[BaseModel] | None:
+    """The class a call's config is checked against, or None for no check.
+
+    ``GenerationCommonConfig`` is what a looked-up ref carries for a model that
+    declared no class, so it means "not checked", the same as calling that
+    model by name.
+    """
+    if schema is GenerationCommonConfig:
+        return None
     return schema if isinstance(schema, type) and issubclass(schema, BaseModel) else None
 
 
@@ -82,6 +91,13 @@ def config_field_names(schema: type[BaseModel]) -> dict[str, str]:
         names[name] = name
         if field.alias:
             names[field.alias] = name
+        accepted = field.validation_alias
+        if isinstance(accepted, str):
+            names[accepted] = name
+        elif isinstance(accepted, AliasChoices):
+            for choice in accepted.choices:
+                if isinstance(choice, str):
+                    names[choice] = name
     return names
 
 
@@ -447,6 +463,53 @@ def assert_correct_config_class(
         message=f'{model}: {body}' if model else body,
         reason=RuntimeErrorReason.INVALID_INPUT,
     )
+
+
+def check_config_dict(*, config: object, schema: type[BaseModel] | None, model: str) -> None:
+    """A dict config has to fit the model's class before anything is sent.
+
+    Each layer (ref, call, prompt) is checked on its own, so a missing field
+    is fine here; only unknown keys and bad values raise. ``None`` means
+    "clear the default" and isn't checked.
+    """
+    if schema is None or not isinstance(config, Mapping):
+        return
+    layer = {key: value for key, value in cast(Mapping[str, Any], config).items() if value is not None}
+    try:
+        schema.model_validate(layer)
+    except ValidationError as e:
+        problems = [err for err in e.errors() if err['type'] != 'missing']
+        if not problems:
+            return
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f'{model}: {_describe_config_problems(problems)}',
+            reason=RuntimeErrorReason.INVALID_INPUT,
+            cause=e,
+        ) from e
+
+
+def _describe_config_problems(problems: list[ErrorDetails]) -> str:
+    unknown = [_config_path(err['loc']) for err in problems if err['type'] == 'extra_forbidden']
+    parts: list[str] = []
+    if unknown:
+        keys = ', '.join(repr(key) for key in unknown)
+        noun = 'key' if len(unknown) == 1 else 'keys'
+        parts.append(f"unknown config {noun} {keys}; put provider-only settings in config['extra']")
+    parts.extend(
+        f'config {_config_path(err["loc"])!r}: {err["msg"]}' for err in problems if err['type'] != 'extra_forbidden'
+    )
+    return '; '.join(parts)
+
+
+def _config_path(loc: tuple[int | str, ...]) -> str:
+    return '.'.join(str(part) for part in loc)
+
+
+def check_call_config(*, config: object, schema: type[BaseModel] | None, model: str) -> None:
+    """Call-time config check: a typed object's class and a dict's keys and values."""
+    assert_correct_config_class(config=config, schema=schema, model=model)
+    check_config_dict(config=config, schema=schema, model=model)
 
 
 # =============================================================================
