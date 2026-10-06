@@ -31,8 +31,10 @@ from genkit_openai._models._model_info import SUPPORTED_OPENAI_MODELS
 from genkit_openai._openai_plugin import OpenAI, openai_model
 from openai import APIStatusError, APITimeoutError
 from openai.types import Model
+from openai.types.chat import ChatCompletion
 
-from genkit import Document, GenkitError
+from genkit import Document, Genkit, GenkitError
+from genkit._ai._formats import built_in_formats
 from genkit.embedder import EmbedRequest, EmbedResponse
 from genkit.model import Supports
 from genkit.plugin_api import ActionKind, ActionMetadata, loop_local_client
@@ -108,8 +110,8 @@ def test_gpt_6_astra_catalog_entry() -> None:
     )
 
 
-# Genkit's built-in output formats, plus 'media' for image and audio models.
-KNOWN_OUTPUTS = {'array', 'enum', 'json', 'jsonl', 'text', 'media'}
+# Image and audio models list 'media' in addition to the built-in formats.
+KNOWN_OUTPUTS = {f.name for f in built_in_formats} | {'media'}
 
 
 @pytest.mark.parametrize(
@@ -466,3 +468,38 @@ async def test_list_actions_propagates_unclassified_errors() -> None:
 
     assert exc_info.value is error
     assert not isinstance(exc_info.value, GenkitError)
+
+
+def _json_completion(content: str = '{"a": 1}') -> ChatCompletion:
+    """A one-choice JSON completion the generate path can parse."""
+    return ChatCompletion.construct(
+        id='1',
+        object='chat.completion',
+        created=1,
+        model='gpt-4o',
+        choices=[
+            {
+                'index': 0,
+                'message': {'role': 'assistant', 'content': content},
+                'finish_reason': 'stop',
+            }
+        ],
+    )
+
+
+@pytest.mark.asyncio
+async def test_openai_unlisted_model_json_request_sends_json_object() -> None:
+    """ai.generate(model='openai/ft:gpt-4o:acme', output_format='json') still sends json_object."""
+    captured: dict[str, Any] = {}
+    client = MagicMock()
+
+    async def create(**kwargs: Any) -> ChatCompletion:
+        captured.update(kwargs)
+        return _json_completion()
+
+    client.chat.completions.create = AsyncMock(side_effect=create)
+    ai = Genkit(plugins=[_plugin_with(client)])
+
+    await ai.generate(model='openai/ft:gpt-4o:acme', prompt='give me json', output_format='json')
+
+    assert captured['response_format'] == {'type': 'json_object'}

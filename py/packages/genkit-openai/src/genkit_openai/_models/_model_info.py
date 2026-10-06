@@ -21,6 +21,7 @@ from typing import Literal, TypeAlias
 
 from genkit.model import ModelInfo, Supports
 
+# 'json' in output means the endpoint accepts schema-less JSON mode.
 MULTIMODAL_MODEL_SUPPORTS = Supports(
     multiturn=True,
     media=True,
@@ -29,6 +30,7 @@ MULTIMODAL_MODEL_SUPPORTS = Supports(
     output=['json', 'text'],
 )
 
+# gpt-4's endpoint rejects schema-less JSON mode, so output lists only 'text'.
 GPT_4_MODEL_SUPPORTS = Supports(
     multiturn=True,
     media=False,

@@ -52,7 +52,8 @@ TRANSFORMATIONS = {
     # Documents take the same Part as messages. The schema names a
     # text|media subset; we do not emit a second type for that.
     'DocumentPart': {'output_name': 'PartData'},
-    # Python does not act on supports.context, same as Dart. Removed for good.
+    # docs= always goes into the prompt and nothing in Python reads
+    # supports.context, so the field isn't emitted.
     'Supports': {'omit': ['context']},
 }
 
