@@ -85,6 +85,7 @@ from genkit._core._model import (
     OutputConfig,
     Part,
     as_message,
+    reject_unanswered_interrupts,
 )
 from genkit._core._protocols import RegistryLike, SessionLike
 from genkit._core._registry import Registry
@@ -1545,6 +1546,8 @@ async def call_model(
     call.request = request
 
     async def run_action(params: ModelHookParams, c: GenerateMiddlewareContext) -> ModelResponse:
+        # After they stop, another model call would be billed and thrown away.
+        raise_if_aborted(c.abort_signal)
         if is_debug_enabled(logger):
             logger.debug(
                 'calling model',
@@ -2292,6 +2295,7 @@ async def resolve_resume_options(
     """Handle resume options by resolving pending tool calls from a previous turn."""
     if not options.resume:
         return (options, None, None)
+    reject_unanswered_interrupts(options.resume)
 
     messages = list(options.messages or [])
     last_message = messages[-1] if messages else None

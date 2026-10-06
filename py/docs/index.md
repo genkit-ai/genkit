@@ -45,10 +45,6 @@
 
 ::: genkit.Interrupt
 
-::: genkit.respond_to_interrupt
-
-::: genkit.restart_tool
-
 ::: genkit.response
 
 ::: genkit.MultipartToolResponse
