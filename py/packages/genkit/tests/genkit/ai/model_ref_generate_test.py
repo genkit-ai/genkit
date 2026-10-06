@@ -31,10 +31,10 @@ class CustomConfig(BaseModel):
     safety_settings: dict[str, str] | None = None
 
 
-class ExcludedKeyConfig(ModelConfig):
-    """ModelConfig whose api_key is omitted from model_dump."""
+class ExcludedFieldConfig(ModelConfig):
+    """ModelConfig with a client-only setting omitted from model_dump."""
 
-    api_key: str | None = Field(default=None, exclude=True)
+    http_options: dict[str, str] | None = Field(default=None, exclude=True)
 
 
 class AllowExtraConfig(ModelConfig):
@@ -405,17 +405,17 @@ async def test_model_config_aliased_field_same_key_override(
 
 
 @pytest.mark.asyncio
-async def test_excluded_api_key_reaches_plugin(
+async def test_excluded_field_reaches_plugin(
     ai_with_echo: tuple[Genkit, EchoModel],
 ) -> None:
-    """Per-request api_key still lands on the plugin request after veneer dump."""
+    """A setting marked exclude=True still lands on the plugin request after veneer dump."""
     ai, echo = ai_with_echo
-    ref = model_ref('testEcho', config_schema=ExcludedKeyConfig)
+    ref = model_ref('testEcho', config_schema=ExcludedFieldConfig)
 
-    await ai.generate(model=ref, config=ExcludedKeyConfig(api_key='secret'), prompt='Hello')
+    await ai.generate(model=ref, config=ExcludedFieldConfig(http_options={'timeout': '5'}), prompt='Hello')
 
     assert echo.last_request is not None
-    assert _config_value(echo.last_request.config, 'api_key') == 'secret'
+    assert _config_value(echo.last_request.config, 'http_options') == {'timeout': '5'}
 
 
 @pytest.mark.asyncio

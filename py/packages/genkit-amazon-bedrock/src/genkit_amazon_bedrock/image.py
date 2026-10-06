@@ -60,11 +60,11 @@ _AMAZON_IMAGE_MIME = 'image/png'
 
 _NO_IMAGES_MESSAGE = 'bedrock image: no images generated'
 
-# Both spellings of Genkit's own generation knobs: none is a Bedrock image
-# parameter, and apiKey on an outbound body would leak a credential.
+# Both spellings of Genkit's own generation knobs and of a stray api key: none
+# is a Bedrock image parameter, and a key on an outbound body would leak a credential.
 _GENKIT_CONFIG_KEYS: frozenset[str] = frozenset(
     key for name, field in ModelConfig.model_fields.items() for key in (name, field.alias) if key is not None
-)
+) | {'api_key', 'apiKey'}
 
 
 def _image_family(model_id: str) -> ImageFamily | None:

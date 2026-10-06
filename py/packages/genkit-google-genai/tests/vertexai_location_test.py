@@ -42,7 +42,7 @@ EU_REP_URL = 'https://aiplatform.eu.rep.googleapis.com'
 
 
 def _text_request(config: GeminiConfig | dict[str, Any] | None = None) -> ModelRequest[Any]:
-    if isinstance(config, dict):
+    if isinstance(config, dict) and 'api_key' not in config and 'apiKey' not in config:
         config = GeminiConfig.model_validate(config)
     return ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],

@@ -123,14 +123,14 @@ def normalize_config(*, config: object) -> dict[str, Any]:
     """Dump a config object or dict. Does not fold or merge.
 
     Pydantic dumps the Python field names, including explicit ``None``.
-    Dict keys stay as written. ``api_key`` is copied back when dump omits it.
+    Dict keys stay as written. Fields marked ``exclude=True`` are copied back.
     """
     if config is None:
         return {}
     if isinstance(config, BaseModel):
         dumped = config.model_dump(exclude_unset=True, exclude_none=False, by_alias=False)
-        # api_key is left out of JSON on purpose; copy it back so a
-        # per-request key still reaches the plugin.
+        # a plugin can keep a client-only setting out of JSON with exclude=True;
+        # copy it back so the setting the caller passed still reaches the plugin.
         for name in config.model_fields_set:
             if name not in dumped:
                 dumped[name] = getattr(config, name)
@@ -239,6 +239,7 @@ async def resolve_for_generate(
     registered model action.
     """
     resolved = resolve_call_model(model=model, config=config, registry=registry, message=message)
+    reject_config_api_key(resolved.config)
     if resolved.config_schema is not None:
         return resolved
     action = await registry.resolve_model(resolved.name)
@@ -512,38 +513,19 @@ def check_call_config(*, config: object, schema: type[BaseModel] | None, model: 
     check_config_dict(config=config, schema=schema, model=model)
 
 
-# =============================================================================
-# Model config types (from model_types.py)
-# =============================================================================
+def reject_config_api_key(config: Mapping[str, Any]) -> None:
+    """A per-request key in config raises on every model, with or without a config class.
 
-
-def get_request_api_key(config: Mapping[str, object] | ModelConfig | object | None) -> str | None:
-    """Extract API key from config (snake_case or camelCase)."""
-    if config is None:
-        return None
-
-    if isinstance(config, ModelConfig):
-        return config.api_key
-
-    if isinstance(config, Mapping):
-        config_mapping = cast(Mapping[str, object], config)
-        for key in ('api_key', 'apiKey'):
-            api_key = config_mapping.get(key)
-            if isinstance(api_key, str) and api_key:
-                return api_key
-    else:
-        # Defensive fallback for plugin-specific config classes that inherit from
-        # ModelConfig or expose an api_key attribute.
-        api_key_attr = getattr(config, 'api_key', None)
-        if isinstance(api_key_attr, str) and api_key_attr:
-            return api_key_attr
-
-    return None
-
-
-def get_effective_api_key(
-    config: Mapping[str, object] | ModelConfig | object | None,
-    plugin_api_key: str | None,
-) -> str | None:
-    """Return request API key if set, otherwise plugin API key."""
-    return get_request_api_key(config) or plugin_api_key
+    Config is recorded in traces and a plugin may not read a key from it, so
+    the caller is pointed at ``context.secrets`` rather than told the key is
+    unknown. What's inside ``extra`` isn't checked.
+    """
+    if config.get('api_key') is None and config.get('apiKey') is None:
+        return
+    raise GenkitError(
+        status='INVALID_ARGUMENT',
+        message=(
+            "API key belongs in context.secrets, not config. Pass the key as context={'secrets': {'api_key': ...}}."
+        ),
+        reason=RuntimeErrorReason.INVALID_INPUT,
+    )

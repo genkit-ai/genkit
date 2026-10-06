@@ -176,7 +176,6 @@ def test_model_config_dict_accepts_common_knobs() -> None:
         'top_p': 0.9,
         'stop_sequences': ['END'],
         'version': '001',
-        'api_key': 'test-key',
     }
 
     assert config['temperature'] == 0.5

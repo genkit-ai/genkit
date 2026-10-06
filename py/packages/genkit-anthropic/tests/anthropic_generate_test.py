@@ -246,25 +246,6 @@ async def test_generate_claude_secrets_without_api_key_uses_plugin_key() -> None
     assert api.api_key() == PLUGIN_KEY
 
 
-@pytest.mark.parametrize('config', [{'api_key': TENANT_KEY}, {'apiKey': TENANT_KEY}])
-@pytest.mark.asyncio
-async def test_generate_claude_config_api_key_fails_pointing_to_secrets(
-    config: dict[str, Any],
-) -> None:
-    """A key in config fails with INVALID_ARGUMENT naming `context.secrets` without echoing it; nothing is sent."""
-    api = FakeClaudeApi()
-    ai = _genkit(api)
-
-    response = await ai.generate(model=MODEL, prompt='hi', config=config)
-
-    assert response.finish_reason == FinishReason.FAILED
-    assert response.error is not None
-    assert response.error.status == 'INVALID_ARGUMENT'
-    assert "context={'secrets': {'api_key': ...}}" in response.error.message
-    assert TENANT_KEY not in response.error.message
-    assert api.requests == []
-
-
 @pytest.mark.parametrize(
     ('client_params', 'reason'),
     [

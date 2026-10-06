@@ -82,7 +82,9 @@ class ModelConfig(GenerationCommonConfig):
     """Settings every model understands, plus ``extra`` for provider-only ones.
 
     Unknown keyword arguments raise, so ``ModelConfig(temprature=0.2)`` fails
-    where it was typed instead of being sent or silently dropped.
+    where it was typed instead of being sent or silently dropped. A
+    per-request API key goes in ``context={'secrets': {'api_key': ...}}``, not
+    here.
     """
 
     model_config: ClassVar[ConfigDict] = ConfigDict(extra='forbid')
@@ -144,7 +146,6 @@ class ModelConfigDict(TypedDict, extra_items=Any, total=False):
     top_k: float | None
     top_p: float | None
     stop_sequences: Sequence[str] | None
-    api_key: str | None
     extra: dict[str, Any] | None
 
 

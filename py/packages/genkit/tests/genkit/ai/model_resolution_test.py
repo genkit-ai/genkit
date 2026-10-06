@@ -21,7 +21,6 @@ from genkit._ai._model import (
     assert_correct_config_class,
     config_schema_at_define,
     fold_config_aliases,
-    get_request_api_key,
     model,
     normalize_config,
     overlay_config,
@@ -46,10 +45,10 @@ class CustomConfig(BaseModel):
     safety_settings: dict[str, str] | None = None
 
 
-class ExcludedKeyConfig(ModelConfig):
-    """ModelConfig whose api_key is omitted from model_dump."""
+class ExcludedFieldConfig(ModelConfig):
+    """ModelConfig with a client-only setting omitted from model_dump."""
 
-    api_key: str | None = Field(default=None, exclude=True)
+    http_options: dict[str, str] | None = Field(default=None, exclude=True)
 
 
 class OtherFamilyConfig(BaseModel):
@@ -234,8 +233,10 @@ def test_resolve_model_ref_same_key_override_on_aliased_field() -> None:
 
 
 def test_normalize_config_restores_excluded_fields() -> None:
-    """Fields marked exclude=True still reach the plugin (per-request api_key)."""
-    assert normalize_config(config=ExcludedKeyConfig(api_key='secret')) == {'api_key': 'secret'}
+    """Fields marked exclude=True still reach the plugin."""
+    assert normalize_config(config=ExcludedFieldConfig(http_options={'timeout': '5'})) == {
+        'http_options': {'timeout': '5'}
+    }
 
 
 def test_normalize_config_passes_through_camel_case_keys() -> None:
@@ -602,9 +603,3 @@ def test_resolve_model_ref_both_spellings_last_write_wins() -> None:
     )
     assert camel_last.config == {'max_output_tokens': 5}
     assert snake_last.config == {'max_output_tokens': 1}
-
-
-def test_get_request_api_key_reads_camel_dict() -> None:
-    """A wire-shaped dict still exposes the per-request key."""
-    assert get_request_api_key({'apiKey': 'secret'}) == 'secret'
-    assert get_request_api_key({'api_key': 'secret'}) == 'secret'

@@ -103,7 +103,6 @@ async def test_get_openai_config_peels_genkit_keys_and_passes_the_rest() -> None
             'temperature': 0.5,
             'max_output_tokens': 128,
             'stop_sequences': ['END'],
-            'api_key': 'secret',
             'top_k': 8,
             'version': 'gpt-4o-2024-08-06',
             'prompt_cache_key': 'abc',
