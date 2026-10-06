@@ -1016,14 +1016,16 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
     def _validate_input(self, input: InputT | None) -> InputT | None:
         """Validate caller input against the action schema when one is registered."""
         omitted = input is NO_INPUT
-        if self._input_type is None:
-            return input
         # Skip validation when the caller passed nothing AND the wrapped
         # function declares a Python default for its input — that's the
         # signal that "no input" is a legitimate way to invoke this action.
         if omitted and self._params.input_optional:
             return input
-        payload: object = input
+        # The sentinel isn't a value. A required parameter gets None, so
+        # `str | None` runs with None and plain `str` reports the missing input.
+        payload: object = None if omitted else input
+        if self._input_type is None:
+            return None if omitted else input
         # A differently-typed ModelRequest with a mapping config is dumped and
         # re-parsed into the plugin class. A Pydantic config instance of the
         # wrong class is a caller mistake — dump would silently coerce it.
