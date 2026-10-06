@@ -28,7 +28,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from genkit import ContextProvider, Genkit, GenkitError, RequestData
+from genkit import ContextProvider, Genkit, GenkitError, PublicError, RequestData
 from genkit.exp.agent import Agent, SessionSnapshot
 from genkit.plugin_api import Action, ActionKind, get_callable_json, get_http_status
 
@@ -106,6 +106,13 @@ def json_error_response(error: Exception, status_code: int | None = None) -> Res
     )
 
 
+def _log_served_failure(error: Exception, *, where: str) -> None:
+    if get_http_status(error) >= 500:
+        logger.exception('served flow %s failed', where)
+    else:
+        logger.warning('served flow %s failed: %s', where, error)
+
+
 def extract_action_input(body: dict[str, Any]) -> object:
     """Extract action input payload from supported wire formats."""
     if 'data' in body:
@@ -120,9 +127,9 @@ def extract_action_input(body: dict[str, Any]) -> object:
     # Match Express: ``request.body.data`` is undefined, not a wire error.
     if not body:
         return None
-    raise GenkitError(
-        status='INVALID_ARGUMENT',
-        message='Action request must be wrapped in {"data": ...} object',
+    raise PublicError(
+        'INVALID_ARGUMENT',
+        'Action request must be wrapped in {"data": ...} object',
     )
 
 
@@ -195,9 +202,9 @@ async def handle_genkit_request(
     body = await request.json()
     if not isinstance(body, dict):
         return json_error_response(
-            GenkitError(
-                status='INVALID_ARGUMENT',
-                message='Action request must be a JSON object',
+            PublicError(
+                'INVALID_ARGUMENT',
+                'Action request must be a JSON object',
             )
         )
 
@@ -219,7 +226,7 @@ async def handle_genkit_request(
                 result = await stream_response.response
                 yield format_stream_result(result)
             except Exception as e:
-                logger.exception('served flow stream failed')
+                _log_served_failure(e, where='stream')
                 yield format_stream_error(e)
 
         return StreamingResponse(event_stream(), media_type='text/event-stream')
@@ -230,7 +237,7 @@ async def handle_genkit_request(
             return Response(status_code=404)
         return {'result': to_dict(response.response)}
     except Exception as e:
-        logger.exception('served flow failed')
+        _log_served_failure(e, where='run')
         return json_error_response(e)
 
 
@@ -298,13 +305,17 @@ def genkit_fastapi_handler(
             # through serve_flow/serve_agent's context_dependency instead.
             action_context: dict[str, object] | None = None
             if context_provider:
-                body = await request.json()
-                request_data = FastAPIRequestData(request, body if isinstance(body, dict) else None)
-                context = context_provider(request_data)
-                if asyncio.iscoroutine(context):
-                    context = await context
-                if isinstance(context, dict):
-                    action_context = context
+                try:
+                    body = await request.json()
+                    request_data = FastAPIRequestData(request, body if isinstance(body, dict) else None)
+                    context = context_provider(request_data)
+                    if asyncio.iscoroutine(context):
+                        context = await context
+                    if isinstance(context, dict):
+                        action_context = context
+                except Exception as e:
+                    _log_served_failure(e, where='context provider')
+                    return json_error_response(e)
 
             return await handle_genkit_request(
                 request,

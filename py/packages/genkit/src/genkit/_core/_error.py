@@ -407,13 +407,11 @@ class GenkitError(Exception):
         return runtime_error_reason(self.details)
 
     def to_callable_serializable(self) -> HttpErrorWireFormat:
-        """Returns a JSON-serializable representation of this object.
+        """In-process form: original message and details, including stack.
 
-        Returns:
-            An HttpErrorWireFormat model instance.
+        Served flows use ``get_callable_json``, which redacts non-public
+        text. Call that when writing an HTTP body.
         """
-        # This error type is used by 3P authors with the field "details",
-        # but the actual Callable protocol value is "details"
         return HttpErrorWireFormat(
             details=self.details,
             status=StatusCodes[self.status].name,
@@ -463,9 +461,8 @@ class PublicError(GenkitError):
     """Error class for issues to be returned to users.
 
     Using this error allows a web framework handler (e.g. FastAPI, Flask) to know it
-    is safe to return the message in a request. Other kinds of errors will
-    result in a generic 500 message to avoid the possibility of internal
-    exceptions being leaked to attackers.
+    is safe to return the message and details in a request. Other GenkitError
+    values keep their HTTP status and get a generic message for that status.
     """
 
     def __init__(self, status: StatusName, message: str, details: Any = None) -> None:  # noqa: ANN401
@@ -485,13 +482,14 @@ _INTERNAL_CLIENT_BODY: dict[str, Any] = {'message': 'Internal Error', 'status': 
 def _client_facing_error(error: object) -> GenkitError | None:
     """The GenkitError whose status a served flow may show the caller, or None to redact.
 
-    The innermost GenkitError with a real status wins, so a PublicError the
-    action runner wrapped still reaches the caller. An INTERNAL wrapper with
+    Only the runtime's INTERNAL wrapper is peeled, so a PublicError the
+    action runner wrapped still reaches the caller. A NOT_FOUND that happens
+    to wrap another GenkitError keeps NOT_FOUND. An INTERNAL wrapper with
     nothing like that underneath is an unexpected failure and gets a plain 500.
     """
     if not isinstance(error, GenkitError):
         return None
-    if isinstance(error.cause, GenkitError):
+    if error.status == 'INTERNAL' and isinstance(error.cause, GenkitError):
         inner = _client_facing_error(error.cause)
         if inner is not None:
             return inner
@@ -508,11 +506,19 @@ def _generic_client_message(status: StatusName) -> str:
 
 
 def _client_details(details: Any) -> Any:  # noqa: ANN401
-    """Details safe to put on the wire: drop stack, omit an empty dict."""
+    """Details safe to put on the wire: drop stack, dump models, omit empty."""
     if not details:
         return None
+    if hasattr(details, 'model_dump') and callable(details.model_dump):
+        details = details.model_dump(by_alias=True, exclude_none=True)
     if isinstance(details, dict):
-        cleaned = {key: value for key, value in details.items() if key != 'stack'}
+        cleaned = {
+            key: value.model_dump(by_alias=True, exclude_none=True)
+            if hasattr(value, 'model_dump') and callable(value.model_dump)
+            else value
+            for key, value in details.items()
+            if key != 'stack'
+        }
         return cleaned or None
     return details
 
@@ -550,11 +556,12 @@ def get_reflection_json(error: object) -> ReflectionError:
 def get_callable_json(error: object) -> dict[str, Any]:
     """JSON body for a served-flow HTTP or SSE error.
 
-    Only a PublicError's message goes on the wire; it's the one error whose
-    author said the text is safe for callers. Any other GenkitError keeps its
-    status but gets a generic message, since framework errors can quote the
-    caller's input. Anything else — including an INTERNAL wrapper around a raw
-    exception — becomes ``{"message": "Internal Error", "status": "INTERNAL"}``.
+    Only a PublicError's message and details go on the wire; it's the one
+    error whose author said the text is safe for callers. Any other
+    GenkitError keeps its status but gets a generic message and no details,
+    since framework errors can quote the caller's input or a provider body.
+    Anything else — including an INTERNAL wrapper around a raw exception —
+    becomes ``{"message": "Internal Error", "status": "INTERNAL"}``.
     """
     facing = _client_facing_error(error)
     if facing is None:
@@ -564,9 +571,10 @@ def get_callable_json(error: object) -> dict[str, Any]:
         'message': message,
         'status': facing.status,
     }
-    details = _client_details(facing.details)
-    if details is not None:
-        body['details'] = details
+    if isinstance(facing, PublicError):
+        details = _client_details(facing.details)
+        if details is not None:
+            body['details'] = details
     return body
 
 

@@ -23,7 +23,7 @@ from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 from genkit_fastapi import genkit_fastapi_handler, serve_flow
 
-from genkit import ActionRunContext, Genkit, GenkitError, PublicError
+from genkit import ActionRunContext, Genkit, GenkitError, PublicError, RequestData
 
 
 def assert_is_error_response(parsed: dict) -> None:
@@ -104,7 +104,6 @@ def test_fastapi_flow_posted_wrong_input_type_returns_400_without_validation_tex
     assert response.json() == {
         'message': 'Invalid argument',
         'status': 'INVALID_ARGUMENT',
-        'details': {'reason': 'INVALID_INPUT'},
     }
     assert '123-45-6789' not in response.text
 
@@ -114,8 +113,10 @@ def test_unknown_body_shape_still_returns_400() -> None:
     client = TestClient(create_app())
     response = client.post('/chat', json={'foo': 'bar'})
     assert response.status_code == 400
-    parsed = json.loads(response.text)
-    assert_is_error_response(parsed)
+    assert response.json() == {
+        'message': 'Action request must be wrapped in {"data": ...} object',
+        'status': 'INVALID_ARGUMENT',
+    }
 
 
 def test_500_flow_exception_returns_valid_json() -> None:
@@ -269,3 +270,27 @@ def test_fastapi_stream_flow_raising_value_error_sends_sse_internal_error_withou
     assert error == {'message': 'Internal Error', 'status': 'INTERNAL'}
     assert 'secret' not in response.text
     assert 'stack' not in error
+
+
+def test_fastapi_context_provider_public_error_returns_its_status_and_message() -> None:
+    """A PublicError from FastAPI's context_provider is mapped like a flow failure."""
+    ai = Genkit()
+
+    def deny(_request: RequestData) -> dict[str, object]:
+        raise PublicError('UNAUTHENTICATED', 'not signed in')
+
+    @ai.flow()
+    async def chat(_: str) -> str:
+        return 'ok'
+
+    app = FastAPI()
+
+    @app.post('/chat', response_model=None)
+    @genkit_fastapi_handler(ai, context_provider=deny)
+    async def chat_route():
+        return chat
+
+    response = TestClient(app).post('/chat', json={'data': 'x'})
+
+    assert response.status_code == 401
+    assert response.json() == {'message': 'not signed in', 'status': 'UNAUTHENTICATED'}

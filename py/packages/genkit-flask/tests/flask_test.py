@@ -180,3 +180,35 @@ def test_flask_stream_flow_raising_value_error_sends_sse_internal_error_without_
     assert error == {'message': 'Internal Error', 'status': 'INTERNAL'}
     assert b'secret' not in b''.join(chunks)
     assert 'stack' not in error
+
+
+def test_flask_missing_data_wrapper_returns_the_wrap_message() -> None:
+    """A POST without ``{"data": ...}`` tells the caller to wrap the body."""
+    response = create_app().test_client().post('/chat', json={'foo': 'bar'})
+
+    assert response.status_code == 400
+    assert json.loads(response.data) == {
+        'message': 'flow request must be wrapped in {"data": data} object',
+        'status': 'INVALID_ARGUMENT',
+    }
+
+
+def test_flask_context_provider_public_error_returns_its_status_and_message() -> None:
+    """A PublicError from Flask's context_provider is mapped like a flow failure."""
+    ai = Genkit()
+    app = Flask(__name__)
+    app.config.update({'TESTING': True})
+
+    def deny(_request: RequestData[Request]) -> dict[str, Any]:
+        raise PublicError('UNAUTHENTICATED', 'not signed in')
+
+    @app.post('/chat')
+    @genkit_flask_handler(ai, context_provider=deny)
+    @ai.flow()
+    async def chat(_: str) -> str:
+        return 'ok'
+
+    response = app.test_client().post('/chat', json={'data': 'x'})
+
+    assert response.status_code == 401
+    assert json.loads(response.data) == {'message': 'not signed in', 'status': 'UNAUTHENTICATED'}

@@ -26,13 +26,28 @@ from typing import Any, TypeAlias, TypeVar
 from flask import Response, request
 from pydantic import BaseModel
 
-from genkit import ContextProvider, Genkit, GenkitError, RequestData
+from genkit import ContextProvider, Genkit, PublicError, RequestData
 from genkit.plugin_api import Action, get_callable_json, get_http_status
 
 logger = logging.getLogger(__name__)
 
 # Compact JSON (no spaces) for smaller wire payload.
 _JSON_SEPARATORS = (',', ':')
+
+
+def _log_served_failure(error: Exception, *, where: str) -> None:
+    if get_http_status(error) >= 500:
+        logger.exception('served flow %s failed', where)
+    else:
+        logger.warning('served flow %s failed: %s', where, error)
+
+
+def _error_response(error: Exception, status: int | None = None) -> Response:
+    return Response(
+        status=get_http_status(error) if status is None else status,
+        response=json.dumps(get_callable_json(error), separators=_JSON_SEPARATORS),
+        mimetype='application/json',
+    )
 
 
 def _to_dict(obj: Any) -> Any:  # noqa: ANN401
@@ -117,22 +132,27 @@ def genkit_flask_handler(
 
     def decorator(flow: Action) -> Callable[..., Awaitable[FlaskRouteReturn]]:
         if not isinstance(flow, Action):
-            raise GenkitError(status='INVALID_ARGUMENT', message='must apply @genkit_flask_handler on a @flow')
+            raise PublicError('INVALID_ARGUMENT', 'must apply @genkit_flask_handler on a @flow')
 
         async def handler() -> FlaskRouteReturn:
             input_data = request.get_json()
-            if 'data' not in input_data:
-                return Response(status=400, response='flow request must be wrapped in {"data": data} object')
+            if not isinstance(input_data, dict) or 'data' not in input_data:
+                return _error_response(
+                    PublicError('INVALID_ARGUMENT', 'flow request must be wrapped in {"data": data} object')
+                )
 
             request_data = _FlaskRequestData()
-            context = None
             action_context: dict[str, object] | None = None
             if context_provider:
-                context = context_provider(request_data)
-                if asyncio.iscoroutine(context):
-                    context = await context
-                if isinstance(context, dict):
-                    action_context = context
+                try:
+                    context = context_provider(request_data)
+                    if asyncio.iscoroutine(context):
+                        context = await context
+                    if isinstance(context, dict):
+                        action_context = context
+                except Exception as e:
+                    _log_served_failure(e, where='context provider')
+                    return _error_response(e)
 
             # Substring match so Accept: text/event-stream, */* (and similar) still streams.
             accept = request_data.headers.get('accept', '')
@@ -149,7 +169,7 @@ def genkit_flask_handler(
                         result = await stream_response.response
                         yield f'data: {json.dumps({"result": _to_dict(result)}, separators=_JSON_SEPARATORS)}\n\n'
                     except Exception as e:
-                        logger.exception('served flow stream failed')
+                        _log_served_failure(e, where='stream')
                         yield f'data: {json.dumps({"error": get_callable_json(e)}, separators=_JSON_SEPARATORS)}\n\n'
 
                 iter = _iter_over_async(async_gen(), loop)
@@ -159,12 +179,8 @@ def genkit_flask_handler(
                     response = await flow.run(input_data.get('data'), context=action_context, init=init)
                     return {'result': _to_dict(response.response)}
                 except Exception as e:
-                    logger.exception('served flow failed')
-                    return Response(
-                        status=get_http_status(e),
-                        response=json.dumps(get_callable_json(e), separators=_JSON_SEPARATORS),
-                        mimetype='application/json',
-                    )
+                    _log_served_failure(e, where='run')
+                    return _error_response(e)
 
         return handler
 
