@@ -10,17 +10,18 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from genkit import Genkit
+from genkit import Genkit, get_logger
 from genkit._core._action import ActionRunContext, _action_context
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import ModelRequest, ModelResponse
-from genkit._core._telemetry._instrumentation import (
+from genkit._core._telemetry._log_exporter import build_log_record
+from genkit._core._typing import Operation
+from genkit.telemetry import (
     SpanMetadata,
     SpanNext,
+    configure_instrumentation,
     reset_instrumentation,
 )
-from genkit._core._typing import Operation
-from genkit.telemetry import configure_instrumentation
 
 
 @pytest.mark.asyncio
@@ -72,6 +73,30 @@ async def test_genkit_run_tags_flow_step_action_type() -> None:
         assert recording.last.action_type == 'flowStep'
     finally:
         reset_instrumentation()
+
+
+@pytest.mark.asyncio
+async def test_get_logger_in_flow_attaches_trace_id(hex_ids: None) -> None:
+    """get_logger() lines inside a flow attach the flow's trace ID to the log record."""
+    ai = Genkit()
+    captured: list[dict[str, object]] = []
+
+    def capture_log(*, level: int, event: str, attrs: dict[str, object] | None = None) -> None:
+        captured.append(build_log_record(level=level, event=event, attrs=attrs or {}))
+
+    with mock.patch('genkit._core._telemetry._log_exporter.emit_log', side_effect=capture_log):
+
+        @ai.flow()
+        async def cart_flow() -> str:
+            get_logger(__name__).info('looked up cart')
+            return 'ok'
+
+        assert await cart_flow() == 'ok'
+
+    assert len(captured) == 1
+    assert captured[0]['body'] == {'stringValue': 'looked up cart'}
+    trace_id = captured[0].get('traceId')
+    assert isinstance(trace_id, str) and len(trace_id) == 32
 
 
 @pytest.mark.asyncio
@@ -340,3 +365,40 @@ async def test_current_context() -> None:
         _action_context.reset(token)
 
     assert Genkit.current_context() is None
+
+
+def test_genkit_positional_argument_raises_type_error() -> None:
+    with pytest.raises(
+        TypeError,
+        match=(
+            r'Genkit\(\) takes no positional arguments, got 1\. '
+            r'Pass keyword arguments instead, e\.g\. '
+            r"Genkit\(model='googleai/gemini-flash-latest'\)\."
+        ),
+    ):
+        Genkit('googleai/gemini-flash-latest')  # type: ignore[reportCallIssue,too-many-positional-arguments]
+    with pytest.raises(
+        TypeError,
+        match=(
+            r'Genkit\(\) takes no positional arguments, got 1\. '
+            r'Pass keyword arguments instead, e\.g\. '
+            r'Genkit\(plugins=\[...\], model="..."\)\.'
+        ),
+    ):
+        Genkit([])  # type: ignore[reportCallIssue,too-many-positional-arguments]
+
+
+def test_genkit_path_string_does_not_suggest_model_kwarg() -> None:
+    with pytest.raises(TypeError) as exc_info:
+        Genkit('./prompts')  # type: ignore[reportCallIssue,too-many-positional-arguments]
+    message = str(exc_info.value)
+    assert "model='./prompts'" not in message
+    assert 'Genkit(plugins=[...], model="...")' in message
+
+
+def test_genkit_two_positional_args_says_got_2() -> None:
+    with pytest.raises(
+        TypeError,
+        match=r'Genkit\(\) takes no positional arguments, got 2\.',
+    ):
+        Genkit('googleai/gemini-flash-latest', [])  # type: ignore[reportCallIssue,too-many-positional-arguments]

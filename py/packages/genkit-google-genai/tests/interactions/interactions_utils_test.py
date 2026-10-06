@@ -19,7 +19,7 @@
 from __future__ import annotations
 
 import pytest
-from genkit_google_genai.models.interactions_utils import (
+from genkit_google_genai._models._interactions_utils import (
     extract_version,
     partition_keys,
     require_interaction_steps,
@@ -73,7 +73,7 @@ def test_require_interaction_steps_passes_through() -> None:
 
 
 def test_api_key_for_context_prefers_tenant_secret(monkeypatch: pytest.MonkeyPatch) -> None:
-    from genkit_google_genai.models.interactions_utils import api_key_for_context
+    from genkit_google_genai._models._interactions_utils import api_key_for_context
 
     monkeypatch.setenv('GEMINI_API_KEY', 'env-key')
     context = {'secrets': {'api_key': 'tenant-key'}}
@@ -81,21 +81,21 @@ def test_api_key_for_context_prefers_tenant_secret(monkeypatch: pytest.MonkeyPat
 
 
 def test_api_key_for_context_falls_back_to_plugin(monkeypatch: pytest.MonkeyPatch) -> None:
-    from genkit_google_genai.models.interactions_utils import api_key_for_context
+    from genkit_google_genai._models._interactions_utils import api_key_for_context
 
     monkeypatch.setenv('GEMINI_API_KEY', 'env-key')
     assert api_key_for_context({}, 'plugin-key') == 'plugin-key'
 
 
 def test_api_key_for_context_falls_back_to_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    from genkit_google_genai.models.interactions_utils import api_key_for_context
+    from genkit_google_genai._models._interactions_utils import api_key_for_context
 
     monkeypatch.setenv('GEMINI_API_KEY', 'env-key')
     assert api_key_for_context({}, None) == 'env-key'
 
 
 def test_api_key_for_context_raises_when_missing(monkeypatch: pytest.MonkeyPatch) -> None:
-    from genkit_google_genai.models.interactions_utils import api_key_for_context
+    from genkit_google_genai._models._interactions_utils import api_key_for_context
 
     monkeypatch.delenv('GEMINI_API_KEY', raising=False)
     monkeypatch.delenv('GOOGLE_API_KEY', raising=False)
@@ -108,7 +108,7 @@ def test_api_key_for_context_raises_when_missing(monkeypatch: pytest.MonkeyPatch
 def test_client_overrides_from_config_reads_object() -> None:
     from types import SimpleNamespace
 
-    from genkit_google_genai.models.interactions_utils import client_overrides_from_config
+    from genkit_google_genai._models._interactions_utils import client_overrides_from_config
 
     cfg = SimpleNamespace(base_url='https://custom.api', api_version='v1', timeout=5000.0, custom_headers={'h': 'v'})
     opts = client_overrides_from_config(cfg)
@@ -119,7 +119,7 @@ def test_client_overrides_from_config_reads_object() -> None:
 
 
 def test_steps_with_folded_system_instruction_prepends_system() -> None:
-    from genkit_google_genai.models.interactions_utils import steps_with_folded_system_instruction
+    from genkit_google_genai._models._interactions_utils import steps_with_folded_system_instruction
 
     from genkit import Message, Part, Role
 
@@ -134,7 +134,7 @@ def test_steps_with_folded_system_instruction_prepends_system() -> None:
 
 
 def test_model_name_predicates_support_namespaces() -> None:
-    from genkit_google_genai.models.interactions_registry import (
+    from genkit_google_genai._models._interactions_registry import (
         is_antigravity_model_name,
         is_deep_research_model_name,
         is_lyria_model_name,

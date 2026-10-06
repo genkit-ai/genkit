@@ -21,11 +21,11 @@ import inspect
 from collections.abc import Callable, Sequence
 from contextvars import ContextVar
 from types import UnionType
-from typing import Any, Union, cast, get_args, get_origin, get_type_hints
+from typing import Any, Union, cast, get_args, get_origin
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
-from genkit._core._action import Action, ActionKind, ActionRunContext
+from genkit._core._action import Action, ActionKind, ActionRunContext, resolve_type_hints
 from genkit._core._error import GenkitError, Interrupt, RuntimeErrorReason
 from genkit._core._logger import get_logger
 from genkit._core._middleware import GenerateMiddlewareContext
@@ -33,10 +33,10 @@ from genkit._core._model import MultipartToolResponse, OutputT, Part, as_part
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
 from genkit._core._telemetry._instrumentation import set_custom_metadata_attributes
+from genkit._core._tool import Tool as _Tool
 from genkit._core._typing import (
     Metadata,
     MultipartToolResponse as MultipartToolResponseData,
-    ToolDefinition,
     ToolResponse,
 )
 
@@ -285,68 +285,6 @@ def as_multipart_tool_response(value: Any, *, tool_name: str | None = None) -> M
 logger = get_logger(__name__)
 
 
-class Tool:
-    """A registered tool: a callable handle backed by an :class:`~genkit._core._action.Action`.
-
-    Obtain instances via :func:`define_tool`, :func:`define_interrupt`, :func:`tool`, or the
-    ``@ai.tool`` decorator rather than constructing directly.
-    """
-
-    def __init__(
-        self,
-        action: Action,
-        *,
-        original_output_schema: dict[str, object] | None = None,
-    ) -> None:
-        self._action = action
-        # What the model should expect as ``output``. ``action.output_schema`` is
-        # the envelope ``run`` actually returns (output plus optional media).
-        self._original_output_schema = original_output_schema
-
-    @property
-    def name(self) -> str:
-        """Tool name (registry key)."""
-        return self._action.name
-
-    @property
-    def description(self) -> str:
-        """Human-readable description sent to the model."""
-        return self._action.description or ''
-
-    @property
-    def input_schema(self) -> dict[str, object] | None:
-        """JSON Schema for the tool's input, as sent on the wire."""
-        return self._action.input_schema
-
-    @property
-    def output_schema(self) -> dict[str, object] | None:
-        """JSON Schema for the structured ``output`` the model should expect.
-
-        ``None`` means the handler is annotated as the envelope itself — the
-        model should not bind a schema. An unannotated handler still infers
-        ``{}``.
-        """
-        return self._original_output_schema
-
-    def definition(self) -> ToolDefinition:
-        """Return the wire-format ToolDefinition for this tool."""
-        return ToolDefinition(
-            name=self.name,
-            description=self.description,
-            input_schema=self.input_schema,
-            output_schema=self.output_schema,
-        )
-
-    def action(self) -> Action:
-        """Return the underlying :class:`~genkit._core._action.Action` registered for this tool."""
-        return self._action
-
-    async def __call__(self, *args: Any, **kwargs: Any) -> MultipartToolResponse:  # noqa: ANN401
-        """Run the tool and return the envelope (structured output plus optional media)."""
-        result = (await self._action.run(*args, **kwargs)).response
-        return as_multipart_tool_response(result, tool_name=self.name)
-
-
 # Context variables for propagating resumed metadata to tools
 _tool_resumed_metadata: ContextVar[dict[str, Any] | None] = ContextVar('tool_resumed_metadata', default=None)
 # Stashed copy of tool_request.input when restart replaces input (JSON; shape is per tool).
@@ -547,11 +485,7 @@ def model_schema_from_return_annotation(
     inferred: dict[str, object] | None,
 ) -> dict[str, object] | None:
     """JSON Schema the model should bind, from the handler's return annotation."""
-    try:
-        hints = get_type_hints(func)
-    except Exception:
-        hints = dict(getattr(func, '__annotations__', {}))
-    inner = envelope_output_type(hints.get('return'))
+    inner = envelope_output_type(resolve_type_hints(func).get('return'))
     if inner is NOT_ENVELOPE:
         return inferred
     if inner is Any or inner is object:
@@ -575,7 +509,7 @@ def _define_tool(
     description: str | None = None,
     *,
     input_schema: type[BaseModel] | dict[str, object] | None = None,
-) -> Tool:
+) -> _Tool:
     """Register a function as a tool.
 
     The return annotation is what the model binds. ``input_schema=`` is for
@@ -590,32 +524,15 @@ def _define_tool(
         raise ValueError(f'Cannot infer a tool name from {func!r}; pass name= explicitly.')
     tool_description = _get_func_description(func, description)
 
-    input_spec = inspect.getfullargspec(func)
-
-    async def tool_fn_wrapper(*args: Any) -> Any:  # noqa: ANN401 - arity dispatch; args/return follow registered tool
+    async def tool_fn_wrapper(input: object, ctx: ActionRunContext) -> MultipartToolResponse[Any]:  # noqa: A002
         # Record resumed metadata on the current span for observability.
         resumed_meta = _tool_resumed_metadata.get()
         if resumed_meta:
             set_custom_metadata_attributes({'resumed': resumed_meta})
 
-        # Dynamic dispatch by arity; payload types follow the registered tool (not expressible here).
-        match len(input_spec.args):
-            case 0:
-                raw = await func()
-            case 1:
-                raw = await func(args[0])
-            case 2:
-                original_input = _tool_original_input.get()
-                raw = await func(
-                    args[0],
-                    ToolRunContext(
-                        cast(ActionRunContext, args[1]),
-                        resumed_metadata=resumed_meta,
-                        original_input=original_input,
-                    ),
-                )
-            case _:
-                raise ValueError('tool must have 0-2 args...')
+        # A ctx annotated ActionRunContext gets the ToolRunContext too.
+        tool_ctx = ToolRunContext(ctx, resumed_metadata=resumed_meta, original_input=_tool_original_input.get())
+        raw = await action.params.call(func, input, tool_ctx)
         return as_multipart_tool_response(raw, tool_name=tool_name)
 
     action = registry.register_action(
@@ -634,7 +551,7 @@ def _define_tool(
     action.metadata[ORIGINAL_OUTPUT_SCHEMA_KEY] = original_output_schema
     action.output_schema = TypeAdapter(MultipartToolResponseData).json_schema()
 
-    return Tool(action, original_output_schema=original_output_schema)
+    return _Tool(action, original_output_schema=original_output_schema)
 
 
 def define_tool(
@@ -644,7 +561,7 @@ def define_tool(
     description: str | None = None,
     *,
     input_schema: type[BaseModel] | dict[str, object] | None = None,
-) -> Tool:
+) -> _Tool:
     """Register a function as a tool.
 
     The model sees the handler's return annotation as ``outputSchema``.
@@ -654,12 +571,17 @@ def define_tool(
     Args:
         registry: The registry to register the tool in.
         func: The async function to register as a tool. Must be a coroutine function.
+            It takes at most one input, annotated with a type that has a JSON
+            schema (``Any`` accepts anything), plus an optional parameter
+            annotated ``ToolRunContext`` in any position.
         name: Optional name for the tool. Defaults to the function name.
         description: Optional description. Defaults to the function's docstring.
         input_schema: Optional input schema override (Pydantic model or JSON-schema dict).
 
     Raises:
-        TypeError: If func is not an async function.
+        TypeError: If func is not an async function, has more than one input,
+            has an input with no annotation or no JSON schema, or has more than
+            one ``ToolRunContext`` parameter.
     """
     return _define_tool(registry, func, name, description, input_schema=input_schema)
 
@@ -670,7 +592,7 @@ def tool(
     name: str | None = None,
     description: str | None = None,
     input_schema: type[BaseModel] | dict[str, object] | None = None,
-) -> Tool:
+) -> _Tool:
     """Define an ephemeral tool for a single ``generate`` call.
 
     Unlike ``@ai.tool()``, this does not register the tool on the app, so it
@@ -678,13 +600,14 @@ def tool(
     for one call.
 
     Args:
-        func: Async tool implementation (same 0–2 argument rules as :func:`define_tool`).
+        func: Async tool implementation (same one-input rule as :func:`define_tool`).
         name: Tool name for the model. Defaults to ``func.__name__``.
         description: Sent to the model. Defaults to the function docstring.
         input_schema: Optional input schema override (Pydantic model or JSON-schema dict).
 
     Raises:
-        TypeError: If ``func`` is not a coroutine function.
+        TypeError: If ``func`` is not a coroutine function, takes more than one input,
+            or its input has no annotation or no JSON schema.
         ValueError: If no ``name`` is given and ``func`` has no ``__name__``.
 
     Example:
@@ -706,7 +629,7 @@ def define_interrupt(
     description: str | None = None,
     request_metadata: dict[str, Any] | Callable[[Any], dict[str, Any]] | None = None,  # noqa: ANN401
     input_schema: type[BaseModel] | dict[str, object] | None = None,
-) -> Tool:
+) -> _Tool:
     """Register a tool that always interrupts execution.
 
     An interrupt tool is a special tool that always raises ``Interrupt`` with

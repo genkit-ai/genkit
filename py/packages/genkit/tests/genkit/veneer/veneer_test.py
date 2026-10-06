@@ -7,7 +7,7 @@
 
 import json
 from collections.abc import Awaitable, Callable
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import pytest
 from pydantic import BaseModel, Field, ValidationError
@@ -23,12 +23,6 @@ from genkit import (
 )
 from genkit._ai._formats._types import FormatDef, Formatter, FormatterConfig
 from genkit._ai._model import text_from_message
-from genkit._ai._testing import (
-    EchoModel,
-    ProgrammableModel,
-    define_echo_model,
-    define_programmable_model,
-)
 from genkit._core._action import ActionKind, ActionRunContext
 from genkit._core._model import ModelRequest, OutputConfig
 from genkit._core._typing import (
@@ -49,9 +43,15 @@ from genkit._core._typing import (
     ToolResponse,
 )
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, MiddlewareRef, ModelHookParams
+from genkit.testing import (
+    EchoModel,
+    ScriptedModel,
+    define_echo_model,
+    define_scripted_model,
+)
 
-# type SetupFixture = tuple[Genkit, EchoModel, ProgrammableModel]
-SetupFixture = tuple[Genkit, EchoModel, ProgrammableModel]
+# type SetupFixture = tuple[Genkit, EchoModel, ScriptedModel]
+SetupFixture = tuple[Genkit, EchoModel, ScriptedModel]
 
 
 def _ok_schema_response() -> ModelResponse:
@@ -67,7 +67,7 @@ def setup_test() -> SetupFixture:
     """Setup a test fixture for the veneer tests."""
     ai = Genkit(model='echoModel')
 
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
     echo, _ = define_echo_model(ai)
 
     return (ai, echo, pm)
@@ -457,7 +457,7 @@ async def test_generate_with_interrupting_tools(
     )
 
     response = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='hi',
         tools=['test_tool', 'test_interrupt'],
     )
@@ -560,7 +560,7 @@ async def test_generate_with_interrupt_respond(
     )
 
     interrupted_response = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='hi',
         tools=['test_tool', 'test_interrupt'],
     )
@@ -601,7 +601,7 @@ async def test_generate_with_interrupt_respond(
     respond_wrapped = interrupted_response.interrupts[0].respond({'bar': 2})
     assert type(respond_wrapped) is Part
     response = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         messages=interrupted_response.messages,
         resume_respond=[respond_wrapped],
         tools=['test_tool', 'test_interrupt'],
@@ -678,7 +678,7 @@ async def test_generate_with_tools_and_output(setup_test: SetupFixture) -> None:
     )
 
     response = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='hi',
         tool_choice='required',
         tools=['testTool'],
@@ -755,7 +755,7 @@ async def test_generate_stream_with_tools(setup_test: SetupFixture) -> None:
     ]
 
     stream_result = ai.generate_stream(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='hi',
         tool_choice='required',
         tools=['testTool'],
@@ -817,7 +817,7 @@ async def test_generate_stream_no_need_to_await_response(
         ],
     ]
 
-    stream_result = ai.generate_stream(model='programmableModel', prompt='do it')
+    stream_result = ai.generate_stream(model='scriptedModel', prompt='do it')
     chunks = ''
     async for chunk in stream_result.stream:
         chunks += chunk.text
@@ -867,7 +867,7 @@ async def test_generate_with_output(setup_test: SetupFixture) -> None:
     )
 
     response = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='hi',
         output_schema=TestSchema,
         output_format='json',
@@ -879,7 +879,7 @@ async def test_generate_with_output(setup_test: SetupFixture) -> None:
     assert response.request == want
 
     stream_result = ai.generate_stream(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='hi',
         output_schema=TestSchema,
         output_format='json',
@@ -937,7 +937,7 @@ async def test_generate_defaults_to_json_format(
     )
 
     response = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='hi',
         output_schema=TestSchema,
     )
@@ -945,7 +945,7 @@ async def test_generate_defaults_to_json_format(
     assert response.request == want
 
     stream_result = ai.generate_stream(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='hi',
         output_schema=TestSchema,
     )
@@ -997,7 +997,7 @@ async def test_generate_json_format_unconstrained(
     )
 
     response = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='hi',
         output_schema=TestSchema,
         output_constrained=False,
@@ -1006,7 +1006,7 @@ async def test_generate_json_format_unconstrained(
     assert response.request == want
 
     stream_result = ai.generate_stream(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='hi',
         output_schema=TestSchema,
         output_constrained=False,
@@ -1019,7 +1019,7 @@ async def test_generate_json_format_unconstrained(
 async def test_generate_with_middleware() -> None:
     """When middleware is provided, applies it."""
     ai = Genkit(model='echoModel')
-    define_programmable_model(ai)
+    define_scripted_model(ai)
     define_echo_model(ai)
 
     @ai.middleware(name='pre_mw')
@@ -1081,7 +1081,7 @@ async def test_generate_with_middleware() -> None:
 async def test_generate_passes_through_current_action_context() -> None:
     """Test that generate uses current action context by default."""
     ai = Genkit(model='echoModel')
-    define_programmable_model(ai)
+    define_scripted_model(ai)
     define_echo_model(ai)
 
     @ai.middleware(name='inject_ctx')
@@ -1124,7 +1124,7 @@ async def test_generate_passes_through_current_action_context() -> None:
 async def test_generate_uses_explicitly_passed_in_context() -> None:
     """Generate uses specific context instead of current action context."""
     ai = Genkit(model='echoModel')
-    define_programmable_model(ai)
+    define_scripted_model(ai)
     define_echo_model(ai)
 
     @ai.middleware(name='inject_ctx')
@@ -1168,7 +1168,7 @@ async def test_generate_uses_explicitly_passed_in_context() -> None:
 async def test_generate_uses_inline_middleware_instance_with_context() -> None:
     """Test that generate works with inline middleware instances directly (no registration needed)."""
     ai = Genkit(model='echoModel')
-    define_programmable_model(ai)
+    define_scripted_model(ai)
     define_echo_model(ai)
 
     class InjectContextMiddleware(BaseMiddleware):
@@ -1273,7 +1273,7 @@ async def test_generate_json_format_unconstrained_with_instructions(
     )
 
     response = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='hi',
         output_schema=TestSchema,
         output_constrained=False,
@@ -1283,7 +1283,7 @@ async def test_generate_json_format_unconstrained_with_instructions(
     assert response.request == want
 
     stream_result = ai.generate_stream(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='hi',
         output_schema=TestSchema,
         output_constrained=False,
@@ -1315,7 +1315,7 @@ async def test_generate_output_instructions_true_injects_standard(
 
     # True -> the standard schema preamble is injected.
     on = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='hi',
         output_schema=TestSchema,
         output_constrained=False,
@@ -1328,7 +1328,7 @@ async def test_generate_output_instructions_true_injects_standard(
 
     # Unset -> json's default (False) means nothing is injected.
     off = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='hi',
         output_schema=TestSchema,
         output_constrained=False,
@@ -1453,7 +1453,7 @@ async def test_define_format(setup_test: SetupFixture) -> None:
     chunks = []
 
     stream_result = ai.generate_stream(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='hi',
         output_schema=TestSchema,
         output_format='banana',
@@ -1669,7 +1669,7 @@ def test_define_batch_evaluator(setup_test: SetupFixture) -> None:
     """Test that the define batch evaluator function works."""
     ai, _, _, *_ = setup_test
 
-    async def my_eval_fn(req: EvalRequest, options: object | None) -> list[EvalFnResponse]:
+    async def my_eval_fn(req: EvalRequest) -> list[EvalFnResponse]:
         eval_responses: list[EvalFnResponse] = []
         for index in range(len(req.dataset)):
             datapoint = req.dataset[index]
@@ -1698,6 +1698,55 @@ def test_define_batch_evaluator(setup_test: SetupFixture) -> None:
         'evaluatorDisplayName': 'Test evaluator',
         'evaluatorIsBilled': False,
     }
+
+
+@pytest.mark.asyncio
+async def test_batch_evaluator_run_reads_options_from_the_request(setup_test: SetupFixture) -> None:
+    """`my_eval(req)` reads options from `req.options`, not a second parameter."""
+    ai, *_ = setup_test
+    seen: list[object] = []
+
+    async def my_eval(req: EvalRequest) -> list[EvalFnResponse]:
+        seen.append(req.options)
+        return [
+            EvalFnResponse(
+                test_case_id=req.dataset[0].test_case_id or '',
+                evaluation=Score(score=True),
+            )
+        ]
+
+    action = ai.define_batch_evaluator(
+        name='my_eval',
+        display_name='Test evaluator',
+        definition='reads options from the request',
+        fn=my_eval,
+    )
+    result = await action.run(
+        EvalRequest(
+            dataset=[BaseDataPoint(input='hi', output='hi', test_case_id='case1')],
+            eval_run_id='run-1',
+            options={'threshold': 0.8},
+        )
+    )
+
+    assert seen == [{'threshold': 0.8}]
+    assert result.response[0].test_case_id == 'case1'
+
+
+def test_batch_evaluator_with_second_parameter_raises_type_error(setup_test: SetupFixture) -> None:
+    """`(req, options)` raises at definition: options live on the request."""
+    ai, *_ = setup_test
+
+    async def my_eval(req: EvalRequest, options: object | None) -> list[EvalFnResponse]:
+        return []
+
+    with pytest.raises(TypeError, match="evaluator 'my_eval' takes one input, but 'options' is a second parameter"):
+        ai.define_batch_evaluator(
+            name='my_eval',
+            display_name='Test evaluator',
+            definition='two params',
+            fn=cast(Any, my_eval),
+        )
 
 
 @pytest.mark.asyncio
@@ -1752,7 +1801,7 @@ async def test_define_async_flow(setup_test: SetupFixture) -> None:
 
 @pytest.mark.asyncio
 async def test_evaluate(setup_test: SetupFixture) -> None:
-    """Test that the evaluate function works."""
+    """ai.evaluate reports a one-score evaluator's evaluation as that Score."""
     ai, _, _, *_ = setup_test
 
     async def my_eval_fn(datapoint: BaseDataPoint, options: object | None) -> EvalFnResponse:
@@ -1778,11 +1827,13 @@ async def test_evaluate(setup_test: SetupFixture) -> None:
     assert isinstance(response, EvalResponse)
     assert len(response.root) == 2
     assert response.root[0].test_case_id == 'case1'
-    assert isinstance(response.root[0].evaluation, Score)
-    assert response.root[0].evaluation.score is True
+    first = response.root[0].evaluation
+    assert isinstance(first, Score)
+    assert first.score is True
     assert response.root[1].test_case_id == 'case2'
-    assert isinstance(response.root[1].evaluation, Score)
-    assert response.root[1].evaluation.score is True
+    second = response.root[1].evaluation
+    assert isinstance(second, Score)
+    assert second.score is True
 
 
 @pytest.mark.asyncio
@@ -1817,13 +1868,135 @@ async def test_evaluator_records_fail_then_still_runs_the_next_row(
 
     assert isinstance(response, EvalResponse)
     assert len(response.root) == 2
-    first = response.root[0].evaluation
-    assert isinstance(first, Score)
-    assert first.status == EvalStatusEnum.FAIL
-    assert first.error is not None
+    failed = response.root[0].evaluation
+    assert isinstance(failed, Score)
+    assert failed.status == EvalStatusEnum.FAIL
+    assert failed.error is not None
     assert response.root[1].test_case_id == 'case2'
-    assert isinstance(response.root[1].evaluation, Score)
-    assert response.root[1].evaluation.score is True
+    passed = response.root[1].evaluation
+    assert isinstance(passed, Score)
+    assert passed.score is True
+
+
+@pytest.mark.asyncio
+async def test_evaluate_score_list_returns_those_scores(setup_test: SetupFixture) -> None:
+    """ai.evaluate reports an evaluator's list of scores as that list."""
+    ai, _, _, *_ = setup_test
+
+    async def my_eval_fn(datapoint: BaseDataPoint, options: object | None) -> EvalFnResponse:
+        return EvalFnResponse(
+            test_case_id=datapoint.test_case_id or '',
+            evaluation=[
+                Score(id='accuracy', score=0.9),
+                Score(id='fluency', score=0.8),
+            ],
+        )
+
+    ai.define_evaluator(
+        name='list_eval',
+        display_name='List evaluator',
+        definition='Returns two scores per sample',
+        fn=my_eval_fn,
+    )
+
+    response = await ai.evaluate(
+        evaluator='list_eval',
+        dataset=[BaseDataPoint(input='hi', output='hi', test_case_id='case1')],
+    )
+
+    assert isinstance(response, EvalResponse)
+    assert len(response.root) == 1
+    assert response.root[0].test_case_id == 'case1'
+    evaluation = response.root[0].evaluation
+    assert isinstance(evaluation, list)
+    assert [score.id for score in evaluation] == ['accuracy', 'fluency']
+    assert [score.score for score in evaluation] == [0.9, 0.8]
+
+
+@pytest.mark.asyncio
+async def test_evaluate_mixed_rows_keep_score_and_list(setup_test: SetupFixture) -> None:
+    """One row's Score and the next row's score list each come back in the shape the evaluator returned."""
+    ai, *_ = setup_test
+
+    async def my_eval_fn(datapoint: BaseDataPoint, options: object | None) -> EvalFnResponse:
+        if datapoint.test_case_id == 'case1':
+            return EvalFnResponse(test_case_id='case1', evaluation=Score(id='accuracy', score=0.9))
+        return EvalFnResponse(
+            test_case_id=datapoint.test_case_id or '',
+            evaluation=[Score(id='accuracy', score=0.9), Score(id='fluency', score=0.8)],
+        )
+
+    ai.define_evaluator(
+        name='mixed_eval',
+        display_name='Mixed evaluator',
+        definition='Returns a Score or a list depending on the row',
+        fn=my_eval_fn,
+    )
+
+    response = await ai.evaluate(
+        evaluator='mixed_eval',
+        dataset=[
+            BaseDataPoint(input='hi', output='hi', test_case_id='case1'),
+            BaseDataPoint(input='bye', output='bye', test_case_id='case2'),
+        ],
+    )
+
+    assert len(response.root) == 2
+    assert response.root[0].test_case_id == 'case1'
+    one = response.root[0].evaluation
+    assert isinstance(one, Score)
+    assert one.id == 'accuracy'
+    assert one.score == 0.9
+    assert response.root[1].test_case_id == 'case2'
+    many = response.root[1].evaluation
+    assert isinstance(many, list)
+    assert [score.id for score in many] == ['accuracy', 'fluency']
+    assert [score.score for score in many] == [0.9, 0.8]
+
+
+def test_eval_response_score_object_on_load_stays_score() -> None:
+    """A saved row whose evaluation is one score object loads as a Score and writes an object back."""
+    row = EvalFnResponse.model_validate_json('{"testCaseId": "case1", "evaluation": {"id": "accuracy", "score": 0.9}}')
+
+    assert row.test_case_id == 'case1'
+    evaluation = row.evaluation
+    assert isinstance(evaluation, Score)
+    assert evaluation.id == 'accuracy'
+    assert evaluation.score == 0.9
+    assert row.model_dump(by_alias=True, exclude_none=True)['evaluation'] == {'id': 'accuracy', 'score': 0.9}
+
+
+def test_eval_response_score_list_on_load_stays_list() -> None:
+    """A saved row whose evaluation is a list of scores loads as that list and writes a list back."""
+    row = EvalFnResponse.model_validate({
+        'testCaseId': 'case1',
+        'evaluation': [{'id': 'accuracy', 'score': 0.9}, {'id': 'fluency', 'score': 0.8}],
+    })
+
+    assert row.test_case_id == 'case1'
+    evaluation = row.evaluation
+    assert isinstance(evaluation, list)
+    assert [score.id for score in evaluation] == ['accuracy', 'fluency']
+    assert [score.score for score in evaluation] == [0.9, 0.8]
+    assert row.model_dump(by_alias=True, exclude_none=True)['evaluation'] == [
+        {'id': 'accuracy', 'score': 0.9},
+        {'id': 'fluency', 'score': 0.8},
+    ]
+
+
+def test_eval_response_empty_score_list_on_load_stays_empty() -> None:
+    """A saved row whose evaluation is an empty list loads as an empty list."""
+    row = EvalFnResponse.model_validate({'testCaseId': 'case1', 'evaluation': []})
+
+    assert row.test_case_id == 'case1'
+    assert row.evaluation == []
+    assert row.model_dump(by_alias=True, exclude_none=True)['evaluation'] == []
+
+
+def test_eval_response_string_evaluation_raises() -> None:
+    """A saved row whose evaluation is a string raises ValidationError."""
+    with pytest.raises(ValidationError):
+        EvalFnResponse.model_validate({'testCaseId': 'case1', 'evaluation': 'nope'})
 
 
 def test_define_background_model_with_info(setup_test: SetupFixture) -> None:
@@ -1955,7 +2128,7 @@ async def test_generate_echoes_full_request_when_model_raises(setup_test: SetupF
     pm.response_cb = boom
 
     response = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='hi',
         tools=['test_tool'],
         **_echo_request_kwargs(),
@@ -1982,7 +2155,7 @@ async def test_generate_echoes_full_request_when_hook_raises(setup_test: SetupFi
             raise ValueError('hook exploded')
 
     response = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='hi',
         tools=['test_tool'],
         use=[MiddlewareRef(name='raising_mw')],
@@ -2007,7 +2180,7 @@ async def test_generate_echoes_full_request_when_max_turns_exceeded(
     )
 
     response = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='hi',
         tools=['test_tool'],
         max_turns=1,
@@ -2032,7 +2205,7 @@ async def test_generate_echoes_full_request_when_tool_missing(setup_test: SetupF
     )
 
     response = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='hi',
         tools=['test_tool'],
         **_echo_request_kwargs(),
@@ -2071,7 +2244,7 @@ async def test_generate_echoes_full_request_across_interrupt_and_resume(
     )
 
     interrupted = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='hi',
         tools=['test_interrupt'],
         **_echo_request_kwargs(),
@@ -2080,7 +2253,7 @@ async def test_generate_echoes_full_request_across_interrupt_and_resume(
     _assert_request_fully_echoed(interrupted)
 
     resumed = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         messages=interrupted.messages,
         resume_respond=[interrupted.interrupts[0].respond({'bar': 2})],
         tools=['test_interrupt'],
@@ -2116,7 +2289,7 @@ async def test_generate_echoes_full_request_when_restart_interrupts_again(
     )
 
     interrupted = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='hi',
         tools=['test_interrupt'],
         **_echo_request_kwargs(),
@@ -2124,7 +2297,7 @@ async def test_generate_echoes_full_request_when_restart_interrupts_again(
     _assert_request_fully_echoed(interrupted)
 
     again = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         messages=interrupted.messages,
         resume_restart=interrupted.interrupts[0].restart(),
         tools=['test_interrupt'],
@@ -2146,7 +2319,7 @@ async def test_generate_echoes_full_request_when_restart_interrupts_again(
         )
     )
     answered = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         messages=again.messages,
         resume_respond=[again.interrupts[0].respond({'ok': True})],
         tools=['test_interrupt'],
@@ -2197,7 +2370,7 @@ async def test_generate_restart_can_pause_any_number_of_times(
     )
 
     response = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='hi',
         tools=['gatekeeper'],
         **_echo_request_kwargs(),
@@ -2207,7 +2380,7 @@ async def test_generate_restart_can_pause_any_number_of_times(
     # Restarts two and three have to behave exactly like the first one.
     for attempt in range(2, 4):
         response = await ai.generate(
-            model='programmableModel',
+            model='scriptedModel',
             messages=response.messages,
             resume_restart=response.interrupts[0].restart(),
             tools=['gatekeeper'],
@@ -2226,7 +2399,7 @@ async def test_generate_restart_can_pause_any_number_of_times(
 
     # The fourth restart succeeds, so the run closes normally.
     answered = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         messages=response.messages,
         resume_restart=response.interrupts[0].restart(),
         tools=['gatekeeper'],
@@ -2291,7 +2464,7 @@ async def test_generate_resolved_sibling_survives_repeated_interrupts(
     )
 
     response = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='pay and approve',
         tools=['charge_card', 'approve'],
     )
@@ -2309,7 +2482,7 @@ async def test_generate_resolved_sibling_survives_repeated_interrupts(
 
     for attempt in range(2, 5):
         response = await ai.generate(
-            model='programmableModel',
+            model='scriptedModel',
             messages=response.messages,
             resume_restart=response.interrupts[0].restart(),
             tools=['charge_card', 'approve'],

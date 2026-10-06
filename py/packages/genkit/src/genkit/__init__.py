@@ -43,7 +43,6 @@ from genkit._ai._prompt import (
 )
 from genkit._ai._tools import (
     MultipartToolResponse,
-    Tool,
     ToolRunContext,
     response,
     tool,
@@ -52,6 +51,7 @@ from genkit._core._action import Action as Flow, ActionRunContext, StreamRespons
 from genkit._core._context import ContextProvider, RequestData
 from genkit._core._dap import DynamicActionProvider
 from genkit._core._error import GenkitError, Interrupt, PublicError, RuntimeErrorReason
+from genkit._core._logger import get_logger
 from genkit._core._model import (
     Document,
     Message,
@@ -60,6 +60,7 @@ from genkit._core._model import (
     Part,
     ToolChoice,
 )
+from genkit._core._tool import Tool
 from genkit._core._typing import (
     BaseDataPoint,
     Embedding,
@@ -105,6 +106,7 @@ __all__ = [
     'GenkitError',
     'PublicError',
     'RuntimeErrorReason',
+    'get_logger',
     # HTTP request context for flow handlers
     'ContextProvider',
     'RequestData',

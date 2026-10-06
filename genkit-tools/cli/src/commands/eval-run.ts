@@ -64,9 +64,17 @@ export const evalRun = new Command('eval:run')
     'comma separated list of evaluators to use (by default uses all)'
   )
   .option(
-    '--batchSize <batchSize>',
+    '--batch-size <batchSize>',
     'batch size to use for parallel evals (defaults to 1, no parallelization)',
     parsePositiveInt
+  )
+  .addOption(
+    new Option(
+      '--batchSize <batchSize>',
+      'batch size to use for parallel evals'
+    )
+      .argParser(parsePositiveInt)
+      .hideHelp()
   )
   .option('--force', 'Automatically accept all interactive prompts')
   .action(async (dataset: string, options: EvalRunCliOptions) => {
