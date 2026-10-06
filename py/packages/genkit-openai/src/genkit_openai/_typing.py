@@ -209,6 +209,18 @@ class OpenAIConfig(ModelConfig):
 
         web_search_options: Web search tool configuration.
             See: https://platform.openai.com/docs/api-reference/chat/create#chat-create-web_search_options
+
+        max_output_tokens: Accepted but not sent, so it doesn't cap the reply.
+            Use ``max_tokens`` to cap reply length.
+
+        extra: Request body fields this class doesn't declare, such as a
+            field a newer API version or an OpenAI-compatible server added.
+            Sent as the OpenAI SDK's ``extra_body``, which replaces a
+            top-level field of the same name, so ``extra={'temperature': 0.9}``
+            wins over ``temperature``. Nothing inside it is checked.
+
+    Any other key raises, so a typo like ``temprature`` fails by name instead
+    of reaching OpenAI.
     """
 
     # Dev UI and reflection send camelCase. frequencyPenalty binds and goes
@@ -219,6 +231,7 @@ class OpenAIConfig(ModelConfig):
     # class doesn't declare goes in ``extra`` and is sent as ``extra_body``.
     model_config: ClassVar[ConfigDict] = ConfigDict(
         alias_generator=to_camel,
+        extra='forbid',
         populate_by_name=True,
     )
 
