@@ -677,21 +677,32 @@ func toGenkitUsage(u anthropic.Usage, thinking int64) *ai.GenerationUsage {
 		CacheWriteTokens:    int(u.CacheCreationInputTokens),
 	}
 	usage.TotalTokens = usage.InputTokens + usage.OutputTokens + usage.ThoughtsTokens
+
 	// Cache writes are billed by how long the entry lives, and server tools
-	// by the request, neither of which has a field of its own.
-	for name, count := range map[string]int64{
-		"cacheWrite5mTokens": u.CacheCreation.Ephemeral5mInputTokens,
-		"cacheWrite1hTokens": u.CacheCreation.Ephemeral1hInputTokens,
-		"webSearchRequests":  u.ServerToolUse.WebSearchRequests,
-		"webFetchRequests":   u.ServerToolUse.WebFetchRequests,
+	// by the request, neither of which has a field of its own. The split by
+	// lifetime is reported only while it adds up to CacheWriteTokens: a
+	// stream whose server tools write more cache after message_start may not
+	// say how the extra writes split, and a partial split would undercharge.
+	split := u.CacheCreation
+	if split.Ephemeral5mInputTokens+split.Ephemeral1hInputTokens != u.CacheCreationInputTokens {
+		split = anthropic.CacheCreation{}
+	}
+	for _, c := range [...]struct {
+		name  string
+		count int64
+	}{
+		{"cacheWrite5mTokens", split.Ephemeral5mInputTokens},
+		{"cacheWrite1hTokens", split.Ephemeral1hInputTokens},
+		{"webSearchRequests", u.ServerToolUse.WebSearchRequests},
+		{"webFetchRequests", u.ServerToolUse.WebFetchRequests},
 	} {
-		if count <= 0 {
+		if c.count <= 0 {
 			continue
 		}
 		if usage.Custom == nil {
 			usage.Custom = make(map[string]float64)
 		}
-		usage.Custom[name] = float64(count)
+		usage.Custom[c.name] = float64(c.count)
 	}
 	return usage
 }
@@ -710,22 +721,24 @@ func thinkingTokens(details respjson.Field) int64 {
 }
 
 // applyDeltaUsage folds a message_delta's usage into the usage that
-// message_start reported. The delta's counts are cumulative and final, and
-// server tools can raise the input counts after the start, but the SDK's
-// accumulator keeps only output_tokens before v1.62.0. A count the delta
-// leaves out keeps its value from the start.
+// message_start reported. The delta's counts are cumulative, and server tools
+// can raise the input counts after the start, but the SDK's accumulator keeps
+// only output_tokens before v1.62.0. Cumulative counts never fall, so each
+// keeps the larger of the two: a delta that leaves a count out, or a proxy
+// that zeroes it, does not lower what the start reported.
 func applyDeltaUsage(u *anthropic.Usage, d anthropic.MessageDeltaUsage) {
-	u.OutputTokens = d.OutputTokens
-	if d.JSON.InputTokens.Valid() {
-		u.InputTokens = d.InputTokens
-	}
-	if d.JSON.CacheReadInputTokens.Valid() {
-		u.CacheReadInputTokens = d.CacheReadInputTokens
-	}
-	if d.JSON.CacheCreationInputTokens.Valid() {
-		u.CacheCreationInputTokens = d.CacheCreationInputTokens
-	}
-	if d.JSON.ServerToolUse.Valid() {
-		u.ServerToolUse = d.ServerToolUse
+	u.InputTokens = max(u.InputTokens, d.InputTokens)
+	u.CacheReadInputTokens = max(u.CacheReadInputTokens, d.CacheReadInputTokens)
+	u.CacheCreationInputTokens = max(u.CacheCreationInputTokens, d.CacheCreationInputTokens)
+	u.ServerToolUse.WebSearchRequests = max(u.ServerToolUse.WebSearchRequests, d.ServerToolUse.WebSearchRequests)
+	u.ServerToolUse.WebFetchRequests = max(u.ServerToolUse.WebFetchRequests, d.ServerToolUse.WebFetchRequests)
+	// The split of cache writes by lifetime, which the SDK does not model on
+	// the delta.
+	if raw := d.JSON.ExtraFields["cache_creation"].Raw(); raw != "" && raw != "null" {
+		var c anthropic.CacheCreation
+		if json.Unmarshal([]byte(raw), &c) == nil {
+			u.CacheCreation.Ephemeral5mInputTokens = max(u.CacheCreation.Ephemeral5mInputTokens, c.Ephemeral5mInputTokens)
+			u.CacheCreation.Ephemeral1hInputTokens = max(u.CacheCreation.Ephemeral1hInputTokens, c.Ephemeral1hInputTokens)
+		}
 	}
 }

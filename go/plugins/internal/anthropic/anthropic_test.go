@@ -1042,6 +1042,26 @@ func TestGenerateReportsUsage(t *testing.T) {
 				Custom:              map[string]float64{"webSearchRequests": 1},
 			},
 		},
+		{
+			// A delta's counts are cumulative, so a zeroed input count does
+			// not lower the start's, and cache writes added after the start
+			// with no split by lifetime drop the start's partial split.
+			name:   "stream delta below start",
+			stream: true,
+			body: "event: message_start\n" +
+				`data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-haiku-4-5","content":[],"stop_reason":null,"usage":{"input_tokens":75,"cache_creation_input_tokens":100,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":100,"ephemeral_1h_input_tokens":0},"output_tokens":1}}}` + "\n\n" +
+				"event: message_delta\n" +
+				`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":0,"cache_creation_input_tokens":300,"output_tokens":50,"server_tool_use":{"web_search_requests":1}}}` + "\n\n" +
+				"event: message_stop\n" +
+				`data: {"type":"message_stop"}` + "\n\n",
+			want: &ai.GenerationUsage{
+				InputTokens:      375,
+				CacheWriteTokens: 300,
+				OutputTokens:     50,
+				TotalTokens:      425,
+				Custom:           map[string]float64{"webSearchRequests": 1},
+			},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
