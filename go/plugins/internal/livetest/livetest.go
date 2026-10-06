@@ -30,9 +30,10 @@
 //	GENKIT_LIVE=1 go test -run Live ./plugins/compat_oai/openai/
 //
 // GENKIT_LIVE=all also runs the expensive cases (see [Expensive]). Without
-// the variable, a live test skips, unless -run selected tests explicitly: then
-// it fails and names the variable, since a run that asked for a test and
-// quietly skipped it would read as a pass.
+// the variable or the provider's key, a live test skips, unless -run selected
+// tests explicitly: then it fails and names what is missing, since a run that
+// asked for a test and quietly skipped it would read as a pass. So
+// GENKIT_LIVE=1 go test ./plugins/... runs every suite whose key is set.
 //
 // # Capabilities
 //
@@ -66,10 +67,10 @@ const gateVar = "GENKIT_LIVE"
 // set, typically the provider's API key under its accepted spellings. Call it
 // first in every live test.
 //
-// Without GENKIT_LIVE the test skips, or fails when -run selected tests
-// explicitly. With GENKIT_LIVE set and none of names set, the test fails,
-// since the caller asked for a live run it cannot make. With no names, Env
-// only gates (for a local server that needs no key) and returns "".
+// Without GENKIT_LIVE, or without any of names, the test skips, or fails when
+// -run selected tests explicitly, since a run that asked for a test and
+// quietly skipped it would read as a pass. With no names, Env only gates (for
+// a local server that needs no key) and returns "".
 func Env(t *testing.T, names ...string) string {
 	t.Helper()
 	if os.Getenv(gateVar) == "" {
@@ -90,7 +91,11 @@ func Env(t *testing.T, names ...string) string {
 			return v
 		}
 	}
-	t.Fatalf("live test: %s is set but %s is not", gateVar, strings.Join(names, " or "))
+	msg := fmt.Sprintf("live test: %s is set but %s is not", gateVar, strings.Join(names, " or "))
+	if runSelected() {
+		t.Fatal(msg)
+	}
+	t.Skip(msg)
 	return ""
 }
 
