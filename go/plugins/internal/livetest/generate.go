@@ -104,9 +104,6 @@ func generateCases() []liveCase {
 			resp := r.gen(t, r.s.Model,
 				ai.WithPrompt("What is the capital of France? Reply with just the city name."))
 			wantReply(t, resp, "paris")
-			if resp.Usage == nil || resp.Usage.TotalTokens == 0 {
-				t.Error("Usage.TotalTokens = 0, want the request's token counts")
-			}
 			if resp.FinishReason != ai.FinishReasonStop {
 				t.Errorf("FinishReason = %q, want %q", resp.FinishReason, ai.FinishReasonStop)
 			}
@@ -141,8 +138,19 @@ func generateCases() []liveCase {
 			if streamed.String() != resp.Text() {
 				t.Errorf("streamed text = %q, want the final text %q", streamed.String(), resp.Text())
 			}
-			if resp.Usage == nil || resp.Usage.TotalTokens == 0 {
-				t.Error("Usage.TotalTokens = 0, want the streamed token counts")
+		}},
+		// Streams only report usage when the request opts in, so the
+		// streamed counts are the half that goes missing.
+		{"usage reported", always, func(t *testing.T, r *runner) {
+			for _, streaming := range []bool{false, true} {
+				opts := []ai.GenerateOption{ai.WithPrompt("Name one primary color. Answer with the word alone.")}
+				if streaming {
+					opts = append(opts, ai.WithStreaming(func(context.Context, *ai.ModelResponseChunk) error { return nil }))
+				}
+				u := r.gen(t, r.s.Model, opts...).Usage
+				if u == nil || u.InputTokens == 0 || u.OutputTokens == 0 || u.TotalTokens == 0 {
+					t.Errorf("Usage (streaming %v) = %+v, want input, output and total token counts", streaming, u)
+				}
 			}
 		}},
 		{"output limit", func(r *runner) string {
