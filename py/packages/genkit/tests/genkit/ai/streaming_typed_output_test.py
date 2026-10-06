@@ -21,6 +21,7 @@ from pydantic.alias_generators import to_camel
 
 from genkit import Genkit, Message, ModelResponse, ModelResponseChunk, Part
 from genkit._core._action import ActionRunContext
+from genkit._core._model import chunk_for_stream
 from genkit._core._typing import Role
 from genkit.testing import define_scripted_model
 
@@ -72,9 +73,11 @@ def _chunk(text: str, schema_type: type[OutputT]) -> ModelResponseChunk[OutputT]
 def _chunk(text: str, schema_type: None = None) -> ModelResponseChunk[object]: ...
 def _chunk(text: str, schema_type: type[BaseModel] | None = None) -> ModelResponseChunk[Any]:
     """Build a chunk whose accumulated text is exactly ``text``."""
-    return ModelResponseChunk(
-        role='model',
-        content=[Part.from_text(text)],
+    return chunk_for_stream(
+        ModelResponseChunk(
+            role='model',
+            content=[Part.from_text(text)],
+        ),
         schema_type=schema_type,
     )
 
@@ -119,9 +122,11 @@ class TestChunkPartialOutput:
         assert not isinstance(out, Recipe)
 
     def test_constructs_chunk_parser_result(self) -> None:
-        wrapper: ModelResponseChunk[Recipe] = ModelResponseChunk(
-            role='model',
-            content=[Part.from_text('ignored')],
+        wrapper: ModelResponseChunk[Recipe] = chunk_for_stream(
+            ModelResponseChunk(
+                role='model',
+                content=[Part.from_text('ignored')],
+            ),
             chunk_parser=lambda _c: {'title': 'Parsed', 'steps': ['a']},
             schema_type=Recipe,
         )

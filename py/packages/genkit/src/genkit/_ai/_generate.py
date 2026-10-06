@@ -85,7 +85,7 @@ from genkit._core._model import (
     OutputConfig,
     Part,
     as_message,
-    stream_chunk,
+    chunk_for_stream,
 )
 from genkit._core._protocols import RegistryLike, SessionLike
 from genkit._core._registry import Registry
@@ -861,7 +861,7 @@ class ChunkAccumulator:
         prev_to_send = copy.copy(self.prev_chunks)
         self.prev_chunks.append(chunk)
 
-        return stream_chunk(
+        return chunk_for_stream(
             chunk,
             index=self.message_index,
             previous_chunks=prev_to_send,

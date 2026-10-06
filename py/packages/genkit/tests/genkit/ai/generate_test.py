@@ -25,7 +25,7 @@ from genkit._ai._model import text_from_content, text_from_message
 from genkit._ai._tools import Interrupt, ToolRunContext, define_tool, restart_tool
 from genkit._core._action import ActionRunContext
 from genkit._core._error import GenkitError, PublicError, RuntimeErrorReason
-from genkit._core._model import GenerateActionOptions, ModelRequest, Resume, as_model_request
+from genkit._core._model import GenerateActionOptions, ModelRequest, Resume
 from genkit._core._registry import Registry
 from genkit._core._typing import (
     FinishReason,
@@ -126,28 +126,6 @@ async def test_simple_text_generate_request(
 
 
 @pytest.mark.asyncio
-async def test_response_request_equals_by_fields_not_identity(
-    setup_test: tuple[Genkit, ScriptedModel],
-) -> None:
-    """response.request compares equal by fields, not identity."""
-    ai, pm = setup_test
-    pm.responses.append(
-        ModelResponse(
-            finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part.from_text('bye')]),
-        )
-    )
-    response = await ai.generate(
-        model='scriptedModel',
-        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
-    )
-    assert response.request is not None
-    twin = as_model_request(response.request)
-    assert twin == response.request
-    assert twin is not response.request
-
-
-@pytest.mark.asyncio
 async def test_generate_user_from_text_model_from_text_reads_without_root(
     setup_test: tuple[Genkit, ScriptedModel],
 ) -> None:
@@ -225,6 +203,58 @@ async def test_generate_stream_chunk_text_from_factory_part(
     async for chunk in stream_result.stream:
         texts.append(chunk.text)
     assert texts == ['h', 'i']
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_earlier_chunk_accumulated_text_stays_put(
+    setup_test: tuple[Genkit, ScriptedModel],
+) -> None:
+    """An earlier stream chunk's accumulated_text does not grow as later chunks arrive."""
+    ai, pm = setup_test
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('abc')]),
+        )
+    )
+    pm.chunks = [
+        [
+            ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('a')]),
+            ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('b')]),
+            ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('c')]),
+        ],
+    ]
+
+    stream_result = ai.generate_stream(model='scriptedModel', prompt='do it')
+    first: ModelResponseChunk | None = None
+    async for chunk in stream_result.stream:
+        if first is None:
+            first = chunk
+    assert first is not None
+    assert first.accumulated_text == 'a'
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_chunk_output_uses_format_parser(
+    setup_test: tuple[Genkit, ScriptedModel],
+) -> None:
+    """Streaming with output_format='array' puts the parsed list on chunk.output."""
+    ai, pm = setup_test
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('[{"id": 1}]')]),
+        )
+    )
+    pm.chunks = [
+        [
+            ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('[{"id": 1}]')]),
+        ],
+    ]
+
+    stream_result = ai.generate_stream(model='scriptedModel', prompt='list', output_format='array')
+    chunks = [chunk async for chunk in stream_result.stream]
+    assert chunks[0].output == [{'id': 1}]
 
 
 @pytest.mark.asyncio

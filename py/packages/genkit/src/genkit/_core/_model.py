@@ -1281,9 +1281,11 @@ class ModelResponseChunk(GenkitModel, Generic[OutputT]):
     content: list[Part]
     custom: Any | None = Field(default=None)
     aggregated: bool | None = None
-    previous_chunks: list[Any] = Field(default_factory=list, exclude=True)
-    chunk_parser: Callable[..., object] | None = Field(default=None, exclude=True)
-    schema_type: type[BaseModel] | None = Field(default=None, exclude=True)
+    # History and the format parser are stamped by the stream helper after
+    # construction so the constructor a plugin types is just the wire fields.
+    _previous_chunks: list[Any] = PrivateAttr(default_factory=list)
+    _chunk_parser: Callable[..., object] | None = PrivateAttr(default=None)
+    _schema_type: type[BaseModel] | None = PrivateAttr(default=None)
 
     @field_validator('content', mode='before')
     @classmethod
@@ -1309,8 +1311,8 @@ class ModelResponseChunk(GenkitModel, Generic[OutputT]):
     def accumulated_text(self) -> str:
         """Text from all previous chunks plus this chunk."""
         prior = ''
-        if self.previous_chunks:
-            prior = ''.join(p.text for chunk in self.previous_chunks for p in chunk.content if p.text)
+        if self._previous_chunks:
+            prior = ''.join(p.text for chunk in self._previous_chunks for p in chunk.content if p.text)
         return prior + self.text
 
     @cached_property
@@ -1326,49 +1328,55 @@ class ModelResponseChunk(GenkitModel, Generic[OutputT]):
         use. ``(await sr.response).output`` is the only fully validated value.
         """
         parsed = (
-            self.chunk_parser(self)
-            if self.chunk_parser
+            self._chunk_parser(self)
+            if self._chunk_parser
             else extract_json(self.accumulated_text, throw_on_bad_json=False)
         )
-        if self.schema_type is not None and isinstance(parsed, dict) and not issubclass(self.schema_type, RootModel):
+        if self._schema_type is not None and isinstance(parsed, dict) and not issubclass(self._schema_type, RootModel):
             return cast(
                 'OutputT | None',
-                construct_partial(schema_type=self.schema_type, data=parsed),
+                construct_partial(schema_type=self._schema_type, data=parsed),
             )
         return cast('OutputT | None', parsed)
 
 
 def as_model_response_chunk(value: object) -> ModelResponseChunk:
     if isinstance(value, ModelResponseChunk):
-        return stream_chunk(
-            value,
-            index=value.index,
-            previous_chunks=value.previous_chunks,
-            chunk_parser=value.chunk_parser,
-            schema_type=value.schema_type,
-        )
+        copied = value.model_copy()
+        # model_copy keeps stream history / parser so wrapping still has
+        # index and .output. Re-check content so a two-kind part already
+        # on the chunk cannot persist through AgentStreamChunk.
+        copied.content = [Part.model_validate(part) for part in copied.content]
+        return copied
     return ModelResponseChunk.model_validate(value)
 
 
-def stream_chunk(
-    source: ModelResponseChunk,
+def chunk_for_stream(
+    source: ModelResponseChunk[OutputT],
     *,
     index: float | None = None,
     previous_chunks: list[Any] | None = None,
     chunk_parser: Callable[..., object] | None = None,
     schema_type: type[BaseModel] | None = None,
-) -> ModelResponseChunk:
-    """Copy a plugin chunk and stamp stream index / parser on the copy."""
-    return ModelResponseChunk(
+) -> ModelResponseChunk[OutputT]:
+    """Copy a plugin chunk and stamp stream index / parser on the copy.
+
+    Builds a fresh chunk so an already-read ``.output`` on the plugin's
+    chunk cannot override the stream's format parser.
+    """
+    chunk = ModelResponseChunk(
         role=source.role,
         index=index,
         content=source.content,
         custom=source.custom,
         aggregated=source.aggregated,
-        previous_chunks=list(previous_chunks or []),
-        chunk_parser=chunk_parser,
-        schema_type=schema_type,
     )
+    # The snapshot from make is stored as-is so an earlier chunk's
+    # accumulated_text does not grow as later tokens arrive.
+    chunk._previous_chunks = previous_chunks if previous_chunks is not None else []
+    chunk._chunk_parser = chunk_parser
+    chunk._schema_type = schema_type
+    return cast(ModelResponseChunk[OutputT], chunk)
 
 
 class AgentStreamChunk(GenkitModel):
