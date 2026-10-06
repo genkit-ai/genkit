@@ -218,16 +218,16 @@ def test_served_error_body_for_internal_wrapper_around_wrapped_raw_error_is_inte
     assert get_http_status(nested) == 500
 
 
-def test_served_error_body_for_wrapped_public_error_is_its_status_and_message() -> None:
-    """A PublicError wrapped by the action runner still sends its own status and message."""
+def test_served_error_body_for_public_error_wrapped_in_internal_is_internal_error() -> None:
+    """Wrapping a PublicError in INTERNAL hides it: callers get 500 Internal Error."""
     wrapped = GenkitError(
         status='INTERNAL',
-        message='Error while running action lookup',
+        message='hide this',
         cause=PublicError(status='NOT_FOUND', message='no order 99'),
     )
 
-    assert get_callable_json(wrapped) == {'message': 'no order 99', 'status': 'NOT_FOUND'}
-    assert get_http_status(wrapped) == 404
+    assert get_callable_json(wrapped) == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert get_http_status(wrapped) == 500
 
 
 def test_dev_ui_error_body_for_genkit_error_keeps_its_real_message() -> None:
@@ -300,11 +300,39 @@ def test_wrap_http_error_reads_retry_after() -> None:
     assert error.status == 'RESOURCE_EXHAUSTED'
     assert error.response_metadata == {'retry_after_ms': 60000.0}
     assert error.original_message == 'rate limited'
-    assert error.to_callable_serializable().message == 'Resource exhausted'
+    assert error.to_callable_serializable().model_dump(exclude_none=True) == {
+        'message': 'Internal Error',
+        'status': 'INTERNAL',
+    }
 
 
-def test_served_error_body_for_provider_error_keeps_status_without_provider_text() -> None:
-    """A provider 503 reaching a served flow is 'Unavailable', with neither the provider text nor the SDK repr."""
+def test_served_error_body_for_provider_401_is_internal_error() -> None:
+    """A plugin error built from a provider 401 serves as 500 Internal Error, with no provider text."""
+    error = wrap_http_error(RuntimeError('API key not valid'), status_code=401)
+
+    assert get_callable_json(error) == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert get_http_status(error) == 500
+    assert 'API key not valid' not in str(get_callable_json(error))
+
+
+def test_in_process_provider_error_keeps_unauthenticated() -> None:
+    """wrap_http_error still classifies a 401 as UNAUTHENTICATED for Retry and Fallback."""
+    error = wrap_http_error(RuntimeError('API key not valid'), status_code=401)
+
+    assert error.status == 'UNAUTHENTICATED'
+    assert error.original_message == 'API key not valid'
+
+
+def test_wrap_http_error_keeps_provider_status_in_process() -> None:
+    """A provider 429 stays RESOURCE_EXHAUSTED in-process so Retry still sees it."""
+    error = wrap_http_error(RuntimeError('quota'), status_code=429)
+
+    assert error.status == 'RESOURCE_EXHAUSTED'
+    assert get_callable_json(error) == {'message': 'Internal Error', 'status': 'INTERNAL'}
+
+
+def test_served_error_body_for_unmarked_genkit_error_keeps_status() -> None:
+    """A GenkitError built by hand, not from a provider response, keeps its status."""
     error = GenkitError(
         status='UNAVAILABLE',
         message='overloaded',
@@ -313,6 +341,14 @@ def test_served_error_body_for_provider_error_keeps_status_without_provider_text
 
     assert get_callable_json(error) == {'message': 'Unavailable', 'status': 'UNAVAILABLE'}
     assert get_http_status(error) == 503
+
+
+def test_served_error_body_for_flow_input_error_keeps_400() -> None:
+    """A framework INVALID_ARGUMENT for bad flow input stays 400 Invalid argument."""
+    error = GenkitError(status='INVALID_ARGUMENT', message='expected str, got dict')
+
+    assert get_callable_json(error) == {'message': 'Invalid argument', 'status': 'INVALID_ARGUMENT'}
+    assert get_http_status(error) == 400
 
 
 def test_served_error_body_omits_details_on_non_public_genkit_error() -> None:
@@ -365,6 +401,30 @@ def test_served_error_body_dumps_pydantic_details_on_public_error() -> None:
         'message': 'no order 99',
         'status': 'NOT_FOUND',
         'details': {'m': {'id': '99'}},
+    }
+    json.dumps(body)
+
+
+def test_served_error_body_dumps_models_nested_in_lists_on_public_error() -> None:
+    """A PublicError with models nested in a list still JSON-encodes those details."""
+    import json
+
+    from pydantic import BaseModel
+
+    class FieldViolation(BaseModel):
+        field: str
+
+    error = PublicError(
+        'INVALID_ARGUMENT',
+        'bad',
+        details={'violations': [FieldViolation(field='a')]},
+    )
+    body = get_callable_json(error)
+
+    assert body == {
+        'message': 'bad',
+        'status': 'INVALID_ARGUMENT',
+        'details': {'violations': [{'field': 'a'}]},
     }
     json.dumps(body)
 

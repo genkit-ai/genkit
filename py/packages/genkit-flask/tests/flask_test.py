@@ -24,6 +24,7 @@ from flask import Flask, Request
 from genkit_flask import genkit_flask_handler
 
 from genkit import ActionRunContext, Genkit, GenkitError, PublicError, RequestData
+from genkit.plugin_api import wrap_http_error
 
 
 def sse_error_event(chunks: list[bytes]) -> dict:
@@ -191,6 +192,67 @@ def test_flask_missing_data_wrapper_returns_the_wrap_message() -> None:
         'message': 'flow request must be wrapped in {"data": data} object',
         'status': 'INVALID_ARGUMENT',
     }
+
+
+def test_flask_malformed_json_body_returns_400_valid_json_message() -> None:
+    """A Flask POST that is not JSON is 400 request body must be valid JSON."""
+    response = (
+        create_app()
+        .test_client()
+        .post(
+            '/chat',
+            data='{bad',
+            content_type='application/json',
+        )
+    )
+
+    assert response.status_code == 400
+    assert json.loads(response.data) == {
+        'message': 'request body must be valid JSON',
+        'status': 'INVALID_ARGUMENT',
+    }
+
+
+def test_flask_provider_401_returns_500_internal_error() -> None:
+    """A Flask flow whose model call fails with a provider 401 is 500 Internal Error."""
+    ai = Genkit()
+    app = Flask(__name__)
+    app.config.update({'TESTING': True})
+
+    @app.post('/ask')
+    @genkit_flask_handler(ai)
+    @ai.flow()
+    async def ask(_: str) -> str:
+        raise wrap_http_error(RuntimeError('API key not valid'), status_code=401)
+
+    response = app.test_client().post('/ask', json={'data': 'hi'})
+
+    assert response.status_code == 500
+    assert json.loads(response.data) == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert b'API key not valid' not in response.data
+
+
+def test_flask_stream_provider_401_sends_sse_internal_error() -> None:
+    """A streamed Flask flow whose model call fails with a provider 401 ends with Internal Error."""
+    ai = Genkit()
+    app = Flask(__name__)
+    app.config.update({'TESTING': True})
+
+    @app.post('/ask')
+    @genkit_flask_handler(ai)
+    @ai.flow()
+    async def ask(_: str) -> str:
+        raise wrap_http_error(RuntimeError('API key not valid'), status_code=401)
+
+    response = app.test_client().post(
+        '/ask',
+        json={'data': 'hi'},
+        headers={'accept': 'text/event-stream'},
+    )
+
+    chunks = list(response.response)
+    assert sse_error_event(chunks) == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert b'API key not valid' not in b''.join(chunks)
 
 
 def test_flask_context_provider_public_error_returns_its_status_and_message() -> None:
