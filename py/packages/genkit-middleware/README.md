@@ -45,9 +45,8 @@ response = await ai.generate(
 ```
 
 Every middleware works when you pass an instance in `use=[]`; no plugin
-registration is needed. Registering `Middleware()` lists Retry, Fallback,
-ToolApproval, Skills, and Filesystem in the Dev UI and lets a `.prompt` file
-name them in `use:`.
+registration is needed. Registering `Middleware()` lists the stable middleware
+in the Dev UI and lets a `.prompt` file name them in `use:`.
 
 ## Installation
 
