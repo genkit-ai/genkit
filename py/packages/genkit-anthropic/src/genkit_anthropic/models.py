@@ -39,7 +39,7 @@ from genkit.plugin_api import (
     from_http_code,
     parse_retry_after_ms,
 )
-from genkit_anthropic.config import BETA_KWARG_KEYS, STABLE_KWARG_KEYS, AnthropicConfig
+from genkit_anthropic.config import AnthropicConfig
 from genkit_anthropic.model_info import get_model_info
 from genkit_anthropic.utils import (
     build_cache_usage,
@@ -181,26 +181,6 @@ def _to_anthropic_thinking_config(thinking: dict[str, Any] | None) -> dict[str, 
     return result
 
 
-def _move_unknown_params_to_extra_body(params: dict[str, Any], use_beta: bool) -> None:
-    """Route passthrough body params through the SDK's ``extra_body`` escape hatch."""
-    allowed = BETA_KWARG_KEYS if use_beta else STABLE_KWARG_KEYS
-    unknown_keys = [key for key in params if key not in allowed]
-    if not unknown_keys:
-        return
-
-    extra_body = params.get('extra_body')
-    if extra_body is None:
-        body: dict[str, Any] = {}
-    elif isinstance(extra_body, dict):
-        body = dict(extra_body)
-    else:
-        body = {'extra_body': extra_body}
-
-    for key in unknown_keys:
-        body[key] = params.pop(key)
-    params['extra_body'] = body
-
-
 # Body fields Genkit builds from the request. `extra` can't set them: the
 # schema can't see inside the passthrough, and overwriting them silently would
 # replace the model the action resolved (pin one with `version`), the
@@ -227,9 +207,7 @@ def _merge_config_extra(params: dict[str, Any], extra: dict[str, Any] | None) ->
                     'and cannot be set from config'
                 ),
             )
-    body = dict(params.get('extra_body') or {})
-    body.update(extra)
-    params['extra_body'] = body
+    params['extra_body'] = dict(extra)
 
 
 class AnthropicModel:
@@ -404,9 +382,7 @@ class AnthropicModel:
         extra = params.pop('extra', None)
 
         # Handle mapped parameters
-        max_tokens = params.pop('max_output_tokens', None)
-        if max_tokens is None:
-            max_tokens = params.pop('max_tokens', DEFAULT_MAX_OUTPUT_TOKENS)
+        max_tokens = params.pop('max_output_tokens', DEFAULT_MAX_OUTPUT_TOKENS)
 
         thinking = params.pop('thinking', None)
         metadata = params.pop('metadata', None)
@@ -420,9 +396,6 @@ class AnthropicModel:
         # api_version and api_key select the API surface and client; they are not create() kwargs.
         for key in AnthropicConfig.SDK_UNSUPPORTED_KEYS:
             params.pop(key, None)
-
-        # Genkit selects the streaming surface from the request context.
-        params.pop('stream', None)
 
         if use_beta:
             # Resold surfaces (Vertex, Bedrock) do not offer every default beta, so only the direct API gets them.
@@ -494,7 +467,6 @@ class AnthropicModel:
         if not params.get('tools'):
             params.pop('tool_choice', None)
 
-        _move_unknown_params_to_extra_body(params, use_beta)
         _merge_config_extra(params, extra)
         return params
 
