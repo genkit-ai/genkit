@@ -22,7 +22,7 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 from anthropic import APIConnectionError, APIError, APIStatusError
-from genkit_anthropic.models import AnthropicModel
+from genkit_anthropic._models import AnthropicModel
 
 from genkit import GenkitError, Message, Part, Role
 from genkit.model import ModelRequest
