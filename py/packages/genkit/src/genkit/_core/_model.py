@@ -44,7 +44,7 @@ from typing_extensions import TypedDict, TypeVar
 
 from genkit._core import _typing as typing_mod
 from genkit._core._base import GenkitModel, dump_keeping_unknown
-from genkit._core._error import GenkitError, ModelResponseError, RuntimeErrorReason
+from genkit._core._error import GenkitError, GenkitRuntimeError, RuntimeErrorReason
 from genkit._core._extract_json import extract_json
 from genkit._core._partial import construct_partial
 from genkit._core._schema import parse_schema
@@ -56,7 +56,6 @@ from genkit._core._typing import (
     GenerateActionOutputConfig,
     GenerationCommonConfig,
     GenerationUsage,
-    GenkitRuntimeError as GenkitRuntimeErrorData,
     JsonPatch,
     Media,
     MessageData,
@@ -809,7 +808,7 @@ class SessionSnapshot(GenkitModel):
     heartbeat_at: str | None = None
     status: SnapshotStatus | None = None
     finish_reason: AgentFinishReason | None = None
-    error: GenkitRuntimeErrorData | None = None
+    error: GenkitRuntimeError | None = None
     state: SessionState | None = None
 
     @field_validator('state', mode='before')
@@ -866,7 +865,7 @@ class AgentOutput(GenkitModel):
     message: Message | None = None
     artifacts: list[Artifact] | None = None
     finish_reason: AgentFinishReason | None = None
-    error: GenkitRuntimeErrorData | None = None
+    error: GenkitRuntimeError | None = None
 
     @field_validator('message', mode='before')
     @classmethod
@@ -1079,7 +1078,7 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
     _schema_type: type[BaseModel] | None = PrivateAttr(None)
     # Wire fields (must be declared for extra='forbid' to accept wire responses)
     message: Message | None = None
-    error: ModelResponseError | None = None
+    error: GenkitRuntimeError | None = None
     finish_reason: FinishReason | None = None
     finish_message: str | None = None
     latency_ms: float | None = None
@@ -1119,7 +1118,7 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
             self.custom = {}
 
     def _mark_invalid_output(self, message: str) -> None:
-        self.error = ModelResponseError(
+        self.error = GenkitRuntimeError(
             status='INTERNAL',
             message=message,
             details={'reason': RuntimeErrorReason.INVALID_OUTPUT.value},

@@ -19,7 +19,7 @@ from __future__ import annotations
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from genkit import FinishReason, Genkit, Message, ModelResponse, ModelResponseError, Part, Role, RuntimeErrorReason
+from genkit import FinishReason, Genkit, GenkitRuntimeError, Message, ModelResponse, Part, Role, RuntimeErrorReason
 from genkit._ai._testing import define_programmable_model
 from genkit._core._typing import AgentFinishReason, ToolRequest
 from genkit.exp import Genkit as ExpGenkit
@@ -38,15 +38,15 @@ def _reply(text: str, finish_reason: FinishReason = FinishReason.STOP) -> ModelR
 
 
 @pytest.mark.asyncio
-async def test_generate_schema_miss_error_is_model_response_error_with_invalid_output_reason() -> None:
-    """A prose reply to ``output_schema=City`` returns a ModelResponseError with reason INVALID_OUTPUT."""
+async def test_generate_schema_miss_error_is_genkit_runtime_error_with_invalid_output_reason() -> None:
+    """A prose reply to ``output_schema=City`` returns a GenkitRuntimeError with reason INVALID_OUTPUT."""
     ai = Genkit(model='programmableModel')
     pm, _ = define_programmable_model(ai)
     pm.responses = [_reply('Paris is lovely')]
 
     res = await ai.generate(prompt='extract', output_schema=City)
 
-    assert isinstance(res.error, ModelResponseError)
+    assert isinstance(res.error, GenkitRuntimeError)
     assert res.error.reason is RuntimeErrorReason.INVALID_OUTPUT
     assert res.output is None
 
@@ -73,7 +73,7 @@ async def test_generate_failed_tool_error_has_status_message_details_and_reason(
 
     res = await ai.generate(prompt='hi', tools=['lookup'])
 
-    assert isinstance(res.error, ModelResponseError)
+    assert isinstance(res.error, GenkitRuntimeError)
     assert res.error.status == 'INTERNAL'
     assert res.error.message == res.finish_message
     assert isinstance(res.error.details, dict)
@@ -82,7 +82,7 @@ async def test_generate_failed_tool_error_has_status_message_details_and_reason(
 
 
 @pytest.mark.asyncio
-async def test_model_response_error_is_not_an_exception() -> None:
+async def test_genkit_runtime_error_is_not_an_exception() -> None:
     """``res.error`` is not a BaseException instance."""
     ai = Genkit(model='programmableModel')
     pm, _ = define_programmable_model(ai)
@@ -94,9 +94,9 @@ async def test_model_response_error_is_not_an_exception() -> None:
     assert not isinstance(res.error, BaseException)
 
 
-def test_model_response_error_is_read_only() -> None:
+def test_genkit_runtime_error_is_read_only() -> None:
     """Assigning ``res.error.message = 'x'`` raises a validation error."""
-    res = ModelResponse(error=ModelResponseError(status='INTERNAL', message='bad'))
+    res = ModelResponse(error=GenkitRuntimeError(status='INTERNAL', message='bad'))
     assert res.error is not None
 
     with pytest.raises(ValidationError):
@@ -105,32 +105,58 @@ def test_model_response_error_is_read_only() -> None:
     assert res.error.message == 'bad'
 
 
-def test_model_response_error_with_unknown_reason_reads_none() -> None:
+def test_genkit_runtime_error_with_unknown_reason_reads_none() -> None:
     """``details={'reason': 'NOT_A_REASON'}`` gives ``.reason is None``."""
-    error = ModelResponseError(status='INTERNAL', message='bad', details={'reason': 'NOT_A_REASON'})
+    error = GenkitRuntimeError(status='INTERNAL', message='bad', details={'reason': 'NOT_A_REASON'})
 
     assert error.reason is None
     assert error.details == {'reason': 'NOT_A_REASON'}
 
 
-def test_model_response_from_wire_dict_builds_model_response_error() -> None:
-    """``ModelResponse.model_validate({'error': {...}})`` gives a ModelResponseError."""
+def test_model_response_from_wire_dict_builds_genkit_runtime_error() -> None:
+    """``ModelResponse.model_validate({'error': {...}})`` gives a GenkitRuntimeError."""
     res = ModelResponse.model_validate({
         'error': {'status': 'INTERNAL', 'message': 'x', 'details': {'reason': 'TOOL_FAILED'}},
     })
 
-    assert isinstance(res.error, ModelResponseError)
+    assert isinstance(res.error, GenkitRuntimeError)
     assert res.error.message == 'x'
     assert res.error.reason is RuntimeErrorReason.TOOL_FAILED
 
 
-def test_model_response_json_schema_names_model_response_error() -> None:
-    """``ModelResponse.model_json_schema()`` defines the error as ``ModelResponseError``."""
+def test_model_response_json_schema_names_genkit_runtime_error() -> None:
+    """``ModelResponse.model_json_schema()`` defines the error as ``GenkitRuntimeError``."""
     schema = ModelResponse.model_json_schema()
 
-    assert 'ModelResponseError' in schema['$defs']
-    assert schema['$defs']['ModelResponseError']['title'] == 'ModelResponseError'
-    assert schema['properties']['error']['anyOf'][0] == {'$ref': '#/$defs/ModelResponseError'}
+    assert 'GenkitRuntimeError' in schema['$defs']
+    assert schema['$defs']['GenkitRuntimeError']['title'] == 'GenkitRuntimeError'
+    assert schema['properties']['error']['anyOf'][0] == {'$ref': '#/$defs/GenkitRuntimeError'}
+
+
+def test_snapshot_and_agent_output_decode_the_same_error_type() -> None:
+    """A persisted turn and a live response expose the same ``.reason``."""
+    from genkit._core._model import AgentOutput, SessionSnapshot
+
+    wire = {'status': 'ABORTED', 'message': 'stopped', 'details': {'reason': 'MAX_TURNS_EXCEEDED'}}
+    snapshot = SessionSnapshot.model_validate({'snapshotId': 's1', 'createdAt': '2026-10-06T00:00:00Z', 'error': wire})
+    output = AgentOutput.model_validate({'error': wire})
+
+    assert isinstance(snapshot.error, GenkitRuntimeError)
+    assert isinstance(output.error, GenkitRuntimeError)
+    assert snapshot.error.reason is RuntimeErrorReason.MAX_TURNS_EXCEEDED
+    assert output.error.reason is RuntimeErrorReason.MAX_TURNS_EXCEEDED
+
+
+def test_snapshot_accepts_generated_wire_error() -> None:
+    """A store holding the generated ``_typing`` class still builds a snapshot with ``.reason``."""
+    from genkit._core._model import SessionSnapshot
+    from genkit._core._typing import GenkitRuntimeError as WireError
+
+    wire = WireError(status='NOT_FOUND', message='gone', details={'reason': 'TOOL_NOT_FOUND'})
+    snapshot = SessionSnapshot.model_validate({'snapshotId': 's1', 'createdAt': '2026-10-06T00:00:00Z', 'error': wire})
+
+    assert isinstance(snapshot.error, GenkitRuntimeError)
+    assert snapshot.error.reason is RuntimeErrorReason.TOOL_NOT_FOUND
 
 
 def test_model_response_has_no_assert_valid() -> None:

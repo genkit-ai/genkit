@@ -37,7 +37,7 @@ from genkit._core._channel import CloseableQueue
 from genkit._core._error import (
     _STATUS_CODE_MAP,
     GenkitError,
-    ModelResponseError,
+    GenkitRuntimeError,
     RuntimeErrorReason,
     StatusCodes,
     StatusName,
@@ -397,7 +397,7 @@ def to_agent_error(
         details = e
     raw = AgentOutput(
         finish_reason=AgentFinishReason.FAILED,
-        error=ModelResponseError(status=status, message=message, details=details),
+        error=GenkitRuntimeError(status=status, message=message, details=details),
     )
     response = AgentResponse(raw=raw, messages=list(messages), state=state)
     return AgentError(

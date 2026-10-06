@@ -115,8 +115,11 @@ def runtime_error_reason(details: object) -> RuntimeErrorReason | None:
         return None
 
 
-class ModelResponseError(GenkitRuntimeErrorData):
-    """Why a generate call came back without a usable reply, on ``response.error``.
+class GenkitRuntimeError(GenkitRuntimeErrorData):
+    """Classified failure carried as data: ``response.error``, ``AgentOutput.error``, ``SessionSnapshot.error``.
+
+    Wire shape is the shared ``RuntimeError`` schema (status, message, details);
+    Go carries the same shape as ``*status.Error``.
 
     Plain data, not an exception: generate returns failures as values, so
     ``raise res.error`` would make a returning call look like a throwing one.
@@ -124,7 +127,9 @@ class ModelResponseError(GenkitRuntimeErrorData):
     can branch without parsing the message.
     """
 
-    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
+    # from_attributes: snapshot and agent-output fields are typed as this class,
+    # but stores and plugins may still hand over the generated wire class.
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, from_attributes=True)
 
     @property
     def reason(self) -> RuntimeErrorReason | None:
