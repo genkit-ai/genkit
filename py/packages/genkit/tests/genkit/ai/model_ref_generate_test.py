@@ -14,13 +14,13 @@ from pydantic.alias_generators import to_camel
 from genkit import Genkit, Message, Part
 from genkit._ai._model import ModelConfig
 from genkit._ai._prompt import GenerateCall, to_generate_options
-from genkit._ai._testing import EchoModel, define_echo_model
 from genkit._core._action import ActionRunContext
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import ModelRequest, ModelResponse
 from genkit._core._typing import Operation, Role
 from genkit.exp import Genkit as ExpGenkit
 from genkit.model import model, model_ref
+from genkit.testing import EchoModel, define_echo_model
 
 
 class CustomConfig(BaseModel):
