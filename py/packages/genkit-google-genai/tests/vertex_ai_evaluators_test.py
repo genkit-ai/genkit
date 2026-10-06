@@ -30,6 +30,8 @@ from genkit_google_genai._evaluators._evaluation import (
     _stringify,
 )
 
+from genkit import BaseDataPoint, Genkit
+
 
 def test_vertex_ai_evaluation_metric_type_values() -> None:
     """Test that VertexAIEvaluationMetricType has expected values."""
@@ -286,3 +288,26 @@ def test_all_metric_types_supported() -> None:
     )
 
     assert mock_registry.define_evaluator.call_count == len(all_metrics)
+
+
+@pytest.mark.asyncio
+async def test_vertexai_evaluator_row_evaluation_is_a_list() -> None:
+    """ai.evaluate with vertexai/fluency returns a list of rows read as results[0].evaluation[0].score."""
+    ai = Genkit()
+    create_vertex_evaluators(
+        ai, [VertexAIEvaluationMetricType.FLUENCY], project_id='test-project', location='us-central1'
+    )
+
+    with patch.object(
+        EvaluatorFactory,
+        'evaluate_instances',
+        AsyncMock(return_value={'fluencyResult': {'score': 4.5, 'explanation': 'Very fluent text'}}),
+    ):
+        results = await ai.evaluate(
+            evaluator='vertexai/fluency',
+            dataset=[BaseDataPoint(input='Write about AI.', output='AI helps.', test_case_id='case1')],
+        )
+
+    assert type(results) is list
+    assert [row.test_case_id for row in results] == ['case1']
+    assert [score.score for score in results[0].evaluation] == [4.5]

@@ -115,8 +115,8 @@ from genkit._core._tool import Tool
 from genkit._core._typing import (
     BaseDataPoint,
     Embedding,
+    EvalFnResponse,
     EvalRequest,
-    EvalResponse,
     MiddlewareRef,
     ModelInfo,
     Operation,
@@ -1583,8 +1583,11 @@ class Genkit:
         dataset: list[BaseDataPoint] | None = None,
         config: dict[str, object] | None = None,
         eval_run_id: str | None = None,
-    ) -> EvalResponse:
+    ) -> list[EvalFnResponse]:
         """Evaluate a dataset using the specified evaluator.
+
+        Returns one row per datapoint, in dataset order, for per-row and batch
+        evaluators alike. Each row's ``evaluation`` is a list of scores.
 
         ``config`` is merged over the ``EvaluatorRef``'s settings (the call
         wins per key) and handed to the evaluator as its second argument. When
@@ -1598,14 +1601,16 @@ class Genkit:
                 evaluator='my_eval',
                 dataset=[BaseDataPoint(input='What is 2+2?', output='4')],
             )
-            print(results.root[0].evaluation.score)
+            for row in results:
+                for score in row.evaluation:
+                    print(row.test_case_id, score.score)
         """
         evaluator_name: str = ''
         ref_config: dict[str, object] | None = None
 
         if isinstance(evaluator, EvaluatorRef):
             evaluator_name = evaluator.name
-            ref_config = evaluator.config_schema
+            ref_config = evaluator.config
         elif isinstance(evaluator, str):
             evaluator_name = evaluator
         else:
@@ -1631,15 +1636,14 @@ class Genkit:
         if dataset is None:
             raise ValueError('Dataset must be specified for evaluation.')
 
-        return (
-            await eval_action.run(
-                EvalRequest(
-                    dataset=dataset,
-                    options=final_options,
-                    eval_run_id=eval_run_id,
-                ),
-            )
-        ).response
+        response = await eval_action.run(
+            EvalRequest(
+                dataset=dataset,
+                options=final_options,
+                eval_run_id=eval_run_id,
+            ),
+        )
+        return response.response.root
 
     @staticmethod
     def current_context() -> dict[str, Any] | None:

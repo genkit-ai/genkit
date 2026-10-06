@@ -39,7 +39,6 @@ from genkit._core._typing import (
     Details,
     EvalFnResponse,
     EvalRequest,
-    EvalResponse,
     EvalStatusEnum,
     FinishReason,
     ModelInfo,
@@ -51,7 +50,7 @@ from genkit._core._typing import (
     ToolRequest,
     ToolResponse,
 )
-from genkit.evaluator import evaluator_ref
+from genkit.evaluator import EvaluatorRef, evaluator_ref
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, MiddlewareRef, ModelHookParams
 
 # type SetupFixture = tuple[Genkit, EchoModel, ProgrammableModel]
@@ -1608,7 +1607,7 @@ def test_define_evaluator_simple(setup_test: SetupFixture) -> None:
     async def my_eval_fn(datapoint: BaseDataPoint, options: dict[str, Any] | None = None) -> EvalFnResponse:
         return EvalFnResponse(
             test_case_id=datapoint.test_case_id or '',
-            evaluation=Score(score=True, details=Details(reasoning='I think it is true')),
+            evaluation=[Score(score=True, details=Details(reasoning='I think it is true'))],
         )
 
     action = ai.define_evaluator(
@@ -1636,9 +1635,9 @@ def test_define_evaluator_custom_config(setup_test: SetupFixture) -> None:
     async def my_eval_fn(datapoint: BaseDataPoint, options: dict[str, Any] | None = None) -> EvalFnResponse:
         return EvalFnResponse(
             test_case_id=datapoint.test_case_id or '',
-            evaluation=Score(
-                score=True, details=Details(reasoning=options.get('foo_bar', 'baz') if options else 'baz')
-            ),
+            evaluation=[
+                Score(score=True, details=Details(reasoning=options.get('foo_bar', 'baz') if options else 'baz'))
+            ],
         )
 
     action = ai.define_evaluator(
@@ -1680,10 +1679,12 @@ def test_define_batch_evaluator(setup_test: SetupFixture) -> None:
             eval_responses.append(
                 EvalFnResponse(
                     test_case_id=f'testCase{index}',
-                    evaluation=Score(
-                        score=True,
-                        details=Details(reasoning=f'I think {datapoint.input} is true'),
-                    ),
+                    evaluation=[
+                        Score(
+                            score=True,
+                            details=Details(reasoning=f'I think {datapoint.input} is true'),
+                        )
+                    ],
                 )
             )
 
@@ -1715,7 +1716,7 @@ async def test_batch_evaluator_run_reads_options_from_the_request(setup_test: Se
         return [
             EvalFnResponse(
                 test_case_id=req.dataset[0].test_case_id or '',
-                evaluation=Score(score=True),
+                evaluation=[Score(score=True)],
             )
         ]
 
@@ -1734,7 +1735,7 @@ async def test_batch_evaluator_run_reads_options_from_the_request(setup_test: Se
     )
 
     assert seen == [{'threshold': 0.8}]
-    assert result.response[0].test_case_id == 'case1'
+    assert result.response.root[0].test_case_id == 'case1'
 
 
 def test_batch_evaluator_with_second_parameter_raises_type_error(setup_test: SetupFixture) -> None:
@@ -1803,185 +1804,114 @@ async def test_define_async_flow(setup_test: SetupFixture) -> None:
     assert await result.response == 'banana2'
 
 
-@pytest.mark.asyncio
-async def test_evaluate(setup_test: SetupFixture) -> None:
-    """ai.evaluate reports a one-score evaluator's evaluation as that Score."""
-    ai, _, _, *_ = setup_test
+def _define_scoring_evaluator(ai: Genkit, name: str, scores: list[Score]) -> None:
+    """Register a per-row evaluator that gives every row the same scores."""
 
-    async def my_eval_fn(datapoint: BaseDataPoint, options: object | None) -> EvalFnResponse:
-        return EvalFnResponse(
-            test_case_id=datapoint.test_case_id or '',
-            evaluation=Score(score=True, details=Details(reasoning='I think it is true')),
-        )
+    async def eval_fn(datapoint: BaseDataPoint, options: object | None) -> EvalFnResponse:
+        return EvalFnResponse(test_case_id=datapoint.test_case_id or '', evaluation=list(scores))
 
-    ai.define_evaluator(
-        name='my_eval',
-        display_name='Test evaluator',
-        definition='Test evaluator that always returns True',
-        fn=my_eval_fn,
-    )
+    ai.define_evaluator(name=name, display_name=name, definition='fixed scores', fn=eval_fn)
 
-    dataset = [
+
+def _two_rows() -> list[BaseDataPoint]:
+    return [
         BaseDataPoint(input='hi', output='hi', test_case_id='case1'),
         BaseDataPoint(input='bye', output='bye', test_case_id='case2'),
     ]
 
-    response = await ai.evaluate(evaluator='my_eval', dataset=dataset)
 
-    assert isinstance(response, EvalResponse)
-    assert len(response.root) == 2
-    assert response.root[0].test_case_id == 'case1'
-    first = response.root[0].evaluation
-    assert isinstance(first, Score)
-    assert first.score is True
-    assert response.root[1].test_case_id == 'case2'
-    second = response.root[1].evaluation
-    assert isinstance(second, Score)
-    assert second.score is True
+@pytest.mark.asyncio
+async def test_evaluate_returns_one_row_per_datapoint_as_a_list(setup_test: SetupFixture) -> None:
+    """ai.evaluate with two rows returns a two-item list whose rows keep their test case ids in order."""
+    ai, *_ = setup_test
+    _define_scoring_evaluator(ai, 'my_eval', [Score(score=True, details=Details(reasoning='I think it is true'))])
+
+    results = await ai.evaluate(evaluator='my_eval', dataset=_two_rows())
+
+    assert type(results) is list
+    assert [row.test_case_id for row in results] == ['case1', 'case2']
+    assert [score.score for score in results[0].evaluation] == [True]
+    assert [score.score for score in results[1].evaluation] == [True]
 
 
 @pytest.mark.asyncio
-async def test_evaluator_records_fail_then_still_runs_the_next_row(
-    setup_test: SetupFixture,
+@pytest.mark.parametrize(
+    'scores',
+    [
+        [Score(id='accuracy', score=0.9)],
+        [Score(id='accuracy', score=0.9), Score(id='fluency', score=0.8)],
+    ],
+    ids=['one_score', 'two_scores'],
+)
+async def test_evaluate_row_evaluation_is_the_evaluators_score_list(
+    setup_test: SetupFixture, scores: list[Score]
 ) -> None:
-    """A row that raises is recorded as FAIL; the next row still runs."""
+    """row.evaluation is the list of scores the evaluator returned, in order, even when it holds one score."""
+    ai, *_ = setup_test
+    _define_scoring_evaluator(ai, 'score_eval', scores)
+
+    results = await ai.evaluate(evaluator='score_eval', dataset=_one_row())
+
+    assert [row.test_case_id for row in results] == ['case1']
+    assert results[0].evaluation == scores
+
+
+@pytest.mark.asyncio
+async def test_evaluate_row_that_raises_is_a_fail_score_and_next_row_runs(setup_test: SetupFixture) -> None:
+    """A row whose evaluator raises comes back as one FAIL score naming the test case, and the next row is scored."""
     ai, *_ = setup_test
 
     async def my_eval_fn(datapoint: BaseDataPoint, options: object | None) -> EvalFnResponse:
         if datapoint.test_case_id == 'case1':
             raise RuntimeError('row boom')
-        return EvalFnResponse(
-            test_case_id=datapoint.test_case_id or '',
-            evaluation=Score(score=True),
-        )
+        return EvalFnResponse(test_case_id=datapoint.test_case_id or '', evaluation=[Score(score=True)])
 
-    ai.define_evaluator(
-        name='my_eval',
-        display_name='Test evaluator',
-        definition='records FAIL then keeps going',
-        fn=my_eval_fn,
-    )
+    ai.define_evaluator(name='my_eval', display_name='my_eval', definition='first row raises', fn=my_eval_fn)
 
-    response = await ai.evaluate(
-        evaluator='my_eval',
-        dataset=[
-            BaseDataPoint(input='hi', output='hi', test_case_id='case1'),
-            BaseDataPoint(input='bye', output='bye', test_case_id='case2'),
-        ],
-    )
+    results = await ai.evaluate(evaluator='my_eval', dataset=_two_rows())
 
-    assert isinstance(response, EvalResponse)
-    assert len(response.root) == 2
-    failed = response.root[0].evaluation
-    assert isinstance(failed, Score)
+    assert [row.test_case_id for row in results] == ['case1', 'case2']
+    assert len(results[0].evaluation) == 1
+    failed = results[0].evaluation[0]
     assert failed.status == EvalStatusEnum.FAIL
-    assert failed.error is not None
-    assert response.root[1].test_case_id == 'case2'
-    passed = response.root[1].evaluation
-    assert isinstance(passed, Score)
-    assert passed.score is True
+    assert failed.error is not None and 'case1' in failed.error and 'row boom' in failed.error
+    assert [score.score for score in results[1].evaluation] == [True]
 
 
 @pytest.mark.asyncio
-async def test_evaluate_score_list_returns_those_scores(setup_test: SetupFixture) -> None:
-    """ai.evaluate reports an evaluator's list of scores as that list."""
-    ai, _, _, *_ = setup_test
-
-    async def my_eval_fn(datapoint: BaseDataPoint, options: object | None) -> EvalFnResponse:
-        return EvalFnResponse(
-            test_case_id=datapoint.test_case_id or '',
-            evaluation=[
-                Score(id='accuracy', score=0.9),
-                Score(id='fluency', score=0.8),
-            ],
-        )
-
-    ai.define_evaluator(
-        name='list_eval',
-        display_name='List evaluator',
-        definition='Returns two scores per sample',
-        fn=my_eval_fn,
-    )
-
-    response = await ai.evaluate(
-        evaluator='list_eval',
-        dataset=[BaseDataPoint(input='hi', output='hi', test_case_id='case1')],
-    )
-
-    assert isinstance(response, EvalResponse)
-    assert len(response.root) == 1
-    assert response.root[0].test_case_id == 'case1'
-    evaluation = response.root[0].evaluation
-    assert isinstance(evaluation, list)
-    assert [score.id for score in evaluation] == ['accuracy', 'fluency']
-    assert [score.score for score in evaluation] == [0.9, 0.8]
-
-
-@pytest.mark.asyncio
-async def test_evaluate_mixed_rows_keep_score_and_list(setup_test: SetupFixture) -> None:
-    """One row's Score and the next row's score list each come back in the shape the evaluator returned."""
+async def test_evaluate_batch_evaluator_returns_a_list_of_rows(setup_test: SetupFixture) -> None:
+    """ai.evaluate on a batch evaluator returns the same list of rows as a per-row one."""
     ai, *_ = setup_test
+    _define_recording_batch_evaluator(ai, 'batch_eval')
 
-    async def my_eval_fn(datapoint: BaseDataPoint, options: object | None) -> EvalFnResponse:
-        if datapoint.test_case_id == 'case1':
-            return EvalFnResponse(test_case_id='case1', evaluation=Score(id='accuracy', score=0.9))
-        return EvalFnResponse(
-            test_case_id=datapoint.test_case_id or '',
-            evaluation=[Score(id='accuracy', score=0.9), Score(id='fluency', score=0.8)],
-        )
+    results = await ai.evaluate(evaluator='batch_eval', dataset=_two_rows())
 
-    ai.define_evaluator(
-        name='mixed_eval',
-        display_name='Mixed evaluator',
-        definition='Returns a Score or a list depending on the row',
-        fn=my_eval_fn,
-    )
-
-    response = await ai.evaluate(
-        evaluator='mixed_eval',
-        dataset=[
-            BaseDataPoint(input='hi', output='hi', test_case_id='case1'),
-            BaseDataPoint(input='bye', output='bye', test_case_id='case2'),
-        ],
-    )
-
-    assert len(response.root) == 2
-    assert response.root[0].test_case_id == 'case1'
-    one = response.root[0].evaluation
-    assert isinstance(one, Score)
-    assert one.id == 'accuracy'
-    assert one.score == 0.9
-    assert response.root[1].test_case_id == 'case2'
-    many = response.root[1].evaluation
-    assert isinstance(many, list)
-    assert [score.id for score in many] == ['accuracy', 'fluency']
-    assert [score.score for score in many] == [0.9, 0.8]
+    assert type(results) is list
+    assert [row.test_case_id for row in results] == ['case1', 'case2']
+    assert [score.score for score in results[0].evaluation] == [True]
+    assert [score.score for score in results[1].evaluation] == [True]
 
 
-def test_eval_response_score_object_on_load_stays_score() -> None:
-    """A saved row whose evaluation is one score object loads as a Score and writes an object back."""
+def test_eval_response_single_score_object_on_load_becomes_list() -> None:
+    """A saved row whose evaluation is one score object loads as a one-item list."""
     row = EvalFnResponse.model_validate_json('{"testCaseId": "case1", "evaluation": {"id": "accuracy", "score": 0.9}}')
 
     assert row.test_case_id == 'case1'
-    evaluation = row.evaluation
-    assert isinstance(evaluation, Score)
-    assert evaluation.id == 'accuracy'
-    assert evaluation.score == 0.9
-    assert row.model_dump(by_alias=True, exclude_none=True)['evaluation'] == {'id': 'accuracy', 'score': 0.9}
+    assert [score.id for score in row.evaluation] == ['accuracy']
+    assert [score.score for score in row.evaluation] == [0.9]
+    assert row.model_dump(by_alias=True, exclude_none=True)['evaluation'] == [{'id': 'accuracy', 'score': 0.9}]
 
 
 def test_eval_response_score_list_on_load_stays_list() -> None:
-    """A saved row whose evaluation is a list of scores loads as that list and writes a list back."""
+    """A saved row whose evaluation is already a list loads unchanged."""
     row = EvalFnResponse.model_validate({
         'testCaseId': 'case1',
         'evaluation': [{'id': 'accuracy', 'score': 0.9}, {'id': 'fluency', 'score': 0.8}],
     })
 
     assert row.test_case_id == 'case1'
-    evaluation = row.evaluation
-    assert isinstance(evaluation, list)
-    assert [score.id for score in evaluation] == ['accuracy', 'fluency']
-    assert [score.score for score in evaluation] == [0.9, 0.8]
+    assert [score.id for score in row.evaluation] == ['accuracy', 'fluency']
+    assert [score.score for score in row.evaluation] == [0.9, 0.8]
     assert row.model_dump(by_alias=True, exclude_none=True)['evaluation'] == [
         {'id': 'accuracy', 'score': 0.9},
         {'id': 'fluency', 'score': 0.8},
@@ -2001,6 +1931,12 @@ def test_eval_response_string_evaluation_raises() -> None:
     """A saved row whose evaluation is a string raises ValidationError."""
     with pytest.raises(ValidationError):
         EvalFnResponse.model_validate({'testCaseId': 'case1', 'evaluation': 'nope'})
+
+
+def test_eval_response_bare_score_in_code_raises_validation_error() -> None:
+    """Building EvalFnResponse(evaluation=Score(...)) in code raises; wrap it in a list."""
+    with pytest.raises(ValidationError):
+        EvalFnResponse(test_case_id='case1', evaluation=Score(id='accuracy', score=0.9))  # type: ignore[arg-type]
 
 
 def _define_recording_evaluator(ai: Genkit, name: str) -> list[object]:
@@ -2092,14 +2028,26 @@ async def test_batch_evaluator_run_directly_gets_request_options(setup_test: Set
 
 
 @pytest.mark.asyncio
-async def test_evaluate_with_ref_settings_only_passes_ref_settings(setup_test: SetupFixture) -> None:
-    """Settings on the evaluator ref alone reach the evaluator as that dict."""
+async def test_evaluator_ref_config_reaches_evaluator(setup_test: SetupFixture) -> None:
+    """ai.evaluate(evaluator=evaluator_ref(name, config={...})) hands the evaluator that dict."""
     ai, *_ = setup_test
     seen = _define_recording_evaluator(ai, 'ref_eval')
 
-    await ai.evaluate(evaluator=evaluator_ref('ref_eval', config_schema={'judge': 'j1'}), dataset=_one_row())
+    await ai.evaluate(evaluator=evaluator_ref('ref_eval', config={'judge': 'j1'}), dataset=_one_row())
 
     assert seen == [{'judge': 'j1'}]
+
+
+def test_evaluator_ref_with_config_schema_keyword_raises_type_error() -> None:
+    """evaluator_ref(name, config_schema={...}) is a TypeError; settings go in config=."""
+    with pytest.raises(TypeError, match='config_schema'):
+        evaluator_ref('ref_eval', config_schema={'judge': 'j1'})  # type: ignore[call-arg]
+
+
+def test_evaluator_ref_model_with_config_schema_field_raises_validation_error() -> None:
+    """EvaluatorRef(name=..., config_schema={...}) raises instead of silently dropping the settings."""
+    with pytest.raises(ValidationError, match='config_schema'):
+        EvaluatorRef(name='ref_eval', config_schema={'judge': 'j1'})  # type: ignore[call-arg]
 
 
 @pytest.mark.asyncio
@@ -2107,12 +2055,12 @@ async def test_evaluate_config_wins_over_ref_settings_per_key(setup_test: SetupF
     """When the ref and config= both set a key, config= wins and other ref keys stay."""
     ai, *_ = setup_test
     seen = _define_recording_evaluator(ai, 'merge_eval')
-    ref = evaluator_ref('merge_eval', config_schema={'judge': 'j1', 'threshold': 0.1})
+    ref = evaluator_ref('merge_eval', config={'judge': 'j1', 'threshold': 0.1})
 
     await ai.evaluate(evaluator=ref, dataset=_one_row(), config={'threshold': 0.9})
 
     assert seen == [{'judge': 'j1', 'threshold': 0.9}]
-    assert ref.config_schema == {'judge': 'j1', 'threshold': 0.1}
+    assert ref.config == {'judge': 'j1', 'threshold': 0.1}
 
 
 @pytest.mark.asyncio
