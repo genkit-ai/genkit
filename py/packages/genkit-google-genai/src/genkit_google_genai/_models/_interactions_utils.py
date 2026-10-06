@@ -22,14 +22,14 @@ import os
 from typing import Any
 
 from genkit import GenkitError, Message
-from genkit_google_genai._interactions.converters import (
+from genkit_google_genai._interactions._converters import (
     ensure_tool_ids,
     split_system_instruction,
     to_interaction_steps,
 )
-from genkit_google_genai._interactions.options import ClientOptions
-from genkit_google_genai.models._routing import strip_ref_prefixes
-from genkit_google_genai.models._secrets import context_api_key
+from genkit_google_genai._interactions._options import ClientOptions
+from genkit_google_genai._models._routing import strip_ref_prefixes
+from genkit_google_genai._models._secrets import context_api_key
 
 # Snake_case: callers dump config with by_alias=False before we strip these.
 CLIENT_OPTION_KEYS = frozenset({

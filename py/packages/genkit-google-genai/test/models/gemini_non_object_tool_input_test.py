@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from typing import Any
 
 import pytest
-from genkit_google_genai.models.gemini import GeminiModel
+from genkit_google_genai._models._gemini import GeminiModel
 from google.genai import types as genai_types
 from pytest_mock import MockerFixture
 

@@ -1,7 +1,7 @@
 # Copyright 2026 Google LLC
 # SPDX-License-Identifier: Apache-2.0
 
-"""A tool takes one typed input; the context arrives only on a ToolRunContext-annotated parameter."""
+"""A tool takes one typed input; the context arrives on a parameter annotated ToolRunContext or ActionRunContext."""
 
 import sys
 import typing
@@ -12,8 +12,9 @@ import pytest
 from pydantic import BaseModel
 from typing_extensions import TypedDict
 
-from genkit import Genkit, GenkitError, Message, ModelResponse, Part, ToolRunContext, tool
+from genkit import ActionRunContext, Genkit, GenkitError, Message, ModelResponse, Part, ToolRunContext, tool
 from genkit._ai._testing import ProgrammableModel, define_programmable_model
+from genkit._core._schema import to_json_schema
 from genkit._core._typing import FinishReason, Role, ToolRequest
 
 
@@ -172,6 +173,24 @@ async def test_tool_with_tool_run_context_first_then_input_gets_both() -> None:
 
 
 @pytest.mark.asyncio
+async def test_tool_with_action_run_context_annotation_gets_tool_run_context() -> None:
+    """`ctx: ActionRunContext` on a tool marks the context too, and it receives a ToolRunContext."""
+    ai, pm = _app()
+    seen: list[object] = []
+
+    @ai.tool()
+    async def weather(input: WeatherInput, ctx: ActionRunContext) -> str:
+        seen.extend([type(ctx), ctx.context])
+        return f'22{input.unit} in {input.city}'
+
+    response = await _model_calls_tool(ai, pm, name='weather', tool_input={'city': 'Paris'}, context={'user': 'u1'})
+
+    assert _advertised_schema(pm) == WEATHER_SCHEMA
+    assert seen == [ToolRunContext, {'user': 'u1'}]
+    assert _tool_output(response) == '22C in Paris'
+
+
+@pytest.mark.asyncio
 async def test_tool_with_only_tool_run_context_runs_with_context_and_no_input() -> None:
     """`(ctx: ToolRunContext)` runs with the context instead of receiving the model's arguments in `ctx`."""
     ai, pm = _app()
@@ -326,6 +345,139 @@ def test_tool_with_plain_class_input_raises_type_error_naming_input() -> None:
     with pytest.raises(TypeError, match="tool 'read' input 't' has type Thermometer, which has no JSON schema") as exc:
         ai.tool()(read)
     assert 'Use a Pydantic model, dataclass, TypedDict, or a basic type' in str(exc.value)
+
+
+def test_tool_with_input_model_defined_in_function_raises_type_error_naming_it() -> None:
+    """A tool whose input model is defined in the same function raises TypeError saying to move it to module level."""
+    ai, _ = _app()
+
+    class StepInput(BaseModel):
+        step: int
+
+    # Postponed annotations are stored as this string, which can't see StepInput.
+    async def slow_work(input: 'StepInput', ctx: ToolRunContext) -> dict:
+        return {'step': input.step}
+
+    with pytest.raises(
+        TypeError, match="tool 'slow_work' input 'input' has type 'StepInput', which can't be found"
+    ) as exc:
+        ai.tool()(slow_work)
+    assert 'Define or import it at module level' in str(exc.value)
+
+
+# A user module that imports the context type only for type checkers, so
+# 'ToolRunContext' can't be resolved at runtime but every other name can.
+_TYPE_CHECKING_CONTEXT_MODULE = """
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from genkit import MultipartToolResponse, response
+
+if TYPE_CHECKING:
+    from genkit import ToolRunContext
+
+
+async def weather(input: WeatherInput, ctx: ToolRunContext) -> str:
+    return f'22{input.unit} in {input.city} for {ctx.context["user"]}'
+
+
+async def forecast(input: WeatherInput, ctx: ToolRunContext) -> MultipartToolResponse[Forecast]:
+    return response(Forecast(city=input.city, days=3))
+"""
+
+
+def _type_checking_context_module(*, postponed: bool = True) -> dict[str, Any]:
+    source = _TYPE_CHECKING_CONTEXT_MODULE
+    if not postponed:
+        source = source.replace('from __future__ import annotations\n', '')
+    module_globals: dict[str, Any] = {'WeatherInput': WeatherInput, 'Forecast': Forecast}
+    exec(source, module_globals)  # noqa: S102 - builds a module with postponed annotations
+    return module_globals
+
+
+@pytest.mark.asyncio
+async def test_tool_with_type_checking_only_context_still_resolves_module_level_input() -> None:
+    """A `TYPE_CHECKING`-only `ToolRunContext` doesn't stop the module-level `WeatherInput` from resolving."""
+    ai, pm = _app()
+
+    ai.tool()(_type_checking_context_module()['weather'])
+    response = await _model_calls_tool(ai, pm, name='weather', tool_input={'city': 'Paris'}, context={'user': 'u1'})
+
+    assert response.text == 'done'
+    assert _advertised_schema(pm) == WEATHER_SCHEMA
+    assert _tool_output(response) == '22C in Paris for u1'
+
+
+@pytest.mark.skipif(sys.version_info < (3, 14), reason='annotations are evaluated lazily from Python 3.14')
+@pytest.mark.asyncio
+async def test_tool_with_type_checking_only_context_runs_without_future_import() -> None:
+    """On 3.14, a `TYPE_CHECKING`-only `ToolRunContext` without the `__future__` import still runs."""
+    ai, pm = _app()
+
+    ai.tool()(_type_checking_context_module(postponed=False)['weather'])
+    response = await _model_calls_tool(ai, pm, name='weather', tool_input={'city': 'Paris'}, context={'user': 'u1'})
+
+    assert response.text == 'done'
+    assert _advertised_schema(pm) == WEATHER_SCHEMA
+    assert _tool_output(response) == '22C in Paris for u1'
+
+
+def test_tool_with_type_checking_only_context_still_reads_multipart_return() -> None:
+    """A `TYPE_CHECKING`-only `ToolRunContext` doesn't hide a `-> MultipartToolResponse[Forecast]` return."""
+    ai, _ = _app()
+
+    forecast = ai.tool()(_type_checking_context_module()['forecast'])
+
+    assert forecast.output_schema == to_json_schema(Forecast)
+
+
+# A user module whose return type is imported only for type checkers.
+_TYPE_CHECKING_RETURN_MODULE = """
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from reports import Report
+
+
+async def weekly_report(input: WeatherInput) -> Report:
+    raise NotImplementedError
+"""
+
+
+def test_tool_with_type_checking_only_return_type_raises_type_error_naming_it() -> None:
+    """A return type imported under `TYPE_CHECKING` raises TypeError naming it, not Pydantic's `.rebuild()` error."""
+    ai, _ = _app()
+    module_globals: dict[str, Any] = {'WeatherInput': WeatherInput}
+    exec(_TYPE_CHECKING_RETURN_MODULE, module_globals)  # noqa: S102 - builds a module with postponed annotations
+
+    with pytest.raises(TypeError, match="tool 'weekly_report' output has type 'Report', which can't be found") as exc:
+        ai.tool()(module_globals['weekly_report'])
+    assert "outside 'if TYPE_CHECKING:'" in str(exc.value)
+
+
+def test_tool_with_plain_class_return_type_raises_type_error_naming_it() -> None:
+    """`-> Thermometer` raises TypeError naming the tool and the return type."""
+    ai, _ = _app()
+
+    async def read(city: str) -> Thermometer:
+        return Thermometer()
+
+    with pytest.raises(TypeError, match="tool 'read' output has type Thermometer, which has no JSON schema"):
+        ai.tool()(read)
+
+
+def test_tool_with_list_of_plain_class_return_type_names_the_generic() -> None:
+    """`-> list[Thermometer]` raises TypeError naming the generic, not just `list`."""
+    ai, _ = _app()
+
+    async def read(city: str) -> list[Thermometer]:
+        return []
+
+    with pytest.raises(TypeError, match=r"tool 'read' output has type list\[.*Thermometer\], which has no JSON schema"):
+        ai.tool()(read)
 
 
 @pytest.mark.skipif(sys.version_info >= (3, 12), reason='Pydantic accepts typing.TypedDict on 3.12+')

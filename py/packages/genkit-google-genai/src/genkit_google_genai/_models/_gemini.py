@@ -51,16 +51,16 @@ from genkit.model import (
     get_basic_usage_stats,
 )
 from genkit.plugin_api import wrap_http_error
-from genkit_google_genai.constants import is_multi_regional_location, multi_regional_base_url
-from genkit_google_genai.models._sdk_config import (
+from genkit_google_genai._constants import is_multi_regional_location, multi_regional_base_url
+from genkit_google_genai._models._context_caching._constants import DEFAULT_TTL
+from genkit_google_genai._models._context_caching._utils import generate_cache_key, validate_context_cache_request
+from genkit_google_genai._models._sdk_config import (
     attach_leftovers,
     dump_family_config,
     sdk_config_error,
     split_sdk_fields,
 )
-from genkit_google_genai.models._secrets import context_api_key, reject_request_config_api_key
-from genkit_google_genai.models.context_caching.constants import DEFAULT_TTL
-from genkit_google_genai.models.context_caching.utils import generate_cache_key, validate_context_cache_request
+from genkit_google_genai._models._secrets import context_api_key, reject_request_config_api_key
 
 
 def _to_dict(obj: JsonAny) -> JsonAny:  # noqa: ANN401
@@ -120,10 +120,7 @@ def _usage_from_metadata(usage_metadata: Any) -> ModelUsage:  # noqa: ANN401
     )
 
 
-from genkit_google_genai.models._deprecations import (  # noqa: E402
-    deprecated_enum_metafactory,
-)
-from genkit_google_genai.models.utils import TOOL_INPUT_FIELD, PartConverter  # noqa: E402
+from genkit_google_genai._models._utils import TOOL_INPUT_FIELD, PartConverter  # noqa: E402
 
 
 def _wraps_tool_input(input_schema: dict[str, object] | None) -> bool:
@@ -257,8 +254,8 @@ class VoiceConfigSchema(BaseModel):
     prebuilt_voice_config: PrebuiltVoiceConfig | None = Field(None, alias='prebuiltVoiceConfig')
 
 
-class GeminiConfigSchema(ModelConfig):
-    """Gemini Config Schema."""
+class GeminiConfig(ModelConfig):
+    """Gemini Config."""
 
     model_config = ConfigDict(extra='allow', populate_by_name=True)
 
@@ -500,8 +497,8 @@ _GEMINI_API_TTS_MODELS_NEEDING_VOICE = frozenset({'gemini-3.1-flash-tts-preview'
 """Gemini API TTS models that reject a request naming no voice. On Vertex AI every TTS model gets the default."""
 
 
-class GeminiTtsConfigSchema(GeminiConfigSchema):
-    """Gemini TTS Config Schema."""
+class GeminiTtsConfig(GeminiConfig):
+    """Gemini TTS Config."""
 
     speech_config: SpeechConfigSchema | None = Field(
         None,
@@ -513,8 +510,8 @@ class GeminiTtsConfigSchema(GeminiConfigSchema):
     )
 
 
-class GeminiImageConfigSchema(GeminiConfigSchema):
-    """Gemini Image Config Schema."""
+class GeminiImageConfig(GeminiConfig):
+    """Gemini Image Config."""
 
     image_config: Annotated[
         ImageConfigSchema | None,
@@ -529,10 +526,10 @@ class GeminiImageConfigSchema(GeminiConfigSchema):
     ] = Field(None, alias='imageConfig')
 
 
-class GemmaConfigSchema(GeminiConfigSchema):
-    """Gemma Config Schema."""
+class GemmaConfig(GeminiConfig):
+    """Gemma Config."""
 
-    # Inherits temperature from GeminiConfigSchema
+    # Inherits temperature from GeminiConfig
     temperature: float | None = None
 
 
@@ -849,75 +846,9 @@ GENERIC_GEMMA_MODEL = ModelInfo(
 )
 
 
-Deprecations = deprecated_enum_metafactory({})
-
-
-class VertexAIGeminiVersion(StrEnum, metaclass=Deprecations):  # pyrefly: ignore[invalid-inheritance]
-    """Vertex AI Gemini model IDs."""
-
-    GEMINI_2_5_PRO_EXP_03_25 = 'gemini-2.5-pro-exp-03-25'
-    GEMINI_2_5_PRO_PREVIEW_03_25 = 'gemini-2.5-pro-preview-03-25'
-    GEMINI_2_5_PRO_PREVIEW_05_06 = 'gemini-2.5-pro-preview-05-06'
-    GEMINI_3_FLASH_PREVIEW = 'gemini-3-flash-preview'
-    GEMINI_2_5_PRO = 'gemini-2.5-pro'
-    GEMINI_2_5_FLASH = 'gemini-2.5-flash'
-    GEMINI_2_5_FLASH_LITE = 'gemini-2.5-flash-lite'
-    GEMINI_2_5_FLASH_PREVIEW_TTS = 'gemini-2.5-flash-preview-tts'
-    GEMINI_2_5_PRO_PREVIEW_TTS = 'gemini-2.5-pro-preview-tts'
-    GEMINI_3_1_FLASH_TTS_PREVIEW = 'gemini-3.1-flash-tts-preview'
-    GEMINI_3_PRO_IMAGE = 'gemini-3-pro-image'
-    GEMINI_3_1_FLASH_IMAGE = 'gemini-3.1-flash-image'
-    GEMINI_3_PRO_IMAGE_PREVIEW = 'gemini-3-pro-image-preview'
-    GEMINI_2_5_FLASH_IMAGE_PREVIEW = 'gemini-2.5-flash-image-preview'
-    GEMINI_2_5_FLASH_IMAGE = 'gemini-2.5-flash-image'
-    GEMINI_3_5_FLASH = 'gemini-3.5-flash'
-    GEMINI_3_6_FLASH = 'gemini-3.6-flash'
-    GEMINI_3_7_FLASH = 'gemini-3.7-flash'
-    GEMINI_3_1_PRO_PREVIEW = 'gemini-3.1-pro-preview'
-    GEMINI_3_1_FLASH_LITE = 'gemini-3.1-flash-lite'
-    GEMMA_3_12B_IT = 'gemma-3-12b-it'
-    GEMMA_3_1B_IT = 'gemma-3-1b-it'
-    GEMMA_3_27B_IT = 'gemma-3-27b-it'
-    GEMMA_3_4B_IT = 'gemma-3-4b-it'
-    GEMMA_3N_E4B_IT = 'gemma-3n-e4b-it'
-
-
-class GoogleAIGeminiVersion(StrEnum, metaclass=Deprecations):  # pyrefly: ignore[invalid-inheritance]
-    """Google AI Gemini model IDs."""
-
-    GEMINI_2_5_PRO_EXP_03_25 = 'gemini-2.5-pro-exp-03-25'
-    GEMINI_2_5_PRO_PREVIEW_03_25 = 'gemini-2.5-pro-preview-03-25'
-    GEMINI_2_5_PRO_PREVIEW_05_06 = 'gemini-2.5-pro-preview-05-06'
-    GEMINI_3_FLASH_PREVIEW = 'gemini-3-flash-preview'
-    GEMINI_3_6_FLASH = 'gemini-3.6-flash'
-    GEMINI_3_7_FLASH = 'gemini-3.7-flash'
-    GEMINI_2_5_PRO = 'gemini-2.5-pro'
-    GEMINI_2_5_FLASH = 'gemini-2.5-flash'
-    GEMINI_2_5_FLASH_LITE = 'gemini-2.5-flash-lite'
-    GEMINI_2_5_FLASH_PREVIEW_TTS = 'gemini-2.5-flash-preview-tts'
-    GEMINI_2_5_PRO_PREVIEW_TTS = 'gemini-2.5-pro-preview-tts'
-    GEMINI_3_1_FLASH_TTS_PREVIEW = 'gemini-3.1-flash-tts-preview'
-    GEMINI_3_PRO_IMAGE = 'gemini-3-pro-image'
-    GEMINI_3_1_FLASH_IMAGE = 'gemini-3.1-flash-image'
-    GEMINI_3_1_FLASH_IMAGE_PREVIEW = 'gemini-3.1-flash-image-preview'
-    GEMINI_3_PRO_IMAGE_PREVIEW = 'gemini-3-pro-image-preview'
-    GEMINI_2_5_FLASH_IMAGE_PREVIEW = 'gemini-2.5-flash-image-preview'
-    GEMINI_2_5_FLASH_IMAGE = 'gemini-2.5-flash-image'
-    GEMINI_3_1_PRO_PREVIEW = 'gemini-3.1-pro-preview'
-    GEMINI_3_1_PRO_PREVIEW_CUSTOMTOOLS = 'gemini-3.1-pro-preview-customtools'
-    GEMINI_3_1_FLASH_LITE_PREVIEW = 'gemini-3.1-flash-lite-preview'
-    GEMMA_3_12B_IT = 'gemma-3-12b-it'
-    GEMMA_3_1B_IT = 'gemma-3-1b-it'
-    GEMMA_3_27B_IT = 'gemma-3-27b-it'
-    GEMMA_3_4B_IT = 'gemma-3-4b-it'
-    GEMMA_3N_E4B_IT = 'gemma-3n-e4b-it'
-    GEMMA_4_26B_A4B_IT = 'gemma-4-26b-a4b-it'
-    GEMMA_4_31B_IT = 'gemma-4-31b-it'
-
-
-# Quote autocomplete needs a Literal. The version enums above and the
-# ``_add_model`` names below are the catalog; a test requires each family
-# Literal to equal that catalog filtered by family.
+# Quote autocomplete needs a Literal, so these aliases are the model-id
+# catalog. Constructors take ``Known* | str``: listed ids autocomplete,
+# and an id Google ships after this release still type-checks and routes.
 KnownGemini: TypeAlias = Literal[
     'gemini-2.5-flash',
     'gemini-2.5-pro',
@@ -1157,7 +1088,7 @@ def resolve_vertex_model_name(client: genai.Client, name: str) -> str:
     return f'projects/{project}/locations/{location}/{name}'
 
 
-def get_model_config_schema(name: str) -> type[GeminiConfigSchema]:
+def get_model_config_schema(name: str) -> type[GeminiConfig]:
     """Get the appropriate config schema for a dynamically discovered model.
 
     Different model types (TTS, image, Gemma, standard) have different
@@ -1169,18 +1100,18 @@ def get_model_config_schema(name: str) -> type[GeminiConfigSchema]:
 
     Returns:
         The appropriate config schema class:
-        - GeminiTtsConfigSchema for TTS models
-        - GeminiImageConfigSchema for image models
-        - GemmaConfigSchema for Gemma models
-        - GeminiConfigSchema for standard Gemini models
+        - GeminiTtsConfig for TTS models
+        - GeminiImageConfig for image models
+        - GemmaConfig for Gemma models
+        - GeminiConfig for standard Gemini models
     """
     if is_tts_model(name):
-        return GeminiTtsConfigSchema
+        return GeminiTtsConfig
     if is_image_model(name):
-        return GeminiImageConfigSchema
+        return GeminiImageConfig
     if is_gemma_model(name):
-        return GemmaConfigSchema
-    return GeminiConfigSchema
+        return GemmaConfig
+    return GeminiConfig
 
 
 def google_model_info(
@@ -1242,7 +1173,7 @@ class GeminiModel:
 
     def __init__(
         self,
-        version: str | GoogleAIGeminiVersion | VertexAIGeminiVersion,
+        version: str,
         client: genai.Client,
         client_kwargs: dict[str, Any] | None = None,
         base_url_pinned: bool = False,
@@ -1979,12 +1910,12 @@ class GeminiModel:
 
     def _normalize_config_to_dict(
         self,
-        config: GeminiConfigSchema | None,
+        config: GeminiConfig | None,
     ) -> dict[str, Any] | None:
         """Dump a typed family config to a snake_case dict for the SDK."""
         return dump_family_config(
             config=config,
-            expected_type=GeminiConfigSchema,
+            expected_type=GeminiConfig,
             action_name=self._version,
         )
 

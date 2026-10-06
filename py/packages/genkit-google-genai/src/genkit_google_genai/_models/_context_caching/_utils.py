@@ -24,7 +24,7 @@ from google.genai import types as genai_types
 
 from genkit import GenkitError
 from genkit.model import ModelRequest
-from genkit_google_genai.models.context_caching.constants import (
+from genkit_google_genai._models._context_caching._constants import (
     CONTEXT_CACHE_SUPPORTED_MODELS,
     INVALID_ARGUMENT_MESSAGES,
 )

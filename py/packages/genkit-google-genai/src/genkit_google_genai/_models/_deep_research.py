@@ -26,20 +26,19 @@ from pydantic.alias_generators import to_camel
 from genkit import ActionRunContext, Operation
 from genkit.model import BackgroundAction, ModelRef, ModelRequest, model_ref
 from genkit.plugin_api import Action, ActionKind, to_json_schema
-from genkit_google_genai._interactions.client import (
+from genkit_google_genai._interactions._client import (
     cancel_interaction,
     create_interaction,
     get_interaction,
 )
-from genkit_google_genai._interactions.converters import (
+from genkit_google_genai._interactions._converters import (
     clean_schema,
     from_interaction,
     to_interaction_tool,
 )
-from genkit_google_genai._interactions.options import ClientOptions
-from genkit_google_genai.models._secrets import reject_request_config_api_key
-from genkit_google_genai.models.interactions_registry import deep_research_model_info
-from genkit_google_genai.models.interactions_utils import (
+from genkit_google_genai._interactions._options import ClientOptions
+from genkit_google_genai._models._interactions_registry import deep_research_model_info
+from genkit_google_genai._models._interactions_utils import (
     api_key_for_context,
     client_overrides_from_config,
     extract_version,
@@ -49,6 +48,7 @@ from genkit_google_genai.models.interactions_utils import (
     remove_client_option_overrides,
     steps_with_folded_system_instruction,
 )
+from genkit_google_genai._models._secrets import reject_request_config_api_key
 
 AGENT_CONFIG_KEYS = (
     'thinking_summaries',

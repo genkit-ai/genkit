@@ -23,13 +23,13 @@ Research, and Antigravity closed; Google AI routes those families through
 Interactions.
 """
 
-from genkit_google_genai.models.gemini import (
+from genkit_google_genai._models._gemini import (
     is_gemma_model,
     is_image_model,
     is_tts_model,
 )
-from genkit_google_genai.models.lyria import is_lyria_model
-from genkit_google_genai.models.veo import is_veo_model
+from genkit_google_genai._models._lyria import is_lyria_model
+from genkit_google_genai._models._veo import is_veo_model
 
 # Prefixes people paste from action keys, Dev UI traces, or another plugin's
 # samples. Stripping them first means the constructor decides the namespace,

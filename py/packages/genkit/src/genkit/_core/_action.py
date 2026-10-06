@@ -20,10 +20,23 @@ import asyncio
 import inspect
 import json
 import re
+import sys
 import time
+import types
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextvars import ContextVar
-from typing import Any, ClassVar, Generic, NamedTuple, cast, get_type_hints
+from dataclasses import dataclass
+from typing import (
+    Any,
+    ClassVar,
+    Generic,
+    NamedTuple,
+    Union,
+    cast,
+    get_args,
+    get_origin,
+    get_type_hints,
+)
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from pydantic.alias_generators import to_camel
@@ -226,102 +239,284 @@ def parse_plugin_name_from_action_name(name: str) -> str | None:
     return None
 
 
-def extract_action_args_and_types(
-    input_spec: inspect.FullArgSpec,
-    annotations: Mapping[str, Any] | None = None,
-) -> tuple[list[str], list[Any]]:
-    """Extract argument names and types from a function spec."""
-    arg_types = []
-    action_args = input_spec.args.copy()
-    resolved_annotations = annotations or input_spec.annotations
+# =============================================================================
+# Reading an action's signature
+#
+# An action function takes at most one input and at most one run context, in
+# either order:
+#
+#   async def lookup(order: Order, ctx: ActionRunContext) -> Receipt: ...
+#   async def lookup(ctx: ActionRunContext, order: Order) -> Receipt: ...  # same
+#   async def ping(ctx: ActionRunContext) -> str: ...                      # no input
+#
+# Rules for the function:
+#   - The context is the parameter annotated ActionRunContext or a subclass
+#     (ToolRunContext, ...).
+#   - Any other parameter is the input, so there's only one. Put more fields
+#     on one input model.
+#   - Input and return types need a JSON schema: a Pydantic model, dataclass,
+#     TypedDict, or a basic type like str, int, list or dict.
+#   - A default on the input lets the action run with no input.
+#
+# Breaking a rule raises TypeError when the action is defined.
+# =============================================================================
 
-    # Special case when using a method as an action, we ignore first "self"
-    # arg. (Note: The original condition `len(action_args) <= 3` is preserved
-    # from the source snippet).
-    if len(action_args) > 0 and len(action_args) <= 3 and action_args[0] == 'self':
-        del action_args[0]
+_CallT = TypeVar('_CallT')
 
-    for arg in action_args:
-        arg_types.append(resolved_annotations.get(arg, Any))
 
-    return action_args, arg_types
+@dataclass(frozen=True, slots=True)
+class ActionParams:
+    """An action function's input and run-context parameters, either may be absent."""
+
+    input: inspect.Parameter | None
+    context: inspect.Parameter | None
+
+    @property
+    def input_optional(self) -> bool:
+        """True if the input has a default, so the action can run without one."""
+        return self.input is not None and self.input.default is not inspect.Parameter.empty
+
+    def call(self, fn: Callable[..., _CallT], input: object, ctx: 'ActionRunContext') -> _CallT:  # noqa: A002
+        """Call ``fn`` with ``input`` and ``ctx`` passed by parameter name.
+
+        A missing input is left out when the parameter has a default, so the
+        default applies.
+        """
+        kwargs: dict[str, object] = {}
+        if self.input is not None and not (input is None and self.input_optional):
+            kwargs[self.input.name] = input
+        if self.context is not None:
+            kwargs[self.context.name] = ctx
+        return fn(**kwargs)
+
+
+def _kind_label(kind: ActionKind) -> str:
+    """The action kind as error messages say it."""
+    # ActionKind.TOOL is 'tool.v2' (the catalog key); people call it a tool.
+    return 'tool' if kind == ActionKind.TOOL else str(kind)
+
+
+def describe_action(kind: ActionKind, name: str) -> str:
+    """How error messages name an action, e.g. ``"tool 'weather'"``."""
+    return f"{_kind_label(kind)} '{name}'"
 
 
 def find_input_and_context(
-    func: Callable[..., object],
+    fn: Callable[..., object],
     hints: Mapping[str, Any],
     *,
-    context_type: type,
-    owner: str,
-) -> tuple[inspect.Parameter | None, str | None]:
-    """Split ``func``'s parameters into its one input and its context parameter.
+    kind: ActionKind,
+    name: str,
+) -> ActionParams:
+    """Find ``fn``'s input and run-context parameters, or raise a TypeError saying how to fix it.
 
-    The context is whichever parameter is annotated ``context_type``, in any
-    position, so reordering parameters never changes what they receive. Callers,
-    the model, and the Dev UI all send one input, so any other parameter is a
-    definition error that says how to fix it.
-
-    The input's type is the schema the model and Dev UI are shown, so it has to
-    be annotated with a type that has a JSON schema. ``Any`` opts into accepting
-    anything.
+    ``hints`` is ``resolve_type_hints(fn)``. ``*args`` and ``**kwargs`` are ignored.
     """
-    context_name = context_type.__name__
-    input_param: inspect.Parameter | None = None
-    context_param: str | None = None
-    for param in inspect.signature(func).parameters.values():
-        if param.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
-            continue
-        annotation = hints.get(param.name, param.annotation)
-        # a postponed annotation that couldn't be resolved is still the bare name
-        if annotation is context_type or annotation == context_name:
-            if context_param is not None:
-                raise TypeError(
-                    f"{owner} has two {context_name} parameters, '{context_param}' and '{param.name}'. Keep one."
-                )
-            context_param = param.name
-        elif input_param is None:
-            input_param = param
-        else:
+    owner = describe_action(kind, name)
+    context_class = 'ToolRunContext' if kind == ActionKind.TOOL else 'ActionRunContext'
+
+    params = [
+        p
+        for p in signature_of(fn).parameters.values()
+        if p.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+    ]
+
+    for p in params:
+        if p.kind is inspect.Parameter.POSITIONAL_ONLY:
             raise TypeError(
-                f"{owner} takes one input, but '{param.name}' is a second parameter. "
-                f"Put the fields on one input model, or annotate '{param.name}' as {context_name}."
+                f"{owner} parameter '{p.name}' is positional-only, but Genkit passes the input "
+                "and context by name. Remove the '/' from the signature."
             )
-    if input_param is not None:
-        input_type = hints.get(input_param.name, input_param.annotation)
-        if input_type is inspect.Parameter.empty:
-            # an unannotated input would show the model a tool with no fields
+
+    contexts: list[inspect.Parameter] = []
+    inputs: list[inspect.Parameter] = []
+    for p in params:
+        if _is_context_annotation(hints.get(p.name, p.annotation)):
+            contexts.append(p)
+        else:
+            inputs.append(p)
+
+    if len(contexts) > 1:
+        first, second = contexts[0].name, contexts[1].name
+        raise TypeError(f"{owner} has two {context_class} parameters, '{first}' and '{second}'. Keep one.")
+    if len(inputs) > 1:
+        extra = inputs[1].name
+        raise TypeError(
+            f"{owner} takes one input, but '{extra}' is a second parameter. "
+            f"Put the fields on one input model, or annotate '{extra}' as {context_class}."
+        )
+
+    input_param = inputs[0] if inputs else None
+    context_param = contexts[0] if contexts else None
+
+    # A tool's input type is the schema the model sees, and a flow's is its
+    # public API, so those need one. Other actions (models, embedders, ...)
+    # get a fixed input from Genkit and may leave it unannotated.
+    if kind in (ActionKind.TOOL, ActionKind.FLOW) and input_param is not None:
+        if hints.get(input_param.name, input_param.annotation) is inspect.Parameter.empty:
             raise TypeError(
                 f"{owner} input '{input_param.name}' has no type annotation. "
                 f"Annotate it (e.g. '{input_param.name}: str'), or use Any to accept anything."
             )
-        type_name = getattr(input_type, '__name__', repr(input_type))
-        try:
-            TypeAdapter(input_type).json_schema()
-        except (PydanticSchemaGenerationError, PydanticInvalidForJsonSchema) as e:
-            raise TypeError(
-                f"{owner} input '{input_param.name}' has type {type_name}, which has no JSON schema. "
-                'Use a Pydantic model, dataclass, TypedDict, or a basic type like str, int, list, or dict.'
-            ) from e
-        except PydanticUserError as e:
-            # e.g. typing.TypedDict on Python < 3.12; keep Pydantic's fix in the message
-            raise TypeError(f"{owner} input '{input_param.name}' has type {type_name}: {e.message}") from e
-    return input_param, context_param
+
+    return ActionParams(input=input_param, context=context_param)
 
 
-def _first_action_arg_has_default(input_spec: inspect.FullArgSpec, n_action_args: int) -> bool:
-    """Return True if the action's first user-facing arg has a Python default.
+def json_schema_for(
+    annotation: object,
+    *,
+    kind: ActionKind,
+    name: str,
+    label: str,
+) -> tuple[TypeAdapter[Any], dict[str, object]]:
+    """A validator and JSON schema for an action's input or output type.
 
-    Lets `@ai.flow() async def f(name: str = 'world')` be called as `await f()`
-    without forcing the caller to pass `None` explicitly. The default makes the
-    input semantically optional from the function's perspective; we honour that
-    when dispatching.
+    ``label`` says which one, e.g. ``"input 'query'"`` or ``'output'``.
+    Pydantic's own errors here name neither the action nor the fix, so each
+    one is re-raised as a TypeError that does.
     """
-    if n_action_args == 0:
-        return False
-    # FullArgSpec.defaults applies to the *trailing* positional args, so the
-    # first positional has a default iff defaults covers every positional arg.
-    defaults = input_spec.defaults or ()
-    return len(defaults) >= n_action_args
+    owner = describe_action(kind, name)
+    # A generic's __name__ is the origin (list), so list[Thermometer]
+    # would show up in the error as "list". get_origin also catches 3.10,
+    # where isinstance(list[X], type) is True.
+    is_generic = get_origin(annotation) is not None
+    type_name = annotation.__name__ if isinstance(annotation, type) and not is_generic else repr(annotation)
+    try:
+        adapter: TypeAdapter[Any] = TypeAdapter(annotation)
+        return adapter, adapter.json_schema()
+    except (PydanticSchemaGenerationError, PydanticInvalidForJsonSchema) as e:
+        # e.g. `-> Thermometer`, where Thermometer is a plain class
+        raise TypeError(
+            f'{owner} {label} has type {type_name}, which has no JSON schema. '
+            'Use a Pydantic model, dataclass, TypedDict, or a basic type like str, int, list, or dict.'
+        ) from e
+    except PydanticUserError as e:
+        if isinstance(annotation, str):
+            # resolve_type_hints couldn't find this name, so it's still a
+            # string. Usually the file has `from __future__ import annotations`
+            # and the type is a class defined inside a function, or imported
+            # only under `if TYPE_CHECKING:`.
+            raise TypeError(
+                f"{owner} {label} has type '{annotation}', which can't be found "
+                f'when the {_kind_label(kind)} is defined. Define or import it at module level (outside '
+                "'if TYPE_CHECKING:'), or remove 'from __future__ import annotations' from this file."
+            ) from e
+        # e.g. typing.TypedDict on Python < 3.12; keep Pydantic's fix in the message
+        raise TypeError(f'{owner} {label} has type {type_name}: {e.message}') from e
+
+
+# -----------------------------------------------------------------------------
+# Annotations
+#
+# A name in an annotation can be missing at runtime: imported only under
+# `if TYPE_CHECKING:` (Ruff's TC rules do this), or a class defined inside a
+# function in a file with `from __future__ import annotations`. These helpers
+# keep such a name as a string instead of failing, so the rest still resolves.
+# -----------------------------------------------------------------------------
+
+
+def signature_of(fn: Callable[..., object]) -> inspect.Signature:
+    """``inspect.signature(fn)``, without failing on a name missing at runtime.
+
+    From Python 3.14 annotations are evaluated when read, so a plain
+    ``inspect.signature`` raises on a TYPE_CHECKING-only ``ctx: ToolRunContext``.
+    """
+    if sys.version_info >= (3, 14):
+        import annotationlib
+
+        return inspect.signature(fn, annotation_format=annotationlib.Format.FORWARDREF)
+    return inspect.signature(fn)
+
+
+def resolve_type_hints(fn: Callable[..., object]) -> dict[str, Any]:
+    """``fn``'s annotations as types. A name that can't be found stays a string.
+
+    ``get_type_hints`` fails outright if any one name is missing, so then each
+    annotation is resolved on its own. A missing context class doesn't also
+    hide the input model.
+    """
+    try:
+        return get_type_hints(fn)
+    except Exception:
+        module_globals = getattr(inspect.unwrap(fn), '__globals__', {})
+        return {name: _resolve_one(a, module_globals) for name, a in _annotations_as_written(fn).items()}
+
+
+def _annotations_as_written(fn: Callable[..., object]) -> dict[str, Any]:
+    """``fn``'s annotations without evaluating them; a missing name is a string."""
+    if sys.version_info >= (3, 14):
+        import annotationlib
+
+        annotations = annotationlib.get_annotations(fn, format=annotationlib.Format.FORWARDREF)
+        return {
+            name: a.__forward_arg__ if isinstance(a, annotationlib.ForwardRef) else a for name, a in annotations.items()
+        }
+    return dict(inspect.getfullargspec(fn).annotations)
+
+
+# Code object of an empty function, for _resolve_one.
+_EMPTY_FUNCTION_CODE = (lambda: None).__code__
+
+
+def _resolve_one(annotation: object, module_globals: dict[str, Any]) -> object:
+    """Resolve one annotation the way ``get_type_hints`` would, or return it unchanged."""
+    # get_type_hints takes a function, so give it an empty one in fn's module
+    # whose only annotation is this one.
+    stand_in = types.FunctionType(_EMPTY_FUNCTION_CODE, module_globals)
+    stand_in.__annotations__ = {'x': annotation}
+    try:
+        return get_type_hints(stand_in)['x']
+    except Exception:
+        return annotation
+
+
+def _is_context_annotation(annotation: object) -> bool:
+    """True if ``annotation`` marks the run-context parameter.
+
+    That's ActionRunContext or any subclass, written any of these ways:
+    ``ToolRunContext``, ``ActionRunContext[str]``, ``ToolRunContext | None``,
+    or as a string (see _string_names_context).
+    """
+    # On 3.14 a name missing at runtime is a ForwardRef; use its text.
+    forward_arg = getattr(annotation, '__forward_arg__', None)
+    if isinstance(forward_arg, str):
+        annotation = forward_arg
+    if isinstance(annotation, str):
+        return _string_names_context(annotation)
+
+    origin = get_origin(annotation)
+    if origin is Union or origin is types.UnionType:
+        return any(_is_context_annotation(arg) for arg in get_args(annotation))
+    # ActionRunContext[str] -> ActionRunContext
+    cls = origin if origin is not None else annotation
+    return isinstance(cls, type) and issubclass(cls, ActionRunContext)
+
+
+def _string_names_context(annotation: str) -> bool:
+    """True if a string annotation names a run-context class.
+
+    'ToolRunContext', 'ToolRunContext | None', 'Optional[ToolRunContext]',
+    'ActionRunContext[str]' and 'genkit.ToolRunContext' all do.
+    """
+    # The annotation couldn't be resolved to a class, so match by name against
+    # ActionRunContext and every subclass defined so far (ToolRunContext, ...).
+    context_names: set[str] = set()
+    classes: list[type] = [ActionRunContext]
+    while classes:
+        cls = classes.pop()
+        context_names.add(cls.__name__)
+        classes.extend(cls.__subclasses__())
+
+    for part in annotation.split('|'):
+        name = part.strip().strip('\'"')
+        for prefix in ('Optional[', 'typing.Optional['):
+            if name.startswith(prefix) and name.endswith(']'):
+                name = name[len(prefix) : -1].strip()  # Optional[X] -> X
+        name = name.split('[', 1)[0]  # ActionRunContext[str] -> ActionRunContext
+        name = name.rsplit('.', 1)[-1]  # genkit.ToolRunContext -> ToolRunContext
+        if name in context_names:
+            return True
+    return False
 
 
 # =============================================================================
@@ -510,7 +705,6 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         span_metadata: dict[str, SpanAttributeValue] | None = None,
         init_schema: type[BaseModel] | dict[str, object] | None = None,
         config_schema: type[BaseModel] | dict[str, object] | None = None,
-        context_type: type | None = None,
     ) -> None:
         self._kind: ActionKind = kind
         self._name: str = name
@@ -527,36 +721,21 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         if not inspect.iscoroutinefunction(fn):
             raise TypeError(f"Action handlers must be async functions. Got sync function for '{name}'.")
 
-        signature_fn = metadata_fn if metadata_fn else fn
-        input_spec = inspect.getfullargspec(signature_fn)
-        try:
-            resolved_annotations = get_type_hints(signature_fn)
-        except (NameError, TypeError, AttributeError):
-            resolved_annotations = input_spec.annotations
-        # With a context_type, the context goes to the parameter annotated with
-        # it and the input to the other one, both by name.
-        self._by_annotation: bool = context_type is not None
-        self._context_param: str | None = None
-        if context_type is not None:
-            kind_label = 'tool' if kind == ActionKind.TOOL else str(kind)
-            input_param, self._context_param = find_input_and_context(
-                signature_fn, resolved_annotations, context_type=context_type, owner=f"{kind_label} '{name}'"
-            )
-            action_args = [input_param.name] if input_param else []
-            arg_types = [resolved_annotations.get(input_param.name, Any)] if input_param else []
-            first_arg_optional = input_param is not None and input_param.default is not inspect.Parameter.empty
-        else:
-            action_args, arg_types = extract_action_args_and_types(input_spec, resolved_annotations)
-            first_arg_optional = _first_action_arg_has_default(input_spec, len(action_args))
-        # Raw user fn; tracing/dispatch handled by _run_with_telemetry / _invoke.
+        # Genkit calls fn. With a metadata_fn, fn is a wrapper (the tool wrapper
+        # is one) and metadata_fn is the user's function, whose signature
+        # decides the input and context.
+        user_fn = metadata_fn if metadata_fn else fn
+        hints = resolve_type_hints(user_fn)
+        self._params: ActionParams = find_input_and_context(user_fn, hints, kind=kind, name=name)
         self._fn: Callable[..., Awaitable[OutputT]] = fn
-        self._n_action_args: int = len(action_args)
-        self._action_arg_names: list[str] = action_args
-        # When True, calling the action without an input is legal because the
-        # wrapped function will fall back to its own Python-level default.
-        self._first_arg_optional: bool = first_arg_optional
-        self._initialize_io_schemas(action_args, arg_types, resolved_annotations, input_spec)
+        self._fn_is_wrapper: bool = metadata_fn is not None
+        self._initialize_io_schemas(hints)
         self._initialize_init_schema(init_schema)
+
+    @property
+    def params(self) -> ActionParams:
+        """The function's input and context parameters, as Genkit passes them."""
+        return self._params
 
     @property
     def kind(self) -> ActionKind:
@@ -722,36 +901,27 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
 
         return StreamResponse(stream=channel, response=result_future)
 
-    def _initialize_io_schemas(
-        self,
-        action_args: list[str],
-        arg_types: list[type],
-        annotations: dict[str, Any],
-        _input_spec: inspect.FullArgSpec,
-    ) -> None:
-        # Allow up to 2 args: (input, ctx) - use ctx.send_chunk() for streaming
-        if len(action_args) > 2:
-            raise TypeError(f'can only have up to 2 args: {action_args}')
-
-        if len(action_args) > 0:
-            type_adapter = TypeAdapter(arg_types[0])
-            self._input_schema: dict[str, object] = type_adapter.json_schema()
+    def _initialize_io_schemas(self, annotations: dict[str, Any]) -> None:
+        if self._params.input is not None:
+            input_type = annotations.get(self._params.input.name, Any)
+            type_adapter, self._input_schema = json_schema_for(
+                input_type, kind=self._kind, name=self._name, label=f"input '{self._params.input.name}'"
+            )
             self._input_type: TypeAdapter[InputT] | None = cast(TypeAdapter[InputT], type_adapter)
-            self._input_class: type | None = arg_types[0] if isinstance(arg_types[0], type) else None
-            self._metadata[ActionMetadataKey.INPUT_KEY] = self._input_schema
+            self._input_class: type | None = input_type if isinstance(input_type, type) else None
         else:
             self._input_schema = TypeAdapter(object).json_schema()
             self._input_type = None
             self._input_class = None
-            self._metadata[ActionMetadataKey.INPUT_KEY] = self._input_schema
+        self._metadata[ActionMetadataKey.INPUT_KEY] = self._input_schema
 
         if ActionMetadataKey.RETURN in annotations:
-            type_adapter = TypeAdapter(annotations[ActionMetadataKey.RETURN])
-            self._output_schema: dict[str, object] = type_adapter.json_schema()
-            self._metadata[ActionMetadataKey.OUTPUT_KEY] = self._output_schema
+            _, self._output_schema = json_schema_for(
+                annotations[ActionMetadataKey.RETURN], kind=self._kind, name=self._name, label='output'
+            )
         else:
             self._output_schema = TypeAdapter(object).json_schema()
-            self._metadata[ActionMetadataKey.OUTPUT_KEY] = self._output_schema
+        self._metadata[ActionMetadataKey.OUTPUT_KEY] = self._output_schema
 
     def _initialize_init_schema(
         self,
@@ -806,9 +976,9 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         if self._input_type is None:
             return input
         # Skip validation when the caller passed nothing AND the wrapped
-        # function declares a Python default for its first arg — that's the
+        # function declares a Python default for its input — that's the
         # signal that "no input" is a legitimate way to invoke this action.
-        if input is None and self._first_arg_optional:
+        if input is None and self._params.input_optional:
             return input
         payload: object = input
         # A differently-typed ModelRequest with a mapping config is dumped and
@@ -933,34 +1103,14 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             ) from e
 
     async def _invoke(self, input: object | None, ctx: ActionRunContext) -> OutputT:
-        """Dispatch ``self._fn`` based on its declared arity (0/1/2 args)."""
-        # When the caller passed no input and the function's first arg has a
-        # Python default, dispatch *without* the input so the default applies.
-        # The 2-arg form passes ctx by keyword (using the user's actual
-        # parameter name) so the defaulted first arg isn't accidentally
-        # supplanted by a positional.
-        omit_input = input is None and self._first_arg_optional
-        if self._by_annotation:
-            kwargs: dict[str, object] = {}
-            if self._action_arg_names and not omit_input:
-                kwargs[self._action_arg_names[0]] = input
-            if self._context_param is not None:
-                kwargs[self._context_param] = ctx
-            return await self._fn(**kwargs)
-        match self._n_action_args:
-            case 0:
-                return await self._fn()
-            case 1:
-                if omit_input:
-                    return await self._fn()
-                return await self._fn(input)
-            case 2:
-                if omit_input:
-                    ctx_param_name = self._action_arg_names[1]
-                    return await self._fn(**{ctx_param_name: ctx})
-                return await self._fn(input, ctx)
-            case _:
-                raise ValueError('action fn must have 0-2 args')
+        """Call ``self._fn`` with the input and context."""
+        if self._fn_is_wrapper:
+            # The wrapper takes (input, ctx) and forwards to the user's
+            # function with self.params.call.
+            output = await self._fn(input, ctx)
+        else:
+            output = await self._params.call(self._fn, input, ctx)
+        return output
 
 
 async def single_item_stream(item: InputT) -> AsyncIterator[InputT]:

@@ -22,7 +22,7 @@ from functools import reduce
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from genkit_openai.models import OpenAIModel
+from genkit_openai._models import OpenAIModel
 from openai.types.chat import ChatCompletion
 
 from genkit import ModelResponseChunk
