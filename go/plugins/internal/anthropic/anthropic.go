@@ -234,7 +234,7 @@ func Generate(
 			return nil, WrapAPIError(err)
 		}
 
-		r, err := toGenkitResponse(msg)
+		r, err := toGenkitResponse(msg, thinkingTokens(msg.Usage.JSON.ExtraFields["output_tokens_details"]))
 		if err != nil {
 			return nil, err
 		}
@@ -284,13 +284,13 @@ func Generate(
 					}
 				}
 			case anthropic.MessageDeltaEvent:
-				thinking = applyDeltaUsage(&message.Usage, event.Usage)
+				applyDeltaUsage(&message.Usage, event.Usage)
+				thinking = thinkingTokens(event.Usage.JSON.ExtraFields["output_tokens_details"])
 			case anthropic.MessageStopEvent:
-				r, err := toGenkitResponse(&message)
+				r, err := toGenkitResponse(&message, thinking)
 				if err != nil {
 					return nil, err
 				}
-				r.Usage = toGenkitUsage(message.Usage, thinking)
 				r.Request = input
 				return r, nil
 			}
@@ -614,8 +614,9 @@ func toAnthropicToolResultContent(p *ai.Part) (anthropic.ToolResultBlockParamCon
 		"unsupported part in tool response content: Anthropic tool results accept text, image, and document parts")
 }
 
-// toGenkitResponse translates an Anthropic Message to [ai.ModelResponse]
-func toGenkitResponse(m *anthropic.Message) (*ai.ModelResponse, error) {
+// toGenkitResponse translates an Anthropic Message, and the thinking token
+// count reported beside it, to [ai.ModelResponse].
+func toGenkitResponse(m *anthropic.Message, thinking int64) (*ai.ModelResponse, error) {
 	r := ai.ModelResponse{}
 
 	switch m.StopReason {
@@ -654,7 +655,7 @@ func toGenkitResponse(m *anthropic.Message) (*ai.ModelResponse, error) {
 
 	r.Message = msg
 	r.Raw = m.JSON
-	r.Usage = toGenkitUsage(m.Usage, thinkingTokens(m.Usage.JSON.ExtraFields["output_tokens_details"]))
+	r.Usage = toGenkitUsage(m.Usage, thinking)
 	return &r, nil
 }
 
@@ -696,7 +697,8 @@ func toGenkitUsage(u anthropic.Usage, thinking int64) *ai.GenerationUsage {
 }
 
 // thinkingTokens reads output_tokens_details.thinking_tokens, which the SDK
-// does not model, returning zero when the field is absent.
+// models only from v1.62.0, returning zero when the field is absent. Once the
+// SDK is bumped, Usage.OutputTokensDetails replaces it.
 func thinkingTokens(details respjson.Field) int64 {
 	var d struct {
 		ThinkingTokens int64 `json:"thinking_tokens"`
@@ -708,11 +710,11 @@ func thinkingTokens(details respjson.Field) int64 {
 }
 
 // applyDeltaUsage folds a message_delta's usage into the usage that
-// message_start reported, and returns the thinking token count. The delta's
-// counts are cumulative and final, and server tools can raise the input
-// counts after the start, but the SDK's accumulator keeps only output_tokens.
-// A count the delta leaves out keeps its value from the start.
-func applyDeltaUsage(u *anthropic.Usage, d anthropic.MessageDeltaUsage) int64 {
+// message_start reported. The delta's counts are cumulative and final, and
+// server tools can raise the input counts after the start, but the SDK's
+// accumulator keeps only output_tokens before v1.62.0. A count the delta
+// leaves out keeps its value from the start.
+func applyDeltaUsage(u *anthropic.Usage, d anthropic.MessageDeltaUsage) {
 	u.OutputTokens = d.OutputTokens
 	if d.JSON.InputTokens.Valid() {
 		u.InputTokens = d.InputTokens
@@ -726,5 +728,4 @@ func applyDeltaUsage(u *anthropic.Usage, d anthropic.MessageDeltaUsage) int64 {
 	if d.JSON.ServerToolUse.Valid() {
 		u.ServerToolUse = d.ServerToolUse
 	}
-	return thinkingTokens(d.JSON.ExtraFields["output_tokens_details"])
 }

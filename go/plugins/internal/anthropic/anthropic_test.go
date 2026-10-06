@@ -20,7 +20,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -1001,7 +1000,6 @@ func checkError(t *testing.T, err error, expectedErr string) bool {
 // final counts arrive on message_delta, of which the SDK's accumulator keeps
 // only output_tokens, so the stream case pins that the rest is not lost.
 func TestGenerateReportsUsage(t *testing.T) {
-	const message = `{"id":"msg_1","type":"message","role":"assistant","model":"claude-haiku-4-5","content":[{"type":"text","text":"0.05"}],"stop_reason":"end_turn","usage":%s}`
 	for _, tc := range []struct {
 		name   string
 		stream bool
@@ -1010,7 +1008,7 @@ func TestGenerateReportsUsage(t *testing.T) {
 	}{
 		{
 			name: "cache write",
-			body: fmt.Sprintf(message, `{"input_tokens":75,"cache_creation_input_tokens":12608,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":12608,"ephemeral_1h_input_tokens":0},"output_tokens":214,"output_tokens_details":{"thinking_tokens":206},"service_tier":"standard"}`),
+			body: `{"id":"msg_1","type":"message","role":"assistant","model":"claude-haiku-4-5","content":[{"type":"text","text":"0.05"}],"stop_reason":"end_turn","usage":{"input_tokens":75,"cache_creation_input_tokens":12608,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":12608,"ephemeral_1h_input_tokens":0},"output_tokens":214,"output_tokens_details":{"thinking_tokens":206},"service_tier":"standard"}}`,
 			want: &ai.GenerationUsage{
 				InputTokens:      12683,
 				CacheWriteTokens: 12608,
