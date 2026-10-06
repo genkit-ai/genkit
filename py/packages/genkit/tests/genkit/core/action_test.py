@@ -293,6 +293,29 @@ async def test_run_raises_on_none_input_when_input_required() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('kind', 'want'),
+    [
+        pytest.param(ActionKind.FLOW, "Invalid input for flow 'lookup'", id='flow'),
+        pytest.param(ActionKind.TOOL, "Invalid input for tool 'lookup'", id='tool.v2 reads as tool'),
+        pytest.param(ActionKind.BACKGROUND_MODEL, "Invalid input for background model 'lookup'", id='hyphen'),
+    ],
+)
+async def test_invalid_input_error_names_the_action_kind(kind: ActionKind, want: str) -> None:
+    """The error says `flow` / `tool` / `background model`, the word the caller defined it with."""
+
+    async def lookup(order_id: int) -> int:
+        return order_id
+
+    action = Action(name='lookup', kind=kind, fn=lookup)
+
+    with pytest.raises(GenkitError) as e:
+        await action.run(input='abc')
+
+    assert e.value.original_message == want
+
+
+@pytest.mark.asyncio
 async def test_run_succeeds_with_valid_input() -> None:
     """run() succeeds when valid input is provided."""
 

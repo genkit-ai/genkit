@@ -521,7 +521,7 @@ def test_genkit_error_wrapping_validation_error_shows_the_short_form_once() -> N
     """`GenkitError(cause=ValidationError)` reads `status: message: <short form>`, not Pydantic's dump."""
     cause = _validation_error(_Item, {'dish': 'pad thai'})
 
-    error = GenkitError(status='INVALID_ARGUMENT', message="Invalid input for action 'order'", cause=cause)
+    error = GenkitError(status='INVALID_ARGUMENT', message="Invalid input for flow 'order'", cause=cause)
 
-    assert str(error) == "INVALID_ARGUMENT: Invalid input for action 'order': qty: Field required"
+    assert str(error) == "INVALID_ARGUMENT: Invalid input for flow 'order': qty: Field required"
     assert error.cause is cause

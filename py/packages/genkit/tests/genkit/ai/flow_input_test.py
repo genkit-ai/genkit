@@ -76,7 +76,7 @@ async def test_await_flow_with_explicit_none_and_str_default_raises_invalid_argu
         await greet(None)
 
     assert exc.value.status == 'INVALID_ARGUMENT'
-    assert "Invalid input for action 'greet'" in str(exc.value)
+    assert "Invalid input for flow 'greet'" in str(exc.value)
 
 
 @pytest.mark.asyncio
@@ -120,7 +120,7 @@ async def test_await_flow_with_no_input_and_no_default_raises_input_required() -
         await greet()
 
     assert exc.value.status == 'INVALID_ARGUMENT'
-    assert "Action 'greet' requires input but none was provided" in str(exc.value)
+    assert "Flow 'greet' requires input but none was provided" in str(exc.value)
 
 
 class Item(BaseModel):
@@ -139,13 +139,13 @@ class Order(BaseModel):
     [
         pytest.param(
             None,
-            "INVALID_ARGUMENT: Invalid input for action 'place': "
+            "INVALID_ARGUMENT: Invalid input for flow 'place': "
             'Input should be a valid dictionary or instance of Order, got None',
             id='None',
         ),
         pytest.param(
             {'table': 4, 'items': [{'dish': 'pad thai'}]},
-            "INVALID_ARGUMENT: Invalid input for action 'place': items[0].qty: Field required",
+            "INVALID_ARGUMENT: Invalid input for flow 'place': items[0].qty: Field required",
             id='nested field missing',
         ),
     ],
@@ -176,7 +176,7 @@ async def test_flow_with_no_input_and_required_model_says_input_is_required() ->
     with pytest.raises(GenkitError) as exc:
         await place()
 
-    assert str(exc.value) == "INVALID_ARGUMENT: Action 'place' requires input but none was provided."
+    assert str(exc.value) == "INVALID_ARGUMENT: Flow 'place' requires input but none was provided."
 
 
 @pytest.mark.asyncio

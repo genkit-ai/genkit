@@ -715,6 +715,11 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         else:
             self._init_type = cast(TypeAdapter[InitT], TypeAdapter(init_schema))
 
+    @property
+    def _kind_label(self) -> str:
+        """What the caller calls this action in an error: `flow`, `model`, `tool`, `background model`."""
+        return str(self._kind).split('.')[0].replace('-', ' ')
+
     def _validate_init(self, init: InitT | None) -> InitT | None:
         """Validate per-run ``init`` against the init schema when one is registered.
 
@@ -730,14 +735,12 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         except ValidationError as e:
             if init is None:
                 raise GenkitError(
-                    message=(
-                        f"Action '{self.name}' requires init but none was provided. Please supply a valid init payload."
-                    ),
+                    message=(f"{self._kind_label.capitalize()} '{self.name}' requires init but none was provided."),
                     status='INVALID_ARGUMENT',
                     reason=RuntimeErrorReason.INVALID_INPUT,
                 ) from e
             raise GenkitError(
-                message=f"Invalid init for action '{self.name}'",
+                message=f"Invalid init for {self._kind_label} '{self.name}'",
                 status='INVALID_ARGUMENT',
                 cause=e,
                 reason=RuntimeErrorReason.INVALID_INPUT,
@@ -766,7 +769,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
                     want = config_type_path(expected) if isinstance(expected, type) else 'the plugin config class'
                     raise GenkitError(
                         message=(
-                            f"Invalid input for action '{self.name}': "
+                            f"Invalid input for {self._kind_label} '{self.name}': "
                             f'config must be {want} or a mapping, '
                             f'got {config_type_path(type(config))}'
                         ),
@@ -779,9 +782,9 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             return self._input_type.validate_python(payload)
         except ValidationError as e:
             msg = (
-                f"Action '{self.name}' requires input but none was provided."
+                f"{self._kind_label.capitalize()} '{self.name}' requires input but none was provided."
                 if omitted
-                else f"Invalid input for action '{self.name}'"
+                else f"Invalid input for {self._kind_label} '{self.name}'"
             )
             raise GenkitError(
                 message=msg,
