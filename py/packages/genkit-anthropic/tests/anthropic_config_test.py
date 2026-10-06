@@ -143,10 +143,15 @@ def test_beta_api_version_with_betas_valid() -> None:
     assert cfg.betas == ['token-efficient-tools-2025']
 
 
-def test_unknown_extras_survive_validate_dump() -> None:
-    cfg = AnthropicConfig.model_validate({'temperature': 0.5, 'foo_bar': 'baz'})
+def test_unknown_top_level_key_raises() -> None:
+    with pytest.raises(ValidationError, match='foo_bar'):
+        AnthropicConfig.model_validate({'temperature': 0.5, 'foo_bar': 'baz'})
+
+
+def test_extra_survives_validate_dump() -> None:
+    cfg = AnthropicConfig.model_validate({'temperature': 0.5, 'extra': {'foo_bar': 'baz'}})
     dumped = cfg.model_dump(exclude_none=True, by_alias=False)
-    assert dumped['foo_bar'] == 'baz'
+    assert dumped['extra'] == {'foo_bar': 'baz'}
 
 
 def test_base_max_output_tokens_alias() -> None:
@@ -225,16 +230,16 @@ def test_thinking_accepts_unambiguous_modes(raw: dict) -> None:
 @pytest.mark.parametrize(
     ('raw', 'expected'),
     [
-        ({'speed': 'fast'}, {'speed'}),
+        ({'extra': {'speed': 'fast'}}, {'speed'}),
         ({'betas': ['x']}, {'betas'}),
         # Setting a beta-only feature at all is intent, even when the value is empty.
-        ({'mcp_servers': []}, {'mcp_servers'}),
+        ({'extra': {'mcp_servers': []}}, {'mcp_servers'}),
         # An empty betas list requests no beta headers, so it does not select the surface.
         ({'betas': []}, set()),
         ({'output_config': {'task_budget': {'total': 20000}}}, {'output_config.task_budget'}),
         ({'output_config': {'effort': 'high'}}, set()),
         ({'temperature': 0.5}, set()),
-        ({'future_option': 'x'}, set()),
+        ({'extra': {'future_option': 'x'}}, set()),
     ],
 )
 def test_beta_only_fields_detection(raw: dict, expected: set[str]) -> None:
@@ -246,7 +251,7 @@ def test_beta_only_fields_detection(raw: dict, expected: set[str]) -> None:
     'raw',
     [
         {'apiVersion': 'stable', 'betas': ['x']},
-        {'apiVersion': 'stable', 'speed': 'fast'},
+        {'apiVersion': 'stable', 'extra': {'speed': 'fast'}},
         {'apiVersion': 'stable', 'output_config': {'task_budget': {'total': 20000}}},
     ],
 )
@@ -258,7 +263,11 @@ def test_beta_only_fields_rejected_on_stable_surface(raw: dict) -> None:
 
 @pytest.mark.parametrize(
     'raw',
-    [{'apiVersion': 'beta', 'speed': 'fast'}, {'speed': 'fast'}, {'apiVersion': 'stable', 'temperature': 0.5}],
+    [
+        {'apiVersion': 'beta', 'extra': {'speed': 'fast'}},
+        {'extra': {'speed': 'fast'}},
+        {'apiVersion': 'stable', 'temperature': 0.5},
+    ],
 )
 def test_beta_only_fields_allowed_without_explicit_stable(raw: dict) -> None:
     """Beta-only fields are accepted unless stable is explicitly requested."""

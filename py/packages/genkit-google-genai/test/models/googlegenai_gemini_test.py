@@ -1193,13 +1193,13 @@ def test_gemini_model__normalize_config_dumps_gemma_instance() -> None:
 
 
 @pytest.mark.asyncio
-async def test_gemini_model__unknown_extra_rides_on_extra_body(
+async def test_gemini_model__config_extra_rides_on_extra_body(
     gemini_model_instance: GeminiModel,
 ) -> None:
-    """Leftover keys ride on extra_body so a newly supported field still reaches the API."""
+    """`extra` rides on extra_body under its wire path so a newly supported field still reaches the API."""
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
-        config=GeminiConfig.model_validate({'temperature': 0.5, 'fooBar': 1}),
+        config=GeminiConfig.model_validate({'temperature': 0.5, 'extra': {'generationConfig': {'fooBar': 1}}}),
     )
 
     cfg = await gemini_model_instance._genkit_to_googleai_cfg(request)

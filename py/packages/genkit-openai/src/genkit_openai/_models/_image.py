@@ -29,7 +29,7 @@ from openai.types.images_response import ImagesResponse
 
 from genkit import ActionRunContext, FinishReason, Message, ModelResponse, Part, Role
 from genkit.model import ModelInfo, ModelRequest, Supports
-from genkit_openai._models._utils import _extract_text, extract_config_dict, reraise_openai_error
+from genkit_openai._models._utils import _extract_text, extract_config_dict, pop_extra_body, reraise_openai_error
 
 # GPT Image 1 has a different configuration surface from DALL-E models.
 _GPT_IMAGE_1_CONFIG_SCHEMA: dict[str, Any] = {
@@ -98,6 +98,7 @@ def _to_image_generate_params(
     """
     prompt = _extract_prompt_text(request)
     config = extract_config_dict(request)
+    extra_body = pop_extra_body(config, managed=('prompt',), label='openai image')
 
     # Start with required params.
     effective_model = config.pop('version', None) or model_name
@@ -119,6 +120,8 @@ def _to_image_generate_params(
 
     # Pass remaining config through (size, quality, style, n, etc.).
     params.update(config)
+    if extra_body:
+        params['extra_body'] = extra_body
 
     # Remove None values.
     return {k: v for k, v in params.items() if v is not None}
