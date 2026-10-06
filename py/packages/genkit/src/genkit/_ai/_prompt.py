@@ -472,7 +472,7 @@ class Prompt(Generic[InputT, OutputT]):
             options,
             on_chunk=on_chunk,
             # context also goes to the run, not just the template, so tools and middleware see it.
-            context=context if context is not None else get_current_context(),
+            context=context,
         )
         return cast(ModelResponse[OutputT], result)
 

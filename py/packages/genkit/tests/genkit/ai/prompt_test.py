@@ -1286,12 +1286,13 @@ async def test_prompt_call_without_context_uses_enclosing_flow_context(method: s
     p = _allergy_check_prompt(ai, pm, seen)
     auth = {'auth': {'uid': 'chef-1'}}
 
+    @ai.flow()
     async def plan_order(_: None) -> str:
         if method == 'stream':
             return (await p.stream().response).text
         return (await p()).text
 
-    await Action(name='planOrder', kind=ActionKind.FLOW, fn=plan_order).run(context=auth)
+    await plan_order.run(context=auth)
 
     assert seen == _context_on_each_hop(auth)
 
