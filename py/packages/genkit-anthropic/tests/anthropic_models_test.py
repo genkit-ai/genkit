@@ -21,10 +21,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from anthropic import AsyncAnthropic, AsyncAnthropicVertex
-from genkit_anthropic import models as anthropic_models
-from genkit_anthropic.config import AnthropicConfig
-from genkit_anthropic.models import BETA_APIS, AnthropicModel, _to_anthropic_thinking_config
-from genkit_anthropic.utils import maybe_strip_fences, strip_markdown_fences
+from genkit_anthropic import _models as anthropic_models
+from genkit_anthropic._config import AnthropicConfig
+from genkit_anthropic._models import BETA_APIS, AnthropicModel, _to_anthropic_thinking_config
+from genkit_anthropic._utils import maybe_strip_fences, strip_markdown_fences
 from pydantic import ValidationError
 
 from genkit import FinishReason, GenkitError, Message, ModelResponseChunk, Part, Role

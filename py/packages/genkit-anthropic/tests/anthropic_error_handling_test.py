@@ -30,7 +30,7 @@ from anthropic import (
     APITimeoutError,
     AsyncAnthropic,
 )
-from genkit_anthropic.models import AnthropicModel
+from genkit_anthropic._models import AnthropicModel
 
 from genkit import GenkitError, Message, Part, Role
 from genkit.model import ModelRequest

@@ -17,7 +17,7 @@
 """Tests for the typed Anthropic config schema."""
 
 import pytest
-from genkit_anthropic.config import AnthropicConfig, ThinkingConfig
+from genkit_anthropic._config import AnthropicConfig, ThinkingConfig
 from pydantic import ValidationError
 
 from genkit.plugin_api import to_json_schema

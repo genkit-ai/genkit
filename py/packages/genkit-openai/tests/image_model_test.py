@@ -21,7 +21,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from genkit_openai.models.image import (
+from genkit_openai._models._image import (
     SUPPORTED_IMAGE_MODELS,
     OpenAIImageModel,
     _extract_prompt_text,

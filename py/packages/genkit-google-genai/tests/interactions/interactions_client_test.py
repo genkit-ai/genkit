@@ -24,8 +24,8 @@ from urllib.parse import quote
 
 import httpx
 import pytest
-from genkit_google_genai._interactions import client as interactions_client
-from genkit_google_genai._interactions.client import (
+from genkit_google_genai._interactions import _client as interactions_client
+from genkit_google_genai._interactions._client import (
     API_REVISION,
     cancel_interaction,
     create_interaction,
@@ -34,7 +34,7 @@ from genkit_google_genai._interactions.client import (
     headers,
     timeout_seconds,
 )
-from genkit_google_genai._interactions.options import ClientOptions
+from genkit_google_genai._interactions._options import ClientOptions
 from google.genai.interactions import Interaction
 
 from genkit import GenkitError

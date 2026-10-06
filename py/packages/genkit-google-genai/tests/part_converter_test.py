@@ -25,7 +25,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
-from genkit_google_genai.models.utils import PartConverter
+from genkit_google_genai._models._utils import PartConverter
 from google import genai
 
 from genkit import GenkitError, Part
@@ -378,7 +378,7 @@ class TestDownloadMediaErrors:
         client = self._client(lambda request: httpx.Response(code))
         part = Part.from_media('https://cdn.example.com/menu/tartine.jpg', content_type='image/jpeg')
 
-        with patch('genkit_google_genai.models.utils.get_cached_client', return_value=client):
+        with patch('genkit_google_genai._models._utils.get_cached_client', return_value=client):
             with pytest.raises(GenkitError) as raised:
                 await PartConverter.to_gemini(part)
 
@@ -391,7 +391,7 @@ class TestDownloadMediaErrors:
         client = self._client(lambda request: httpx.Response(code))
         part = Part.from_media('https://cdn.example.com/menu/tartine.jpg', content_type='image/jpeg')
 
-        with patch('genkit_google_genai.models.utils.get_cached_client', return_value=client):
+        with patch('genkit_google_genai._models._utils.get_cached_client', return_value=client):
             with pytest.raises(httpx.HTTPStatusError):
                 await PartConverter.to_gemini(part)
 
@@ -403,6 +403,6 @@ class TestDownloadMediaErrors:
         client = self._client(refuse)
         part = Part.from_media('https://cdn.example.com/menu/tartine.jpg', content_type='image/jpeg')
 
-        with patch('genkit_google_genai.models.utils.get_cached_client', return_value=client):
+        with patch('genkit_google_genai._models._utils.get_cached_client', return_value=client):
             with pytest.raises(httpx.ConnectError):
                 await PartConverter.to_gemini(part)

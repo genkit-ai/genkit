@@ -20,11 +20,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-from genkit_google_genai.evaluators import (
+from genkit_google_genai._evaluators import (
     VertexAIEvaluationMetricType,
     create_vertex_evaluators,
 )
-from genkit_google_genai.evaluators.evaluation import (
+from genkit_google_genai._evaluators._evaluation import (
     EvaluatorFactory,
     VertexAIEvaluationMetricConfig,
     _is_config,
@@ -37,6 +37,9 @@ from genkit import BaseDataPoint, GenkitError
 
 def test_vertex_ai_evaluation_metric_type_values() -> None:
     """Test that VertexAIEvaluationMetricType has expected values."""
+    from genkit_google_genai import VertexAIEvaluationMetricType as RootMetricType
+
+    assert RootMetricType is VertexAIEvaluationMetricType
     assert VertexAIEvaluationMetricType.BLEU == 'BLEU'
     assert VertexAIEvaluationMetricType.ROUGE == 'ROUGE'
     assert VertexAIEvaluationMetricType.FLUENCY == 'FLUENCY'
@@ -136,7 +139,7 @@ async def test_evaluator_factory_evaluate_instances_structure() -> None:
         }
     }
 
-    with patch('genkit_google_genai.evaluators.evaluation.google_auth_default') as mock_auth:
+    with patch('genkit_google_genai._evaluators._evaluation.google_auth_default') as mock_auth:
         mock_auth.return_value = (mock_credentials, 'test-project')
 
         # Mock get_cached_client to return a mock client
@@ -147,7 +150,7 @@ async def test_evaluator_factory_evaluate_instances_structure() -> None:
         mock_client.post = AsyncMock(return_value=mock_response)
         mock_client.is_closed = False
 
-        with patch('genkit_google_genai.evaluators.evaluation.get_cached_client', return_value=mock_client):
+        with patch('genkit_google_genai._evaluators._evaluation.get_cached_client', return_value=mock_client):
             result = await factory.evaluate_instances({'fluencyInput': {'prediction': 'Test'}})
 
             assert result == mock_response_data
@@ -166,7 +169,7 @@ async def test_evaluator_factory_evaluate_instances_error_handling() -> None:
     mock_credentials.token = 'mock-token'
     mock_credentials.expired = False
 
-    with patch('genkit_google_genai.evaluators.evaluation.google_auth_default') as mock_auth:
+    with patch('genkit_google_genai._evaluators._evaluation.google_auth_default') as mock_auth:
         mock_auth.return_value = (mock_credentials, 'test-project')
 
         # Mock get_cached_client to return a mock client
@@ -177,7 +180,7 @@ async def test_evaluator_factory_evaluate_instances_error_handling() -> None:
         mock_client.post = AsyncMock(return_value=mock_response)
         mock_client.is_closed = False
 
-        with patch('genkit_google_genai.evaluators.evaluation.get_cached_client', return_value=mock_client):
+        with patch('genkit_google_genai._evaluators._evaluation.get_cached_client', return_value=mock_client):
             with pytest.raises(GenkitError) as exc_info:
                 await factory.evaluate_instances({'input': 'test'})
 
@@ -315,8 +318,8 @@ async def test_evaluate_instances_http_status_is_classified(code: int, status: s
     """A 429 from the eval service is retryable, a 400 is not; both used to be INTERNAL."""
     response = httpx.Response(code, json={'error': {'message': 'eval call failed'}}, headers={'Retry-After': '2'})
     with (
-        patch('genkit_google_genai.evaluators.evaluation.google_auth_default', return_value=(_creds(), 'menu-prod')),
-        patch('genkit_google_genai.evaluators.evaluation.get_cached_client', return_value=_http_client(response)),
+        patch('genkit_google_genai._evaluators._evaluation.google_auth_default', return_value=(_creds(), 'menu-prod')),
+        patch('genkit_google_genai._evaluators._evaluation.get_cached_client', return_value=_http_client(response)),
         pytest.raises(GenkitError, match='eval call failed') as raised,
     ):
         await _factory().evaluate_instances({'fluencyInput': {}})
@@ -330,8 +333,8 @@ async def test_evaluate_instances_transport_failure_stays_raw() -> None:
     """A refused connection used to be labeled UNAVAILABLE; it has no known status."""
     refused = httpx.ConnectError('connection refused')
     with (
-        patch('genkit_google_genai.evaluators.evaluation.google_auth_default', return_value=(_creds(), 'menu-prod')),
-        patch('genkit_google_genai.evaluators.evaluation.get_cached_client', return_value=_http_client(refused)),
+        patch('genkit_google_genai._evaluators._evaluation.google_auth_default', return_value=(_creds(), 'menu-prod')),
+        patch('genkit_google_genai._evaluators._evaluation.get_cached_client', return_value=_http_client(refused)),
         pytest.raises(httpx.ConnectError) as raised,
     ):
         await _factory().evaluate_instances({'fluencyInput': {}})
@@ -343,8 +346,8 @@ async def test_evaluate_instances_transport_failure_stays_raw() -> None:
 async def test_evaluate_instances_non_json_success_is_internal() -> None:
     response = httpx.Response(200, text='<html>proxy page</html>')
     with (
-        patch('genkit_google_genai.evaluators.evaluation.google_auth_default', return_value=(_creds(), 'menu-prod')),
-        patch('genkit_google_genai.evaluators.evaluation.get_cached_client', return_value=_http_client(response)),
+        patch('genkit_google_genai._evaluators._evaluation.google_auth_default', return_value=(_creds(), 'menu-prod')),
+        patch('genkit_google_genai._evaluators._evaluation.get_cached_client', return_value=_http_client(response)),
         pytest.raises(GenkitError) as raised,
     ):
         await _factory().evaluate_instances({'fluencyInput': {}})
@@ -359,7 +362,7 @@ async def test_evaluate_instances_non_json_success_is_internal() -> None:
 )
 async def test_evaluate_instances_credential_failure_is_unauthenticated(auth_error: Exception) -> None:
     with (
-        patch('genkit_google_genai.evaluators.evaluation.google_auth_default', side_effect=auth_error),
+        patch('genkit_google_genai._evaluators._evaluation.google_auth_default', side_effect=auth_error),
         pytest.raises(GenkitError) as raised,
     ):
         await _factory().evaluate_instances({'fluencyInput': {}})

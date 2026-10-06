@@ -593,7 +593,11 @@ def get_reflection_json(error: object, *, trace_id: str | None = None) -> Reflec
         )
     if not trace_id or (ref.details is not None and ref.details.trace_id):
         return ref
-    details = (ref.details or ReflectionErrorDetails()).model_copy(update={'trace_id': trace_id})
+    details = (
+        ref.details.model_copy(update={'trace_id': trace_id})
+        if ref.details is not None
+        else ReflectionErrorDetails(trace_id=trace_id)
+    )
     return ref.model_copy(update={'details': details})
 
 

@@ -123,6 +123,48 @@ async def test_await_flow_with_no_input_and_no_default_raises_input_required() -
     assert "Flow 'greet' requires input but none was provided" in str(exc.value)
 
 
+@pytest.mark.asyncio
+async def test_ctx_first_flow_with_no_input_uses_default_and_gets_context() -> None:
+    """`ctx` before a defaulted input: `await greet(context=...)` runs with `name='world'` and sees the auth."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def greet(ctx: ActionRunContext, name: str = 'world') -> str:
+        return f'hello {name} as {ctx.context["auth"]["uid"]}'
+
+    assert await greet(context={'auth': {'uid': 'u1'}}) == 'hello world as u1'
+    assert await greet('ada', context={'auth': {'uid': 'u1'}}) == 'hello ada as u1'
+
+
+@pytest.mark.asyncio
+async def test_ctx_first_flow_with_explicit_none_raises_invalid_argument() -> None:
+    """`ctx` before `name: str = 'world'`: `await greet(None)` is validated, not swapped for the default."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def greet(ctx: ActionRunContext, name: str = 'world') -> str:
+        return f'hello {name}'
+
+    with pytest.raises(GenkitError) as exc:
+        await greet(None)
+
+    assert exc.value.status == 'INVALID_ARGUMENT'
+    assert "Invalid input for flow 'greet'" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_ctx_first_flow_with_explicit_none_and_optional_input_receives_none() -> None:
+    """`ctx` before `name: str | None = 'world'`: `None` reaches the function; omitted uses the default."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def greet(ctx: ActionRunContext, name: str | None = 'world') -> str:
+        return f'hello {name}'
+
+    assert await greet(None) == 'hello None'
+    assert await greet() == 'hello world'
+
+
 class Item(BaseModel):
     dish: str
     qty: int
