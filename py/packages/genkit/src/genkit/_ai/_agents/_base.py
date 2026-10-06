@@ -65,7 +65,6 @@ from genkit._ai._prompt import (
     prepare_prompt,
     register_prompt_actions,
 )
-from genkit._ai._tools import Tool
 from genkit._core._action import Action, ActionKind, ActionRunContext, BidiAction, BidiFn, get_current_context
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._middleware import BaseMiddleware
@@ -85,6 +84,7 @@ from genkit._core._model import (
 )
 from genkit._core._registry import Registry
 from genkit._core._telemetry._instrumentation import set_custom_metadata_attributes
+from genkit._core._tool import Tool
 from genkit._core._typing import (
     AgentAbortRequest,
     AgentAbortResponse,
