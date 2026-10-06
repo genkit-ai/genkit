@@ -74,7 +74,7 @@ class Fallback(BaseMiddleware[FallbackConfig]):
         try:
             return await next_fn(params, ctx)
         except Exception as exc:
-            if not isinstance(exc, GenkitError) or exc.status not in self.config.statuses:
+            if not self._should_fall_back(exc):
                 raise
             last_error = exc
 
@@ -92,7 +92,13 @@ class Fallback(BaseMiddleware[FallbackConfig]):
                 return result.response  # type: ignore[return-value]
             except Exception as e2:
                 last_error = e2
-                if not isinstance(e2, GenkitError) or e2.status not in self.config.statuses:
+                if not self._should_fall_back(e2):
                     raise
 
         raise last_error
+
+    def _should_fall_back(self, exc: Exception) -> bool:
+        # A provider SDK error that no plugin classified (a ConnectionError,
+        # say) is an internal failure, so it falls back like INTERNAL does.
+        status = exc.status if isinstance(exc, GenkitError) else 'INTERNAL'
+        return status in self.config.statuses

@@ -557,19 +557,12 @@ async def run_tool_after_restart(
         raise ValueError('run_tool_after_restart needs a tool request part')
     try:
         raw = await run_tool_request(tool=tool, tool_request_part=restart_trp, ctx=ctx)
-    except (GenkitError, Interrupt) as e:
-        intr = (
-            e.cause
-            if isinstance(e, GenkitError) and isinstance(e.cause, Interrupt)
-            else (e if isinstance(e, Interrupt) else None)
+    except Interrupt as e:
+        logger.debug(
+            'restarted tool triggered an interrupt',
+            tool=tool_req.name,
         )
-        if intr is not None:
-            logger.debug(
-                'restarted tool triggered an interrupt',
-                tool=tool_req.name,
-            )
-            raise restart_interrupt_error(intr) from e
-        raise
+        raise restart_interrupt_error(e) from e
 
     envelope = as_multipart_tool_response(raw, tool_name=tool_req.name)
     return Part(

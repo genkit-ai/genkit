@@ -23,7 +23,7 @@ import pytest
 from genkit_middleware import Retry
 from pydantic import ValidationError
 
-from genkit import ModelResponse
+from genkit import ActionRunContext, FinishReason, Genkit, Message, ModelResponse, Part, Role
 from genkit._core._error import GenkitError
 from genkit.middleware import GenerateMiddlewareContext, ModelHookParams
 from genkit.model import ModelRequest
@@ -313,3 +313,59 @@ async def test_retry_does_not_retry_unauthenticated_error(ctx: GenerateMiddlewar
 
     assert call_count == 1
     sleep.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_generate_with_failing_model_and_retry_retries_connection_error() -> None:
+    """With `Retry(max_retries=2)`, a model raising ConnectionError once is called again and its answer comes back."""
+    ai = Genkit()
+    calls = 0
+
+    async def flaky(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise ConnectionError('connection reset')
+        return ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('second try')]),
+        )
+
+    ai.define_model(name='flaky', fn=flaky)
+
+    response = await ai.generate(
+        model='flaky',
+        prompt='hi',
+        use=[Retry(max_retries=2, initial_delay_ms=0, no_jitter=True)],
+    )
+
+    assert response.finish_reason == FinishReason.STOP
+    assert response.text == 'second try'
+    assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_generate_with_failing_model_and_retry_without_internal_calls_model_once() -> None:
+    """With INTERNAL left out of `statuses`, a model raising ConnectionError fails after one call."""
+    ai = Genkit()
+    calls = 0
+
+    async def down(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        nonlocal calls
+        calls += 1
+        raise ConnectionError('connection refused')
+
+    ai.define_model(name='down', fn=down)
+
+    response = await ai.generate(
+        model='down',
+        prompt='hi',
+        use=[Retry(max_retries=2, statuses=['UNAVAILABLE'], initial_delay_ms=0, no_jitter=True)],
+    )
+
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.finish_message == 'internal error'
+    assert response.error is not None
+    assert response.error.status == 'INTERNAL'
+    assert response.message is None
+    assert calls == 1

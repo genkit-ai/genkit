@@ -251,20 +251,19 @@ async def test_propagates_context_via_contextvar() -> None:
 
 @pytest.mark.asyncio
 async def test_action_raises_errors() -> None:
-    """Action raises error with necessary metadata."""
+    """Action.run raises the exception the body raised."""
 
     async def foo(_: str | None, ctx: ActionRunContext) -> None:
         raise Exception('oops')
 
     action = Action(name='fooAction', kind=ActionKind.CUSTOM, fn=foo)
 
-    with pytest.raises(GenkitError, match=r'.*Error while running action fooAction.*') as e:
+    with pytest.raises(Exception, match='^oops$') as e:
         await action.run()
 
-    assert 'stack' in e.value.details
-    # Default-off: no provider → empty/absent trace id.
-    assert not e.value.trace_id
-    assert str(e.value.cause) == 'oops'
+    assert type(e.value) is Exception
+    # Default-off: no provider → no trace id.
+    assert not hasattr(e.value, 'trace_id')
 
 
 @pytest.mark.asyncio
@@ -273,10 +272,9 @@ async def test_action_error_includes_trace_id_when_instrumented(hex_ids) -> None
         raise Exception('oops')
 
     action = Action(name='fooAction', kind=ActionKind.CUSTOM, fn=foo)
-    with pytest.raises(GenkitError) as e:
+    with pytest.raises(Exception, match='^oops$') as e:
         await action.run()
-    assert e.value.trace_id
-    assert 'trace_id' in e.value.details
+    assert getattr(e.value, 'trace_id', None)
 
 
 @pytest.mark.asyncio

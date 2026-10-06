@@ -123,11 +123,10 @@ async def test_flow_that_raises_keeps_its_own_error() -> None:
     async def charge(name: str) -> Receipt:
         raise KeyError(name)
 
-    with pytest.raises(GenkitError) as exc:
+    with pytest.raises(KeyError) as exc:
         await charge('acme')
 
-    assert exc.value.reason is not RuntimeErrorReason.INVALID_OUTPUT
-    assert isinstance(exc.value.cause, KeyError)
+    assert exc.value.args == ('acme',)
 
 
 @pytest.mark.asyncio

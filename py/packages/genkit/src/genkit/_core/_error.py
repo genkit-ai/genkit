@@ -572,22 +572,29 @@ def get_http_status(error: object) -> int:
     return 500
 
 
-def get_reflection_json(error: object) -> ReflectionError:
+def get_reflection_json(error: object, *, trace_id: str | None = None) -> ReflectionError:
     """Get the JSON representation of an error for reflection API responses.
 
     Args:
         error: The error to convert to JSON.
+        trace_id: The run's trace id, used when the error doesn't carry one,
+            so the Dev UI can link a failed run to its trace.
 
     Returns:
         A ReflectionError model instance.
     """
     if isinstance(error, GenkitError):
-        return error.to_serializable()
-    return ReflectionError(
-        message=str(error),
-        code=StatusCodes.INTERNAL.value,
-        details=ReflectionErrorDetails(stack=get_error_stack(error)),
-    )
+        ref = error.to_serializable()
+    else:
+        ref = ReflectionError(
+            message=str(error),
+            code=StatusCodes.INTERNAL.value,
+            details=ReflectionErrorDetails(stack=get_error_stack(error)),
+        )
+    if not trace_id or (ref.details is not None and ref.details.trace_id):
+        return ref
+    details = (ref.details or ReflectionErrorDetails()).model_copy(update={'trace_id': trace_id})
+    return ref.model_copy(update={'details': details})
 
 
 def get_callable_json(error: object) -> dict[str, Any]:

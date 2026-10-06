@@ -21,7 +21,7 @@ from typing import NoReturn
 import pytest
 from genkit_middleware import Fallback
 
-from genkit import ModelResponse
+from genkit import ActionRunContext, FinishReason, Genkit, Message, ModelResponse, Part, Role
 from genkit._core._error import GenkitError
 from genkit.middleware import ModelHookParams
 from genkit.model import ModelRequest
@@ -72,12 +72,55 @@ async def test_fallback_non_retryable_error(ctx) -> None:
 
 
 @pytest.mark.asyncio
-async def test_fallback_non_genkit_error(ctx) -> None:
-    """Test that non-GenkitError exceptions fail immediately."""
-    fallback = _make_fallback(models=['model2'])
+async def test_generate_with_failing_model_and_fallback_tries_next_model() -> None:
+    """With `Fallback(models=['backup'])`, a model raising ConnectionError falls back to `backup`."""
+    ai = Genkit()
 
-    async def next_fn(params, ctx) -> NoReturn:
-        raise ConnectionError('Network failure')
+    async def down(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        raise ConnectionError('connection refused')
 
-    with pytest.raises(ConnectionError):
-        await fallback.wrap_model(_make_params(), ctx, next_fn)
+    async def backup(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        return ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('from backup')]),
+        )
+
+    ai.define_model(name='primary', fn=down)
+    ai.define_model(name='backup', fn=backup)
+
+    response = await ai.generate(model='primary', prompt='hi', use=[Fallback(models=['backup'])])
+
+    assert response.finish_reason == FinishReason.STOP
+    assert response.text == 'from backup'
+    assert response.error is None
+
+
+@pytest.mark.asyncio
+async def test_generate_with_failing_model_and_fallback_without_internal_keeps_the_failure() -> None:
+    """With INTERNAL left out of `statuses`, a model raising ConnectionError fails without trying `backup`."""
+    ai = Genkit()
+    backup_calls = 0
+
+    async def down(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        raise ConnectionError('connection refused')
+
+    async def backup(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        nonlocal backup_calls
+        backup_calls += 1
+        return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('from backup')]))
+
+    ai.define_model(name='primary', fn=down)
+    ai.define_model(name='backup', fn=backup)
+
+    response = await ai.generate(
+        model='primary',
+        prompt='hi',
+        use=[Fallback(models=['backup'], statuses=['UNAVAILABLE'])],
+    )
+
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.finish_message == 'internal error'
+    assert response.error is not None
+    assert response.error.status == 'INTERNAL'
+    assert response.message is None
+    assert backup_calls == 0

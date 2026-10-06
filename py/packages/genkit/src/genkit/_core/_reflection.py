@@ -166,7 +166,8 @@ class ActionRunner:
             # Dumping a full traceback here turns every playground failure into
             # terminal noise.
             logger.debug('Action failed: %s: %s', type(e).__name__, e, exc_info=True)
-            self.queue.put_nowait(json.dumps({'error': get_reflection_json(e).model_dump(by_alias=True)}))
+            error = get_reflection_json(e, trace_id=self.trace_id)
+            self.queue.put_nowait(json.dumps({'error': error.model_dump(by_alias=True)}))
         finally:
             self.trace_ready.set()
             self.queue.put_nowait(None)

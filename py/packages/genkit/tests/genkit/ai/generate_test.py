@@ -4062,8 +4062,7 @@ async def test_model_failure_after_tool_turn_keeps_closed_rounds() -> None:
     assert response.error is not None
     assert response.error.status == 'INTERNAL'
     assert response.error.reason is None
-    assert isinstance(response.error.details, dict)
-    assert 'reason' not in response.error.details
+    assert response.error.details is None
     assert response.error.message == response.finish_message
     assert response.message is None
     assert [m.role for m in response.messages] == [Role.USER, Role.MODEL, Role.TOOL]

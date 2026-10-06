@@ -17,6 +17,7 @@
 """Action module for defining and managing remotely callable functions."""
 
 import asyncio
+import contextlib
 import inspect
 import json
 import re
@@ -804,7 +805,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         execute: Callable[[], Awaitable[OutputT]] | None = None,
         omit_input: bool = True,
     ) -> ActionResponse[OutputT]:
-        """Open the action span via ``run_in_new_span``, dispatch ``self._fn``, wrap errors in ``GenkitError``."""
+        """Open the action span via ``run_in_new_span``, dispatch ``self._fn``, re-raise what it raised."""
         start_time = time.perf_counter()
 
         # ``telemetry_labels`` are caller-controlled passthrough attrs (e.g.
@@ -825,8 +826,8 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
                 except Exception:
                     extra_metadata['context'] = str(traced_context)
 
-        trace_id = ''
-        span_id = ''
+        trace_id: str = ''
+        span_id: str = ''
 
         async def body(span: SpanContext) -> OutputT:
             nonlocal trace_id, span_id
@@ -870,16 +871,13 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
                 span_id=span_id,
                 latency_ms=latency_ms,
             )
-        except GenkitError:
-            raise
         except Exception as e:
-            # Wrap outside the span so we don't clobber ``genkit:error`` (which
-            # the renderer already set to ``str(original_e)``).
-            raise GenkitError(
-                cause=e,
-                message=f'Error while running action {self._name}',
-                trace_id=trace_id,
-            ) from e
+            # The caller gets the body's own exception so `except ValueError`
+            # works; the trace id rides along so a log line can link to the run.
+            if trace_id and getattr(e, 'trace_id', None) is None:
+                with contextlib.suppress(AttributeError, TypeError):
+                    setattr(e, 'trace_id', trace_id)  # noqa: B010
+            raise
 
     def _validate_output(self, output: object, *, trace_id: str) -> OutputT:
         """Give the caller what the flow's return annotation promises, or fail the run."""
