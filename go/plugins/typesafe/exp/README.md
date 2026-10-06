@@ -7,8 +7,9 @@ probabilities, in a few hundred milliseconds. That makes it a fit for the
 decisions inside an application: routing, classification, scoring, guardrails,
 and verification.
 
-> Status: in preview. The package lives under `go/plugins/typesafe/exp` and its
-> APIs may change in any minor version release. Import it as `typesafex`.
+> Status: in preview. The plugin lives under `go/plugins/typesafe/exp`, and the
+> question types under `go/plugins/systemone/exp`. Their APIs may change in any
+> minor version release. Import them as `typesafex` and `systemonex`.
 
 ## Design principle: the output type is the question set
 
@@ -18,8 +19,15 @@ type, declared with `Choice`, `Score`, and `Noul`. Each field's description is
 the question's instructions, and each field's JSON is the wire answer, so a
 decision is one typed generate call and the answer lands in typed fields.
 
+The question types belong to System One, the protocol jev speaks, not to the
+plugin, so they live in `systemonex` and one decision type serves every model
+that speaks it.
+
 ```go
-import typesafex "github.com/firebase/genkit/go/plugins/typesafe/exp"
+import (
+	systemonex "github.com/firebase/genkit/go/plugins/systemone/exp"
+	typesafex "github.com/firebase/genkit/go/plugins/typesafe/exp"
+)
 
 // The options of a choice belong to their type, with their criteria.
 type Dept string
@@ -39,9 +47,9 @@ func (Anger) Levels() []string { return []string{"Calm", "Concerned but civil", 
 
 // The decision: one question per field.
 type Triage struct {
-	Department  typesafex.Choice[Dept] `json:"department"  jsonschema_description:"Which team should handle this?"`
-	IsUrgent    typesafex.Noul         `json:"is_urgent"   jsonschema_description:"Does the ticket explicitly communicate time pressure?"`
-	Frustration typesafex.Score[Anger] `json:"frustration" jsonschema_description:"How frustrated is the customer?"`
+	Department  systemonex.Choice[Dept] `json:"department"  jsonschema_description:"Which team should handle this?"`
+	IsUrgent    systemonex.Noul         `json:"is_urgent"   jsonschema_description:"Does the ticket explicitly communicate time pressure?"`
+	Frustration systemonex.Score[Anger] `json:"frustration" jsonschema_description:"How frustrated is the customer?"`
 }
 
 g := genkit.Init(ctx, genkit.WithPlugins(&typesafex.TypeSafe{})) // TYPESAFE_API_KEY
@@ -95,7 +103,7 @@ func (Urgent) Criteria() (yes, no string) {
 	return "Names a deadline, or says now or today", "No time pressure is expressed"
 }
 
-IsUrgent typesafex.NoulOf[Urgent] `json:"is_urgent" jsonschema_description:"Does the ticket explicitly communicate time pressure?"`
+IsUrgent systemonex.NoulOf[Urgent] `json:"is_urgent" jsonschema_description:"Does the ticket explicitly communicate time pressure?"`
 ```
 
 Criteria and levels are strings, and the schema and the answers show those
@@ -118,7 +126,7 @@ func (Dept) Guidance() map[Dept]any {
 An object with no `what` gets the string as its `what`, so guidance adds to
 the description. Any other value goes out as it is. A score's legend keeps
 the rubric's strings, and the guidance the API echoes back is on
-`typesafex.ResponseInfo(resp).Answers`.
+`systemonex.ResponseInfo(resp).Answers`.
 
 The built-in `enum` output format also works, with no decision type: the enum
 values are the options of one choice question, the system message is the
@@ -140,19 +148,19 @@ option; a `Choice` field in a decision type gives both.
 
 A question whose options come from data, such as the tools on hand, a
 tenant's categories, or the nodes of a taxonomy, has no type to declare it
-with. `typesafex.Schema` builds the output schema from values instead, and the
-answers come back as a map of `typesafex.Answer`:
+with. `systemonex.Schema` builds the output schema from values instead, and the
+answers come back as a map of `systemonex.Answer`:
 
 ```go
-options := make([]typesafex.ChoiceOption, 0, len(tools))
+options := make([]systemonex.ChoiceOption, 0, len(tools))
 for _, tool := range tools {
-	options = append(options, typesafex.ChoiceOption{Name: tool.Name, Criteria: tool.Description})
+	options = append(options, systemonex.ChoiceOption{Name: tool.Name, Criteria: tool.Description})
 }
 resp, err := genkit.Generate(ctx, g,
 	ai.WithModelName("typesafe/jev-1.13.0"),
-	ai.WithOutputSchema(typesafex.Schema(map[string]typesafex.Question{
-		"tool": typesafex.ChoiceQuestion{Instructions: "Which tool serves the request?", Options: options},
-		"personal": typesafex.NoulQuestion{
+	ai.WithOutputSchema(systemonex.Schema(map[string]systemonex.Question{
+		"tool": systemonex.ChoiceQuestion{Instructions: "Which tool serves the request?", Options: options},
+		"personal": systemonex.NoulQuestion{
 			Instructions: "Does the request involve the user's own data?",
 			Yes:          "Names the user's files, mail, or calendar",
 			No:           "Asks about the world at large",
@@ -162,7 +170,7 @@ resp, err := genkit.Generate(ctx, g,
 if err != nil {
 	return err
 }
-var answers map[string]typesafex.Answer
+var answers map[string]systemonex.Answer
 if err := resp.Output(&answers); err != nil {
 	return err
 }
@@ -250,7 +258,7 @@ Requests that fail to connect, time out, are rate limited, or hit a server
 error are retried twice, with `Retry-After` honored.
 
 Pin a version in production. Confidence thresholds tuned against one release do
-not carry over to the next, and `typesafex.ResponseInfo(resp).Model` is the
+not carry over to the next, and `systemonex.ResponseInfo(resp).Model` is the
 version that answered, on every call. A gateway's cost is
 `resp.Usage.Custom["cost"]`. Where a reference with a config is needed, such
 as a fallback list, `typesafex.ModelRef("jev-1.13.0", &cfg)` builds one.
@@ -268,7 +276,8 @@ as a fallback list, `typesafex.ModelRef("jev-1.13.0", &cfg)` builds one.
 
 ## Tests
 
-`go test ./plugins/typesafe/...` runs against a fake endpoint. With
+`go test ./plugins/typesafe/... ./plugins/systemone/... ./plugins/internal/systemone/...`
+runs against a fake endpoint. With
 `OPENROUTER_API_KEY` set, `TestOpenRouterLive` runs the decision, guidance,
 enum, history, runtime-question, document, and model-version paths against jev
 through OpenRouter.
