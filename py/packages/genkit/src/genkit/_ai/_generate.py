@@ -1506,6 +1506,8 @@ async def call_model(
     call.request = request
 
     async def run_action(params: ModelHookParams, c: GenerateMiddlewareContext) -> ModelResponse:
+        # After they stop, another model call would be billed and thrown away.
+        raise_if_aborted(c.abort_signal)
         if is_debug_enabled(logger):
             logger.debug(
                 'calling model',

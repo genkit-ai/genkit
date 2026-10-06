@@ -4954,6 +4954,48 @@ async def test_abort_during_later_model_call_keeps_closed_round() -> None:
 
 
 @pytest.mark.asyncio
+async def test_generate_user_retry_middleware_makes_no_model_call_after_stop() -> None:
+    """A user's retry loop that calls next_fn again after a stop does not bill another model call."""
+    ai = Genkit()
+    calls: list[str] = []
+
+    async def flaky(_request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        calls.append('flaky')
+        ctx.abort_signal.set()
+        raise GenkitError(status='UNAVAILABLE', message='primary down')
+
+    ai.define_model(name='flaky', fn=flaky)
+
+    class MyRetry(BaseMiddleware):
+        async def wrap_model(
+            self,
+            params: ModelHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ) -> ModelResponse:
+            last: GenkitError | None = None
+            for _ in range(3):
+                try:
+                    return await next_fn(params, ctx)
+                except GenkitError as e:
+                    last = e
+            assert last is not None
+            raise last
+
+    response = await ai.generate(model='flaky', prompt='hi', use=[MyRetry()])
+
+    assert response.finish_reason == FinishReason.ABORTED
+    assert response.finish_message == 'Generation aborted.'
+    assert response.error is not None
+    assert response.error.status == 'CANCELLED'
+    assert response.error.reason is None
+    assert response.error.message == response.finish_message
+    assert response.message is None
+    assert [m.role for m in response.messages] == [Role.USER]
+    assert calls == ['flaky']
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize('status', ['ABORTED', 'NOT_FOUND', 'INVALID_ARGUMENT', 'FAILED_PRECONDITION'])
 async def test_provider_status_failure_keeps_closed_rounds(status: str) -> None:
     """A provider status is failure data after generation starts, not a setup error."""

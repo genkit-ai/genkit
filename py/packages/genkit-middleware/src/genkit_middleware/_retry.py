@@ -19,9 +19,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import math
 import random
-from asyncio import sleep
 from collections.abc import Awaitable, Callable
 
 from pydantic import BaseModel, Field
@@ -39,14 +39,9 @@ _DEFAULT_RETRY_STATUSES: list[str] = [
 ]
 
 
-async def _sleep_unless_stopped(seconds: float, abort_signal: asyncio.Event) -> None:
-    stop = asyncio.ensure_future(abort_signal.wait())
-    nap = asyncio.ensure_future(sleep(seconds))
-    try:
-        await asyncio.wait({stop, nap}, return_when=asyncio.FIRST_COMPLETED)
-    finally:
-        stop.cancel()
-        nap.cancel()
+async def sleep_unless_stopped(seconds: float, abort_signal: asyncio.Event) -> None:
+    with contextlib.suppress(asyncio.TimeoutError):
+        await asyncio.wait_for(abort_signal.wait(), seconds)
 
 
 class RetryConfig(BaseModel):
@@ -93,10 +88,8 @@ class Retry(BaseMiddleware[RetryConfig]):
                 # The provider delay is a floor within max_delay_ms, never an override of it.
                 delay_ms = min(delay_ms, self.config.max_delay_ms)
 
+                await sleep_unless_stopped(delay_ms / 1000.0, ctx.abort_signal)
                 # Once the caller stops, every further attempt would be a model call nobody reads.
-                if ctx.abort_signal.is_set():
-                    raise
-                await _sleep_unless_stopped(delay_ms / 1000.0, ctx.abort_signal)
                 if ctx.abort_signal.is_set():
                     raise
                 current_delay_ms = min(current_delay_ms * self.config.backoff_factor, self.config.max_delay_ms)

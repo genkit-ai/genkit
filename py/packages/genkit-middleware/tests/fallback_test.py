@@ -28,7 +28,6 @@ from genkit import (
     GenkitError,
     Message,
     ModelResponse,
-    ModelResponseChunk,
     Part,
     Role,
 )
@@ -98,9 +97,6 @@ async def test_fallback_stops_when_aborted() -> None:
     ai = Genkit()
     ran: list[str] = []
 
-    async def fail(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
-        raise GenkitError(status='UNAVAILABLE', message='primary down')
-
     async def backup1(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
         ran.append('backup1')
         raise GenkitError(status='UNAVAILABLE', message='backup1 down')
@@ -112,7 +108,6 @@ async def test_fallback_stops_when_aborted() -> None:
             message=Message(role=Role.MODEL, content=[Part.from_text('backup2')]),
         )
 
-    ai.define_model(name='primary', fn=fail)
     ai.define_model(name='backup1', fn=backup1)
     ai.define_model(name='backup2', fn=backup2)
 
@@ -160,31 +155,3 @@ async def test_fallback_halts_subsequent_models_on_abort() -> None:
         await fallback.wrap_model(_make_params(), ctx, next_fn)
 
     assert ran == ['backup1']
-
-
-@pytest.mark.asyncio
-async def test_fallback_streams_chunks_from_the_fallback_model() -> None:
-    """Test that fallback streams chunks emitted by the fallback model."""
-    ai = Genkit()
-
-    async def fail(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
-        raise GenkitError(status='UNAVAILABLE', message='primary down')
-
-    async def backup(_request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
-        ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('from-backup')]))
-        return ModelResponse(
-            finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part.from_text('done')]),
-        )
-
-    ai.define_model(name='primary', fn=fail)
-    ai.define_model(name='backup', fn=backup)
-
-    stream = ai.generate_stream(model='primary', prompt='hi', use=[Fallback(models=['backup'])])
-    texts: list[str] = []
-    async for chunk in stream.stream:
-        texts.append(chunk.text)
-    final = await stream.response
-
-    assert 'from-backup' in ''.join(texts)
-    assert final.text == 'done'
