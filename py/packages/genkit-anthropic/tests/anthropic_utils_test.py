@@ -23,7 +23,7 @@ and cache-aware usage building.
 
 import base64
 
-from genkit_anthropic.utils import (
+from genkit_anthropic._utils import (
     DOCUMENT_MIME_TYPES,
     PDF_MIME_TYPE,
     TEXT_MIME_TYPE,

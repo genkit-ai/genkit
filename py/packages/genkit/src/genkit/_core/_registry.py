@@ -311,7 +311,7 @@ class Registry:
             name: A unique name for the action within its kind.
             fn: The function to be called when the action is executed.
             metadata_fn: The function to be used to infer metadata (e.g.
-                schemas).
+                schemas). When set, ``fn`` is called as ``fn(input, ctx)``.
             description: Optional human-readable description of the action.
             metadata: Optional dictionary of metadata about the action.
             span_metadata: Optional dictionary of tracing span metadata.

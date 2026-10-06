@@ -51,12 +51,6 @@ from genkit._ai._prompt import (
     prompt,
     resume_options_to_resume,
 )
-from genkit._ai._testing import (
-    EchoModel,
-    ProgrammableModel,
-    define_echo_model,
-    define_programmable_model,
-)
 from genkit._core._action import Action, ActionKind
 from genkit._core._dap import DapValue
 from genkit._core._error import GenkitError, RuntimeErrorReason
@@ -65,6 +59,12 @@ from genkit._core._registry import define_dynamic_action_provider
 from genkit._core._typing import Role
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, MiddlewareRef, ModelHookParams
 from genkit.plugin_api import MiddlewarePlugin, new_middleware
+from genkit.testing import (
+    EchoModel,
+    ScriptedModel,
+    define_echo_model,
+    define_scripted_model,
+)
 
 
 class _PreMiddleware(BaseMiddleware):
@@ -109,11 +109,11 @@ class PrePostMiddlewarePlugin(MiddlewarePlugin):
     ]
 
 
-def setup_test() -> tuple[Genkit, EchoModel, ProgrammableModel]:
+def setup_test() -> tuple[Genkit, EchoModel, ScriptedModel]:
     """Setup a test fixture for the prompt tests."""
     ai = Genkit(model='echoModel')
 
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
     echo, _ = define_echo_model(ai)
 
     return (ai, echo, pm)
@@ -535,7 +535,7 @@ async def test_config_merge_priority() -> None:
 
 @pytest.mark.asyncio
 async def test_prompt_call_model_keyword_switches_model() -> None:
-    """`await p(model='programmableModel')` runs the other model."""
+    """`await p(model='scriptedModel')` runs the other model."""
     ai, _, pm = setup_test()
 
     pm.responses = [ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('pm response')]))]
@@ -546,9 +546,9 @@ async def test_prompt_call_model_keyword_switches_model() -> None:
     )
 
     # Override model via kwargs
-    response = await my_prompt(model='programmableModel')
+    response = await my_prompt(model='scriptedModel')
 
-    # Should use programmableModel, not echoModel
+    # Should use scriptedModel, not echoModel
     assert response.text == 'pm response'
 
 
@@ -630,10 +630,10 @@ def _tool_call_reply(name: str, ref: str) -> ModelResponse:
     )
 
 
-def _setup_prompt_call() -> tuple[Genkit, ProgrammableModel]:
+def _setup_prompt_call() -> tuple[Genkit, ScriptedModel]:
     """A Genkit whose default model records each request and has `oven` and `grill` tools."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     pm.responses = [_text_reply('ok')]
 
     @ai.tool(name='oven')
@@ -647,12 +647,12 @@ def _setup_prompt_call() -> tuple[Genkit, ProgrammableModel]:
     return ai, pm
 
 
-def _sent_tool_names(pm: ProgrammableModel) -> list[str]:
+def _sent_tool_names(pm: ScriptedModel) -> list[str]:
     assert pm.last_request is not None
     return [t.name for t in pm.last_request.tools or []]
 
 
-def _sent_doc_texts(pm: ProgrammableModel) -> list[str]:
+def _sent_doc_texts(pm: ScriptedModel) -> list[str]:
     assert pm.last_request is not None
     return [d.text for d in pm.last_request.docs or []]
 
@@ -928,7 +928,7 @@ async def test_prompt_call_model_and_config_reach_the_new_model() -> None:
     ai, pm = _setup_prompt_call()
     p = ai.define_prompt(model='echoModel', prompt='hi')
 
-    res = await p(model='programmableModel', config={'temperature': 0.2})
+    res = await p(model='scriptedModel', config={'temperature': 0.2})
 
     assert pm.request_count == 1
     assert res.request is not None
@@ -1004,7 +1004,7 @@ def test_with_overrides_keeps_template_messages() -> None:
 def test_with_overrides_leaves_model_and_config_alone() -> None:
     """model/config resolve in Prompt._resolve_model, not here."""
     base = GenerateCall(model='echoModel', config={'temperature': 0.5})
-    opts: PromptGenerateOptions = {'model': 'programmableModel', 'config': {'temperature': 0.9}}
+    opts: PromptGenerateOptions = {'model': 'scriptedModel', 'config': {'temperature': 0.9}}
 
     call = base.with_overrides(opts)
 
@@ -1230,9 +1230,7 @@ async def test_prompt_render_context_reaches_every_template() -> None:
     assert [text for _, text in _roles_and_texts(rendered)] == ['Serve Ada.', 'Table for Ada.', 'Order for Ada.']
 
 
-def _allergy_check_prompt(
-    ai: Genkit, pm: ProgrammableModel, seen: list[tuple[str, dict[str, Any]]]
-) -> Prompt[Any, Any]:
+def _allergy_check_prompt(ai: Genkit, pm: ScriptedModel, seen: list[tuple[str, dict[str, Any]]]) -> Prompt[Any, Any]:
     """A prompt whose model calls `check_allergies` once. Middleware and the tool record the context they ran with."""
 
     # The engine builds middleware from its class, so the recorder closes over `seen` instead of holding it.
@@ -1969,7 +1967,7 @@ async def test_define_prompt_primitive_with_output_instructions() -> None:
 
     p_true = ai.define_prompt(
         name='p_true',
-        model='programmableModel',
+        model='scriptedModel',
         prompt='hi',
         output_format='json',
         output_schema=TestSchema,
@@ -2020,7 +2018,7 @@ async def test_load_prompt_with_output_instructions() -> None:
         prompt_dir = Path(tmpdir) / 'prompts'
         prompt_dir.mkdir()
         (prompt_dir / 'with_instructions.prompt').write_text(
-            '---\nmodel: programmableModel\noutput:\n  format: json\n  schema:\n'
+            '---\nmodel: scriptedModel\noutput:\n  format: json\n  schema:\n'
             '    type: object\n    properties:\n      foo:\n        type: integer\n'
             '  instructions: true\n---\nhi\n'
         )
@@ -2033,7 +2031,7 @@ async def test_load_prompt_with_output_instructions() -> None:
         assert rendered.output is not None
         assert rendered.output.instructions is True
 
-        resp = await loaded(model='programmableModel')
+        resp = await loaded(model='scriptedModel')
         injected = output_parts(resp)
         assert len(injected) == 1
         assert 'Output should be in JSON format' in (injected[0].text or '')
