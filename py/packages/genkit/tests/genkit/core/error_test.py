@@ -16,9 +16,11 @@
 
 """Unit tests for the error module."""
 
+from typing import Any, Literal
 from unittest.mock import MagicMock
 
 import pytest
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from genkit._core import _error as error_mod
 from genkit._core._error import (
@@ -27,6 +29,7 @@ from genkit._core._error import (
     PublicError,
     ReflectionError,
     RuntimeErrorReason,
+    format_validation_error,
     get_callable_json,
     get_error_stack,
     get_http_status,
@@ -441,3 +444,84 @@ def test_parse_retry_after_returns_none_on_timestamp_oserror(monkeypatch: pytest
     monkeypatch.setattr(error_mod, 'parsedate_to_datetime', lambda _: retry_at)
 
     assert parse_retry_after_ms('Thu, 01 Jan 1601 00:00:00') is None
+
+
+class _Item(BaseModel):
+    dish: str
+    qty: int
+
+
+class _Order(BaseModel):
+    table: int
+    items: list[_Item]
+
+
+class _StrictItem(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    dish: str
+
+
+def _validation_error(schema: Any, value: object) -> ValidationError:  # noqa: ANN401
+    with pytest.raises(ValidationError) as exc:
+        TypeAdapter(schema).validate_python(value)
+    return exc.value
+
+
+@pytest.mark.parametrize(
+    ('schema', 'value', 'want'),
+    [
+        pytest.param(str, None, 'Input should be a valid string, got None', id='str'),
+        pytest.param(
+            int, 'abc', "Input should be a valid integer, unable to parse string as an integer, got 'abc'", id='int'
+        ),
+        pytest.param(
+            _Item, None, 'Input should be a valid dictionary or instance of _Item, got None', id='model given None'
+        ),
+        pytest.param(
+            _Order, {'table': 4, 'items': [{'dish': 'pad thai'}]}, 'items[0].qty: Field required', id='nested missing'
+        ),
+        pytest.param(
+            dict[str, int],
+            {'tip': 'x'},
+            "tip: Input should be a valid integer, unable to parse string as an integer, got 'x'",
+            id='dict value',
+        ),
+        pytest.param(
+            Literal['small', 'large'], 'medium', "Input should be 'small' or 'large', got 'medium'", id='literal'
+        ),
+        pytest.param(_StrictItem, {'dish': 'x', 'tip': 5}, 'tip: Extra inputs are not permitted, got 5', id='extra'),
+        pytest.param(
+            int | str,
+            [1],
+            'int: Input should be a valid integer, got [1]; str: Input should be a valid string, got [1]',
+            id='union keeps branch names',
+        ),
+        pytest.param(
+            _Order,
+            {'table': 'x', 'items': [{}, {}]},
+            "table: Input should be a valid integer, unable to parse string as an integer, got 'x'; "
+            'items[0].dish: Field required; items[0].qty: Field required; and 2 more',
+            id='caps at three',
+        ),
+        pytest.param(
+            _Item,
+            {'dish': 'pad thai', 'qty': 'y' * 200},
+            'qty: Input should be a valid integer, unable to parse string as an integer, '
+            "got 'yyyyyyyyyyyyyyyyy...yyyyyyyyyyyyyyyyyy'",
+            id='long value is shortened',
+        ),
+    ],
+)
+def test_format_validation_error_is_one_line_per_problem(schema: Any, value: object, want: str) -> None:  # noqa: ANN401
+    """Each Pydantic error becomes `path: message, got <value>`, with no header, bracket, or docs URL."""
+    assert format_validation_error(_validation_error(schema, value)) == want
+
+
+def test_genkit_error_wrapping_validation_error_shows_the_short_form_once() -> None:
+    """`GenkitError(cause=ValidationError)` reads `status: message: <short form>`, not Pydantic's dump."""
+    cause = _validation_error(_Item, {'dish': 'pad thai'})
+
+    error = GenkitError(status='INVALID_ARGUMENT', message="Invalid input for action 'order'", cause=cause)
+
+    assert str(error) == "INVALID_ARGUMENT: Invalid input for action 'order': qty: Field required"
+    assert error.cause is cause

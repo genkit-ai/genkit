@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from pydantic import BaseModel
 
 from genkit import ActionRunContext, Genkit, GenkitError
 from genkit._core._reflection import create_reflection_asgi_app
@@ -120,6 +121,62 @@ async def test_await_flow_with_no_input_and_no_default_raises_input_required() -
 
     assert exc.value.status == 'INVALID_ARGUMENT'
     assert "Action 'greet' requires input but none was provided" in str(exc.value)
+
+
+class Item(BaseModel):
+    dish: str
+    qty: int
+
+
+class Order(BaseModel):
+    table: int
+    items: list[Item]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('call_input', 'want'),
+    [
+        pytest.param(
+            None,
+            "INVALID_ARGUMENT: Invalid input for action 'place': "
+            'Input should be a valid dictionary or instance of Order, got None',
+            id='None',
+        ),
+        pytest.param(
+            {'table': 4, 'items': [{'dish': 'pad thai'}]},
+            "INVALID_ARGUMENT: Invalid input for action 'place': items[0].qty: Field required",
+            id='nested field missing',
+        ),
+    ],
+)
+async def test_flow_invalid_model_input_names_the_field_once(call_input: object, want: str) -> None:
+    """`place(order: Order)` given bad input says which field is wrong, without Pydantic's dump or a repeat."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def place(order: Order) -> str:
+        return order.items[0].dish
+
+    with pytest.raises(GenkitError) as exc:
+        await place(call_input)  # type: ignore[arg-type]
+
+    assert str(exc.value) == want
+
+
+@pytest.mark.asyncio
+async def test_flow_with_no_input_and_required_model_says_input_is_required() -> None:
+    """`await place()` on a required `order: Order` says input is missing, not Pydantic's `got None`."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def place(order: Order) -> str:
+        return order.items[0].dish
+
+    with pytest.raises(GenkitError) as exc:
+        await place()
+
+    assert str(exc.value) == "INVALID_ARGUMENT: Action 'place' requires input but none was provided."
 
 
 @pytest.mark.asyncio

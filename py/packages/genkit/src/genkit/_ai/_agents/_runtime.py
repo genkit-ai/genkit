@@ -268,9 +268,8 @@ def validate_custom_state(*, custom: Any, state_schema: type[BaseModel] | None, 
         # see exactly what was wrong, not just that something was.
         raise GenkitError(
             status='INVALID_ARGUMENT',
-            message=(
-                f"Invalid custom state for agent '{agent_name}': {e.error_count()} schema validation error(s).\n{e}"
-            ),
+            message=f"Invalid custom state for agent '{agent_name}'",
+            cause=e,
             details={
                 'schema': state_schema.model_json_schema(),
                 'errors': [{'loc': list(err['loc']), 'message': err['msg'], 'type': err['type']} for err in e.errors()],

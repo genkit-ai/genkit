@@ -67,6 +67,9 @@ async def test_flow_returning_wrong_shape_raises_invalid_output_with_validation_
         await charge('acme')
 
     _assert_invalid_output(exc.value, 'charge')
+    assert str(exc.value) == (
+        "INTERNAL: Flow 'charge' returned a value that doesn't match its return annotation: amount: Field required"
+    )
 
 
 @pytest.mark.asyncio

@@ -737,7 +737,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
                     reason=RuntimeErrorReason.INVALID_INPUT,
                 ) from e
             raise GenkitError(
-                message=f"Invalid init for action '{self.name}': {e}",
+                message=f"Invalid init for action '{self.name}'",
                 status='INVALID_ARGUMENT',
                 cause=e,
                 reason=RuntimeErrorReason.INVALID_INPUT,
@@ -779,14 +779,15 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             return self._input_type.validate_python(payload)
         except ValidationError as e:
             msg = (
-                f"Action '{self.name}' requires input but none was provided. Please supply a valid input payload."
+                f"Action '{self.name}' requires input but none was provided."
                 if omitted
-                else f"Invalid input for action '{self.name}': {e}"
+                else f"Invalid input for action '{self.name}'"
             )
             raise GenkitError(
                 message=msg,
                 status='INVALID_ARGUMENT',
-                cause=e,
+                # Nothing was passed, so Pydantic's "got None" would only mislead.
+                cause=None if omitted else e,
                 reason=RuntimeErrorReason.INVALID_INPUT,
             ) from e
 
@@ -887,7 +888,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             # A bad return is the flow author's bug, not the caller's, so it's
             # INTERNAL rather than INVALID_ARGUMENT.
             raise GenkitError(
-                message=f"Flow '{self.name}' returned a value that doesn't match its return annotation: {e}",
+                message=f"Flow '{self.name}' returned a value that doesn't match its return annotation",
                 status='INTERNAL',
                 cause=e,
                 reason=RuntimeErrorReason.INVALID_OUTPUT,
