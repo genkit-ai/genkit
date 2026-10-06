@@ -1667,7 +1667,7 @@ export const contextCompression: GenerateMiddleware<
             ? { ...req, messages: resolvedMessages }
             : req;
 
-        const result = await next(modifiedReq, ctx);
+        let result = await next(modifiedReq, ctx);
         if (result.usage?.inputTokens !== undefined) {
           lastInputTokens = result.usage.inputTokens;
           if (result.usage.inputTokens > 0) {
@@ -1679,23 +1679,29 @@ export const contextCompression: GenerateMiddleware<
             // location is populated.
             const stamped = { inputTokens: result.usage.inputTokens };
             if (result.message) {
-              result.message = {
-                ...result.message,
-                metadata: withCompressionMetadata(result.message, stamped),
+              result = {
+                ...result,
+                message: {
+                  ...result.message,
+                  metadata: withCompressionMetadata(result.message, stamped),
+                },
               };
             } else if (result.candidates?.[0]?.message) {
               // Only candidates[0] is surfaced as `response.message`.
               const [first, ...rest] = result.candidates;
-              result.candidates = [
-                {
-                  ...first,
-                  message: {
-                    ...first.message,
-                    metadata: withCompressionMetadata(first.message, stamped),
+              result = {
+                ...result,
+                candidates: [
+                  {
+                    ...first,
+                    message: {
+                      ...first.message,
+                      metadata: withCompressionMetadata(first.message, stamped),
+                    },
                   },
-                },
-                ...rest,
-              ];
+                  ...rest,
+                ],
+              };
             }
           }
         }

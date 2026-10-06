@@ -1316,22 +1316,24 @@ describe('contextCompression middleware', () => {
 
     // Mirrors @genkit-ai/google-genai, which returns `candidates` rather than
     // a top-level `message` from the raw model action.
+    const rawCandidateResponse = {
+      candidates: [
+        {
+          index: 0,
+          finishReason: 'stop' as const,
+          message: {
+            role: 'model' as const,
+            content: [{ text: 'reply' }],
+            metadata: { existing: true },
+          },
+        },
+      ],
+      usage: { inputTokens: 800 },
+    };
+    const originalFirstCandidate = rawCandidateResponse.candidates[0];
     const pm = ai.defineModel({ name: 'candidatesModel' }, async (req) => {
       capturedRequest = req;
-      return {
-        candidates: [
-          {
-            index: 0,
-            finishReason: 'stop',
-            message: {
-              role: 'model',
-              content: [{ text: 'reply' }],
-              metadata: { existing: true },
-            },
-          },
-        ],
-        usage: { inputTokens: 800 },
-      };
+      return rawCandidateResponse;
     });
 
     const mw = contextCompression({
@@ -1350,8 +1352,13 @@ describe('contextCompression middleware', () => {
       (stampedModelMsg.metadata?.contextCompression as any)?.inputTokens,
       800
     );
-    // Pre-existing message metadata must be preserved alongside the stamp.
+    // Pre-existing message metadata must be preserved alongside the stamp, and
+    // the raw response object returned by the model must not be mutated in place.
     assert.strictEqual(stampedModelMsg.metadata?.existing, true);
+    assert.strictEqual(
+      rawCandidateResponse.candidates[0],
+      originalFirstCandidate
+    );
 
     // Turn 0 of a separate generate call should read the stamp (not the
     // character heuristic) and trigger compression.
