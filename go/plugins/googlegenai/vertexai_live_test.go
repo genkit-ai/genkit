@@ -17,8 +17,6 @@
 package googlegenai_test
 
 import (
-	"context"
-	"math"
 	"os"
 	"strings"
 	"testing"
@@ -26,437 +24,107 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
+	"github.com/firebase/genkit/go/plugins/internal/livetest"
 	"google.golang.org/genai"
 )
 
-// To run this test suite: go test -v -run TestVertexAI
-
 func TestVertexAILive(t *testing.T) {
-	projectID, ok := requireEnv("GOOGLE_CLOUD_PROJECT")
-	if !ok {
-		t.Skipf("GOOGLE_CLOUD_PROJECT env var not set")
+	// Authentication is ambient (Application Default Credentials).
+	projectID := livetest.Env(t, "GOOGLE_CLOUD_PROJECT")
+	location := os.Getenv("GOOGLE_CLOUD_LOCATION")
+	if location == "" {
+		location = "global"
 	}
-	location, ok := requireEnv("GOOGLE_CLOUD_LOCATION")
-	if !ok {
-		t.Log("GOOGLE_CLOUD_LOCATION env var not set, defaulting to us-central1")
-		location = "us-central1"
-	}
+	g := livetest.Init(t, &googlegenai.VertexAI{ProjectID: projectID, Location: location})
 
-	ctx := context.Background()
-	g := genkit.Init(ctx,
-		genkit.WithDefaultModel("vertexai/gemini-2.5-flash"),
-		genkit.WithPlugins(&googlegenai.VertexAI{ProjectID: projectID, Location: location}),
-	)
-
-	embedder := googlegenai.VertexAIEmbedder(g, "gemini-embedding-001")
-
-	gablorkenTool := genkit.DefineTool(g, "gablorken", "use this tool when the user asks to calculate a gablorken",
-		func(ctx *ai.ToolContext, input struct {
-			Value float64
-			Over  float64
-		},
-		) (float64, error) {
-			return math.Pow(input.Value, input.Over), nil
-		},
-	)
-	t.Run("model", func(t *testing.T) {
-		resp, err := genkit.Generate(ctx, g, ai.WithPrompt("Which country was Napoleon the emperor of?"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		out := resp.Message.Content[0].Text
-		if !strings.Contains(out, "France") {
-			t.Errorf("got \"%s\", expecting it would contain \"France\"", out)
-		}
-		if resp.Request == nil {
-			t.Error("Request field not set properly")
-		}
-		if resp.Usage.InputTokens == 0 || resp.Usage.OutputTokens == 0 || resp.Usage.TotalTokens == 0 {
-			t.Errorf("Empty usage stats %#v", *resp.Usage)
-		}
-	})
-	t.Run("streaming", func(t *testing.T) {
-		out := ""
-		parts := 0
-		final, err := genkit.Generate(ctx, g,
-			ai.WithPrompt("Write one paragraph about the Golden State Warriors."),
-			ai.WithStreaming(func(ctx context.Context, c *ai.ModelResponseChunk) error {
-				parts++
-				for _, p := range c.Content {
-					out += p.Text
-				}
-				return nil
-			}))
-		if err != nil {
-			t.Fatal(err)
-		}
-		out2 := ""
-		for _, p := range final.Message.Content {
-			out2 += p.Text
-		}
-		if out != out2 {
-			t.Errorf("streaming and final should contain the same text.\nstreaming:%s\nfinal:%s", out, out2)
-		}
-		const want = "Golden"
-		if !strings.Contains(out, want) {
-			t.Errorf("got %q, expecting it to contain %q", out, want)
-		}
-		if parts == 1 {
-			// Check if streaming actually occurred.
-			t.Errorf("expecting more than one part")
-		}
-		if final.Usage.InputTokens == 0 || final.Usage.OutputTokens == 0 || final.Usage.TotalTokens == 0 {
-			t.Errorf("Empty usage stats %#v", *final.Usage)
-		}
-	})
-	t.Run("tool", func(t *testing.T) {
-		resp, err := genkit.Generate(ctx, g,
-			ai.WithPrompt("what is a gablorken of value 2 over 3.5?"),
-			ai.WithTools(gablorkenTool))
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		out := resp.Message.Content[0].Text
-		if !strings.Contains(out, "11.31") {
-			t.Errorf("got %s, expecting it to contain \"11.31\"", out)
-		}
-	})
-	t.Run("embedder", func(t *testing.T) {
-		res, err := genkit.Embed(ctx, g,
-			ai.WithEmbedder(embedder),
-			ai.WithTextDocs("time flies like an arrow", "fruit flies like a banana"),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		// There's not a whole lot we can test about the result.
-		// Just do a few sanity checks.
-		for _, de := range res.Embeddings {
-			out := de.Embedding
-			if len(out) < 100 {
-				t.Errorf("embedding vector looks too short: len(out)=%d", len(out))
-			}
-			var normSquared float32
-			for _, x := range out {
-				normSquared += x * x
-			}
-			if normSquared < 0.9 || normSquared > 1.1 {
-				t.Errorf("embedding vector not unit length: %f", normSquared)
-			}
-		}
-	})
-	t.Run("cache", func(t *testing.T) {
-		if *cache == "" {
-			t.Skip("no cache contents provided, use -cache flag")
-		}
-		textContent, err := os.ReadFile(*cache)
-		if err != nil {
-			t.Fatal(err)
-		}
-		resp, err := genkit.Generate(ctx, g,
-			ai.WithMessages(
-				ai.NewUserTextMessage(string(textContent)).WithCacheTTL(360),
-			),
-			ai.WithPrompt("write a summary of the content"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		// inspect metadata just to make sure the cache was created
-		m := resp.Message.Metadata
-		cacheName := ""
-		if cache, ok := m["cache"].(map[string]any); ok {
-			if n, ok := cache["name"].(string); ok {
-				if n == "" {
-					t.Fatal("expecting a cache name, but got nothing")
-				}
-				cacheName = n
-			} else {
-				t.Fatalf("cache name should be a string but got %T", n)
-			}
-		} else {
-			t.Fatalf("cache name should be a map but got %T", cache)
-		}
-		resp, err = genkit.Generate(ctx, g,
-			ai.WithMessages(resp.History()...),
-			ai.WithPrompt("rewrite the previous summary but now talking like a pirate, say Ahoy a lot of times"),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		text := resp.Text()
-		if !strings.Contains(text, "Ahoy") {
-			t.Fatalf("expecting a response as a pirate but got %v", text)
-		}
-		// cache metadata should have not changed...
-		if cache, ok := m["cache"].(map[string]any); ok {
-			if n, ok := cache["name"].(string); ok {
-				if n == "" {
-					t.Fatal("expecting a cache name, but got nothing")
-				}
-				if cacheName != n {
-					t.Fatalf("cache name mismatch, want: %s, got: %s", cacheName, n)
-				}
-			} else {
-				t.Fatalf("cache name should be a string but got %T", n)
-			}
-		} else {
-			t.Fatalf("cache name should be a map but got %T", cache)
-		}
-	})
-	t.Run("media content (inline data)", func(t *testing.T) {
-		i, err := fetchImgAsBase64()
-		if err != nil {
-			t.Fatal(err)
-		}
-		resp, err := genkit.Generate(ctx, g,
-			ai.WithSystem("You are a pirate expert in animals, your response should include the name of the animal in the provided image"),
-			ai.WithMessages(
-				ai.NewUserMessage(
-					ai.NewTextPart("do you know which animal is in the image?"),
-					ai.NewMediaPart("image/jpg", "data:image/jpg;base64,"+i),
-				),
-			),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !strings.Contains(strings.ToLower(resp.Text()), "cat") {
-			t.Fatalf("image detection failed, want: cat, got: %s", resp.Text())
-		}
-	})
-	t.Run("media content", func(t *testing.T) {
-		resp, err := genkit.Generate(ctx, g,
-			ai.WithMessages(
-				ai.NewUserMessage(
-					ai.NewTextPart("do you know what's the video about?"),
-					ai.NewMediaPart("video/mp4", `https://www.youtube.com/watch?v=_6FYhqGgel8`),
-				),
-			),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !strings.Contains(resp.Text(), "Mario Kart") {
-			t.Fatalf("image detection failed, want: Mario Kart, got: %s", resp.Text())
-		}
-	})
-	t.Run("data content (inline data)", func(t *testing.T) {
-		i, err := fetchImgAsBase64()
-		if err != nil {
-			t.Fatal(err)
-		}
-		resp, err := genkit.Generate(ctx, g,
-			ai.WithSystem("You are a pirate expert in animals, your response should include the name of the animal in the image provided"),
-			ai.WithMessages(
-				ai.NewUserMessage(
-					ai.NewTextPart("do you know which animal is in the image?"),
-					ai.NewDataPart("data:image/jpg;base64,"+i),
-				),
-			),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !strings.Contains(strings.ToLower(resp.Text()), "cat") {
-			t.Fatalf("image detection failed, want: cat, got: %s", resp.Text())
-		}
-	})
-	t.Run("image generation", func(t *testing.T) {
-		if location != "global" {
-			t.Skipf("image generation in Vertex AI is only supported in region: global, got: %s", location)
-		}
-		m := googlegenai.VertexAIModel(g, "gemini-2.5-flash-image")
-		resp, err := genkit.Generate(ctx, g,
-			ai.WithConfig(genai.GenerateContentConfig{
-				ResponseModalities: []string{"IMAGE", "TEXT"},
+	const flash = "gemini-3.5-flash"
+	s := genaiSuite{
+		Suite: livetest.Suite{
+			Model: googlegenai.VertexAIModelRef(flash, nil),
+			ReasoningModel: googlegenai.VertexAIModelRef(flash, &genai.GenerateContentConfig{
+				ThinkingConfig: &genai.ThinkingConfig{IncludeThoughts: true},
 			}),
-			ai.WithMessages(
-				ai.NewUserTextMessage("generate an image of a dog wearing a black tejana while playing the accordion"),
-			),
-			ai.WithModel(m),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(resp.Message.Content) == 0 {
-			t.Fatal("empty response")
-		}
-		foundMediaPart := false
-		for _, part := range resp.Message.Content {
-			if part.ContentType == "image/png" {
-				foundMediaPart = true
-				if part.Kind != ai.PartMedia {
-					t.Errorf("expecting part to be Media type but got: %q", part.Kind)
-				}
-				if part.Text == "" {
-					t.Error("empty response")
-				}
-			}
-		}
-		if !foundMediaPart {
-			t.Error("no media found in the response message")
-		}
-	})
-	t.Run("constrained generation", func(t *testing.T) {
-		type outFormat struct {
-			Country string
-		}
-		resp, err := genkit.Generate(ctx, g,
-			ai.WithPrompt("Which country was Napoleon the emperor of?"),
-			ai.WithOutputType(outFormat{}),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
+			// Gemini thinks on every request but returns its thought
+			// summaries only on some, so the content is not checked; the
+			// thought signatures still have to survive every turn.
+			LimitConfig:       &genai.GenerateContentConfig{MaxOutputTokens: 16},
+			ToolResponseMedia: true,
+		},
+		ref:         googlegenai.VertexAIModelRef,
+		flash:       flash,
+		speechModel: "gemini-2.5-flash-tts",
+		imagenModel: "imagen-4.0-fast-generate-001",
+		videoModel:  "veo-3.1-lite-generate-001",
+		imagenRef:   func(id string) ai.ModelRef { return googlegenai.ImageModelRef("vertexai/"+id, nil) },
+		videoRef:    func(id string) ai.ModelRef { return googlegenai.VideoModelRef("vertexai/"+id, nil) },
+	}
+	// Gemini image output is served only from the global location.
+	if location == "global" {
+		s.imageModel = "gemini-3.1-flash-image"
+	}
+	runGenAI(t, g, s)
 
-		var ans outFormat
-		err = resp.Output(&ans)
-		if err != nil {
-			t.Fatal(err)
-		}
-		const want = "France"
-		if ans.Country != want {
-			t.Errorf("got %q, expecting %q", ans.Country, want)
-		}
-		if resp.Request == nil {
-			t.Error("Request field not set properly")
-		}
-		if resp.Usage.InputTokens == 0 || resp.Usage.OutputTokens == 0 || resp.Usage.TotalTokens == 0 {
-			t.Errorf("Empty usage stats %#v", *resp.Usage)
-		}
+	livetest.RunEmbedder(t, g, livetest.EmbedderSuite{
+		Embedder:   googlegenai.VertexAIEmbedder(g, "gemini-embedding-001"),
+		Dimensions: 3072,
+		Normalized: true,
 	})
-	t.Run("thinking enabled", func(t *testing.T) {
-		if location != "global" && location != "us-central1" {
-			t.Skipf("thinking in Vertex AI is only supported in these regions: [global, us-central1], got: %q", location)
-		}
 
-		m := googlegenai.VertexAIModel(g, "gemini-2.5-flash")
-		resp, err := genkit.Generate(ctx, g,
-			ai.WithConfig(
-				genai.GenerateContentConfig{
-					Temperature: genai.Ptr[float32](1),
-					ThinkingConfig: &genai.ThinkingConfig{
-						IncludeThoughts: true,
-						ThinkingBudget:  genai.Ptr[int32](1024),
-					},
-				},
-			),
-			ai.WithPrompt(`how is a black hole born?`),
-			ai.WithModel(m),
-		)
+	// sayHello generates on a fresh Genkit instance with plugin, which these
+	// checks configure differently from the one above.
+	sayHello := func(t *testing.T, plugin *googlegenai.VertexAI) {
+		t.Helper()
+		gAlt := genkit.Init(t.Context(), genkit.WithPlugins(plugin))
+		resp, err := genkit.Generate(t.Context(), gAlt,
+			ai.WithModel(googlegenai.VertexAIModelRef(flash, nil)),
+			ai.WithPrompt("Say hello in one short sentence."))
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("Generate() error = %v", err)
 		}
-		if resp.Reasoning() == "" {
-			t.Error("expected reasoning contents but got empty")
+		if strings.TrimSpace(resp.Text()) == "" {
+			t.Error("Text() is empty")
 		}
-		if resp.Text() == "" {
-			t.Error("expecting response output, got empty")
-		}
-		if resp.Usage.ThoughtsTokens == 0 {
-			t.Error("expecting thought token count, got 0")
-		}
-	})
-	t.Run("thinking disabled", func(t *testing.T) {
-		if location != "global" && location != "us-central1" {
-			t.Skipf("thinking in Vertex AI is only supported in these regions: [global, us-central1], got: %q", location)
-		}
+	}
 
-		m := googlegenai.VertexAIModel(g, "gemini-2.5-flash")
-		resp, err := genkit.Generate(ctx, g,
-			ai.WithConfig(
-				genai.GenerateContentConfig{
-					Temperature: genai.Ptr[float32](1),
-					ThinkingConfig: &genai.ThinkingConfig{
-						IncludeThoughts: false,
-						ThinkingBudget:  genai.Ptr[int32](0),
-					},
-				},
-			),
-			ai.WithPrompt(`how is a black hole born?`),
-			ai.WithModel(m),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if resp.Reasoning() != "" {
-			t.Error("expected reasoning contents but got content")
-		}
-		if resp.Text() == "" {
-			t.Error("expecting response output, got empty")
-		}
-		if resp.Usage.ThoughtsTokens > 0 {
-			t.Errorf("expecting 0 thought tokens, got %d", resp.Usage.ThoughtsTokens)
-		}
-	})
 	t.Run("tuned gemini endpoint", func(t *testing.T) {
 		endpointID := os.Getenv("GENKIT_VERTEX_TUNED_ENDPOINT")
 		if endpointID == "" {
-			t.Skip("GENKIT_VERTEX_TUNED_ENDPOINT not set; skipping tuned endpoint live test")
+			t.Skip("GENKIT_VERTEX_TUNED_ENDPOINT is not set")
 		}
-		modelName := endpointID
-		if !strings.HasPrefix(modelName, "endpoints/") && !strings.HasPrefix(modelName, "projects/") {
-			modelName = "endpoints/" + modelName
+		name := endpointID
+		if !strings.HasPrefix(name, "endpoints/") && !strings.HasPrefix(name, "projects/") {
+			name = "endpoints/" + name
 		}
-
-		// Use a fresh Genkit instance so we can DefineModel on the Vertex
-		// plugin before Generate runs.
+		// The tuned model is defined on the plugin before generation, so
+		// it needs an instance of its own.
 		plugin := &googlegenai.VertexAI{ProjectID: projectID, Location: location}
-		gTuned := genkit.Init(ctx, genkit.WithPlugins(plugin))
-		m, err := plugin.DefineModel(gTuned, modelName, nil)
+		gTuned := genkit.Init(t.Context(), genkit.WithPlugins(plugin))
+		m, err := plugin.DefineModel(gTuned, name, nil)
 		if err != nil {
-			t.Fatalf("failed to register tuned model %q: %v", modelName, err)
+			t.Fatalf("DefineModel(%q) error = %v", name, err)
 		}
-
-		resp, err := genkit.Generate(ctx, gTuned,
+		resp, err := genkit.Generate(t.Context(), gTuned,
 			ai.WithModel(m),
-			ai.WithPrompt("Say hello in one short sentence."),
-		)
+			ai.WithPrompt("Say hello in one short sentence."))
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("Generate() error = %v", err)
 		}
 		if strings.TrimSpace(resp.Text()) == "" {
-			t.Fatal("expected a non-empty response from the tuned endpoint")
+			t.Error("Text() is empty")
 		}
 	})
+
+	// Multi-region ("us"/"eu") endpoints are not enabled on every project,
+	// so the check is opt-in.
 	t.Run("multi-region location", func(t *testing.T) {
-		// Multi-region ("us"/"eu") endpoints aren't necessarily enabled on
-		// every Vertex AI project, so this is opt-in like the tuned endpoint
-		// test above rather than assumed to work whenever GOOGLE_CLOUD_PROJECT
-		// is set.
-		multiRegion, ok := requireEnv("GENKIT_VERTEX_MULTIREGION_LOCATION")
-		if !ok {
-			t.Skip("GENKIT_VERTEX_MULTIREGION_LOCATION not set; skipping multi-region live test")
+		multiRegion := os.Getenv("GENKIT_VERTEX_MULTIREGION_LOCATION")
+		if multiRegion == "" {
+			t.Skip("GENKIT_VERTEX_MULTIREGION_LOCATION is not set")
 		}
-		// "us" and "eu" are multi-region locations routed to
-		// aiplatform.{location}.rep.googleapis.com by the genai SDK.
-		plugin := &googlegenai.VertexAI{ProjectID: projectID, Location: multiRegion}
-		gMultiRegion := genkit.Init(ctx, genkit.WithPlugins(plugin))
-		resp, err := genkit.Generate(ctx, gMultiRegion,
-			ai.WithModelName("vertexai/gemini-2.5-flash"),
-			ai.WithPrompt("Say hello in one short sentence."),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if strings.TrimSpace(resp.Text()) == "" {
-			t.Fatal("expected a non-empty response from the multi-region endpoint")
-		}
+		sayHello(t, &googlegenai.VertexAI{ProjectID: projectID, Location: multiRegion})
 	})
+
 	t.Run("plugin-level apiVersion override", func(t *testing.T) {
-		plugin := &googlegenai.VertexAI{ProjectID: projectID, Location: location, APIVersion: "v1"}
-		gAPIVersion := genkit.Init(ctx, genkit.WithPlugins(plugin))
-		resp, err := genkit.Generate(ctx, gAPIVersion,
-			ai.WithModelName("vertexai/gemini-2.5-flash"),
-			ai.WithPrompt("Say hello in one short sentence."),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if strings.TrimSpace(resp.Text()) == "" {
-			t.Fatal("expected a non-empty response with apiVersion override")
-		}
+		sayHello(t, &googlegenai.VertexAI{ProjectID: projectID, Location: location, APIVersion: "v1"})
 	})
 }
