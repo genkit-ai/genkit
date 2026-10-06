@@ -281,21 +281,21 @@ class ActionParams:
         fn: Callable[..., _CallT],
         input: object,  # noqa: A002
         ctx: 'ActionRunContext',
-        *,
-        omit_input: bool | None = None,
     ) -> _CallT:
         """Call ``fn`` with ``input`` and ``ctx`` passed by parameter name.
 
-        A missing input is left out when the parameter has a default, so the
-        default applies. ``omit_input`` says whether the caller left the input
-        out; when not given, a None input counts as left out. A flow passes it
-        so an explicit None reaches the function instead of the default.
+        A missing input (``NO_INPUT``) is left out when the parameter has a
+        default, so the default applies. An explicit None on a flow is passed
+        through as a value.
         """
-        if omit_input is None:
-            omit_input = input is None
         kwargs: dict[str, object] = {}
-        if self.input is not None and not (omit_input and self.input_optional):
-            kwargs[self.input.name] = input
+        if self.input is not None:
+            # A missing input is left out only when the parameter has a
+            # default, so `weather(city='Paris')` still runs as Paris. A
+            # required parameter still receives the sentinel (bidi agents
+            # ignore it when `ctx.input_stream` is the real source).
+            if not (input is NO_INPUT and self.input_optional):
+                kwargs[self.input.name] = input
         if self.context is not None:
             kwargs[self.context.name] = ctx
         return fn(**kwargs)
@@ -638,6 +638,11 @@ class NoInput:
 NO_INPUT = cast(Any, NoInput())
 
 
+def input_from_json(value: object) -> object:
+    """JSON can't tell omitted from null, so both mean no input."""
+    return NO_INPUT if value is None else value
+
+
 class ActionRunContext(Generic[ChunkT]):
     """Execution context for an action.
 
@@ -726,9 +731,14 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         span_metadata: dict[str, SpanAttributeValue] | None = None,
         init_schema: type[BaseModel] | dict[str, object] | None = None,
         config_schema: type[BaseModel] | dict[str, object] | None = None,
+        _strict_io: bool = False,
     ) -> None:
         self._kind: ActionKind = kind
         self._name: str = name
+        # Flows treat None as a real value and check the return against the
+        # annotation. Other actions still treat a missing/None input as omitted
+        # and leave the return unchecked.
+        self._strict_io: bool = _strict_io
         self._metadata: dict[str, object] = metadata if metadata else {}
         self._description: str | None = description
         # Python class for generate's isinstance check. Not in metadata —
@@ -854,13 +864,12 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         """
         # Only a flow treats an explicit None as a value; for every other action
         # None still means "no input".
-        omitted = input is NO_INPUT or (input is None and self._kind != ActionKind.FLOW)
-        if omitted:
-            input = None
+        if input is None and not self._strict_io:
+            input = NO_INPUT
         # With a live input_stream, `input` isn't the payload — the stream
         # carries the per-turn inputs — so there's nothing to validate up front.
         if input_stream is None:
-            input = self._validate_input(input, omitted=omitted)
+            input = self._validate_input(input)
         init = self._validate_init(init)
 
         token = None
@@ -881,7 +890,6 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
                 ),
                 on_trace_start,
                 telemetry_labels,
-                omit_input=omitted,
             )
         finally:
             if token is not None:
@@ -1005,8 +1013,9 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
                 reason=RuntimeErrorReason.INVALID_INPUT,
             ) from e
 
-    def _validate_input(self, input: InputT | None, *, omitted: bool = False) -> InputT | None:
+    def _validate_input(self, input: InputT | None) -> InputT | None:
         """Validate caller input against the action schema when one is registered."""
+        omitted = input is NO_INPUT
         if self._input_type is None:
             return input
         # Skip validation when the caller passed nothing AND the wrapped
@@ -1061,7 +1070,6 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         telemetry_labels: dict[str, object] | None,
         *,
         execute: Callable[[], Awaitable[OutputT]] | None = None,
-        omit_input: bool = True,
     ) -> ActionResponse[OutputT]:
         """Open the action span via ``run_in_new_span``, dispatch ``self._fn``, wrap errors in ``GenkitError``."""
         start_time = time.perf_counter()
@@ -1098,12 +1106,12 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
                 if execute is not None:
                     output = await execute()
                 else:
-                    output = await self._invoke(input, ctx, omit_input=omit_input)
+                    output = await self._invoke(input, ctx)
             except Interrupt as e:
                 if e.metadata:
                     span.set_metadata({'interrupt': e.metadata})
                 raise
-            if self._kind == ActionKind.FLOW:
+            if self._strict_io:
                 output = self._validate_output(output, trace_id=trace_id)
             latency_ms = (time.perf_counter() - start_time) * 1000
             return cast(OutputT, _record_latency(output, latency_ms))
@@ -1118,7 +1126,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
                 self._name,
                 body,
                 action_type=str(self._kind),
-                input=input,
+                input=None if input is NO_INPUT else input,
                 attributes=attributes,
                 is_action=True,
             )
@@ -1157,19 +1165,19 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
                 trace_id=trace_id,
             ) from e
 
-    async def _invoke(self, input: object | None, ctx: ActionRunContext, *, omit_input: bool = True) -> OutputT:
+    async def _invoke(self, input: object | None, ctx: ActionRunContext) -> OutputT:
         """Call ``self._fn`` with the input and context.
 
-        ``omit_input`` is True when the caller left the input out, so a
-        defaulted input parameter gets its default. An explicit None on a
-        flow is passed through as a value.
+        A missing input stays ``NO_INPUT`` so a defaulted parameter gets its
+        default. An explicit None on a flow is passed through as a value.
         """
         if self._fn_is_wrapper:
             # The wrapper takes (input, ctx) and forwards to the user's
-            # function with self.params.call.
+            # function with self.params.call. Keep the sentinel so a
+            # defaulted tool input is omitted there instead of becoming None.
             output = await self._fn(input, ctx)
         else:
-            output = await self._params.call(self._fn, input, ctx, omit_input=omit_input and input is None)
+            output = await self._params.call(self._fn, input, ctx)
         return output
 
 

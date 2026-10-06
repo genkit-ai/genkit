@@ -27,6 +27,7 @@ from django.views.decorators.csrf import csrf_exempt
 from pydantic import BaseModel
 
 from genkit import ContextProvider, Genkit, PublicError, RequestData
+from genkit._core._action import input_from_json
 from genkit._core._context import joined_headers
 from genkit.plugin_api import Action, get_callable_json, get_http_status
 
@@ -178,15 +179,13 @@ def genkit_django_handler(
             accept = request_data.headers.get('accept', '')
             stream = 'text/event-stream' in accept or request.GET.get('stream') == 'true'
             init = body.get('init')
-            # JSON can't say "omitted" apart from null, so `{"data": null}` means
-            # no input and the flow's default applies.
-            inputs: dict[str, Any] = {} if body['data'] is None else {'input': body['data']}
+            action_input = input_from_json(body['data'])
 
             if stream:
 
                 async def event_stream() -> AsyncIterator[str]:
                     try:
-                        stream_response = flow.stream(**inputs, context=action_context, init=init)
+                        stream_response = flow.stream(input=action_input, context=action_context, init=init)
                         async for chunk in stream_response.stream:
                             yield f'data: {json.dumps({"message": _to_dict(chunk)}, separators=_JSON_SEPARATORS)}\n\n'
 
@@ -203,7 +202,7 @@ def genkit_django_handler(
                 return StreamingHttpResponse(event_stream(), content_type='text/event-stream')
 
             try:
-                response = await flow.run(**inputs, context=action_context, init=init)
+                response = await flow.run(input=action_input, context=action_context, init=init)
                 return JsonResponse({'result': _to_dict(response.response)})
             except Exception as e:
                 _log_served_failure(e, where='run')

@@ -22,6 +22,7 @@ import json
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 from genkit_fastapi import genkit_fastapi_handler, serve_flow
+from pydantic import BaseModel
 
 from genkit import ActionRunContext, Genkit, GenkitError, PublicError, RequestData
 
@@ -428,3 +429,28 @@ def test_fastapi_flow_returning_wrong_shape_returns_500_internal_error() -> None
     assert response.status_code == 500
     assert response.json() == {'message': 'Internal Error', 'status': 'INTERNAL'}
     assert 'acme' not in response.text
+
+
+class Receipt(BaseModel):
+    table: int
+    note: str | None = None
+
+
+def test_fastapi_flow_returning_dict_for_model_sends_model_dump() -> None:
+    """POST to a `-> Receipt` flow that returns `{'table': 4, 'note': None}` gives `{"result": {"table": 4}}`."""
+    ai = Genkit()
+    app = FastAPI()
+
+    @ai.flow()
+    async def close_tab(table: int) -> Receipt:
+        return {'table': table, 'note': None}  # type: ignore[return-value]
+
+    @app.post('/close_tab', response_model=None)
+    @genkit_fastapi_handler(ai)
+    async def close_tab_route():
+        return close_tab
+
+    response = TestClient(app).post('/close_tab', json={'data': 4})
+
+    assert response.status_code == 200
+    assert response.json() == {'result': {'table': 4}}

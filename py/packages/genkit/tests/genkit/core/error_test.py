@@ -525,3 +525,14 @@ def test_genkit_error_wrapping_validation_error_shows_the_short_form_once() -> N
 
     assert str(error) == "INVALID_ARGUMENT: Invalid input for flow 'order': qty: Field required"
     assert error.cause is cause
+
+
+def test_genkit_error_with_empty_validation_error_has_no_trailing_colon() -> None:
+    """An empty ValidationError adds nothing after the message."""
+    error = GenkitError(
+        status='INVALID_ARGUMENT',
+        message='title missing',
+        cause=ValidationError.from_exception_data('Recipe', []),
+    )
+
+    assert str(error) == 'INVALID_ARGUMENT: title missing'

@@ -42,7 +42,7 @@ import websockets
 from pydantic import BaseModel, JsonValue, ValidationError
 from websockets.exceptions import ConnectionClosed
 
-from genkit._core._action import NO_INPUT, Action, BidiAction
+from genkit._core._action import Action, BidiAction, input_from_json
 from genkit._core._channel import CloseableQueue
 from genkit._core._constants import GENKIT_VERSION
 from genkit._core._error import ReflectionError, ReflectionErrorDetails, StatusCodes, get_reflection_json
@@ -550,9 +550,8 @@ class ReflectionServerV2:
                 await asyncio.gather(*stream_chunk_tasks, return_exceptions=True)
 
         try:
-            # JSON can't say "omitted" apart from null, so both mean no input.
             output = await action.run(
-                input=NO_INPUT if p.input is None else p.input,
+                input=input_from_json(p.input),
                 on_chunk=on_chunk,
                 context=ctx or None,
                 on_trace_start=on_trace_start,

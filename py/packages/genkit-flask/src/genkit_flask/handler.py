@@ -27,6 +27,7 @@ from flask import Response, request
 from pydantic import BaseModel
 
 from genkit import ContextProvider, Genkit, PublicError, RequestData
+from genkit._core._action import input_from_json
 from genkit._core._context import joined_headers
 from genkit.plugin_api import Action, get_callable_json, get_http_status
 
@@ -157,14 +158,12 @@ def genkit_flask_handler(
             accept = request_data.headers.get('accept', '')
             stream = 'text/event-stream' in accept or request.args.get('stream') == 'true'
             init = input_data.get('init')
-            # JSON can't say "omitted" apart from null, so `{"data": null}` means
-            # no input and the flow's default applies.
-            inputs: dict[str, Any] = {} if input_data['data'] is None else {'input': input_data['data']}
+            action_input = input_from_json(input_data['data'])
             if stream:
 
                 async def async_gen() -> AsyncIterator[str]:
                     try:
-                        stream_response = flow.stream(**inputs, context=action_context, init=init)
+                        stream_response = flow.stream(input=action_input, context=action_context, init=init)
                         async for chunk in stream_response.stream:
                             yield f'data: {json.dumps({"message": _to_dict(chunk)}, separators=_JSON_SEPARATORS)}\n\n'
 
@@ -178,7 +177,7 @@ def genkit_flask_handler(
                 return iter
             else:
                 try:
-                    response = await flow.run(**inputs, context=action_context, init=init)
+                    response = await flow.run(input=action_input, context=action_context, init=init)
                     return {'result': _to_dict(response.response)}
                 except Exception as e:
                     _log_served_failure(e, where='run')

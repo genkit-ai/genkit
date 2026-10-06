@@ -358,11 +358,13 @@ def format_validation_error(error: ValidationError, *, max_errors: int = 3) -> s
     Example:
         ``items[1].qty: Field required; table: Input should be a valid integer, got 'x'``
     """
+    # Follow Pydantic's own decision about whether the value is safe to print.
+    hide_input = error.error_count() > 0 and 'input_value=' not in str(error)
     problems: list[str] = []
     for err in error.errors(include_url=False)[:max_errors]:
         text = err['msg']
         # For a missing field the input is the whole parent object, which says nothing new.
-        if err['type'] != 'missing':
+        if err['type'] != 'missing' and not hide_input:
             text = f'{text}, got {_value_preview.repr(err["input"])}'
         path = ''.join(f'[{p}]' if isinstance(p, int) else f'.{p}' for p in err['loc']).lstrip('.')
         problems.append(f'{path}: {text}' if path else text)
@@ -416,7 +418,8 @@ class GenkitError(Exception):
         # UI) see the real reason instead of the bare wrapper text.
         source_prefix = f'{source}: ' if source else ''
         if isinstance(cause, ValidationError):
-            cause_suffix = f': {format_validation_error(cause)}'
+            formatted = format_validation_error(cause)
+            cause_suffix = f': {formatted}' if formatted else ''
         else:
             cause_suffix = f': {cause}' if cause else ''
         super().__init__(f'{source_prefix}{self.status}: {message}{cause_suffix}')
@@ -427,6 +430,11 @@ class GenkitError(Exception):
         if reason is not None:
             details = dict(details)
             details['reason'] = reason.value
+        if isinstance(cause, ValidationError) and 'errors' not in details:
+            details = dict(details)
+            details['errors'] = [
+                {'loc': list(err['loc']), 'message': err['msg'], 'type': err['type']} for err in cause.errors()
+            ]
         if 'stack' not in details:
             details['stack'] = get_error_stack(cause if cause else self)
         if 'trace_id' not in details and trace_id:

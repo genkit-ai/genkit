@@ -22,6 +22,7 @@ from typing import Any
 
 from flask import Flask
 from genkit_flask import genkit_flask_handler
+from pydantic import BaseModel
 
 from genkit import ActionRunContext, Genkit, GenkitError, PublicError, RequestData
 
@@ -285,3 +286,26 @@ def test_flask_flow_with_default_and_null_data_uses_python_default() -> None:
 
     assert response.status_code == 200
     assert response.json == {'result': 'hello world'}
+
+
+class Receipt(BaseModel):
+    table: int
+    note: str | None = None
+
+
+def test_flask_flow_returning_partial_dict_for_model_sends_defaults() -> None:
+    """POST to a `-> Receipt` flow that returns `{'table': 4}` includes `note: null`."""
+    ai = Genkit()
+    app = Flask(__name__)
+    app.config.update({'TESTING': True})
+
+    @app.post('/close_tab')
+    @genkit_flask_handler(ai)
+    @ai.flow()
+    async def close_tab(table: int) -> Receipt:
+        return {'table': table}  # type: ignore[return-value]
+
+    response = app.test_client().post('/close_tab', json={'data': 4})
+
+    assert response.status_code == 200
+    assert response.json == {'result': {'table': 4, 'note': None}}

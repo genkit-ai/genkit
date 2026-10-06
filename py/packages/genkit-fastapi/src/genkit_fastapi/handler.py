@@ -29,6 +29,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from genkit import ContextProvider, Genkit, GenkitError, PublicError, RequestData
+from genkit._core._action import input_from_json
 from genkit._core._context import joined_headers
 from genkit.exp.agent import Agent, SessionSnapshot
 from genkit.plugin_api import Action, ActionKind, get_callable_json, get_http_status
@@ -220,15 +221,13 @@ async def handle_genkit_request(
 
     resolved_init = init if init is not None else resolve_session_init(body, request.query_params)
     action_obj = cast(Action[Any, Any, Any, Any], action)
-    # JSON can't say "omitted" apart from null, so both mean no input and the
-    # flow's default applies.
-    inputs: dict[str, Any] = {} if input_data is None else {'input': input_data}
+    action_input = input_from_json(input_data)
 
     if wants_stream(request):
 
         async def event_stream() -> AsyncIterator[str]:
             try:
-                stream_response = action_obj.stream(**inputs, context=context, init=resolved_init)
+                stream_response = action_obj.stream(input=action_input, context=context, init=resolved_init)
                 async for chunk in stream_response.stream:
                     yield format_stream_chunk(chunk)
                 result = await stream_response.response
@@ -240,7 +239,7 @@ async def handle_genkit_request(
         return StreamingResponse(event_stream(), media_type='text/event-stream')
 
     try:
-        response = await action_obj.run(**inputs, context=context, init=resolved_init)
+        response = await action_obj.run(input=action_input, context=context, init=resolved_init)
         if response.response is None and action_obj.kind == ActionKind.AGENT_SNAPSHOT:
             return Response(status_code=404)
         return {'result': to_dict(response.response)}
