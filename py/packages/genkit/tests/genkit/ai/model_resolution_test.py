@@ -168,7 +168,7 @@ def test_resolve_model_name_raises_when_default_is_not_string() -> None:
     """A configured default of the wrong type says so, rather than 'not configured'."""
     registry = Registry()
     registry.register_value('defaultModel', 'defaultModel', 123)
-    with pytest.raises(GenkitError, match='defaultModel is int, expected str or ModelRef') as exc_info:
+    with pytest.raises(GenkitError, match='defaultModel is int, expected str, ModelRef, or a model action') as exc_info:
         resolve_model_name(model=None, registry=registry)
     assert exc_info.value.reason is RuntimeErrorReason.INVALID_INPUT
     assert 'INVALID_INPUT' not in exc_info.value.original_message
@@ -353,7 +353,7 @@ def test_resolve_model_arg_rejects_non_name_explicit_model() -> None:
     """A leftover int must not silently run the constructor default."""
     registry = Registry()
     registry.register_value('defaultModel', 'defaultModel', 'echo-model')
-    with pytest.raises(GenkitError, match='model is int, expected str or ModelRef'):
+    with pytest.raises(GenkitError, match='model is int, expected str, ModelRef, or a model action'):
         resolve_model_arg(model=123, registry=registry)
 
 

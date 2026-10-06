@@ -342,7 +342,7 @@ def define_agent(
     registry: Registry,
     name: str,
     *,
-    model: ModelRef[ModelRefConfigT] | str | None = None,
+    model: ModelRef[ModelRefConfigT] | Action | str | None = None,
     system: str | list[Part] | None = None,
     tools: Sequence[str | Tool] | None = None,
     use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,

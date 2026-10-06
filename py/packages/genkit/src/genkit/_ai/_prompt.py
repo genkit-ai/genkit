@@ -194,7 +194,7 @@ class GenerateCall(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(arbitrary_types_allowed=True)
 
     variant: str | None = None
-    model: str | ModelRef[BaseModel] | None = None
+    model: ModelArg | None = None
     config: Mapping[str, Any] | BaseModel | None = None
     description: str | None = None
     input_schema: type | dict[str, Any] | str | None = None

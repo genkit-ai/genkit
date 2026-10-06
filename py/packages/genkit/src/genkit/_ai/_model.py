@@ -59,7 +59,8 @@ ModelFn = Callable[[ModelRequest, ActionRunContext], Awaitable[ModelResponse[Any
 logger = get_logger(__name__)
 
 # Veneer-facing argument shapes. Internals resolve these into ResolvedModel.
-ModelArg: TypeAlias = str | ModelRef[BaseModel]
+# A model action is the object define_model returns; generate looks it up by name.
+ModelArg: TypeAlias = str | ModelRef[BaseModel] | Action
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -144,42 +145,52 @@ def normalize_config(*, config: object) -> dict[str, Any]:
     )
 
 
+def _name_or_ref(model: object) -> str | ModelRef[BaseModel] | None:
+    """Unwrap a name, ModelRef, or define_model action. Other values stay None."""
+    if isinstance(model, ModelRef):
+        return cast(ModelRef[BaseModel], model)
+    if isinstance(model, str) and model:
+        return model
+    if isinstance(model, Action) and model.kind == ActionKind.MODEL and model.name:
+        return model.name
+    return None
+
+
 def resolve_model_arg(
     *,
     model: object | None,
     registry: Registry,
     message: str = 'No model configured.',
-) -> ModelArg:
+) -> str | ModelRef[BaseModel]:
     """Return the explicit model or the registry default (name or ModelRef).
 
     An empty string is treated as omitted so ``model=os.getenv('MODEL')``
     still picks up the constructor default when the env var is unset.
     An empty constructor default is omitted the same way: not a model
     name, and not a type error.
-    Anything else that is not a name or ModelRef is a hard error — a
-    leftover int or action must not silently run the default model.
+    A model action from define_model is the same as passing that action's name.
+    Anything else that is not a name, ModelRef, or model action is a hard
+    error — an int or other wrong type must not silently run the default model.
     """
-    if isinstance(model, ModelRef):
-        return cast(ModelArg, model)
-    if isinstance(model, str) and model:
-        return model
+    explicit = _name_or_ref(model)
+    if explicit is not None:
+        return explicit
     if model is not None and model != '':
         raise GenkitError(
             status='INVALID_ARGUMENT',
-            message=f'model is {type(model).__name__}, expected str or ModelRef.',
+            message=(f'model is {type(model).__name__}, expected str, ModelRef, or a model action.'),
             reason=RuntimeErrorReason.INVALID_INPUT,
         )
     resolved = registry.lookup_value('defaultModel', 'defaultModel')
-    if isinstance(resolved, ModelRef):
-        logger.debug('no model specified, using default model', model=resolved.name)
-        return cast(ModelArg, resolved)
-    if isinstance(resolved, str) and resolved:
-        logger.debug('no model specified, using default model', model=resolved)
-        return resolved
+    default = _name_or_ref(resolved)
+    if default is not None:
+        name = default.name if isinstance(default, ModelRef) else default
+        logger.debug('no model specified, using default model', model=name)
+        return default
     if resolved is not None and resolved != '':
         raise GenkitError(
             status='INVALID_ARGUMENT',
-            message=(f'defaultModel is {type(resolved).__name__}, expected str or ModelRef.'),
+            message=(f'defaultModel is {type(resolved).__name__}, expected str, ModelRef, or a model action.'),
             reason=RuntimeErrorReason.INVALID_INPUT,
         )
     raise GenkitError(

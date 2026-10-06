@@ -628,7 +628,7 @@ async def test_non_name_model_is_hard_error_not_default() -> None:
     with pytest.raises(GenkitError) as exc_info:
         await ai.generate(model=123, prompt='hi')  # type: ignore[arg-type]
 
-    assert 'model is int, expected str or ModelRef' in str(exc_info.value)
+    assert 'model is int, expected str, ModelRef, or a model action' in str(exc_info.value)
     assert exc_info.value.reason is RuntimeErrorReason.INVALID_INPUT
     assert 'INVALID_INPUT' not in exc_info.value.original_message
     assert echo.last_request is None
