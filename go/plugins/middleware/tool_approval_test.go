@@ -811,13 +811,13 @@ func TestToolApprovalJudgeVerdicts(t *testing.T) {
 		reply       judgeReply
 		wantRan     bool
 		wantDenied  bool
-		interrupted bool
+		interrupted string // the interrupt's "judge" value; empty when none
 	}{
 		{name: "allow runs the tool", reply: judgeReply{text: "allow"}, wantRan: true},
 		{name: "deny answers the call with an error", reply: judgeReply{text: "deny"}, wantDenied: true},
-		{name: "ask interrupts", reply: judgeReply{text: "ask"}, interrupted: true},
-		{name: "an answer outside the verdicts interrupts", reply: judgeReply{text: "probably fine"}, interrupted: true},
-		{name: "a failed judge interrupts", reply: judgeReply{err: errors.New("judge down")}, interrupted: true},
+		{name: "ask interrupts", reply: judgeReply{text: "ask"}, interrupted: "ask"},
+		{name: "an answer outside the verdicts interrupts", reply: judgeReply{text: "probably fine"}, interrupted: "failed"},
+		{name: "a failed judge interrupts", reply: judgeReply{err: errors.New("judge down")}, interrupted: "failed"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -833,10 +833,18 @@ func TestToolApprovalJudgeVerdicts(t *testing.T) {
 			if ran := f.ran.Load() > 0; ran != tc.wantRan {
 				t.Errorf("tool ran = %v, want %v", ran, tc.wantRan)
 			}
-			if interrupted := resp.FinishReason == "interrupted"; interrupted != tc.interrupted {
-				t.Fatalf("interrupted = %v, want %v", interrupted, tc.interrupted)
+			if interrupted := resp.FinishReason == "interrupted"; interrupted != (tc.interrupted != "") {
+				t.Fatalf("interrupted = %v, want %v", interrupted, tc.interrupted != "")
 			}
-			if tc.interrupted {
+			if tc.interrupted != "" {
+				interrupts := resp.Interrupts()
+				if len(interrupts) != 1 {
+					t.Fatalf("got %d interrupts, want 1", len(interrupts))
+				}
+				md, _ := ai.InterruptAs[map[string]any](interrupts[0])
+				if got := md["judge"]; got != tc.interrupted {
+					t.Errorf("interrupt judge = %v, want %q", got, tc.interrupted)
+				}
 				return
 			}
 			if resp.Text() != "done" {

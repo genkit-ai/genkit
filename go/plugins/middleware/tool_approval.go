@@ -83,6 +83,10 @@ import (
 // A judge that fails, or answers with anything other than a verdict,
 // interrupts the call.
 //
+// An interrupt the judge caused carries a "judge" key in its metadata, "ask"
+// or "failed", so the caller can tell a judge that wants the user to confirm
+// from one that could not decide.
+//
 // The judge is asked through the enum output format, so any model that can
 // answer with one of a list of values works, including decision models such
 // as TypeSafe's jev. A smaller, faster model than the one being judged keeps
@@ -145,12 +149,14 @@ func (t *ToolApproval) wrapTool(ctx context.Context, params *ai.ToolParams, next
 		return next(ctx, params)
 	}
 
+	interrupt := map[string]any{"message": "Tool not in approved list: " + name}
 	if t.Judge.Name() != "" {
 		v, err := t.judge(ctx, params)
 		if err != nil {
 			// Falling back to an interrupt is safe, but the judge is
 			// misconfigured or unreachable, so it warrants visibility.
 			logger.Warn(ctx, "tool approval judge failed, holding tool for approval", "tool", name, "judge", t.Judge.Name(), "error", err)
+			interrupt = map[string]any{"message": "Approval judge failed on tool: " + name, "judge": judgeFailed}
 		} else {
 			logger.Debug(ctx, "tool approval judge decided", "tool", name, "judge", t.Judge.Name(), "verdict", v)
 			switch v {
@@ -159,15 +165,14 @@ func (t *ToolApproval) wrapTool(ctx context.Context, params *ai.ToolParams, next
 			case verdictDeny:
 				return nil, tool.Fail(ctx, errors.New(deniedMessage))
 			}
+			interrupt = map[string]any{"message": "Approval judge asked to confirm tool: " + name, "judge": verdictAsk}
 		}
 	}
 
 	// No span is emitted here: the generate engine attributes a hook that
 	// short-circuits the tool to the tool itself in traces.
 	logger.Debug(ctx, "tool held for approval", "tool", name)
-	return nil, tool.Interrupt(ctx, map[string]any{
-		"message": "Tool not in approved list: " + name,
-	})
+	return nil, tool.Interrupt(ctx, interrupt)
 }
 
 // The verdicts a [ToolApproval.Judge] answers with.
@@ -176,6 +181,10 @@ const (
 	verdictDeny  = "deny"
 	verdictAsk   = "ask"
 )
+
+// judgeFailed is the interrupt's "judge" value when the judge returned no
+// verdict: it failed, or answered with something other than one.
+const judgeFailed = "failed"
 
 // deniedMessage is the error the model receives for a call the judge denies.
 const deniedMessage = "the tool call was denied by the approval policy; do not retry it or work around the denial, continue without it or tell the user it was refused"
