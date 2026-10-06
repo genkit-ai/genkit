@@ -22,7 +22,7 @@ from collections.abc import Callable
 
 import httpx
 import pytest
-from genkit_openai.models.utils import (
+from genkit_openai._models._utils import (
     DictMessageAdapter,
     MessageAdapter,
     MessageConverter,

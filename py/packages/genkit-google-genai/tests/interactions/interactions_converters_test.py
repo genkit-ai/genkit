@@ -21,7 +21,7 @@ from __future__ import annotations
 from typing import Any, cast
 
 import pytest
-from genkit_google_genai._interactions.converters import (
+from genkit_google_genai._interactions._converters import (
     ensure_tool_ids,
     from_interaction,
     from_interaction_content,

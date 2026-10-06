@@ -18,8 +18,8 @@
 from unittest.mock import MagicMock
 
 import pytest
-from genkit_openai.models import OpenAIModelHandler
-from genkit_openai.models.model_info import SUPPORTED_OPENAI_MODELS
+from genkit_openai._models import OpenAIModelHandler
+from genkit_openai._models._model_info import SUPPORTED_OPENAI_MODELS
 
 
 def test_get_model_handler() -> None:
