@@ -58,6 +58,44 @@ def stamp_operation_action(*, operation: Operation, name: str) -> None:
     operation.action = _make_action_key(ActionKind.BACKGROUND_MODEL, name)
 
 
+def _operation_action(
+    *,
+    kind: ActionKind,
+    name: str,
+    fn: Callable[..., Awaitable[Operation]],
+    model_name: str,
+    description: str,
+    metadata: dict[str, object],
+    config_schema: type[BaseModel] | dict[str, Any] | None = None,
+) -> Action:
+    """An Action for start/check/cancel that stamps the returned Operation.
+
+    ``fn``'s signature is still the Action's (``metadata_fn``), so
+    ``(ctx, request)`` and ``(request, ctx)`` both work: the wrapper forwards
+    through ``params.call``. The stamp is the start action key, so a caller
+    who passes the Operation back reaches the right check/cancel.
+    """
+
+    # wraps keeps fn's annotations on the wrapper, e.g. ModelRequest[VeoConfig].
+    @wraps(fn)
+    async def run_and_stamp(input: object, ctx: ActionRunContext) -> Operation:  # noqa: A002
+        op = await action.params.call(fn, input, ctx)
+        if isinstance(op, Operation):
+            stamp_operation_action(operation=op, name=model_name)
+        return op
+
+    action = Action(
+        kind=kind,
+        name=name,
+        fn=run_and_stamp,
+        metadata_fn=fn,
+        metadata=metadata,
+        description=description,
+        config_schema=config_schema,
+    )
+    return action
+
+
 StartModelOpFn = Callable[[ModelRequest, ActionRunContext], Awaitable[Operation]]
 CheckModelOpFn = Callable[[Operation, ActionRunContext], Awaitable[Operation]]
 CancelModelOpFn = Callable[[Operation, ActionRunContext], Awaitable[Operation]]
@@ -88,10 +126,11 @@ def operation_context(
 
 
 class BackgroundAction(Generic[OutputT]):
-    """A background action that can run for a long time.
+    """A handle over a background model's start, check and cancel actions.
 
-    Unlike regular actions, background actions can run for extended periods.
-    The returned operation can be used to check status and retrieve the response.
+    Built on registered actions but isn't itself an ``Action``: each of
+    start, check and cancel has its own registry key.
+    ``start`` returns an Operation; pass it to ``check`` until it's done.
 
     Attributes:
         __action: Action metadata.
@@ -135,6 +174,18 @@ class BackgroundAction(Generic[OutputT]):
     def supports_cancel(self) -> bool:
         """Whether this background action supports cancellation."""
         return self.cancel_action is not None
+
+    @property
+    def actions(self) -> list[Action]:
+        """The start, check and (if any) cancel actions, for registering or listing.
+
+        A background model is three registered actions, not one. Register all
+        of them, or a poll fails later with the check action not found.
+        """
+        actions = [self.start_action, self.check_action]
+        if self.cancel_action is not None:
+            actions.append(self.cancel_action)
+        return actions
 
     async def start(
         self,
@@ -249,8 +300,6 @@ def background_model(
     Plugin ``init`` / ``resolve`` return this. ``define_background_model``
     registers the start / check / cancel actions.
     """
-    action_key = _make_action_key(ActionKind.BACKGROUND_MODEL, name)
-
     # Build model metadata
     model_meta: dict[str, Any] = metadata.copy() if metadata else {}
     model_options: dict[str, Any] = {}
@@ -281,53 +330,32 @@ def background_model(
     output_schema_meta = to_json_schema(ModelResponse)
     model_meta['outputSchema'] = output_schema_meta
 
-    # Wrap the start function to add the action key and timing.
-    # Keep the caller's request annotation (ModelRequest[FamilyConfig]) so
-    # Action still types the config bag as that family.
-    @wraps(start)
-    async def wrapped_start(request: ModelRequest, ctx: ActionRunContext) -> Operation:
-        op = await start(request, ctx)
-        # The handle needs this key so check/cancel can find the job later.
-        op.action = action_key
-        return op
-
-    async def wrapped_check(op: Operation, ctx: ActionRunContext) -> Operation:
-        updated = await check(op, ctx)
-        # Preserve action key
-        updated.action = action_key
-        return updated
-
-    start_action = Action(
+    start_action = _operation_action(
         kind=ActionKind.BACKGROUND_MODEL,
         name=name,
-        fn=wrapped_start,
-        metadata_fn=start,
+        fn=start,
+        model_name=name,
         metadata=model_meta,
         description=description or f'Background model: {label}',
         config_schema=config_schema,
     )
 
-    check_action = Action(
+    check_action = _operation_action(
         kind=ActionKind.CHECK_OPERATION,
         name=f'{name}/check',
-        fn=wrapped_check,
+        fn=check,
+        model_name=name,
         metadata={'outputSchema': output_schema_meta},
         description=f'Check operation status for {label}',
     )
 
     cancel_action = None
     if cancel is not None:
-        cancel_fn = cancel
-
-        async def wrapped_cancel(op: Operation, ctx: ActionRunContext) -> Operation:
-            cancelled = await cancel_fn(op, ctx)
-            cancelled.action = action_key
-            return cancelled
-
-        cancel_action = Action(
+        cancel_action = _operation_action(
             kind=ActionKind.CANCEL_OPERATION,
             name=f'{name}/cancel',
-            fn=wrapped_cancel,
+            fn=cancel,
+            model_name=name,
             metadata={'outputSchema': output_schema_meta},
             description=f'Cancel operation for {label}',
         )
@@ -363,10 +391,8 @@ def define_background_model(
         metadata=metadata,
         description=description,
     )
-    registry.register_action_from_instance(action.start_action)
-    registry.register_action_from_instance(action.check_action)
-    if action.cancel_action is not None:
-        registry.register_action_from_instance(action.cancel_action)
+    for each in action.actions:
+        registry.register_action_from_instance(each)
     return action
 
 
