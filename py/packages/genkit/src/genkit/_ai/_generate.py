@@ -248,7 +248,7 @@ async def run_logged_hook(
         )
 
 
-@dataclass
+@dataclass(frozen=True)
 class ScopedGenkitView:
     """A GenkitLike view over the call-scoped registry for one generate invocation.
 
