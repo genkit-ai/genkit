@@ -17,9 +17,9 @@ package zai_test
 import (
 	"testing"
 
-	"github.com/firebase/genkit/go/plugins/compat_oai/internal/oailive"
 	"github.com/firebase/genkit/go/plugins/compat_oai/zai"
 	"github.com/firebase/genkit/go/plugins/internal/livetest"
+	"github.com/firebase/genkit/go/plugins/internal/oailive"
 )
 
 func TestPluginLive(t *testing.T) {
