@@ -49,7 +49,7 @@ async def test_model_garden_openai_compatible_model_resolves_and_generates() -> 
     client.chat.completions.create = AsyncMock(return_value=_chat_completion('hello from llama'))
 
     with patch(
-        'genkit_vertexai.model_garden.model_garden.OpenAIClient.create',
+        'genkit_vertexai.model_garden.client.OpenAIClient.create',
         new=AsyncMock(return_value=client),
     ):
         ai = Genkit(plugins=[ModelGarden(project_id='my-project', location='us-central1')])

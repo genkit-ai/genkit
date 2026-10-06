@@ -51,7 +51,7 @@ See Also:
     - Vertex AI Vector Search: https://cloud.google.com/vertex-ai/docs/vector-search
 """
 
-from genkit_vertexai.model_garden import ModelGarden, ModelGardenPlugin
+from genkit_vertexai.model_garden import ModelGarden
 
 
 def package_name() -> str:
@@ -65,6 +65,5 @@ def package_name() -> str:
 
 __all__ = [
     'ModelGarden',
-    'ModelGardenPlugin',
     'package_name',
 ]

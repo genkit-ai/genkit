@@ -16,19 +16,17 @@
 
 """Unittests for VertexAI Model Garden Models."""
 
-import warnings
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 from genkit_anthropic import AnthropicConfig
-from genkit_vertexai.model_garden import ModelGarden, ModelGardenPlugin
 from genkit_vertexai.model_garden.anthropic import AnthropicModelGarden
 from genkit_vertexai.model_garden.model_garden import ModelGardenModel
 
 
 @pytest.fixture
-@patch('genkit_vertexai.model_garden.model_garden.OpenAIClient')
+@patch('genkit_vertexai.model_garden.client.OpenAIClient')
 def model_garden_instance(client: MagicMock) -> ModelGardenModel:
     """Model Garden fixture."""
     return ModelGardenModel(model='test', location='us-central1', project_id='project')
@@ -88,17 +86,6 @@ def test_get_model_info(model_name: str, expected: dict[str, Any], model_garden_
     result = model_garden_instance.get_model_info()
 
     assert result == expected
-
-
-def test_model_garden_plugin_deprecated_alias() -> None:
-    """ModelGardenPlugin warns and delegates to ModelGarden."""
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter('always', DeprecationWarning)
-        plugin = ModelGardenPlugin(project_id='my-project', location='us-central1')
-
-    assert len(caught) == 1
-    assert 'ModelGardenPlugin is deprecated' in str(caught[0].message)
-    assert isinstance(plugin, ModelGarden)
 
 
 def test_anthropic_model_garden_uses_anthropic_config_schema() -> None:
