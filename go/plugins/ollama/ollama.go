@@ -681,9 +681,14 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %v", err)
+		return nil, sendError(ctx, g.serverAddress, err)
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, responseError(resp.StatusCode, body)
+	}
 
 	if cb == nil {
 		// Existing behavior for non-streaming responses
@@ -691,9 +696,6 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read response body: %v", err)
-		}
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("server returned non-200 status: %d, body: %s", resp.StatusCode, body)
 		}
 
 		var response *ai.ModelResponse

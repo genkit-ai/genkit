@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
@@ -71,7 +72,8 @@ func embed(ctx context.Context, serverAddress string, req *ai.EmbedRequest) (*ai
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("ollama embed request failed with status code %d", resp.StatusCode)
+		body, _ := io.ReadAll(resp.Body)
+		return nil, responseError(resp.StatusCode, body)
 	}
 
 	var ollamaResp ollamaEmbedResponse
@@ -89,7 +91,11 @@ func sendEmbedRequest(ctx context.Context, serverAddress string, jsonData []byte
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	return client.Do(httpReq)
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return nil, sendError(ctx, serverAddress, err)
+	}
+	return resp, nil
 }
 
 func newOllamaEmbedRequest(model string, documents []*ai.Document) ollamaEmbedRequest {
