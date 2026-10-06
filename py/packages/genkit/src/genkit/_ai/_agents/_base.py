@@ -62,6 +62,7 @@ from genkit._ai._prompt import (
     Prompt,
     PromptGenerateOptions,
     lookup_prompt,
+    prepare_prompt,
     register_prompt_actions,
 )
 from genkit._core._action import Action, ActionKind, ActionRunContext, BidiAction, BidiFn, get_current_context
@@ -429,16 +430,16 @@ def define_prompt_agent(
                 'resume_metadata': resume_metadata,
                 'context': ctx.context,
             }
-            call_registry, options = await executable._prepare(input={}, opts=call_opts)
-            rendered_messages = list(options.messages or [])
-            options = options.model_copy(
+            prepared = await prepare_prompt(prompt=executable, input={}, opts=call_opts)
+            rendered_messages = list(prepared.options.messages or [])
+            options = prepared.options.model_copy(
                 update={'messages': apply_preamble_tags(rendered_messages)},
             )
 
             return await generate_prompt_agent_turn(
                 session_runner=session_runner,
                 ctx=ctx,
-                registry=call_registry,
+                registry=prepared.registry,
                 options=options,
                 history=history,
             )
