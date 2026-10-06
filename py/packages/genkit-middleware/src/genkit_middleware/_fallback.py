@@ -27,16 +27,11 @@ from genkit import GenkitError
 from genkit._core._action import Action, ActionKind
 from genkit._core._model import ModelResponse
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
+from genkit_middleware._statuses import TRANSIENT_STATUSES, status_matches
 
-_DEFAULT_FALLBACK_STATUSES: list[str] = [
-    'UNAVAILABLE',
-    'DEADLINE_EXCEEDED',
-    'RESOURCE_EXHAUSTED',
-    'ABORTED',
-    'INTERNAL',
-    'NOT_FOUND',
-    'UNIMPLEMENTED',
-]
+# Everything Retry would retry, plus failures another model may not have:
+# this model doesn't exist or can't do what the request asks.
+_DEFAULT_FALLBACK_STATUSES: list[str] = [*TRANSIENT_STATUSES, 'NOT_FOUND', 'UNIMPLEMENTED']
 
 
 class FallbackConfig(BaseModel):
@@ -98,7 +93,6 @@ class Fallback(BaseMiddleware[FallbackConfig]):
         raise last_error
 
     def _should_fall_back(self, exc: Exception) -> bool:
-        # Same contract as JS and Go: only a classified error falls back. A
-        # second model is billed, so a raw error (a bug in a plugin or in
-        # another middleware) propagates instead of rerouting every request.
-        return isinstance(exc, GenkitError) and exc.status in self.config.statuses
+        # A raw exception has no status to check, so it propagates instead of
+        # sending the request on to another billed model.
+        return status_matches(exc, self.config.statuses, unclassified=False)

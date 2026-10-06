@@ -28,14 +28,9 @@ from pydantic import BaseModel, Field
 from genkit import GenkitError
 from genkit._core._model import ModelResponse
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
+from genkit_middleware._statuses import TRANSIENT_STATUSES, status_matches
 
-_DEFAULT_RETRY_STATUSES: list[str] = [
-    'UNAVAILABLE',
-    'DEADLINE_EXCEEDED',
-    'RESOURCE_EXHAUSTED',
-    'ABORTED',
-    'INTERNAL',
-]
+_DEFAULT_RETRY_STATUSES: list[str] = list(TRANSIENT_STATUSES)
 
 
 class RetryConfig(BaseModel):
@@ -68,9 +63,9 @@ class Retry(BaseMiddleware[RetryConfig]):
                 if attempt == self.config.max_retries:
                     raise
 
-                # Same contract as JS and Go: `statuses` gates classified errors,
-                # and an unclassified one (a raw ConnectionError, say) is retried.
-                if isinstance(e, GenkitError) and e.status not in self.config.statuses:
+                # A raw exception has no status to check, so it's retried;
+                # `statuses` only filters GenkitError.
+                if not status_matches(e, self.config.statuses, unclassified=True):
                     raise
 
                 delay_ms = current_delay_ms
