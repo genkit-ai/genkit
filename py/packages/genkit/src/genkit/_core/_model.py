@@ -45,7 +45,8 @@ from typing_extensions import TypedDict, TypeVar
 from genkit._core import _typing as typing_mod
 from genkit._core._base import GenkitModel, dump_keeping_unknown
 from genkit._core._error import GenkitError, GenkitRuntimeError, RuntimeErrorReason
-from genkit._core._extract_json import extract_json
+from genkit._core._extract_json import extract_json, extract_partial_json
+from genkit._core._logger import get_logger
 from genkit._core._partial import construct_partial
 from genkit._core._schema import parse_schema
 from genkit._core._typing import (
@@ -101,6 +102,8 @@ ABNORMAL_FINISH_REASONS = frozenset({
     FinishReason.INTERRUPTED,
     FinishReason.OTHER,
 })
+
+logger = get_logger(__name__)
 
 
 class ModelConfigDict(TypedDict, extra_items=Any, total=False):
@@ -1122,6 +1125,7 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
             return
 
         schema = self.request.output_schema if self.request is not None else None
+        cut_off = self.finish_reason == FinishReason.LENGTH
 
         try:
             parsed = self._raw_parsed_output()
@@ -1129,12 +1133,25 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
             if isinstance(exc, GenkitError) and (exc.original_message or '').startswith('Invalid output_schema'):
                 raise
             preview = (self.text or '')[:200]
-            self._mark_invalid_output(f'Model output was not valid JSON for the requested schema: {preview}')
+            if cut_off:
+                self._mark_invalid_output(
+                    'Model output was cut off at the token limit '
+                    f'(finish_reason=length) before the JSON was complete: {preview}'
+                )
+            else:
+                target = 'schema' if schema is not None else 'format'
+                self._mark_invalid_output(f'Model output was not valid JSON for the requested {target}: {preview}')
             return
 
         if parsed is None:
             preview = (self.text or '')[:200]
-            self._mark_invalid_output(f'Model output was not valid for the requested format: {preview}')
+            if cut_off:
+                self._mark_invalid_output(
+                    'Model output was cut off at the token limit '
+                    f'(finish_reason=length) before the JSON was complete: {preview}'
+                )
+            else:
+                self._mark_invalid_output(f'Model output was not valid for the requested format: {preview}')
             return
 
         if schema is not None:
@@ -1193,6 +1210,8 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
 
         generate() does not throw when the text is not the schema. If you
         asked for a schema and this is not it, read ``error`` / ``.text``.
+        Only complete JSON counts: a reply cut off mid-object is None (check
+        ``finish_reason == 'length'`` to tell a token cap from bad JSON).
         """
         # BLOCKED and FAILED carry no legitimate content at all, so there is
         # nothing to hand back even when the caller only asked for a format.
@@ -1211,7 +1230,6 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
             # Text that is not the shape they asked for is still text. Reading
             # it back is never worth an exception: `.text` holds the raw reply
             # and `error` carries INVALID_OUTPUT when structure was requested.
-            # Matches JS, where `extractJson` is called without the throw flag.
             return None
 
         if schema is not None:
@@ -1277,9 +1295,11 @@ class ModelResponseChunk(GenkitModel, Generic[OutputT]):
     content: list[Part]
     custom: Any | None = Field(default=None)
     aggregated: bool | None = None
-    previous_chunks: list[Any] = Field(default_factory=list, exclude=True)
-    chunk_parser: Callable[..., object] | None = Field(default=None, exclude=True)
-    schema_type: type[BaseModel] | None = Field(default=None, exclude=True)
+    # History and the format parser are stamped by the stream helper after
+    # construction so the constructor a plugin types is just the wire fields.
+    _previous_chunks: list[Any] = PrivateAttr(default_factory=list)
+    _chunk_parser: Callable[..., object] | None = PrivateAttr(default=None)
+    _schema_type: type[BaseModel] | None = PrivateAttr(default=None)
 
     @field_validator('content', mode='before')
     @classmethod
@@ -1305,66 +1325,79 @@ class ModelResponseChunk(GenkitModel, Generic[OutputT]):
     def accumulated_text(self) -> str:
         """Text from all previous chunks plus this chunk."""
         prior = ''
-        if self.previous_chunks:
-            prior = ''.join(p.text for chunk in self.previous_chunks for p in chunk.content if p.text)
+        if self._previous_chunks:
+            prior = ''.join(p.text for chunk in self._previous_chunks for p in chunk.content if p.text)
         return prior + self.text
 
     @cached_property
     def output(self) -> OutputT | None:
-        """Parsed output from accumulated text.
+        """The reply so far, parsed as far as it goes. Never raises.
 
-        With no ``output_schema`` class, this is the extracted JSON value
-        (a dict, list, scalar, or ``None`` if an object has not started).
+        With ``output_schema=Recipe``, this is a partly built ``Recipe``:
+        fields that haven't arrived are ``None`` even when typed ``str``,
+        values may be cut short (``'Fluffy Panc'``), and nothing is
+        validated. Guard each field you read. ``(await stream.response).output``
+        is the only validated ``Recipe``.
 
-        When ``output_schema`` is a Pydantic model, this is an instance of
-        that class with missing fields set to ``None``. Values may still be
-        prefixes, and constraints are not enforced. Guard each field you
-        use. ``(await sr.response).output`` is the only fully validated value.
+        With no schema class, this is the JSON value so far (dict, list,
+        or scalar). It's ``None`` before an object starts or while the text
+        can't be parsed.
         """
-        parsed = (
-            self.chunk_parser(self)
-            if self.chunk_parser
-            else extract_json(self.accumulated_text, throw_on_bad_json=False)
-        )
-        if self.schema_type is not None and isinstance(parsed, dict) and not issubclass(self.schema_type, RootModel):
-            return cast(
-                'OutputT | None',
-                construct_partial(schema_type=self.schema_type, data=parsed),
-            )
-        return cast('OutputT | None', parsed)
+        try:
+            parsed = self._chunk_parser(self) if self._chunk_parser else extract_partial_json(self.accumulated_text)
+            if (
+                self._schema_type is not None
+                and isinstance(parsed, dict)
+                and not issubclass(self._schema_type, RootModel)
+            ):
+                return cast(
+                    'OutputT | None',
+                    construct_partial(schema_type=self._schema_type, data=parsed),
+                )
+            return cast('OutputT | None', parsed)
+        except Exception:
+            # one odd chunk shouldn't end a stream whose final reply may still parse.
+            logger.debug('chunk.output could not be parsed; returning None', exc_info=True)
+            return None
 
 
 def as_model_response_chunk(value: object) -> ModelResponseChunk:
     if isinstance(value, ModelResponseChunk):
-        return stream_chunk(
-            value,
-            index=value.index,
-            previous_chunks=value.previous_chunks,
-            chunk_parser=value.chunk_parser,
-            schema_type=value.schema_type,
-        )
+        copied = value.model_copy()
+        # model_copy keeps stream history / parser so wrapping still has
+        # index and .output. Re-check content so a two-kind part already
+        # on the chunk cannot persist through AgentStreamChunk.
+        copied.content = [Part.model_validate(part) for part in copied.content]
+        return copied
     return ModelResponseChunk.model_validate(value)
 
 
-def stream_chunk(
-    source: ModelResponseChunk,
+def chunk_for_stream(
+    source: ModelResponseChunk[OutputT],
     *,
     index: float | None = None,
     previous_chunks: list[Any] | None = None,
     chunk_parser: Callable[..., object] | None = None,
     schema_type: type[BaseModel] | None = None,
-) -> ModelResponseChunk:
-    """Copy a plugin chunk and stamp stream index / parser on the copy."""
-    return ModelResponseChunk(
+) -> ModelResponseChunk[OutputT]:
+    """Copy a plugin chunk and stamp stream index / parser on the copy.
+
+    Builds a fresh chunk so an already-read ``.output`` on the plugin's
+    chunk cannot override the stream's format parser.
+    """
+    chunk = ModelResponseChunk(
         role=source.role,
         index=index,
         content=source.content,
         custom=source.custom,
         aggregated=source.aggregated,
-        previous_chunks=list(previous_chunks or []),
-        chunk_parser=chunk_parser,
-        schema_type=schema_type,
     )
+    # The snapshot from make is stored as-is so an earlier chunk's
+    # accumulated_text does not grow as later tokens arrive.
+    chunk._previous_chunks = previous_chunks if previous_chunks is not None else []
+    chunk._chunk_parser = chunk_parser
+    chunk._schema_type = schema_type
+    return cast(ModelResponseChunk[OutputT], chunk)
 
 
 class AgentStreamChunk(GenkitModel):
