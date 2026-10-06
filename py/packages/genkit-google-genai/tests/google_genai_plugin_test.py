@@ -847,7 +847,8 @@ def test_vertexai_gemini_version_enum() -> None:
 
 def test_gemini_config_schema() -> None:
     """Test GeminiConfigSchema can be instantiated."""
-    config = GeminiConfigSchema(temperature=0.7, max_output_tokens=1000)
+    # populate_by_name accepts the field name; pyrefly only knows the explicit alias.
+    config = GeminiConfigSchema(temperature=0.7, max_output_tokens=1000)  # pyrefly: ignore[unexpected-keyword]
     assert config.temperature == 0.7
     assert config.max_output_tokens == 1000
 

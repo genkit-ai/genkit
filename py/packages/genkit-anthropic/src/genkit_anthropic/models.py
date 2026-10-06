@@ -201,6 +201,35 @@ def _move_unknown_params_to_extra_body(params: dict[str, Any], use_beta: bool) -
     params['extra_body'] = body
 
 
+# Body fields Genkit builds from the request. `extra` can't set them: the
+# schema can't see inside the passthrough, and overwriting them silently would
+# replace the conversation, the streaming mode, or the structured-output format
+# Genkit merges into output_config (the declared field still works).
+_MANAGED_BODY_FIELDS = ('messages', 'system', 'tools', 'tool_choice', 'stream', 'output_config')
+
+
+def _merge_config_extra(params: dict[str, Any], extra: dict[str, Any] | None) -> None:
+    """Send ``config.extra`` verbatim through ``extra_body``, after every declared field.
+
+    The SDK merges ``extra_body`` over the JSON body, so a key in ``extra``
+    wins over the same key built from a declared field.
+    """
+    if not extra:
+        return
+    for field in _MANAGED_BODY_FIELDS:
+        if field in extra:
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=(
+                    f'anthropic: extra field {field!r} is built by Genkit from the request '
+                    'and cannot be set from config'
+                ),
+            )
+    body = dict(params.get('extra_body') or {})
+    body.update(extra)
+    params['extra_body'] = body
+
+
 class AnthropicModel:
     """Represents an Anthropic language model for use with Genkit.
 
@@ -370,6 +399,7 @@ class AnthropicModel:
         if use_beta is None:
             use_beta = self._uses_beta_api(config)
         params = config.model_dump(exclude_none=True, by_alias=False)
+        extra = params.pop('extra', None)
 
         # Handle mapped parameters
         max_tokens = params.pop('max_output_tokens', None)
@@ -463,6 +493,7 @@ class AnthropicModel:
             params.pop('tool_choice', None)
 
         _move_unknown_params_to_extra_body(params, use_beta)
+        _merge_config_extra(params, extra)
         return params
 
     def _supports_constrained(self, has_tools: bool) -> bool:

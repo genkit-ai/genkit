@@ -40,6 +40,7 @@ from genkit_openai.models.utils import (
     _find_text,
     decode_data_uri_bytes,
     extract_config_dict,
+    pop_extra_body,
     reraise_openai_error,
 )
 
@@ -148,6 +149,7 @@ def _to_tts_params(
     """
     text = _extract_text(request)
     config = extract_config_dict(request)
+    extra_body = pop_extra_body(config, managed=('input',), label='openai tts')
 
     params: dict[str, Any] = {
         'model': config.pop('version', None) or model_name,
@@ -164,6 +166,8 @@ def _to_tts_params(
     for key in ('temperature', 'max_output_tokens', 'stop_sequences', 'top_k', 'top_p'):
         config.pop(key, None)
 
+    if extra_body:
+        params['extra_body'] = extra_body
     return {k: v for k, v in params.items() if v is not None}
 
 
@@ -215,6 +219,7 @@ def _to_stt_params(
     """
     media_url, content_type = _extract_media(request)
     config = extract_config_dict(request)
+    extra_body = pop_extra_body(config, managed=('file',), label='openai stt')
 
     audio_bytes = decode_data_uri_bytes(media_url)
 
@@ -248,6 +253,8 @@ def _to_stt_params(
     for key in ('max_output_tokens', 'stop_sequences', 'top_k', 'top_p'):
         config.pop(key, None)
 
+    if extra_body:
+        params['extra_body'] = extra_body
     return {k: v for k, v in params.items() if v is not None}
 
 

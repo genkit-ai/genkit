@@ -172,6 +172,31 @@ def decode_data_uri_bytes(url: str) -> bytes:
         raise ValueError('Invalid base64 data provided in media URL') from e
 
 
+def pop_extra_body(config: dict[str, Any], *, managed: tuple[str, ...], label: str) -> dict[str, Any] | None:
+    """Pop ``extra`` off a dumped config as an ``extra_body``, rejecting fields Genkit builds.
+
+    Args:
+        config: The dumped config; ``extra`` is removed from it.
+        managed: Body fields this endpoint builds from the request.
+        label: Names the endpoint in the error.
+
+    Returns:
+        A copy of ``extra`` to pass as ``extra_body``, or None when unset.
+    """
+    extra = config.pop('extra', None)
+    if not extra:
+        return None
+    for field in managed:
+        if field in extra:
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=(
+                    f'{label}: extra field {field!r} is built by Genkit from the request and cannot be set from config'
+                ),
+            )
+    return dict(extra)
+
+
 def extract_config_dict(request: ModelRequest) -> dict[str, Any]:
     """Extract the config from a ModelRequest as a mutable dictionary.
 

@@ -90,6 +90,13 @@ class ModelConfig(GenerationCommonConfig):
     extra: dict[str, Any] | None = None
     """Provider settings the model's config class doesn't declare, sent as-is and not checked.
 
+    Keys are the provider's wire names. The plugin merges them into its
+    request after the declared fields, so a colliding key wins. Fields Genkit
+    builds from the request (messages, tools) are rejected rather than
+    overwritten. Where the map lands depends on the provider: the request
+    body for Gemini, OpenAI and Anthropic, ``options`` for Ollama, and
+    ``additionalModelRequestFields`` for Bedrock.
+
     Don't put API keys or other secrets here: config travels with the request
     into traces.
     """

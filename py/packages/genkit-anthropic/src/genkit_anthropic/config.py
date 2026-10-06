@@ -19,7 +19,9 @@
 Extends the shared :class:`ModelConfig` (``version``, ``temperature``,
 ``maxOutputTokens``, ...) with Anthropic-specific options.
 
-Unknown keys pass through (``extra='allow'``). Top-level Genkit fields
+Unknown top-level keys raise, so a typo fails before the request is sent.
+A ``messages.create()`` param this class doesn't declare goes in ``extra``
+and is sent through the SDK's ``extra_body``. Top-level Genkit fields
 accept their usual camelCase aliases, while Anthropic-specific nested keys
 match the Anthropic plugin shape field-by-field.
 """
@@ -289,7 +291,6 @@ class AnthropicConfig(ModelConfig):
 
     model_config = ConfigDict(
         alias_generator=to_camel,
-        extra='allow',
         json_schema_extra=_anthropic_config_schema_extra,
         populate_by_name=True,
     )
@@ -320,12 +321,8 @@ class AnthropicConfig(ModelConfig):
     )
 
     def beta_only_fields(self) -> set[str]:
-        """Return the names of beta-only request fields set on this config."""
-        present = {
-            name
-            for name, value in (self.__pydantic_extra__ or {}).items()
-            if name in BETA_ONLY_KEYS and value is not None
-        }
+        """Return the names of beta-only request fields set on this config, including in ``extra``."""
+        present = {name for name, value in (self.extra or {}).items() if name in BETA_ONLY_KEYS and value is not None}
         if self.betas:
             present.add('betas')
         if self.output_config is not None and self.output_config.task_budget is not None:

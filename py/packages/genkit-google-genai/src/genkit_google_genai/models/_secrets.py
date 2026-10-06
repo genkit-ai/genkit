@@ -100,6 +100,10 @@ def request_config_has_api_key(config: object) -> bool:
     extra = getattr(config, 'model_extra', None)
     if isinstance(extra, dict) and _bag_has_api_key(cast(dict[str, Any], extra)):
         return True
+    # config.extra is sent on the wire and lands in traces; a key there is the same leak.
+    passthrough = getattr(config, 'extra', None)
+    if isinstance(passthrough, dict) and _bag_has_api_key(cast(dict[str, Any], passthrough)):
+        return True
     if getattr(config, 'api_key', None) is not None or getattr(config, 'apiKey', None) is not None:
         return True
     dump = getattr(config, 'model_dump', None)

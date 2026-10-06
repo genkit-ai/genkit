@@ -975,12 +975,12 @@ class TestBuildRequestOptions:
         options = OllamaModel.build_request_options(OllamaConfig(min_p=0.05))
         assert options['min_p'] == 0.05
 
-    def test_ollama_config_extras_snake_cased(self) -> None:
-        """Unknown OllamaConfig knobs are forwarded snake-cased (instance + camel)."""
-        snake = OllamaModel.build_request_options(OllamaConfig.model_validate({'repeat_penalty': 1.1}))
-        assert snake['repeat_penalty'] == 1.1
-        camel = OllamaModel.build_request_options(OllamaConfig.model_validate({'repeatPenalty': 1.2}))
-        assert camel['repeat_penalty'] == 1.2
+    def test_ollama_config_extra_forwarded_verbatim(self) -> None:
+        """Undeclared knobs go in `extra` and reach options unchanged (instance + dict)."""
+        typed = OllamaModel.build_request_options(OllamaConfig(extra={'repeat_penalty': 1.1}))
+        assert typed['repeat_penalty'] == 1.1
+        validated = OllamaModel.build_request_options(OllamaConfig.model_validate({'extra': {'repeat_penalty': 1.2}}))
+        assert validated['repeat_penalty'] == 1.2
 
     def test_num_predict_wins_over_max_output_tokens(self) -> None:
         """An explicit num_predict beats the inherited max_output_tokens."""
