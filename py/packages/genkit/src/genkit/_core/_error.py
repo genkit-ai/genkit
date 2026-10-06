@@ -115,13 +115,16 @@ def runtime_error_reason(details: object) -> RuntimeErrorReason | None:
         return None
 
 
-class GenkitRuntimeError(GenkitRuntimeErrorData):
-    """Classified generate failure sitting on ``response.error``.
+class ModelResponseError(GenkitRuntimeErrorData):
+    """Why a generate call came back without a usable reply, on ``response.error``.
 
-    The wire is still status, message, and details. ``reason`` is the
-    framework why when we put one in details, so callers can branch
-    without parsing the message.
+    Plain data, not an exception: generate returns failures as values, so
+    ``raise res.error`` would make a returning call look like a throwing one.
+    ``reason`` is set when the framework classified the failure, so callers
+    can branch without parsing the message.
     """
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
 
     @property
     def reason(self) -> RuntimeErrorReason | None:

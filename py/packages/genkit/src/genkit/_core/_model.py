@@ -44,7 +44,7 @@ from typing_extensions import TypedDict, TypeVar
 
 from genkit._core import _typing as typing_mod
 from genkit._core._base import GenkitModel, dump_keeping_unknown
-from genkit._core._error import GenkitError, GenkitRuntimeError, RuntimeErrorReason
+from genkit._core._error import GenkitError, ModelResponseError, RuntimeErrorReason
 from genkit._core._extract_json import extract_json
 from genkit._core._partial import construct_partial
 from genkit._core._schema import parse_schema
@@ -1079,7 +1079,7 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
     _schema_type: type[BaseModel] | None = PrivateAttr(None)
     # Wire fields (must be declared for extra='forbid' to accept wire responses)
     message: Message | None = None
-    error: GenkitRuntimeError | None = None
+    error: ModelResponseError | None = None
     finish_reason: FinishReason | None = None
     finish_message: str | None = None
     latency_ms: float | None = None
@@ -1118,11 +1118,8 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
         if self.custom is None:
             self.custom = {}
 
-    def assert_valid(self) -> None:
-        """No-op. A blocked or empty reply is still a response the caller can read."""
-
     def _mark_invalid_output(self, message: str) -> None:
-        self.error = GenkitRuntimeError(
+        self.error = ModelResponseError(
             status='INTERNAL',
             message=message,
             details={'reason': RuntimeErrorReason.INVALID_OUTPUT.value},
@@ -1141,7 +1138,7 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
                 return True
         return False
 
-    def assert_valid_schema(self) -> None:
+    def _assert_valid_schema(self) -> None:
         """Mark this response as unusable structured output without throwing.
 
         Raw text or a wrong-shape JSON is not a Recipe. generate()

@@ -19,11 +19,12 @@
 from unittest.mock import MagicMock
 
 import pytest
+from pydantic import ValidationError
 
 from genkit._core import _error as error_mod
 from genkit._core._error import (
     GenkitError,
-    GenkitRuntimeError,
+    ModelResponseError,
     PublicError,
     ReflectionError,
     RuntimeErrorReason,
@@ -61,7 +62,7 @@ def test_runtime_error_reasons_are_the_ones_helpers_write() -> None:
 
 
 def test_runtime_error_reason_accessor_keeps_reason_nested() -> None:
-    error = GenkitRuntimeError(
+    error = ModelResponseError(
         status='ABORTED',
         message='stopped',
         details={'reason': 'MAX_TURNS_EXCEEDED', 'attempt': 5},
@@ -73,9 +74,9 @@ def test_runtime_error_reason_accessor_keeps_reason_nested() -> None:
         'message': 'stopped',
         'details': {'reason': 'MAX_TURNS_EXCEEDED', 'attempt': 5},
     }
-    assert GenkitRuntimeError(message='bad', details={'reason': 5}).reason is None
-    assert GenkitRuntimeError(message='bad', details={'reason': 'not-valid'}).reason is None
-    with pytest.raises(AttributeError):
+    assert ModelResponseError(message='bad', details={'reason': 5}).reason is None
+    assert ModelResponseError(message='bad', details={'reason': 'not-valid'}).reason is None
+    with pytest.raises(ValidationError):
         error.reason = RuntimeErrorReason.TOOL_FAILED  # type: ignore[misc]
 
 

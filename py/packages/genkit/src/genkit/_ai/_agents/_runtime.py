@@ -44,7 +44,7 @@ from genkit._ai._generate import generate_action
 from genkit._ai._json_patch import diff_json
 from genkit._core._action import ActionRunContext, StreamingCallback, get_current_context
 from genkit._core._channel import CloseableQueue, QueueShutDown
-from genkit._core._error import GenkitError, GenkitRuntimeError, RuntimeErrorReason
+from genkit._core._error import GenkitError, ModelResponseError, RuntimeErrorReason
 from genkit._core._logger import get_logger
 from genkit._core._model import (
     AgentInit,
@@ -105,7 +105,7 @@ class SessionRunner(Generic[StateT]):
         self.on_end_turn = on_end_turn
         self.turn_index: int = 0
         self.last_turn_finish_reason: AgentFinishReason | None = None
-        self.last_turn_error: GenkitRuntimeError | None = None
+        self.last_turn_error: ModelResponseError | None = None
         self.last_good_state: SessionState | None = None
         self.last_good_state_version: int | None = None
         self.last_good_finish_reason: AgentFinishReason | None = None
@@ -535,7 +535,7 @@ class AgentRuntime:
         *,
         finish_reason: AgentFinishReason | None = None,
         status: SnapshotStatus | None = None,
-        error: GenkitRuntimeError | None = None,
+        error: ModelResponseError | None = None,
         force: bool = False,
         snapshot_id: str | None = None,
     ) -> str | None:
@@ -1086,7 +1086,7 @@ async def generate_prompt_agent_turn(
 # ---------------------------------------------------------------------------
 
 
-def to_error_details(exc: Exception) -> GenkitRuntimeError:
+def to_error_details(exc: Exception) -> ModelResponseError:
     status = getattr(exc, 'status', None) or 'INTERNAL'
     if isinstance(exc, GenkitError):
         message = exc.original_message
@@ -1095,7 +1095,7 @@ def to_error_details(exc: Exception) -> GenkitRuntimeError:
     details = getattr(exc, 'detail', None) or getattr(exc, 'details', None)
     if details is None and not isinstance(exc, GenkitError):
         details = str(exc)
-    return GenkitRuntimeError(status=str(status), message=message, details=details)
+    return ModelResponseError(status=str(status), message=message, details=details)
 
 
 def to_agent_finish_reason(fr: FinishReason) -> AgentFinishReason:
