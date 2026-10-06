@@ -27,12 +27,7 @@ import (
 )
 
 func TestLlamaLive(t *testing.T) {
-	if _, ok := requireEnv("GOOGLE_CLOUD_PROJECT"); !ok {
-		t.Skip("GOOGLE_CLOUD_PROJECT not found in the environment")
-	}
-	if _, ok := requireEnv("GOOGLE_CLOUD_LOCATION"); !ok {
-		t.Skip("GOOGLE_CLOUD_LOCATION not found in the environment")
-	}
+	vertexEnv(t)
 
 	ctx := context.Background()
 	g := genkit.Init(ctx, genkit.WithPlugins(&modelgarden.Llama{}))
