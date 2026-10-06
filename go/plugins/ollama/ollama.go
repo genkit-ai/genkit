@@ -402,10 +402,14 @@ type ollamaModelResponse struct {
 }
 
 // ollamaUsage holds the token counts Ollama reports on a finished response,
-// which a stream carries on its last chunk.
+// which a stream carries on its last chunk. prompt_eval_count includes the
+// prompt tokens served from Ollama's cache, and prompt_eval_cached_count is
+// that cached part. Older servers left prompt_eval_count out when the whole
+// prompt came from the cache (ollama/ollama#2068).
 type ollamaUsage struct {
-	PromptEvalCount int `json:"prompt_eval_count"`
-	EvalCount       int `json:"eval_count"`
+	PromptEvalCount       int `json:"prompt_eval_count"`
+	PromptEvalCachedCount int `json:"prompt_eval_cached_count"`
+	EvalCount             int `json:"eval_count"`
 }
 
 // toGenkit maps Ollama's counts onto [ai.GenerationUsage]'s convention.
@@ -413,9 +417,10 @@ type ollamaUsage struct {
 // stays zero.
 func (u ollamaUsage) toGenkit() *ai.GenerationUsage {
 	return &ai.GenerationUsage{
-		InputTokens:  u.PromptEvalCount,
-		OutputTokens: u.EvalCount,
-		TotalTokens:  u.PromptEvalCount + u.EvalCount,
+		InputTokens:         u.PromptEvalCount,
+		CachedContentTokens: u.PromptEvalCachedCount,
+		OutputTokens:        u.EvalCount,
+		TotalTokens:         u.PromptEvalCount + u.EvalCount,
 	}
 }
 

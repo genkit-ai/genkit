@@ -1127,23 +1127,42 @@ func TestDefineModelReusesDiscoveredCapabilities(t *testing.T) {
 
 // TestGenerateReportsUsage pins that a response reports the token counts
 // Ollama sends on its last message, which a stream carries on its final
-// chunk. The plugin used to report an empty usage on every path.
+// chunk, for chat and generate models alike. The plugin used to report an
+// empty usage on every path.
 func TestGenerateReportsUsage(t *testing.T) {
+	const counts = `"done":true,"prompt_eval_count":26,"prompt_eval_cached_count":20,"eval_count":9`
 	for _, tc := range []struct {
-		name   string
-		stream bool
-		body   string
+		name      string
+		modelType string
+		stream    bool
+		body      string
 	}{
 		{
-			name: "complete",
-			body: `{"model":"llama3","message":{"role":"assistant","content":"Hi"},"done":true,"prompt_eval_count":26,"eval_count":9}`,
+			name:      "chat",
+			modelType: "chat",
+			body:      `{"model":"llama3","message":{"role":"assistant","content":"Hi"},` + counts + `}`,
 		},
 		{
-			name:   "stream",
-			stream: true,
+			name:      "chat stream",
+			modelType: "chat",
+			stream:    true,
 			body: `{"model":"llama3","message":{"role":"assistant","content":"H"},"done":false}
 {"model":"llama3","message":{"role":"assistant","content":"i"},"done":false}
-{"model":"llama3","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":26,"eval_count":9}
+{"model":"llama3","message":{"role":"assistant","content":""},` + counts + `}
+`,
+		},
+		{
+			name:      "generate",
+			modelType: "generate",
+			body:      `{"model":"llama3","response":"Hi",` + counts + `}`,
+		},
+		{
+			name:      "generate stream",
+			modelType: "generate",
+			stream:    true,
+			body: `{"model":"llama3","response":"H","done":false}
+{"model":"llama3","response":"i","done":false}
+{"model":"llama3","response":"",` + counts + `}
 `,
 		},
 	} {
@@ -1153,7 +1172,7 @@ func TestGenerateReportsUsage(t *testing.T) {
 			}))
 			defer server.Close()
 
-			g := &generator{model: ModelDefinition{Name: "llama3", Type: "chat"}, serverAddress: server.URL, timeout: 30}
+			g := &generator{model: ModelDefinition{Name: "llama3", Type: tc.modelType}, serverAddress: server.URL, timeout: 30}
 			var cb func(context.Context, *ai.ModelResponseChunk) error
 			if tc.stream {
 				cb = func(context.Context, *ai.ModelResponseChunk) error { return nil }
@@ -1164,7 +1183,7 @@ func TestGenerateReportsUsage(t *testing.T) {
 			if err != nil {
 				t.Fatalf("generate() error = %v", err)
 			}
-			want := ai.GenerationUsage{InputTokens: 26, OutputTokens: 9, TotalTokens: 35}
+			want := ai.GenerationUsage{InputTokens: 26, CachedContentTokens: 20, OutputTokens: 9, TotalTokens: 35}
 			if resp.Usage == nil || !reflect.DeepEqual(*resp.Usage, want) {
 				t.Errorf("Usage = %+v, want %+v", resp.Usage, want)
 			}
