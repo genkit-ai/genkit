@@ -345,8 +345,8 @@ async def test_generate_with_failing_model_and_retry_retries_connection_error() 
 
 
 @pytest.mark.asyncio
-async def test_generate_with_failing_model_and_retry_without_internal_calls_model_once() -> None:
-    """With INTERNAL left out of `statuses`, a model raising ConnectionError fails after one call."""
+async def test_generate_with_failing_model_and_retry_retries_unclassified_error_regardless_of_statuses() -> None:
+    """`statuses=['UNAVAILABLE']` still retries a raw ConnectionError; it fails after 1 + max_retries calls."""
     ai = Genkit()
     calls = 0
 
@@ -368,4 +368,4 @@ async def test_generate_with_failing_model_and_retry_without_internal_calls_mode
     assert response.error is not None
     assert response.error.status == 'INTERNAL'
     assert response.message is None
-    assert calls == 1
+    assert calls == 3

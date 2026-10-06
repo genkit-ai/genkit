@@ -156,22 +156,19 @@ async def test_ai_embed_with_failing_embedder_raises_original_exception() -> Non
 
 
 @pytest.mark.asyncio
-async def test_flow_error_has_trace_id_when_tracing_is_on(hex_ids: None) -> None:
-    """With tracing on, the raised ValueError has a 32-hex `trace_id`."""
+async def test_flow_error_with_tracing_on_has_no_trace_id(hex_ids: None) -> None:
+    """With tracing on, the raised ValueError still has no `trace_id`; the trace keeps it."""
     missing = _define_missing(Genkit())
 
     with pytest.raises(ValueError) as exc:
         await missing('acme')
 
-    trace_id = getattr(exc.value, 'trace_id', None)
-    assert isinstance(trace_id, str)
-    assert len(trace_id) == 32
-    int(trace_id, 16)
+    assert not hasattr(exc.value, 'trace_id')
 
 
 @pytest.mark.asyncio
-async def test_flow_genkit_error_gets_trace_id_when_tracing_is_on(hex_ids: None) -> None:
-    """With tracing on, a GenkitError the body raised has its `trace_id` filled in."""
+async def test_flow_genkit_error_with_tracing_on_keeps_trace_id_unset(hex_ids: None) -> None:
+    """With tracing on, a GenkitError the body raised comes back with `trace_id` still None."""
     ai = Genkit()
 
     @ai.flow()
@@ -181,20 +178,25 @@ async def test_flow_genkit_error_gets_trace_id_when_tracing_is_on(hex_ids: None)
     with pytest.raises(GenkitError) as exc:
         await ship('99')
 
-    assert exc.value.trace_id is not None
-    assert len(exc.value.trace_id) == 32
+    assert exc.value.trace_id is None
     assert exc.value.status == 'FAILED_PRECONDITION'
 
 
 @pytest.mark.asyncio
-async def test_flow_error_without_tracing_has_no_trace_id() -> None:
-    """With tracing off, the ValueError has no `trace_id` attribute set."""
-    missing = _define_missing(Genkit())
+async def test_flow_reraising_shared_exception_leaves_it_untouched(hex_ids: None) -> None:
+    """One exception instance raised by two runs comes back unchanged both times."""
+    ai = Genkit()
+    locked = AccountLockedError('acme is locked')
 
-    with pytest.raises(ValueError) as exc:
-        await missing('acme')
+    @ai.flow()
+    async def charge(account: str) -> str:
+        raise locked
 
-    assert not hasattr(exc.value, 'trace_id')
+    for _ in range(2):
+        with pytest.raises(AccountLockedError) as exc:
+            await charge('acme')
+        assert exc.value is locked
+        assert 'trace_id' not in vars(locked)
 
 
 @pytest.mark.asyncio

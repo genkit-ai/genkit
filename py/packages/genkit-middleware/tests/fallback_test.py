@@ -72,12 +72,24 @@ async def test_fallback_non_retryable_error(ctx) -> None:
 
 
 @pytest.mark.asyncio
-async def test_generate_with_failing_model_and_fallback_tries_next_model() -> None:
-    """With `Fallback(models=['backup'])`, a model raising ConnectionError falls back to `backup`."""
+async def test_fallback_non_genkit_error_raises_without_trying_next_model(ctx) -> None:
+    """A raw TypeError (a bug in another middleware, say) propagates without fallback."""
+    fallback = _make_fallback(models=['model2'])
+
+    async def next_fn(params, ctx) -> NoReturn:
+        raise TypeError("'NoneType' object is not subscriptable")
+
+    with pytest.raises(TypeError, match='not subscriptable'):
+        await fallback.wrap_model(_make_params(), ctx, next_fn)
+
+
+@pytest.mark.asyncio
+async def test_generate_with_unavailable_model_and_fallback_tries_next_model() -> None:
+    """With `Fallback(models=['backup'])`, a model raising UNAVAILABLE falls back to `backup`."""
     ai = Genkit()
 
     async def down(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
-        raise ConnectionError('connection refused')
+        raise GenkitError(status='UNAVAILABLE', message='provider is down')
 
     async def backup(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
         return ModelResponse(
@@ -96,8 +108,8 @@ async def test_generate_with_failing_model_and_fallback_tries_next_model() -> No
 
 
 @pytest.mark.asyncio
-async def test_generate_with_failing_model_and_fallback_without_internal_keeps_the_failure() -> None:
-    """With INTERNAL left out of `statuses`, a model raising ConnectionError fails without trying `backup`."""
+async def test_generate_with_model_raising_connection_error_and_fallback_keeps_the_failure() -> None:
+    """An unclassified ConnectionError from the model fails the call without trying `backup`."""
     ai = Genkit()
     backup_calls = 0
 
@@ -112,11 +124,7 @@ async def test_generate_with_failing_model_and_fallback_without_internal_keeps_t
     ai.define_model(name='primary', fn=down)
     ai.define_model(name='backup', fn=backup)
 
-    response = await ai.generate(
-        model='primary',
-        prompt='hi',
-        use=[Fallback(models=['backup'], statuses=['UNAVAILABLE'])],
-    )
+    response = await ai.generate(model='primary', prompt='hi', use=[Fallback(models=['backup'])])
 
     assert response.finish_reason == FinishReason.FAILED
     assert response.finish_message == 'internal error'

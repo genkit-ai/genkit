@@ -98,7 +98,7 @@ class Fallback(BaseMiddleware[FallbackConfig]):
         raise last_error
 
     def _should_fall_back(self, exc: Exception) -> bool:
-        # A provider SDK error that no plugin classified (a ConnectionError,
-        # say) is an internal failure, so it falls back like INTERNAL does.
-        status = exc.status if isinstance(exc, GenkitError) else 'INTERNAL'
-        return status in self.config.statuses
+        # Same contract as JS and Go: only a classified error falls back. A
+        # second model is billed, so a raw error (a bug in a plugin or in
+        # another middleware) propagates instead of rerouting every request.
+        return isinstance(exc, GenkitError) and exc.status in self.config.statuses

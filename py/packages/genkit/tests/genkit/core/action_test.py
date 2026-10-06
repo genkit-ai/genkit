@@ -267,14 +267,16 @@ async def test_action_raises_errors() -> None:
 
 
 @pytest.mark.asyncio
-async def test_action_error_includes_trace_id_when_instrumented(hex_ids) -> None:
+async def test_action_error_has_no_trace_id_when_instrumented(hex_ids) -> None:
+    """Tracing on doesn't change the raised exception; the trace id stays on the span."""
+
     async def foo(_: str | None, ctx: ActionRunContext) -> None:
         raise Exception('oops')
 
     action = Action(name='fooAction', kind=ActionKind.CUSTOM, fn=foo)
     with pytest.raises(Exception, match='^oops$') as e:
         await action.run()
-    assert getattr(e.value, 'trace_id', None)
+    assert not hasattr(e.value, 'trace_id')
 
 
 @pytest.mark.asyncio

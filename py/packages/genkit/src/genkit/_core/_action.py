@@ -17,7 +17,6 @@
 """Action module for defining and managing remotely callable functions."""
 
 import asyncio
-import contextlib
 import inspect
 import json
 import re
@@ -855,29 +854,23 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         if ctx.init is not None:
             attributes[Attr.INIT] = to_json_attr(ctx.init)
 
-        try:
-            output = await run_in_new_span(
-                self._name,
-                body,
-                action_type=str(self._kind),
-                input=input,
-                attributes=attributes,
-                is_action=True,
-            )
-            latency_ms = (time.perf_counter() - start_time) * 1000
-            return ActionResponse(
-                response=output,
-                trace_id=trace_id,
-                span_id=span_id,
-                latency_ms=latency_ms,
-            )
-        except Exception as e:
-            # The caller gets the body's own exception so `except ValueError`
-            # works; the trace id rides along so a log line can link to the run.
-            if trace_id and getattr(e, 'trace_id', None) is None:
-                with contextlib.suppress(AttributeError, TypeError):
-                    setattr(e, 'trace_id', trace_id)  # noqa: B010
-            raise
+        # A failure propagates as the body raised it, like Go. The trace id
+        # stays on the span; nothing is written onto the caller's exception.
+        output = await run_in_new_span(
+            self._name,
+            body,
+            action_type=str(self._kind),
+            input=input,
+            attributes=attributes,
+            is_action=True,
+        )
+        latency_ms = (time.perf_counter() - start_time) * 1000
+        return ActionResponse(
+            response=output,
+            trace_id=trace_id,
+            span_id=span_id,
+            latency_ms=latency_ms,
+        )
 
     def _validate_output(self, output: object, *, trace_id: str) -> OutputT:
         """Give the caller what the flow's return annotation promises, or fail the run."""

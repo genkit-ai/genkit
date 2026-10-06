@@ -68,10 +68,9 @@ class Retry(BaseMiddleware[RetryConfig]):
                 if attempt == self.config.max_retries:
                     raise
 
-                # A provider SDK error that no plugin classified (a ConnectionError,
-                # say) is an internal failure, so `statuses` decides it like INTERNAL.
-                status = e.status if isinstance(e, GenkitError) else 'INTERNAL'
-                if status not in self.config.statuses:
+                # Same contract as JS and Go: `statuses` gates classified errors,
+                # and an unclassified one (a raw ConnectionError, say) is retried.
+                if isinstance(e, GenkitError) and e.status not in self.config.statuses:
                     raise
 
                 delay_ms = current_delay_ms
