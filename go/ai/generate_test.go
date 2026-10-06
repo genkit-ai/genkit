@@ -4774,6 +4774,14 @@ func TestToolErrorsReturnedToModel(t *testing.T) {
 			wantErr: ErrToolNotFound},
 		{name: "the policy skips tools it does not cover", request: "lookup",
 			toolErr: errors.New("boom"), use: []Middleware{softToolErrors("other")}, wantErr: ErrToolFailed},
+		// A timeout or cancellation the tool's own context raised stops the
+		// loop like the caller's would, unless the tool marks it.
+		{name: "the policy keeps a tool's own deadline", request: "lookup",
+			toolErr: fmt.Errorf("rpc: %w", context.DeadlineExceeded), use: []Middleware{softToolErrors()}, wantErr: context.DeadlineExceeded},
+		{name: "the policy keeps a tool's own cancellation", request: "lookup",
+			toolErr: fmt.Errorf("rpc: %w", context.Canceled), use: []Middleware{softToolErrors()}, wantErr: context.Canceled},
+		{name: "a marked deadline answers the call", request: "lookup",
+			toolErr: &base.ToolFailError{Err: context.DeadlineExceeded}, wantMsg: "context deadline exceeded"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newTestRegistry(t)

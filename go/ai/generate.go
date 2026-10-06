@@ -1584,7 +1584,9 @@ func answerToolError(ctx context.Context, name string, resp *MultipartToolRespon
 // fail the loop instead. An error made with [base.ToolFailError] always
 // answers the call. Any other error does when it is the tool's own (fromTool;
 // a missing tool counts) and the soft-failure policy on ctx covers the tool.
-// Neither interrupts nor anything once the caller has stopped do.
+// Neither interrupts, nor anything once the caller has stopped, nor an
+// unmarked cancellation or deadline do, even one the tool's own context
+// raised: a tool that wants the model to see a timeout marks it.
 //
 // The model reads the tool's own words. A ToolFailError answers with its own
 // message, which its author wrote for the model, even when a hook wrapped it:
@@ -1600,7 +1602,8 @@ func toolErrorAnswer(ctx context.Context, name string, err error, fromTool bool)
 	var fail *base.ToolFailError
 	if errors.As(err, &fail) {
 		msg = fail.Error()
-	} else if !fromTool || !base.SoftToolErrorsKey.FromContext(ctx).Allows(name) {
+	} else if !fromTool || !base.SoftToolErrorsKey.FromContext(ctx).Allows(name) ||
+		errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return nil
 	} else if call, ok := err.(*toolCallError); ok {
 		// A type assertion rather than errors.As, so a hook's wrapping keeps
