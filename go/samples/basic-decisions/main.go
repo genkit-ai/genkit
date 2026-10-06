@@ -92,7 +92,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"slices"
 	"sync"
 
@@ -321,16 +320,9 @@ func main() {
 
 	// jev is reached through OpenRouter's Decisions API here. The questions
 	// and the answers are the same on TypeSafe's own API or any other server
-	// that speaks System One; only the plugin's fields and the model name
-	// differ.
-	openRouter := &systemonex.SystemOne{
-		Provider: "openrouter-decisions",
-		BaseURL:  "https://openrouter.ai",
-		Path:     "/api/alpha/decisions",
-		APIKey:   os.Getenv("OPENROUTER_API_KEY"),
-	}
+	// that speaks System One; only the plugin and the model name differ.
 	g := genkit.Init(ctx,
-		genkit.WithPlugins(openRouter, &googlegenai.GoogleAI{}),
+		genkit.WithPlugins(systemonex.OpenRouter(), &googlegenai.GoogleAI{}),
 		genkit.WithPromptFS(promptsFS),
 	)
 
