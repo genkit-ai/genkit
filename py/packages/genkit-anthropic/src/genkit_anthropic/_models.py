@@ -39,9 +39,9 @@ from genkit.plugin_api import (
     from_http_code,
     parse_retry_after_ms,
 )
-from genkit_anthropic.config import BETA_KWARG_KEYS, STABLE_KWARG_KEYS, AnthropicConfig
-from genkit_anthropic.model_info import get_model_info
-from genkit_anthropic.utils import (
+from genkit_anthropic._config import BETA_KWARG_KEYS, STABLE_KWARG_KEYS, AnthropicConfig
+from genkit_anthropic._model_info import get_model_info
+from genkit_anthropic._utils import (
     build_cache_usage,
     get_cache_control,
     get_redacted_thinking_data,

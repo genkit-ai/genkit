@@ -33,10 +33,10 @@ from genkit._core._model import MultipartToolResponse, OutputT, Part, as_part
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
 from genkit._core._telemetry._instrumentation import set_custom_metadata_attributes
+from genkit._core._tool import Tool as _Tool
 from genkit._core._typing import (
     Metadata,
     MultipartToolResponse as MultipartToolResponseData,
-    ToolDefinition,
     ToolResponse,
 )
 
@@ -283,68 +283,6 @@ def as_multipart_tool_response(value: Any, *, tool_name: str | None = None) -> M
 
 
 logger = get_logger(__name__)
-
-
-class Tool:
-    """A registered tool: a callable handle backed by an :class:`~genkit._core._action.Action`.
-
-    Obtain instances via :func:`define_tool`, :func:`define_interrupt`, :func:`tool`, or the
-    ``@ai.tool`` decorator rather than constructing directly.
-    """
-
-    def __init__(
-        self,
-        action: Action,
-        *,
-        original_output_schema: dict[str, object] | None = None,
-    ) -> None:
-        self._action = action
-        # What the model should expect as ``output``. ``action.output_schema`` is
-        # the envelope ``run`` actually returns (output plus optional media).
-        self._original_output_schema = original_output_schema
-
-    @property
-    def name(self) -> str:
-        """Tool name (registry key)."""
-        return self._action.name
-
-    @property
-    def description(self) -> str:
-        """Human-readable description sent to the model."""
-        return self._action.description or ''
-
-    @property
-    def input_schema(self) -> dict[str, object] | None:
-        """JSON Schema for the tool's input, as sent on the wire."""
-        return self._action.input_schema
-
-    @property
-    def output_schema(self) -> dict[str, object] | None:
-        """JSON Schema for the structured ``output`` the model should expect.
-
-        ``None`` means the handler is annotated as the envelope itself — the
-        model should not bind a schema. An unannotated handler still infers
-        ``{}``.
-        """
-        return self._original_output_schema
-
-    def definition(self) -> ToolDefinition:
-        """Return the wire-format ToolDefinition for this tool."""
-        return ToolDefinition(
-            name=self.name,
-            description=self.description,
-            input_schema=self.input_schema,
-            output_schema=self.output_schema,
-        )
-
-    def action(self) -> Action:
-        """Return the underlying :class:`~genkit._core._action.Action` registered for this tool."""
-        return self._action
-
-    async def __call__(self, *args: Any, **kwargs: Any) -> MultipartToolResponse:  # noqa: ANN401
-        """Run the tool and return the envelope (structured output plus optional media)."""
-        result = (await self._action.run(*args, **kwargs)).response
-        return as_multipart_tool_response(result, tool_name=self.name)
 
 
 # Context variables for propagating resumed metadata to tools
@@ -651,7 +589,7 @@ def _define_tool(
     description: str | None = None,
     *,
     input_schema: type[BaseModel] | dict[str, object] | None = None,
-) -> Tool:
+) -> _Tool:
     """Register a function as a tool.
 
     The return annotation is what the model binds. ``input_schema=`` is for
@@ -693,7 +631,7 @@ def _define_tool(
     action.metadata[ORIGINAL_OUTPUT_SCHEMA_KEY] = original_output_schema
     action.output_schema = TypeAdapter(MultipartToolResponseData).json_schema()
 
-    return Tool(action, original_output_schema=original_output_schema)
+    return _Tool(action, original_output_schema=original_output_schema)
 
 
 def define_tool(
@@ -703,7 +641,7 @@ def define_tool(
     description: str | None = None,
     *,
     input_schema: type[BaseModel] | dict[str, object] | None = None,
-) -> Tool:
+) -> _Tool:
     """Register a function as a tool.
 
     The model sees the handler's return annotation as ``outputSchema``.
@@ -734,7 +672,7 @@ def tool(
     name: str | None = None,
     description: str | None = None,
     input_schema: type[BaseModel] | dict[str, object] | None = None,
-) -> Tool:
+) -> _Tool:
     """Define an ephemeral tool for a single ``generate`` call.
 
     Unlike ``@ai.tool()``, this does not register the tool on the app, so it
@@ -771,7 +709,7 @@ def define_interrupt(
     description: str | None = None,
     request_metadata: dict[str, Any] | Callable[[Any], dict[str, Any]] | None = None,  # noqa: ANN401
     input_schema: type[BaseModel] | dict[str, object] | None = None,
-) -> Tool:
+) -> _Tool:
     """Register a tool that always interrupts execution.
 
     An interrupt tool is a special tool that always raises ``Interrupt`` with

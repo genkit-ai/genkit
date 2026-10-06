@@ -49,10 +49,9 @@ from genkit.plugin_api import (
     loop_local_client,
     to_json_schema,
 )
-from genkit_openai.models import (
+from genkit_openai._models import (
     SUPPORTED_EMBEDDING_MODELS,
     SUPPORTED_IMAGE_MODELS,
-    SUPPORTED_OPENAI_COMPAT_MODELS,
     SUPPORTED_OPENAI_MODELS,
     SUPPORTED_STT_MODELS,
     SUPPORTED_TTS_MODELS,
@@ -62,9 +61,9 @@ from genkit_openai.models import (
     OpenAISTTModel,
     OpenAITTSModel,
 )
-from genkit_openai.models.model_info import KnownGpt, get_default_openai_model_info
-from genkit_openai.models.utils import reraise_openai_error
-from genkit_openai.typing import OpenAIConfig
+from genkit_openai._models._model_info import KnownGpt, get_default_openai_model_info
+from genkit_openai._models._utils import reraise_openai_error
+from genkit_openai._typing import OpenAIConfig
 
 
 def open_ai_name(name: str) -> str:
@@ -346,7 +345,7 @@ class OpenAI(Plugin):
                 'supports': supports,
             }
 
-        model_info = SUPPORTED_OPENAI_COMPAT_MODELS.get(name, get_default_openai_model_info(name))
+        model_info = get_default_openai_model_info(name)
         supports = model_info.supports.model_dump(by_alias=True, exclude_none=True) if model_info.supports else {}
         return {
             'label': model_info.label,
