@@ -203,9 +203,11 @@ def _move_unknown_params_to_extra_body(params: dict[str, Any], use_beta: bool) -
 
 # Body fields Genkit builds from the request. `extra` can't set them: the
 # schema can't see inside the passthrough, and overwriting them silently would
-# replace the conversation, the streaming mode, or the structured-output format
-# Genkit merges into output_config (the declared field still works).
-_MANAGED_BODY_FIELDS = ('messages', 'system', 'tools', 'tool_choice', 'stream', 'output_config')
+# replace the model the action resolved (pin one with `version`), the
+# conversation, the streaming mode, or the structured-output format Genkit
+# merges into output_config (the declared field still works). Matches Go's
+# rejectManagedConfig, which refuses a config-level model.
+_MANAGED_BODY_FIELDS = ('model', 'messages', 'system', 'tools', 'tool_choice', 'stream', 'output_config')
 
 
 def _merge_config_extra(params: dict[str, Any], extra: dict[str, Any] | None) -> None:
