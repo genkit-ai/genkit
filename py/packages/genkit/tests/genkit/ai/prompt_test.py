@@ -1320,6 +1320,20 @@ async def test_prompt_inside_flow_fills_auth_from_flow_context(method: str) -> N
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('kind', [ActionKind.PROMPT, ActionKind.EXECUTABLE_PROMPT])
+async def test_registered_prompt_action_fills_auth_from_run_context(kind: ActionKind) -> None:
+    """The Dev UI runs a prompt through its action with context=; the template fills from it."""
+    ai, _ = _setup_prompt_call()
+    ai.define_prompt(name='order', prompt='Order for {{@auth.uid}}.')
+    action = await ai.registry.resolve_action(kind, 'order')
+    assert action is not None
+
+    rendered = (await action.run(None, context={'auth': {'uid': 'chef-1'}})).response
+
+    assert [text_from_message(m) for m in rendered.messages] == ['Order for chef-1.']
+
+
+@pytest.mark.asyncio
 async def test_prompt_render_explicit_context_overrides_flow_context() -> None:
     """`context=` on render wins over the enclosing flow's auth."""
     ai, _ = _setup_prompt_call()
