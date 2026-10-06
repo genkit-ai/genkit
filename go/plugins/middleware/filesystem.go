@@ -196,7 +196,9 @@ func (f Filesystem) New(ctx context.Context) (*ai.Hooks, error) {
 			queue[n-1].Content = append(queue[n-1].Content, parts...)
 			return
 		}
-		queue = append(queue, ai.NewUserMessage(parts...))
+		msg := ai.NewUserMessage(parts...)
+		msg.Metadata = map[string]any{filesystemToolKey: f.toolName("read_file")}
+		queue = append(queue, msg)
 	}
 
 	cache := newFileStateCache(fileStateCacheMaxEntries)
@@ -244,6 +246,11 @@ func (f Filesystem) New(ctx context.Context) (*ai.Hooks, error) {
 		WrapGenerate: wrapGenerate,
 	}, nil
 }
+
+// filesystemToolKey is the metadata key that marks the user messages
+// Filesystem adds to carry file contents, valued with the tool name, as in JS.
+// Those messages are tool output, not something the user wrote.
+const filesystemToolKey = "filesystemMiddlewareTool"
 
 // toolName returns suffix prefixed with f.ToolNamePrefix.
 func (f *Filesystem) toolName(suffix string) string { return f.ToolNamePrefix + suffix }

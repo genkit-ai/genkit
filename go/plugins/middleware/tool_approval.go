@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/ai/tool"
@@ -75,11 +76,12 @@ import (
 //     continues.
 //   - "ask" interrupts, as a call without a judge does.
 //
-// The judge sees the text of the user's messages and the pending call (the
-// tool's name, description, and input) as one JSON document. It does not see
-// model text or tool results, since injected instructions usually arrive
-// through those. A judge that fails, or answers with anything other than a
-// verdict, interrupts the call.
+// The judge sees the text the user wrote and the pending call (the tool's
+// name, description, and input) as one JSON document. It does not see model
+// text, tool results, retrieved documents, or file contents the [Filesystem]
+// middleware adds, since injected instructions usually arrive through those.
+// A judge that fails, or answers with anything other than a verdict,
+// interrupts the call.
 //
 // The judge is asked through the enum output format, so any model that can
 // answer with one of a list of values works, including decision models such
@@ -216,6 +218,19 @@ type judgeToolCall struct {
 	Input       any    `json:"input"`
 }
 
+// userText returns the text the user wrote in m. The framework marks the text
+// it adds to a user message with a "purpose" (retrieved documents are
+// "context", output instructions "output"), so those parts are left out.
+func userText(m *ai.Message) string {
+	var sb strings.Builder
+	for _, p := range m.Content {
+		if p.IsText() && p.Metadata["purpose"] == nil {
+			sb.WriteString(p.Text)
+		}
+	}
+	return sb.String()
+}
+
 // judge asks t.Judge for a verdict on the call in params.
 func (t *ToolApproval) judge(ctx context.Context, params *ai.ToolParams) (string, error) {
 	g := genkit.FromContext(ctx)
@@ -235,10 +250,10 @@ func (t *ToolApproval) judge(ctx context.Context, params *ai.ToolParams) (string
 	}
 	msgs, _ := ctx.Value(judgeMessagesKey{}).([]*ai.Message)
 	for _, m := range msgs {
-		if m == nil || m.Role != ai.RoleUser {
+		if m == nil || m.Role != ai.RoleUser || m.Metadata[filesystemToolKey] != nil {
 			continue
 		}
-		if text := m.Text(); text != "" {
+		if text := userText(m); text != "" {
 			in.UserMessages = append(in.UserMessages, text)
 		}
 	}
