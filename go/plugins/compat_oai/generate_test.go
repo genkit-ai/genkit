@@ -178,59 +178,9 @@ func TestConvertChatCompletionToModelResponseProviderFinishReasons(t *testing.T)
 	}
 }
 
-// TestConvertChatCompletionToModelResponseCachedTokens covers both shapes a
-// provider reports prompt cache hits in: OpenAI's prompt_tokens_details
-// breakdown and the top-level field DeepSeek uses, which returns no
-// prompt_tokens_details at all.
-func TestConvertChatCompletionToModelResponseCachedTokens(t *testing.T) {
-	for _, tc := range []struct {
-		name  string
-		usage string
-		want  int
-	}{
-		{
-			name:  "openai prompt_tokens_details",
-			usage: `{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12,"prompt_tokens_details":{"cached_tokens":6}}`,
-			want:  6,
-		},
-		{
-			name:  "deepseek prompt_cache_hit_tokens",
-			usage: `{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12,"prompt_cache_hit_tokens":6,"prompt_cache_miss_tokens":4}`,
-			want:  6,
-		},
-		{
-			name:  "no cache hit reported",
-			usage: `{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12,"prompt_cache_hit_tokens":0,"prompt_cache_miss_tokens":10}`,
-			want:  0,
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var completion openai.ChatCompletion
-			if err := json.Unmarshal([]byte(`{
-				"id":"1","object":"chat.completion","created":1,"model":"test-model",
-				"choices":[{"index":0,"message":{"role":"assistant","content":"answer"},"finish_reason":"stop"}],
-				"usage":`+tc.usage+`
-			}`), &completion); err != nil {
-				t.Fatalf("json.Unmarshal() error = %v", err)
-			}
-
-			resp, err := convertChatCompletionToModelResponse(&completion)
-			if err != nil {
-				t.Fatalf("convertChatCompletionToModelResponse() error = %v", err)
-			}
-			if got := resp.Usage.CachedContentTokens; got != tc.want {
-				t.Errorf("CachedContentTokens = %d, want %d", got, tc.want)
-			}
-			if got := resp.Usage.InputTokens; got != 10 {
-				t.Errorf("InputTokens = %d, want 10", got)
-			}
-		})
-	}
-}
-
 // TestConvertUsage pins how each provider's usage maps onto the
-// [ai.GenerationUsage] convention, from usage the providers returned live.
-// OpenAI and DeepSeek count reasoning inside completion_tokens, so passing
+// [ai.GenerationUsage] convention. The OpenAI, xAI, and DeepSeek reasoning
+// rows are usage those providers returned live. OpenAI and DeepSeek count reasoning inside completion_tokens, so passing
 // that through beside ThoughtsTokens counted reasoning twice; xAI counts it
 // beside completion_tokens, so subtracting it there would count it never.
 func TestConvertUsage(t *testing.T) {
@@ -253,6 +203,11 @@ func TestConvertUsage(t *testing.T) {
 			name:  "deepseek cache hit",
 			usage: `{"prompt_tokens":4826,"completion_tokens":71,"total_tokens":4897,"prompt_tokens_details":{"cached_tokens":4608},"completion_tokens_details":{"reasoning_tokens":67},"prompt_cache_hit_tokens":4608,"prompt_cache_miss_tokens":218}`,
 			want:  ai.GenerationUsage{InputTokens: 4826, OutputTokens: 4, ThoughtsTokens: 67, CachedContentTokens: 4608, TotalTokens: 4897},
+		},
+		{
+			name:  "deepseek cache hit without details",
+			usage: `{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12,"prompt_cache_hit_tokens":6,"prompt_cache_miss_tokens":4}`,
+			want:  ai.GenerationUsage{InputTokens: 10, OutputTokens: 2, CachedContentTokens: 6, TotalTokens: 12},
 		},
 		{
 			name:  "openrouter cache write",

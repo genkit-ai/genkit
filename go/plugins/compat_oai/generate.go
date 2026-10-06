@@ -729,10 +729,8 @@ func convertChatCompletionToModelResponse(completion *openai.ChatCompletion) (*a
 
 	choice := completion.Choices[0]
 
-	usage := convertUsage(completion.Usage)
-
 	resp := &ai.ModelResponse{
-		Usage: usage,
+		Usage: convertUsage(completion.Usage),
 		Message: &ai.Message{
 			Role:    ai.RoleModel,
 			Content: make([]*ai.Part, 0),
@@ -838,8 +836,6 @@ func convertChatCompletionToModelResponse(completion *openai.ChatCompletion) (*a
 // convention: output excludes the reasoning reported beside it, and the total
 // is input + output + thoughts.
 func convertUsage(u openai.CompletionUsage) *ai.GenerationUsage {
-	usage := &ai.GenerationUsage{InputTokens: int(u.PromptTokens)}
-
 	// OpenAI and most providers count reasoning inside completion_tokens. xAI
 	// counts it beside them, and its total_tokens adds it on top, which is how
 	// the two are told apart. A completion count below the reasoning count
@@ -850,22 +846,25 @@ func convertUsage(u openai.CompletionUsage) *ai.GenerationUsage {
 		int(u.TotalTokens) != int(u.PromptTokens)+completion+reasoning {
 		completion -= reasoning
 	}
-	usage.OutputTokens = completion
-	usage.ThoughtsTokens = reasoning
 
 	// DeepSeek reports its cache hits as a usage field of its own and, on
 	// older models, returns no prompt_tokens_details at all, so that field
 	// stands in when OpenAI's breakdown is absent. OpenRouter reports cache
 	// writes, which OpenAI's shape has no field for.
-	if u.PromptTokensDetails.CachedTokens > 0 {
-		usage.CachedContentTokens = int(u.PromptTokensDetails.CachedTokens)
-	} else {
-		usage.CachedContentTokens = extractTokenCount(
-			u.JSON.ExtraFields["prompt_cache_hit_tokens"].Raw())
+	cached := int(u.PromptTokensDetails.CachedTokens)
+	if cached == 0 {
+		cached = extractTokenCount(u.JSON.ExtraFields["prompt_cache_hit_tokens"].Raw())
 	}
-	usage.CacheWriteTokens = extractTokenCount(
-		u.PromptTokensDetails.JSON.ExtraFields["cache_write_tokens"].Raw())
-	usage.TotalTokens = usage.InputTokens + usage.OutputTokens + usage.ThoughtsTokens
+
+	usage := &ai.GenerationUsage{
+		InputTokens:         int(u.PromptTokens),
+		OutputTokens:        completion,
+		ThoughtsTokens:      reasoning,
+		TotalTokens:         int(u.PromptTokens) + completion + reasoning,
+		CachedContentTokens: cached,
+		CacheWriteTokens: extractTokenCount(
+			u.PromptTokensDetails.JSON.ExtraFields["cache_write_tokens"].Raw()),
+	}
 
 	// Add the token counts Genkit has no field of its own for.
 	addCustomTokens(usage, "audioTokens", int(u.CompletionTokensDetails.AudioTokens))
