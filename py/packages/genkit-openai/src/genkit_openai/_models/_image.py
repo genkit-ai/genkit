@@ -50,7 +50,7 @@ class OpenAIGptImageConfig(ModelConfig):
     size: Literal['1024x1024', '1536x1024', '1024x1536', 'auto'] | None = None
     style: Literal['vivid', 'natural'] | None = None
     user: str | None = None
-    n: int | None = None
+    n: int | None = Field(default=None, ge=1, le=10)
     quality: Literal['low', 'medium', 'high'] | None = Field(
         default=None,
         json_schema_extra={'enum': ['low', 'medium', 'high']},

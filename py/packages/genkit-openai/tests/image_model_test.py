@@ -276,6 +276,7 @@ class TestSupportedImageModels:
         assert _enum('quality') == ['low', 'medium', 'high']
         assert _enum('background') == ['transparent', 'opaque', 'auto']
         assert _enum('moderation') == ['low', 'auto']
+        assert _int_bounds('n') == {'type': 'integer', 'minimum': 1, 'maximum': 10}
         assert _int_bounds('outputCompression') == {'type': 'integer', 'minimum': 1, 'maximum': 100}
         assert _enum('outputFormat') == ['png', 'jpeg', 'webp']
         assert 'responseFormat' not in properties
