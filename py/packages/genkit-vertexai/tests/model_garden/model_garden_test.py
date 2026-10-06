@@ -29,7 +29,7 @@ from genkit_vertexai.model_garden.anthropic import AnthropicModelGarden
 from genkit_vertexai.model_garden.model_garden import ModelGardenModel
 from openai.types.chat import ChatCompletion
 
-from genkit import ActionRunContext, Message, Part, Role
+from genkit import ActionRunContext, Genkit, Message, Part, Role
 from genkit._ai._formats import built_in_formats
 from genkit.model import ModelRequest, OutputConfig
 
@@ -45,10 +45,26 @@ def test_catalog_output_names_are_known_formats() -> None:
 
 
 @pytest.fixture
-@patch('genkit_vertexai.model_garden.model_garden.OpenAIClient')
-def model_garden_instance(client: MagicMock) -> ModelGardenModel:
+def model_garden_instance() -> ModelGardenModel:
     """Model Garden fixture."""
     return ModelGardenModel(model='test', location='us-central1', project_id='project')
+
+
+def _chat_completion(text: str) -> ChatCompletion:
+    return ChatCompletion.model_validate({
+        'id': 'chatcmpl-1',
+        'object': 'chat.completion',
+        'created': 0,
+        'model': 'meta/llama-3.1-405b-instruct-maas',
+        'choices': [
+            {
+                'index': 0,
+                'finish_reason': 'stop',
+                'message': {'role': 'assistant', 'content': text},
+            }
+        ],
+        'usage': {'prompt_tokens': 1, 'completion_tokens': 1, 'total_tokens': 2},
+    })
 
 
 @pytest.mark.parametrize(
@@ -169,3 +185,97 @@ async def test_model_garden_llama_json_request_sends_json_object() -> None:
         await garden.to_openai_compatible_model()(request, ctx)
 
     assert captured['response_format'] == {'type': 'json_object'}
+
+
+@pytest.mark.asyncio
+async def test_model_garden_openai_compatible_model_resolves_and_generates() -> None:
+    """ai.generate on a catalog Llama model sends the prompt to the OpenAI client and returns its reply."""
+    client = MagicMock()
+    client.chat.completions.create = AsyncMock(return_value=_chat_completion('hello from llama'))
+
+    with patch(
+        'genkit_vertexai.model_garden.model_garden.ModelGardenModel.create_client',
+        new=AsyncMock(return_value=client),
+    ):
+        ai = Genkit(plugins=[ModelGarden(project_id='my-project', location='us-central1')])
+        response = await ai.generate(model='modelgarden/meta/llama-3.1-405b-instruct-maas', prompt='hi')
+
+    assert response.text == 'hello from llama'
+    client.chat.completions.create.assert_awaited_once()
+    sent = client.chat.completions.create.call_args.kwargs
+    assert sent['model'] == 'meta/llama-3.1-405b-instruct-maas'
+    assert sent['messages'] == [{'role': 'user', 'content': 'hi'}]
+
+
+class _FakeCredentials:
+    """Google credentials stand-in with a token that can expire."""
+
+    def __init__(self) -> None:
+        self.token = 'tok-1'
+        self.valid = True
+        self.refresh_count = 0
+
+    def refresh(self, _request: object) -> None:
+        self.refresh_count += 1
+        if self.refresh_count > 1:
+            self.token = 'tok-2'
+        self.valid = True
+
+
+@pytest.mark.asyncio
+async def test_model_garden_repeated_generate_refreshes_credentials_once() -> None:
+    """Three ai.generate calls on a Llama model refresh Google credentials once and reuse one OpenAI client."""
+    creds = _FakeCredentials()
+    clients: list[MagicMock] = []
+
+    def make_client(**kwargs: object) -> MagicMock:
+        client = MagicMock()
+        client.api_key = kwargs.get('api_key')
+        client.chat.completions.create = AsyncMock(return_value=_chat_completion('ok'))
+        clients.append(client)
+        return client
+
+    with (
+        patch('genkit_vertexai.model_garden.client.auth.default', return_value=(creds, 'my-project')),
+        patch('genkit_vertexai.model_garden.client.google.auth.transport.requests.Request'),
+        patch('genkit_vertexai.model_garden.client._AsyncOpenAI', side_effect=make_client),
+    ):
+        ai = Genkit(plugins=[ModelGarden(project_id='my-project', location='us-central1')])
+        for _ in range(3):
+            response = await ai.generate(model='modelgarden/meta/llama-3.1-405b-instruct-maas', prompt='hi')
+            assert response.text == 'ok'
+
+    assert creds.refresh_count == 1
+    assert len(clients) == 1
+
+
+@pytest.mark.asyncio
+async def test_model_garden_generate_after_token_expiry_sends_fresh_token() -> None:
+    """After cached credentials expire, the next generate refreshes and sends the new token."""
+    creds = _FakeCredentials()
+    clients: list[MagicMock] = []
+
+    def make_client(**kwargs: object) -> MagicMock:
+        client = MagicMock()
+        client.api_key = kwargs.get('api_key')
+        client.chat.completions.create = AsyncMock(return_value=_chat_completion('ok'))
+        clients.append(client)
+        return client
+
+    with (
+        patch('genkit_vertexai.model_garden.client.auth.default', return_value=(creds, 'my-project')),
+        patch('genkit_vertexai.model_garden.client.google.auth.transport.requests.Request'),
+        patch('genkit_vertexai.model_garden.client._AsyncOpenAI', side_effect=make_client),
+    ):
+        ai = Genkit(plugins=[ModelGarden(project_id='my-project', location='us-central1')])
+        first = await ai.generate(model='modelgarden/meta/llama-3.1-405b-instruct-maas', prompt='hi')
+        assert first.text == 'ok'
+        assert clients[0].api_key == 'tok-1'
+
+        creds.valid = False
+        second = await ai.generate(model='modelgarden/meta/llama-3.1-405b-instruct-maas', prompt='hi')
+        assert second.text == 'ok'
+
+    assert creds.refresh_count == 2
+    assert len(clients) == 1
+    assert clients[0].api_key == 'tok-2'

@@ -53,6 +53,7 @@ dependencies = [
   "anthropic>=0.40.0",
   "genkit-anthropic",
   "genkit-openai",
+  "openai",
 ]
 description = "Vertex AI and Model Garden on Genkit"
 keywords = [

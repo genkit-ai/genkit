@@ -17,7 +17,7 @@
 
 """Model Garden implementation."""
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 # Private import across packages, on purpose. genkit-openai and
 # genkit-vertexai release in lockstep, so Model Garden reuses the
@@ -27,11 +27,12 @@ from genkit_vertexai.model_garden._model_info import (
     SUPPORTED_OPENAI_COMPAT_MODELS,
     get_default_model_info,
 )
-from genkit_vertexai.model_garden.client import OpenAIClient
+from genkit_vertexai.model_garden.client import CachedOpenAI
 from openai import AsyncOpenAI
 
 from genkit import ActionRunContext, ModelResponse
 from genkit.model import ModelRequest
+from genkit.plugin_api import loop_local_client
 
 MODELGARDEN_PLUGIN_NAME = 'modelgarden'
 
@@ -78,18 +79,15 @@ class ModelGardenModel:
                 model is deployed.
         """
         self.name = model
-        self._openai_params = {'location': location, 'project_id': project_id}
+        self._runtime_client = loop_local_client(lambda: CachedOpenAI(location=location, project_id=project_id))
 
     async def create_client(self) -> AsyncOpenAI:
-        """Create the AsyncOpenAI client with refreshed credentials.
-
-        This offloads the blocking ``credentials.refresh()`` call to a
-        thread via ``OpenAIClient.create()``.
+        """Return the per-loop AsyncOpenAI client, refreshing the token only when expired.
 
         Returns:
             The authenticated AsyncOpenAI client.
         """
-        return await OpenAIClient.create(**self._openai_params)
+        return await self._runtime_client().get()
 
     def get_model_info(self) -> dict[str, object] | None:
         """Retrieve metadata and supported features for the specified model.
@@ -114,7 +112,7 @@ class ModelGardenModel:
             ),
         }
 
-    def to_openai_compatible_model(self) -> Callable:
+    def to_openai_compatible_model(self) -> Callable[[ModelRequest, ActionRunContext], Awaitable[ModelResponse]]:
         """Convert the Model Garden model into an OpenAI-compatible Genkit model function.
 
         Returns:

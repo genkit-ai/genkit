@@ -1979,6 +1979,7 @@ dependencies = [
     { name = "google-cloud-aiplatform" },
     { name = "google-cloud-bigquery" },
     { name = "google-genai" },
+    { name = "openai" },
     { name = "strenum", marker = "python_full_version < '3.11'" },
     { name = "structlog" },
 ]
@@ -1992,6 +1993,7 @@ requires-dist = [
     { name = "google-cloud-aiplatform", specifier = ">=1.77.0" },
     { name = "google-cloud-bigquery", specifier = ">=3.11.0" },
     { name = "google-genai", specifier = ">=1.7.0" },
+    { name = "openai" },
     { name = "strenum", marker = "python_full_version < '3.11'", specifier = ">=0.4.15" },
     { name = "structlog", specifier = ">=25.2.0" },
 ]
