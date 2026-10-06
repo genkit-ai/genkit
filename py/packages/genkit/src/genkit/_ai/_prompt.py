@@ -494,8 +494,10 @@ class Prompt(Generic[InputT, OutputT]):
         """
         channel: Channel[ModelResponseChunk[OutputT], ModelResponse[OutputT]] = Channel()
 
-        async def _run() -> ModelResponse[OutputT]:
-            opts = PromptGenerateOptions(
+        # Same run path as __call__; only the chunk sink differs.
+        response_future: asyncio.Future[ModelResponse[OutputT]] = asyncio.create_task(
+            self(
+                input,
                 model=model,
                 config=config,
                 messages=messages,
@@ -509,18 +511,9 @@ class Prompt(Generic[InputT, OutputT]):
                 resume_respond=resume_respond,
                 resume_restart=resume_restart,
                 resume_metadata=resume_metadata,
-            )
-            registry, options = await self._prepare(input=input, opts=opts)
-            result = await generate_action(
-                registry,
-                options,
                 on_chunk=lambda c: channel.send(cast('ModelResponseChunk[OutputT]', c)),
-                # context also goes to the run, not just the template, so tools and middleware see it.
-                context=context if context is not None else get_current_context(),
             )
-            return cast(ModelResponse[OutputT], result)
-
-        response_future: asyncio.Future[ModelResponse[OutputT]] = asyncio.create_task(_run())
+        )
         channel.set_close_future(response_future)
 
         return ModelStreamResponse[OutputT](channel=channel, response_future=response_future)
