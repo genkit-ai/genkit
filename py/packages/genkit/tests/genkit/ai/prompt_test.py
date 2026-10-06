@@ -49,12 +49,11 @@ from genkit._ai._prompt import (
     load_prompt_folder,
     lookup_prompt,
     prompt,
-    resume_options_to_resume,
 )
 from genkit._core._action import Action, ActionKind
 from genkit._core._dap import DapValue
 from genkit._core._error import GenkitError, RuntimeErrorReason
-from genkit._core._model import GenerateActionOptions, ModelConfig
+from genkit._core._model import GenerateActionOptions, ModelConfig, resume_options_to_resume
 from genkit._core._registry import define_dynamic_action_provider
 from genkit._core._typing import Role
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, MiddlewareRef, ModelHookParams
