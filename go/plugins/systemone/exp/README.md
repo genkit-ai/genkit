@@ -232,14 +232,14 @@ damage, _, err := genkit.GenerateData[Damage](ctx, g,
 Media is an extension to the protocol, and a server that does not know a field
 can drop it and answer as if nothing had been sent. A plugin therefore refuses
 media before the request is sent, kind by kind, unless its `Images`, `Audio`, or
-`Video` is `systemonex.MediaSupported`. `Ollama()` sets `Images`, and so does a
-server of your own that takes images, such as Liquid's in
-[Any other server](#any-other-server). Then a model is sent that kind, and the
-server refuses it for a model that cannot read it, so a new model needs no
-setup. A model's `ModelSpec` overrides the plugin's setting, kind by kind,
-either way. Its zero value keeps the plugin's, so an entry that only sets a
-`Label` changes nothing else. How much media a request takes, and how large, is
-the server's to say.
+`Video` is `systemonex.MediaSupported`. `Ollama()` and `WorkersAI(accountID)`
+set `Images`, and so does a server of your own that takes images, such as
+Liquid's in [Any other server](#any-other-server). Then a model is sent that
+kind, and the server refuses it for a model that cannot read it, so a new model
+needs no setup. A model's `ModelSpec` overrides the plugin's setting, kind by
+kind, either way: Clef-omni on Workers AI also reads audio and video. Its zero
+value keeps the plugin's, so an entry that only sets a `Label` changes nothing
+else. How much media a request takes, and how large, is the server's to say.
 
 ## Prompt files
 
@@ -271,6 +271,7 @@ on the day it ships.
 | `TypeSafe()`   | `typesafe/jev-1.13.0`                   | `TYPESAFE_API_KEY`   | `TYPESAFE_BASE_URL` is read too; lists models; text only |
 | `OpenRouter()` | `openrouter-decisions/liquid/d1`, `openrouter-decisions/typesafe/jev-1.13`, `openrouter-decisions/~typesafe/jev-latest` | `OPENROUTER_API_KEY` | alpha Decisions API; lists OpenRouter's decision models; cost in `resp.Usage.Custom["cost"]`; text only |
 | `Ollama()`     | `ollama-decisions/clef`                 | none                 | `http://localhost:11434` unless `BaseURL` is set; images as raw base64; a request needs text |
+| `WorkersAI(accountID)` | `cloudflare-decisions/@cf/cloudflare/clef`, `cloudflare-decisions/@cf/cloudflare/clef-flash`, `cloudflare-decisions/@cf/cloudflare/clef-omni`, `cloudflare-decisions/typesafe/jev` | `CLOUDFLARE_API_TOKEN` | `CLOUDFLARE_ACCOUNT_ID` when `accountID` is empty; Clef models read images, Clef-omni audio and video too; a long state is truncated; no versions to pin |
 
 A gateway serves several vendors' models under one key, so one plugin reaches
 all of them. OpenRouter's is named `openrouter-decisions` because the plugin for
@@ -336,6 +337,72 @@ damage, _, err := genkit.GenerateData[Damage](ctx, g,
 		ai.NewMediaPart("image/jpeg", photoDataURL))))
 ```
 
+### Cloudflare Workers AI
+
+Workers AI serves Cloudflare's Clef and Clef-flash, which read images,
+Clef-omni, which reads images, audio, and video, and partners' models such as
+jev, which reads text only. A model is named by its Workers AI ID, `@cf/`
+included. The account ID is the argument, or `CLOUDFLARE_ACCOUNT_ID` when it is
+empty.
+
+```go
+g := genkit.Init(ctx, genkit.WithPlugins(systemonex.WorkersAI(""))) // CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID
+
+out, _, err := genkit.GenerateData[Triage](ctx, g,
+	ai.WithModelName("cloudflare-decisions/@cf/cloudflare/clef-flash"),
+	ai.WithPrompt(ticket))
+
+// Clef-omni hears and sees: audio and video go beside the text.
+check, _, err := genkit.GenerateData[FanCheck](ctx, g,
+	ai.WithModelName("cloudflare-decisions/@cf/cloudflare/clef-omni"),
+	ai.WithMessages(ai.NewUserMessage(
+		ai.NewTextPart("Clip from the server room."),
+		ai.NewMediaPart("audio/wav", fanAudioDataURL),
+		ai.NewMediaPart("video/mp4", fanVideoDataURL))))
+```
+
+Clef-omni takes up to 4 images, 4 audio clips of up to 5 minutes, and 2 videos
+of up to a minute, sampled at 2 frames a second; a video's soundtrack is heard
+only when every video in the request has one. Clef-flash takes 24k tokens of
+state, media, and questions together, and Clef and Clef-omni 64k.
+
+The base URL has an `{account}` segment, which the account ID fills. A proxy's
+`BaseURL` with no such segment needs no account ID:
+
+```go
+cf := systemonex.WorkersAI("")
+cf.BaseURL = "https://ai-proxy.example.com/cloudflare" // takes /ai/run/<model>
+```
+
+Workers AI names one model per release, with no versions, so a threshold tuned
+against a model can move when Cloudflare updates it.
+
+### Several servers
+
+Each server is its own plugin, so one app can use several, and the fallback
+middleware moves a request to another server when one is down. Each model's
+answers are calibrated on their own, so check which model answered before
+applying a threshold tuned for one.
+
+```go
+cf, or := systemonex.WorkersAI(""), systemonex.OpenRouter()
+g := genkit.Init(ctx, genkit.WithPlugins(cf, or))
+
+out, resp, err := genkit.GenerateData[Triage](ctx, g,
+	ai.WithModelName("cloudflare-decisions/typesafe/jev"),
+	ai.WithUse(&middleware.Fallback{Models: []ai.ModelRef{
+		or.ModelRef("typesafe/jev-1.13", nil),
+	}}),
+	ai.WithPrompt(ticket))
+if err != nil {
+	return err
+}
+threshold := thresholds[systemonex.ResponseInfo(resp).Model]
+```
+
+A fallback takes each model's own config, so give every reference the
+`StateJSON` it needs, or send the state as a data part.
+
 ### Any other server
 
 Any other server that speaks the protocol takes a few fields. `Provider` names
@@ -395,12 +462,10 @@ error are retried twice, with `Retry-After` honored.
 
 Pin a version in production where the server offers one. Confidence thresholds
 tuned against one release do not carry over to the next, nor from one model to
-another, and `systemonex.ResponseInfo(resp).Model` is the version that answered,
-on every call. A gateway's cost is `resp.Usage.Custom["cost"]`. Where a
-reference with a config is needed, such as a fallback list, the plugin's
-`ModelRef("jev-1.13.0", &cfg)` builds one. A fallback takes each model's own
-config, so give every reference the `StateJSON` it needs, or send the state as a
-data part.
+another, and `systemonex.ResponseInfo(resp).Model` is the version that
+answered, on every call. A gateway's cost is `resp.Usage.Custom["cost"]`. Where
+a reference with a config is needed, such as a fallback list, the plugin's
+`ModelRef("jev-1.13.0", &cfg)` builds one.
 
 ## Limits
 
@@ -421,4 +486,7 @@ data part.
 `go test ./plugins/systemone/... ./plugins/internal/systemone/...` runs against
 a fake endpoint. With `OPENROUTER_API_KEY` set, `TestOpenRouterLive` runs the
 decision, guidance, enum, history, runtime-question, document, listing, and
-model-version paths against jev and d1 through OpenRouter.
+model-version paths against jev and d1 through OpenRouter. With
+`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` set, `TestWorkersAILive` runs
+a decision on Clef-flash, images on Clef, Clef-flash, and Clef-omni, and audio
+and video on Clef-omni.
