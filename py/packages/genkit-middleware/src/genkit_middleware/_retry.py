@@ -26,9 +26,10 @@ from collections.abc import Awaitable, Callable
 from pydantic import BaseModel, Field
 
 from genkit import GenkitError
+from genkit._ai._generate import StreamingCallbackError
 from genkit._core._model import ModelResponse
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
-from genkit_middleware._statuses import TRANSIENT_STATUSES, status_matches
+from genkit_middleware._statuses import TRANSIENT_STATUSES
 
 _DEFAULT_RETRY_STATUSES: list[str] = list(TRANSIENT_STATUSES)
 
@@ -63,9 +64,12 @@ class Retry(BaseMiddleware[RetryConfig]):
                 if attempt == self.config.max_retries:
                     raise
 
-                # A raw exception has no status to check, so it's retried;
-                # `statuses` only filters GenkitError.
-                if not status_matches(e, self.config.statuses, unclassified=True):
+                # The caller's own on_chunk failure is not retried. A
+                # GenkitError is retried only when its status is listed. Any
+                # other exception is retried.
+                if isinstance(e, StreamingCallbackError):
+                    raise
+                if isinstance(e, GenkitError) and e.status not in self.config.statuses:
                     raise
 
                 delay_ms = current_delay_ms

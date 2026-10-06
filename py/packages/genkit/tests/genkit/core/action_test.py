@@ -11,7 +11,7 @@ from typing import Any, cast
 import pytest
 from pydantic import BaseModel, ConfigDict
 
-from genkit import Message, Part
+from genkit import Genkit, Message, Part, PublicError
 from genkit._core._action import (
     Action,
     ActionKind,
@@ -26,6 +26,7 @@ from genkit._core._action import (
 )
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import OutputConfig
+from genkit.embedder import EmbedRequest, EmbedResponse
 from genkit.model import ModelRequest
 
 
@@ -559,3 +560,208 @@ async def test_bidi_send_before_close_delivers_the_turn() -> None:
     await conn.send('hi')
     await conn.close()
     assert await conn.output() == {'turns': 1}
+
+
+class AccountLockedError(Exception):
+    """A caller's own exception type."""
+
+
+class Receipt(BaseModel):
+    account: str
+    amount: int
+
+
+def _define_missing(ai: Genkit):  # noqa: ANN202
+    @ai.flow()
+    async def missing(account: str) -> str:
+        raise ValueError('no such account')
+
+    return missing
+
+
+@pytest.mark.asyncio
+async def test_await_flow_that_raises_value_error_raises_value_error() -> None:
+    """`await missing('acme')` raises the body's ValueError."""
+    missing = _define_missing(Genkit())
+
+    with pytest.raises(ValueError, match='no such account') as exc:
+        await missing('acme')
+
+    assert type(exc.value) is ValueError
+
+
+@pytest.mark.asyncio
+async def test_await_flow_that_raises_custom_exception_raises_same_instance() -> None:
+    """A user exception class comes back as the same object the body raised."""
+    ai = Genkit()
+    raised = AccountLockedError('acme is locked')
+
+    @ai.flow()
+    async def charge(account: str) -> str:
+        raise raised
+
+    with pytest.raises(AccountLockedError) as exc:
+        await charge('acme')
+
+    assert exc.value is raised
+
+
+@pytest.mark.asyncio
+async def test_await_flow_that_raises_public_error_keeps_status_and_message() -> None:
+    """A PublicError('NOT_FOUND', 'no order 99') surfaces unchanged."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def order(order_id: str) -> str:
+        raise PublicError('NOT_FOUND', f'no order {order_id}')
+
+    with pytest.raises(PublicError) as exc:
+        await order('99')
+
+    assert exc.value.status == 'NOT_FOUND'
+    assert exc.value.original_message == 'no order 99'
+
+
+@pytest.mark.asyncio
+async def test_await_flow_that_raises_genkit_error_keeps_status() -> None:
+    """A GenkitError(status='FAILED_PRECONDITION') surfaces with that status."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def ship(order_id: str) -> str:
+        raise GenkitError(status='FAILED_PRECONDITION', message='order is not paid')
+
+    with pytest.raises(GenkitError) as exc:
+        await ship('99')
+
+    assert exc.value.status == 'FAILED_PRECONDITION'
+    assert exc.value.original_message == 'order is not paid'
+    assert exc.value.cause is None
+
+
+@pytest.mark.asyncio
+async def test_await_outer_flow_calling_failing_inner_flow_raises_inner_value_error() -> None:
+    """A ValueError from a nested flow reaches the outer caller unwrapped."""
+    ai = Genkit()
+    missing = _define_missing(ai)
+
+    @ai.flow()
+    async def statement(account: str) -> str:
+        return await missing(account)
+
+    with pytest.raises(ValueError, match='no such account') as exc:
+        await statement('acme')
+
+    assert type(exc.value) is ValueError
+
+
+@pytest.mark.asyncio
+async def test_await_tool_that_raises_value_error_raises_value_error() -> None:
+    """Calling a tool directly raises the tool's ValueError."""
+    ai = Genkit()
+
+    @ai.tool()
+    async def balance(account: str) -> int:
+        """Look up an account balance."""
+        raise ValueError(f'no account {account}')
+
+    with pytest.raises(ValueError, match='no account acme') as exc:
+        await balance('acme')
+
+    assert type(exc.value) is ValueError
+
+
+@pytest.mark.asyncio
+async def test_ai_embed_with_failing_embedder_raises_original_exception() -> None:
+    """`ai.embed` raises the embedder's own exception."""
+    ai = Genkit()
+
+    async def down(request: EmbedRequest) -> EmbedResponse:
+        raise ConnectionError('embedding server refused the connection')
+
+    ai.define_embedder(name='down', fn=down)
+
+    with pytest.raises(ConnectionError, match='refused the connection') as exc:
+        await ai.embed(embedder='down', content='hello')
+
+    assert type(exc.value) is ConnectionError
+
+
+@pytest.mark.asyncio
+async def test_flow_error_with_tracing_on_has_no_trace_id(hex_ids: None) -> None:
+    """With tracing on, the raised ValueError still has no `trace_id`; the trace keeps it."""
+    missing = _define_missing(Genkit())
+
+    with pytest.raises(ValueError) as exc:
+        await missing('acme')
+
+    assert not hasattr(exc.value, 'trace_id')
+
+
+@pytest.mark.asyncio
+async def test_flow_genkit_error_with_tracing_on_keeps_trace_id_unset(hex_ids: None) -> None:
+    """With tracing on, a GenkitError the body raised comes back with `trace_id` still None."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def ship(order_id: str) -> str:
+        raise GenkitError(status='FAILED_PRECONDITION', message='order is not paid')
+
+    with pytest.raises(GenkitError) as exc:
+        await ship('99')
+
+    assert exc.value.trace_id is None
+    assert exc.value.status == 'FAILED_PRECONDITION'
+
+
+@pytest.mark.asyncio
+async def test_flow_reraising_shared_exception_leaves_it_untouched(hex_ids: None) -> None:
+    """One exception instance raised by two runs comes back unchanged both times."""
+    ai = Genkit()
+    locked = AccountLockedError('acme is locked')
+
+    @ai.flow()
+    async def charge(account: str) -> str:
+        raise locked
+
+    for _ in range(2):
+        with pytest.raises(AccountLockedError) as exc:
+            await charge('acme')
+        assert exc.value is locked
+        assert 'trace_id' not in vars(locked)
+
+
+@pytest.mark.asyncio
+async def test_flow_error_keeps_existing_trace_id_attribute(hex_ids: None) -> None:
+    """An exception that already carries `trace_id` keeps its own value."""
+    ai = Genkit()
+
+    class UpstreamError(Exception):
+        trace_id = 'upstream-trace'
+
+    @ai.flow()
+    async def relay(account: str) -> str:
+        raise UpstreamError('upstream failed')
+
+    with pytest.raises(UpstreamError) as exc:
+        await relay('acme')
+
+    assert exc.value.trace_id == 'upstream-trace'
+
+
+@pytest.mark.asyncio
+async def test_flow_bad_return_with_tracing_on_has_no_trace_id(hex_ids: None) -> None:
+    """`-> Receipt` returning `'nope'` raises INVALID_OUTPUT with `trace_id` still None."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def charge(order: str) -> Receipt:
+        return 'nope'  # type: ignore[return-value]
+
+    with pytest.raises(GenkitError) as exc:
+        await charge('o1')
+
+    assert exc.value.status == 'INTERNAL'
+    assert exc.value.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert exc.value.trace_id is None
+    assert 'trace_id' not in (exc.value.details or {})

@@ -142,7 +142,7 @@ async def test_streamed_flow_response_is_the_model() -> None:
 
 
 @pytest.mark.asyncio
-async def test_dev_ui_run_with_bad_return_reports_internal_invalid_output() -> None:
+async def test_dev_ui_run_with_bad_return_reports_internal_invalid_output(hex_ids: None) -> None:
     """A Dev UI runAction of a bad-return flow gets INTERNAL, reason INVALID_OUTPUT, and the real message."""
     ai = Genkit()
 
@@ -160,3 +160,4 @@ async def test_dev_ui_run_with_bad_return_reports_internal_invalid_output() -> N
     assert error['code'] == 13  # INTERNAL
     assert error['details']['reason'] == 'INVALID_OUTPUT'
     assert "Flow 'charge' returned a value that doesn't match its return annotation" in error['message']
+    assert error['details']['traceId'] == response.headers['x-genkit-trace-id']

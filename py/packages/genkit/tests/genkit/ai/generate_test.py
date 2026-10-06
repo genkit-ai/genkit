@@ -29,7 +29,7 @@ from genkit._ai._testing import (
 )
 from genkit._ai._tools import Interrupt, ToolRunContext, define_tool, restart_tool
 from genkit._core._action import ActionRunContext
-from genkit._core._error import GenkitError, PublicError, RuntimeErrorReason
+from genkit._core._error import GenkitError, PublicError, RuntimeErrorReason, wrap_http_error
 from genkit._core._model import GenerateActionOptions, ModelRequest, Resume
 from genkit._core._registry import Registry
 from genkit._core._typing import (
@@ -8303,3 +8303,151 @@ async def test_generate_json_format_with_tool_call_validates_only_final_turn() -
     assert response.error is None
     assert response.output == {'result': 'special ingredient'}
     assert response.messages[-1].text == '{"result": "special ingredient"}'
+
+
+@pytest.mark.asyncio
+async def test_generate_with_failing_tool_still_returns_internal_error() -> None:
+    """A tool raising ValueError still fails the response with INTERNAL and `finish_message == 'internal error'`."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+
+    @ai.tool(name='lookup')
+    async def lookup() -> str:
+        raise ValueError('db password is hunter2')
+
+    pm.responses = [_model_calls_tool(name='lookup', ref='r1')]
+
+    response = await ai.generate(prompt='weather?', tools=['lookup'])
+
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.finish_message == 'internal error'
+    assert response.error is not None
+    assert response.error.status == 'INTERNAL'
+    assert response.error.message == 'internal error'
+    assert response.message is None
+    assert [m.role for m in response.messages] == [Role.USER]
+
+
+@pytest.mark.asyncio
+async def test_generate_with_public_error_tool_returns_its_message() -> None:
+    """A tool raising PublicError still puts its message on `finish_message`."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+
+    @ai.tool(name='lookup')
+    async def lookup() -> str:
+        raise PublicError('NOT_FOUND', 'no forecast for Atlantis')
+
+    pm.responses = [_model_calls_tool(name='lookup', ref='r1')]
+
+    response = await ai.generate(prompt='weather?', tools=['lookup'])
+
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.finish_message == 'no forecast for Atlantis'
+    assert response.error is not None
+    assert response.error.status == 'NOT_FOUND'
+    assert response.message is None
+    assert [m.role for m in response.messages] == [Role.USER]
+
+
+@pytest.mark.asyncio
+async def test_generate_with_interrupting_tool_still_returns_interrupted() -> None:
+    """A tool raising Interrupt still yields an interrupted response with the tool request."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+
+    @ai.tool(name='transfer')
+    async def transfer() -> str:
+        raise Interrupt({'reason': 'needs_approval'})
+
+    pm.responses = [_model_calls_tool(name='transfer', ref='r1')]
+
+    response = await ai.generate(prompt='send $100', tools=['transfer'])
+
+    assert response.finish_reason == FinishReason.INTERRUPTED
+    assert response.message is not None
+    assert response.messages[-1] == response.message
+    assert [m.role for m in response.messages] == [Role.USER, Role.MODEL]
+    [interrupt] = response.interrupts
+    assert interrupt.tool_request is not None
+    assert interrupt.tool_request.ref == 'r1'
+    assert interrupt.metadata is not None
+    assert interrupt.metadata['interrupt'] == {'reason': 'needs_approval'}
+
+
+@pytest.mark.asyncio
+async def test_generate_with_failing_streaming_callback_returns_callback_message() -> None:
+    """An `on_chunk` that raises still yields its own message on the failed response."""
+    ai = Genkit(model='programmableModel')
+    pm, _ = define_programmable_model(ai)
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('done')]),
+        )
+    ]
+    pm.chunks = [[ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('partial')])]]
+
+    def on_chunk(_: ModelResponseChunk) -> None:
+        raise RuntimeError('model sink closed')
+
+    response = await generate_action(
+        ai.registry,
+        GenerateActionOptions(
+            model='programmableModel',
+            messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
+        ),
+        on_chunk=on_chunk,
+    )
+
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.finish_message == 'model sink closed'
+    assert response.error is not None
+    assert response.error.status == 'INTERNAL'
+    assert response.message is None
+    assert [m.role for m in response.messages] == [Role.USER]
+
+
+@pytest.mark.asyncio
+async def test_generate_with_model_raising_wrapped_provider_500_returns_internal_error() -> None:
+    """A model raising wrap_http_error(..., status_code=500) keeps provider text off finish_message."""
+    ai = Genkit()
+
+    async def down(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        raise wrap_http_error(
+            RuntimeError('upstream said: db password rejected'),
+            status_code=500,
+        )
+
+    ai.define_model(name='down', fn=down)
+
+    response = await ai.generate(model='down', prompt='hi')
+
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.finish_message == 'internal error'
+    assert response.error is not None
+    assert response.error.status == 'INTERNAL'
+    assert 'password' not in (response.finish_message or '')
+
+
+@pytest.mark.asyncio
+async def test_generate_with_genkit_error_wrapping_public_error_uses_outer_message() -> None:
+    """A hand-built GenkitError(cause=PublicError) uses the outer message, not the inner one."""
+    ai = Genkit()
+
+    async def down(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        raise GenkitError(
+            status='INTERNAL',
+            message='outer wrapper',
+            cause=PublicError('NOT_FOUND', 'no order 99'),
+        )
+
+    ai.define_model(name='down', fn=down)
+
+    response = await ai.generate(model='down', prompt='hi')
+
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.finish_message == 'outer wrapper'
+    assert 'no order 99' not in (response.finish_message or '')
+    assert response.error is not None
+    assert response.error.status == 'INTERNAL'

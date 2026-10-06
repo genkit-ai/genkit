@@ -1104,7 +1104,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
                     span.set_metadata({'interrupt': e.metadata})
                 raise
             if self._kind == ActionKind.FLOW:
-                output = self._validate_output(output, trace_id=trace_id)
+                output = self._validate_output(output)
             latency_ms = (time.perf_counter() - start_time) * 1000
             return cast(OutputT, _record_latency(output, latency_ms))
 
@@ -1113,8 +1113,8 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         if ctx.init is not None:
             attributes[Attr.INIT] = to_json_attr(ctx.init)
 
-        # A failure propagates as the body raised it, like Go. The trace id
-        # stays on the span; nothing is written onto the caller's exception.
+        # A failure propagates as the body raised it. The trace id stays on
+        # the span; nothing is written onto the caller's exception.
         output = await run_in_new_span(
             self._name,
             body,
@@ -1131,7 +1131,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             latency_ms=latency_ms,
         )
 
-    def _validate_output(self, output: object, *, trace_id: str) -> OutputT:
+    def _validate_output(self, output: object) -> OutputT:
         """Give the caller what the flow's return annotation promises, or fail the run."""
         if self._output_type is None:
             return cast(OutputT, output)
@@ -1145,7 +1145,6 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
                 status='INTERNAL',
                 cause=e,
                 reason=RuntimeErrorReason.INVALID_OUTPUT,
-                trace_id=trace_id,
             ) from e
 
     async def _invoke(self, input: object | None, ctx: ActionRunContext, *, omit_input: bool = True) -> OutputT:

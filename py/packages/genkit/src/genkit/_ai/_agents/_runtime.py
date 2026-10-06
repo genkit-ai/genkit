@@ -1092,8 +1092,6 @@ def to_error_details(exc: Exception) -> GenkitRuntimeError:
     else:
         message = str(exc) or 'Internal failure'
     details = getattr(exc, 'detail', None) or getattr(exc, 'details', None)
-    if details is None and not isinstance(exc, GenkitError):
-        details = str(exc)
     return GenkitRuntimeError(status=str(status), message=message, details=details)
 
 

@@ -16,10 +16,6 @@
 
 """Which model failures Retry and Fallback act on."""
 
-from collections.abc import Collection
-
-from genkit import GenkitError
-
 # Failures where sending the same request again can succeed.
 TRANSIENT_STATUSES: tuple[str, ...] = (
     'UNAVAILABLE',
@@ -28,14 +24,3 @@ TRANSIENT_STATUSES: tuple[str, ...] = (
     'ABORTED',
     'INTERNAL',
 )
-
-
-def status_matches(error: Exception, statuses: Collection[str], *, unclassified: bool) -> bool:
-    """Whether ``error`` is one of ``statuses``.
-
-    A ``GenkitError`` matches when its status is in ``statuses``. Any other
-    exception carries no status, so ``unclassified`` is the answer for it.
-    """
-    if isinstance(error, GenkitError):
-        return error.status in statuses
-    return unclassified

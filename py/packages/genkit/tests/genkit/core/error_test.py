@@ -221,16 +221,16 @@ def test_served_error_body_for_internal_wrapper_around_wrapped_raw_error_is_inte
     assert get_http_status(nested) == 500
 
 
-def test_served_error_body_for_wrapped_public_error_is_its_status_and_message() -> None:
-    """A PublicError wrapped by the action runner still sends its own status and message."""
+def test_served_error_body_for_wrapped_public_error_is_internal_error() -> None:
+    """A hand-built INTERNAL wrapper around a PublicError is redacted on the served body."""
     wrapped = GenkitError(
         status='INTERNAL',
         message='Error while running action lookup',
         cause=PublicError(status='NOT_FOUND', message='no order 99'),
     )
 
-    assert get_callable_json(wrapped) == {'message': 'no order 99', 'status': 'NOT_FOUND'}
-    assert get_http_status(wrapped) == 404
+    assert get_callable_json(wrapped) == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert get_http_status(wrapped) == 500
 
 
 def test_dev_ui_error_body_for_genkit_error_keeps_its_real_message() -> None:
@@ -525,3 +525,28 @@ def test_genkit_error_wrapping_validation_error_shows_the_short_form_once() -> N
 
     assert str(error) == "INVALID_ARGUMENT: Invalid input for flow 'order': qty: Field required"
     assert error.cause is cause
+
+
+def test_reflection_json_adds_run_trace_id_when_error_has_none() -> None:
+    """`get_reflection_json(ValueError('x'), trace_id='abc')` puts the run id on details."""
+    ref = get_reflection_json(ValueError('x'), trace_id='abc')
+
+    assert ref.details is not None
+    assert ref.details.trace_id == 'abc'
+    assert ref.message == 'x'
+
+
+def test_reflection_json_keeps_error_trace_id_over_run_trace_id() -> None:
+    """A GenkitError that already has a trace id keeps it when the run supplies another."""
+    error = GenkitError(status='FAILED_PRECONDITION', message='not paid', trace_id='keep-me')
+    ref = get_reflection_json(error, trace_id='run-id')
+
+    assert ref.details is not None
+    assert ref.details.trace_id == 'keep-me'
+
+
+def test_reflection_json_without_trace_id_is_unchanged() -> None:
+    """No `trace_id` argument means no `details.trace_id` is added."""
+    ref = get_reflection_json(ValueError('x'))
+
+    assert ref.details is None or ref.details.trace_id is None

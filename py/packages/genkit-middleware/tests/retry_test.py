@@ -23,7 +23,8 @@ import pytest
 from genkit_middleware import Retry
 from pydantic import ValidationError
 
-from genkit import ActionRunContext, FinishReason, Genkit, Message, ModelResponse, Part, Role
+from genkit import ActionRunContext, FinishReason, Genkit, Message, ModelResponse, ModelResponseChunk, Part, Role
+from genkit._ai._testing import define_programmable_model
 from genkit._core._error import GenkitError
 from genkit.middleware import GenerateMiddlewareContext, ModelHookParams
 from genkit.model import ModelRequest
@@ -369,3 +370,30 @@ async def test_generate_with_failing_model_and_retry_retries_unclassified_error_
     assert response.error.status == 'INTERNAL'
     assert response.message is None
     assert calls == 3
+
+
+@pytest.mark.asyncio
+async def test_prompt_with_failing_on_chunk_and_retry_calls_model_once() -> None:
+    """`await prompt(on_chunk=raises, use=[Retry()])` calls the model once and returns the callback's message."""
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('done')]),
+        )
+    ]
+    pm.chunks = [[ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('partial')])]]
+    prompt = ai.define_prompt(model='programmableModel', prompt='hi')
+
+    def on_chunk(_: ModelResponseChunk) -> None:
+        raise RuntimeError('model sink closed')
+
+    response = await prompt(
+        on_chunk=on_chunk,
+        use=[Retry(max_retries=2, initial_delay_ms=0, no_jitter=True)],
+    )
+
+    assert pm.request_count == 1
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.finish_message == 'model sink closed'

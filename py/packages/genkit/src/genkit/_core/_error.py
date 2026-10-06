@@ -519,17 +519,11 @@ _INTERNAL_CLIENT_BODY: dict[str, Any] = {'message': 'Internal Error', 'status': 
 def _client_facing_error(error: object) -> GenkitError | None:
     """The GenkitError whose status a served flow may show the caller, or None to redact.
 
-    Only the runtime's INTERNAL wrapper is peeled, so a PublicError the
-    action runner wrapped still reaches the caller. A NOT_FOUND that happens
-    to wrap another GenkitError keeps NOT_FOUND. An INTERNAL wrapper with
-    nothing like that underneath is an unexpected failure and gets a plain 500.
+    An INTERNAL error with a cause is a wrapped unexpected failure and is
+    redacted. Other GenkitErrors keep their status.
     """
     if not isinstance(error, GenkitError):
         return None
-    if error.status == 'INTERNAL' and isinstance(error.cause, GenkitError):
-        inner = _client_facing_error(error.cause)
-        if inner is not None:
-            return inner
     if error.status == 'INTERNAL' and error.cause is not None:
         return None
     return error
