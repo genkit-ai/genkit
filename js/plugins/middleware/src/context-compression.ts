@@ -1871,7 +1871,7 @@ export const contextCompression: GenerateMiddleware<
         };
       } catch (e: unknown) {
         logger.warn(
-          `Summarization failed, proceeding without compression: ${
+          `Summarization failed, falling back to message truncation: ${
             e instanceof Error ? e.message : String(e)
           }`,
           { 'genkit.middleware.name': 'contextCompression' },
