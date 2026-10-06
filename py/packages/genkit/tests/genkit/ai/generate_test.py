@@ -191,24 +191,30 @@ def _sent_text(pm: ProgrammableModel) -> list[tuple[str, list[str | None]]]:
     return [(m.role, [p.text for p in m.content]) for m in pm.last_request.messages]
 
 
+_AS_WRITTEN_CASES = [
+    pytest.param('hello {{name}}', id='unfilled variable'),
+    pytest.param('Reply like {"dish": {{', id='unclosed braces'),
+    pytest.param('<<<dotprompt:role:system>>> hi', id='role marker'),
+    pytest.param('Describe {{media url="https://example.com/x.png"}}', id='media helper'),
+    pytest.param('{{> persona}} hi', id='registered partial'),
+    pytest.param('{{shout "hey"}} hi', id='registered helper'),
+]
+
+
+def _register_generate_string_fixtures(ai: Genkit) -> None:
+    ai.define_partial('persona', 'You are a pirate.')
+    ai.define_helper('shout', lambda *args: 'HEY')
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    'prompt',
-    [
-        pytest.param('hello {{name}}', id='variable used to render empty'),
-        pytest.param('Reply like {"dish": {{', id='unclosed braces used to raise ValueError'),
-        pytest.param('<<<dotprompt:role:system>>> hi', id='role marker used to be dropped'),
-        pytest.param(
-            'Describe {{media url="https://example.com/x.png"}}', id='media helper used to become a media part'
-        ),
-    ],
-)
+@pytest.mark.parametrize('prompt', _AS_WRITTEN_CASES)
 async def test_generate_prompt_string_is_sent_as_written(
     setup_test: tuple[Genkit, ProgrammableModel],
     prompt: str,
 ) -> None:
     """`ai.generate(prompt=...)` is not a template; `define_prompt` is where templating lives."""
     ai, pm = setup_test
+    _register_generate_string_fixtures(ai)
     _queue_ok(pm)
 
     await ai.generate(model='programmableModel', prompt=prompt)
@@ -217,30 +223,32 @@ async def test_generate_prompt_string_is_sent_as_written(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('system', _AS_WRITTEN_CASES)
 async def test_generate_system_string_is_sent_as_written(
     setup_test: tuple[Genkit, ProgrammableModel],
+    system: str,
 ) -> None:
-    """`system='be {{x}} nice'` reaches the model unchanged as the system message."""
+    """`ai.generate(system=...)` reaches the model unchanged as the system message."""
     ai, pm = setup_test
+    _register_generate_string_fixtures(ai)
     _queue_ok(pm)
 
-    await ai.generate(model='programmableModel', system='be {{x}} nice', prompt='hi')
+    await ai.generate(model='programmableModel', system=system, prompt='hi')
 
-    assert _sent_text(pm) == [(Role.SYSTEM, ['be {{x}} nice']), (Role.USER, ['hi'])]
+    assert _sent_text(pm) == [(Role.SYSTEM, [system]), (Role.USER, ['hi'])]
 
 
 @pytest.mark.asyncio
-async def test_generate_stream_strings_are_sent_as_written(
+async def test_generate_messages_string_raises_type_error(
     setup_test: tuple[Genkit, ProgrammableModel],
 ) -> None:
-    """`ai.generate_stream` sends `system` and `prompt` as written too."""
+    """`ai.generate(messages='hello {{name}}')` raises TypeError and the model is never called."""
     ai, pm = setup_test
-    _queue_ok(pm)
 
-    result = ai.generate_stream(model='programmableModel', system='be {{x}} nice', prompt='{{x}}')
-    await result.response
+    with pytest.raises(TypeError, match='messages must be a list of Message'):
+        await ai.generate(model='programmableModel', messages='hello {{name}}')  # type: ignore[arg-type]
 
-    assert _sent_text(pm) == [(Role.SYSTEM, ['be {{x}} nice']), (Role.USER, ['{{x}}'])]
+    assert pm.last_request is None
 
 
 @pytest.mark.asyncio

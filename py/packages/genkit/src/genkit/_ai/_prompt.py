@@ -604,25 +604,21 @@ async def to_generate_options(
     registry: Registry,
     call: GenerateCall,
 ) -> GenerateActionOptions:
-    """Fold a ``GenerateCall`` into the ``options`` the engine runs."""
+    """Fold a ``GenerateCall`` into the ``options`` the engine runs.
+
+    ``call.messages`` must already be the final list. ``system`` / ``prompt``
+    and a string ``messages`` belong on the caller that renders or builds them.
+    """
+    if call.system is not None or call.prompt is not None or isinstance(call.messages, str):
+        raise TypeError('render the prompt before building generate options')
+
     resolved = resolve_call_model(model=call.model, config=call.config, registry=registry)
     model = resolved.name
     default_model = registry.lookup_value('defaultModel', 'defaultModel')
     uses_ref = isinstance(call.model, ModelRef) or isinstance(default_model, ModelRef)
     config = resolved.config if uses_ref else call.config
 
-    # Plain generate has no input to fill, so braces in system/prompt are
-    # content the caller meant to send (JSON, code, another template).
-    # Templating only happens in define_prompt and .prompt files.
-    resolved_msgs: list[Message] = []
-    if call.system:
-        resolved_msgs.append(Message(role=Role.SYSTEM, content=parts_from_prompt(call.system)))
-    if call.messages:
-        resolved_msgs.extend(
-            await render_message_prompt(registry=registry, input={}, call=call, cache=PromptCache(), history=None)
-        )
-    if call.prompt:
-        resolved_msgs.append(Message(role=Role.USER, content=parts_from_prompt(call.prompt)))
+    resolved_msgs: list[Message] = list(call.messages or [])
 
     # If is schema is set but format is not explicitly set, default to
     # `json` format.
