@@ -21,11 +21,7 @@ from collections.abc import Awaitable, Callable
 from typing import cast
 
 from anthropic import AsyncAnthropic, AsyncAnthropicVertex
-from genkit_anthropic import AnthropicConfig
-
-# Same-release import: Model Garden reuses the Anthropic model class.
-# Don't treat genkit_anthropic._models as a public hook.
-from genkit_anthropic._models import AnthropicModel
+from genkit_anthropic import AnthropicConfig, AnthropicModel
 from pydantic import ConfigDict
 from pydantic.config import JsonDict
 

@@ -31,10 +31,7 @@ from ._image import (
 from ._model import OpenAIModel
 from ._model_info import (
     SUPPORTED_EMBEDDING_MODELS,
-    SUPPORTED_OPENAI_COMPAT_MODELS,
     SUPPORTED_OPENAI_MODELS,
-    PluginSource,
-    get_default_model_info,
 )
 
 __all__ = [
@@ -43,12 +40,9 @@ __all__ = [
     'OpenAIModelHandler',
     'OpenAISTTModel',
     'OpenAITTSModel',
-    'PluginSource',
     'SUPPORTED_EMBEDDING_MODELS',
     'SUPPORTED_IMAGE_MODELS',
-    'SUPPORTED_OPENAI_COMPAT_MODELS',
     'SUPPORTED_OPENAI_MODELS',
     'SUPPORTED_STT_MODELS',
     'SUPPORTED_TTS_MODELS',
-    'get_default_model_info',
 ]

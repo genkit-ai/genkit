@@ -19,20 +19,8 @@
 
 from typing import Literal, TypeAlias
 
-from genkit._core._compat import StrEnum
 from genkit.model import ModelInfo, Supports
 from genkit_openai._typing import SupportedOutputFormat
-
-OPENAI = 'openai'
-MODEL_GARDEN = 'model-garden'
-
-
-class PluginSource(StrEnum):
-    """Source of the plugin (OpenAI or Model Garden)."""
-
-    OPENAI = 'openai'
-    MODEL_GARDEN = 'model-garden'
-
 
 MULTIMODAL_MODEL_SUPPORTS = Supports(
     multiturn=True,
@@ -81,9 +69,6 @@ GPT_OSS_MODEL_SUPPORTS = Supports(
     system_role=True,
     output=[SupportedOutputFormat.JSON_MODE, SupportedOutputFormat.TEXT],
 )
-
-LLAMA_3_1 = 'meta/llama-3.1-405b-instruct-maas'
-LLAMA_3_2 = 'meta/llama-3.2-90b-vision-instruct-maas'
 
 # Quote autocomplete needs a Literal. The catalog below is what you edit when
 # a chat model ships; a test requires these members and the dict keys to be the
@@ -214,47 +199,6 @@ SUPPORTED_EMBEDDING_MODELS: dict[str, dict] = {
         'supports': {'input': ['text']},
     },
 }
-
-SUPPORTED_OPENAI_COMPAT_MODELS: dict[str, ModelInfo] = {
-    LLAMA_3_1: ModelInfo(
-        label='ModelGarden - Meta - llama-3.1',
-        supports=Supports(
-            multiturn=True,
-            media=False,
-            tools=True,
-            system_role=True,
-            long_running=False,
-            output=[SupportedOutputFormat.JSON_MODE, SupportedOutputFormat.TEXT],
-        ),
-    ),
-    LLAMA_3_2: ModelInfo(
-        label='ModelGarden - Meta - llama-3.2',
-        supports=Supports(
-            multiturn=True,
-            media=True,
-            tools=True,
-            system_role=True,
-            output=[SupportedOutputFormat.JSON_MODE, SupportedOutputFormat.TEXT],
-        ),
-    ),
-}
-
-
-DEFAULT_SUPPORTS = Supports(
-    multiturn=True,
-    media=True,
-    tools=True,
-    system_role=True,
-    output=[SupportedOutputFormat.JSON_MODE, SupportedOutputFormat.TEXT],
-)
-
-
-def get_default_model_info(name: str) -> ModelInfo:
-    """Gets the default model info given a name."""
-    return ModelInfo(
-        label=f'ModelGarden - {name}',
-        supports=DEFAULT_SUPPORTS,
-    )
 
 
 def get_default_openai_model_info(name: str) -> ModelInfo:

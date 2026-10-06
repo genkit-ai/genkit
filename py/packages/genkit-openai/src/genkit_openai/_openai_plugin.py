@@ -52,7 +52,6 @@ from genkit.plugin_api import (
 from genkit_openai._models import (
     SUPPORTED_EMBEDDING_MODELS,
     SUPPORTED_IMAGE_MODELS,
-    SUPPORTED_OPENAI_COMPAT_MODELS,
     SUPPORTED_OPENAI_MODELS,
     SUPPORTED_STT_MODELS,
     SUPPORTED_TTS_MODELS,
@@ -346,7 +345,7 @@ class OpenAI(Plugin):
                 'supports': supports,
             }
 
-        model_info = SUPPORTED_OPENAI_COMPAT_MODELS.get(name, get_default_openai_model_info(name))
+        model_info = get_default_openai_model_info(name)
         supports = model_info.supports.model_dump(by_alias=True, exclude_none=True) if model_info.supports else {}
         return {
             'label': model_info.label,

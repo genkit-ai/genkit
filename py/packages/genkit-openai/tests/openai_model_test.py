@@ -868,7 +868,7 @@ async def test_generate(stream: bool, sample_request: ModelRequest) -> None:
     model_any = cast(Any, model)
     model_any._generate_stream = AsyncMock(return_value=mock_response)
     model_any._generate = AsyncMock(return_value=mock_response)
-    model_any.normalize_config = MagicMock(return_value={})
+    model_any._normalize_config = MagicMock(return_value={})
     response = await model.generate(sample_request, ctx_mock)
 
     assert response == mock_response
@@ -941,9 +941,9 @@ def test_normalize_config(config: object, expected: object) -> None:
     """Tests for _normalize_config."""
     if isinstance(expected, Exception):
         with pytest.raises(ValueError, match=r'Expected request.config to be a dict or OpenAIConfig, got .*'):
-            OpenAIModel.normalize_config(config)
+            OpenAIModel._normalize_config(config)
     else:
-        response = OpenAIModel.normalize_config(config)
+        response = OpenAIModel._normalize_config(config)
         assert response == expected
 
 

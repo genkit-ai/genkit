@@ -449,7 +449,7 @@ class OpenAIModel:
                 openai_config['response_format'] = response_format
         if request.config:
             config = (
-                request.config if isinstance(request.config, OpenAIConfig) else self.normalize_config(request.config)
+                request.config if isinstance(request.config, OpenAIConfig) else self._normalize_config(request.config)
             )
             if config.version:
                 openai_config['model'] = config.version
@@ -633,7 +633,7 @@ class OpenAIModel:
             A ModelResponse containing the model's response.
         """
         try:
-            request.config = self.normalize_config(request.config)
+            request.config = self._normalize_config(request.config)
             if ctx.is_streaming:
                 logger.debug('OpenAI generate request', model=self._model, streaming=True)
                 return await self._generate_stream(request, ctx.send_chunk)
@@ -642,7 +642,7 @@ class OpenAIModel:
             reraise_openai_error(e)
 
     @staticmethod
-    def normalize_config(config: object) -> OpenAIConfig:
+    def _normalize_config(config: object) -> OpenAIConfig:
         """Ensures the config is an OpenAIConfig instance."""
         if isinstance(config, OpenAIConfig):
             return config

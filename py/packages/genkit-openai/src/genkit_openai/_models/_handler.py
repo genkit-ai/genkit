@@ -24,47 +24,25 @@ from openai import AsyncOpenAI
 from genkit import ActionRunContext, ModelResponse
 from genkit.model import ModelInfo, ModelRequest
 from genkit_openai._models._model import OpenAIModel
-from genkit_openai._models._model_info import (
-    SUPPORTED_OPENAI_COMPAT_MODELS,
-    SUPPORTED_OPENAI_MODELS,
-    PluginSource,
-)
+from genkit_openai._models._model_info import SUPPORTED_OPENAI_MODELS
+
+_SUPPORTED_MODELS = cast(Mapping[str, ModelInfo], SUPPORTED_OPENAI_MODELS)
 
 
 class OpenAIModelHandler:
     """Handles OpenAI API interactions for the Genkit plugin."""
 
-    def __init__(self, model: OpenAIModel, source: PluginSource = PluginSource.OPENAI) -> None:
+    def __init__(self, model: OpenAIModel) -> None:
         """Initializes the OpenAIModelHandler with a specified model.
 
         Args:
             model: An instance of a Model subclass representing the OpenAI model.
-            source: Helps distinguish if model handler is called from model-garden plugin.
-                    Default source is openai.
         """
         self._model = model
-        self._source = source
-
-    @staticmethod
-    def _get_supported_models(source: PluginSource) -> Mapping[str, ModelInfo]:
-        """Returns the supported models based on the plugin source.
-
-        Args:
-            source: Helps distinguish if model handler is called from model-garden plugin.
-                    Default source is openai.
-
-        Returns:
-            Openai models if source is openai. Merges supported openai models
-            with openai-compat models if source is model-garden.
-
-        """
-        if source == PluginSource.MODEL_GARDEN:
-            return SUPPORTED_OPENAI_COMPAT_MODELS
-        return cast(Mapping[str, ModelInfo], SUPPORTED_OPENAI_MODELS)
 
     @classmethod
     def get_model_handler(
-        cls, model: str, client: AsyncOpenAI, source: PluginSource = PluginSource.OPENAI
+        cls, model: str, client: AsyncOpenAI
     ) -> Callable[[ModelRequest, ActionRunContext], Awaitable[ModelResponse]]:
         """Factory method to initialize the model handler for the specified OpenAI model.
 
@@ -77,8 +55,6 @@ class OpenAIModelHandler:
         Args:
             model: The OpenAI model name.
             client: OpenAI client instance.
-            source: Helps distinguish if model handler is called from model-garden plugin.
-                    Default source is openai.
 
         Returns:
             A callable function that acts as an action handler.
@@ -86,13 +62,11 @@ class OpenAIModelHandler:
         Raises:
             ValueError: If the specified model is not supported.
         """
-        supported_models = cls._get_supported_models(source)
-
-        if model not in supported_models:
+        if model not in _SUPPORTED_MODELS:
             raise ValueError(f"Model '{model}' is not supported.")
 
         openai_model = OpenAIModel(model, client)
-        return cls(openai_model, source).generate
+        return cls(openai_model).generate
 
     def _validate_version(self, version: str) -> None:
         """Validates whether the specified model version is supported.
@@ -103,8 +77,7 @@ class OpenAIModelHandler:
         Raises:
             ValueError: If the specified model version is not supported.
         """
-        supported_models = self._get_supported_models(self._source)
-        model_info = supported_models[self._model.name]
+        model_info = _SUPPORTED_MODELS[self._model.name]
         if model_info.versions is not None and version not in model_info.versions:
             raise ValueError(f"Model version '{version}' is not supported.")
 
@@ -121,7 +94,7 @@ class OpenAIModelHandler:
         Raises:
             ValueError: If the specified model version is not supported.
         """
-        request.config = self._model.normalize_config(request.config)
+        request.config = self._model._normalize_config(request.config)
 
         if request.config and hasattr(request.config, 'model') and request.config.model:
             self._validate_version(request.config.model)

@@ -48,7 +48,8 @@ See Also:
     - OpenAI documentation: https://platform.openai.com/docs/
 """
 
+from ._models import OpenAIModel
 from ._openai_plugin import OpenAI, openai_model
 from ._typing import OpenAIConfig
 
-__all__ = ['OpenAI', 'OpenAIConfig', 'openai_model']
+__all__ = ['OpenAI', 'OpenAIConfig', 'OpenAIModel', 'openai_model']
