@@ -45,7 +45,8 @@ from typing_extensions import TypedDict, TypeVar
 from genkit._core import _typing as typing_mod
 from genkit._core._base import GenkitModel, dump_keeping_unknown
 from genkit._core._error import GenkitError, GenkitRuntimeError, RuntimeErrorReason
-from genkit._core._extract_json import extract_json
+from genkit._core._extract_json import extract_json, extract_partial_json
+from genkit._core._logger import get_logger
 from genkit._core._partial import construct_partial
 from genkit._core._schema import parse_schema
 from genkit._core._typing import (
@@ -127,6 +128,8 @@ ABNORMAL_FINISH_REASONS = frozenset({
     FinishReason.INTERRUPTED,
     FinishReason.OTHER,
 })
+
+logger = get_logger(__name__)
 
 
 class ModelConfigDict(TypedDict, extra_items=Any, total=False):
@@ -423,6 +426,56 @@ class Part(GenkitModel):
     def from_reasoning(cls, reasoning: str, metadata: dict[str, Any] | None = None) -> Part:
         return cls(reasoning=reasoning, metadata=metadata)
 
+    def restart(
+        self,
+        *,
+        resumed_metadata: dict[str, Any] | None = None,
+        replace_input: Any | None = None,  # noqa: ANN401
+    ) -> Part:
+        """Build the tool-request part that runs this interrupt again.
+
+        ``resumed_metadata`` is what the tool reads as ``ctx.resumed_metadata``.
+        Omit it and the tool still sees a resume (``ctx.is_resumed()`` is true).
+        ``replace_input`` swaps the tool input and keeps the previous input on
+        ``metadata['replacedInput']``.
+        """
+        tool_req = self.tool_request
+        if tool_req is None:
+            raise ValueError('restart needs a tool request part')
+        new_meta: dict[str, Any] = dict(self.metadata or {})
+        new_meta['resumed'] = resumed_metadata if resumed_metadata is not None else True
+        new_input = tool_req.input
+        if replace_input is not None:
+            new_meta['replacedInput'] = tool_req.input
+            new_input = replace_input
+        return Part.from_tool_request(
+            name=tool_req.name,
+            input=new_input,
+            ref=tool_req.ref,
+            metadata=new_meta,
+        )
+
+    def respond(
+        self,
+        output: Any,  # noqa: ANN401
+        *,
+        metadata: dict[str, Any] | None = None,
+    ) -> Part:
+        """Build the tool-response part that answers this interrupt without running the tool.
+
+        ``metadata`` is stored under ``interruptResponse`` and defaults to true when omitted.
+        """
+        tool_req = self.tool_request
+        if tool_req is None:
+            raise ValueError('respond needs a tool request part')
+        interrupt_metadata = metadata if metadata is not None else True
+        return Part.from_tool_response(
+            name=tool_req.name,
+            output=output,
+            ref=tool_req.ref,
+            metadata={'interruptResponse': interrupt_metadata},
+        )
+
 
 def as_part(value: object) -> Part:
     if isinstance(value, Part):
@@ -512,7 +565,7 @@ def as_output_config(value: object) -> OutputConfig:
 def as_resume_respond(value: object) -> Part:
     part = as_part(value)
     if part.tool_response is None:
-        raise ValueError('resume_respond needs a tool response part')
+        raise ValueError('resume_respond needs a tool response part; answer a pause with Part.respond(output)')
     return part
 
 
@@ -563,18 +616,67 @@ def _normalize_resume_parts(value: Part | list[Part] | None) -> list[Part] | Non
     return list(value) if isinstance(value, list) else [value]
 
 
+def as_resumed(part: Part) -> dict[str, Any] | None:
+    """The resume bag the tool sees: True → {}, a dict as-is, anything else None."""
+    raw = (part.metadata or {}).get('resumed')
+    if raw is True:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    return None
+
+
 def resume_options_to_resume(
     *,
     resume_respond: Part | list[Part] | None = None,
     resume_restart: Part | list[Part] | None = None,
     resume_metadata: dict[str, Any] | None = None,
 ) -> Resume | None:
-    """Build Resume from flat keyword options (``generate`` / prompts)."""
+    """Build a Resume payload from flat resume kwargs."""
     respond = _normalize_resume_parts(resume_respond)
     restart = _normalize_resume_parts(resume_restart)
     if respond is None and restart is None and resume_metadata is None:
         return None
+    # A paused request on resume_respond is INVALID_ARGUMENT naming
+    # Part.respond, which Resume() construction cannot say.
+    reject_unanswered_interrupts(respond=respond, restart=restart)
     return Resume(respond=respond, restart=restart, metadata=resume_metadata)
+
+
+def unanswered_interrupt(part: Part) -> bool:
+    """True when this is still a pause, not a restart or response."""
+    meta = part.metadata or {}
+    return part.tool_request is not None and bool(meta.get('interrupt')) and as_resumed(part) is None
+
+
+def reject_unanswered_interrupts(
+    resume: Resume | None = None,
+    *,
+    respond: list[Part] | None = None,
+    restart: list[Part] | None = None,
+) -> None:
+    if resume is not None:
+        if respond is None:
+            respond = resume.respond
+        if restart is None:
+            restart = resume.restart
+    for part in restart or []:
+        if unanswered_interrupt(part):
+            name = part.tool_request.name if part.tool_request else 'tool'
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=(
+                    f'resume part for {name!r} is still an interrupt; '
+                    'use Part.restart(...) or Part.respond(...) before generate.'
+                ),
+            )
+    for part in respond or []:
+        if part.tool_request is not None and part.tool_response is None:
+            name = part.tool_request.name
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=(f'resume_respond got the paused request for {name!r}; answer it with Part.respond(output)'),
+            )
 
 
 class Message(GenkitModel):
@@ -1152,6 +1254,7 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
             return
 
         schema = self.request.output_schema if self.request is not None else None
+        cut_off = self.finish_reason == FinishReason.LENGTH
 
         try:
             parsed = self._raw_parsed_output()
@@ -1159,12 +1262,25 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
             if isinstance(exc, GenkitError) and (exc.original_message or '').startswith('Invalid output_schema'):
                 raise
             preview = (self.text or '')[:200]
-            self._mark_invalid_output(f'Model output was not valid JSON for the requested schema: {preview}')
+            if cut_off:
+                self._mark_invalid_output(
+                    'Model output was cut off at the token limit '
+                    f'(finish_reason=length) before the JSON was complete: {preview}'
+                )
+            else:
+                target = 'schema' if schema is not None else 'format'
+                self._mark_invalid_output(f'Model output was not valid JSON for the requested {target}: {preview}')
             return
 
         if parsed is None:
             preview = (self.text or '')[:200]
-            self._mark_invalid_output(f'Model output was not valid for the requested format: {preview}')
+            if cut_off:
+                self._mark_invalid_output(
+                    'Model output was cut off at the token limit '
+                    f'(finish_reason=length) before the JSON was complete: {preview}'
+                )
+            else:
+                self._mark_invalid_output(f'Model output was not valid for the requested format: {preview}')
             return
 
         if schema is not None:
@@ -1223,6 +1339,8 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
 
         generate() does not throw when the text is not the schema. If you
         asked for a schema and this is not it, read ``error`` / ``.text``.
+        Only complete JSON counts: a reply cut off mid-object is None (check
+        ``finish_reason == 'length'`` to tell a token cap from bad JSON).
         """
         # BLOCKED and FAILED carry no legitimate content at all, so there is
         # nothing to hand back even when the caller only asked for a format.
@@ -1241,7 +1359,6 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
             # Text that is not the shape they asked for is still text. Reading
             # it back is never worth an exception: `.text` holds the raw reply
             # and `error` carries INVALID_OUTPUT when structure was requested.
-            # Matches JS, where `extractJson` is called without the throw flag.
             return None
 
         if schema is not None:
@@ -1376,27 +1493,34 @@ class ModelResponseChunk(GenkitModel, Generic[OutputT]):
 
     @cached_property
     def output(self) -> OutputT | None:
-        """Parsed output from accumulated text.
+        """The reply so far, parsed as far as it goes. Never raises.
 
-        With no ``output_schema`` class, this is the extracted JSON value
-        (a dict, list, scalar, or ``None`` if an object has not started).
+        With ``output_schema=Recipe``, this is a partly built ``Recipe``:
+        fields that haven't arrived are ``None`` even when typed ``str``,
+        values may be cut short (``'Fluffy Panc'``), and nothing is
+        validated. Guard each field you read. ``(await stream.response).output``
+        is the only validated ``Recipe``.
 
-        When ``output_schema`` is a Pydantic model, this is an instance of
-        that class with missing fields set to ``None``. Values may still be
-        prefixes, and constraints are not enforced. Guard each field you
-        use. ``(await sr.response).output`` is the only fully validated value.
+        With no schema class, this is the JSON value so far (dict, list,
+        or scalar). It's ``None`` before an object starts or while the text
+        can't be parsed.
         """
-        parsed = (
-            self.chunk_parser(self)
-            if self.chunk_parser
-            else extract_json(self.accumulated_text, throw_on_bad_json=False)
-        )
-        if self.schema_type is not None and isinstance(parsed, dict) and not issubclass(self.schema_type, RootModel):
-            return cast(
-                'OutputT | None',
-                construct_partial(schema_type=self.schema_type, data=parsed),
-            )
-        return cast('OutputT | None', parsed)
+        try:
+            parsed = self.chunk_parser(self) if self.chunk_parser else extract_partial_json(self.accumulated_text)
+            if (
+                self.schema_type is not None
+                and isinstance(parsed, dict)
+                and not issubclass(self.schema_type, RootModel)
+            ):
+                return cast(
+                    'OutputT | None',
+                    construct_partial(schema_type=self.schema_type, data=parsed),
+                )
+            return cast('OutputT | None', parsed)
+        except Exception:
+            # one odd chunk shouldn't end a stream whose final reply may still parse.
+            logger.debug('chunk.output could not be parsed; returning None', exc_info=True)
+            return None
 
 
 def as_model_response_chunk(value: object) -> ModelResponseChunk:

@@ -44,23 +44,25 @@ def missing_key_error() -> GenkitError:
     )
 
 
-def string_secret(value: object) -> str | None:
-    if value is None or value == '':
-        return None
-    if isinstance(value, str):
-        cleaned = value.strip()
-        if not cleaned:
-            return None
-        if any(c in cleaned for c in ('\r', '\n', '\0', ' ', '\t')):
-            raise GenkitError(
-                status='INVALID_ARGUMENT',
-                message=f'context.secrets.api_key contains invalid whitespace or control characters. {SECRETS_SLOT}',
-            )
-        return cleaned
-    raise GenkitError(
-        status='INVALID_ARGUMENT',
-        message=f'context.secrets.api_key must be a string. {SECRETS_SLOT}',
-    )
+def string_secret(value: object) -> str:
+    """The key with surrounding whitespace trimmed, or raise when it can't be a key."""
+    if not isinstance(value, str):
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f'context.secrets.api_key must be a string. {SECRETS_SLOT}',
+        )
+    cleaned = value.strip()
+    if not cleaned:
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f'context.secrets.api_key is blank. {SECRETS_SLOT}',
+        )
+    if any(c in cleaned for c in ('\r', '\n', '\0', ' ', '\t')):
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f'context.secrets.api_key contains invalid whitespace or control characters. {SECRETS_SLOT}',
+        )
+    return cleaned
 
 
 def context_api_key(context: dict[str, Any]) -> str | None:
@@ -68,8 +70,9 @@ def context_api_key(context: dict[str, Any]) -> str | None:
 
     ``api_key`` is the documented slot; ``apiKey`` is accepted too. Secrets
     without either key return None, so the call uses the plugin's key; apps
-    keep other secrets there. A key on ``context['config']`` or the top-level
-    context raises, so it can't quietly fall through to the plugin's own key.
+    keep other secrets there. A key that is set but blank or not a string
+    raises. A key on ``context['config']`` or the top-level context raises,
+    so it can't quietly fall through to the plugin's own key.
     """
     nested = context.get('config')
     if isinstance(nested, dict) and _bag_has_api_key(cast(dict[str, Any], nested)):
@@ -85,10 +88,11 @@ def context_api_key(context: dict[str, Any]) -> str | None:
             status='INVALID_ARGUMENT',
             message=f'context.secrets must be a dict. {SECRETS_SLOT}',
         )
-    key = string_secret(secrets.get('api_key'))
-    if key is None:
-        key = string_secret(secrets.get('apiKey'))
-    return key
+    for slot in ('api_key', 'apiKey'):
+        value = secrets.get(slot)
+        if value is not None:
+            return string_secret(value)
+    return None
 
 
 def _bag_has_api_key(bag: dict[str, Any]) -> bool:
