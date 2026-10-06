@@ -23,7 +23,7 @@ import weakref
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, ClassVar, Generic, TypedDict, TypeVar, cast
+from typing import Any, ClassVar, Generic, NamedTuple, TypedDict, TypeVar, cast
 
 from dotpromptz.typing import (
     DataArgument,
@@ -307,7 +307,7 @@ class Prompt(Generic[InputT, OutputT]):
         self._variant = variant
         self._description = description
         # The whole definition as one value. Per-call overrides layer over it
-        # in _prepare via with_overrides; nothing mutates it after define
+        # in prepare_prompt via with_overrides; nothing mutates it after define
         # except _ensure_resolved swapping in a lazily loaded definition.
         self._def = GenerateCall(
             model=model,
@@ -407,43 +407,6 @@ class Prompt(Generic[InputT, OutputT]):
             )
         return call.model_copy(update={'model': resolved.name, 'config': resolved.config})
 
-    async def _prepare(
-        self,
-        input: InputT | dict[str, Any] | None = None,
-        opts: PromptGenerateOptions | None = None,
-    ) -> tuple[Registry, GenerateActionOptions]:
-        """Build the model request for one call of this prompt.
-
-        Returns the per-call registry (with the call's tools and middleware)
-        and the request to run on it.
-        """
-        await self._ensure_resolved()
-        call_opts: PromptGenerateOptions = opts if opts is not None else {}
-
-        # The call's tools/docs/use/etc. replace the prompt's for this call.
-        call = self._def.with_overrides(call_opts)
-        # Tools and middleware passed inline (e.g. use=[Foo()]) are registered on a
-        # child registry so they exist for this call only.
-        registry = self._registry.new_child()
-        await register_tools(registry, call.tools)
-        if call.use is not None:
-            call = call.model_copy(update={'use': register_middleware(registry, call.use)})
-
-        # Which model runs, and with what config.
-        call = await self._resolve_model(call, call_opts)
-
-        # Render the template with input, the call's chat history and context.
-        call = await render_call(
-            prompt=self,
-            registry=registry,
-            call=call,
-            input=input,
-            context=call_opts.get('context'),
-            history=call_opts.get('messages'),
-        )
-
-        return registry, await to_generate_options(registry=registry, call=call)
-
     async def __call__(
         self,
         input: InputT | dict[str, Any] | None = None,
@@ -484,13 +447,13 @@ class Prompt(Generic[InputT, OutputT]):
             resume_restart=resume_restart,
             resume_metadata=resume_metadata,
         )
-        registry, options = await self._prepare(input=input, opts=opts)
+        prepared = await prepare_prompt(prompt=self, input=input, opts=opts)
         result = await generate_action(
-            registry,
-            options,
+            prepared.registry,
+            prepared.options,
             on_chunk=on_chunk,
-            # context also goes to the run, not just the template, so tools and middleware see it.
-            context=context if context is not None else get_current_context(),
+            # Same context the template already rendered, so {{@auth}} and tools agree.
+            context=prepared.context,
         )
         return cast(ModelResponse[OutputT], result)
 
@@ -577,8 +540,55 @@ class Prompt(Generic[InputT, OutputT]):
             resume_restart=resume_restart,
             resume_metadata=resume_metadata,
         )
-        _registry, options = await self._prepare(input=input, opts=opts)
-        return options
+        return (await prepare_prompt(prompt=self, input=input, opts=opts)).options
+
+
+class PreparedPrompt(NamedTuple):
+    registry: Registry
+    options: GenerateActionOptions
+    context: dict[str, Any] | None
+
+
+async def prepare_prompt(
+    *,
+    prompt: Prompt[Any, Any],
+    input: Any | None = None,  # noqa: ANN401
+    opts: PromptGenerateOptions | None = None,
+) -> PreparedPrompt:
+    """Build the model request for one call of this prompt.
+
+    Looks up the enclosing flow's context once when the call omits
+    ``context=``, then that same value is what templates and the run see.
+    """
+    await prompt._ensure_resolved()
+    call_opts: PromptGenerateOptions = opts if opts is not None else {}
+
+    context = call_opts.get('context')
+    if context is None:
+        context = get_current_context()
+
+    # The call's tools/docs/use/etc. replace the prompt's for this call.
+    call = prompt._def.with_overrides(call_opts)
+    # Tools and middleware passed inline (e.g. use=[Foo()]) are registered on a
+    # child registry so they exist for this call only.
+    registry = prompt._registry.new_child()
+    await register_tools(registry, call.tools)
+    if call.use is not None:
+        call = call.model_copy(update={'use': register_middleware(registry, call.use)})
+
+    call = await prompt._resolve_model(call, call_opts)
+
+    call = await render_call(
+        prompt=prompt,
+        registry=registry,
+        call=call,
+        input=input,
+        context=context,
+        history=call_opts.get('messages'),
+    )
+
+    options = await to_generate_options(registry=registry, call=call)
+    return PreparedPrompt(registry=registry, options=options, context=context)
 
 
 def _register_prompt_action_pair(
@@ -606,8 +616,8 @@ def _register_prompt_action_pair(
 
     async def prompt_action_fn(input: Any = None) -> ModelRequest:  # noqa: ANN401
         ep = await ep_factory()
-        registry, options = await ep._prepare(input=input)
-        return await to_prompt_model_request(registry=registry, options=options)
+        prepared = await prepare_prompt(prompt=ep, input=input)
+        return await to_prompt_model_request(registry=prepared.registry, options=prepared.options)
 
     async def executable_prompt_action_fn(input: Any = None) -> GenerateActionOptions:  # noqa: ANN401
         ep = await ep_factory()
@@ -927,7 +937,6 @@ async def render_template(
     template: str | list[Part] | None,
     input: dict[str, Any],
     input_schema: type | dict[str, Any] | str | None,
-    metadata: dict[str, Any] | None,
     compiled_fn: PromptFunction[Any] | None,
     context: dict[str, Any] | None,
 ) -> tuple[Message, PromptFunction[Any] | None]:
@@ -935,9 +944,6 @@ async def render_template(
     if isinstance(template, str):
         if compiled_fn is None:
             compiled_fn = await registry.dotprompt.compile(template)
-
-        if metadata and 'state' in metadata:
-            context = {**(context or {}), 'state': metadata['state']}
 
         rendered_parts = cast(
             list[Part],
@@ -972,7 +978,6 @@ async def render_system_prompt(
         template=call.system,
         input=input,
         input_schema=call.input_schema,
-        metadata=call.metadata,
         compiled_fn=cache.system,
         context=context,
     )
@@ -1022,9 +1027,6 @@ async def render_message_prompt(
         if cache.messages is None:
             cache.messages = await registry.dotprompt.compile(call.messages)
 
-        if call.metadata:
-            context = {**(context or {}), 'state': call.metadata.get('state')}
-
         # Convert history to dict format for template
         messages_ = None
         if history:
@@ -1067,7 +1069,6 @@ async def render_user_prompt(
         template=call.prompt,
         input=input,
         input_schema=call.input_schema,
-        metadata=call.metadata,
         compiled_fn=cache.user_prompt,
         context=context,
     )
@@ -1085,9 +1086,9 @@ async def render_call(
 ) -> GenerateCall:
     """Expand dotprompt with the call's input into one merged :class:`GenerateCall`.
 
-    ``context`` feeds ``{{@auth}}`` etc.; ``None`` uses the enclosing flow's
-    context. ``history`` is this call's chat history (``messages=`` on the
-    call). Sets final ``messages`` and clears template source fields, before
+    ``context`` is what templates see (``{{@auth}}``, ``{{@state}}``).
+    ``history`` is this call's chat history (``messages=`` on the call).
+    Sets final ``messages`` and clears template source fields, before
     :func:`to_generate_options`.
     """
     template_input = filled_prompt_input(input=input, defaults=prompt._input_default)
@@ -1098,9 +1099,11 @@ async def render_call(
         file_schema=prompt._file_input_schema,
         registry=registry,
     )
-    # An omitted context= uses the enclosing flow's auth, so render() shows
-    # what the run will send.
-    render_context = context if context is not None else get_current_context()
+    render_context = context
+    # {{@state}} is written only when metadata has state; a non-empty
+    # metadata bag without that key must not wipe the call's context state.
+    if call.metadata and 'state' in call.metadata:
+        render_context = {**(render_context or {}), 'state': call.metadata['state']}
     cache = prompt._compiled_templates
 
     resolved_msgs: list[Message] = []
