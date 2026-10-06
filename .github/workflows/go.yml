@@ -21,8 +21,11 @@ on:
     paths:
       - "go/**"
       - "genkit-tools/**"
+      - "tests/specs/**"
       - ".github/workflows/go.yml"
 
+permissions:
+  contents: read
 
 jobs:
   tests:
@@ -32,12 +35,14 @@ jobs:
         go-version: ['1.25.x', '1.26.x']
     steps:
       - name: Checkout Repo
-        uses: actions/checkout@main
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
 
       - name: Set up Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: 20.x
           cache: 'pnpm'
@@ -54,7 +59,7 @@ jobs:
         run: npm --prefix genkit-tools run export:schemas
 
       - name: Set up Go
-        uses: actions/setup-go@main
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version: ${{ matrix.go-version }}
 

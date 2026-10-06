@@ -34,11 +34,11 @@ Available commands (run `genkit help <command>` for the options of each command)
 
   run a flow using provided data as input
 
-- `flow:batchRun [options] <flowName> <inputFileName> [-- <command...>]`
+- `flow:batch-run [options] <flowName> <inputFileName> [-- <command...>]`
 
   batch run a flow using provided set of data from a file as input
 
-- `eval:extractData [options] <flowName>`
+- `eval:extract-data [options] <flowName>`
 
   extract evaluation data for a given flow from the trace store
 

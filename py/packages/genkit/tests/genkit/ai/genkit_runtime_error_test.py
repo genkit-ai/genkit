@@ -20,9 +20,9 @@ import pytest
 from pydantic import BaseModel, ValidationError
 
 from genkit import FinishReason, Genkit, GenkitRuntimeError, Message, ModelResponse, Part, Role, RuntimeErrorReason
-from genkit._ai._testing import define_programmable_model
 from genkit._core._typing import AgentFinishReason, ToolRequest
 from genkit.exp import Genkit as ExpGenkit
+from genkit.testing import define_scripted_model
 
 
 class City(BaseModel):
@@ -40,8 +40,8 @@ def _reply(text: str, finish_reason: FinishReason = FinishReason.STOP) -> ModelR
 @pytest.mark.asyncio
 async def test_generate_schema_miss_error_is_genkit_runtime_error_with_invalid_output_reason() -> None:
     """A prose reply to ``output_schema=City`` returns a GenkitRuntimeError with reason INVALID_OUTPUT."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     pm.responses = [_reply('Paris is lovely')]
 
     res = await ai.generate(prompt='extract', output_schema=City)
@@ -54,8 +54,8 @@ async def test_generate_schema_miss_error_is_genkit_runtime_error_with_invalid_o
 @pytest.mark.asyncio
 async def test_generate_failed_tool_error_has_status_message_details_and_reason() -> None:
     """A failing tool returns an error with status INTERNAL, the finish message, details, and reason TOOL_FAILED."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='lookup')
     async def lookup() -> str:
@@ -84,8 +84,8 @@ async def test_generate_failed_tool_error_has_status_message_details_and_reason(
 @pytest.mark.asyncio
 async def test_genkit_runtime_error_is_not_an_exception() -> None:
     """``res.error`` is not a BaseException instance."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     pm.responses = [_reply('Paris is lovely')]
 
     res = await ai.generate(prompt='extract', output_schema=City)
@@ -169,8 +169,8 @@ def test_model_response_has_no_assert_valid() -> None:
 async def test_agent_response_has_no_assert_valid() -> None:
     """``AgentResponse`` has no ``assert_valid`` attribute."""
     ai = ExpGenkit()
-    pm, _ = define_programmable_model(ai)
-    ai.define_prompt(name='helper', model='programmableModel')
+    pm, _ = define_scripted_model(ai)
+    ai.define_prompt(name='helper', model='scriptedModel')
     agent = ai.define_prompt_agent(name='helper')
     pm.responses = [_reply('hello')]
 
@@ -183,8 +183,8 @@ async def test_agent_response_has_no_assert_valid() -> None:
 @pytest.mark.asyncio
 async def test_blocked_generate_returns_response_with_blocked_finish_reason() -> None:
     """A blocked reply returns with ``finish_reason == 'blocked'`` and no exception."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     pm.responses = [_reply('nope', FinishReason.BLOCKED)]
 
     res = await ai.generate(prompt='hi')
@@ -197,8 +197,8 @@ async def test_blocked_generate_returns_response_with_blocked_finish_reason() ->
 async def test_blocked_agent_turn_returns_response_with_blocked_finish_reason() -> None:
     """A blocked agent turn returns with ``finish_reason == 'blocked'`` and no exception."""
     ai = ExpGenkit()
-    pm, _ = define_programmable_model(ai)
-    ai.define_prompt(name='helper', model='programmableModel')
+    pm, _ = define_scripted_model(ai)
+    ai.define_prompt(name='helper', model='scriptedModel')
     agent = ai.define_prompt_agent(name='helper')
     pm.responses = [_reply('nope', FinishReason.BLOCKED)]
 

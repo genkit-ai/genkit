@@ -17,6 +17,7 @@
 """Multipart tools — bare return vs ``response()`` with a PNG."""
 
 from genkit_google_genai import GoogleAI
+from pydantic import BaseModel
 
 from genkit import Genkit, MultipartToolResponse, Part, response
 
@@ -29,10 +30,16 @@ _PNG = Part.from_media(
 )
 
 
+class WeatherInput(BaseModel):
+    city: str
+    unit: str = 'C'
+
+
+# A tool takes one input; several fields go on one model the model fills in.
 @ai.tool()
-async def weather(city: str) -> str:
+async def weather(input: WeatherInput) -> str:
     """Look up the weather. A bare return is wrapped as output-only."""
-    return f'Sunny in {city}'
+    return f'Sunny and 22{input.unit} in {input.city}'
 
 
 @ai.tool()

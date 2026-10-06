@@ -27,7 +27,7 @@ import {
   logger,
 } from '@genkit-ai/tools-common/utils';
 import * as clc from 'colorette';
-import { Command } from 'commander';
+import { Command, Option } from 'commander';
 import { writeFile } from 'fs/promises';
 import { runWithManager } from '../utils/manager-utils';
 import { parsePositiveInt } from '../utils/option-parsers';
@@ -39,7 +39,8 @@ interface EvalDatasetOptions {
 }
 
 /** Command to extract evaluation data. */
-export const evalExtractData = new Command('eval:extractData')
+export const evalExtractData = new Command('eval:extract-data')
+  .alias('eval:extractData')
   .description('extract evaluation data for a given flow from the trace store')
   .argument('<flowName>', 'name of the flow to extract data for')
   .option(
@@ -47,10 +48,15 @@ export const evalExtractData = new Command('eval:extractData')
     'name of the output file to store the extracted data'
   )
   .option(
-    '--maxRows <maxRows>',
+    '--max-rows <maxRows>',
     'maximum number of rows',
     parsePositiveInt,
     100
+  )
+  .addOption(
+    new Option('--maxRows <maxRows>', 'maximum number of rows')
+      .argParser(parsePositiveInt)
+      .hideHelp()
   )
   .option('--label <label>', 'only extract traces with this batchRun label')
   .action(async (flowName: string, options: EvalDatasetOptions) => {

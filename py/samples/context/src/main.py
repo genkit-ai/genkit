@@ -19,7 +19,7 @@
 from genkit_google_genai import GoogleAI
 from pydantic import BaseModel
 
-from genkit import ActionRunContext, Genkit
+from genkit import Genkit, ToolRunContext
 
 ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
 
@@ -35,7 +35,7 @@ class AccountNeed(BaseModel):
 
 
 @ai.tool()
-async def account_record(input: AccountNeed, ctx: ActionRunContext) -> str:
+async def account_record(input: AccountNeed, ctx: ToolRunContext) -> str:
     # Tenant is not a tool argument, so a prompt cannot hop to another customer.
     key = (str(ctx.context.get('user_id', '')), str(ctx.context.get('tenant_id', '')))
     account = ACCOUNTS.get(key, 'unknown')

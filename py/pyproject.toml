@@ -162,7 +162,7 @@ output-formats       = { workspace = true }
 prompts              = { workspace = true }
 tool-interrupts      = { workspace = true }
 tracing              = { workspace = true }
-vertexai-imagen      = { workspace = true }
+vertexai-image       = { workspace = true }
 
 # Core packages
 genkit = { workspace = true }
@@ -254,6 +254,7 @@ select = [
 "packages/genkit/src/genkit/_ai/__init__.py" = ["F401"]
 "packages/genkit/src/genkit/_ai/_document.py" = ["F401"]
 "packages/genkit/src/genkit/_ai/_model.py" = ["F401"]
+"packages/genkit/src/genkit/_ai/_testing.py" = ["F401"]
 "packages/genkit/src/genkit/_ai/_formats/__init__.py" = ["F401"]
 # Test files don't need docstrings or type ceremony; test names/bodies are self-documenting
 "**/tests/**/*.py" = ["D", "ANN"]

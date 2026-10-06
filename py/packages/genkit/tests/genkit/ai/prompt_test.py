@@ -29,12 +29,6 @@ from pydantic import BaseModel, Field
 from genkit import Genkit, Message, ModelResponse, Part
 from genkit._ai._model import ModelRequest, text_from_message
 from genkit._ai._prompt import _parse_dotprompt_use, load_prompt_folder, lookup_prompt, prompt, resume_options_to_resume
-from genkit._ai._testing import (
-    EchoModel,
-    ProgrammableModel,
-    define_echo_model,
-    define_programmable_model,
-)
 from genkit._core._action import Action, ActionKind
 from genkit._core._dap import DapValue
 from genkit._core._error import GenkitError, RuntimeErrorReason
@@ -43,6 +37,12 @@ from genkit._core._registry import define_dynamic_action_provider
 from genkit._core._typing import Role
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, MiddlewareRef, ModelHookParams
 from genkit.plugin_api import MiddlewarePlugin, new_middleware
+from genkit.testing import (
+    EchoModel,
+    ScriptedModel,
+    define_echo_model,
+    define_scripted_model,
+)
 
 
 class _PreMiddleware(BaseMiddleware):
@@ -87,11 +87,11 @@ class PrePostMiddlewarePlugin(MiddlewarePlugin):
     ]
 
 
-def setup_test() -> tuple[Genkit, EchoModel, ProgrammableModel]:
+def setup_test() -> tuple[Genkit, EchoModel, ScriptedModel]:
     """Setup a test fixture for the prompt tests."""
     ai = Genkit(model='echoModel')
 
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
     echo, _ = define_echo_model(ai)
 
     return (ai, echo, pm)
@@ -605,9 +605,9 @@ async def test_opts_can_override_model() -> None:
     )
 
     # Override model via kwargs
-    response = await my_prompt(model='programmableModel')
+    response = await my_prompt(model='scriptedModel')
 
-    # Should use programmableModel, not echoModel
+    # Should use scriptedModel, not echoModel
     assert response.text == 'pm response'
 
 
@@ -1130,7 +1130,7 @@ async def test_define_prompt_primitive_with_output_instructions() -> None:
 
     p_true = ai.define_prompt(
         name='p_true',
-        model='programmableModel',
+        model='scriptedModel',
         prompt='hi',
         output_format='json',
         output_schema=TestSchema,
@@ -1181,7 +1181,7 @@ async def test_load_prompt_with_output_instructions() -> None:
         prompt_dir = Path(tmpdir) / 'prompts'
         prompt_dir.mkdir()
         (prompt_dir / 'with_instructions.prompt').write_text(
-            '---\nmodel: programmableModel\noutput:\n  format: json\n  schema:\n'
+            '---\nmodel: scriptedModel\noutput:\n  format: json\n  schema:\n'
             '    type: object\n    properties:\n      foo:\n        type: integer\n'
             '  instructions: true\n---\nhi\n'
         )
@@ -1194,7 +1194,7 @@ async def test_load_prompt_with_output_instructions() -> None:
         assert rendered.output is not None
         assert rendered.output.instructions is True
 
-        resp = await loaded(model='programmableModel')
+        resp = await loaded(model='scriptedModel')
         injected = output_parts(resp)
         assert len(injected) == 1
         assert 'Output should be in JSON format' in (injected[0].text or '')
