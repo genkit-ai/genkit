@@ -28,7 +28,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from genkit import ContextProvider, Genkit, GenkitError, RequestData
-from genkit.plugin_api import Action, ActionKind, get_callable_json
+from genkit.plugin_api import Action, get_callable_json
 
 # Compact JSON (no spaces) for smaller wire payload.
 JSON_SEPARATORS = (',', ':')
@@ -57,7 +57,9 @@ class FastAPIRequestData(RequestData):
 
 def json_error_response(error: Exception, status_code: int = 400) -> Response:
     """Build a compact JSON error response from an exception."""
-    ex = error.cause if isinstance(error, GenkitError) else error
+    # A wrapped cause is what the client should see. The wrapper itself is the
+    # message when there isn't one (a bad body has no inner exception).
+    ex = error.cause if isinstance(error, GenkitError) and error.cause is not None else error
     return Response(
         status_code=status_code,
         content=json.dumps(get_callable_json(ex), separators=JSON_SEPARATORS),
@@ -66,36 +68,19 @@ def json_error_response(error: Exception, status_code: int = 400) -> Response:
 
 
 def extract_action_input(body: dict[str, Any]) -> object:
-    """Extract action input payload from supported wire formats."""
+    """Extract action input from the stable ``data`` / ``input`` / ``{}`` envelopes."""
     if 'data' in body:
         return body['data']
     if 'input' in body:
         return body['input']
-    if 'message' in body:
-        return {'message': {'role': 'user', 'content': [{'text': str(body['message'])}]}}
-    if 'snapshotId' in body or 'sessionId' in body:
-        return body
     # Callable clients omit ``data`` when runFlow has no input (POST ``{}``).
-    # Match Express: ``request.body.data`` is undefined, not a wire error.
+    # A missing wrapper is not a wire error; the action decides if input is required.
     if not body:
         return None
     raise GenkitError(
         status='INVALID_ARGUMENT',
         message='Action request must be wrapped in {"data": ...} object',
     )
-
-
-def resolve_session_init(body: dict[str, Any], query_params: Mapping[str, str]) -> object:
-    """Resolve per-run init data, injecting session_id from query parameters if present."""
-    init = body.get('init')
-    query_session_id = query_params.get('session_id') or query_params.get('thread_id')
-    if not query_session_id:
-        return init
-    if isinstance(init, dict) and not init.get('session_id') and not init.get('sessionId'):
-        return {**init, 'session_id': query_session_id}
-    if init is None:
-        return {'session_id': query_session_id}
-    return init
 
 
 def wants_stream(request: Request) -> bool:
@@ -131,27 +116,44 @@ async def handle_genkit_request(
 ) -> Response | dict[str, Any]:
     """Run one Genkit action request and return its FastAPI response.
 
-    This is the wire contract every route sits on. It reads the JSON body in
-    whichever shape the client sends (``data`` / ``input`` / ``message``, or a
-    snapshot/session lookup), threads ``init`` (an agent's session identity), and
-    then either streams SSE frames — ``data: {"message": ...}`` chunks followed by
-    a final ``data: {"result": ...}`` — or returns a one-shot ``{"result": ...}``.
+    This is the wire contract every stable route sits on. It reads ``data`` /
+    ``input`` / ``{}`` plus body ``init``, then either streams SSE frames —
+    ``data: {"message": ...}`` chunks followed by a final ``data: {"result": ...}``
+    — or returns a one-shot ``{"result": ...}``.
 
     ``context`` and ``init`` are handed straight to the action, so you can resolve
-    auth, session identity, and per-request state however you like and pass them in.
-    That makes this the escape hatch for full control: write your own ``@app.post``
-    endpoint with any ``Depends(...)`` params you need, build context and init, and
-    call this to get the exact Genkit wire format without re-implementing it.
+    auth and per-request state however you like and pass them in. That makes this
+    the escape hatch for full control: write your own ``@app.post`` endpoint with
+    any ``Depends(...)`` params you need, build context and init, and call this to
+    get the exact Genkit wire format without re-implementing it.
 
     Args:
         request: The incoming FastAPI request.
         action: The flow or agent action to run.
         context: Optional context dict passed through to the action.
-        init: Optional session identity / init payload passed through to the action.
+        init: Optional init payload passed through to the action.
 
     Returns:
         A streaming SSE response, a ``{"result": ...}`` dict, or an error Response.
     """
+    return await _handle_action_request(
+        request=request,
+        action=action,
+        context=context,
+        init=init,
+    )
+
+
+async def _handle_action_request(
+    *,
+    request: Request,
+    action: Action[InputT, OutputT, ChunkT, InitT],
+    context: dict[str, object] | None = None,
+    init: InitT | dict[str, Any] | None = None,
+    extract_input: Callable[[dict[str, Any]], object] | None = None,
+    resolve_init: Callable[[dict[str, Any], Mapping[str, str]], object] | None = None,
+    empty_status: int | None = None,
+) -> Response | dict[str, Any]:
     body = await request.json()
     if not isinstance(body, dict):
         return json_error_response(
@@ -162,11 +164,16 @@ async def handle_genkit_request(
         )
 
     try:
-        input_data = extract_action_input(body)
+        input_data = (extract_input or extract_action_input)(body)
     except GenkitError as err:
         return json_error_response(err)
 
-    resolved_init = init if init is not None else resolve_session_init(body, request.query_params)
+    if init is not None:
+        resolved_init = init
+    elif resolve_init is not None:
+        resolved_init = resolve_init(body, request.query_params)
+    else:
+        resolved_init = body.get('init')
     action_obj = cast(Action[Any, Any, Any, Any], action)
 
     if wants_stream(request):
@@ -185,8 +192,8 @@ async def handle_genkit_request(
 
     try:
         response = await action_obj.run(input_data, context=context, init=resolved_init)
-        if response.response is None and action_obj.kind == ActionKind.AGENT_SNAPSHOT:
-            return Response(status_code=404)
+        if response.response is None and empty_status is not None:
+            return Response(status_code=empty_status)
         return {'result': to_dict(response.response)}
     except Exception as e:
         return json_error_response(e, status_code=500)
@@ -281,6 +288,9 @@ def _mount_action(
     action: Action[InputT, OutputT, ChunkT, InitT],
     *,
     context_dependency: Callable[..., Any] | None = None,
+    extract_input: Callable[[dict[str, Any]], object] | None = None,
+    resolve_init: Callable[[dict[str, Any], Mapping[str, str]], object] | None = None,
+    empty_status: int | None = None,
 ) -> None:
     """Register one action on the router, honoring FastAPI DI when asked.
 
@@ -294,17 +304,26 @@ def _mount_action(
             request: Request,
             context: Any = Depends(context_dependency),  # noqa: ANN401, B008
         ) -> Response | dict[str, Any]:
-            return await handle_genkit_request(
-                request,
+            return await _handle_action_request(
+                request=request,
                 action=action,
                 context=context if isinstance(context, dict) else None,
+                extract_input=extract_input,
+                resolve_init=resolve_init,
+                empty_status=empty_status,
             )
 
         router.post(path, response_model=None)(endpoint_with_context)
         return
 
     async def endpoint(request: Request) -> Response | dict[str, Any]:
-        return await handle_genkit_request(request, action=action)
+        return await _handle_action_request(
+            request=request,
+            action=action,
+            extract_input=extract_input,
+            resolve_init=resolve_init,
+            empty_status=empty_status,
+        )
 
     router.post(path, response_model=None)(endpoint)
 

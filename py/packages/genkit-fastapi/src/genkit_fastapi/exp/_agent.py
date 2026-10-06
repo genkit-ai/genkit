@@ -18,7 +18,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any, TypeVar
 
 from fastapi import APIRouter
@@ -27,9 +27,41 @@ from pydantic import BaseModel
 from genkit import GenkitError
 from genkit.exp.agent import Agent, SessionSnapshot
 from genkit.plugin_api import Action, ActionKind
-from genkit_fastapi.handler import _mount_action
+
+from ..handler import _mount_action
 
 StateT = TypeVar('StateT', bound=BaseModel)
+
+
+def extract_agent_input(body: dict[str, Any]) -> object:
+    """Read the agent wire shapes: ``message``, top-level snapshot/session ids, or ``data``/``input``."""
+    if 'data' in body:
+        return body['data']
+    if 'input' in body:
+        return body['input']
+    if 'message' in body:
+        return {'message': {'role': 'user', 'content': [{'text': str(body['message'])}]}}
+    if 'snapshotId' in body or 'sessionId' in body:
+        return body
+    if not body:
+        return None
+    raise GenkitError(
+        status='INVALID_ARGUMENT',
+        message='Action request must be wrapped in {"data": ...} object',
+    )
+
+
+def resolve_session_init(body: dict[str, Any], query_params: Mapping[str, str]) -> object:
+    """Resolve per-run init, injecting session_id from ``?session_id=`` / ``?thread_id=``."""
+    init = body.get('init')
+    query_session_id = query_params.get('session_id') or query_params.get('thread_id')
+    if not query_session_id:
+        return init
+    if isinstance(init, dict) and not init.get('session_id') and not init.get('sessionId'):
+        return {**init, 'session_id': query_session_id}
+    if init is None:
+        return {'session_id': query_session_id}
+    return init
 
 
 def _parse_snapshot_lookup_input(input_val: dict[str, Any] | str | None) -> tuple[str | None, str | None]:
@@ -98,6 +130,8 @@ def serve_agent(
         resolved_base_path,
         agent,
         context_dependency=context_dependency,
+        extract_input=extract_agent_input,
+        resolve_init=resolve_session_init,
     )
 
     if agent.store is not None:
@@ -129,12 +163,15 @@ def serve_agent(
             f'{resolved_base_path}/getSnapshot',
             snapshot_action,
             context_dependency=context_dependency,
+            extract_input=extract_agent_input,
+            empty_status=404,
         )
         _mount_action(
             router,
             f'{resolved_base_path}/abort',
             abort_action,
             context_dependency=context_dependency,
+            extract_input=extract_agent_input,
         )
 
     return router

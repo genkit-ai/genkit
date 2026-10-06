@@ -41,6 +41,10 @@ app.include_router(serve_flow(suggest_dish), prefix='/api')
 
 For a custom route, stack ``@genkit_fastapi_handler(ai)`` over ``@ai.flow()``.
 
+Agents are experimental, so their routes come from ``genkit_fastapi.exp``::
+
+    from genkit_fastapi.exp import serve_agent
+
 ```bash
 genkit start -- uvicorn main:app --reload  # with Dev UI
 uvicorn main:app                           # production

@@ -26,7 +26,7 @@ app.include_router(serve_agent(weather_agent), prefix='/api')
 ```
 """
 
-from genkit_fastapi.exp._agent import serve_agent
+from ._agent import serve_agent
 
 __all__ = [
     'serve_agent',
