@@ -33,6 +33,7 @@ from genkit_openai._models._utils import (
     DictMessageAdapter,
     MessageAdapter,
     MessageConverter,
+    check_extra_body,
     extract_response_metadata,
     reraise_openai_error,
     strip_markdown_fences,
@@ -48,8 +49,10 @@ _GENKIT_ONLY = frozenset({'top_k', 'version', 'max_output_tokens', 'stop_sequenc
 
 # Body fields Genkit builds from the request. `extra` can't set them: the
 # schema can't see inside the passthrough, and overwriting them silently would
-# replace the conversation or break response parsing.
+# replace the model the action resolved (pin one with `version`), the
+# conversation, or break response parsing.
 _MANAGED_BODY_FIELDS = (
+    'model',
     'messages',
     'tools',
     'tool_choice',
@@ -58,19 +61,6 @@ _MANAGED_BODY_FIELDS = (
     'response_format',
     'stream',
 )
-
-
-def _check_extra(extra: dict[str, Any]) -> dict[str, Any]:
-    """The ``extra`` map as an ``extra_body``, or raise when it names a field Genkit builds."""
-    for field in _MANAGED_BODY_FIELDS:
-        if field in extra:
-            raise GenkitError(
-                status='INVALID_ARGUMENT',
-                message=(
-                    f'openai: extra field {field!r} is built by Genkit from the request and cannot be set from config'
-                ),
-            )
-    return dict(extra)
 
 
 def _uses_max_completion_tokens(model: str | None) -> bool:
@@ -119,7 +109,7 @@ def _openai_create_kwargs(*, config: OpenAIConfig, model: str | None = None) -> 
     if 'stop' not in body and config.stop_sequences is not None:
         body['stop'] = config.stop_sequences
     if config.extra:
-        body['extra_body'] = _check_extra(config.extra)
+        body['extra_body'] = check_extra_body(config.extra, managed=_MANAGED_BODY_FIELDS, label='openai')
     return body
 
 

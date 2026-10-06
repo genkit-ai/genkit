@@ -247,6 +247,38 @@ async def test_generate_claude_secrets_without_api_key_uses_plugin_key() -> None
 
 
 @pytest.mark.parametrize(
+    'secrets',
+    [
+        {'api_key': ''},
+        {'api_key': '   '},
+        {'apiKey': ''},
+        {'apiKey': '   '},
+        {'api_key': '', 'apiKey': TENANT_KEY},
+    ],
+    ids=['api_key-empty', 'api_key-whitespace', 'apiKey-empty', 'apiKey-whitespace', 'blank-api_key-shadows-apiKey'],
+)
+@pytest.mark.parametrize('plugin_key', [PLUGIN_KEY, None], ids=['plugin-key', 'no-plugin-key'])
+@pytest.mark.asyncio
+@pytest.mark.usefixtures('no_env_key')
+async def test_generate_claude_blank_secrets_key_fails_instead_of_using_plugin_key(
+    secrets: dict[str, str], plugin_key: str | None
+) -> None:
+    """A set but blank secrets key fails INVALID_ARGUMENT instead of running on the plugin key; nothing is sent."""
+    api = FakeClaudeApi()
+    ai = _genkit(api, api_key=plugin_key)
+
+    response = await ai.generate(model=MODEL, prompt='hi', context={'secrets': secrets})
+
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.error is not None
+    assert response.error.status == 'INVALID_ARGUMENT'
+    assert 'is blank' in response.error.message
+    assert "context={'secrets': {'api_key': ...}}" in response.error.message
+    assert TENANT_KEY not in response.error.message
+    assert api.requests == []
+
+
+@pytest.mark.parametrize(
     ('client_params', 'reason'),
     [
         ({'api_key': None, 'auth_token': 'corp-bearer'}, 'auth token'),

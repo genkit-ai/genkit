@@ -34,6 +34,7 @@ from genkit._ai._agents._runtime import AgentInitError
 from genkit._ai._agents._types import StateManagement
 from genkit._ai._json_patch import apply_json_patch
 from genkit._core._channel import CloseableQueue
+from genkit._core._error import GenkitError
 from genkit._core._model import (
     AgentInit,
     AgentInput,
@@ -151,15 +152,49 @@ class MockAgentTransport(AgentTransport[Any]):
 # ---------------------------------------------------------------------------
 
 
-def test_restart_applies_replace_input() -> None:
+def test_agent_interrupt_restart_has_no_replace_input() -> None:
+    """intr.restart(replace_input=...) is a TypeError; the helper does not take a new input."""
     intr = AgentInterrupt('transfer', 'ref-1', {'amount': 100})
-    part = intr.restart(replace_input={'amount': 50, 'approved': True})
+    with pytest.raises(TypeError, match='replace_input'):
+        intr.restart(replace_input={'amount': 50})  # type: ignore[call-arg]
 
+
+def test_restart_with_no_args_marks_resumed() -> None:
+    """intr.restart() marks the tool request resumed."""
+    intr = AgentInterrupt('transfer', 'ref-1', {'amount': 100})
+    part = intr.restart()
     assert part.tool_request is not None
-    assert part.tool_request.input == {'amount': 50, 'approved': True}
+    assert part.tool_request.input == {'amount': 100}
     assert part.metadata is not None
-    assert part.metadata.get('replacedInput') == {'amount': 100}
     assert part.metadata.get('resumed') is True
+
+
+def test_respond_carries_output_only() -> None:
+    """intr.respond(output) carries the output and no interruptResponse metadata."""
+    intr = AgentInterrupt('transfer', 'ref-1', {'amount': 100})
+    part = intr.respond({'approved': True})
+    assert part.tool_response is not None
+    assert part.tool_response.output == {'approved': True}
+    assert part.metadata is None
+
+
+def test_chat_resume_rejects_paused_part() -> None:
+    """chat.resume(restart=[paused]) raises before the turn is sent."""
+    chat = AgentChat(MockAgentTransport())
+    paused = Part.from_tool_request(name='pay', ref='r1', input={}, metadata={'interrupt': True})
+    with pytest.raises(GenkitError, match='still an interrupt'):
+        chat.resume_stream(restart=[paused])
+
+
+def test_chat_resume_respond_with_paused_part_raises_before_send() -> None:
+    """chat.resume_stream(respond=[paused]) is INVALID_ARGUMENT before anything is sent."""
+    transport = MockAgentTransport()
+    chat = AgentChat(transport)
+    paused = Part.from_tool_request(name='pay', ref='r1', input={}, metadata={'interrupt': True})
+    with pytest.raises(GenkitError, match='Part.respond') as exc:
+        chat.resume_stream(respond=[paused])
+    assert exc.value.status == 'INVALID_ARGUMENT'
+    assert transport.send_payloads == []
 
 
 # ---------------------------------------------------------------------------

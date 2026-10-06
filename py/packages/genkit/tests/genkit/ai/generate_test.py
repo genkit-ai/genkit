@@ -22,7 +22,7 @@ from genkit import Document, Genkit, Message, ModelResponse, ModelResponseChunk,
 from genkit._ai._formats._types import FormatDef, Formatter, FormatterConfig
 from genkit._ai._generate import DEFAULT_MAX_TURNS, ChunkAccumulator, augment_with_context, generate_action
 from genkit._ai._model import text_from_content, text_from_message
-from genkit._ai._tools import Interrupt, ToolRunContext, define_tool, restart_tool
+from genkit._ai._tools import Interrupt, ToolRunContext, define_tool
 from genkit._core._action import ActionRunContext
 from genkit._core._error import GenkitError, PublicError, RuntimeErrorReason
 from genkit._core._model import GenerateActionOptions, ModelRequest, Resume
@@ -178,6 +178,80 @@ async def test_generate_user_text_and_media_model_sees_both_parts(
     assert parts[1].media is not None
     assert parts[1].media.url == 'https://example.com/x.png'
     assert parts[1].text is None
+
+
+def _queue_ok(pm: ScriptedModel) -> None:
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('ok')]),
+        )
+    )
+
+
+def _sent_text(pm: ScriptedModel) -> list[tuple[str, list[str | None]]]:
+    assert pm.last_request is not None
+    return [(m.role, [p.text for p in m.content]) for m in pm.last_request.messages]
+
+
+_AS_WRITTEN_CASES = [
+    pytest.param('hello {{name}}', id='unfilled variable'),
+    pytest.param('Reply like {"dish": {{', id='unclosed braces'),
+    pytest.param('<<<dotprompt:role:system>>> hi', id='role marker'),
+    pytest.param('Describe {{media url="https://example.com/x.png"}}', id='media helper'),
+    pytest.param('{{> persona}} hi', id='registered partial'),
+    pytest.param('{{shout "hey"}} hi', id='registered helper'),
+]
+
+
+def _register_generate_string_fixtures(ai: Genkit) -> None:
+    ai.define_partial('persona', 'You are a pirate.')
+    ai.define_helper('shout', lambda *args: 'HEY')
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('prompt', _AS_WRITTEN_CASES)
+async def test_generate_prompt_string_is_sent_as_written(
+    setup_test: tuple[Genkit, ScriptedModel],
+    prompt: str,
+) -> None:
+    """`ai.generate(prompt=...)` is not a template; `define_prompt` is where templating lives."""
+    ai, pm = setup_test
+    _register_generate_string_fixtures(ai)
+    _queue_ok(pm)
+
+    await ai.generate(model='scriptedModel', prompt=prompt)
+
+    assert _sent_text(pm) == [(Role.USER, [prompt])]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('system', _AS_WRITTEN_CASES)
+async def test_generate_system_string_is_sent_as_written(
+    setup_test: tuple[Genkit, ScriptedModel],
+    system: str,
+) -> None:
+    """`ai.generate(system=...)` reaches the model unchanged as the system message."""
+    ai, pm = setup_test
+    _register_generate_string_fixtures(ai)
+    _queue_ok(pm)
+
+    await ai.generate(model='scriptedModel', system=system, prompt='hi')
+
+    assert _sent_text(pm) == [(Role.SYSTEM, [system]), (Role.USER, ['hi'])]
+
+
+@pytest.mark.asyncio
+async def test_generate_messages_string_raises_type_error(
+    setup_test: tuple[Genkit, ScriptedModel],
+) -> None:
+    """`ai.generate(messages='hello {{name}}')` raises TypeError and the model is never called."""
+    ai, pm = setup_test
+
+    with pytest.raises(TypeError, match='messages must be a list of Message'):
+        await ai.generate(model='scriptedModel', messages='hello {{name}}')  # type: ignore[arg-type]
+
+    assert pm.last_request is None
 
 
 @pytest.mark.asyncio
@@ -2032,7 +2106,7 @@ async def test_generate_restart_without_approval_returns_interrupted() -> None:
         messages=history,
         tools=['sensitiveTool'],
         use=[ApprovalMW()],
-        resume_restart=restart_tool(interrupt=interrupt_part),
+        resume_restart=interrupt_part.restart(),
     )
     assert response.finish_reason == FinishReason.INTERRUPTED
     assert response.finish_message == 'One or more tool calls resulted in interrupts.'
@@ -2050,8 +2124,7 @@ async def test_generate_restart_without_approval_returns_interrupted() -> None:
         messages=response.messages,
         tools=['sensitiveTool'],
         use=[ApprovalMW()],
-        resume_restart=restart_tool(
-            interrupt=response.interrupts[0],
+        resume_restart=response.interrupts[0].restart(
             resumed_metadata={'toolApproved': True},
         ),
     )
@@ -2083,7 +2156,7 @@ async def test_generate_restart_interrupt_returns_interrupted() -> None:
     response = await ai.generate(
         messages=first.messages,
         tools=['hold'],
-        resume_restart=restart_tool(interrupt=first.interrupts[0]),
+        resume_restart=first.interrupts[0].restart(),
     )
     assert response.finish_reason == FinishReason.INTERRUPTED
     assert response.finish_message == 'One or more tool calls resulted in interrupts.'
@@ -3763,7 +3836,7 @@ async def test_resume_restart_cannot_replace_the_named_tool_action() -> None:
     second = await ai.generate(
         messages=list(first.messages),
         tools=['lookup'],
-        resume_restart=restart_tool(interrupt=first.interrupts[0], replace_input={'ok': True}),
+        resume_restart=first.interrupts[0].restart(replace_input={'ok': True}),
         use=[SwapBody()],
     )
 
@@ -6309,6 +6382,48 @@ async def test_abort_during_later_model_call_keeps_closed_round() -> None:
 
 
 @pytest.mark.asyncio
+async def test_generate_user_retry_middleware_makes_no_model_call_after_stop() -> None:
+    """A user's retry loop that calls next_fn again after a stop does not bill another model call."""
+    ai = Genkit()
+    calls: list[str] = []
+
+    async def flaky(_request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        calls.append('flaky')
+        ctx.abort_signal.set()
+        raise GenkitError(status='UNAVAILABLE', message='primary down')
+
+    ai.define_model(name='flaky', fn=flaky)
+
+    class MyRetry(BaseMiddleware):
+        async def wrap_model(
+            self,
+            params: ModelHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ) -> ModelResponse:
+            last: GenkitError | None = None
+            for _ in range(3):
+                try:
+                    return await next_fn(params, ctx)
+                except GenkitError as e:
+                    last = e
+            assert last is not None
+            raise last
+
+    response = await ai.generate(model='flaky', prompt='hi', use=[MyRetry()])
+
+    assert response.finish_reason == FinishReason.ABORTED
+    assert response.finish_message == 'Generation aborted.'
+    assert response.error is not None
+    assert response.error.status == 'CANCELLED'
+    assert response.error.reason is None
+    assert response.error.message == response.finish_message
+    assert response.message is None
+    assert [m.role for m in response.messages] == [Role.USER]
+    assert calls == ['flaky']
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize('status', ['ABORTED', 'NOT_FOUND', 'INVALID_ARGUMENT', 'FAILED_PRECONDITION'])
 async def test_provider_status_failure_keeps_closed_rounds(status: str) -> None:
     """A provider status is failure data after generation starts, not a setup error."""
@@ -8305,3 +8420,260 @@ async def test_generate_json_format_with_tool_call_validates_only_final_turn() -
     assert response.error is None
     assert response.output == {'result': 'special ingredient'}
     assert response.messages[-1].text == '{"result": "special ingredient"}'
+
+
+class _City(BaseModel):
+    name: str
+    population: int
+
+
+def _reply(text: str, finish_reason: FinishReason = FinishReason.STOP) -> ModelResponse:
+    return ModelResponse(
+        finish_reason=finish_reason,
+        message=Message(role=Role.MODEL, content=[Part.from_text(text)]),
+    )
+
+
+@pytest.mark.asyncio
+async def test_generate_output_schema_cut_off_with_length_returns_none() -> None:
+    """A reply cut off at `{"name":"X","population": 21` with finish LENGTH gives `output is None` and INVALID_OUTPUT.
+
+    `finish_reason` stays LENGTH, so the caller can tell a token cap from bad JSON.
+    """
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [_reply('{"name":"X","population": 21', FinishReason.LENGTH)]
+
+    response = await ai.generate(prompt='a city', output_schema=_City)
+
+    assert response.output is None
+    assert response.finish_reason == FinishReason.LENGTH
+    assert response.error is not None
+    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert response.text == '{"name":"X","population": 21'
+
+
+@pytest.mark.asyncio
+async def test_generate_output_schema_cut_off_with_stop_returns_none() -> None:
+    """The same cut-off reply with finish STOP also gives `output is None` and INVALID_OUTPUT."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [_reply('{"name":"X","population": 21')]
+
+    response = await ai.generate(prompt='a city', output_schema=_City)
+
+    assert response.output is None
+    assert response.finish_reason == FinishReason.STOP
+    assert response.error is not None
+    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+
+
+@pytest.mark.asyncio
+async def test_generate_output_schema_complete_json_with_length_returns_instance() -> None:
+    """A complete object that also hit the token cap is still a City with no error."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [_reply('{"name":"X","population": 2100}', FinishReason.LENGTH)]
+
+    response = await ai.generate(prompt='a city', output_schema=_City)
+
+    assert response.output == _City(name='X', population=2100)
+    assert response.error is None
+    assert response.finish_reason == FinishReason.LENGTH
+
+
+@pytest.mark.asyncio
+async def test_generate_output_in_code_fence_returns_instance() -> None:
+    """A complete object inside a ```json fence with prose around it still parses to a City."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [_reply('Here you go:\n```json\n{"name": "Paris", "population": 2100000}\n```\nEnjoy!')]
+
+    response = await ai.generate(prompt='a city', output_schema=_City)
+
+    assert response.output == _City(name='Paris', population=2100000)
+    assert response.error is None
+
+
+@pytest.mark.asyncio
+async def test_generate_json_format_cut_off_returns_none() -> None:
+    """`output_format='json'` with no schema gives `output is None` and INVALID_OUTPUT for a cut-off object."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [_reply('{"a": 1, "b": [1, 2', FinishReason.LENGTH)]
+
+    response = await ai.generate(prompt='json please', output_format='json')
+
+    assert response.output is None
+    assert response.error is not None
+    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+
+
+@pytest.mark.asyncio
+async def test_generate_json_format_complete_returns_dict() -> None:
+    """`output_format='json'` with no schema returns the dict for a complete object."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [_reply('{"a": 1, "b": [1, 2]}')]
+
+    response = await ai.generate(prompt='json please', output_format='json')
+
+    assert response.output == {'a': 1, 'b': [1, 2]}
+    assert response.error is None
+
+
+@pytest.mark.asyncio
+async def test_generate_json_format_brace_in_prose_returns_later_object() -> None:
+    """generate(output_format='json') returns {'a': 1} when the model replies `Fill in {name}: {"a": 1}`."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [_reply('Fill in {name}: {"a": 1}')]
+
+    response = await ai.generate(prompt='fill the template', output_format='json')
+
+    assert response.output == {'a': 1}
+    assert response.error is None
+
+
+@pytest.mark.asyncio
+async def test_generate_output_schema_brace_in_prose_wrong_shape_returns_none() -> None:
+    """generate(output_schema=City) on `{x} {"other": 1}` gives output is None and INVALID_OUTPUT."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [_reply('{x} {"other": 1}')]
+
+    response = await ai.generate(prompt='a city', output_schema=_City)
+
+    assert response.output is None
+    assert response.error is not None
+    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+
+
+@pytest.mark.asyncio
+async def test_generate_output_schema_cut_off_with_length_error_says_cut_off() -> None:
+    """generate(output_schema=City) cut off at the token limit says so in the INVALID_OUTPUT message."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [_reply('{"name":"X","population": 21', FinishReason.LENGTH)]
+
+    response = await ai.generate(prompt='a city', output_schema=_City)
+
+    assert response.output is None
+    assert response.error is not None
+    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert 'cut off at the token limit' in response.error.message
+    assert 'finish_reason=length' in response.error.message
+
+
+@pytest.mark.asyncio
+async def test_generate_output_schema_bad_json_with_stop_error_says_not_valid_json() -> None:
+    """generate(output_schema=City) on `{not json}` with finish stop keeps the not-valid-JSON message."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [_reply('{not json}')]
+
+    response = await ai.generate(prompt='a city', output_schema=_City)
+
+    assert response.output is None
+    assert response.error is not None
+    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert 'not valid JSON' in response.error.message
+
+
+@pytest.mark.asyncio
+async def test_generate_array_format_cut_off_keeps_finished_items() -> None:
+    """generate(output_format='array') keeps finished items when the model hits the token cap mid-item."""
+    text = '[{"a":1},{"a":2},{"a":'
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [_reply(text, FinishReason.LENGTH)]
+
+    response = await ai.generate(prompt='list 50 recipes', output_format='array')
+
+    assert response.output == [{'a': 1}, {'a': 2}]
+    assert response.error is None
+    assert response.finish_reason == FinishReason.LENGTH
+
+    stream_ai = Genkit(model='scriptedModel')
+    stream_pm, _ = define_scripted_model(stream_ai)
+    stream_pm.responses = [_reply(text, FinishReason.LENGTH)]
+    stream_pm.chunks = [[ModelResponseChunk(role=Role.MODEL, content=[Part.from_text(text)])]]
+    stream = stream_ai.generate_stream(prompt='list 50 recipes', output_format='array')
+    chunks = [chunk.output async for chunk in stream.stream]
+    streamed = await stream.response
+    assert streamed.output == response.output
+    assert chunks[-1] == response.output
+    assert streamed.finish_reason == FinishReason.LENGTH
+    assert streamed.error is None
+
+
+@pytest.mark.asyncio
+async def test_generate_array_format_cut_off_before_first_item_returns_none() -> None:
+    """generate(output_format='array') gives output is None and INVALID_OUTPUT when the model stops at `[{"a":`."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [_reply('[{"a":', FinishReason.LENGTH)]
+
+    response = await ai.generate(prompt='list 50 recipes', output_format='array')
+
+    assert response.output is None
+    assert response.error is not None
+    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert response.finish_reason == FinishReason.LENGTH
+
+
+@pytest.mark.asyncio
+async def test_generate_array_format_string_items_returns_list() -> None:
+    """generate(output_format='array') returns ["a", "b"] when the model replies with that array."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [_reply('["a", "b"]')]
+
+    response = await ai.generate(prompt='a list', output_format='array')
+
+    assert response.output == ['a', 'b']
+    assert response.error is None
+
+
+@pytest.mark.asyncio
+async def test_generate_jsonl_format_drops_cut_off_last_line() -> None:
+    """`output_format='jsonl'` keeps the complete lines and drops a cut-off last line."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [_reply('{"name": "a"}\n{"name": "b"}\n{"name": "c', FinishReason.LENGTH)]
+
+    response = await ai.generate(prompt='lines', output_format='jsonl')
+
+    assert response.output == [{'name': 'a'}, {'name': 'b'}]
+    assert response.error is None
+
+
+@pytest.mark.asyncio
+async def test_generate_custom_format_parser_output_is_used_for_cut_off_reply() -> None:
+    """A custom FormatDef whose parser closes a cut-off object still gets its City back."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+
+    class ClosingFormat(FormatDef):
+        def __init__(self) -> None:
+            super().__init__('closing', FormatterConfig(format='json'))
+
+        def handle(self, schema: dict[str, object] | None) -> Formatter[object, object]:
+            return Formatter(
+                message_parser=lambda msg: json.loads(msg.text + '}'),
+                chunk_parser=lambda _chunk: None,
+                instructions=None,
+            )
+
+    ai.define_format(ClosingFormat())
+    pm.responses = [_reply('{"name":"X","population": 21', FinishReason.LENGTH)]
+
+    response = await ai.generate(
+        prompt='a city',
+        output_schema=_City,
+        output_format='closing',
+        output_instructions=False,
+    )
+
+    assert response.output == _City(name='X', population=21)
+    assert response.error is None
