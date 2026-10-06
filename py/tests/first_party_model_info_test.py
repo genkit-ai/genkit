@@ -67,10 +67,11 @@ def _vertex_model_garden_anthropic() -> list[Supports]:
 
 SOURCES = {
     'amazon-bedrock': _bedrock,
-    'anthropic': _catalog('genkit_anthropic.model_info'),
-    'google-genai-gemini': _catalog('genkit_google_genai.models.gemini'),
-    'google-genai-veo': _catalog('genkit_google_genai.models.veo'),
-    'openai': _catalog('genkit_openai.models.model_info'),
+    'anthropic': _catalog('genkit_anthropic._model_info'),
+    'google-genai-gemini': _catalog('genkit_google_genai._models._gemini'),
+    'google-genai-veo': _catalog('genkit_google_genai._models._veo'),
+    'openai': _catalog('genkit_openai._models._model_info'),
+    'vertexai-model-garden': _catalog('genkit_vertexai.model_garden._model_info'),
     'vertexai-model-garden-anthropic': _vertex_model_garden_anthropic,
 }
 
