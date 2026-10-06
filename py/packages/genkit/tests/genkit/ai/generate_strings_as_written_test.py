@@ -3,13 +3,19 @@
 # Copyright 2026 Google LLC
 # SPDX-License-Identifier: Apache-2.0
 
-"""What the model receives for prompt and system strings passed to generate."""
+"""What the model receives for prompt, system, and message strings.
+
+Anything defined up front (`define_prompt`, `.prompt` files, `define_agent(system=)`)
+is a template. Anything sent at call time (`generate` strings, `chat.send`,
+message history) reaches the model as written.
+"""
 
 import pytest
 
 from genkit import Genkit, Message, ModelResponse, Part
 from genkit._ai._testing import ProgrammableModel, define_programmable_model
 from genkit._core._typing import FinishReason, Role
+from genkit.exp import Genkit as ExpGenkit
 from genkit.model import ModelRequest
 
 
@@ -134,3 +140,58 @@ async def test_generate_stream_prompt_with_braces_sends_text_as_written(
     await result.response
 
     assert _sent(pm) == [(Role.SYSTEM, ['be {{x}} nice']), (Role.USER, ['{{x}}'])]
+
+
+@pytest.mark.asyncio
+async def test_generate_prompt_with_media_helper_stays_text(setup: tuple[Genkit, ProgrammableModel]) -> None:
+    """`prompt='{{media url=...}}'` stays text in generate; use `Part.from_media` or `define_prompt` instead."""
+    ai, pm = setup
+
+    await ai.generate(model='programmableModel', prompt='Describe {{media url="https://example.com/x.png"}}')
+
+    assert _sent(pm) == [(Role.USER, ['Describe {{media url="https://example.com/x.png"}}'])]
+
+
+@pytest.mark.asyncio
+async def test_define_prompt_history_messages_sent_as_written(setup: tuple[Genkit, ProgrammableModel]) -> None:
+    """`messages=` history passed at call time is not templated, even though the prompt itself is."""
+    ai, pm = setup
+    order = ai.define_prompt(name='order', model='programmableModel', prompt='Order {{dish}}.')
+
+    await order(
+        {'dish': 'pad thai'},
+        messages=[Message(role=Role.USER, content=[Part.from_text('No {{allergen}} please.')])],
+    )
+
+    assert _sent(pm) == [(Role.USER, ['No {{allergen}} please.']), (Role.USER, ['Order pad thai.'])]
+
+
+@pytest.mark.asyncio
+async def test_agent_system_is_template_and_chat_turns_sent_as_written() -> None:
+    """`define_agent(system=...)` renders from context; `chat.send` text and replayed history stay as written."""
+    ai = ExpGenkit()
+    pm, _ = define_programmable_model(ai)
+    for _ in range(2):
+        pm.responses.append(
+            ModelResponse(
+                finish_reason=FinishReason.STOP,
+                message=Message(role=Role.MODEL, content=[Part.from_text('ok')]),
+            )
+        )
+    waiter = ai.define_agent('waiter', model='programmableModel', system='Guest: {{@auth.name}}.')
+
+    @ai.flow()
+    async def take_order(_: str) -> None:
+        chat = waiter.chat()
+        await chat.send('Return {"dish": {{dish}}}')
+        await chat.send('And {{drink}}.')
+
+    await take_order.run('', context={'auth': {'name': 'Ana'}})
+
+    # Turn 2 replays turn 1 from session history; neither user turn is templated.
+    assert _sent(pm) == [
+        (Role.SYSTEM, ['Guest: Ana.']),
+        (Role.USER, ['Return {"dish": {{dish}}}']),
+        (Role.MODEL, ['ok']),
+        (Role.USER, ['And {{drink}}.']),
+    ]
