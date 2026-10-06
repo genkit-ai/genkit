@@ -22,7 +22,7 @@ import base64
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from genkit_openai.models.audio import (
+from genkit_openai._models._audio import (
     SUPPORTED_STT_MODELS,
     SUPPORTED_TTS_MODELS,
     OpenAISTTModel,

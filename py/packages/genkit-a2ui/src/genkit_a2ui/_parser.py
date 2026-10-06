@@ -24,8 +24,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, cast
 
-from genkit import GenkitError, RuntimeErrorReason
-from genkit._core._logger import get_logger
+from genkit import GenkitError, RuntimeErrorReason, get_logger
 
 from ._catalog import A2uiCatalog
 from ._types import DEFAULT_VERSION, SURFACE_ID_PLACEHOLDER, SURFACE_KEYS, Envelope, ValidateMode

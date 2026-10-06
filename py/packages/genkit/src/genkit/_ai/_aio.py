@@ -28,7 +28,7 @@ import threading
 import uuid
 from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from pathlib import Path
-from typing import Any, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, TypeVar, cast, overload
 
 import anyio
 import uvicorn
@@ -72,7 +72,7 @@ from genkit._ai._prompt import (
     register_prompt_actions,
     to_generate_options,
 )
-from genkit._ai._tools import Tool, define_interrupt, define_tool
+from genkit._ai._tools import define_interrupt, define_tool
 from genkit._core._action import Action, ActionKind, get_current_context
 from genkit._core._background import (
     BackgroundAction,
@@ -111,6 +111,7 @@ from genkit._core._registry import Registry, define_dynamic_action_provider as d
 from genkit._core._telemetry._attrs import metadata_key
 from genkit._core._telemetry._instrumentation import run_in_new_span
 from genkit._core._telemetry.http import maybe_inject_dev_instrumentation
+from genkit._core._tool import Tool
 from genkit._core._typing import (
     BaseDataPoint,
     Embedding,
@@ -134,6 +135,18 @@ ChunkT = TypeVar('ChunkT')
 R = TypeVar('R')
 T = TypeVar('T')
 MiddlewareT = TypeVar('MiddlewareT', bound=BaseMiddleware)
+
+
+def init_keyword_example(value: object) -> str:
+    # Suggest model= only for a provider/name id or a ModelRef. A path like
+    # './prompts' is not a model, so don't put it on model=.
+    if isinstance(value, ModelRef):
+        return f'Genkit(model={value!r})'
+    if isinstance(value, str) and '/' in value and not value.startswith(('.', '/', '\\', '~')) and '\\' not in value:
+        parts = value.split('/')
+        if all(part and part not in ('.', '..') for part in parts):
+            return f'Genkit(model={value!r})'
+    return 'Genkit(plugins=[...], model="...")'
 
 
 class Genkit:
@@ -160,43 +173,77 @@ class Genkit:
             ai.run_main(my_flow('Weather in Paris?'))
     """
 
-    def __init__(
-        self,
-        plugins: list[Plugin] | None = None,
-        model: ModelArg | None = None,
-        prompt_dir: str | Path | None = None,
-        reflection_server_spec: ServerSpec | None = None,
-    ) -> None:
-        # Before anything that logs, so plugin initialization is covered too.
-        configure_logging()
-        self.registry: Registry = Registry()
-        self._reflection_server_spec: ServerSpec | None = reflection_server_spec
-        self._reflection_ready = threading.Event()
-        self._initialize_registry(model, plugins)
-        # Ensure the default generate action is registered for async usage.
-        define_generate_action(self.registry)
-        self._register_plugin_middleware(plugins)
-        maybe_inject_dev_instrumentation()
-        # In dev mode, start the reflection server immediately in a background
-        # daemon thread so it's available regardless of which web framework (or
-        # none) the user chooses.
-        if is_dev_environment():
-            # SIGINT (Ctrl+C) always hits handle_signal. SIGTERM inside the
-            # run_main wait loop is stolen by anyio (clean exit → atexit);
-            # elsewhere SIGTERM also goes through handle_signal. Both paths
-            # remove the runtime discovery files.
-            setup_signal_handlers()
-            self._start_reflection_background()
+    registry: Registry
+    _reflection_server_spec: ServerSpec | None
+    _reflection_ready: threading.Event
 
-        # Load prompts
-        load_path = prompt_dir
-        if load_path is None:
-            default_prompts_path = Path('./prompts')
-            if default_prompts_path.is_dir():
-                load_path = default_prompts_path
+    if TYPE_CHECKING:
 
-        if load_path:
-            load_prompt_folder(self.registry, dir_path=load_path)
+        def __init__(
+            self,
+            *,
+            plugins: list[Plugin] | None = None,
+            model: ModelArg | None = None,
+            prompt_dir: str | Path | None = None,
+            reflection_server_spec: ServerSpec | None = None,
+        ) -> None: ...
+
+    else:
+        # Type checkers see the keyword-only signature above. Runtime still
+        # accepts *args so we can raise a TypeError that names the keyword they
+        # probably meant, instead of silently binding a model id as plugins.
+        def __init__(
+            self,
+            *args: object,
+            plugins: list[Plugin] | None = None,
+            model: ModelArg | None = None,
+            prompt_dir: str | Path | None = None,
+            reflection_server_spec: ServerSpec | None = None,
+        ) -> None:
+            if args:
+                raise TypeError(
+                    f'Genkit() takes no positional arguments, got {len(args)}. '
+                    f'Pass keyword arguments instead, e.g. {init_keyword_example(args[0])}.'
+                )
+            # Before anything that logs, so plugin initialization is covered too.
+            configure_logging()
+            self.registry = Registry()
+            self._reflection_server_spec = reflection_server_spec
+            self._reflection_ready = threading.Event()
+            self._initialize_registry(model, plugins)
+            # Ensure the default generate action is registered for async usage.
+            define_generate_action(self.registry)
+            self._register_plugin_middleware(plugins)
+            maybe_inject_dev_instrumentation()
+            # In dev mode, start the reflection server immediately in a background
+            # daemon thread so it's available regardless of which web framework (or
+            # none) the user chooses.
+            if is_dev_environment():
+                # SIGINT (Ctrl+C) always hits handle_signal. SIGTERM inside the
+                # run_main wait loop is stolen by anyio (clean exit → atexit);
+                # elsewhere SIGTERM also goes through handle_signal. Both paths
+                # remove the runtime discovery files.
+                setup_signal_handlers()
+                self._start_reflection_background()
+
+            # Load prompts
+            load_path = prompt_dir
+            if load_path is None:
+                default_prompts_path = Path('./prompts')
+                if default_prompts_path.is_dir():
+                    load_path = default_prompts_path
+
+            if load_path:
+                load_prompt_folder(self.registry, dir_path=load_path)
+
+        # help(Genkit) should show the keyword-only constructor, not a phantom *args.
+        __init__.__signature__ = inspect.signature(__init__).replace(
+            parameters=[
+                parameter
+                for parameter in inspect.signature(__init__).parameters.values()
+                if parameter.kind != inspect.Parameter.VAR_POSITIONAL
+            ]
+        )
 
     # -------------------------------------------------------------------------
     # Registry methods
@@ -228,6 +275,10 @@ class Genkit:
         chunk_type: type[Any] | None = None,
     ) -> _FlowDecorator | _FlowDecoratorWithChunk[Any]:
         """Decorator to register an async function as a flow.
+
+        A flow takes at most one input. To read the request context or stream
+        chunks, add a parameter annotated ``ActionRunContext``, in any position.
+        Any other second parameter raises ``TypeError`` when the flow is defined.
 
         Args:
             name: Optional name for the flow. Defaults to the function name.
@@ -303,12 +354,27 @@ class Genkit:
 
         The return annotation is what the model binds as ``outputSchema``.
 
+        A tool takes at most one input, and that input's type is the schema the
+        model fills in. For several fields, use one Pydantic model. To read the
+        request context or interrupt, add a parameter annotated
+        ``ToolRunContext``, in any position. Any other second parameter raises
+        ``TypeError`` when the tool is defined.
+
         Example:
             @ai.tool()
             async def current_weather(city: str) -> str:
                 return f'Sunny in {city}'
 
-            res = await ai.generate(prompt='Weather in Paris?', tools=['current_weather'])
+            class Forecast(BaseModel):
+                city: str
+                days: int = 3
+
+            @ai.tool()
+            async def forecast(input: Forecast, ctx: ToolRunContext) -> str:
+                user = ctx.context.get('user_id')
+                return f'{input.days}-day forecast for {input.city} ({user})'
+
+            res = await ai.generate(prompt='Weather in Paris?', tools=['current_weather', 'forecast'])
         """
 
         def wrapper(func: Callable[..., Any]) -> Tool:
@@ -413,13 +479,17 @@ class Genkit:
         name: str,
         display_name: str,
         definition: str,
-        fn: BatchEvaluatorFn[Any],
+        fn: BatchEvaluatorFn,
         is_billed: bool = False,
         config_schema: type[BaseModel] | dict[str, object] | None = None,
         metadata: dict[str, object] | None = None,
         description: str | None = None,
     ) -> Action:
-        """Register a batch evaluator action."""
+        """Register a batch evaluator.
+
+        The function is an action: one ``EvalRequest``. Read options from
+        ``req.options``. A second parameter raises ``TypeError`` when defined.
+        """
         return define_batch_evaluator(
             self.registry,
             name=name,
@@ -974,6 +1044,28 @@ class Genkit:
         else:
             raise ValueError('Embedder must be specified as a string name or an EmbedderRef.')
 
+    def _embedder_options(
+        self,
+        *,
+        embedder: str | EmbedderRef | None,
+        options: dict[str, object] | None,
+    ) -> dict[str, object]:
+        """Copy ref config plus version, then overlay call-site options.
+
+        The caller's EmbedderRef.config dict is left unchanged so they can
+        reuse the same ref on later embed / embed_many calls.
+        """
+        merged: dict[str, object] = {}
+        if isinstance(embedder, EmbedderRef):
+            config = embedder.config
+            if isinstance(config, dict):
+                merged.update(config)
+            if embedder.version:
+                merged['version'] = embedder.version
+        if options:
+            merged.update(options)
+        return merged
+
     # Overload: config=ModelConfigDict, output_schema=type[T] -> ModelResponse[T]
     @overload
     async def generate(
@@ -1287,7 +1379,14 @@ class Genkit:
         With ``output_schema=Recipe``, each ``chunk.output`` is a partial of
         that type: same attributes, any field may still be ``None`` or a
         prefix. Guard the field you are about to use. The finished
-        ``Recipe`` is only ``(await sr.response).output``.
+        ``Recipe`` is only ``(await stream.response).output``, and it's ``None``
+        when the reply isn't a ``Recipe``.
+
+        If the model fails partway through, the ``async for`` still ends
+        normally. The final response has ``finish_reason == FAILED``,
+        ``error`` set, ``text == ''``, ``message is None``, and ``messages``
+        ending at the last complete turn, so it's safe to send back. The
+        chunks you already received are the record of what was shown.
 
         Example:
             stream = ai.generate_stream(prompt='Write a haiku about rain.')
@@ -1413,16 +1512,7 @@ class Genkit:
             vector = embeddings[0].embedding
         """
         embedder_name = self._resolve_embedder_name(embedder)
-        embedder_config: dict[str, object] = {}
-
-        # Extract config and version from EmbedderRef (not done for embed_many per JS behavior)
-        if isinstance(embedder, EmbedderRef):
-            embedder_config = embedder.config or {}
-            if embedder.version:
-                embedder_config['version'] = embedder.version  # Handle version from ref
-
-        # Merge options passed to embed() with config from EmbedderRef
-        final_options = {**(embedder_config or {}), **(options or {})}
+        final_options = self._embedder_options(embedder=embedder, options=options)
 
         embed_action = await self.registry.resolve_embedder(embedder_name)
         if embed_action is None:
@@ -1460,14 +1550,16 @@ class Genkit:
             Document.from_text(item, metadata) if isinstance(item, str) else item for item in content
         ]
 
-        # Resolve embedder name (JS embedMany does not extract config/version from ref)
         embedder_name = self._resolve_embedder_name(embedder)
+        final_options = self._embedder_options(embedder=embedder, options=options)
 
         embed_action = await self.registry.resolve_embedder(embedder_name)
         if embed_action is None:
             raise ValueError(f'Embedder "{embedder_name}" not found')
 
-        response = (await embed_action.run(EmbedRequest(input=documents, options=options))).response  # type: ignore[arg-type]
+        response = (
+            await embed_action.run(EmbedRequest(input=documents, options=final_options))  # type: ignore[arg-type]
+        ).response
         return response.embeddings
 
     async def evaluate(
