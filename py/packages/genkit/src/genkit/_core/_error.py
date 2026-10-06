@@ -23,7 +23,7 @@ from email.utils import parsedate_to_datetime
 from enum import IntEnum
 from typing import Any, ClassVar, Literal, TypedDict, cast
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic.alias_generators import to_camel
 
 from genkit._core._compat import StrEnum
@@ -118,18 +118,29 @@ def runtime_error_reason(details: object) -> RuntimeErrorReason | None:
 class GenkitRuntimeError(GenkitRuntimeErrorData):
     """Classified failure carried as data: ``response.error``, ``AgentOutput.error``, ``SessionSnapshot.error``.
 
-    Wire shape is the shared ``RuntimeError`` schema (status, message, details);
-    Go carries the same shape as ``*status.Error``.
+    Wire shape is the shared ``RuntimeError`` schema (status, message, details).
 
     Plain data, not an exception: generate returns failures as values, so
     ``raise res.error`` would make a returning call look like a throwing one.
     ``reason`` is set when the framework classified the failure, so callers
     can branch without parsing the message.
+
+    Fields can't be reassigned. ``details`` is the dict as received.
     """
 
-    # from_attributes: snapshot and agent-output fields are typed as this class,
-    # but stores and plugins may still hand over the generated wire class.
-    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, from_attributes=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
+
+    # A failure value isn't a set member or dict key, and dict details
+    # can't hash anyway.
+    __hash__ = None  # type: ignore[assignment]
+
+    @model_validator(mode='before')
+    @classmethod
+    def _from_wire(cls, value: object) -> object:
+        # A session store built against the generated class still loads.
+        if isinstance(value, GenkitRuntimeErrorData) and not isinstance(value, cls):
+            return value.model_dump(exclude_none=True)
+        return value
 
     @property
     def reason(self) -> RuntimeErrorReason | None:
