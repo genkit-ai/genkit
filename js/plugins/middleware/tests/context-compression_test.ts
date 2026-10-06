@@ -3975,7 +3975,7 @@ describe('contextCompression middleware', () => {
       (res.custom as Record<string, unknown> | undefined)
         ?.contextCompression as Record<string, unknown> | undefined;
 
-    // 1. Truncates content via toolResponses.maxChars and materializes via resolveCompressedHistory
+    // 1. Truncates content via toolResponses.maxChars into output, omits text content, and materializes via resolveCompressedHistory
     const largeText = 'X'.repeat(200_000);
     const truncRes = await runWithTool('ok', [{ text: largeText }], {
       maxInputTokens: 1000,
@@ -3984,20 +3984,19 @@ describe('contextCompression middleware', () => {
     });
     assert.strictEqual(getCc(truncRes)?.toolResponsesTruncated, 1);
     assert.strictEqual(getCc(truncRes)?.toolResponsesSafetyCapped, 0);
-    const expectedTrunc = `${'X'.repeat(98)}\n\n[Truncated 199902 characters]`;
-    assert.strictEqual(sentToolResp().output, 'ok');
-    assert.deepStrictEqual(sentToolResp().content, [{ text: expectedTrunc }]);
+    const expectedTrunc = `ok\n\n${'X'.repeat(98)}\n\n[Truncated 199902 characters]`;
+    assert.strictEqual(sentToolResp().output, expectedTrunc);
+    assert.strictEqual('content' in sentToolResp(), false);
     assert.strictEqual(
       truncRes.messages.find((m) => m.role === 'tool')!.content[0].toolResponse
         ?.content?.[0].text,
       largeText
     );
-    assert.strictEqual(
-      resolveCompressedHistory(truncRes.messages).find(
-        (m) => m.role === 'tool'
-      )!.content[0].toolResponse?.content?.[0].text,
-      expectedTrunc
-    );
+    const resolvedResp = resolveCompressedHistory(truncRes.messages).find(
+      (m) => m.role === 'tool'
+    )!.content[0].toolResponse!;
+    assert.strictEqual(resolvedResp.output, expectedTrunc);
+    assert.strictEqual('content' in resolvedResp, false);
 
     // 2. Enforces maxToolResponseChars safety cap even under maxInputTokens
     const capRes = await runWithTool(
@@ -4010,12 +4009,11 @@ describe('contextCompression middleware', () => {
       { maxInputTokens: 100_000, maxToolResponseChars: 500 }
     );
     assert.strictEqual(getCc(capRes)?.toolResponsesSafetyCapped, 1);
-    assert.deepStrictEqual(sentToolResp().content, [
-      { text: 'A'.repeat(100) },
-      {
-        text: `${'B'.repeat(398)}\n\n---\n\n[TRUNCATED: Response was 1602 chars but only first 500 are shown.]`,
-      },
-    ]);
+    assert.strictEqual(
+      sentToolResp().output,
+      `ok\n\n${'A'.repeat(100)}\n\n${'B'.repeat(398)}\n\n---\n\n[TRUNCATED: Response was 1602 chars but only first 500 are shown.]`
+    );
+    assert.strictEqual('content' in sentToolResp(), false);
 
     // 3. Strips content when output alone exhausts the limit
     await runWithTool('O'.repeat(200), [{ text: 'C'.repeat(300) }], {
@@ -4029,7 +4027,7 @@ describe('contextCompression middleware', () => {
     );
     assert.strictEqual('content' in sentToolResp(), false);
 
-    // 4. Uses DATA_URI_APPROX_CHARS for inline data: media and compact descriptor when truncated
+    // 4. Uses DATA_URI_APPROX_CHARS for inline data: media and folds compact descriptor into output when truncated
     const dataUrl = `data:image/png;base64,${'A'.repeat(500_000)}`;
     const mediaPart: Part = {
       media: { url: dataUrl, contentType: 'image/png' },
@@ -4045,11 +4043,13 @@ describe('contextCompression middleware', () => {
       toolResponses: { maxChars: 100, preserveRecent: 0 },
     });
     assert.strictEqual(getCc(mediaTruncRes)?.toolResponsesTruncated, 1);
-    assert.deepStrictEqual(sentToolResp().content, [
-      { text: '[media: image/png]\n\n[Truncated 1000 characters]' },
-    ]);
+    assert.strictEqual(
+      sentToolResp().output,
+      'ok\n\n[media: image/png]\n\n[Truncated 1000 characters]'
+    );
+    assert.strictEqual('content' in sentToolResp(), false);
 
-    // 5. Preserves structured part intact when it fits exactly within remaining budget (2 + 18 === 20)
+    // 5. Preserves structured non-text part in content when it fits exactly within remaining budget (2 + 18 === 20)
     await runWithTool(
       'ok',
       [{ data: { status: 'ready' } }, { text: 'X'.repeat(200) }],
@@ -4058,9 +4058,12 @@ describe('contextCompression middleware', () => {
         toolResponses: { maxChars: 20, preserveRecent: 0 },
       }
     );
+    assert.strictEqual(
+      sentToolResp().output,
+      'ok\n\n[Truncated 200 characters]'
+    );
     assert.deepStrictEqual(sentToolResp().content, [
       { data: { status: 'ready' } },
-      { text: '\n\n[Truncated 200 characters]' },
     ]);
   });
 });

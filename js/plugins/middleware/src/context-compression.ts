@@ -464,35 +464,23 @@ function materializeToolPart(part: Part): Part {
     };
   }
 
-  if (ccMeta.truncated && typeof ccMeta.maxChars === 'number') {
-    const truncatedToolResponse = truncateToolResponse(
+  if (
+    (ccMeta.truncated || ccMeta.capped) &&
+    typeof ccMeta.maxChars === 'number'
+  ) {
+    const mode = ccMeta.truncated ? 'truncated' : 'capped';
+    const updatedToolResponse = truncateToolResponse(
       part.toolResponse,
       ccMeta.maxChars,
-      'truncated'
+      mode
     );
-    if (!truncatedToolResponse) {
+    if (!updatedToolResponse) {
       return { ...part, metadata: withoutRawOutputFlag(part) };
     }
     return {
       ...part,
       metadata: withoutRawOutputFlag(part),
-      toolResponse: truncatedToolResponse,
-    };
-  }
-
-  if (ccMeta.capped && typeof ccMeta.maxChars === 'number') {
-    const cappedToolResponse = truncateToolResponse(
-      part.toolResponse,
-      ccMeta.maxChars,
-      'capped'
-    );
-    if (!cappedToolResponse) {
-      return { ...part, metadata: withoutRawOutputFlag(part) };
-    }
-    return {
-      ...part,
-      metadata: withoutRawOutputFlag(part),
-      toolResponse: cappedToolResponse,
+      toolResponse: updatedToolResponse,
     };
   }
 
@@ -779,15 +767,16 @@ function truncateToolResponse(
     const outputStr = stringifyOutput(toolResponse.output);
     if (outputStr.length <= limit) return null;
     const sliced = sliceCodePointSafe(outputStr, limit);
-    const marker = formatToolTruncationMarker(
-      mode,
-      outputStr.length,
-      sliced.length,
-      limit
-    );
     return {
       ...toolResponse,
-      output: sliced + marker,
+      output:
+        sliced +
+        formatToolTruncationMarker(
+          mode,
+          outputStr.length,
+          sliced.length,
+          limit
+        ),
     };
   }
 
@@ -799,31 +788,37 @@ function truncateToolResponse(
 
   if (totalChars <= limit) return null;
 
+  const { content, ...restToolResponse } = toolResponse;
   if (hasOutput && (outputStr.length > limit || contentTotalLen === 0)) {
     const sliced = sliceCodePointSafe(outputStr, limit);
-    const marker = formatToolTruncationMarker(
-      mode,
-      totalChars,
-      sliced.length,
-      limit
-    );
-    const { content: _content, ...restToolResponse } = toolResponse;
     return {
       ...restToolResponse,
-      output: sliced + marker,
+      output:
+        sliced +
+        formatToolTruncationMarker(mode, totalChars, sliced.length, limit),
     };
   }
 
   let remaining = limit - outputStr.length;
   let keptChars = outputStr.length;
-  const newContent: Part[] = [];
+  const outputSegments: string[] = outputStr ? [outputStr] : [];
+  const keptContent: Part[] = [];
 
-  for (let i = 0; i < toolResponse.content.length; i++) {
-    const cPart = toolResponse.content[i];
+  for (let i = 0; i < content.length; i++) {
+    const cPart = content[i];
     const partLen = contentLengths[i];
 
     if (partLen <= remaining) {
-      newContent.push(cPart);
+      if (
+        typeof cPart.text === 'string' ||
+        typeof cPart.reasoning === 'string'
+      ) {
+        const textVal =
+          typeof cPart.text === 'string' ? cPart.text : cPart.reasoning!;
+        if (textVal) outputSegments.push(textVal);
+      } else {
+        keptContent.push(cPart);
+      }
       remaining -= partLen;
       keptChars += partLen;
       continue;
@@ -832,59 +827,29 @@ function truncateToolResponse(
     if (cPart.media?.url) {
       const descriptor = formatMediaDescriptor(cPart.media);
       if (cPart.media.url.startsWith('data:')) {
-        const marker = formatToolTruncationMarker(
-          mode,
-          totalChars,
-          keptChars,
-          limit
-        );
-        newContent.push({
-          ...(cPart.metadata ? { metadata: cPart.metadata } : {}),
-          text: descriptor + marker,
-        });
+        outputSegments.push(descriptor);
       } else {
         const sliced = sliceCodePointSafe(descriptor, remaining);
         keptChars += sliced.length;
-        const marker = formatToolTruncationMarker(
-          mode,
-          totalChars,
-          keptChars,
-          limit
-        );
-        newContent.push({
-          ...(cPart.metadata ? { metadata: cPart.metadata } : {}),
-          text: sliced + marker,
-        });
+        if (sliced) outputSegments.push(sliced);
       }
       break;
     }
 
-    const partStr = stringifyToolContentPart(cPart);
-    const sliced = sliceCodePointSafe(partStr, remaining);
-    keptChars += sliced.length;
-    const marker = formatToolTruncationMarker(
-      mode,
-      totalChars,
-      keptChars,
-      limit
+    const sliced = sliceCodePointSafe(
+      stringifyToolContentPart(cPart),
+      remaining
     );
-
-    if (typeof cPart.text === 'string') {
-      newContent.push({ ...cPart, text: sliced + marker });
-    } else if (typeof cPart.reasoning === 'string') {
-      newContent.push({ ...cPart, reasoning: sliced + marker });
-    } else {
-      newContent.push({
-        ...(cPart.metadata ? { metadata: cPart.metadata } : {}),
-        text: sliced + marker,
-      });
-    }
+    keptChars += sliced.length;
+    if (sliced) outputSegments.push(sliced);
     break;
   }
 
+  const marker = formatToolTruncationMarker(mode, totalChars, keptChars, limit);
   return {
-    ...toolResponse,
-    content: newContent,
+    ...restToolResponse,
+    output: outputSegments.join('\n\n') + marker,
+    ...(keptContent.length > 0 ? { content: keptContent } : {}),
   };
 }
 
@@ -1529,25 +1494,17 @@ export const contextCompression: GenerateMiddleware<
           changed = true;
           if (mode === 'truncated') {
             truncated++;
-            return {
-              ...part,
-              metadata: withCompressionMetadata(part, {
-                truncated: true,
-                maxChars: limit,
-              }),
-              toolResponse: updatedToolResponse,
-            };
           } else {
             capped++;
-            return {
-              ...part,
-              metadata: withCompressionMetadata(part, {
-                capped: true,
-                maxChars: limit,
-              }),
-              toolResponse: updatedToolResponse,
-            };
           }
+          return {
+            ...part,
+            metadata: withCompressionMetadata(part, {
+              [mode]: true,
+              maxChars: limit,
+            }),
+            toolResponse: updatedToolResponse,
+          };
         });
 
         if (!changed) return msg;
