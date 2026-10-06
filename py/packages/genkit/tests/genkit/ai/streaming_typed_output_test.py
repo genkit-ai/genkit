@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator
 from pydantic.alias_generators import to_camel
 
 from genkit import Genkit, Message, ModelResponse, ModelResponseChunk, Part
+from genkit._ai._formats._types import FormatDef, Formatter, FormatterConfig
 from genkit._core._action import ActionRunContext
 from genkit._core._model import chunk_for_stream
 from genkit._core._typing import Role
@@ -579,3 +580,157 @@ async def test_define_prompt_stream_yields_typed_chunks() -> None:
     assert isinstance(response.output, Recipe)
     assert response.output.title == 'Chocolate Cake'
     assert response.output.steps == ['mix', 'bake']
+
+
+async def _stream_outputs(
+    chunk_texts: list[str],
+    final_text: str,
+    **generate_kwargs: Any,  # noqa: ANN401
+) -> tuple[list[Any], ModelResponse[Any]]:
+    """Stream ``chunk_texts`` then ``final_text`` and collect every ``chunk.output``."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.chunks = [[ModelResponseChunk(role=Role.MODEL, content=[Part.from_text(t)]) for t in chunk_texts]]
+    pm.responses = [ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text(final_text)]))]
+
+    stream_result = ai.generate_stream(prompt='hi', **generate_kwargs)
+    outputs: list[Any] = []
+    async for chunk in stream_result.stream:
+        outputs.append(chunk.output)
+    return outputs, await stream_result.response
+
+
+@pytest.mark.asyncio
+async def test_stream_chunk_output_is_partial_instance_of_schema_class() -> None:
+    """With output_schema=Recipe, an early chunk `{"title": "Fluffy Panc` is a Recipe.
+
+    Its title is the cut-short 'Fluffy Panc' and steps is None, with no validation.
+    """
+    outputs, _ = await _stream_outputs(
+        ['{"title": "Fluffy Panc'],
+        '{"title": "Fluffy Pancakes", "steps": ["mix"]}',
+        output_schema=Recipe,
+    )
+
+    assert isinstance(outputs[0], Recipe)
+    assert outputs[0].title == 'Fluffy Panc'
+    assert outputs[0].steps is None
+
+
+@pytest.mark.asyncio
+async def test_stream_chunk_output_is_none_before_object_starts() -> None:
+    """A chunk with prose and no `{` yet has `chunk.output is None`."""
+    outputs, _ = await _stream_outputs(
+        ['Sure, here is ', 'your recipe: {"title": "Pan'],
+        'Sure, here is your recipe: {"title": "Pancakes", "steps": []}',
+        output_schema=Recipe,
+    )
+
+    assert outputs[0] is None
+    assert isinstance(outputs[1], Recipe)
+    assert outputs[1].title == 'Pan'
+
+
+@pytest.mark.asyncio
+async def test_stream_chunk_output_skips_non_json_braces() -> None:
+    """Chunks `{1, 2}` then ` then {"a": 1}` give chunk.output None then {'a': 1}."""
+    outputs, _ = await _stream_outputs(['{1, 2}', ' then {"a": 1}'], '{1, 2} then {"a": 1}')
+
+    assert outputs == [None, {'a': 1}]
+
+
+@pytest.mark.asyncio
+async def test_stream_chunk_output_schema_post_init_error_is_none() -> None:
+    """generate_stream(output_schema=Recipe) whose model_post_init reads title.
+
+    A chunk missing title gives chunk.output is None and the loop keeps going.
+    """
+
+    class RecipeNeedsTitle(BaseModel):
+        title: str
+
+        def model_post_init(self, __context: Any) -> None:
+            _ = self.title.lower()
+
+    outputs, response = await _stream_outputs(
+        ['{"other": 1', ', "title": "X"}'],
+        '{"other": 1, "title": "X"}',
+        output_schema=RecipeNeedsTitle,
+    )
+
+    assert outputs[0] is None
+    assert isinstance(outputs[1], RecipeNeedsTitle)
+    assert outputs[1].title == 'X'
+    assert response.output == RecipeNeedsTitle(title='X')
+    assert response.error is None
+
+
+@pytest.mark.asyncio
+async def test_stream_chunk_output_custom_chunk_parser_error_is_none() -> None:
+    """A custom format whose chunk parser raises gives `chunk.output is None` instead of ending the stream."""
+
+    class BoomChunks(FormatDef):
+        def __init__(self) -> None:
+            super().__init__('boom-chunks', FormatterConfig(format='json'))
+
+        def handle(self, schema: dict[str, object] | None) -> Formatter[object, object]:
+            def chunk_parser(_chunk: ModelResponseChunk) -> object:
+                raise TypeError('chunk parser exploded')
+
+            return Formatter(message_parser=lambda msg: msg.text, chunk_parser=chunk_parser, instructions=None)
+
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    ai.define_format(BoomChunks())
+    pm.chunks = [[ModelResponseChunk(role=Role.MODEL, content=[Part.from_text(t)]) for t in ('a', 'b')]]
+    pm.responses = [ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ab')]))]
+
+    stream_result = ai.generate_stream(prompt='hi', output_format='boom-chunks', output_instructions=False)
+    outputs = [chunk.output async for chunk in stream_result.stream]
+
+    assert outputs == [None, None]
+    assert (await stream_result.response).text == 'ab'
+
+
+@pytest.mark.asyncio
+async def test_stream_final_output_is_validated_instance() -> None:
+    """After partial chunks, `(await stream.response).output` is a fully validated Recipe."""
+    outputs, response = await _stream_outputs(
+        ['{"title": "Fluffy Panc', 'akes", "steps": ["mix"]}'],
+        '{"title": "Fluffy Pancakes", "steps": ["mix"]}',
+        output_schema=Recipe,
+    )
+
+    assert outputs[0].steps is None
+    assert response.output == Recipe.model_validate({'title': 'Fluffy Pancakes', 'steps': ['mix']})
+    assert response.error is None
+
+
+@pytest.mark.asyncio
+async def test_stream_final_output_missing_field_is_none_after_partial_chunks() -> None:
+    """Chunks showed a Recipe with steps None, but a final reply that never sends steps gives `output is None`."""
+    outputs, response = await _stream_outputs(
+        ['{"title": "Fluffy Pancakes"}'],
+        '{"title": "Fluffy Pancakes"}',
+        output_schema=Recipe,
+    )
+
+    assert isinstance(outputs[0], Recipe)
+    assert outputs[0].steps is None
+    assert response.output is None
+    assert response.error is not None
+
+
+@pytest.mark.asyncio
+async def test_stream_cut_off_final_output_is_none() -> None:
+    """A stream that ends on a cut-off object gives partial chunk outputs, but the final `output is None`."""
+    outputs, response = await _stream_outputs(
+        ['{"title": "Fluffy Pancakes", "steps": ["mi'],
+        '{"title": "Fluffy Pancakes", "steps": ["mi',
+        output_schema=Recipe,
+    )
+
+    assert isinstance(outputs[0], Recipe)
+    assert outputs[0].steps == ['mi']
+    assert response.output is None
+    assert response.error is not None

@@ -5,6 +5,8 @@
 
 """Tests for the JSON format."""
 
+import pytest
+
 from genkit import Message, ModelResponseChunk, Part
 from genkit._ai._formats import JsonFormat
 from genkit._core._model import chunk_for_stream
@@ -82,13 +84,13 @@ class TestJsonFormatMessage:
         )
         assert result == {'id': 1}
 
-    def test_parses_partial_json_message(self) -> None:
-        """Test parsing a message with partial/incomplete JSON."""
+    def test_json_format_cut_off_message_raises(self) -> None:
+        """A finished message cut off at `{"foo": "bar"` is not JSON, so the json format raises."""
         json_fmt = JsonFormat()
         fmt = json_fmt.handle({'type': 'object'})
 
-        result = fmt.parse_message(Message(role='user', content=[Part.from_text('{"foo": "bar"')]))
-        assert result == {'foo': 'bar'}
+        with pytest.raises(ValueError):
+            fmt.parse_message(Message(role='user', content=[Part.from_text('{"foo": "bar"')]))
 
     def test_parses_complex_nested_json(self) -> None:
         """Test parsing complex nested JSON across multiple parts."""

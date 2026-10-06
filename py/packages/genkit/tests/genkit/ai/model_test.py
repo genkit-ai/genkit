@@ -54,7 +54,20 @@ def test_response_wrapper_text() -> None:
 
 
 def test_response_wrapper_output() -> None:
-    """Test output property of ModelResponse."""
+    """A finished reply split across parts as `{"foo":` + `"bar"}` reads back as the dict."""
+    wrapper = ModelResponse(
+        message=Message(
+            role='model',
+            content=[Part.from_text('{"foo":'), Part.from_text('"bar"}')],
+        ),
+    )
+    wrapper.request = ModelRequest(messages=[])
+
+    assert wrapper.output == {'foo': 'bar'}
+
+
+def test_response_output_cut_off_reply_is_none() -> None:
+    """A finished reply cut off at `{"foo": "bar` gives `output is None`."""
     wrapper = ModelResponse(
         message=Message(
             role='model',
@@ -63,7 +76,7 @@ def test_response_wrapper_output() -> None:
     )
     wrapper.request = ModelRequest(messages=[])
 
-    assert wrapper.output == {'foo': 'bar'}
+    assert wrapper.output is None
 
 
 def test_response_wrapper_messages() -> None:

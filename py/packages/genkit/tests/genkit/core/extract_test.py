@@ -21,7 +21,12 @@ from typing import Any
 
 import pytest
 
-from genkit._core._extract_json import extract_json, extract_json_array_from_text, parse_partial_json
+from genkit._core._extract_json import (
+    extract_json,
+    extract_json_array_from_text,
+    extract_partial_json,
+    parse_partial_json,
+)
 
 # TODO(#4356): consider extracting these tests into shared yaml spec. They are already
 # duplicated in js/ai/tests/extract_test.ts
@@ -202,3 +207,29 @@ def test_parse_partial_json(name: str, input_str: str, expected_data: dict[str, 
     """Test if it fixes simple malformed json string."""
     result = parse_partial_json(input_str)
     assert result == expected_data['expected']
+
+
+def test_extract_json_cut_off_object_raises() -> None:
+    """extract_json('{"a": 1') raises ValueError because the object is not complete."""
+    with pytest.raises(ValueError):
+        extract_json('{"a": 1')
+
+
+def test_extract_json_cut_off_object_no_throw_returns_none() -> None:
+    """extract_json('{"a": 1', throw_on_bad_json=False) returns None."""
+    assert extract_json('{"a": 1', throw_on_bad_json=False) is None
+
+
+def test_extract_partial_json_cut_off_object_returns_partial() -> None:
+    """extract_partial_json('{"a": 1') returns {'a': 1} for a streaming cut-off."""
+    assert extract_partial_json('{"a": 1') == {'a': 1}
+
+
+def test_extract_json_balanced_non_json_no_throw_returns_none() -> None:
+    """extract_json('{1, 2}', throw_on_bad_json=False) returns None."""
+    assert extract_json('{1, 2}', throw_on_bad_json=False) is None
+
+
+def test_extract_json_skips_non_json_braces_and_returns_later_object() -> None:
+    """extract_json('{1, 2} then {"a": 1}') returns {'a': 1}."""
+    assert extract_json('{1, 2} then {"a": 1}') == {'a': 1}
