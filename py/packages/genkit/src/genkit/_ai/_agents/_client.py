@@ -196,22 +196,21 @@ class AgentInterrupt(Generic[InputT, OutputT]):
         self,
         *,
         resumed_metadata: dict[str, Any] | None = None,
-        replace_input: Any | None = None,  # noqa: ANN401
     ) -> Part:
         """Tool request for ``chat.resume(restart=[...])``.
 
         The tool sees a resume (``ctx.is_resumed()`` is true). Pass
         ``resumed_metadata`` when it needs the approval payload.
+
+        The request input stays the one the model asked for — a client
+        cannot re-run a tool with arguments the model never sent.
         """
         part = Part.from_tool_request(
             name=self.name,
             ref=self.ref,
             input=self.input,
         )
-        return part.restart(
-            resumed_metadata=resumed_metadata,
-            replace_input=replace_input,
-        )
+        return part.restart(resumed_metadata=resumed_metadata)
 
 
 @dataclass

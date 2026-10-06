@@ -81,7 +81,6 @@ from genkit._core._model import (
     Part,
     Resume,
     SessionSnapshot,
-    reject_unanswered_interrupts,
 )
 from genkit._core._registry import Registry
 from genkit._core._telemetry._instrumentation import set_custom_metadata_attributes
@@ -483,7 +482,6 @@ def validate_resume_against_history(resume: Resume, history: list[Message]) -> N
     can appear in earlier, stale turns. Matching from the end lands on the live
     request instead of a superseded one that shares the same handle.
     """
-    reject_unanswered_interrupts(resume)
     tool_requests: list[ToolRequest] = []
     for msg in reversed(history):
         if msg.role != Role.MODEL:

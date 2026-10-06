@@ -28,12 +28,18 @@ import pytest
 
 from genkit import Part
 from genkit._ai._agents._base import validate_resume_against_history
+from genkit._ai._tools import Interrupt
 from genkit._core._error import GenkitError
-from genkit._core._model import Message, Resume
+from genkit._core._model import AgentInit, AgentInput, Message, ModelResponse, Resume
 from genkit._core._typing import (
+    AgentFinishReason,
+    FinishReason,
     Role,
     ToolRequest,
 )
+from genkit.exp import Genkit
+from genkit.exp.agent import InMemorySessionStore
+from genkit.testing import define_scripted_model
 
 
 def model_message_with_tools(*requests: ToolRequest) -> Message:
@@ -110,15 +116,6 @@ def test_ref_mismatch_raises() -> None:
     assert exc.value.status == 'INVALID_ARGUMENT'
 
 
-def test_paused_restart_part_raises() -> None:
-    """A still-paused part on resume.restart is rejected before history matching."""
-    paused = Part.from_tool_request(name='book', ref='1', input={'seat': '3A'}, metadata={'interrupt': True})
-    history = [model_message_with_tools(ToolRequest(name='book', ref='1', input={'seat': '3A'}))]
-    with pytest.raises(GenkitError, match='still an interrupt') as exc:
-        validate_resume_against_history(Resume(restart=[paused]), history)
-    assert exc.value.status == 'INVALID_ARGUMENT'
-
-
 def test_tool_request_in_non_model_message_does_not_count() -> None:
     # A tool request only counts if the *model* asked for it; a matching name in a
     # user message must not satisfy the resume.
@@ -131,3 +128,50 @@ def test_tool_request_in_non_model_message_does_not_count() -> None:
     with pytest.raises(GenkitError) as exc:
         validate_resume_against_history(Resume(respond=[respond('book', ref='1')]), history)
     assert exc.value.status == 'INVALID_ARGUMENT'
+
+
+@pytest.mark.asyncio
+async def test_agent_resume_with_paused_part_is_invalid_argument() -> None:
+    """AgentInput(resume=Resume(restart=[paused])) is INVALID_ARGUMENT; the tool does not run again."""
+    ai = Genkit()
+    pm, _ = define_scripted_model(ai)
+    calls: list[str] = []
+
+    @ai.tool(name='pay')
+    async def pay(_: dict) -> str:  # noqa: ARG001
+        calls.append('run')
+        raise Interrupt({'hold': True})
+
+    agent = ai.define_agent(
+        name='payAgent',
+        model='scriptedModel',
+        tools=['pay'],
+        store=InMemorySessionStore(),
+    )
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(
+                role=Role.MODEL,
+                content=[Part.from_tool_request(name='pay', ref='r1', input={})],
+            ),
+        )
+    )
+    first = await agent.chat().send('hi')
+    assert first.finish_reason == AgentFinishReason.INTERRUPTED
+    assert calls == ['run']
+    paused = Part.from_tool_request(name='pay', ref='r1', input={}, metadata={'interrupt': True})
+
+    conn = await agent.stream_bidi(AgentInit(snapshot_id=first.snapshot_id))
+    try:
+        await conn.send(AgentInput(resume=Resume(restart=[paused])))
+        await conn.close()
+        out = await conn.output()
+    finally:
+        await conn.close()
+
+    assert out.finish_reason == AgentFinishReason.FAILED
+    assert out.error is not None
+    assert out.error.status == 'INVALID_ARGUMENT'
+    assert 'still an interrupt' in (out.error.message or '')
+    assert calls == ['run']

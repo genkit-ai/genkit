@@ -1566,61 +1566,14 @@ async def test_generate_action_resume_rejects_paused_part() -> None:
 
 
 @pytest.mark.asyncio
-async def test_part_respond_on_resume_respond_skips_the_tool() -> None:
-    """interrupt.respond(...) on resume_respond injects output without running the tool again."""
+async def test_resume_respond_with_paused_part_is_invalid_argument() -> None:
+    """ai.generate(resume_respond=paused) is INVALID_ARGUMENT naming Part.respond; the model is not called."""
     ai = Genkit()
     pm, _ = define_scripted_model(ai)
-    calls: list[str] = []
 
-    @ai.tool(name='pay')
-    async def pay(_: dict) -> str:
-        calls.append('run')
-        raise Interrupt({'hold': True})
-
-    pm.responses.append(
-        ModelResponse(
-            finish_reason=FinishReason.STOP,
-            message=Message.model_validate({
-                'role': 'model',
-                'content': [{'toolRequest': {'ref': 'p1', 'name': 'pay', 'input': {}}}],
-            }),
-        )
-    )
-    pm.responses.append(
-        ModelResponse(
-            finish_reason=FinishReason.STOP,
-            message=Message.model_validate({'role': 'model', 'content': [{'text': 'declined'}]}),
-        )
-    )
-    first = await ai.generate(model='scriptedModel', prompt='hi', tools=['pay'])
-    second = await ai.generate(
-        model='scriptedModel',
-        messages=list(first.messages),
-        tools=['pay'],
-        resume_respond=first.interrupts[0].respond({'status': 'declined'}),
-    )
-    assert second.finish_reason == FinishReason.STOP
-    assert calls == ['run']
-    assert second.text == 'declined'
-
-
-@pytest.mark.asyncio
-async def test_resume_respond_and_restart_together() -> None:
-    """Flat kwargs can answer one pause and re-run another in the same generate."""
-    ai = Genkit()
-    pm, _ = define_scripted_model(ai)
-    transfer_calls: list[str] = []
-
-    @ai.tool(name='refund')
-    async def refund(_: dict) -> str:
-        raise Interrupt({'ask': 'refund'})
-
-    @ai.tool(name='transfer')
-    async def transfer(inp: dict) -> str:
-        transfer_calls.append('run')
-        if not inp.get('ok'):
-            raise Interrupt({'ask': 'transfer'})
-        return 'sent'
+    @ai.tool(name='intr')
+    async def intr(_: dict) -> str:  # noqa: ARG001
+        raise Interrupt({'reason': 'x'})
 
     pm.responses.append(
         ModelResponse(
@@ -1628,28 +1581,21 @@ async def test_resume_respond_and_restart_together() -> None:
             message=Message.model_validate({
                 'role': 'model',
                 'content': [
-                    {'toolRequest': {'ref': 'r1', 'name': 'refund', 'input': {}}},
-                    {'toolRequest': {'ref': 't1', 'name': 'transfer', 'input': {}}},
+                    {'text': 'call'},
+                    {'toolRequest': {'ref': 'r1', 'name': 'intr', 'input': {}}},
                 ],
             }),
         )
     )
-    pm.responses.append(
-        ModelResponse(
-            finish_reason=FinishReason.STOP,
-            message=Message.model_validate({'role': 'model', 'content': [{'text': 'mixed'}]}),
-        )
-    )
-    first = await ai.generate(model='scriptedModel', prompt='hi', tools=['refund', 'transfer'])
+    first = await ai.generate(model='scriptedModel', prompt='hi', tools=['intr'])
     assert first.finish_reason == FinishReason.INTERRUPTED
-    assert [p.tool_request.name for p in first.interrupts if p.tool_request] == ['refund', 'transfer']
-    second = await ai.generate(
-        model='scriptedModel',
-        messages=list(first.messages),
-        tools=['refund', 'transfer'],
-        resume_respond=first.interrupts[0].respond({'status': 'declined'}),
-        resume_restart=first.interrupts[1].restart(replace_input={'ok': True}),
-    )
-    assert second.finish_reason == FinishReason.STOP
-    assert transfer_calls == ['run', 'run']
-    assert second.text == 'mixed'
+    assert pm.request_count == 1
+    with pytest.raises(GenkitError, match='Part.respond') as exc:
+        await ai.generate(
+            model='scriptedModel',
+            messages=list(first.messages),
+            tools=['intr'],
+            resume_respond=first.interrupts[0],
+        )
+    assert exc.value.status == 'INVALID_ARGUMENT'
+    assert pm.request_count == 1

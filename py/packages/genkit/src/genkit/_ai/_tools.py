@@ -29,7 +29,7 @@ from genkit._core._action import Action, ActionKind, ActionRunContext, resolve_t
 from genkit._core._error import GenkitError, Interrupt, RuntimeErrorReason
 from genkit._core._logger import get_logger
 from genkit._core._middleware import GenerateMiddlewareContext
-from genkit._core._model import MultipartToolResponse, OutputT, Part, as_part
+from genkit._core._model import MultipartToolResponse, OutputT, Part, as_part, as_resumed
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
 from genkit._core._telemetry._instrumentation import set_custom_metadata_attributes
@@ -325,16 +325,7 @@ def _resume_context_from_tool_request_part(
 ) -> tuple[dict[str, Any] | None, Any | None]:
     """Read resume/restart fields from a tool request part's metadata."""
     meta = tool_request_part.metadata or {}
-    raw_resumed = meta.get('resumed')
-    if raw_resumed is True:
-        resumed_meta: dict[str, Any] | None = {}
-    elif isinstance(raw_resumed, dict):
-        resumed_meta = raw_resumed
-    else:
-        resumed_meta = None
-
-    original_input = meta.get('replacedInput')
-    return resumed_meta, original_input
+    return as_resumed(tool_request_part), meta.get('replacedInput')
 
 
 async def run_tool_request(
