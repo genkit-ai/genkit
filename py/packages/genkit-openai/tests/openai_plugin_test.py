@@ -25,8 +25,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
-from genkit_openai.models.model_info import SUPPORTED_OPENAI_MODELS
-from genkit_openai.openai_plugin import OpenAI, openai_model
+from genkit_openai._models._model_info import SUPPORTED_OPENAI_MODELS
+from genkit_openai._openai_plugin import OpenAI, openai_model
 from openai import APIStatusError, APITimeoutError
 from openai.types import Model
 from openai.types.chat import ChatCompletion

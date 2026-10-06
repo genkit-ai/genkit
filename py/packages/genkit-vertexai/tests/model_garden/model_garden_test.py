@@ -21,7 +21,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
-from genkit_anthropic.config import AnthropicConfig
+from genkit_anthropic import AnthropicConfig
 from genkit_vertexai.model_garden import ModelGarden, ModelGardenPlugin
 from genkit_vertexai.model_garden.anthropic import AnthropicModelGarden
 from genkit_vertexai.model_garden.model_garden import ModelGardenModel
