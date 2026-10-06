@@ -29,7 +29,7 @@ import (
 // an extra field cannot replace: a different model or questions would
 // detach the request from the model that was called and the questions that
 // were compiled from the output type.
-var reservedFields = []string{"model", "state", "questions", "images"}
+var reservedFields = []string{"model", "state", "questions", "images", "audio", "videos"}
 
 // Config is the per-request configuration of a decision model.
 // go/plugins/systemone/exp exports it as Config.
@@ -44,8 +44,8 @@ type Config struct {
 	// Extra is merged into the top-level fields of the request body. It
 	// reaches fields this package does not model, such as a gateway's
 	// session_id or trace. It cannot name a field the request builds
-	// itself: model, state, questions, or images.
-	Extra map[string]any `json:"extra,omitempty" jsonschema_description:"Extra top-level request fields, such as a gateway's session_id. Cannot replace model, state, questions, or images."`
+	// itself: model, state, questions, images, audio, or videos.
+	Extra map[string]any `json:"extra,omitempty" jsonschema_description:"Extra top-level request fields, such as a gateway's session_id. Cannot replace model, state, questions, images, audio, or videos."`
 }
 
 // NewModel builds the model action for one model ID under its registered
@@ -55,11 +55,12 @@ type Config struct {
 // schema untouched, and claims the system role and context so the loop
 // does not rewrite either into instruction text that would land in the
 // state.
-func NewModel(c *Client, name, id, label string) *ai.ModelAction {
-	m := &model{client: c, id: id}
+func NewModel(c *Client, name, id string, spec Spec) *ai.ModelAction {
+	m := &model{client: c, id: id, reads: spec.Reads}
 	return ai.NewModelAction(name, &ai.ModelOptions{
-		Label: label,
+		Label: spec.Label,
 		Supports: &ai.ModelSupports{
+			Media:       spec.Reads.Images || spec.Reads.Audio || spec.Reads.Video,
 			Multiturn:   true,
 			SystemRole:  true,
 			Context:     true,
@@ -70,10 +71,20 @@ func NewModel(c *Client, name, id, label string) *ai.ModelAction {
 	}, m.generate)
 }
 
+// Spec describes one model to [NewModel].
+type Spec struct {
+	// Label names the model in the Dev UI.
+	Label string
+	// Reads is the media requests may carry. A kind the model does not
+	// read is refused before a request is sent.
+	Reads Reads
+}
+
 // model is one resolved model.
 type model struct {
 	client *Client
 	id     string
+	reads  Reads
 }
 
 // generate answers the questions the request's output schema encodes.
@@ -104,12 +115,12 @@ func (m *model) generate(ctx context.Context, req *ai.ModelRequest, cfg *Config,
 	if err != nil {
 		return nil, err
 	}
-	state, err := BuildState(req, opts.StateJSON)
+	state, media, err := BuildState(req, opts.StateJSON, m.reads)
 	if err != nil {
 		return nil, err
 	}
 
-	resp, err := m.client.Decide(ctx, m.id, &Request{State: state, Questions: questions, Extra: opts.Extra})
+	resp, err := m.client.Decide(ctx, m.id, &Request{State: state, Media: media, Questions: questions, Extra: opts.Extra})
 	if err != nil {
 		return nil, err
 	}

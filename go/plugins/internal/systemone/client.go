@@ -61,11 +61,16 @@ type Endpoint struct {
 
 // Request is the native request body, before the endpoint's envelope.
 type Request struct {
-	State     any
+	State any
+	// Media is sent in the images, audio, and videos fields, which the
+	// servers place before the state. Each field is sent only when it has
+	// media, since a server that does not read a kind can refuse its field.
+	Media     Media
 	Questions map[string]Question
 	// Extra is merged into the top-level fields, which is the escape hatch
 	// to a field this package does not model. It cannot replace a field
-	// the request builds itself: model, state, questions, or images.
+	// the request builds itself: model, state, questions, images, audio, or
+	// videos.
 	Extra map[string]any
 }
 
@@ -73,12 +78,17 @@ type Request struct {
 func (r *Request) Body(model string) map[string]any {
 	body := maps.Clone(r.Extra)
 	if body == nil {
-		body = make(map[string]any, 3)
+		body = make(map[string]any, 4)
 	}
 	for _, field := range reservedFields {
 		delete(body, field)
 	}
 	body["model"], body["state"], body["questions"] = model, r.State, r.Questions
+	for field, media := range map[string][]string{"images": r.Media.Images, "audio": r.Media.Audio, "videos": r.Media.Videos} {
+		if len(media) > 0 {
+			body[field] = media
+		}
+	}
 	return body
 }
 
