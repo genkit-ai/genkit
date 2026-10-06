@@ -28,8 +28,15 @@ from django.test import AsyncClient
 from django.test.utils import override_settings
 from django.urls import path
 from genkit_django import genkit_django_handler
+from pydantic import BaseModel
 
 from genkit import ActionRunContext, Genkit, GenkitError, PublicError, RequestData
+from genkit.plugin_api import wrap_http_error
+
+
+class Receipt(BaseModel):
+    table: int
+    note: str | None = None
 
 
 def _assert_is_error_response(parsed: dict) -> None:
@@ -110,14 +117,26 @@ def _build_views() -> dict[str, Any]:
     async def greet(name: str = 'world') -> str:
         return f'hello {name}'
 
+    @genkit_django_handler(ai)
+    @ai.flow()
+    async def close_tab(table: int) -> Receipt:
+        return {'table': table}  # type: ignore[return-value]
+
+    @genkit_django_handler(ai)
+    @ai.flow()
+    async def raise_provider(_: str) -> None:
+        raise wrap_http_error(RuntimeError('API key not valid'), status_code=401)
+
     return {
         'greet': greet,
+        'close_tab': close_tab,
         'say_hi': say_hi,
         'raise_error': raise_error,
         'raise_invalid': raise_invalid,
         'raise_public': raise_public,
         'echo_request': echo_request,
         'gated': gated,
+        'raise_provider': raise_provider,
     }
 
 
@@ -137,6 +156,8 @@ def urlconf(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         path('echo_request', views['echo_request']),
         path('gated', views['gated']),
         path('greet', views['greet']),
+        path('close_tab', views['close_tab']),
+        path('provider_flow', views['raise_provider']),
     ]
     monkeypatch.setitem(sys.modules, 'genkit_django_tests_urls', module)
 
@@ -360,3 +381,44 @@ async def test_django_flow_with_default_and_null_data_uses_python_default(urlcon
 
     assert response.status_code == 200
     assert json.loads(response.content) == {'result': 'hello world'}
+
+
+@pytest.mark.asyncio
+async def test_django_flow_returning_partial_dict_for_model_sends_defaults(urlconf: None) -> None:  # noqa: ARG001
+    """POST to a `-> Receipt` flow that returns `{'table': 4}` includes `note: null`."""
+    client = AsyncClient()
+    response = await client.post('/close_tab', data=json.dumps({'data': 4}), content_type='application/json')
+
+    assert response.status_code == 200
+    assert json.loads(response.content) == {'result': {'table': 4, 'note': None}}
+
+
+@pytest.mark.asyncio
+async def test_django_provider_401_returns_500_internal_error(urlconf: None) -> None:  # noqa: ARG001
+    """A Django flow whose model call fails with a provider 401 is 500 Internal Error."""
+    client = AsyncClient()
+    response = await client.post(
+        '/provider_flow',
+        data=json.dumps({'data': 'hi'}),
+        content_type='application/json',
+    )
+
+    assert response.status_code == 500
+    assert json.loads(response.content) == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert b'API key not valid' not in response.content
+
+
+@pytest.mark.asyncio
+async def test_django_stream_provider_401_sends_sse_internal_error(urlconf: None) -> None:  # noqa: ARG001
+    """A streamed Django flow whose model call fails with a provider 401 ends with Internal Error."""
+    client = AsyncClient()
+    response = await client.post(
+        '/provider_flow',
+        data=json.dumps({'data': 'hi'}),
+        content_type='application/json',
+        headers={'accept': 'text/event-stream'},
+    )
+    chunks = [chunk async for chunk in response.streaming_content]
+    error = _sse_error_event(chunks)
+    assert error == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert b'API key not valid' not in b''.join(chunks)

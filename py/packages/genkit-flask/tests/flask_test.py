@@ -22,8 +22,10 @@ from typing import Any
 
 from flask import Flask
 from genkit_flask import genkit_flask_handler
+from pydantic import BaseModel
 
 from genkit import ActionRunContext, Genkit, GenkitError, PublicError, RequestData
+from genkit.plugin_api import wrap_http_error
 
 
 def sse_error_event(chunks: list[bytes]) -> dict:
@@ -248,6 +250,67 @@ def test_flask_missing_data_wrapper_returns_the_wrap_message() -> None:
     }
 
 
+def test_flask_malformed_json_body_returns_400_valid_json_message() -> None:
+    """A Flask POST that is not JSON is 400 request body must be valid JSON."""
+    response = (
+        create_app()
+        .test_client()
+        .post(
+            '/chat',
+            data='{bad',
+            content_type='application/json',
+        )
+    )
+
+    assert response.status_code == 400
+    assert json.loads(response.data) == {
+        'message': 'request body must be valid JSON',
+        'status': 'INVALID_ARGUMENT',
+    }
+
+
+def test_flask_provider_401_returns_500_internal_error() -> None:
+    """A Flask flow whose model call fails with a provider 401 is 500 Internal Error."""
+    ai = Genkit()
+    app = Flask(__name__)
+    app.config.update({'TESTING': True})
+
+    @app.post('/ask')
+    @genkit_flask_handler(ai)
+    @ai.flow()
+    async def ask(_: str) -> str:
+        raise wrap_http_error(RuntimeError('API key not valid'), status_code=401)
+
+    response = app.test_client().post('/ask', json={'data': 'hi'})
+
+    assert response.status_code == 500
+    assert json.loads(response.data) == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert b'API key not valid' not in response.data
+
+
+def test_flask_stream_provider_401_sends_sse_internal_error() -> None:
+    """A streamed Flask flow whose model call fails with a provider 401 ends with Internal Error."""
+    ai = Genkit()
+    app = Flask(__name__)
+    app.config.update({'TESTING': True})
+
+    @app.post('/ask')
+    @genkit_flask_handler(ai)
+    @ai.flow()
+    async def ask(_: str) -> str:
+        raise wrap_http_error(RuntimeError('API key not valid'), status_code=401)
+
+    response = app.test_client().post(
+        '/ask',
+        json={'data': 'hi'},
+        headers={'accept': 'text/event-stream'},
+    )
+
+    chunks = list(response.response)
+    assert sse_error_event(chunks) == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert b'API key not valid' not in b''.join(chunks)
+
+
 def test_flask_context_provider_public_error_returns_its_status_and_message() -> None:
     """A PublicError from Flask's context_provider is mapped like a flow failure."""
     ai = Genkit()
@@ -285,3 +348,26 @@ def test_flask_flow_with_default_and_null_data_uses_python_default() -> None:
 
     assert response.status_code == 200
     assert response.json == {'result': 'hello world'}
+
+
+class Receipt(BaseModel):
+    table: int
+    note: str | None = None
+
+
+def test_flask_flow_returning_partial_dict_for_model_sends_defaults() -> None:
+    """POST to a `-> Receipt` flow that returns `{'table': 4}` includes `note: null`."""
+    ai = Genkit()
+    app = Flask(__name__)
+    app.config.update({'TESTING': True})
+
+    @app.post('/close_tab')
+    @genkit_flask_handler(ai)
+    @ai.flow()
+    async def close_tab(table: int) -> Receipt:
+        return {'table': table}  # type: ignore[return-value]
+
+    response = app.test_client().post('/close_tab', json={'data': 4})
+
+    assert response.status_code == 200
+    assert response.json == {'result': {'table': 4, 'note': None}}

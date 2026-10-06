@@ -33,6 +33,7 @@ from anthropic import (
 from genkit_anthropic._models import AnthropicModel
 
 from genkit import GenkitError, Message, Part, Role
+from genkit._core._error import get_callable_json, get_http_status
 from genkit.model import ModelRequest
 from genkit.plugin_api import StatusName
 
@@ -94,6 +95,22 @@ async def test_generate_maps_anthropic_status_errors(status_code: int, expected_
     assert error.cause is api_error
     assert error.__cause__ is api_error
     assert error.response_metadata is None
+
+
+@pytest.mark.asyncio
+async def test_anthropic_api_error_is_served_as_internal_error() -> None:
+    """An Anthropic 401 stays UNAUTHENTICATED in-process and serves as 500 Internal Error."""
+    api_error = _status_error(401)
+    model = _model_failing_with(api_error)
+
+    with pytest.raises(GenkitError) as exc_info:
+        await model.generate(_request())
+
+    error = exc_info.value
+    assert error.status == 'UNAUTHENTICATED'
+    assert get_callable_json(error) == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert get_http_status(error) == 500
+    assert _ERROR_MESSAGE not in str(get_callable_json(error))
 
 
 @pytest.mark.asyncio

@@ -24,10 +24,11 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from genkit import GenkitError
+from genkit._ai._generate import StreamingCallbackError
 from genkit._core._action import Action, ActionKind
 from genkit._core._model import ModelResponse
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
-from genkit_middleware._statuses import TRANSIENT_STATUSES, status_matches
+from genkit_middleware._statuses import TRANSIENT_STATUSES
 
 # Everything Retry would retry, plus failures another model may not have:
 # this model doesn't exist or can't do what the request asks.
@@ -93,6 +94,9 @@ class Fallback(BaseMiddleware[FallbackConfig]):
         raise last_error
 
     def _should_fall_back(self, exc: Exception) -> bool:
-        # A raw exception has no status to check, so it propagates instead of
-        # sending the request on to another billed model.
-        return status_matches(exc, self.config.statuses, unclassified=False)
+        # The caller's own on_chunk failure never switches models. A raw
+        # exception has no status, so it also stays on this model. Only a
+        # listed GenkitError status sends the request on.
+        if isinstance(exc, StreamingCallbackError):
+            return False
+        return isinstance(exc, GenkitError) and exc.status in self.config.statuses

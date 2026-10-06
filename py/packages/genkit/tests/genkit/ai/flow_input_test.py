@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from genkit import ActionRunContext, Genkit, GenkitError
 from genkit._core._reflection import create_reflection_asgi_app
@@ -288,3 +288,71 @@ async def test_dev_ui_run_with_null_input_uses_python_default() -> None:
 
     assert response.status_code == 200
     assert response.json()['result'] == 'hello world'
+
+
+class Secret(BaseModel):
+    model_config = ConfigDict(hide_input_in_errors=True)
+    password: int
+
+
+class SixFields(BaseModel):
+    a: int
+    b: int
+    c: int
+    d: int
+    e: int
+    f: int
+
+
+@pytest.mark.asyncio
+async def test_flow_input_with_hidden_input_model_omits_value_from_error() -> None:
+    """A hidden-input model does not print the rejected password in `str(e)`."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def login(secret: Secret) -> str:
+        return 'ok'
+
+    with pytest.raises(GenkitError) as exc:
+        await login({'password': 'hunter2-secret'})  # type: ignore[arg-type]
+
+    assert 'hunter2' not in str(exc.value)
+    assert 'got ' not in str(exc.value)
+    assert 'Input should be a valid integer' in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_flow_input_with_six_bad_fields_lists_all_six_in_details() -> None:
+    """Six bad fields fill `details.errors` with all six; `str(e)` still caps at three."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def six(fields: SixFields) -> str:
+        return 'ok'
+
+    with pytest.raises(GenkitError) as exc:
+        await six({k: 'x' for k in 'abcdef'})  # type: ignore[arg-type]
+
+    locs = [tuple(err['loc']) for err in exc.value.details['errors']]
+    assert locs == [('a',), ('b',), ('c',), ('d',), ('e',), ('f',)]
+    assert str(exc.value).endswith('; and 3 more')
+
+
+@pytest.mark.asyncio
+async def test_devui_run_with_bad_input_returns_all_errors_in_details() -> None:
+    """Dev UI runAction with six bad fields returns all six in `details.errors`."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def six(fields: SixFields) -> str:
+        return 'ok'
+
+    async with _dev_ui_client(ai) as client:
+        response = await client.post(
+            '/api/runAction',
+            json={'key': '/flow/six', 'input': {k: 'x' for k in 'abcdef'}},
+        )
+
+    errors = response.json()['error']['details']['errors']
+    assert len(errors) == 6
+    assert [tuple(err['loc']) for err in errors] == [('a',), ('b',), ('c',), ('d',), ('e',), ('f',)]

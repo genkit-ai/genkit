@@ -21,7 +21,7 @@ import os
 from genkit_ollama import EmbeddingDefinition, ModelDefinition, Ollama, OllamaConnectionError
 from pydantic import BaseModel
 
-from genkit import Genkit
+from genkit import FinishReason, Genkit
 
 chat_model = os.getenv('OLLAMA_CHAT_MODEL', 'llama3.2')
 embedder_model = os.getenv('OLLAMA_EMBEDDER_MODEL', 'nomic-embed-text')
@@ -50,6 +50,15 @@ async def current_weather(input: WeatherInput) -> str:
 async def main() -> None:
     try:
         response = await ai.generate(prompt='Write a two-sentence pitch for local AI development.')
+        if response.finish_reason == FinishReason.FAILED:
+            status = response.error.status if response.error is not None else None
+            print(
+                'Start Ollama and pull the sample models first:\n'
+                f'  ollama pull {chat_model}\n'
+                f'  ollama pull {embedder_model}\n\n'
+                f'{status}: {response.finish_message}'
+            )
+            raise SystemExit(1)
         print(response.text)
 
         # Ollama streams text on the chunks and returns an empty final

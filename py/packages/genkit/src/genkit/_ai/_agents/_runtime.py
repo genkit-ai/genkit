@@ -272,7 +272,6 @@ def validate_custom_state(*, custom: Any, state_schema: type[BaseModel] | None, 
             cause=e,
             details={
                 'schema': state_schema.model_json_schema(),
-                'errors': [{'loc': list(err['loc']), 'message': err['msg'], 'type': err['type']} for err in e.errors()],
             },
             reason=RuntimeErrorReason.INVALID_INPUT,
         ) from e
@@ -1092,8 +1091,6 @@ def to_error_details(exc: Exception) -> GenkitRuntimeError:
     else:
         message = str(exc) or 'Internal failure'
     details = getattr(exc, 'detail', None) or getattr(exc, 'details', None)
-    if details is None and not isinstance(exc, GenkitError):
-        details = str(exc)
     return GenkitRuntimeError(status=str(status), message=message, details=details)
 
 

@@ -18,12 +18,16 @@
 """Tests for the FastAPI plugin."""
 
 import json
+import logging
 
+import pytest
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 from genkit_fastapi import genkit_fastapi_handler, serve_flow
+from pydantic import BaseModel
 
 from genkit import ActionRunContext, Genkit, GenkitError, PublicError, RequestData
+from genkit.plugin_api import wrap_http_error
 
 
 def assert_is_error_response(parsed: dict) -> None:
@@ -428,3 +432,213 @@ def test_fastapi_flow_returning_wrong_shape_returns_500_internal_error() -> None
     assert response.status_code == 500
     assert response.json() == {'message': 'Internal Error', 'status': 'INTERNAL'}
     assert 'acme' not in response.text
+
+
+class Receipt(BaseModel):
+    table: int
+    note: str | None = None
+
+
+def test_fastapi_flow_returning_dict_for_model_sends_model_dump() -> None:
+    """POST to a `-> Receipt` flow that returns `{'table': 4, 'note': None}` gives `{"result": {"table": 4}}`."""
+    ai = Genkit()
+    app = FastAPI()
+
+    @ai.flow()
+    async def close_tab(table: int) -> Receipt:
+        return {'table': table, 'note': None}  # type: ignore[return-value]
+
+    @app.post('/close_tab', response_model=None)
+    @genkit_fastapi_handler(ai)
+    async def close_tab_route():
+        return close_tab
+
+    response = TestClient(app).post('/close_tab', json={'data': 4})
+
+    assert response.status_code == 200
+    assert response.json() == {'result': {'table': 4}}
+
+
+def test_served_flow_wrong_server_key_is_500_internal_error() -> None:
+    """A served flow whose model call fails with a provider 401 is 500 Internal Error."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def ask(_: str) -> str:
+        raise wrap_http_error(RuntimeError('API key not valid'), status_code=401)
+
+    app = FastAPI()
+    app.include_router(serve_flow(ask, base_path='/ask'))
+    response = TestClient(app).post('/ask', json={'data': 'hi'})
+
+    assert response.status_code == 500
+    assert response.json() == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert 'API key not valid' not in response.text
+
+
+def test_served_flow_public_error_keeps_status_and_message() -> None:
+    """A PublicError the app raises keeps its status and message on the wire."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def lookup(_: str) -> None:
+        raise PublicError('NOT_FOUND', 'no order 99')
+
+    app = FastAPI()
+    app.include_router(serve_flow(lookup, base_path='/lookup'))
+    response = TestClient(app).post('/lookup', json={'data': '99'})
+
+    assert response.status_code == 404
+    assert response.json() == {'message': 'no order 99', 'status': 'NOT_FOUND'}
+
+
+def test_served_flow_provider_failure_logs_traceback(caplog: pytest.LogCaptureFixture) -> None:
+    """A provider failure on a served flow is logged at error with a traceback."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def ask(_: str) -> str:
+        raise wrap_http_error(RuntimeError('API key not valid'), status_code=401)
+
+    app = FastAPI()
+    app.include_router(serve_flow(ask, base_path='/ask'))
+    with caplog.at_level(logging.ERROR, logger='genkit_fastapi.handler'):
+        response = TestClient(app).post('/ask', json={'data': 'hi'})
+
+    assert response.status_code == 500
+    assert any(record.exc_info for record in caplog.records)
+
+
+def test_fastapi_stream_provider_401_sends_sse_internal_error() -> None:
+    """A streamed flow whose model call fails with a provider 401 ends with Internal Error."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def ask(_: str) -> str:
+        raise wrap_http_error(RuntimeError('API key not valid'), status_code=401)
+
+    app = FastAPI()
+    app.include_router(serve_flow(ask, base_path='/ask'))
+    response = TestClient(app).post(
+        '/ask',
+        json={'data': 'hi'},
+        headers={'Accept': 'text/event-stream'},
+    )
+
+    assert sse_error_event(response.text) == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert 'API key not valid' not in response.text
+
+
+def test_fastapi_stream_public_error_with_nested_model_details_sends_error_event() -> None:
+    """A streamed PublicError with models in details still ends with a JSON error event."""
+
+    class FieldViolation(BaseModel):
+        field: str
+
+    ai = Genkit()
+
+    @ai.flow()
+    async def lookup(_: str) -> None:
+        raise PublicError('INVALID_ARGUMENT', 'bad', details={'violations': [FieldViolation(field='a')]})
+
+    app = FastAPI()
+    app.include_router(serve_flow(lookup, base_path='/lookup'))
+    response = TestClient(app).post(
+        '/lookup',
+        json={'data': 'x'},
+        headers={'Accept': 'text/event-stream'},
+    )
+
+    assert sse_error_event(response.text) == {
+        'message': 'bad',
+        'status': 'INVALID_ARGUMENT',
+        'details': {'violations': [{'field': 'a'}]},
+    }
+
+
+def test_fastapi_malformed_json_body_returns_400_valid_json_message() -> None:
+    """A FastAPI POST that is not JSON is 400 request body must be valid JSON."""
+    client = TestClient(create_app())
+    response = client.post(
+        '/chat',
+        content=b'{bad',
+        headers={'content-type': 'application/json'},
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {
+        'message': 'request body must be valid JSON',
+        'status': 'INVALID_ARGUMENT',
+    }
+
+
+def test_fastapi_context_provider_route_malformed_json_returns_400() -> None:
+    """A malformed body on a context_provider route is the same 400 and never calls the provider."""
+    ai = Genkit()
+    called = False
+
+    def deny(_request: RequestData) -> dict[str, object]:
+        nonlocal called
+        called = True
+        raise PublicError('UNAUTHENTICATED', 'not signed in')
+
+    @ai.flow()
+    async def chat(_: str) -> str:
+        return 'ok'
+
+    app = FastAPI()
+
+    @app.post('/chat', response_model=None)
+    @genkit_fastapi_handler(ai, context_provider=deny)
+    async def chat_route():
+        return chat
+
+    response = TestClient(app).post(
+        '/chat',
+        content=b'{bad',
+        headers={'content-type': 'application/json'},
+    )
+
+    assert called is False
+    assert response.status_code == 400
+    assert response.json() == {
+        'message': 'request body must be valid JSON',
+        'status': 'INVALID_ARGUMENT',
+    }
+
+
+def test_fastapi_handler_sync_wrapper_returns_json_internal_error() -> None:
+    """A sync wrapper under genkit_fastapi_handler is JSON 500 Internal Error."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def chat(_: str) -> str:
+        return 'ok'
+
+    app = FastAPI()
+
+    @app.post('/chat', response_model=None)
+    @genkit_fastapi_handler(ai)
+    def chat_route():
+        return chat
+
+    response = TestClient(app).post('/chat', json={'data': 'x'})
+
+    assert response.status_code == 500
+    assert response.json() == {'message': 'Internal Error', 'status': 'INTERNAL'}
+
+
+def test_fastapi_handler_wrapper_returning_non_action_returns_json_internal_error() -> None:
+    """A wrapper that does not return an Action is JSON 500 Internal Error."""
+    ai = Genkit()
+    app = FastAPI()
+
+    @app.post('/chat', response_model=None)
+    @genkit_fastapi_handler(ai)
+    async def chat_route():
+        return 'not an action'
+
+    response = TestClient(app).post('/chat', json={'data': 'x'})
+
+    assert response.status_code == 500
+    assert response.json() == {'message': 'Internal Error', 'status': 'INTERNAL'}

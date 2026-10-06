@@ -32,6 +32,7 @@ from anthropic import APIError, APIResponseValidationError, AsyncAnthropic
 from anthropic.types import Message as AnthropicMessage
 
 from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
+from genkit._core._error import mark_provider_error
 from genkit.model import Constrained, ModelRequest, ModelUsage, ToolRequest, get_basic_usage_stats
 from genkit.plugin_api import (
     ErrorResponseMetadata,
@@ -111,7 +112,7 @@ def _from_anthropic_error(error: APIError) -> GenkitError:
     failure or timeout, is re-raised unchanged so it stays unclassified.
     """
     if isinstance(error, APIResponseValidationError):
-        return GenkitError(status='INTERNAL', message=error.message, cause=error)
+        return mark_provider_error(error=GenkitError(status='INTERNAL', message=error.message, cause=error))
 
     status_code = getattr(error, 'status_code', None)
     failing_code = status_code if isinstance(status_code, int) and status_code >= 400 else None
@@ -138,11 +139,13 @@ def _from_anthropic_error(error: APIError) -> GenkitError:
     if retry_after_ms is not None:
         response_metadata = {'retry_after_ms': retry_after_ms}
 
-    return GenkitError(
-        status=status,
-        message=message,
-        cause=error,
-        response_metadata=response_metadata,
+    return mark_provider_error(
+        error=GenkitError(
+            status=status,
+            message=message,
+            cause=error,
+            response_metadata=response_metadata,
+        )
     )
 
 

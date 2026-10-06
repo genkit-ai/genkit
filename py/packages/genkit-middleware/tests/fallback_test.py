@@ -21,7 +21,8 @@ from typing import NoReturn
 import pytest
 from genkit_middleware import Fallback
 
-from genkit import ActionRunContext, FinishReason, Genkit, Message, ModelResponse, Part, Role
+from genkit import ActionRunContext, FinishReason, Genkit, Message, ModelResponse, ModelResponseChunk, Part, Role
+from genkit._ai._testing import define_programmable_model
 from genkit._core._error import GenkitError
 from genkit.middleware import ModelHookParams
 from genkit.model import ModelRequest
@@ -131,4 +132,39 @@ async def test_generate_with_model_raising_connection_error_and_fallback_keeps_t
     assert response.error is not None
     assert response.error.status == 'INTERNAL'
     assert response.message is None
+    assert backup_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_prompt_with_failing_on_chunk_and_fallback_does_not_call_backup() -> None:
+    """`await prompt(on_chunk=raises, use=[Fallback(...)])` fails with the callback's message and never calls backup."""
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('done')]),
+        )
+    ]
+    pm.chunks = [[ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('partial')])]]
+    backup_calls = 0
+
+    async def backup(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        nonlocal backup_calls
+        backup_calls += 1
+        return ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('from backup')]),
+        )
+
+    ai.define_model(name='backup', fn=backup)
+    prompt = ai.define_prompt(model='programmableModel', prompt='hi')
+
+    def on_chunk(_: ModelResponseChunk) -> None:
+        raise RuntimeError('model sink closed')
+
+    response = await prompt(on_chunk=on_chunk, use=[Fallback(models=['backup'])])
+
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.finish_message == 'model sink closed'
     assert backup_calls == 0
