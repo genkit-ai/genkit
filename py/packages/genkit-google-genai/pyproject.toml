@@ -50,11 +50,10 @@ dependencies = [
   "structlog>=25.2.0",
   "strenum>=0.4.15; python_version < '3.11'",
 ]
-description = "Gemini, Imagen, and Veo on Genkit"
+description = "Gemini and Veo on Genkit"
 keywords = [
   "genkit",
   "gemini",
-  "imagen",
   "veo",
   "vertex-ai",
   "google",

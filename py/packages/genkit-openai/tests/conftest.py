@@ -21,7 +21,7 @@ from collections.abc import Callable
 from typing import Any
 
 import pytest
-from genkit_openai.typing import OpenAIConfig
+from genkit_openai._typing import OpenAIConfig
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 
 from genkit import Message, Part, Role

@@ -88,9 +88,17 @@ export const evalFlow = new Command('eval:flow')
     'comma separated list of evaluators to use (by default uses all)'
   )
   .option(
-    '--batchSize <batchSize>',
+    '--batch-size <batchSize>',
     'batch size to use for parallel evals (defaults to 1, no parallelization)',
     parsePositiveInt
+  )
+  .addOption(
+    new Option(
+      '--batchSize <batchSize>',
+      'batch size to use for parallel evals'
+    )
+      .argParser(parsePositiveInt)
+      .hideHelp()
   )
   .option('-f, --force', 'Automatically accept all interactive prompts')
   .action(

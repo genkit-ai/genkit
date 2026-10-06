@@ -19,7 +19,7 @@ import {
   findProjectRoot,
   forceStderr,
 } from '@genkit-ai/tools-common/utils';
-import { Command } from 'commander';
+import { Command, Option } from 'commander';
 import { startMcpServer } from '../mcp/server';
 import { parseNonNegativeInt } from '../utils/option-parsers';
 
@@ -40,9 +40,15 @@ export const mcp = new Command('mcp')
     parseNonNegativeInt
   )
   .option(
-    '--explicitProjectRoot',
+    '--explicit-project-root',
     'Require runtime-dependent tools to specify projectRoot explicitly',
     false
+  )
+  .addOption(
+    new Option(
+      '--explicitProjectRoot',
+      'Require runtime-dependent tools to specify projectRoot explicitly'
+    ).hideHelp()
   )
   .description('run MCP stdio server (EXPERIMENTAL, subject to change)')
   .action(async (options: McpOptions) => {

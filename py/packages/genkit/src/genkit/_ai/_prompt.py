@@ -54,7 +54,6 @@ from genkit._ai._model import (
     resolve_call_model,
     resolve_for_generate,
 )
-from genkit._ai._tools import Tool
 from genkit._core._action import (
     Action,
     ActionKind,
@@ -77,6 +76,7 @@ from genkit._core._model import (
 )
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
+from genkit._core._tool import Tool
 from genkit._core._typing import (
     GenerateActionOutputConfig,
     MiddlewareRef,
@@ -156,11 +156,16 @@ class ModelStreamResponse(Generic[OutputT]):
         Returns:
             An awaitable that resolves to a ModelResponse containing:
             - text: The complete generated text
-            - output: The typed output (when using Output[T])
+            - output: The typed output, or None when the reply isn't that shape
             - messages: The full message history
             - usage: Token usage statistics
             - finish_reason: Why generation stopped (e.g., 'stop', 'length')
             - Any tool calls or interrupts from the response
+
+        If the model fails partway through, this still resolves rather than
+        raising: ``finish_reason`` is FAILED, ``error`` is set, ``text`` is
+        empty, ``message`` is None, and ``messages`` ends at the last complete
+        turn. The chunks already streamed are the record of what was shown.
         """
         return self._response_future
 
