@@ -7,7 +7,7 @@
 
 import json
 from collections.abc import Awaitable, Callable
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import pytest
 from pydantic import BaseModel, Field, ValidationError
@@ -1673,7 +1673,7 @@ def test_define_batch_evaluator(setup_test: SetupFixture) -> None:
     """Test that the define batch evaluator function works."""
     ai, _, _, *_ = setup_test
 
-    async def my_eval_fn(req: EvalRequest, options: object | None) -> list[EvalFnResponse]:
+    async def my_eval_fn(req: EvalRequest) -> list[EvalFnResponse]:
         eval_responses: list[EvalFnResponse] = []
         for index in range(len(req.dataset)):
             datapoint = req.dataset[index]
@@ -1702,6 +1702,55 @@ def test_define_batch_evaluator(setup_test: SetupFixture) -> None:
         'evaluatorDisplayName': 'Test evaluator',
         'evaluatorIsBilled': False,
     }
+
+
+@pytest.mark.asyncio
+async def test_batch_evaluator_run_reads_options_from_the_request(setup_test: SetupFixture) -> None:
+    """`my_eval(req)` reads options from `req.options`, not a second parameter."""
+    ai, *_ = setup_test
+    seen: list[object] = []
+
+    async def my_eval(req: EvalRequest) -> list[EvalFnResponse]:
+        seen.append(req.options)
+        return [
+            EvalFnResponse(
+                test_case_id=req.dataset[0].test_case_id or '',
+                evaluation=Score(score=True),
+            )
+        ]
+
+    action = ai.define_batch_evaluator(
+        name='my_eval',
+        display_name='Test evaluator',
+        definition='reads options from the request',
+        fn=my_eval,
+    )
+    result = await action.run(
+        EvalRequest(
+            dataset=[BaseDataPoint(input='hi', output='hi', test_case_id='case1')],
+            eval_run_id='run-1',
+            options={'threshold': 0.8},
+        )
+    )
+
+    assert seen == [{'threshold': 0.8}]
+    assert result.response[0].test_case_id == 'case1'
+
+
+def test_batch_evaluator_with_second_parameter_raises_type_error(setup_test: SetupFixture) -> None:
+    """`(req, options)` raises at definition: options live on the request."""
+    ai, *_ = setup_test
+
+    async def my_eval(req: EvalRequest, options: object | None) -> list[EvalFnResponse]:
+        return []
+
+    with pytest.raises(TypeError, match="evaluator 'my_eval' takes one input, but 'options' is a second parameter"):
+        ai.define_batch_evaluator(
+            name='my_eval',
+            display_name='Test evaluator',
+            definition='two params',
+            fn=cast(Any, my_eval),
+        )
 
 
 @pytest.mark.asyncio
@@ -1970,8 +2019,8 @@ def _define_recording_batch_evaluator(ai: Genkit, name: str) -> list[object]:
     """Register a batch evaluator that records the settings it was handed."""
     seen: list[object] = []
 
-    async def eval_fn(req: EvalRequest, options: object | None) -> list[EvalFnResponse]:
-        seen.append(options)
+    async def eval_fn(req: EvalRequest) -> list[EvalFnResponse]:
+        seen.append(req.options)
         return [
             EvalFnResponse(test_case_id=row.test_case_id or '', evaluation=[Score(score=True)]) for row in req.dataset
         ]
@@ -1997,7 +2046,7 @@ async def test_evaluate_config_reaches_evaluator(setup_test: SetupFixture) -> No
 
 @pytest.mark.asyncio
 async def test_evaluate_batch_evaluator_gets_the_config_dict(setup_test: SetupFixture) -> None:
-    """A batch evaluator's second argument is the config dict, not the action context."""
+    """A batch evaluator reads the config dict from req.options."""
     ai, *_ = setup_test
     seen = _define_recording_batch_evaluator(ai, 'cfg_batch_eval')
 

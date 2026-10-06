@@ -27,12 +27,12 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 from genkit_google_genai import GoogleAI, VertexAI
-from genkit_google_genai.google import _inject_attribution_headers, googleai_name, vertexai_name
-from genkit_google_genai.models.embedder import VERTEX_KNOWN_EMBEDDERS
-from genkit_google_genai.models.gemini import (
+from genkit_google_genai._google import _inject_attribution_headers, googleai_name, vertexai_name
+from genkit_google_genai._models._embedder import VERTEX_KNOWN_EMBEDDERS
+from genkit_google_genai._models._gemini import (
     DEFAULT_SUPPORTS_MODEL,
     SUPPORTED_MODELS,
-    GeminiConfigSchema,
+    GeminiConfig,
     GeminiModel,
 )
 from google import genai
@@ -192,7 +192,7 @@ async def test_googleai_resolve_action_embedder(
     mock_resolve_action.assert_called_once_with('lazaro-model')
 
 
-@patch('genkit_google_genai.models.gemini.google_model_info')
+@patch('genkit_google_genai._models._gemini.google_model_info')
 @pytest.mark.parametrize(
     'model_name, expected_model_name, key',
     [
@@ -366,9 +366,9 @@ async def test_googleai_list_actions(googleai_plugin_instance: GoogleAI) -> None
     # Check TTS
     action3 = next(a for a in result if a.name == googleai_name('gemini-2.0-flash-tts'))
     assert action3 is not None
-    # from genkit_google_genai.models.gemini import GeminiTtsConfigSchema, GeminiConfigSchema
-    # assert action3.config_schema == GeminiTtsConfigSchema
-    # assert action1.config_schema == GeminiConfigSchema
+    # from genkit_google_genai._models._gemini import GeminiConfig, GeminiTtsConfig
+    # assert action3.config_schema == GeminiTtsConfig
+    # assert action1.config_schema == GeminiConfig
 
     # Check Veo
     action4 = next((a for a in result if a.name == googleai_name('veo-2.0-generate-001')), None)
@@ -632,7 +632,7 @@ async def test_vertexai_resolve_action_embedder(
 
 
 @patch(
-    'genkit_google_genai.models.gemini.google_model_info',
+    'genkit_google_genai._models._gemini.google_model_info',
     new_callable=MagicMock,
 )
 @pytest.mark.parametrize(
@@ -765,7 +765,7 @@ async def test_vertexai_list_actions(vertexai_plugin_instance: VertexAI) -> None
     # Verify Veo
     action4 = next(a for a in result if a.name == vertexai_name('veo-2.0-generate-001'))
     assert action4 is not None
-    # from genkit_google_genai.models.veo import VeoConfigSchema
+    # from genkit_google_genai._models._veo import VeoConfigSchema
     # assert action4.config_schema == VeoConfigSchema
 
 
@@ -872,7 +872,7 @@ def test_config_schema_extra_fields() -> None:
     # Validation should succeed with unknown field by using model_validate for dynamic fields
     # to avoid static type checker errors on constructor
     config_data = {'temperature': 0.5, 'new_experimental_param': 'test'}
-    config = GeminiConfigSchema.model_validate(config_data)
+    config = GeminiConfig.model_validate(config_data)
 
     assert config.temperature == 0.5
     # Access dynamic fields via getattr or __dict__ to make type checker happy

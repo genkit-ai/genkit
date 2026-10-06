@@ -17,20 +17,20 @@
 """Family name checks for Google model routing."""
 
 import pytest
-from genkit_google_genai.models._routing import (
-    classify_family,
-    is_imagen_model_name,
-    is_unroutable_model_id,
-    is_unsupported_image_model_name,
-)
-from genkit_google_genai.models.gemini import (
+from genkit_google_genai._models._gemini import (
     is_gemini_model,
     is_gemma_model,
     is_image_model,
     is_tts_model,
 )
-from genkit_google_genai.models.lyria import is_lyria_model
-from genkit_google_genai.models.veo import is_veo_model
+from genkit_google_genai._models._lyria import is_lyria_model
+from genkit_google_genai._models._routing import (
+    classify_family,
+    is_imagen_model_name,
+    is_unroutable_model_id,
+    is_unsupported_image_model_name,
+)
+from genkit_google_genai._models._veo import is_veo_model
 
 
 @pytest.mark.parametrize(

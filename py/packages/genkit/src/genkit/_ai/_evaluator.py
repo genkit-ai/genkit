@@ -52,8 +52,8 @@ T = TypeVar('T')
 # Must be async (coroutine function).
 EvaluatorFn = Callable[[BaseDataPoint, T], Coroutine[Any, Any, EvalFnResponse]]
 
-# User-provided batch evaluator function that evaluates an EvaluationRequest
-BatchEvaluatorFn = Callable[[EvalRequest, T], Coroutine[Any, Any, list[EvalFnResponse]]]
+# User-provided batch evaluator: one EvalRequest.
+BatchEvaluatorFn = Callable[[EvalRequest], Coroutine[Any, Any, list[EvalFnResponse]]]
 
 
 class EvaluatorRef(BaseModel):
@@ -184,13 +184,13 @@ def define_batch_evaluator(
     name: str,
     display_name: str,
     definition: str,
-    fn: BatchEvaluatorFn[Any],
+    fn: BatchEvaluatorFn,
     is_billed: bool = False,
     config_schema: type[BaseModel] | dict[str, object] | None = None,
     metadata: dict[str, object] | None = None,
     description: str | None = None,
 ) -> Action:
-    """Register a batch evaluator that runs the callback on the entire dataset."""
+    """Register a batch evaluator. ``fn`` is the action: one ``EvalRequest``."""
     evaluator_meta: dict[str, object] = metadata.copy() if metadata else {}
     if 'evaluator' not in evaluator_meta:
         evaluator_meta['evaluator'] = {}
@@ -206,13 +206,10 @@ def define_batch_evaluator(
 
     evaluator_description = _get_func_description(fn, description)
 
-    async def batch_fn(req: EvalRequest) -> list[EvalFnResponse]:
-        return await fn(req, req.options)
-
     return registry.register_action(
         name=name,
         kind=ActionKind.EVALUATOR,
-        fn=batch_fn,
+        fn=fn,
         metadata=evaluator_meta,
         description=evaluator_description,
     )
