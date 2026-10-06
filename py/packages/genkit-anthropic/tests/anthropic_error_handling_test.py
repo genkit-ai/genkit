@@ -86,7 +86,6 @@ async def test_generate_maps_anthropic_status_errors(status_code: int, expected_
     assert error.cause is None
     assert error.__cause__ is api_error
     assert error.response_metadata is None
-    assert error.to_callable_serializable().message == _ERROR_MESSAGE
     assert error.to_serializable().message == _ERROR_MESSAGE
 
 

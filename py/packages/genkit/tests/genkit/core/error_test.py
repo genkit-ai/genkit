@@ -299,7 +299,8 @@ def test_wrap_http_error_reads_retry_after() -> None:
     error = wrap_http_error(FakeError(), status_code=429, message='rate limited')
     assert error.status == 'RESOURCE_EXHAUSTED'
     assert error.response_metadata == {'retry_after_ms': 60000.0}
-    assert error.to_callable_serializable().message == 'rate limited'
+    assert error.original_message == 'rate limited'
+    assert error.to_callable_serializable().message == 'Resource exhausted'
 
 
 def test_served_error_body_for_provider_error_keeps_status_without_provider_text() -> None:
@@ -368,8 +369,8 @@ def test_served_error_body_dumps_pydantic_details_on_public_error() -> None:
     json.dumps(body)
 
 
-def test_to_callable_serializable_keeps_original_message() -> None:
-    """to_callable_serializable is in-process; served flows use get_callable_json."""
+def test_to_callable_serializable_redacts_like_get_callable_json() -> None:
+    """A non-public error's wire body drops the message and details, same as get_callable_json."""
     error = GenkitError(
         status='INVALID_ARGUMENT',
         message='bad id 12345',
@@ -377,8 +378,21 @@ def test_to_callable_serializable_keeps_original_message() -> None:
     )
 
     body = error.to_callable_serializable()
-    assert body.message == 'bad id 12345'
-    assert get_callable_json(error) == {'message': 'Invalid argument', 'status': 'INVALID_ARGUMENT'}
+    assert body.model_dump(exclude_none=True) == get_callable_json(error)
+    # => {'message': 'Invalid argument', 'status': 'INVALID_ARGUMENT'}
+    assert error.original_message == 'bad id 12345'
+
+
+def test_to_callable_serializable_keeps_public_error_text() -> None:
+    """A PublicError keeps its message and details; stack is stripped."""
+    error = PublicError('NOT_FOUND', 'no order 99', details={'reason': 'MISSING', 'stack': 'trace'})
+
+    body = error.to_callable_serializable()
+    assert body.model_dump(exclude_none=True) == {
+        'message': 'no order 99',
+        'status': 'NOT_FOUND',
+        'details': {'reason': 'MISSING'},
+    }
 
 
 @pytest.mark.parametrize(

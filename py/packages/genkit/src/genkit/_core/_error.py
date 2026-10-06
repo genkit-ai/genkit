@@ -407,15 +407,16 @@ class GenkitError(Exception):
         return runtime_error_reason(self.details)
 
     def to_callable_serializable(self) -> HttpErrorWireFormat:
-        """In-process form: original message and details, including stack.
+        """Served-flow wire body; same redaction as ``get_callable_json``.
 
-        Served flows use ``get_callable_json``, which redacts non-public
-        text. Call that when writing an HTTP body.
+        Only a PublicError keeps its message and details. In-process code
+        that needs the real error reads ``original_message`` and ``details``.
         """
+        body = get_callable_json(self)
         return HttpErrorWireFormat(
-            details=self.details,
-            status=StatusCodes[self.status].name,
-            message=self.original_message,
+            details=body.get('details'),
+            status=body['status'],
+            message=body['message'],
         )
 
     def to_serializable(self) -> ReflectionError:
