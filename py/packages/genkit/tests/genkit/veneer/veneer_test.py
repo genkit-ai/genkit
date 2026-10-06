@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field, ValidationError
 from genkit import (
     Document,
     Genkit,
+    GenkitError,
     Interrupt,
     Message,
     ModelResponse,
@@ -50,6 +51,7 @@ from genkit._core._typing import (
     ToolRequest,
     ToolResponse,
 )
+from genkit.evaluator import evaluator_ref
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, MiddlewareRef, ModelHookParams
 
 # type SetupFixture = tuple[Genkit, EchoModel, ProgrammableModel]
@@ -1950,6 +1952,150 @@ def test_eval_response_string_evaluation_raises() -> None:
     """A saved row whose evaluation is a string raises ValidationError."""
     with pytest.raises(ValidationError):
         EvalFnResponse.model_validate({'testCaseId': 'case1', 'evaluation': 'nope'})
+
+
+def _define_recording_evaluator(ai: Genkit, name: str) -> list[object]:
+    """Register a per-row evaluator that records the settings it was handed."""
+    seen: list[object] = []
+
+    async def eval_fn(datapoint: BaseDataPoint, options: object | None) -> EvalFnResponse:
+        seen.append(options)
+        return EvalFnResponse(test_case_id=datapoint.test_case_id or '', evaluation=[Score(score=True)])
+
+    ai.define_evaluator(name=name, display_name=name, definition='records settings', fn=eval_fn)
+    return seen
+
+
+def _define_recording_batch_evaluator(ai: Genkit, name: str) -> list[object]:
+    """Register a batch evaluator that records the settings it was handed."""
+    seen: list[object] = []
+
+    async def eval_fn(req: EvalRequest, options: object | None) -> list[EvalFnResponse]:
+        seen.append(options)
+        return [
+            EvalFnResponse(test_case_id=row.test_case_id or '', evaluation=[Score(score=True)]) for row in req.dataset
+        ]
+
+    ai.define_batch_evaluator(name=name, display_name=name, definition='records settings', fn=eval_fn)
+    return seen
+
+
+def _one_row() -> list[BaseDataPoint]:
+    return [BaseDataPoint(input='q', output='a', test_case_id='case1')]
+
+
+@pytest.mark.asyncio
+async def test_evaluate_config_reaches_evaluator(setup_test: SetupFixture) -> None:
+    """ai.evaluate(config={'threshold': 0.5}) hands the evaluator that dict."""
+    ai, *_ = setup_test
+    seen = _define_recording_evaluator(ai, 'cfg_eval')
+
+    await ai.evaluate(evaluator='cfg_eval', dataset=_one_row(), config={'threshold': 0.5})
+
+    assert seen == [{'threshold': 0.5}]
+
+
+@pytest.mark.asyncio
+async def test_evaluate_batch_evaluator_gets_the_config_dict(setup_test: SetupFixture) -> None:
+    """A batch evaluator's second argument is the config dict, not the action context."""
+    ai, *_ = setup_test
+    seen = _define_recording_batch_evaluator(ai, 'cfg_batch_eval')
+
+    await ai.evaluate(evaluator='cfg_batch_eval', dataset=_one_row(), config={'threshold': 0.5})
+
+    assert seen == [{'threshold': 0.5}]
+
+
+@pytest.mark.asyncio
+async def test_evaluate_with_no_config_passes_none_to_evaluator(setup_test: SetupFixture) -> None:
+    """ai.evaluate with no ref settings and no config= hands the evaluator None."""
+    ai, *_ = setup_test
+    seen = _define_recording_evaluator(ai, 'none_eval')
+
+    await ai.evaluate(evaluator='none_eval', dataset=_one_row())
+
+    assert seen == [None]
+
+
+@pytest.mark.asyncio
+async def test_evaluate_batch_with_no_config_passes_none_to_evaluator(setup_test: SetupFixture) -> None:
+    """The same None reaches a batch evaluator."""
+    ai, *_ = setup_test
+    seen = _define_recording_batch_evaluator(ai, 'none_batch_eval')
+
+    await ai.evaluate(evaluator='none_batch_eval', dataset=_one_row())
+
+    assert seen == [None]
+
+
+@pytest.mark.asyncio
+async def test_batch_evaluator_run_directly_gets_request_options(setup_test: SetupFixture) -> None:
+    """Running a batch evaluator action the way the Dev UI does hands it request.options, None when absent."""
+    ai, *_ = setup_test
+    seen = _define_recording_batch_evaluator(ai, 'direct_batch_eval')
+    action = await ai.registry.resolve_evaluator('direct_batch_eval')
+    assert action is not None
+
+    await action.run(EvalRequest(dataset=_one_row(), eval_run_id='run1', options={'k': 1}))
+    await action.run(EvalRequest(dataset=_one_row(), eval_run_id='run2'))
+
+    assert seen == [{'k': 1}, None]
+
+
+@pytest.mark.asyncio
+async def test_evaluate_with_ref_settings_only_passes_ref_settings(setup_test: SetupFixture) -> None:
+    """Settings on the evaluator ref alone reach the evaluator as that dict."""
+    ai, *_ = setup_test
+    seen = _define_recording_evaluator(ai, 'ref_eval')
+
+    await ai.evaluate(evaluator=evaluator_ref('ref_eval', config_schema={'judge': 'j1'}), dataset=_one_row())
+
+    assert seen == [{'judge': 'j1'}]
+
+
+@pytest.mark.asyncio
+async def test_evaluate_config_wins_over_ref_settings_per_key(setup_test: SetupFixture) -> None:
+    """When the ref and config= both set a key, config= wins and other ref keys stay."""
+    ai, *_ = setup_test
+    seen = _define_recording_evaluator(ai, 'merge_eval')
+    ref = evaluator_ref('merge_eval', config_schema={'judge': 'j1', 'threshold': 0.1})
+
+    await ai.evaluate(evaluator=ref, dataset=_one_row(), config={'threshold': 0.9})
+
+    assert seen == [{'judge': 'j1', 'threshold': 0.9}]
+    assert ref.config_schema == {'judge': 'j1', 'threshold': 0.1}
+
+
+@pytest.mark.asyncio
+async def test_evaluate_with_options_keyword_raises_type_error(setup_test: SetupFixture) -> None:
+    """ai.evaluate(options=...) is a TypeError; settings go in config=."""
+    ai, *_ = setup_test
+    _define_recording_evaluator(ai, 'kw_eval')
+
+    with pytest.raises(TypeError, match='options'):
+        await ai.evaluate(evaluator='kw_eval', dataset=_one_row(), options={'threshold': 0.5})  # type: ignore[call-arg]
+
+
+@pytest.mark.asyncio
+async def test_evaluate_with_positional_arguments_raises_type_error(setup_test: SetupFixture) -> None:
+    """ai.evaluate('name', dataset) is a TypeError; evaluate takes keywords only."""
+    ai, *_ = setup_test
+    _define_recording_evaluator(ai, 'pos_eval')
+
+    with pytest.raises(TypeError):
+        await ai.evaluate('pos_eval', _one_row())  # type: ignore[misc]
+
+
+@pytest.mark.asyncio
+async def test_evaluate_unknown_evaluator_raises_not_found(setup_test: SetupFixture) -> None:
+    """ai.evaluate with an evaluator name nobody registered raises GenkitError NOT_FOUND naming it."""
+    ai, *_ = setup_test
+
+    with pytest.raises(GenkitError) as exc_info:
+        await ai.evaluate(evaluator='nope/missing', dataset=_one_row())
+
+    assert exc_info.value.status == 'NOT_FOUND'
+    assert 'nope/missing' in str(exc_info.value)
 
 
 def test_define_background_model_with_info(setup_test: SetupFixture) -> None:

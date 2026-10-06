@@ -23,7 +23,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pydantic import BaseModel
 
-from genkit import Document, Genkit
+from genkit import Document, Genkit, GenkitError
 from genkit._ai._embedding import (
     EmbedderInfo,
     EmbedderSupports,
@@ -238,7 +238,7 @@ async def test_embed_with_embedder_ref(
 
     content = Document.from_text('hello world')
 
-    response = await genkit_instance.embed(embedder=embedder_ref, content=content, options={'additional_option': True})
+    response = await genkit_instance.embed(embedder=embedder_ref, content=content, config={'additional_option': True})
 
     assert response[0].embedding == [1.0, 2.0, 3.0]
 
@@ -249,15 +249,15 @@ async def test_embed_with_embedder_ref(
     called_request = embed_action.run.call_args[0][0]
     assert isinstance(called_request, EmbedRequest)
     assert called_request.input == [content]
-    # Check if config from EmbedderRef and options are merged correctly
+    # ref config, version, and call config all arrive as request.options
     assert called_request.options == {'param': 'value', 'additional_option': True, 'version': 'v1'}
 
 
 @pytest.mark.asyncio
-async def test_embed_with_string_name_and_options(
+async def test_embed_config_reaches_embedder_as_options(
     mock_genkit_instance: tuple[Genkit, MockGenkitRegistry],
 ) -> None:
-    """Test the embed method using a string name for embedder and options."""
+    """ai.embed(config={...}) arrives at the embedder as request.options."""
     genkit_instance, registry = mock_genkit_instance
 
     async def fake_embedder_fn(request: EmbedRequest) -> EmbedResponse:
@@ -275,7 +275,7 @@ async def test_embed_with_string_name_and_options(
     content = 'test text'
 
     response = await genkit_instance.embed(
-        embedder='another-embedder', content=content, options={'custom_setting': 'high'}
+        embedder='another-embedder', content=content, config={'custom_setting': 'high'}
     )
 
     assert response[0].embedding == [4.0, 5.0, 6.0]
@@ -328,7 +328,7 @@ async def test_embed_many(mock_genkit_instance: tuple[Genkit, MockGenkitRegistry
 async def test_embed_many_with_embedder_ref_merges_config_the_same_as_embed(
     mock_genkit_instance: tuple[Genkit, MockGenkitRegistry],
 ) -> None:
-    """embed_many with an EmbedderRef merges ref config, version, and options like embed."""
+    """embed_many with an EmbedderRef merges ref config, version, and call config like embed."""
     genkit_instance, registry = mock_genkit_instance
 
     async def fake_embedder_fn(request: EmbedRequest) -> EmbedResponse:
@@ -344,7 +344,7 @@ async def test_embed_many_with_embedder_ref_merges_config_the_same_as_embed(
     embedder_ref = create_embedder_ref('my-plugin/my-embedder', config={'param': 'value'}, version='v1')
     content = [Document.from_text('one'), Document.from_text('two')]
 
-    response = await genkit_instance.embed_many(embedder=embedder_ref, content=content, options={'extra': True})
+    response = await genkit_instance.embed_many(embedder=embedder_ref, content=content, config={'extra': True})
 
     assert [item.embedding for item in response] == [[1.0], [2.0]]
     embed_action = await registry.resolve_action('embedder', 'my-plugin/my-embedder')
@@ -355,10 +355,10 @@ async def test_embed_many_with_embedder_ref_merges_config_the_same_as_embed(
 
 
 @pytest.mark.asyncio
-async def test_embed_many_options_override_embedder_ref_config(
+async def test_embed_many_call_config_wins_over_embedder_ref_config(
     mock_genkit_instance: tuple[Genkit, MockGenkitRegistry],
 ) -> None:
-    """embed_many options win over the same key on the EmbedderRef."""
+    """embed_many config= wins over the same key on the EmbedderRef."""
     genkit_instance, registry = mock_genkit_instance
 
     async def fake_embedder_fn(request: EmbedRequest) -> EmbedResponse:
@@ -376,7 +376,7 @@ async def test_embed_many_options_override_embedder_ref_config(
     response = await genkit_instance.embed_many(
         embedder=embedder_ref,
         content=['hello'],
-        options={'param': 'override'},
+        config={'param': 'override'},
     )
 
     assert response[0].embedding == [1.0]
@@ -408,12 +408,83 @@ async def test_embed_many_does_not_change_the_embedder_ref_config(
     await genkit_instance.embed_many(
         embedder=embedder_ref,
         content=['hello'],
-        options={'extra': True},
+        config={'extra': True},
     )
 
     assert embedder_ref.config == {'param': 'value'}
     assert embedder_ref.config is config
     assert 'version' not in embedder_ref.config
+
+
+@pytest.mark.asyncio
+async def test_embed_many_config_reaches_embedder_as_options(
+    mock_genkit_instance: tuple[Genkit, MockGenkitRegistry],
+) -> None:
+    """ai.embed_many(config={...}) with a string name arrives as request.options."""
+    genkit_instance, registry = mock_genkit_instance
+
+    async def fake_embedder_fn(request: EmbedRequest) -> EmbedResponse:
+        return EmbedResponse(embeddings=[Embedding(embedding=[1.0]), Embedding(embedding=[2.0])])
+
+    registry.register_action(
+        name='plain-embedder',
+        kind='embedder',
+        fn=fake_embedder_fn,
+        metadata=embedder_action_metadata('plain-embedder').metadata,
+        description='A fake embedder for testing',
+    )
+
+    await genkit_instance.embed_many(embedder='plain-embedder', content=['a', 'b'], config={'dim': 3})
+
+    embed_action = await registry.resolve_action('embedder', 'plain-embedder')
+    called_request = embed_action.run.call_args[0][0]
+    assert called_request.options == {'dim': 3}
+
+
+@pytest.mark.asyncio
+async def test_embed_with_options_keyword_raises_type_error(
+    mock_genkit_instance: tuple[Genkit, MockGenkitRegistry],
+) -> None:
+    """ai.embed(options=...) is a TypeError; settings go in config=."""
+    genkit_instance, _ = mock_genkit_instance
+
+    with pytest.raises(TypeError, match='options'):
+        await genkit_instance.embed(embedder='any', content='hi', options={'dim': 3})  # type: ignore[call-arg]
+
+
+@pytest.mark.asyncio
+async def test_embed_many_with_options_keyword_raises_type_error(
+    mock_genkit_instance: tuple[Genkit, MockGenkitRegistry],
+) -> None:
+    """ai.embed_many(options=...) is a TypeError; settings go in config=."""
+    genkit_instance, _ = mock_genkit_instance
+
+    with pytest.raises(TypeError, match='options'):
+        await genkit_instance.embed_many(embedder='any', content=['hi'], options={'dim': 3})  # type: ignore[call-arg]
+
+
+@pytest.mark.asyncio
+async def test_embed_unknown_embedder_raises_not_found() -> None:
+    """ai.embed with an embedder name nobody registered raises GenkitError NOT_FOUND naming it."""
+    ai = Genkit()
+
+    with pytest.raises(GenkitError) as exc_info:
+        await ai.embed(embedder='nope/missing', content='hi')
+
+    assert exc_info.value.status == 'NOT_FOUND'
+    assert 'nope/missing' in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_embed_many_unknown_embedder_raises_not_found() -> None:
+    """ai.embed_many with an embedder name nobody registered raises GenkitError NOT_FOUND naming it."""
+    ai = Genkit()
+
+    with pytest.raises(GenkitError) as exc_info:
+        await ai.embed_many(embedder='nope/missing', content=['hi'])
+
+    assert exc_info.value.status == 'NOT_FOUND'
+    assert 'nope/missing' in str(exc_info.value)
 
 
 # --- Tests for _resolve_embedder_name helper ---
