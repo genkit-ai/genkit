@@ -44,6 +44,7 @@ def model_garden_instance(client: MagicMock) -> ModelGardenModel:
                 'supports': {
                     'constrained': None,
                     'content_type': None,
+                    'context': None,
                     'long_running': False,
                     'multiturn': True,
                     'media': False,
@@ -64,6 +65,7 @@ def model_garden_instance(client: MagicMock) -> ModelGardenModel:
                 'supports': {
                     'constrained': None,
                     'content_type': None,
+                    'context': None,
                     'long_running': None,
                     'multiturn': True,
                     'media': True,

@@ -56,6 +56,16 @@ def test_gpt_6_astra_json_mode_uses_json_object() -> None:
     assert model._get_response_format(request) == {'type': 'json_object'}
 
 
+def test_gpt_4_json_request_uses_text() -> None:
+    """gpt-4 does not list json output, so a schema-less JSON request sends text."""
+    model = OpenAIModel(model='gpt-4', client=MagicMock())
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part.from_text('Hi')])],
+        output=OutputConfig(format='json'),
+    )
+    assert model._get_response_format(request) == {'type': 'text'}
+
+
 def test_get_messages(sample_request: ModelRequest) -> None:
     """Test _get_messages method.
 
