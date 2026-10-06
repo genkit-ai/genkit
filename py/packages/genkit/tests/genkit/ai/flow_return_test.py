@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from genkit import Genkit, GenkitError
 from genkit._core._error import RuntimeErrorReason
@@ -139,6 +139,83 @@ async def test_streamed_flow_response_is_the_model() -> None:
         return {'account': name, 'amount': 1}  # type: ignore[return-value]
 
     assert await charge.stream('acme').response == Receipt(account='acme', amount=1)
+
+
+class TabReceipt(BaseModel):
+    table: int
+    note: str | None = None
+
+
+class StrictReceipt(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    table: int
+    note: str | None = None
+
+
+class Secret(BaseModel):
+    model_config = ConfigDict(hide_input_in_errors=True)
+    password: int
+
+
+@pytest.mark.asyncio
+async def test_flow_returning_dict_with_extra_keys_gives_model_without_them() -> None:
+    """`-> Receipt` returning `{'table': 4, 'tip_cents': 300}` gives `Receipt(table=4, note=None)`."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def close_tab(table: int) -> TabReceipt:
+        return {'table': table, 'tip_cents': 300}  # type: ignore[return-value]
+
+    result = await close_tab(4)
+
+    assert result == TabReceipt(table=4, note=None)
+    assert not hasattr(result, 'tip_cents')
+
+
+@pytest.mark.asyncio
+async def test_flow_returning_extra_keys_for_forbid_model_raises_invalid_output() -> None:
+    """`-> StrictReceipt` returning an extra key raises INTERNAL / INVALID_OUTPUT."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def close_tab(table: int) -> StrictReceipt:
+        return {'table': table, 'tip_cents': 300}  # type: ignore[return-value]
+
+    with pytest.raises(GenkitError) as exc:
+        await close_tab(4)
+
+    _assert_invalid_output(exc.value, 'close_tab')
+    assert 'tip_cents' in str(exc.value)
+    assert 'Extra inputs are not permitted' in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_flow_return_with_hidden_input_model_omits_value_from_error() -> None:
+    """A hidden-input return model does not print the rejected value in `str(e)`."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def login(_name: str) -> Secret:
+        return {'password': 'hunter2-secret'}  # type: ignore[return-value]
+
+    with pytest.raises(GenkitError) as exc:
+        await login('ada')
+
+    assert 'hunter2' not in str(exc.value)
+    assert 'got ' not in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_tool_returning_wrong_shape_is_not_checked() -> None:
+    """A `@ai.tool` `-> int` returning `'x'` gives back `'x'`."""
+    ai = Genkit()
+
+    @ai.tool()
+    async def echo(_name: str) -> int:
+        return 'x'  # type: ignore[return-value]
+
+    result = await echo('ada')
+    assert result.output == 'x'
 
 
 @pytest.mark.asyncio

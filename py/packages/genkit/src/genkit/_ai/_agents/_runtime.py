@@ -272,7 +272,6 @@ def validate_custom_state(*, custom: Any, state_schema: type[BaseModel] | None, 
             cause=e,
             details={
                 'schema': state_schema.model_json_schema(),
-                'errors': [{'loc': list(err['loc']), 'message': err['msg'], 'type': err['type']} for err in e.errors()],
             },
             reason=RuntimeErrorReason.INVALID_INPUT,
         ) from e

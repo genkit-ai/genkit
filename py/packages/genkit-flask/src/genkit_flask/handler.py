@@ -21,14 +21,16 @@ import json
 import logging
 from asyncio import AbstractEventLoop
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterable
-from typing import Any, TypeAlias, TypeVar
+from typing import Any, TypeAlias, TypeVar, cast
 
 from flask import Response, request
 from pydantic import BaseModel
 
-from genkit import ContextProvider, Genkit, PublicError, RequestData
+from genkit import ContextProvider, Genkit, GenkitError, PublicError, RequestData
+from genkit._core._action import input_from_json
 from genkit._core._context import joined_headers
-from genkit.plugin_api import Action, get_callable_json, get_http_status
+from genkit._core._error import log_served_failure, served_error_json, served_stream_error_event
+from genkit.plugin_api import Action
 
 logger = logging.getLogger(__name__)
 
@@ -36,19 +38,22 @@ logger = logging.getLogger(__name__)
 _JSON_SEPARATORS = (',', ':')
 
 
-def _log_served_failure(error: Exception, *, where: str) -> None:
-    if get_http_status(error) >= 500:
-        logger.exception('served flow %s failed', where)
-    else:
-        logger.warning('served flow %s failed: %s', where, error)
-
-
 def _error_response(error: Exception, status: int | None = None) -> Response:
+    resolved_status, body = served_error_json(error=error)
     return Response(
-        status=get_http_status(error) if status is None else status,
-        response=json.dumps(get_callable_json(error), separators=_JSON_SEPARATORS),
+        status=resolved_status if status is None else status,
+        response=body,
         mimetype='application/json',
     )
+
+
+def _parse_request_json() -> object:
+    """Parse the Flask body as JSON, or raise a 400 PublicError."""
+    try:
+        raw = request.get_data()
+        return json.loads(raw.decode('utf-8')) if raw else {}
+    except (json.JSONDecodeError, UnicodeDecodeError) as err:
+        raise PublicError('INVALID_ARGUMENT', 'request body must be valid JSON') from err
 
 
 def _to_dict(obj: Any) -> Any:  # noqa: ANN401
@@ -130,15 +135,19 @@ def genkit_flask_handler(
 
     def decorator(flow: Action) -> Callable[..., Awaitable[FlaskRouteReturn]]:
         if not isinstance(flow, Action):
-            raise PublicError('INVALID_ARGUMENT', 'must apply @genkit_flask_handler on a @flow')
+            raise GenkitError(status='INVALID_ARGUMENT', message='must apply @genkit_flask_handler on a @flow')
 
         async def handler() -> FlaskRouteReturn:
-            json_payload = request.get_json(silent=True)
-            if not isinstance(json_payload, dict) or 'data' not in json_payload:
+            try:
+                input_data = _parse_request_json()
+            except PublicError as e:
+                log_served_failure(adapter_logger=logger, error=e, where='run')
+                return _error_response(e)
+            if not isinstance(input_data, dict) or 'data' not in input_data:
                 return _error_response(
                     PublicError('INVALID_ARGUMENT', 'flow request must be wrapped in {"data": data} object')
                 )
-            input_data: dict[str, Any] = json_payload
+            input_data = cast(dict[str, Any], input_data)
 
             request_data = _FlaskRequestData(input_data)
             action_context: dict[str, object] | None = None
@@ -150,38 +159,36 @@ def genkit_flask_handler(
                     if isinstance(context, dict):
                         action_context = context
                 except Exception as e:
-                    _log_served_failure(e, where='context provider')
+                    log_served_failure(adapter_logger=logger, error=e, where='context provider')
                     return _error_response(e)
 
             # Substring match so Accept: text/event-stream, */* (and similar) still streams.
             accept = request_data.headers.get('accept', '')
             stream = 'text/event-stream' in accept or request.args.get('stream') == 'true'
             init = input_data.get('init')
-            # JSON can't say "omitted" apart from null, so `{"data": null}` means
-            # no input and the flow's default applies.
-            inputs: dict[str, Any] = {} if input_data['data'] is None else {'input': input_data['data']}
+            action_input = input_from_json(input_data['data'])
             if stream:
 
                 async def async_gen() -> AsyncIterator[str]:
                     try:
-                        stream_response = flow.stream(**inputs, context=action_context, init=init)
+                        stream_response = flow.stream(input=action_input, context=action_context, init=init)
                         async for chunk in stream_response.stream:
                             yield f'data: {json.dumps({"message": _to_dict(chunk)}, separators=_JSON_SEPARATORS)}\n\n'
 
                         result = await stream_response.response
                         yield f'data: {json.dumps({"result": _to_dict(result)}, separators=_JSON_SEPARATORS)}\n\n'
                     except Exception as e:
-                        _log_served_failure(e, where='stream')
-                        yield f'data: {json.dumps({"error": get_callable_json(e)}, separators=_JSON_SEPARATORS)}\n\n'
+                        log_served_failure(adapter_logger=logger, error=e, where='stream')
+                        yield served_stream_error_event(error=e)
 
                 iter = _iter_over_async(async_gen(), loop)
                 return iter
             else:
                 try:
-                    response = await flow.run(**inputs, context=action_context, init=init)
+                    response = await flow.run(input=action_input, context=action_context, init=init)
                     return {'result': _to_dict(response.response)}
                 except Exception as e:
-                    _log_served_failure(e, where='run')
+                    log_served_failure(adapter_logger=logger, error=e, where='run')
                     return _error_response(e)
 
         return handler
