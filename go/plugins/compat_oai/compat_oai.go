@@ -202,6 +202,13 @@ type OpenAICompatible struct {
 	// the OpenAI-style listing.
 	ListModels func(ctx context.Context, client *openai.Client) ([]string, error)
 
+	// SeparateReasoningTokens records that the provider counts
+	// completion_tokens_details.reasoning_tokens apart from completion_tokens,
+	// as xAI does, rather than inside them, as OpenAI does. Left false, each
+	// response is read by its total_tokens: a total that adds the reasoning on
+	// top of the completion marks it as counted apart.
+	SeparateReasoningTokens bool
+
 	// descs caches the action descriptors of listed models by name; they are
 	// deterministic per name, and rebuilding a full model action per listed
 	// model on every reflection poll is wasteful. A plugin instance lists
@@ -325,6 +332,7 @@ func (o *OpenAICompatible) DefineModel(provider, id string, opts ai.ModelOptions
 		cb ai.ModelStreamCallback,
 	) (*ai.ModelResponse, error) {
 		return NewModelGenerator(o.client, id).
+			withSeparateReasoning(o.SeparateReasoningTokens).
 			WithMessages(input.Messages).
 			WithConfig(input.Config).
 			WithTools(input.Tools).
@@ -434,6 +442,7 @@ func NewChatModel[Config ChatConfig](o *OpenAICompatible, id string, opts ai.Mod
 			outputFormats = opts.Supports.Output
 		}
 		return NewModelGenerator(o.clientForKey(config.RequestAPIKey()), id).
+			withSeparateReasoning(o.SeparateReasoningTokens).
 			WithParams(params).
 			WithMessages(input.Messages).
 			WithTools(input.Tools).

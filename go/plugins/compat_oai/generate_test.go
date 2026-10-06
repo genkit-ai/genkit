@@ -62,7 +62,7 @@ func TestConvertChatCompletionToModelResponseReasoning(t *testing.T) {
 				t.Fatalf("json.Unmarshal() error = %v", err)
 			}
 
-			resp, err := convertChatCompletionToModelResponse(&completion)
+			resp, err := convertChatCompletionToModelResponse(&completion, false)
 			if err != nil {
 				t.Fatalf("convertChatCompletionToModelResponse() error = %v", err)
 			}
@@ -167,7 +167,7 @@ func TestConvertChatCompletionToModelResponseProviderFinishReasons(t *testing.T)
 					},
 				}},
 			}
-			resp, err := convertChatCompletionToModelResponse(completion)
+			resp, err := convertChatCompletionToModelResponse(completion, false)
 			if err != nil {
 				t.Fatalf("convertChatCompletionToModelResponse() error = %v", err)
 			}
@@ -185,9 +185,10 @@ func TestConvertChatCompletionToModelResponseProviderFinishReasons(t *testing.T)
 // beside completion_tokens, so subtracting it there would count it never.
 func TestConvertUsage(t *testing.T) {
 	for _, tc := range []struct {
-		name  string
-		usage string
-		want  ai.GenerationUsage
+		name     string
+		usage    string
+		separate bool
+		want     ai.GenerationUsage
 	}{
 		{
 			name:  "openai reasoning inside completion",
@@ -198,6 +199,14 @@ func TestConvertUsage(t *testing.T) {
 			name:  "xai reasoning beside completion",
 			usage: `{"prompt_tokens":5294,"completion_tokens":3,"total_tokens":5508,"prompt_tokens_details":{"text_tokens":5294,"audio_tokens":0,"image_tokens":0,"cached_tokens":5248},"completion_tokens_details":{"reasoning_tokens":211,"audio_tokens":0,"accepted_prediction_tokens":0,"rejected_prediction_tokens":0},"num_sources_used":0}`,
 			want:  ai.GenerationUsage{InputTokens: 5294, OutputTokens: 3, ThoughtsTokens: 211, CachedContentTokens: 5248, TotalTokens: 5508},
+		},
+		{
+			// A stream's final chunk may leave total_tokens out, which takes
+			// away the total the undeclared case decides by.
+			name:     "xai declared, no total",
+			usage:    `{"prompt_tokens":5294,"completion_tokens":3,"prompt_tokens_details":{"cached_tokens":5248},"completion_tokens_details":{"reasoning_tokens":211}}`,
+			separate: true,
+			want:     ai.GenerationUsage{InputTokens: 5294, OutputTokens: 3, ThoughtsTokens: 211, CachedContentTokens: 5248, TotalTokens: 5508},
 		},
 		{
 			name:  "deepseek cache hit",
@@ -225,7 +234,7 @@ func TestConvertUsage(t *testing.T) {
 			if err := json.Unmarshal([]byte(tc.usage), &u); err != nil {
 				t.Fatalf("json.Unmarshal() error = %v", err)
 			}
-			got := convertUsage(u)
+			got := convertUsage(u, tc.separate)
 			got.Custom = nil
 			if !reflect.DeepEqual(*got, tc.want) {
 				t.Errorf("convertUsage() = %+v, want %+v", *got, tc.want)
@@ -277,7 +286,7 @@ func TestConvertChatCompletionToModelResponseCitations(t *testing.T) {
 				t.Fatalf("json.Unmarshal() error = %v", err)
 			}
 
-			resp, err := convertChatCompletionToModelResponse(&completion)
+			resp, err := convertChatCompletionToModelResponse(&completion, false)
 			if err != nil {
 				t.Fatalf("convertChatCompletionToModelResponse() error = %v", err)
 			}
@@ -307,7 +316,7 @@ func TestConvertChatCompletionToModelResponseSearchUsage(t *testing.T) {
 		t.Fatalf("json.Unmarshal() error = %v", err)
 	}
 
-	resp, err := convertChatCompletionToModelResponse(&completion)
+	resp, err := convertChatCompletionToModelResponse(&completion, false)
 	if err != nil {
 		t.Fatalf("convertChatCompletionToModelResponse() error = %v", err)
 	}
@@ -346,7 +355,7 @@ func TestConvertChatCompletionToModelResponseCost(t *testing.T) {
 				t.Fatalf("json.Unmarshal() error = %v", err)
 			}
 
-			resp, err := convertChatCompletionToModelResponse(&completion)
+			resp, err := convertChatCompletionToModelResponse(&completion, false)
 			if err != nil {
 				t.Fatalf("convertChatCompletionToModelResponse() error = %v", err)
 			}
@@ -378,7 +387,7 @@ func TestConvertChatCompletionToModelResponseProviderFailure(t *testing.T) {
 		t.Fatalf("json.Unmarshal() error = %v", err)
 	}
 
-	resp, err := convertChatCompletionToModelResponse(&completion)
+	resp, err := convertChatCompletionToModelResponse(&completion, false)
 	if err != nil {
 		t.Fatalf("convertChatCompletionToModelResponse() error = %v", err)
 	}
@@ -424,7 +433,7 @@ func TestConvertChatCompletionToModelResponseErrorBesideStop(t *testing.T) {
 		t.Fatalf("json.Unmarshal() error = %v", err)
 	}
 
-	resp, err := convertChatCompletionToModelResponse(&completion)
+	resp, err := convertChatCompletionToModelResponse(&completion, false)
 	if err != nil {
 		t.Fatalf("convertChatCompletionToModelResponse() error = %v", err)
 	}
@@ -453,7 +462,7 @@ func TestConvertChatCompletionToModelResponseNoErrorObject(t *testing.T) {
 		t.Fatalf("json.Unmarshal() error = %v", err)
 	}
 
-	resp, err := convertChatCompletionToModelResponse(&completion)
+	resp, err := convertChatCompletionToModelResponse(&completion, false)
 	if err != nil {
 		t.Fatalf("convertChatCompletionToModelResponse() error = %v", err)
 	}

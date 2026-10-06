@@ -306,6 +306,7 @@ func (x *XAI) Init(ctx context.Context) []api.Action {
 
 	x.openAICompatible.Provider = provider
 	x.openAICompatible.Opts = opts
+	x.openAICompatible.SeparateReasoningTokens = true
 	actions := x.openAICompatible.Init(ctx)
 
 	for model := range supportedModels {

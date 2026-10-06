@@ -42,6 +42,8 @@ type ModelGenerator struct {
 	// outputFormats is what the model declares it serves natively on the
 	// wire; empty declares nothing and keeps every format eligible.
 	outputFormats []string
+	// separateReasoning is [OpenAICompatible.SeparateReasoningTokens].
+	separateReasoning bool
 	// Store any errors that occur during building
 	err error
 }
@@ -61,6 +63,13 @@ func NewModelGenerator(client *openai.Client, modelName string) *ModelGenerator 
 			Model: (modelName),
 		},
 	}
+}
+
+// withSeparateReasoning sets whether the provider counts reasoning tokens
+// apart from completion_tokens; see [OpenAICompatible.SeparateReasoningTokens].
+func (g *ModelGenerator) withSeparateReasoning(separate bool) *ModelGenerator {
+	g.separateReasoning = separate
+	return g
 }
 
 // WithMessages adds messages to the request
@@ -592,7 +601,7 @@ func (g *ModelGenerator) generateStream(ctx context.Context, req *ai.ModelReques
 	}
 
 	// Convert accumulated ChatCompletion to ai.ModelResponse.
-	resp, err := convertChatCompletionToModelResponse(&acc.ChatCompletion)
+	resp, err := convertChatCompletionToModelResponse(&acc.ChatCompletion, g.separateReasoning)
 	if err != nil {
 		return nil, err
 	}
@@ -721,8 +730,10 @@ func extractErrorObject(raw string) map[string]any {
 	return failure
 }
 
-// convertChatCompletionToModelResponse converts openai.ChatCompletion to ai.ModelResponse
-func convertChatCompletionToModelResponse(completion *openai.ChatCompletion) (*ai.ModelResponse, error) {
+// convertChatCompletionToModelResponse converts openai.ChatCompletion to
+// ai.ModelResponse. separateReasoning is
+// [OpenAICompatible.SeparateReasoningTokens].
+func convertChatCompletionToModelResponse(completion *openai.ChatCompletion, separateReasoning bool) (*ai.ModelResponse, error) {
 	if len(completion.Choices) == 0 {
 		return nil, status.Errorf(status.ErrInvalidOutput, "no choices in completion")
 	}
@@ -730,7 +741,7 @@ func convertChatCompletionToModelResponse(completion *openai.ChatCompletion) (*a
 	choice := completion.Choices[0]
 
 	resp := &ai.ModelResponse{
-		Usage: convertUsage(completion.Usage),
+		Usage: convertUsage(completion.Usage, separateReasoning),
 		Message: &ai.Message{
 			Role:    ai.RoleModel,
 			Content: make([]*ai.Part, 0),
@@ -834,17 +845,23 @@ func convertChatCompletionToModelResponse(completion *openai.ChatCompletion) (*a
 
 // convertUsage maps a chat completion's usage onto [ai.GenerationUsage]'s
 // convention: output excludes the reasoning reported beside it, and the total
-// is input + output + thoughts.
-func convertUsage(u openai.CompletionUsage) *ai.GenerationUsage {
+// is the provider's, or input + output + thoughts when it reports none.
+// separateReasoning is [OpenAICompatible.SeparateReasoningTokens].
+func convertUsage(u openai.CompletionUsage, separateReasoning bool) *ai.GenerationUsage {
 	// OpenAI and most providers count reasoning inside completion_tokens. xAI
-	// counts it beside them, and its total_tokens adds it on top, which is how
-	// the two are told apart. A completion count below the reasoning count
-	// cannot contain it either.
+	// counts it beside them, which its plugin declares. For a provider that
+	// declares nothing, a total_tokens that adds the reasoning on top tells
+	// the two apart, and a completion count below the reasoning count cannot
+	// contain it either.
 	completion := int(u.CompletionTokens)
 	reasoning := int(u.CompletionTokensDetails.ReasoningTokens)
-	if reasoning > 0 && completion >= reasoning &&
+	if reasoning > 0 && !separateReasoning && completion >= reasoning &&
 		int(u.TotalTokens) != int(u.PromptTokens)+completion+reasoning {
 		completion -= reasoning
+	}
+	total := int(u.TotalTokens)
+	if total == 0 {
+		total = int(u.PromptTokens) + completion + reasoning
 	}
 
 	// DeepSeek reports its cache hits as a usage field of its own and, on
@@ -860,7 +877,7 @@ func convertUsage(u openai.CompletionUsage) *ai.GenerationUsage {
 		InputTokens:         int(u.PromptTokens),
 		OutputTokens:        completion,
 		ThoughtsTokens:      reasoning,
-		TotalTokens:         int(u.PromptTokens) + completion + reasoning,
+		TotalTokens:         total,
 		CachedContentTokens: cached,
 		CacheWriteTokens: extractTokenCount(
 			u.PromptTokensDetails.JSON.ExtraFields["cache_write_tokens"].Raw()),
@@ -911,7 +928,7 @@ func (g *ModelGenerator) generateComplete(ctx context.Context, req *ai.ModelRequ
 		return nil, fmt.Errorf("failed to create completion: %w", WrapAPIError(err))
 	}
 
-	resp, err := convertChatCompletionToModelResponse(completion)
+	resp, err := convertChatCompletionToModelResponse(completion, g.separateReasoning)
 	if err != nil {
 		return nil, err
 	}
