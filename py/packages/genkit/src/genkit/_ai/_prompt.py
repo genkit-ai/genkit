@@ -137,8 +137,8 @@ class PromptGenerateOptions(PromptSettings, ModelSettings, total=False):
     # the template says ({{history}}, or after the system message).
     messages: list[Message] | None
     # `context` is runtime state (auth, request metadata). Templates read it
-    # as {{@auth}}; __call__/stream also pass it to the run so tools and
-    # middleware see it. It never goes into the model request.
+    # as {{@auth}}. Omit it and render/call/stream use the enclosing flow's
+    # context, the same one tools and middleware already see.
     context: dict[str, Any] | None
 
 
@@ -840,8 +840,8 @@ async def render_template(
         if compiled_fn is None:
             compiled_fn = await registry.dotprompt.compile(template)
 
-        if metadata:
-            context = {**(context or {}), 'state': metadata.get('state')}
+        if metadata and 'state' in metadata:
+            context = {**(context or {}), 'state': metadata['state']}
 
         rendered_parts = cast(
             list[Part],
@@ -993,8 +993,11 @@ async def render_call(
     :func:`to_generate_options`.
     """
     template_input = coerce_prompt_template_input(input)
-    # Templates read context as {{@auth}} etc.
+    # Templates read context as {{@auth}} etc. An omitted context= uses
+    # the enclosing flow's auth, so render() shows what the run will send.
     render_context = opts.get('context') if opts else None
+    if render_context is None:
+        render_context = get_current_context()
     # This call's chat history; call.messages below is the template's own.
     message_history = opts.get('messages') if opts else None
     cache = prompt._compiled_templates

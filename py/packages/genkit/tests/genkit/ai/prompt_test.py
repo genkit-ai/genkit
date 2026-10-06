@@ -1299,6 +1299,77 @@ async def test_prompt_call_without_context_uses_enclosing_flow_context(method: s
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('method', ['render', '__call__', 'stream'])
+async def test_prompt_inside_flow_fills_auth_from_flow_context(method: str) -> None:
+    """Inside a flow, omit `context=` and `{{@auth}}` still fills from the flow."""
+    ai, echo, _ = setup_test()
+    p = ai.define_prompt(prompt='hello {{@auth.name}}')
+
+    async def greet(_: None) -> str:
+        if method == 'render':
+            rendered = await p.render()
+            return text_from_message(rendered.messages[0])
+        if method == 'stream':
+            return (await p.stream().response).text
+        return (await p()).text
+
+    result = await Action(name='greet', kind=ActionKind.FLOW, fn=greet).run(context={'auth': {'name': 'Ada'}})
+
+    assert 'hello Ada' in result.response
+    if method != 'render':
+        assert echo.last_request is not None
+        assert 'hello Ada' in text_from_message(echo.last_request.messages[-1])
+
+
+@pytest.mark.asyncio
+async def test_prompt_render_explicit_context_overrides_flow_context() -> None:
+    """`context=` on render wins over the enclosing flow's auth."""
+    ai, _ = _setup_prompt_call()
+    p = ai.define_prompt(prompt='hello {{@auth.name}}')
+
+    async def greet(_: None) -> str:
+        rendered = await p.render(context={'auth': {'name': 'Bea'}})
+        return text_from_message(rendered.messages[0])
+
+    result = await Action(name='greet', kind=ActionKind.FLOW, fn=greet).run(context={'auth': {'name': 'Ada'}})
+
+    assert result.response == 'hello Bea'
+
+
+@pytest.mark.asyncio
+async def test_prompt_render_outside_flow_without_context_leaves_auth_blank() -> None:
+    """Outside a flow, omit `context=` and `{{@auth}}` stays empty."""
+    ai, _ = _setup_prompt_call()
+    p = ai.define_prompt(prompt='hello {{@auth.name}}')
+
+    rendered = await p.render()
+
+    assert text_from_message(rendered.messages[0]) == 'hello '
+
+
+@pytest.mark.asyncio
+async def test_prompt_render_keeps_call_state_when_metadata_has_no_state() -> None:
+    """Definition metadata without `state` does not wipe `context={'state': ...}`."""
+    ai, _ = _setup_prompt_call()
+    p = ai.define_prompt(prompt='s={{@state.x}}', metadata={'owner': 'team'})
+
+    rendered = await p.render(context={'state': {'x': 'call'}})
+
+    assert text_from_message(rendered.messages[0]) == 's=call'
+
+
+@pytest.mark.asyncio
+async def test_prompt_render_uses_metadata_state_when_present() -> None:
+    """Definition `metadata={'state': ...}` is what `{{@state}}` reads."""
+    ai, _ = _setup_prompt_call()
+    p = ai.define_prompt(prompt='s={{@state.x}}', metadata={'state': {'x': 'meta'}})
+
+    rendered = await p.render(context={'state': {'x': 'call'}})
+
+    assert text_from_message(rendered.messages[0]) == 's=meta'
+
+
+@pytest.mark.asyncio
 async def test_prompt_stream_yields_each_chunk() -> None:
     """Iterating `p.stream()` yields the model's chunks in order, then the final response resolves."""
     ai, pm = _setup_prompt_call()
