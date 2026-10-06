@@ -28,7 +28,7 @@ from genkit_google_genai._interactions._options import ClientOptions
 from google.genai.interactions import Interaction
 
 from genkit import GenkitError, get_logger
-from genkit._core._error import ErrorResponseMetadata
+from genkit._core._error import ErrorResponseMetadata, mark_provider_error
 from genkit.plugin_api import (
     GENKIT_CLIENT_HEADER,
     from_http_code,
@@ -175,17 +175,21 @@ async def request(
                 json=json_body,
             )
     except httpx.TimeoutException as error:
-        raise GenkitError(
-            status='DEADLINE_EXCEEDED',
-            message=f'Request to {url} exceeded the configured timeout: {error}',
+        raise mark_provider_error(
+            error=GenkitError(
+                status='DEADLINE_EXCEEDED',
+                message=f'Request to {url} exceeded the configured timeout: {error}',
+            )
         ) from error
     except GenkitError:
         raise
     except Exception as error:
         logger.exception('Interactions request failed')
-        raise GenkitError(
-            status='UNKNOWN',
-            message=f'Unable to complete request to {url}: {error}',
+        raise mark_provider_error(
+            error=GenkitError(
+                status='UNKNOWN',
+                message=f'Unable to complete request to {url}: {error}',
+            )
         ) from error
 
     if response.is_success:
@@ -222,9 +226,13 @@ async def request(
     if retry_after_ms is not None:
         response_metadata = cast(ErrorResponseMetadata, {'retry_after_ms': retry_after_ms})
 
-    raise GenkitError(
-        status=from_http_code(response.status_code),
-        message=(f'Request to {url} failed with HTTP {response.status_code} {response.reason_phrase}: {error_message}'),
-        details=error_detail,
-        response_metadata=response_metadata,
+    raise mark_provider_error(
+        error=GenkitError(
+            status=from_http_code(response.status_code),
+            message=(
+                f'Request to {url} failed with HTTP {response.status_code} {response.reason_phrase}: {error_message}'
+            ),
+            details=error_detail,
+            response_metadata=response_metadata,
+        )
     )

@@ -30,6 +30,7 @@ from django.urls import path
 from genkit_django import genkit_django_handler
 
 from genkit import ActionRunContext, Genkit, GenkitError, PublicError, RequestData
+from genkit.plugin_api import wrap_http_error
 
 
 def _assert_is_error_response(parsed: dict) -> None:
@@ -105,6 +106,11 @@ def _build_views() -> dict[str, Any]:
     async def gated(_: str) -> str:
         return 'ok'
 
+    @genkit_django_handler(ai)
+    @ai.flow()
+    async def raise_provider(_: str) -> None:
+        raise wrap_http_error(RuntimeError('API key not valid'), status_code=401)
+
     return {
         'say_hi': say_hi,
         'raise_error': raise_error,
@@ -112,6 +118,7 @@ def _build_views() -> dict[str, Any]:
         'raise_public': raise_public,
         'echo_request': echo_request,
         'gated': gated,
+        'raise_provider': raise_provider,
     }
 
 
@@ -130,6 +137,7 @@ def urlconf(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         path('public_flow', views['raise_public']),
         path('echo_request', views['echo_request']),
         path('gated', views['gated']),
+        path('provider_flow', views['raise_provider']),
     ]
     monkeypatch.setitem(sys.modules, 'genkit_django_tests_urls', module)
 
@@ -343,3 +351,34 @@ async def test_django_context_provider_public_error_returns_its_status_and_messa
 
     assert response.status_code == 401
     assert json.loads(response.content) == {'message': 'not signed in', 'status': 'UNAUTHENTICATED'}
+
+
+@pytest.mark.asyncio
+async def test_django_provider_401_returns_500_internal_error(urlconf: None) -> None:  # noqa: ARG001
+    """A Django flow whose model call fails with a provider 401 is 500 Internal Error."""
+    client = AsyncClient()
+    response = await client.post(
+        '/provider_flow',
+        data=json.dumps({'data': 'hi'}),
+        content_type='application/json',
+    )
+
+    assert response.status_code == 500
+    assert json.loads(response.content) == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert b'API key not valid' not in response.content
+
+
+@pytest.mark.asyncio
+async def test_django_stream_provider_401_sends_sse_internal_error(urlconf: None) -> None:  # noqa: ARG001
+    """A streamed Django flow whose model call fails with a provider 401 ends with Internal Error."""
+    client = AsyncClient()
+    response = await client.post(
+        '/provider_flow',
+        data=json.dumps({'data': 'hi'}),
+        content_type='application/json',
+        headers={'accept': 'text/event-stream'},
+    )
+    chunks = [chunk async for chunk in response.streaming_content]
+    error = _sse_error_event(chunks)
+    assert error == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert b'API key not valid' not in b''.join(chunks)

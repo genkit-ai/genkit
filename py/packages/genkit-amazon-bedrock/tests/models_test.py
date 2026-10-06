@@ -35,6 +35,7 @@ from botocore.exceptions import (
 from genkit_amazon_bedrock.models import BedrockModel
 
 from genkit import ActionRunContext, FinishReason, GenkitError, Message, Part, Role
+from genkit._core._error import get_callable_json, get_http_status
 from genkit.model import ModelRequest
 
 
@@ -179,6 +180,21 @@ async def test_botocore_errors_map_to_genkit_statuses(error: BotoCoreError, expe
     assert excinfo.value.status == expected_status
     assert 'bedrock converse failed' in excinfo.value.original_message
     assert excinfo.value.__cause__ is error
+
+
+@pytest.mark.asyncio
+async def test_bedrock_credentials_error_is_served_as_internal_error() -> None:
+    """Missing Bedrock credentials stay UNAUTHENTICATED in-process and serve as 500 Internal Error."""
+    transport = FakeTransport(error=NoCredentialsError())
+    model = BedrockModel(model_id='amazon.nova-lite-v1:0', transport=transport)
+
+    with pytest.raises(GenkitError) as excinfo:
+        await model.generate(text_request())
+
+    error = excinfo.value
+    assert error.status == 'UNAUTHENTICATED'
+    assert get_callable_json(error) == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert get_http_status(error) == 500
 
 
 @pytest.mark.parametrize(
