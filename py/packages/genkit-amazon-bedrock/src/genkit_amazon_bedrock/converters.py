@@ -31,15 +31,13 @@ from genkit import FinishReason, GenkitError, Message, ModelResponse, Part, Role
 from genkit.model import ModelRequest, ModelUsage, ToolDefinition, ToolRequest
 from genkit_amazon_bedrock.config import BedrockConfig
 
-# Metadata keys used to round-trip Bedrock reasoning ("thinking") content back
-# into a follow-up request. Bedrock returns signed and sometimes redacted
-# reasoning that must be replayed verbatim on the next turn or the model
-# rejects it, so both are stashed on the part metadata: the signature verbatim
-# (it is a string on the wire), the redacted blob as a base64 string so the
-# part stays JSON-serializable. These keys are Bedrock-specific: a generic
-# reasoning part (without these) is intentionally NOT round-tripped, so
-# foreign reasoning can't corrupt a Bedrock conversation.
-REASONING_SIGNATURE_METADATA_KEY = 'bedrockReasoningSignature'
+# Bedrock returns signed and sometimes redacted reasoning that has to be sent
+# back verbatim next turn or the model rejects it, so both ride on the part
+# metadata. The signature uses the same `thoughtSignature` key every provider
+# uses; the redacted blob is stored base64 so a saved chat stays JSON. Reasoning
+# with neither is never sent back. A signature from another provider is sent
+# as-is, and Bedrock rejects it the same way any provider rejects a foreign one.
+REASONING_SIGNATURE_METADATA_KEY = 'thoughtSignature'
 REDACTED_CONTENT_METADATA_KEY = 'bedrockRedactedContent'
 
 # Custom-part key marking a prompt cache point.
@@ -318,9 +316,8 @@ def _tool_response_text(output: Any) -> str:  # noqa: ANN401
 def _reasoning_part_to_blocks(part: Part) -> list[dict[str, Any]]:
     """Converts a reasoning part back to Converse reasoningContent blocks.
 
-    Only Bedrock-originated reasoning (carrying the signature and/or redacted
-    metadata) is emitted; a generic reasoning part produces no blocks so it
-    cannot corrupt the follow-up request.
+    Only signed or redacted reasoning is emitted; unsigned reasoning produces
+    no blocks, since Bedrock would reject it.
     """
     metadata = part.metadata
     blocks: list[dict[str, Any]] = []
@@ -643,8 +640,6 @@ def bedrock_reasoning_part(text: str, signature: str | None, redacted: bytes | N
     """
     metadata: dict[str, Any] = {}
     if signature:
-        # Also stored under the generic key so framework-level consumers see it.
-        metadata['signature'] = signature
         metadata[REASONING_SIGNATURE_METADATA_KEY] = signature
     if redacted:
         # Base64 string, not raw bytes: part metadata must stay JSON-serializable.

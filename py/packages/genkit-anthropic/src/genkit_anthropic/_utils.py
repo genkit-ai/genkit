@@ -145,18 +145,16 @@ def get_redacted_thinking_data(part: Part) -> str | None:
 
 
 def get_thinking_signature(part: Part) -> str | None:
-    """Extract the Anthropic thinking signature from a part's metadata.
+    """Extract the Anthropic thinking signature from ``metadata.thoughtSignature``.
 
-    Reads ``metadata.thoughtSignature`` (JS naming), falling back to
-    ``metadata.signature`` (Go naming) as an input alias.
+    That's the only key read: a plain ``signature`` may have been stamped by a
+    different provider, and Claude would reject it anyway.
     """
     metadata = part.metadata
     if not isinstance(metadata, dict):
         return None
 
     signature = metadata.get('thoughtSignature')
-    if signature is None:
-        signature = metadata.get('signature')
     if isinstance(signature, bytes):
         try:
             signature = signature.decode('utf-8')

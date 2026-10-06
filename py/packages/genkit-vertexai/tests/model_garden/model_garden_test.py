@@ -26,6 +26,8 @@ from genkit_vertexai.model_garden import ModelGarden, ModelGardenPlugin
 from genkit_vertexai.model_garden.anthropic import AnthropicModelGarden
 from genkit_vertexai.model_garden.model_garden import ModelGardenModel
 
+from genkit import FinishReason, Genkit, Message, Part, Role
+
 
 @pytest.fixture
 @patch('genkit_vertexai.model_garden.model_garden.OpenAIClient')
@@ -105,6 +107,33 @@ def test_anthropic_model_garden_uses_anthropic_config_schema() -> None:
     """Anthropic Model Garden advertises the schema enforced by its handler."""
     schema = AnthropicModelGarden.get_config_schema()
     assert issubclass(schema, AnthropicConfig)
+
+
+@pytest.mark.asyncio
+async def test_generate_model_garden_claude_part_with_only_signature_key_fails_with_invalid_argument() -> None:
+    """A Model Garden Claude thinking part carrying only ``signature`` fails with INVALID_ARGUMENT before sending."""
+    ai = Genkit(plugins=[ModelGarden(project_id='project', location='us-east5')])
+    history = [
+        Message(role=Role.USER, content=[Part.from_text('what is 17 * 23?')]),
+        Message(
+            role=Role.MODEL,
+            content=[Part.from_reasoning('because', metadata={'signature': 'sig'}), Part.from_text('391')],
+        ),
+    ]
+
+    with patch('genkit_vertexai.model_garden.anthropic.AsyncAnthropicVertex') as client_ctor:
+        response = await ai.generate(
+            model='modelgarden/anthropic/claude-sonnet-4@20250514', messages=history, prompt='now add 100'
+        )
+
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.error is not None
+    assert response.error.status == 'INVALID_ARGUMENT'
+    assert response.finish_message is not None
+    assert 'metadata.thoughtSignature' in response.finish_message
+    assert response.message is None
+    assert [m.role for m in response.messages] == [Role.USER, Role.MODEL, Role.USER]
+    client_ctor.return_value.messages.create.assert_not_called()
 
 
 def test_anthropic_model_garden_does_not_advertise_api_key() -> None:

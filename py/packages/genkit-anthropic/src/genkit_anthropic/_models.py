@@ -627,10 +627,13 @@ class AnthropicModel:
         if reasoning:
             signature = get_thinking_signature(part)
             if not signature:
-                raise ValueError(
-                    'Anthropic thinking parts require a signature when sending back '
-                    'to the API. Preserve the `metadata.thoughtSignature` value from '
-                    'the original response.'
+                raise GenkitError(
+                    status='INVALID_ARGUMENT',
+                    message=(
+                        'Anthropic thinking parts require a signature when sending back '
+                        'to the API. Preserve the `metadata.thoughtSignature` value from '
+                        'the original response.'
+                    ),
                 )
             return {'type': 'thinking', 'thinking': reasoning, 'signature': signature}
 
