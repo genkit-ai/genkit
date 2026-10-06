@@ -990,7 +990,6 @@ class Supports(GenkitModel):
     system_role: bool | None = None
     output: list[str] | None = None
     content_type: list[str] | None = None
-    context: bool | None = None
     constrained: Constrained | None = None
     tool_choice: bool | None = None
     long_running: bool | None = None
