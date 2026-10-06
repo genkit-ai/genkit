@@ -49,12 +49,11 @@ from genkit._ai._prompt import (
     load_prompt_folder,
     lookup_prompt,
     prompt,
-    resume_options_to_resume,
 )
 from genkit._core._action import Action, ActionKind
 from genkit._core._dap import DapValue
 from genkit._core._error import GenkitError, RuntimeErrorReason
-from genkit._core._model import GenerateActionOptions, ModelConfig
+from genkit._core._model import GenerateActionOptions, ModelConfig, resume_options_to_resume
 from genkit._core._registry import define_dynamic_action_provider
 from genkit._core._typing import Role
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, MiddlewareRef, ModelHookParams
@@ -1091,18 +1090,18 @@ class _StopAtPrepareError(Exception):
 @pytest.mark.asyncio
 @pytest.mark.parametrize('method', ['__call__', 'stream', 'render'])
 async def test_prompt_call_forwards_every_keyword_to_prepare(method: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Every keyword reaches _prepare with the value passed; a keyword left out of the opts dict fails here."""
+    """Every keyword reaches prepare_prompt with the value passed; a keyword left out of the opts dict fails here."""
     ai, _ = _setup_prompt_call()
     p = ai.define_prompt(prompt='Suggest a dish.')
     # A distinct value per keyword, so a dropped or swapped one shows up.
     sent = {key: object() for key in PromptGenerateOptions.__optional_keys__}
     seen: dict[str, object] = {}
 
-    async def capture(input: object = None, opts: PromptGenerateOptions | None = None) -> None:
+    async def capture(*, prompt: object, input: object = None, opts: PromptGenerateOptions | None = None) -> None:
         seen.update(opts or {})
         raise _StopAtPrepareError
 
-    monkeypatch.setattr(p, '_prepare', capture)
+    monkeypatch.setattr('genkit._ai._prompt.prepare_prompt', capture)
     with pytest.raises(_StopAtPrepareError):
         if method == 'stream':
             await p.stream(None, **sent).response
@@ -1378,6 +1377,52 @@ async def test_prompt_render_uses_metadata_state_when_present() -> None:
     rendered = await p.render(context={'state': {'x': 'call'}})
 
     assert text_from_message(rendered.messages[0]) == 's=meta'
+
+
+@pytest.mark.asyncio
+async def test_prompt_render_messages_template_keeps_call_state_when_metadata_has_no_state() -> None:
+    """A messages= template with metadata that has no state still shows the call's context state."""
+    ai, _ = _setup_prompt_call()
+    p = ai.define_prompt(messages='s={{@state.x}}', metadata={'owner': 'team'})
+
+    rendered = await p.render(context={'state': {'x': 'call'}})
+
+    assert text_from_message(rendered.messages[0]) == 's=call'
+
+
+@pytest.mark.asyncio
+async def test_prompt_render_messages_template_uses_metadata_state_when_present() -> None:
+    """A messages= template reads definition `metadata={'state': ...}` for `{{@state}}`."""
+    ai, _ = _setup_prompt_call()
+    p = ai.define_prompt(messages='s={{@state.x}}', metadata={'state': {'x': 'meta'}})
+
+    rendered = await p.render(context={'state': {'x': 'call'}})
+
+    assert text_from_message(rendered.messages[0]) == 's=meta'
+
+
+@pytest.mark.asyncio
+async def test_prompt_file_render_keeps_call_state() -> None:
+    """A .prompt file with no state in frontmatter still shows the call's context state in {{@state}}."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        (Path(tmp_dir) / 'stateful.prompt').write_text('---\nmodel: scriptedModel\n---\ns={{@state.x}}\n')
+        ai = Genkit(prompt_dir=tmp_dir, model='scriptedModel')
+        define_scripted_model(ai)
+
+        rendered = await ai.prompt('stateful').render(context={'state': {'x': 'call'}})
+
+        assert text_from_message(rendered.messages[0]) == 's=call'
+
+
+@pytest.mark.asyncio
+async def test_prompt_render_system_template_keeps_call_state_when_metadata_has_no_state() -> None:
+    """A system= template with metadata that has no state still shows the call's context state."""
+    ai, _ = _setup_prompt_call()
+    p = ai.define_prompt(system='s={{@state.x}}', metadata={'owner': 'team'})
+
+    rendered = await p.render(context={'state': {'x': 'call'}})
+
+    assert text_from_message(rendered.messages[0]) == 's=call'
 
 
 @pytest.mark.asyncio

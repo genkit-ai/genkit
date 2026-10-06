@@ -12,7 +12,7 @@ from structlog.testing import capture_logs
 from genkit import Genkit, Message, ModelResponse, ModelResponseChunk, Part
 from genkit._ai._generate import generate_action
 from genkit._ai._model import resolve_model_arg
-from genkit._ai._tools import Interrupt, respond_to_interrupt, restart_tool
+from genkit._ai._tools import Interrupt
 from genkit._core._environment import GENKIT_ENV
 from genkit._core._logger import GENKIT_LOG, get_logger
 from genkit._core._model import GenerateActionOptions, Resume
@@ -368,7 +368,7 @@ async def test_restarted_tool_interrupt_logs(monkeypatch: pytest.MonkeyPatch) ->
                 model='scriptedModel',
                 messages=list(first.messages),
                 tools=['hold'],
-                resume=Resume(restart=[restart_tool(interrupt=first.interrupts[0])]),
+                resume=Resume(restart=[first.interrupts[0].restart()]),
             ),
         )
 
@@ -497,7 +497,7 @@ async def test_resumed_tool_stream_callback_failure_returns_closed_history() -> 
         if getattr(chunk, 'role', None) == Role.TOOL:
             raise RuntimeError('resume sink closed')
 
-    reply = respond_to_interrupt({'approved': True}, interrupt=first.interrupts[0])
+    reply = first.interrupts[0].respond({'approved': True})
     response = await generate_action(
         ai.registry,
         GenerateActionOptions(
