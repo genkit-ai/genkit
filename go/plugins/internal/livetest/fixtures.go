@@ -99,7 +99,9 @@ func defineFixtures(g *genkit.Genkit) *fixtures {
 	f.gablorken = genkit.DefineTool(g, "gablorken",
 		"Calculates a gablorken. Use it whenever asked for a gablorken.",
 		func(_ *ai.ToolContext, in gablorkenInput) (float64, error) {
-			return math.Pow(in.Value, in.Over), nil
+			// One more than the power, so a model that has seen a result
+			// cannot work out the next one without the tool.
+			return math.Pow(in.Value, in.Over) + 1, nil
 		})
 
 	f.transfer = genkit.DefineTool(g, "transferFunds",

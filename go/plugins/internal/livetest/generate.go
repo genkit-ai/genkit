@@ -215,7 +215,7 @@ func generateCases() []liveCase {
 			resp := r.gen(t, r.s.Model,
 				ai.WithTools(r.tools.gablorken),
 				ai.WithPrompt("Use the gablorken tool with value 4 and over 2, then reply with just the number it returns."))
-			wantReply(t, resp, "16")
+			wantReply(t, resp, "17")
 		}},
 		{"tool calling streaming", needTools, func(t *testing.T, r *runner) {
 			chunks := 0
@@ -229,13 +229,13 @@ func generateCases() []liveCase {
 			if chunks == 0 {
 				t.Error("chunks = 0, want streamed chunks across the tool round trip")
 			}
-			wantReply(t, resp, "16")
+			wantReply(t, resp, "17")
 		}},
 		{"parallel tool calls", needTools, func(t *testing.T, r *runner) {
 			resp := r.gen(t, r.s.Model,
 				ai.WithTools(r.tools.gablorken),
 				ai.WithPrompt("I need two gablorkens: value 2 over 3, and value 3 over 2. They are independent, so request both tool calls at once. Then reply with both numbers."))
-			wantReply(t, resp, "8", "9")
+			wantReply(t, resp, "9", "10")
 			parallel := false
 			for _, m := range resp.History() {
 				if m.Role == ai.RoleModel && len(toolRequests([]*ai.Message{m})) >= 2 {
@@ -250,7 +250,7 @@ func generateCases() []liveCase {
 			resp := r.gen(t, r.s.Model,
 				ai.WithTools(r.tools.gablorken),
 				ai.WithPrompt("Compute the gablorken of value 2 over 3. Then compute the gablorken of that result over 2. Use the tool for each step and reply with just the final number."))
-			wantReply(t, resp, "64")
+			wantReply(t, resp, "82")
 			if n := len(toolRequests(resp.History())); n < 2 {
 				t.Errorf("tool requests = %d, want one per step", n)
 			}
@@ -349,8 +349,8 @@ func generateCases() []liveCase {
 			if err != nil {
 				t.Fatalf("GenerateData() error = %v", err)
 			}
-			if answer.Result != 16 {
-				t.Errorf("Result = %v (%d tool calls in history), want 16", answer.Result, len(toolRequests(resp.History())))
+			if answer.Result != 17 {
+				t.Errorf("Result = %v (%d tool calls in history), want 17", answer.Result, len(toolRequests(resp.History())))
 			}
 		}},
 
@@ -509,12 +509,12 @@ func generateCases() []liveCase {
 				wantReply(t, resp, want...)
 				return resp
 			}
-			first := turn(nil, "Use the gablorken tool with value 3 and over 2, then reply with just the number.", "9")
+			first := turn(nil, "Use the gablorken tool with value 3 and over 2, then reply with just the number.", "10")
 			if r.s.ReasoningContent && !hasReasoning(first.History()) {
 				t.Error("first turn kept no reasoning in its history, want the thinking that led to the tool call")
 			}
-			second := turn(first.History(), "Call the gablorken tool once more, with value set to the previous result and over set to 0.5. Reply with just the number it returns.", "3")
-			turn(second.History(), "What were the two gablorken results? Reply with both numbers.", "9", "3")
+			second := turn(first.History(), "Call the gablorken tool once more, with value set to the previous result and over set to 2. Reply with just the number it returns.", "101")
+			turn(second.History(), "What were the two gablorken results? Reply with both numbers.", "10", "101")
 		}},
 	}
 }

@@ -224,10 +224,10 @@ func agentCases() []liveCase {
 		}},
 		{"tool calls across turns", needTools, func(t *testing.T, r *runner) {
 			s := r.newSession(t, r.s.Model, ai.WithTools(r.tools.gablorken))
-			s.askText(t, "Use the gablorken tool with value 4 and over 2. Reply with just the number.", "16")
-			s.askText(t, "Call the gablorken tool once more, with value set to the previous result and over set to 0.5. Reply with just the number it returns.", "4")
-			s.askText(t, "Now get two gablorkens at once: value 2 over 3, and value 3 over 2. Reply with both numbers.", "8", "9")
-			s.askText(t, "List every gablorken result so far, separated by commas.", "16", "4", "8", "9")
+			s.askText(t, "Use the gablorken tool with value 4 and over 2. Reply with just the number.", "17")
+			s.askText(t, "Call the gablorken tool once more, with value set to the previous result and over set to 2. Reply with just the number it returns.", "290")
+			s.askText(t, "Now get two gablorkens at once: value 2 over 3, and value 3 over 2. Reply with both numbers.", "9", "10")
+			s.askText(t, "List every gablorken result so far, separated by commas.", "17", "290", "9", "10")
 		}},
 		{"interrupts across turns", needTools, func(t *testing.T, r *runner) {
 			s := r.newSession(t, r.s.Model, ai.WithTools(r.tools.transfer, r.tools.gablorken))
@@ -256,7 +256,7 @@ func agentCases() []liveCase {
 				t.Errorf("reply = %q, want it to report the rejected transfer", rejected.reply())
 			}
 
-			s.askText(t, "Use the gablorken tool with value 4 and over 2. Reply with just the number.", "16")
+			s.askText(t, "Use the gablorken tool with value 4 and over 2. Reply with just the number.", "17")
 			s.askText(t, "What was the confirmation code of the transfer to Ada?", transferCode)
 		}},
 		{"reasoning across turns", needReasoning, func(t *testing.T, r *runner) {
@@ -268,9 +268,9 @@ func agentCases() []liveCase {
 			turns := []*turn{s.askText(t, "Is 91 a prime number? Answer yes or no.", "no")}
 			if len(opts) > 0 {
 				turns = append(turns,
-					s.askText(t, "Use the gablorken tool with value 3 and over 2. Reply with just the number.", "9"),
-					s.askText(t, "Call the gablorken tool once more, with value set to the previous result and over set to 0.5. Reply with just the number it returns.", "3"),
-					s.askText(t, "What were the two gablorken results? Reply with both numbers.", "9", "3"))
+					s.askText(t, "Use the gablorken tool with value 3 and over 2. Reply with just the number.", "10"),
+					s.askText(t, "Call the gablorken tool once more, with value set to the previous result and over set to 2. Reply with just the number it returns.", "101"),
+					s.askText(t, "What were the two gablorken results? Reply with both numbers.", "10", "101"))
 			} else {
 				turns = append(turns, s.askText(t, "Is 97 a prime number? Answer yes or no.", "yes"))
 			}
@@ -303,7 +303,7 @@ func agentCases() []liveCase {
 			if !caps.Tools {
 				return
 			}
-			s.askText(t, "Use the gablorken tool with value 4 and over 2. Reply with just the number.", "16")
+			s.askText(t, "Use the gablorken tool with value 4 and over 2. Reply with just the number.", "17")
 			if r.s.ToolResponseMedia {
 				s.askText(t, "Fetch the swatch named primary with the fetchSwatch tool and tell me its color in one word.", "red")
 				s.askText(t, "What color was the swatch? Reply with one word.", "red")
@@ -326,7 +326,7 @@ func agentCases() []liveCase {
 		}},
 		{"abort during a tool call", needTools, func(t *testing.T, r *runner) {
 			s := r.newSession(t, r.s.Model, ai.WithTools(r.tools.gablorken, r.tools.diagnostics))
-			s.askText(t, "Use the gablorken tool with value 4 and over 2. Reply with just the number.", "16")
+			s.askText(t, "Use the gablorken tool with value 4 and over 2. Reply with just the number.", "17")
 
 			select {
 			case <-r.tools.started:
@@ -366,8 +366,8 @@ func agentCases() []liveCase {
 
 			// The aborted turn left a tool request nothing answered; the
 			// conversation must carry on without it.
-			s.askText(t, "Forget the diagnostics. Use the gablorken tool with value 3 and over 2. Reply with just the number.", "9")
-			s.askText(t, "What was the first gablorken result in this conversation?", "16")
+			s.askText(t, "Forget the diagnostics. Use the gablorken tool with value 3 and over 2. Reply with just the number.", "10")
+			s.askText(t, "What was the first gablorken result in this conversation?", "17")
 		}},
 		{"abort while streaming", always, func(t *testing.T, r *runner) {
 			s := r.newSession(t, r.s.Model)
@@ -403,7 +403,7 @@ func agentCases() []liveCase {
 		}},
 		{"failed turn then retry", needTools, func(t *testing.T, r *runner) {
 			s := r.newSession(t, r.s.Model, ai.WithTools(r.tools.lookupOrder))
-			s.askText(t, "I am going to ask about order 1234. Reply with just OK.")
+			s.askText(t, "My name is Ada Lovelace. Reply with just OK.")
 
 			r.tools.failLookups.Store(1)
 			defer r.tools.failLookups.Store(0)
@@ -421,7 +421,7 @@ func agentCases() []liveCase {
 			retry := s.send(t, r.ctx, &aix.AgentInput{})
 			retry.wantCompleted(t)
 			retry.wantReply(t, "quokka")
-			s.askText(t, "Which order number did we look up? Reply with just the number.", "1234")
+			s.askText(t, "What is my name, and which order number did we look up?", "ada", "1234")
 		}},
 	}
 }
