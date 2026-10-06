@@ -154,6 +154,22 @@ def test_extra_survives_validate_dump() -> None:
     assert dumped['extra'] == {'foo_bar': 'baz'}
 
 
+@pytest.mark.parametrize(
+    'raw',
+    [
+        {'thinking': {'enabled': True, 'budgetTokens': 2048, 'budgetToken': 1}},
+        {'output_config': {'effort': 'high', 'efort': 'low'}},
+        {'output_config': {'task_budget': {'total': 20000, 'totl': 1}}},
+        {'tool_choice': {'type': 'tool', 'name': 'lookup_menu', 'nmae': 'lookup_menu'}},
+        {'metadata': {'user_id': 'u', 'userid': 'u'}},
+    ],
+)
+def test_anthropic_config_with_unknown_nested_key_raises_validation_error(raw: dict) -> None:
+    """A typo inside `thinking`, `output_config`, `tool_choice` or `metadata` fails the same way."""
+    with pytest.raises(ValidationError, match='Extra inputs are not permitted'):
+        AnthropicConfig.model_validate(raw)
+
+
 def test_base_max_output_tokens_alias() -> None:
     cfg = AnthropicConfig.model_validate({'maxOutputTokens': 256})
     assert cfg.max_output_tokens == 256
@@ -168,7 +184,6 @@ def test_json_schema_advertises_js_shaped_keys() -> None:
 
     # Advertised common and Anthropic-specific keys.
     for key in (
-        'apiKey',
         'apiVersion',
         'betas',
         'maxOutputTokens',
@@ -181,7 +196,6 @@ def test_json_schema_advertises_js_shaped_keys() -> None:
 
     assert props['maxOutputTokens']['type'] == 'number'
     assert props['maxOutputTokens']['title'] == 'Max output tokens'
-    assert props['apiKey']['description'] == 'Overrides the plugin-configured Anthropic API key for this request.'
     assert props['apiVersion']['description'] == 'Selects the Anthropic API surface for this request.'
     assert (
         props['betas']['description']

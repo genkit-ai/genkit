@@ -384,7 +384,6 @@ async def test_list_actions_empty_api_response_returns_and_caches_statics() -> N
 
 
 _ANTHROPIC_CONFIG_KEYS = {
-    'apiKey',
     'apiVersion',
     'betas',
     'maxOutputTokens',

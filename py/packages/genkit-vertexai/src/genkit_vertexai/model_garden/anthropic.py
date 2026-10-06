@@ -49,7 +49,7 @@ class VertexAnthropicConfig(AnthropicConfig):
     """Anthropic config for Vertex Model Garden.
 
     ``apiKey`` is omitted because :class:`AsyncAnthropicVertex` authenticates
-    with ambient Google credentials and ignores a per-request Anthropic key.
+    with ambient Google credentials and can't take a per-request Anthropic key.
     """
 
     model_config = ConfigDict(**{

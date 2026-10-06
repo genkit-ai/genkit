@@ -41,6 +41,7 @@ from genkit.plugin_api import (
 )
 from genkit_anthropic._config import AnthropicConfig
 from genkit_anthropic._model_info import get_model_info
+from genkit_anthropic._secrets import context_api_key, reject_request_config_api_key
 from genkit_anthropic._utils import (
     build_cache_usage,
     get_cache_control,
@@ -154,7 +155,7 @@ def _to_anthropic_thinking_config(thinking: dict[str, Any] | None) -> dict[str, 
     enabled = thinking.get('enabled') is True or thinking_type == 'enabled'
     disabled = thinking.get('enabled') is False or thinking_type == 'disabled'
 
-    # Keys that are not mode toggles (display, and any forward-compatible field) pass through unchanged.
+    # Keys that are not mode toggles (display) pass through unchanged.
     result: dict[str, Any] = {key: value for key, value in thinking.items() if key not in _THINKING_MODE_KEYS}
 
     if adaptive:
@@ -185,8 +186,7 @@ def _to_anthropic_thinking_config(thinking: dict[str, Any] | None) -> dict[str, 
 # schema can't see inside the passthrough, and overwriting them silently would
 # replace the model the action resolved (pin one with `version`), the
 # conversation, the streaming mode, or the structured-output format Genkit
-# merges into output_config (the declared field still works). Matches Go's
-# rejectManagedConfig, which refuses a config-level model.
+# merges into output_config (the declared field still works).
 _MANAGED_BODY_FIELDS = ('model', 'messages', 'system', 'tools', 'tool_choice', 'stream', 'output_config')
 
 
@@ -256,9 +256,11 @@ class AnthropicModel:
         Returns:
             Generated response.
         """
+        reject_request_config_api_key(request.config)
         config = _normalize_config(request.config)
         use_beta = self._uses_beta_api(config)
-        client = self._client_for_config(config)
+        context = ctx.context if ctx is not None and isinstance(ctx.context, dict) else {}
+        client = self._client_for_key(context_api_key(context))
         params = self._build_params(request, config=config, use_beta=use_beta)
         streaming = ctx and ctx.is_streaming
 
@@ -333,26 +335,32 @@ class AnthropicModel:
             cache_read_input_tokens=getattr(response.usage, 'cache_read_input_tokens', None) or 0,
         )
 
-    def _client_for_config(self, config: AnthropicConfig) -> object:
-        """Return the request client, applying a per-request API key when supported."""
-        if not config.api_key:
+    def _client_for_key(self, api_key: str | None) -> object:
+        """Return the request client, re-credentialed with the caller's key when one was given.
+
+        A client that can't swap its credential raises rather than sending the
+        call on the plugin's own key, because whoever passed a key expects
+        that account to be billed.
+        """
+        if api_key is None:
             return self.client
 
+        reason = None
         if not isinstance(self.client, AsyncAnthropic):
-            logger.warning('Ignored per-request Anthropic apiKey because the configured client does not support it')
-            return self.client
-
+            reason = 'this client uses its own cloud credentials, not an Anthropic API key'
         # copy() cannot unset these, so the override would leave the base credential authenticating the request.
-        if self.client.auth_token is not None:
-            logger.warning('Ignored per-request Anthropic apiKey because the client authenticates with an auth token')
-            return self.client
-
-        if any(name.lower() == 'x-api-key' for name in self.client._custom_headers):  # noqa: SLF001
-            logger.warning('Ignored per-request Anthropic apiKey because the client pins an x-api-key header')
-            return self.client
+        elif self.client.auth_token is not None:
+            reason = 'the plugin client authenticates with an auth token'
+        elif any(name.lower() == 'x-api-key' for name in self.client._custom_headers):  # noqa: SLF001
+            reason = 'the plugin client sets its own x-api-key header'
+        if reason is not None:
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=f'A per-request API key from context.secrets cannot be used: {reason}.',
+            )
 
         # copy() keeps every other client setting and shares the pooled HTTP transport.
-        return self.client.copy(api_key=config.api_key)
+        return self.client.copy(api_key=api_key)
 
     def _uses_beta_api(self, config: AnthropicConfig) -> bool:
         """Whether this request should use the Anthropic beta API surface.
@@ -464,7 +472,7 @@ class AnthropicModel:
                     params['tool_choice'] = request.tool_choice
 
         # The API rejects tool_choice when the request carries no tools.
-        if not params.get('tools'):
+        if not params.get('tools') and not (extra or {}).get('tools'):
             params.pop('tool_choice', None)
 
         _merge_config_extra(params, extra)

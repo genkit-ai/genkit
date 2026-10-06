@@ -34,10 +34,18 @@ from genkit.plugin_api import (
 from genkit_anthropic._config import AnthropicConfig
 from genkit_anthropic._model_info import SUPPORTED_ANTHROPIC_MODELS, KnownClaude, get_model_info
 from genkit_anthropic._models import AnthropicModel
+from genkit_anthropic._secrets import context_api_key, missing_key_error
 
 logger = structlog.get_logger(__name__)
 
 ANTHROPIC_PLUGIN_NAME = 'anthropic'
+
+
+def _has_credential(client: AsyncAnthropic) -> bool:
+    if client.api_key is not None or client.auth_token is not None or client.credentials is not None:
+        return True
+    return any(name.lower() in ('x-api-key', 'authorization') for name in client._custom_headers)  # noqa: SLF001
+
 
 # Only this plugin's namespace. A vertexai/ paste is a different name —
 # remapping it here would send the request to the Anthropic API.
@@ -165,9 +173,14 @@ class Anthropic(Plugin):
         model_info = get_model_info(clean_name)
 
         async def _generate(request: ModelRequest[AnthropicConfig], ctx: ActionRunContext) -> ModelResponse:
+            client = self._runtime_client()
+            context = ctx.context if isinstance(ctx.context, dict) else {}
+            # A plugin built without a credential serves only callers who bring a key.
+            if not _has_credential(client) and context_api_key(context) is None:
+                raise missing_key_error()
             model = AnthropicModel(
                 model_name=clean_name,
-                client=self._runtime_client(),
+                client=client,
                 default_api_version=self._default_api_version,
             )
             return await model.generate(request, ctx)
