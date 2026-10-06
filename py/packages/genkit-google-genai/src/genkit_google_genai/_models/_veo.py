@@ -26,13 +26,14 @@ from typing import Any, Literal, TypeAlias
 from google import genai
 from google.genai import types as genai_types
 from google.genai.errors import APIError
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, Operation, Part, Role
 from genkit.model import ModelInfo, ModelRequest, OperationError, Supports
 from genkit.plugin_api import wrap_http_error
 from genkit_google_genai._constants import is_multi_regional_location, multi_regional_base_url
 from genkit_google_genai._models._sdk_config import (
+    attach_config_extra,
     dump_family_config,
     sdk_config_error,
     split_sdk_fields,
@@ -68,7 +69,27 @@ def is_veo_model(name: str) -> bool:
 class VeoConfig(BaseModel):
     """Veo Config Schema."""
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True)
+    model_config = ConfigDict(extra='forbid', populate_by_name=True)
+    number_of_videos: int | None = Field(default=None, alias='numberOfVideos')
+    generate_audio: bool | None = Field(default=None, alias='generateAudio')
+    fps: int | None = Field(default=None)
+    output_gcs_uri: str | None = Field(default=None, alias='outputGcsUri')
+    pubsub_topic: str | None = Field(default=None, alias='pubsubTopic')
+    compression_quality: genai_types.VideoCompressionQuality | None = Field(default=None, alias='compressionQuality')
+    resize_mode: genai_types.ImageResizeMode | None = Field(default=None, alias='resizeMode')
+    labels: dict[str, str] | None = Field(default=None)
+    last_frame: dict[str, Any] | None = Field(default=None, alias='lastFrame')
+    reference_images: list[dict[str, Any]] | None = Field(default=None, alias='referenceImages')
+    mask: dict[str, Any] | None = Field(default=None)
+    webhook_config: dict[str, Any] | None = Field(default=None, alias='webhookConfig')
+    extra: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            'Provider fields this class does not declare, in API wire names, merged into the top level of the '
+            "request body after everything else (for example {'parameters': {...}}). Nested objects merge key "
+            'by key. Not checked; do not put API keys here.'
+        ),
+    )
     negative_prompt: str | None = Field(
         default=None, alias='negativePrompt', description='Negative prompt for video generation.'
     )
@@ -87,6 +108,17 @@ class VeoConfig(BaseModel):
         default=None, alias='apiVersion', description='Override the API version for this call.'
     )
     location: str | None = Field(default=None, description='Override the Vertex AI location for this call.')
+
+    @model_validator(mode='before')
+    @classmethod
+    def _api_key_belongs_in_secrets(cls, data: Any) -> Any:  # noqa: ANN401
+        """Point a key in config or extra at context.secrets, not the generic unknown-key error."""
+        if isinstance(data, Mapping):
+            extra = data.get('extra')
+            for bag in (data, extra if isinstance(extra, Mapping) else {}):
+                if bag.get('api_key') is not None or bag.get('apiKey') is not None:
+                    raise misplaced_key_error()
+        return data
 
 
 DEFAULT_VEO_SUPPORT = Supports(
@@ -384,6 +416,7 @@ class VeoModel:
         if not dumped:
             return None
 
+        extra = dumped.pop('extra', None)
         known, leftovers = split_sdk_fields(dumped, genai_types.GenerateVideosConfig)
         try:
             cfg = genai_types.GenerateVideosConfig(**known) if known else genai_types.GenerateVideosConfig()
@@ -392,7 +425,7 @@ class VeoModel:
 
         if leftovers:
             cfg.http_options = genai_types.HttpOptions(extra_body={'parameters': leftovers})
-        return cfg
+        return attach_config_extra(cfg, extra, action_name=self._name)
 
     @property
     def metadata(self) -> dict:

@@ -17,6 +17,7 @@
 """Gemini models."""
 
 import asyncio
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from functools import cached_property
 from typing import Annotated, Any, Any as JsonAny, Literal, TypeAlias, cast
@@ -26,7 +27,7 @@ from google.auth import default as google_auth_default
 from google.auth.exceptions import DefaultCredentialsError
 from google.genai import types as genai_types
 from google.genai.errors import APIError
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, WithJsonSchema
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, WithJsonSchema, model_validator
 
 from genkit import (
     ActionRunContext,
@@ -147,7 +148,7 @@ class HarmBlockThreshold(StrEnum):
 class SafetySettingsSchema(BaseModel):
     """Safety settings schema."""
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True)
+    model_config = ConfigDict(extra='forbid', populate_by_name=True)
     category: HarmCategory
     threshold: HarmBlockThreshold
 
@@ -155,7 +156,7 @@ class SafetySettingsSchema(BaseModel):
 class PrebuiltVoiceConfig(BaseModel):
     """Prebuilt voice config."""
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True)
+    model_config = ConfigDict(extra='forbid', populate_by_name=True)
     voice_name: str | None = Field(None, alias='voiceName')
 
 
@@ -171,7 +172,7 @@ class FunctionCallingMode(StrEnum):
 class FunctionCallingConfig(BaseModel):
     """Function calling config."""
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True)
+    model_config = ConfigDict(extra='forbid', populate_by_name=True)
     mode: FunctionCallingMode | None = None
     allowed_function_names: list[str] | None = Field(None, alias='allowedFunctionNames')
 
@@ -188,7 +189,7 @@ class ThinkingLevel(StrEnum):
 class ThinkingConfigSchema(BaseModel):
     """Thinking config schema."""
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True)
+    model_config = ConfigDict(extra='forbid', populate_by_name=True)
     include_thoughts: bool | None = Field(None, alias='includeThoughts')
     thinking_budget: int | None = Field(None, alias='thinkingBudget')
     thinking_level: ThinkingLevel | None = Field(None, alias='thinkingLevel')
@@ -197,7 +198,7 @@ class ThinkingConfigSchema(BaseModel):
 class FileSearchConfigSchema(BaseModel):
     """File search config schema."""
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True)
+    model_config = ConfigDict(extra='forbid', populate_by_name=True)
     file_search_store_names: list[str] | None = Field(None, alias='fileSearchStoreNames')
     metadata_filter: str | None = Field(None, alias='metadataFilter')
     top_k: int | None = Field(None, alias='topK')
@@ -229,7 +230,7 @@ class ImageSize(StrEnum):
 class ImageConfigSchema(BaseModel):
     """Image config schema."""
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True)
+    model_config = ConfigDict(extra='forbid', populate_by_name=True)
     aspect_ratio: ImageAspectRatio | None = Field(None, alias='aspectRatio')
     image_size: ImageSize | None = Field(None, alias='imageSize')
 
@@ -237,7 +238,7 @@ class ImageConfigSchema(BaseModel):
 class VoiceConfigSchema(BaseModel):
     """Voice config schema."""
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True)
+    model_config = ConfigDict(extra='forbid', populate_by_name=True)
     prebuilt_voice_config: PrebuiltVoiceConfig | None = Field(None, alias='prebuiltVoiceConfig')
 
 
@@ -248,7 +249,7 @@ class GeminiConfig(ModelConfig):
     ``extra`` under its wire name and is merged into the request body.
     """
 
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(extra='forbid', populate_by_name=True)
 
     base_url: str | None = Field(
         None, description='Overrides the plugin-configured or default baseUrl, if specified.', alias='baseUrl'
@@ -276,7 +277,7 @@ class GeminiConfig(ModelConfig):
                     'threshold': {'type': 'string', 'enum': [e.value for e in HarmBlockThreshold]},
                 },
                 'required': ['category', 'threshold'],
-                'additionalProperties': True,
+                'additionalProperties': False,
             },
             'description': (
                 'Adjust how likely you are to see responses that could be harmful. '
@@ -315,7 +316,7 @@ class GeminiConfig(ModelConfig):
                 'function call and guarantee function schema adherence. With NONE, the model is prohibited '
                 'from making function calls.'
             ),
-            'additionalProperties': True,
+            'additionalProperties': False,
         }),
     ] = Field(
         None,
@@ -328,15 +329,27 @@ class GeminiConfig(ModelConfig):
         alias='responseModalities',
     )
 
-    google_search_retrieval: bool | dict[str, Any] | None = Field(
+    google_search: bool | dict[str, Any] | None = Field(
         None,
         description=(
-            'Retrieve public web data for grounding, powered by Google Search. '
-            'Note: This feature is not supported on all models. '
-            'If you get an error, use the google_search tool instead.'
+            'Ground the response in public web data with the Google Search tool. '
+            'True attaches it; a dict is passed through as the tool options.'
         ),
-        alias='googleSearchRetrieval',
+        alias='googleSearch',
     )
+
+    @model_validator(mode='before')
+    @classmethod
+    def _google_search_retrieval_was_renamed(cls, data: Any) -> Any:  # noqa: ANN401
+        """Name the replacement for the pre-1.0 key instead of the generic unknown-key error."""
+        if isinstance(data, Mapping):
+            for old in ('google_search_retrieval', 'googleSearchRetrieval'):
+                if old in data:
+                    raise GenkitError(
+                        status='INVALID_ARGUMENT',
+                        message=f'{old} was renamed to google_search; pass True or a dict of tool options',
+                    )
+        return data
 
     file_search: Annotated[
         FileSearchConfigSchema | None,
@@ -360,7 +373,7 @@ class GeminiConfig(ModelConfig):
                     'description': 'The number of semantic retrieval chunks to retrieve.',
                 },
             },
-            'additionalProperties': True,
+            'additionalProperties': False,
         }),
     ] = Field(None, alias='fileSearch')
 
@@ -441,7 +454,7 @@ class GeminiConfig(ModelConfig):
                     ),
                 },
             },
-            'additionalProperties': True,
+            'additionalProperties': False,
         }),
     ] = Field(None, alias='thinkingConfig')
 
@@ -473,7 +486,7 @@ class GeminiConfig(ModelConfig):
 class SpeakerVoiceConfigSchema(BaseModel):
     """Speaker voice config schema."""
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True)
+    model_config = ConfigDict(extra='forbid', populate_by_name=True)
     speaker: str | None = None
     voice_config: VoiceConfigSchema | None = Field(None, alias='voiceConfig')
 
@@ -481,14 +494,14 @@ class SpeakerVoiceConfigSchema(BaseModel):
 class MultiSpeakerVoiceConfigSchema(BaseModel):
     """Multi-speaker voice config schema."""
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True)
+    model_config = ConfigDict(extra='forbid', populate_by_name=True)
     speaker_voice_configs: list[SpeakerVoiceConfigSchema] | None = Field(None, alias='speakerVoiceConfigs')
 
 
 class SpeechConfigSchema(BaseModel):
     """Speech config schema."""
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True)
+    model_config = ConfigDict(extra='forbid', populate_by_name=True)
     voice_config: VoiceConfigSchema | None = Field(None, alias='voiceConfig')
     language_code: str | None = Field(None, alias='languageCode')
     multi_speaker_voice_config: MultiSpeakerVoiceConfigSchema | None = Field(None, alias='multiSpeakerVoiceConfig')
@@ -531,7 +544,7 @@ class GeminiImageConfig(GeminiConfig):
                 'aspectRatio': {'type': 'string', 'enum': [e.value for e in ImageAspectRatio]},
                 'imageSize': {'type': 'string', 'enum': [e.value for e in ImageSize]},
             },
-            'additionalProperties': True,
+            'additionalProperties': False,
         }),
     ] = Field(None, alias='imageConfig')
 
@@ -1938,8 +1951,8 @@ class GeminiModel:
             ]
 
         # Google Search
-        val = config.pop('google_search_retrieval', None)
-        if val is not None:
+        val = config.pop('google_search', None)
+        if val is not None and val is not False:
             val = {} if val is True else val
             tools.append(genai_types.Tool(google_search=genai_types.GoogleSearch(**val)))
 
