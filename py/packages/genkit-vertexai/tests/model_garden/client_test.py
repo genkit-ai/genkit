@@ -20,6 +20,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from genkit_vertexai.model_garden.client import OpenAIClient
+from google.auth.exceptions import DefaultCredentialsError, RefreshError, TransportError
+
+from genkit import GenkitError
 
 
 @pytest.mark.asyncio
@@ -73,3 +76,47 @@ async def test_client_initialization_without_explicit_project_id(
     mock_request_cls.assert_called_once()
 
     assert client_instance is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'auth_error',
+    [
+        DefaultCredentialsError('Your default credentials were not found.'),
+        RefreshError('invalid_grant: Token has been expired or revoked.'),
+    ],
+)
+async def test_credential_failure_is_unauthenticated(auth_error: Exception) -> None:
+    """Missing or revoked ADC is UNAUTHENTICATED, so retry doesn't keep calling with it."""
+    with patch('google.auth.default', side_effect=auth_error), pytest.raises(GenkitError) as raised:
+        await OpenAIClient.create(location='us-central1', project_id='menu-prod')
+
+    assert raised.value.status == 'UNAUTHENTICATED'
+    assert raised.value.cause is auth_error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'flaky',
+    [
+        RefreshError('token endpoint returned 503', retryable=True),
+        TransportError('metadata server unreachable'),
+    ],
+)
+async def test_transient_auth_failure_stays_raw(flaky: Exception) -> None:
+    with patch('google.auth.default', side_effect=flaky), pytest.raises(type(flaky)) as raised:
+        await OpenAIClient.create(location='us-central1', project_id='menu-prod')
+
+    assert raised.value is flaky
+
+
+@pytest.mark.asyncio
+@patch('google.auth.transport.requests.Request')
+async def test_missing_project_is_failed_precondition(mock_request_cls: MagicMock) -> None:
+    credentials = MagicMock()
+    credentials.token = 'token'
+    with patch('google.auth.default', return_value=(credentials, None)), pytest.raises(GenkitError) as raised:
+        await OpenAIClient.create(location='us-central1')
+
+    assert raised.value.status == 'FAILED_PRECONDITION'
+    assert 'project_id' in str(raised.value)

@@ -51,9 +51,10 @@ import logging
 from typing import Any, cast
 from urllib.parse import urlparse
 
+import httpx
 from google import genai
 
-from genkit import Part
+from genkit import GenkitError, Part
 from genkit.model import ToolRequest, ToolResponse
 from genkit.plugin_api import get_cached_client
 
@@ -439,7 +440,11 @@ class PartConverter:
             A tuple containing the content (bytes) and its MIME type (str or None).
 
         Raises:
-            httpx.HTTPStatusError: If the server returns an error status code.
+            GenkitError: INVALID_ARGUMENT when the media host answers with a
+                4xx other than 408/429: the caller's URL is wrong or not
+                public, and another model would fail on it too.
+            httpx.HTTPError: A 5xx, 408, 429, timeout, or transport failure,
+                left unclassified because it may pass on retry.
         """
         client = get_cached_client(
             cache_key='google_genai_media',
@@ -447,5 +452,15 @@ class PartConverter:
             follow_redirects=True,
         )
         response = await client.get(url, timeout=60.0)
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            code = e.response.status_code
+            if 400 <= code < 500 and code not in (408, 429):
+                raise GenkitError(
+                    status='INVALID_ARGUMENT',
+                    message=f'Could not download request media (HTTP {code})',
+                    cause=e,
+                ) from e
+            raise
         return response.content, response.headers.get('content-type')

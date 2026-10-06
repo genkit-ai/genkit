@@ -228,6 +228,17 @@ async def test_timeout_maps_to_deadline_exceeded(http_client: MagicMock) -> None
 
 
 @pytest.mark.asyncio
+async def test_connect_error_stays_unclassified(http_client: MagicMock) -> None:
+    """A refused connection has no known status; retry sees the raw httpx error."""
+    refused = httpx.ConnectError('connection refused')
+    http_client.request.side_effect = refused
+    with patch.object(interactions_client, 'get_cached_client', return_value=http_client):
+        with pytest.raises(httpx.ConnectError) as exc_info:
+            await create_interaction('key', {'model': 'lyria'})
+    assert exc_info.value is refused
+
+
+@pytest.mark.asyncio
 async def test_request_timeout_converted_from_ms(http_client: MagicMock) -> None:
     http_client.request.return_value = mock_response(
         json_body={'id': 'ix-1', 'status': 'completed', 'steps': []},

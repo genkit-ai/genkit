@@ -20,13 +20,15 @@ These tests verify the edge cases documented in the utils.py module docstring,
 particularly around URL classification and media part conversion.
 """
 
+from collections.abc import Callable
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 from genkit_google_genai.models.utils import PartConverter
 from google import genai
 
-from genkit import Part
+from genkit import GenkitError, Part
 from genkit.model import ToolRequest, ToolResponse
 
 
@@ -360,3 +362,47 @@ class TestToolResponseFromGemini:
             pytest.fail(f'output = {tr.output!r}')
         if tr.content != [{'media': {'url': 'data:image/png;base64,YWJj', 'contentType': 'image/png'}}]:
             pytest.fail(f'content = {tr.content!r}')
+
+
+class TestDownloadMediaErrors:
+    """A bad media URL is the caller's problem; host outages stay retryable."""
+
+    @staticmethod
+    def _client(handler: Callable[[httpx.Request], httpx.Response]) -> httpx.AsyncClient:
+        return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize('code', [403, 404, 410])
+    async def test_client_error_is_invalid_argument(self, code: int) -> None:
+        """A 404 must not be NOT_FOUND: fallback would try another model on the same dead URL."""
+        client = self._client(lambda request: httpx.Response(code))
+        part = Part.from_media('https://cdn.example.com/menu/tartine.jpg', content_type='image/jpeg')
+
+        with patch('genkit_google_genai.models.utils.get_cached_client', return_value=client):
+            with pytest.raises(GenkitError) as raised:
+                await PartConverter.to_gemini(part)
+
+        assert raised.value.status == 'INVALID_ARGUMENT'
+        assert isinstance(raised.value.cause, httpx.HTTPStatusError)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize('code', [408, 429, 500, 503])
+    async def test_transient_status_stays_raw(self, code: int) -> None:
+        client = self._client(lambda request: httpx.Response(code))
+        part = Part.from_media('https://cdn.example.com/menu/tartine.jpg', content_type='image/jpeg')
+
+        with patch('genkit_google_genai.models.utils.get_cached_client', return_value=client):
+            with pytest.raises(httpx.HTTPStatusError):
+                await PartConverter.to_gemini(part)
+
+    @pytest.mark.asyncio
+    async def test_connect_error_stays_raw(self) -> None:
+        def refuse(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError('connection refused', request=request)
+
+        client = self._client(refuse)
+        part = Part.from_media('https://cdn.example.com/menu/tartine.jpg', content_type='image/jpeg')
+
+        with patch('genkit_google_genai.models.utils.get_cached_client', return_value=client):
+            with pytest.raises(httpx.ConnectError):
+                await PartConverter.to_gemini(part)

@@ -21,7 +21,7 @@ from collections.abc import Callable
 from typing import Any, cast
 
 import structlog
-from openai import APIStatusError, AsyncOpenAI
+from openai import APIError, AsyncOpenAI
 from openai.lib._pydantic import _ensure_strict_json_schema
 from openai.types import CompletionUsage
 from openai.types.completion_usage import CompletionTokensDetails, PromptTokensDetails
@@ -638,7 +638,7 @@ class OpenAIModel:
                 logger.debug('OpenAI generate request', model=self._model, streaming=True)
                 return await self._generate_stream(request, ctx.send_chunk)
             return await self._generate(request)
-        except (APIStatusError, ValueError) as e:
+        except (APIError, ValueError) as e:
             reraise_openai_error(e)
 
     @staticmethod

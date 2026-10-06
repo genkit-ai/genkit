@@ -26,6 +26,9 @@ from genkit_vertexai.model_garden import ModelGarden, ModelGardenPlugin
 from genkit_vertexai.model_garden.anthropic import AnthropicModelGarden
 from genkit_vertexai.model_garden.model_garden import ModelGardenModel
 
+from genkit import GenkitError
+from genkit.plugin_api import ActionKind
+
 
 @pytest.fixture
 @patch('genkit_vertexai.model_garden.model_garden.OpenAIClient')
@@ -112,3 +115,18 @@ def test_anthropic_model_garden_does_not_advertise_api_key() -> None:
     properties = AnthropicModelGarden.get_config_schema().model_json_schema()['properties']
     assert 'apiKey' not in properties
     assert 'apiVersion' in properties
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'model_name', ['modelgarden/meta/llama-3.2-90b-vision-instruct-maas', 'modelgarden/anthropic/claude-sonnet-4']
+)
+async def test_resolve_without_project_is_failed_precondition(model_name: str) -> None:
+    """No project configured is a local setup problem, not a bad request."""
+    with patch.dict('os.environ', {}, clear=True):
+        plugin = ModelGarden(location='us-central1')
+
+    with pytest.raises(GenkitError, match='project_id must be provided') as raised:
+        await plugin.resolve(ActionKind.MODEL, model_name)
+
+    assert raised.value.status == 'FAILED_PRECONDITION'

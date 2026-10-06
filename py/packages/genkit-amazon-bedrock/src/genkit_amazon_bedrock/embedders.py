@@ -434,6 +434,7 @@ class BedrockEmbedder:
                 raise GenkitError(
                     message=f'bedrock embed: document {index}: {_without_own_prefix(error.original_message)}',
                     status=error.status,
+                    response_metadata=error.response_metadata,
                 ) from error
             if not text and not image:
                 raise GenkitError(
@@ -522,10 +523,12 @@ class BedrockEmbedder:
                         return await call
                     except GenkitError as error:
                         # A batch failure is opaque without the failing document,
-                        # but the inner message already names the plugin.
+                        # but the inner message already names the plugin. Keep
+                        # response_metadata so retry still honours Retry-After.
                         raise GenkitError(
                             message=f'bedrock embed: document {index}: {_without_own_prefix(error.original_message)}',
                             status=error.status,
+                            response_metadata=error.response_metadata,
                         ) from error
             except asyncio.CancelledError:
                 # Cancelled while queued on the semaphore, so nothing awaited it.

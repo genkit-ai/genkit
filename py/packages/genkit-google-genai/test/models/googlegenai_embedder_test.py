@@ -23,12 +23,15 @@ import pytest
 from genkit_google_genai.models.embedder import (
     Embedder,
     GeminiEmbeddingModels,
+    VertexEmbeddingModels,
     get_embedder_info,
 )
 from google import genai
+from google.auth.exceptions import DefaultCredentialsError, RefreshError
+from google.genai.errors import APIError
 from pytest_mock import MockerFixture
 
-from genkit import Document, Part
+from genkit import Document, GenkitError, Part
 from genkit.embedder import EmbedRequest, EmbedResponse
 
 
@@ -127,8 +130,9 @@ async def test_embedding_rejects_empty_input(mocker: MockerFixture) -> None:
     """Empty input must not call the API (avoids opaque BatchEmbedContents errors)."""
     googleai_client_mock = mocker.AsyncMock()
     embedder = Embedder(GeminiEmbeddingModels.GEMINI_EMBEDDING_001, googleai_client_mock)
-    with pytest.raises(ValueError, match='Embed request input is empty'):
+    with pytest.raises(GenkitError, match='Embed request input is empty') as raised:
         await embedder.generate(EmbedRequest(input=[]))
+    assert raised.value.status == 'INVALID_ARGUMENT'
     googleai_client_mock.aio.models.embed_content.assert_not_called()
 
 
@@ -280,8 +284,9 @@ async def test_multimodal_embedding_rejects_multiple_images(mocker: MockerFixtur
     )
     client_mock = mocker.AsyncMock()
     embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
-    with pytest.raises(ValueError, match='more than one image'):
+    with pytest.raises(GenkitError, match='more than one image') as raised:
         await embedder.generate(request)
+    assert raised.value.status == 'INVALID_ARGUMENT'
     client_mock._api_client.async_request.assert_not_called()
 
 
@@ -300,8 +305,9 @@ async def test_multimodal_embedding_rejects_multiple_videos(mocker: MockerFixtur
     )
     client_mock = mocker.AsyncMock()
     embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
-    with pytest.raises(ValueError, match='more than one video'):
+    with pytest.raises(GenkitError, match='more than one video') as raised:
         await embedder.generate(request)
+    assert raised.value.status == 'INVALID_ARGUMENT'
     client_mock._api_client.async_request.assert_not_called()
 
 
@@ -311,8 +317,9 @@ async def test_multimodal_embedding_rejects_http_url(mocker: MockerFixture) -> N
     request = EmbedRequest(input=[Document.from_media('https://example.com/cat.png', 'image/png')])
     client_mock = mocker.AsyncMock()
     embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
-    with pytest.raises(ValueError, match='http'):
+    with pytest.raises(GenkitError, match='http') as raised:
         await embedder.generate(request)
+    assert raised.value.status == 'INVALID_ARGUMENT'
     client_mock._api_client.async_request.assert_not_called()
 
 
@@ -331,8 +338,9 @@ async def test_multimodal_embedding_rejects_multiple_documents(mocker: MockerFix
     )
     client_mock = mocker.AsyncMock()
     embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
-    with pytest.raises(ValueError, match='one document per request'):
+    with pytest.raises(GenkitError, match='one document per request') as raised:
         await embedder.generate(request)
+    assert raised.value.status == 'INVALID_ARGUMENT'
     client_mock._api_client.async_request.assert_not_called()
 
 
@@ -342,8 +350,9 @@ async def test_multimodal_embedding_rejects_non_vertex_client(mocker: MockerFixt
     request = EmbedRequest(input=[Document.from_media('gs://bucket/cat.png', 'image/png')])
     client_mock = mocker.AsyncMock()
     embedder = Embedder('multimodalembedding@001', client_mock, is_vertex=False)
-    with pytest.raises(ValueError, match='only available on Vertex AI'):
+    with pytest.raises(GenkitError, match='only available on Vertex AI') as raised:
         await embedder.generate(request)
+    assert raised.value.status == 'INVALID_ARGUMENT'
     client_mock._api_client.async_request.assert_not_called()
 
 
@@ -371,8 +380,9 @@ async def test_multimodal_embedding_rejects_non_base64_data_url(mocker: MockerFi
     request = EmbedRequest(input=[Document.from_media('data:image/png,rawbytes', 'image/png')])
     client_mock = mocker.AsyncMock()
     embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
-    with pytest.raises(ValueError, match='base64'):
+    with pytest.raises(GenkitError, match='base64') as raised:
         await embedder.generate(request)
+    assert raised.value.status == 'INVALID_ARGUMENT'
     client_mock._api_client.async_request.assert_not_called()
 
 
@@ -451,5 +461,127 @@ async def test_multimodal_embedding_guards_missing_private_transport(mocker: Moc
     client_mock = mocker.Mock(spec=[])  # no _api_client attribute at all
 
     embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
-    with pytest.raises(RuntimeError, match='google-genai>=1.63.0'):
+    with pytest.raises(GenkitError, match='google-genai>=1.63.0') as raised:
         await embedder.generate(request)
+    assert raised.value.status == 'FAILED_PRECONDITION'
+
+
+# ---------------------------------------------------------------------------
+# Error classification
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('code', 'status'), [(429, 'RESOURCE_EXHAUSTED'), (503, 'UNAVAILABLE'), (400, 'INVALID_ARGUMENT')]
+)
+async def test_embed_content_api_error_is_classified(mocker: MockerFixture, code: int, status: str) -> None:
+    """A quota or overload error while indexing a menu keeps its status so retry can act on it."""
+    api_error = APIError(code, {'error': {'message': 'embed failed'}})
+    client_mock = mocker.AsyncMock()
+    client_mock.aio.models.embed_content.side_effect = api_error
+    embedder = Embedder(GeminiEmbeddingModels.GEMINI_EMBEDDING_001, client_mock)
+
+    with pytest.raises(GenkitError) as raised:
+        await embedder.generate(EmbedRequest(input=[Document.from_text('Smoked salmon tartine')]))
+
+    assert raised.value.status == status
+    assert raised.value.cause is api_error
+
+
+@pytest.mark.asyncio
+async def test_embed_content_credential_failure_is_unauthenticated(mocker: MockerFixture) -> None:
+    """Missing ADC on a Vertex embed is UNAUTHENTICATED, not a raw google.auth error."""
+    no_adc = DefaultCredentialsError('Your default credentials were not found.')
+    client_mock = mocker.AsyncMock()
+    client_mock.aio.models.embed_content.side_effect = no_adc
+    embedder = Embedder(VertexEmbeddingModels.TEXT_EMBEDDING_005_ENG, client_mock, is_vertex=True)
+
+    with pytest.raises(GenkitError) as raised:
+        await embedder.generate(EmbedRequest(input=[Document.from_text('Smoked salmon tartine')]))
+
+    assert raised.value.status == 'UNAUTHENTICATED'
+    assert raised.value.cause is no_adc
+
+
+@pytest.mark.asyncio
+async def test_embed_content_unknown_exception_stays_raw(mocker: MockerFixture) -> None:
+    """A dropped connection has no known status and reaches the caller unchanged."""
+    dropped = ConnectionResetError('Connection reset by peer')
+    client_mock = mocker.AsyncMock()
+    client_mock.aio.models.embed_content.side_effect = dropped
+    embedder = Embedder(GeminiEmbeddingModels.GEMINI_EMBEDDING_001, client_mock)
+
+    with pytest.raises(ConnectionResetError) as raised:
+        await embedder.generate(EmbedRequest(input=[Document.from_text('Smoked salmon tartine')]))
+
+    assert raised.value is dropped
+
+
+@pytest.mark.asyncio
+async def test_multimodal_embedding_api_error_is_classified(mocker: MockerFixture) -> None:
+    """The :predict call classifies provider HTTP errors like embed_content does."""
+    api_error = APIError(429, {'error': {'message': 'Quota exceeded'}})
+    client_mock = mocker.AsyncMock()
+    client_mock._api_client.async_request.side_effect = api_error
+    embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
+
+    with pytest.raises(GenkitError) as raised:
+        await embedder.generate(EmbedRequest(input=[Document.from_media('gs://menu/tartine.png', 'image/png')]))
+
+    assert raised.value.status == 'RESOURCE_EXHAUSTED'
+    assert raised.value.cause is api_error
+
+
+@pytest.mark.asyncio
+async def test_multimodal_embedding_credential_failure_is_unauthenticated(mocker: MockerFixture) -> None:
+    """A revoked token on :predict is UNAUTHENTICATED."""
+    client_mock = mocker.AsyncMock()
+    client_mock._api_client.async_request.side_effect = RefreshError('invalid_grant')
+    embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
+
+    with pytest.raises(GenkitError) as raised:
+        await embedder.generate(EmbedRequest(input=[Document.from_media('gs://menu/tartine.png', 'image/png')]))
+
+    assert raised.value.status == 'UNAUTHENTICATED'
+
+
+@pytest.mark.asyncio
+async def test_multimodal_embedding_non_json_body_is_internal(mocker: MockerFixture) -> None:
+    """A 200 whose body isn't JSON is a malformed provider response."""
+    client_mock = mocker.AsyncMock()
+    http_response = mocker.Mock()
+    http_response.body = '<html>502 Bad Gateway</html>'
+    client_mock._api_client.async_request.return_value = http_response
+    embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
+
+    with pytest.raises(GenkitError) as raised:
+        await embedder.generate(EmbedRequest(input=[Document.from_media('gs://menu/tartine.png', 'image/png')]))
+
+    assert raised.value.status == 'INTERNAL'
+    assert isinstance(raised.value.cause, json.JSONDecodeError)
+
+
+@pytest.mark.asyncio
+async def test_multimodal_embedding_rejects_unsupported_content_type(mocker: MockerFixture) -> None:
+    """A PDF is caller input the multimodal API cannot take."""
+    client_mock = mocker.AsyncMock()
+    embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
+
+    with pytest.raises(GenkitError, match='Unsupported contentType') as raised:
+        await embedder.generate(EmbedRequest(input=[Document.from_media('gs://menu/menu.pdf', 'application/pdf')]))
+
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    client_mock._api_client.async_request.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_multimodal_embedding_rejects_empty_document(mocker: MockerFixture) -> None:
+    """A document with nothing to embed is caller input, rejected before the call."""
+    client_mock = mocker.AsyncMock()
+    embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
+
+    with pytest.raises(GenkitError, match='no text, image, or video') as raised:
+        await embedder.generate(EmbedRequest(input=[Document(content=[Part.from_text('')])]))
+
+    assert raised.value.status == 'INVALID_ARGUMENT'

@@ -24,6 +24,7 @@ from genkit_openai.models import SUPPORTED_OPENAI_COMPAT_MODELS
 from genkit_openai.typing import OpenAIConfig
 from genkit_vertexai import constants as const
 
+from genkit import GenkitError
 from genkit.model import model as create_model, model_action_metadata
 from genkit.plugin_api import Action, ActionKind, ActionMetadata, Plugin, to_json_schema
 
@@ -118,7 +119,10 @@ class ModelGarden(Plugin):
 
             location = self.model_locations.get(clean_name, self.location)
             if not self.project_id:
-                raise ValueError('project_id must be provided')
+                raise GenkitError(
+                    status='FAILED_PRECONDITION',
+                    message='project_id must be provided',
+                )
             model_proxy = AnthropicWorker(
                 model=clean_name,
                 location=location,
@@ -142,7 +146,10 @@ class ModelGarden(Plugin):
 
         location = self.model_locations.get(clean_name, self.location)
         if not self.project_id:
-            raise ValueError('project_id must be provided')
+            raise GenkitError(
+                status='FAILED_PRECONDITION',
+                message='project_id must be provided',
+            )
         model_proxy = ModelGardenModel(
             model=clean_name,
             location=location,

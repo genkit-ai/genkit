@@ -61,6 +61,7 @@ from google.genai.interactions import (
 from pydantic import BaseModel
 
 from genkit import FinishReason, GenkitError, Media, Message, ModelResponse, Operation, Part
+from genkit._core._error import StatusCodes, StatusName
 from genkit.model import (
     ModelUsage,
     OperationError,
@@ -68,6 +69,7 @@ from genkit.model import (
     ToolRequest,
     ToolResponse,
 )
+from genkit.plugin_api import from_http_code
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +135,46 @@ def interaction_error_message(interaction: Interaction) -> str | None:
     for step in interaction.steps or []:
         if isinstance(step, ModelOutputStep) and step.error is not None and step.error.message:
             return step.error.message
+    return None
+
+
+def status_from_provider_code(code: object) -> StatusName | None:
+    """Map an error code the Interactions API reported to a Genkit status.
+
+    Top-level errors carry a string code (a canonical name like
+    ``RESOURCE_EXHAUSTED``, or a number); step errors carry a gRPC int.
+    Numbers 1-16 are gRPC codes and 400-599 are HTTP codes. Anything else,
+    and any code that only maps to OK or UNKNOWN, returns None so the caller
+    leaves the failure unclassified.
+    """
+    status: str | None = None
+    text = str(code).strip() if code is not None and not isinstance(code, bool) else ''
+    if text.isdigit():
+        number = int(text)
+        if 400 <= number <= 599:
+            status = from_http_code(number)
+        else:
+            try:
+                status = StatusCodes(number).name
+            except ValueError:
+                status = None
+    elif text.upper() in StatusCodes.__members__:
+        status = text.upper()
+    if status is None or status in ('OK', 'UNKNOWN'):
+        return None
+    return cast(StatusName, status)
+
+
+def interaction_error_status(interaction: Interaction) -> StatusName | None:
+    """The status of the first error on a failed Interaction that has a usable code."""
+    for err in interaction.errors or []:
+        code = err.get('code') if isinstance(err, dict) else getattr(err, 'code', None)
+        if status := status_from_provider_code(code):
+            return status
+    for step in interaction.steps or []:
+        if isinstance(step, ModelOutputStep) and step.error is not None:
+            if status := status_from_provider_code(step.error.code):
+                return status
     return None
 
 
@@ -223,20 +265,23 @@ def to_interaction_content(part: Part) -> ContentParam | None:
 def to_interaction_media(part: Part) -> ContentParam:
     """Convert a media part to an Interactions image/audio/video/document block."""
     if part.media is None:
-        raise ValueError('Media part missing media')
+        raise GenkitError(status='INVALID_ARGUMENT', message='Media part missing media')
     content_type = part.media.content_type
     if not content_type:
-        raise ValueError('Media part missing contentType')
+        raise GenkitError(status='INVALID_ARGUMENT', message='Media part missing contentType')
     block_type = next((name for prefix, name in MEDIA_CONTENT_TYPES if content_type.startswith(prefix)), None)
     if block_type is None:
-        raise ValueError(f'Unsupported media type: {content_type}')
+        raise GenkitError(status='INVALID_ARGUMENT', message=f'Unsupported media type: {content_type}')
 
     block: dict[str, Any] = {'type': block_type, 'mime_type': content_type}
     # Inline data URLs travel as base64; anything else is a reference the API fetches.
     url = part.media.url
     if url.startswith('data:'):
         if ',' not in url:
-            raise ValueError('Malformed data URL for media part: missing payload separator')
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message='Malformed data URL for media part: missing payload separator',
+            )
         block['data'] = url.split(',', 1)[1]
     else:
         block['uri'] = url
@@ -246,7 +291,10 @@ def to_interaction_media(part: Part) -> ContentParam:
 def to_interaction_role(role: str) -> InteractionRole:
     """Map a Genkit message role to the Interactions API role."""
     if role == 'system':
-        raise ValueError('System role should be handled as system_instruction, not part of turns.')
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message='System role should be handled as system_instruction, not part of turns.',
+        )
     return INTERACTION_ROLES.get(role, 'user')
 
 
@@ -790,15 +838,23 @@ def from_interaction_sync(interaction: Interaction) -> ModelResponse:
 
     Truncated or over-budget turns keep their real finish reason so a
     generate that ran out of tokens does not look like a clean stop.
-    In-flight statuses raise — this helper is not a poll loop.
+    In-flight statuses raise FAILED_PRECONDITION — this helper is not a poll
+    loop. A failed interaction raises with the status its error code maps
+    to; with no usable code it stays a plain ValueError (unclassified).
     """
     status = interaction.status
     if status == 'failed':
-        raise ValueError(interaction_error_message(interaction) or FAILED_MESSAGE)
+        message = interaction_error_message(interaction) or FAILED_MESSAGE
+        if error_status := interaction_error_status(interaction):
+            raise GenkitError(status=error_status, message=message)
+        raise ValueError(message)
     if status == 'cancelled':
         return cancelled_response(interaction)
     if status in ('in_progress', 'queued', 'requires_action'):
-        raise ValueError(f'Interaction is still running (status={status!r})')
+        raise GenkitError(
+            status='FAILED_PRECONDITION',
+            message=f'Interaction is still running (status={status!r})',
+        )
     if partial := PARTIAL_TERMINAL_STATUSES.get(cast(str, status)):
         finish_reason, message = partial
         response = steps_response(interaction, finish_reason=finish_reason, finish_message=message)

@@ -42,6 +42,7 @@ from genkit.plugin_api import (
     Plugin,
     loop_local_client,
     to_json_schema,
+    wrap_http_error,
 )
 from genkit_ollama._errors import wrap_connection_errors
 from genkit_ollama.constants import (
@@ -411,7 +412,10 @@ class Ollama(Plugin):
         """
         async with self._client_for_request() as client:
             async with wrap_connection_errors(self.server_address):
-                response = await client.list()
+                try:
+                    response = await client.list()
+                except ollama_api.ResponseError as e:
+                    raise wrap_http_error(e, status_code=e.status_code) from e
 
         actions = []
         for model in response.models:

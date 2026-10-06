@@ -22,11 +22,13 @@ from collections.abc import AsyncIterator, Callable
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, PropertyMock
 
+import httpx
 import pytest
 from genkit_openai.models import OpenAIModel
 from genkit_openai.models.model import _usage_from_completion
 from genkit_openai.models.utils import strip_markdown_fences
 from genkit_openai.typing import OpenAIConfig, ReasoningEffort
+from openai import APIError, AsyncOpenAI
 from openai.types import CompletionUsage
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 from pydantic import BaseModel
@@ -1707,3 +1709,67 @@ class TestResponseMetadata:
         assert response.custom['systemFingerprint'] == 'fp_deepseek'
         assert response.raw is not None
         assert response.raw['choices'][0]['message']['content'] == fenced
+
+
+async def _stream_through_sdk(sse_body: str, sample_request: ModelRequest) -> tuple[list[str], BaseException]:
+    """Stream through the real OpenAI SDK against a canned SSE body; return chunks and the error."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={'content-type': 'text/event-stream'}, content=sse_body.encode())
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = AsyncOpenAI(api_key='test-key', http_client=http_client, max_retries=0)
+    model = OpenAIModel(model='gpt-4o', client=client)
+    chunks: list[str] = []
+    ctx = MagicMock(spec=ActionRunContext)
+    type(ctx).is_streaming = PropertyMock(return_value=True)
+    ctx.send_chunk.side_effect = lambda chunk: chunks.append(chunk.text)
+
+    with pytest.raises(Exception) as exc_info:
+        await model.generate(sample_request, ctx)
+    await http_client.aclose()
+    return chunks, exc_info.value
+
+
+def _stream_failing_after_first_token(error: dict[str, Any]) -> str:
+    """A 200 stream that emits one token, then a chunk carrying an `error` object."""
+    first = {
+        'id': 'chatcmpl-1',
+        'object': 'chat.completion.chunk',
+        'created': 1700000000,
+        'model': 'gpt-4o',
+        'choices': [{'index': 0, 'delta': {'role': 'assistant', 'content': 'Grilled'}, 'finish_reason': None}],
+    }
+    return f'data: {json.dumps(first)}\n\ndata: {json.dumps({"error": error})}\n\n'
+
+
+@pytest.mark.asyncio
+async def test_generate_classifies_known_mid_stream_error(sample_request: ModelRequest) -> None:
+    """A rate limit reported mid-stream after a 200 is RESOURCE_EXHAUSTED, so retry backs off."""
+    chunks, error = await _stream_through_sdk(
+        _stream_failing_after_first_token({
+            'message': 'Rate limit reached for gpt-4o',
+            'type': 'requests',
+            'code': 'rate_limit_exceeded',
+        }),
+        sample_request,
+    )
+
+    assert chunks == ['Grilled']
+    assert isinstance(error, GenkitError)
+    assert error.status == 'RESOURCE_EXHAUSTED'
+    assert error.original_message == 'Rate limit reached for gpt-4o'
+    assert type(error.cause) is APIError
+
+
+@pytest.mark.asyncio
+async def test_generate_leaves_unknown_mid_stream_error_raw(sample_request: ModelRequest) -> None:
+    """A mid-stream error the plugin does not know reaches the caller as the SDK raised it."""
+    chunks, error = await _stream_through_sdk(
+        _stream_failing_after_first_token({'message': 'Upstream reset', 'type': 'brand_new_error'}),
+        sample_request,
+    )
+
+    assert chunks == ['Grilled']
+    assert type(error) is APIError
+    assert error.message == 'Upstream reset'

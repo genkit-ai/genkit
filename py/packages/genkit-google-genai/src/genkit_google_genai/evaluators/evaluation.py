@@ -40,7 +40,15 @@ from pydantic import BaseModel, ConfigDict
 from genkit import BaseDataPoint, GenkitError
 from genkit._core._compat import StrEnum
 from genkit.evaluator import Details, EvalFnResponse, Score
-from genkit.plugin_api import GENKIT_CLIENT_HEADER, Action, get_cached_client
+from genkit.plugin_api import (
+    GENKIT_CLIENT_HEADER,
+    Action,
+    ErrorResponseMetadata,
+    from_http_code,
+    get_cached_client,
+    parse_retry_after_ms,
+)
+from genkit_google_genai._auth import GOOGLE_AUTH_ERRORS, raise_auth_error
 from genkit_google_genai.constants import GLOBAL_LOCATION, is_multi_regional_location, vertex_api_host
 
 if TYPE_CHECKING:
@@ -165,8 +173,11 @@ class EvaluatorFactory:
 
         # Get authentication token
         # Use asyncio.to_thread to avoid blocking the event loop during token refresh
-        credentials, _ = google_auth_default()
-        await asyncio.to_thread(credentials.refresh, Request())
+        try:
+            credentials, _ = google_auth_default()
+            await asyncio.to_thread(credentials.refresh, Request())
+        except GOOGLE_AUTH_ERRORS as e:
+            raise_auth_error(e)
         token = credentials.token
 
         if not token:
@@ -194,35 +205,45 @@ class EvaluatorFactory:
             timeout=60.0,
         )
 
-        try:
-            response = await client.post(
-                url,
-                headers=headers,
-                json=request,
+        # Transport failures (refused connection, timeout) have no known
+        # status and propagate as is.
+        response = await client.post(
+            url,
+            headers=headers,
+            json=request,
+        )
+
+        if response.status_code != 200:
+            error_message = response.text
+            try:
+                error_json = response.json()
+                if 'error' in error_json and 'message' in error_json['error']:
+                    error_message = error_json['error']['message']
+            except json.JSONDecodeError:  # noqa: S110
+                pass
+
+            message = f'Error calling Vertex AI Evaluation API: [{response.status_code}] {error_message}'
+            if response.status_code < 400:
+                # A non-200 success or redirect is not a body this client can read.
+                raise GenkitError(message=message, status='INTERNAL')
+            response_metadata: ErrorResponseMetadata | None = None
+            retry_after = response.headers.get('retry-after')
+            retry_after_ms = parse_retry_after_ms(retry_after) if isinstance(retry_after, str) else None
+            if retry_after_ms is not None:
+                response_metadata = {'retry_after_ms': retry_after_ms}
+            raise GenkitError(
+                message=message,
+                status=from_http_code(response.status_code),
+                response_metadata=response_metadata,
             )
 
-            if response.status_code != 200:
-                error_message = response.text
-                try:
-                    error_json = response.json()
-                    if 'error' in error_json and 'message' in error_json['error']:
-                        error_message = error_json['error']['message']
-                except json.JSONDecodeError:  # noqa: S110
-                    pass
-
-                raise GenkitError(
-                    message=f'Error calling Vertex AI Evaluation API: [{response.status_code}] {error_message}',
-                    status='INTERNAL',
-                )
-
+        try:
             return response.json()
-
-        except Exception as e:
-            if isinstance(e, GenkitError):
-                raise
+        except json.JSONDecodeError as e:
             raise GenkitError(
-                message=f'Failed to call Vertex AI Evaluation API: {e}',
-                status='UNAVAILABLE',
+                message='Vertex AI Evaluation API returned a body that is not JSON',
+                status='INTERNAL',
+                cause=e,
             ) from e
 
     def create_evaluator_fn(
@@ -259,7 +280,15 @@ class EvaluatorFactory:
             """
             request_body = to_request(datapoint, metric_spec or {})
             response = await self.evaluate_instances(request_body)
-            score = response_handler(response)
+            try:
+                score = response_handler(response)
+            except (KeyError, TypeError, AttributeError) as e:
+                # The 200 body is missing the result fields this metric reads.
+                raise GenkitError(
+                    message=f'Unexpected Vertex AI Evaluation response for {metric_type}',
+                    status='INTERNAL',
+                    cause=e,
+                ) from e
 
             return EvalFnResponse(
                 evaluation=score,

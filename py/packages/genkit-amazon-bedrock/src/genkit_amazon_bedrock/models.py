@@ -27,18 +27,25 @@ import structlog
 from botocore.exceptions import (
     BotoCoreError,
     ClientError,
+    ConfigNotFound,
     ConnectTimeoutError,
+    CredentialRetrievalError,
     EndpointConnectionError,
+    NoAuthTokenError,
     NoCredentialsError,
     NoRegionError,
     ParamValidationError,
     PartialCredentialsError,
+    ProfileNotFound,
     ReadTimeoutError,
+    SSOTokenLoadError,
+    TokenRetrievalError,
+    UnauthorizedSSOTokenError,
 )
 
 from genkit import ActionRunContext, GenkitError, ModelResponse
 from genkit.model import ModelRequest
-from genkit.plugin_api import ErrorResponseMetadata, StatusName
+from genkit.plugin_api import ErrorResponseMetadata, StatusName, from_http_code
 from genkit_amazon_bedrock.converters import build_converse_request, to_model_response, usage_log_fields
 from genkit_amazon_bedrock.stream import consume_converse_stream
 
@@ -57,7 +64,8 @@ class ConverseTransport(Protocol):
         ...
 
 
-# AWS error codes → Genkit statuses; anything unlisted maps to UNKNOWN.
+# AWS error codes → Genkit statuses. An unlisted code falls back to the
+# response's HTTP status (see ``_from_client_error``).
 _ERROR_CODE_STATUS: dict[str, StatusName] = {
     'ThrottlingException': 'RESOURCE_EXHAUSTED',
     'TooManyRequestsException': 'RESOURCE_EXHAUSTED',
@@ -78,12 +86,21 @@ _ERROR_CODE_STATUS: dict[str, StatusName] = {
 
 
 # Client-side botocore failures never reach the service, so they carry no error
-# code; map the exception type instead. Anything unlisted stays UNKNOWN.
+# code; map the exception type instead. Anything unlisted (dropped connections,
+# SSL, proxy, truncated reads) is re-raised as-is so retry treats it as
+# unclassified.
 _BOTOCORE_ERROR_STATUS: tuple[tuple[type[BotoCoreError], StatusName], ...] = (
     (ParamValidationError, 'INVALID_ARGUMENT'),
     (NoCredentialsError, 'UNAUTHENTICATED'),
     (PartialCredentialsError, 'UNAUTHENTICATED'),
+    (CredentialRetrievalError, 'UNAUTHENTICATED'),
+    (TokenRetrievalError, 'UNAUTHENTICATED'),
+    (NoAuthTokenError, 'UNAUTHENTICATED'),
+    (SSOTokenLoadError, 'UNAUTHENTICATED'),
+    (UnauthorizedSSOTokenError, 'UNAUTHENTICATED'),
     (NoRegionError, 'FAILED_PRECONDITION'),
+    (ProfileNotFound, 'FAILED_PRECONDITION'),
+    (ConfigNotFound, 'FAILED_PRECONDITION'),
     (ReadTimeoutError, 'DEADLINE_EXCEEDED'),
     (ConnectTimeoutError, 'DEADLINE_EXCEEDED'),
     (EndpointConnectionError, 'UNAVAILABLE'),
@@ -127,9 +144,33 @@ def _retry_after_ms(error: ClientError) -> float | None:
     return None
 
 
+def _http_status(error: ClientError) -> int | None:
+    """The response's HTTP status if it is a failure status (4xx/5xx)."""
+    metadata = error.response.get('ResponseMetadata') or {}
+    status = metadata.get('HTTPStatusCode') if isinstance(metadata, dict) else None
+    if isinstance(status, int) and not isinstance(status, bool) and 400 <= status <= 599:
+        return status
+    return None
+
+
 def _from_client_error(error: ClientError, operation: str = 'converse') -> GenkitError:
+    """Classifies an AWS service error by its error code, then its HTTP status.
+
+    Raises ``error`` itself when neither yields a status, e.g. a mid-stream
+    EventStreamError whose exception type is not in ``_ERROR_CODE_STATUS``:
+    the event carries no HTTP status of its own.
+    """
     error_info: dict[str, Any] = error.response.get('Error') or {}
     code = error_info.get('Code') or ''
+    status = _ERROR_CODE_STATUS.get(_normalize_error_code(code))
+    if status is None:
+        http_status = _http_status(error)
+        if http_status is not None:
+            status = from_http_code(http_status)
+    # from_http_code has no status for some 4xx (e.g. 418). UNKNOWN would make
+    # retry skip the error, so leave it raw instead.
+    if status is None or status == 'UNKNOWN':
+        raise error
     message = error_info.get('Message') or str(error)
     prefix = f'bedrock {operation} failed'
     retry_after_ms = _retry_after_ms(error)
@@ -138,7 +179,7 @@ def _from_client_error(error: ClientError, operation: str = 'converse') -> Genki
         response_metadata = {'retry_after_ms': retry_after_ms}
     return GenkitError(
         message=f'{prefix}: {code}: {message}' if code else f'{prefix}: {message}',
-        status=_ERROR_CODE_STATUS.get(_normalize_error_code(code), 'UNKNOWN'),
+        status=status,
         response_metadata=response_metadata,
     )
 
@@ -154,12 +195,14 @@ def _normalize_error_code(code: str) -> str:
 
 
 def _from_botocore_error(error: BotoCoreError, operation: str = 'converse') -> GenkitError:
-    status: StatusName = 'UNKNOWN'
-    for error_type, mapped in _BOTOCORE_ERROR_STATUS:
+    """Classifies a client-side botocore failure by exception type.
+
+    Raises ``error`` itself when its type is not in ``_BOTOCORE_ERROR_STATUS``.
+    """
+    for error_type, status in _BOTOCORE_ERROR_STATUS:
         if isinstance(error, error_type):
-            status = mapped
-            break
-    return GenkitError(message=f'bedrock {operation} failed: {error}', status=status)
+            return GenkitError(message=f'bedrock {operation} failed: {error}', status=status)
+    raise error
 
 
 class BedrockModel:

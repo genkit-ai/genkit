@@ -82,6 +82,7 @@ from genkit.plugin_api import (
     loop_local_client,
     to_json_schema,
 )
+from genkit_google_genai._auth import GOOGLE_AUTH_ERRORS, raise_auth_error
 from genkit_google_genai._interactions.options import ClientOptions
 from genkit_google_genai.evaluators import (
     VertexAIEvaluationMetricType,
@@ -238,6 +239,19 @@ PLUGIN_DISPLAY_NAME: dict[str, str] = {
     GOOGLEAI_PLUGIN_NAME: 'Google AI',
     VERTEXAI_PLUGIN_NAME: 'Vertex AI',
 }
+
+
+def _plugin_client(client_kwargs: dict[str, Any]) -> genai.Client:
+    """Build the plugin's client on first use in a loop.
+
+    Construction is lazy, so it runs inside the first action body. Vertex with
+    no project resolves ADC here; a missing or rejected credential becomes
+    UNAUTHENTICATED instead of a bare google.auth error.
+    """
+    try:
+        return genai.client.Client(**client_kwargs)
+    except GOOGLE_AUTH_ERRORS as e:
+        raise_auth_error(e)
 
 
 def _new_gemini(plugin: GoogleAI | VertexAI, clean_name: str) -> GeminiModel:
@@ -649,7 +663,7 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
         }
         self._base_url_pinned = bool(self._client_kwargs['http_options'].base_url)
         # Single loop-local client accessor used everywhere in plugin runtime paths.
-        self._runtime_client = loop_local_client(lambda: genai.client.Client(**self._client_kwargs))
+        self._runtime_client = loop_local_client(lambda: _plugin_client(self._client_kwargs))
         self._list_actions_cache: list[ActionMetadata] | None = None
 
     def _interactions_client_options(self) -> ClientOptions:
@@ -1058,7 +1072,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
             'http_options': opts,
         }
         # Single loop-local client accessor used everywhere in plugin runtime paths.
-        self._runtime_client = loop_local_client(lambda: genai.client.Client(**self._client_kwargs))
+        self._runtime_client = loop_local_client(lambda: _plugin_client(self._client_kwargs))
         self._list_actions_cache: list[ActionMetadata] | None = None
 
     async def init(self) -> list[Action]:
