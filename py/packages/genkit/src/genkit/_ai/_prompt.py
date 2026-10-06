@@ -415,7 +415,14 @@ class Prompt(Generic[InputT, OutputT]):
         call = await self._resolve_model(call, call_opts)
 
         # Render the template with input, the call's chat history and context.
-        call = await render_call(prompt=self, registry=registry, call=call, input=input, opts=call_opts)
+        call = await render_call(
+            prompt=self,
+            registry=registry,
+            call=call,
+            input=input,
+            context=call_opts.get('context'),
+            history=call_opts.get('messages'),
+        )
 
         return registry, await to_generate_options(registry=registry, call=call)
 
@@ -977,22 +984,20 @@ async def render_call(
     registry: Registry,
     call: GenerateCall,
     input: Any,  # noqa: ANN401
-    opts: PromptGenerateOptions | None = None,
+    context: dict[str, Any] | None = None,
+    history: list[Message] | None = None,
 ) -> GenerateCall:
     """Expand dotprompt with the call's input into one merged :class:`GenerateCall`.
 
-    Reads the call's ``messages`` (chat history) and ``context`` from ``opts``.
-    Sets final ``messages`` and clears template source fields, before
+    ``context`` feeds ``{{@auth}}`` etc.; ``None`` uses the enclosing flow's
+    context. ``history`` is this call's chat history (``messages=`` on the
+    call). Sets final ``messages`` and clears template source fields, before
     :func:`to_generate_options`.
     """
     template_input = coerce_prompt_template_input(input)
-    # Templates read context as {{@auth}} etc. An omitted context= uses
-    # the enclosing flow's auth, so render() shows what the run will send.
-    render_context = opts.get('context') if opts else None
-    if render_context is None:
-        render_context = get_current_context()
-    # This call's chat history; call.messages below is the template's own.
-    message_history = opts.get('messages') if opts else None
+    # An omitted context= uses the enclosing flow's auth, so render() shows
+    # what the run will send.
+    render_context = context if context is not None else get_current_context()
     cache = prompt._compiled_templates
 
     resolved_msgs: list[Message] = []
@@ -1009,11 +1014,11 @@ async def render_call(
                 call=call,
                 cache=cache,
                 context=render_context,
-                history=message_history,
+                history=history,
             )
         )
-    elif message_history:
-        resolved_msgs.extend(message_history)
+    elif history:
+        resolved_msgs.extend(history)
     if call.prompt:
         result = await render_user_prompt(
             registry=registry, input=template_input, call=call, cache=cache, context=render_context
