@@ -17,7 +17,6 @@
 
 """Model Garden integration for Vertex AI."""
 
-from .model_garden import model_garden_name
-from .modelgarden_plugin import ModelGarden, ModelGardenPlugin
+from .modelgarden_plugin import ModelGarden, ModelGardenPlugin, model_garden_name
 
 __all__ = ['ModelGarden', 'ModelGardenPlugin', 'model_garden_name']

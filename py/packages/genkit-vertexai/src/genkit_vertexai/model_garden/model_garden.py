@@ -33,20 +33,6 @@ from openai import AsyncOpenAI
 from genkit import ActionRunContext, ModelResponse
 from genkit.model import ModelRequest
 
-MODELGARDEN_PLUGIN_NAME = 'modelgarden'
-
-
-def model_garden_name(name: str) -> str:
-    """Create a Model Garden action name.
-
-    Args:
-        name: Base name for the action.
-
-    Returns:
-        The fully qualified Model Garden action name.
-    """
-    return f'{MODELGARDEN_PLUGIN_NAME}/{name}'
-
 
 class ModelGardenModel:
     """Manages integration with Google's Model Garden service for Genkit.

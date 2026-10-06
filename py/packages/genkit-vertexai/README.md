@@ -18,6 +18,15 @@ Integrate Genkit with Google Cloud Vertex AI Model Garden.
 uv add genkit-vertexai
 ```
 
+Add the extra for the Model Garden publishers you call:
+
+```bash
+uv add 'genkit-vertexai[anthropic]'   # Claude
+uv add 'genkit-vertexai[openai]'      # Llama, Mistral, and other OpenAI-compatible models
+```
+
+Calling a model without its extra raises an error naming the command to run.
+
 ## Usage
 
 ```python

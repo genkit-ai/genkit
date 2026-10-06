@@ -43,6 +43,8 @@ Example:
 
 Requirements:
     - Requires Google Cloud Application Default Credentials (ADC) or explicit credentials.
+    - Claude models need ``genkit-vertexai[anthropic]``; Llama, Mistral, and other
+      OpenAI-compatible models need ``genkit-vertexai[openai]``.
 
 See Also:
     - Vertex AI Model Garden: https://cloud.google.com/vertex-ai/docs/model-garden

@@ -20,14 +20,34 @@ import os
 import warnings
 from typing import cast
 
-from genkit_openai import OpenAIConfig
 from genkit_vertexai import constants as const
 from genkit_vertexai.model_garden._model_info import SUPPORTED_OPENAI_COMPAT_MODELS
 
+from genkit import GenkitError
 from genkit.model import model as create_model, model_action_metadata
 from genkit.plugin_api import Action, ActionKind, ActionMetadata, Plugin, to_json_schema
 
-from .model_garden import MODELGARDEN_PLUGIN_NAME, ModelGardenModel, model_garden_name
+MODELGARDEN_PLUGIN_NAME = 'modelgarden'
+
+# claude and the openai-compatible publishers are separate extras, so an app
+# only installs the SDK for the models it actually calls.
+_CLAUDE_EXTRA_MISSING = "Model Garden Claude models need the anthropic extra: uv add 'genkit-vertexai[anthropic]'"
+_OPENAI_COMPAT_EXTRA_MISSING = (
+    'Model Garden Llama, Mistral, and other OpenAI-compatible models need the openai extra: '
+    "uv add 'genkit-vertexai[openai]'"
+)
+
+
+def model_garden_name(name: str) -> str:
+    """Create a Model Garden action name.
+
+    Args:
+        name: Base name for the action.
+
+    Returns:
+        The fully qualified Model Garden action name.
+    """
+    return f'{MODELGARDEN_PLUGIN_NAME}/{name}'
 
 
 class ModelGarden(Plugin):
@@ -114,7 +134,10 @@ class ModelGarden(Plugin):
         )
 
         if clean_name.startswith('anthropic/'):
-            from .anthropic import AnthropicModelGarden as AnthropicWorker
+            try:
+                from .anthropic import AnthropicModelGarden as AnthropicWorker
+            except ModuleNotFoundError as e:
+                raise GenkitError(status='FAILED_PRECONDITION', message=_CLAUDE_EXTRA_MISSING) from e
 
             location = self.model_locations.get(clean_name, self.location)
             if not self.project_id:
@@ -139,6 +162,13 @@ class ModelGarden(Plugin):
                     },
                 },
             )
+
+        try:
+            from genkit_openai import OpenAIConfig
+
+            from .model_garden import ModelGardenModel
+        except ModuleNotFoundError as e:
+            raise GenkitError(status='FAILED_PRECONDITION', message=_OPENAI_COMPAT_EXTRA_MISSING) from e
 
         location = self.model_locations.get(clean_name, self.location)
         if not self.project_id:
@@ -178,7 +208,13 @@ class ModelGarden(Plugin):
                 - kind (ActionKind): The type or category of the action.
                 - info (dict): The metadata dictionary describing the model configuration and properties.
                 - config_schema (type): The schema class used for validating the model's configuration.
+            Empty when the ``openai`` extra isn't installed, so the Dev UI only lists models that can run.
         """
+        try:
+            from genkit_openai import OpenAIConfig
+        except ModuleNotFoundError:
+            return []
+
         actions_list = []
         for model, model_info in SUPPORTED_OPENAI_COMPAT_MODELS.items():
             actions_list.append(
