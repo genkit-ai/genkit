@@ -31,8 +31,8 @@ import (
 // registered middleware names (e.g. genkit-middleware-exp/agents).
 const provider = "genkit-middleware-exp"
 
-// Middleware provides the experimental agent middleware ([Agents], [Artifacts])
-// as a Genkit plugin. Register it with [genkit.WithPlugins] during
+// Middleware provides the experimental middleware ([Agents], [Artifacts],
+// [Budget]) as a Genkit plugin. Register it with [genkit.WithPlugins] during
 // [genkit.Init] to make them resolvable by name (e.g. for the Dev UI). Using
 // them directly via [ai.WithUse] does not require the plugin.
 type Middleware struct{}
@@ -45,5 +45,6 @@ func (p *Middleware) Middlewares(ctx context.Context) ([]*ai.MiddlewareDesc, err
 	return []*ai.MiddlewareDesc{
 		ai.NewMiddleware("Delegate tasks to registered sub-agents via per-agent tools", Agents{}),
 		ai.NewMiddleware("Provide read/write tools for session artifacts", Artifacts{}),
+		ai.NewMiddleware("Cap the usage a generate run or agent session may spend", Budget{}),
 	}, nil
 }
