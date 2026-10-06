@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from genkit import Genkit, Message, ModelResponse, Part
 from genkit._core._action import ActionRunContext
@@ -31,6 +31,20 @@ class StrictConfig(ModelConfig):
 
 class OtherConfig(ModelConfig):
     """Some other plugin's class."""
+
+
+class CappedConfig(ModelConfig):
+    """A plugin class that narrows a common setting's range."""
+
+    temperature: float | None = Field(default=None, le=1.0)
+
+
+class BareConfig(BaseModel):
+    """A plugin class that declares none of the common settings."""
+
+    model_config = ConfigDict(extra='forbid')
+
+    safe_prompt: bool | None = None
 
 
 def _config_value(config: Any, key: str) -> Any:  # noqa: ANN401
@@ -383,3 +397,108 @@ async def test_generate_valid_config_runs_unchanged() -> None:
     assert _config_value(config, 'temperature') == 0.2
     assert _config_value(config, 'max_output_tokens') == 10
     assert _config_value(config, 'safe_prompt') is True
+
+
+@pytest.mark.asyncio
+async def test_generate_model_config_on_model_with_own_class_is_accepted() -> None:
+    """`config=ModelConfig(temperature=0.2)` on a model with its own class reaches it with temperature 0.2."""
+    ai, fn = _ai_with_model()
+
+    response = await ai.generate(model='strict', prompt='hi', config=ModelConfig(temperature=0.2))
+
+    assert response.text == 'ok'
+    assert _config_value(fn.requests[-1].config, 'temperature') == 0.2
+
+
+@pytest.mark.asyncio
+async def test_generate_model_config_value_checked_against_model_class() -> None:
+    """`ModelConfig(temperature=1.5)` on a model whose class caps temperature at 1.0 raises naming `temperature`."""
+    ai, fn = _ai_with_model(config_schema=CappedConfig, name='capped')
+
+    with pytest.raises(GenkitError) as err:
+        await ai.generate(model='capped', prompt='hi', config=ModelConfig(temperature=1.5))
+
+    _assert_rejected(err, fn, "capped: config 'temperature'")
+
+
+@pytest.mark.asyncio
+async def test_generate_model_config_on_class_without_common_settings_raises() -> None:
+    """`ModelConfig(temperature=0.2)` on a model whose class has no `temperature` raises naming it."""
+    ai, fn = _ai_with_model(config_schema=BareConfig, name='bare')
+
+    with pytest.raises(GenkitError) as err:
+        await ai.generate(model='bare', prompt='hi', config=ModelConfig(temperature=0.2))
+
+    _assert_rejected(err, fn, "bare: unknown config key 'temperature'")
+
+
+@pytest.mark.asyncio
+async def test_generate_model_config_on_model_without_config_class_runs() -> None:
+    """`ModelConfig(temperature=0.2)` on a model with no config class runs and reaches it as temperature 0.2."""
+    ai, fn = _ai_with_model(config_schema=None, name='loose')
+
+    response = await ai.generate(model='loose', prompt='hi', config=ModelConfig(temperature=0.2))
+
+    assert response.text == 'ok'
+    assert _config_value(fn.requests[-1].config, 'temperature') == 0.2
+
+
+@pytest.mark.asyncio
+async def test_generate_model_config_on_model_ref_merges_over_ref_default() -> None:
+    """`ModelConfig(temperature=0.2)` over a ref with 0.5 and safe_prompt runs with 0.2 and keeps safe_prompt."""
+    ai, fn = _ai_with_model()
+    ref = model_ref('strict', config_schema=StrictConfig, config=StrictConfig(temperature=0.5, safe_prompt=True))
+
+    await ai.generate(model=ref, prompt='hi', config=ModelConfig(temperature=0.2))
+
+    config = fn.requests[-1].config
+    assert _config_value(config, 'temperature') == 0.2
+    assert _config_value(config, 'safe_prompt') is True
+
+
+@pytest.mark.asyncio
+async def test_prompt_defined_with_model_config_runs() -> None:
+    """A prompt defined and called with `ModelConfig(...)` runs with both the define and call settings."""
+    ai, fn = _ai_with_model()
+    prompt = ai.define_prompt(name='shared', model='strict', prompt='hi', config=ModelConfig(temperature=0.2))
+
+    response = await prompt(config=ModelConfig(max_output_tokens=7))
+
+    assert response.text == 'ok'
+    config = fn.requests[-1].config
+    assert _config_value(config, 'temperature') == 0.2
+    assert _config_value(config, 'max_output_tokens') == 7
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('snake_value', [5, 6], ids=['same_value', 'different_value'])
+async def test_generate_both_spellings_of_one_setting_raises_same_setting(snake_value: int) -> None:
+    """`{'maxOutputTokens': 5, 'max_output_tokens': 5 or 6}` raises "are the same setting; pass one", not "unknown"."""
+    ai, fn = _ai_with_model()
+
+    with pytest.raises(GenkitError) as err:
+        await ai.generate(model='strict', prompt='hi', config={'maxOutputTokens': 5, 'max_output_tokens': snake_value})
+
+    _assert_rejected(err, fn, 'strict: max_output_tokens and maxOutputTokens are the same setting; pass one')
+    assert 'unknown' not in err.value.original_message
+
+
+@pytest.mark.asyncio
+async def test_generate_both_spellings_and_typo_names_both() -> None:
+    """Both spellings plus `temprature` raise one error naming the duplicate setting and the typo."""
+    ai, fn = _ai_with_model()
+
+    with pytest.raises(GenkitError) as err:
+        await ai.generate(
+            model='strict',
+            prompt='hi',
+            config={'maxOutputTokens': 5, 'max_output_tokens': 5, 'temprature': 0.2},
+        )
+
+    _assert_rejected(
+        err,
+        fn,
+        'max_output_tokens and maxOutputTokens are the same setting; pass one',
+        "unknown config key 'temprature'",
+    )
+    assert "'max_output_tokens'" not in err.value.original_message
