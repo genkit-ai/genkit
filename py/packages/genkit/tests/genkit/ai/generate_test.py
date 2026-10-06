@@ -177,6 +177,72 @@ async def test_generate_user_text_and_media_model_sees_both_parts(
     assert parts[1].text is None
 
 
+def _queue_ok(pm: ProgrammableModel) -> None:
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('ok')]),
+        )
+    )
+
+
+def _sent_text(pm: ProgrammableModel) -> list[tuple[str, list[str | None]]]:
+    assert pm.last_request is not None
+    return [(m.role, [p.text for p in m.content]) for m in pm.last_request.messages]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'prompt',
+    [
+        pytest.param('hello {{name}}', id='variable used to render empty'),
+        pytest.param('Reply like {"dish": {{', id='unclosed braces used to raise ValueError'),
+        pytest.param('<<<dotprompt:role:system>>> hi', id='role marker used to be dropped'),
+        pytest.param(
+            'Describe {{media url="https://example.com/x.png"}}', id='media helper used to become a media part'
+        ),
+    ],
+)
+async def test_generate_prompt_string_is_sent_as_written(
+    setup_test: tuple[Genkit, ProgrammableModel],
+    prompt: str,
+) -> None:
+    """`ai.generate(prompt=...)` is not a template; `define_prompt` is where templating lives."""
+    ai, pm = setup_test
+    _queue_ok(pm)
+
+    await ai.generate(model='programmableModel', prompt=prompt)
+
+    assert _sent_text(pm) == [(Role.USER, [prompt])]
+
+
+@pytest.mark.asyncio
+async def test_generate_system_string_is_sent_as_written(
+    setup_test: tuple[Genkit, ProgrammableModel],
+) -> None:
+    """`system='be {{x}} nice'` reaches the model unchanged as the system message."""
+    ai, pm = setup_test
+    _queue_ok(pm)
+
+    await ai.generate(model='programmableModel', system='be {{x}} nice', prompt='hi')
+
+    assert _sent_text(pm) == [(Role.SYSTEM, ['be {{x}} nice']), (Role.USER, ['hi'])]
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_strings_are_sent_as_written(
+    setup_test: tuple[Genkit, ProgrammableModel],
+) -> None:
+    """`ai.generate_stream` sends `system` and `prompt` as written too."""
+    ai, pm = setup_test
+    _queue_ok(pm)
+
+    result = ai.generate_stream(model='programmableModel', system='be {{x}} nice', prompt='{{x}}')
+    await result.response
+
+    assert _sent_text(pm) == [(Role.SYSTEM, ['be {{x}} nice']), (Role.USER, ['{{x}}'])]
+
+
 @pytest.mark.asyncio
 async def test_generate_stream_chunk_text_from_factory_part(
     setup_test: tuple[Genkit, ProgrammableModel],
