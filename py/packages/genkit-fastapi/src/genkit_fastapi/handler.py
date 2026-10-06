@@ -31,8 +31,9 @@ from pydantic import BaseModel
 from genkit import ContextProvider, Genkit, GenkitError, PublicError, RequestData
 from genkit._core._action import input_from_json
 from genkit._core._context import joined_headers
+from genkit._core._error import log_served_failure, served_error_json, served_stream_error_event
 from genkit.exp.agent import Agent, SessionSnapshot
-from genkit.plugin_api import Action, ActionKind, get_callable_json, get_http_status
+from genkit.plugin_api import Action, ActionKind
 
 logger = logging.getLogger(__name__)
 
@@ -105,18 +106,20 @@ class FastAPIRequestData(RequestData):
 
 def json_error_response(error: Exception, status_code: int | None = None) -> Response:
     """Build a compact JSON error response from an exception."""
+    status, body = served_error_json(error=error)
     return Response(
-        status_code=get_http_status(error) if status_code is None else status_code,
-        content=json.dumps(get_callable_json(error), separators=JSON_SEPARATORS),
+        status_code=status if status_code is None else status_code,
+        content=body,
         media_type='application/json',
     )
 
 
-def _log_served_failure(error: Exception, *, where: str) -> None:
-    if get_http_status(error) >= 500:
-        logger.exception('served flow %s failed', where)
-    else:
-        logger.warning('served flow %s failed: %s', where, error)
+async def _read_json_request_body(*, request: Request) -> object:
+    """Parse the request body as JSON, or raise a 400 PublicError."""
+    try:
+        return json.loads((await request.body()).decode('utf-8'))
+    except (json.JSONDecodeError, UnicodeDecodeError) as err:
+        raise PublicError('INVALID_ARGUMENT', 'request body must be valid JSON') from err
 
 
 def extract_action_input(body: dict[str, Any]) -> object:
@@ -172,7 +175,7 @@ def format_stream_result(result: object) -> str:
 
 def format_stream_error(error: Exception) -> str:
     """Format a stream failure as a canonical SSE data event."""
-    return f'data: {json.dumps({"error": get_callable_json(error)}, separators=JSON_SEPARATORS)}\n\n'
+    return served_stream_error_event(error=error)
 
 
 async def handle_genkit_request(
@@ -205,7 +208,11 @@ async def handle_genkit_request(
     Returns:
         A streaming SSE response, a ``{"result": ...}`` dict, or an error Response.
     """
-    body = await request.json()
+    try:
+        body = await _read_json_request_body(request=request)
+    except PublicError as err:
+        log_served_failure(adapter_logger=logger, error=err, where='run')
+        return json_error_response(err)
     if not isinstance(body, dict):
         return json_error_response(
             PublicError(
@@ -213,6 +220,7 @@ async def handle_genkit_request(
                 'Action request must be a JSON object',
             )
         )
+    body = cast(dict[str, Any], body)
 
     try:
         input_data = extract_action_input(body)
@@ -233,7 +241,7 @@ async def handle_genkit_request(
                 result = await stream_response.response
                 yield format_stream_result(result)
             except Exception as e:
-                _log_served_failure(e, where='stream')
+                log_served_failure(adapter_logger=logger, error=e, where='stream')
                 yield format_stream_error(e)
 
         return StreamingResponse(event_stream(), media_type='text/event-stream')
@@ -244,7 +252,7 @@ async def handle_genkit_request(
             return Response(status_code=404)
         return {'result': to_dict(response.response)}
     except Exception as e:
-        _log_served_failure(e, where='run')
+        log_served_failure(adapter_logger=logger, error=e, where='run')
         return json_error_response(e)
 
 
@@ -291,21 +299,25 @@ def genkit_fastapi_handler(
         fn: Callable[[], Awaitable[Action[InputT, OutputT, ChunkT, InitT]]] | Action[InputT, OutputT, ChunkT, InitT],
     ) -> Callable[[Request], Awaitable[Response | dict[str, Any]]]:
         async def handler(request: Request) -> Response | dict[str, Any]:
-            if isinstance(fn, Action):
-                action = fn
-            else:
-                result = fn()
-                if not asyncio.iscoroutine(result):
+            try:
+                if isinstance(fn, Action):
+                    action = fn
+                else:
+                    result = fn()
+                    if not asyncio.iscoroutine(result):
+                        raise GenkitError(
+                            status='INTERNAL',
+                            message='genkit_fastapi_handler wrapper must be async when action is defined elsewhere',
+                        )
+                    action = await result
+                if not isinstance(action, Action):
                     raise GenkitError(
-                        status='INVALID_ARGUMENT',
-                        message='genkit_fastapi_handler wrapper must be async when action is defined elsewhere',
+                        status='INTERNAL',
+                        message='genkit_fastapi_handler must wrap an Action or an async function returning an Action',
                     )
-                action = await result
-            if not isinstance(action, Action):
-                raise GenkitError(
-                    status='INVALID_ARGUMENT',
-                    message='genkit_fastapi_handler must wrap an Action or an async function returning an Action',
-                )
+            except Exception as e:
+                log_served_failure(adapter_logger=logger, error=e, where='handler')
+                return json_error_response(e)
 
             # This decorator reads context from the request itself. Routes that
             # want FastAPI's dependency graph (auth schemes, DB sessions) go
@@ -313,15 +325,16 @@ def genkit_fastapi_handler(
             action_context: dict[str, object] | None = None
             if context_provider:
                 try:
-                    body = await request.json()
-                    request_data = FastAPIRequestData(request, body if isinstance(body, dict) else None)
+                    body = await _read_json_request_body(request=request)
+                    parsed_body = cast(dict[str, Any], body) if isinstance(body, dict) else None
+                    request_data = FastAPIRequestData(request, parsed_body)
                     context = context_provider(request_data)
                     if asyncio.iscoroutine(context):
                         context = await context
                     if isinstance(context, dict):
                         action_context = context
                 except Exception as e:
-                    _log_served_failure(e, where='context provider')
+                    log_served_failure(adapter_logger=logger, error=e, where='context provider')
                     return json_error_response(e)
 
             return await handle_genkit_request(

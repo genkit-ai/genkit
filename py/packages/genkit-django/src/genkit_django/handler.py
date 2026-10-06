@@ -26,10 +26,11 @@ from django.http import HttpRequest, HttpResponse, HttpResponseBase, JsonRespons
 from django.views.decorators.csrf import csrf_exempt
 from pydantic import BaseModel
 
-from genkit import ContextProvider, Genkit, PublicError, RequestData
+from genkit import ContextProvider, Genkit, GenkitError, PublicError, RequestData
 from genkit._core._action import input_from_json
 from genkit._core._context import joined_headers
-from genkit.plugin_api import Action, get_callable_json, get_http_status
+from genkit._core._error import log_served_failure, served_error_json, served_stream_error_event
+from genkit.plugin_api import Action
 
 logger = logging.getLogger(__name__)
 
@@ -58,18 +59,12 @@ def _to_dict(obj: Any) -> Any:  # noqa: ANN401
 
 def _error_response(err: Exception, status: int | None = None) -> HttpResponse:
     """Return a JSON error body; status comes from the error unless overridden."""
+    resolved_status, body = served_error_json(error=err)
     return HttpResponse(
-        status=get_http_status(err) if status is None else status,
-        content=json.dumps(get_callable_json(err), separators=_JSON_SEPARATORS),  # pyright: ignore[reportArgumentType]
+        status=resolved_status if status is None else status,
+        content=body.encode('utf-8'),
         content_type='application/json',
     )
-
-
-def _log_served_failure(error: Exception, *, where: str) -> None:
-    if get_http_status(error) >= 500:
-        logger.exception('served flow %s failed', where)
-    else:
-        logger.warning('served flow %s failed: %s', where, error)
 
 
 def _request_headers(request: HttpRequest) -> Mapping[str, str]:
@@ -135,7 +130,7 @@ def genkit_django_handler(
 
     def decorator(flow: Action) -> Callable[[HttpRequest], Awaitable[HttpResponseBase]]:
         if not isinstance(flow, Action):
-            raise PublicError('INVALID_ARGUMENT', 'must apply @genkit_django_handler on a @flow')
+            raise GenkitError(status='INVALID_ARGUMENT', message='must apply @genkit_django_handler on a @flow')
 
         @csrf_exempt
         async def handler(request: HttpRequest) -> HttpResponseBase:
@@ -150,7 +145,6 @@ def genkit_django_handler(
             except (json.JSONDecodeError, UnicodeDecodeError):
                 return _error_response(
                     PublicError('INVALID_ARGUMENT', 'request body must be valid JSON'),
-                    status=400,
                 )
 
             if not isinstance(body, dict) or 'data' not in body:
@@ -159,7 +153,6 @@ def genkit_django_handler(
                         'INVALID_ARGUMENT',
                         'Action request must be wrapped in {"data": ...} object',
                     ),
-                    status=400,
                 )
 
             request_data = _DjangoRequestData(request, body)
@@ -173,7 +166,7 @@ def genkit_django_handler(
                     if isinstance(context, dict):
                         action_context = context
                 except Exception as e:
-                    _log_served_failure(e, where='context provider')
+                    log_served_failure(adapter_logger=logger, error=e, where='context provider')
                     return _error_response(e)
 
             accept = request_data.headers.get('accept', '')
@@ -192,12 +185,8 @@ def genkit_django_handler(
                         result = await stream_response.response
                         yield f'data: {json.dumps({"result": _to_dict(result)}, separators=_JSON_SEPARATORS)}\n\n'
                     except Exception as e:
-                        _log_served_failure(e, where='stream')
-                        err_payload = json.dumps(
-                            {'error': get_callable_json(e)},
-                            separators=_JSON_SEPARATORS,
-                        )
-                        yield f'data: {err_payload}\n\n'
+                        log_served_failure(adapter_logger=logger, error=e, where='stream')
+                        yield served_stream_error_event(error=e)
 
                 return StreamingHttpResponse(event_stream(), content_type='text/event-stream')
 
@@ -205,7 +194,7 @@ def genkit_django_handler(
                 response = await flow.run(input=action_input, context=action_context, init=init)
                 return JsonResponse({'result': _to_dict(response.response)})
             except Exception as e:
-                _log_served_failure(e, where='run')
+                log_served_failure(adapter_logger=logger, error=e, where='run')
                 return _error_response(e)
 
         return handler
