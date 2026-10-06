@@ -25,7 +25,6 @@ import (
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
-	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/genkit"
 )
 
@@ -418,19 +417,25 @@ func TestFallbackThroughGenerateAction(t *testing.T) {
 	}
 }
 
-// TestFallbackWithoutGenkit runs Fallback through ai.Generate on a bare
-// registry, where no Genkit is on the context to resolve the fallback models.
-// It must fail with a status error rather than panic on the nil instance.
-func TestFallbackWithoutGenkit(t *testing.T) {
+// TestFallbackOnBareRegistry runs Fallback through ai.Generate on a bare
+// registry rather than genkit.Generate. The loop puts a Genkit backing the
+// registry on the context itself, so the fallback model still resolves.
+func TestFallbackOnBareRegistry(t *testing.T) {
 	r := newTestRegistry(t)
 	primary := defineModel(t, r, "test/primary", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		return nil, core.NewError(core.UNAVAILABLE, "primary down")
 	})
+	defineModel(t, r, "test/secondary", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		return &ai.ModelResponse{Message: ai.NewModelTextMessage("secondary ok")}, nil
+	})
 
 	fb := &Fallback{Models: []ai.ModelRef{ai.NewModelRef("test/secondary", nil)}}
 
-	_, err := ai.Generate(ctx, r, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithUse(fb))
-	if s, _ := status.Classified(err); s != status.FailedPrecondition {
-		t.Fatalf("got error %v (status %q), want FAILED_PRECONDITION", err, s)
+	resp, err := ai.Generate(ctx, r, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithUse(fb))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := resp.Text(); got != "secondary ok" {
+		t.Errorf("got %q, want %q", got, "secondary ok")
 	}
 }

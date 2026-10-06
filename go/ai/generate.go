@@ -198,17 +198,9 @@ type ModelOptions struct {
 }
 
 // DefineGenerateAction defines a utility generate action.
-//
-// The Dev UI and other reflection clients run generation through this action
-// rather than through genkit.Generate, so it seeds the *genkit.Genkit backing r
-// into the context itself. Middleware that resolves other actions through
-// genkit.FromContext then works the same on both paths.
 func DefineGenerateAction(ctx context.Context, r api.Registry) *generateAction {
 	a := core.NewStreamingActionOf(api.ActionTypeUtil, "generate", nil,
 		func(ctx context.Context, actionOpts *GenerateActionOptions, cb ModelStreamCallback) (resp *ModelResponse, err error) {
-			if seed := genkitbridge.SeedContextForRegistry; seed != nil {
-				ctx = seed(ctx, r)
-			}
 			// The action's own span records the request and response, and
 			// stands in for the first turn's: opening one would nest a
 			// duplicate "generate" span directly inside it.
@@ -471,6 +463,14 @@ func withoutToolCall(ctx context.Context) context.Context {
 // first turn opens its own "generate" span; the generate action passes false
 // because its own span already serves as that one.
 func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActionOptions, mmws []ModelMiddleware, cb ModelStreamCallback, spanTurnZero bool) (*ModelResponse, error) {
+	// Every path into the loop (genkit.Generate, Prompt.Execute, the generate
+	// action the Dev UI runs) puts the *genkit.Genkit backing r on the
+	// context, so middleware that resolves other actions through
+	// genkit.FromContext works the same on all of them. It replaces an
+	// instance already there, so those lookups use the loop's registry.
+	if seed := genkitbridge.SeedContextForRegistry; seed != nil {
+		ctx = seed(ctx, r)
+	}
 	// The soft-failure policy belongs to the call whose middleware set it: a
 	// Generate run from inside a tool starts without its parent's.
 	ctx = base.SoftToolErrorsKey.NewContext(ctx, nil)

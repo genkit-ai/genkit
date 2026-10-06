@@ -41,8 +41,8 @@ var RegistryOf func(host any) api.Registry
 // SeedContextForRegistry returns ctx with the *genkit.Genkit backing reg
 // attached, so it can be retrieved with genkit.FromContext. It is installed by
 // the genkit package's init. ai/exp's agent constructors call it to seed the
-// Genkit instance into every agent turn, and ai's generate action calls it to
-// seed each run, so prompts, tools, and middleware can resolve and run other
+// Genkit instance into every agent turn, and ai's generate loop calls it to
+// seed each generation, so prompts, tools, and middleware can resolve and run other
 // actions without direct registry access.
 //
 // The Genkit instance is reconstructed from reg (a *genkit.Genkit is a thin

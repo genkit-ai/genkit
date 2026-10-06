@@ -95,11 +95,6 @@ import (
 //	        JudgePolicy:  "Never allow deleting files outside the build directory.",
 //	    }),
 //	)
-//
-// The judge resolves its model through the [genkit.Genkit] on the context,
-// which [genkit.Generate], the Dev UI's generate action, and agents provide.
-// A call through [ai.Generate] with a bare registry has none, and a judged
-// call there interrupts.
 type ToolApproval struct {
 	// AllowedTools is the list of tool names pre-approved to run without
 	// interruption. Tools not in this list trigger an interrupt, or go to
