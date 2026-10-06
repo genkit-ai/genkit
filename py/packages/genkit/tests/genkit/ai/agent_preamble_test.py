@@ -141,14 +141,14 @@ async def test_agent_system_renders_as_template_without_input() -> None:
     `chat.send` text reaches the model as written.
     """
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
     pm.responses.append(
         ModelResponse(
             finish_reason=FinishReason.STOP,
             message=Message(role=Role.MODEL, content=[Part.from_text('ok')]),
         )
     )
-    waiter = ai.define_agent('waiter', model='programmableModel', system='Guest: {{@auth.name}}. Table {{table}}.')
+    waiter = ai.define_agent('waiter', model='scriptedModel', system='Guest: {{@auth.name}}. Table {{table}}.')
 
     @ai.flow()
     async def take_order(_: str) -> None:
