@@ -70,7 +70,7 @@ def test_extra_cannot_set_genkit_built_fields(field: str) -> None:
 
 def test_beta_only_key_in_extra_selects_beta_surface() -> None:
     """A beta-only body field in `extra` still routes to the beta API."""
-    beta_key = sorted(BETA_ONLY_KEYS)[0]
+    beta_key = next(key for key in sorted(BETA_ONLY_KEYS) if key != 'betas')
     config = AnthropicConfig(extra={beta_key: {}})
 
     assert config.beta_only_fields() == {beta_key}
@@ -78,7 +78,35 @@ def test_beta_only_key_in_extra_selects_beta_surface() -> None:
 
 def test_beta_only_key_in_extra_rejected_on_stable_surface() -> None:
     """`apiVersion='stable'` plus a beta-only key in `extra` fails at validation."""
-    beta_key = sorted(BETA_ONLY_KEYS)[0]
+    beta_key = next(key for key in sorted(BETA_ONLY_KEYS) if key != 'betas')
 
     with pytest.raises(ValidationError, match='beta'):
         AnthropicConfig(api_version='stable', extra={beta_key: {}})
+
+
+def test_generate_anthropic_timeout_in_extra_raises_pointing_at_plugin() -> None:
+    """`config={'extra': {'timeout': 30}}` raises INVALID_ARGUMENT pointing at Anthropic(...)."""
+    with pytest.raises(GenkitError) as err:
+        _params(AnthropicConfig(extra={'timeout': 30}))
+
+    assert err.value.status == 'INVALID_ARGUMENT'
+    assert "'timeout'" in str(err.value)
+    assert 'Anthropic(timeout=' in str(err.value)
+    assert 'default_headers' in str(err.value)
+
+
+def test_generate_anthropic_betas_in_extra_raises_pointing_at_betas_setting() -> None:
+    """`config={'extra': {'betas': ['x']}}` raises INVALID_ARGUMENT naming betas."""
+    with pytest.raises(GenkitError) as err:
+        _params(AnthropicConfig(extra={'betas': ['x']}))
+
+    assert err.value.status == 'INVALID_ARGUMENT'
+    assert 'betas' in str(err.value)
+
+
+def test_generate_anthropic_declared_betas_sent_as_header() -> None:
+    """`config={'betas': ['x']}` sends betas as the SDK header kwarg, not a body field."""
+    params = _params(AnthropicConfig(betas=['x']))
+
+    assert params.get('betas') == ['x']
+    assert 'betas' not in (params.get('extra_body') or {})

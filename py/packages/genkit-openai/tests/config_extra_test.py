@@ -57,7 +57,7 @@ def test_camel_case_dict_extra_is_read() -> None:
     assert _openai_create_kwargs(config=config)['extra_body'] == {'user_tier': 'pro'}
 
 
-@pytest.mark.parametrize('field', ['messages', 'tools', 'tool_choice', 'response_format', 'stream'])
+@pytest.mark.parametrize('field', ['model', 'messages', 'tools', 'tool_choice', 'response_format', 'stream'])
 def test_extra_cannot_set_genkit_built_fields(field: str) -> None:
     """Fields Genkit builds from the request are rejected, not overwritten."""
     with pytest.raises(GenkitError) as err:
@@ -96,3 +96,43 @@ def test_image_extra_cannot_set_prompt() -> None:
     """The prompt comes from the messages; `extra` can't replace it."""
     with pytest.raises(GenkitError, match="'prompt'"):
         _to_image_generate_params('dall-e-3', _text_request({'extra': {'prompt': 'something else'}}))
+
+
+def test_generate_openai_timeout_in_extra_raises_pointing_at_plugin() -> None:
+    """`config={'extra': {'timeout': 30}}` raises INVALID_ARGUMENT pointing at OpenAI(...)."""
+    with pytest.raises(GenkitError) as err:
+        _openai_create_kwargs(config=OpenAIConfig(extra={'timeout': 30}))
+
+    assert err.value.status == 'INVALID_ARGUMENT'
+    assert "'timeout'" in str(err.value)
+    assert 'OpenAI(timeout=' in str(err.value)
+    assert 'default_headers' in str(err.value)
+
+
+def test_generate_openai_extra_headers_in_extra_raises_pointing_at_plugin() -> None:
+    """`config={'extra': {'extra_headers': {...}}}` raises INVALID_ARGUMENT pointing at OpenAI(...)."""
+    with pytest.raises(GenkitError) as err:
+        _openai_create_kwargs(config=OpenAIConfig(extra={'extra_headers': {'X-Team': 'search'}}))
+
+    assert err.value.status == 'INVALID_ARGUMENT'
+    assert 'extra_headers' in str(err.value)
+    assert 'OpenAI(timeout=' in str(err.value)
+
+
+def test_generate_openai_model_in_extra_raises_pointing_at_version() -> None:
+    """`extra={'model': 'gpt-4o-mini'}` raises INVALID_ARGUMENT naming model and version."""
+    with pytest.raises(GenkitError) as err:
+        _openai_create_kwargs(config=OpenAIConfig(extra={'model': 'gpt-4o-mini'}))
+
+    assert err.value.status == 'INVALID_ARGUMENT'
+    assert "'model'" in str(err.value)
+    assert 'version' in str(err.value)
+
+
+def test_generate_openai_tts_model_in_extra_raises() -> None:
+    """`extra={'model': ...}` on tts-1 raises before anything is sent."""
+    with pytest.raises(GenkitError) as err:
+        _to_tts_params('tts-1', _text_request({'extra': {'model': 'tts-1-hd'}}))
+
+    assert err.value.status == 'INVALID_ARGUMENT'
+    assert "'model'" in str(err.value)

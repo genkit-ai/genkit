@@ -186,8 +186,10 @@ def _to_anthropic_thinking_config(thinking: dict[str, Any] | None) -> dict[str, 
 # schema can't see inside the passthrough, and overwriting them silently would
 # replace the model the action resolved (pin one with `version`), the
 # conversation, the streaming mode, or the structured-output format Genkit
-# merges into output_config (the declared field still works).
-_MANAGED_BODY_FIELDS = ('model', 'messages', 'system', 'tools', 'tool_choice', 'stream', 'output_config')
+# merges into output_config (the declared field still works). `betas` is
+# the header Genkit sends from the declared setting, not a body field.
+_MANAGED_BODY_FIELDS = ('model', 'messages', 'system', 'tools', 'tool_choice', 'stream', 'output_config', 'betas')
+_CLIENT_SETTING_FIELDS = ('timeout', 'extra_headers', 'extra_query', 'extra_body')
 
 
 def _merge_config_extra(params: dict[str, Any], extra: dict[str, Any] | None) -> None:
@@ -198,15 +200,30 @@ def _merge_config_extra(params: dict[str, Any], extra: dict[str, Any] | None) ->
     """
     if not extra:
         return
-    for field in _MANAGED_BODY_FIELDS:
+    for field in _CLIENT_SETTING_FIELDS:
         if field in extra:
             raise GenkitError(
                 status='INVALID_ARGUMENT',
                 message=(
-                    f'anthropic: extra field {field!r} is built by Genkit from the request '
-                    'and cannot be set from config'
+                    f'anthropic: {field!r} is a client setting, not a request field; '
+                    'pass it to Anthropic(timeout=..., default_headers=...)'
                 ),
             )
+    for field in _MANAGED_BODY_FIELDS:
+        if field in extra:
+            if field == 'betas':
+                message = "anthropic: extra field 'betas' cannot be set from extra; use the declared betas setting"
+            elif field == 'model':
+                message = (
+                    "anthropic: extra field 'model' is built by Genkit from the action "
+                    'and cannot be set from config; pin a model with version'
+                )
+            else:
+                message = (
+                    f'anthropic: extra field {field!r} is built by Genkit from the request '
+                    'and cannot be set from config'
+                )
+            raise GenkitError(status='INVALID_ARGUMENT', message=message)
     params['extra_body'] = dict(extra)
 
 

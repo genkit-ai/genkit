@@ -32,7 +32,6 @@ from genkit._ai._agents._runtime import AgentInitError, seeded_init_fields
 from genkit._ai._agents._snapshot import lookup_label
 from genkit._ai._agents._types import StateManagement
 from genkit._ai._json_patch import apply_json_patch
-from genkit._ai._tools import restart_tool
 from genkit._core._channel import CloseableQueue
 from genkit._core._error import (
     _STATUS_CODE_MAP,
@@ -182,7 +181,11 @@ class AgentInterrupt(Generic[InputT, OutputT]):
         self.input = input_data
 
     def respond(self, output: OutputT) -> Part:
-        """Tool-response Part for batching into ``chat.resume(respond=[...])``."""
+        """Tool response for ``chat.resume(respond=[...])``.
+
+        Carries the output only. ``Part.respond`` is the call that attaches
+        ``interruptResponse`` metadata.
+        """
         return Part.from_tool_response(
             name=self.name,
             ref=self.ref,
@@ -193,21 +196,21 @@ class AgentInterrupt(Generic[InputT, OutputT]):
         self,
         *,
         resumed_metadata: dict[str, Any] | None = None,
-        replace_input: Any | None = None,  # noqa: ANN401
     ) -> Part:
-        """Restart tool-request Part for batching into ``chat.resume(restart=[...])``."""
+        """Tool request for ``chat.resume(restart=[...])``.
+
+        The tool sees a resume (``ctx.is_resumed()`` is true). Pass
+        ``resumed_metadata`` when it needs the approval payload.
+
+        The request input stays the one the model asked for — a client
+        cannot re-run a tool with arguments the model never sent.
+        """
         part = Part.from_tool_request(
             name=self.name,
             ref=self.ref,
             input=self.input,
         )
-        if resumed_metadata is not None or replace_input is not None:
-            return restart_tool(
-                interrupt=part,
-                resumed_metadata=resumed_metadata,
-                replace_input=replace_input,
-            )
-        return part
+        return part.restart(resumed_metadata=resumed_metadata)
 
 
 @dataclass

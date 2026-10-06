@@ -134,6 +134,36 @@ async def test_prompt_agent_multi_turn_session_has_no_accumulated_preamble() -> 
 
 
 @pytest.mark.asyncio
+async def test_agent_system_renders_as_template_without_input() -> None:
+    """`define_agent(system=...)` is a template even though agents pass no input.
+
+    `{{@auth.name}}` fills from context and `{{table}}` renders empty. The
+    `chat.send` text reaches the model as written.
+    """
+    ai = Genkit()
+    pm, _ = define_scripted_model(ai)
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('ok')]),
+        )
+    )
+    waiter = ai.define_agent('waiter', model='scriptedModel', system='Guest: {{@auth.name}}. Table {{table}}.')
+
+    @ai.flow()
+    async def take_order(_: str) -> None:
+        await waiter.chat().send('Return {"dish": {{dish}}}')
+
+    await take_order.run('', context={'auth': {'name': 'Ana'}})
+
+    assert pm.last_request is not None
+    assert [(m.role, [p.text for p in m.content]) for m in pm.last_request.messages] == [
+        (Role.SYSTEM, ['Guest: Ana. Table .']),
+        (Role.USER, ['Return {"dish": {{dish}}}']),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_prompt_agent_explicit_history_tag_preamble() -> None:
     """Verifies that explicit {{history}} tags work correctly with preamble marking.
 
