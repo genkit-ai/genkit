@@ -26,7 +26,7 @@ import ollama as ollama_api
 import pytest
 from genkit_ollama.constants import OllamaAPITypes
 from genkit_ollama.models import ModelDefinition, OllamaConfig, OllamaModel, _convert_parameters
-from pydantic import ValidationError
+from pydantic import ConfigDict, ValidationError
 
 from genkit import ActionRunContext, GenkitError, Message, ModelResponseChunk, Part, Role
 from genkit.model import ModelConfig, ModelRequest, ModelUsage
@@ -1032,12 +1032,16 @@ class TestBuildRequestKwargs:
         assert kwargs == {'think': 'low', 'keep_alive': '10m'}
 
     def test_plain_model_config_extras_surface_think_and_keep_alive(self) -> None:
-        """A plain ModelConfig carrying think/keep_alive as extras surfaces them.
+        """A ModelConfig subclass that allows unknown keys surfaces think/keep_alive extras.
 
-        ModelConfig has ``extra='allow'``, so the knobs can ride on a base
-        ModelConfig instance (including camelCased), not just OllamaConfig.
+        The knobs can ride on any ModelConfig instance (including camelCased),
+        not just OllamaConfig.
         """
-        config = ModelConfig.model_validate({'think': True, 'keepAlive': '5m'})
+
+        class LooseConfig(ModelConfig):
+            model_config = ConfigDict(extra='allow')
+
+        config = LooseConfig.model_validate({'think': True, 'keepAlive': '5m'})
         kwargs = OllamaModel.build_request_kwargs(config)
         assert kwargs == {'think': True, 'keep_alive': '5m'}
 

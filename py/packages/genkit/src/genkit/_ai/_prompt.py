@@ -49,6 +49,8 @@ from genkit._ai._model import (
     ModelResponse,
     ModelResponseChunk,
     assert_correct_config_class,
+    check_call_config,
+    check_config_dict,
     config_schema_at_define,
     normalize_config,
     resolve_call_model,
@@ -364,19 +366,21 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
             config=merged_config,
             registry=self._registry,
         )
-        assert_correct_config_class(
+        check_call_config(
             config=opts.get('config'),
             schema=resolved.config_schema,
             model=resolved.name,
         )
         # Re-check the stored typed config unless this call hops models.
-        # Extra keys overlay in overlay_config, not here.
+        # The prompt's own dict is always checked against the model this call
+        # hits, before the call's config is merged over it.
         if self._defined_model_name is None or self._defined_model_name == resolved.name:
             assert_correct_config_class(
                 config=self._config,
                 schema=resolved.config_schema,
                 model=resolved.name,
             )
+        check_config_dict(config=self._config, schema=resolved.config_schema, model=resolved.name)
 
         merged_metadata = (
             {**(self._metadata or {}), **(opts.get('metadata') or {})} if opts.get('metadata') else self._metadata
