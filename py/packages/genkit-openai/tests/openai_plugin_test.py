@@ -25,6 +25,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
+from genkit_openai._models._audio import SUPPORTED_STT_MODELS, SUPPORTED_TTS_MODELS
+from genkit_openai._models._image import SUPPORTED_IMAGE_MODELS
 from genkit_openai._models._model_info import SUPPORTED_OPENAI_MODELS
 from genkit_openai._openai_plugin import OpenAI, openai_model
 from openai import APIStatusError, APITimeoutError
@@ -104,6 +106,23 @@ def test_gpt_6_astra_catalog_entry() -> None:
         system_role=True,
         output=['json', 'text'],
     )
+
+
+# Genkit's built-in output formats, plus 'media' for image and audio models.
+KNOWN_OUTPUTS = {'array', 'enum', 'json', 'jsonl', 'text', 'media'}
+
+
+@pytest.mark.parametrize(
+    'catalog',
+    [SUPPORTED_OPENAI_MODELS, SUPPORTED_IMAGE_MODELS, SUPPORTED_TTS_MODELS, SUPPORTED_STT_MODELS],
+    ids=['chat', 'image', 'tts', 'stt'],
+)
+def test_catalog_output_names_are_known_formats(catalog: dict[str, Any]) -> None:
+    """supports.output lists Genkit output formats, not OpenAI request options like json_mode."""
+    for name, info in catalog.items():
+        outputs = info.supports.output if info.supports else None
+        unknown = set(outputs or []) - KNOWN_OUTPUTS
+        assert not unknown, f'{name}: {sorted(unknown)}'
 
 
 @pytest.mark.asyncio

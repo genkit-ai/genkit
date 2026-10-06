@@ -23,8 +23,19 @@ from unittest.mock import MagicMock, patch
 import pytest
 from genkit_anthropic import AnthropicConfig
 from genkit_vertexai.model_garden import ModelGarden, ModelGardenPlugin
+from genkit_vertexai.model_garden._model_info import DEFAULT_SUPPORTS, SUPPORTED_OPENAI_COMPAT_MODELS
 from genkit_vertexai.model_garden.anthropic import AnthropicModelGarden
 from genkit_vertexai.model_garden.model_garden import ModelGardenModel
+
+
+def test_catalog_output_names_are_known_formats() -> None:
+    """supports.output lists Genkit output formats, not OpenAI request options like json_mode."""
+    known = {'array', 'enum', 'json', 'jsonl', 'text'}  # Genkit's built-in output formats
+    entries = {name: info.supports for name, info in SUPPORTED_OPENAI_COMPAT_MODELS.items()}
+    entries['<default>'] = DEFAULT_SUPPORTS
+    for name, supports in entries.items():
+        unknown = set((supports.output if supports else None) or []) - known
+        assert not unknown, f'{name}: {sorted(unknown)}'
 
 
 @pytest.fixture
