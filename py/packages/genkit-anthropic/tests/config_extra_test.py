@@ -58,7 +58,7 @@ def test_extra_colliding_key_wins_through_extra_body() -> None:
     assert params['extra_body']['temperature'] == 0.9
 
 
-@pytest.mark.parametrize('field', ['messages', 'system', 'tools', 'tool_choice', 'stream', 'output_config'])
+@pytest.mark.parametrize('field', ['model', 'messages', 'system', 'tools', 'tool_choice', 'stream', 'output_config'])
 def test_extra_cannot_set_genkit_built_fields(field: str) -> None:
     """Fields Genkit builds from the request are rejected, not overwritten."""
     with pytest.raises(GenkitError) as err:
