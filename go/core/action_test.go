@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"sync"
 	"testing"
 
 	"github.com/firebase/genkit/go/core/api"
@@ -397,10 +398,10 @@ func TestActionDesc(t *testing.T) {
 		r.RegisterSchema("AgentResponse", outputSchema)
 
 		fn := func(ctx context.Context, input any) (any, error) { return nil, nil }
-		a := NewAction("test/refs", api.ActionTypeCustom, nil, SchemaRef("AgentRequest"), fn)
-		// Override the inferred output schema with a $ref so we can test resolution
-		// of OutputSchema as well.
-		a.desc.OutputSchema = SchemaRef("AgentResponse")
+		a := NewActionOf(api.ActionTypeCustom, "test/refs", &ActionOptions{
+			InputSchema:  SchemaRef("AgentRequest"),
+			OutputSchema: SchemaRef("AgentResponse"),
+		}, fn)
 		a.Register(r)
 
 		desc := a.Desc()
@@ -582,6 +583,82 @@ func TestRunJSONWithTelemetry(t *testing.T) {
 
 		if err == nil {
 			t.Error("expected error for invalid JSON, got nil")
+		}
+	})
+}
+
+// TestRegisterConcurrentWithUse pins that registering an action while it is
+// concurrently in use is safe. Detached actions built at runtime (constructors
+// like ai.NewTool stamp the "dynamic" marker) can be registered while the
+// reflection server or an in-flight generate call is already reading them, so
+// Register must not race with readers like Desc and Run. Meaningful under
+// -race.
+func TestRegisterConcurrentWithUse(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("action", func(t *testing.T) {
+		for range 50 {
+			a := NewActionOf(api.ActionTypeCustom, "test/race", &ActionOptions{
+				Metadata: map[string]any{"dynamic": true},
+			}, func(_ context.Context, in string) (string, error) { return in, nil })
+
+			var wg sync.WaitGroup
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for i := range 200 {
+					_ = a.Name()
+					_ = a.Desc()
+					if i%32 == 0 {
+						if _, err := a.Run(ctx, "in", nil); err != nil {
+							t.Errorf("Run: %v", err)
+							return
+						}
+					}
+				}
+			}()
+			a.Register(registry.New())
+			wg.Wait()
+
+			if _, ok := a.Desc().Metadata["dynamic"]; ok {
+				t.Fatalf("registered action still carries the dynamic marker: %v", a.Desc().Metadata)
+			}
+		}
+	})
+
+	t.Run("bidi action", func(t *testing.T) {
+		for range 50 {
+			b := NewBidiActionOf(api.ActionTypeCustom, "test/bidi-race", &BidiActionOptions{
+				Metadata: map[string]any{"dynamic": true},
+			}, func(_ context.Context, _ struct{}, inCh <-chan string, _ chan<- string) (string, error) {
+				var last string
+				for in := range inCh {
+					last = in
+				}
+				return last, nil
+			})
+
+			var wg sync.WaitGroup
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for i := range 200 {
+					_ = b.Name()
+					_ = b.Desc()
+					if i%64 == 0 {
+						if _, err := b.Run(ctx, "in", nil); err != nil {
+							t.Errorf("Run: %v", err)
+							return
+						}
+					}
+				}
+			}()
+			b.Register(registry.New())
+			wg.Wait()
+
+			if _, ok := b.Desc().Metadata["dynamic"]; ok {
+				t.Fatalf("registered bidi action still carries the dynamic marker: %v", b.Desc().Metadata)
+			}
 		}
 	})
 }

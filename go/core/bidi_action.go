@@ -112,7 +112,9 @@ func NewBidiActionOf[In, Out, Stream, Init any](
 	// The embedded action's fn backs the promoted unary surface (Run,
 	// RunJSON): a one-shot session with the zero Init value.
 	b.Action.fn = b.oneShotFn(base.Zero[Init]())
-	b.desc.InitSchema = schemaFor[Init](opts.InitSchema, true)
+	// The action hasn't escaped the constructor yet, so the bidi-only init
+	// slot can still be filled in on the stored descriptor.
+	b.desc().InitSchema = schemaFor[Init](opts.InitSchema, true)
 
 	return b
 }
@@ -132,15 +134,11 @@ func NewBidiAction[In, Out, Stream, Init any](
 
 // Register registers the bidi action with the given registry. It overrides
 // the embedded Action's Register so that the registry holds the BidiAction
-// itself; registry lookups must satisfy api.BidiAction.
+// itself; registry lookups must satisfy api.BidiAction. Like
+// [Action.Register], it is safe to call while the action is concurrently in
+// use.
 func (b *BidiAction[In, Out, Stream, Init]) Register(r api.Registry) {
-	// See Action.Register: the "dynamic" marker is dropped on
-	// definition-time registration only, into a fresh map.
-	if shouldStripDynamicMarker(b.desc.Metadata, r) {
-		b.desc.Metadata = withoutDynamicMarker(b.desc.Metadata)
-	}
-	b.Action.registry = r
-	r.RegisterAction(b.desc.Key, b)
+	r.RegisterAction(b.bindRegistry(r).Key, b)
 }
 
 // oneShotFn adapts the bidi function into a single streaming call with the
@@ -151,6 +149,7 @@ func (b *BidiAction[In, Out, Stream, Init]) Register(r api.Registry) {
 // failures are recorded on the action's trace span, like input validation
 // failures.
 func (b *BidiAction[In, Out, Stream, Init]) oneShotFn(init Init) StreamingFunc[In, Out, Stream] {
+	name := b.desc().Name
 	return func(ctx context.Context, input In, cb StreamCallback[Stream]) (Out, error) {
 		if err := b.validateInit(init); err != nil {
 			return base.Zero[Out](), err
@@ -162,8 +161,8 @@ func (b *BidiAction[In, Out, Stream, Init]) oneShotFn(init Init) StreamingFunc[I
 		// on a stream write with no consumer. A cause recorded earlier (cb
 		// error) wins; the first cancel is sticky.
 		defer conn.cancel(nil)
-		go conn.run(b.desc.Name, func(ctx context.Context) (Out, error) {
-			return callBidiFn(ctx, b.desc.Name, b.bidiFn, init, conn.inputCh, conn.streamCh)
+		go conn.run(name, func(ctx context.Context) (Out, error) {
+			return callBidiFn(ctx, name, b.bidiFn, init, conn.inputCh, conn.streamCh)
 		})
 
 		// inputCh is buffered, so delivering the single input cannot block.
@@ -229,7 +228,7 @@ func (b *BidiAction[In, Out, Stream, Init]) RunBidiJSON(ctx context.Context, inp
 	// schema). Deferring input past startup is a streaming session
 	// capability; see ConnectJSON.
 	if !base.HasJSONValue(input) {
-		return nil, status.PublicErrorf(status.ErrInvalidArgument, "action %q requires input for a one-shot run; open a streaming session to defer input", b.desc.Key)
+		return nil, status.PublicErrorf(status.ErrInvalidArgument, "action %q requires input for a one-shot run; open a streaming session to defer input", b.desc().Key)
 	}
 	init, hasInit, err := b.decodeInit(opts)
 	if err != nil {
@@ -269,15 +268,16 @@ func (b *BidiAction[In, Out, Stream, Init]) ConnectJSON(ctx context.Context, opt
 	if err := b.validateInit(init); err != nil {
 		return nil, err
 	}
-	inputSchema, err := ResolveSchema(b.registry, b.desc.InputSchema)
+	info := b.info.Load()
+	inputSchema, err := ResolveSchema(info.registry, info.desc.InputSchema)
 	if err != nil {
-		return nil, status.Errorf(status.ErrInvalidSchema, "invalid input schema for action %q: %w", b.desc.Key, err)
+		return nil, status.Errorf(status.ErrInvalidSchema, "invalid input schema for action %q: %w", info.desc.Key, err)
 	}
 	// Compiled once per session: Send validates every inbound chunk, and
 	// recompiling the schema per chunk would dominate the streaming hot path.
 	compiledInput, err := base.CompileSchema(inputSchema)
 	if err != nil {
-		return nil, status.Errorf(status.ErrInvalidSchema, "invalid input schema for action %q: %w", b.desc.Key, err)
+		return nil, status.Errorf(status.ErrInvalidSchema, "invalid input schema for action %q: %w", info.desc.Key, err)
 	}
 	// Like RunBidiJSON, record init on the span only when the client actually
 	// supplied one; the zero value from an absent init is not meaningful.
@@ -288,7 +288,7 @@ func (b *BidiAction[In, Out, Stream, Init]) ConnectJSON(ctx context.Context, opt
 	conn := b.startBidi(ctx, init, spanInit)
 	return &bidiJSONConn[In, Out, Stream]{
 		conn:          conn,
-		key:           b.desc.Key,
+		key:           info.desc.Key,
 		inputSchema:   inputSchema,
 		compiledInput: compiledInput,
 	}, nil
@@ -314,13 +314,14 @@ func (b *BidiAction[In, Out, Stream, Init]) decodeInit(opts *api.BidiJSONOptions
 	if opts == nil || !base.HasJSONValue(opts.Init) {
 		return init, false, nil
 	}
-	schema, err := ResolveSchema(b.registry, b.desc.InitSchema)
+	info := b.info.Load()
+	schema, err := ResolveSchema(info.registry, info.desc.InitSchema)
 	if err != nil {
-		return init, false, status.Errorf(status.ErrInvalidSchema, "invalid init schema for action %q: %w", b.desc.Key, err)
+		return init, false, status.Errorf(status.ErrInvalidSchema, "invalid init schema for action %q: %w", info.desc.Key, err)
 	}
 	init, err = base.UnmarshalAndNormalize[Init](opts.Init, schema)
 	if err != nil {
-		return init, false, status.Errorf(status.ErrInvalidInput, "invalid init for action %q: %w", b.desc.Key, err)
+		return init, false, status.Errorf(status.ErrInvalidInput, "invalid init for action %q: %w", info.desc.Key, err)
 	}
 	return init, true, nil
 }
@@ -335,18 +336,19 @@ func (b *BidiAction[In, Out, Stream, Init]) decodeInit(opts *api.BidiJSONOptions
 // field), and would otherwise always fail the inferred object schema as JSON
 // null. The action function receives the nil and applies its defaults.
 func (b *BidiAction[In, Out, Stream, Init]) validateInit(init Init) error {
-	if b.desc.InitSchema == nil {
+	info := b.info.Load()
+	if info.desc.InitSchema == nil {
 		return nil
 	}
 	if isNilValue(init) {
 		return nil
 	}
-	schema, err := ResolveSchema(b.registry, b.desc.InitSchema)
+	schema, err := ResolveSchema(info.registry, info.desc.InitSchema)
 	if err != nil {
-		return status.Errorf(status.ErrInvalidSchema, "invalid init schema for action %q: %w", b.desc.Key, err)
+		return status.Errorf(status.ErrInvalidSchema, "invalid init schema for action %q: %w", info.desc.Key, err)
 	}
 	if err := base.ValidateValue(init, schema); err != nil {
-		return status.Errorf(status.ErrInvalidInput, "invalid init for action %q: %w", b.desc.Key, err)
+		return status.Errorf(status.ErrInvalidInput, "invalid init for action %q: %w", info.desc.Key, err)
 	}
 	return nil
 }
@@ -364,22 +366,24 @@ func (b *BidiAction[In, Out, Stream, Init]) startBidi(ctx context.Context, init 
 	// session receives incrementally over the connection.
 	spanMetadata := b.spanMetadata(ctx, spanInit)
 
-	go conn.run(b.desc.Name, func(ctx context.Context) (Out, error) {
+	info := b.info.Load()
+	name := info.desc.Name
+	go conn.run(name, func(ctx context.Context) (Out, error) {
 		return tracing.RunInNewSpan(ctx, spanMetadata, nil,
 			func(ctx context.Context, _ any) (out Out, err error) {
 				start := time.Now()
-				defer func() { recordActionMetrics(ctx, b.desc.Name, start, err) }()
-				out, err = callBidiFn(ctx, b.desc.Name, b.bidiFn, init, conn.inputCh, conn.streamCh)
+				defer func() { recordActionMetrics(ctx, name, start, err) }()
+				out, err = callBidiFn(ctx, name, b.bidiFn, init, conn.inputCh, conn.streamCh)
 				if err != nil {
 					return out, err
 				}
 				// Mirror the unary path: the final output is validated
 				// against the action's OutputSchema.
-				outputSchema, err := b.resolveOutputSchema()
+				outputSchema, err := resolveOutputSchema(info)
 				if err != nil {
 					return out, err
 				}
-				return out, b.validateOutput(out, outputSchema)
+				return out, validateOutput(info.desc.Key, out, outputSchema)
 			},
 		)
 	})

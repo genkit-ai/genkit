@@ -19,6 +19,7 @@ package ai
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -1537,4 +1538,34 @@ func TestInterruptMetadata(t *testing.T) {
 			t.Error("InterruptMetadata() ok = true for bool interrupt, want false")
 		}
 	})
+}
+
+// TestRegisterToolConcurrentWithUse registers a detached tool into a root
+// registry while another goroutine reads its definition, as when a plugin
+// builds and registers tools at runtime while the reflection server or an
+// in-flight Generate is already reading them. Meaningful under -race.
+func TestRegisterToolConcurrentWithUse(t *testing.T) {
+	for range 50 {
+		tool := NewTool("raceTool", "test tool",
+			func(_ *ToolContext, in string) (string, error) { return in, nil })
+
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 200 {
+				if def := tool.Definition(); def.Name != "raceTool" {
+					t.Errorf("Definition().Name = %q, want %q", def.Name, "raceTool")
+					return
+				}
+			}
+		}()
+		r := newTestRegistry(t)
+		tool.Register(r)
+		wg.Wait()
+
+		if LookupTool(r, "raceTool") == nil {
+			t.Fatal("registered tool not found in registry")
+		}
+	}
 }
