@@ -154,3 +154,15 @@ Skill body.
 
         assert ' - bare-skill\n' in prompt
         assert 'No description provided' not in prompt
+
+
+def test_use_skill_description_is_nonempty(ctx: GenerateMiddlewareContext) -> None:
+    """The skill tool the model sees has a non-empty description."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        skill_dir = Path(tmpdir) / 'test-skill'
+        skill_dir.mkdir()
+        (skill_dir / 'SKILL.md').write_text('You are a test assistant.')
+
+        handles = Skills(skill_paths=[tmpdir]).tools(ctx)
+        assert handles
+        assert handles[0].description

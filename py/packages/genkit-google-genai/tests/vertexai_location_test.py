@@ -22,14 +22,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from genkit_google_genai import VertexAI
-from genkit_google_genai.constants import (
+from genkit_google_genai._constants import (
     is_multi_regional_location,
     multi_regional_base_url,
     vertex_api_host,
 )
-from genkit_google_genai.evaluators.evaluation import EvaluatorFactory
-from genkit_google_genai.models import gemini as gemini_module
-from genkit_google_genai.models.gemini import GeminiConfigSchema, GeminiModel
+from genkit_google_genai._evaluators._evaluation import EvaluatorFactory
+from genkit_google_genai._models import _gemini as gemini_module
+from genkit_google_genai._models._gemini import GeminiConfig, GeminiModel
 from google import genai
 from google.genai import types as genai_types
 from google.genai.types import HttpOptions
@@ -41,9 +41,9 @@ US_REP_URL = 'https://aiplatform.us.rep.googleapis.com'
 EU_REP_URL = 'https://aiplatform.eu.rep.googleapis.com'
 
 
-def _text_request(config: GeminiConfigSchema | dict[str, Any] | None = None) -> ModelRequest[Any]:
+def _text_request(config: GeminiConfig | dict[str, Any] | None = None) -> ModelRequest[Any]:
     if isinstance(config, dict):
-        config = GeminiConfigSchema.model_validate(config)
+        config = GeminiConfig.model_validate(config)
     return ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
         config=config,
@@ -93,7 +93,7 @@ class TestVertexAIPluginLocation:
 
     def test_multi_region_sets_base_url(self) -> None:
         """A multi-region location routes to the rep endpoint."""
-        with patch('genkit_google_genai.google.genai.client.Client'):
+        with patch('genkit_google_genai._google.genai.client.Client'):
             plugin = VertexAI(project='p', location='us')
         assert plugin._location == 'us'
         assert plugin._client_kwargs['http_options'].base_url == US_REP_URL
@@ -101,32 +101,32 @@ class TestVertexAIPluginLocation:
 
     def test_regional_location_leaves_base_url_unset(self) -> None:
         """Regional locations keep SDK-derived endpoints."""
-        with patch('genkit_google_genai.google.genai.client.Client'):
+        with patch('genkit_google_genai._google.genai.client.Client'):
             plugin = VertexAI(project='p', location='europe-west1')
         assert plugin._client_kwargs['http_options'].base_url is None
 
     def test_global_location_leaves_base_url_unset(self) -> None:
         """Global location keeps the SDK-derived endpoint."""
-        with patch('genkit_google_genai.google.genai.client.Client'):
+        with patch('genkit_google_genai._google.genai.client.Client'):
             plugin = VertexAI(project='p', location='global')
         assert plugin._client_kwargs['http_options'].base_url is None
 
     def test_explicit_base_url_wins_over_multi_region(self) -> None:
         """An explicit base_url is not clobbered by multi-region routing."""
-        with patch('genkit_google_genai.google.genai.client.Client'):
+        with patch('genkit_google_genai._google.genai.client.Client'):
             plugin = VertexAI(project='p', location='us', base_url='https://example.com/')
         assert plugin._client_kwargs['http_options'].base_url == 'https://example.com/'
         assert plugin._base_url_pinned is True
 
     def test_http_options_base_url_wins_over_multi_region(self) -> None:
         """A base_url inside http_options is not clobbered either."""
-        with patch('genkit_google_genai.google.genai.client.Client'):
+        with patch('genkit_google_genai._google.genai.client.Client'):
             plugin = VertexAI(project='p', location='eu', http_options={'base_url': 'https://example.com/'})
         assert plugin._client_kwargs['http_options'].base_url == 'https://example.com/'
 
     def test_camel_case_base_url_wins_over_multi_region(self) -> None:
         """A camelCase baseUrl inside http_options is honored, not clobbered."""
-        with patch('genkit_google_genai.google.genai.client.Client'):
+        with patch('genkit_google_genai._google.genai.client.Client'):
             # cast: the camelCase alias is what a JS-shaped config passes; the
             # SDK accepts it at runtime but HttpOptionsDict only spells snake_case.
             plugin = VertexAI(project='p', location='us', http_options=cast(Any, {'baseUrl': 'https://example.com/'}))
@@ -135,14 +135,14 @@ class TestVertexAIPluginLocation:
 
     def test_empty_base_url_treated_as_unset(self) -> None:
         """An empty base_url string does not defeat multi-region routing."""
-        with patch('genkit_google_genai.google.genai.client.Client'):
+        with patch('genkit_google_genai._google.genai.client.Client'):
             plugin = VertexAI(project='p', location='us', base_url='')
         assert plugin._client_kwargs['http_options'].base_url == US_REP_URL
 
     def test_caller_http_options_not_mutated(self) -> None:
         """Plugin-derived settings never leak into the caller's HttpOptions."""
         shared = HttpOptions()
-        with patch('genkit_google_genai.google.genai.client.Client'):
+        with patch('genkit_google_genai._google.genai.client.Client'):
             plugin_us = VertexAI(project='p', location='us', http_options=shared)
             plugin_eu = VertexAI(project='p', location='eu', http_options=shared)
         assert shared.base_url is None
@@ -155,7 +155,7 @@ class TestVertexAIPluginLocation:
         """GOOGLE_CLOUD_LOCATION is consulted when location is not passed."""
         env = {'GCLOUD_PROJECT': 'p', 'GOOGLE_CLOUD_LOCATION': 'eu'}
         with patch.dict(os.environ, env, clear=True):
-            with patch('genkit_google_genai.google.genai.client.Client'):
+            with patch('genkit_google_genai._google.genai.client.Client'):
                 plugin = VertexAI()
         assert plugin._location == 'eu'
         assert plugin._client_kwargs['http_options'].base_url == EU_REP_URL
@@ -163,17 +163,17 @@ class TestVertexAIPluginLocation:
     def test_location_env_fallback_chain(self) -> None:
         """GCLOUD_LOCATION is consulted after GOOGLE_CLOUD_LOCATION."""
         with patch.dict(os.environ, {'GCLOUD_PROJECT': 'p', 'GCLOUD_LOCATION': 'europe-west1'}, clear=True):
-            with patch('genkit_google_genai.google.genai.client.Client'):
+            with patch('genkit_google_genai._google.genai.client.Client'):
                 assert VertexAI()._location == 'europe-west1'
         env = {'GCLOUD_PROJECT': 'p', 'GOOGLE_CLOUD_LOCATION': 'us-east1', 'GCLOUD_LOCATION': 'europe-west1'}
         with patch.dict(os.environ, env, clear=True):
-            with patch('genkit_google_genai.google.genai.client.Client'):
+            with patch('genkit_google_genai._google.genai.client.Client'):
                 assert VertexAI()._location == 'us-east1'
 
     def test_location_defaults_to_us_central1(self) -> None:
         """Without an explicit location or env vars, us-central1 is used."""
         with patch.dict(os.environ, {'GCLOUD_PROJECT': 'p'}, clear=True):
-            with patch('genkit_google_genai.google.genai.client.Client'):
+            with patch('genkit_google_genai._google.genai.client.Client'):
                 plugin = VertexAI()
         assert plugin._location == 'us-central1'
 
@@ -184,7 +184,7 @@ class TestVertexAIPluginProject:
     def test_google_cloud_project_env_fallback(self) -> None:
         """GOOGLE_CLOUD_PROJECT is consulted after GCLOUD_PROJECT."""
         with patch.dict(os.environ, {'GOOGLE_CLOUD_PROJECT': 'env-p'}, clear=True):
-            with patch('genkit_google_genai.google.genai.client.Client'):
+            with patch('genkit_google_genai._google.genai.client.Client'):
                 plugin = VertexAI(location='us')
         assert plugin._project == 'env-p'
         assert plugin._client_kwargs['project'] == 'env-p'
@@ -196,8 +196,8 @@ class TestVertexAIPluginProject:
         it unresolved would fail a deployment that relies purely on ADC.
         """
         with patch.dict(os.environ, {}, clear=True):
-            with patch('genkit_google_genai.google.genai.client.Client'):
-                with patch('genkit_google_genai.google.google_auth_default', return_value=(None, 'adc-p')):
+            with patch('genkit_google_genai._google.genai.client.Client'):
+                with patch('genkit_google_genai._google.google_auth_default', return_value=(None, 'adc-p')):
                     plugin = VertexAI(location='us-central1')
         assert plugin._project == 'adc-p'
         assert plugin._client_kwargs['project'] == 'adc-p'
@@ -211,9 +211,9 @@ class TestVertexAIPluginProject:
         from google.auth.exceptions import DefaultCredentialsError
 
         with patch.dict(os.environ, {}, clear=True):
-            with patch('genkit_google_genai.google.genai.client.Client'):
+            with patch('genkit_google_genai._google.genai.client.Client'):
                 with patch(
-                    'genkit_google_genai.google.google_auth_default', side_effect=DefaultCredentialsError('no adc')
+                    'genkit_google_genai._google.google_auth_default', side_effect=DefaultCredentialsError('no adc')
                 ):
                     plugin = VertexAI(location='us-central1')
         assert plugin._project is None
@@ -221,8 +221,8 @@ class TestVertexAIPluginProject:
     def test_api_key_skips_adc_probe(self) -> None:
         """Express mode (api_key, no project) does not probe ADC."""
         with patch.dict(os.environ, {}, clear=True):
-            with patch('genkit_google_genai.google.genai.client.Client'):
-                with patch('genkit_google_genai.google.google_auth_default') as mock_adc:
+            with patch('genkit_google_genai._google.genai.client.Client'):
+                with patch('genkit_google_genai._google.google_auth_default') as mock_adc:
                     plugin = VertexAI(location='us-central1', api_key='k')
         mock_adc.assert_not_called()
         assert plugin._project is None
@@ -230,16 +230,16 @@ class TestVertexAIPluginProject:
     def test_explicit_project_skips_adc_probe(self) -> None:
         """An explicit project short-circuits the ADC probe."""
         with patch.dict(os.environ, {}, clear=True):
-            with patch('genkit_google_genai.google.genai.client.Client'):
-                with patch('genkit_google_genai.google.google_auth_default') as mock_adc:
+            with patch('genkit_google_genai._google.genai.client.Client'):
+                with patch('genkit_google_genai._google.google_auth_default') as mock_adc:
                     VertexAI(project='p', location='us-central1')
         mock_adc.assert_not_called()
 
     def test_multi_region_resolves_project_from_adc(self) -> None:
         """With no project configured, a multi-region plugin resolves it via ADC."""
         with patch.dict(os.environ, {}, clear=True):
-            with patch('genkit_google_genai.google.genai.client.Client'):
-                with patch('genkit_google_genai.google.google_auth_default', return_value=(None, 'adc-p')):
+            with patch('genkit_google_genai._google.genai.client.Client'):
+                with patch('genkit_google_genai._google.google_auth_default', return_value=(None, 'adc-p')):
                     plugin = VertexAI(location='us')
         assert plugin._project == 'adc-p'
         assert plugin._client_kwargs['project'] == 'adc-p'
@@ -247,8 +247,8 @@ class TestVertexAIPluginProject:
     def test_multi_region_without_project_raises(self) -> None:
         """A multi-region plugin with no resolvable project fails fast."""
         with patch.dict(os.environ, {}, clear=True):
-            with patch('genkit_google_genai.google.genai.client.Client'):
-                with patch('genkit_google_genai.google.google_auth_default', return_value=(None, None)):
+            with patch('genkit_google_genai._google.genai.client.Client'):
+                with patch('genkit_google_genai._google.google_auth_default', return_value=(None, None)):
                     with pytest.raises(ValueError, match='multi-region'):
                         VertexAI(location='eu')
 
@@ -257,9 +257,9 @@ class TestVertexAIPluginProject:
         from google.auth.exceptions import DefaultCredentialsError
 
         with patch.dict(os.environ, {}, clear=True):
-            with patch('genkit_google_genai.google.genai.client.Client'):
+            with patch('genkit_google_genai._google.genai.client.Client'):
                 with patch(
-                    'genkit_google_genai.google.google_auth_default', side_effect=DefaultCredentialsError('no adc')
+                    'genkit_google_genai._google.google_auth_default', side_effect=DefaultCredentialsError('no adc')
                 ):
                     with pytest.raises(ValueError, match='multi-region'):
                         VertexAI(location='eu')
@@ -269,8 +269,8 @@ class TestVertexAIPluginProject:
         creds = MagicMock()
         creds.project_id = 'creds-p'
         with patch.dict(os.environ, {}, clear=True):
-            with patch('genkit_google_genai.google.genai.client.Client'):
-                with patch('genkit_google_genai.google.google_auth_default') as mock_adc:
+            with patch('genkit_google_genai._google.genai.client.Client'):
+                with patch('genkit_google_genai._google.google_auth_default') as mock_adc:
                     plugin = VertexAI(location='us', credentials=creds)
         mock_adc.assert_not_called()
         assert plugin._project == 'creds-p'
@@ -283,8 +283,8 @@ class TestVertexAIPluginProject:
         when the caller pinned the URL.
         """
         with patch.dict(os.environ, {}, clear=True):
-            with patch('genkit_google_genai.google.genai.client.Client'):
-                with patch('genkit_google_genai.google.google_auth_default', return_value=(None, 'adc-p')):
+            with patch('genkit_google_genai._google.genai.client.Client'):
+                with patch('genkit_google_genai._google.google_auth_default', return_value=(None, 'adc-p')):
                     plugin = VertexAI(location='us', base_url='https://example.com/')
         assert plugin._project == 'adc-p'
         assert plugin._client_kwargs['project'] == 'adc-p'
@@ -293,8 +293,8 @@ class TestVertexAIPluginProject:
     def test_multi_region_with_pinned_base_url_without_project_raises(self) -> None:
         """A pinned base_url plus multi-region still fails fast without a project."""
         with patch.dict(os.environ, {}, clear=True):
-            with patch('genkit_google_genai.google.genai.client.Client'):
-                with patch('genkit_google_genai.google.google_auth_default', return_value=(None, None)):
+            with patch('genkit_google_genai._google.genai.client.Client'):
+                with patch('genkit_google_genai._google.google_auth_default', return_value=(None, None)):
                     with pytest.raises(ValueError, match='multi-region'):
                         VertexAI(location='eu', base_url='https://example.com/')
 
@@ -341,17 +341,17 @@ class TestEvaluatorApiHost:
             factory._api_host()
 
 
-class TestGeminiConfigSchemaLocation:
+class TestGeminiConfigLocation:
     """Tests for the per-request location config field."""
 
     def test_location_field(self) -> None:
         """The schema accepts a location override."""
-        assert GeminiConfigSchema(location='eu').location == 'eu'
-        assert GeminiConfigSchema().location is None
+        assert GeminiConfig(location='eu').location == 'eu'
+        assert GeminiConfig().location is None
 
 
 def _vertex_plugin(location: str = 'us-central1', base_url: str | None = None, project: str | None = 'p') -> VertexAI:
-    with patch('genkit_google_genai.google.genai.client.Client'):
+    with patch('genkit_google_genai._google.genai.client.Client'):
         return VertexAI(project=project, location=location, base_url=base_url)
 
 
@@ -391,7 +391,7 @@ class TestResolveRequestClient:
     async def test_location_override_creates_client_with_location(self) -> None:
         """A regional override is passed through with plugin settings intact."""
         model = _vertex_model()
-        with patch('genkit_google_genai.models.gemini.genai.Client') as mock_ctor:
+        with patch('genkit_google_genai._models._gemini.genai.Client') as mock_ctor:
             await model._resolve_request_client(_text_request({'location': 'europe-west1'}))
         kwargs = mock_ctor.call_args.kwargs
         assert kwargs['location'] == 'europe-west1'
@@ -403,7 +403,7 @@ class TestResolveRequestClient:
     async def test_multi_region_override_sets_rep_base_url(self) -> None:
         """A multi-region override routes to the rep endpoint."""
         model = _vertex_model()
-        with patch('genkit_google_genai.models.gemini.genai.Client') as mock_ctor:
+        with patch('genkit_google_genai._models._gemini.genai.Client') as mock_ctor:
             await model._resolve_request_client(_text_request({'location': 'eu'}))
         kwargs = mock_ctor.call_args.kwargs
         assert kwargs['location'] == 'eu'
@@ -413,7 +413,7 @@ class TestResolveRequestClient:
     async def test_api_version_override_keeps_multi_region_base_url(self) -> None:
         """An apiVersion-only override on a multi-region plugin keeps the rep endpoint."""
         model = _vertex_model(location='us')
-        with patch('genkit_google_genai.models.gemini.genai.Client') as mock_ctor:
+        with patch('genkit_google_genai._models._gemini.genai.Client') as mock_ctor:
             await model._resolve_request_client(_text_request({'api_version': 'v1'}))
         kwargs = mock_ctor.call_args.kwargs
         assert kwargs['location'] == 'us'
@@ -424,7 +424,7 @@ class TestResolveRequestClient:
     async def test_regional_override_on_multi_region_plugin_clears_rep_url(self) -> None:
         """Overriding a multi-region plugin with a region drops the rep endpoint."""
         model = _vertex_model(location='us')
-        with patch('genkit_google_genai.models.gemini.genai.Client') as mock_ctor:
+        with patch('genkit_google_genai._models._gemini.genai.Client') as mock_ctor:
             await model._resolve_request_client(_text_request({'location': 'europe-west1'}))
         kwargs = mock_ctor.call_args.kwargs
         assert kwargs['location'] == 'europe-west1'
@@ -434,7 +434,7 @@ class TestResolveRequestClient:
     async def test_pinned_base_url_survives_location_override(self) -> None:
         """A plugin-pinned base URL (proxy) is preserved across a location override."""
         model = _vertex_model(base_url='https://corp-proxy.example.com/')
-        with patch('genkit_google_genai.models.gemini.genai.Client') as mock_ctor:
+        with patch('genkit_google_genai._models._gemini.genai.Client') as mock_ctor:
             await model._resolve_request_client(_text_request({'location': 'us'}))
         kwargs = mock_ctor.call_args.kwargs
         assert kwargs['location'] == 'us'
@@ -444,7 +444,7 @@ class TestResolveRequestClient:
     async def test_pinned_base_url_survives_api_version_override(self) -> None:
         """A plugin-pinned base URL is preserved across an apiVersion override."""
         model = _vertex_model(base_url='https://corp-proxy.example.com/')
-        with patch('genkit_google_genai.models.gemini.genai.Client') as mock_ctor:
+        with patch('genkit_google_genai._models._gemini.genai.Client') as mock_ctor:
             await model._resolve_request_client(_text_request({'api_version': 'v1'}))
         kwargs = mock_ctor.call_args.kwargs
         assert kwargs['http_options'].base_url == 'https://corp-proxy.example.com/'
@@ -454,7 +454,7 @@ class TestResolveRequestClient:
     async def test_base_url_override_wins(self) -> None:
         """An explicit per-request base_url beats multi-region derivation."""
         model = _vertex_model()
-        with patch('genkit_google_genai.models.gemini.genai.Client') as mock_ctor:
+        with patch('genkit_google_genai._models._gemini.genai.Client') as mock_ctor:
             await model._resolve_request_client(_text_request({'location': 'us', 'base_url': 'https://example.com/'}))
         kwargs = mock_ctor.call_args.kwargs
         assert kwargs['http_options'].base_url == 'https://example.com/'
@@ -464,8 +464,8 @@ class TestResolveRequestClient:
         """A multi-region override with no project falls back to ADC."""
         model = _vertex_model()
         model._client_kwargs = dict(model._client_kwargs, project=None)
-        with patch('genkit_google_genai.models.gemini.genai.Client') as mock_ctor:
-            with patch('genkit_google_genai.models.gemini.google_auth_default', return_value=(None, 'adc-p')):
+        with patch('genkit_google_genai._models._gemini.genai.Client') as mock_ctor:
+            with patch('genkit_google_genai._models._gemini.google_auth_default', return_value=(None, 'adc-p')):
                 await model._resolve_request_client(_text_request({'location': 'eu'}))
         assert mock_ctor.call_args.kwargs['project'] == 'adc-p'
 
@@ -474,7 +474,7 @@ class TestResolveRequestClient:
         """A multi-region override with no resolvable project fails fast."""
         model = _vertex_model()
         model._client_kwargs = dict(model._client_kwargs, project=None)
-        with patch('genkit_google_genai.models.gemini.google_auth_default', return_value=(None, None)):
+        with patch('genkit_google_genai._models._gemini.google_auth_default', return_value=(None, None)):
             with pytest.raises(GenkitError, match='project is required'):
                 await model._resolve_request_client(_text_request({'location': 'eu'}))
 
@@ -486,7 +486,7 @@ class TestResolveRequestClient:
         model = _vertex_model()
         model._client_kwargs = dict(model._client_kwargs, project=None)
         with patch(
-            'genkit_google_genai.models.gemini.google_auth_default', side_effect=DefaultCredentialsError('no adc')
+            'genkit_google_genai._models._gemini.google_auth_default', side_effect=DefaultCredentialsError('no adc')
         ):
             with pytest.raises(GenkitError, match='project is required'):
                 await model._resolve_request_client(_text_request({'location': 'eu'}))
@@ -503,9 +503,9 @@ class TestResolveRequestClient:
 
         model = _vertex_model()
         model._client_kwargs = dict(model._client_kwargs, project=None)
-        with patch('genkit_google_genai.models.gemini.genai.Client'):
+        with patch('genkit_google_genai._models._gemini.genai.Client'):
             with patch(
-                'genkit_google_genai.models.gemini.google_auth_default',
+                'genkit_google_genai._models._gemini.google_auth_default',
                 side_effect=DefaultCredentialsError('no adc'),
             ) as mock_adc:
                 await model._resolve_request_client(_text_request({'api_version': 'v1'}))
@@ -517,8 +517,11 @@ class TestResolveRequestClient:
         """ADC resolving to no project is also cached, not re-probed."""
         model = _vertex_model()
         model._client_kwargs = dict(model._client_kwargs, project=None)
-        with patch('genkit_google_genai.models.gemini.genai.Client'):
-            with patch('genkit_google_genai.models.gemini.google_auth_default', return_value=(None, None)) as mock_adc:
+        with patch('genkit_google_genai._models._gemini.genai.Client'):
+            with patch(
+                'genkit_google_genai._models._gemini.google_auth_default',
+                return_value=(None, None),
+            ) as mock_adc:
                 await model._resolve_request_client(_text_request({'api_version': 'v1'}))
                 await model._resolve_request_client(_text_request({'api_version': 'v1'}))
         assert mock_adc.call_count == 1
@@ -528,9 +531,9 @@ class TestResolveRequestClient:
         """A successful resolution stays cached across requests."""
         model = _vertex_model()
         model._client_kwargs = dict(model._client_kwargs, project=None)
-        with patch('genkit_google_genai.models.gemini.genai.Client') as mock_ctor:
+        with patch('genkit_google_genai._models._gemini.genai.Client') as mock_ctor:
             with patch(
-                'genkit_google_genai.models.gemini.google_auth_default', return_value=(None, 'adc-p')
+                'genkit_google_genai._models._gemini.google_auth_default', return_value=(None, 'adc-p')
             ) as mock_adc:
                 await model._resolve_request_client(_text_request({'api_version': 'v1'}))
                 await model._resolve_request_client(_text_request({'api_version': 'v1'}))
@@ -542,8 +545,8 @@ class TestResolveRequestClient:
         """Any override on an ADC-project plugin resolves the project off-loop."""
         model = _vertex_model()
         model._client_kwargs = dict(model._client_kwargs, project=None)
-        with patch('genkit_google_genai.models.gemini.genai.Client') as mock_ctor:
-            with patch('genkit_google_genai.models.gemini.google_auth_default', return_value=(None, 'adc-p')):
+        with patch('genkit_google_genai._models._gemini.genai.Client') as mock_ctor:
+            with patch('genkit_google_genai._models._gemini.google_auth_default', return_value=(None, 'adc-p')):
                 await model._resolve_request_client(_text_request({'api_version': 'v1'}))
         assert mock_ctor.call_args.kwargs['project'] == 'adc-p'
 
@@ -552,8 +555,8 @@ class TestResolveRequestClient:
         """A per-request base_url override keeps project/location resolution intact."""
         model = _vertex_model()
         model._client_kwargs = dict(model._client_kwargs, project=None)
-        with patch('genkit_google_genai.models.gemini.genai.Client') as mock_ctor:
-            with patch('genkit_google_genai.models.gemini.google_auth_default', return_value=(None, 'adc-p')):
+        with patch('genkit_google_genai._models._gemini.genai.Client') as mock_ctor:
+            with patch('genkit_google_genai._models._gemini.google_auth_default', return_value=(None, 'adc-p')):
                 await model._resolve_request_client(_text_request({'base_url': 'https://corp-proxy.example.com/'}))
         kwargs = mock_ctor.call_args.kwargs
         assert kwargs['project'] == 'adc-p'
@@ -568,7 +571,7 @@ class TestResolveRequestClient:
         apiVersion override fail client construction.
         """
         with patch.dict(os.environ, {}, clear=True):
-            with patch('genkit_google_genai.google.genai.client.Client'):
+            with patch('genkit_google_genai._google.genai.client.Client'):
                 plugin = VertexAI(api_key='k', location='us-central1')
         client = MagicMock()
         client.vertexai = True
@@ -578,8 +581,8 @@ class TestResolveRequestClient:
             client_kwargs=plugin._client_kwargs,
             base_url_pinned=plugin._base_url_pinned,
         )
-        with patch('genkit_google_genai.models.gemini.genai.Client') as mock_ctor:
-            with patch('genkit_google_genai.models.gemini.google_auth_default', return_value=(None, 'adc-p')) as adc:
+        with patch('genkit_google_genai._models._gemini.genai.Client') as mock_ctor:
+            with patch('genkit_google_genai._models._gemini.google_auth_default', return_value=(None, 'adc-p')) as adc:
                 await model._resolve_request_client(_text_request({'api_version': 'v1'}))
         adc.assert_not_called()
         kwargs = mock_ctor.call_args.kwargs
@@ -590,7 +593,7 @@ class TestResolveRequestClient:
     async def test_express_mode_multi_region_override_raises(self) -> None:
         """A multi-region override in express mode fails with a clear error."""
         with patch.dict(os.environ, {}, clear=True):
-            with patch('genkit_google_genai.google.genai.client.Client'):
+            with patch('genkit_google_genai._google.genai.client.Client'):
                 plugin = VertexAI(api_key='k', location='us-central1')
         client = MagicMock()
         client.vertexai = True
@@ -600,7 +603,7 @@ class TestResolveRequestClient:
             client_kwargs=plugin._client_kwargs,
             base_url_pinned=plugin._base_url_pinned,
         )
-        with patch('genkit_google_genai.models.gemini.google_auth_default') as adc:
+        with patch('genkit_google_genai._models._gemini.google_auth_default') as adc:
             with pytest.raises(GenkitError, match='express'):
                 await model._resolve_request_client(_text_request({'location': 'eu'}))
         adc.assert_not_called()
@@ -612,8 +615,8 @@ class TestResolveRequestClient:
         creds = MagicMock()
         creds.project_id = 'creds-p'
         model._client_kwargs = dict(model._client_kwargs, project=None, credentials=creds)
-        with patch('genkit_google_genai.models.gemini.genai.Client') as mock_ctor:
-            with patch('genkit_google_genai.models.gemini.google_auth_default') as mock_adc:
+        with patch('genkit_google_genai._models._gemini.genai.Client') as mock_ctor:
+            with patch('genkit_google_genai._models._gemini.google_auth_default') as mock_adc:
                 await model._resolve_request_client(_text_request({'location': 'eu'}))
         mock_adc.assert_not_called()
         assert mock_ctor.call_args.kwargs['project'] == 'creds-p'
@@ -651,7 +654,7 @@ class TestResolveRequestClient:
             client,
             client_kwargs={'vertexai': False, 'api_key': 'plugin-key', 'credentials': MagicMock()},
         )
-        with patch('genkit_google_genai.models.gemini.genai.Client') as mock_ctor:
+        with patch('genkit_google_genai._models._gemini.genai.Client') as mock_ctor:
             await model._resolve_request_client(
                 _text_request(),
                 context={'secrets': {'api_key': 'sk-tenant'}},
@@ -669,7 +672,7 @@ class TestResolveRequestClient:
             client,
             client_kwargs={'vertexai': False, 'api_key': 'plugin-key'},
         )
-        with patch('genkit_google_genai.models.gemini.genai.Client') as mock_ctor:
+        with patch('genkit_google_genai._models._gemini.genai.Client') as mock_ctor:
             await model._resolve_request_client(
                 _text_request(),
                 context={'secrets': {'apiKey': 'sk-camel'}},
@@ -715,7 +718,7 @@ class TestResolveRequestClient:
             client,
             client_kwargs={'vertexai': False, 'api_key': 'plugin-key'},
         )
-        with patch('genkit_google_genai.models.gemini.genai.Client') as mock_ctor:
+        with patch('genkit_google_genai._models._gemini.genai.Client') as mock_ctor:
             await model._resolve_request_client(
                 _text_request(),
                 context={'secrets': {'api_key': '   sk-tenant-padded   '}},
@@ -752,7 +755,7 @@ class TestResolveRequestClient:
     async def test_vertex_secrets_drops_project_and_location(self) -> None:
         """A tenant key is not a regional Vertex host."""
         model = _vertex_model()
-        with patch('genkit_google_genai.models.gemini.genai.Client') as mock_ctor:
+        with patch('genkit_google_genai._models._gemini.genai.Client') as mock_ctor:
             await model._resolve_request_client(
                 _text_request(),
                 context={'secrets': {'api_key': 'AQ.express'}},
@@ -788,7 +791,7 @@ class TestResolveRequestClient:
         ctx = MagicMock()
         ctx.is_streaming = False
         ctx.context = {'secrets': {'api_key': 'sk-tenant'}}
-        with patch('genkit_google_genai.models.gemini.genai.Client', return_value=temp_client) as mock_ctor:
+        with patch('genkit_google_genai._models._gemini.genai.Client', return_value=temp_client) as mock_ctor:
             await model.generate(_text_request(), ctx)
         assert mock_ctor.call_args.kwargs['api_key'] == 'sk-tenant'
         temp_client.aio.models.generate_content.assert_awaited_once()
@@ -804,7 +807,7 @@ class TestPluginModelWiring:
         plugin = _vertex_plugin(location='us')
         action = plugin._resolve_model('vertexai/gemini-2.5-flash')
         assert action is not None
-        with patch('genkit_google_genai.google.GeminiModel') as mock_model:
+        with patch('genkit_google_genai._google.GeminiModel') as mock_model:
             mock_model.return_value.generate = AsyncMock(return_value=MagicMock())
             await action._fn(_text_request(), MagicMock())
         kwargs = mock_model.call_args.kwargs
@@ -816,11 +819,11 @@ class TestPluginModelWiring:
         """The GoogleAI model action also passes the plugin's kwargs."""
         from genkit_google_genai import GoogleAI
 
-        with patch('genkit_google_genai.google.genai.client.Client'):
+        with patch('genkit_google_genai._google.genai.client.Client'):
             plugin = GoogleAI(api_key='k')
         action = plugin._resolve_model('googleai/gemini-2.5-flash')
         assert action is not None
-        with patch('genkit_google_genai.google.GeminiModel') as mock_model:
+        with patch('genkit_google_genai._google.GeminiModel') as mock_model:
             mock_model.return_value.generate = AsyncMock(return_value=MagicMock())
             await action._fn(_text_request(), MagicMock())
         kwargs = mock_model.call_args.kwargs
@@ -846,7 +849,7 @@ class TestGenerateUsesResolvedClient:
         temp_client.aio.models.generate_content = AsyncMock(return_value=response)
         ctx = MagicMock()
         ctx.is_streaming = False
-        with patch('genkit_google_genai.models.gemini.genai.Client', return_value=temp_client):
+        with patch('genkit_google_genai._models._gemini.genai.Client', return_value=temp_client):
             result = await model.generate(_text_request({'location': 'europe-west1'}), ctx)
         temp_client.aio.models.generate_content.assert_awaited_once()
         _plugin_client(model).aio.models.generate_content.assert_not_called()
@@ -873,7 +876,7 @@ class TestGenerateUsesResolvedClient:
         temp_client.aio.models.generate_content_stream = AsyncMock(return_value=_stream())
         ctx = MagicMock()
         ctx.is_streaming = True
-        with patch('genkit_google_genai.models.gemini.genai.Client', return_value=temp_client):
+        with patch('genkit_google_genai._models._gemini.genai.Client', return_value=temp_client):
             await model.generate(_text_request({'location': 'europe-west1'}), ctx)
         temp_client.aio.models.generate_content_stream.assert_awaited_once()
         _plugin_client(model).aio.models.generate_content_stream.assert_not_called()
@@ -896,7 +899,7 @@ class TestGenerateUsesResolvedClient:
         ctx = MagicMock()
         ctx.is_streaming = False
         contents = [genai_types.Content(parts=[genai_types.Part(text='hi')], role='user')]
-        with patch('genkit_google_genai.models.gemini.genai.Client', return_value=temp_client):
+        with patch('genkit_google_genai._models._gemini.genai.Client', return_value=temp_client):
             with patch.object(model, '_build_messages', AsyncMock(return_value=(contents, None))) as mock_build:
                 await model.generate(_text_request({'location': 'europe-west1'}), ctx)
         assert mock_build.call_args.kwargs['client'] is temp_client
@@ -943,7 +946,7 @@ class TestLocationConfigThroughPipeline:
         the family schema, so the pipeline is exercised with that instance.
         """
         model = _vertex_model()
-        request = _text_request(GeminiConfigSchema.model_validate({'location': 'eu', 'temperature': 0.5}))
+        request = _text_request(GeminiConfig.model_validate({'location': 'eu', 'temperature': 0.5}))
         cfg = await model._genkit_to_googleai_cfg(request=request)
         assert cfg is not None
         assert cfg.temperature == 0.5
@@ -951,11 +954,11 @@ class TestLocationConfigThroughPipeline:
 
     @pytest.mark.asyncio
     async def test_typed_config_location_stripped(self) -> None:
-        """Same for a typed GeminiConfigSchema config."""
+        """Same for a typed GeminiConfig config."""
         model = _vertex_model()
         request = ModelRequest(
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
-            config=GeminiConfigSchema(location='us', temperature=0.1),
+            config=GeminiConfig(location='us', temperature=0.1),
         )
         cfg = await model._genkit_to_googleai_cfg(request=request)
         assert cfg is not None

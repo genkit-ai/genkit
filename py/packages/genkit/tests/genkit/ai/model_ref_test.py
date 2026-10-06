@@ -12,10 +12,10 @@ from pydantic import BaseModel
 
 from genkit import Genkit, Message, ModelResponse, Part
 from genkit._ai._model import ModelConfigDict
-from genkit._ai._testing import define_programmable_model
 from genkit._core._error import GenkitError
 from genkit._core._typing import Role
 from genkit.model import ModelConfig, ModelInfo, ModelRef, Supports, model_ref
+from genkit.testing import define_scripted_model
 
 
 class CustomConfig(BaseModel):
@@ -200,8 +200,8 @@ def test_model_config_dict_keys_match_generation_common_config() -> None:
 @pytest.mark.asyncio
 async def test_prompt_call_config_keeps_extra_keys_for_the_plugin() -> None:
     """`await p(config={'banana': True})` hands the unknown knob to the model so a plugin can read it."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     pm.responses = [ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))]
     p = ai.define_prompt(prompt='hi')
 
