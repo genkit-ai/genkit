@@ -35,7 +35,7 @@ def test_package_names() -> None:
     assert not hasattr(genkit_google_genai, 'package_name')
     assert not hasattr(genkit_openai, 'package_name')
     assert not hasattr(genkit_anthropic, 'package_name')
-    assert 'OpenAIModel' in genkit_openai.__all__
-    assert 'AnthropicModel' in genkit_anthropic.__all__
+    assert 'OpenAIModel' not in genkit_openai.__all__
+    assert 'AnthropicModel' not in genkit_anthropic.__all__
     assert ollama_package_name() == 'genkit_ollama'
     assert vertex_ai_package_name() == 'genkit_vertexai'

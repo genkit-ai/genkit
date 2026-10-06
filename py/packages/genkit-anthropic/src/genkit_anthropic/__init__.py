@@ -58,13 +58,11 @@ from genkit_anthropic._config import (
     ToolChoice,
     ToolChoiceNone,
 )
-from genkit_anthropic._models import AnthropicModel
 from genkit_anthropic._plugin import Anthropic, anthropic_name
 
 __all__ = [
     'Anthropic',
     'AnthropicConfig',
-    'AnthropicModel',
     'AutoToolChoice',
     'AnyToolChoice',
     'OutputConfig',
