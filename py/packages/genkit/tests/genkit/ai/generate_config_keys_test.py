@@ -47,6 +47,39 @@ class BareConfig(BaseModel):
     safe_prompt: bool | None = None
 
 
+class TaskBudget(BaseModel):
+    """A nested setting that is not useful until `total` is set."""
+
+    model_config = ConfigDict(extra='forbid')
+    total: int
+
+
+class OutputSetting(BaseModel):
+    """A nested object sent whole, not merged field-by-field."""
+
+    model_config = ConfigDict(extra='forbid')
+    task_budget: TaskBudget
+
+
+class NestedConfig(ModelConfig):
+    """A Claude-shaped class with a required nested field."""
+
+    output_config: OutputSetting | None = None
+
+
+class RequiredTopConfig(ModelConfig):
+    """A class with a required top-level field another layer may supply."""
+
+    must: int
+
+
+class GeminiLikeConfig(ModelConfig):
+    """Declares Gemini settings the shared ModelConfig class does not."""
+
+    safety_settings: list[dict[str, str]] | None = Field(default=None, alias='safety_settings')
+    thinking_config: dict[str, Any] | None = Field(default=None, alias='thinkingConfig')
+
+
 def _config_value(config: Any, key: str) -> Any:  # noqa: ANN401
     if isinstance(config, dict):
         return config.get(key)
@@ -502,3 +535,113 @@ async def test_generate_both_spellings_and_typo_names_both() -> None:
         "unknown config key 'temprature'",
     )
     assert "'max_output_tokens'" not in err.value.original_message
+
+
+@pytest.mark.asyncio
+async def test_prompt_call_other_model_clearing_prompt_key_with_none_runs() -> None:
+    """A Gemini prompt called with `model='other', config={'thinkingConfig': None}` runs and sends no thinkingConfig."""
+    ai = Genkit()
+    gem = _Model()
+    other = _Model()
+    gem.define(ai, name='gem', config_schema=GeminiLikeConfig)
+    other.define(ai, name='other', config_schema=ModelConfig)
+    prompt = ai.define_prompt(
+        name='hop',
+        model='gem',
+        prompt='hi',
+        config={'thinkingConfig': {'thinkingBudget': 0}},
+    )
+
+    response = await prompt(model='other', config={'thinkingConfig': None})
+
+    assert response.text == 'ok'
+    assert other.requests
+    assert _config_value(other.requests[-1].config, 'thinkingConfig') is None
+    assert _config_value(other.requests[-1].config, 'thinking_config') is None
+    assert gem.requests == []
+
+
+@pytest.mark.asyncio
+async def test_prompt_call_other_model_keeping_prompt_only_key_raises() -> None:
+    """The same prompt called with `model='other'` and no override raises INVALID_ARGUMENT naming thinkingConfig."""
+    ai = Genkit()
+    gem = _Model()
+    other = _Model()
+    gem.define(ai, name='gem', config_schema=GeminiLikeConfig)
+    other.define(ai, name='other', config_schema=ModelConfig)
+    prompt = ai.define_prompt(
+        name='hop',
+        model='gem',
+        prompt='hi',
+        config={'thinkingConfig': {'thinkingBudget': 0}},
+    )
+
+    with pytest.raises(GenkitError) as err:
+        await prompt(model='other')
+
+    _assert_rejected(err, other, 'thinkingConfig')
+    assert gem.requests == []
+
+
+@pytest.mark.asyncio
+async def test_generate_incomplete_nested_setting_raises_naming_the_missing_field() -> None:
+    """An incomplete nested `output_config` raises INVALID_ARGUMENT naming output_config.task_budget.total."""
+    ai, fn = _ai_with_model(config_schema=NestedConfig, name='anth')
+
+    with pytest.raises(GenkitError) as err:
+        await ai.generate(model='anth', prompt='hi', config={'output_config': {'task_budget': {}}})
+
+    _assert_rejected(err, fn, 'output_config.task_budget.total')
+
+
+@pytest.mark.asyncio
+async def test_generate_missing_required_top_level_field_in_one_layer_still_runs() -> None:
+    """A required top-level field missing from the call dict still runs; another layer may supply it."""
+    ai, fn = _ai_with_model(config_schema=RequiredTopConfig, name='needs')
+
+    response = await ai.generate(model='needs', prompt='hi', config={'temperature': 0.2})
+
+    assert response.text == 'ok'
+    assert _config_value(fn.requests[-1].config, 'temperature') == 0.2
+
+
+@pytest.mark.asyncio
+async def test_generate_ref_with_shared_config_class_accepts_model_declared_setting() -> None:
+    """`model_ref(..., config_schema=ModelConfig)` with the model's `safety_settings` runs."""
+    ai, fn = _ai_with_model(config_schema=GeminiLikeConfig, name='gem')
+    ref = model_ref('gem', config_schema=ModelConfig)
+
+    response = await ai.generate(
+        model=ref,
+        prompt='hi',
+        config={'safety_settings': [{'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_LOW_AND_ABOVE'}]},
+    )
+
+    assert response.text == 'ok'
+    assert _config_value(fn.requests[-1].config, 'safety_settings') == [
+        {'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_LOW_AND_ABOVE'}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_generate_ref_with_shared_config_class_rejects_typo_via_model_class() -> None:
+    """The same ModelConfig ref with `{'temprature': 0.2}` raises INVALID_ARGUMENT naming temprature."""
+    ai, fn = _ai_with_model(config_schema=GeminiLikeConfig, name='gem')
+    ref = model_ref('gem', config_schema=ModelConfig)
+
+    with pytest.raises(GenkitError) as err:
+        await ai.generate(model=ref, prompt='hi', config={'temprature': 0.2})
+
+    _assert_rejected(err, fn, "gem: unknown config key 'temprature'")
+
+
+@pytest.mark.asyncio
+async def test_generate_ref_with_plugin_class_still_checks_against_that_class() -> None:
+    """A ref that names another plugin's class still rejects this model's settings."""
+    ai, fn = _ai_with_model(config_schema=GeminiLikeConfig, name='gem')
+    ref = model_ref('gem', config_schema=OtherConfig)
+
+    with pytest.raises(GenkitError) as err:
+        await ai.generate(model=ref, prompt='hi', config={'safety_settings': [{'category': 'HARM'}]})
+
+    _assert_rejected(err, fn, 'safety_settings')

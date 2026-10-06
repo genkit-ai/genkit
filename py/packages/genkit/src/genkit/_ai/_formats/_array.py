@@ -96,17 +96,21 @@ class ArrayFormat(FormatDef):
         def message_parser(msg: Message) -> list[object] | None:
             """Parses a complete message into a list of items.
 
-            The incremental extractor only collects ``{...}`` objects. A
-            finished reply like ``["a", "b"]`` has to be read as one JSON
-            array or the caller gets an empty list instead of the strings.
+            A finished reply like ``["a", "b"]`` is read as one JSON array.
+            A token-capped array keeps the items that finished and drops a
+            half-written last item; ``finish_reason='length'`` is how the
+            caller tells the list is short.
             """
-            if '[' not in msg.text:
-                return None
             try:
                 parsed = extract_json(msg.text)
             except ValueError:
+                parsed = None
+            if isinstance(parsed, list):
+                return parsed
+            if '[' not in msg.text:
                 return None
-            return parsed if isinstance(parsed, list) else None
+            items = extract_json_array_from_text(msg.text).items
+            return items or None
 
         def chunk_parser(chunk: ModelResponseChunk) -> list[object]:
             """Parses a streaming chunk into a list of items."""

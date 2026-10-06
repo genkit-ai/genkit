@@ -317,7 +317,11 @@ class AnthropicConfig(ModelConfig):
 
     def beta_only_fields(self) -> set[str]:
         """Return the names of beta-only request fields set on this config, including in ``extra``."""
-        present = {name for name, value in (self.extra or {}).items() if name in BETA_ONLY_KEYS and value is not None}
+        present = {
+            name
+            for name, value in (self.extra or {}).items()
+            if name in BETA_ONLY_KEYS and name != 'betas' and value is not None
+        }
         if self.betas:
             present.add('betas')
         if self.output_config is not None and self.output_config.task_budget is not None:
