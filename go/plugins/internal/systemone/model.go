@@ -25,24 +25,38 @@ import (
 	"github.com/firebase/genkit/go/core/status"
 )
 
-// RequestOptions is what a plugin's config sets on one request.
-type RequestOptions struct {
-	// StateJSON parses each text part of the state as JSON.
-	StateJSON bool
-	// Extra is merged over the top-level fields of the request body.
-	Extra map[string]any
+// reservedFields are the top-level fields a request builds itself, which
+// an extra field cannot replace: a different model or questions would
+// detach the request from the model that was called and the questions that
+// were compiled from the output type.
+var reservedFields = []string{"model", "state", "questions", "images"}
+
+// Config is the per-request configuration of a decision model.
+// go/plugins/systemone/exp exports it as Config.
+type Config struct {
+	// StateJSON parses each text part of the state as JSON, so a prompt
+	// template that renders a JSON document produces an object state
+	// rather than a string one. A text that is not JSON is an error. A
+	// fallback to another model takes that model's config, so set it there
+	// too, or send the state as a data part, which needs no parsing.
+	StateJSON bool `json:"stateJSON,omitzero" jsonschema_description:"Parse each text part of the state as JSON, so a template that renders JSON produces an object state."`
+
+	// Extra is merged into the top-level fields of the request body. It
+	// reaches fields this package does not model, such as a gateway's
+	// session_id or trace. It cannot name a field the request builds
+	// itself: model, state, questions, or images.
+	Extra map[string]any `json:"extra,omitempty" jsonschema_description:"Extra top-level request fields, such as a gateway's session_id. Cannot replace model, state, questions, or images."`
 }
 
 // NewModel builds the model action for one model ID under its registered
-// name. options reads the plugin's config type C; it is not called for a
-// request with no config.
+// name.
 //
 // The model claims constrained output, so the loop hands it the output
 // schema untouched, and claims the system role and context so the loop
 // does not rewrite either into instruction text that would land in the
 // state.
-func NewModel[C any](c *Client, name, id, label string, options func(*C) RequestOptions) *ai.ModelAction {
-	m := &model[C]{client: c, id: id, options: options}
+func NewModel(c *Client, name, id, label string) *ai.ModelAction {
+	m := &model{client: c, id: id}
 	return ai.NewModelAction(name, &ai.ModelOptions{
 		Label: label,
 		Supports: &ai.ModelSupports{
@@ -57,20 +71,24 @@ func NewModel[C any](c *Client, name, id, label string, options func(*C) Request
 }
 
 // model is one resolved model.
-type model[C any] struct {
-	client  *Client
-	id      string
-	options func(*C) RequestOptions
+type model struct {
+	client *Client
+	id     string
 }
 
 // generate answers the questions the request's output schema encodes.
-func (m *model[C]) generate(ctx context.Context, req *ai.ModelRequest, cfg *C, _ ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+func (m *model) generate(ctx context.Context, req *ai.ModelRequest, cfg *Config, _ ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 	if req.Output == nil || (req.Output.Schema == nil && req.Output.Format != ai.OutputFormatEnum) {
 		return nil, status.Errorf(status.ErrInvalidArgument, "systemone: the model answers questions encoded in an output type; call GenerateData with a decision type, or pass ai.WithOutputSchema(systemonex.Schema(questions)) for questions built at run time")
 	}
-	var opts RequestOptions
+	var opts Config
 	if cfg != nil {
-		opts = m.options(cfg)
+		opts = *cfg
+	}
+	for _, field := range reservedFields {
+		if _, ok := opts.Extra[field]; ok {
+			return nil, status.Errorf(status.ErrInvalidArgument, "systemone: extra field %q is one the request builds itself", field)
+		}
 	}
 	enum := req.Output.Format == ai.OutputFormatEnum
 	preamble, err := SystemPreamble(req.Messages)

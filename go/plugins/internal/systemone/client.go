@@ -26,8 +26,6 @@ import (
 	"maps"
 	"math/rand/v2"
 	"net/http"
-	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -35,38 +33,23 @@ import (
 	"github.com/firebase/genkit/go/core/status"
 )
 
-// Endpoint is one server that answers System One questions. The servers
-// take the same questions and return the same answers; they differ in the
-// URL, the model IDs, and the envelope around the body, which is what an
-// Endpoint captures.
+// Endpoint is how a server takes System One requests: the paths, and the
+// hooks for a server whose wire is not the native one.
 type Endpoint struct {
 	// Name names the endpoint in errors.
 	Name string
-	// BaseURL is the origin requests go to, and BaseURLEnv the environment
-	// variable that overrides it, if any.
-	BaseURL    string
-	BaseURLEnv string
-	// Path is the request path. An {account} segment is filled from
-	// Account; see [Endpoint.URLPath].
+	// Path is the request path under the base URL.
 	Path string
-	// APIKeyEnv is the environment variable the API key is read from.
-	APIKeyEnv string
-	// ModelsPath is the path of the model listing, empty when the endpoint
-	// has none.
+	// ModelsPath is the path of the model listing under the base URL,
+	// empty when the endpoint has none.
 	ModelsPath string
-	// Models are the IDs advertised when there is no listing, or it fails.
-	Models []string
-	// Account fills the {account} segment of Path, from AccountEnv when it
-	// is empty; see [Endpoint.WithAccount].
-	Account    string
-	AccountEnv string
 	// Route builds one model's request when it is not the native one. It
 	// gets the model ID and the native body, which it may change, and
 	// returns a suffix to the path, which is joined with a slash when it
 	// does not start with one, and the body to send. It is per model
 	// because one host can serve models on different routes, as Workers AI
-	// does, and it is where a model ID is translated to the host's own.
-	// When nil, the native body goes to Path with the model ID as given.
+	// does. When nil, the native body goes to Path with the model ID as
+	// given.
 	Route func(model string, body map[string]any) (suffix string, out any, err error)
 	// Unwrap extracts the native response from the endpoint's envelope.
 	// When nil, the response is the native body. An error it returns is
@@ -76,39 +59,26 @@ type Endpoint struct {
 	Unwrap func(body []byte) ([]byte, error)
 }
 
-// WithAccount returns the endpoint with its account ID resolved, from the
-// environment when none was given, or an error naming what to set. An
-// endpoint whose path has no account is returned as it is.
-func (ep *Endpoint) WithAccount() (*Endpoint, error) {
-	if !strings.Contains(ep.Path, "{account}") {
-		return ep, nil
-	}
-	resolved := *ep
-	resolved.Account = cmp.Or(ep.Account, os.Getenv(ep.AccountEnv))
-	if resolved.Account == "" {
-		return nil, fmt.Errorf("%s needs an account ID; pass one or set %s", ep.Name, ep.AccountEnv)
-	}
-	return &resolved, nil
-}
-
-// URLPath is the request path, with the account ID escaped into it.
-func (ep *Endpoint) URLPath() string {
-	return strings.ReplaceAll(ep.Path, "{account}", url.PathEscape(ep.Account))
-}
-
 // Request is the native request body, before the endpoint's envelope.
 type Request struct {
 	State     any
 	Questions map[string]Question
-	// Extra is merged over the top-level fields, last write wins, which is
-	// the escape hatch to a field this package does not model.
+	// Extra is merged into the top-level fields, which is the escape hatch
+	// to a field this package does not model. It cannot replace a field
+	// the request builds itself: model, state, questions, or images.
 	Extra map[string]any
 }
 
 // Body builds the native JSON body.
 func (r *Request) Body(model string) map[string]any {
-	body := map[string]any{"model": model, "state": r.State, "questions": r.Questions}
-	maps.Copy(body, r.Extra)
+	body := maps.Clone(r.Extra)
+	if body == nil {
+		body = make(map[string]any, 3)
+	}
+	for _, field := range reservedFields {
+		delete(body, field)
+	}
+	body["model"], body["state"], body["questions"] = model, r.State, r.Questions
 	return body
 }
 
@@ -123,11 +93,19 @@ type Response struct {
 	} `json:"usage"`
 }
 
-// ModelInfo is one entry of the models listing.
+// ModelInfo is one entry of the models listing. A listing names a model
+// by its name, or, as OpenRouter's does, by its ID with a display name
+// beside it; [ModelInfo.Model] is whichever names the model.
 type ModelInfo struct {
+	ID          string `json:"id,omitempty"`
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	ReleaseDate string `json:"release_date,omitempty"`
+}
+
+// Model is the ID a request names the model by.
+func (m ModelInfo) Model() string {
+	return cmp.Or(m.ID, m.Name)
 }
 
 // Client posts questions to one endpoint.
@@ -172,7 +150,7 @@ func (c *Client) Decide(ctx context.Context, model string, req *Request) (*Respo
 			suffix = "/" + suffix
 		}
 	}
-	raw, err := c.do(ctx, http.MethodPost, c.BaseURL+c.Endpoint.URLPath()+suffix, body)
+	raw, err := c.do(ctx, http.MethodPost, c.BaseURL+c.Endpoint.Path+suffix, body)
 	if err != nil {
 		return nil, err
 	}

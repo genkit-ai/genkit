@@ -207,8 +207,8 @@ func TestExtraMergesTopLevelFields(t *testing.T) {
 	if body["session_id"] != "s-1" {
 		t.Errorf("session_id = %v, want s-1", body["session_id"])
 	}
-	if body["model"] != "typesafe/jev-9" {
-		t.Errorf("model = %v: an extra wins over the field it collides with", body["model"])
+	if body["model"] != "jev-latest" {
+		t.Errorf("model = %v, want the model called: an extra cannot replace a field the request builds", body["model"])
 	}
 }
 
@@ -333,6 +333,8 @@ func TestListModels(t *testing.T) {
 		`[{"name":"jev-1.13.0","description":"Current release","release_date":"2026-08-01"}]`,
 		`{"models":[{"name":"jev-1.13.0"}]}`,
 		`{"data":[{"name":"jev-1.13.0"}]}`,
+		// OpenRouter names a model by its id; its name is for display.
+		`{"data":[{"id":"jev-1.13.0","name":"TypeSafe: Jev 1.13"}]}`,
 	} {
 		rec := &recorder{reply: reply}
 		c := newClient(t, rec, testEndpoint())
@@ -344,7 +346,7 @@ func TestListModels(t *testing.T) {
 		if req.Method != http.MethodGet || req.URL.Path != "/v1/models" {
 			t.Errorf("request = %s %s, want GET /v1/models", req.Method, req.URL.Path)
 		}
-		if len(models) != 1 || models[0].Name != "jev-1.13.0" {
+		if len(models) != 1 || models[0].Model() != "jev-1.13.0" {
 			t.Errorf("%s: models = %+v", reply, models)
 		}
 	}

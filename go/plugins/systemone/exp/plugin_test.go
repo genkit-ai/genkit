@@ -31,53 +31,30 @@ import (
 	"github.com/firebase/genkit/go/internal/base"
 	"github.com/firebase/genkit/go/plugins/internal/systemone"
 	"github.com/firebase/genkit/go/plugins/internal/systemone/systemonetest"
-	systemonex "github.com/firebase/genkit/go/plugins/systemone/exp"
 )
 
-// The decision type the tests share: one question of each kind.
-
-type dept string
-
-func (dept) Criteria() map[dept]string {
-	return map[dept]string{
-		"billing":   "Payments, invoicing, refunds",
-		"technical": "Bugs, outages, integrations",
-		"other":     "None of the above",
-	}
-}
-
-type anger int
-
-func (anger) Levels() []string { return []string{"Calm", "Concerned but civil", "Very angry"} }
-
-type urgent struct{}
-
-func (urgent) Criteria() (yes, no string) { return "Explicitly time-sensitive", "No urgency expressed" }
-
-type triage struct {
-	Department  systemonex.Choice[dept]   `json:"department" jsonschema_description:"Which team should handle this?"`
-	IsUrgent    systemonex.NoulOf[urgent] `json:"is_urgent" jsonschema_description:"Does the ticket explicitly communicate time pressure?"`
-	Frustration systemonex.Score[anger]   `json:"frustration" jsonschema_description:"How frustrated is the customer?"`
-}
-
-// newGenkit starts a fake endpoint and a Genkit with the plugin pointed at
-// it. The endpoint defaults to the direct one.
-func newGenkit(t *testing.T, fake *systemonetest.Server, ep *Endpoint) *genkit.Genkit {
+// newGenkit starts a fake endpoint and a Genkit with the TypeSafe plugin
+// pointed at it.
+func newGenkit(t *testing.T, fake *systemonetest.Server) *genkit.Genkit {
 	t.Helper()
 	srv := httptest.NewServer(fake)
 	t.Cleanup(srv.Close)
-	return genkit.Init(t.Context(), genkit.WithPlugins(&TypeSafe{
-		APIKey:   "test-key",
-		BaseURL:  srv.URL,
-		Endpoint: ep,
-	}))
+	return genkit.Init(t.Context(), genkit.WithPlugins(testTypeSafe(srv.URL)))
+}
+
+// testTypeSafe is the TypeSafe plugin pointed at a fake endpoint.
+func testTypeSafe(baseURL string) *SystemOne {
+	p := TypeSafe()
+	p.APIKey = "test-key"
+	p.BaseURL = baseURL
+	return p
 }
 
 func TestGenerateData(t *testing.T) {
 	// The documented call: the model, the state, and the type. The
 	// questions ride on the output schema, so no format is named.
 	fake := &systemonetest.Server{}
-	g := newGenkit(t, fake, nil)
+	g := newGenkit(t, fake)
 	out, resp, err := genkit.GenerateData[triage](t.Context(), g,
 		ai.WithModelName("typesafe/jev-1.13.0"),
 		ai.WithPrompt("I was charged twice and need the duplicate refunded today."))
@@ -98,7 +75,7 @@ func TestGenerateData(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Compared as JSON: the round trip turns a []string into []any.
-	if got, want := base.JSONString(questions), base.JSONString(triageQuestions(t)); got != want {
+	if got, want := base.JSONString(questions), base.JSONString(triageQuestions); got != want {
 		t.Errorf("questions on the wire:\n got %s\nwant %s", got, want)
 	}
 
@@ -117,7 +94,7 @@ func TestGenerateData(t *testing.T) {
 	if resp.Usage == nil || resp.Usage.InputTokens != 312 || resp.Usage.OutputTokens != 48 || resp.Usage.TotalTokens != 360 {
 		t.Errorf("usage = %+v", resp.Usage)
 	}
-	if info := systemonex.ResponseInfo(resp); info.Model != "jev-1.13.0" || info.Answers["department"]["choice"] != "billing" {
+	if info := ResponseInfo(resp); info.Model != "jev-1.13.0" || info.Answers["department"]["choice"] != "billing" {
 		t.Errorf("info = %+v", info)
 	}
 	if resp.FinishReason != ai.FinishReasonStop {
@@ -130,17 +107,17 @@ func TestGenerateData(t *testing.T) {
 	if err := json.Unmarshal([]byte(base.JSONString(resp)), &decoded); err != nil {
 		t.Fatal(err)
 	}
-	if info := systemonex.ResponseInfo(&decoded); info.Model != "jev-1.13.0" || info.Answers["department"]["choice"] != "billing" {
+	if info := ResponseInfo(&decoded); info.Model != "jev-1.13.0" || info.Answers["department"]["choice"] != "billing" {
 		t.Errorf("info after a JSON round trip = %+v", info)
 	}
-	if info := systemonex.ResponseInfo(&ai.ModelResponse{Raw: "another model's"}); info.Model != "" {
+	if info := ResponseInfo(&ai.ModelResponse{Raw: "another model's"}); info.Model != "" {
 		t.Errorf("info of another model's response = %+v, want zero", info)
 	}
 }
 
 func TestStateShapes(t *testing.T) {
 	fake := &systemonetest.Server{}
-	g := newGenkit(t, fake, nil)
+	g := newGenkit(t, fake)
 	const model = "typesafe/jev-latest"
 	decide := func(t *testing.T, opts ...ai.GenerateOption) any {
 		t.Helper()
@@ -245,7 +222,7 @@ func TestStateShapes(t *testing.T) {
 
 func TestRefusals(t *testing.T) {
 	fake := &systemonetest.Server{}
-	g := newGenkit(t, fake, nil)
+	g := newGenkit(t, fake)
 	const model = "typesafe/jev-latest"
 
 	t.Run("no output type", func(t *testing.T) {
@@ -284,7 +261,7 @@ func TestRefusals(t *testing.T) {
 
 func TestEnumFormat(t *testing.T) {
 	fake := &systemonetest.Server{}
-	g := newGenkit(t, fake, nil)
+	g := newGenkit(t, fake)
 
 	// The enum option carries no description, so the question gets the
 	// default instructions.
@@ -338,7 +315,7 @@ func TestEnumFormat(t *testing.T) {
 
 func TestSystemMessageIsInstructions(t *testing.T) {
 	fake := &systemonetest.Server{}
-	g := newGenkit(t, fake, nil)
+	g := newGenkit(t, fake)
 	const model = "typesafe/jev-latest"
 
 	t.Run("preamble on every question", func(t *testing.T) {
@@ -354,7 +331,7 @@ func TestSystemMessageIsInstructions(t *testing.T) {
 		}
 		for id, raw := range body["questions"].(map[string]any) {
 			q := raw.(map[string]any)
-			if want := "The state is a support ticket.\n\n" + triageQuestions(t)[id].Instructions.(string); q["instructions"] != want {
+			if want := "The state is a support ticket.\n\n" + triageQuestions[id].Instructions.(string); q["instructions"] != want {
 				t.Errorf("%s instructions = %q, want %q", id, q["instructions"], want)
 			}
 		}
@@ -383,27 +360,23 @@ func TestRuntimeQuestionsThroughGenerate(t *testing.T) {
 	// Options known only at run time: the schema is built from data, and
 	// the answers come back as a map of Answer.
 	fake := &systemonetest.Server{}
-	g := newGenkit(t, fake, nil)
+	g := newGenkit(t, fake)
 	tools := []struct{ name, description string }{
 		{"search", "Look something up on the web"},
 		{"calendar", "Read or change the user's calendar"},
 	}
-	options := make([]systemonex.ChoiceOption, 0, len(tools))
+	options := make([]ChoiceOption, 0, len(tools))
 	for _, tool := range tools {
-		options = append(options, systemonex.ChoiceOption{Name: tool.name, Criteria: tool.description})
+		options = append(options, ChoiceOption{Name: tool.name, Criteria: tool.description})
 	}
-	resp, err := genkit.Generate(t.Context(), g,
+	answers, _, err := genkit.GenerateData[map[string]Answer](t.Context(), g,
 		ai.WithModelName("typesafe/jev-latest"),
-		ai.WithOutputSchema(systemonex.Schema(map[string]systemonex.Question{
-			"tool":     systemonex.ChoiceQuestion{Instructions: "Which tool serves the request?", Options: options},
-			"personal": systemonex.NoulQuestion{Instructions: "Does the request involve the user's own data?"},
+		ai.WithOutputSchema(Schema(map[string]Question{
+			"tool":     ChoiceQuestion{Instructions: "Which tool serves the request?", Options: options},
+			"personal": NoulQuestion{Instructions: "Does the request involve the user's own data?"},
 		})),
 		ai.WithPrompt("What is on my calendar tomorrow?"))
 	if err != nil {
-		t.Fatal(err)
-	}
-	var answers map[string]systemonex.Answer
-	if err := resp.Output(&answers); err != nil {
 		t.Fatal(err)
 	}
 	_, body := fake.Last(t)
@@ -412,78 +385,80 @@ func TestRuntimeQuestionsThroughGenerate(t *testing.T) {
 		t.Errorf("tool criteria on the wire = %s", got)
 	}
 	// The fake picks the first option by name.
-	if a := answers["tool"]; a.Choice != "calendar" || a.Confidence != 0.6 {
+	if a := (*answers)["tool"]; a.Choice != "calendar" || a.Confidence != 0.6 {
 		t.Errorf("tool = %+v", a)
 	}
-	if a := answers["personal"]; a.Probability != 0.93 {
+	if a := (*answers)["personal"]; a.Probability != 0.93 {
 		t.Errorf("personal = %+v", a)
 	}
 }
 
-func TestOpenRouterThroughGenerate(t *testing.T) {
-	fake := &systemonetest.Server{}
-	g := newGenkit(t, fake, OpenRouter())
-	out, _, err := genkit.GenerateData[triage](t.Context(), g,
-		ai.WithModelName("typesafe/jev-1.13"),
-		ai.WithPrompt("hi"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	req, body := fake.Last(t)
-	if req.URL.Path != "/api/alpha/decisions" || body["model"] != "typesafe/jev-1.13" {
-		t.Errorf("request = %s model=%v", req.URL.Path, body["model"])
-	}
-	if out.Department.Choice != "billing" {
-		t.Errorf("out = %+v", out)
-	}
-}
-
 func TestListActions(t *testing.T) {
-	t.Run("listed by the API", func(t *testing.T) {
-		fake := &systemonetest.Server{Models: `{"models":[{"name":"jev-1.13.0","description":"Current"},{"name":"jev-1.14.0-preview"}]}`}
-		g := newGenkit(t, fake, nil)
-		plugin := genkit.LookupPlugin(g, provider).(*TypeSafe)
+	names := func(g *genkit.Genkit) []string {
 		var names []string
-		for _, desc := range plugin.ListActions(t.Context()) {
+		for _, desc := range genkit.LookupPlugin(g, "typesafe").(*SystemOne).ListActions(t.Context()) {
 			if desc.Type != api.ActionTypeModel {
 				t.Errorf("listed a %s action", desc.Type)
 			}
 			names = append(names, desc.Name)
 		}
-		if want := []string{"typesafe/jev-1.13.0", "typesafe/jev-1.14.0-preview"}; !reflect.DeepEqual(names, want) {
-			t.Errorf("listed %v, want %v", names, want)
+		return names
+	}
+	t.Run("listed by the API", func(t *testing.T) {
+		// The listing adds to the models known ahead, without repeats.
+		g := newGenkit(t, &systemonetest.Server{Models: `{"models":[{"name":"jev-1.13.0","description":"Current"},{"name":"jev-1.14.0-preview"}]}`})
+		if got, want := names(g), []string{"typesafe/jev-1.13.0", "typesafe/jev-1.14.0-preview", "typesafe/jev-latest"}; !reflect.DeepEqual(got, want) {
+			t.Errorf("listed %v, want %v", got, want)
 		}
 	})
 	t.Run("listing unavailable", func(t *testing.T) {
-		g := newGenkit(t, &systemonetest.Server{}, nil)
-		plugin := genkit.LookupPlugin(g, provider).(*TypeSafe)
-		var names []string
-		for _, desc := range plugin.ListActions(t.Context()) {
-			names = append(names, desc.Name)
-		}
-		if want := []string{"typesafe/jev-latest", "typesafe/jev-1.13.0"}; !reflect.DeepEqual(names, want) {
-			t.Errorf("listed %v, want the known models %v", names, want)
+		g := newGenkit(t, &systemonetest.Server{})
+		if got, want := names(g), []string{"typesafe/jev-1.13.0", "typesafe/jev-latest"}; !reflect.DeepEqual(got, want) {
+			t.Errorf("listed %v, want the known models %v", got, want)
 		}
 	})
-	t.Run("gateway", func(t *testing.T) {
-		g := newGenkit(t, &systemonetest.Server{}, Cloudflare("acct"))
-		plugin := genkit.LookupPlugin(g, provider).(*TypeSafe)
-		if descs := plugin.ListActions(t.Context()); len(descs) != 1 || descs[0].Name != "typesafe/jev-latest" {
-			t.Errorf("listed %v", descs)
+	t.Run("listing kept", func(t *testing.T) {
+		// The Dev UI lists actions often; the server is asked once.
+		fake := &systemonetest.Server{Models: `{"models":[{"name":"jev-1.13.0"},{"name":""}]}`}
+		g := newGenkit(t, fake)
+		names(g)
+		if got, want := names(g), []string{"typesafe/jev-1.13.0", "typesafe/jev-latest"}; !reflect.DeepEqual(got, want) {
+			t.Errorf("listed %v, want %v without the entry that has no ID", got, want)
+		}
+		if n := len(fake.Listings()); n != 1 {
+			t.Errorf("the server was asked for %d listings, want 1", n)
+		}
+	})
+	t.Run("models read at Init", func(t *testing.T) {
+		// Keys may carry the prefix, and a change after Init has no
+		// effect, so it cannot race with a listing.
+		srv := httptest.NewServer(&systemonetest.Server{})
+		t.Cleanup(srv.Close)
+		p := testTypeSafe(srv.URL)
+		p.Models = map[string]ModelSpec{"typesafe/jev-1.13.0": {Label: "Pinned"}}
+		g := genkit.Init(t.Context(), genkit.WithPlugins(p))
+		p.Models["jev-1.14.0"] = ModelSpec{}
+		p.Provider = "renamed"
+		if got, want := names(g), []string{"typesafe/jev-1.13.0"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("listed %v, want %v", got, want)
+		}
+		if ref := p.ModelRef("jev-1.13.0", nil); ref.Name() != "typesafe/jev-1.13.0" {
+			t.Errorf("ModelRef after a rename = %q, want the name Init read", ref.Name())
+		}
+		if desc := p.ListActions(t.Context())[0]; !strings.Contains(base.JSONString(desc.Metadata), `"label":"Pinned"`) {
+			t.Errorf("the label from the prefixed key was not used")
 		}
 	})
 	t.Run("resolves any id", func(t *testing.T) {
-		g := newGenkit(t, &systemonetest.Server{}, nil)
+		g := newGenkit(t, &systemonetest.Server{})
 		if m := genkit.LookupModel(g, "typesafe/jev-9.9.9"); m == nil {
 			t.Error("an unlisted version did not resolve")
 		}
-		if genkit.LookupModel(g, "typesafe/jev-latest") == nil {
-			t.Error("the alias did not resolve")
+		if ref := TypeSafe().ModelRef("jev-latest", nil); ref.Name() != "typesafe/jev-latest" || ref.Config() != nil {
+			t.Errorf("ModelRef = %q with config %v, want typesafe/jev-latest with none", ref.Name(), ref.Config())
 		}
-		for _, id := range []string{"jev-latest", "typesafe/jev-latest"} {
-			if ref := ModelRef(id, nil); ref.Name() != "typesafe/jev-latest" || ref.Config() != nil {
-				t.Errorf("ModelRef(%q) = %q with config %v, want typesafe/jev-latest with none", id, ref.Name(), ref.Config())
-			}
+		if ref := TypeSafe().ModelRef("typesafe/jev-latest", nil); ref.Name() != "typesafe/jev-latest" {
+			t.Errorf("ModelRef of the full name = %q, want it taken as Models takes it", ref.Name())
 		}
 	})
 }
@@ -495,17 +470,137 @@ func TestInitRequiresAKey(t *testing.T) {
 			t.Errorf("Init without a key: recovered %v, want a panic naming the variable", r)
 		}
 	}()
-	(&TypeSafe{}).Init(t.Context())
+	TypeSafe().Init(t.Context())
 }
 
-func TestInitRequiresACloudflareAccount(t *testing.T) {
-	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "")
-	defer func() {
-		if r := recover(); r == nil || !strings.Contains(r.(string), "CLOUDFLARE_ACCOUNT_ID") {
-			t.Errorf("Init without an account ID: recovered %v, want a panic naming the variable", r)
+func TestInitRequires(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		plugin *SystemOne
+		want   string
+	}{
+		{"a provider", &SystemOne{BaseURL: "http://localhost:11434"}, "Provider"},
+		{"a base URL", &SystemOne{Provider: "local"}, "BaseURL"},
+		{"one key per model", &SystemOne{Provider: "local", BaseURL: "http://localhost:11434",
+			Models: map[string]ModelSpec{"d1": {}, "local/d1": {}}}, "twice"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			defer func() {
+				if r := recover(); r == nil || !strings.Contains(r.(string), tt.want) {
+					t.Errorf("recovered %v, want a panic naming %s", r, tt.want)
+				}
+			}()
+			tt.plugin.Init(t.Context())
+		})
+	}
+}
+
+func TestGenericServer(t *testing.T) {
+	// A server with no constructor: the fields are the whole setup, and a
+	// local one takes no key.
+	fake := &systemonetest.Server{}
+	srv := httptest.NewServer(fake)
+	t.Cleanup(srv.Close)
+	g := genkit.Init(t.Context(), genkit.WithPlugins(
+		&SystemOne{Provider: "local", BaseURL: srv.URL + "/decisions/"},
+		&SystemOne{Provider: "custom", BaseURL: srv.URL, Path: "decide"},
+		&SystemOne{Provider: "whole", BaseURL: srv.URL + "/endpoint", Path: "/"},
+	))
+
+	if _, _, err := genkit.GenerateData[triage](t.Context(), g, ai.WithModelName("local/vendor/d1"), ai.WithPrompt("hi")); err != nil {
+		t.Fatal(err)
+	}
+	req, body := fake.Last(t)
+	if req.URL.Path != "/decisions/v1/systemone" {
+		t.Errorf("path = %s, want the default path under the base URL", req.URL.Path)
+	}
+	if body["model"] != "vendor/d1" {
+		t.Errorf("model = %v, want the server's ID as given", body["model"])
+	}
+	if got := req.Header.Values("Authorization"); got != nil {
+		t.Errorf("Authorization = %q, want none without a key", got)
+	}
+
+	// A server's ID is kept whole, even one that starts with the provider.
+	if _, _, err := genkit.GenerateData[triage](t.Context(), g, ai.WithModelName("local/local/clef"), ai.WithPrompt("hi")); err != nil {
+		t.Fatal(err)
+	}
+	if _, body := fake.Last(t); body["model"] != "local/clef" {
+		t.Errorf("model = %v, want local/clef", body["model"])
+	}
+
+	// A path without a leading slash still joins the base URL.
+	if _, _, err := genkit.GenerateData[triage](t.Context(), g, ai.WithModelName("custom/d1"), ai.WithPrompt("hi")); err != nil {
+		t.Fatal(err)
+	}
+	if req, _ := fake.Last(t); req.URL.Path != "/decide" {
+		t.Errorf("path = %s, want /decide", req.URL.Path)
+	}
+
+	// A path of "/" posts to the base URL itself.
+	if _, _, err := genkit.GenerateData[triage](t.Context(), g, ai.WithModelName("whole/d1"), ai.WithPrompt("hi")); err != nil {
+		t.Fatal(err)
+	}
+	if req, _ := fake.Last(t); req.URL.Path != "/endpoint" {
+		t.Errorf("path = %s, want the base URL itself", req.URL.Path)
+	}
+}
+
+func TestWireHooks(t *testing.T) {
+	// A server whose wire is not the native one is served from the
+	// fields: Route wraps the request, and Unwrap takes the response out
+	// of the server's envelope.
+	fake := &systemonetest.Server{Wrap: func(reply map[string]any) any {
+		return map[string]any{"result": reply}
+	}}
+	srv := httptest.NewServer(fake)
+	t.Cleanup(srv.Close)
+	g := genkit.Init(t.Context(), genkit.WithPlugins(&SystemOne{
+		Provider: "wrapped",
+		BaseURL:  srv.URL,
+		Path:     "/run",
+		Route: func(model string, body map[string]any) (string, any, error) {
+			delete(body, "model")
+			return "/" + model, map[string]any{"input": body}, nil
+		},
+		Unwrap: func(body []byte) ([]byte, error) {
+			var envelope struct{ Result json.RawMessage }
+			err := json.Unmarshal(body, &envelope)
+			return envelope.Result, err
+		},
+	}))
+
+	out, _, err := genkit.GenerateData[triage](t.Context(), g, ai.WithModelName("wrapped/d1"), ai.WithPrompt("hi"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, body := fake.Last(t)
+	if req.URL.Path != "/run/d1" {
+		t.Errorf("path = %s, want the route's path after Path", req.URL.Path)
+	}
+	if input, _ := body["input"].(map[string]any); input["state"] != "hi" || input["model"] != nil {
+		t.Errorf("body = %v, want the native body under input, without a model", body)
+	}
+	if out.Department.Choice != "billing" {
+		t.Errorf("the envelope was not unwrapped: %+v", out)
+	}
+}
+
+func TestExtraCannotReplaceTheRequest(t *testing.T) {
+	fake := &systemonetest.Server{}
+	g := newGenkit(t, fake)
+	for _, field := range []string{"model", "state", "questions", "images"} {
+		_, _, err := genkit.GenerateData[triage](t.Context(), g,
+			ai.WithModelName("typesafe/jev-latest"),
+			ai.WithPrompt("hi"),
+			ai.WithConfig(&Config{Extra: map[string]any{field: "x"}}))
+		if err == nil || !strings.Contains(err.Error(), field) {
+			t.Errorf("extra %s: error = %v, want it refused", field, err)
 		}
-	}()
-	(&TypeSafe{APIKey: "k", Endpoint: Cloudflare("")}).Init(t.Context())
+	}
+	if fake.Calls() != 0 {
+		t.Error("a request with a reserved extra field was sent")
+	}
 }
 
 func TestPromptFile(t *testing.T) {
@@ -539,7 +634,7 @@ The state is a support ticket.
 	srv := httptest.NewServer(fake)
 	t.Cleanup(srv.Close)
 	g := genkit.Init(t.Context(),
-		genkit.WithPlugins(&TypeSafe{APIKey: "test-key", BaseURL: srv.URL}),
+		genkit.WithPlugins(testTypeSafe(srv.URL)),
 		genkit.WithPromptDir(dir))
 	genkit.DefineSchemasFor(g, ticketInput{}, triage{})
 

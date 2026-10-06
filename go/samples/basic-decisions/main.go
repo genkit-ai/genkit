@@ -92,6 +92,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"slices"
 	"sync"
 
@@ -100,7 +101,6 @@ import (
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 	"github.com/firebase/genkit/go/plugins/server"
 	systemonex "github.com/firebase/genkit/go/plugins/systemone/exp"
-	typesafex "github.com/firebase/genkit/go/plugins/typesafe/exp"
 	"google.golang.org/genai"
 )
 
@@ -302,7 +302,7 @@ var promptsFS embed.FS
 // model is the decision model, by name, shared by every flow. Pin a version
 // in production: thresholds tuned against one release do not carry over to
 // the next.
-const model = "typesafe/jev-latest"
+const model = "openrouter-decisions/~typesafe/jev-latest"
 
 // The answer models behind askFlow. The light one is fast and cheap; the
 // heavy one thinks before it answers and costs accordingly, which is what
@@ -319,10 +319,18 @@ var (
 func main() {
 	ctx := context.Background()
 
-	// jev is reached through OpenRouter here. The questions and the answers
-	// are the same on TypeSafe's own API; only the endpoint and the key differ.
+	// jev is reached through OpenRouter's Decisions API here. The questions
+	// and the answers are the same on TypeSafe's own API or any other server
+	// that speaks System One; only the plugin's fields and the model name
+	// differ.
+	openRouter := &systemonex.SystemOne{
+		Provider: "openrouter-decisions",
+		BaseURL:  "https://openrouter.ai",
+		Path:     "/api/alpha/decisions",
+		APIKey:   os.Getenv("OPENROUTER_API_KEY"),
+	}
 	g := genkit.Init(ctx,
-		genkit.WithPlugins(&typesafex.TypeSafe{Endpoint: typesafex.OpenRouter()}, &googlegenai.GoogleAI{}),
+		genkit.WithPlugins(openRouter, &googlegenai.GoogleAI{}),
 		genkit.WithPromptFS(promptsFS),
 	)
 
@@ -559,7 +567,7 @@ func DefineToolPick(g *genkit.Genkit) {
 		}
 		options = append(options, systemonex.ChoiceOption{Name: "none", Criteria: "No tool fits; the assistant answers from what it knows"})
 
-		resp, err := genkit.Generate(ctx, g,
+		answers, _, err := genkit.GenerateData[map[string]systemonex.Answer](ctx, g,
 			ai.WithModelName(model),
 			ai.WithSystem("The state is a request a user made to an assistant."),
 			ai.WithOutputSchema(systemonex.Schema(map[string]systemonex.Question{
@@ -570,12 +578,7 @@ func DefineToolPick(g *genkit.Genkit) {
 		if err != nil {
 			return ToolPick{}, fmt.Errorf("could not pick a tool: %w", err)
 		}
-		var answers map[string]systemonex.Answer
-		if err := resp.Output(&answers); err != nil {
-			return ToolPick{}, fmt.Errorf("could not read the pick: %w", err)
-		}
-
-		pick := answers["tool"]
+		pick := (*answers)["tool"]
 		route := "call"
 		switch {
 		case pick.Choice == "none":
