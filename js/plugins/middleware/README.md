@@ -308,7 +308,7 @@ const activeMessages = resolveCompressedHistory(response.messages);
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `maxInputTokens` | `number` | `Infinity` | Triggers compression when token count exceeds this threshold. |
-| `preserveRecent` | `number` | `10` | Number of most recent non-system messages to preserve when dropping older messages (and default for `summarize.preserveRecent`). |
+| `preserveRecent` | `number` | `4` | Number of most recent non-system messages to preserve when dropping older messages (and default/fallback window for `summarize.preserveRecent`). |
 | `preserveSystem` | `boolean` | `true` | Always keep system instructions intact. |
 | `maxToolResponseChars` | `number` | `400000` | Hard cap on any single tool response size in characters. Set negative to disable. |
 | `deduplicateToolResponses` | `object` | — | Deduplication settings for repeated tool calls. |
@@ -319,6 +319,7 @@ const activeMessages = resolveCompressedHistory(response.messages);
 | `toolResponses.maxChars` | `number` | — | Max characters per older tool response. |
 | `toolResponses.preserveRecent` | `number` | `2` | Number of most recent tool response messages to keep untruncated. |
 | `summarize` | `object` | — | LLM summarization settings (`model`, `preserveRecent`, `prompt`). |
+| `summarize.preserveRecent` | `number` | `6` | Number of most recent non-system messages to keep un-summarized (defaults to top-level `preserveRecent` if set, and falls back to `preserveRecent` on shorter over-budget histories). |
 | `skipSummarizationThreshold` | `number` | — | Skip summarization if cheap strategies save at least this fraction (`0..1`) of context and bring estimated tokens within `maxInputTokens`. |
 | `maxMessages` | `number` | — | Maximum message count target. Drops older non-system messages, ensuring history begins with a user turn. |
 | `insertTruncationNotice` | `boolean` | `true` | Inserts an advisory notice when messages are dropped. |

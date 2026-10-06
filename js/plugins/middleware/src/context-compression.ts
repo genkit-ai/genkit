@@ -112,7 +112,9 @@ export const SummarizeOptionsSchema = z.object({
 
   /**
    * Number of most recent non-system messages to keep un-summarized.
-   * Everything before this window is replaced with a summary. Minimum: 1.
+   * Everything before this window is replaced with a summary. Falls back
+   * to top-level `preserveRecent` (if smaller) when the history has
+   * `<= summarize.preserveRecent` messages. Minimum: 1.
    * @default 6
    */
   preserveRecent: z
@@ -146,9 +148,9 @@ export const ContextCompressionOptionsSchema = z.object({
 
   /**
    * Number of most recent non-system messages to preserve untouched when
-   * compacting older messages (used as the default window for summarization
-   * or message truncation, and dynamically reduced on severe budget overshoot).
-   * Minimum: 1.
+   * compacting older messages (used as the default/fallback window for
+   * summarization and message truncation, and dynamically reduced on
+   * severe budget overshoot). Minimum: 1.
    * @default 4
    */
   preserveRecent: z
