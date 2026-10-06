@@ -25,7 +25,7 @@ from genkit._ai._testing import (
     define_programmable_model,
 )
 from genkit._ai._tools import Interrupt, ToolRunContext, define_tool, restart_tool
-from genkit._core._action import Action, ActionRunContext
+from genkit._core._action import ActionRunContext
 from genkit._core._error import GenkitError, PublicError, RuntimeErrorReason
 from genkit._core._model import GenerateActionOptions, ModelRequest, Resume
 from genkit._core._registry import Registry
@@ -1443,6 +1443,7 @@ async def test_generate_without_context_uses_enclosing_flow_context() -> None:
         ),
     ]
 
+    @ai.flow()
     async def plan_order(_: None) -> str:
         return (
             await ai.generate(
@@ -1454,7 +1455,7 @@ async def test_generate_without_context_uses_enclosing_flow_context() -> None:
         ).text
 
     auth = {'auth': {'uid': 'diner-42'}}
-    await Action(name='planOrder', kind=ActionKind.FLOW, fn=plan_order).run(context=auth)
+    await plan_order.run(context=auth)
 
     # Model turn that asks for the tool, the tool run, then the model turn that answers.
     assert seen == [('middleware', auth), ('tool', auth), ('middleware', auth)]
