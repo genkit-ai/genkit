@@ -36,6 +36,7 @@ import (
 	"github.com/invopop/jsonschema"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/anthropics/anthropic-sdk-go/packages/respjson"
 )
 
 const (
@@ -243,6 +244,7 @@ func Generate(
 	} else {
 		stream := client.Messages.NewStreaming(ctx, *req)
 		message := anthropic.Message{}
+		var thinking int64
 		for stream.Next() {
 			event := stream.Current()
 			err := message.Accumulate(event)
@@ -281,11 +283,14 @@ func Generate(
 						}
 					}
 				}
+			case anthropic.MessageDeltaEvent:
+				thinking = applyDeltaUsage(&message.Usage, event.Usage)
 			case anthropic.MessageStopEvent:
 				r, err := toGenkitResponse(&message)
 				if err != nil {
 					return nil, err
 				}
+				r.Usage = toGenkitUsage(message.Usage, thinking)
 				r.Request = input
 				return r, nil
 			}
@@ -649,22 +654,28 @@ func toGenkitResponse(m *anthropic.Message) (*ai.ModelResponse, error) {
 
 	r.Message = msg
 	r.Raw = m.JSON
-	r.Usage = toGenkitUsage(m.Usage)
+	r.Usage = toGenkitUsage(m.Usage, thinkingTokens(m.Usage.JSON.ExtraFields["output_tokens_details"]))
 	return &r, nil
 }
 
-// toGenkitUsage maps a message's usage onto [ai.GenerationUsage]'s convention.
-// Anthropic's input_tokens leaves out the tokens read from and written to the
-// cache, so they are added back to make InputTokens the whole prompt. Thinking
-// is inside output_tokens with no separate count, so ThoughtsTokens stays zero.
-func toGenkitUsage(u anthropic.Usage) *ai.GenerationUsage {
+// toGenkitUsage maps a message's usage and its thinking token count onto
+// [ai.GenerationUsage]'s convention. Anthropic's input_tokens leaves out the
+// tokens read from and written to the cache, so they are added back to make
+// InputTokens the whole prompt. Its output_tokens includes thinking, so the
+// thinking count is taken out of it. A response with no thinking count, as
+// from an API that does not report one, leaves all of it in OutputTokens.
+func toGenkitUsage(u anthropic.Usage, thinking int64) *ai.GenerationUsage {
+	if thinking > u.OutputTokens {
+		thinking = 0
+	}
 	usage := &ai.GenerationUsage{
 		InputTokens:         int(u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens),
-		OutputTokens:        int(u.OutputTokens),
+		OutputTokens:        int(u.OutputTokens - thinking),
+		ThoughtsTokens:      int(thinking),
 		CachedContentTokens: int(u.CacheReadInputTokens),
 		CacheWriteTokens:    int(u.CacheCreationInputTokens),
 	}
-	usage.TotalTokens = usage.InputTokens + usage.OutputTokens
+	usage.TotalTokens = usage.InputTokens + usage.OutputTokens + usage.ThoughtsTokens
 	// Cache writes are billed by how long the entry lives, and server tools
 	// by the request, neither of which has a field of its own.
 	for name, count := range map[string]int64{
@@ -682,4 +693,38 @@ func toGenkitUsage(u anthropic.Usage) *ai.GenerationUsage {
 		usage.Custom[name] = float64(count)
 	}
 	return usage
+}
+
+// thinkingTokens reads output_tokens_details.thinking_tokens, which the SDK
+// does not model, returning zero when the field is absent.
+func thinkingTokens(details respjson.Field) int64 {
+	var d struct {
+		ThinkingTokens int64 `json:"thinking_tokens"`
+	}
+	if raw := details.Raw(); raw != "" && raw != "null" {
+		_ = json.Unmarshal([]byte(raw), &d)
+	}
+	return d.ThinkingTokens
+}
+
+// applyDeltaUsage folds a message_delta's usage into the usage that
+// message_start reported, and returns the thinking token count. The delta's
+// counts are cumulative and final, and server tools can raise the input
+// counts after the start, but the SDK's accumulator keeps only output_tokens.
+// A count the delta leaves out keeps its value from the start.
+func applyDeltaUsage(u *anthropic.Usage, d anthropic.MessageDeltaUsage) int64 {
+	u.OutputTokens = d.OutputTokens
+	if d.JSON.InputTokens.Valid() {
+		u.InputTokens = d.InputTokens
+	}
+	if d.JSON.CacheReadInputTokens.Valid() {
+		u.CacheReadInputTokens = d.CacheReadInputTokens
+	}
+	if d.JSON.CacheCreationInputTokens.Valid() {
+		u.CacheCreationInputTokens = d.CacheCreationInputTokens
+	}
+	if d.JSON.ServerToolUse.Valid() {
+		u.ServerToolUse = d.ServerToolUse
+	}
+	return thinkingTokens(d.JSON.ExtraFields["output_tokens_details"])
 }
