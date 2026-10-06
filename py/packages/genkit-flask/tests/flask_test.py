@@ -267,3 +267,21 @@ def test_flask_context_provider_public_error_returns_its_status_and_message() ->
 
     assert response.status_code == 401
     assert json.loads(response.data) == {'message': 'not signed in', 'status': 'UNAUTHENTICATED'}
+
+
+def test_flask_flow_with_default_and_null_data_uses_python_default() -> None:
+    """POST `{"data": null}` to a served `greet(name: str = 'world')` returns the default's result."""
+    ai = Genkit()
+    app = Flask(__name__)
+    app.config.update({'TESTING': True})
+
+    @app.post('/greet')
+    @genkit_flask_handler(ai)
+    @ai.flow()
+    async def greet(name: str = 'world') -> str:
+        return f'hello {name}'
+
+    response = app.test_client().post('/greet', json={'data': None})
+
+    assert response.status_code == 200
+    assert response.json == {'result': 'hello world'}

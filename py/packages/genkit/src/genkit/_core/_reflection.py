@@ -36,7 +36,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
-from genkit._core._action import Action, BidiAction
+from genkit._core._action import NO_INPUT, Action, BidiAction
 from genkit._core._constants import GENKIT_VERSION
 from genkit._core._error import get_reflection_json
 from genkit._core._logger import get_logger
@@ -141,8 +141,9 @@ class ActionRunner:
                 else:
                     input_val = AgentInput.model_validate(as_agent_input_dict(input_val))
 
+            # JSON can't say "omitted" apart from null, so both mean no input.
             output = await self.action.run(
-                input=input_val,
+                input=NO_INPUT if input_val is None else input_val,
                 on_chunk=on_chunk,
                 context=self.payload.get('context', {}),
                 on_trace_start=self.on_trace_start,

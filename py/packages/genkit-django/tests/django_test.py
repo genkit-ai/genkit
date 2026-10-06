@@ -105,7 +105,13 @@ def _build_views() -> dict[str, Any]:
     async def gated(_: str) -> str:
         return 'ok'
 
+    @genkit_django_handler(ai)
+    @ai.flow()
+    async def greet(name: str = 'world') -> str:
+        return f'hello {name}'
+
     return {
+        'greet': greet,
         'say_hi': say_hi,
         'raise_error': raise_error,
         'raise_invalid': raise_invalid,
@@ -130,6 +136,7 @@ def urlconf(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         path('public_flow', views['raise_public']),
         path('echo_request', views['echo_request']),
         path('gated', views['gated']),
+        path('greet', views['greet']),
     ]
     monkeypatch.setitem(sys.modules, 'genkit_django_tests_urls', module)
 
@@ -343,3 +350,13 @@ async def test_django_context_provider_public_error_returns_its_status_and_messa
 
     assert response.status_code == 401
     assert json.loads(response.content) == {'message': 'not signed in', 'status': 'UNAUTHENTICATED'}
+
+
+@pytest.mark.asyncio
+async def test_django_flow_with_default_and_null_data_uses_python_default(urlconf: None) -> None:  # noqa: ARG001
+    """POST `{"data": null}` to a served `greet(name: str = 'world')` returns the default's result."""
+    client = AsyncClient()
+    response = await client.post('/greet', data=json.dumps({'data': None}), content_type='application/json')
+
+    assert response.status_code == 200
+    assert json.loads(response.content) == {'result': 'hello world'}

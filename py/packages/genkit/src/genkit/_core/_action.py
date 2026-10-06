@@ -360,6 +360,16 @@ _action_context: ContextVar[dict[str, Any] | None] = ContextVar('context')
 _ = _action_context.set(None)
 
 
+class NoInput:
+    def __repr__(self) -> str:
+        return 'NO_INPUT'
+
+
+# The default for "the caller passed no input", so a flow can tell `await f()`
+# (use the Python default) apart from `await f(None)` (a value to validate).
+NO_INPUT = cast(Any, NoInput())
+
+
 class ActionRunContext(Generic[ChunkT]):
     """Execution context for an action.
 
@@ -535,13 +545,13 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         else:
             self._input_type = cast(TypeAdapter[InputT], TypeAdapter(input_schema))
 
-    async def __call__(self, input: InputT | None = None) -> OutputT:
+    async def __call__(self, input: InputT | None = NO_INPUT, *, context: dict[str, Any] | None = None) -> OutputT:
         """Call the action directly, returning just the response value."""
-        return (await self.run(input)).response
+        return (await self.run(input, context=context)).response
 
     async def run(
         self,
-        input: InputT | None = None,
+        input: InputT | None = NO_INPUT,
         on_chunk: Callable[[ChunkT], None] | None = None,
         context: dict[str, Any] | None = None,
         on_trace_start: Callable[[str, str], Awaitable[None]] | None = None,
@@ -554,6 +564,8 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
 
         Args:
             input: The input to the action. Will be validated against the input schema.
+                Omit it to use the function's own default. On a flow, an explicit
+                None is a value and is validated like any other.
             on_chunk: Optional streaming callback for chunked responses.
             context: Optional context dict for the action.
             on_trace_start: Optional callback invoked when trace starts.
@@ -572,10 +584,15 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         Raises:
             GenkitError: If input validation fails (INVALID_ARGUMENT status).
         """
+        # Only a flow treats an explicit None as a value; for every other action
+        # None still means "no input".
+        omitted = input is NO_INPUT or (input is None and self._kind != ActionKind.FLOW)
+        if omitted:
+            input = None
         # With a live input_stream, `input` isn't the payload — the stream
         # carries the per-turn inputs — so there's nothing to validate up front.
         if input_stream is None:
-            input = self._validate_input(input)
+            input = self._validate_input(input, omitted=omitted)
         init = self._validate_init(init)
 
         token = None
@@ -596,6 +613,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
                 ),
                 on_trace_start,
                 telemetry_labels,
+                omit_input=omitted,
             )
         finally:
             if token is not None:
@@ -603,7 +621,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
 
     def stream(
         self,
-        input: InputT | None = None,
+        input: InputT | None = NO_INPUT,
         context: dict[str, Any] | None = None,
         telemetry_labels: dict[str, object] | None = None,
         init: InitT | None = None,
@@ -670,8 +688,10 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         if ActionMetadataKey.RETURN in annotations:
             type_adapter = TypeAdapter(annotations[ActionMetadataKey.RETURN])
             self._output_schema: dict[str, object] = type_adapter.json_schema()
+            self._output_type: TypeAdapter[OutputT] | None = cast(TypeAdapter[OutputT], type_adapter)
             self._metadata[ActionMetadataKey.OUTPUT_KEY] = self._output_schema
         else:
+            self._output_type = None
             self._output_schema = TypeAdapter(object).json_schema()
             self._metadata[ActionMetadataKey.OUTPUT_KEY] = self._output_schema
 
@@ -723,14 +743,14 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
                 reason=RuntimeErrorReason.INVALID_INPUT,
             ) from e
 
-    def _validate_input(self, input: InputT | None) -> InputT | None:
+    def _validate_input(self, input: InputT | None, *, omitted: bool = False) -> InputT | None:
         """Validate caller input against the action schema when one is registered."""
         if self._input_type is None:
             return input
         # Skip validation when the caller passed nothing AND the wrapped
         # function declares a Python default for its first arg — that's the
         # signal that "no input" is a legitimate way to invoke this action.
-        if input is None and self._first_arg_optional:
+        if omitted and self._first_arg_optional:
             return input
         payload: object = input
         # A differently-typed ModelRequest with a mapping config is dumped and
@@ -760,7 +780,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         except ValidationError as e:
             msg = (
                 f"Action '{self.name}' requires input but none was provided. Please supply a valid input payload."
-                if input is None
+                if omitted
                 else f"Invalid input for action '{self.name}': {e}"
             )
             raise GenkitError(
@@ -778,6 +798,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         telemetry_labels: dict[str, object] | None,
         *,
         execute: Callable[[], Awaitable[OutputT]] | None = None,
+        omit_input: bool = True,
     ) -> ActionResponse[OutputT]:
         """Open the action span via ``run_in_new_span``, dispatch ``self._fn``, wrap errors in ``GenkitError``."""
         start_time = time.perf_counter()
@@ -814,11 +835,13 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
                 if execute is not None:
                     output = await execute()
                 else:
-                    output = await self._invoke(input, ctx)
+                    output = await self._invoke(input, ctx, omit_input=omit_input)
             except Interrupt as e:
                 if e.metadata:
                     span.set_metadata({'interrupt': e.metadata})
                 raise
+            if self._kind == ActionKind.FLOW:
+                output = self._validate_output(output, trace_id=trace_id)
             latency_ms = (time.perf_counter() - start_time) * 1000
             return cast(OutputT, _record_latency(output, latency_ms))
 
@@ -854,14 +877,31 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
                 trace_id=trace_id,
             ) from e
 
-    async def _invoke(self, input: object | None, ctx: ActionRunContext) -> OutputT:
+    def _validate_output(self, output: object, *, trace_id: str) -> OutputT:
+        """Give the caller what the flow's return annotation promises, or fail the run."""
+        if self._output_type is None:
+            return cast(OutputT, output)
+        try:
+            return self._output_type.validate_python(output)
+        except ValidationError as e:
+            # A bad return is the flow author's bug, not the caller's, so it's
+            # INTERNAL rather than INVALID_ARGUMENT.
+            raise GenkitError(
+                message=f"Flow '{self.name}' returned a value that doesn't match its return annotation: {e}",
+                status='INTERNAL',
+                cause=e,
+                reason=RuntimeErrorReason.INVALID_OUTPUT,
+                trace_id=trace_id,
+            ) from e
+
+    async def _invoke(self, input: object | None, ctx: ActionRunContext, *, omit_input: bool = True) -> OutputT:
         """Dispatch ``self._fn`` based on its declared arity (0/1/2 args)."""
         # When the caller passed no input and the function's first arg has a
         # Python default, dispatch *without* the input so the default applies.
         # The 2-arg form passes ctx by keyword (using the user's actual
         # parameter name) so the defaulted first arg isn't accidentally
         # supplanted by a positional.
-        omit_input = input is None and self._first_arg_optional
+        omit_input = omit_input and input is None and self._first_arg_optional
         match self._n_action_args:
             case 0:
                 return await self._fn()
