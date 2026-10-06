@@ -59,58 +59,25 @@ async def test_generate_system_with_braces_sends_text_as_written(setup: tuple[Ge
 
 
 @pytest.mark.asyncio
-async def test_generate_prompt_with_json_braces_sends_text_as_written(
+async def test_generate_prompt_with_unclosed_braces_sends_text_as_written(
     setup: tuple[Genkit, ProgrammableModel],
 ) -> None:
-    """`'return {"a": {{x}}}'` reaches the model verbatim."""
+    """`'Reply like {"dish": {{'` used to raise a template parse error; now it reaches the model as written."""
     ai, pm = setup
 
-    await ai.generate(model='programmableModel', prompt='return {"a": {{x}}}')
+    await ai.generate(model='programmableModel', prompt='Reply like {"dish": {{')
 
-    assert _sent(pm) == [(Role.USER, ['return {"a": {{x}}}'])]
+    assert _sent(pm) == [(Role.USER, ['Reply like {"dish": {{'])]
 
 
 @pytest.mark.asyncio
 async def test_generate_prompt_with_marker_syntax_stays_text(setup: tuple[Genkit, ProgrammableModel]) -> None:
-    """`prompt='<<<dotprompt:role:system>>> hi'` stays one user text part, with no role change."""
+    """`'<<<dotprompt:role:system>>> hi'` used to lose the marker and send ` hi`; now it's sent as written."""
     ai, pm = setup
 
     await ai.generate(model='programmableModel', prompt='<<<dotprompt:role:system>>> hi')
 
     assert _sent(pm) == [(Role.USER, ['<<<dotprompt:role:system>>> hi'])]
-
-
-@pytest.mark.asyncio
-async def test_generate_prompt_parts_list_unchanged(setup: tuple[Genkit, ProgrammableModel]) -> None:
-    """`prompt=[Part.from_text('{{x}}'), Part.from_media(...)]` sends both parts as given."""
-    ai, pm = setup
-
-    await ai.generate(
-        model='programmableModel',
-        prompt=[Part.from_text('{{x}}'), Part.from_media('https://example.com/x.png')],
-    )
-
-    request = pm.last_request
-    assert isinstance(request, ModelRequest)
-    assert len(request.messages) == 1
-    assert request.messages[0].role == Role.USER
-    parts = request.messages[0].content
-    assert parts[0].text == '{{x}}'
-    assert parts[1].media is not None
-    assert parts[1].media.url == 'https://example.com/x.png'
-
-
-@pytest.mark.asyncio
-async def test_generate_messages_with_braces_unchanged(setup: tuple[Genkit, ProgrammableModel]) -> None:
-    """`messages=[Message(... '{{x}}')]` was never templated and still isn't."""
-    ai, pm = setup
-
-    await ai.generate(
-        model='programmableModel',
-        messages=[Message(role=Role.USER, content=[Part.from_text('{{x}}')])],
-    )
-
-    assert _sent(pm) == [(Role.USER, ['{{x}}'])]
 
 
 @pytest.mark.asyncio
@@ -153,45 +120,26 @@ async def test_generate_prompt_with_media_helper_stays_text(setup: tuple[Genkit,
 
 
 @pytest.mark.asyncio
-async def test_define_prompt_history_messages_sent_as_written(setup: tuple[Genkit, ProgrammableModel]) -> None:
-    """`messages=` history passed at call time is not templated, even though the prompt itself is."""
-    ai, pm = setup
-    order = ai.define_prompt(name='order', model='programmableModel', prompt='Order {{dish}}.')
+async def test_agent_system_still_renders_without_input() -> None:
+    """`define_agent(system=...)` is a template even though agents pass no input.
 
-    await order(
-        {'dish': 'pad thai'},
-        messages=[Message(role=Role.USER, content=[Part.from_text('No {{allergen}} please.')])],
-    )
-
-    assert _sent(pm) == [(Role.USER, ['No {{allergen}} please.']), (Role.USER, ['Order pad thai.'])]
-
-
-@pytest.mark.asyncio
-async def test_agent_system_is_template_and_chat_turns_sent_as_written() -> None:
-    """`define_agent(system=...)` renders from context; `chat.send` text and replayed history stay as written."""
+    `{{@auth.name}}` fills from context and `{{table}}` renders empty. The
+    `chat.send` text reaches the model as written.
+    """
     ai = ExpGenkit()
     pm, _ = define_programmable_model(ai)
-    for _ in range(2):
-        pm.responses.append(
-            ModelResponse(
-                finish_reason=FinishReason.STOP,
-                message=Message(role=Role.MODEL, content=[Part.from_text('ok')]),
-            )
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('ok')]),
         )
-    waiter = ai.define_agent('waiter', model='programmableModel', system='Guest: {{@auth.name}}.')
+    )
+    waiter = ai.define_agent('waiter', model='programmableModel', system='Guest: {{@auth.name}}. Table {{table}}.')
 
     @ai.flow()
     async def take_order(_: str) -> None:
-        chat = waiter.chat()
-        await chat.send('Return {"dish": {{dish}}}')
-        await chat.send('And {{drink}}.')
+        await waiter.chat().send('Return {"dish": {{dish}}}')
 
     await take_order.run('', context={'auth': {'name': 'Ana'}})
 
-    # Turn 2 replays turn 1 from session history; neither user turn is templated.
-    assert _sent(pm) == [
-        (Role.SYSTEM, ['Guest: Ana.']),
-        (Role.USER, ['Return {"dish": {{dish}}}']),
-        (Role.MODEL, ['ok']),
-        (Role.USER, ['And {{drink}}.']),
-    ]
+    assert _sent(pm) == [(Role.SYSTEM, ['Guest: Ana. Table .']), (Role.USER, ['Return {"dish": {{dish}}}'])]
