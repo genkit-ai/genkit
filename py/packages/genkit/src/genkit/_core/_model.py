@@ -155,7 +155,7 @@ def config_type_path(cls: type) -> str:
 
     Walks parent packages from the top and uses the first one that re-exports
     this class under the same name (``genkit_openai.OpenAIConfig``, not
-    ``genkit_openai.typing.OpenAIConfig``). Nested / test-local classes keep
+    ``genkit_openai._typing.OpenAIConfig``). Nested / test-local classes keep
     the defining path.
     """
     impl = f'{cls.__module__}.{cls.__qualname__}'
@@ -652,9 +652,6 @@ class GenerateActionOptions(GenkitModel):
         return as_resume(v)
 
 
-_TEXT_DATA_TYPE: str = 'text'
-
-
 class Document(GenkitModel):
     """Multi-part document that can be embedded, indexed, or retrieved."""
 
@@ -693,17 +690,6 @@ class Document(GenkitModel):
         """Create a document from a media URL."""
         return Document(content=[Part.from_media(url, content_type)], metadata=metadata)
 
-    @staticmethod
-    def from_data(
-        data: str,
-        data_type: str | None = None,
-        metadata: dict[str, Any] | None = None,
-    ) -> Document:
-        """Create a document from data, inferring text vs media from data_type."""
-        if data_type == _TEXT_DATA_TYPE:
-            return Document.from_text(data, metadata)
-        return Document.from_media(data, data_type, metadata)
-
     @cached_property
     def text(self) -> str:
         """Concatenate all text parts."""
@@ -717,24 +703,6 @@ class Document(GenkitModel):
     def media(self) -> list[Media]:
         """All media parts."""
         return [part.media for part in self.content if part.media is not None]
-
-    @cached_property
-    def data(self) -> str:
-        """Primary data: text if available, otherwise first media URL."""
-        if self.text:
-            return self.text
-        if self.media:
-            return self.media[0].url
-        return ''
-
-    @cached_property
-    def data_type(self) -> str | None:
-        """Type of primary data: 'text' or first media's content type."""
-        if self.text:
-            return _TEXT_DATA_TYPE
-        if self.media and self.media[0].content_type:
-            return self.media[0].content_type
-        return None
 
 
 class Artifact(GenkitModel):

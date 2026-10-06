@@ -310,7 +310,7 @@ class EvalFnResponse(GenkitModel):
     test_case_id: str = Field(...)
     trace_id: str | None = None
     span_id: str | None = None
-    evaluation: Score = Field(...)
+    evaluation: Score | list[Score] = Field(...)
 
 
 class EvalRequest(GenkitModel):

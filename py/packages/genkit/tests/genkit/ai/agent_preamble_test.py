@@ -24,7 +24,6 @@ from genkit._ai._agents._preamble import (
     apply_preamble_tags,
     tag_history_for_render,
 )
-from genkit._ai._testing import define_programmable_model
 from genkit._core._model import Message, ModelResponse
 from genkit._core._typing import (
     AgentFinishReason,
@@ -36,6 +35,7 @@ from genkit._core._typing import (
 )
 from genkit.exp import Genkit
 from genkit.exp.agent import InMemorySessionStore
+from genkit.testing import define_scripted_model
 
 
 def test_tag_history_for_render_copies_messages() -> None:
@@ -69,9 +69,9 @@ def test_apply_preamble_tags_does_not_mutate_shared_prompt_messages() -> None:
 @pytest.mark.asyncio
 async def test_prompt_agent_does_not_persist_system_preamble() -> None:
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
-    ai.define_prompt(name='preambleAgent', model='programmableModel', system='You are terse.')
+    ai.define_prompt(name='preambleAgent', model='scriptedModel', system='You are terse.')
     agent = ai.define_prompt_agent(name='preambleAgent')
 
     pm.responses.append(
@@ -95,9 +95,9 @@ async def test_prompt_agent_does_not_persist_system_preamble() -> None:
 @pytest.mark.asyncio
 async def test_prompt_agent_multi_turn_session_has_no_accumulated_preamble() -> None:
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
-    ai.define_prompt(name='preambleAgent', model='programmableModel', system='You are terse.')
+    ai.define_prompt(name='preambleAgent', model='scriptedModel', system='You are terse.')
     agent = ai.define_prompt_agent(name='preambleAgent')
 
     pm.responses.extend([
@@ -143,11 +143,11 @@ async def test_prompt_agent_explicit_history_tag_preamble() -> None:
     and model responses are persisted.
     """
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     ai.define_prompt(
         name='explicitHistory',
-        model='programmableModel',
+        model='scriptedModel',
         messages="""
         {{role "system"}}
         Prefix system instruction.
@@ -204,11 +204,11 @@ async def test_prompt_agent_few_shot_preamble() -> None:
     from the session store at the end of the turn.
     """
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     ai.define_prompt(
         name='fewShotAgent',
-        model='programmableModel',
+        model='scriptedModel',
         messages="""
         {{role "system"}}
         System help.
@@ -262,9 +262,9 @@ async def test_prompt_agent_tool_messages_preserved_verbatim() -> None:
     as preambles, ensuring tool traces are successfully saved to the database.
     """
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
-    ai.define_prompt(name='toolHistoryAgent', model='programmableModel', system='You are helpful.')
+    ai.define_prompt(name='toolHistoryAgent', model='scriptedModel', system='You are helpful.')
     agent = ai.define_prompt_agent(name='toolHistoryAgent')
 
     pm.responses.append(
@@ -322,8 +322,8 @@ async def test_prompt_agent_schema_miss_keeps_the_model_text() -> None:
         title: str
 
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
-    ai.define_prompt(name='cook', model='programmableModel', output_schema=Recipe)
+    pm, _ = define_scripted_model(ai)
+    ai.define_prompt(name='cook', model='scriptedModel', output_schema=Recipe)
     agent = ai.define_prompt_agent(name='cook')
     pm.responses.append(
         ModelResponse(
@@ -341,9 +341,9 @@ async def test_prompt_agent_schema_miss_keeps_the_model_text() -> None:
 async def test_prompt_agent_blocked_snapshot_is_not_resumable() -> None:
     """A safety refusal is not a completed turn resume can continue from."""
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
     store = InMemorySessionStore()
-    ai.define_prompt(name='blocked', model='programmableModel')
+    ai.define_prompt(name='blocked', model='scriptedModel')
     agent = ai.define_prompt_agent(name='blocked', store=store)
     pm.responses.append(
         ModelResponse(
@@ -387,8 +387,8 @@ async def test_prompt_agent_blocked_snapshot_is_not_resumable() -> None:
 async def test_prompt_agent_client_managed_blocked_is_not_next_turn_history() -> None:
     """A safety refusal is this turn's reply, not the next generate's history."""
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
-    ai.define_prompt(name='blocked', model='programmableModel')
+    pm, _ = define_scripted_model(ai)
+    ai.define_prompt(name='blocked', model='scriptedModel')
     agent = ai.define_prompt_agent(name='blocked')
     pm.responses.extend([
         ModelResponse(
@@ -417,9 +417,9 @@ async def test_prompt_agent_client_managed_blocked_is_not_next_turn_history() ->
 async def test_detach_blocked_keeps_blocked_finish_reason() -> None:
     """A detached safety refusal stays blocked on the snapshot."""
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
     store = InMemorySessionStore()
-    ai.define_prompt(name='blockedDetach', model='programmableModel')
+    ai.define_prompt(name='blockedDetach', model='scriptedModel')
     agent = ai.define_prompt_agent(name='blockedDetach', store=store)
     pm.responses.append(
         ModelResponse(

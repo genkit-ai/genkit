@@ -54,7 +54,6 @@ from genkit._ai._model import (
     resolve_call_model,
     resolve_for_generate,
 )
-from genkit._ai._tools import Tool
 from genkit._core._action import (
     Action,
     ActionKind,
@@ -77,6 +76,7 @@ from genkit._core._model import (
 )
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
+from genkit._core._tool import Tool
 from genkit._core._typing import (
     GenerateActionOutputConfig,
     MiddlewareRef,
