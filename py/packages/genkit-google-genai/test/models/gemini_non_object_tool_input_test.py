@@ -203,3 +203,130 @@ async def test_gemini_streaming_str_tool_call_receives_string(mocker: MockerFixt
 
     assert chunks[0].content[0].tool_request == ToolRequest(name='weather', input='Paris', ref='c1')
     assert _tool_request(response) == ToolRequest(name='weather', input='Paris', ref='c1')
+
+
+ENUM_REF_INPUT = {
+    '$defs': {
+        'Color': {
+            'enum': ['red', 'blue'],
+            'title': 'Color',
+            'type': 'string',
+        }
+    },
+    '$ref': '#/$defs/Color',
+}
+
+
+@pytest.mark.asyncio
+async def test_gemini_uppercase_object_tool_declares_own_fields(mocker: MockerFixture) -> None:
+    """A tool with `input_schema={'type': 'OBJECT', ...}` is declared with property `a` and no `input` wrapper."""
+    schema = {'type': 'OBJECT', 'properties': {'a': {'type': 'string'}}}
+
+    _, sent = await _generate(mocker, _request(_tool(schema)), _no_call())
+
+    assert _declared_parameters(sent) == genai_types.Schema(
+        type=genai_types.Type.OBJECT,
+        properties={'a': genai_types.Schema(type=genai_types.Type.STRING)},
+    )
+
+
+@pytest.mark.asyncio
+async def test_gemini_enum_ref_tool_declares_input_enum(mocker: MockerFixture) -> None:
+    """A tool whose input is a `$ref` to a string enum is declared with a required `input` holding that enum."""
+    _, sent = await _generate(mocker, _request(_tool(ENUM_REF_INPUT, name='set_color')), _no_call())
+
+    assert _declared_parameters(sent) == genai_types.Schema(
+        type=genai_types.Type.OBJECT,
+        properties={'input': genai_types.Schema(type=genai_types.Type.STRING, enum=['red', 'blue'])},
+        required=['input'],
+    )
+
+
+@pytest.mark.asyncio
+async def test_gemini_calls_enum_ref_tool_with_input_tool_receives_value(mocker: MockerFixture) -> None:
+    """Gemini calling that tool with `{"input": "red"}` produces a tool request whose input is `'red'`."""
+    response, _ = await _generate(
+        mocker, _request(_tool(ENUM_REF_INPUT, name='set_color')), _gemini_calls('set_color', {'input': 'red'})
+    )
+
+    assert _tool_request(response) == ToolRequest(name='set_color', input='red', ref='c1')
+
+
+@pytest.mark.asyncio
+async def test_gemini_null_only_tool_declares_input(mocker: MockerFixture) -> None:
+    """A `{'type': ['null']}` input is declared under `input` and not as a bare STRING."""
+    _, sent = await _generate(mocker, _request(_tool({'type': ['null']})), _no_call())
+
+    assert _declared_parameters(sent) == genai_types.Schema(
+        type=genai_types.Type.OBJECT,
+        properties={'input': genai_types.Schema(type=genai_types.Type.STRING, nullable=True)},
+        required=['input'],
+    )
+
+
+@pytest.mark.asyncio
+async def test_gemini_history_nullable_tool_none_input_sends_input_null(mocker: MockerFixture) -> None:
+    """A previous nullable-string tool call with input `None` is sent back as `args={"input": None}`."""
+    history = [
+        Message(role=Role.USER, content=[Part.from_text('Weather in Paris?')]),
+        Message(role=Role.MODEL, content=[Part(tool_request=ToolRequest(name='weather', input=None, ref='c1'))]),
+    ]
+
+    _, sent = await _generate(mocker, _request(_tool({'type': ['string', 'null']}), messages=history), _no_call())
+
+    call = sent['contents'][1].parts[0].function_call
+    assert call == genai_types.FunctionCall(name='weather', args={'input': None}, id='c1')
+
+
+@pytest.mark.asyncio
+async def test_gemini_history_undeclared_tool_string_input_sends_input_field(mocker: MockerFixture) -> None:
+    """A previous `weather('Paris')` call is sent as `args={"input": "Paris"}` even if `weather` is not in this turn."""
+    history = [
+        Message(role=Role.USER, content=[Part.from_text('Weather in Paris?')]),
+        Message(role=Role.MODEL, content=[Part(tool_request=ToolRequest(name='weather', input='Paris', ref='c1'))]),
+    ]
+
+    _, sent = await _generate(mocker, _request(messages=history), _no_call())
+
+    call = sent['contents'][1].parts[0].function_call
+    assert call == genai_types.FunctionCall(name='weather', args={'input': 'Paris'}, id='c1')
+
+
+@pytest.mark.asyncio
+async def test_gemini_calls_str_tool_with_extra_keys_tool_receives_input_only(mocker: MockerFixture) -> None:
+    """Gemini calling `weather` with `{"input": "Paris", "unit": "C"}` gives a tool request whose input is `'Paris'`."""
+    response, _ = await _generate(
+        mocker, _request(_tool(STRING_INPUT)), _gemini_calls('weather', {'input': 'Paris', 'unit': 'C'})
+    )
+
+    assert _tool_request(response) == ToolRequest(name='weather', input='Paris', ref='c1')
+
+
+@pytest.mark.asyncio
+async def test_gemini_calls_double_underscore_str_tool_receives_string_and_name(mocker: MockerFixture) -> None:
+    """Gemini calling `get__weather` with `{"input": "Paris"}` gives name `get__weather` and input `'Paris'`."""
+    response, _ = await _generate(
+        mocker,
+        _request(_tool(STRING_INPUT, name='get__weather')),
+        _gemini_calls('get__weather', {'input': 'Paris'}),
+    )
+
+    assert _tool_request(response) == ToolRequest(name='get__weather', input='Paris', ref='c1')
+
+
+@pytest.mark.asyncio
+async def test_gemini_slash_tool_declared_with_double_underscore(mocker: MockerFixture) -> None:
+    """A tool named `a/b` is declared to Gemini as `a__b`."""
+    _, sent = await _generate(mocker, _request(_tool(STRING_INPUT, name='a/b')), _no_call())
+
+    assert sent['config'].tools[0].function_declarations[0].name == 'a__b'
+
+
+@pytest.mark.asyncio
+async def test_gemini_calls_slash_str_tool_receives_string_and_name(mocker: MockerFixture) -> None:
+    """Gemini calling `a__b` with `{"input": "Paris"}` produces a tool request named `a/b` with input `'Paris'`."""
+    response, _ = await _generate(
+        mocker, _request(_tool(STRING_INPUT, name='a/b')), _gemini_calls('a__b', {'input': 'Paris'})
+    )
+
+    assert _tool_request(response) == ToolRequest(name='a/b', input='Paris', ref='c1')
