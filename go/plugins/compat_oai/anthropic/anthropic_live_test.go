@@ -15,36 +15,30 @@
 package anthropic_test
 
 import (
-	"context"
-	"os"
 	"testing"
 
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/compat_oai/anthropic"
-	"github.com/firebase/genkit/go/plugins/compat_oai/internal/livetest"
+	"github.com/firebase/genkit/go/plugins/compat_oai/internal/oailive"
+	"github.com/firebase/genkit/go/plugins/internal/livetest"
 )
 
 func TestPluginLive(t *testing.T) {
-	if os.Getenv("ANTHROPIC_API_KEY") == "" {
-		t.Skip("ANTHROPIC_API_KEY is not set")
-	}
+	livetest.Env(t, "ANTHROPIC_API_KEY")
+	g := livetest.Init(t, &anthropic.Anthropic{})
 
-	ctx := context.Background()
-	g := genkit.Init(ctx,
-		genkit.WithPlugins(&anthropic.Anthropic{}),
-		genkit.WithDefaultModel("anthropic/claude-haiku-4-5-20251001"),
-	)
-
-	livetest.Run(t, g, livetest.Suite{
-		Model: anthropic.ModelRef("claude-haiku-4-5-20251001", nil),
-		// The OpenAI-compatible endpoint takes the thinking knob but never
-		// returns the thinking content itself.
-		ReasoningModel: anthropic.ModelRef("claude-haiku-4-5-20251001", &anthropic.ChatConfig{
-			MaxOutputTokens: 4096,
-			Thinking:        &anthropic.ThinkingConfig{Type: "enabled", BudgetTokens: 2048},
-		}),
-		VisionModel: anthropic.ModelRef("claude-haiku-4-5-20251001", nil),
-		ToolChoice:  true,
+	const model = "claude-haiku-4-5-20251001"
+	oailive.Run(t, g, oailive.Suite{
+		Suite: livetest.Suite{
+			Model: anthropic.ModelRef(model, nil),
+			// The OpenAI-compatible endpoint takes the thinking knob but
+			// never returns the thinking content itself.
+			ReasoningModel: anthropic.ModelRef(model, &anthropic.ChatConfig{
+				MaxOutputTokens: 4096,
+				Thinking:        &anthropic.ThinkingConfig{Type: "enabled", BudgetTokens: 2048},
+			}),
+			LimitConfig:  &anthropic.ChatConfig{MaxOutputTokens: 16},
+			BadKeyPlugin: &anthropic.Anthropic{APIKey: "invalid"},
+		},
 		ExtraConfig: map[string]any{
 			"extra": map[string]any{"thinking": map[string]any{"type": "disabled"}},
 		},

@@ -15,80 +15,61 @@
 package openai_test
 
 import (
-	"context"
-	"os"
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/plugins/compat_oai/internal/livetest"
+	"github.com/firebase/genkit/go/plugins/compat_oai/internal/oailive"
 	"github.com/firebase/genkit/go/plugins/compat_oai/openai"
+	"github.com/firebase/genkit/go/plugins/internal/livetest"
 	openaiGo "github.com/openai/openai-go"
 	"github.com/openai/openai-go/shared"
 )
 
 func TestPluginLive(t *testing.T) {
-	apiKey := os.Getenv("OPENAI_API_KEY")
-	if apiKey == "" {
-		t.Skip("Skipping test: OPENAI_API_KEY environment variable not set")
-	}
-
-	ctx := context.Background()
+	apiKey := livetest.Env(t, "OPENAI_API_KEY")
 	oai := &openai.OpenAI{APIKey: apiKey}
-	g := genkit.Init(ctx,
-		genkit.WithDefaultModel("openai/gpt-4o-mini"),
-		genkit.WithPlugins(oai),
-	)
+	g := livetest.Init(t, oai)
 
-	livetest.Run(t, g, livetest.Suite{
-		Model: openai.ModelRef("gpt-4o-mini", nil),
-		// The chat completions API takes the effort knob but keeps the
-		// reasoning content server-side.
-		ReasoningModel: openai.ModelRef("gpt-5-nano", &openaiGo.ChatCompletionNewParams{
-			ReasoningEffort: shared.ReasoningEffortLow,
-		}),
-		VisionModel: openai.ModelRef("gpt-4.1-nano", nil),
-		ToolChoice:  true,
+	oailive.Run(t, g, oailive.Suite{
+		Suite: livetest.Suite{
+			Model: openai.ModelRef("gpt-4o-mini", nil),
+			// The chat completions API takes the effort knob but keeps the
+			// reasoning content server-side.
+			ReasoningModel: openai.ModelRef("gpt-5-nano", &openaiGo.ChatCompletionNewParams{
+				ReasoningEffort: shared.ReasoningEffortLow,
+			}),
+			VisionModel: openai.ModelRef("gpt-4.1-nano", nil),
+			LimitConfig: &openaiGo.ChatCompletionNewParams{
+				MaxCompletionTokens: openaiGo.Int(16),
+			},
+			BadKeyPlugin: &openai.OpenAI{APIKey: "invalid"},
+		},
 		// No ExtraConfig: this plugin speaks the SDK's own request type,
 		// which has no extra passthrough.
 	})
 
-	t.Run("embedder", func(t *testing.T) {
-		embedder := oai.Embedder(g, "text-embedding-3-small")
-		res, err := genkit.Embed(ctx, g, ai.WithEmbedder(embedder), ai.WithTextDocs("yellow banana"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		out := res.Embeddings[0].Embedding
-		// There's not a whole lot we can test about the result.
-		// Just do a few sanity checks.
-		if len(out) < 100 {
-			t.Errorf("embedding vector looks too short: len(out)=%d", len(out))
-		}
-		var normSquared float32
-		for _, x := range out {
-			normSquared += x * x
-		}
-		if normSquared < 0.9 || normSquared > 1.1 {
-			t.Errorf("embedding vector not unit length: %f", normSquared)
-		}
+	livetest.RunEmbedder(t, g, livetest.EmbedderSuite{
+		Embedder:   oai.Embedder(g, "text-embedding-3-small"),
+		Dimensions: 1536,
+		Normalized: true,
 	})
 
+	// The SDK's own request type carries the sampling fields.
 	t.Run("sdk config", func(t *testing.T) {
-		config := &openaiGo.ChatCompletionNewParams{
-			Temperature:         openaiGo.Float(0.2),
-			MaxCompletionTokens: openaiGo.Int(50),
-			TopP:                openaiGo.Float(0.5),
-			Stop: openaiGo.ChatCompletionNewParamsStopUnion{
-				OfStringArray: []string{".", "!", "?"},
-			},
-		}
-		resp, err := genkit.Generate(ctx, g,
+		resp, err := genkit.Generate(t.Context(), g,
+			ai.WithModel(openai.ModelRef("gpt-4o-mini", &openaiGo.ChatCompletionNewParams{
+				Temperature:         openaiGo.Float(0.2),
+				MaxCompletionTokens: openaiGo.Int(50),
+				TopP:                openaiGo.Float(0.5),
+				Stop: openaiGo.ChatCompletionNewParamsStopUnion{
+					OfStringArray: []string{".", "!", "?"},
+				},
+			})),
 			ai.WithPrompt("Write a short sentence about artificial intelligence."),
-			ai.WithConfig(config),
 		)
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("Generate() error = %v", err)
 		}
 		if resp.Text() == "" {
 			t.Error("Text() is empty")

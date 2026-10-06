@@ -15,36 +15,31 @@
 package dashscope_test
 
 import (
-	"context"
-	"os"
 	"testing"
 
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/compat_oai/dashscope"
-	"github.com/firebase/genkit/go/plugins/compat_oai/internal/livetest"
+	"github.com/firebase/genkit/go/plugins/compat_oai/internal/oailive"
+	"github.com/firebase/genkit/go/plugins/internal/livetest"
 )
 
 func TestPluginLive(t *testing.T) {
-	if os.Getenv("DASHSCOPE_API_KEY") == "" {
-		t.Skip("DASHSCOPE_API_KEY is not set")
-	}
-
-	ctx := context.Background()
-	g := genkit.Init(ctx,
-		genkit.WithPlugins(&dashscope.DashScope{}),
-		genkit.WithDefaultModel("dashscope/qwen-plus"),
-	)
+	livetest.Env(t, "DASHSCOPE_API_KEY")
+	g := livetest.Init(t, &dashscope.DashScope{})
 
 	thinking := true
-	livetest.Run(t, g, livetest.Suite{
-		Model: dashscope.ModelRef("qwen-plus", nil),
-		ReasoningModel: dashscope.ModelRef("qwen-plus", &dashscope.ChatConfig{
-			EnableThinking: &thinking,
-		}),
-		ReasoningContent: true,
-		// DashScope only serves thinking on streaming calls.
-		StreamOnlyReasoning: true,
-		VisionModel:         dashscope.ModelRef("qwen3-vl-plus", nil),
+	oailive.Run(t, g, oailive.Suite{
+		Suite: livetest.Suite{
+			Model: dashscope.ModelRef("qwen-plus", nil),
+			ReasoningModel: dashscope.ModelRef("qwen-plus", &dashscope.ChatConfig{
+				EnableThinking: &thinking,
+			}),
+			ReasoningContent: true,
+			// DashScope only serves thinking on streaming calls.
+			StreamOnlyReasoning: true,
+			VisionModel:         dashscope.ModelRef("qwen3-vl-plus", nil),
+			LimitConfig:         &dashscope.ChatConfig{MaxOutputTokens: 16},
+			BadKeyPlugin:        &dashscope.DashScope{APIKey: "invalid"},
+		},
 		ExtraConfig: map[string]any{
 			"extra": map[string]any{"enable_thinking": false},
 		},
