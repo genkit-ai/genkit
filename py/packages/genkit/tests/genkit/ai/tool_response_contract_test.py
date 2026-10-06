@@ -16,11 +16,14 @@ from genkit import (
     MultipartToolResponse,
     Part,
     Role,
+    Tool,
     response,
 )
 from genkit._ai._testing import ProgrammableModel, define_programmable_model
+from genkit._core._action import Action
 from genkit._core._schema import to_json_schema
 from genkit.model import ToolRequest, ToolResponse
+from genkit.plugin_api import ActionKind
 
 
 class ShotOut(BaseModel):
@@ -79,6 +82,21 @@ async def _generate_tool_turn(
 ) -> ModelResponse:
     pm.responses = [_model_calls_tool(name=name, ref='t1', tool_input=tool_input), _ok()]
     return await ai.generate(prompt='go', tools=[name])
+
+
+@pytest.mark.asyncio
+async def test_await_tool_from_raw_action_returns_multipart_envelope() -> None:
+    """Awaiting a Tool built from a raw Action returns the same multipart envelope generate already speaks."""
+
+    async def raw_shot() -> MultipartToolResponse[ShotOut]:
+        return response(ShotOut(ok=True, label='lab'), parts=[_png()], metadata={'src': 'cam'})
+
+    handle = Tool(Action(name='shot', kind=ActionKind.TOOL, fn=raw_shot))
+    out = await handle()
+    assert isinstance(out, MultipartToolResponse)
+    assert out.output == SHOT
+    assert out.content == [_png()]
+    assert out.metadata == {'src': 'cam'}
 
 
 @pytest.mark.asyncio

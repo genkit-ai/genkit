@@ -18,7 +18,7 @@
 
 Each plugin class exposes one constructor per config family
 (``gemini_model``, ``gemini_image_model``, ...). The return type is the contract:
-``ModelRef[GeminiConfigSchema]`` tells generate-time code exactly which
+``ModelRef[GeminiConfig]`` tells generate-time code exactly which
 config is legal, so a constructor must refuse ids whose runtime action
 would validate a different schema — otherwise the ref lies and the wrong
 config sails through until the API rejects it.
@@ -31,7 +31,7 @@ from pydantic import BaseModel
 from genkit import GenkitError
 from genkit.embedder import EmbedderRef
 from genkit.model import ModelInfo, ModelRef, model_ref
-from genkit_google_genai.models._routing import classify_family, is_imagen_model_name, strip_ref_prefixes
+from genkit_google_genai._models._routing import classify_family, is_imagen_model_name, strip_ref_prefixes
 
 ConfigT = TypeVar('ConfigT', bound=BaseModel)
 

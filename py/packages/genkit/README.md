@@ -24,7 +24,7 @@ uv add genkit genkit-google-genai
 
 ```python
 from pydantic import BaseModel, Field
-from genkit import Genkit
+from genkit import Genkit, PublicError
 from genkit_google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
@@ -42,6 +42,11 @@ async def review(code: str) -> Issue:
         prompt=f'Review this code:\n{code}',
         output_schema=Issue,
     )
+    if result.output is None:
+        raise PublicError(
+            'INTERNAL',
+            f'Model did not return an Issue (finish_reason={result.finish_reason}, error={result.error})',
+        )
     return result.output
 
 

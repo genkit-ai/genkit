@@ -74,7 +74,7 @@ async def test_write_artifact_uses_current_session(ctx: GenerateMiddlewareContex
         assert set(tools) == {'read_artifact', 'write_artifact'}
 
         write = tools['write_artifact']
-        result = await write.run(input={'name': 'poem.txt', 'content': 'roses are red'})
+        result = await write.action().run(input={'name': 'poem.txt', 'content': 'roses are red'})
         assert result.response.output['status'] == 'Artifact "poem.txt" saved successfully.'
         arts = await session.get_artifacts()
         assert len(arts) == 1
@@ -93,7 +93,7 @@ async def test_read_artifact_returns_found(ctx: GenerateMiddlewareContext) -> No
     async def check() -> None:
         read = next(t for t in mw.tools(ctx) if t.name == 'read_artifact')
 
-        result = await read.run(input={'name': 'notes.txt'})
+        result = await read.action().run(input={'name': 'notes.txt'})
         assert result.response.output['name'] == 'notes.txt'
         assert result.response.output['content'] == 'hello'
         assert result.response.output['found'] is True
@@ -105,7 +105,7 @@ async def test_read_artifact_returns_found(ctx: GenerateMiddlewareContext) -> No
 async def test_read_artifact_without_session(ctx: GenerateMiddlewareContext) -> None:
     mw = Artifacts()
     read = next(t for t in mw.tools(ctx) if t.name == 'read_artifact')
-    result = await read.run(input={'name': 'missing.txt'})
+    result = await read.action().run(input={'name': 'missing.txt'})
     assert result.response.output['name'] == 'missing.txt'
     assert 'no active agent session' in result.response.output['content'].lower()
     assert result.response.output['found'] is False

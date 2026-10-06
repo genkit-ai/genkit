@@ -31,9 +31,9 @@ from genkit.plugin_api import (
     loop_local_client,
     to_json_schema,
 )
-from genkit_anthropic.config import AnthropicConfig
-from genkit_anthropic.model_info import SUPPORTED_ANTHROPIC_MODELS, KnownClaude, get_model_info
-from genkit_anthropic.models import AnthropicModel
+from genkit_anthropic._config import AnthropicConfig
+from genkit_anthropic._model_info import SUPPORTED_ANTHROPIC_MODELS, KnownClaude, get_model_info
+from genkit_anthropic._models import AnthropicModel
 
 logger = structlog.get_logger(__name__)
 

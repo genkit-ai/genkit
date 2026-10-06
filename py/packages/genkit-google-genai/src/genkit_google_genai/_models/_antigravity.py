@@ -14,11 +14,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Google AI Interactions Lyria audio model action."""
+"""Google AI Interactions Antigravity model action."""
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, field_validator
 from pydantic.alias_generators import to_camel
@@ -27,31 +27,33 @@ from typing_extensions import Never
 from genkit import ActionRunContext, ModelResponse
 from genkit.model import ModelRequest, model_action_metadata
 from genkit.plugin_api import Action, ActionKind
-from genkit_google_genai._interactions.client import create_interaction
-from genkit_google_genai._interactions.converters import (
-    ensure_tool_ids,
-    from_interaction_sync,
-    split_system_instruction,
-    to_interaction_steps,
-)
-from genkit_google_genai._interactions.options import ClientOptions, ResponseModality
-from genkit_google_genai.models._secrets import reject_request_config_api_key
-from genkit_google_genai.models.interactions_registry import lyria_model_info
-from genkit_google_genai.models.interactions_utils import (
+from genkit_google_genai._interactions._client import create_interaction
+from genkit_google_genai._interactions._converters import from_interaction_sync
+from genkit_google_genai._interactions._options import ClientOptions
+from genkit_google_genai._models._interactions_registry import antigravity_model_info
+from genkit_google_genai._models._interactions_utils import (
     api_key_for_context,
     client_overrides_from_config,
     extract_version,
     lowercase_choice_list,
     partition_keys,
     remove_client_option_overrides,
-    require_interaction_steps,
+    steps_with_folded_system_instruction,
+)
+from genkit_google_genai._models._secrets import reject_request_config_api_key
+
+DEFAULT_ENVIRONMENT: dict[str, str] = {'type': 'remote'}
+
+CREATE_OPTION_KEYS = (
+    'previous_interaction_id',
+    'store',
+    'environment',
+    'response_modalities',
 )
 
-CREATE_OPTION_KEYS = ('response_modalities',)
 
-
-class LyriaConfig(BaseModel):
-    """Google AI Interactions Lyria model configuration."""
+class AntigravityConfig(BaseModel):
+    """Antigravity model configuration."""
 
     model_config = ConfigDict(extra='allow', populate_by_name=True, alias_generator=to_camel)
     base_url: str | None = None
@@ -59,47 +61,45 @@ class LyriaConfig(BaseModel):
     # Milliseconds — applied to the HTTP call, not the create body.
     timeout: float | None = None
     custom_headers: dict[str, str] | None = None
-    response_modalities: list[ResponseModality] | None = None
+    previous_interaction_id: str | None = None
+    store: bool | None = None
+    environment: str | dict[str, Any] | None = None
+    response_modalities: list[Literal['text', 'image']] | None = None
 
     @field_validator('response_modalities', mode='before')
     @classmethod
     def fold_modalities_case(cls, value: object) -> object:
-        """Accept TEXT/AUDIO the same as lowercase wire values."""
+        """Accept TEXT/IMAGE the same as lowercase wire values."""
         return lowercase_choice_list(value)
 
 
-def create_lyria_action(
+def create_antigravity_action(
     name: str,
     *,
     plugin_api_key: str | None,
     client_options: ClientOptions,
-) -> Action[ModelRequest[LyriaConfig], ModelResponse, Never]:
-    """Build a foreground model action for Interactions Lyria."""
+) -> Action[ModelRequest[AntigravityConfig], ModelResponse, Never]:
+    """Build a foreground model action for Antigravity."""
     version = extract_version(name)
-    info = lyria_model_info(version)
+    info = antigravity_model_info(version)
 
-    async def run(request: ModelRequest[LyriaConfig], ctx: ActionRunContext) -> ModelResponse:
+    async def run(request: ModelRequest[AntigravityConfig], ctx: ActionRunContext) -> ModelResponse:
         reject_request_config_api_key(request.config)
-        config = request.config or LyriaConfig()
+        config = request.config or AntigravityConfig()
         api_key = api_key_for_context(ctx.context, plugin_api_key)
         merged_options = client_options.merge(client_overrides_from_config(config))
+
+        # Known create kwargs vs undocumented passthrough — non-mutating split.
         dumped = remove_client_option_overrides(config.model_dump(exclude_none=True))
         create_options, passthrough = partition_keys(dumped, CREATE_OPTION_KEYS)
-        modalities = create_options.get('response_modalities') or ['audio', 'text']
-        system_instruction, turns = split_system_instruction(request.messages or [])
-        steps = to_interaction_steps(ensure_tool_ids(turns))
         create_kwargs: dict[str, Any] = {
-            'model': version,
-            'input': steps,
-            'response_modalities': modalities,
+            'agent': version,
+            'input': steps_with_folded_system_instruction(request.messages),
+            **create_options,
             **passthrough,
         }
-        if system_instruction:
-            create_kwargs['system_instruction'] = system_instruction
-        # A system prompt is enough to start a clip — empty user turns
-        # should not fail the call when instruction is already set.
-        if not system_instruction:
-            require_interaction_steps(steps)
+        # Default missing environment to remote; the API rejects unsupported values.
+        create_kwargs.setdefault('environment', DEFAULT_ENVIRONMENT)
 
         created = await create_interaction(api_key, create_kwargs, merged_options)
         return from_interaction_sync(created)
@@ -111,6 +111,6 @@ def create_lyria_action(
         metadata=model_action_metadata(
             name=name,
             info=info.model_dump(by_alias=True),
-            config_schema=LyriaConfig,
+            config_schema=AntigravityConfig,
         ).metadata,
     )
