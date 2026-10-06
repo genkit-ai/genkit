@@ -28,6 +28,8 @@ if typing.TYPE_CHECKING:
     from genkit import ActionRunContext, ModelResponse
     from genkit.model import ModelRequest
 
+# Same-release import: Model Garden reuses the OpenAI-compatible model
+# class. Don't treat genkit_openai._models as a public hook.
 from genkit_openai._models import (
     SUPPORTED_OPENAI_COMPAT_MODELS,
     get_default_model_info,

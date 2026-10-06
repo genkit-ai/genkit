@@ -21,6 +21,9 @@ import warnings
 from typing import cast
 
 from genkit_openai import OpenAIConfig
+
+# Same-release import: Model Garden reuses the OpenAI catalog.
+# Don't treat genkit_openai._models as a public hook.
 from genkit_openai._models import SUPPORTED_OPENAI_COMPAT_MODELS
 from genkit_vertexai import constants as const
 
