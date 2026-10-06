@@ -48,7 +48,7 @@ from opentelemetry.sdk.trace.sampling import Sampler
 
 from genkit import GenkitError
 
-from .config import GcpTelemetry
+from .config import GcpTelemetry, _reject_unusable_cloud_setup
 
 logger = structlog.get_logger(__name__)
 
@@ -83,26 +83,37 @@ def enable_google_cloud_telemetry(
     minting. Under ``genkit start``, ``Genkit()`` still attaches the
     Developer UI collector.
 
+    If the app already set an SDK ``TracerProvider``, Cloud Trace is added
+    next to that exporter. Set your provider first; calling this helper
+    and then ``trace.set_tracer_provider(...)`` leaves the app's exporter
+    unused. A provider that is not the SDK class raises
+    ``FAILED_PRECONDITION``. The same check applies to the process logger.
+
     Cloud exporters are skipped when ``GENKIT_ENV=dev`` and
     ``force_dev_export=False``. ``disable_traces=True`` skips Cloud Trace
     only; GenAI still turns on. Prompt and reply text are not written
     on GenAI spans. To put raw action I/O on the span, register
     ``GenAiInstrumentation(capture_action_io=True)`` before ``Genkit()``.
     Log records the instrumentation emits (content-capture log events)
-    go to Cloud Logging.
+    go to Cloud Logging. Sampler and provider checks still run under
+    ``GENKIT_ENV=dev``.
 
     Args:
-        project_id: Google Cloud project ID. If provided, takes precedence over
-            environment variables and credentials. Required when using external
-            credentials (e.g., Workload Identity Federation).
+        project_id: Google Cloud project ID. Wins over ``GOOGLE_CLOUD_PROJECT``,
+            ``GCLOUD_PROJECT``, and the project on ``credentials``. Required
+            when using external credentials (e.g., Workload Identity
+            Federation).
         credentials: Service account credentials dict for authenticating with
             Google Cloud. Primarily for use outside of GCP. On GCP, credentials
             are typically inferred via Application Default Credentials (ADC).
-        sampler: OpenTelemetry trace sampler. Controls which traces are collected
-            and exported. Defaults to AlwaysOnSampler. Common options:
-            - AlwaysOnSampler: Collect all traces
-            - AlwaysOffSampler: Collect no traces
-            - TraceIdRatioBasedSampler: Sample a percentage of traces
+        sampler: Sampler used when this helper creates the process tracer.
+            Pass ``ALWAYS_ON``, ``ALWAYS_OFF``, or ``TraceIdRatioBased(0.1)``
+            from ``opentelemetry.sdk.trace.sampling``. With no ``sampler=``,
+            the SDK default applies (parent-based, always on, unless
+            ``OTEL_TRACES_SAMPLER`` says otherwise). If a tracer is already
+            set, ``sampler=`` raises ``INVALID_ARGUMENT``; build
+            ``TracerProvider(sampler=...)`` yourself instead.
+            ``sampler=`` with ``disable_traces=True`` also raises.
         force_dev_export: If True, export Cloud telemetry even when
             ``GENKIT_ENV=dev``. Defaults to False.
         disable_metrics: If True, Cloud Monitoring is not hung. Traces and
@@ -140,6 +151,8 @@ def enable_google_cloud_telemetry(
         - Cloud Monitoring: https://cloud.google.com/monitoring/docs
         - Cloud Logging: https://cloud.google.com/logging/docs
     """
+    _reject_unusable_cloud_setup(sampler=sampler, disable_traces=disable_traces)
+
     global _enable_google_cloud_telemetry_already_called
     if _enable_google_cloud_telemetry_already_called:
         raise GenkitError(

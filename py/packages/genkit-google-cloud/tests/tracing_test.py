@@ -18,11 +18,12 @@
 
 import os
 from collections.abc import Generator
+from typing import Any
 from unittest import mock
 from unittest.mock import MagicMock, patch
 
 import pytest
-from genkit_google_cloud.telemetry.config import resolve_project_id
+from genkit_google_cloud.telemetry.config import GcpTelemetry
 from genkit_google_cloud.telemetry.tracing import (
     _reset_google_cloud_telemetry,
     enable_google_cloud_telemetry,
@@ -98,7 +99,7 @@ def test_enable_google_cloud_telemetry_wraps_with_gcp_adjusting_exporter() -> No
         assert call_kwargs['exporter'] == mock_base_exporter
 
         # Verify the wrapped exporter was added
-        mock_add_exporter.assert_called_once_with(exporter=mock_wrapped_exporter)
+        mock_add_exporter.assert_called_once_with(exporter=mock_wrapped_exporter, sampler=None)
 
 
 def test_enable_google_cloud_telemetry_rejects_log_input_and_output() -> None:
@@ -392,51 +393,117 @@ def test_enable_google_cloud_telemetry_enforces_minimum_interval() -> None:
         assert call_kwargs['export_interval_millis'] == 5000
 
 
-def test_resolve_project_id_from_env_vars() -> None:
-    """GOOGLE_CLOUD_PROJECT / FIREBASE_PROJECT_ID / GCLOUD_PROJECT all resolve a project."""
-    # Test FIREBASE_PROJECT_ID has highest priority
-    with mock.patch.dict(
-        os.environ,
-        {
-            'FIREBASE_PROJECT_ID': 'firebase-project',
-            'GOOGLE_CLOUD_PROJECT': 'gcp-project',
-            'GCLOUD_PROJECT': 'gcloud-project',
-        },
+def _exporter_project(mock_ctor: MagicMock) -> str | None:
+    mock_ctor.assert_called_once()
+    return mock_ctor.call_args.kwargs.get('project_id')
+
+
+@pytest.mark.parametrize(
+    ('env', 'kwargs', 'expected'),
+    [
+        pytest.param(
+            {'FIREBASE_PROJECT_ID': 'firebase-proj', 'GOOGLE_CLOUD_PROJECT': 'gcp-proj'},
+            {},
+            'gcp-proj',
+            id='firebase_ignored_google_cloud_project_wins',
+        ),
+        pytest.param(
+            {'FIREBASE_PROJECT_ID': 'firebase-proj'},
+            {'credentials': {'project_id': 'creds-proj'}},
+            'creds-proj',
+            id='firebase_ignored_credentials_win',
+        ),
+        pytest.param(
+            {'FIREBASE_PROJECT_ID': 'firebase-proj'},
+            {},
+            None,
+            id='firebase_only_sends_no_project',
+        ),
+        pytest.param(
+            {'GOOGLE_CLOUD_PROJECT': 'gcp-proj'},
+            {'project_id': 'explicit-proj'},
+            'explicit-proj',
+            id='project_id_beats_google_cloud_project',
+        ),
+        pytest.param(
+            {'GOOGLE_CLOUD_PROJECT': 'gcp-proj', 'GCLOUD_PROJECT': 'gcloud-proj'},
+            {},
+            'gcp-proj',
+            id='google_cloud_project_beats_gcloud_project',
+        ),
+        pytest.param(
+            {'GOOGLE_CLOUD_PROJECT': '', 'GCLOUD_PROJECT': 'gcloud-proj'},
+            {},
+            'gcloud-proj',
+            id='empty_google_cloud_project_falls_through',
+        ),
+        pytest.param(
+            {'GOOGLE_CLOUD_PROJECT': 'gcp-proj'},
+            {'credentials': {'project_id': 'creds-proj'}},
+            'gcp-proj',
+            id='google_cloud_project_beats_credentials',
+        ),
+        pytest.param(
+            {},
+            {'credentials': {'project_id': 'creds-proj'}},
+            'creds-proj',
+            id='credentials_are_last_fallback',
+        ),
+    ],
+)
+def test_enable_sends_traces_metrics_and_logs_to_the_resolved_cloud_project(
+    monkeypatch: pytest.MonkeyPatch,
+    _stub_cloud_logging_exporter: MagicMock,
+    env: dict[str, str],
+    kwargs: dict[str, Any],
+    expected: str | None,
+) -> None:
+    """project_id=, then GOOGLE_CLOUD_PROJECT, then GCLOUD_PROJECT, then credentials; FIREBASE_PROJECT_ID is ignored."""
+    for key in ('FIREBASE_PROJECT_ID', 'GOOGLE_CLOUD_PROJECT', 'GCLOUD_PROJECT'):
+        if key in env:
+            monkeypatch.setenv(key, env[key])
+        else:
+            monkeypatch.delenv(key, raising=False)
+    with (
+        mock.patch.dict(os.environ, {_GENKIT_ENV: _ENV_PROD}, clear=False),
+        patch('genkit_google_cloud.telemetry.config.GenkitGCPExporter') as traces,
+        patch('genkit_google_cloud.telemetry.config.GcpAdjustingTraceExporter'),
+        patch('genkit_google_cloud.telemetry.config._hang_exporter_on_process_tracer'),
+        patch('genkit_google_cloud.telemetry.config.GoogleCloudResourceDetector'),
+        patch('genkit_google_cloud.telemetry.config.CloudMonitoringMetricsExporter') as metrics,
+        patch('genkit_google_cloud.telemetry.config.GenkitMetricExporter'),
+        patch('genkit_google_cloud.telemetry.config.PeriodicExportingMetricReader'),
+        patch('genkit_google_cloud.telemetry.config.metrics'),
     ):
-        assert resolve_project_id() == 'firebase-project'
-
-    # Test GOOGLE_CLOUD_PROJECT is second priority
-    with mock.patch.dict(
-        os.environ,
-        {
-            'GOOGLE_CLOUD_PROJECT': 'gcp-project',
-            'GCLOUD_PROJECT': 'gcloud-project',
-        },
-        clear=True,
-    ):
-        assert resolve_project_id() == 'gcp-project'
-
-    # Test GCLOUD_PROJECT is fallback
-    with mock.patch.dict(os.environ, {'GCLOUD_PROJECT': 'gcloud-project'}, clear=True):
-        assert resolve_project_id() == 'gcloud-project'
+        enable_google_cloud_telemetry(**kwargs)
+    assert _exporter_project(traces) == expected
+    assert _exporter_project(metrics) == expected
+    assert _exporter_project(_stub_cloud_logging_exporter) == expected
 
 
-def test_resolve_project_id_explicit_takes_precedence() -> None:
-    """An explicit project_id= wins over the environment."""
-    with mock.patch.dict(
-        os.environ,
-        {'FIREBASE_PROJECT_ID': 'firebase-project'},
-    ):
-        # Explicit project_id should override env var
-        assert resolve_project_id(project_id='explicit-project') == 'explicit-project'
+@pytest.mark.parametrize(
+    ('env', 'warns'),
+    [
+        pytest.param({'FIREBASE_PROJECT_ID': 'firebase-proj', 'GOOGLE_CLOUD_PROJECT': 'gcp-proj'}, True, id='differs'),
+        pytest.param({'FIREBASE_PROJECT_ID': 'firebase-proj'}, True, id='only_firebase'),
+        pytest.param({'FIREBASE_PROJECT_ID': 'same-proj', 'GOOGLE_CLOUD_PROJECT': 'same-proj'}, False, id='matches'),
+        pytest.param({'GOOGLE_CLOUD_PROJECT': 'gcp-proj'}, False, id='unset'),
+    ],
+)
+def test_config_warns_when_firebase_project_id_is_ignored(
+    monkeypatch: pytest.MonkeyPatch, env: dict[str, str], warns: bool
+) -> None:
+    """A FIREBASE_PROJECT_ID that would have picked a different project logs one warning naming it."""
+    for key in ('FIREBASE_PROJECT_ID', 'GOOGLE_CLOUD_PROJECT', 'GCLOUD_PROJECT'):
+        if key in env:
+            monkeypatch.setenv(key, env[key])
+        else:
+            monkeypatch.delenv(key, raising=False)
+    with patch('genkit_google_cloud.telemetry.config.logger') as logger:
+        GcpTelemetry()
 
-
-def test_resolve_project_id_from_credentials() -> None:
-    """A credentials dict with project_id is enough when env is empty."""
-    with mock.patch.dict(os.environ, {}, clear=True):
-        # Project ID from credentials
-        credentials = {'project_id': 'creds-project'}
-        assert resolve_project_id(credentials=credentials) == 'creds-project'
+    messages = [c.args[0] for c in logger.warning.call_args_list]
+    assert any('FIREBASE_PROJECT_ID' in m for m in messages) is warns
 
 
 def test_legacy_force_export_parameter() -> None:
