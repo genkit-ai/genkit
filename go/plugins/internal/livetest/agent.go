@@ -408,7 +408,10 @@ func agentCases() []liveCase {
 			r.tools.failLookups.Store(1)
 			defer r.tools.failLookups.Store(0)
 			failed := s.send(t, r.ctx, &aix.AgentInput{Message: ai.NewUserTextMessage(
-				"Call the lookupOrder tool for that order and tell me its carrier.")})
+				"Call the lookupOrder tool for order 1234 and tell me its carrier.")})
+			if r.tools.failLookups.Load() > 0 {
+				t.Fatalf("the model answered without calling lookupOrder (reply %q)", failed.reply())
+			}
 			if failed.out.FinishReason != aix.AgentFinishReasonFailed || failed.out.Error == nil {
 				t.Fatalf("FinishReason = %q (error %v), want the failed tool to fail the turn", failed.out.FinishReason, failed.out.Error)
 			}
