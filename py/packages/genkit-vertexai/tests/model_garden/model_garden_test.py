@@ -20,7 +20,8 @@ import json
 import subprocess  # noqa: S404
 import sys
 import textwrap
-from typing import Any
+from types import ModuleType
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
@@ -313,8 +314,10 @@ async def test_generate_model_garden_claude_registers_full_publisher_path() -> N
 
 def _uninstall(monkeypatch: pytest.MonkeyPatch, *modules: str) -> None:
     """Makes `modules` import as if absent, and drops the Claude worker module so it imports again."""
+    # A None entry in sys.modules makes `import` raise ModuleNotFoundError with `name` set.
+    module_table = cast(dict[str, ModuleType | None], sys.modules)
     for module in modules:
-        monkeypatch.setitem(sys.modules, module, None)
+        monkeypatch.setitem(module_table, module, None)
     monkeypatch.delitem(sys.modules, 'genkit_vertexai.model_garden.anthropic', raising=False)
 
 
