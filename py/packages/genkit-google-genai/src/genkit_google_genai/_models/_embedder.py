@@ -23,23 +23,9 @@ from google import genai
 from google.genai import types as genai_types
 
 from genkit import Document, Embedding, Part
-from genkit._core._compat import StrEnum
 from genkit.embedder import EmbedderInfo, EmbedderSupports, EmbedRequest, EmbedResponse
 from genkit_google_genai._models._routing import strip_ref_prefixes
 from genkit_google_genai._models._utils import PartConverter
-
-
-class EmbeddingTaskType(StrEnum):
-    """Embedding task types supported by Google-Genai."""
-
-    RETRIEVAL_QUERY = 'RETRIEVAL_QUERY'
-    RETRIEVAL_DOCUMENT = 'RETRIEVAL_DOCUMENT'
-    SEMANTIC_SIMILARITY = 'SEMANTIC_SIMILARITY'
-    CLASSIFICATION = 'CLASSIFICATION'
-    CLUSTERING = 'CLUSTERING'
-    QUESTION_ANSWERING = 'QUESTION_ANSWERING'
-    FACT_VERIFICATION = 'FACT_VERIFICATION'
-
 
 # Static dimensions for known embedders. Keys are version-suffix free
 # (e.g. 'multimodalembedding', not 'multimodalembedding@001') because model

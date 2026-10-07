@@ -15,10 +15,16 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
+	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/internal/base"
+	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/mark3labs/mcp-go/server"
 )
 
 func asMap(t *testing.T, v any, label string) map[string]any {
@@ -159,5 +165,84 @@ func TestPrepareToolArguments(t *testing.T) {
 	_, err = prepareToolArguments(tool, nil)
 	if err == nil {
 		t.Fatalf("expected error for nil args with required field")
+	}
+}
+
+// inProcessTools serves an MCP server in process and returns its tools as
+// Genkit tools, keyed by name, as GetActiveTools builds them.
+func inProcessTools(t *testing.T, srv *server.MCPServer) map[string]ai.Tool {
+	t.Helper()
+	ctx := context.Background()
+	c, err := client.NewInProcessClient(srv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { c.Close() })
+	if err := c.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	init := mcp.InitializeRequest{}
+	init.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
+	if _, err := c.Initialize(ctx, init); err != nil {
+		t.Fatal(err)
+	}
+
+	gc := &GenkitMCPClient{options: MCPClientOptions{Name: "srv"}, server: &ServerRef{Client: c}}
+	tools, err := gc.GetActiveTools(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := make(map[string]ai.Tool, len(tools))
+	for _, tl := range tools {
+		byName[tl.Name()] = tl
+	}
+	return byName
+}
+
+// TestToolErrorsAnswerTheCall checks which MCP tool errors are marked for the
+// model: errors the server reports in the result are, protocol errors are not.
+func TestToolErrorsAnswerTheCall(t *testing.T) {
+	srv := server.NewMCPServer("test", "1.0.0", server.WithToolCapabilities(true))
+	srv.AddTool(mcp.NewTool("lookup", mcp.WithString("city", mcp.Required())),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return mcp.NewToolResultError("no such city"), nil
+		})
+	srv.AddTool(mcp.NewTool("broken"),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return nil, errors.New("database unreachable")
+		})
+	tools := inProcessTools(t, srv)
+	ctx := context.Background()
+
+	tests := []struct {
+		name     string
+		tool     string
+		input    map[string]any
+		wantFail string // message the model reads; empty for an error that stops the loop
+	}{
+		{name: "result error", tool: "srv_lookup", input: map[string]any{"city": "Atlantis"}, wantFail: "no such city"},
+		{name: "protocol error", tool: "srv_broken", input: map[string]any{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := tools[tt.tool].RunRawMultipart(ctx, tt.input)
+			if err == nil {
+				t.Fatal("got no error")
+			}
+			var fail *base.ToolFailError
+			marked := errors.As(err, &fail)
+			if tt.wantFail == "" {
+				if marked {
+					t.Errorf("err = %v is marked for the model, want it to stop the loop", err)
+				}
+				return
+			}
+			if !marked {
+				t.Fatalf("err = %v is not marked for the model", err)
+			}
+			if fail.Error() != tt.wantFail {
+				t.Errorf("model reads %q, want %q", fail.Error(), tt.wantFail)
+			}
+		})
 	}
 }
