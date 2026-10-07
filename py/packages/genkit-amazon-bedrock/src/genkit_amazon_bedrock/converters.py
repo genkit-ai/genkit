@@ -35,8 +35,10 @@ from genkit_amazon_bedrock.config import BedrockConfig
 # back verbatim next turn or the model rejects it, so both ride on the part
 # metadata. The signature uses the same `thoughtSignature` key every provider
 # uses; the redacted blob is stored base64 so a saved chat stays JSON. Reasoning
-# with neither is never sent back. A signature from another provider is sent
-# as-is, and Bedrock rejects it the same way any provider rejects a foreign one.
+# with neither is never sent back. Claude signatures work across the Claude API,
+# Vertex, and Bedrock, so a part from `anthropic/` or `modelgarden/anthropic/`
+# replays here. The source isn't checked, so a Gemini `thoughtSignature` is sent
+# too, and Bedrock rejects it.
 REASONING_SIGNATURE_METADATA_KEY = 'thoughtSignature'
 REDACTED_CONTENT_METADATA_KEY = 'bedrockRedactedContent'
 

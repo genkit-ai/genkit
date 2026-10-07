@@ -625,16 +625,12 @@ class AnthropicModel:
         """
         reasoning = part.reasoning
         if reasoning:
+            # Claude only accepts thinking it signed. Unsigned reasoning, such as
+            # history from a model that signs nothing, is dropped, the same as on
+            # Bedrock's Claude path.
             signature = get_thinking_signature(part)
             if not signature:
-                raise GenkitError(
-                    status='INVALID_ARGUMENT',
-                    message=(
-                        'Anthropic thinking parts require a signature when sending back '
-                        'to the API. Preserve the `metadata.thoughtSignature` value from '
-                        'the original response.'
-                    ),
-                )
+                return None
             return {'type': 'thinking', 'thinking': reasoning, 'signature': signature}
 
         redacted_thinking = get_redacted_thinking_data(part)

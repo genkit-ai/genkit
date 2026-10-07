@@ -323,3 +323,83 @@ async def test_stream_is_closed_when_a_chunk_callback_raises() -> None:
         await model.generate(text_request(), ActionRunContext(streaming_callback=explode))
 
     assert transport.stream_closed
+
+
+CLAUDE_ID = 'anthropic.claude-sonnet-4-5-20250929-v1:0'
+
+
+def reasoning_response() -> dict[str, Any]:
+    return {
+        'output': {
+            'message': {
+                'role': 'assistant',
+                'content': [
+                    {'reasoningContent': {'reasoningText': {'text': 'because', 'signature': 'sig'}}},
+                    {'text': '391'},
+                ],
+            }
+        },
+        'stopReason': 'end_turn',
+        'usage': {'inputTokens': 1, 'outputTokens': 1, 'totalTokens': 2},
+    }
+
+
+@pytest.mark.asyncio
+async def test_reasoning_part_has_only_thought_signature() -> None:
+    transport = FakeTransport(response=reasoning_response())
+    model = BedrockModel(model_id=CLAUDE_ID, transport=transport)
+
+    response = await model.generate(text_request('what is 17 * 23?'))
+
+    assert response.message is not None
+    reasoning, answer = response.message.content
+    assert reasoning.reasoning == 'because'
+    assert reasoning.metadata == {'thoughtSignature': 'sig'}
+    assert answer.text == '391'
+
+
+@pytest.mark.asyncio
+async def test_streamed_reasoning_part_has_only_thought_signature() -> None:
+    transport = FakeTransport(
+        stream_events=[
+            {'contentBlockDelta': {'contentBlockIndex': 0, 'delta': {'reasoningContent': {'text': 'because'}}}},
+            {'contentBlockDelta': {'contentBlockIndex': 0, 'delta': {'reasoningContent': {'signature': 'sig'}}}},
+            {'contentBlockDelta': {'contentBlockIndex': 1, 'delta': {'text': '391'}}},
+            {'messageStop': {'stopReason': 'end_turn'}},
+        ]
+    )
+    model = BedrockModel(model_id=CLAUDE_ID, transport=transport)
+
+    response = await model.generate(
+        text_request('what is 17 * 23?'), ActionRunContext(streaming_callback=lambda _chunk: None)
+    )
+
+    assert response.message is not None
+    reasoning, answer = response.message.content
+    assert reasoning.reasoning == 'because'
+    assert reasoning.metadata == {'thoughtSignature': 'sig'}
+    assert answer.text == '391'
+
+
+@pytest.mark.asyncio
+async def test_saved_reasoning_part_replays_thought_signature() -> None:
+    transport = FakeTransport(response=text_response())
+    model = BedrockModel(model_id=CLAUDE_ID, transport=transport)
+    request = ModelRequest(
+        messages=[
+            Message(role=Role.USER, content=[Part.from_text('what is 17 * 23?')]),
+            Message(
+                role=Role.MODEL,
+                content=[Part.from_reasoning('because', metadata={'thoughtSignature': 'sig'}), Part.from_text('391')],
+            ),
+            Message(role=Role.USER, content=[Part.from_text('now add 100')]),
+        ]
+    )
+
+    await model.generate(request)
+
+    assert transport.kwargs is not None
+    assert transport.kwargs['messages'][1]['content'] == [
+        {'reasoningContent': {'reasoningText': {'text': 'because', 'signature': 'sig'}}},
+        {'text': '391'},
+    ]

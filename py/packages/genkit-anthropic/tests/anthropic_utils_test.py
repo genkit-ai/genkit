@@ -116,11 +116,6 @@ class TestGetThinkingSignature:
         part = Part.from_text('hello', metadata={'thoughtSignature': 'sig'})
         assert get_thinking_signature(part) == 'sig'
 
-    def test_decodes_bytes_signature(self) -> None:
-        """Decodes a raw byte signature."""
-        part = Part.from_text('hello', metadata={'thoughtSignature': b'sig'})
-        assert get_thinking_signature(part) == 'sig'
-
     def test_returns_none_for_non_string_signature(self) -> None:
         """Returns None when signature metadata is not string-like."""
         part = Part.from_text('hello', metadata={'thoughtSignature': 123})

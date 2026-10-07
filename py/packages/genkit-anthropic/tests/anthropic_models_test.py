@@ -1742,12 +1742,11 @@ def test_reasoning_part_encodes_as_thinking_block() -> None:
     ],
     ids=['no_metadata', 'plain_signature', 'pre_1_0_bedrock_keys'],
 )
-async def test_generate_claude_thinking_part_without_thought_signature_fails_before_sending(
+async def test_generate_claude_drops_thinking_part_without_thought_signature(
     metadata: dict[str, str] | None,
 ) -> None:
-    """A thinking part without ``thoughtSignature`` fails with INVALID_ARGUMENT and nothing goes to Claude."""
-    mock_client = MagicMock()
-    mock_client.messages.create = AsyncMock()
+    """A thinking part without ``thoughtSignature`` is left out; the rest of the turn still goes to Claude."""
+    mock_client = _mock_client_for_generate()
     plugin = Anthropic(api_key='test-key')
     plugin._runtime_client = lambda: mock_client
     ai = Genkit(plugins=[plugin])
@@ -1758,13 +1757,10 @@ async def test_generate_claude_thinking_part_without_thought_signature_fails_bef
 
     response = await ai.generate(model='anthropic/claude-sonnet-4', messages=history, prompt='now add 100')
 
-    assert response.finish_reason == FinishReason.FAILED
-    assert response.error is not None
-    assert response.error.status == 'INVALID_ARGUMENT'
-    assert response.finish_message is not None
-    assert 'metadata.thoughtSignature' in response.finish_message
-    assert response.message is None
-    mock_client.messages.create.assert_not_called()
+    assert response.text == 'ok'
+    create = mock_client.messages.create if mock_client.messages.create.called else mock_client.beta.messages.create
+    sent = create.call_args.kwargs['messages']
+    assert sent[1] == {'role': 'assistant', 'content': [{'type': 'text', 'text': '391'}]}
 
 
 def test_empty_reasoning_part_is_skipped() -> None:

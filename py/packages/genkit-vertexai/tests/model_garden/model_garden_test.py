@@ -18,7 +18,7 @@
 
 import warnings
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from genkit_anthropic import AnthropicConfig
@@ -26,7 +26,7 @@ from genkit_vertexai.model_garden import ModelGarden, ModelGardenPlugin
 from genkit_vertexai.model_garden.anthropic import AnthropicModelGarden
 from genkit_vertexai.model_garden.model_garden import ModelGardenModel
 
-from genkit import FinishReason, Genkit, Message, Part, Role
+from genkit import Genkit, Message, Part, Role
 
 
 @pytest.fixture
@@ -110,8 +110,8 @@ def test_anthropic_model_garden_uses_anthropic_config_schema() -> None:
 
 
 @pytest.mark.asyncio
-async def test_generate_model_garden_claude_part_with_only_signature_key_fails_with_invalid_argument() -> None:
-    """A Model Garden Claude thinking part carrying only ``signature`` fails with INVALID_ARGUMENT before sending."""
+async def test_generate_model_garden_claude_drops_part_with_only_signature_key() -> None:
+    """A Model Garden Claude thinking part carrying only ``signature`` is left out of the request."""
     ai = Genkit(plugins=[ModelGarden(project_id='project', location='us-east5')])
     history = [
         Message(role=Role.USER, content=[Part.from_text('what is 17 * 23?')]),
@@ -120,20 +120,22 @@ async def test_generate_model_garden_claude_part_with_only_signature_key_fails_w
             content=[Part.from_reasoning('because', metadata={'signature': 'sig'}), Part.from_text('391')],
         ),
     ]
+    reply = MagicMock()
+    reply.content = [MagicMock(type='text', text='ok')]
+    reply.usage = MagicMock(input_tokens=1, output_tokens=1)
+    reply.stop_reason = 'end_turn'
 
     with patch('genkit_vertexai.model_garden.anthropic.AsyncAnthropicVertex') as client_ctor:
+        client = client_ctor.return_value
+        client.messages.create = AsyncMock(return_value=reply)
+        client.beta.messages.create = AsyncMock(return_value=reply)
         response = await ai.generate(
             model='modelgarden/anthropic/claude-sonnet-4@20250514', messages=history, prompt='now add 100'
         )
 
-    assert response.finish_reason == FinishReason.FAILED
-    assert response.error is not None
-    assert response.error.status == 'INVALID_ARGUMENT'
-    assert response.finish_message is not None
-    assert 'metadata.thoughtSignature' in response.finish_message
-    assert response.message is None
-    assert [m.role for m in response.messages] == [Role.USER, Role.MODEL, Role.USER]
-    client_ctor.return_value.messages.create.assert_not_called()
+    assert response.text == 'ok'
+    create = client.messages.create if client.messages.create.called else client.beta.messages.create
+    assert create.call_args.kwargs['messages'][1] == {'role': 'assistant', 'content': [{'type': 'text', 'text': '391'}]}
 
 
 def test_anthropic_model_garden_does_not_advertise_api_key() -> None:
