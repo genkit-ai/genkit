@@ -24,7 +24,7 @@ import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from typing import Any, TypeVar, cast
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -292,6 +292,9 @@ def genkit_fastapi_handler(
                         context = await context
                     if isinstance(context, dict):
                         action_context = context
+                except HTTPException:
+                    # The app's own HTTP response (e.g. 401 + WWW-Authenticate) passes through.
+                    raise
                 except Exception as e:
                     log_served_failure(adapter_logger=logger, error=e, where='context provider')
                     return json_error_response(e)

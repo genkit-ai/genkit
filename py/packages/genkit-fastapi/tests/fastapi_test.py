@@ -21,7 +21,7 @@ import json
 import logging
 
 import pytest
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from genkit_fastapi import genkit_fastapi_handler, serve_flow
 from pydantic import BaseModel
@@ -370,6 +370,25 @@ def test_served_flow_provider_failure_logs_traceback(caplog: pytest.LogCaptureFi
     assert any(record.exc_info for record in caplog.records)
 
 
+def test_served_flow_client_error_logs_one_warning_without_traceback(caplog: pytest.LogCaptureFixture) -> None:
+    """A 4xx on a served flow is the caller's mistake: one warning, no traceback."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def lookup_order(_: str) -> str:
+        raise PublicError('NOT_FOUND', 'order not found')
+
+    app = FastAPI()
+    app.include_router(serve_flow(lookup_order, base_path='/orders'))
+    with caplog.at_level(logging.DEBUG, logger='genkit_fastapi.handler'):
+        response = TestClient(app).post('/orders', json={'data': 'A-1001'})
+
+    records = [record for record in caplog.records if record.name == 'genkit_fastapi.handler']
+    assert response.status_code == 404
+    assert [record.levelno for record in records] == [logging.WARNING]
+    assert records[0].exc_info is None
+
+
 def test_fastapi_stream_provider_401_sends_sse_internal_error() -> None:
     """A streamed flow whose model call fails with a provider 401 ends with Internal Error."""
     ai = Genkit()
@@ -503,3 +522,28 @@ def test_fastapi_handler_wrapper_returning_non_action_returns_json_internal_erro
 
     assert response.status_code == 500
     assert response.json() == {'message': 'Internal Error', 'status': 'INTERNAL'}
+
+
+def test_fastapi_context_provider_http_exception_keeps_its_status() -> None:
+    """An HTTPException from context_provider is the app's own response, not a 500."""
+    ai = Genkit()
+
+    def require_token(_request: RequestData) -> dict[str, object]:
+        raise HTTPException(status_code=401, detail='no token', headers={'WWW-Authenticate': 'Bearer'})
+
+    @ai.flow()
+    async def chat(_: str) -> str:
+        return 'ok'
+
+    app = FastAPI()
+
+    @app.post('/chat', response_model=None)
+    @genkit_fastapi_handler(ai, context_provider=require_token)
+    async def chat_route():
+        return chat
+
+    response = TestClient(app).post('/chat', json={'data': 'x'})
+
+    assert response.status_code == 401
+    assert response.json() == {'detail': 'no token'}
+    assert response.headers['www-authenticate'] == 'Bearer'

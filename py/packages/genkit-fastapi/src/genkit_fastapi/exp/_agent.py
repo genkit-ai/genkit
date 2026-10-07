@@ -24,7 +24,7 @@ from typing import Any, TypeVar
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from genkit import GenkitError
+from genkit import PublicError
 from genkit.exp.agent import Agent, SessionSnapshot
 from genkit.plugin_api import Action, ActionKind
 
@@ -45,9 +45,9 @@ def extract_agent_input(body: dict[str, Any]) -> object:
         return body
     if not body:
         return None
-    raise GenkitError(
-        status='INVALID_ARGUMENT',
-        message='Action request must be wrapped in {"data": ...} object',
+    raise PublicError(
+        'INVALID_ARGUMENT',
+        'Action request must be wrapped in {"data": ...} object',
     )
 
 
@@ -72,17 +72,17 @@ def _parse_snapshot_lookup_input(input_val: dict[str, Any] | str | None) -> tupl
         sid = input_val.get('snapshotId') or input_val.get('snapshot_id')
         sess_id = input_val.get('sessionId') or input_val.get('session_id')
         if bool(sid) == bool(sess_id):
-            raise GenkitError(
-                status='INVALID_ARGUMENT',
-                message=(
+            raise PublicError(
+                'INVALID_ARGUMENT',
+                (
                     "getSnapshot requires exactly one of 'snapshotId' (or 'snapshot_id') "
                     "or 'sessionId' (or 'session_id')."
                 ),
             )
         return sid, sess_id
-    raise GenkitError(
-        status='INVALID_ARGUMENT',
-        message='getSnapshot input must be a dictionary or snapshot ID string.',
+    raise PublicError(
+        'INVALID_ARGUMENT',
+        'getSnapshot input must be a dictionary or snapshot ID string.',
     )
 
 
@@ -94,9 +94,9 @@ def _parse_abort_input(input_val: dict[str, Any] | str | None) -> str:
         sid = input_val.get('snapshotId') or input_val.get('snapshot_id')
         if sid:
             return sid
-    raise GenkitError(
-        status='INVALID_ARGUMENT',
-        message="abort requires 'snapshotId' (or 'snapshot_id') in input.",
+    raise PublicError(
+        'INVALID_ARGUMENT',
+        "abort requires 'snapshotId' (or 'snapshot_id') in input.",
     )
 
 

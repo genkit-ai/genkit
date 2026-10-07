@@ -20,7 +20,7 @@
 import json
 from typing import Any
 
-from flask import Flask, Request
+from flask import Flask, Request, abort
 from genkit_flask import genkit_flask_handler
 
 from genkit import ActionRunContext, Genkit, GenkitError, PublicError, RequestData
@@ -274,3 +274,23 @@ def test_flask_context_provider_public_error_returns_its_status_and_message() ->
 
     assert response.status_code == 401
     assert json.loads(response.data) == {'message': 'not signed in', 'status': 'UNAUTHENTICATED'}
+
+
+def test_flask_context_provider_abort_keeps_its_status() -> None:
+    """abort(401) from context_provider is the app's own response, not a 500."""
+    ai = Genkit()
+    app = Flask(__name__)
+    app.config.update({'TESTING': True})
+
+    def require_token(_request: RequestData[Request]) -> dict[str, Any]:
+        abort(401)
+
+    @app.post('/chat')
+    @genkit_flask_handler(ai, context_provider=require_token)
+    @ai.flow()
+    async def chat(_: str) -> str:
+        return 'ok'
+
+    response = app.test_client().post('/chat', json={'data': 'x'})
+
+    assert response.status_code == 401

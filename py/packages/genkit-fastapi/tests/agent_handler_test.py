@@ -194,3 +194,26 @@ def test_handle_genkit_request_agent_route_with_data_envelope_runs_turn() -> Non
     result = response.json()['result']
     assert result['sessionId'] == 'session-789'
     assert 'Hi there!' in json.dumps(result)
+
+
+@pytest.mark.parametrize(
+    'path, body, message',
+    [
+        pytest.param('/api/chat', {'foo': 'bar'}, 'Action request must be wrapped in {"data": ...} object', id='turn'),
+        pytest.param(
+            '/api/chat/getSnapshot',
+            {'snapshotId': 's1', 'sessionId': 'x1'},
+            "getSnapshot requires exactly one of 'snapshotId' (or 'snapshot_id') or 'sessionId' (or 'session_id').",
+            id='get-snapshot',
+        ),
+        pytest.param(
+            '/api/chat/abort', {'data': {}}, "abort requires 'snapshotId' (or 'snapshot_id') in input.", id='abort'
+        ),
+    ],
+)
+def test_serve_agent_bad_input_returns_400_with_its_message(path: str, body: dict[str, Any], message: str) -> None:
+    """Agent-route input errors are fixed adapter text, so the caller sees what to fix."""
+    response = client(build_agent('badInputAgent')).post(path, json=body)
+
+    assert response.status_code == 400
+    assert response.json() == {'message': message, 'status': 'INVALID_ARGUMENT'}
