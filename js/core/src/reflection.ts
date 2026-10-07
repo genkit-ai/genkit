@@ -516,13 +516,19 @@ export class ReflectionServer {
     // next free one would leave whoever chose it talking to a dead port.
     this.port =
       config.port.kind === 'pinned' ? config.port.port : await this.findPort();
-    await new Promise<void>((resolve, reject) => {
-      this.server = server.listen(this.port!, config.host, resolve);
-      this.server.once('error', reject);
+    const listening = await new Promise<Server>((resolve, reject) => {
+      const s = server.listen(this.port!, config.host, () => {
+        s.removeListener('error', reject);
+        resolve(s);
+      });
+      s.once('error', reject);
     });
+    // Assigned only once listening, so stop() after a failed bind is a no-op
+    // instead of closing a server that never started.
+    this.server = listening;
     // With port 0 the OS picked the port; record the real one so the runtime
     // file and logs point at something reachable.
-    const address = this.server!.address();
+    const address = listening.address();
     if (address && typeof address === 'object') {
       this.port = address.port;
     }

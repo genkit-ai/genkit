@@ -116,15 +116,18 @@ function parseEnabled(raw: string | undefined): boolean | undefined {
  * or the code, gets exactly that port; only an unchosen port is probed.
  *
  * Code values: `undefined` or `0` is unset, {@link REFLECTION_PORT_AUTO} (-1)
- * lets the OS pick, 1..65535 is exact. Anything else throws.
+ * lets the OS pick, 1..65535 is exact. Anything else throws, even when the
+ * environment port wins, so a bad value fails regardless of deployment.
  */
 export function resolveReflectionPort(
   envPort: number | undefined,
   optionPort: number | undefined
 ): ReflectionPort {
-  if (envPort !== undefined) {
-    return { kind: 'pinned', port: envPort };
-  }
+  const fromOption = resolveOptionPort(optionPort);
+  return envPort !== undefined ? { kind: 'pinned', port: envPort } : fromOption;
+}
+
+function resolveOptionPort(optionPort: number | undefined): ReflectionPort {
   if (optionPort === undefined || optionPort === 0) {
     return { kind: 'probe' };
   }
@@ -161,7 +164,7 @@ export function resolveReflectionConfig(
   options: { port?: number } = {}
 ): ReflectionConfig {
   // Validated before the on/off check so a bad value fails early.
-  resolveReflectionPort(undefined, options.port);
+  resolveOptionPort(options.port);
   const enabled = parseEnabled(env.GENKIT_REFLECTION_ENABLED);
   if (enabled === false) {
     return { kind: 'disabled' };
@@ -181,17 +184,19 @@ export function resolveReflectionServerConfig(
   env: ReflectionEnv,
   options: { port?: number } = {}
 ): ReflectionServerConfig {
-  const optionPort = resolveReflectionPort(undefined, options.port);
+  // Validated even for v2, which has no port, so a bad value always fails.
+  resolveOptionPort(options.port);
   const secret = env.GENKIT_REFLECTION_SECRET_TOKEN || undefined;
   if (env.GENKIT_REFLECTION_V2_SERVER) {
     return { kind: 'v2', url: env.GENKIT_REFLECTION_V2_SERVER, secret };
   }
-  const envPort = parsePort(env.GENKIT_REFLECTION_PORT);
   return {
     kind: 'v1',
     host: env.GENKIT_REFLECTION_HOST || DEFAULT_REFLECTION_HOST,
-    port:
-      envPort !== undefined ? { kind: 'pinned', port: envPort } : optionPort,
+    port: resolveReflectionPort(
+      parsePort(env.GENKIT_REFLECTION_PORT),
+      options.port
+    ),
     secret,
   };
 }

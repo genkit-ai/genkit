@@ -187,6 +187,8 @@ describe('ReflectionServer auth', () => {
       process.env.GENKIT_REFLECTION_PORT = String(port);
       const blocked = new ReflectionServer(new Registry());
       await assert.rejects(() => blocked.start());
+      // A failed bind leaves nothing to stop, so cleanup must not throw.
+      await blocked.stop();
     } finally {
       await new Promise<void>((resolve) => taken.close(() => resolve()));
     }

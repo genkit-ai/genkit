@@ -125,6 +125,12 @@ function createTelemetryServerProcessor(): SpanProcessor {
   // A Dev UI may be watching in dev (the URL can arrive later via
   // /api/notify) or whenever a telemetry server is already known, e.g. a
   // non-dev reflection runtime given GENKIT_TELEMETRY_SERVER.
+  //
+  // Outside dev, only a URL known at init counts. A URL learned later
+  // (/api/notify, v2 handshake) is still used by the exporter, but the
+  // processor stays batched and realtime stays off. Reflection runs flush on
+  // completion, so the Dev UI still sees them. Set GENKIT_TELEMETRY_SERVER
+  // for eager export. The log processor in enableTelemetry follows suit.
   const devUiMayBeWatching = isDevEnv() || !!telemetryServerUrl;
   const enableRealTimeTelemetry =
     process.env.GENKIT_ENABLE_REALTIME_TELEMETRY === 'true';
