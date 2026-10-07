@@ -1131,3 +1131,45 @@ func TestGenerateReportsUsage(t *testing.T) {
 		})
 	}
 }
+
+// A redacted_thinking block is thinking the API encrypted for safety reasons.
+// It must not fail the response, and the next turn must send it back
+// unchanged, after the history has gone through JSON as a stored session does.
+func TestRedactedThinkingRoundTrip(t *testing.T) {
+	var m anthropic.Message
+	if err := json.Unmarshal([]byte(`{
+		"id": "msg_1", "type": "message", "role": "assistant", "model": "claude-sonnet-5",
+		"stop_reason": "end_turn",
+		"content": [
+			{"type": "thinking", "thinking": "Let me think.", "signature": "sig"},
+			{"type": "redacted_thinking", "data": "EmwKAhgB"},
+			{"type": "text", "text": "Done."}
+		],
+		"usage": {"input_tokens": 1, "output_tokens": 2}
+	}`), &m); err != nil {
+		t.Fatalf("unmarshal message: %v", err)
+	}
+	resp, err := toGenkitResponse(&m, 0)
+	if err != nil {
+		t.Fatalf("toGenkitResponse() error = %v", err)
+	}
+	if got := resp.Reasoning(); got != "Let me think." {
+		t.Errorf("Reasoning() = %q, want only the readable thinking", got)
+	}
+
+	var stored ai.Message
+	b, err := json.Marshal(resp.Message)
+	if err != nil {
+		t.Fatalf("marshal message: %v", err)
+	}
+	if err := json.Unmarshal(b, &stored); err != nil {
+		t.Fatalf("unmarshal message: %v", err)
+	}
+	blocks, err := toAnthropicParts(stored.Content)
+	if err != nil {
+		t.Fatalf("toAnthropicParts() error = %v", err)
+	}
+	if got, want := wireJSON(t, blocks[1]), `{"data":"EmwKAhgB","type":"redacted_thinking"}`; got != want {
+		t.Errorf("block = %s, want %s", got, want)
+	}
+}
