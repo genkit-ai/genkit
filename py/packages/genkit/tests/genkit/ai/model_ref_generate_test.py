@@ -1461,6 +1461,19 @@ async def test_define_prompt_with_define_model_action_matches_its_name() -> None
 
 
 @pytest.mark.asyncio
+async def test_define_agent_with_define_model_action_runs_that_model() -> None:
+    """define_agent(model=action) runs the model the action names on each turn."""
+    ai = ExpGenkit()
+    echo, action = define_echo_model(ai, name='local/echo')
+
+    agent = ai.define_agent(name='echoAgent', model=action, system='Reply briefly.')
+    out = await agent.chat().send('Hello')
+
+    assert '[ECHO]' in out.text
+    assert echo.last_request is not None
+
+
+@pytest.mark.asyncio
 async def test_generate_operation_with_define_background_model_result_starts_the_operation() -> None:
     """generate_operation(model=the define_background_model result) starts it, same as the name."""
 
