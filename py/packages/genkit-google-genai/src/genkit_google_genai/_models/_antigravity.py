@@ -26,7 +26,7 @@ from typing_extensions import Never
 
 from genkit import ActionRunContext, ModelResponse
 from genkit.model import ModelRequest, model_action_metadata
-from genkit.plugin_api import Action, ActionKind, reject_config_api_key
+from genkit.plugin_api import Action, ActionKind
 from genkit_google_genai._interactions._client import create_interaction
 from genkit_google_genai._interactions._converters import from_interaction_sync
 from genkit_google_genai._interactions._options import ClientOptions
@@ -40,6 +40,7 @@ from genkit_google_genai._models._interactions_utils import (
     remove_client_option_overrides,
     steps_with_folded_system_instruction,
 )
+from genkit_google_genai._models._secrets import reject_request_config_api_key
 
 DEFAULT_ENVIRONMENT: dict[str, str] = {'type': 'remote'}
 
@@ -83,7 +84,7 @@ def create_antigravity_action(
     info = antigravity_model_info(version)
 
     async def run(request: ModelRequest[AntigravityConfig], ctx: ActionRunContext) -> ModelResponse:
-        reject_config_api_key(request.config)
+        reject_request_config_api_key(request.config)
         config = request.config or AntigravityConfig()
         api_key = api_key_for_context(ctx.context, plugin_api_key)
         merged_options = client_options.merge(client_overrides_from_config(config))

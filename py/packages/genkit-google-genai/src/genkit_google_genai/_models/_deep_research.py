@@ -25,7 +25,7 @@ from pydantic.alias_generators import to_camel
 
 from genkit import ActionRunContext, Operation
 from genkit.model import BackgroundAction, ModelRef, ModelRequest, model_ref
-from genkit.plugin_api import Action, ActionKind, reject_config_api_key, to_json_schema
+from genkit.plugin_api import Action, ActionKind, to_json_schema
 from genkit_google_genai._interactions._client import (
     cancel_interaction,
     create_interaction,
@@ -48,6 +48,7 @@ from genkit_google_genai._models._interactions_utils import (
     remove_client_option_overrides,
     steps_with_folded_system_instruction,
 )
+from genkit_google_genai._models._secrets import reject_request_config_api_key
 
 AGENT_CONFIG_KEYS = (
     'thinking_summaries',
@@ -181,7 +182,7 @@ def create_deep_research_background_action(
         return operation
 
     async def start(request: ModelRequest[DeepResearchConfig], ctx: ActionRunContext) -> Operation:
-        reject_config_api_key(request.config)
+        reject_request_config_api_key(request.config)
         config = request.config or DeepResearchConfig()
         api_key = api_key_for_context(ctx.context, plugin_api_key)
         options = client_options.merge(client_overrides_from_config(config))

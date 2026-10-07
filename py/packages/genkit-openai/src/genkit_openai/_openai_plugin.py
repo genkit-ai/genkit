@@ -48,9 +48,7 @@ from genkit.plugin_api import (
     ActionKind,
     ActionMetadata,
     Plugin,
-    context_api_key,
     loop_local_client,
-    reject_config_api_key,
     to_json_schema,
 )
 from genkit_openai._models import (
@@ -69,6 +67,7 @@ from genkit_openai._models._audio import OpenAISttConfig, OpenAITtsConfig
 from genkit_openai._models._image import OpenAIDalleConfig, OpenAIGptImageConfig
 from genkit_openai._models._model_info import KnownGpt, get_default_openai_model_info
 from genkit_openai._models._utils import reraise_openai_error
+from genkit_openai._secrets import context_api_key, reject_config_api_key
 from genkit_openai._typing import OpenAIConfig
 
 # Headers that tie a call to the plugin's OpenAI organization or project. A

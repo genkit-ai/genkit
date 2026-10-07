@@ -30,7 +30,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 
 from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, Operation, Part, Role
 from genkit.model import ModelInfo, ModelRequest, OperationError, Supports
-from genkit.plugin_api import context_api_key, misplaced_api_key_error, wrap_http_error
+from genkit.plugin_api import wrap_http_error
 from genkit_google_genai._auth import GOOGLE_AUTH_ERRORS, raise_auth_error
 from genkit_google_genai._constants import is_multi_regional_location, multi_regional_base_url
 from genkit_google_genai._models._sdk_config import (
@@ -40,6 +40,7 @@ from genkit_google_genai._models._sdk_config import (
     keep_client_extra_body,
     sdk_config_error,
 )
+from genkit_google_genai._models._secrets import context_api_key, misplaced_key_error
 
 # Quote autocomplete needs a Literal, so this alias is the Veo catalog.
 # ``veo_model`` takes ``KnownVeo | str`` so unlisted ids still work.
@@ -118,7 +119,7 @@ class VeoConfig(BaseModel):
             extra = data.get('extra')
             for bag in (data, extra if isinstance(extra, Mapping) else {}):
                 if bag.get('api_key') is not None or bag.get('apiKey') is not None:
-                    raise misplaced_api_key_error()
+                    raise misplaced_key_error()
         return data
 
 
