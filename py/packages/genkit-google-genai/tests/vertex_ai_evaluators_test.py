@@ -32,8 +32,6 @@ from google.auth.exceptions import DefaultCredentialsError, RefreshError
 
 from genkit import BaseDataPoint, GenkitError
 
-from genkit import BaseDataPoint
-
 
 def test_vertex_ai_evaluation_metric_type_values() -> None:
     """Test that VertexAIEvaluationMetricType has expected values."""
@@ -356,8 +354,7 @@ async def test_evaluator_fn_malformed_result_is_internal() -> None:
     factory = _factory()
     evaluator_fn = factory.create_evaluator_fn(
         VertexAIEvaluationMetricType.FLUENCY,
-        None,
-        lambda datapoint, spec: {'fluencyInput': {}},
+        lambda datapoint: {'fluencyInput': {}},
         lambda r: r['fluencyResult']['score'],
     )
     with (
