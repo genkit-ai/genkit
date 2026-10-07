@@ -403,7 +403,9 @@ export class Index {
     if (rootSpan?.displayName) {
       indexData['status'] = rootSpan.status?.code ?? 'UNKNOWN';
     }
-    const sessionId = rootSpan?.attributes?.['genkit:metadata:agent:sessionId'];
+    const sessionId =
+      rootSpan?.attributes?.['genkit:metadata:agent:sessionId'] ||
+      rootSpan?.attributes?.['session.id'];
     if (sessionId) {
       indexData['sessionId'] = `${sessionId}`;
     }

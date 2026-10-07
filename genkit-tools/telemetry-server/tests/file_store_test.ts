@@ -568,7 +568,7 @@ describe('index', () => {
 
     const spanB = span(TRACE_ID_2, SPAN_B, 200, 200);
     spanB.displayName = 'agentA';
-    spanB.attributes['genkit:metadata:agent:sessionId'] = 'session-2';
+    spanB.attributes['session.id'] = 'session-2';
 
     const spanC = span(TRACE_ID_3, SPAN_C, 200, 200);
     spanC.displayName = 'flowB';
@@ -602,6 +602,26 @@ describe('index', () => {
           end: 2,
           status: 0,
           sessionId: 'session-1',
+        },
+      ]
+    );
+
+    assert.deepStrictEqual(
+      index.search({
+        limit: 5,
+        filter: {
+          eq: { sessionId: 'session-2' },
+        },
+      }).data,
+      [
+        {
+          id: TRACE_ID_2,
+          type: 'flow',
+          name: 'agentA',
+          start: 1,
+          end: 2,
+          status: 0,
+          sessionId: 'session-2',
         },
       ]
     );
