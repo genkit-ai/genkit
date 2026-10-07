@@ -575,8 +575,13 @@ func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 			opts.Output.Constrained && outputCfg.Constrained && m != nil && m.(*ModelAction).supportsConstrained(len(toolDefs) > 0)
 
 		// Add schema instructions to prompt when not using native constraints.
-		// This is a no-op for unstructured output requests.
-		if !outputCfg.Constrained {
+		// Under a native constraint only the json format goes without them:
+		// a plugin may constrain json alone, and an array or enum request
+		// that reaches it with neither a constraint nor instructions has
+		// nothing to follow. This matches the JS formats, where only json
+		// sets defaultInstructions to false. This is a no-op for
+		// unstructured output requests.
+		if !outputCfg.Constrained || outputCfg.Format != OutputFormatJSON {
 			instructions := ""
 			if opts.Output.Instructions != nil {
 				instructions = *opts.Output.Instructions
@@ -586,7 +591,8 @@ func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 			if instructions != "" {
 				opts.Messages = injectInstructions(opts.Messages, instructions)
 			}
-
+		}
+		if !outputCfg.Constrained {
 			// This is optional to make the output config internally consistent.
 			outputCfg.Schema = nil
 		}
