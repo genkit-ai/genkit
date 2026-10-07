@@ -15,7 +15,6 @@
 package livetest
 
 import (
-	"context"
 	"math"
 	"testing"
 
@@ -41,7 +40,7 @@ func RunEmbedder(t *testing.T, g *genkit.Genkit, s EmbedderSuite) {
 	if s.Embedder == nil || s.Dimensions == 0 {
 		t.Fatal("livetest: EmbedderSuite.Embedder and Dimensions are required")
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 	t.Run("embedder", func(t *testing.T) {
 		// Two sentences about the same scene in different words, and one
 		// about something else: the pair must land closer together than
@@ -64,10 +63,13 @@ func RunEmbedder(t *testing.T, g *genkit.Genkit, s EmbedderSuite) {
 			if len(e.Embedding) != s.Dimensions {
 				t.Errorf("Embeddings[%d] has %d dimensions, want %d", i, len(e.Embedding), s.Dimensions)
 			}
-			if s.Normalized {
-				if n := norm(e.Embedding); math.Abs(n-1) > 0.01 {
-					t.Errorf("Embeddings[%d] has norm %v, want unit length", i, n)
-				}
+			// A zero vector would make the similarity checks below NaN,
+			// and every comparison with NaN is false.
+			switch n := norm(e.Embedding); {
+			case n == 0:
+				t.Errorf("Embeddings[%d] is all zeros", i)
+			case s.Normalized && math.Abs(n-1) > 0.01:
+				t.Errorf("Embeddings[%d] has norm %v, want unit length", i, n)
 			}
 		}
 		if t.Failed() {

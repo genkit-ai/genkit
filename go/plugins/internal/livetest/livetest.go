@@ -203,7 +203,7 @@ func Run(t *testing.T, g *genkit.Genkit, s Suite) {
 	r := &runner{
 		g:    g,
 		s:    s,
-		ctx:  context.Background(),
+		ctx:  t.Context(),
 		caps: supportsOf(t, g, s.Model),
 	}
 	r.tools = defineFixtures(g)

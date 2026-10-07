@@ -121,9 +121,12 @@ func defineFixtures(g *genkit.Genkit) *fixtures {
 	f.lookupOrder = genkit.DefineTool(g, "lookupOrder",
 		"Looks up the shipping status of an order by its ID.",
 		func(_ *ai.ToolContext, in orderInput) (orderResult, error) {
-			if f.failLookups.Load() > 0 {
-				f.failLookups.Add(-1)
-				return orderResult{}, errLookupDown
+			// Parallel tool calls run concurrently, so the claim on a
+			// failure is a compare-and-swap, not a load then a decrement.
+			for n := f.failLookups.Load(); n > 0; n = f.failLookups.Load() {
+				if f.failLookups.CompareAndSwap(n, n-1) {
+					return orderResult{}, errLookupDown
+				}
 			}
 			return orderResult{OrderID: in.OrderID, Status: "shipped", Carrier: orderCarrier}, nil
 		})
@@ -138,7 +141,7 @@ func defineFixtures(g *genkit.Genkit) *fixtures {
 			select {
 			case <-tc.Done():
 				return "", tc.Err()
-			case <-time.After(5 * time.Minute):
+			case <-time.After(time.Minute):
 				return "", errors.New("diagnostics were never aborted")
 			}
 		})

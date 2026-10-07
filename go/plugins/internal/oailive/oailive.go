@@ -19,7 +19,6 @@
 package oailive
 
 import (
-	"context"
 	"maps"
 	"strings"
 	"testing"
@@ -61,7 +60,7 @@ func Run(t *testing.T, g *genkit.Genkit, s Suite) {
 	maps.Copy(skip, s.Skip)
 	s.Skip = skip
 	livetest.Run(t, g, s.Suite)
-	ctx := context.Background()
+	ctx := t.Context()
 	t.Run("compat_oai", func(t *testing.T) {
 		t.Run("extra config passthrough", func(t *testing.T) {
 			if s.ExtraConfig == nil {
