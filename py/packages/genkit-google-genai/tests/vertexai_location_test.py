@@ -33,6 +33,7 @@ from genkit_google_genai._models._gemini import GeminiConfig, GeminiModel
 from google import genai
 from google.genai import types as genai_types
 from google.genai.types import HttpOptions
+from pydantic import ValidationError
 
 from genkit import GenkitError, Message, Part, Role
 from genkit.model import ModelRequest
@@ -43,7 +44,10 @@ EU_REP_URL = 'https://aiplatform.eu.rep.googleapis.com'
 
 def _text_request(config: GeminiConfig | dict[str, Any] | None = None) -> ModelRequest[Any]:
     if isinstance(config, dict):
-        config = GeminiConfig.model_validate(config)
+        try:
+            config = GeminiConfig.model_validate(config)
+        except ValidationError:
+            pass
     return ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
         config=config,
