@@ -62,12 +62,12 @@ class EvaluatorRef(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(extra='forbid', populate_by_name=True, alias_generator=to_camel)
 
     name: str
-    config_schema: dict[str, object] | None = None
+    config: dict[str, object] | None = None
 
 
-def evaluator_ref(name: str, config_schema: dict[str, object] | None = None) -> EvaluatorRef:
-    """Create an EvaluatorRef."""
-    return EvaluatorRef(name=name, config_schema=config_schema)
+def evaluator_ref(name: str, config: dict[str, object] | None = None) -> EvaluatorRef:
+    """Create an EvaluatorRef whose config ``ai.evaluate(config=...)`` merges over per key."""
+    return EvaluatorRef(name=name, config=config)
 
 
 def evaluator_action_metadata(

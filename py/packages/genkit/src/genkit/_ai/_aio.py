@@ -1049,18 +1049,22 @@ class Genkit:
         *,
         embedder: str | EmbedderRef | None,
         config: dict[str, object] | None,
-    ) -> dict[str, object]:
+    ) -> dict[str, object] | None:
         """Copy ref config plus version, then overlay call-site config.
 
-        The caller's EmbedderRef.config dict is left unchanged so they can
-        reuse the same ref on later embed / embed_many calls.
+        Returns None when neither the ref nor the call sets anything, the same
+        as a Dev UI run of the embedder. The caller's EmbedderRef.config dict is
+        left unchanged so they can reuse the same ref on later calls.
         """
+        ref_config = embedder.config if isinstance(embedder, EmbedderRef) else None
+        version = embedder.version if isinstance(embedder, EmbedderRef) else None
+        if ref_config is None and not version and config is None:
+            return None
         merged: dict[str, object] = {}
-        if isinstance(embedder, EmbedderRef):
-            if isinstance(embedder.config, dict):
-                merged.update(embedder.config)
-            if embedder.version:
-                merged['version'] = embedder.version
+        if isinstance(ref_config, dict):
+            merged.update(ref_config)
+        if version:
+            merged['version'] = version
         if config:
             merged.update(config)
         return merged
@@ -1586,7 +1590,7 @@ class Genkit:
     ) -> EvalResponse:
         """Evaluate a dataset using the specified evaluator.
 
-        ``config`` is merged over the ``EvaluatorRef``'s settings (the call
+        ``config`` is merged over the ``EvaluatorRef``'s config (the call
         wins per key) and handed to the evaluator as its second argument. When
         neither sets anything, the evaluator gets ``None``. An evaluator name
         that isn't registered raises ``GenkitError`` with ``NOT_FOUND``.
@@ -1605,14 +1609,14 @@ class Genkit:
 
         if isinstance(evaluator, EvaluatorRef):
             evaluator_name = evaluator.name
-            ref_config = evaluator.config_schema
+            ref_config = evaluator.config
         elif isinstance(evaluator, str):
             evaluator_name = evaluator
         else:
             raise ValueError('Evaluator must be specified as a string name or an EvaluatorRef.')
 
-        # an evaluator sees None both here and from the CLI / Dev UI when no
-        # settings were given, so `options is None` is the one check it needs.
+        # same rule as _embedder_options: None when nothing was set, matching
+        # what the CLI / Dev UI send, so `options is None` is the one check.
         final_options: dict[str, object] | None = None
         if ref_config is not None or config is not None:
             final_options = {**(ref_config or {}), **(config or {})}

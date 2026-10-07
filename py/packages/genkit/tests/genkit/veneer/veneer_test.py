@@ -2078,26 +2078,12 @@ async def test_evaluate_batch_with_no_config_passes_none_to_evaluator(setup_test
 
 
 @pytest.mark.asyncio
-async def test_batch_evaluator_run_directly_gets_request_options(setup_test: SetupFixture) -> None:
-    """Running a batch evaluator action the way the Dev UI does hands it request.options, None when absent."""
-    ai, *_ = setup_test
-    seen = _define_recording_batch_evaluator(ai, 'direct_batch_eval')
-    action = await ai.registry.resolve_evaluator('direct_batch_eval')
-    assert action is not None
-
-    await action.run(EvalRequest(dataset=_one_row(), eval_run_id='run1', options={'k': 1}))
-    await action.run(EvalRequest(dataset=_one_row(), eval_run_id='run2'))
-
-    assert seen == [{'k': 1}, None]
-
-
-@pytest.mark.asyncio
 async def test_evaluate_with_ref_settings_only_passes_ref_settings(setup_test: SetupFixture) -> None:
-    """Settings on the evaluator ref alone reach the evaluator as that dict."""
+    """Config on the evaluator ref alone reaches the evaluator as that dict."""
     ai, *_ = setup_test
     seen = _define_recording_evaluator(ai, 'ref_eval')
 
-    await ai.evaluate(evaluator=evaluator_ref('ref_eval', config_schema={'judge': 'j1'}), dataset=_one_row())
+    await ai.evaluate(evaluator=evaluator_ref('ref_eval', config={'judge': 'j1'}), dataset=_one_row())
 
     assert seen == [{'judge': 'j1'}]
 
@@ -2107,32 +2093,12 @@ async def test_evaluate_config_wins_over_ref_settings_per_key(setup_test: SetupF
     """When the ref and config= both set a key, config= wins and other ref keys stay."""
     ai, *_ = setup_test
     seen = _define_recording_evaluator(ai, 'merge_eval')
-    ref = evaluator_ref('merge_eval', config_schema={'judge': 'j1', 'threshold': 0.1})
+    ref = evaluator_ref('merge_eval', config={'judge': 'j1', 'threshold': 0.1})
 
     await ai.evaluate(evaluator=ref, dataset=_one_row(), config={'threshold': 0.9})
 
     assert seen == [{'judge': 'j1', 'threshold': 0.9}]
-    assert ref.config_schema == {'judge': 'j1', 'threshold': 0.1}
-
-
-@pytest.mark.asyncio
-async def test_evaluate_with_options_keyword_raises_type_error(setup_test: SetupFixture) -> None:
-    """ai.evaluate(options=...) is a TypeError; settings go in config=."""
-    ai, *_ = setup_test
-    _define_recording_evaluator(ai, 'kw_eval')
-
-    with pytest.raises(TypeError, match='options'):
-        await ai.evaluate(evaluator='kw_eval', dataset=_one_row(), options={'threshold': 0.5})  # type: ignore[call-arg]
-
-
-@pytest.mark.asyncio
-async def test_evaluate_with_positional_arguments_raises_type_error(setup_test: SetupFixture) -> None:
-    """ai.evaluate('name', dataset) is a TypeError; evaluate takes keywords only."""
-    ai, *_ = setup_test
-    _define_recording_evaluator(ai, 'pos_eval')
-
-    with pytest.raises(TypeError):
-        await ai.evaluate('pos_eval', _one_row())  # type: ignore[misc]
+    assert ref.config == {'judge': 'j1', 'threshold': 0.1}
 
 
 @pytest.mark.asyncio
