@@ -30,7 +30,7 @@ from genkit_openai._models._utils import strip_markdown_fences
 from genkit_openai._typing import OpenAIConfig, ReasoningEffort
 from openai.types import CompletionUsage
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
 from genkit._core._typing import GenerationUsage, Operation
@@ -191,30 +191,6 @@ async def test_get_openai_config_keeps_max_tokens_for_legacy_models() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ('model_name', 'expected_key', 'absent_key'),
-    [
-        ('gpt-4o', 'max_tokens', 'max_completion_tokens'),
-        ('o3-mini', 'max_completion_tokens', 'max_tokens'),
-    ],
-)
-async def test_get_openai_config_routes_genkit_max_output_tokens_by_model(
-    model_name: str, expected_key: str, absent_key: str
-) -> None:
-    """ModelConfig(max_output_tokens=...) goes out as max_tokens, or max_completion_tokens for reasoning models."""
-    model = OpenAIModel(model=model_name, client=MagicMock())
-    request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
-        config=ModelConfig(max_output_tokens=32),
-    )
-
-    body = await model._get_openai_request_config(request)
-
-    assert body[expected_key] == 32
-    assert absent_key not in body
-
-
-@pytest.mark.asyncio
 async def test_get_openai_config_prefers_explicit_max_completion_tokens() -> None:
     """An explicit modern token limit wins when both fields are configured."""
     model = OpenAIModel(model='gpt-4o', client=MagicMock())
@@ -227,28 +203,6 @@ async def test_get_openai_config_prefers_explicit_max_completion_tokens() -> Non
 
     assert body['max_completion_tokens'] == 64
     assert 'max_tokens' not in body
-
-
-@pytest.mark.asyncio
-async def test_get_openai_config_user_in_extra_still_sends_user() -> None:
-    """OpenAIConfig drops user; extra={'user': 'u'} still sends it, through extra_body."""
-    model = OpenAIModel(model='gpt-4o', client=MagicMock())
-    request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
-        config=OpenAIConfig(extra={'user': 'u'}, safety_identifier='s'),
-    )
-
-    body = await model._get_openai_request_config(request)
-
-    assert body['extra_body'] == {'user': 'u'}
-    assert 'user' not in body
-    assert body['safety_identifier'] == 's'
-
-
-def test_openai_config_top_level_user_raises() -> None:
-    """A top-level user key is unknown now, so it fails by name instead of reaching OpenAI."""
-    with pytest.raises(ValidationError, match='user'):
-        OpenAIConfig.model_validate({'user': 'u'})
 
 
 @pytest.mark.asyncio

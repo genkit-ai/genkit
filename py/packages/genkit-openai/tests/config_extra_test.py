@@ -27,10 +27,11 @@ from genkit import GenkitError, Message, Part, Role
 from genkit.model import ModelRequest
 
 
-def test_unknown_key_raises() -> None:
-    """`OpenAIConfig(temprature=0.2)` fails instead of riding to the wire."""
-    with pytest.raises(ValidationError, match='temprature'):
-        OpenAIConfig.model_validate({'temprature': 0.2})
+@pytest.mark.parametrize('key', ['temprature', 'user'])
+def test_unknown_key_raises(key: str) -> None:
+    """A typo or OpenAI's undeclared `user` field fails by name instead of riding to the wire."""
+    with pytest.raises(ValidationError, match=key):
+        OpenAIConfig.model_validate({key: 'x'})
 
 
 def test_extra_goes_out_as_extra_body_not_a_kwarg() -> None:
