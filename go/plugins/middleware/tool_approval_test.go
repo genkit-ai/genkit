@@ -730,10 +730,12 @@ type judgeFixture struct {
 	requests []*ai.ModelRequest // requests the judge received
 }
 
-// judgeReply is one scripted judge answer: text, or err when set.
+// judgeReply is one scripted judge answer: text with an optional finish
+// reason, or err when set.
 type judgeReply struct {
-	text string
-	err  error
+	text   string
+	finish ai.FinishReason
+	err    error
 }
 
 func newJudgeFixture(t *testing.T, replies ...judgeReply) *judgeFixture {
@@ -779,7 +781,7 @@ func newJudgeFixture(t *testing.T, replies ...judgeReply) *judgeFixture {
 		if r.err != nil {
 			return nil, r.err
 		}
-		return &ai.ModelResponse{Request: req, Message: ai.NewModelTextMessage(r.text)}, nil
+		return &ai.ModelResponse{Request: req, Message: ai.NewModelTextMessage(r.text), FinishReason: r.finish}, nil
 	})
 	f.judge = ai.NewModelRef(judge.Name(), nil)
 	safe := genkit.DefineTool(f.g, "safe", "Lists files.", func(ctx *ai.ToolContext, in struct {
@@ -818,6 +820,8 @@ func TestToolApprovalJudgeVerdicts(t *testing.T) {
 		{name: "ask interrupts", reply: judgeReply{text: "ask"}, interrupted: "ask"},
 		{name: "an answer outside the verdicts interrupts", reply: judgeReply{text: "probably fine"}, interrupted: "failed"},
 		{name: "a failed judge interrupts", reply: judgeReply{err: errors.New("judge down")}, interrupted: "failed"},
+		// An abnormal finish skips enum parsing, so the text is not validated by generate.
+		{name: "a blocked judge interrupts as failed", reply: judgeReply{finish: ai.FinishReasonBlocked}, interrupted: "failed"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

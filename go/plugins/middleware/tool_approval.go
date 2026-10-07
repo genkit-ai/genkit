@@ -164,8 +164,9 @@ func (t *ToolApproval) wrapTool(ctx context.Context, params *ai.ToolParams, next
 				return next(ctx, params)
 			case verdictDeny:
 				return nil, tool.Fail(ctx, errors.New(deniedMessage))
+			case verdictAsk:
+				interrupt = map[string]any{"message": "Approval judge asked to confirm tool: " + name, "judge": verdictAsk}
 			}
-			interrupt = map[string]any{"message": "Approval judge asked to confirm tool: " + name, "judge": verdictAsk}
 		}
 	}
 
@@ -240,7 +241,8 @@ func userText(m *ai.Message) string {
 	return sb.String()
 }
 
-// judge asks t.Judge for a verdict on the call in params.
+// judge asks t.Judge for a verdict on the call in params. It returns an error
+// for any answer other than a verdict.
 func (t *ToolApproval) judge(ctx context.Context, params *ai.ToolParams) (string, error) {
 	g := genkit.FromContext(ctx)
 	if g == nil {
@@ -285,5 +287,12 @@ func (t *ToolApproval) judge(ctx context.Context, params *ai.ToolParams) (string
 	if err != nil {
 		return "", err
 	}
-	return resp.Text(), nil
+	// A judge that finishes abnormally, such as on a safety block, skips
+	// output parsing and returns no error, so its text needs checking here.
+	switch v := resp.Text(); v {
+	case verdictAllow, verdictDeny, verdictAsk:
+		return v, nil
+	default:
+		return "", fmt.Errorf("judge answered %q with finish reason %q, not a verdict", v, resp.FinishReason)
+	}
 }
