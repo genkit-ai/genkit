@@ -468,6 +468,21 @@ def test_enable_with_non_sdk_logger_raises_failed_precondition_and_does_not_log_
     assert not any('Telemetry fully initialized' in str(call) for call in mock_info.call_args_list)
 
 
+def test_enable_with_non_sdk_tracer_and_disable_traces_runs_and_leaves_their_tracer(
+    real_otel_globals: None,
+) -> None:
+    """disable_traces=True never adds Cloud Trace, so a non-SDK process tracer doesn't raise and stays installed."""
+    theirs = NonSdkTracerProvider()
+    trace_api.set_tracer_provider(theirs)
+
+    with patch('genkit_google_cloud.telemetry.config.logger.info') as mock_info:
+        with _cloud_enable(disable_traces=True):
+            pass
+
+    assert trace_api.get_tracer_provider() is theirs
+    assert any('Telemetry fully initialized' in str(call) for call in mock_info.call_args_list)
+
+
 @pytest.mark.asyncio
 async def test_enable_then_app_sets_tracer_cloud_keeps_spans_and_their_exporter_gets_none(
     real_otel_globals: None,

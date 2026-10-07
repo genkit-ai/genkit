@@ -60,35 +60,49 @@ from .trace_exporter import GcpAdjustingTraceExporter, GenkitGCPExporter
 logger = structlog.get_logger(__name__)
 
 
+def _nothing_registered(provider: object) -> bool:
+    """True only for OTel's default proxy, which means the app registered nothing yet.
+
+    Exact type, not ``isinstance``: a registered subclass of the proxy is the
+    app's provider, and ``set_*_provider`` over it is a warned no-op, so a new
+    provider would export to nothing.
+    """
+    return type(provider) in (ProxyTracerProvider, ProxyLoggerProvider)
+
+
 def _reject_unusable_cloud_setup(*, sampler: Sampler | None, disable_traces: bool) -> None:
-    """Raise before anything is installed when sampler= or the process providers can't take Cloud."""
+    """Raise before anything is installed when sampler= or the process providers can't take Cloud.
+
+    The process tracer is only checked when Cloud Trace is on.
+    """
     if sampler is not None and disable_traces:
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message='sampler= only applies when Cloud Trace is on',
         )
 
-    tracer = trace_api.get_tracer_provider()
-    if isinstance(tracer, TracerProvider):
-        if sampler is not None:
+    if not disable_traces:
+        tracer = trace_api.get_tracer_provider()
+        if isinstance(tracer, TracerProvider):
+            if sampler is not None:
+                raise GenkitError(
+                    status='INVALID_ARGUMENT',
+                    message=(
+                        'a tracer provider is already set; pass TracerProvider(sampler=...) '
+                        'when you create it instead of sampler='
+                    ),
+                )
+        elif not _nothing_registered(tracer):
             raise GenkitError(
-                status='INVALID_ARGUMENT',
+                status='FAILED_PRECONDITION',
                 message=(
-                    'a tracer provider is already set; pass TracerProvider(sampler=...) '
-                    'when you create it instead of sampler='
+                    'the process tracer is not opentelemetry.sdk.trace.TracerProvider; '
+                    'register that class so Cloud Trace can be added'
                 ),
             )
-    elif type(tracer) is not ProxyTracerProvider:
-        raise GenkitError(
-            status='FAILED_PRECONDITION',
-            message=(
-                'the process tracer is not opentelemetry.sdk.trace.TracerProvider; '
-                'register that class so Cloud Trace can be added'
-            ),
-        )
 
     process_logger = _logs.get_logger_provider()
-    if not isinstance(process_logger, LoggerProvider) and type(process_logger) is not ProxyLoggerProvider:
+    if not isinstance(process_logger, LoggerProvider) and not _nothing_registered(process_logger):
         raise GenkitError(
             status='FAILED_PRECONDITION',
             message=(
@@ -107,7 +121,7 @@ def _hang_exporter_on_process_tracer(*, exporter: SpanExporter, sampler: Sampler
     the tracer so ``sampler=`` has somewhere to go.
     """
     provider = trace_api.get_tracer_provider()
-    if type(provider) is ProxyTracerProvider:
+    if _nothing_registered(provider):
         provider = TracerProvider(sampler=sampler) if sampler is not None else TracerProvider()
         trace_api.set_tracer_provider(provider)
     elif not isinstance(provider, TracerProvider):
@@ -130,7 +144,7 @@ def _hang_exporter_on_process_logger(*, exporter: LogRecordExporter) -> None:
     prompt text.
     """
     provider = _logs.get_logger_provider()
-    if type(provider) is ProxyLoggerProvider:
+    if _nothing_registered(provider):
         provider = LoggerProvider()
         _logs.set_logger_provider(provider)
     elif not isinstance(provider, LoggerProvider):
