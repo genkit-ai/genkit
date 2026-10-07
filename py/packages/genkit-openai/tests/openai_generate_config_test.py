@@ -23,7 +23,7 @@ from typing import Any, cast
 
 import httpx
 import pytest
-from genkit_openai import OpenAI, OpenAIConfig
+from genkit_openai import OpenAI
 from genkit_openai._models import OpenAIModel
 from openai import AsyncOpenAI
 
@@ -287,25 +287,41 @@ async def test_generate_openai_invalid_secrets_api_key_raises_invalid_argument(
 
 
 @pytest.mark.parametrize(
-    'model,kwargs',
+    'model,config',
     [
-        pytest.param('openai/gpt-4o', {'config': {'api_key': 'sk-tenant-secret'}}, id='config-dict'),
-        pytest.param('openai/gpt-4o', {'config': {'apiKey': 'sk-tenant-secret'}}, id='config-camel-case'),
-        pytest.param('openai/gpt-4o', {'config': OpenAIConfig(api_key='sk-tenant-secret')}, id='openai-config'),
-        pytest.param('openai/gpt-4o', {'context': {'api_key': 'sk-tenant-secret'}}, id='top-level-context'),
-        pytest.param('openai/gpt-image-1', {'config': {'api_key': 'sk-tenant-secret'}}, id='image-config-dict'),
+        pytest.param('openai/gpt-4o', {'api_key': 'sk-tenant-secret'}, id='config-dict'),
+        pytest.param('openai/gpt-4o', {'apiKey': 'sk-tenant-secret'}, id='config-camel-case'),
+        pytest.param('openai/gpt-image-1', {'api_key': 'sk-tenant-secret'}, id='image-config-dict'),
     ],
 )
 @pytest.mark.asyncio
-async def test_generate_openai_misplaced_api_key_raises_naming_context_secrets(
-    ai: Genkit, server: _OpenAIServer, model: str, kwargs: dict[str, Any]
+async def test_generate_openai_config_api_key_raises_naming_context_secrets(
+    ai: Genkit, server: _OpenAIServer, model: str, config: dict[str, Any]
 ) -> None:
-    """A key on config or the top-level context fails INVALID_ARGUMENT pointing at context.secrets.
+    """A key in config raises INVALID_ARGUMENT from generate, pointing at context.secrets.
+
+    Genkit rejects it before the plugin runs. The key is never echoed and
+    nothing is sent.
+    """
+    with pytest.raises(GenkitError) as raised:
+        await ai.generate(model=model, prompt='hi', config=config)
+
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    assert "context={'secrets': {'api_key': ...}}" in str(raised.value)
+    assert 'sk-tenant-secret' not in str(raised.value)
+    assert server.requests == []
+
+
+@pytest.mark.asyncio
+async def test_generate_openai_top_level_context_api_key_raises_naming_context_secrets(
+    ai: Genkit, server: _OpenAIServer
+) -> None:
+    """A key at the top level of context fails INVALID_ARGUMENT pointing at context.secrets.
 
     The plugin has its own key, so dropping the misplaced one would bill the
     wrong account. The key is never echoed and nothing is sent.
     """
-    response = await ai.generate(model=model, prompt='hi', **kwargs)
+    response = await ai.generate(model='openai/gpt-4o', prompt='hi', context={'api_key': 'sk-tenant-secret'})
 
     assert response.finish_reason == FinishReason.FAILED
     assert response.error is not None
