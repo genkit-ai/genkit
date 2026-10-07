@@ -31,10 +31,10 @@ from genkit._ai._formats._types import FormatDef, Formatter
 from genkit._ai._messages import inject_instructions
 from genkit._ai._model import (
     Message,
+    MiddlewareConfigCheck,
     ModelRequest,
     ModelResponse,
     ModelResponseChunk,
-    check_middleware_config,
     resolve_model_name,
     text_from_content,
 )
@@ -1607,29 +1607,10 @@ async def call_model(
     config_class = declared_config_type(turn_model.input_class) if turn_model.input_class is not None else None
     on_handoff: Callable[[ModelHookParams, MiddlewareDef], None] | None = None
     if config_class is not None and isinstance(request.config, config_class):
-        held_class = config_class
-        checked: dict[str, object] = dict(vars(request.config))
-        # The config a check rejected stays on the shared request, so a layer
-        # that retries next would trip on it again. Re-raise the first error so
-        # it keeps naming the layer that put it there.
-        rejected: list[tuple[object, GenkitError]] = []
+        config_check = MiddlewareConfigCheck(config=request.config, schema=config_class, model=turn_model.name)
 
         def check_handoff(params: ModelHookParams, mw: MiddlewareDef) -> None:
-            config = params.request.config
-            for bad, err in rejected:
-                if bad is config:
-                    raise err
-            try:
-                check_middleware_config(
-                    config=config,
-                    schema=held_class,
-                    model=turn_model.name,
-                    middleware=middleware_name(mw),
-                    checked=checked,
-                )
-            except GenkitError as err:
-                rejected.append((config, err))
-                raise
+            config_check.check(params.request.config, middleware_name(mw))
 
         on_handoff = check_handoff
 

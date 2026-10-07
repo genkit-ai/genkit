@@ -14,7 +14,7 @@ from collections.abc import Callable
 from typing import Any
 
 import pytest
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from genkit import Genkit, GenkitError, Message, ModelResponse, Part
 from genkit._core._action import ActionRunContext
@@ -215,7 +215,7 @@ async def test_middleware_nested_dict_reaches_model_as_the_nested_class() -> Non
 
 @pytest.mark.asyncio
 async def test_middleware_incomplete_nested_dict_fails_naming_the_field() -> None:
-    """`config.task_budget = {}` fails naming task_budget; the model never runs."""
+    """`config.task_budget = {}` fails naming the missing task_budget.total; the model never runs."""
     ai, model = _nested_ai()
 
     response = await ai.generate(
@@ -223,7 +223,9 @@ async def test_middleware_incomplete_nested_dict_fails_naming_the_field() -> Non
     )
 
     assert response.finish_message is not None
-    assert response.finish_message.startswith("nested: middleware 'Rewrite' set config 'task_budget': ")
+    assert response.finish_message.startswith(
+        "nested: middleware 'Rewrite' set config 'task_budget.total': Field required"
+    )
     assert model.configs == []
 
 
@@ -334,14 +336,31 @@ async def test_middleware_changed_field_is_validated_once() -> None:
     assert configs[0].version == 'models/v2'
 
 
-class _RetryOnce(BaseMiddleware):
-    """Calls next again when it raises, like a broad user retry."""
+def _retry_once(fix: Callable[[Any], None] | None = None) -> BaseMiddleware:
+    """A middleware that calls next again when it raises, like a broad user retry, after applying `fix`."""
 
-    async def wrap_model(self, params: Any, ctx: Any, next_fn: Any) -> Any:  # noqa: ANN401
-        try:
-            return await next_fn(params, ctx)
-        except GenkitError:
-            return await next_fn(params, ctx)
+    class Retry(BaseMiddleware):
+        async def wrap_model(self, params: Any, ctx: Any, next_fn: Any) -> Any:  # noqa: ANN401
+            try:
+                return await next_fn(params, ctx)
+            except GenkitError:
+                if fix is not None:
+                    fix(params)
+                return await next_fn(params, ctx)
+
+    return Retry()
+
+
+def _set_once(name: str, value: object) -> Callable[[Any], None]:
+    """Sets `name` to `value` the first time only, so a retry sees what the outer layer left."""
+    calls: list[None] = []
+
+    def change(params: Any) -> None:  # noqa: ANN401
+        if not calls:
+            calls.append(None)
+            setattr(params.request.config, name, value)
+
+    return change
 
 
 @pytest.mark.asyncio
@@ -352,10 +371,115 @@ async def test_outer_retry_does_not_take_the_blame_for_inner_swap() -> None:
     response = await ai.generate(
         model='strict',
         prompt='hi',
-        use=[_RetryOnce(), _middleware('Inner', [], _replace_with({'temperature': 0.1}))],
+        use=[_retry_once(), _middleware('Inner', [], _replace_with({'temperature': 0.1}))],
     )
 
     assert response.finish_message == (
         "strict: middleware 'Inner' replaced request.config with dict; change fields on request.config instead"
     )
     assert model.configs == []
+
+
+@pytest.mark.asyncio
+async def test_outer_retry_with_bad_value_left_in_place_still_names_inner() -> None:
+    """Inner sets temperature='hot' once; an outer retry that leaves it fails naming Inner, not the retrying layer."""
+    ai, model = _ai()
+
+    response = await ai.generate(
+        model='strict',
+        prompt='hi',
+        use=[_retry_once(), _middleware('Inner', [], _set_once('temperature', 'hot'))],
+    )
+
+    assert response.finish_message is not None
+    assert response.finish_message.startswith("strict: middleware 'Inner' set config 'temperature': ")
+    assert model.configs == []
+
+
+@pytest.mark.asyncio
+async def test_outer_retry_after_fixing_the_value_reaches_the_model() -> None:
+    """Inner sets temperature='hot'; an outer layer that catches, sets 0.5, and retries gets the model's answer."""
+    ai, model = _ai()
+
+    response = await ai.generate(
+        model='strict',
+        prompt='hi',
+        use=[_retry_once(_set_field('temperature', 0.5)), _middleware('Inner', [], _set_once('temperature', 'hot'))],
+    )
+
+    assert response.text == 'ok'
+    assert [c.temperature for c in model.configs] == [0.5]  # type: ignore[attr-defined]
+
+
+def _append_stop(params: Any) -> None:  # noqa: ANN401
+    params.request.config.stop_sequences.append(5)
+
+
+def _set_nested_total(params: Any) -> None:  # noqa: ANN401
+    params.request.config.task_budget.total = 'all of it'
+
+
+@pytest.mark.asyncio
+async def test_middleware_bad_edit_inside_a_list_fails_naming_the_item() -> None:
+    """`config.stop_sequences.append(5)` fails naming stop_sequences.1; the model never runs."""
+    ai, model = _ai()
+
+    response = await ai.generate(
+        model='strict', prompt='hi', config={'stop_sequences': ['END']}, use=[_middleware('Rewrite', [], _append_stop)]
+    )
+
+    assert response.finish_message is not None
+    assert response.finish_message.startswith("strict: middleware 'Rewrite' set config 'stop_sequences.1': ")
+    assert model.configs == []
+
+
+@pytest.mark.asyncio
+async def test_middleware_bad_edit_inside_a_nested_model_fails_naming_the_field() -> None:
+    """`config.task_budget.total = 'all of it'` fails naming task_budget.total; the model never runs."""
+    ai, model = _nested_ai()
+
+    response = await ai.generate(
+        model='nested',
+        prompt='hi',
+        config={'task_budget': {'total': 1}},
+        use=[_middleware('Rewrite', [], _set_nested_total)],
+    )
+
+    assert response.finish_message is not None
+    assert response.finish_message.startswith("nested: middleware 'Rewrite' set config 'task_budget.total': ")
+    assert model.configs == []
+
+
+class AllergyConfig(ModelConfig):
+    """A config whose model validator ties two fields together."""
+
+    allergens: list[str] | None = None
+    strict_allergy_check: bool | None = None
+
+    @model_validator(mode='after')
+    def _check_allergens(self) -> 'AllergyConfig':
+        if self.strict_allergy_check and not self.allergens:
+            raise ValueError('strict_allergy_check needs allergens')
+        return self
+
+
+@pytest.mark.asyncio
+async def test_middleware_change_runs_model_validators_naming_the_changed_field() -> None:
+    """Turning on strict_allergy_check without allergens fails the model validator, naming the field the layer set."""
+    ai = Genkit()
+    configs: list[Any] = []
+
+    async def fn(request: ModelRequest[AllergyConfig], _ctx: ActionRunContext) -> ModelResponse:
+        configs.append(request.config)
+        return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))
+
+    ai.define_model(name='menu', fn=fn, config_schema=AllergyConfig)
+
+    response = await ai.generate(
+        model='menu', prompt='hi', use=[_middleware('Guard', [], _set_field('strict_allergy_check', True))]
+    )
+
+    assert response.finish_message == (
+        "menu: middleware 'Guard' set config 'strict_allergy_check': Value error, strict_allergy_check needs allergens"
+    )
+    assert configs == []
