@@ -40,7 +40,7 @@ from genkit._core._model import (
     SessionSnapshot,
     SessionState,
 )
-from genkit._core._typing import Media, ToolRequest
+from genkit._core._typing import FinishReason, Media, ToolRequest
 from genkit.exp.agent import FileSessionStore
 from genkit.model import model_ref
 from genkit.testing import EchoModel, define_echo_model
@@ -199,7 +199,7 @@ def test_model_response_round_trips_through_user_model_json() -> None:
     class Saved(BaseModel):
         response: ModelResponse
 
-    response = ModelResponse(message=_tool_request_message(), finish_reason='stop')
+    response = ModelResponse(message=_tool_request_message(), finish_reason=FinishReason.STOP)
     saved = Saved(response=response)
 
     assert saved.model_dump()['response'] == response.model_dump()
@@ -307,7 +307,9 @@ WIRE_SAMPLES: dict[str, tuple[str, Any]] = {
     'model_request': ('ModelRequest', _request),
     'model_response': (
         'ModelResponse',
-        lambda: ModelResponse(message=_message_with_every_part_kind(), finish_reason='stop', request=_request()),
+        lambda: ModelResponse(
+            message=_message_with_every_part_kind(), finish_reason=FinishReason.STOP, request=_request()
+        ),
     ),
     'model_response_chunk': (
         'ModelResponseChunk',
