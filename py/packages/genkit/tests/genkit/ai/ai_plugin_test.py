@@ -45,7 +45,7 @@ class AsyncResolveOnlyPlugin(Plugin):
         """Resolve an action."""
         if action_type != ActionKind.MODEL:
             return None
-        if name != f'{self.name}/lazy-model':
+        if name != 'lazy-model':
             return None
 
         async def _generate(req: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
