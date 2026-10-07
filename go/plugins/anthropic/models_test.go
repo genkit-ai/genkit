@@ -87,6 +87,9 @@ func TestSupportedModelsAreServableLive(t *testing.T) {
 
 	for id := range supportedModels {
 		t.Run(id, func(t *testing.T) {
+			if supportedModels[id].Stage == ai.ModelStageDeprecated {
+				t.Skip("deprecated: an account can lose access to it before its retirement date")
+			}
 			t.Parallel()
 			resp, err := genkit.Generate(ctx, g,
 				ai.WithModelName(provider+"/"+id),
