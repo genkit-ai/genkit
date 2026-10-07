@@ -158,7 +158,7 @@ class Bedrock(Plugin):
         return []
 
     async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
-        """Resolve an action by namespaced name.
+        """Resolve an action by its Bedrock model id.
 
         Any model ID resolves. Nothing is discovered: listing the catalogue
         needs a second, control-plane ``bedrock`` client and the IAM actions
@@ -166,42 +166,38 @@ class Bedrock(Plugin):
 
         Args:
             action_type: The kind of action to resolve.
-            name: The namespaced action name.
+            name: The Bedrock model id without the ``bedrock/`` prefix
+                (``amazon.nova-lite-v1:0``, or a full inference-profile ARN).
 
         Returns:
             Action object if resolvable, None otherwise.
         """
-        prefix = f'{BEDROCK_PLUGIN_NAME}/'
-        # Direct plugin.model() calls can pass any namespace; only ours resolves.
-        if not name.startswith(prefix):
-            return None
-        model_id = name.removeprefix(prefix)
         if action_type == ActionKind.EMBEDDER:
             # An unroutable embedding ID still resolves, so embed() can name it
             # as an unsupported embedder instead of the registry saying 404.
-            if not looks_like_embedding_model(model_id):
-                logger.debug('Bedrock resolve declined', model=model_id, kind='embedder', reason='not_an_embedder')
+            if not looks_like_embedding_model(name):
+                logger.debug('Bedrock resolve declined', model=name, kind='embedder', reason='not_an_embedder')
                 return None
-            return self._create_embedder_action(model_id)
+            return self._create_embedder_action(name)
         if action_type != ActionKind.MODEL:
-            logger.debug('Bedrock resolve declined', model=model_id, kind=str(action_type), reason='unsupported_kind')
+            logger.debug('Bedrock resolve declined', model=name, kind=str(action_type), reason='unsupported_kind')
             return None
-        if looks_like_embedding_model(model_id):
+        if looks_like_embedding_model(name):
             # Embedding models speak InvokeModel, not Converse; resolving one
             # as a chat model only defers the failure to call time.
-            logger.debug('Bedrock resolve declined', model=model_id, kind='model', reason='embedding_model')
+            logger.debug('Bedrock resolve declined', model=name, kind='model', reason='embedding_model')
             return None
-        if is_rerank_model(model_id):
+        if is_rerank_model(name):
             # Same story for rerank models; reranking is the Bedrock.rerank helper.
-            logger.debug('Bedrock resolve declined', model=model_id, kind='model', reason='rerank_model')
+            logger.debug('Bedrock resolve declined', model=name, kind='model', reason='rerank_model')
             return None
-        declared = self._declared_model_type(model_id)
+        declared = self._declared_model_type(name)
         # Undeclared IDs are classified rather than assumed to be chat: resolve
         # is lazy, so otherwise bedrock/amazon.nova-canvas-v1:0 would take the
         # Converse path and fail at call time. Embedders classify the same way.
-        model_type = declared if declared is not None else ('image' if is_image_model(model_id) else 'chat')
-        logger.debug('Bedrock model resolved', model=model_id, model_type=model_type, declared=declared is not None)
-        return self._create_model_action(model_id, model_type)
+        model_type = declared if declared is not None else ('image' if is_image_model(name) else 'chat')
+        logger.debug('Bedrock model resolved', model=name, model_type=model_type, declared=declared is not None)
+        return self._create_model_action(name, model_type)
 
     def _declared_model_type(self, model_id: str) -> Literal['chat', 'text', 'image'] | None:
         for definition in self.models:

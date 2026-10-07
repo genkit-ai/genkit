@@ -21,6 +21,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
+from anthropic import AsyncAnthropicVertex
 from genkit_anthropic import AnthropicConfig
 from genkit_openai import OpenAIConfig
 from genkit_vertexai.model_garden import ModelGarden, ModelGardenPlugin
@@ -32,6 +33,7 @@ from openai.types.chat import ChatCompletion
 from genkit import ActionRunContext, Genkit, Message, Part, Role
 from genkit._ai._formats import built_in_formats
 from genkit.model import ModelRequest, OutputConfig
+from genkit.plugin_api import ActionKind
 
 
 def test_catalog_output_names_are_known_formats() -> None:
@@ -279,3 +281,29 @@ async def test_model_garden_generate_after_token_expiry_sends_fresh_token() -> N
     assert creds.refresh_count == 2
     assert len(clients) == 1
     assert clients[0].api_key == 'tok-2'
+
+
+@pytest.mark.asyncio
+async def test_generate_model_garden_claude_registers_full_publisher_path() -> None:
+    """`modelgarden/anthropic/claude-…` registers under that name; Claude gets the id without the publisher."""
+    claude = 'modelgarden/anthropic/claude-sonnet-4-5'
+    reply = MagicMock()
+    reply.content = [MagicMock(type='text', text='hello')]
+    reply.usage = MagicMock(input_tokens=1, output_tokens=1)
+    reply.stop_reason = 'end_turn'
+    client = MagicMock(spec=AsyncAnthropicVertex)
+    client.messages = MagicMock()
+    client.beta = MagicMock()
+    client.messages.create = AsyncMock(return_value=reply)
+    client.beta.messages.create = AsyncMock(return_value=reply)
+    with patch('genkit_vertexai.model_garden.anthropic.AsyncAnthropicVertex', return_value=client):
+        ai = Genkit(plugins=[ModelGarden(project_id='p', location='us-central1')])
+        response = await ai.generate(model=claude, prompt='hi')
+        action = await ai.registry.resolve_action(ActionKind.MODEL, claude)
+
+    assert response.text == 'hello'
+    sent = client.messages.create.await_args or client.beta.messages.create.await_args
+    assert sent is not None
+    assert sent.kwargs['model'].startswith('claude-sonnet-4-5')
+    assert action is not None
+    assert action.name == 'modelgarden/anthropic/claude-sonnet-4-5'
