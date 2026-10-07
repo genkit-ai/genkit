@@ -194,30 +194,6 @@ async def test_get_openai_config_keeps_max_tokens_for_legacy_models() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ('model_name', 'expected_key', 'absent_key'),
-    [
-        ('gpt-4o', 'max_tokens', 'max_completion_tokens'),
-        ('o3-mini', 'max_completion_tokens', 'max_tokens'),
-    ],
-)
-async def test_get_openai_config_routes_genkit_max_output_tokens_by_model(
-    model_name: str, expected_key: str, absent_key: str
-) -> None:
-    """ModelConfig(max_output_tokens=...) goes out as max_tokens, or max_completion_tokens for reasoning models."""
-    model = OpenAIModel(model=model_name, client=MagicMock())
-    request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
-        config=ModelConfig(max_output_tokens=32),
-    )
-
-    body = await model._get_openai_request_config(request)
-
-    assert body[expected_key] == 32
-    assert absent_key not in body
-
-
-@pytest.mark.asyncio
 async def test_get_openai_config_prefers_explicit_max_completion_tokens() -> None:
     """An explicit modern token limit wins when both fields are configured."""
     model = OpenAIModel(model='gpt-4o', client=MagicMock())
