@@ -26,7 +26,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from genkit_google_genai import (
-    EmbeddingTaskType,
     GeminiConfig,
     GeminiImageConfig,
     GeminiTtsConfig,
@@ -806,13 +805,39 @@ async def test_vertexai_resolve_embedder(mock_list_models: MagicMock, mock_clien
     assert action.name == 'vertexai/gemini-embedding-001'
 
 
-def test_embedding_task_types() -> None:
-    """Test EmbeddingTaskType enum values."""
-    assert EmbeddingTaskType.RETRIEVAL_QUERY is not None
-    assert EmbeddingTaskType.RETRIEVAL_DOCUMENT is not None
-    assert EmbeddingTaskType.SEMANTIC_SIMILARITY is not None
-    assert EmbeddingTaskType.CLASSIFICATION is not None
-    assert EmbeddingTaskType.CLUSTERING is not None
+def test_importing_embedding_task_type_raises() -> None:
+    """from genkit_google_genai import EmbeddingTaskType raises ImportError."""
+    with pytest.raises(ImportError):
+        from genkit_google_genai import EmbeddingTaskType  # type: ignore[attr-defined]  # noqa: F401
+
+
+def test_importing_vertex_ai_evaluation_metric_type_raises() -> None:
+    """from genkit_google_genai import VertexAIEvaluationMetricType raises ImportError."""
+    with pytest.raises(ImportError):
+        from genkit_google_genai import VertexAIEvaluationMetricType  # type: ignore[attr-defined]  # noqa: F401
+
+
+def test_embedding_task_type_not_in_package_all() -> None:
+    """EmbeddingTaskType is not listed on genkit_google_genai.__all__."""
+    import genkit_google_genai
+
+    assert 'EmbeddingTaskType' not in genkit_google_genai.__all__
+
+
+def test_vertex_ai_evaluation_metric_type_not_in_package_all() -> None:
+    """VertexAIEvaluationMetricType is not listed on genkit_google_genai.__all__."""
+    import genkit_google_genai
+
+    assert 'VertexAIEvaluationMetricType' not in genkit_google_genai.__all__
+
+
+def test_google_ai_vertex_ai_and_gemini_config_still_import() -> None:
+    """Plugins and GeminiConfig still import from genkit_google_genai."""
+    from genkit_google_genai import GeminiConfig as RootGeminiConfig, GoogleAI as RootGoogleAI, VertexAI as RootVertexAI
+
+    assert RootGoogleAI is GoogleAI
+    assert RootVertexAI is VertexAI
+    assert RootGeminiConfig is GeminiConfig
 
 
 def test_gemini_config() -> None:

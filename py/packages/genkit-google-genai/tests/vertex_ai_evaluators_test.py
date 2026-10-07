@@ -33,9 +33,6 @@ from genkit_google_genai._evaluators._evaluation import (
 
 def test_vertex_ai_evaluation_metric_type_values() -> None:
     """Test that VertexAIEvaluationMetricType has expected values."""
-    from genkit_google_genai import VertexAIEvaluationMetricType as RootMetricType
-
-    assert RootMetricType is VertexAIEvaluationMetricType
     assert VertexAIEvaluationMetricType.BLEU == 'BLEU'
     assert VertexAIEvaluationMetricType.ROUGE == 'ROUGE'
     assert VertexAIEvaluationMetricType.FLUENCY == 'FLUENCY'
