@@ -612,16 +612,6 @@ class GeminiImageConfig(GeminiConfig):
     ] = Field(None, alias='imageConfig')
 
 
-# Backward-compatibility aliases for pre-1.0 naming.
-ThinkingConfigSchema = ThinkingConfig
-FileSearchConfigSchema = FileSearchConfig
-ImageConfigSchema = ImageConfig
-VoiceConfigSchema = VoiceConfig
-SpeakerVoiceConfigSchema = SpeakerVoiceConfig
-MultiSpeakerVoiceConfigSchema = MultiSpeakerVoiceConfig
-SpeechConfigSchema = SpeechConfig
-
-
 class GemmaConfig(GeminiConfig):
     """Gemma Config."""
 

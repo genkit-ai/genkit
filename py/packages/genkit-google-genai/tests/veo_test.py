@@ -928,4 +928,3 @@ class TestVeoErrorClassification:
             await veo.start(_text_request(), ActionRunContext(context={'secrets': {'api_key': 'sk-tenant'}}))
 
         assert raised.value is boom
-
