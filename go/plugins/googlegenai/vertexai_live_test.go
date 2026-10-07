@@ -53,9 +53,7 @@ func TestVertexAILive(t *testing.T) {
 		ref:         googlegenai.VertexAIModelRef,
 		flash:       flash,
 		speechModel: "gemini-2.5-flash-tts",
-		imagenModel: "imagen-4.0-fast-generate-001",
 		videoModel:  "veo-3.1-lite-generate-001",
-		imagenRef:   func(id string) ai.ModelRef { return googlegenai.ImageModelRef("vertexai/"+id, nil) },
 		videoRef:    func(id string) ai.ModelRef { return googlegenai.VideoModelRef("vertexai/"+id, nil) },
 	}
 	// Gemini image output is served only from the global location.

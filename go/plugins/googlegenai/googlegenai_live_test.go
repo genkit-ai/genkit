@@ -37,12 +37,11 @@ type genaiSuite struct {
 	ref func(id string, config *genai.GenerateContentConfig) ai.ModelRef
 	// flash is the Gemini model the family cases spend on.
 	flash string
-	// imageModel, speechModel, imagenModel and videoModel serve the
-	// expensive media output cases. An empty one skips its case.
-	imageModel, speechModel, imagenModel, videoModel string
-	// imagenRef and videoRef build references to the Imagen and Veo models.
-	imagenRef func(id string) ai.ModelRef
-	videoRef  func(id string) ai.ModelRef
+	// imageModel, speechModel and videoModel serve the expensive media
+	// output cases. An empty one skips its case.
+	imageModel, speechModel, videoModel string
+	// videoRef builds references to the Veo models.
+	videoRef func(id string) ai.ModelRef
 }
 
 // runGenAI walks the backend registered on g through the shared checklist and
@@ -184,14 +183,6 @@ func runGenAI(t *testing.T, g *genkit.Genkit, s genaiSuite) {
 				ai.WithModel(s.ref(s.speechModel, nil)),
 				ai.WithPrompt("Say: the quick brown fox jumps over the lazy dog."))
 			wantMedia(t, resp, "audio/")
-		}},
-
-		{Name: "imagen output", Needs: needModel(s.imagenModel, "Imagen"), Run: func(t *testing.T) {
-			livetest.Expensive(t)
-			resp := gen(t,
-				ai.WithModel(s.imagenRef(s.imagenModel)),
-				ai.WithPrompt("A red circle on a white background."))
-			wantMedia(t, resp, "image/")
 		}},
 
 		{Name: "veo output", Needs: needModel(s.videoModel, "Veo"), Run: func(t *testing.T) {

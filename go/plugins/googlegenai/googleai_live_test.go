@@ -42,17 +42,12 @@ func TestGoogleAILive(t *testing.T) {
 			LimitConfig:       &genai.GenerateContentConfig{MaxOutputTokens: 16},
 			ToolResponseMedia: true,
 			BadKeyPlugin:      &googlegenai.GoogleAI{APIKey: "invalid"},
-			Skip: map[string]string{
-				"googlegenai/imagen output": "the Gemini API answers the Imagen 4 models with 404",
-			},
 		},
 		ref:         googlegenai.GoogleAIModelRef,
 		flash:       flash,
 		imageModel:  "gemini-3.1-flash-image",
 		speechModel: "gemini-2.5-flash-preview-tts",
-		imagenModel: "imagen-4.0-generate-001",
 		videoModel:  "veo-3.1-lite-generate-preview",
-		imagenRef:   func(id string) ai.ModelRef { return googlegenai.ImageModelRef("googleai/"+id, nil) },
 		videoRef:    func(id string) ai.ModelRef { return googlegenai.VideoModelRef("googleai/"+id, nil) },
 	})
 
