@@ -31,6 +31,7 @@ from botocore.exceptions import (
     ConnectTimeoutError,
     CredentialRetrievalError,
     EndpointConnectionError,
+    MetadataRetrievalError,
     NoAuthTokenError,
     NoCredentialsError,
     NoRegionError,
@@ -196,11 +197,27 @@ def _normalize_error_code(code: str) -> str:
     return code[:1].upper() + code[1:] if code else code
 
 
+def _is_transient_credential_error(error: BotoCoreError) -> bool:
+    """A credential refresh that failed to reach the ECS/EKS credential endpoint.
+
+    botocore's ContainerProvider catches the endpoint's MetadataRetrievalError
+    (timeout, refused connection) inside an ``except`` and raises
+    CredentialRetrievalError without ``from``, so the original is only on
+    ``__context__``. That is a transport failure, not a rejected credential.
+    """
+    if not isinstance(error, CredentialRetrievalError):
+        return False
+    return isinstance(error.__cause__ or error.__context__, MetadataRetrievalError)
+
+
 def _from_botocore_error(error: BotoCoreError, operation: str = 'converse') -> GenkitError:
     """Classifies a client-side botocore failure by exception type.
 
-    Raises ``error`` itself when its type is not in ``_BOTOCORE_ERROR_STATUS``.
+    Raises ``error`` itself when its type is not in ``_BOTOCORE_ERROR_STATUS``,
+    or when it is a transient credential-endpoint failure.
     """
+    if _is_transient_credential_error(error):
+        raise error
     for error_type, status in _BOTOCORE_ERROR_STATUS:
         if isinstance(error, error_type):
             return mark_provider_error(error=GenkitError(message=f'bedrock {operation} failed: {error}', status=status))

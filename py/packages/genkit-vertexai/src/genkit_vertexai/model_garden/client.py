@@ -27,10 +27,11 @@ import asyncio
 import google.auth.credentials
 import google.auth.transport.requests
 from google import auth
-from google.auth.exceptions import DefaultCredentialsError, RefreshError
+from google.auth.exceptions import DefaultCredentialsError, RefreshError, TransportError
 from openai import AsyncOpenAI as _AsyncOpenAI
 
 from genkit import GenkitError
+from genkit.plugin_api import mark_provider_error
 
 
 def _refresh_credentials(
@@ -50,8 +51,9 @@ def _refresh_credentials(
     Raises:
         GenkitError: UNAUTHENTICATED when ADC is missing or the refresh is
             rejected; FAILED_PRECONDITION when no project can be resolved.
-            A refresh google.auth marked retryable, and a TransportError
-            reaching the token endpoint, propagate unchanged.
+            A transient refresh failure (marked retryable, or raised from a
+            TransportError such as a metadata-server blip) and a bare
+            TransportError propagate unchanged.
     """
     credentials: google.auth.credentials.Credentials
     resolved_project_id: str | None = project_id
@@ -63,12 +65,14 @@ def _refresh_credentials(
 
         credentials.refresh(google.auth.transport.requests.Request())
     except (DefaultCredentialsError, RefreshError) as e:
-        if e.retryable:
+        if e.retryable or isinstance(e.__cause__, TransportError):
             raise
-        raise GenkitError(
-            status='UNAUTHENTICATED',
-            message='Google Cloud credentials are missing or were rejected',
-            cause=e,
+        raise mark_provider_error(
+            error=GenkitError(
+                status='UNAUTHENTICATED',
+                message='Google Cloud credentials are missing or were rejected',
+                cause=e,
+            )
         ) from e
 
     if not resolved_project_id:

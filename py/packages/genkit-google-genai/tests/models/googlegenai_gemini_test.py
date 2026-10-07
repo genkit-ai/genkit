@@ -42,7 +42,7 @@ from genkit_google_genai._models._gemini import (
 )
 from genkit_google_genai._models._utils import ToolWire
 from google import genai
-from google.auth.exceptions import DefaultCredentialsError, RefreshError
+from google.auth.exceptions import DefaultCredentialsError, RefreshError, TransportError
 from google.genai import types as genai_types
 from google.genai.errors import APIError
 from pydantic import BaseModel, Field
@@ -1698,6 +1698,26 @@ async def test_streaming_generate_credential_failure_is_unauthenticated(mocker: 
 
     assert raised.value.status == 'UNAUTHENTICATED'
     assert raised.value.cause is revoked
+
+
+@pytest.mark.asyncio
+async def test_generate_metadata_server_refresh_error_stays_raw(mocker: MockerFixture) -> None:
+    """On Cloud Run or GKE a metadata-server blip is RefreshError from TransportError, retryable=False; still raw."""
+    try:
+        try:
+            raise TransportError('metadata server unreachable')
+        except TransportError as e:
+            raise RefreshError(e) from e
+    except RefreshError as error:
+        blip = error
+    client_mock = mocker.AsyncMock()
+    client_mock.aio.models.generate_content.side_effect = blip
+    gemini = GeminiModel('gemini-2.5-flash', client_mock)
+
+    with pytest.raises(RefreshError) as raised:
+        await gemini.generate(_hi_request(), ActionRunContext())
+
+    assert raised.value is blip
 
 
 @pytest.mark.asyncio

@@ -30,6 +30,7 @@ from botocore.exceptions import (
     EndpointConnectionError,
     EventStreamError,
     IncompleteReadError,
+    MetadataRetrievalError,
     NoAuthTokenError,
     NoCredentialsError,
     NoRegionError,
@@ -203,6 +204,29 @@ async def test_botocore_errors_map_to_genkit_statuses(error: BotoCoreError, expe
     assert excinfo.value.status == expected_status
     assert 'bedrock converse failed' in excinfo.value.original_message
     assert excinfo.value.__cause__ is error
+
+
+def _container_endpoint_timeout() -> CredentialRetrievalError:
+    """What botocore's ContainerProvider raises when the ECS/EKS credential endpoint times out."""
+    try:
+        try:
+            raise MetadataRetrievalError(error_msg='Read timeout on endpoint URL')
+        except MetadataRetrievalError as e:
+            raise CredentialRetrievalError(provider='container-role', error_msg=str(e))  # noqa: B904
+    except CredentialRetrievalError as error:
+        return error
+
+
+@pytest.mark.asyncio
+async def test_container_credential_endpoint_timeout_stays_raw() -> None:
+    """A credential-endpoint blip is a transport failure, so retry still sees it unclassified."""
+    error = _container_endpoint_timeout()
+    model = BedrockModel(model_id='amazon.nova-lite-v1:0', transport=FakeTransport(error=error))
+
+    with pytest.raises(CredentialRetrievalError) as excinfo:
+        await model.generate(text_request())
+
+    assert excinfo.value is error
 
 
 @pytest.mark.asyncio

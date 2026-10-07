@@ -312,9 +312,9 @@ def test_wrap_http_error_coerces_string_status_code() -> None:
     assert error.status == 'UNAVAILABLE'
 
 
-@pytest.mark.parametrize('status_code', [None, 'nope', 0, -1, 200, 301])
+@pytest.mark.parametrize('status_code', [None, 'nope', 0, -1, 200, 301, 402, 413, 418])
 def test_wrap_http_error_leaves_missing_status_unclassified(status_code: object) -> None:
-    """No HTTP failure status means retry still sees the raw error."""
+    """No HTTP failure status, or a 4xx with no canonical status, means retry still sees the raw error."""
     cause = RuntimeError('model failed')
     with pytest.raises(RuntimeError) as raised:
         wrap_http_error(cause, status_code=status_code)

@@ -95,13 +95,26 @@ async def test_credential_failure_is_unauthenticated(auth_error: Exception) -> N
     assert raised.value.cause is auth_error
 
 
+def _metadata_server_blip() -> RefreshError:
+    """What compute_engine.Credentials.refresh raises when the metadata server drops: retryable=False."""
+    try:
+        try:
+            raise TransportError('metadata server unreachable')
+        except TransportError as e:
+            raise RefreshError(e) from e
+    except RefreshError as error:
+        return error
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     'flaky',
     [
         RefreshError('token endpoint returned 503', retryable=True),
         TransportError('metadata server unreachable'),
+        _metadata_server_blip(),
     ],
+    ids=['retryable_refresh', 'transport', 'metadata_server_blip'],
 )
 async def test_transient_auth_failure_stays_raw(flaky: Exception) -> None:
     with patch('google.auth.default', side_effect=flaky), pytest.raises(type(flaky)) as raised:

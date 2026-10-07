@@ -81,6 +81,9 @@ _ERROR_TYPE_TO_STATUS: dict[str, StatusName] = {
     'permission_error': 'PERMISSION_DENIED',
     'not_found_error': 'NOT_FOUND',
     'rate_limit_error': 'RESOURCE_EXHAUSTED',
+    # HTTP 402, which has no canonical status. Same as OpenAI's
+    # insufficient_quota: Fallback can switch providers.
+    'billing_error': 'RESOURCE_EXHAUSTED',
     'timeout_error': 'DEADLINE_EXCEEDED',
     'api_error': 'INTERNAL',
     'overloaded_error': 'UNAVAILABLE',

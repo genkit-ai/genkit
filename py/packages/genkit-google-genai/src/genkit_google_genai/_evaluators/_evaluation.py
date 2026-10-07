@@ -33,6 +33,7 @@ import json
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, ClassVar
 
+import httpx
 from google.auth import default as google_auth_default
 from google.auth.transport.requests import Request
 from pydantic import BaseModel, ConfigDict
@@ -43,10 +44,9 @@ from genkit.evaluator import Details, EvalFnResponse, Score
 from genkit.plugin_api import (
     GENKIT_CLIENT_HEADER,
     Action,
-    ErrorResponseMetadata,
-    from_http_code,
     get_cached_client,
-    parse_retry_after_ms,
+    mark_provider_error,
+    wrap_http_error,
 )
 from genkit_google_genai._auth import GOOGLE_AUTH_ERRORS, raise_auth_error
 from genkit_google_genai._constants import GLOBAL_LOCATION, is_multi_regional_location, vertex_api_host
@@ -223,19 +223,13 @@ class EvaluatorFactory:
                 pass
 
             message = f'Error calling Vertex AI Evaluation API: [{response.status_code}] {error_message}'
-            if response.status_code < 400:
-                # A non-200 success or redirect is not a body this client can read.
-                raise GenkitError(message=message, status='INTERNAL')
-            response_metadata: ErrorResponseMetadata | None = None
-            retry_after = response.headers.get('retry-after')
-            retry_after_ms = parse_retry_after_ms(retry_after) if isinstance(retry_after, str) else None
-            if retry_after_ms is not None:
-                response_metadata = {'retry_after_ms': retry_after_ms}
-            raise GenkitError(
-                message=message,
-                status=from_http_code(response.status_code),
-                response_metadata=response_metadata,
-            )
+            if response.status_code >= 400:
+                try:
+                    response.raise_for_status()
+                except httpx.HTTPStatusError as e:
+                    raise wrap_http_error(e, status_code=response.status_code, message=message) from e
+            # A non-200 success or redirect is not a body this client can read.
+            raise mark_provider_error(error=GenkitError(message=message, status='INTERNAL'))
 
         try:
             return response.json()

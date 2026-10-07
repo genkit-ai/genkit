@@ -28,7 +28,7 @@ from openai.types.chat import ChatCompletion, ChatCompletionChunk
 
 from genkit import GenkitError, Message, Part, Role
 from genkit.model import ModelRequest, ToolRequest
-from genkit.plugin_api import StatusName, wrap_http_error
+from genkit.plugin_api import StatusName, mark_provider_error, wrap_http_error
 
 # Codes and types OpenAI reports in an error body. A stream that already
 # returned 200 reports a later failure only this way, as an SSE chunk with
@@ -72,12 +72,12 @@ def reraise_openai_error(error: Exception) -> NoReturn:
     if isinstance(error, APIConnectionError):
         raise error
     if isinstance(error, APIResponseValidationError):
-        raise GenkitError(status='INTERNAL', message=error.message, cause=error) from error
+        raise mark_provider_error(error=GenkitError(status='INTERNAL', message=error.message, cause=error)) from error
     if isinstance(error, APIError):
         status = _in_band_error_status(error)
         if status is None:
             raise error
-        raise GenkitError(status=status, message=error.message, cause=error) from error
+        raise mark_provider_error(error=GenkitError(status=status, message=error.message, cause=error)) from error
     if isinstance(error, json.JSONDecodeError):
         raise GenkitError(status='INTERNAL', message=str(error), cause=error) from error
     if isinstance(error, ValueError):

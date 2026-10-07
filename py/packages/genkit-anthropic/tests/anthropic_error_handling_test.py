@@ -154,6 +154,23 @@ async def test_generate_reads_error_type_when_http_status_is_unmapped() -> None:
 
 
 @pytest.mark.asyncio
+async def test_generate_maps_billing_error_to_resource_exhausted() -> None:
+    """A 402 billing_error is RESOURCE_EXHAUSTED, like OpenAI insufficient_quota, so Fallback can switch providers."""
+    request = _http_request()
+    api_error = APIStatusError(
+        _ERROR_MESSAGE,
+        response=httpx.Response(402, request=request),
+        body={'type': 'error', 'error': {'type': 'billing_error', 'message': 'Your credit balance is too low'}},
+    )
+
+    with pytest.raises(GenkitError) as exc_info:
+        await _model_failing_with(api_error).generate(_request())
+
+    assert exc_info.value.status == 'RESOURCE_EXHAUSTED'
+    assert exc_info.value.cause is api_error
+
+
+@pytest.mark.asyncio
 async def test_generate_leaves_unmapped_status_without_known_type_raw() -> None:
     """An unmapped 4xx with no known error type has no real status, so it stays raw."""
     request = _http_request()
@@ -322,6 +339,7 @@ async def _stream_generate(sse_body: str) -> tuple[list[str], BaseException]:
         ('overloaded_error', 'UNAVAILABLE'),
         ('api_error', 'INTERNAL'),
         ('rate_limit_error', 'RESOURCE_EXHAUSTED'),
+        ('billing_error', 'RESOURCE_EXHAUSTED'),
         ('invalid_request_error', 'INVALID_ARGUMENT'),
     ],
 )

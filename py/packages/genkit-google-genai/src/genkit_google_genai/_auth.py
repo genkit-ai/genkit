@@ -23,9 +23,10 @@ stays the same across generate, embed, cache, and Veo paths.
 
 from typing import NoReturn
 
-from google.auth.exceptions import DefaultCredentialsError, GoogleAuthError, RefreshError
+from google.auth.exceptions import DefaultCredentialsError, GoogleAuthError, RefreshError, TransportError
 
 from genkit import GenkitError
+from genkit.plugin_api import mark_provider_error
 
 # TransportError is left out on purpose: it is a network failure reaching the
 # token endpoint, not a credential problem, so it stays unclassified.
@@ -35,21 +36,25 @@ GOOGLE_AUTH_ERRORS: tuple[type[GoogleAuthError], ...] = (DefaultCredentialsError
 def raise_auth_error(error: GoogleAuthError) -> NoReturn:
     """Raise UNAUTHENTICATED for a missing or rejected credential.
 
-    google.auth marks a refresh that hit a transient token-endpoint failure as
-    ``retryable``. That one is re-raised unchanged so retry still sees an
-    unclassified error instead of a status that tells it to stop.
+    A refresh that hit a transient failure is re-raised unchanged so retry
+    still sees an unclassified error instead of a status that tells it to
+    stop. google.auth marks a token-endpoint blip ``retryable``; a metadata
+    server blip on Cloud Run or GKE is a ``RefreshError`` raised from a
+    ``TransportError`` with ``retryable=False``, so the cause is checked too.
 
     Args:
         error: The DefaultCredentialsError or RefreshError that was caught.
 
     Raises:
         GenkitError: UNAUTHENTICATED, with ``error`` as the cause.
-        GoogleAuthError: ``error`` itself, when google.auth marked it retryable.
+        GoogleAuthError: ``error`` itself, when the refresh failure was transient.
     """
-    if error.retryable:
+    if error.retryable or isinstance(error.__cause__, TransportError):
         raise error
-    raise GenkitError(
-        status='UNAUTHENTICATED',
-        message='Google Cloud credentials are missing or were rejected',
-        cause=error,
+    raise mark_provider_error(
+        error=GenkitError(
+            status='UNAUTHENTICATED',
+            message='Google Cloud credentials are missing or were rejected',
+            cause=error,
+        )
     ) from error

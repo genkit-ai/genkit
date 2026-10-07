@@ -535,8 +535,9 @@ def wrap_http_error(error: Exception, *, status_code: object, message: str | Non
     the traceback. A plugin that builds ``GenkitError(status=...)`` by hand
     is the same 500 on the wire; raise PublicError to give the caller a 4xx.
 
-    A missing or non-HTTP ``status_code`` is left unclassified — raise the
-    original error so retry still sees a raw failure. Also reads Retry-After
+    A missing or non-HTTP ``status_code``, or a 4xx with no canonical status
+    (413, 418), is left unclassified — raise the original error so retry
+    still sees a raw failure instead of UNKNOWN. Also reads Retry-After
     when the SDK left it on the error, so retry waits what the provider asked
     instead of coming back in a second.
     """
@@ -546,13 +547,16 @@ def wrap_http_error(error: Exception, *, status_code: object, message: str | Non
     # GenkitError that claims OK.
     if resolved is None or resolved < 400:
         raise error
+    status = from_http_code(resolved)
+    if status == 'UNKNOWN':
+        raise error
     retry_after_ms = retry_after_ms_from_error(error)
     response_metadata: ErrorResponseMetadata | None = None
     if retry_after_ms is not None:
         response_metadata = {'retry_after_ms': retry_after_ms}
     return mark_provider_error(
         error=GenkitError(
-            status=from_http_code(resolved),
+            status=status,
             message=message if message is not None else str(error),
             cause=error,
             response_metadata=response_metadata,

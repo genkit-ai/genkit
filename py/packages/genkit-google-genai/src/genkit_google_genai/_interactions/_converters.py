@@ -69,7 +69,7 @@ from genkit.model import (
     ToolRequest,
     ToolResponse,
 )
-from genkit.plugin_api import from_http_code
+from genkit.plugin_api import from_http_code, mark_provider_error
 
 logger = logging.getLogger(__name__)
 
@@ -846,7 +846,7 @@ def from_interaction_sync(interaction: Interaction) -> ModelResponse:
     if status == 'failed':
         message = interaction_error_message(interaction) or FAILED_MESSAGE
         if error_status := interaction_error_status(interaction):
-            raise GenkitError(status=error_status, message=message)
+            raise mark_provider_error(error=GenkitError(status=error_status, message=message))
         raise ValueError(message)
     if status == 'cancelled':
         return cancelled_response(interaction)
