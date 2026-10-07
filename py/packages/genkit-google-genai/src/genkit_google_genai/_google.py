@@ -1152,10 +1152,16 @@ class VertexAI(GoogleFamilyRefs, Plugin):
             return None
 
         # The name is a real Vertex metric, so "not found" would send people
-        # hunting for a typo. Say what's actually missing instead.
+        # hunting for a typo. Say what's actually missing instead. The
+        # evaluators authenticate with ADC only (api_key and credentials are
+        # not used), so name both requirements.
         if not self._project:
             raise GenkitError(
-                message='Vertex evaluators need a project; pass VertexAI(project=...) or set GOOGLE_CLOUD_PROJECT',
+                message=(
+                    'Vertex evaluators need a project and Application Default Credentials; '
+                    'pass VertexAI(project=...) or set GOOGLE_CLOUD_PROJECT, '
+                    'and run `gcloud auth application-default login`'
+                ),
                 status='FAILED_PRECONDITION',
             )
 

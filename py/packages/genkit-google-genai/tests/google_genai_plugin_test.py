@@ -133,13 +133,14 @@ def test_vertexai_initialization_from_env() -> None:
 @patch('genkit_google_genai._google.genai.client.Client')
 @patch('genkit_google_genai._google._list_genai_models')
 @pytest.mark.asyncio
-async def test_vertexai_with_api_key_and_no_project_starts(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
-    """VertexAI(api_key=...) with no project starts; init() does not raise."""
+async def test_vertexai_with_api_key_and_no_project_init_skips_evaluators(
+    mock_list_models: MagicMock, mock_client: MagicMock
+) -> None:
+    """VertexAI(api_key=...) with no project: init() returns no evaluator actions."""
     mock_list_models.return_value = GenaiModels()
     with patch.dict(os.environ, {'GCLOUD_PROJECT': '', 'GOOGLE_CLOUD_PROJECT': ''}):
-        plugin = VertexAI(api_key='k')
-        Genkit(plugins=[plugin])
-        await plugin.init()
+        actions = await VertexAI(api_key='k').init()
+    assert not [a for a in actions if a.kind == ActionKind.EVALUATOR]
 
 
 @patch('genkit_google_genai._google.genai.client.Client')
@@ -160,6 +161,7 @@ async def test_vertexai_with_api_key_and_no_project_evaluate_says_project_needed
     assert exc_info.value.status == 'FAILED_PRECONDITION'
     assert 'VertexAI(project=...)' in str(exc_info.value)
     assert 'GOOGLE_CLOUD_PROJECT' in str(exc_info.value)
+    assert 'Application Default Credentials' in str(exc_info.value)
 
 
 @patch('genkit_google_genai._google.genai.client.Client')
