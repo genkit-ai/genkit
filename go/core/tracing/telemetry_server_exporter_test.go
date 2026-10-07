@@ -111,7 +111,7 @@ func TestConvertSpan(t *testing.T) {
 			Attributes:             map[string]any{"k3": "v3"},
 			DroppedAttributesCount: 1,
 		}},
-		Status: Status{Code: 2, Description: "desc"},
+		Status: Status{Code: 1, Description: "desc"}, // codes.Ok maps to OTLP STATUS_CODE_OK
 		InstrumentationScope: InstrumentationScope{
 			Name:      "iname",
 			Version:   "version",
@@ -150,5 +150,28 @@ func TestConvertSpanLive(t *testing.T) {
 	}
 	if got.EndTime != 0 {
 		t.Errorf("EndTime = %v, want 0 for an unfinished span", got.EndTime)
+	}
+}
+
+// TestConvertStatus checks that Go SDK status codes are translated to their
+// OTLP wire values. The Go codes.Code ordinals are internal and inverted
+// relative to OTLP (Error=1, Ok=2 vs STATUS_CODE_OK=1, STATUS_CODE_ERROR=2),
+// so serializing them unchanged would report span status backwards.
+func TestConvertStatus(t *testing.T) {
+	for _, test := range []struct {
+		in   codes.Code
+		want uint32
+	}{
+		{codes.Unset, 0}, // STATUS_CODE_UNSET
+		{codes.Ok, 1},    // STATUS_CODE_OK
+		{codes.Error, 2}, // STATUS_CODE_ERROR
+	} {
+		got := convertStatus(sdktrace.Status{Code: test.in, Description: "desc"})
+		if got.Code != test.want {
+			t.Errorf("convertStatus(%v).Code = %d, want %d", test.in, got.Code, test.want)
+		}
+		if got.Description != "desc" {
+			t.Errorf("convertStatus(%v).Description = %q, want %q", test.in, got.Description, "desc")
+		}
 	}
 }
