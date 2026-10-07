@@ -24,9 +24,10 @@ import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from typing import Any, TypeVar, cast
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from genkit import ContextProvider, Genkit, GenkitError, PublicError, RequestData
 from genkit._core._action import input_from_json
@@ -281,6 +282,9 @@ def genkit_fastapi_handler(
                         status='INTERNAL',
                         message='genkit_fastapi_handler must wrap an Action or an async function returning an Action',
                     )
+            except StarletteHTTPException:
+                # The wrapper's own HTTP response (e.g. 503 while the action isn't ready).
+                raise
             except Exception as e:
                 log_served_failure(adapter_logger=logger, error=e, where='handler')
                 return json_error_response(e)
@@ -299,8 +303,9 @@ def genkit_fastapi_handler(
                         context = await context
                     if isinstance(context, dict):
                         action_context = context
-                except HTTPException:
-                    # The app's own HTTP response (e.g. 401 + WWW-Authenticate) passes through.
+                except StarletteHTTPException:
+                    # FastAPI and Starlette HTTPException share this base; FastAPI
+                    # handles it so a 401 from context_provider stays a 401.
                     raise
                 except Exception as e:
                     log_served_failure(adapter_logger=logger, error=e, where='context provider')

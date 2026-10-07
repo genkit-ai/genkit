@@ -24,6 +24,7 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
+from django.core.exceptions import PermissionDenied
 from django.test import AsyncClient
 from django.test.utils import override_settings
 from django.urls import path
@@ -112,6 +113,14 @@ def _build_views() -> dict[str, Any]:
     async def gated(_: str) -> str:
         return 'ok'
 
+    async def deny_permission(_request: RequestData) -> dict[str, Any]:
+        raise PermissionDenied()
+
+    @genkit_django_handler(ai, context_provider=deny_permission)
+    @ai.flow()
+    async def forbidden(_: str) -> str:
+        return 'ok'
+
     @genkit_django_handler(ai)
     @ai.flow()
     async def greet(name: str = 'world') -> str:
@@ -136,6 +145,7 @@ def _build_views() -> dict[str, Any]:
         'raise_public': raise_public,
         'echo_request': echo_request,
         'gated': gated,
+        'forbidden': forbidden,
         'raise_provider': raise_provider,
     }
 
@@ -157,6 +167,7 @@ def urlconf(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         path('gated', views['gated']),
         path('greet', views['greet']),
         path('close_tab', views['close_tab']),
+        path('forbidden', views['forbidden']),
         path('provider_flow', views['raise_provider']),
     ]
     monkeypatch.setitem(sys.modules, 'genkit_django_tests_urls', module)
@@ -268,18 +279,18 @@ async def test_500_flow_exception_returns_valid_json(urlconf: None) -> None:  # 
 
 
 @pytest.mark.asyncio
-async def test_django_flow_raising_invalid_argument_returns_400_with_generic_message(
+async def test_django_flow_raising_invalid_argument_returns_500_internal_error(
     urlconf: None,
 ) -> None:  # noqa: ARG001
-    """Django POST to a flow that raises GenkitError INVALID_ARGUMENT returns 400 'Invalid argument', not its text."""
+    """Django POST to a flow that raises GenkitError INVALID_ARGUMENT is 500, not 400."""
     client = AsyncClient()
     response = await client.post(
         '/invalid_flow',
         data=json.dumps({'data': 'x'}),
         content_type='application/json',
     )
-    assert response.status_code == 400
-    assert json.loads(response.content) == {'message': 'Invalid argument', 'status': 'INVALID_ARGUMENT'}
+    assert response.status_code == 500
+    assert json.loads(response.content) == {'message': 'Internal Error', 'status': 'INTERNAL'}
     assert b'12345' not in response.content
 
 
@@ -391,6 +402,21 @@ async def test_django_flow_returning_partial_dict_for_model_sends_defaults(urlco
 
     assert response.status_code == 200
     assert json.loads(response.content) == {'result': {'table': 4, 'note': None}}
+
+
+@pytest.mark.asyncio
+async def test_django_context_provider_permission_denied_returns_403(
+    urlconf: None,
+) -> None:  # noqa: ARG001
+    """PermissionDenied from context_provider is Django's 403, not our 500."""
+    client = AsyncClient()
+    response = await client.post(
+        '/forbidden',
+        data=json.dumps({'data': 'x'}),
+        content_type='application/json',
+    )
+
+    assert response.status_code == 403
 
 
 @pytest.mark.asyncio

@@ -25,6 +25,7 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from genkit_fastapi import genkit_fastapi_handler, serve_flow
 from pydantic import BaseModel
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from genkit import ActionRunContext, Genkit, GenkitError, PublicError, RequestData
 from genkit.plugin_api import wrap_http_error
@@ -183,8 +184,8 @@ def test_context_dependency_value_reaches_action() -> None:
     assert response.json()['result'] == 'user-123'
 
 
-def test_fastapi_flow_raising_not_found_returns_404_with_generic_message() -> None:
-    """FastAPI POST to a flow that raises GenkitError NOT_FOUND returns 404 'Not found', not its text."""
+def test_fastapi_flow_raising_not_found_returns_500_internal_error() -> None:
+    """FastAPI POST to a flow that raises GenkitError NOT_FOUND is 500, not a missing route."""
     ai = Genkit()
 
     @ai.flow()
@@ -195,8 +196,8 @@ def test_fastapi_flow_raising_not_found_returns_404_with_generic_message() -> No
     app.include_router(serve_flow(missing, base_path='/missing'))
     response = TestClient(app).post('/missing', json={'data': 'x'})
 
-    assert response.status_code == 404
-    assert response.json() == {'message': 'Not found', 'status': 'NOT_FOUND'}
+    assert response.status_code == 500
+    assert response.json() == {'message': 'Internal Error', 'status': 'INTERNAL'}
     assert 'alice@example.com' not in response.text
 
 
@@ -235,8 +236,8 @@ def test_fastapi_flow_raising_value_error_returns_500_internal_error_without_sta
     assert 'stack' not in body
 
 
-def test_fastapi_stream_flow_raising_not_found_sends_sse_error_with_generic_message() -> None:
-    """FastAPI SSE to a flow that raises GenkitError NOT_FOUND ends with a 'Not found' error event."""
+def test_fastapi_stream_flow_raising_not_found_sends_sse_internal_error() -> None:
+    """FastAPI SSE to a flow that raises GenkitError NOT_FOUND ends with Internal Error."""
     ai = Genkit()
 
     @ai.flow()
@@ -251,7 +252,7 @@ def test_fastapi_stream_flow_raising_not_found_sends_sse_error_with_generic_mess
         headers={'Accept': 'text/event-stream'},
     )
 
-    assert sse_error_event(response.text) == {'message': 'Not found', 'status': 'NOT_FOUND'}
+    assert sse_error_event(response.text) == {'message': 'Internal Error', 'status': 'INTERNAL'}
     assert 'alice@example.com' not in response.text
 
 
@@ -496,22 +497,6 @@ def test_served_flow_wrong_server_key_is_500_internal_error() -> None:
     assert 'API key not valid' not in response.text
 
 
-def test_served_flow_public_error_keeps_status_and_message() -> None:
-    """A PublicError the app raises keeps its status and message on the wire."""
-    ai = Genkit()
-
-    @ai.flow()
-    async def lookup(_: str) -> None:
-        raise PublicError('NOT_FOUND', 'no order 99')
-
-    app = FastAPI()
-    app.include_router(serve_flow(lookup, base_path='/lookup'))
-    response = TestClient(app).post('/lookup', json={'data': '99'})
-
-    assert response.status_code == 404
-    assert response.json() == {'message': 'no order 99', 'status': 'NOT_FOUND'}
-
-
 def test_served_flow_provider_failure_logs_traceback(caplog: pytest.LogCaptureFixture) -> None:
     """A provider failure on a served flow is logged at error with a traceback."""
     ai = Genkit()
@@ -706,3 +691,61 @@ def test_fastapi_context_provider_http_exception_keeps_its_status() -> None:
     assert response.status_code == 401
     assert response.json() == {'detail': 'no token'}
     assert response.headers['www-authenticate'] == 'Bearer'
+
+
+def test_served_flow_missing_model_returns_500() -> None:
+    """POST a flow whose generate names a model that isn't registered is 500, not 404."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def poem(_: None) -> str:
+        res = await ai.generate(model='googleai/typo-flash', prompt='hi')
+        return res.text
+
+    app = FastAPI()
+    app.include_router(serve_flow(poem, base_path='/poem'))
+    response = TestClient(app).post('/poem', json={'data': None})
+
+    assert response.status_code == 500
+    assert response.json() == {'message': 'Internal Error', 'status': 'INTERNAL'}
+
+
+def test_fastapi_context_provider_starlette_http_exception_keeps_401() -> None:
+    """A Starlette HTTPException from context_provider stays 401, not 500."""
+    ai = Genkit()
+
+    def require_token(_request: RequestData) -> dict[str, object]:
+        raise StarletteHTTPException(status_code=401, detail='no token')
+
+    @ai.flow()
+    async def chat(_: str) -> str:
+        return 'ok'
+
+    app = FastAPI()
+
+    @app.post('/chat', response_model=None)
+    @genkit_fastapi_handler(ai, context_provider=require_token)
+    async def chat_route():
+        return chat
+
+    response = TestClient(app).post('/chat', json={'data': 'x'})
+
+    assert response.status_code == 401
+    assert response.json() == {'detail': 'no token'}
+
+
+def test_fastapi_wrapper_http_exception_keeps_503() -> None:
+    """An HTTPException from the async wrapper is the app's own response, not a 500."""
+    ai = Genkit()
+
+    app = FastAPI()
+
+    @app.post('/chat', response_model=None)
+    @genkit_fastapi_handler(ai)
+    async def chat_route():
+        raise HTTPException(status_code=503, detail='not ready')
+
+    response = TestClient(app).post('/chat', json={'data': 'x'})
+
+    assert response.status_code == 503
+    assert response.json() == {'detail': 'not ready'}

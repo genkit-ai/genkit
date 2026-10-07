@@ -471,6 +471,9 @@ class GenkitError(Exception):
         # in-process (Retry, Fallback) but serve as a crash at the HTTP
         # boundary so a dead server key is not a 401 to the end caller.
         self._provider_sourced: bool = False
+        # The served action's own input/init check is the caller's request,
+        # so it keeps a 4xx. A plugin "bad role" inside the flow does not.
+        self._request_sourced: bool = False
 
     @property
     def reason(self) -> RuntimeErrorReason | None:
@@ -502,6 +505,16 @@ class GenkitError(Exception):
         )
 
 
+def mark_request_error(*, error: GenkitError) -> GenkitError:
+    """Mark an error from the served action's own input or init check.
+
+    The HTTP caller sent a body the action cannot accept, so they get a 4xx
+    with a generic sentence. The validation dump stays off the wire.
+    """
+    error._request_sourced = True
+    return error
+
+
 def mark_provider_error(*, error: GenkitError) -> GenkitError:
     """Mark an error built from a provider response.
 
@@ -520,7 +533,7 @@ def wrap_http_error(error: Exception, *, status_code: object, message: str | Non
     The result keeps that status in-process. A served flow treats it as the
     server's failure: callers see 500 Internal Error, and the process logs
     the traceback. A plugin that builds ``GenkitError(status=...)`` by hand
-    still forwards that status on the wire.
+    is the same 500 on the wire; raise PublicError to give the caller a 4xx.
 
     A missing or non-HTTP ``status_code`` is left unclassified — raise the
     original error so retry still sees a raw failure. Also reads Retry-After
@@ -551,8 +564,8 @@ class PublicError(GenkitError):
     """Error class for issues to be returned to users.
 
     Using this error allows a web framework handler (e.g. FastAPI, Flask) to know it
-    is safe to return the message and details in a request. Other GenkitError
-    values keep their HTTP status and get a generic message for that status.
+    is safe to return the message, details, and HTTP status in a request. Any
+    other GenkitError is 500 Internal Error on the wire.
     """
 
     def __init__(self, status: StatusName, message: str, details: Any = None) -> None:  # noqa: ANN401
@@ -570,15 +583,16 @@ _INTERNAL_CLIENT_BODY: dict[str, Any] = {'message': 'Internal Error', 'status': 
 
 
 def _client_facing_error(error: object) -> GenkitError | None:
-    """The GenkitError whose status a served flow may show the caller, or None to redact.
+    """The error whose status and sentence a served flow may show, or None to redact.
 
-    A PublicError the app raised is shown as-is. An error a plugin built from
-    a provider response is the server's failure, so it is redacted. Any other
-    GenkitError keeps its own status. Everything else is a crash.
+    A PublicError is the app saying this status and sentence are for the
+    caller. The served action's own input/init check is the caller's
+    request, so it keeps a 4xx and a generic sentence. A missing model or
+    a plugin "bad role" is the server failing to run the flow.
     """
     if isinstance(error, PublicError):
         return error
-    if isinstance(error, GenkitError) and not error._provider_sourced:
+    if isinstance(error, GenkitError) and error._request_sourced and not error._provider_sourced:
         return error
     return None
 
@@ -604,9 +618,9 @@ def _client_details(details: Any) -> Any:  # noqa: ANN401
 def get_http_status(error: object) -> int:
     """HTTP status for a served-flow error.
 
-    A PublicError or framework GenkitError keeps its own status (NOT_FOUND
-    is a 404). A provider-sourced error, a plain exception, or anything else
-    is a 500.
+    A PublicError keeps its own status (NOT_FOUND is a 404). Any other
+    GenkitError, a provider-sourced error, a plain exception, or anything
+    else is a 500.
     """
     facing = _client_facing_error(error)
     if facing is not None:
@@ -635,11 +649,9 @@ def get_reflection_json(error: object) -> ReflectionError:
 def get_callable_json(error: object) -> dict[str, Any]:
     """JSON body for a served-flow HTTP or SSE error.
 
-    Only a PublicError's message and details go on the wire; it's the one
-    error whose author said the text is safe for callers. Any other
-    GenkitError keeps its status but gets a generic message and no details,
-    since framework errors can quote the caller's input. A provider-sourced
-    error and anything else become
+    Only a PublicError's message, details, and status go on the wire; it's
+    the one error whose author said the text is safe for callers. Any other
+    GenkitError, a provider-sourced error, and anything else become
     ``{"message": "Internal Error", "status": "INTERNAL"}``.
     """
     facing = _client_facing_error(error)
