@@ -18,6 +18,7 @@ package tool
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -95,6 +96,25 @@ func TestResume_NonObjectDataIsClearError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "JSON object") {
 		t.Errorf("error = %q, want it to mention the JSON object constraint", err)
+	}
+}
+
+func TestFail_MarksError(t *testing.T) {
+	ctx := context.Background()
+	if err := Fail(ctx, nil); err != nil {
+		t.Errorf("Fail(ctx, nil) = %v, want nil", err)
+	}
+
+	cause := errors.New("no such city")
+	err := Fail(ctx, cause)
+	if !ai.IsToolFailError(err) {
+		t.Fatalf("IsToolFailError(Fail(ctx, err)) = false, want true")
+	}
+	if !errors.Is(err, cause) {
+		t.Error("Fail(err) does not unwrap to err")
+	}
+	if err.Error() != cause.Error() {
+		t.Errorf("Error() = %q, want %q", err.Error(), cause.Error())
 	}
 }
 

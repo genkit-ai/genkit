@@ -26,7 +26,7 @@ from genkit_amazon_bedrock import Bedrock, BedrockConfig, ModelDefinition, bedro
 from genkit_amazon_bedrock.transport import BedrockTransport
 from pydantic import ValidationError
 
-from genkit import Document, GenkitError, ModelResponse
+from genkit import Document, Genkit, GenkitError, ModelResponse
 from genkit.embedder import EmbedRequest
 from genkit.model import ModelRequest
 from genkit.plugin_api import ActionKind
@@ -97,7 +97,7 @@ async def test_init_fails_loudly_without_region() -> None:
 @pytest.mark.asyncio
 async def test_resolve_returns_model_action_for_any_model_id() -> None:
     plugin = Bedrock(region='us-east-1')
-    action = await plugin.resolve(ActionKind.MODEL, bedrock_name('amazon.nova-lite-v1:0'))
+    action = await plugin.resolve(ActionKind.MODEL, 'amazon.nova-lite-v1:0')
     assert action is not None
     assert action.name == 'bedrock/amazon.nova-lite-v1:0'
     assert action.metadata is not None
@@ -109,13 +109,7 @@ async def test_resolve_returns_model_action_for_any_model_id() -> None:
 @pytest.mark.asyncio
 async def test_resolve_ignores_non_model_kinds() -> None:
     plugin = Bedrock(region='us-east-1')
-    assert await plugin.resolve(ActionKind.FLOW, 'bedrock/whatever') is None
-
-
-@pytest.mark.asyncio
-async def test_resolve_ignores_other_plugin_namespaces() -> None:
-    plugin = Bedrock(region='us-east-1')
-    assert await plugin.resolve(ActionKind.MODEL, 'openai/gpt-4') is None
+    assert await plugin.resolve(ActionKind.FLOW, 'whatever') is None
 
 
 @pytest.mark.asyncio
@@ -124,7 +118,7 @@ async def test_resolve_returns_an_image_action_for_a_declared_image_model() -> N
         region='us-east-1',
         models=[ModelDefinition(name='amazon.titan-image-generator-v1', type='image')],
     )
-    action = await plugin.resolve(ActionKind.MODEL, bedrock_name('amazon.titan-image-generator-v1'))
+    action = await plugin.resolve(ActionKind.MODEL, 'amazon.titan-image-generator-v1')
 
     assert action is not None
     assert action.metadata is not None
@@ -140,7 +134,7 @@ async def test_resolve_classifies_an_undeclared_image_model_id() -> None:
     # Lazy resolution means an unlisted image ID would otherwise take the
     # Converse path and only fail at call time.
     plugin = Bedrock(region='us-east-1')
-    action = await plugin.resolve(ActionKind.MODEL, bedrock_name('amazon.nova-canvas-v1:0'))
+    action = await plugin.resolve(ActionKind.MODEL, 'amazon.nova-canvas-v1:0')
 
     assert action is not None
     assert action.metadata is not None
@@ -155,7 +149,7 @@ async def test_a_declared_chat_type_wins_over_id_classification() -> None:
         region='us-east-1',
         models=[ModelDefinition(name='amazon.nova-canvas-v1:0', type='chat')],
     )
-    action = await plugin.resolve(ActionKind.MODEL, bedrock_name('amazon.nova-canvas-v1:0'))
+    action = await plugin.resolve(ActionKind.MODEL, 'amazon.nova-canvas-v1:0')
 
     assert action is not None
     assert action.metadata is not None
@@ -169,7 +163,7 @@ async def test_text_type_routes_like_chat() -> None:
         region='us-east-1',
         models=[ModelDefinition(name='meta.llama3-8b-instruct-v1:0', type='text')],
     )
-    action = await plugin.resolve(ActionKind.MODEL, bedrock_name('meta.llama3-8b-instruct-v1:0'))
+    action = await plugin.resolve(ActionKind.MODEL, 'meta.llama3-8b-instruct-v1:0')
     assert action is not None
     actions = await plugin.list_actions()
     assert [a.name for a in actions] == ['bedrock/meta.llama3-8b-instruct-v1:0']
@@ -212,7 +206,7 @@ async def test_a_chat_model_declared_as_an_image_model_is_not_listed() -> None:
     assert [a.name for a in listed] == ['bedrock/amazon.nova-lite-v1:0']
 
     # It still resolves, so the caller reads why it cannot work, not a 404.
-    action = await plugin.resolve(ActionKind.MODEL, bedrock_name('anthropic.claude-sonnet-4-5-20250929-v1:0'))
+    action = await plugin.resolve(ActionKind.MODEL, 'anthropic.claude-sonnet-4-5-20250929-v1:0')
     assert action is not None
     request = ModelRequest.model_validate({'messages': [{'role': 'user', 'content': [{'text': 'a reef'}]}]})
     with pytest.raises(GenkitError, match='unsupported image generation model') as excinfo:
@@ -223,7 +217,7 @@ async def test_a_chat_model_declared_as_an_image_model_is_not_listed() -> None:
 @pytest.mark.asyncio
 async def test_resolve_returns_embedder_action_with_registry_metadata() -> None:
     plugin = Bedrock(region='us-east-1')
-    action = await plugin.resolve(ActionKind.EMBEDDER, bedrock_name('amazon.titan-embed-text-v2:0'))
+    action = await plugin.resolve(ActionKind.EMBEDDER, 'amazon.titan-embed-text-v2:0')
 
     assert action is not None
     assert action.kind == ActionKind.EMBEDDER
@@ -237,19 +231,13 @@ async def test_resolve_returns_embedder_action_with_registry_metadata() -> None:
 @pytest.mark.asyncio
 async def test_resolve_rejects_embedder_requests_for_chat_models() -> None:
     plugin = Bedrock(region='us-east-1')
-    assert await plugin.resolve(ActionKind.EMBEDDER, bedrock_name('amazon.nova-lite-v1:0')) is None
-
-
-@pytest.mark.asyncio
-async def test_resolve_ignores_foreign_namespaces_for_embedders() -> None:
-    plugin = Bedrock(region='us-east-1')
-    assert await plugin.resolve(ActionKind.EMBEDDER, 'openai/text-embedding-3-small') is None
+    assert await plugin.resolve(ActionKind.EMBEDDER, 'amazon.nova-lite-v1:0') is None
 
 
 @pytest.mark.asyncio
 async def test_resolve_accepts_a_profile_prefixed_embedder_id() -> None:
     plugin = Bedrock(region='us-east-1')
-    action = await plugin.resolve(ActionKind.EMBEDDER, bedrock_name('us.amazon.titan-embed-text-v2:0'))
+    action = await plugin.resolve(ActionKind.EMBEDDER, 'us.amazon.titan-embed-text-v2:0')
     assert action is not None
     assert action.name == 'bedrock/us.amazon.titan-embed-text-v2:0'
 
@@ -258,14 +246,14 @@ async def test_resolve_accepts_a_profile_prefixed_embedder_id() -> None:
 async def test_embedding_models_do_not_resolve_as_chat_models() -> None:
     # Without the guard this returns a Converse action that only fails when called.
     plugin = Bedrock(region='us-east-1')
-    assert await plugin.resolve(ActionKind.MODEL, bedrock_name('amazon.titan-embed-text-v2:0')) is None
-    assert await plugin.resolve(ActionKind.MODEL, bedrock_name('cohere.embed-english-v3')) is None
+    assert await plugin.resolve(ActionKind.MODEL, 'amazon.titan-embed-text-v2:0') is None
+    assert await plugin.resolve(ActionKind.MODEL, 'cohere.embed-english-v3') is None
 
 
 @pytest.mark.asyncio
 async def test_the_cross_guard_leaves_cohere_chat_models_alone() -> None:
     plugin = Bedrock(region='us-east-1')
-    assert await plugin.resolve(ActionKind.MODEL, bedrock_name('cohere.command-r-v1:0')) is not None
+    assert await plugin.resolve(ActionKind.MODEL, 'cohere.command-r-v1:0') is not None
 
 
 @pytest.mark.asyncio
@@ -273,16 +261,16 @@ async def test_rerank_models_do_not_resolve_as_chat_models() -> None:
     # Neither rerank family has a Converse path, so resolving one as a chat
     # model would only defer the failure to call time.
     plugin = Bedrock(region='us-east-1')
-    assert await plugin.resolve(ActionKind.MODEL, bedrock_name('cohere.rerank-v3-5:0')) is None
-    assert await plugin.resolve(ActionKind.MODEL, bedrock_name('amazon.rerank-v1:0')) is None
-    assert await plugin.resolve(ActionKind.EMBEDDER, bedrock_name('cohere.rerank-v3-5:0')) is None
-    assert await plugin.resolve(ActionKind.EMBEDDER, bedrock_name('amazon.rerank-v1:0')) is None
+    assert await plugin.resolve(ActionKind.MODEL, 'cohere.rerank-v3-5:0') is None
+    assert await plugin.resolve(ActionKind.MODEL, 'amazon.rerank-v1:0') is None
+    assert await plugin.resolve(ActionKind.EMBEDDER, 'cohere.rerank-v3-5:0') is None
+    assert await plugin.resolve(ActionKind.EMBEDDER, 'amazon.rerank-v1:0') is None
 
 
 @pytest.mark.asyncio
 async def test_cohere_v4_resolves_but_fails_when_called() -> None:
     plugin = Bedrock(region='us-east-1')
-    action = await plugin.resolve(ActionKind.EMBEDDER, bedrock_name('cohere.embed-v4:0'))
+    action = await plugin.resolve(ActionKind.EMBEDDER, 'cohere.embed-v4:0')
 
     assert action is not None
     with pytest.raises(GenkitError, match='Cohere Embed v4') as excinfo:
@@ -296,8 +284,8 @@ async def test_an_unknown_embedding_family_resolves_but_fails_when_called() -> N
     plugin = Bedrock(region='us-east-1')
     model_id = 'amazon.some-new-embed-v9:0'
 
-    assert await plugin.resolve(ActionKind.MODEL, bedrock_name(model_id)) is None
-    action = await plugin.resolve(ActionKind.EMBEDDER, bedrock_name(model_id))
+    assert await plugin.resolve(ActionKind.MODEL, model_id) is None
+    action = await plugin.resolve(ActionKind.EMBEDDER, model_id)
 
     assert action is not None
     with pytest.raises(GenkitError, match='unsupported embedding model') as excinfo:
@@ -344,7 +332,9 @@ async def test_everything_listed_can_actually_resolve() -> None:
     ]
     for metadata in listed:
         assert metadata.action_type is not None
-        assert await plugin.resolve(ActionKind(metadata.action_type), metadata.name) is not None
+        assert (
+            await plugin.resolve(ActionKind(metadata.action_type), metadata.name.removeprefix('bedrock/')) is not None
+        )
 
 
 @pytest.mark.asyncio
@@ -368,7 +358,7 @@ async def test_resolve_and_list_publish_the_same_embedder_metadata() -> None:
     # One helper feeds both paths, so the Dev UI listing can never disagree
     # with what the resolved action reports.
     plugin = Bedrock(region='us-east-1', embedders=['cohere.embed-multilingual-v3'])
-    action = await plugin.resolve(ActionKind.EMBEDDER, bedrock_name('cohere.embed-multilingual-v3'))
+    action = await plugin.resolve(ActionKind.EMBEDDER, 'cohere.embed-multilingual-v3')
     listed = await plugin.list_actions()
 
     assert action is not None
@@ -397,7 +387,7 @@ async def test_image_config_survives_the_action_boundary() -> None:
     )
     transport = FakeImageTransport()
     plugin._transport = cast(BedrockTransport, transport)  # noqa: SLF001
-    action = await plugin.resolve(ActionKind.MODEL, bedrock_name('stability.sd3-5-large-v1:0'))
+    action = await plugin.resolve(ActionKind.MODEL, 'stability.sd3-5-large-v1:0')
     assert action is not None
 
     # Validated from the wire shape, so the config goes through the same
@@ -426,7 +416,7 @@ async def test_genkit_generic_config_never_reaches_the_image_body() -> None:
     )
     transport = FakeImageTransport()
     plugin._transport = cast(BedrockTransport, transport)  # noqa: SLF001
-    action = await plugin.resolve(ActionKind.MODEL, bedrock_name('stability.sd3-5-large-v1:0'))
+    action = await plugin.resolve(ActionKind.MODEL, 'stability.sd3-5-large-v1:0')
     assert action is not None
 
     request = ModelRequest.model_validate({
@@ -438,3 +428,53 @@ async def test_genkit_generic_config_never_reaches_the_image_body() -> None:
     body = transport.calls[0]['body']
     assert json.loads(body) == {'prompt': 'a coral reef', 'output_format': 'png', 'aspect_ratio': '16:9'}
     assert 'SECRET-VALUE' not in body
+
+
+class FakeConverseTransport:
+    """Stands in for BedrockTransport; records the Converse kwargs."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def ensure_client(self) -> None:
+        return None
+
+    async def converse(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(kwargs)
+        return {
+            'output': {'message': {'role': 'assistant', 'content': [{'text': 'hello'}]}},
+            'stopReason': 'end_turn',
+        }
+
+
+def _genkit_with_fake_converse() -> tuple[Genkit, FakeConverseTransport]:
+    plugin = Bedrock(region='us-east-1')
+    transport = FakeConverseTransport()
+    plugin._transport = cast(BedrockTransport, transport)  # noqa: SLF001
+    return Genkit(plugins=[plugin]), transport
+
+
+@pytest.mark.asyncio
+async def test_generate_bedrock_model_resolves_with_bare_id() -> None:
+    """`bedrock/anthropic.claude-…` still resolves, and Converse gets the id without `bedrock/`."""
+    ai, transport = _genkit_with_fake_converse()
+
+    response = await ai.generate(model='bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0', prompt='hi')
+
+    assert response.text == 'hello'
+    assert transport.calls[0]['modelId'] == 'anthropic.claude-sonnet-4-5-20250929-v1:0'
+
+
+@pytest.mark.asyncio
+async def test_generate_bedrock_arn_model_keeps_full_path() -> None:
+    """A Bedrock inference-profile ARN with `/` keeps the whole ARN."""
+    arn = 'arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-3-5-sonnet-20241022-v2:0'
+    ai, transport = _genkit_with_fake_converse()
+
+    response = await ai.generate(model=f'bedrock/{arn}', prompt='hi')
+
+    assert response.text == 'hello'
+    assert transport.calls[0]['modelId'] == arn
+    action = await ai.registry.resolve_action(ActionKind.MODEL, f'bedrock/{arn}')
+    assert action is not None
+    assert action.name == f'bedrock/{arn}'

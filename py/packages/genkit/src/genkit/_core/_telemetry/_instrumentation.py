@@ -34,6 +34,7 @@ from typing import Any, Literal, Protocol, TypeVar, runtime_checkable
 from pydantic import BaseModel
 
 from ._attrs import METADATA_PREFIX, Attr
+from ._log_exporter import reset_log_export
 
 T = TypeVar('T')
 T_co = TypeVar('T_co', covariant=True)
@@ -218,16 +219,28 @@ def flush_instrumentations() -> None:
 
 
 def reset_instrumentation() -> None:
-    """Remove all providers. Tests and re-init."""
+    """Start telemetry over. Tests only.
+
+    Disposes and removes every configured provider, stops Dev UI log export,
+    and forgets the open trace so the next span is a new root.
+    """
     dispose_instrumentations()
     instrumentations.clear()
+    reset_log_export()
+    parent_path_context.set('')
+    current_span.set(None)
+    span_is_action.set(False)
+    # The HTTP parent is a ContextVar on the poster. Reset must clear it
+    # even when no poster is registered, so the next span is a new root.
+    from ._http import reset_parent_span
+
+    reset_parent_span()
 
 
 def is_instrumented_by(kind: type) -> bool:
     """True when a configured provider is an instance of ``kind``.
 
-    Use ``is_instrumented_by(GenkitBuiltinInstrumentation)`` for the
-    Developer UI poster.
+    Testers pass a class, e.g. ``DirectHttpInstrumentation``.
     """
     if not isinstance(kind, type):
         raise TypeError('is_instrumented_by expected a type, got ' + describe_value(kind))
