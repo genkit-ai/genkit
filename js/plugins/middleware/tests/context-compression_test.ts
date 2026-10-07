@@ -4168,5 +4168,73 @@ describe('contextCompression middleware', () => {
     assert.strictEqual(cc.messagesAfter, 7);
     assert.strictEqual(cc.truncationNoticeInserted, false);
     assert.strictEqual(capturedRequest!.messages.length, 7);
+
+    // Without summarize configured, cheap tool truncation that brings the prompt
+    // under maxInputTokens also prevents Step 5 from dropping messages to preserveRecent
+    const resWithoutSummarize = await ai.generate({
+      model: pm,
+      messages: historyWithLargeToolOutput,
+      use: [
+        contextCompression({
+          maxInputTokens: 500,
+          preserveRecent: 2,
+          toolResponses: { maxChars: 50, preserveRecent: 0 },
+        }),
+      ],
+    });
+    const ccNoSum = (resWithoutSummarize.custom as Record<string, unknown>)
+      ?.contextCompression as Record<string, unknown> | undefined;
+    assert.strictEqual(ccNoSum?.toolResponsesTruncated, 1);
+    assert.strictEqual(ccNoSum?.messagesAfter, 7);
+    assert.strictEqual(capturedRequest!.messages.length, 7);
+
+    // When compression is triggered by a high stamped inputTokens whose scaled
+    // post-cheap token count remains over maxInputTokens (even though chars / 3.5 <= maxInputTokens),
+    // summarization is not falsely skipped.
+    const stampedHistory: MessageData[] = [
+      { role: 'user', content: [{ text: 'u1' }] },
+      {
+        role: 'model',
+        content: [{ toolRequest: { name: 'bigTool', ref: 't1', input: {} } }],
+      },
+      {
+        role: 'tool',
+        content: [
+          {
+            toolResponse: {
+              name: 'bigTool',
+              ref: 't1',
+              output: 'X'.repeat(300),
+            },
+          },
+        ],
+      },
+      {
+        role: 'model',
+        content: [{ text: 'Y'.repeat(300) }],
+      },
+      { role: 'user', content: [{ text: 'u2' }] },
+      {
+        role: 'model',
+        metadata: { contextCompression: { inputTokens: 1000 } },
+        content: [{ text: 'm2' }],
+      },
+      { role: 'user', content: [{ text: 'u3' }] },
+    ];
+
+    await ai.generate({
+      model: pm,
+      messages: stampedHistory,
+      use: [
+        contextCompression({
+          maxInputTokens: 500,
+          preserveRecent: 2,
+          toolResponses: { maxChars: 50, preserveRecent: 0 },
+          summarize: { model: summaryModel, preserveRecent: 2 },
+          skipSummarizationThreshold: 0.3,
+        }),
+      ],
+    });
+    assert.strictEqual(summaryCalled, true);
   });
 });

@@ -2093,26 +2093,34 @@ export const contextCompression: GenerateMiddleware<
             }
 
             if (shouldCompress) {
-              // 3. Check if cheap strategies saved enough to skip summarization
+              // 3. Check if cheap strategies brought the prompt under budget
+              let cheapUnderBudget = false;
               let shouldSkipSummarization = false;
-              if (
-                summaryModelRef &&
-                skipSummarizationThreshold !== undefined &&
-                skipSummarizationThreshold > 0 &&
-                skipSummarizationThreshold <= 1
-              ) {
+              if (deduplicated > 0 || truncated > 0) {
                 const charsBefore = getActiveChars();
                 const charsAfterCheap = estimateMessageChars(messages);
                 const charsSaved = charsBefore - charsAfterCheap;
                 const savingsRatio =
                   charsBefore > 0 ? charsSaved / charsBefore : 0;
-                const tokensAfterCheap = Math.ceil(
-                  charsAfterCheap / CHARS_PER_TOKEN_ESTIMATE
+                const scaledTokensAfterCheap =
+                  charsBefore > 0
+                    ? Math.ceil(
+                        effectiveTokens * (charsAfterCheap / charsBefore)
+                      )
+                    : 0;
+                const tokensAfterCheap = Math.max(
+                  Math.ceil(charsAfterCheap / CHARS_PER_TOKEN_ESTIMATE),
+                  scaledTokensAfterCheap
                 );
+                cheapUnderBudget = tokensAfterCheap <= maxInputTokens;
 
                 shouldSkipSummarization =
+                  Boolean(summaryModelRef) &&
+                  skipSummarizationThreshold !== undefined &&
+                  skipSummarizationThreshold > 0 &&
+                  skipSummarizationThreshold <= 1 &&
                   savingsRatio >= skipSummarizationThreshold &&
-                  tokensAfterCheap <= maxInputTokens;
+                  cheapUnderBudget;
               }
 
               // 4. Summarization
@@ -2152,6 +2160,9 @@ export const contextCompression: GenerateMiddleware<
                   insertTruncationNotice && systemMessages.length === 0 ? 1 : 0;
                 const fixedSlots = systemMessages.length + noticeSlot;
 
+                const cheapSatisfiedBudget = summaryModelRef
+                  ? skippedSummary
+                  : cheapUnderBudget;
                 const needsTokenFallbackTruncation =
                   effectiveTokens > maxInputTokens &&
                   ((!dedupConfig && !toolResponseConfig && !summaryModelRef) ||
@@ -2159,7 +2170,7 @@ export const contextCompression: GenerateMiddleware<
 
                 let effectiveMaxMessages: number | undefined;
                 if (
-                  (hasExplicitPreserveRecent && !skippedSummary) ||
+                  (hasExplicitPreserveRecent && !cheapSatisfiedBudget) ||
                   needsTokenFallbackTruncation
                 ) {
                   const preserveCap = fixedSlots + adjustedPreserveRecent;
