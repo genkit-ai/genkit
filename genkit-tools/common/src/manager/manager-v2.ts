@@ -169,6 +169,9 @@ export class RuntimeManagerV2 extends BaseRuntimeManager {
   // Sockets that have not completed `register` yet, with their deadline timer.
   // Until a socket registers, the only message it may send is `register`.
   private unregistered: Map<WebSocket, NodeJS.Timeout> = new Map();
+  // Sockets whose `register` was rejected. Everything they send is ignored
+  // while the error frame flushes and the close completes.
+  private rejected: WeakSet<WebSocket> = new WeakSet();
   // Rejections are logged once per pid: old runtimes reconnect with backoff
   // and would otherwise repeat the same explanation forever.
   private rejectedPids: Set<number> = new Set();
@@ -281,6 +284,7 @@ export class RuntimeManagerV2 extends BaseRuntimeManager {
   }
 
   private handleMessage(ws: WebSocket, message: JsonRpcMessage) {
+    if (this.rejected.has(ws)) return;
     if (this.unregistered.has(ws)) {
       // One message before authentication, and it must be `register`.
       if ('method' in message && message.method === 'register') {
@@ -326,6 +330,11 @@ export class RuntimeManagerV2 extends BaseRuntimeManager {
     params: ReflectionRegisterParams,
     failure: 'missing' | 'invalid'
   ) {
+    // Stop handling this socket now, not when the close lands: otherwise a
+    // pipelined second `register` would be checked again (or, once removed
+    // from `unregistered`, treated as registered).
+    this.clearUnregistered(ws);
+    this.rejected.add(ws);
     if (!this.rejectedPids.has(params.pid)) {
       this.rejectedPids.add(params.pid);
       logger.error(registerRejectedMessage(params, failure));

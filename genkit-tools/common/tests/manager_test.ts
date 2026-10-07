@@ -151,6 +151,20 @@ describe('RuntimeManager reflection auth', () => {
     expect('reflectionSecret' in runtimes[0]).toBe(false);
   });
 
+  it('does not keep the secret of a runtime that fails its health check', async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    const mgr = await withRuntimeFile(
+      runtimeFile({ reflectionSecret: 'runtime-secret' })
+    );
+    expect(mgr.listRuntimes()).toEqual([]);
+    expect((mgr as any).runtimeSecrets).toEqual({});
+    // Restart so afterEach can close it again.
+    server = http.createServer();
+    await new Promise<void>((resolve) =>
+      server.listen(0, '127.0.0.1', resolve)
+    );
+  });
+
   it('falls back to the configured secret when the file has none', async () => {
     const mgr = await withRuntimeFile(runtimeFile());
     await mgr.listActions();

@@ -155,7 +155,6 @@ export const start = new Command('start')
         reflectionV2Port,
         reflectionV2Host: options.reflectionV2Host,
         telemetryServerUrl,
-        auth,
         // Reuse the secret getDevEnvVars resolved for this run (env-provided,
         // or generated for --write-env-file).
         reflectionSecret: envVars[REFLECTION_SECRET_ENV],

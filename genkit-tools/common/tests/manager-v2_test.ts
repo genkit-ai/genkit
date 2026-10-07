@@ -636,6 +636,42 @@ describe('RuntimeManagerV2 reflection auth', () => {
     expect(manager.listRuntimes().map((r) => r.id)).toEqual(['rt-unsecured']);
   });
 
+  it('ignores a register pipelined behind a rejected one', async () => {
+    manager = await RuntimeManagerV2.create({
+      projectRoot: './',
+      reflectionSecret: SECRET,
+    });
+    const { messages, closeCode } = await new Promise<{
+      messages: any[];
+      closeCode: number;
+    }>((resolve) => {
+      const client = new WebSocket(`ws://127.0.0.1:${manager.port}`);
+      wsClient = client;
+      const messages: any[] = [];
+      const registerMsg = (id: string, secret: string) =>
+        JSON.stringify({
+          jsonrpc: '2.0',
+          method: 'register',
+          params: { id: 'rt-pipelined', pid: 5, secret },
+          id,
+        });
+      client.on('open', () => {
+        // Both frames go out before the server can close the socket.
+        client.send(registerMsg('1', 'nope'));
+        client.send(registerMsg('2', SECRET));
+      });
+      client.on('message', (data) =>
+        messages.push(JSON.parse(data.toString()))
+      );
+      client.on('close', (code) => resolve({ messages, closeCode: code }));
+    });
+    expect(messages).toHaveLength(1);
+    expect(messages[0].id).toBe('1');
+    expect(messages[0].error.code).toBe(REFLECTION_AUTH_ERROR_CODE);
+    expect(closeCode).toBe(1008);
+    expect(manager.listRuntimes()).toEqual([]);
+  });
+
   it('closes a connection whose first message is not register', async () => {
     manager = await RuntimeManagerV2.create({
       projectRoot: './',

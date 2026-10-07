@@ -75,11 +75,9 @@ export class McpRuntimeManager {
     if (this.manager) {
       await this.manager.stop();
     }
-    this.manager = await startManager({
-      projectRoot,
-      manageHealth: true,
-      auth: this.auth,
-    });
+    // No auth here: attaching to existing runtimes never generates a secret.
+    // `this.auth` applies when a runtime is spawned (getManagerWithDevProcess).
+    this.manager = await startManager({ projectRoot, manageHealth: true });
     this.currentProjectRoot = projectRoot;
     return this.manager;
   }

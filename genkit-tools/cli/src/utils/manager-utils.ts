@@ -111,10 +111,10 @@ export async function startManager(options: {
   /** `--reflection-v2-host`. */
   reflectionV2Host?: string;
   telemetryServerUrl?: string;
-  /** `--experimental-auth`. */
-  auth?: boolean;
   /**
    * Secret to use. When omitted, falls back to `GENKIT_REFLECTION_SECRET_TOKEN`.
+   * Never generated here: a manager without a spawned runtime has nobody to
+   * hand a fresh secret to.
    * v1 runtimes that wrote their own secret into their discovery file are
    * reached with that one regardless.
    */
@@ -130,8 +130,7 @@ export async function startManager(options: {
     reflectionV2Port: options.reflectionV2Port,
     reflectionV2Host: options.reflectionV2Host,
     reflectionSecret:
-      options.reflectionSecret ??
-      resolveReflectionSecret({ auth: options.auth, generate: false }),
+      options.reflectionSecret ?? resolveReflectionSecret({ generate: false }),
   });
   return manager;
 }
@@ -445,11 +444,13 @@ export async function runWithManager(
       );
       manager = result.manager;
     } else {
-      manager = await startManager({
-        projectRoot,
-        manageHealth: false,
-        auth: options?.auth,
-      });
+      if (options?.auth) {
+        logger.warn(
+          '--experimental-auth has no effect without a command to run (`-- <cmd>`). ' +
+            `To share a secret with a runtime you start yourself, set ${REFLECTION_SECRET_ENV}.`
+        );
+      }
+      manager = await startManager({ projectRoot, manageHealth: false });
     }
   } catch (e) {
     logger.error('Failed to start manager', e);

@@ -905,9 +905,6 @@ export class RuntimeManager extends BaseRuntimeManager {
         if (!runtimeInfo.name) {
           runtimeInfo.name = runtimeInfo.id;
         }
-        if (typeof reflectionSecret === 'string' && reflectionSecret) {
-          this.runtimeSecrets[runtimeInfo.id] = reflectionSecret;
-        }
         const fileName = path.basename(filePath);
         if (
           await checkServerHealth(
@@ -935,6 +932,11 @@ export class RuntimeManager extends BaseRuntimeManager {
               );
               process.exit(1);
             }
+          }
+          // Only stored for tracked runtimes, so handleRemovedRuntime cleans it
+          // up. The health check above does not need it.
+          if (typeof reflectionSecret === 'string' && reflectionSecret) {
+            this.runtimeSecrets[runtimeInfo.id] = reflectionSecret;
           }
           this.filenameToRuntimeMap[fileName] = runtimeInfo;
           this.idToFileMap[runtimeInfo.id] = fileName;

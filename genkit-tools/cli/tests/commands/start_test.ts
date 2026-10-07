@@ -114,7 +114,6 @@ describe('start command', () => {
       reflectionV2Port: 3200,
       reflectionV2Host: undefined,
       telemetryServerUrl: 'http://localhost:4033',
-      auth: false,
       reflectionSecret: undefined,
     });
     expect(startDevProcessManagerSpy).not.toHaveBeenCalled();
@@ -211,7 +210,7 @@ describe('start command', () => {
         expect.objectContaining({ auth: false })
       );
       expect(startManagerSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ auth: false })
+        expect.objectContaining({ reflectionSecret: undefined })
       );
       expect(logger.warn).toHaveBeenCalledWith(
         expect.stringContaining('--experimental-auth has no effect')

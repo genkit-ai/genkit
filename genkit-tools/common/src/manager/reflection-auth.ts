@@ -74,12 +74,7 @@ export function isLoopbackUrl(url: string): boolean {
   } catch {
     return false;
   }
-  return (
-    hostname === 'localhost' ||
-    hostname === '[::1]' ||
-    hostname === '::1' ||
-    /^127\.\d+\.\d+\.\d+$/.test(hostname)
-  );
+  return isLoopbackHost(hostname);
 }
 
 /**

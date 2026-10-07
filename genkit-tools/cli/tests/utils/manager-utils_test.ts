@@ -262,6 +262,19 @@ describe('runWithManager', () => {
     expect(logger.error).toHaveBeenCalledWith('\tTrace ID: trace-abc\n');
     expect(mockManager.stop).toHaveBeenCalledTimes(1);
   });
+
+  it('warns that --experimental-auth has no effect without a runtime command', async () => {
+    const warnSpy = jest
+      .spyOn(logger, 'warn')
+      .mockImplementation((() => {}) as any);
+    await runWithManager('/mock/root', async () => {}, { auth: true });
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('--experimental-auth has no effect')
+    );
+    expect(RuntimeManager.create).toHaveBeenCalledWith(
+      expect.objectContaining({ reflectionSecret: undefined })
+    );
+  });
 });
 
 describe('resolveReflectionSecret', () => {
