@@ -197,7 +197,7 @@ var (
 		SystemRole:  true,
 		Media:       true,
 		ToolChoice:  true,
-		Output:      []string{"text", "json"},
+		Output:      []string{"text", "json", "array", "enum"},
 		Constrained: ai.ConstrainedSupportAll,
 	}
 	multimodalNoToolConstraint = ai.ModelSupports{
@@ -206,7 +206,7 @@ var (
 		SystemRole:  true,
 		Media:       true,
 		ToolChoice:  true,
-		Output:      []string{"text", "json"},
+		Output:      []string{"text", "json", "array", "enum"},
 		Constrained: ai.ConstrainedSupportNoTools,
 	}
 )

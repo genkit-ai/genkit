@@ -1163,6 +1163,24 @@ func TestApplyResponseFormatHonorsDeclaredOutputs(t *testing.T) {
 		t.Error("a schema keeps its json_schema form regardless of the declaration")
 	}
 
+	// OpenAI accepts only an object at the schema root, so an array or enum
+	// schema goes out only to a model that declares the format.
+	enumOutput := &ai.ModelOutputConfig{
+		Format:      "enum",
+		Constrained: true,
+		Schema:      map[string]any{"type": "string", "enum": []any{"red", "green"}},
+	}
+	g = NewModelGenerator(&client, "m").WithOutputFormats([]string{"text", "json"})
+	g.applyResponseFormat(enumOutput)
+	if g.request.ResponseFormat.OfJSONSchema != nil {
+		t.Error("enum not declared: no json_schema should be sent")
+	}
+	g = NewModelGenerator(&client, "m").WithOutputFormats([]string{"text", "json", "enum"})
+	g.applyResponseFormat(enumOutput)
+	if g.request.ResponseFormat.OfJSONSchema == nil {
+		t.Error("enum declared: its schema should be sent as json_schema")
+	}
+
 	g = NewModelGenerator(&client, "m")
 	g.applyResponseFormat(&ai.ModelOutputConfig{Format: "text"})
 	if g.request.ResponseFormat.OfText != nil {

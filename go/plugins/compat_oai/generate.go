@@ -314,7 +314,11 @@ func clearManagedFields(params *openai.ChatCompletionNewParams) {
 // WithOutputFormats declares the output formats the model serves natively on
 // the wire. When the declaration leaves "json" out, a schema-less JSON
 // request sends no response_format and rides on the injected format
-// instructions instead. Nil declares nothing and keeps every format eligible.
+// instructions instead. A constrained "array" or "enum" request sends its
+// schema as a json_schema response_format only when the declaration lists
+// that format, since some endpoints (OpenAI's among them) accept only an
+// object at the schema root. Nil declares nothing and keeps the json format
+// eligible.
 func (g *ModelGenerator) WithOutputFormats(formats []string) *ModelGenerator {
 	if g.err != nil {
 		return g
@@ -423,13 +427,33 @@ func (g *ModelGenerator) Generate(ctx context.Context, req *ai.ModelRequest, han
 // "json" out has no schema-less JSON mode on the wire (Anthropic's compatible
 // endpoint rejects the json_object type), so such a request sends no
 // response_format and the format instructions the framework injects carry it
-// instead.
+// instead. A constrained array or enum request sends its schema only to a
+// model that declares the format.
 func (g *ModelGenerator) applyResponseFormat(output *ai.ModelOutputConfig) {
 	format := getResponseFormat(output)
 	if format.OfJSONObject != nil && len(g.outputFormats) > 0 && !slices.Contains(g.outputFormats, "json") {
 		format = openai.ChatCompletionNewParamsResponseFormatUnion{}
 	}
+	if output != nil && output.Constrained && output.Schema != nil && slices.Contains(g.outputFormats, output.Format) {
+		switch output.Format {
+		case "array", "enum":
+			format = jsonSchemaFormat(output.Schema)
+		}
+	}
 	g.request.ResponseFormat = format
+}
+
+// jsonSchemaFormat is a strict json_schema response format for schema.
+func jsonSchemaFormat(schema map[string]any) openai.ChatCompletionNewParamsResponseFormatUnion {
+	return openai.ChatCompletionNewParamsResponseFormatUnion{
+		OfJSONSchema: &shared.ResponseFormatJSONSchemaParam{
+			JSONSchema: shared.ResponseFormatJSONSchemaJSONSchemaParam{
+				Name:   "output",
+				Schema: schema,
+				Strict: openai.Bool(true),
+			},
+		},
+	}
 }
 
 // getResponseFormat determines the appropriate response format based on the output configuration
@@ -443,14 +467,7 @@ func getResponseFormat(output *ai.ModelOutputConfig) openai.ChatCompletionNewPar
 	switch output.Format {
 	case "json":
 		if output.Schema != nil {
-			jsonSchemaParam := shared.ResponseFormatJSONSchemaParam{
-				JSONSchema: shared.ResponseFormatJSONSchemaJSONSchemaParam{
-					Name:   "output",
-					Schema: output.Schema,
-					Strict: openai.Bool(true),
-				},
-			}
-			format.OfJSONSchema = &jsonSchemaParam
+			format = jsonSchemaFormat(output.Schema)
 		} else {
 			jsonObjectParam := shared.NewResponseFormatJSONObjectParam()
 			format.OfJSONObject = &jsonObjectParam

@@ -147,7 +147,7 @@ var (
 		SystemRole:  true,
 		Media:       true,
 		ToolChoice:  true,
-		Output:      []string{"text", "json"},
+		Output:      []string{"text", "json", "array", "enum"},
 		Constrained: ai.ConstrainedSupportAll,
 	}
 	// multimodalNoToolChoice is multimodal minus tool-choice steering: the K2
@@ -162,7 +162,7 @@ var (
 		SystemRole:  true,
 		Media:       true,
 		ToolChoice:  false,
-		Output:      []string{"text", "json"},
+		Output:      []string{"text", "json", "array", "enum"},
 		Constrained: ai.ConstrainedSupportAll,
 	}
 )
