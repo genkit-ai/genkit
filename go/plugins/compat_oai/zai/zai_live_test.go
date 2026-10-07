@@ -39,9 +39,7 @@ func TestPluginLive(t *testing.T) {
 			VisionModel:      zai.ModelRef("glm-5v-turbo", nil),
 			LimitConfig:      &zai.ChatConfig{MaxOutputTokens: 16, Thinking: noThinking},
 			BadKeyPlugin:     &zai.ZAI{APIKey: "invalid"},
-			Skip: map[string]string{
-				"generate/unknown model": "Z.ai answers an unknown model with 400 (code 1211), not 404",
-			},
+			Skip:             map[string]string{},
 		},
 		ExtraConfig: map[string]any{
 			"thinking": map[string]any{"type": "disabled"},

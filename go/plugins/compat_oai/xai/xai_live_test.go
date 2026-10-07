@@ -40,9 +40,7 @@ func TestPluginLive(t *testing.T) {
 			}),
 			LimitConfig:  &xai.ChatConfig{MaxOutputTokens: 16},
 			BadKeyPlugin: &xai.XAI{APIKey: "invalid"},
-			Skip: map[string]string{
-				"generate/bad api key": "xAI answers a rejected key with 400, not 401",
-			},
+			Skip:         map[string]string{},
 		},
 		ExtraConfig: map[string]any{
 			"extra": map[string]any{"user": "genkit-livetest"},

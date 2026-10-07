@@ -39,9 +39,7 @@ func TestPluginLive(t *testing.T) {
 			ReasoningContent: true,
 			LimitConfig:      &deepseek.ChatConfig{MaxOutputTokens: 16, Thinking: noThinking},
 			BadKeyPlugin:     &deepseek.DeepSeek{APIKey: "invalid"},
-			Skip: map[string]string{
-				"generate/unknown model": "DeepSeek answers an unknown model with 400, not 404",
-			},
+			Skip:             map[string]string{},
 		},
 		ExtraConfig: map[string]any{
 			"thinking": map[string]any{"type": "disabled"},
