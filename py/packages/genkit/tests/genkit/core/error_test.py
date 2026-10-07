@@ -22,6 +22,7 @@ from unittest.mock import MagicMock
 import pytest
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
+import genkit
 from genkit._core import _error as error_mod
 from genkit._core._error import (
     GenkitError,
@@ -206,6 +207,48 @@ def test_public_error() -> None:
     assert error.status == 'UNAUTHENTICATED'
     assert error.original_message == 'Please log in'
     assert error.details['extra_msg'] == 'Session expired'
+
+
+def test_genkit_error_message_is_the_sentence_they_passed() -> None:
+    """err.message is the text passed as message=, without the status prefix."""
+    err = genkit.GenkitError(status='NOT_FOUND', message='missing')
+    assert err.message == 'missing'
+    assert err.original_message == 'missing'
+
+
+def test_genkit_error_str_still_leads_with_the_status() -> None:
+    """str(err) still reads 'NOT_FOUND: missing'."""
+    err = genkit.GenkitError(status='NOT_FOUND', message='missing')
+    assert str(err) == 'NOT_FOUND: missing'
+
+
+def test_genkit_error_message_with_cause_is_the_sentence_they_passed() -> None:
+    """A wrapped cause stays on str(err); .message is still the sentence they passed."""
+    err = genkit.GenkitError(status='NOT_FOUND', message='missing', cause=ValueError('disk'))
+    assert err.message == 'missing'
+    assert str(err) == 'NOT_FOUND: missing: disk'
+
+
+def test_public_error_message_is_the_sentence_they_passed() -> None:
+    """A PublicError's .message is its sentence too."""
+    err = genkit.PublicError(status='UNAUTHENTICATED', message='Please log in')
+    assert err.message == 'Please log in'
+
+
+@pytest.mark.asyncio
+async def test_flow_error_message_is_the_sentence_the_flow_raised() -> None:
+    """Catching a GenkitError raised from a flow, .message is the flow's sentence."""
+    ai = genkit.Genkit()
+
+    @ai.flow()
+    async def lookup_account(account_id: str) -> str:
+        raise genkit.GenkitError(status='NOT_FOUND', message='no such account')
+
+    with pytest.raises(genkit.GenkitError) as raised:
+        await lookup_account('acct-1')
+    err = raised.value
+    assert err.message == 'no such account'
+    assert err.status == 'NOT_FOUND'
 
 
 def test_get_http_status() -> None:

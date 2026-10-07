@@ -444,6 +444,7 @@ class GenkitError(Exception):
         else:
             cause_suffix = f': {cause}' if cause else ''
         super().__init__(f'{source_prefix}{self.status}: {message}{cause_suffix}')
+        self.message: str = message
         self.original_message: str = message
 
         if not details:
