@@ -31,7 +31,7 @@ from dotpromptz.typing import (
     PromptInputConfig,
     PromptMetadata,
 )
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import Never, Self
 
 from genkit._ai._generate import (
@@ -75,7 +75,7 @@ from genkit._core._model import (
     resume_options_to_resume,
 )
 from genkit._core._registry import Registry
-from genkit._core._schema import parse_schema, to_json_schema
+from genkit._core._schema import InvalidOutputSchemaError, check_output_schema, parse_schema, to_json_schema
 from genkit._core._tool import Tool
 from genkit._core._typing import (
     GenerateActionOutputConfig,
@@ -295,13 +295,13 @@ class Prompt(Generic[InputT, OutputT]):
     ) -> None:
         """Initialize prompt with configuration, templates, and schema options."""
         self._registry = registry
-        # Identity: how the prompt is registered and looked up. Not part of _def,
-        # which only holds what goes into a generate.
         # Keys the caller leaves out take these values before the template runs.
         self._input_default = dict(input_default) if input_default else None
         # Set when a lookup also passed input_schema=; the file's schema still
         # has to pass so a required file field can't slip through.
         self._file_input_schema: type | dict[str, Any] | str | None = None
+        # Identity: how the prompt is registered and looked up. Not part of _def,
+        # which only holds what goes into a generate.
         self._name = name
         self._ns = ns
         self._variant = variant
@@ -351,8 +351,8 @@ class Prompt(Generic[InputT, OutputT]):
             return
 
         resolved = await lookup_prompt(self._registry, self._name, self._variant)
-        # Keep a Pydantic output type the caller passed: the .prompt file only
-        # carries a dict schema, and the type is what gives typed output at runtime.
+        # Keep a Pydantic output type the caller passed: it wins over the file's
+        # dict schema or registered name, and the type is what gives typed output.
         keep: dict[str, Any] = {}
         schema = self._def.output_schema
         if isinstance(schema, type) and issubclass(schema, BaseModel):
@@ -554,6 +554,7 @@ async def prepare_prompt(
     prompt: Prompt[Any, Any],
     input: Any | None = None,  # noqa: ANN401
     opts: PromptGenerateOptions | None = None,
+    validate_input: bool = True,
 ) -> PreparedPrompt:
     """Build the model request for one call of this prompt.
 
@@ -585,6 +586,7 @@ async def prepare_prompt(
         input=input,
         context=context,
         history=call_opts.get('messages'),
+        validate_input=validate_input,
     )
 
     options = await to_generate_options(registry=registry, call=call)
@@ -839,16 +841,49 @@ def resolve_prompt_input_schema(
     return schema
 
 
+_ANY_ADAPTER: TypeAdapter[Any] = TypeAdapter(Any)
+
+
+def json_form(data: dict[str, Any]) -> dict[str, Any]:
+    """``data`` with dates, UUIDs, enums, and models in their JSON form.
+
+    The template engine JSON-encodes its input, and the file schema is JSON
+    Schema, so both see what the value serializes to. A value pydantic can't
+    serialize is left as-is.
+    """
+    try:
+        return cast(dict[str, Any], _ANY_ADAPTER.dump_python(data, mode='json'))
+    except ValueError:
+        return data
+
+
+def caller_input_keys(input: Any) -> set[str]:  # noqa: ANN401
+    """Keys the caller actually passed: dict keys, or the fields set on a model instance."""
+    if isinstance(input, BaseModel):
+        return set(input.model_fields_set)
+    return set(coerce_prompt_template_input(input))
+
+
 def check_prompt_input(
     *,
     name: str,
+    input: Any,  # noqa: ANN401
     data: dict[str, Any],
+    defaults: dict[str, Any] | None,
     schema: type | dict[str, Any],
-) -> None:
-    """Raise ``INVALID_ARGUMENT`` naming the prompt and field when input doesn't match."""
+) -> dict[str, Any]:
+    """Raise ``INVALID_ARGUMENT`` naming the prompt and field when input doesn't match.
+
+    Returns the template data. A Pydantic class adds its defaults for keys a
+    dict input left out; a JSON schema returns ``data`` unchanged.
+    """
     if isinstance(schema, type) and issubclass(schema, BaseModel):
+        # An instance of the class already passed it. Re-validating the dumped
+        # dict would miss aliased fields, since model_dump keys by field name.
+        if isinstance(input, schema):
+            return data
         try:
-            schema.model_validate(data)
+            validated = schema.model_validate(data)
         except ValidationError as error:
             raise GenkitError(
                 message=f"Invalid input for action '{name}': {error}",
@@ -856,10 +891,25 @@ def check_prompt_input(
                 cause=error,
                 reason=RuntimeErrorReason.INVALID_INPUT,
             ) from error
-        return
+        return {**data, **validated.model_dump()}
     if isinstance(schema, dict):
         try:
-            parse_schema(data=data, json_schema=schema)
+            check_output_schema(schema)
+        except InvalidOutputSchemaError as error:
+            raise GenkitError(
+                message=f"Invalid input_schema for prompt '{name}': {error.cause}",
+                status='INVALID_ARGUMENT',
+                cause=error.cause,
+                reason=RuntimeErrorReason.INVALID_SCHEMA,
+            ) from error
+        # Keys only a class default filled in don't count against a file that
+        # doesn't declare them; the caller never passed them.
+        declared = set(schema.get('properties') or {}) | set(schema.get('required') or [])
+        passed = caller_input_keys(input) | set(defaults or {})
+        checked = {k: v for k, v in data.items() if k in passed or k in declared}
+        try:
+            # JSON form, so a date or UUID checks as the string it renders as.
+            parse_schema(data=json_form(checked), json_schema=schema)
         except GenkitError as error:
             raise GenkitError(
                 message=f"Invalid input for action '{name}': {error.original_message}",
@@ -867,24 +917,32 @@ def check_prompt_input(
                 cause=error,
                 reason=RuntimeErrorReason.INVALID_INPUT,
             ) from error
+    return data
 
 
-def validate_prompt_input(
+def validated_prompt_input(
     *,
     name: str,
-    data: dict[str, Any],
+    input: Any,  # noqa: ANN401
+    defaults: dict[str, Any] | None,
     schema: type | dict[str, Any] | str | None,
     file_schema: type | dict[str, Any] | str | None,
     registry: Registry,
-) -> None:
-    """Check the filled input against the lookup/define schema and the file's schema."""
+) -> dict[str, Any]:
+    """Fill file defaults, then check against the lookup/define schema and the file's schema.
+
+    Returns the template data. Precedence: keys the caller passed > file
+    ``input.default`` > class default.
+    """
+    data = filled_prompt_input(input=input, defaults=defaults)
     seen: list[object] = []
     for candidate in (schema, file_schema):
         resolved = resolve_prompt_input_schema(schema=candidate, registry=registry)
         if resolved is None or resolved in seen:
             continue
         seen.append(resolved)
-        check_prompt_input(name=name, data=data, schema=resolved)
+        data = check_prompt_input(name=name, input=input, data=data, defaults=defaults, schema=resolved)
+    return data
 
 
 async def to_prompt_model_request(*, registry: Registry, options: GenerateActionOptions) -> ModelRequest:
@@ -1079,22 +1137,29 @@ async def render_call(
     input: Any,  # noqa: ANN401
     context: dict[str, Any] | None = None,
     history: list[Message] | None = None,
+    validate_input: bool = True,
 ) -> GenerateCall:
     """Expand dotprompt with the call's input into one merged :class:`GenerateCall`.
 
     ``context`` is what templates see (``{{@auth}}``, ``{{@state}}``).
     ``history`` is this call's chat history (``messages=`` on the call).
+    ``validate_input=False`` skips the input schema check (prompt agents have
+    no input to pass); file defaults still fill.
     Sets final ``messages`` and clears template source fields, before
     :func:`to_generate_options`.
     """
-    template_input = filled_prompt_input(input=input, defaults=prompt._input_default)
-    validate_prompt_input(
-        name=prompt._name or 'prompt',
-        data=template_input,
-        schema=prompt._def.input_schema,
-        file_schema=prompt._file_input_schema,
-        registry=registry,
-    )
+    if validate_input:
+        template_input = validated_prompt_input(
+            name=registry_definition_key(prompt._name, prompt._variant, prompt._ns) if prompt._name else 'prompt',
+            input=input,
+            defaults=prompt._input_default,
+            schema=prompt._def.input_schema,
+            file_schema=prompt._file_input_schema,
+            registry=registry,
+        )
+    else:
+        template_input = filled_prompt_input(input=input, defaults=prompt._input_default)
+    template_input = json_form(template_input)
     render_context = context
     # {{@state}} is written only when metadata has state; a non-empty
     # metadata bag without that key must not wipe the call's context state.
@@ -1442,9 +1507,13 @@ def load_prompt(registry: Registry, path: Path, filename: str, prefix: str = '',
         raw_output = raw.get('output') if isinstance(raw, dict) else None
         raw_output_schema = raw_output.get('schema') if isinstance(raw_output, dict) else None
         file_default = metadata.get('input', {}).get('default')
-        # Keep a named schema as the name so a registered class becomes .output.
+        # A bare registered class name stays a name so the class becomes .output.
+        # Anything else (`schema: string`, `schema: Recipe, the dish`, inline
+        # picoschema) uses the JSON schema dotprompt resolved.
         output_schema = (
-            raw_output_schema if isinstance(raw_output_schema, str) else metadata.get('output', {}).get('jsonSchema')
+            raw_output_schema
+            if isinstance(raw_output_schema, str) and registry.lookup_schema_type(raw_output_schema) is not None
+            else metadata.get('output', {}).get('jsonSchema')
         )
 
         executable_prompt = Prompt(

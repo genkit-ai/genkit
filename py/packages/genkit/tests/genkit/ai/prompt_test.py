@@ -19,13 +19,16 @@
 
 import inspect
 import tempfile
+import uuid
 from collections.abc import Awaitable, Callable
+from datetime import date
 from pathlib import Path
 from typing import Any, cast
 from unittest.mock import ANY, MagicMock, patch
 
 import pytest
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic.alias_generators import to_camel
 
 from genkit import (
     Document,
@@ -56,6 +59,8 @@ from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import GenerateActionOptions, ModelConfig, resume_options_to_resume
 from genkit._core._registry import define_dynamic_action_provider
 from genkit._core._typing import Role
+from genkit.exp import Genkit as ExpGenkit
+from genkit.exp.agent import InMemorySessionStore
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, MiddlewareRef, ModelHookParams
 from genkit.plugin_api import MiddlewarePlugin, new_middleware
 from genkit.testing import (
@@ -2455,3 +2460,175 @@ async def test_prompt_without_input_schema_accepts_any_input() -> None:
     assert rendered.messages is not None
     assert rendered.messages[0].text == 'Make 1.'
     assert pm.request_count == 0
+
+
+_SCALAR_OUTPUT_PROMPT = """---
+output:
+  schema: string
+---
+Name a dish.
+"""
+
+_DESCRIBED_NAMED_OUTPUT_PROMPT = """---
+output:
+  schema: Recipe, the dish
+---
+Name a dish.
+"""
+
+
+@pytest.mark.asyncio
+async def test_prompt_file_scalar_output_schema_keeps_json_schema() -> None:
+    """`output: {schema: string}` renders with `json_schema={'type': 'string'}`, not `None`."""
+    ai, _pm, tmp = _prompt_file_ai(('dish.prompt', _SCALAR_OUTPUT_PROMPT))
+    with tmp:
+        rendered = await ai.prompt('dish').render()
+
+        assert rendered.output is not None
+        assert rendered.output.json_schema == {'type': 'string'}
+
+
+@pytest.mark.asyncio
+async def test_prompt_file_named_output_schema_with_description_keeps_json_schema() -> None:
+    """`schema: Recipe, the dish` is not a bare name, so it keeps the dotprompt-resolved JSON schema."""
+    ai, _pm, tmp = _prompt_file_ai(('dish.prompt', _DESCRIBED_NAMED_OUTPUT_PROMPT))
+    with tmp:
+        ai.define_schema('Recipe', Recipe)
+        rendered = await ai.prompt('dish').render()
+
+        assert rendered.output is not None
+        assert rendered.output.json_schema is not None
+        assert 'title' in rendered.output.json_schema['properties']
+
+
+class PantryInput(BaseModel):
+    food: str = 'banana bread'
+    ingredients: list[str] | None = None
+
+
+@pytest.mark.asyncio
+async def test_prompt_lookup_class_unset_field_the_file_omits_passes() -> None:
+    """An unset lookup-class field the file does not declare does not trip the file's `additionalProperties`."""
+    ai, pm, tmp = _prompt_file_ai(('recipe.prompt', _NO_DEFAULT_PROMPT))
+    with tmp:
+        rendered = await ai.prompt('recipe', input_schema=PantryInput).render(PantryInput())
+
+        assert rendered.messages is not None
+        assert rendered.messages[0].text == 'Make banana bread.'
+        assert pm.request_count == 0
+
+
+@pytest.mark.asyncio
+async def test_prompt_lookup_class_set_field_the_file_omits_is_rejected() -> None:
+    """A lookup-class field the caller set still has to pass the file schema."""
+    ai, pm, tmp = _prompt_file_ai(('recipe.prompt', _NO_DEFAULT_PROMPT))
+    with tmp:
+        with pytest.raises(GenkitError) as raised:
+            await ai.prompt('recipe', input_schema=PantryInput).render(PantryInput(ingredients=['walnuts']))
+        _assert_invalid_prompt_input(raised.value, prompt_name='recipe', field='ingredients')
+        assert pm.request_count == 0
+
+
+class AliasedOrder(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel)
+
+    food_name: str
+
+
+@pytest.mark.asyncio
+async def test_define_prompt_aliased_class_accepts_its_own_instance() -> None:
+    """An instance of an `alias_generator` class passes its own `input_schema` and renders by field name."""
+    ai, _pm = _setup_prompt_call()
+    p = ai.define_prompt(name='aliased', prompt='Make {{food_name}}.', input_schema=AliasedOrder)
+
+    rendered = await p.render(AliasedOrder.model_validate({'foodName': 'pie'}))
+
+    assert rendered.messages is not None
+    assert rendered.messages[0].text == 'Make pie.'
+
+
+@pytest.mark.asyncio
+async def test_define_prompt_dict_input_takes_class_default() -> None:
+    """A dict input renders the class default for a key it omits, same as an instance."""
+    ai, _pm = _setup_prompt_call()
+    p = ai.define_prompt(name='ramen', prompt='{{size}} {{dish}}', input_schema=RamenOrder)
+
+    from_dict = await p.render({'dish': 'ramen'})
+    from_instance = await p.render(RamenOrder(dish='ramen'))
+
+    assert from_dict.messages is not None
+    assert from_instance.messages is not None
+    assert from_dict.messages[0].text == 'regular ramen'
+    assert from_instance.messages[0].text == 'regular ramen'
+
+
+class ReservationInput(BaseModel):
+    when: date
+    party: uuid.UUID
+
+
+_RESERVATION_PROMPT = """---
+input:
+  schema:
+    when: string
+    party: string
+---
+Book {{party}} on {{when}}.
+"""
+
+
+@pytest.mark.asyncio
+async def test_prompt_lookup_class_json_types_pass_file_string_schema() -> None:
+    """`date` and `UUID` fields check against the file's `type: string` in their JSON form."""
+    party = uuid.UUID('12345678-1234-5678-1234-567812345678')
+    ai, _pm, tmp = _prompt_file_ai(('reserve.prompt', _RESERVATION_PROMPT))
+    with tmp:
+        rendered = await ai.prompt('reserve', input_schema=ReservationInput).render(
+            ReservationInput(when=date(2026, 1, 1), party=party)
+        )
+
+        assert rendered.messages is not None
+        assert rendered.messages[0].text == f'Book {party} on 2026-01-01.'
+
+
+@pytest.mark.asyncio
+async def test_define_prompt_malformed_input_schema_is_a_schema_error() -> None:
+    """A broken `input_schema` dict raises `INVALID_SCHEMA` naming `input_schema`, not a caller input error."""
+    ai, pm = _setup_prompt_call()
+    p = ai.define_prompt(name='broken', prompt='hi', input_schema={'type': 'objekt'})
+
+    with pytest.raises(GenkitError) as raised:
+        await p.render({})
+
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    assert raised.value.reason is RuntimeErrorReason.INVALID_SCHEMA
+    assert "Invalid input_schema for prompt 'broken'" in raised.value.original_message
+    assert 'output_schema' not in raised.value.original_message
+    assert pm.request_count == 0
+
+
+@pytest.mark.asyncio
+async def test_prompt_variant_input_error_names_the_variant() -> None:
+    """A rejected input on `recipe.robot.prompt` reports `recipe.robot`, not `recipe`."""
+    ai, _pm, tmp = _prompt_file_ai(('recipe.prompt', _RECIPE_PROMPT), ('recipe.robot.prompt', _NO_DEFAULT_PROMPT))
+    with tmp:
+        with pytest.raises(GenkitError) as raised:
+            await ai.prompt('recipe', variant='robot').render({})
+        _assert_invalid_prompt_input(raised.value, prompt_name='recipe.robot', field='food')
+
+
+@pytest.mark.asyncio
+async def test_prompt_agent_renders_required_field_without_input() -> None:
+    """A prompt agent has no input to pass, so a required file field renders empty instead of failing the turn."""
+    with tempfile.TemporaryDirectory() as tmp:
+        (Path(tmp) / 'chef.prompt').write_text(_NO_DEFAULT_PROMPT)
+        ai = ExpGenkit(prompt_dir=tmp, model='scriptedModel')
+        pm, _ = define_scripted_model(ai)
+        pm.responses = [_text_reply('Pie it is.')]
+        agent = ai.define_prompt_agent(name='chef', store=InMemorySessionStore())
+
+        chat = agent.chat()
+        await chat.send('What should I bake?')
+
+        assert pm.request_count == 1
+        assert chat.messages[-1].text == 'Pie it is.'
