@@ -78,8 +78,8 @@ def evaluator_action_metadata(
     return ActionMetadata(
         action_type=ActionKind.EVALUATOR,
         name=name,
-        input_json_schema=to_json_schema(EvalRequest),
-        output_json_schema=to_json_schema(list[EvalFnResponse]),
+        input_schema=to_json_schema(EvalRequest),
+        output_schema=to_json_schema(list[EvalFnResponse]),
         metadata={'evaluator': {'customOptions': to_json_schema(config_schema) if config_schema else None}},
     )
 

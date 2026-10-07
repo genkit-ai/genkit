@@ -710,14 +710,8 @@ class ActionMetadata(GenkitModel):
     action_type: str | None = None
     name: str = Field(...)
     description: str | None = None
-    input_schema: Any | None = Field(default=None)
-    input_json_schema: Any | dict[str, Any] | None = Field(
-        default=None, description='A JSON Schema Draft 7 (http://json-schema.org/draft-07/schema) object.'
-    )
-    output_schema: Any | None = Field(default=None)
-    output_json_schema: Any | None = Field(
-        default=None, description='A JSON Schema Draft 7 (http://json-schema.org/draft-07/schema) object.'
-    )
+    input_schema: dict[str, Any] | None = None
+    output_schema: dict[str, Any] | None = None
     stream_schema: Any | None = Field(default=None)
     metadata: Metadata | None = None
 

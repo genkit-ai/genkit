@@ -351,8 +351,8 @@ class Ollama(Plugin):
         )
 
         # Explicitly set schemas (always present in the action metadata).
-        action.input_schema = action_metadata.input_json_schema  # type: ignore[invalid-assignment]
-        action.output_schema = action_metadata.output_json_schema  # type: ignore[invalid-assignment]
+        action.input_schema = action_metadata.input_schema  # type: ignore[invalid-assignment]
+        action.output_schema = action_metadata.output_schema  # type: ignore[invalid-assignment]
 
         return action
 

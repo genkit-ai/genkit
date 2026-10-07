@@ -675,8 +675,8 @@ class ReflectionServerV2:
                 'actionType': meta.action_type,
                 'description': meta.description,
                 'metadata': meta.metadata,
-                'inputSchema': meta.input_schema or meta.input_json_schema,
-                'outputSchema': meta.output_schema or meta.output_json_schema,
+                'inputSchema': meta.input_schema or None,
+                'outputSchema': meta.output_schema or None,
             })
             for key, meta in catalog.items()
         }

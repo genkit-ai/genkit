@@ -484,8 +484,8 @@ def _veo_background_action_metadata(name: str) -> ActionMetadata:
     return ActionMetadata(
         action_type=ActionKind.BACKGROUND_MODEL,
         name=name,
-        input_json_schema=to_json_schema(ModelRequest[VeoConfig]),
-        output_json_schema=to_json_schema(Operation),
+        input_schema=to_json_schema(ModelRequest[VeoConfig]),
+        output_schema=to_json_schema(Operation),
         metadata={
             'model': {
                 **veo_model_info(local).model_dump(by_alias=True),
@@ -863,8 +863,8 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
                 ActionMetadata(
                     action_type=ActionKind.BACKGROUND_MODEL,
                     name=googleai_name(name),
-                    input_json_schema=to_json_schema(ModelRequest[DeepResearchConfig]),
-                    output_json_schema=to_json_schema(Operation),
+                    input_schema=to_json_schema(ModelRequest[DeepResearchConfig]),
+                    output_schema=to_json_schema(Operation),
                     metadata={
                         'model': {
                             **deep_research_model_info(name).model_dump(by_alias=True),
@@ -1282,8 +1282,8 @@ class VertexAI(GoogleFamilyRefs, Plugin):
                 ActionMetadata(
                     name=evaluator_name,
                     action_type=ActionKind.EVALUATOR,
-                    input_json_schema=to_json_schema(EvalRequest),
-                    output_json_schema=to_json_schema(list[EvalFnResponse]),
+                    input_schema=to_json_schema(EvalRequest),
+                    output_schema=to_json_schema(list[EvalFnResponse]),
                     metadata={'type': 'evaluator'},
                 )
             )

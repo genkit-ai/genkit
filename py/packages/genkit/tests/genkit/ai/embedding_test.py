@@ -46,8 +46,8 @@ def test_embedder_action_metadata() -> None:
     )
 
     assert isinstance(action_metadata, ActionMetadata)
-    assert action_metadata.input_json_schema is not None
-    assert action_metadata.output_json_schema is not None
+    assert action_metadata.input_schema is not None
+    assert action_metadata.output_schema is not None
     assert action_metadata.metadata == {
         'embedder': {
             'label': info.label,

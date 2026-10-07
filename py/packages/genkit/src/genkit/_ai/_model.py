@@ -278,8 +278,8 @@ def model_action_metadata(
     return ActionMetadata(
         action_type=ActionKind.MODEL,
         name=name,
-        input_json_schema=to_json_schema(ModelRequest),
-        output_json_schema=to_json_schema(ModelResponse),
+        input_schema=to_json_schema(ModelRequest),
+        output_schema=to_json_schema(ModelResponse),
         metadata={'model': {**info, 'customOptions': to_json_schema(config_schema) if config_schema else None}},
     )
 
