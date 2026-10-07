@@ -138,7 +138,9 @@ func (c ChatConfig) ApplyToChatCompletion(params *openai.ChatCompletionNewParams
 // Capability sets shared by the entries below: text and images in, text or
 // JSON out, and tools. Moonshot's chat API takes response_format json_schema,
 // so structured output is generated natively rather than coaxed through
-// prompt instructions. See https://platform.kimi.ai/docs/api/chat.
+// prompt instructions. See https://platform.kimi.ai/docs/api/chat. Under a
+// response format the model answers in JSON at once and never calls a tool,
+// so the constraint is claimed only for requests without tools.
 var (
 	// multimodal is the Kimi K3 set, with free tool choice.
 	multimodal = ai.ModelSupports{
@@ -148,7 +150,7 @@ var (
 		Media:       true,
 		ToolChoice:  true,
 		Output:      []string{"text", "json", "array", "enum"},
-		Constrained: ai.ConstrainedSupportAll,
+		Constrained: ai.ConstrainedSupportNoTools,
 	}
 	// multimodalNoToolChoice is multimodal minus tool-choice steering: the K2
 	// generation rejects tool_choice required as incompatible with thinking,
@@ -163,7 +165,7 @@ var (
 		Media:       true,
 		ToolChoice:  false,
 		Output:      []string{"text", "json", "array", "enum"},
-		Constrained: ai.ConstrainedSupportAll,
+		Constrained: ai.ConstrainedSupportNoTools,
 	}
 )
 

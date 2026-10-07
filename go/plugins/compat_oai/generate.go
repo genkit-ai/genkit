@@ -44,6 +44,10 @@ type ModelGenerator struct {
 	outputFormats []string
 	// separateReasoning is [OpenAICompatible.SeparateReasoningTokens].
 	separateReasoning bool
+	// constrained is the model's constrained output claim. A model that
+	// claims it only without tools gets no JSON mode on a request with
+	// tools, as it gets no schema.
+	constrained ai.ConstrainedSupport
 	// Store any errors that occur during building
 	err error
 }
@@ -427,11 +431,19 @@ func (g *ModelGenerator) Generate(ctx context.Context, req *ai.ModelRequest, han
 // "json" out has no schema-less JSON mode on the wire (Anthropic's compatible
 // endpoint rejects the json_object type), so such a request sends no
 // response_format and the format instructions the framework injects carry it
-// instead. A constrained array or enum request sends its schema only to a
-// model that declares the format.
+// instead, as does a request with tools to a model that constrains output
+// only without them. A constrained array or enum request sends its schema
+// only to a model that declares the format.
 func (g *ModelGenerator) applyResponseFormat(output *ai.ModelOutputConfig) {
 	format := getResponseFormat(output)
 	if format.OfJSONObject != nil && len(g.outputFormats) > 0 && !slices.Contains(g.outputFormats, "json") {
+		format = openai.ChatCompletionNewParamsResponseFormatUnion{}
+	}
+	// The framework drops the schema of a model that constrains output only
+	// without tools when the request has tools, since such a model answers
+	// in JSON at once and never calls them. JSON mode does the same, so it
+	// goes too, and the injected format instructions carry the format.
+	if format.OfJSONObject != nil && len(g.tools) > 0 && g.constrained == ai.ConstrainedSupportNoTools {
 		format = openai.ChatCompletionNewParamsResponseFormatUnion{}
 	}
 	if output != nil && output.Constrained && output.Schema != nil && slices.Contains(g.outputFormats, output.Format) {

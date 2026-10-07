@@ -1181,6 +1181,22 @@ func TestApplyResponseFormatHonorsDeclaredOutputs(t *testing.T) {
 		t.Error("enum declared: its schema should be sent as json_schema")
 	}
 
+	// A model that constrains output only without tools answers in JSON at
+	// once under JSON mode and never calls the tools.
+	tools := []*ai.ToolDefinition{{Name: "t", InputSchema: map[string]any{"type": "object"}}}
+	g = NewModelGenerator(&client, "m").WithOutputFormats([]string{"text", "json"}).WithTools(tools)
+	g.constrained = ai.ConstrainedSupportNoTools
+	g.applyResponseFormat(jsonOutput)
+	if g.request.ResponseFormat.OfJSONObject != nil {
+		t.Error("no-tools model with tools: json_object should be dropped")
+	}
+	g = NewModelGenerator(&client, "m").WithOutputFormats([]string{"text", "json"}).WithTools(tools)
+	g.constrained = ai.ConstrainedSupportAll
+	g.applyResponseFormat(jsonOutput)
+	if g.request.ResponseFormat.OfJSONObject == nil {
+		t.Error("model constrained alongside tools: json_object should be sent")
+	}
+
 	g = NewModelGenerator(&client, "m")
 	g.applyResponseFormat(&ai.ModelOutputConfig{Format: "text"})
 	if g.request.ResponseFormat.OfText != nil {

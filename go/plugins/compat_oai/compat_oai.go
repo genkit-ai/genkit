@@ -439,18 +439,19 @@ func NewChatModel[Config ChatConfig](o *OpenAICompatible, id string, opts ai.Mod
 			return nil, err
 		}
 
-		var outputFormats []string
+		var supports ai.ModelSupports
 		if opts.Supports != nil {
-			outputFormats = opts.Supports.Output
+			supports = *opts.Supports
 		}
-		return NewModelGenerator(o.clientForKey(config.RequestAPIKey()), id).
+		g := NewModelGenerator(o.clientForKey(config.RequestAPIKey()), id).
 			withSeparateReasoning(o.SeparateReasoningTokens).
 			WithParams(params).
 			WithMessages(input.Messages).
 			WithTools(input.Tools).
 			WithToolChoice(input.ToolChoice).
-			WithOutputFormats(outputFormats).
-			Generate(ctx, input, cb)
+			WithOutputFormats(supports.Output)
+		g.constrained = supports.Constrained
+		return g.Generate(ctx, input, cb)
 	})
 }
 
