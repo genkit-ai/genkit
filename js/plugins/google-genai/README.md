@@ -361,15 +361,17 @@ However, if your code directly inspects the underlying provider payload via `res
   - **Tool Invocations:** Intermediate server-side tool calls (such as Google Search and Code Execution) and tool results are always represented as explicit steps (`google_search_call`, `code_execution_call`, etc.).
   - **Grounding Citations:** Search/Maps grounding citations are located inside content annotations within the `model_output` step:
     ```typescript
-    const raw = response.raw as any;
+    import type { GeminiInteraction } from '@genkit-ai/google-genai';
+
+    const raw = response.raw as GeminiInteraction;
     const annotations = raw.steps
-      ?.find((step: any) => step.content?.some((c: any) => c.annotations))
-      ?.content.find((c: any) => c.annotations)?.annotations;
+      ?.flatMap((step) => (step.type === 'model_output' ? step.content : []))
+      .flatMap((c) => (c.type === 'text' ? (c.annotations ?? []) : []));
     ```
 
 ### Key Differences on the Interactions Path
 
-1. **Safety Settings:** Custom safety settings are not supported in the Interactions API. Passing `safetySettings` to an Interactions model will throw an `INVALID_ARGUMENT` error to prevent silently ignoring safety policies.
+1. **Safety Settings:** Custom safety settings are not supported on the Interactions path. These models apply no additional safety filters by default ([Gemini API safety settings](https://ai.google.dev/gemini-api/docs/safety-settings)); built-in protections against core harms always apply. `BLOCK_NONE` settings are ignored, since they can't block anything beyond that default. Blocking thresholds (`BLOCK_ONLY_HIGH` and stricter) throw an `INVALID_ARGUMENT` error, so a requested filter is never silently dropped.
 2. **Server-Side Tool Invocations:** The Interactions API always includes intermediate tool invocations in the execution steps, so `toolConfig.includeServerSideToolInvocations` is unnecessary.
 3. **Stateless by Default (Explicit Store Opt-In):** The upstream Interactions API defaults to storing conversations on Google's servers (`store: true`). To preserve the stateless, privacy-preserving behavior of Genkit's `generateContent`, the plugin explicitly defaults `store: false`. For Gemini models, server-side storage is an explicit opt-in: `store: true` must be specified via request config (`config: { store: true }`) or plugin configuration (`googleAI({ store: true })`). When an interaction is stored, its ID is accessible on `response.message?.metadata?.interactionId`. In multi-turn calls, passing `messages: previousResponse.messages` with `config: { store: true }` will automatically extract the previous interaction ID from message metadata and continue the session statefully. If setting `config: { previousInteractionId: "..." }` manually, `store: true` is also required (omitting `store` or passing `store: false` will throw an `INVALID_ARGUMENT` error).
 

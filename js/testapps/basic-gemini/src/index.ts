@@ -86,6 +86,13 @@ ai.defineFlow('deep-research-code-execution', async (_, { sendChunk }) => {
   return operation.output?.message?.content;
 });
 
+// The MCP flows below need an MCP server. This default points at a public
+// THIRD-PARTY demo server that we do not control: prompts and tool calls are
+// sent to it. To use it, delete the "// Third-party demo server: " prefix
+// (acknowledging that), or pass your own server as `serverUrl`.
+const DEMO_MCP_SERVER_URL =
+  '// Third-party demo server: https://mcpplaygroundonline.com/mcp-complex-server';
+
 ai.defineFlow(
   'deep-research-mcp',
   async (
@@ -101,8 +108,7 @@ ai.defineFlow(
     const prompt =
       input?.prompt ??
       'Research the impact of Model Context Protocol on AI agent development and summarize key findings.';
-    const serverUrl =
-      input?.serverUrl ?? 'https://mcpplaygroundonline.com/mcp-complex-server';
+    const serverUrl = input?.serverUrl ?? DEMO_MCP_SERVER_URL;
     const allowedTools = input?.allowedTools ?? ['analyze_data'];
 
     let { operation } = await ai.generate({
@@ -147,8 +153,7 @@ ai.defineFlow(
     const prompt =
       input?.prompt ??
       'Research the impact of Model Context Protocol on AI agent development and summarize key findings.';
-    const serverUrl =
-      input?.serverUrl ?? 'https://mcpplaygroundonline.com/mcp-complex-server';
+    const serverUrl = input?.serverUrl ?? DEMO_MCP_SERVER_URL;
     const mode = input?.mode ?? 'validated';
     const tools = input?.tools ?? ['analyze_data'];
 
@@ -234,7 +239,9 @@ ai.defineFlow('maps-grounding', async () => {
 
   return {
     text,
-    groundingMetadata: (raw as any)?.candidates[0]?.groundingMetadata,
+    // gemini-3.1-pro-preview uses generateContent, so grounding metadata is on
+    // the candidate. (On Interactions models, citations are text annotations.)
+    groundingMetadata: (raw as any)?.candidates?.[0]?.groundingMetadata,
   };
 });
 
@@ -245,14 +252,40 @@ ai.defineFlow('combine tools and builtins', async () => {
       'What is the southernmost city in Canada? What is the weather like there today? Use the getWeather tool.',
     config: {
       tools: [{ googleSearch: {} }],
-      toolConfig: {
-        includeServerSideToolInvocations: true,
-      },
     },
     tools: [getWeather],
   });
 
   return text;
+});
+
+// Streams a response that uses the built-in Google Search tool. Citations
+// arrive at the end of the stream and are attached to the final text part.
+ai.defineFlow('streaming-google-search', async (_, { sendChunk }) => {
+  const { stream, response } = ai.generateStream({
+    model: googleAI.model('gemini-3.6-flash'),
+    prompt:
+      'Who won the most recent Nobel Prize in Physics, and what was it for? ' +
+      'Use Google Search and cite your sources.',
+    config: {
+      tools: [{ googleSearch: {} }],
+    },
+  });
+
+  for await (const chunk of stream) {
+    if (chunk.text) {
+      sendChunk(chunk.text);
+    }
+  }
+
+  const { text, message } = await response;
+  const citations = (message?.content ?? []).flatMap((p) =>
+    Array.isArray(p.metadata?.annotations) ? p.metadata.annotations : []
+  );
+  return {
+    text,
+    citations: citations.map((c: any) => ({ title: c.title, url: c.url })),
+  };
 });
 
 ai.defineFlow('basic-hi', async () => {
@@ -1002,6 +1035,81 @@ two... let's go!`
     return {
       media: 'data:audio/wav;base64,' + (await toWav(audioBuffer)),
     };
+  }
+);
+
+// TTS through the Interactions API (gemini-3.8 TTS models). These return a
+// complete WAV file, so the media URL can be used directly (no toWav()).
+// Turn-level `style` is set via part metadata and requires a voice.
+ai.defineFlow(
+  {
+    name: 'tts-interactions-voice-and-style',
+    inputSchema: z.string().default('Have a wonderful day!'),
+    outputSchema: z.object({ media: z.string() }),
+  },
+  async (text) => {
+    const { media } = await ai.generate({
+      model: googleAI.model('gemini-3.8-flash-lite-tts'),
+      prompt: [
+        {
+          text,
+          metadata: { speechMetadata: { style: 'cheerful and friendly' } },
+        },
+      ],
+      config: {
+        speechConfig: {
+          voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } },
+        },
+      },
+    });
+    if (!media) {
+      throw new Error('no media returned');
+    }
+    return { media: media.url };
+  }
+);
+
+// Multi-speaker TTS through the Interactions API: each turn is a separate text
+// part that names its speaker, matching a configured speaker.
+ai.defineFlow(
+  {
+    name: 'tts-interactions-multi-speaker',
+    outputSchema: z.object({ media: z.string() }),
+  },
+  async () => {
+    const { media } = await ai.generate({
+      model: googleAI.model('gemini-3.8-flash-lite-tts'),
+      prompt: [
+        {
+          text: "How's it going today, Jane?",
+          metadata: { speechMetadata: { speaker: 'Joe' } },
+        },
+        {
+          text: 'Not too bad, how about you?',
+          metadata: { speechMetadata: { speaker: 'Jane', style: 'calm' } },
+        },
+      ],
+      config: {
+        speechConfig: {
+          multiSpeakerVoiceConfig: {
+            speakerVoiceConfigs: [
+              {
+                speaker: 'Joe',
+                voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } },
+              },
+              {
+                speaker: 'Jane',
+                voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } },
+              },
+            ],
+          },
+        },
+      },
+    });
+    if (!media) {
+      throw new Error('no media returned');
+    }
+    return { media: media.url };
   }
 );
 

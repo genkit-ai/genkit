@@ -43,6 +43,7 @@ export { type DeepResearchConfig } from './deep-research.js';
 export { type EmbeddingConfig } from './embedder.js';
 export { type GeminiConfig, type GeminiTtsConfig } from './gemini.js';
 export { type ImagenConfig } from './imagen.js';
+export { type GeminiInteraction } from './interaction-types.js';
 export { type LyriaConfig } from './lyria.js';
 export { type GoogleAIPluginOptions };
 

@@ -30,6 +30,7 @@ import {
   toInteractionGenerationConfig,
   toInteractionGoogleSearch,
   toInteractionRole,
+  toInteractionSpeechConfig,
   toInteractionSteps,
   toInteractionTool,
 } from '../../src/googleai/interaction-converters.js';
@@ -208,6 +209,121 @@ describe('Interaction Converters', () => {
           thinking_budget: 2048,
         },
       });
+    });
+  });
+
+  describe('toInteractionSpeechConfig', () => {
+    it('maps a single prebuilt voice', () => {
+      assert.deepStrictEqual(
+        toInteractionSpeechConfig({
+          voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } },
+        }),
+        [{ voice: 'Puck' }]
+      );
+    });
+
+    it('maps multi-speaker voices', () => {
+      assert.deepStrictEqual(
+        toInteractionSpeechConfig({
+          multiSpeakerVoiceConfig: {
+            speakerVoiceConfigs: [
+              {
+                speaker: 'Joe',
+                voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } },
+              },
+              {
+                speaker: 'Jane',
+                voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } },
+              },
+            ],
+          },
+        }),
+        {
+          speakers: [
+            { voice: 'Kore', speaker: 'Joe' },
+            { voice: 'Puck', speaker: 'Jane' },
+          ],
+        }
+      );
+    });
+
+    it('applies languageCode to every entry', () => {
+      assert.deepStrictEqual(
+        toInteractionSpeechConfig({
+          languageCode: 'fr-FR',
+          voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } },
+        }),
+        [{ voice: 'Puck', language: 'fr-FR' }]
+      );
+    });
+
+    it('returns undefined when no voice or language is set', () => {
+      assert.strictEqual(toInteractionSpeechConfig(undefined), undefined);
+      assert.strictEqual(toInteractionSpeechConfig({}), undefined);
+      assert.strictEqual(
+        toInteractionSpeechConfig({ voiceConfig: {} }),
+        undefined
+      );
+    });
+
+    it('is applied by toInteractionGenerationConfig', () => {
+      assert.deepStrictEqual(
+        toInteractionGenerationConfig({
+          maxOutputTokens: 100,
+          speechConfig: {
+            voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } },
+          },
+        }),
+        {
+          max_output_tokens: 100,
+          speech_config: [{ voice: 'Puck' }],
+        }
+      );
+    });
+  });
+
+  describe('speech_metadata annotations on text parts', () => {
+    it('adds a speech_metadata annotation from metadata.speechMetadata', () => {
+      assert.deepStrictEqual(
+        toInteractionContent({
+          text: "How's it going today Jane?",
+          metadata: { speechMetadata: { speaker: 'Joe', style: 'cheerful' } },
+        }),
+        {
+          type: 'text',
+          text: "How's it going today Jane?",
+          annotations: [
+            { type: 'speech_metadata', speaker: 'Joe', style: 'cheerful' },
+          ],
+        }
+      );
+    });
+
+    it('supports style alone (single-speaker)', () => {
+      assert.deepStrictEqual(
+        toInteractionContent({
+          text: 'Have a wonderful day!',
+          metadata: { speechMetadata: { style: 'cheerful and friendly' } },
+        }),
+        {
+          type: 'text',
+          text: 'Have a wonderful day!',
+          annotations: [
+            { type: 'speech_metadata', style: 'cheerful and friendly' },
+          ],
+        }
+      );
+    });
+
+    it('adds no annotations for plain text or empty speechMetadata', () => {
+      assert.deepStrictEqual(toInteractionContent({ text: 'Hi' }), {
+        type: 'text',
+        text: 'Hi',
+      });
+      assert.deepStrictEqual(
+        toInteractionContent({ text: 'Hi', metadata: { speechMetadata: {} } }),
+        { type: 'text', text: 'Hi' }
+      );
     });
   });
 
@@ -782,7 +898,11 @@ describe('Interaction Converters', () => {
                       type: 'text',
                       text: 'Plan',
                       annotations: [
-                        { title: 'Doc', url: 'https://example.com' },
+                        {
+                          type: 'url_citation',
+                          title: 'Doc',
+                          url: 'https://example.com',
+                        },
                       ],
                     },
                   ],
@@ -801,7 +921,13 @@ describe('Interaction Converters', () => {
             {
               type: 'text',
               text: 'Plan',
-              annotations: [{ title: 'Doc', url: 'https://example.com' }],
+              annotations: [
+                {
+                  type: 'url_citation',
+                  title: 'Doc',
+                  url: 'https://example.com',
+                },
+              ],
             },
           ],
           signature: 'custom-sig-789',
@@ -815,13 +941,27 @@ describe('Interaction Converters', () => {
       const content: Content = {
         type: 'text',
         text: 'Hello world',
-        annotations: [{ start_index: 0, end_index: 5, source: 'source' }],
+        annotations: [
+          {
+            type: 'file_citation',
+            start_index: 0,
+            end_index: 5,
+            source: 'source',
+          },
+        ],
       };
       const result = fromInteractionContent(content);
       assert.deepStrictEqual(result, {
         text: 'Hello world',
         metadata: {
-          annotations: [{ start_index: 0, end_index: 5, source: 'source' }],
+          annotations: [
+            {
+              type: 'file_citation',
+              start_index: 0,
+              end_index: 5,
+              source: 'source',
+            },
+          ],
         },
       });
     });
@@ -903,7 +1043,7 @@ describe('Interaction Converters', () => {
       };
       const result = fromInteractionContent(content);
       assert.deepStrictEqual(result, {
-        reasoning: 'Thinking about...[Image]...this image.',
+        reasoning: 'Thinking about...\n[Image]\n...this image.',
         metadata: {
           thoughtSignature: 'SIG',
         },
@@ -1104,7 +1244,7 @@ describe('Interaction Converters', () => {
       const result = fromInteractionStep(step);
       assert.deepStrictEqual(result, [
         {
-          reasoning: '**Protocol...** **Evalua...**',
+          reasoning: '**Protocol...**\n **Evalua...**',
           metadata: { thoughtSignature: '' },
           custom: { thought: step },
         },
@@ -1169,6 +1309,35 @@ describe('Interaction Converters', () => {
       };
       const result = fromInteractionDelta(delta);
       assert.deepStrictEqual(result, [{ reasoning: 'thinking process' }]);
+    });
+
+    it('should convert a thought_summary image delta to an [Image] reasoning placeholder', () => {
+      const delta: StepDeltaData = {
+        type: 'thought_summary',
+        content: { type: 'image', data: 'base64data', mime_type: 'image/jpeg' },
+      };
+      const result = fromInteractionDelta(delta);
+      // The draft image is part of the thought, so it must not be streamed as
+      // a media part (the final response only shows `[Image]` in reasoning).
+      assert.deepStrictEqual(result, [{ reasoning: '[Image]' }]);
+    });
+
+    it('should convert other non-text thought_summary deltas to a type placeholder', () => {
+      const audio: StepDeltaData = {
+        type: 'thought_summary',
+        content: { type: 'audio', data: 'base64data', mime_type: 'audio/wav' },
+      };
+      assert.deepStrictEqual(fromInteractionDelta(audio), [
+        { reasoning: '[Audio]' },
+      ]);
+
+      const functionCall: StepDeltaData = {
+        type: 'thought_summary',
+        content: { type: 'function_call', name: 'myFunc', id: 'call_1' },
+      };
+      assert.deepStrictEqual(fromInteractionDelta(functionCall), [
+        { reasoning: '[Function call]' },
+      ]);
     });
   });
 
@@ -1309,7 +1478,10 @@ describe('Interaction Converters', () => {
         id: '123',
         status: 'incomplete',
         steps: [
-          { type: 'model_output', content: [{ type: 'text', text: 'partial' }] },
+          {
+            type: 'model_output',
+            content: [{ type: 'text', text: 'partial' }],
+          },
         ],
       });
       assert.strictEqual(result.done, true);
@@ -1430,7 +1602,10 @@ describe('Interaction Converters', () => {
         id: 'int-1',
         status: 'incomplete',
         steps: [
-          { type: 'model_output', content: [{ type: 'text', text: 'partial' }] },
+          {
+            type: 'model_output',
+            content: [{ type: 'text', text: 'partial' }],
+          },
         ],
       });
       assert.strictEqual(result.finishReason, 'length');

@@ -83,6 +83,7 @@ import {
   checkModelName,
   cleanSchema,
   extractVersion,
+  isObject,
   removeClientOptionOverrides,
 } from './utils.js';
 
@@ -108,6 +109,26 @@ const SafetySettingsSchema = z
     ]),
   })
   .passthrough();
+
+/**
+ * Reports whether a safety setting is equivalent to the model default (no
+ * additional filtering), i.e. it can be omitted without changing behavior.
+ *
+ * Per the Gemini API docs, the adjustable safety filters are Off by default for
+ * current Gemini models, so `BLOCK_NONE` requests the same behavior as sending
+ * no safety settings. `HARM_CATEGORY_UNSPECIFIED` entries are also dropped on
+ * the generateContent path.
+ * See https://ai.google.dev/gemini-api/docs/safety-settings
+ */
+function isDefaultSafetySetting(setting: {
+  category?: string;
+  threshold?: string;
+}): boolean {
+  return (
+    setting.category === 'HARM_CATEGORY_UNSPECIFIED' ||
+    setting.threshold === 'BLOCK_NONE'
+  );
+}
 
 const VoiceConfigSchema = z
   .object({
@@ -193,11 +214,15 @@ export const GeminiConfigSchema = GenerationCommonConfigSchema.extend({
     .union([z.boolean(), z.object({}).strict()])
     .describe('Enables the model to generate and run code.')
     .optional(),
+  // TODO(v2): Remove. This plugin does not implement context caching, so this
+  // field has no effect (it is passed through, and models on the Interactions
+  // path reject it). Kept for now because removing it is a breaking change.
   contextCache: z
     .boolean()
     .describe(
       'Context caching allows you to save and reuse precomputed input ' +
-        'tokens that you wish to use repeatedly.'
+        'tokens that you wish to use repeatedly. Not currently implemented ' +
+        'by this plugin.'
     )
     .optional(),
   functionCallingConfig: z
@@ -840,10 +865,13 @@ export function defineModel(
       const interactionsTools: InteractionTool[] = [];
 
       if (request.tools?.length) {
-        tools.push({
-          functionDeclarations: request.tools.map(toGeminiTool),
-        });
-        interactionsTools.push(...request.tools.map(toInteractionTool));
+        if (useInteractions) {
+          interactionsTools.push(...request.tools.map(toInteractionTool));
+        } else {
+          tools.push({
+            functionDeclarations: request.tools.map(toGeminiTool),
+          });
+        }
       }
 
       const requestOptions: ConfigSchema = {
@@ -908,11 +936,28 @@ export function defineModel(
       }
 
       if (useInteractions) {
-        if (safetySettingsFromConfig && safetySettingsFromConfig.length > 0) {
+        // The Gemini API's Interactions endpoint does not accept
+        // `safety_settings` (it returns 400). Permissive settings can be
+        // dropped safely: per the Gemini API docs, the adjustable safety
+        // filters are Off by default for current Gemini models, so BLOCK_NONE
+        // (and HARM_CATEGORY_UNSPECIFIED entries) never block anything beyond
+        // the default. Built-in protections against core harms always apply.
+        // See https://ai.google.dev/gemini-api/docs/safety-settings
+        //
+        // Blocking thresholds (BLOCK_ONLY_HIGH and stricter) cannot be honored,
+        // so throw rather than silently weaken the requested filtering.
+        const blockingSafetySettings = (safetySettingsFromConfig ?? []).filter(
+          (setting) => !isDefaultSafetySetting(setting)
+        );
+        if (blockingSafetySettings.length > 0) {
           throw new GenkitError({
             status: 'INVALID_ARGUMENT',
             message:
-              'Safety settings are not supported for this model with the Interactions API.',
+              `safetySettings with blocking thresholds are not supported for model '${modelVersion}'. ` +
+              'This model applies no additional safety filters by default ' +
+              '(built-in protections against core harms still apply). ' +
+              'Remove the safetySettings or set their thresholds to BLOCK_NONE.',
+            detail: { safetySettings: blockingSafetySettings },
           });
         }
         if (toolConfigConfig) {
@@ -1112,6 +1157,61 @@ export function defineModel(
 
         const store = storeOptedIn;
 
+        // Turn-level speech metadata (speaker/style) is only accepted together
+        // with a speech_config; without one the server returns a generic 400
+        // ("Request contains an invalid argument"), so explain what to set.
+        const speechConfig = interactionGenerationConfig.speech_config;
+        if (!speechConfig) {
+          const hasSpeechMetadata = newMessages
+            .filter((m) => m.role === 'user')
+            .flatMap((m) => m.content)
+            .some(
+              (p) =>
+                p.text !== undefined && isObject(p.metadata?.speechMetadata)
+            );
+          if (hasSpeechMetadata) {
+            throw new GenkitError({
+              status: 'INVALID_ARGUMENT',
+              message:
+                `speechMetadata (speaker/style) requires a voice for model ` +
+                `'${modelVersion}'. Set ` +
+                'config.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName ' +
+                '(or multiSpeakerVoiceConfig for multiple speakers).',
+            });
+          }
+        }
+
+        // Multi-speaker TTS requires every non-empty text part to name a
+        // speaker that matches one of the configured speakers. The server's
+        // own error talks about "text turns", so explain what to set instead.
+        if (speechConfig && !Array.isArray(speechConfig)) {
+          const speakerNames = speechConfig.speakers
+            .map((s) => s.speaker)
+            .filter((name): name is string => !!name);
+          const textParts = newMessages
+            .filter((m) => m.role === 'user')
+            .flatMap((m) => m.content)
+            .filter((p) => !!p.text?.trim());
+          const invalidTurn = textParts.some((p) => {
+            const speechMetadata = p.metadata?.speechMetadata;
+            return (
+              !isObject(speechMetadata) ||
+              typeof speechMetadata.speaker !== 'string' ||
+              !speakerNames.includes(speechMetadata.speaker)
+            );
+          });
+          if (invalidTurn) {
+            throw new GenkitError({
+              status: 'INVALID_ARGUMENT',
+              message:
+                `Multi-speaker speech for model '${modelVersion}' requires ` +
+                'each turn to be a separate text part with ' +
+                '`metadata: { speechMetadata: { speaker } }` set to one of ' +
+                `the configured speakers (${speakerNames.join(', ')}).`,
+            });
+          }
+        }
+
         const req: CreateInteractionRequest = {
           system_instruction: interactionsSystemInstruction,
           model: modelVersion,
@@ -1180,6 +1280,12 @@ export function defineModel(
           const out = fromInteractionSync(response);
           return out;
         }
+      }
+
+      if (storeFromConfig !== undefined || previousInteractionIdFromConfig) {
+        logger.warn(
+          'store and previousInteractionId are not supported for this model and will be ignored.'
+        );
       }
 
       let generateContentRequest: GenerateContentRequest = {

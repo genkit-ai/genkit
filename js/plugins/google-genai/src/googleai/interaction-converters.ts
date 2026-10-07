@@ -50,8 +50,11 @@ import {
   InteractionTool,
   ModelGenerationConfig,
   ResponseModality,
+  SpeechAnnotation,
+  SpeechConfig,
   Step,
   StepDeltaData,
+  TextAnnotationSchema,
   TextContent,
   ThoughtContent,
   ThoughtStep,
@@ -369,13 +372,73 @@ export function toInteractionResponseModalities(
   return modalities.map((m) => m.toLowerCase());
 }
 
+/**
+ * Converts a Genkit/generateContent-style `speechConfig` to the Interactions
+ * API `speech_config`.
+ *
+ * - `voiceConfig.prebuiltVoiceConfig.voiceName` becomes `[{ voice }]`.
+ * - `multiSpeakerVoiceConfig.speakerVoiceConfigs[]` becomes
+ *   `{ speakers: [{ speaker, voice }, ...] }`. Each text part must then name
+ *   its speaker via `metadata.speechMetadata.speaker`.
+ * - A top-level `languageCode` is applied to every entry as `language`.
+ *
+ * Returns `undefined` if no voice or language is set.
+ */
+export function toInteractionSpeechConfig(
+  speechConfig: unknown
+): ModelGenerationConfig['speech_config'] {
+  if (!isObject(speechConfig)) {
+    return undefined;
+  }
+
+  const language =
+    typeof speechConfig.languageCode === 'string'
+      ? speechConfig.languageCode
+      : undefined;
+  const voiceNameOf = (voiceConfig: unknown): string | undefined => {
+    if (!isObject(voiceConfig) || !isObject(voiceConfig.prebuiltVoiceConfig)) {
+      return undefined;
+    }
+    const voiceName = voiceConfig.prebuiltVoiceConfig.voiceName;
+    return typeof voiceName === 'string' ? voiceName : undefined;
+  };
+  const entry = (voice?: string, speaker?: string): SpeechConfig => ({
+    ...(voice ? { voice } : {}),
+    ...(language ? { language } : {}),
+    ...(speaker ? { speaker } : {}),
+  });
+
+  const multi = speechConfig.multiSpeakerVoiceConfig;
+  if (isObject(multi) && Array.isArray(multi.speakerVoiceConfigs)) {
+    return {
+      speakers: multi.speakerVoiceConfigs
+        .filter(isObject)
+        .map((s) =>
+          entry(
+            voiceNameOf(s.voiceConfig),
+            typeof s.speaker === 'string' ? s.speaker : undefined
+          )
+        ),
+    };
+  }
+
+  const voice = voiceNameOf(speechConfig.voiceConfig);
+  if (voice || language) {
+    return [entry(voice)];
+  }
+  return undefined;
+}
+
 export function toInteractionGenerationConfig(
   config: Record<string, unknown>
 ): ModelGenerationConfig {
-  const result = convertObjectKeysToSnakeCase(config) as Record<
-    string,
-    unknown
-  >;
+  const { speechConfig, ...rest } = config;
+  const result = convertObjectKeysToSnakeCase(rest) as Record<string, unknown>;
+
+  const interactionSpeechConfig = toInteractionSpeechConfig(speechConfig);
+  if (interactionSpeechConfig) {
+    result.speech_config = interactionSpeechConfig;
+  }
 
   if (isObject(result.thinking_config)) {
     const tc = result.thinking_config;
@@ -423,7 +486,14 @@ export function toInteractionGenerationConfig(
  */
 export function toInteractionContent(part: Part): Content | undefined {
   if (part.text !== undefined) {
-    return { type: 'text', text: part.text };
+    const speechMetadata = toSpeechMetadataAnnotation(
+      part.metadata?.speechMetadata
+    );
+    return {
+      type: 'text',
+      text: part.text,
+      ...(speechMetadata ? { annotations: [speechMetadata] } : {}),
+    };
   }
   if (part.media) {
     return toInteractionMedia(part);
@@ -432,6 +502,33 @@ export function toInteractionContent(part: Part): Content | undefined {
     `Unsupported part type for Interaction input: ${JSON.stringify(part)}`
   );
   return undefined;
+}
+
+/**
+ * Converts a text part's `metadata.speechMetadata` (`{ speaker?, style? }`)
+ * into an Interactions `speech_metadata` annotation, used by TTS models to
+ * assign each turn to a speaker and set its delivery style.
+ */
+function toSpeechMetadataAnnotation(
+  speechMetadata: unknown
+): SpeechAnnotation | undefined {
+  if (!isObject(speechMetadata)) {
+    return undefined;
+  }
+  const speaker =
+    typeof speechMetadata.speaker === 'string'
+      ? speechMetadata.speaker
+      : undefined;
+  const style =
+    typeof speechMetadata.style === 'string' ? speechMetadata.style : undefined;
+  if (!speaker && !style) {
+    return undefined;
+  }
+  return {
+    type: 'speech_metadata',
+    ...(speaker ? { speaker } : {}),
+    ...(style ? { style } : {}),
+  };
 }
 
 function toInteractionMedia(part: Part): Content {
@@ -505,15 +602,6 @@ const GoogleSearchArgsSchema = z.object({ queries: z.array(z.string()) });
 const RecordUnknownSchema = z.record(z.unknown());
 
 const MediaResolutionSchema = z.enum(['low', 'medium', 'high', 'ultra_high']);
-
-const TextAnnotationSchema = z.object({
-  type: z.string().optional(),
-  start_index: z.number().optional(),
-  end_index: z.number().optional(),
-  url: z.string().optional(),
-  title: z.string().optional(),
-  source: z.string().optional(),
-});
 
 const TextContentSchema = z.object({
   type: z.literal('text'),
@@ -722,13 +810,11 @@ export function toInteractionSteps(messages: MessageData[]): Step[] {
 }
 
 /**
- * Converts an Interaction Content object back into a Genkit Part.
+ * Converts a streamed step delta into Genkit Parts for a stream chunk.
  *
- * Supports text, image, thought, function calls, and function results.
- *
- * @param content - The Interaction Content object.
- * @returns The corresponding Genkit Part.
- * @throws Error if the content type is unsupported.
+ * @param delta - The `delta` of a `step.delta` SSE event.
+ * @returns The corresponding Genkit Parts (empty for deltas with nothing to
+ *   emit, such as partial function call arguments).
  */
 export function fromInteractionDelta(delta: StepDeltaData): Part[] {
   switch (delta.type) {
@@ -768,14 +854,12 @@ export function fromInteractionDelta(delta: StepDeltaData): Part[] {
           },
         ];
       }
-      return [fromInteractionContent(delta.content)];
+      // Non-text thought content (e.g. a draft image) is part of the
+      // reasoning, not the answer. Use the same placeholder as the final
+      // response so streaming clients don't receive it as a regular part.
+      return [{ reasoning: thoughtContentPlaceholder(delta.content) }];
     case 'thought_signature':
-      return [
-        {
-          metadata: { thoughtSignature: delta.signature },
-          custom: { thoughtSignatureDelta: delta.signature },
-        },
-      ];
+      return [{ metadata: { thoughtSignature: delta.signature } }];
     case 'function_call':
       return [
         {
@@ -863,6 +947,15 @@ export function fromInteractionDelta(delta: StepDeltaData): Part[] {
   }
 }
 
+/**
+ * Converts an Interaction Content object back into a Genkit Part.
+ *
+ * Supports text, image, audio, document, video, thought, function calls, and
+ * function results. Unknown content types are returned as a custom part.
+ *
+ * @param content - The Interaction Content object.
+ * @returns The corresponding Genkit Part.
+ */
 export function fromInteractionContent(content: Content): Part {
   switch (content.type) {
     case 'text':
@@ -1089,15 +1182,34 @@ function fromVideoContent(content: VideoContent): Part {
   return part;
 }
 
+/**
+ * Placeholder text for non-text content inside a thought summary, e.g.
+ * `[Image]`, `[Audio]` or `[Function call]`.
+ *
+ * Thoughts are returned as reasoning text, so non-text items (such as a draft
+ * image the model reviews before its final output) are shown as a label
+ * instead of being dropped or returned as regular media parts. The label is
+ * derived from the content type, so any type the server adds in the future
+ * still shows up in the reasoning.
+ */
+function thoughtContentPlaceholder(content: Content): string {
+  const label = content.type.replace(/_/g, ' ');
+  return `[${label.charAt(0).toUpperCase()}${label.slice(1)}]`;
+}
+
 function fromThoughtContent(content: ThoughtContent): Part {
   let reasoning = '';
   if (content.summary) {
+    // Separate summary blocks with a newline so distinct thought sections
+    // don't run together. Each summary block is a whole section, both in
+    // non-streamed responses and in streamed `thought_summary` deltas (one
+    // delta per section, confirmed live), so this doesn't split sentences.
     reasoning = content.summary
       .map((c) => {
         if (c.type === 'text') return c.text;
-        return '[Image]';
+        return thoughtContentPlaceholder(c);
       })
-      .join('');
+      .join('\n');
   }
 
   return {
@@ -1125,13 +1237,7 @@ function isContentArray(val: unknown): val is Content[] {
   return (
     Array.isArray(val) &&
     val.length > 0 &&
-    val.every(
-      (item) =>
-        typeof item === 'object' &&
-        item !== null &&
-        'type' in item &&
-        typeof (item as any).type === 'string'
-    )
+    val.every((item) => isObject(item) && typeof item.type === 'string')
   );
 }
 
@@ -1199,9 +1305,7 @@ const INTERACTION_INCOMPLETE_MESSAGE =
 /** Builds a human-readable message from a failed interaction's errors. */
 function interactionFailureMessage(interaction: GeminiInteraction): string {
   const details = (interaction.errors ?? [])
-    .map((e) =>
-      [e.code ? `[${e.code}]` : '', e.message ?? ''].join(' ').trim()
-    )
+    .map((e) => [e.code ? `[${e.code}]` : '', e.message ?? ''].join(' ').trim())
     .filter(Boolean)
     .join('; ');
   return details

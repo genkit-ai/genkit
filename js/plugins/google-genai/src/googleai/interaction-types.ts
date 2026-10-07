@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+import { z } from 'genkit';
 import { FunctionDeclaration } from '../common/types.js';
 
 /**
@@ -121,23 +122,119 @@ export declare type InteractionTool =
   | InteractionRetrievalTool
   | InteractionDynamicTool;
 
+// Text annotations are defined as Zod schemas (used for runtime validation)
+// with their TypeScript types derived via z.infer, so the shape is written
+// once. `.passthrough()` keeps fields not listed here.
+
+/** Fields shared by all text annotations. */
+const AnnotationSpanShape = {
+  /** Start of the annotated segment (in bytes). */
+  start_index: z.number().optional(),
+  /** End of the annotated segment, exclusive. */
+  end_index: z.number().optional(),
+};
+
+/** A URL citation annotation. */
+export const UrlCitationSchema = z
+  .object({
+    type: z.literal('url_citation'),
+    ...AnnotationSpanShape,
+    /** The URL. */
+    url: z.string().optional(),
+    /** The title of the URL. */
+    title: z.string().optional(),
+  })
+  .passthrough();
+export type UrlCitation = z.infer<typeof UrlCitationSchema>;
+
+/** A file citation annotation. */
+export const FileCitationSchema = z
+  .object({
+    type: z.literal('file_citation'),
+    ...AnnotationSpanShape,
+    /** The URI of the file. */
+    document_uri: z.string().optional(),
+    /** The name of the file. */
+    file_name: z.string().optional(),
+    /** Source attributed for a portion of the text. */
+    source: z.string().optional(),
+    /** Page number of the cited document, if applicable. */
+    page_number: z.number().optional(),
+    /** Media ID in case of image citations, if applicable. */
+    media_id: z.string().optional(),
+    /** User-provided metadata about the retrieved context. */
+    custom_metadata: z.record(z.unknown()).optional(),
+  })
+  .passthrough();
+export type FileCitation = z.infer<typeof FileCitationSchema>;
+
+/** A place (Google Maps) citation annotation. */
+export const PlaceCitationSchema = z
+  .object({
+    type: z.literal('place_citation'),
+    ...AnnotationSpanShape,
+    /** Title of the place. */
+    name: z.string().optional(),
+    /** The ID of the place, in `places/{place_id}` format. */
+    place_id: z.string().optional(),
+    /** URI reference of the place. */
+    url: z.string().optional(),
+    /** Review snippets about features of the place. */
+    review_snippets: z
+      .array(
+        z.object({
+          review_id: z.string().optional(),
+          title: z.string().optional(),
+          url: z.string().optional(),
+        })
+      )
+      .optional(),
+  })
+  .passthrough();
+export type PlaceCitation = z.infer<typeof PlaceCitationSchema>;
+
 /**
- * Citation information for model-generated content.
+ * Speech annotation for text content. Used as input to TTS models to assign a
+ * turn to a speaker and set its delivery style.
  */
-declare interface TextAnnotation {
-  /** The type of annotation (e.g. 'url_citation') */
-  type?: string;
-  /** Start of segment of the response that is attributed to this source. */
-  start_index?: number;
-  /** End of the attributed segment, exclusive. */
-  end_index?: number;
-  /** The URL for a url_citation annotation. */
-  url?: string;
-  /** The title for a url_citation annotation. */
-  title?: string;
-  /** Legacy source attributed for a portion of the text. */
-  source?: string;
-}
+export const SpeechAnnotationSchema = z
+  .object({
+    type: z.literal('speech_metadata'),
+    ...AnnotationSpanShape,
+    /** The speaker to associate with this turn. */
+    speaker: z.string().optional(),
+    /** Style instruction for the speech synthesis. */
+    style: z.string().optional(),
+  })
+  .passthrough();
+export type SpeechAnnotation = z.infer<typeof SpeechAnnotationSchema>;
+
+/** Word-level speech recognition annotation for transcription output. */
+export const WordInfoSchema = z
+  .object({
+    type: z.literal('word_info'),
+    ...AnnotationSpanShape,
+    /** The transcribed word. */
+    text: z.string().optional(),
+    /** Start offset in time of the word relative to the start of the audio. */
+    start_offset: z.string().optional(),
+    /** End offset in time of the word relative to the start of the audio. */
+    end_offset: z.string().optional(),
+    /** Speaker label for this word (e.g. "spk_1"). */
+    speaker: z.string().optional(),
+  })
+  .passthrough();
+export type WordInfo = z.infer<typeof WordInfoSchema>;
+
+/** An annotation on text content, discriminated by `type`. */
+export const TextAnnotationSchema = z.discriminatedUnion('type', [
+  UrlCitationSchema,
+  FileCitationSchema,
+  PlaceCitationSchema,
+  SpeechAnnotationSchema,
+  WordInfoSchema,
+]);
+export type TextAnnotation = z.infer<typeof TextAnnotationSchema>;
 
 /**
  * A text content block.
@@ -146,7 +243,10 @@ export declare interface TextContent {
   type: 'text';
   /** The text content. */
   text?: string;
-  /** Citation information for model-generated content. */
+  /**
+   * Annotations on the text: citations on model output, or speech metadata on
+   * TTS input.
+   */
   annotations?: TextAnnotation[];
 }
 
@@ -426,8 +526,11 @@ export declare interface ModelGenerationConfig {
   thinking_summaries?: 'auto' | 'none';
   /** The maximum number of tokens to include in the response. */
   max_output_tokens?: number;
-  /** Configuration for speech interaction. */
-  speech_config?: SpeechConfig;
+  /**
+   * Speech configuration: an array for a single speaker, or
+   * `{ speakers: [...] }` for multi-speaker.
+   */
+  speech_config?: SpeechConfig[] | { speakers: SpeechConfig[] };
   /** Configuration for image interaction. */
   image_config?: ImageConfig;
 }
@@ -708,7 +811,8 @@ export type InteractionSseEvent =
     }
   | {
       event_type: 'interaction.status_update';
-      interaction_id: string;
+      /** Only present when the interaction is stored (`store: true`). */
+      interaction_id?: string;
       status: GeminiInteraction['status'];
       event_id?: string;
     }

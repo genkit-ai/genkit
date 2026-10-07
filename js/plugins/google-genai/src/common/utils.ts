@@ -28,11 +28,12 @@ import {
 } from 'genkit';
 import { logger } from 'genkit/logging';
 import { GenerateRequest } from 'genkit/model';
-import { toJsonSchema } from 'genkit/schema';
 import {
+  Content,
   GeminiInteraction,
   InteractionSseEvent,
   InteractionStreamResult,
+  TextContent,
 } from '../googleai/interaction-types.js';
 import { applyGeminiPartialArgs } from './converters.js';
 import {
@@ -334,29 +335,15 @@ export function extractMediaArray(
  * @param {JSONSchema} schema The JSON schema to clean.
  * @returns {JSONSchema} The cleaned JSON schema.
  */
-export function cleanSchema(schema: JSONSchema | z.ZodTypeAny): JSONSchema {
-  let schemaToClean: JSONSchema;
-
-  if (
-    schema &&
-    typeof schema === 'object' &&
-    '_def' in schema &&
-    'parse' in schema
-  ) {
-    // It's a Zod Schema, convert it first.
-    schemaToClean = toJsonSchema({ schema: schema as z.ZodTypeAny });
-  } else {
-    schemaToClean = schema as JSONSchema;
-  }
-
-  const out = structuredClone(schemaToClean);
+export function cleanSchema(schema: JSONSchema): JSONSchema {
+  const out = structuredClone(schema);
   for (const key in out) {
     if (key === '$schema' || key === 'additionalProperties') {
       delete out[key];
       continue;
     }
     if (typeof out[key] === 'object' && out[key] !== null) {
-      out[key] = cleanSchema(out[key] as JSONSchema);
+      out[key] = cleanSchema(out[key]);
     }
     // Zod nullish() and picoschema optional fields will produce type `["string", "null"]`
     // which is not supported by the model API. Convert them to just `"string"`.
@@ -716,7 +703,15 @@ async function getInteractionResponsePromise(
         value.event_type === 'interaction.created' ||
         value.event_type === 'interaction.completed'
       ) {
-        Object.assign(interaction, value.interaction);
+        // Merge metadata (id, status, usage, errors, ...) only. Steps are
+        // assembled from step.* events, and these events may carry partial or
+        // no steps, which must not overwrite them. Use their steps only if
+        // none were streamed.
+        const { steps, ...rest } = value.interaction;
+        Object.assign(interaction, rest);
+        if (steps?.length && !interaction.steps?.length) {
+          interaction.steps = steps;
+        }
       } else if (value.event_type === 'interaction.status_update') {
         interaction.status = value.status;
       } else if (value.event_type === 'step.start') {
@@ -742,7 +737,37 @@ async function getInteractionResponsePromise(
             )!;
 
             if (value.delta.type === 'text') {
-              arr.push({ type: 'text', text: value.delta.text });
+              // Append to the previous text block so a streamed answer becomes
+              // a single block, matching the non-streamed response. This also
+              // keeps annotation start/end indices meaningful.
+              const last = arr[arr.length - 1];
+              if (last?.type === 'text') {
+                last.text = (last.text ?? '') + value.delta.text;
+              } else {
+                arr.push({ type: 'text', text: value.delta.text });
+              }
+            } else if (
+              value.delta.type === 'image' ||
+              value.delta.type === 'audio' ||
+              value.delta.type === 'video' ||
+              value.delta.type === 'document'
+            ) {
+              // Media deltas have the same shape as the matching content block.
+              arr.push({ ...value.delta } as Content);
+            } else if (value.delta.type === 'text_annotation_delta') {
+              if (value.delta.annotations?.length) {
+                let target = [...arr]
+                  .reverse()
+                  .find((c): c is TextContent => c.type === 'text');
+                if (!target) {
+                  target = { type: 'text', text: '' };
+                  arr.push(target);
+                }
+                target.annotations = [
+                  ...(target.annotations ?? []),
+                  ...value.delta.annotations,
+                ];
+              }
             } else if (
               value.delta.type === 'thought_summary' &&
               value.delta.content
@@ -761,14 +786,29 @@ async function getInteractionResponsePromise(
                 arguments: value.delta.arguments,
               });
             }
-          } else if (step.type === 'function_call') {
-            if (value.delta.type === 'arguments_delta') {
-              const existing = partialArgumentsMap.get(value.index) || '';
-              partialArgumentsMap.set(
-                value.index,
-                existing + (value.delta.arguments || '')
-              );
-            }
+          } else if (
+            step.type === 'function_call' &&
+            value.delta.type === 'arguments_delta'
+          ) {
+            const existing = partialArgumentsMap.get(value.index) || '';
+            partialArgumentsMap.set(
+              value.index,
+              existing + (value.delta.arguments || '')
+            );
+          } else if (value.delta.type === step.type) {
+            // Built-in tool steps (google_search_call/result,
+            // code_execution_call/result, url_context_*, file_search_*,
+            // google_maps_*, mcp_server_tool_*, function_result, ...): step.start
+            // carries only ids and an empty signature; the arguments, result
+            // and real signature arrive in a delta of the same type. Copy those
+            // fields onto the step.
+            const { type: _type, ...fields } = value.delta;
+            Object.assign(
+              step,
+              Object.fromEntries(
+                Object.entries(fields).filter(([, v]) => v !== undefined)
+              )
+            );
           }
         }
       } else if (value.event_type === 'step.stop') {

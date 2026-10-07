@@ -86,11 +86,13 @@ function commonRef(
 const GENERIC_MODEL = commonRef('embedder');
 
 const DEPRECATED_MODELS = {
-  // Shutdown: July 14, 2026
-  'gemini-embedding-001': commonRef('gemini-embedding-001'),
+  // When models are < 1 month from shutdown, move them here (with the
+  // shutdown date) instead. They can still be used, but no longer appear in
+  // autocomplete suggestions.
 } as const;
 
 const KNOWN_MODELS = {
+  'gemini-embedding-001': commonRef('gemini-embedding-001'),
   'gemini-embedding-2-preview': commonRef('gemini-embedding-2-preview', {
     supports: {
       input: ['text', 'image', 'video'],

@@ -15,7 +15,6 @@
  */
 
 import * as assert from 'assert';
-import { z } from 'genkit';
 import { GenerateRequest } from 'genkit/model';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import * as sinon from 'sinon';
@@ -287,8 +286,12 @@ describe('Google AI Gemini', () => {
             {
               name: 'myFunc',
               description: 'Does something',
-              inputSchema: z.object({ foo: z.string() }),
-              outputSchema: z.string(),
+              inputSchema: {
+                type: 'object',
+                properties: { foo: { type: 'string' } },
+                required: ['foo'],
+              },
+              outputSchema: { type: 'string' },
             },
           ],
           config: {
@@ -742,7 +745,7 @@ describe('Google AI Gemini', () => {
         assert.strictEqual(apiRequest.service_tier, 'flex');
       });
 
-      it('throws when safetySettings are passed to an Interactions model', async () => {
+      it('drops permissive safetySettings on an Interactions model (default behavior)', async () => {
         const model = defineModel('gemini-flash-latest', defaultPluginOptions);
         mockFetchResponse(defaultApiResponse);
         const request: GenerateRequest<typeof GeminiConfigSchema> = {
@@ -753,6 +756,39 @@ describe('Google AI Gemini', () => {
                 category: 'HARM_CATEGORY_HATE_SPEECH',
                 threshold: 'BLOCK_NONE',
               },
+              {
+                category: 'HARM_CATEGORY_DANGEROUS_CONTENT',
+                threshold: 'BLOCK_NONE',
+              },
+              {
+                category: 'HARM_CATEGORY_UNSPECIFIED',
+                threshold: 'BLOCK_LOW_AND_ABOVE',
+              },
+            ],
+          },
+        };
+        await model.run(request);
+
+        const body = JSON.parse(fetchStub.lastCall.args[1].body);
+        assert.strictEqual(body.safety_settings, undefined);
+        assert.strictEqual(body.generation_config?.safety_settings, undefined);
+      });
+
+      it('throws for blocking safetySettings on an Interactions model', async () => {
+        const model = defineModel('gemini-flash-latest', defaultPluginOptions);
+        mockFetchResponse(defaultApiResponse);
+        const request: GenerateRequest<typeof GeminiConfigSchema> = {
+          ...minimalRequest,
+          config: {
+            safetySettings: [
+              {
+                category: 'HARM_CATEGORY_HATE_SPEECH',
+                threshold: 'BLOCK_NONE',
+              },
+              {
+                category: 'HARM_CATEGORY_DANGEROUS_CONTENT',
+                threshold: 'BLOCK_ONLY_HIGH',
+              },
             ],
           },
         };
@@ -761,11 +797,219 @@ describe('Google AI Gemini', () => {
           (err: any) => {
             assert.strictEqual(err.status, 'INVALID_ARGUMENT');
             assert.ok(
-              err.message.includes('Safety settings are not supported')
+              err.message.includes(
+                "safetySettings with blocking thresholds are not supported for model 'gemini-flash-latest'"
+              )
             );
+            // Only the offending setting is reported.
+            assert.deepStrictEqual(err.detail, {
+              safetySettings: [
+                {
+                  category: 'HARM_CATEGORY_DANGEROUS_CONTENT',
+                  threshold: 'BLOCK_ONLY_HIGH',
+                },
+              ],
+            });
             return true;
           }
         );
+        sinon.assert.notCalled(fetchStub);
+      });
+
+      describe('TTS on an unlisted model (routed to Interactions)', () => {
+        const ttsModel = 'gemini-3.8-flash-lite-tts';
+        const multiSpeakerConfig = {
+          speechConfig: {
+            multiSpeakerVoiceConfig: {
+              speakerVoiceConfigs: [
+                {
+                  speaker: 'Joe',
+                  voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } },
+                },
+                {
+                  speaker: 'Jane',
+                  voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } },
+                },
+              ],
+            },
+          },
+        };
+
+        it('sends a single voice as speech_config and requests audio', async () => {
+          const model = defineModel(ttsModel, defaultPluginOptions);
+          mockFetchResponse(defaultApiResponse);
+          await model.run({
+            ...minimalRequest,
+            config: {
+              speechConfig: {
+                voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } },
+              },
+            },
+          } as any);
+
+          const [url, options] = fetchStub.lastCall.args;
+          assert.ok(String(url).endsWith('/interactions'));
+          const body: CreateInteractionRequest = JSON.parse(options.body);
+          assert.deepStrictEqual(body.generation_config?.speech_config, [
+            { voice: 'Puck' },
+          ]);
+          assert.deepStrictEqual(body.response_modalities, ['audio']);
+        });
+
+        it('sends multi-speaker turns with speech_metadata annotations', async () => {
+          const model = defineModel(ttsModel, defaultPluginOptions);
+          mockFetchResponse(defaultApiResponse);
+          await model.run({
+            messages: [
+              {
+                role: 'user',
+                content: [
+                  {
+                    text: "How's it going today Jane?",
+                    metadata: { speechMetadata: { speaker: 'Joe' } },
+                  },
+                  {
+                    text: 'Not too bad, how about you?',
+                    metadata: {
+                      speechMetadata: { speaker: 'Jane', style: 'calm' },
+                    },
+                  },
+                ],
+              },
+            ],
+            config: multiSpeakerConfig,
+          } as any);
+
+          const body: CreateInteractionRequest = JSON.parse(
+            fetchStub.lastCall.args[1].body
+          );
+          assert.deepStrictEqual(body.generation_config?.speech_config, {
+            speakers: [
+              { voice: 'Puck', speaker: 'Joe' },
+              { voice: 'Kore', speaker: 'Jane' },
+            ],
+          });
+          const content = (body.input as any[])[0].content;
+          assert.deepStrictEqual(
+            content.map((c: any) => c.annotations),
+            [
+              [{ type: 'speech_metadata', speaker: 'Joe' }],
+              [{ type: 'speech_metadata', speaker: 'Jane', style: 'calm' }],
+            ]
+          );
+        });
+
+        it('throws a clear error for multi-speaker without per-turn speakers', async () => {
+          const model = defineModel(ttsModel, defaultPluginOptions);
+          mockFetchResponse(defaultApiResponse);
+          await assert.rejects(
+            () =>
+              model.run({
+                messages: [
+                  {
+                    role: 'user',
+                    content: [{ text: 'Joe: Hi Jane!\nJane: Hi Joe!' }],
+                  },
+                ],
+                config: multiSpeakerConfig,
+              } as any),
+            (err: any) => {
+              assert.strictEqual(err.status, 'INVALID_ARGUMENT');
+              assert.ok(err.message.includes('speechMetadata'));
+              assert.ok(err.message.includes('Joe, Jane'));
+              return true;
+            }
+          );
+          sinon.assert.notCalled(fetchStub);
+        });
+
+        it('throws for a turn whose speaker is not configured', async () => {
+          const model = defineModel(ttsModel, defaultPluginOptions);
+          mockFetchResponse(defaultApiResponse);
+          await assert.rejects(
+            () =>
+              model.run({
+                messages: [
+                  {
+                    role: 'user',
+                    content: [
+                      {
+                        text: 'Hi Jane!',
+                        metadata: { speechMetadata: { speaker: 'Joe' } },
+                      },
+                      {
+                        text: 'Hi Joe!',
+                        metadata: { speechMetadata: { speaker: 'Bob' } },
+                      },
+                    ],
+                  },
+                ],
+                config: multiSpeakerConfig,
+              } as any),
+            (err: any) =>
+              err.status === 'INVALID_ARGUMENT' &&
+              err.message.includes('Joe, Jane')
+          );
+          sinon.assert.notCalled(fetchStub);
+        });
+
+        it('throws a clear error for speechMetadata without a voice', async () => {
+          const model = defineModel(ttsModel, defaultPluginOptions);
+          mockFetchResponse(defaultApiResponse);
+          await assert.rejects(
+            () =>
+              model.run({
+                messages: [
+                  {
+                    role: 'user',
+                    content: [
+                      {
+                        text: 'Have a wonderful day!',
+                        metadata: { speechMetadata: { style: 'cheerful' } },
+                      },
+                    ],
+                  },
+                ],
+              } as any),
+            (err: any) =>
+              err.status === 'INVALID_ARGUMENT' &&
+              err.message.includes('requires a voice') &&
+              err.message.includes('voiceName')
+          );
+          sinon.assert.notCalled(fetchStub);
+        });
+
+        it('allows plain text with no voice (default voice)', async () => {
+          const model = defineModel(ttsModel, defaultPluginOptions);
+          mockFetchResponse(defaultApiResponse);
+          await model.run({
+            messages: [
+              { role: 'user', content: [{ text: 'Have a wonderful day!' }] },
+            ],
+          } as any);
+          sinon.assert.calledOnce(fetchStub);
+        });
+
+        it('ignores empty text parts when checking speakers', async () => {
+          const model = defineModel(ttsModel, defaultPluginOptions);
+          mockFetchResponse(defaultApiResponse);
+          await model.run({
+            messages: [
+              {
+                role: 'user',
+                content: [
+                  {
+                    text: 'Hi Jane!',
+                    metadata: { speechMetadata: { speaker: 'Joe' } },
+                  },
+                  { text: '  ' },
+                ],
+              },
+            ],
+            config: multiSpeakerConfig,
+          } as any);
+          sinon.assert.calledOnce(fetchStub);
+        });
       });
 
       it('passes previousInteractionId to the API when store is true (Interactions API)', async () => {

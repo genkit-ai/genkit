@@ -18,6 +18,7 @@ export {
   googleAI,
   type EmbeddingConfig,
   type GeminiConfig,
+  type GeminiInteraction,
   type GeminiTtsConfig,
   type GoogleAIPluginOptions,
   type ImagenConfig,

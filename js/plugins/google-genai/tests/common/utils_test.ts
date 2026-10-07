@@ -1110,10 +1110,251 @@ describe('Common Utils', () => {
       assert.strictEqual(finalInteraction.steps?.length, 1);
       assert.deepStrictEqual(finalInteraction.steps?.[0], {
         type: 'model_output',
-        content: [
-          { type: 'text', text: 'Hello' },
-          { type: 'text', text: ' World' },
-        ],
+        content: [{ type: 'text', text: 'Hello World' }],
+      });
+    });
+
+    describe('assembling the final interaction from step deltas', () => {
+      async function finalInteractionFrom(events: object[]) {
+        const encoder = new TextEncoder();
+        const stream = new ReadableStream({
+          start(controller) {
+            for (const event of events) {
+              controller.enqueue(
+                encoder.encode(`data: ${JSON.stringify(event)}\n\n`)
+              );
+            }
+            controller.close();
+          },
+        });
+        const { stream: asyncStream, response } = interactionProcessStream(
+          new Response(stream)
+        );
+        for await (const _ of asyncStream) {
+        }
+        return response;
+      }
+
+      const start = (step: object) => ({
+        event_type: 'step.start',
+        index: 0,
+        step,
+      });
+      const delta = (d: object) => ({
+        event_type: 'step.delta',
+        index: 0,
+        delta: d,
+      });
+      const stop = { event_type: 'step.stop', index: 0 };
+
+      it('keeps streamed image deltas in the final interaction', async () => {
+        const interaction = await finalInteractionFrom([
+          start({ type: 'model_output', content: [] }),
+          delta({ type: 'text', text: 'Here is your image:' }),
+          delta({ type: 'image', mime_type: 'image/png', data: 'AAAA' }),
+          stop,
+        ]);
+        assert.deepStrictEqual(interaction.steps?.[0], {
+          type: 'model_output',
+          content: [
+            { type: 'text', text: 'Here is your image:' },
+            { type: 'image', mime_type: 'image/png', data: 'AAAA' },
+          ],
+        });
+      });
+
+      it('keeps audio, video and document deltas', async () => {
+        const interaction = await finalInteractionFrom([
+          start({ type: 'model_output', content: [] }),
+          delta({ type: 'audio', mime_type: 'audio/wav', data: 'AU' }),
+          delta({ type: 'video', uri: 'gs://bucket/v.mp4' }),
+          delta({ type: 'document', mime_type: 'application/pdf', data: 'PD' }),
+          stop,
+        ]);
+        assert.deepStrictEqual(
+          (interaction.steps?.[0] as any).content.map((c: any) => c.type),
+          ['audio', 'video', 'document']
+        );
+      });
+
+      it('starts a new text block after a non-text block', async () => {
+        const interaction = await finalInteractionFrom([
+          start({ type: 'model_output', content: [] }),
+          delta({ type: 'text', text: 'Before ' }),
+          delta({ type: 'text', text: 'image.' }),
+          delta({ type: 'image', mime_type: 'image/png', data: 'AAAA' }),
+          delta({ type: 'text', text: 'After ' }),
+          delta({ type: 'text', text: 'image.' }),
+          stop,
+        ]);
+        assert.deepStrictEqual((interaction.steps?.[0] as any).content, [
+          { type: 'text', text: 'Before image.' },
+          { type: 'image', mime_type: 'image/png', data: 'AAAA' },
+          { type: 'text', text: 'After image.' },
+        ]);
+      });
+
+      it('attaches text_annotation_delta citations to the text block', async () => {
+        const citation = {
+          type: 'url_citation',
+          url: 'https://example.com',
+          title: 'Example',
+          start_index: 0,
+          end_index: 5,
+        };
+        const interaction = await finalInteractionFrom([
+          start({ type: 'model_output', content: [] }),
+          delta({ type: 'text', text: 'Paris ' }),
+          delta({ type: 'text', text: 'is the capital.' }),
+          delta({ type: 'text_annotation_delta', annotations: [citation] }),
+          stop,
+        ]);
+        assert.deepStrictEqual((interaction.steps?.[0] as any).content, [
+          {
+            type: 'text',
+            text: 'Paris is the capital.',
+            annotations: [citation],
+          },
+        ]);
+      });
+
+      it('merges built-in tool deltas (google search) into their steps', async () => {
+        // Event shapes observed from a live gemini-3.6-flash streaming call:
+        // step.start carries only ids and an empty signature; arguments,
+        // results and the real signature arrive in a delta of the same type.
+        const at = (index: number, e: object) => ({ ...e, index });
+        const interaction = await finalInteractionFrom([
+          at(0, {
+            event_type: 'step.start',
+            step: {
+              id: 'call_1',
+              signature: '',
+              type: 'google_search_call',
+              search_type: 'web_search',
+            },
+          }),
+          at(0, {
+            event_type: 'step.delta',
+            delta: {
+              type: 'google_search_call',
+              signature: 'sig-call',
+              arguments: { queries: ['Nobel Prize in Physics winner'] },
+            },
+          }),
+          at(0, { event_type: 'step.stop' }),
+          at(1, {
+            event_type: 'step.start',
+            step: {
+              call_id: 'call_1',
+              signature: '',
+              type: 'google_search_result',
+            },
+          }),
+          at(1, {
+            event_type: 'step.delta',
+            delta: {
+              type: 'google_search_result',
+              signature: 'sig-result',
+              result: [{ search_suggestions: '<div>...</div>' }],
+              is_error: false,
+            },
+          }),
+          at(1, { event_type: 'step.stop' }),
+        ]);
+        assert.deepStrictEqual(interaction.steps, [
+          {
+            id: 'call_1',
+            signature: 'sig-call',
+            type: 'google_search_call',
+            search_type: 'web_search',
+            arguments: { queries: ['Nobel Prize in Physics winner'] },
+          },
+          {
+            call_id: 'call_1',
+            signature: 'sig-result',
+            type: 'google_search_result',
+            result: [{ search_suggestions: '<div>...</div>' }],
+            is_error: false,
+          },
+        ]);
+      });
+
+      it('merges code execution deltas into their steps', async () => {
+        const at = (index: number, e: object) => ({ ...e, index });
+        const interaction = await finalInteractionFrom([
+          at(0, {
+            event_type: 'step.start',
+            step: { id: 'c1', signature: '', type: 'code_execution_call' },
+          }),
+          at(0, {
+            event_type: 'step.delta',
+            delta: {
+              type: 'code_execution_call',
+              arguments: { code: 'print(1)', language: 'python' },
+            },
+          }),
+          at(1, {
+            event_type: 'step.start',
+            step: {
+              call_id: 'c1',
+              signature: '',
+              type: 'code_execution_result',
+            },
+          }),
+          at(1, {
+            event_type: 'step.delta',
+            delta: { type: 'code_execution_result', result: '1\n' },
+          }),
+        ]);
+        assert.deepStrictEqual((interaction.steps?.[0] as any).arguments, {
+          code: 'print(1)',
+          language: 'python',
+        });
+        assert.strictEqual((interaction.steps?.[1] as any).result, '1\n');
+      });
+
+      it('does not overwrite streamed steps with interaction.completed', async () => {
+        const interaction = await finalInteractionFrom([
+          start({ type: 'model_output', content: [] }),
+          delta({ type: 'text', text: 'streamed' }),
+          stop,
+          {
+            event_type: 'interaction.completed',
+            interaction: {
+              id: 'v1_abc123',
+              status: 'completed',
+              steps: [],
+              usage: { total_tokens: 3 },
+            },
+          },
+        ]);
+        assert.strictEqual(interaction.id, 'v1_abc123');
+        assert.strictEqual(interaction.status, 'completed');
+        assert.strictEqual(interaction.usage?.total_tokens, 3);
+        assert.deepStrictEqual((interaction.steps?.[0] as any).content, [
+          { type: 'text', text: 'streamed' },
+        ]);
+      });
+
+      it('uses interaction.completed steps when none were streamed', async () => {
+        const interaction = await finalInteractionFrom([
+          {
+            event_type: 'interaction.completed',
+            interaction: {
+              id: 'v1_abc123',
+              status: 'completed',
+              steps: [
+                {
+                  type: 'model_output',
+                  content: [{ type: 'text', text: 'only here' }],
+                },
+              ],
+            },
+          },
+        ]);
+        assert.deepStrictEqual((interaction.steps?.[0] as any).content, [
+          { type: 'text', text: 'only here' },
+        ]);
       });
     });
 
@@ -1228,9 +1469,7 @@ describe('Common Utils', () => {
         (err: any) => {
           assert.ok(err instanceof GenkitError);
           assert.strictEqual(err.status, 'RESOURCE_EXHAUSTED');
-          assert.ok(
-            err.message.includes('[quota_exceeded] Quota exceeded')
-          );
+          assert.ok(err.message.includes('[quota_exceeded] Quota exceeded'));
           return true;
         }
       );
