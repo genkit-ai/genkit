@@ -27,7 +27,7 @@ from genkit_anthropic._models import BETA_APIS, AnthropicModel, _to_anthropic_th
 from genkit_anthropic._utils import maybe_strip_fences, strip_markdown_fences
 from pydantic import ValidationError
 
-from genkit import FinishReason, Message, ModelResponseChunk, Part, Role
+from genkit import FinishReason, GenkitError, Message, ModelResponseChunk, Part, Role
 from genkit.model import Constrained, ModelConfig, ModelInfo, ModelRequest, OutputConfig, Supports, ToolDefinition
 
 
@@ -1224,13 +1224,16 @@ def test_build_params_consumes_client_level_keys_silently() -> None:
 
 @pytest.mark.asyncio
 async def test_invalid_config_raises_from_generate() -> None:
-    """An invalid dict config surfaces a validation error from generate()."""
+    """An invalid dict config is INVALID_ARGUMENT, carrying the validation error."""
     mock_client = _mock_client_for_generate()
     model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
 
-    with pytest.raises(ValidationError):
+    with pytest.raises(GenkitError) as exc_info:
         await model.generate(_text_request({'thinking': {'enabled': True}}))
 
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert isinstance(exc_info.value.cause, ValidationError)
+    assert exc_info.value.__cause__ is exc_info.value.cause
     mock_client.messages.create.assert_not_called()
 
 

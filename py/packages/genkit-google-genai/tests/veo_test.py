@@ -28,6 +28,7 @@ from genkit_google_genai._models._veo import (
     _from_veo_operation,
     is_veo_model,
 )
+from google.auth.exceptions import DefaultCredentialsError, RefreshError
 from google.genai import types as genai_types
 from google.genai.errors import APIError
 
@@ -827,3 +828,77 @@ class TestVeoContextClient:
         kwargs = ctor.call_args.kwargs
         assert kwargs['api_key'] == 'sk-tenant'
         assert _http_option_base_url(kwargs) is None
+
+
+class TestVeoErrorClassification:
+    """Credential failures get a status; unknown failures stay raw."""
+
+    @pytest.mark.asyncio
+    async def test_start_credential_failure_is_unauthenticated(self) -> None:
+        revoked = RefreshError('invalid_grant: Token has been expired or revoked.')
+        client = MagicMock()
+        client.aio.models.generate_videos = AsyncMock(side_effect=revoked)
+        veo = VeoModel('veo-3.0-generate-001', client)
+
+        with pytest.raises(GenkitError) as raised:
+            await veo.start(_text_request(), ActionRunContext())
+
+        assert raised.value.status == 'UNAUTHENTICATED'
+        assert raised.value.cause is revoked
+
+    @pytest.mark.asyncio
+    async def test_check_credential_failure_is_unauthenticated(self) -> None:
+        client = MagicMock()
+        client.aio.operations.get = AsyncMock(side_effect=DefaultCredentialsError('no ADC'))
+        veo = VeoModel('veo-3.0-generate-001', client)
+
+        with pytest.raises(GenkitError) as raised:
+            await veo.check(Operation(id='operations/abc'), ActionRunContext())
+
+        assert raised.value.status == 'UNAUTHENTICATED'
+
+    @pytest.mark.asyncio
+    async def test_check_transport_failure_stays_raw(self) -> None:
+        dropped = ConnectionResetError('Connection reset by peer')
+        client = MagicMock()
+        client.aio.operations.get = AsyncMock(side_effect=dropped)
+        veo = VeoModel('veo-3.0-generate-001', client)
+
+        with pytest.raises(ConnectionResetError) as raised:
+            await veo.check(Operation(id='operations/abc'), ActionRunContext())
+
+        assert raised.value is dropped
+
+    @pytest.mark.asyncio
+    async def test_request_client_credential_failure_is_unauthenticated(self) -> None:
+        """A Vertex location override with no ADC is a credential problem, not a bad argument."""
+        plugin_client = MagicMock()
+        plugin_client.vertexai = True
+        veo = VeoModel(
+            'veo-3.0-generate-001',
+            plugin_client,
+            client_kwargs={'vertexai': True, 'project': 'menu-prod', 'location': 'us-central1'},
+        )
+
+        with (
+            patch('genkit_google_genai._models._veo.genai.Client', side_effect=DefaultCredentialsError('no ADC')),
+            pytest.raises(GenkitError) as raised,
+        ):
+            await veo.start(_text_request(config=VeoConfig(location='europe-west4')), ActionRunContext())
+
+        assert raised.value.status == 'UNAUTHENTICATED'
+
+    @pytest.mark.asyncio
+    async def test_request_client_unknown_failure_stays_raw(self) -> None:
+        plugin_client = MagicMock()
+        plugin_client.vertexai = False
+        veo = VeoModel('veo-3.0-generate-001', plugin_client, client_kwargs={'api_key': 'plugin-key'})
+        boom = RuntimeError('SDK bug')
+
+        with (
+            patch('genkit_google_genai._models._veo.genai.Client', side_effect=boom),
+            pytest.raises(RuntimeError) as raised,
+        ):
+            await veo.start(_text_request(), ActionRunContext(context={'secrets': {'api_key': 'sk-tenant'}}))
+
+        assert raised.value is boom

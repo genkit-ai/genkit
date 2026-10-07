@@ -65,6 +65,13 @@ jobs:
       - name: Lint with ruff
         run: uv run --directory py ruff check --preview .
 
+      # Every import is declared, and every declared dependency is imported.
+      - name: Check dependencies match imports
+        run: |
+          for package in genkit genkit-google-genai; do
+            uv run --no-sync --directory "py/packages/$package" deptry src
+          done
+
       - name: Run consistency checks
         run: python3 ./py/scripts/check_consistency.py
 
