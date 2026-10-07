@@ -134,17 +134,14 @@ class StreamingCallbackError(Exception):
 
 
 def streaming_callback_cause(*, exc: BaseException) -> Exception | None:
-    """Find the caller exception carried through action error wrappers."""
+    """Find the caller's on_chunk exception through whatever wrapped it."""
     current: BaseException | None = exc
     seen: set[int] = set()
     while current is not None and id(current) not in seen:
         seen.add(id(current))
         if isinstance(current, StreamingCallbackError):
             return current.cause
-        if isinstance(current, GenkitError) and current.cause is not None:
-            current = current.cause
-        else:
-            current = current.__cause__
+        current = current.__cause__
     return None
 
 
@@ -1154,14 +1151,14 @@ INTERNAL_FINISH_MESSAGE = 'internal error'
 def public_error(exc: BaseException) -> PublicError | None:
     if isinstance(exc, PublicError):
         return exc
-    if isinstance(exc, GenkitError) and isinstance(exc.cause, PublicError):
-        return exc.cause
     return None
 
 
 def boxed_finish_message(*, exc: BaseException, pipe_failed: bool) -> str:
     # The string on a returned response is what a flow can put in a 200.
     # PublicError is how a tool author publishes that sentence.
+    # The cause clause below keeps a plugin's wrapped provider error out of
+    # finish_message.
     if pipe_failed:
         if isinstance(exc, GenkitError):
             return exc.original_message or type(exc).__name__
@@ -2221,11 +2218,18 @@ def to_pending_response(request: Part, response: Part) -> Part:
 
 
 def interrupt_from_exc(exc: Exception) -> Interrupt | None:
-    """If ``exc`` is (or wraps) an Interrupt exception, return that interrupt."""
-    if isinstance(exc, Interrupt):
-        return exc
-    if isinstance(exc, GenkitError) and exc.cause is not None and isinstance(exc.cause, Interrupt):
-        return exc.cause
+    """If ``exc`` is an Interrupt, or was raised from one, return it.
+
+    A tool that pauses again on restart is still an interrupt the caller
+    can answer, even when the action runner wraps the raise.
+    """
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        if isinstance(current, Interrupt):
+            return current
+        seen.add(id(current))
+        current = current.__cause__
     return None
 
 

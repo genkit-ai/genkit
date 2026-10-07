@@ -62,6 +62,7 @@ from genkit.model import (
     get_basic_usage_stats,
 )
 from genkit.plugin_api import context_api_key, wrap_http_error
+from genkit_google_genai._auth import GOOGLE_AUTH_ERRORS, raise_auth_error
 from genkit_google_genai._constants import is_multi_regional_location, multi_regional_base_url
 from genkit_google_genai._models._context_caching._constants import DEFAULT_TTL
 from genkit_google_genai._models._context_caching._utils import generate_cache_key, validate_context_cache_request
@@ -209,8 +210,8 @@ class ThinkingLevel(StrEnum):
     HIGH = 'HIGH'
 
 
-class ThinkingConfigSchema(BaseModel):
-    """Thinking config schema. Sent as ``genai_types.ThinkingConfig``."""
+class ThinkingConfig(BaseModel):
+    """Thinking config. Sent as ``genai_types.ThinkingConfig``."""
 
     model_config = ConfigDict(extra='forbid', populate_by_name=True)
     include_thoughts: bool | None = Field(None, alias='includeThoughts')
@@ -218,8 +219,8 @@ class ThinkingConfigSchema(BaseModel):
     thinking_level: ThinkingLevel | None = Field(None, alias='thinkingLevel')
 
 
-class FileSearchConfigSchema(BaseModel):
-    """File search config schema. Sent as ``genai_types.FileSearch``."""
+class FileSearchConfig(BaseModel):
+    """File search config. Sent as ``genai_types.FileSearch``."""
 
     model_config = ConfigDict(extra='forbid', populate_by_name=True)
     file_search_store_names: list[str] | None = Field(None, alias='fileSearchStoreNames')
@@ -250,8 +251,8 @@ class ImageSize(StrEnum):
     SIZE_4K = '4K'
 
 
-class ImageConfigSchema(BaseModel):
-    """Image config schema. Sent as ``genai_types.ImageConfig``."""
+class ImageConfig(BaseModel):
+    """Image config. Sent as ``genai_types.ImageConfig``."""
 
     model_config = ConfigDict(extra='forbid', populate_by_name=True)
     aspect_ratio: ImageAspectRatio | None = Field(None, alias='aspectRatio')
@@ -263,8 +264,8 @@ class ImageConfigSchema(BaseModel):
     image_output_options: genai_types.ImageConfigImageOutputOptions | None = Field(None, alias='imageOutputOptions')
 
 
-class VoiceConfigSchema(BaseModel):
-    """Voice config schema. Sent as ``genai_types.VoiceConfig``."""
+class VoiceConfig(BaseModel):
+    """Voice config. Sent as ``genai_types.VoiceConfig``."""
 
     model_config = ConfigDict(extra='forbid', populate_by_name=True)
     prebuilt_voice_config: PrebuiltVoiceConfig | None = Field(None, alias='prebuiltVoiceConfig')
@@ -410,7 +411,7 @@ class GeminiConfig(ModelConfig):
         return _TOOL_OPTION_TYPES[info.field_name or ''].model_validate(value)
 
     file_search: Annotated[
-        FileSearchConfigSchema | None,
+        FileSearchConfig | None,
         WithJsonSchema({
             'type': 'object',
             'properties': {
@@ -482,7 +483,7 @@ class GeminiConfig(ModelConfig):
     )
 
     thinking_config: Annotated[
-        ThinkingConfigSchema | None,
+        ThinkingConfig | None,
         WithJsonSchema({
             'type': 'object',
             'properties': {
@@ -541,28 +542,28 @@ class GeminiConfig(ModelConfig):
     )
 
 
-class SpeakerVoiceConfigSchema(BaseModel):
-    """Speaker voice config schema. Sent as ``genai_types.SpeakerVoiceConfig``."""
+class SpeakerVoiceConfig(BaseModel):
+    """Speaker voice config. Sent as ``genai_types.SpeakerVoiceConfig``."""
 
     model_config = ConfigDict(extra='forbid', populate_by_name=True)
     speaker: str | None = None
-    voice_config: VoiceConfigSchema | None = Field(None, alias='voiceConfig')
+    voice_config: VoiceConfig | None = Field(None, alias='voiceConfig')
 
 
-class MultiSpeakerVoiceConfigSchema(BaseModel):
-    """Multi-speaker voice config schema. Sent as ``genai_types.MultiSpeakerVoiceConfig``."""
-
-    model_config = ConfigDict(extra='forbid', populate_by_name=True)
-    speaker_voice_configs: list[SpeakerVoiceConfigSchema] | None = Field(None, alias='speakerVoiceConfigs')
-
-
-class SpeechConfigSchema(BaseModel):
-    """Speech config schema. Sent as ``genai_types.SpeechConfig``."""
+class MultiSpeakerVoiceConfig(BaseModel):
+    """Multi-speaker voice config. Sent as ``genai_types.MultiSpeakerVoiceConfig``."""
 
     model_config = ConfigDict(extra='forbid', populate_by_name=True)
-    voice_config: VoiceConfigSchema | None = Field(None, alias='voiceConfig')
+    speaker_voice_configs: list[SpeakerVoiceConfig] | None = Field(None, alias='speakerVoiceConfigs')
+
+
+class SpeechConfig(BaseModel):
+    """Speech config. Sent as ``genai_types.SpeechConfig``."""
+
+    model_config = ConfigDict(extra='forbid', populate_by_name=True)
+    voice_config: VoiceConfig | None = Field(None, alias='voiceConfig')
     language_code: str | None = Field(None, alias='languageCode')
-    multi_speaker_voice_config: MultiSpeakerVoiceConfigSchema | None = Field(None, alias='multiSpeakerVoiceConfig')
+    multi_speaker_voice_config: MultiSpeakerVoiceConfig | None = Field(None, alias='multiSpeakerVoiceConfig')
 
 
 DEFAULT_TTS_VOICE_NAME = 'Kore'
@@ -575,7 +576,7 @@ _GEMINI_API_TTS_MODELS_NEEDING_VOICE = frozenset({'gemini-3.1-flash-tts-preview'
 class GeminiTtsConfig(GeminiConfig):
     """Gemini TTS Config."""
 
-    speech_config: SpeechConfigSchema | None = Field(
+    speech_config: SpeechConfig | None = Field(
         None,
         alias='speechConfig',
         description=(
@@ -589,7 +590,7 @@ class GeminiImageConfig(GeminiConfig):
     """Gemini Image Config."""
 
     image_config: Annotated[
-        ImageConfigSchema | None,
+        ImageConfig | None,
         WithJsonSchema({
             'type': 'object',
             'properties': {
@@ -608,6 +609,16 @@ class GeminiImageConfig(GeminiConfig):
             'additionalProperties': False,
         }),
     ] = Field(None, alias='imageConfig')
+
+
+# Backward-compatibility aliases for pre-1.0 naming.
+ThinkingConfigSchema = ThinkingConfig
+FileSearchConfigSchema = FileSearchConfig
+ImageConfigSchema = ImageConfig
+VoiceConfigSchema = VoiceConfig
+SpeakerVoiceConfigSchema = SpeakerVoiceConfig
+MultiSpeakerVoiceConfigSchema = MultiSpeakerVoiceConfig
+SpeechConfigSchema = SpeechConfig
 
 
 class GemmaConfig(GeminiConfig):
@@ -1448,26 +1459,33 @@ class GeminiModel:
 
         iterator_config = genai_types.ListCachedContentsConfig()
         cache = None
-        pages = await cache_client.aio.caches.list(config=iterator_config)
+        # These calls run before generate, so a provider or credential failure
+        # here is classified the same way a generate failure is.
+        try:
+            pages = await cache_client.aio.caches.list(config=iterator_config)
 
-        async for item in pages:
-            if item.display_name == cache_key:
-                cache = item
-                break
-        if cache and cache.name:
-            updated_expiration_time = datetime.now(timezone.utc) + timedelta(seconds=ttl)
-            cache = await cache_client.aio.caches.update(
-                name=cache.name, config=genai_types.UpdateCachedContentConfig(expire_time=updated_expiration_time)
-            )
-        else:
-            cache = await cache_client.aio.caches.create(
-                model=model_name,
-                config=genai_types.CreateCachedContentConfig(
-                    contents=cast(genai_types.ContentListUnion, contents),
-                    display_name=cache_key,
-                    ttl=f'{ttl}s',
-                ),
-            )
+            async for item in pages:
+                if item.display_name == cache_key:
+                    cache = item
+                    break
+            if cache and cache.name:
+                updated_expiration_time = datetime.now(timezone.utc) + timedelta(seconds=ttl)
+                cache = await cache_client.aio.caches.update(
+                    name=cache.name, config=genai_types.UpdateCachedContentConfig(expire_time=updated_expiration_time)
+                )
+            else:
+                cache = await cache_client.aio.caches.create(
+                    model=model_name,
+                    config=genai_types.CreateCachedContentConfig(
+                        contents=cast(genai_types.ContentListUnion, contents),
+                        display_name=cache_key,
+                        ttl=f'{ttl}s',
+                    ),
+                )
+        except APIError as e:
+            raise wrap_http_error(e, status_code=e.code, message=e.message or str(e)) from e
+        except GOOGLE_AUTH_ERRORS as e:
+            raise_auth_error(e)
         return cache
 
     async def generate(self, request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
@@ -1663,11 +1681,15 @@ class GeminiModel:
 
         try:
             return genai.Client(**kwargs)
-        except Exception as e:
-            # If client creation fails (e.g., invalid API key format), raise a clear error
+        except GOOGLE_AUTH_ERRORS as e:
+            # A Vertex override with no key or explicit credentials makes the SDK look up ADC.
+            raise_auth_error(e)
+        except (ValueError, TypeError) as e:
+            # The SDK rejects bad override combinations (api_key with project, say).
             raise GenkitError(
                 status='INVALID_ARGUMENT',
-                message=f'Failed to create google-genai client: {str(e)}',
+                message='Failed to create google-genai client',
+                cause=e,
             ) from e
 
     async def _generate(
@@ -1699,17 +1721,10 @@ class GeminiModel:
             )
         except APIError as e:
             raise wrap_http_error(e, status_code=e.code, message=e.message or str(e)) from e
-        except Exception as e:
-            # Auth and other SDK failures are not APIError — still fail the
-            # generate so the caller is not left with a partial reply.
-            import logging
-
-            logger = logging.getLogger(__name__)
-            logger.error(f'Unexpected error during generate_content: {type(e).__name__}: {str(e)}')
-            raise GenkitError(
-                status='INTERNAL',
-                message=f'Unexpected error during generation: {type(e).__name__}: {str(e)}',
-            ) from e
+        except GOOGLE_AUTH_ERRORS as e:
+            # The SDK resolves and refreshes credentials on the request, not at construction.
+            raise_auth_error(e)
+        # Anything else (a dropped connection, say) has no known status and propagates as is.
 
         content = await self._contents_from_response(response, tools=tools)
 
@@ -1819,6 +1834,8 @@ class GeminiModel:
             )
         except APIError as e:
             raise wrap_http_error(e, status_code=e.code, message=e.message or str(e)) from e
+        except GOOGLE_AUTH_ERRORS as e:
+            raise_auth_error(e)
 
     @cached_property
     def metadata(self) -> dict:

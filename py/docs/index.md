@@ -33,7 +33,7 @@
 
 ::: genkit.BaseDataPoint
 
-::: genkit.EvalResponse
+::: genkit.EvalFnResponse
 
 ::: genkit.Operation
 

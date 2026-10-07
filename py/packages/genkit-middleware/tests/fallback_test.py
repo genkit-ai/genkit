@@ -35,6 +35,7 @@ from genkit import (
 )
 from genkit.middleware import GenerateMiddlewareContext, ModelHookParams
 from genkit.model import ModelConfig, ModelRequest, model_ref
+from genkit.testing import define_scripted_model
 
 
 def _make_params() -> ModelHookParams:
@@ -82,14 +83,14 @@ async def test_fallback_non_retryable_error(ctx) -> None:
 
 
 @pytest.mark.asyncio
-async def test_fallback_non_genkit_error(ctx) -> None:
-    """Test that non-GenkitError exceptions fail immediately."""
+async def test_fallback_non_genkit_error_raises_without_trying_next_model(ctx) -> None:
+    """A raw TypeError (a bug in another middleware, say) propagates without fallback."""
     fallback = _make_fallback(models=['model2'])
 
     async def next_fn(params, ctx) -> NoReturn:
-        raise ConnectionError('Network failure')
+        raise TypeError("'NoneType' object is not subscriptable")
 
-    with pytest.raises(ConnectionError):
+    with pytest.raises(TypeError, match='not subscriptable'):
         await fallback.wrap_model(_make_params(), ctx, next_fn)
 
 
@@ -235,6 +236,92 @@ async def test_fallback_backup_with_same_config_class_gets_that_class(entry: obj
     assert response.text == 'ok'
     assert isinstance(seen[0], ThinkingConfig)
     assert seen[0].temperature == temperature
+
+
+@pytest.mark.asyncio
+async def test_generate_with_unavailable_model_and_fallback_tries_next_model() -> None:
+    """With `Fallback(models=['backup'])`, a model raising UNAVAILABLE falls back to `backup`."""
+    ai = Genkit()
+
+    async def down(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        raise GenkitError(status='UNAVAILABLE', message='provider is down')
+
+    async def backup(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        return ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('from backup')]),
+        )
+
+    ai.define_model(name='primary', fn=down)
+    ai.define_model(name='backup', fn=backup)
+
+    response = await ai.generate(model='primary', prompt='hi', use=[Fallback(models=['backup'])])
+
+    assert response.finish_reason == FinishReason.STOP
+    assert response.text == 'from backup'
+    assert response.error is None
+
+
+@pytest.mark.asyncio
+async def test_generate_with_model_raising_connection_error_and_fallback_keeps_the_failure() -> None:
+    """An unclassified ConnectionError from the model fails the call without trying `backup`."""
+    ai = Genkit()
+    backup_calls = 0
+
+    async def down(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        raise ConnectionError('connection refused')
+
+    async def backup(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        nonlocal backup_calls
+        backup_calls += 1
+        return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('from backup')]))
+
+    ai.define_model(name='primary', fn=down)
+    ai.define_model(name='backup', fn=backup)
+
+    response = await ai.generate(model='primary', prompt='hi', use=[Fallback(models=['backup'])])
+
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.finish_message == 'internal error'
+    assert response.error is not None
+    assert response.error.status == 'INTERNAL'
+    assert response.message is None
+    assert backup_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_prompt_with_failing_on_chunk_and_fallback_does_not_call_backup() -> None:
+    """`await prompt(on_chunk=raises, use=[Fallback(...)])` fails with the callback's message and never calls backup."""
+    ai = Genkit()
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('done')]),
+        )
+    ]
+    pm.chunks = [[ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('partial')])]]
+    backup_calls = 0
+
+    async def backup(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        nonlocal backup_calls
+        backup_calls += 1
+        return ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('from backup')]),
+        )
+
+    ai.define_model(name='backup', fn=backup)
+    prompt = ai.define_prompt(model='scriptedModel', prompt='hi')
+
+    def on_chunk(_: object) -> None:
+        raise RuntimeError('model sink closed')
+
+    response = await prompt(on_chunk=on_chunk, use=[Fallback(models=['backup'])])
+
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.finish_message == 'model sink closed'
+    assert backup_calls == 0
 
 
 @pytest.mark.asyncio
