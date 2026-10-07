@@ -697,8 +697,7 @@ class TestResolveRequestClient:
         assert exc.value.status == 'INVALID_ARGUMENT'
 
     @pytest.mark.asyncio
-    async def test_secrets_without_api_key_uses_plugin_client(self) -> None:
-        """context.secrets is shared with other plugins and the app; without api_key the plugin client runs."""
+    async def test_empty_secrets_is_invalid_argument(self) -> None:
         client = MagicMock()
         client.vertexai = False
         model = GeminiModel(
@@ -706,8 +705,9 @@ class TestResolveRequestClient:
             client,
             client_kwargs={'vertexai': False, 'api_key': 'plugin-key'},
         )
-        for context in ({'secrets': {}}, {'secrets': {'db_password': 'x'}}):
-            assert await model._resolve_request_client(_text_request(), context=context) is client
+        with pytest.raises(GenkitError, match='context.secrets') as exc:
+            await model._resolve_request_client(_text_request(), context={'secrets': {}})
+        assert exc.value.status == 'INVALID_ARGUMENT'
 
     @pytest.mark.asyncio
     async def test_secrets_api_key_surrounding_whitespace_stripped(self) -> None:

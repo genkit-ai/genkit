@@ -61,7 +61,7 @@ from genkit.model import (
     ToolDefinition,
     get_basic_usage_stats,
 )
-from genkit.plugin_api import context_api_key, reject_config_api_key, wrap_http_error
+from genkit.plugin_api import wrap_http_error
 from genkit_google_genai._auth import GOOGLE_AUTH_ERRORS, raise_auth_error
 from genkit_google_genai._constants import is_multi_regional_location, multi_regional_base_url
 from genkit_google_genai._models._context_caching._constants import DEFAULT_TTL
@@ -76,6 +76,7 @@ from genkit_google_genai._models._sdk_config import (
     sdk_config_error,
     split_sdk_fields,
 )
+from genkit_google_genai._models._secrets import context_api_key, reject_request_config_api_key
 
 
 def _to_dict(obj: JsonAny) -> JsonAny:  # noqa: ANN401
@@ -1596,7 +1597,7 @@ class GeminiModel:
         the key. Any of those rebuilds a request-scoped client; otherwise
         the plugin client is reused.
         """
-        reject_config_api_key(request.config)
+        reject_request_config_api_key(request.config)
         api_version = None
         base_url_override = None
         location_override = None
