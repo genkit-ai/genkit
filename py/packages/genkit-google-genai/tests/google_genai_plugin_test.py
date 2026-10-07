@@ -805,6 +805,18 @@ async def test_vertexai_resolve_embedder(mock_list_models: MagicMock, mock_clien
     assert action.name == 'vertexai/gemini-embedding-001'
 
 
+def test_importing_embedding_task_type_raises() -> None:
+    """from genkit_google_genai import EmbeddingTaskType raises ImportError."""
+    with pytest.raises(ImportError):
+        from genkit_google_genai import EmbeddingTaskType  # type: ignore[attr-defined]  # noqa: F401
+
+
+def test_importing_vertex_ai_evaluation_metric_type_raises() -> None:
+    """from genkit_google_genai import VertexAIEvaluationMetricType raises ImportError."""
+    with pytest.raises(ImportError):
+        from genkit_google_genai import VertexAIEvaluationMetricType  # type: ignore[attr-defined]  # noqa: F401
+
+
 def test_gemini_config() -> None:
     """Test GeminiConfig can be instantiated."""
     config = GeminiConfig(temperature=0.7, max_output_tokens=1000)
