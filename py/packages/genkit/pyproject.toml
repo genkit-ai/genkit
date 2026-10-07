@@ -40,7 +40,6 @@ classifiers = [
 ]
 dependencies = [
   "pydantic>=2.10.5",
-  "pydantic-core>=2.27.2",
   "jsonschema>=4.23.0",
   "partial-json-parser>=0.2.1.1.post5",
   "json5>=0.10.0",
