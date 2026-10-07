@@ -505,7 +505,7 @@ async def test_tool_with_int_input_rejects_string_with_invalid_argument() -> Non
     async def days_until(n: int) -> str:
         return f'{n} days'
 
-    with pytest.raises(GenkitError, match="Invalid input for action 'days_until'") as exc:
+    with pytest.raises(GenkitError, match="Invalid input for tool 'days_until'") as exc:
         await days_until('abc')
     assert exc.value.status == 'INVALID_ARGUMENT'
     assert days_until.input_schema == {'type': 'integer'}

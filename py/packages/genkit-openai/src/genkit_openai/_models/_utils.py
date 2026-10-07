@@ -23,12 +23,38 @@ import re
 from collections.abc import Callable
 from typing import Any, NoReturn
 
-from openai import APIStatusError, BaseModel
+from openai import APIConnectionError, APIError, APIResponseValidationError, APIStatusError, BaseModel
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 
 from genkit import GenkitError, Message, Part, Role
 from genkit.model import ModelRequest, ToolRequest
-from genkit.plugin_api import wrap_http_error
+from genkit.plugin_api import StatusName, mark_provider_error, wrap_http_error
+
+# Codes and types OpenAI reports in an error body. A stream that already
+# returned 200 reports a later failure only this way, as an SSE chunk with
+# an `error` object. The code is more specific, so it is checked first.
+_ERROR_CODE_TO_STATUS: dict[str, StatusName] = {
+    'rate_limit_exceeded': 'RESOURCE_EXHAUSTED',
+    'insufficient_quota': 'RESOURCE_EXHAUSTED',
+    'context_length_exceeded': 'INVALID_ARGUMENT',
+    'server_error': 'INTERNAL',
+}
+_ERROR_TYPE_TO_STATUS: dict[str, StatusName] = {
+    'invalid_request_error': 'INVALID_ARGUMENT',
+    'insufficient_quota': 'RESOURCE_EXHAUSTED',
+    'server_error': 'INTERNAL',
+}
+
+
+def _in_band_error_status(error: APIError) -> StatusName | None:
+    """Status for an error body's code or type, or None if the plugin does not know it."""
+    code = error.code
+    if isinstance(code, str) and code in _ERROR_CODE_TO_STATUS:
+        return _ERROR_CODE_TO_STATUS[code]
+    error_type = getattr(error, 'type', None)
+    if isinstance(error_type, str):
+        return _ERROR_TYPE_TO_STATUS.get(error_type)
+    return None
 
 
 def reraise_openai_error(error: Exception) -> NoReturn:
@@ -37,9 +63,21 @@ def reraise_openai_error(error: Exception) -> NoReturn:
     A bad request (missing text, wrong config type) is INVALID_ARGUMENT so
     retry does not burn attempts on it. A model reply we could not read
     (malformed tool JSON, empty content) is INTERNAL so retry can try again.
+    An error reported inside a stream is classified by its code or type.
+    A connection failure or timeout, or an in-band error the plugin does not
+    know, is re-raised unchanged so it stays unclassified.
     """
     if isinstance(error, APIStatusError):
         raise wrap_http_error(error, status_code=error.status_code) from error
+    if isinstance(error, APIConnectionError):
+        raise error
+    if isinstance(error, APIResponseValidationError):
+        raise mark_provider_error(error=GenkitError(status='INTERNAL', message=error.message, cause=error)) from error
+    if isinstance(error, APIError):
+        status = _in_band_error_status(error)
+        if status is None:
+            raise error
+        raise mark_provider_error(error=GenkitError(status=status, message=error.message, cause=error)) from error
     if isinstance(error, json.JSONDecodeError):
         raise GenkitError(status='INTERNAL', message=str(error), cause=error) from error
     if isinstance(error, ValueError):

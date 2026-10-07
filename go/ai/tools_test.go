@@ -19,8 +19,10 @@ package ai
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
+	"github.com/firebase/genkit/go/internal/base"
 	"github.com/google/go-cmp/cmp"
 )
 
@@ -118,6 +120,24 @@ func TestIsToolInterruptError(t *testing.T) {
 			t.Errorf("metadata = %v, want nil", meta)
 		}
 	})
+}
+
+func TestIsToolFailError(t *testing.T) {
+	marked := &base.ToolFailError{Err: errors.New("no such city")}
+	for _, tc := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"marked", marked, true},
+		{"wrapped by a hook", fmt.Errorf("attempt 3: %w", marked), true},
+		{"unmarked", errors.New("boom"), false},
+		{"nil", nil, false},
+	} {
+		if got := IsToolFailError(tc.err); got != tc.want {
+			t.Errorf("%s: IsToolFailError() = %v, want %v", tc.name, got, tc.want)
+		}
+	}
 }
 
 // wrappedInterruptError is a helper for testing error unwrapping.

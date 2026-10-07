@@ -54,13 +54,16 @@ uvicorn myproject.asgi:application
 ## Wire protocol
 
 - Body: `{"data": <flow_input>}`. Missing `data` → 400.
-- Streaming: `Accept: text/event-stream` or `?stream=true`. Each chunk emits `data: {"message": ...}\n\n`; completion emits `data: {"result": ...}\n\n`; on exception `error: {"error": ...}`.
-- Non-stream: `{"result": <flow_output>}` on success; 500 with `HttpErrorWireFormat` JSON on exception.
+- Streaming: `Accept: text/event-stream` or `?stream=true`. Each chunk emits `data: {"message": ...}\n\n`; completion emits `data: {"result": ...}\n\n`; on exception `data: {"error": ...}`.
+- Non-stream: `{"result": <flow_output>}` on success. A `PublicError` keeps its HTTP status and message; any other `GenkitError` (including a provider-marked failure) is 500 Internal Error.
 
 ## Context provider
 
 ```python
-async def auth(request_data):
+from genkit import RequestData
+
+
+async def auth(request_data: RequestData) -> dict[str, object]:
     return {'username': request_data.headers.get('authorization')}
 
 

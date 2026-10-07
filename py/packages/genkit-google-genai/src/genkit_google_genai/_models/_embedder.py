@@ -21,25 +21,14 @@ from typing import Any, cast
 
 from google import genai
 from google.genai import types as genai_types
+from google.genai.errors import APIError
 
-from genkit import Document, Embedding, Part
-from genkit._core._compat import StrEnum
+from genkit import Document, Embedding, GenkitError, Part
 from genkit.embedder import EmbedderInfo, EmbedderSupports, EmbedRequest, EmbedResponse
+from genkit.plugin_api import wrap_http_error
+from genkit_google_genai._auth import GOOGLE_AUTH_ERRORS, raise_auth_error
 from genkit_google_genai._models._routing import strip_ref_prefixes
 from genkit_google_genai._models._utils import PartConverter
-
-
-class EmbeddingTaskType(StrEnum):
-    """Embedding task types supported by Google-Genai."""
-
-    RETRIEVAL_QUERY = 'RETRIEVAL_QUERY'
-    RETRIEVAL_DOCUMENT = 'RETRIEVAL_DOCUMENT'
-    SEMANTIC_SIMILARITY = 'SEMANTIC_SIMILARITY'
-    CLASSIFICATION = 'CLASSIFICATION'
-    CLUSTERING = 'CLUSTERING'
-    QUESTION_ANSWERING = 'QUESTION_ANSWERING'
-    FACT_VERIFICATION = 'FACT_VERIFICATION'
-
 
 # Static dimensions for known embedders. Keys are version-suffix free
 # (e.g. 'multimodalembedding', not 'multimodalembedding@001') because model
@@ -140,20 +129,26 @@ class Embedder:
         """
         request = EmbedRequest.model_validate(request)
         if not request.input:
-            raise ValueError(
-                'Embed request input is empty: provide at least one document with content '
-                '(for example input: [{"content": [{"text": "your text here"}]}]).'
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message='Embed request input is empty: provide at least one document with content '
+                '(for example input: [{"content": [{"text": "your text here"}]}]).',
             )
         model = self._embed_model(request)
         if self._is_multimodal(model):
             return await self._generate_multimodal(request, model)
         contents = await self._build_contents(request)
         config = self._genkit_to_googleai_cfg(request)
-        response = await self._client.aio.models.embed_content(
-            model=model,
-            contents=cast(genai_types.ContentListUnion, contents),
-            config=config,
-        )
+        try:
+            response = await self._client.aio.models.embed_content(
+                model=model,
+                contents=cast(genai_types.ContentListUnion, contents),
+                config=config,
+            )
+        except APIError as e:
+            raise wrap_http_error(e, status_code=e.code, message=e.message or str(e)) from e
+        except GOOGLE_AUTH_ERRORS as e:
+            raise_auth_error(e)
 
         embeddings = [Embedding(embedding=em.values or []) for em in (response.embeddings or [])]
         return EmbedResponse(embeddings=embeddings)
@@ -191,13 +186,16 @@ class Embedder:
             EmbedResponse
         """
         if not self._is_vertex:
-            raise ValueError(
-                f'{model} embedding is only available on Vertex AI; '
-                'it is not supported by the Gemini Developer API. Use the VertexAI plugin instead.'
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=f'{model} embedding is only available on Vertex AI; '
+                'it is not supported by the Gemini Developer API. Use the VertexAI plugin instead.',
             )
         if len(request.input) > 1:
-            raise ValueError(
-                'multimodalembedding@001 supports only one document per request; embed documents one at a time.'
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message='multimodalembedding@001 supports only one document per request; '
+                'embed documents one at a time.',
             )
         instances = [self._build_multimodal_instance(doc) for doc in request.input]
 
@@ -210,19 +208,33 @@ class Embedder:
         # google-genai exposes no typed multimodal-embedding method, so reuse the
         # client's authenticated low-level transport to POST to :predict. For
         # Vertex, the project/location prefix is added by the SDK automatically.
-        # These are private SDK internals, so guard against them drifting.
+        # These are private SDK internals, so guard against them drifting. An
+        # outdated install is a local setup problem that retrying won't fix.
         api_client = getattr(self._client, '_api_client', None)
         if api_client is None or not hasattr(api_client, 'async_request'):
-            raise RuntimeError(
-                'Multimodal embedding relies on google-genai client internals that are '
-                'unavailable in the installed google-genai version; install google-genai>=1.63.0.'
+            raise GenkitError(
+                status='FAILED_PRECONDITION',
+                message='Multimodal embedding relies on google-genai client internals that are '
+                'unavailable in the installed google-genai version; install google-genai>=1.63.0.',
             )
-        http_response = await api_client.async_request(
-            http_method='post',
-            path=f'publishers/google/models/{model}:predict',
-            request_dict=payload,
-        )
-        body = json.loads(http_response.body) if http_response.body else {}
+        try:
+            http_response = await api_client.async_request(
+                http_method='post',
+                path=f'publishers/google/models/{model}:predict',
+                request_dict=payload,
+            )
+        except APIError as e:
+            raise wrap_http_error(e, status_code=e.code, message=e.message or str(e)) from e
+        except GOOGLE_AUTH_ERRORS as e:
+            raise_auth_error(e)
+        try:
+            body = json.loads(http_response.body) if http_response.body else {}
+        except json.JSONDecodeError as e:
+            raise GenkitError(
+                status='INTERNAL',
+                message='Vertex multimodal embedding returned a body that is not JSON',
+                cause=e,
+            ) from e
         predictions = body.get('predictions', []) if isinstance(body, dict) else []
 
         embeddings: list[Embedding] = []
@@ -250,11 +262,17 @@ class Embedder:
                 content_type = part.media.content_type or ''
                 if content_type.startswith('image/'):
                     if 'image' in instance:
-                        raise ValueError('Multimodal embed document cannot contain more than one image.')
+                        raise GenkitError(
+                            status='INVALID_ARGUMENT',
+                            message='Multimodal embed document cannot contain more than one image.',
+                        )
                     instance['image'] = self._media_reference(part.media.url, content_type)
                 elif content_type.startswith('video/'):
                     if 'video' in instance:
-                        raise ValueError('Multimodal embed document cannot contain more than one video.')
+                        raise GenkitError(
+                            status='INVALID_ARGUMENT',
+                            message='Multimodal embed document cannot contain more than one video.',
+                        )
                     video = self._media_reference(part.media.url, content_type, include_mime_type=False)
                     segment_config = (doc.metadata or {}).get('video_segment_config') or (doc.metadata or {}).get(
                         'videoSegmentConfig'
@@ -263,13 +281,19 @@ class Embedder:
                         video['videoSegmentConfig'] = segment_config
                     instance['video'] = video
                 else:
-                    raise ValueError(f'Unsupported contentType for multimodal embedding: {content_type!r}')
+                    raise GenkitError(
+                        status='INVALID_ARGUMENT',
+                        message=f'Unsupported contentType for multimodal embedding: {content_type!r}',
+                    )
 
         if text_parts:
             instance['text'] = ''.join(text_parts)
 
         if not instance:
-            raise ValueError('Multimodal embed document has no text, image, or video content.')
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message='Multimodal embed document has no text, image, or video content.',
+            )
         return instance
 
     @staticmethod
@@ -283,16 +307,19 @@ class Embedder:
         if url.startswith('gs://'):
             ref: dict[str, Any] = {'gcsUri': url}
         elif url.startswith('http'):
-            raise ValueError(
-                'Vertex multimodal embedding does not accept http(s) media URLs. '
-                'Upload the file to Cloud Storage and pass a gs:// URI, or inline it as a data: URL.'
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message='Vertex multimodal embedding does not accept http(s) media URLs. '
+                'Upload the file to Cloud Storage and pass a gs:// URI, or inline it as a data: URL.',
             )
         elif url.startswith('data:'):
             marker = ';base64,'
             marker_index = url.find(marker)
             if marker_index == -1:
-                raise ValueError(
-                    'Vertex multimodal embedding requires base64-encoded data: URLs (data:<mimeType>;base64,<data>).'
+                raise GenkitError(
+                    status='INVALID_ARGUMENT',
+                    message='Vertex multimodal embedding requires base64-encoded data: URLs '
+                    '(data:<mimeType>;base64,<data>).',
                 )
             ref = {'bytesBase64Encoded': url[marker_index + len(marker) :]}
         else:
