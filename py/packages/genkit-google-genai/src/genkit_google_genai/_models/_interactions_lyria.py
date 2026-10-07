@@ -45,6 +45,7 @@ from genkit_google_genai._models._interactions_utils import (
     remove_client_option_overrides,
     require_interaction_steps,
 )
+from genkit_google_genai._models._secrets import reject_request_config_api_key
 
 CREATE_OPTION_KEYS = ('response_modalities',)
 
@@ -78,6 +79,7 @@ def create_lyria_action(
     info = lyria_model_info(version)
 
     async def run(request: ModelRequest[LyriaConfig], ctx: ActionRunContext) -> ModelResponse:
+        reject_request_config_api_key(request.config)
         config = request.config or LyriaConfig()
         api_key = api_key_for_context(ctx.context, plugin_api_key)
         merged_options = client_options.merge(client_overrides_from_config(config))

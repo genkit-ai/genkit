@@ -1915,4 +1915,3 @@ async def test_request_client_unknown_failure_stays_raw() -> None:
             )
 
     assert raised.value is boom
-

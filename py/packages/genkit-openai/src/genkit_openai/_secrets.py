@@ -14,32 +14,16 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Per-request provider API key on ``context.secrets``.
+"""Per-request API key on ``context.secrets`` for the OpenAI plugin.
 
 A tenant key travels with the call, not the config, so it never lands in a
-trace: ``context={'secrets': {'api_key': tenant_key}}``. Every model plugin
-reads it through ``context_api_key``, and core runs ``reject_config_api_key``
-before any model does, so one app gets the same rules and the same error text
-on every provider.
-
-Rules:
-
-- ``context.secrets`` is shared by every plugin and by the app itself. When it
-  has no ``api_key`` (or ``apiKey``), the call runs on the plugin's own key.
-- A key that is set but is not a string, is blank, or has inner whitespace or
-  control characters raises ``INVALID_ARGUMENT``. Running that call on the
-  plugin's key would bill the wrong account.
-- Only ``context['secrets']`` is read. Other context entries, such as an
-  ``api_key`` an app's own auth context provider set, are left alone.
-- A key on the request config, inside ``config.extra``, or on the config a
-  background operation poll carries raises ``INVALID_ARGUMENT``: config is
-  traced, and ``extra`` is sent to the provider as body fields.
+trace: ``context={'secrets': {'api_key': tenant_key}}``.
 """
 
 from collections.abc import Mapping
 from typing import cast
 
-from genkit._core._error import GenkitError, RuntimeErrorReason
+from genkit import GenkitError
 
 SECRETS_HINT = "Pass the key as context={'secrets': {'api_key': ...}}."
 
@@ -52,7 +36,6 @@ def misplaced_api_key_error() -> GenkitError:
     return GenkitError(
         status='INVALID_ARGUMENT',
         message=f'API key belongs in context.secrets, not config. {SECRETS_HINT}',
-        reason=RuntimeErrorReason.INVALID_INPUT,
     )
 
 
@@ -81,28 +64,13 @@ def _clean_key(value: object, slot: str) -> str:
 
 
 def context_api_key(context: Mapping[str, object] | None) -> str | None:
-    """The per-request key from ``context.secrets``, or None to use the plugin's key.
+    """Read the per-request key from ``context.secrets``.
 
-    ``api_key`` is the documented slot; ``apiKey`` (the JS spelling) works
-    too. Surrounding whitespace is trimmed.
-
-    Example:
-        ```python
-        # 1. Read the tenant key in a model's generate function
-        key = context_api_key(ctx.context)
-
-        # 2. Pick the client
-        client = plugin_client.with_options(api_key=key) if key else plugin_client
-        ```
-
-        ```python
-        context_api_key({'secrets': {'api_key': ' sk-tenant '}})
-        # => 'sk-tenant'
-        context_api_key({'secrets': {'db_password': 'x'}, 'api_key': 'app-key'})
-        # => None
-        context_api_key({'secrets': {'api_key': '  '}})
-        # => GenkitError INVALID_ARGUMENT: context.secrets.api_key is blank. ...
-        ```
+    ``api_key`` is the documented slot; ``apiKey`` works too. ``secrets``
+    without either runs on the plugin's key, so apps can keep other secrets
+    there. A key that is set but blank or not a string raises. Top-level
+    context entries like ``context['api_key']`` are ignored so app-level
+    auth context providers are untouched.
 
     Args:
         context: The action context (``ctx.context``).
@@ -141,23 +109,13 @@ def context_api_key(context: Mapping[str, object] | None) -> str | None:
 def reject_config_api_key(config: object) -> None:
     """Raise when a request config carries an API key.
 
-    Core calls this in generate, in the ``/util/generate`` action, and on every
-    model and background-model action run, so plugins don't need to. Checks
-    ``api_key`` / ``apiKey`` on a config dict or model, on a model's undeclared
-    fields, and inside ``extra``. A key in any of those would be
+    Checks ``api_key`` / ``apiKey`` on a config dict or model, on a model's
+    undeclared fields, and inside ``extra``. A key in any of those would be
     traced, and a key in ``extra`` would also go to the provider as a body
     field while the call authenticates with the plugin's key.
 
-    Example:
-        ```python
-        reject_config_api_key({'temperature': 0.2})
-        # => None
-        reject_config_api_key({'extra': {'api_key': 'sk-tenant'}})
-        # => GenkitError INVALID_ARGUMENT: API key belongs in context.secrets, not config. ...
-        ```
-
     Args:
-        config: The request config, as a dict or a config object.
+        config: ``request.config`` as the model received it.
 
     Raises:
         GenkitError: ``INVALID_ARGUMENT`` when a key is present.

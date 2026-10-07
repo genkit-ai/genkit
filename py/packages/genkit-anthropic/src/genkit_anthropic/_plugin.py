@@ -28,14 +28,13 @@ from genkit.plugin_api import (
     ActionKind,
     ActionMetadata,
     Plugin,
-    context_api_key,
     loop_local_client,
-    reject_config_api_key,
     to_json_schema,
 )
 from genkit_anthropic._config import AnthropicConfig
 from genkit_anthropic._model_info import SUPPORTED_ANTHROPIC_MODELS, KnownClaude, get_model_info
 from genkit_anthropic._models import AnthropicModel, pinned_credential_header
+from genkit_anthropic._secrets import context_api_key, reject_config_api_key
 
 logger = structlog.get_logger(__name__)
 
