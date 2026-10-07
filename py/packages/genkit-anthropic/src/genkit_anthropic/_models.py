@@ -41,7 +41,7 @@ from genkit.plugin_api import (
 )
 from genkit_anthropic._config import AnthropicConfig
 from genkit_anthropic._model_info import get_model_info
-from genkit_anthropic._secrets import context_api_key, reject_request_config_api_key
+from genkit_anthropic._secrets import context_api_key
 from genkit_anthropic._utils import (
     build_cache_usage,
     get_cache_control,
@@ -273,7 +273,6 @@ class AnthropicModel:
         Returns:
             Generated response.
         """
-        reject_request_config_api_key(request.config)
         config = _normalize_config(request.config)
         use_beta = self._uses_beta_api(config)
         context = ctx.context if ctx is not None and isinstance(ctx.context, dict) else {}
@@ -418,7 +417,7 @@ class AnthropicModel:
         params['messages'] = self._to_anthropic_messages(request.messages)
         params['max_tokens'] = int(max_tokens)
 
-        # api_version and api_key select the API surface and client; they are not create() kwargs.
+        # api_version selects the API surface; it is not a create() kwarg.
         for key in AnthropicConfig.SDK_UNSUPPORTED_KEYS:
             params.pop(key, None)
 

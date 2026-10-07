@@ -63,7 +63,7 @@ from genkit_google_genai._models._sdk_config import (
     sdk_config_error,
     split_sdk_fields,
 )
-from genkit_google_genai._models._secrets import context_api_key, reject_request_config_api_key
+from genkit_google_genai._models._secrets import context_api_key, reject_extra_api_key
 
 
 def _to_dict(obj: JsonAny) -> JsonAny:  # noqa: ANN401
@@ -1522,7 +1522,7 @@ class GeminiModel:
         the key. Any of those rebuilds a request-scoped client; otherwise
         the plugin client is reused.
         """
-        reject_request_config_api_key(request.config)
+        reject_extra_api_key(request.config)
         api_version = None
         base_url_override = None
         location_override = None
@@ -1965,7 +1965,7 @@ class GeminiModel:
 
     # Keys that are Genkit-specific and must not be forwarded to the API.
     # 'version' overrides the model name, others are client-level settings.
-    _GENKIT_ONLY_KEYS = frozenset(['version', 'api_version', 'api_key', 'base_url', 'location', 'context_cache'])
+    _GENKIT_ONLY_KEYS = frozenset(['version', 'api_version', 'base_url', 'location', 'context_cache'])
 
     # Keys that may not be supported by older google-genai SDK versions.
     _SDK_GATED_KEYS = frozenset(['image_config', 'thinking_config', 'response_modalities'])

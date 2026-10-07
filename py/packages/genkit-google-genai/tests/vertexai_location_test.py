@@ -42,7 +42,7 @@ EU_REP_URL = 'https://aiplatform.eu.rep.googleapis.com'
 
 
 def _text_request(config: GeminiConfig | dict[str, Any] | None = None) -> ModelRequest[Any]:
-    if isinstance(config, dict) and 'api_key' not in config and 'apiKey' not in config:
+    if isinstance(config, dict):
         config = GeminiConfig.model_validate(config)
     return ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
@@ -630,8 +630,8 @@ class TestResolveRequestClient:
         assert await model._resolve_request_client(_text_request({'location': 'eu'})) is client
 
     @pytest.mark.asyncio
-    async def test_config_api_key_is_invalid_argument(self) -> None:
-        """A tenant key on generate config belongs in context.secrets."""
+    async def test_extra_api_key_is_invalid_argument(self) -> None:
+        """A tenant key inside config `extra` belongs in context.secrets."""
         client = MagicMock()
         client.vertexai = False
         model = GeminiModel(
@@ -641,7 +641,7 @@ class TestResolveRequestClient:
         )
         for bag in ({'api_key': 'override-key'}, {'apiKey': 'override-key'}):
             with pytest.raises(GenkitError, match='context.secrets') as exc:
-                await model._resolve_request_client(_text_request(bag))
+                await model._resolve_request_client(_text_request({'extra': bag}))
             assert exc.value.status == 'INVALID_ARGUMENT'
 
     @pytest.mark.asyncio
@@ -678,23 +678,6 @@ class TestResolveRequestClient:
                 context={'secrets': {'apiKey': 'sk-camel'}},
             )
         assert mock_ctor.call_args.kwargs['api_key'] == 'sk-camel'
-
-    @pytest.mark.asyncio
-    async def test_config_api_key_rejected_even_with_secrets(self) -> None:
-        """Both pockets set still fails — config is not a key slot."""
-        client = MagicMock()
-        client.vertexai = False
-        model = GeminiModel(
-            'gemini-2.5-flash',
-            client,
-            client_kwargs={'vertexai': False, 'api_key': 'plugin-key'},
-        )
-        with pytest.raises(GenkitError, match='context.secrets') as exc:
-            await model._resolve_request_client(
-                _text_request({'api_key': 'sk-config'}),
-                context={'secrets': {'api_key': 'sk-tenant'}},
-            )
-        assert exc.value.status == 'INVALID_ARGUMENT'
 
     @pytest.mark.asyncio
     async def test_empty_secrets_is_invalid_argument(self) -> None:

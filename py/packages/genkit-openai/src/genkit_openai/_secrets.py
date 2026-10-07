@@ -20,8 +20,7 @@ A tenant key travels with the call, not the config, so it never lands in a
 trace: ``context={'secrets': {'api_key': tenant_key}}``.
 """
 
-from collections.abc import Mapping
-from typing import Any, cast
+from typing import Any
 
 from genkit import GenkitError
 
@@ -43,26 +42,6 @@ def missing_key_error() -> GenkitError:
             "or send a per-request key as context={'secrets': {'api_key': ...}}."
         ),
     )
-
-
-def reject_config_api_key(config: object) -> None:
-    """Raise when ``request.config`` carries an API key.
-
-    ``ModelConfig`` declares ``api_key``, so ``OpenAIConfig`` accepts it even
-    with unknown keys forbidden. Left alone it would be dropped and the call
-    would run on the plugin's key. Chat models get an ``OpenAIConfig``; image,
-    speech and transcription models get the config as a dict. ``config.extra``
-    isn't checked: it goes out as request body fields as written.
-    """
-    if config is None:
-        return
-    if isinstance(config, Mapping):
-        bag = cast(Mapping[str, object], config)
-        has_key = bag.get('api_key') is not None or bag.get('apiKey') is not None
-    else:
-        has_key = getattr(config, 'api_key', None) is not None
-    if has_key:
-        raise misplaced_key_error()
 
 
 def string_secret(value: object) -> str:

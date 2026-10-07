@@ -33,7 +33,6 @@ from genkit_google_genai._models._secrets import context_api_key
 
 # Snake_case: callers dump config with by_alias=False before we strip these.
 CLIENT_OPTION_KEYS = frozenset({
-    'api_key',
     'base_url',
     'api_version',
     'custom_headers',

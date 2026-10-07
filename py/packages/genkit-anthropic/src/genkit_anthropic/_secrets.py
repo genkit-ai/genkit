@@ -97,15 +97,3 @@ def context_api_key(context: dict[str, Any]) -> str | None:
 
 def _bag_has_api_key(bag: dict[str, Any]) -> bool:
     return bag.get('api_key') is not None or bag.get('apiKey') is not None
-
-
-def reject_request_config_api_key(config: object) -> None:
-    """A key on ``request.config`` raises instead of authenticating the call."""
-    if config is None:
-        return
-    if isinstance(config, dict):
-        has_key = _bag_has_api_key(cast(dict[str, Any], config))
-    else:
-        has_key = getattr(config, 'api_key', None) is not None
-    if has_key:
-        raise misplaced_key_error()

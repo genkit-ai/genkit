@@ -20,6 +20,7 @@ The ticket and the generate span are not where a tenant key lives. Callers
 pass it again on the run: ``context={'secrets': {'api_key': tenant}}``.
 """
 
+from collections.abc import Mapping
 from typing import Any, cast
 
 from genkit import GenkitError
@@ -59,8 +60,7 @@ def context_api_key(context: dict[str, Any]) -> str | None:
     Documented slot is ``api_key``; ``apiKey`` is accepted so either
     spelling works. A key on ``context['config']`` or the top-level
     context is rejected so it cannot silently fall through to the
-    plugin client. ``generate(..., config={'api_key': ...})`` is the
-    same leftover — reject it on the request too.
+    plugin client.
     """
     extra = context.get('config')
     if isinstance(extra, dict) and (extra.get('api_key') is not None or extra.get('apiKey') is not None):
@@ -87,36 +87,19 @@ def context_api_key(context: dict[str, Any]) -> str | None:
     return key
 
 
-def _bag_has_api_key(bag: dict[str, Any]) -> bool:
+def _bag_has_api_key(bag: Mapping[str, Any]) -> bool:
     return bag.get('api_key') is not None or bag.get('apiKey') is not None
 
 
-def request_config_has_api_key(config: object) -> bool:
-    """True when the generate/start request still carries a tenant key."""
-    if config is None:
-        return False
-    if isinstance(config, dict):
-        return _bag_has_api_key(cast(dict[str, Any], config))
-    extra = getattr(config, 'model_extra', None)
-    if isinstance(extra, dict) and _bag_has_api_key(cast(dict[str, Any], extra)):
-        return True
-    # config.extra is sent on the wire and lands in traces; a key there is the same leak.
-    passthrough = getattr(config, 'extra', None)
-    if isinstance(passthrough, dict) and _bag_has_api_key(cast(dict[str, Any], passthrough)):
-        return True
-    if getattr(config, 'api_key', None) is not None or getattr(config, 'apiKey', None) is not None:
-        return True
-    dump = getattr(config, 'model_dump', None)
-    if callable(dump):
-        try:
-            dumped = dump(by_alias=True)
-        except TypeError:
-            dumped = dump()
-        return isinstance(dumped, dict) and _bag_has_api_key(cast(dict[str, Any], dumped))
-    return False
+def reject_extra_api_key(config: object) -> None:
+    """A key inside ``config.extra`` belongs in context.secrets.
 
-
-def reject_request_config_api_key(config: object) -> None:
-    """A key on request.config belongs in context.secrets."""
-    if request_config_has_api_key(config):
+    Core rejects a key at the top level of config before any model runs.
+    ``extra`` is merged into the Gemini request as written, so a key there
+    would be sent and land in the trace.
+    """
+    extra = (
+        cast(Mapping[str, Any], config).get('extra') if isinstance(config, Mapping) else getattr(config, 'extra', None)
+    )
+    if isinstance(extra, Mapping) and _bag_has_api_key(cast(Mapping[str, Any], extra)):
         raise misplaced_key_error()
