@@ -194,3 +194,28 @@ def test_handle_genkit_request_agent_route_with_data_envelope_runs_turn() -> Non
     result = response.json()['result']
     assert result['sessionId'] == 'session-789'
     assert 'Hi there!' in json.dumps(result)
+
+
+def test_hand_rolled_route_yields_to_sse_same_frames_as_serve_agent() -> None:
+    """A custom route that streams via handle_genkit_request matches serve_agent SSE."""
+    mounted = client(build_agent('mountedFrames'))
+    served = mounted.post('/api/chat?stream=true', json={'message': 'Hi'})
+
+    agent = build_agent('handFrames')
+    app = FastAPI()
+
+    @app.post('/custom', response_model=None)
+    async def custom(request: Request) -> object:
+        return await handle_genkit_request(request, action=agent)
+
+    hand = TestClient(app).post(
+        '/custom?stream=true',
+        json={'data': {'message': {'role': 'user', 'content': [{'text': 'Hi'}]}}},
+    )
+
+    served_kinds = [next(iter(e)) for e in sse_events(served.text)]
+    hand_kinds = [next(iter(e)) for e in sse_events(hand.text)]
+    assert served_kinds == hand_kinds
+    assert served_kinds[-1] == 'result'
+    assert 'Hi there!' in json.dumps(sse_events(served.text)[-1]['result'])
+    assert 'Hi there!' in json.dumps(sse_events(hand.text)[-1]['result'])

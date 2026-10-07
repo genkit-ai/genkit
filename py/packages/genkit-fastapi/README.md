@@ -105,6 +105,45 @@ app.include_router(
 )
 ```
 
+### Your own route (`handle_genkit_request`)
+
+FastAPI owns the route. We own the turn. Build auth and session however you like, then call this:
+
+```python
+from fastapi import Depends, Request
+from genkit_fastapi import handle_genkit_request
+
+
+@app.post('/api/weatherAgent', response_model=None)
+async def turn(request: Request, user=Depends(current_user)):
+    return await handle_genkit_request(
+        request,
+        action=weather_agent,
+        context={'uid': user.id},
+    )
+```
+
+JSON in, SSE or `{"result": ...}` out — same wire as `serve_flow` / `serve_agent`.
+
+### Framing a stream (`to_sse`)
+
+A chunk is not HTTP. `to_sse` turns `generate_stream` / `chat.send_stream` into the same SSE lines those routes send. It is experimental, so it comes from `genkit_fastapi.exp`:
+
+```python
+from fastapi.responses import StreamingResponse
+from genkit_fastapi.exp import to_sse
+
+turn = chat.send_stream('Weather in Paris?')
+
+async def frames():
+    async for line in to_sse(turn):
+        yield line
+
+return StreamingResponse(frames(), media_type='text/event-stream')
+```
+
+Each chunk is `data: {"message": ...}`. The settled turn is `data: {"result": ...}`. A failure is `data: {"error": ...}`.
+
 ### Decorator Handler (`genkit_fastapi_handler`)
 
 For custom route definitions, you can also use `@genkit_fastapi_handler`:
