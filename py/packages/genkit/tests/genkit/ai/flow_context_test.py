@@ -11,9 +11,9 @@ from collections.abc import Sequence
 import pytest
 
 from genkit import ActionRunContext, FinishReason, Genkit, Message, ModelResponse, Part, Role
-from genkit._ai._testing import define_programmable_model
-from genkit._core._telemetry.http import ActiveSpan
+from genkit._core._telemetry._http import ActiveSpan
 from genkit._core._typing import ToolRequest
+from genkit.testing import define_scripted_model
 
 CALLER = {'auth': {'uid': 'u_42', 'tier': 'gold'}, 'locale': 'en-US'}
 
@@ -142,7 +142,7 @@ async def test_streamed_subflow_sees_parent_context() -> None:
 async def test_subflow_called_from_tool_during_generate_sees_flow_context() -> None:
     """flow → generate → tool → subflow: the subflow sees the outer flow's context."""
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
     allergy_check = _define_allergy_check(ai)
     seen: list[dict[str, object]] = []
 
@@ -168,7 +168,7 @@ async def test_subflow_called_from_tool_during_generate_sees_flow_context() -> N
 
     @ai.flow()
     async def concierge(question: str) -> str:
-        response = await ai.generate(model='programmableModel', prompt=question, tools=['check_allergies'])
+        response = await ai.generate(model='scriptedModel', prompt=question, tools=['check_allergies'])
         return response.text
 
     result = await concierge.run('Is the tartine safe?', context=CALLER)
