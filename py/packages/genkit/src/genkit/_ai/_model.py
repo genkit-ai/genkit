@@ -19,14 +19,11 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Annotated, Any, TypeAlias, cast, get_args, get_origin, get_type_hints
+from typing import Annotated, Any, TypeAlias, cast, get_args, get_origin, get_type_hints
 
 from pydantic import AliasChoices, BaseModel, ValidationError
-
-if TYPE_CHECKING:
-    from pydantic_core import ErrorDetails
 
 from genkit._core._action import (
     Action,
@@ -492,7 +489,7 @@ def check_config_dict(*, config: object, schema: type[BaseModel] | None, model: 
 
 
 def _describe_config_problems(
-    problems: list[ErrorDetails], *, layer: Mapping[str, Any], schema: type[BaseModel]
+    problems: Sequence[Mapping[str, Any]], *, layer: Mapping[str, Any], schema: type[BaseModel]
 ) -> str:
     # pydantic binds one spelling of a setting and calls the other unknown;
     # the caller didn't misspell anything, they wrote the setting twice.
