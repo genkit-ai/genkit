@@ -19,12 +19,11 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Annotated, Any, TypeAlias, cast, get_args, get_origin, get_type_hints
 
 from pydantic import AliasChoices, BaseModel, ValidationError
-from pydantic_core import ErrorDetails
 
 from genkit._core._action import (
     Action,
@@ -489,7 +488,7 @@ def check_config_dict(*, config: object, schema: type[BaseModel] | None, model: 
         ) from e
 
 
-def _describe_config_problems(problems: list[ErrorDetails]) -> str:
+def _describe_config_problems(problems: Sequence[Mapping[str, Any]]) -> str:
     unknown = [_config_path(err['loc']) for err in problems if err['type'] == 'extra_forbidden']
     parts: list[str] = []
     if unknown:

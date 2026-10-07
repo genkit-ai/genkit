@@ -1384,7 +1384,7 @@ async def test_config_stream_does_not_reach_sdk() -> None:
     mock_client = _mock_client_for_generate()
     model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
 
-    with pytest.raises(ValidationError, match='stream'):
+    with pytest.raises(GenkitError, match='stream'):
         await model.generate(_text_request({'stream': True}))
     with pytest.raises(GenkitError, match='stream'):
         await model.generate(_text_request({'extra': {'stream': True}}))
