@@ -32,12 +32,34 @@ import {
   resolveReflectionConfig,
   resolveReflectionServerConfig,
   secretsEqual,
+  type ReflectionPort,
   type ReflectionServerConfig,
 } from './reflection-config.js';
 import type { Registry } from './registry.js';
 import { toJsonSchema } from './schema.js';
 import { flushTracing, setTelemetryServerUrl } from './tracing.js';
 import { isDevEnv } from './utils.js';
+
+/** Bind attempts for a probed (unchosen) port before giving up. */
+const PROBE_BIND_ATTEMPTS = 5;
+
+function listenOnce(
+  app: express.Express,
+  port: number,
+  host: string
+): Promise<Server> {
+  return new Promise<Server>((resolve, reject) => {
+    const s = app.listen(port, host, () => {
+      s.removeListener('error', reject);
+      resolve(s);
+    });
+    s.once('error', reject);
+  });
+}
+
+function isAddressInUse(e: unknown): boolean {
+  return e instanceof Error && 'code' in e && e.code === 'EADDRINUSE';
+}
 
 // TODO: Move this to common location for schemas.
 export const RunActionResponseSchema = z.object({
@@ -139,6 +161,40 @@ export class ReflectionServer {
       );
     }
     return freePort;
+  }
+
+  /**
+   * Binds `app` and sets `this.port`.
+   *
+   * A chosen port (env or code) is bound exactly or fails: shifting to the
+   * next free one would leave whoever chose it talking to a dead port.
+   *
+   * A probed port is retried on EADDRINUSE: findPort() checks a port and
+   * releases it before listen() binds, so another process starting at the
+   * same time (e.g. two runtimes in a monorepo) can take it in between.
+   */
+  private async listen(
+    app: express.Express,
+    host: string,
+    port: ReflectionPort
+  ): Promise<Server> {
+    if (port.kind === 'pinned') {
+      this.port = port.port;
+      return listenOnce(app, port.port, host);
+    }
+    for (let attempt = 1; ; attempt++) {
+      this.port = await this.findPort();
+      try {
+        return await listenOnce(app, this.port, host);
+      } catch (e) {
+        if (!isAddressInUse(e) || attempt >= PROBE_BIND_ATTEMPTS) {
+          throw e;
+        }
+        logger.debug(
+          `Port ${this.port} was taken before it could be bound, probing again.`
+        );
+      }
+    }
   }
 
   /**
@@ -512,17 +568,7 @@ export class ReflectionServer {
       res.status(200).end(JSON.stringify({ error: errorResponse }));
     });
 
-    // A chosen port (env or code) is bound exactly or fails: shifting to the
-    // next free one would leave whoever chose it talking to a dead port.
-    this.port =
-      config.port.kind === 'pinned' ? config.port.port : await this.findPort();
-    const listening = await new Promise<Server>((resolve, reject) => {
-      const s = server.listen(this.port!, config.host, () => {
-        s.removeListener('error', reject);
-        resolve(s);
-      });
-      s.once('error', reject);
-    });
+    const listening = await this.listen(server, config.host, config.port);
     // Assigned only once listening, so stop() after a failed bind is a no-op
     // instead of closing a server that never started.
     this.server = listening;

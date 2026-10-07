@@ -158,6 +158,8 @@ function resolveOptionPort(optionPort: number | undefined): ReflectionPort {
  * The environment port beats `options.port` on purpose: whoever set the
  * variable is typically the supervisor that already published that port.
  * `options.port` is validated even when unused so a bad value fails early.
+ *
+ * @hidden
  */
 export function resolveReflectionConfig(
   env: ReflectionEnv,

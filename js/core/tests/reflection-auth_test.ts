@@ -194,6 +194,52 @@ describe('ReflectionServer auth', () => {
     }
   });
 
+  it('probes again when the probed port is taken before the bind', async () => {
+    // Simulates another process grabbing the port between findPort() and
+    // listen(): the first probe returns a port that is already held.
+    const taken = http.createServer();
+    const port = await getPort();
+    await new Promise<void>((resolve, reject) => {
+      taken.once('error', reject);
+      taken.listen(port, '127.0.0.1', resolve);
+    });
+    try {
+      process.env.GENKIT_ENV = 'dev';
+      const s = new ReflectionServer(new Registry());
+      server = s;
+      const realFindPort = s.findPort.bind(s);
+      let calls = 0;
+      s.findPort = async () => (++calls === 1 ? port : realFindPort());
+      await s.start();
+      assert.strictEqual(calls, 2);
+      assert.notStrictEqual((s as any).server.address().port, port);
+    } finally {
+      await new Promise<void>((resolve) => taken.close(() => resolve()));
+    }
+  });
+
+  it('gives up after repeated bind races on a probed port', async () => {
+    const taken = http.createServer();
+    const port = await getPort();
+    await new Promise<void>((resolve, reject) => {
+      taken.once('error', reject);
+      taken.listen(port, '127.0.0.1', resolve);
+    });
+    try {
+      process.env.GENKIT_ENV = 'dev';
+      const blocked = new ReflectionServer(new Registry());
+      let calls = 0;
+      blocked.findPort = async () => {
+        calls++;
+        return port;
+      };
+      await assert.rejects(() => blocked.start(), /EADDRINUSE/);
+      assert.strictEqual(calls, 5);
+    } finally {
+      await new Promise<void>((resolve) => taken.close(() => resolve()));
+    }
+  });
+
   it('does not serve quitquitquit outside dev', async () => {
     const port = await startWithSecret();
     const res = await get(port, '/api/__quitquitquit');
