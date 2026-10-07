@@ -272,10 +272,13 @@ class ModelGarden(Plugin):
         """Region and project the model ``name`` runs in.
 
         Raises:
-            ValueError: No project ID was passed or found in the environment.
+            GenkitError: FAILED_PRECONDITION when no project ID was passed or found in the environment.
         """
         if not self.project_id:
-            raise ValueError('project_id must be provided')
+            raise GenkitError(
+                status='FAILED_PRECONDITION',
+                message='project_id must be provided',
+            )
         return self.model_locations.get(name, self.location), self.project_id
 
     async def _create_model_action(self, name: str) -> Action:

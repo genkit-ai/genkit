@@ -4,16 +4,19 @@
 """Every action takes at most one input; the context goes to the parameter annotated ActionRunContext."""
 
 import sys
+import types
 from collections.abc import Awaitable, Callable
 from typing import Optional, cast
 
 import pytest
+from pydantic import TypeAdapter
 
-from genkit import ActionRunContext, Genkit, Message, ModelResponse, Operation, Part
+from genkit import ActionRunContext, Document, Genkit, GenkitError, Message, ModelResponse, Operation, Part
 from genkit._core._action import Action, ActionKind
 from genkit._core._background import CheckModelOpFn, StartModelOpFn
-from genkit._core._typing import Role
+from genkit._core._typing import ActionMetadata, Role
 from genkit.model import ModelRequest
+from genkit.plugin_api import Plugin
 
 _REPLY = ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('Smoked Salmon Tartine')]))
 
@@ -225,3 +228,266 @@ def test_action_params_names_input_and_context() -> None:
     assert params.input is not None and params.input.name == 'request'
     assert params.context is not None and params.context.name == 'ctx'
     assert not params.input_optional
+
+
+# -----------------------------------------------------------------------------
+# Request and response types imported only under TYPE_CHECKING
+#
+# Ruff's TC rules move `ModelRequest`, `ModelResponse`, `EmbedRequest`, and
+# `Operation` under `if TYPE_CHECKING:` when a handler only annotates them.
+# Genkit fills in those names for the kinds that always use them.
+# -----------------------------------------------------------------------------
+
+
+def _load(name: str, source: str) -> types.ModuleType:
+    module = types.ModuleType(name)
+    exec(source, module.__dict__)  # noqa: S102 - builds a module with postponed annotations
+    return module
+
+
+_TYPE_CHECKING_MODEL = """
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from pydantic import BaseModel
+
+from genkit import Message, ModelResponse as _ModelResponse, Part, Role
+
+if TYPE_CHECKING:
+    from genkit import ActionRunContext, ModelResponse
+    from genkit.model import ModelRequest
+
+    class AllergyRequest(ModelRequest):
+        pass
+
+seen: list[object] = []
+
+
+class KitchenConfig(BaseModel):
+    temperature: float | None = None
+
+
+def _plate(text: str) -> _ModelResponse:
+    return _ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text(text)]))
+
+
+async def chef(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    seen.append(request)
+    return _plate('Smoked Salmon Tartine')
+
+
+async def tuned_chef(request: ModelRequest[KitchenConfig]) -> ModelResponse:
+    seen.append(request.config.temperature if request.config else None)
+    return _plate('Smoked Salmon Tartine')
+
+
+async def misspelled_chef(request: ModelReqeust) -> ModelResponse:
+    return _plate('never')
+
+
+async def subclass_chef(request: AllergyRequest) -> ModelResponse:
+    return _plate('never')
+
+
+async def dict_chef(request: dict[str, object]) -> object:
+    return {}
+"""
+
+
+_TYPE_CHECKING_EMBEDDER = """
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from genkit._core._typing import Embedding, EmbedResponse as _EmbedResponse
+
+if TYPE_CHECKING:
+    from genkit.embedder import EmbedRequest, EmbedResponse
+
+seen: list[object] = []
+
+
+async def menu_vectors(request: EmbedRequest) -> EmbedResponse:
+    seen.extend(request.input)
+    return _EmbedResponse(embeddings=[Embedding(embedding=[1.0, 2.0])])
+"""
+
+
+_TYPE_CHECKING_BACKGROUND_MODEL = """
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from genkit import Operation as _Operation
+
+if TYPE_CHECKING:
+    from genkit import Operation
+    from genkit.model import ModelRequest
+
+
+async def start(request: ModelRequest) -> Operation:
+    return _Operation(id='render-1', done=False)
+
+
+async def check(op: Operation) -> Operation:
+    return op.model_copy(update={'done': True})
+"""
+
+
+_TYPE_CHECKING_FLOW = """
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    class OrderInput:
+        pass
+
+
+async def take_order(order: OrderInput) -> str:
+    return 'x'
+"""
+
+
+class _KitchenPlugin(Plugin):
+    name = 'kitchen'
+
+    def __init__(self, fn: Callable[..., Awaitable[object]]) -> None:
+        self._fn = fn
+
+    async def init(self) -> list[Action]:
+        return []
+
+    async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
+        if action_type == ActionKind.MODEL and name == 'chef':
+            return Action(kind=ActionKind.MODEL, name=name, fn=self._fn)
+        if action_type == ActionKind.EMBEDDER and name == 'menu-vectors':
+            return Action(kind=ActionKind.EMBEDDER, name=name, fn=self._fn)
+        return None
+
+    async def list_actions(self) -> list[ActionMetadata]:
+        return []
+
+
+@pytest.mark.asyncio
+async def test_generate_plugin_model_with_type_checking_request_and_response_returns_reply() -> None:
+    """`request: ModelRequest` and `-> ModelResponse`, both TYPE_CHECKING-only, register and run."""
+    module = _load('tc_chef', _TYPE_CHECKING_MODEL)
+    ai = Genkit(plugins=[_KitchenPlugin(module.chef)])
+
+    resp = await ai.generate(model='kitchen/chef', prompt='Suggest a dish.')
+
+    assert resp.text == 'Smoked Salmon Tartine'
+    assert [type(r) for r in module.seen] == [ModelRequest]
+
+
+def test_define_model_with_type_checking_request_annotation_registers() -> None:
+    """define_model runs _check_request_annotation before building the Action; that check lets the name through."""
+    module = _load('tc_defined_chef', _TYPE_CHECKING_MODEL)
+
+    action = Genkit().define_model(name='chef', fn=module.chef)
+
+    assert action.input_schema == TypeAdapter(ModelRequest).json_schema()
+
+
+@pytest.mark.asyncio
+async def test_model_with_type_checking_parameterized_request_validates_config() -> None:
+    """`ModelRequest[KitchenConfig]` keeps its config type: config is parsed and published."""
+    module = _load('tc_tuned_chef', _TYPE_CHECKING_MODEL)
+    action = Action(ActionKind.MODEL, 'chef', module.tuned_chef)
+
+    await action.run({'messages': [], 'config': {'temperature': 0.5}})
+
+    assert module.seen == [0.5]
+    assert action.input_class is ModelRequest[module.KitchenConfig]
+    assert action.input_schema == TypeAdapter(ModelRequest[module.KitchenConfig]).json_schema()
+
+
+@pytest.mark.parametrize(
+    ('handler', 'missing'), [('misspelled_chef', 'ModelReqeust'), ('subclass_chef', 'AllergyRequest')]
+)
+def test_model_with_unknown_type_checking_request_name_still_raises(handler: str, missing: str) -> None:
+    """Only names Genkit knows are filled in; a typo or a TYPE_CHECKING-only subclass still raises."""
+    fn = getattr(_load(f'tc_{handler}', _TYPE_CHECKING_MODEL), handler)
+
+    with pytest.raises(TypeError, match=f"has type '{missing}', which can't be found"):
+        Action(ActionKind.MODEL, 'chef', fn)
+
+
+def test_model_with_runtime_resolvable_request_annotation_keeps_its_own_type() -> None:
+    """A handler annotation that resolves is used as written."""
+    fn = _load('tc_dict_chef', _TYPE_CHECKING_MODEL).dict_chef
+
+    action = Action(ActionKind.MODEL, 'chef', fn)
+
+    assert action.input_schema == TypeAdapter(dict[str, object]).json_schema()
+
+
+@pytest.mark.asyncio
+async def test_type_checking_request_annotation_validates_raw_json_as_model_request() -> None:
+    """JSON from the Dev UI or reflection API is parsed into a ModelRequest, and bad JSON is rejected."""
+    module = _load('tc_raw_json_chef', _TYPE_CHECKING_MODEL)
+    action = Action(ActionKind.MODEL, 'chef', module.chef)
+
+    await action.run({'messages': [{'role': 'user', 'content': [{'text': 'hi'}]}]})
+    assert [type(r) for r in module.seen] == [ModelRequest]
+
+    with pytest.raises(GenkitError, match='INVALID_ARGUMENT'):
+        await action.run({'messages': 'hi'})
+
+
+@pytest.mark.asyncio
+async def test_embed_plugin_embedder_with_type_checking_request_and_response_returns_embeddings() -> None:
+    """`request: EmbedRequest` and `-> EmbedResponse`, both TYPE_CHECKING-only, register and run."""
+    module = _load('tc_menu_vectors', _TYPE_CHECKING_EMBEDDER)
+    ai = Genkit(plugins=[_KitchenPlugin(module.menu_vectors)])
+
+    embeddings = await ai.embed(embedder='kitchen/menu-vectors', content=Document.from_text('Smoked Salmon Tartine'))
+
+    assert embeddings[0].embedding == [1.0, 2.0]
+    # genkit.embedder.EmbedRequest declares list[Document], so that's what the handler gets.
+    assert [type(d) for d in module.seen] == [Document]
+
+
+@pytest.mark.asyncio
+async def test_background_model_with_type_checking_operation_checks_operation() -> None:
+    """start, check, and cancel annotated with TYPE_CHECKING-only `Operation` all register and run."""
+    module = _load('tc_menu_video', _TYPE_CHECKING_BACKGROUND_MODEL)
+    ai = Genkit()
+
+    action = ai.define_background_model(name='menu-video', start=module.start, check=module.check, cancel=module.check)
+    started = await action.start_action.run(ModelRequest(messages=[]))
+    checked = await action.check_action.run(started.response)
+
+    assert checked.response.done is True
+    assert action.cancel_action is not None
+    assert action.cancel_action.input_class is Operation
+
+
+@pytest.mark.parametrize('define', ['flow', 'tool'])
+def test_define_flow_or_tool_with_type_checking_input_annotation_still_raises(define: str) -> None:
+    """Flows and tools have no fixed input type, so a missing name still raises."""
+    fn = _load(f'tc_{define}', _TYPE_CHECKING_FLOW).take_order
+    ai = Genkit()
+
+    with pytest.raises(TypeError, match='OrderInput'):
+        if define == 'flow':
+            ai.flow()(fn)
+        else:
+            ai.tool()(fn)
+
+
+@pytest.mark.skipif(sys.version_info < (3, 14), reason='annotations are evaluated lazily from Python 3.14')
+@pytest.mark.asyncio
+async def test_model_with_type_checking_parameterized_request_runs_without_future_import() -> None:
+    """On 3.14 the annotation is read as a string too, so `ModelRequest[KitchenConfig]` resolves the same way."""
+    source = _TYPE_CHECKING_MODEL.replace('from __future__ import annotations\n', '')
+    # Annotations are evaluated lazily, so the undefined names in the other handlers never run.
+    module = _load('tc_lazy_chef', source)
+    action = Action(ActionKind.MODEL, 'chef', module.tuned_chef)
+
+    await action.run({'messages': [], 'config': {'temperature': 0.5}})
+
+    assert module.seen == [0.5]
+    assert action.output_schema == TypeAdapter(ModelResponse).json_schema()

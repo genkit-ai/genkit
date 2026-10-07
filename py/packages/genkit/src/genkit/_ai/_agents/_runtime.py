@@ -44,7 +44,7 @@ from genkit._ai._generate import generate_action
 from genkit._ai._json_patch import diff_json
 from genkit._core._action import ActionRunContext, StreamingCallback, get_current_context
 from genkit._core._channel import CloseableQueue, QueueShutDown
-from genkit._core._error import GenkitError, GenkitRuntimeError, RuntimeErrorReason
+from genkit._core._error import GenkitError, GenkitRuntimeError, PublicError, RuntimeErrorReason, StatusName
 from genkit._core._logger import get_logger
 from genkit._core._model import (
     AgentInit,
@@ -268,18 +268,16 @@ def validate_custom_state(*, custom: Any, state_schema: type[BaseModel] | None, 
         # see exactly what was wrong, not just that something was.
         raise GenkitError(
             status='INVALID_ARGUMENT',
-            message=(
-                f"Invalid custom state for agent '{agent_name}': {e.error_count()} schema validation error(s).\n{e}"
-            ),
+            message=f"Invalid custom state for agent '{agent_name}'",
+            cause=e,
             details={
                 'schema': state_schema.model_json_schema(),
-                'errors': [{'loc': list(err['loc']), 'message': err['msg'], 'type': err['type']} for err in e.errors()],
             },
             reason=RuntimeErrorReason.INVALID_INPUT,
         ) from e
 
 
-class AgentInitError(GenkitError):
+class AgentInitError(PublicError):
     """API misuse on agent init that must surface as a thrown/HTTP error.
 
     Covers calling an agent with an init that does not match its state-management
@@ -287,7 +285,22 @@ class AgentInitError(GenkitError):
     problems (missing snapshot, non-resumable snapshot, invalid custom state)
     stay as plain ``GenkitError`` so the caller can absorb them into
     ``finish_reason='failed'``.
+
+    It is a ``PublicError``: the message names only the init fields and ids the
+    caller sent, so a served agent returns its status, message, and
+    ``details.reason`` and a remote client reads the same ``reason`` it would
+    in-process.
     """
+
+    def __init__(self, *, status: StatusName, message: str, reason: RuntimeErrorReason | None = None) -> None:
+        """Initialize an AgentInitError.
+
+        Args:
+            status: The status name for this error.
+            message: Caller-facing sentence; must not include server-side data.
+            reason: Stable reason, sent on the wire as ``details.reason``.
+        """
+        super().__init__(status, message, details={'reason': reason.value} if reason is not None else None)
 
 
 def seeded_init_fields(state: SessionState) -> str:
@@ -381,13 +394,10 @@ async def load_session(
         if init.session_id:
             snap_session_id = session_id_of(snap)
             if snap_session_id != init.session_id:
-                owner = snap_session_id if snap_session_id is not None else 'an unknown session'
+                # The caller sees this message, so don't name the owning session.
                 raise AgentInitError(
                     status='INVALID_ARGUMENT',
-                    message=(
-                        f'Snapshot {init.snapshot_id!r} does not belong to session '
-                        f'{init.session_id!r} (it belongs to {owner!r}).'
-                    ),
+                    message=f'Snapshot {init.snapshot_id!r} does not belong to session {init.session_id!r}.',
                     reason=RuntimeErrorReason.INVALID_SESSION_ID,
                 )
         # A failed/aborted/pending snapshot is kept for inspection but isn't a
@@ -1093,8 +1103,6 @@ def to_error_details(exc: Exception) -> GenkitRuntimeError:
     else:
         message = str(exc) or 'Internal failure'
     details = getattr(exc, 'detail', None) or getattr(exc, 'details', None)
-    if details is None and not isinstance(exc, GenkitError):
-        details = str(exc)
     return GenkitRuntimeError(status=str(status), message=message, details=details)
 
 

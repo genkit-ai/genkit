@@ -46,9 +46,10 @@ classifiers = [
 dependencies = [
   "genkit",
   "google-genai>=2.14.0,<3",
-  "google-cloud-aiplatform>=1.77.0",
+  "httpx>=0.28.1",
+  "pydantic>=2.10.5",
   "structlog>=25.2.0",
-  "strenum>=0.4.15; python_version < '3.11'",
+  "typing_extensions>=4.2",
 ]
 description = "Gemini and Veo on Genkit"
 keywords = [

@@ -31,6 +31,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, Operation, Part, Role
 from genkit.model import ModelInfo, ModelRequest, OperationError, Supports
 from genkit.plugin_api import wrap_http_error
+from genkit_google_genai._auth import GOOGLE_AUTH_ERRORS, raise_auth_error
 from genkit_google_genai._constants import is_multi_regional_location, multi_regional_base_url
 from genkit_google_genai._models._sdk_config import (
     dump_family_config,
@@ -305,10 +306,14 @@ class VeoModel:
         kwargs['http_options'] = opts
         try:
             return genai.Client(**kwargs)
-        except Exception as e:
+        except GOOGLE_AUTH_ERRORS as e:
+            raise_auth_error(e)
+        except (ValueError, TypeError) as e:
+            # The SDK rejects bad override combinations (api_key with project, say).
             raise GenkitError(
                 status='INVALID_ARGUMENT',
-                message=f'Failed to create google-genai client: {e}',
+                message='Failed to create google-genai client',
+                cause=e,
             ) from e
 
     async def start(self, request: ModelRequest[VeoConfig], ctx: ActionRunContext) -> Operation:
@@ -342,6 +347,8 @@ class VeoModel:
             )
         except APIError as e:
             raise wrap_http_error(e, status_code=e.code, message=e.message or str(e)) from e
+        except GOOGLE_AUTH_ERRORS as e:
+            raise_auth_error(e)
 
         return _from_veo_operation(api_op=response)
 
@@ -366,6 +373,8 @@ class VeoModel:
             )
         except APIError as e:
             raise wrap_http_error(e, status_code=e.code, message=e.message or str(e)) from e
+        except GOOGLE_AUTH_ERRORS as e:
+            raise_auth_error(e)
 
         return _from_veo_operation(api_op=response)
 
