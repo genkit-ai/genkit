@@ -48,7 +48,6 @@ from genkit_google_genai._models._interactions_utils import (
     remove_client_option_overrides,
     steps_with_folded_system_instruction,
 )
-from genkit_google_genai._models._secrets import reject_request_config_api_key
 
 AGENT_CONFIG_KEYS = (
     'thinking_summaries',
@@ -182,7 +181,6 @@ def create_deep_research_background_action(
         return operation
 
     async def start(request: ModelRequest[DeepResearchConfig], ctx: ActionRunContext) -> Operation:
-        reject_request_config_api_key(request.config)
         config = request.config or DeepResearchConfig()
         api_key = api_key_for_context(ctx.context, plugin_api_key)
         options = client_options.merge(client_overrides_from_config(config))

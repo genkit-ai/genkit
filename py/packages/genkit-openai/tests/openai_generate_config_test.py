@@ -24,11 +24,8 @@ from typing import Any, cast
 import httpx
 import pytest
 from genkit_openai import OpenAI
-from genkit_openai._models import OpenAIModel
-from openai import AsyncOpenAI
 
-from genkit import ActionRunContext, FinishReason, Genkit, GenkitError, Message, Part, Role
-from genkit.model import ModelConfig, ModelRequest
+from genkit import FinishReason, Genkit, GenkitError, Part
 from genkit.plugin_api import ActionKind
 
 PLUGIN_KEY = 'sk-plugin'
@@ -164,28 +161,21 @@ async def test_openai_model_advertises_config_without_additional_properties(plug
     ],
 )
 @pytest.mark.asyncio
-async def test_openai_model_with_model_config_max_output_tokens_caps_reply(
-    server: _OpenAIServer, model: str, cap: str
+async def test_generate_openai_max_output_tokens_caps_reply(
+    ai: Genkit, server: _OpenAIServer, model: str, cap: str
 ) -> None:
-    """`ModelConfig(max_output_tokens=50)` caps the reply as `max_tokens`, or `max_completion_tokens` on o-series."""
-    client = AsyncOpenAI(
-        api_key=PLUGIN_KEY, http_client=httpx.AsyncClient(transport=httpx.MockTransport(server.handler))
+    """`config={'max_output_tokens': 50}` caps the reply as `max_tokens`, or `max_completion_tokens` on o-series."""
+    response = await ai.generate(
+        model=f'openai/{model}', prompt='hi', config={'max_output_tokens': 50, 'temperature': 0.2}
     )
-    request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
-        config=ModelConfig(max_output_tokens=50, temperature=0.2),
-    )
-
-    response = await OpenAIModel(model, client).generate(request, ActionRunContext())
 
     assert response.text == 'hi back'
     [body] = server.bodies()
     assert body['temperature'] == 0.2
-    assert body[cap] == 50
     caps_sent = {
-        k for k in ('max_tokens', 'max_completion_tokens', 'max_output_tokens', 'maxOutputTokens') if k in body
+        k: body[k] for k in ('max_tokens', 'max_completion_tokens', 'max_output_tokens', 'maxOutputTokens') if k in body
     }
-    assert caps_sent == {cap}
+    assert caps_sent == {cap: 50}
 
 
 # Whose key a call runs on
@@ -264,6 +254,36 @@ async def test_generate_openai_secrets_without_api_key_runs_on_plugin_key(ai: Ge
     assert server.keys() == [f'Bearer {PLUGIN_KEY}']
 
 
+@pytest.mark.asyncio
+async def test_generate_openai_secrets_js_spelling_api_key_runs_on_tenant_key(
+    ai: Genkit, server: _OpenAIServer
+) -> None:
+    """`context={'secrets': {'apiKey': 'sk-tenant'}}` sends `Bearer sk-tenant`."""
+    await ai.generate(model='openai/gpt-4o', prompt='hi', context={'secrets': {'apiKey': 'sk-tenant'}})
+
+    assert server.keys() == ['Bearer sk-tenant']
+
+
+@pytest.mark.asyncio
+async def test_generate_openai_top_level_context_api_key_is_ignored(ai: Genkit, server: _OpenAIServer) -> None:
+    """An `api_key` an app's own auth context provider set on the top-level context doesn't reach OpenAI."""
+    response = await ai.generate(model='openai/gpt-4o', prompt='hi', context={'api_key': 'app-caller-key'})
+
+    assert response.text == 'hi back'
+    assert server.keys() == [f'Bearer {PLUGIN_KEY}']
+
+
+@pytest.mark.asyncio
+async def test_generate_openai_non_dict_secrets_raises_invalid_argument(ai: Genkit, server: _OpenAIServer) -> None:
+    """`context={'secrets': 'sk-tenant'}` fails INVALID_ARGUMENT instead of running on the plugin key."""
+    response = await ai.generate(model='openai/gpt-4o', prompt='hi', context={'secrets': 'sk-tenant'})
+
+    assert response.error is not None
+    assert response.error.status == 'INVALID_ARGUMENT'
+    assert 'context.secrets must be a dict' in str(response.finish_message)
+    assert server.requests == []
+
+
 @pytest.mark.parametrize(
     'api_key,reason',
     [
@@ -291,6 +311,7 @@ async def test_generate_openai_invalid_secrets_api_key_raises_invalid_argument(
     [
         pytest.param('openai/gpt-4o', {'api_key': 'sk-tenant-secret'}, id='config-dict'),
         pytest.param('openai/gpt-4o', {'apiKey': 'sk-tenant-secret'}, id='config-camel-case'),
+        pytest.param('openai/gpt-4o', {'extra': {'api_key': 'sk-tenant-secret'}}, id='config-extra'),
         pytest.param('openai/gpt-image-1', {'api_key': 'sk-tenant-secret'}, id='image-config-dict'),
     ],
 )
@@ -298,7 +319,7 @@ async def test_generate_openai_invalid_secrets_api_key_raises_invalid_argument(
 async def test_generate_openai_config_api_key_raises_naming_context_secrets(
     ai: Genkit, server: _OpenAIServer, model: str, config: dict[str, Any]
 ) -> None:
-    """A key in config raises INVALID_ARGUMENT from generate, pointing at context.secrets.
+    """A key on config or inside config.extra raises INVALID_ARGUMENT from generate, pointing at context.secrets.
 
     Genkit rejects it before the plugin runs. The key is never echoed and
     nothing is sent.
@@ -309,27 +330,6 @@ async def test_generate_openai_config_api_key_raises_naming_context_secrets(
     assert raised.value.status == 'INVALID_ARGUMENT'
     assert "context={'secrets': {'api_key': ...}}" in str(raised.value)
     assert 'sk-tenant-secret' not in str(raised.value)
-    assert server.requests == []
-
-
-@pytest.mark.asyncio
-async def test_generate_openai_top_level_context_api_key_raises_naming_context_secrets(
-    ai: Genkit, server: _OpenAIServer
-) -> None:
-    """A key at the top level of context fails INVALID_ARGUMENT pointing at context.secrets.
-
-    The plugin has its own key, so dropping the misplaced one would bill the
-    wrong account. The key is never echoed and nothing is sent.
-    """
-    response = await ai.generate(model='openai/gpt-4o', prompt='hi', context={'api_key': 'sk-tenant-secret'})
-
-    assert response.finish_reason == FinishReason.FAILED
-    assert response.error is not None
-    assert response.error.status == 'INVALID_ARGUMENT'
-    message = str(response.finish_message)
-    assert "context={'secrets': {'api_key': ...}}" in message
-    assert 'sk-tenant-secret' not in message
-    assert 'sk-tenant-secret' not in str(response.error)
     assert server.requests == []
 
 
@@ -354,3 +354,105 @@ async def test_generate_openai_media_model_runs_on_tenant_key(
     assert response.error is None
     assert response.message is not None
     assert server.keys() == ['Bearer sk-tenant']
+
+
+# What a tenant call carries besides the key
+
+
+@pytest.mark.asyncio
+async def test_generate_openai_tenant_call_drops_plugin_org_and_project(
+    server: _OpenAIServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A tenant call sends no plugin organization or project; other default headers and the plugin call keep theirs."""
+    monkeypatch.setenv('OPENAI_ORG_ID', 'org-env')
+    monkeypatch.setenv('OPENAI_PROJECT_ID', 'proj-env')
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(server.handler))
+    ai = Genkit(
+        plugins=[
+            OpenAI(
+                api_key=PLUGIN_KEY,
+                organization='org-plugin',
+                default_headers={'OpenAI-Project': 'proj-pinned', 'X-Gateway-Route': 'eu'},
+                http_client=http_client,
+                max_retries=0,
+            )
+        ]
+    )
+
+    await ai.generate(model='openai/gpt-4o', prompt='hi', context={'secrets': {'api_key': 'sk-tenant'}})
+    await ai.generate(model='openai/gpt-4o', prompt='hi')
+
+    tenant, plugin = server.requests
+    assert tenant.headers['authorization'] == 'Bearer sk-tenant'
+    assert 'openai-organization' not in tenant.headers
+    assert 'openai-project' not in tenant.headers
+    assert tenant.headers['x-gateway-route'] == 'eu'
+    assert plugin.headers['openai-organization'] == 'org-plugin'
+    assert plugin.headers['openai-project'] == 'proj-pinned'
+
+
+@pytest.mark.asyncio
+async def test_plugin_without_key_tenant_call_drops_env_org_and_project(
+    server: _OpenAIServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`OpenAI()` with no key and OPENAI_ORG_ID/OPENAI_PROJECT_ID set sends neither on a tenant call."""
+    monkeypatch.delenv('OPENAI_API_KEY', raising=False)
+    monkeypatch.setenv('OPENAI_ORG_ID', 'org-env')
+    monkeypatch.setenv('OPENAI_PROJECT_ID', 'proj-env')
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(server.handler))
+    ai = Genkit(plugins=[OpenAI(http_client=http_client, max_retries=0)])
+
+    await ai.generate(model='openai/gpt-4o', prompt='hi', context={'secrets': {'api_key': 'sk-tenant'}})
+
+    [tenant] = server.requests
+    assert tenant.headers['authorization'] == 'Bearer sk-tenant'
+    assert 'openai-organization' not in tenant.headers
+    assert 'openai-project' not in tenant.headers
+
+
+@pytest.mark.asyncio
+async def test_generate_openai_pinned_authorization_header_refuses_tenant_key(server: _OpenAIServer) -> None:
+    """`default_headers={'Authorization': ...}` would replace a tenant key, so the call fails FAILED_PRECONDITION."""
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(server.handler))
+    ai = Genkit(
+        plugins=[
+            OpenAI(
+                api_key=PLUGIN_KEY,
+                default_headers={'Authorization': 'Bearer corp-gateway'},
+                http_client=http_client,
+                max_retries=0,
+            )
+        ]
+    )
+
+    response = await ai.generate(model='openai/gpt-4o', prompt='hi', context={'secrets': {'api_key': 'sk-tenant'}})
+
+    assert response.error is not None
+    assert response.error.status == 'FAILED_PRECONDITION'
+    assert 'Authorization' in str(response.finish_message)
+    assert server.requests == []
+
+
+# Plugin without a key: embedders and the model list
+
+
+@pytest.mark.asyncio
+async def test_plugin_without_key_embed_fails_failed_precondition(keyless_ai: Genkit, server: _OpenAIServer) -> None:
+    """`embed()` on `OpenAI()` with no key fails FAILED_PRECONDITION naming the plugin key; nothing is sent."""
+    with pytest.raises(GenkitError) as raised:
+        await keyless_ai.embed(embedder='openai/text-embedding-3-small', content='hi')
+
+    assert raised.value.status == 'FAILED_PRECONDITION'
+    assert 'OPENAI_API_KEY' in str(raised.value)
+    assert server.requests == []
+
+
+@pytest.mark.asyncio
+async def test_plugin_without_key_lists_built_in_catalog_without_calling_openai(
+    keyless_ai: Genkit, server: _OpenAIServer
+) -> None:
+    """The Dev UI catalog for `OpenAI()` with no key has the built-in models and makes no request."""
+    catalog = await keyless_ai.registry.list_actions()
+
+    assert '/model/openai/gpt-4o' in catalog
+    assert server.requests == []

@@ -57,6 +57,7 @@ from genkit._ai._model import (
     ModelFn,
     ModelResponse,
     ModelResponseChunk,
+    background_model_name,
     check_call_config,
     define_model,
     resolve_for_generate,
@@ -1695,7 +1696,7 @@ class Genkit:
     async def generate_operation(
         self,
         *,
-        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
+        model: ModelRef[ModelRefConfigT] | BackgroundAction[Any] | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1718,7 +1719,7 @@ class Genkit:
     async def generate_operation(
         self,
         *,
-        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
+        model: ModelRef[ModelRefConfigT] | BackgroundAction[Any] | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1740,7 +1741,7 @@ class Genkit:
     async def generate_operation(
         self,
         *,
-        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
+        model: ModelRef[ModelRefConfigT] | BackgroundAction[Any] | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1768,6 +1769,9 @@ class Genkit:
             while not op.done:
                 op = await ai.check_operation(op)
         """
+        if isinstance(model, BackgroundAction):
+            # Same as its name, once we know this registry holds that object.
+            model = background_model_name(model=model, registry=self.registry)
         resolved = await resolve_for_generate(
             model=model,
             config=config,

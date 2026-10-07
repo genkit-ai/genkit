@@ -5,6 +5,7 @@
 
 """define_model accepts ModelRequest / ModelRequest[Cfg] and rejects the rest."""
 
+import sys
 import typing
 from typing import Annotated, Any, Optional, cast
 
@@ -103,6 +104,55 @@ def test_non_model_config_type_rejected(config_type: object) -> None:
     """ModelRequest[X] raises where the annotation is evaluated unless X is a pydantic model."""
     with pytest.raises(GenkitError, match='config type must be a pydantic BaseModel subclass') as exc:
         cast(Any, ModelRequest)[config_type]
+
+    assert exc.value.status == 'INVALID_ARGUMENT'
+
+
+# A user module with a module-level TypedDict config. Under the future import
+# (and by default from Python 3.14) the annotation is read at define_model.
+_TYPED_DICT_CONFIG_MODULE = """
+from __future__ import annotations
+
+from typing import TypedDict
+
+
+class RestaurantConfig(TypedDict, total=False):
+    temperature: float
+
+
+async def menu_model(request: ModelRequest[RestaurantConfig], ctx: ActionRunContext) -> ModelResponse:
+    return OK
+"""
+
+
+@pytest.mark.parametrize(
+    'postponed',
+    [
+        True,
+        pytest.param(
+            False,
+            marks=pytest.mark.skipif(sys.version_info < (3, 14), reason='annotations are evaluated lazily from 3.14'),
+        ),
+    ],
+    ids=['future_import', 'lazy_3_14'],
+)
+def test_typed_dict_config_rejected_through_define_model(ai: Genkit, postponed: bool) -> None:
+    """define_model raises the config-type error for ModelRequest[RestaurantConfig] when annotations are deferred."""
+    source = _TYPED_DICT_CONFIG_MODULE
+    if not postponed:
+        source = source.replace('from __future__ import annotations\n', '')
+    module_globals: dict[str, Any] = {
+        'ModelRequest': ModelRequest,
+        'ModelResponse': ModelResponse,
+        'ActionRunContext': ActionRunContext,
+        'OK': OK,
+    }
+    exec(source, module_globals)  # noqa: S102 - builds a user module
+
+    with pytest.raises(
+        GenkitError, match=r'ModelRequest\[RestaurantConfig\]: the config type must be a pydantic'
+    ) as exc:
+        ai.define_model(name='menu', fn=module_globals['menu_model'])
 
     assert exc.value.status == 'INVALID_ARGUMENT'
 

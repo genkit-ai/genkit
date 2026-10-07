@@ -21,13 +21,15 @@ the request body and headers the API would have received.
 """
 
 import json
+from collections.abc import Callable
 from typing import Any, cast
 
 import httpx
 import pytest
 from genkit_anthropic import Anthropic
 
-from genkit import FinishReason, Genkit
+from genkit import FinishReason, Genkit, GenkitError
+from genkit.middleware import BaseMiddleware
 from genkit.plugin_api import ActionKind
 
 MODEL = 'anthropic/claude-sonnet-4-6'
@@ -246,6 +248,18 @@ async def test_generate_claude_secrets_without_api_key_uses_plugin_key() -> None
     assert api.api_key() == PLUGIN_KEY
 
 
+@pytest.mark.asyncio
+async def test_generate_claude_top_level_context_api_key_is_ignored() -> None:
+    """An `api_key` an app's own auth context provider set on the top-level context doesn't reach Claude."""
+    api = FakeClaudeApi()
+    ai = _genkit(api)
+
+    response = await ai.generate(model=MODEL, prompt='hi', context={'api_key': 'app-caller-key'})
+
+    assert response.text == 'ok'
+    assert api.api_key() == PLUGIN_KEY
+
+
 @pytest.mark.parametrize(
     'secrets',
     [
@@ -279,12 +293,40 @@ async def test_generate_claude_blank_secrets_key_fails_instead_of_using_plugin_k
 
 
 @pytest.mark.parametrize(
+    'config',
+    [{'api_key': TENANT_KEY}, {'apiKey': TENANT_KEY}, {'extra': {'api_key': TENANT_KEY}}],
+    ids=['api_key', 'apiKey', 'extra'],
+)
+@pytest.mark.parametrize('plugin_key', [PLUGIN_KEY, None], ids=['plugin-key', 'no-plugin-key'])
+@pytest.mark.asyncio
+@pytest.mark.usefixtures('no_env_key')
+async def test_generate_claude_config_api_key_fails_pointing_to_secrets(
+    config: dict[str, Any], plugin_key: str | None
+) -> None:
+    """A key in config or config.extra fails INVALID_ARGUMENT naming `context.secrets`, with or without a plugin key.
+
+    The key is not echoed and nothing is sent.
+    """
+    api = FakeClaudeApi()
+    ai = _genkit(api, api_key=plugin_key)
+
+    with pytest.raises(GenkitError) as exc_info:
+        await ai.generate(model=MODEL, prompt='hi', config=config)
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert "context={'secrets': {'api_key': ...}}" in str(exc_info.value)
+    assert TENANT_KEY not in str(exc_info.value)
+    assert api.requests == []
+
+
+@pytest.mark.parametrize(
     ('client_params', 'reason'),
     [
         ({'api_key': None, 'auth_token': 'corp-bearer'}, 'auth token'),
-        ({'default_headers': {'X-Api-Key': 'pinned'}}, 'x-api-key'),
+        ({'default_headers': {'X-Api-Key': 'pinned'}}, 'X-Api-Key'),
+        ({'default_headers': {'Authorization': 'Bearer corp'}}, 'Authorization'),
     ],
-    ids=['auth-token-client', 'fixed-x-api-key-header-client'],
+    ids=['auth-token-client', 'fixed-x-api-key-header-client', 'fixed-authorization-header-client'],
 )
 @pytest.mark.asyncio
 async def test_generate_claude_secrets_key_on_client_that_cannot_swap_key_fails(
@@ -298,7 +340,7 @@ async def test_generate_claude_secrets_key_on_client_that_cannot_swap_key_fails(
 
     assert response.finish_reason == FinishReason.FAILED
     assert response.error is not None
-    assert response.error.status == 'INVALID_ARGUMENT'
+    assert response.error.status == 'FAILED_PRECONDITION'
     assert reason in response.error.message
     assert TENANT_KEY not in response.error.message
     assert api.requests == []
@@ -329,3 +371,60 @@ async def test_generate_claude_tool_choice_disable_parallel_tool_use_reaches_req
 
     assert response.text == 'ok'
     assert api.body()['tool_choice'] == tool_choice
+
+
+# --- middleware edits ---------------------------------------------------------
+
+
+def _edit_thinking_budget(config: Any) -> None:  # noqa: ANN401
+    config.thinking.budget_tokens = 10
+
+
+def _edit_thinking_mode(config: Any) -> None:  # noqa: ANN401
+    config.thinking.adaptive = True
+
+
+def _edit_task_budget(config: Any) -> None:  # noqa: ANN401
+    config.output_config.task_budget = {'total': 20000}
+
+
+@pytest.mark.parametrize(
+    ('config', 'edit', 'message'),
+    [
+        (
+            {'thinking': {'type': 'enabled', 'budgetTokens': 2048}},
+            _edit_thinking_budget,
+            "set config 'thinking.budgetTokens': Input should be greater than or equal to 1024",
+        ),
+        (
+            {'thinking': {'enabled': True, 'budgetTokens': 2048}},
+            _edit_thinking_mode,
+            "set config 'thinking': Value error, Cannot use both enabled and adaptive thinking modes simultaneously",
+        ),
+        (
+            {'apiVersion': 'stable', 'output_config': {}},
+            _edit_task_budget,
+            "set config 'output_config': Value error, output_config.task_budget require the beta API surface",
+        ),
+    ],
+    ids=['thinking-budget-bound', 'thinking-check', 'api-surface-check'],
+)
+@pytest.mark.asyncio
+async def test_middleware_edit_inside_nested_claude_setting_is_validated(
+    config: dict[str, Any], edit: Callable[[Any], None], message: str
+) -> None:
+    """An in-place edit inside thinking or output_config runs Claude's bounds and validators; nothing is sent."""
+    api = FakeClaudeApi()
+    ai = _genkit(api)
+
+    class Tune(BaseMiddleware):
+        async def wrap_model(self, params: Any, ctx: Any, next_fn: Any) -> Any:  # noqa: ANN401
+            edit(params.request.config)
+            return await next_fn(params, ctx)
+
+    response = await ai.generate(model=MODEL, prompt='hi', config=config, use=[Tune()])
+
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.finish_message is not None
+    assert response.finish_message.startswith(f"{MODEL}: middleware 'Tune' {message}")
+    assert api.requests == []

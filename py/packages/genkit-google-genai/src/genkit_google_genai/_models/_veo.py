@@ -26,19 +26,19 @@ from typing import Any, Literal, TypeAlias
 from google import genai
 from google.genai import types as genai_types
 from google.genai.errors import APIError
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, Operation, Part, Role
 from genkit.model import ModelInfo, ModelRequest, OperationError, Supports
-from genkit.plugin_api import wrap_http_error
+from genkit.plugin_api import context_api_key, wrap_http_error
 from genkit_google_genai._constants import is_multi_regional_location, multi_regional_base_url
 from genkit_google_genai._models._sdk_config import (
+    VEO_MANAGED_BODY_FIELDS,
     attach_config_extra,
     dump_family_config,
+    keep_client_extra_body,
     sdk_config_error,
-    split_sdk_fields,
 )
-from genkit_google_genai._models._secrets import context_api_key, misplaced_key_error
 
 # Quote autocomplete needs a Literal, so this alias is the Veo catalog.
 # ``veo_model`` takes ``KnownVeo | str`` so unlisted ids still work.
@@ -108,17 +108,6 @@ class VeoConfig(BaseModel):
         default=None, alias='apiVersion', description='Override the API version for this call.'
     )
     location: str | None = Field(default=None, description='Override the Vertex AI location for this call.')
-
-    @model_validator(mode='before')
-    @classmethod
-    def _api_key_belongs_in_secrets(cls, data: Any) -> Any:  # noqa: ANN401
-        """Point a key in config or extra at context.secrets, not the generic unknown-key error."""
-        if isinstance(data, Mapping):
-            extra = data.get('extra')
-            for bag in (data, extra if isinstance(extra, Mapping) else {}):
-                if bag.get('api_key') is not None or bag.get('apiKey') is not None:
-                    raise misplaced_key_error()
-        return data
 
 
 DEFAULT_VEO_SUPPORT = Supports(
@@ -361,9 +350,6 @@ class VeoModel:
             expected_type=VeoConfig,
             action_name=self._name,
         )
-        if dumped and (dumped.get('api_key') is not None or dumped.get('apiKey') is not None):
-            raise misplaced_key_error()
-
         try:
             response: genai_types.GenerateVideosOperation = await self._client_for_context(
                 ctx, config=dumped
@@ -409,23 +395,21 @@ class VeoModel:
         )
         if not dumped:
             return None
-        if dumped.get('api_key') is not None or dumped.get('apiKey') is not None:
-            raise misplaced_key_error()
         for key in _CLIENT_OPTION_KEYS:
             dumped.pop(key, None)
         if not dumped:
             return None
 
+        # Every other declared VeoConfig field is a GenerateVideosConfig field
+        # (veo_test.py pins this), so the rest goes to the SDK type as-is.
         extra = dumped.pop('extra', None)
-        known, leftovers = split_sdk_fields(dumped, genai_types.GenerateVideosConfig)
         try:
-            cfg = genai_types.GenerateVideosConfig(**known) if known else genai_types.GenerateVideosConfig()
+            cfg = genai_types.GenerateVideosConfig(**dumped)
         except ValidationError as e:
             raise sdk_config_error(action_name=self._name, error=e) from e
 
-        if leftovers:
-            cfg.http_options = genai_types.HttpOptions(extra_body={'parameters': leftovers})
-        return attach_config_extra(cfg, extra, action_name=self._name)
+        cfg = attach_config_extra(cfg, extra, action_name=self._name, managed_body_fields=VEO_MANAGED_BODY_FIELDS)
+        return keep_client_extra_body(cfg, (self._client_kwargs or {}).get('http_options'))
 
     @property
     def metadata(self) -> dict:

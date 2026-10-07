@@ -43,7 +43,7 @@ from genkit._ai._generate import (
     tools_to_action_names,
 )
 from genkit._ai._model import (
-    ModelArg,
+    CallModelArg,
     ModelRef,
     ModelRequest,
     ModelResponse,
@@ -53,6 +53,7 @@ from genkit._ai._model import (
     check_config_dict,
     config_field_names,
     config_schema_at_define,
+    fold_config_aliases,
     normalize_config,
     resolve_call_model,
     resolve_for_generate,
@@ -120,7 +121,7 @@ class ModelSettings(TypedDict, total=False):
     key. Applied in ``Prompt._resolve_model``.
     """
 
-    model: ModelArg | None
+    model: CallModelArg | None
     config: Mapping[str, Any] | BaseModel | None
 
 
@@ -253,7 +254,7 @@ class GenerateCall(BaseModel):
     resume_metadata: dict[str, Any] | None = None
 
     # ModelSettings
-    model: ModelArg | None = None
+    model: CallModelArg | None = None
     config: Mapping[str, Any] | BaseModel | None = None
 
     def with_overrides(self, opts: PromptSettings) -> Self:
@@ -273,7 +274,7 @@ class Prompt(Generic[InputT, OutputT]):
         self,
         registry: Registry,
         variant: str | None = None,
-        model: ModelArg | None = None,
+        model: CallModelArg | None = None,
         config: Mapping[str, Any] | BaseModel | None = None,
         description: str | None = None,
         input_schema: type | dict[str, Any] | str | None = None,
@@ -365,6 +366,8 @@ class Prompt(Generic[InputT, OutputT]):
         to the merged, resolved config.
         """
         override_config = opts.get('config')
+        override_model = opts.get('model')
+        model = override_model if override_model is not None else self._def.model
         merged_config: Mapping[str, Any] | BaseModel | None
         if override_config is not None:
             # exclude_unset semantics via normalize_config: untouched fields are
@@ -372,13 +375,18 @@ class Prompt(Generic[InputT, OutputT]):
             # the merge and clears the lower-precedence value downstream.
             base = normalize_config(config=self._def.config)
             override = normalize_config(config=override_config)
+            # `maxOutputTokens` in the prompt and `max_output_tokens` in the
+            # call are one setting: fold both to field names so the call wins.
+            schema = (await resolve_for_generate(model=model, registry=self._registry)).config_schema
+            if schema is not None:
+                base = fold_config_aliases(config=base, schema=schema)
+                override = fold_config_aliases(config=override, schema=schema)
             merged_config = {**base, **override} if base or override else None
         else:
             merged_config = self._def.config
 
-        override_model = opts.get('model')
         resolved = await resolve_for_generate(
-            model=override_model if override_model is not None else self._def.model,
+            model=model,
             config=merged_config,
             registry=self._registry,
         )
@@ -411,7 +419,7 @@ class Prompt(Generic[InputT, OutputT]):
         self,
         input: InputT | dict[str, Any] | None = None,
         *,
-        model: ModelArg | None = None,
+        model: CallModelArg | None = None,
         config: Mapping[str, Any] | BaseModel | None = None,
         messages: list[Message] | None = None,
         tools: Sequence[str | Tool] | None = None,
@@ -461,7 +469,7 @@ class Prompt(Generic[InputT, OutputT]):
         self,
         input: InputT | dict[str, Any] | None = None,
         *,
-        model: ModelArg | None = None,
+        model: CallModelArg | None = None,
         config: Mapping[str, Any] | BaseModel | None = None,
         messages: list[Message] | None = None,
         tools: Sequence[str | Tool] | None = None,
@@ -510,7 +518,7 @@ class Prompt(Generic[InputT, OutputT]):
         self,
         input: InputT | dict[str, Any] | None = None,
         *,
-        model: ModelArg | None = None,
+        model: CallModelArg | None = None,
         config: Mapping[str, Any] | BaseModel | None = None,
         messages: list[Message] | None = None,
         tools: Sequence[str | Tool] | None = None,
