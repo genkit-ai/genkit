@@ -210,8 +210,8 @@ class ThinkingLevel(StrEnum):
     HIGH = 'HIGH'
 
 
-class ThinkingConfigSchema(BaseModel):
-    """Thinking config schema. Sent as ``genai_types.ThinkingConfig``."""
+class ThinkingConfig(BaseModel):
+    """Thinking config. Sent as ``genai_types.ThinkingConfig``."""
 
     model_config = ConfigDict(extra='forbid', populate_by_name=True)
     include_thoughts: bool | None = Field(None, alias='includeThoughts')
@@ -219,8 +219,8 @@ class ThinkingConfigSchema(BaseModel):
     thinking_level: ThinkingLevel | None = Field(None, alias='thinkingLevel')
 
 
-class FileSearchConfigSchema(BaseModel):
-    """File search config schema. Sent as ``genai_types.FileSearch``."""
+class FileSearchConfig(BaseModel):
+    """File search config. Sent as ``genai_types.FileSearch``."""
 
     model_config = ConfigDict(extra='forbid', populate_by_name=True)
     file_search_store_names: list[str] | None = Field(None, alias='fileSearchStoreNames')
@@ -251,8 +251,8 @@ class ImageSize(StrEnum):
     SIZE_4K = '4K'
 
 
-class ImageConfigSchema(BaseModel):
-    """Image config schema. Sent as ``genai_types.ImageConfig``."""
+class ImageConfig(BaseModel):
+    """Image config. Sent as ``genai_types.ImageConfig``."""
 
     model_config = ConfigDict(extra='forbid', populate_by_name=True)
     aspect_ratio: ImageAspectRatio | None = Field(None, alias='aspectRatio')
@@ -264,8 +264,8 @@ class ImageConfigSchema(BaseModel):
     image_output_options: genai_types.ImageConfigImageOutputOptions | None = Field(None, alias='imageOutputOptions')
 
 
-class VoiceConfigSchema(BaseModel):
-    """Voice config schema. Sent as ``genai_types.VoiceConfig``."""
+class VoiceConfig(BaseModel):
+    """Voice config. Sent as ``genai_types.VoiceConfig``."""
 
     model_config = ConfigDict(extra='forbid', populate_by_name=True)
     prebuilt_voice_config: PrebuiltVoiceConfig | None = Field(None, alias='prebuiltVoiceConfig')
@@ -411,7 +411,7 @@ class GeminiConfig(ModelConfig):
         return _TOOL_OPTION_TYPES[info.field_name or ''].model_validate(value)
 
     file_search: Annotated[
-        FileSearchConfigSchema | None,
+        FileSearchConfig | None,
         WithJsonSchema({
             'type': 'object',
             'properties': {
@@ -483,7 +483,7 @@ class GeminiConfig(ModelConfig):
     )
 
     thinking_config: Annotated[
-        ThinkingConfigSchema | None,
+        ThinkingConfig | None,
         WithJsonSchema({
             'type': 'object',
             'properties': {
@@ -542,28 +542,28 @@ class GeminiConfig(ModelConfig):
     )
 
 
-class SpeakerVoiceConfigSchema(BaseModel):
-    """Speaker voice config schema. Sent as ``genai_types.SpeakerVoiceConfig``."""
+class SpeakerVoiceConfig(BaseModel):
+    """Speaker voice config. Sent as ``genai_types.SpeakerVoiceConfig``."""
 
     model_config = ConfigDict(extra='forbid', populate_by_name=True)
     speaker: str | None = None
-    voice_config: VoiceConfigSchema | None = Field(None, alias='voiceConfig')
+    voice_config: VoiceConfig | None = Field(None, alias='voiceConfig')
 
 
-class MultiSpeakerVoiceConfigSchema(BaseModel):
-    """Multi-speaker voice config schema. Sent as ``genai_types.MultiSpeakerVoiceConfig``."""
-
-    model_config = ConfigDict(extra='forbid', populate_by_name=True)
-    speaker_voice_configs: list[SpeakerVoiceConfigSchema] | None = Field(None, alias='speakerVoiceConfigs')
-
-
-class SpeechConfigSchema(BaseModel):
-    """Speech config schema. Sent as ``genai_types.SpeechConfig``."""
+class MultiSpeakerVoiceConfig(BaseModel):
+    """Multi-speaker voice config. Sent as ``genai_types.MultiSpeakerVoiceConfig``."""
 
     model_config = ConfigDict(extra='forbid', populate_by_name=True)
-    voice_config: VoiceConfigSchema | None = Field(None, alias='voiceConfig')
+    speaker_voice_configs: list[SpeakerVoiceConfig] | None = Field(None, alias='speakerVoiceConfigs')
+
+
+class SpeechConfig(BaseModel):
+    """Speech config. Sent as ``genai_types.SpeechConfig``."""
+
+    model_config = ConfigDict(extra='forbid', populate_by_name=True)
+    voice_config: VoiceConfig | None = Field(None, alias='voiceConfig')
     language_code: str | None = Field(None, alias='languageCode')
-    multi_speaker_voice_config: MultiSpeakerVoiceConfigSchema | None = Field(None, alias='multiSpeakerVoiceConfig')
+    multi_speaker_voice_config: MultiSpeakerVoiceConfig | None = Field(None, alias='multiSpeakerVoiceConfig')
 
 
 DEFAULT_TTS_VOICE_NAME = 'Kore'
@@ -576,7 +576,7 @@ _GEMINI_API_TTS_MODELS_NEEDING_VOICE = frozenset({'gemini-3.1-flash-tts-preview'
 class GeminiTtsConfig(GeminiConfig):
     """Gemini TTS Config."""
 
-    speech_config: SpeechConfigSchema | None = Field(
+    speech_config: SpeechConfig | None = Field(
         None,
         alias='speechConfig',
         description=(
@@ -590,7 +590,7 @@ class GeminiImageConfig(GeminiConfig):
     """Gemini Image Config."""
 
     image_config: Annotated[
-        ImageConfigSchema | None,
+        ImageConfig | None,
         WithJsonSchema({
             'type': 'object',
             'properties': {
@@ -609,6 +609,16 @@ class GeminiImageConfig(GeminiConfig):
             'additionalProperties': False,
         }),
     ] = Field(None, alias='imageConfig')
+
+
+# Backward-compatibility aliases for pre-1.0 naming.
+ThinkingConfigSchema = ThinkingConfig
+FileSearchConfigSchema = FileSearchConfig
+ImageConfigSchema = ImageConfig
+VoiceConfigSchema = VoiceConfig
+SpeakerVoiceConfigSchema = SpeakerVoiceConfig
+MultiSpeakerVoiceConfigSchema = MultiSpeakerVoiceConfig
+SpeechConfigSchema = SpeechConfig
 
 
 class GemmaConfig(GeminiConfig):

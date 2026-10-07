@@ -34,7 +34,7 @@ from genkit_google_genai._models._gemini import (
     KnownGeminiImage,
     KnownGeminiTts,
     KnownGemma,
-    SpeechConfigSchema,
+    SpeechConfig,
     _to_finish_reason,
     get_model_config_schema,
     google_model_info,
@@ -1397,9 +1397,9 @@ def tts_model_instance() -> GeminiModel:
     )
 
 
-def test_speech_config_schema_declares_sdk_fields() -> None:
+def test_speech_config_declares_sdk_fields() -> None:
     """Language code and multi-speaker voice config validate as typed fields, by name or alias."""
-    config = SpeechConfigSchema.model_validate({
+    config = SpeechConfig.model_validate({
         'language_code': 'en-US',
         'multiSpeakerVoiceConfig': {
             'speakerVoiceConfigs': [
@@ -1421,14 +1421,14 @@ def test_speech_config_schema_declares_sdk_fields() -> None:
 def test_tts_config_json_schema_exposes_speech_config_fields() -> None:
     """The Dev UI schema lists every speech config field the SDK accepts."""
     schema = GeminiTtsConfig.model_json_schema(by_alias=True)
-    speech = schema['$defs']['SpeechConfigSchema']['properties']
+    speech = schema['$defs']['SpeechConfig']['properties']
 
     assert {'voiceConfig', 'languageCode', 'multiSpeakerVoiceConfig'} <= set(speech)
 
 
-def test_speech_config_schema_populates_by_field_name() -> None:
+def test_speech_config_populates_by_field_name() -> None:
     """The speech config validates from snake_case field names, not only aliases."""
-    config = SpeechConfigSchema.model_validate({'voice_config': {'prebuilt_voice_config': {'voice_name': 'Kore'}}})
+    config = SpeechConfig.model_validate({'voice_config': {'prebuilt_voice_config': {'voice_name': 'Kore'}}})
 
     assert config.voice_config is not None
     assert config.voice_config.prebuilt_voice_config is not None
@@ -1648,13 +1648,13 @@ _NESTED_SDK_MIRRORS: list[tuple[type[BaseModel], type[BaseModel]]] = [
     (_gemini.SafetySettingsSchema, genai_types.SafetySetting),
     (_gemini.PrebuiltVoiceConfig, genai_types.PrebuiltVoiceConfig),
     (_gemini.FunctionCallingConfig, genai_types.FunctionCallingConfig),
-    (_gemini.ThinkingConfigSchema, genai_types.ThinkingConfig),
-    (_gemini.FileSearchConfigSchema, genai_types.FileSearch),
-    (_gemini.ImageConfigSchema, genai_types.ImageConfig),
-    (_gemini.VoiceConfigSchema, genai_types.VoiceConfig),
-    (_gemini.SpeakerVoiceConfigSchema, genai_types.SpeakerVoiceConfig),
-    (_gemini.MultiSpeakerVoiceConfigSchema, genai_types.MultiSpeakerVoiceConfig),
-    (_gemini.SpeechConfigSchema, genai_types.SpeechConfig),
+    (_gemini.ThinkingConfig, genai_types.ThinkingConfig),
+    (_gemini.FileSearchConfig, genai_types.FileSearch),
+    (_gemini.ImageConfig, genai_types.ImageConfig),
+    (_gemini.VoiceConfig, genai_types.VoiceConfig),
+    (_gemini.SpeakerVoiceConfig, genai_types.SpeakerVoiceConfig),
+    (_gemini.MultiSpeakerVoiceConfig, genai_types.MultiSpeakerVoiceConfig),
+    (_gemini.SpeechConfig, genai_types.SpeechConfig),
 ]
 
 
@@ -1669,9 +1669,9 @@ def test_nested_gemini_setting_declares_exactly_the_sdk_fields(ours: type[BaseMo
     [
         (GeminiConfig, 'safetySettings', _gemini.SafetySettingsSchema),
         (GeminiConfig, 'functionCallingConfig', _gemini.FunctionCallingConfig),
-        (GeminiConfig, 'thinkingConfig', _gemini.ThinkingConfigSchema),
-        (GeminiConfig, 'fileSearch', _gemini.FileSearchConfigSchema),
-        (GeminiImageConfig, 'imageConfig', _gemini.ImageConfigSchema),
+        (GeminiConfig, 'thinkingConfig', _gemini.ThinkingConfig),
+        (GeminiConfig, 'fileSearch', _gemini.FileSearchConfig),
+        (GeminiImageConfig, 'imageConfig', _gemini.ImageConfig),
     ],
 )
 def test_gemini_config_form_lists_every_nested_field(
