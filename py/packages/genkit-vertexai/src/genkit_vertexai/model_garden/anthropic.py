@@ -33,14 +33,6 @@ from genkit.model import ModelConfig, ModelInfo, ModelRequest, Supports
 from genkit.plugin_api import loop_local_client
 
 
-class VertexAnthropicConfig(AnthropicConfig):
-    """Anthropic config for Vertex Model Garden.
-
-    :class:`AsyncAnthropicVertex` authenticates with ambient Google
-    credentials, not a per-request Anthropic key.
-    """
-
-
 class AnthropicModelGarden:
     """Manages integration with Anthropic models on Vertex AI Model Garden."""
 
@@ -102,4 +94,4 @@ class AnthropicModelGarden:
     @staticmethod
     def get_config_schema() -> type[ModelConfig]:
         """Returns the config schema for this model type."""
-        return VertexAnthropicConfig
+        return AnthropicConfig

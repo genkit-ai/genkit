@@ -120,12 +120,11 @@ def test_model_garden_plugin_deprecated_alias() -> None:
 
 def test_anthropic_model_garden_uses_anthropic_config_schema() -> None:
     """Anthropic Model Garden advertises the schema enforced by its handler."""
-    schema = AnthropicModelGarden.get_config_schema()
-    assert issubclass(schema, AnthropicConfig)
+    assert AnthropicModelGarden.get_config_schema() is AnthropicConfig
 
 
 def test_anthropic_model_garden_does_not_advertise_api_key() -> None:
-    """Vertex authenticates with Google credentials, so apiKey is not offered."""
+    """The advertised schema has no apiKey; a per-request key goes in context.secrets."""
     properties = AnthropicModelGarden.get_config_schema().model_json_schema()['properties']
     assert 'apiKey' not in properties
     assert 'apiVersion' in properties
