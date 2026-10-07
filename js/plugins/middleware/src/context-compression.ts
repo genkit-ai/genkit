@@ -33,7 +33,8 @@ import type { ModelAction } from 'genkit/model';
 
 export const ToolResponsesOptionsSchema = z.object({
   /**
-   * Maximum character length for each tool response content.
+   * Maximum character length for each older tool response (covers `output` and
+   * `content` together, folding text `content` into `output` when truncated).
    * Responses exceeding this will be truncated with a `[Truncated N characters]` marker.
    */
   maxChars: z
@@ -41,7 +42,7 @@ export const ToolResponsesOptionsSchema = z.object({
     .int()
     .positive()
     .describe(
-      'Max chars per tool response. Responses beyond this are truncated.'
+      'Max chars per tool response (covers output and content together). Responses beyond this are truncated.'
     ),
 
   /**
@@ -174,16 +175,17 @@ export const ContextCompressionOptionsSchema = z.object({
     .describe('Always keep system messages. Default: true.'),
 
   /**
-   * Hard cap on individual tool response size in characters.
+   * Hard cap on individual tool response size in characters (covers `output`
+   * and `content` together).
    * Applied regardless of other toolResponses config as a safety net.
-   * Set to a negative number (or `Infinity`) to disable.
+   * Set to `<= 0` (or `Infinity`) to disable.
    * @default 400000
    */
   maxToolResponseChars: z
     .number()
     .optional()
     .describe(
-      'Hard cap on any single tool response size. Set negative to disable. Default: 400000 chars.'
+      'Hard cap on any single tool response size. Set <= 0 or Infinity to disable. Default: 400000 chars.'
     ),
 
   /**
@@ -1870,8 +1872,14 @@ export const contextCompression: GenerateMiddleware<
           tailMessages: toKeep,
         };
       } catch (e: unknown) {
+        if (
+          ctx?.abortSignal?.aborted ||
+          (e instanceof Error && e.name === 'AbortError')
+        ) {
+          throw e;
+        }
         logger.warn(
-          `Summarization failed, falling back to message truncation: ${
+          `Summarization failed, falling back to message truncation if over message limit: ${
             e instanceof Error ? e.message : String(e)
           }`,
           { 'genkit.middleware.name': 'contextCompression' },

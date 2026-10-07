@@ -310,15 +310,16 @@ const activeMessages = resolveCompressedHistory(response.messages);
 | `maxInputTokens` | `number` | `Infinity` | Triggers compression when token count exceeds this threshold. |
 | `preserveRecent` | `number` | `4` | Number of most recent non-system messages to preserve when dropping older messages (and default/fallback window for `summarize.preserveRecent`). |
 | `preserveSystem` | `boolean` | `true` | Always keep system instructions intact. |
-| `maxToolResponseChars` | `number` | `400000` | Hard cap on any single tool response size in characters. Set negative to disable. |
+| `maxToolResponseChars` | `number` | `400000` | Hard cap on any single tool response size in characters (covers `output` and `content` together). Set `<= 0` or `Infinity` to disable. |
 | `deduplicateToolResponses` | `object` | — | Deduplication settings for repeated tool calls. |
 | `deduplicateToolResponses.matchBy` | `'name-and-input' \| 'name-only'` | `'name-and-input'` | How duplicate tool calls are matched. `'name-and-input'` matches calls with identical tool name and arguments. `'name-only'` groups all calls to a tool by name alone and discards earlier responses even when called with different inputs (use only for tools that return the latest state regardless of arguments). |
 | `deduplicateToolResponses.keepRecent` | `number` | `1` | Number of most recent responses to keep per duplicate group (minimum `1`). |
 | `deduplicateToolResponses.notice` | `string` | standard text | Custom replacement text for deduplicated tool responses. |
 | `toolResponses` | `object` | — | Truncation settings for older tool responses. |
-| `toolResponses.maxChars` | `number` | — | Max characters per older tool response. |
+| `toolResponses.maxChars` | `number` | — | Max characters per older tool response (covers `output` and `content` together, folding text `content` into `output` when truncated). |
 | `toolResponses.preserveRecent` | `number` | `2` | Number of most recent tool response messages to keep untruncated. |
 | `summarize` | `object` | — | LLM summarization settings (`model`, `preserveRecent`, `prompt`). |
+| `summarize.model` | `ModelArgument` | *(required)* | Model to use for summarization (model reference, model name string, or `ModelAction`). |
 | `summarize.preserveRecent` | `number` | `6` | Number of most recent non-system messages to keep un-summarized (defaults to top-level `preserveRecent` if set, and falls back to `preserveRecent` on shorter over-budget histories). |
 | `summarize.prompt` | `string` | standard prompt | Custom summarization prompt. Use `{conversation}` as a placeholder for the rendered messages to summarize. |
 | `skipSummarizationThreshold` | `number` | — | Skip summarization if cheap strategies save at least this fraction (`0..1`) of context and bring estimated tokens within `maxInputTokens`. |
