@@ -21,7 +21,7 @@ import enum
 import os
 from typing import Any, Literal, TypeAlias, cast
 
-from openai import APIStatusError, AsyncOpenAI
+from openai import APIError, AsyncOpenAI
 from openai.types import Model
 from pydantic import BaseModel
 
@@ -615,7 +615,7 @@ class OpenAI(Plugin):
                         model=name,
                         input=texts,
                     )
-            except APIStatusError as e:
+            except APIError as e:
                 reraise_openai_error(e)
 
             # Convert OpenAI response to Genkit format
@@ -654,7 +654,7 @@ class OpenAI(Plugin):
         actions: list[ActionMetadata] = []
         try:
             models_ = await self._runtime_client().models.list()
-        except APIStatusError as e:
+        except APIError as e:
             reraise_openai_error(e)
         models: list[Model] = models_.data
         for model in models:

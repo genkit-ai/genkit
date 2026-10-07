@@ -25,6 +25,7 @@ from genkit._core._error import (
     StatusName,
     from_http_code,
     get_callable_json,
+    mark_provider_error,
     parse_retry_after_ms,
     wrap_http_error,
 )
@@ -52,6 +53,7 @@ __all__ = [
     'ErrorResponseMetadata',
     'StatusName',
     'from_http_code',
+    'mark_provider_error',
     'parse_retry_after_ms',
     'wrap_http_error',
     # HTTP / version stamping

@@ -32,6 +32,36 @@ ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-late
 
 Requires Google Cloud Application Default Credentials (ADC) or explicit credentials.
 
+### Sampling
+
+Every trace is exported by default (unless `OTEL_TRACES_SAMPLER` says
+otherwise). To export a fraction, pass `sampler=`.
+`ParentBased` keeps the caller's decision when a request arrives with a
+`traceparent`, so a trace that started upstream is not cut in half:
+
+```python
+from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
+
+enable_google_cloud_telemetry(
+    project_id='my-project',
+    sampler=ParentBased(TraceIdRatioBased(0.1)),
+)
+# => about 1 in 10 new traces reach Cloud Trace
+```
+
+`sampler=` applies to the tracer provider this helper creates. If your app
+already set one, put the sampler on that provider instead; passing
+`sampler=` then raises `INVALID_ARGUMENT`:
+
+```python
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+
+trace.set_tracer_provider(TracerProvider(sampler=ParentBased(TraceIdRatioBased(0.1))))
+enable_google_cloud_telemetry(project_id='my-project')
+# => Cloud Trace joins your provider and uses its sampler
+```
+
 
 ## Sessions on Firestore
 
