@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from openai import APIStatusError, AsyncOpenAI
+from openai import APIError, AsyncOpenAI
 from openai.types.images_response import ImagesResponse
 from pydantic import Field
 
@@ -207,5 +207,5 @@ class OpenAIImageModel:
             params = _to_image_generate_params(self._model_name, request)
             result = await self._client.images.generate(**params)
             return _to_generate_response(result)
-        except (APIStatusError, ValueError) as e:
+        except (APIError, ValueError) as e:
             reraise_openai_error(e)

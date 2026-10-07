@@ -82,11 +82,13 @@ that rejects URLs, so we must download images explicitly. This is the only
 behavioral divergence from the JS plugin.
 """
 
+import json
 import mimetypes
 import re
 from collections.abc import Callable
 from typing import Any, Literal, cast
 
+import httpx
 import ollama as ollama_api
 import structlog
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -239,9 +241,14 @@ class OllamaModel:
             return await self._generate_classified(request=request, ctx=ctx, client=client, content=content)
         except ollama_api.ResponseError as e:
             raise wrap_http_error(e, status_code=getattr(e, 'status_code', None)) from e
+        except json.JSONDecodeError as e:
+            # The server sent a body that is not JSON (e.g. a proxy error page).
+            # Caught before ValueError, its base class: this is not a bad request.
+            raise GenkitError(status='INTERNAL', message='ollama: server returned a non-JSON response', cause=e) from e
         except ValidationError as e:
             # A response Part/Message we could not build is not a bad caller
-            # request — retry can try again.
+            # request — retry can try again. Invalid caller config and tools
+            # are raised as INVALID_ARGUMENT while the request is built.
             raise GenkitError(status='INTERNAL', message=str(e), cause=e) from e
         except ValueError as e:
             if str(e).startswith('Unresolved API type:'):
@@ -348,16 +355,20 @@ class OllamaModel:
             fmt = ''
 
         # Build common kwargs for both streaming and non-streaming calls
-        tools = [
-            ollama_api.Tool(
-                function=ollama_api.Tool.Function(
-                    name=tool.name,
-                    description=tool.description,
-                    parameters=_convert_parameters(tool.input_schema or {}),
+        try:
+            tools = [
+                ollama_api.Tool(
+                    function=ollama_api.Tool.Function(
+                        name=tool.name,
+                        description=tool.description,
+                        parameters=_convert_parameters(tool.input_schema or {}),
+                    )
                 )
-            )
-            for tool in request.tools or []
-        ]
+                for tool in request.tools or []
+            ]
+        except ValidationError as e:
+            # The caller's tool definition, not a server response.
+            raise GenkitError(status='INVALID_ARGUMENT', message='ollama: invalid tool definition', cause=e) from e
         options = self.build_request_options(config=request.config)
         extra_kwargs = self.build_request_kwargs(config=request.config)
 
@@ -652,7 +663,11 @@ class OllamaModel:
 
         # Coerce the knobs Options models (int num_predict/top_k, etc.), then
         # merge back any it drops (e.g. min_p) so they still reach the server.
-        options: dict[str, Any] = ollama_api.Options(**knobs).model_dump(exclude_none=True)
+        try:
+            options: dict[str, Any] = ollama_api.Options(**knobs).model_dump(exclude_none=True)
+        except ValidationError as e:
+            # A config value of the wrong type is the caller's to fix.
+            raise GenkitError(status='INVALID_ARGUMENT', message='ollama: invalid model config', cause=e) from e
         for key, value in knobs.items():
             options.setdefault(key, value)
         if isinstance(extra, dict):
@@ -817,7 +832,21 @@ class OllamaModel:
                 follow_redirects=True,
             )
             response = await client.get(url)
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                status = e.response.status_code
+                # A 4xx means the caller's URL is bad (missing, forbidden,
+                # gone). Not NOT_FOUND: Fallback would switch models over a URL
+                # no model can fetch. 408/429 and 5xx stay raw so Retry can try
+                # the image host again.
+                if isinstance(status, int) and 400 <= status < 500 and status not in (408, 429):
+                    raise GenkitError(
+                        status='INVALID_ARGUMENT',
+                        message=f'ollama: could not fetch media URL (HTTP {status})',
+                        cause=e,
+                    ) from e
+                raise
             return response.content
 
         # Local file path or raw base64 — pass through to Image.

@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
 
 from genkit import Genkit, Message, ModelResponse, Part
 from genkit._core._action import ActionRunContext
@@ -372,13 +372,15 @@ async def test_prompt_call_config_typo_raises() -> None:
 
 @pytest.mark.asyncio
 async def test_prompt_camel_case_definition_with_snake_case_call_reaches_model() -> None:
-    """A prompt's `maxOutputTokens: 5` overridden at call time by `max_output_tokens: 7` runs with 7."""
+    """Prompt `maxOutputTokens: 5` called with `max_output_tokens: 7` sends only `max_output_tokens: 7`."""
     ai, fn = _ai_with_model()
     prompt = ai.define_prompt(name='spell', model='strict', prompt='hi', config={'maxOutputTokens': 5})
 
     await prompt(config={'max_output_tokens': 7})
 
-    assert _config_value(fn.requests[-1].config, 'max_output_tokens') == 7
+    config = fn.requests[-1].config
+    assert isinstance(config, StrictConfig)
+    assert config.max_output_tokens == 7
 
 
 @pytest.mark.asyncio
@@ -486,6 +488,22 @@ async def test_generate_both_spellings_of_plugin_declared_alias_raises_same_sett
 
 
 @pytest.mark.asyncio
+async def test_generate_three_spellings_of_one_setting_lists_all_three() -> None:
+    """`AliasChoices('seed_value', 'seedValue', 'seed')` with all three set names all three in one list."""
+
+    class SeedConfig(ModelConfig):
+        seed_value: int | None = Field(default=None, validation_alias=AliasChoices('seed_value', 'seedValue', 'seed'))
+
+    ai, fn = _ai_with_model(config_schema=SeedConfig, name='seeded')
+
+    with pytest.raises(GenkitError) as err:
+        await ai.generate(model='seeded', prompt='hi', config={'seedValue': 1, 'seed': 1, 'seed_value': 1})
+
+    _assert_rejected(err, fn)
+    assert err.value.original_message == 'seeded: seed_value, seedValue, and seed are the same setting; pass one'
+
+
+@pytest.mark.asyncio
 async def test_generate_none_on_one_spelling_is_not_a_second_spelling() -> None:
     """`{'maxOutputTokens': 5, 'max_output_tokens': None}` runs: None is unset, so only one spelling is set."""
     ai, fn = _ai_with_model()
@@ -584,7 +602,7 @@ async def test_generate_missing_required_top_level_field_fails_as_the_registered
     assert response.finish_reason == 'failed'
     assert response.error is not None
     assert response.error.status == 'INVALID_ARGUMENT'
-    assert 'must' in response.error.message
+    assert 'must' in str(response.error.details)
     assert fn.requests == []
 
 

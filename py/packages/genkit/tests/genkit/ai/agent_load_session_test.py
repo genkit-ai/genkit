@@ -185,4 +185,5 @@ async def test_snapshot_id_with_mismatched_session_id_rejected() -> None:
     assert exc.value.reason is RuntimeErrorReason.INVALID_SESSION_ID
     assert 'does not belong to session' in exc.value.original_message
     assert 'INVALID_SESSION_ID' not in exc.value.original_message
-    assert 'it belongs to' in exc.value.original_message
+    # The message is public, so it must not name the session that owns the snapshot.
+    assert f"'{SESSION_ID}'" not in exc.value.original_message
