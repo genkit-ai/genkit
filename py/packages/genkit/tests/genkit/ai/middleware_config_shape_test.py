@@ -14,6 +14,7 @@ from collections.abc import Callable
 from typing import Any, TypedDict
 
 import pytest
+import typing_extensions
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from genkit import Genkit, GenkitError, Message, ModelResponse, Part
@@ -282,16 +283,14 @@ class TypedDictConfig(TypedDict, total=False):
     temperature: float
 
 
-@pytest.mark.asyncio
-async def test_model_typed_with_typeddict_config_runs_through_middleware() -> None:
-    """ModelRequest[TypedDict] skips the check: the model runs and gets the dict."""
+class ExtensionsTypedDictConfig(typing_extensions.TypedDict, total=False):
+    """The same config declared with typing_extensions.TypedDict."""
+
+    temperature: float
+
+
+async def _run_typeddict_model(fn: Callable[..., Any], configs: list[object]) -> None:
     ai = Genkit()
-    configs: list[object] = []
-
-    async def fn(request: ModelRequest[TypedDictConfig], _ctx: ActionRunContext) -> ModelResponse:
-        configs.append(request.config)
-        return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))
-
     ai.define_model(name='td', fn=fn)
 
     response = await ai.generate(
@@ -300,6 +299,34 @@ async def test_model_typed_with_typeddict_config_runs_through_middleware() -> No
 
     assert response.text == 'ok'
     assert configs == [{'temperature': 0.1}]
+
+
+@pytest.mark.asyncio
+async def test_model_typed_with_typeddict_config_runs_through_middleware() -> None:
+    """ModelRequest[TypedDict] skips the check: the model runs and gets the dict.
+
+    typing.TypedDict on purpose: Pydantic rejects it before Python 3.12, so
+    this also guards ModelRequest swapping in a typing_extensions copy.
+    """
+    configs: list[object] = []
+
+    async def fn(request: ModelRequest[TypedDictConfig], _ctx: ActionRunContext) -> ModelResponse:
+        configs.append(request.config)
+        return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))
+
+    await _run_typeddict_model(fn, configs)
+
+
+@pytest.mark.asyncio
+async def test_model_typed_with_typing_extensions_typeddict_config_runs_through_middleware() -> None:
+    """Same as above with typing_extensions.TypedDict, which Pydantic takes on every version."""
+    configs: list[object] = []
+
+    async def fn(request: ModelRequest[ExtensionsTypedDictConfig], _ctx: ActionRunContext) -> ModelResponse:
+        configs.append(request.config)
+        return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))
+
+    await _run_typeddict_model(fn, configs)
 
 
 class PrefixedConfig(ModelConfig):

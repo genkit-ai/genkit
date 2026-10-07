@@ -22,6 +22,7 @@ properties and methods on top of the generated wire types.
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
@@ -44,6 +45,7 @@ from typing_extensions import TypedDict, TypeVar
 
 from genkit._core import _typing as typing_mod
 from genkit._core._base import GenkitModel, dump_keeping_unknown
+from genkit._core._compat import pydantic_safe_typeddicts
 from genkit._core._error import GenkitError, GenkitRuntimeError, RuntimeErrorReason
 from genkit._core._extract_json import extract_json, extract_partial_json
 from genkit._core._logger import get_logger
@@ -1059,6 +1061,17 @@ class ModelRequest(GenkitModel, Generic[ModelRequestConfigT]):
     tool_choice: ToolChoice | None = Field(default=None)
     # Wire-shaped output storage; flat access via the properties below.
     output: OutputConfig = Field(default_factory=OutputConfig)
+
+    if sys.version_info < (3, 12):
+
+        def __class_getitem__(cls, typevar_values: type[Any] | tuple[type[Any], ...]) -> Any:  # noqa: ANN401
+            """``ModelRequest[Cfg]``, where ``Cfg`` may be a ``typing.TypedDict``.
+
+            Pydantic rejects ``typing.TypedDict`` before 3.12, so writing
+            ``request: ModelRequest[Cfg]`` would raise when the model function
+            is defined. Swap in a ``typing_extensions`` copy first.
+            """
+            return super().__class_getitem__(pydantic_safe_typeddicts(typevar_values))
 
     @field_validator('config', mode='before')
     @classmethod
