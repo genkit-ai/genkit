@@ -30,10 +30,14 @@
 //	GENKIT_LIVE=1 go test -run Live ./plugins/compat_oai/openai/
 //
 // GENKIT_LIVE=all also runs the expensive cases (see [Expensive]). Without
-// the variable or the provider's key, a live test skips, unless -run selected
-// tests explicitly: then it fails and names what is missing, since a run that
-// asked for a test and quietly skipped it would read as a pass. So
+// the variable or the provider's key, a live test skips, unless the -run
+// pattern names live tests: then it fails and names what is missing, since a
+// run that asked for a test and quietly skipped it would read as a pass. So
 // GENKIT_LIVE=1 go test ./plugins/... runs every suite whose key is set.
+//
+// A live test's name contains "Live", as in TestPluginLive, and a -run
+// pattern names live tests when it contains "Live" too. A unit-test pattern
+// that happens to match a live test, such as -run TestPlugin, skips it.
 //
 // # Capabilities
 //
@@ -68,11 +72,15 @@ const gateVar = "GENKIT_LIVE"
 // first in every live test.
 //
 // Without GENKIT_LIVE, or without any of names, the test skips, or fails when
-// -run selected tests explicitly, since a run that asked for a test and
+// the -run pattern names live tests, since a run that asked for a test and
 // quietly skipped it would read as a pass. With no names, Env only gates (for
-// a local server that needs no key) and returns "".
+// a local server that needs no key) and returns "". It fails a test whose
+// name does not contain "Live", since -run could not name it.
 func Env(t *testing.T, names ...string) string {
 	t.Helper()
+	if top, _, _ := strings.Cut(t.Name(), "/"); !strings.Contains(top, "Live") {
+		t.Fatalf("livetest: name the test %s with Live in it, so -run Live selects it", top)
+	}
 	if os.Getenv(gateVar) == "" {
 		msg := fmt.Sprintf("live test: set %s=1 to run it (%s=all adds the expensive cases)", gateVar, gateVar)
 		if len(names) > 0 {
@@ -109,18 +117,12 @@ func Expensive(t *testing.T) {
 	}
 }
 
-// runSelected reports whether -run names tests rather than matching all of
-// them.
+// runSelected reports whether the -run pattern names live tests. Any other
+// pattern can still match one by accident: -run TestPlugin matches
+// TestPluginLive.
 func runSelected() bool {
 	f := flag.Lookup("test.run")
-	if f == nil {
-		return false
-	}
-	switch f.Value.String() {
-	case "", ".", ".*":
-		return false
-	}
-	return true
+	return f != nil && strings.Contains(f.Value.String(), "Live")
 }
 
 // Init returns a Genkit instance with plugins and the experimental surface the
