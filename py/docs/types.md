@@ -44,10 +44,6 @@ Types exported from genkit, genkit.model, genkit.embedder, genkit.plugin_api, ge
 
 ::: genkit.Interrupt
 
-::: genkit.respond_to_interrupt
-
-::: genkit.restart_tool
-
 ::: genkit.response
 
 ::: genkit.MultipartToolResponse
@@ -56,9 +52,7 @@ Types exported from genkit, genkit.model, genkit.embedder, genkit.plugin_api, ge
 
 ::: genkit.ActionRunContext
 
-::: genkit.ExecutablePrompt
-
-::: genkit.PromptGenerateOptions
+::: genkit.Prompt
 
 ::: genkit.GenkitError
 

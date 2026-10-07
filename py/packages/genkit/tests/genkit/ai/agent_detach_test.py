@@ -26,7 +26,6 @@ from genkit._ai._agents._session_stores._inmemory_store import InMemorySessionSt
 from genkit._ai._agents._snapshot import abort_snapshot_in_store
 from genkit._ai._agents._types import TurnContext
 from genkit._ai._generate import generate_action
-from genkit._ai._testing import define_programmable_model
 from genkit._ai._tools import ToolRunContext
 from genkit._core._action import ActionRunContext
 from genkit._core._channel import CloseableQueue
@@ -49,6 +48,7 @@ from genkit._core._typing import (
     ToolRequest,
 )
 from genkit.exp import Genkit
+from genkit.testing import define_scripted_model
 
 
 async def _wait_for_snapshot_status(
@@ -322,7 +322,7 @@ async def test_abort_snapshot_stops_detached_work() -> None:
 async def test_generate_tool_respects_abort_signal() -> None:
     """Tools invoked during generate see the same abort_signal as the agent runtime."""
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
     abort_signal = asyncio.Event()
     tool_saw_abort = asyncio.Event()
 
@@ -353,7 +353,7 @@ async def test_generate_tool_respects_abort_signal() -> None:
         response = await generate_action(
             ai.registry,
             GenerateActionOptions(
-                model='programmableModel',
+                model='scriptedModel',
                 messages=[Message(role=Role.USER, content=[Part.from_text('go')])],
                 tools=['slowWork'],
             ),

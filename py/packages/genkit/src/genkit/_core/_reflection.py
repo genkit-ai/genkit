@@ -36,14 +36,14 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
-from genkit._core._action import Action, BidiAction
+from genkit._core._action import Action, BidiAction, input_from_json
 from genkit._core._constants import GENKIT_VERSION
 from genkit._core._error import get_reflection_json
 from genkit._core._logger import get_logger
 from genkit._core._middleware import GenerateMiddleware
 from genkit._core._model import AgentInit, AgentInput, ModelRef
 from genkit._core._registry import Registry
-from genkit._core._telemetry.http import connect_developer_ui_collector
+from genkit._core._telemetry._http import connect_developer_ui_collector
 
 logger = get_logger(__name__)
 
@@ -142,7 +142,7 @@ class ActionRunner:
                     input_val = AgentInput.model_validate(as_agent_input_dict(input_val))
 
             output = await self.action.run(
-                input=input_val,
+                input=input_from_json(input_val),
                 on_chunk=on_chunk,
                 context=self.payload.get('context', {}),
                 on_trace_start=self.on_trace_start,
@@ -165,7 +165,8 @@ class ActionRunner:
             # Dumping a full traceback here turns every playground failure into
             # terminal noise.
             logger.debug('Action failed: %s: %s', type(e).__name__, e, exc_info=True)
-            self.queue.put_nowait(json.dumps({'error': get_reflection_json(e).model_dump(by_alias=True)}))
+            error = get_reflection_json(e, trace_id=self.trace_id)
+            self.queue.put_nowait(json.dumps({'error': error.model_dump(by_alias=True)}))
         finally:
             self.trace_ready.set()
             self.queue.put_nowait(None)

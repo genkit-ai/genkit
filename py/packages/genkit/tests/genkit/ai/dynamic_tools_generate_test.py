@@ -21,7 +21,6 @@ from pydantic import BaseModel
 
 from genkit import Genkit, Message, ModelResponse, Part
 from genkit._ai._generate import expand_wildcard_tools, resolve_tool
-from genkit._ai._testing import define_programmable_model
 from genkit._core._action import Action, ActionKind
 from genkit._core._dap import DapValue
 from genkit._core._error import GenkitError, RuntimeErrorReason
@@ -31,6 +30,7 @@ from genkit._core._typing import (
     Role,
     ToolRequest,
 )
+from genkit.testing import define_scripted_model
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -307,7 +307,7 @@ async def test_non_wildcard_names_pass_through() -> None:
 async def test_generate_mcp_tool_echo_runs_the_dap_tool() -> None:
     """generate(tools=['mcp:tool/echo']) runs the DAP tool that was never register_action'd."""
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     call_log: list[str] = []
 
@@ -340,7 +340,7 @@ async def test_generate_mcp_tool_echo_runs_the_dap_tool() -> None:
     ]
 
     response = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='use echo',
         tools=['mcp:tool/echo'],
     )
@@ -364,7 +364,7 @@ async def test_generate_mcp_tool_echo_runs_the_dap_tool() -> None:
 async def test_generate_mcp_tool_does_not_leave_tool_v2_on_the_app() -> None:
     """After generate(tools=['mcp:tool/echo']), the app catalog still has no /tool.v2/echo."""
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     class Inp(BaseModel):
         x: str
@@ -383,7 +383,7 @@ async def test_generate_mcp_tool_does_not_leave_tool_v2_on_the_app() -> None:
     pm.responses = [_text_response('no tools called')]
 
     await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='hi',
         tools=['mcp:tool/dap_only_tool'],
     )
@@ -401,7 +401,7 @@ async def test_generate_mcp_tool_does_not_leave_tool_v2_on_the_app() -> None:
 async def test_generate_mcp_tool_star_can_run_a_tool_from_that_provider() -> None:
     """generate(tools=['mcp:tool/*']) can run a tool from that provider."""
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     call_log: list[str] = []
 
@@ -433,7 +433,7 @@ async def test_generate_mcp_tool_star_can_run_a_tool_from_that_provider() -> Non
     ]
 
     response = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='use a tool',
         tools=['mcp:tool/*'],
     )
@@ -446,7 +446,7 @@ async def test_generate_mcp_tool_star_can_run_a_tool_from_that_provider() -> Non
 async def test_generate_mcp2_tool_star_runs_mcp2_when_both_have_echo() -> None:
     """generate(tools=['mcp2:tool/*']) runs mcp2's echo when mcp1 also has echo."""
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     call_log: list[str] = []
 
@@ -482,7 +482,7 @@ async def test_generate_mcp2_tool_star_runs_mcp2_when_both_have_echo() -> None:
     ]
 
     response = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='use echo',
         # Crucially, we explicitly request tools from mcp2 ONLY
         tools=['mcp2:tool/*'],
@@ -499,7 +499,7 @@ async def test_generate_mcp2_tool_star_runs_mcp2_when_both_have_echo() -> None:
 async def test_generate_mcp_tool_echo_runs_mcp_echo_not_the_local_echo() -> None:
     """generate(tools=['mcp:tool/echo']) runs the DAP echo, not a local echo of the same name."""
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     call_log: list[str] = []
 
@@ -528,7 +528,7 @@ async def test_generate_mcp_tool_echo_runs_mcp_echo_not_the_local_echo() -> None
     ]
 
     response = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='use echo',
         tools=['mcp:tool/echo'],
     )
@@ -543,12 +543,12 @@ async def test_generate_mcp_tool_echo_runs_mcp_echo_not_the_local_echo() -> None
 async def test_unknown_mcp_provider_fails_before_the_model() -> None:
     """generate(tools=['mcp:nope/echo']) fails before the model is called."""
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
     pm.responses = [_text_response('should not run')]
 
     with pytest.raises(GenkitError) as ei:
         await ai.generate(
-            model='programmableModel',
+            model='scriptedModel',
             prompt='hi',
             tools=['mcp:nope/echo'],
         )
@@ -563,7 +563,7 @@ async def test_unknown_mcp_provider_fails_before_the_model() -> None:
 async def test_unknown_mcp_tool_fails_before_the_model() -> None:
     """generate(tools=['mcp:tool/ghost']) fails before the model is called."""
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
     pm.responses = [_text_response('should not run')]
 
     async def echo_fn(x: str) -> str:
@@ -578,7 +578,7 @@ async def test_unknown_mcp_tool_fails_before_the_model() -> None:
 
     with pytest.raises(GenkitError) as ei:
         await ai.generate(
-            model='programmableModel',
+            model='scriptedModel',
             prompt='hi',
             tools=['mcp:tool/ghost'],
         )
@@ -593,7 +593,7 @@ async def test_unknown_mcp_tool_fails_before_the_model() -> None:
 async def test_generate_mcp_star_and_local_tool_a_same_name_raises() -> None:
     """tools=['mcp:tool/*', 'toolA'] when both are named toolA raises before the model."""
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
     pm.responses = [_text_response('should not run')]
 
     @ai.tool(name='toolA')
@@ -612,7 +612,7 @@ async def test_generate_mcp_star_and_local_tool_a_same_name_raises() -> None:
 
     with pytest.raises(GenkitError) as ei:
         await ai.generate(
-            model='programmableModel',
+            model='scriptedModel',
             prompt='hi',
             tools=['mcp:tool/*', 'toolA'],
         )
@@ -629,7 +629,7 @@ async def test_generate_mcp_star_and_local_tool_a_same_name_raises() -> None:
 async def test_generate_local_tool_a_then_mcp_star_same_name_raises() -> None:
     """tools=['toolA', 'mcp:tool/*'] when both are named toolA raises before the model."""
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
     pm.responses = [_text_response('should not run')]
 
     @ai.tool(name='toolA')
@@ -648,7 +648,7 @@ async def test_generate_local_tool_a_then_mcp_star_same_name_raises() -> None:
 
     with pytest.raises(GenkitError) as ei:
         await ai.generate(
-            model='programmableModel',
+            model='scriptedModel',
             prompt='hi',
             tools=['toolA', 'mcp:tool/*'],
         )

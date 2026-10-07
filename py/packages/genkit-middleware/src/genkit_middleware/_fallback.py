@@ -23,20 +23,15 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from genkit import GenkitError
-from genkit._core._action import Action, ActionKind
-from genkit._core._model import ModelResponse
+from genkit import GenkitError, ModelResponse
+from genkit._ai._generate import StreamingCallbackError
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
+from genkit.plugin_api import Action, ActionKind
+from genkit_middleware._statuses import TRANSIENT_STATUSES
 
-_DEFAULT_FALLBACK_STATUSES: list[str] = [
-    'UNAVAILABLE',
-    'DEADLINE_EXCEEDED',
-    'RESOURCE_EXHAUSTED',
-    'ABORTED',
-    'INTERNAL',
-    'NOT_FOUND',
-    'UNIMPLEMENTED',
-]
+# Everything Retry would retry, plus failures another model may not have:
+# this model doesn't exist or can't do what the request asks.
+_DEFAULT_FALLBACK_STATUSES: list[str] = [*TRANSIENT_STATUSES, 'NOT_FOUND', 'UNIMPLEMENTED']
 
 
 class FallbackConfig(BaseModel):
@@ -74,13 +69,15 @@ class Fallback(BaseMiddleware[FallbackConfig]):
         try:
             return await next_fn(params, ctx)
         except Exception as exc:
-            if not isinstance(exc, GenkitError) or exc.status not in self.config.statuses:
+            if not self._should_fall_back(exc):
                 raise
             last_error = exc
 
         assert last_error is not None  # noqa: S101
         on_chunk = ctx.on_chunk
         for model_name in self.config.models:
+            if ctx.abort_signal.is_set():
+                raise last_error
             fallback_action = await self._resolve_fallback_model(ctx, model_name)
             try:
                 result = await fallback_action.run(
@@ -92,7 +89,15 @@ class Fallback(BaseMiddleware[FallbackConfig]):
                 return result.response  # type: ignore[return-value]
             except Exception as e2:
                 last_error = e2
-                if not isinstance(e2, GenkitError) or e2.status not in self.config.statuses:
+                if not self._should_fall_back(e2):
                     raise
 
         raise last_error
+
+    def _should_fall_back(self, exc: Exception) -> bool:
+        # The caller's own on_chunk failure never switches models. A raw
+        # exception has no status, so it also stays on this model. Only a
+        # listed GenkitError status sends the request on.
+        if isinstance(exc, StreamingCallbackError):
+            return False
+        return isinstance(exc, GenkitError) and exc.status in self.config.statuses

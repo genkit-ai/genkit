@@ -96,12 +96,16 @@ func (f *Fallback) wrapModel(ctx context.Context, params *ai.ModelParams, next a
 	}
 
 	lastErr := err
+	g := genkit.FromContext(ctx)
+	if g == nil && len(f.Models) > 0 {
+		return nil, status.Errorf(status.ErrFailedPrecondition, "fallback: no Genkit instance on the context to resolve fallback models (primary model error: %w)", err)
+	}
 	for _, ref := range f.Models {
 		name := ref.Name()
 		// A fallback reroutes the request to a different (billed) model, so it
 		// warrants more than debug visibility.
 		logger.Warn(ctx, "model call failed, falling back", "model", name, "error", lastErr)
-		m := genkit.LookupModel(genkit.FromContext(ctx), name)
+		m := genkit.LookupModel(g, name)
 		if m == nil {
 			return nil, status.Errorf(ai.ErrModelNotFound, "fallback: model %q not found", name)
 		}

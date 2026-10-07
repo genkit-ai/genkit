@@ -65,6 +65,9 @@ export class McpRuntimeManager {
   private manager: BaseRuntimeManager | undefined;
   private currentProjectRoot: string | undefined;
 
+  /** @param auth `--experimental-auth`. */
+  constructor(private readonly auth?: boolean) {}
+
   async getManager(projectRoot: string) {
     if (this.manager && this.currentProjectRoot === projectRoot) {
       return this.manager;
@@ -72,10 +75,9 @@ export class McpRuntimeManager {
     if (this.manager) {
       await this.manager.stop();
     }
-    this.manager = await startManager({
-      projectRoot,
-      manageHealth: true,
-    });
+    // No auth here: attaching to existing runtimes never generates a secret.
+    // `this.auth` applies when a runtime is spawned (getManagerWithDevProcess).
+    this.manager = await startManager({ projectRoot, manageHealth: true });
     this.currentProjectRoot = projectRoot;
     return this.manager;
   }
@@ -100,6 +102,7 @@ export class McpRuntimeManager {
         healthCheck: timeout !== 0,
         timeout,
         cwd: explicitProjectRoot ? projectRoot : undefined,
+        auth: this.auth,
       }
     );
     this.manager = devManager.manager;

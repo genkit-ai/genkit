@@ -14,14 +14,14 @@ from genkit import Genkit, get_logger
 from genkit._core._action import ActionRunContext, _action_context
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import ModelRequest, ModelResponse
-from genkit._core._telemetry._instrumentation import (
-    SpanMetadata,
-    SpanNext,
-    reset_instrumentation,
-)
 from genkit._core._telemetry._log_exporter import build_log_record
 from genkit._core._typing import Operation
-from genkit.telemetry import configure_instrumentation
+from genkit.telemetry import (
+    SpanMetadata,
+    SpanNext,
+    configure_instrumentation,
+    reset_instrumentation,
+)
 
 
 @pytest.mark.asyncio
