@@ -176,7 +176,7 @@ async def test_resolve_action_from_plugin() -> None:
     assert action is not None
     assert len(resolver_calls) == 1
 
-    assert resolver_calls == [[ActionKind.MODEL, 'myplugin/foo']]
+    assert resolver_calls == [[ActionKind.MODEL, 'foo']]
 
     # should be idempotent
     await ai.registry.resolve_action(ActionKind.MODEL, 'myplugin/foo')

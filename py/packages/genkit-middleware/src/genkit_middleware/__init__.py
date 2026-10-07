@@ -26,14 +26,16 @@ Provides concrete middleware implementations:
   ``use_skill`` tool.
 * ``Filesystem`` — sandboxed filesystem operations (list / read / write /
   edit).
-* ``Artifacts`` — ``read_artifact`` / ``write_artifact`` plus artifact listing in the system prompt.
 
-Import the classes you need and pass instances into ``use=[...]``.
-See below for an example.
+Import the classes you need and pass instances into ``use=[...]``; that works
+without registering anything. Register the ``Middleware()`` plugin to list
+them in the Dev UI and to name them in a ``.prompt`` file's ``use:``.
+
+``Artifacts`` only works inside an agent, so it lives in
+``genkit_middleware.exp`` alongside the other experimental agent APIs.
 """
 
 from genkit.plugin_api import MiddlewarePlugin, new_middleware
-from genkit_middleware._artifacts import Artifacts
 from genkit_middleware._fallback import Fallback
 from genkit_middleware._filesystem import Filesystem
 from genkit_middleware._retry import Retry
@@ -66,19 +68,14 @@ _MIDDLEWARE_DESCS = [
         name='filesystem',
         description='Sandboxed filesystem operations',
     ),
-    new_middleware(
-        Artifacts,
-        name='artifacts',
-        description='read_artifact and write_artifact tools with session artifact listing in system prompt',
-    ),
 ]
 
 
 class Middleware(MiddlewarePlugin):
-    """Plugin that registers Retry, Fallback, ToolApproval, Skills, Filesystem, and Artifacts.
+    """Plugin that registers Retry, Fallback, ToolApproval, Skills, and Filesystem.
 
-    Registers all six middleware descriptors so they show up in the Dev
-    UI.
+    Registering lists them in the Dev UI and lets a ``.prompt`` file name them
+    in ``use:``. Passing an instance in ``use=[...]`` works either way.
 
     ``Filesystem`` has no default root — supply ``root_dir`` when
     constructing an instance, for example
@@ -111,7 +108,6 @@ class Middleware(MiddlewarePlugin):
 
 
 __all__ = [
-    'Artifacts',
     'Fallback',
     'Filesystem',
     'Middleware',

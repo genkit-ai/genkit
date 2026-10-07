@@ -323,18 +323,18 @@ class OpenAI(Plugin):
 
         # Add known chat models.
         for name in SUPPORTED_OPENAI_MODELS:
-            actions.append(self._create_model_action(open_ai_name(name)))
+            actions.append(self._create_model_action(name))
 
         # Add known embedders.
         for name in SUPPORTED_EMBEDDING_MODELS:
-            actions.append(self._create_embedder_action(open_ai_name(name)))
+            actions.append(self._create_embedder_action(name))
 
         # Add multimodal models (Image, TTS, STT).
         for model_type, (model_class, supported_models) in _MULTIMODAL_CONFIG.items():
             for name in supported_models:
                 actions.append(
                     self._create_multimodal_action(
-                        open_ai_name(name),
+                        name,
                         model_class,
                         supported_models,
                         model_type,
@@ -381,7 +381,7 @@ class OpenAI(Plugin):
 
         Args:
             action_type: The kind of action to resolve.
-            name: The namespaced name of the action to resolve.
+            name: The id without the ``openai/`` prefix.
 
         Returns:
             Action object if found, None otherwise.
@@ -425,27 +425,23 @@ class OpenAI(Plugin):
         """Create an Action object for an OpenAI model.
 
         Args:
-            name: The namespaced name of the model.
+            name: The model id as received (no plugin-prefix stripping).
 
         Returns:
             Action object for the model.
         """
-        # Extract local name (remove plugin prefix)
-        clean_name = name.replace('openai/', '') if name.startswith('openai/') else name
-
-        # Create the model handler
-        model_info = self.get_model_info(clean_name) or {}
+        model_info = self.get_model_info(name) or {}
 
         async def _generate(request: ModelRequest[OpenAIConfig], ctx: ActionRunContext) -> ModelResponse:
-            catalog = SUPPORTED_OPENAI_MODELS.get(cast(KnownGpt, clean_name))
-            supports = catalog.supports if catalog is not None else get_default_openai_model_info(clean_name).supports
+            catalog = SUPPORTED_OPENAI_MODELS.get(cast(KnownGpt, name))
+            supports = catalog.supports if catalog is not None else get_default_openai_model_info(name).supports
             openai_model = OpenAIModelHandler(
-                OpenAIModel(clean_name, self._client_for_call(request, ctx), supports=supports)
+                OpenAIModel(name, self._client_for_call(request, ctx), supports=supports)
             )
             return await openai_model.generate(request, ctx)
 
         return create_model(
-            name,
+            open_ai_name(name),
             _generate,
             config_schema=OpenAIConfig,
             metadata={
@@ -466,7 +462,7 @@ class OpenAI(Plugin):
         """Create an Action for a multimodal model (image, TTS, or STT).
 
         Args:
-            name: The namespaced name of the model.
+            name: The model id as received (no plugin-prefix stripping).
             model_class: The model class to instantiate.
             supported_models: Registry of known models and their metadata.
             model_type: The classified model type for default metadata fallback.
@@ -474,15 +470,14 @@ class OpenAI(Plugin):
         Returns:
             Action object for the model.
         """
-        clean_name = name.replace('openai/', '') if name.startswith('openai/') else name
-        info_dict, config_schema = _get_multimodal_info_dict(clean_name, model_type, supported_models)
+        info_dict, config_schema = _get_multimodal_info_dict(name, model_type, supported_models)
 
         async def _generate(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
-            model_instance = model_class(clean_name, self._client_for_call(request, ctx))
+            model_instance = model_class(name, self._client_for_call(request, ctx))
             return await model_instance.generate(request, ctx)
 
         return create_model(
-            name,
+            open_ai_name(name),
             _generate,
             config_schema=config_schema,
             metadata={'model': info_dict},
@@ -492,19 +487,15 @@ class OpenAI(Plugin):
         """Create an Action object for an OpenAI embedder.
 
         Args:
-            name: The namespaced name of the embedder.
+            name: The embedder id as received (no plugin-prefix stripping).
 
         Returns:
             Action object for the embedder.
         """
-        # Extract local name (remove plugin prefix)
-        clean_name = name.replace('openai/', '') if name.startswith('openai/') else name
-
-        # Get embedder info from known models or use default
         embedder_info = SUPPORTED_EMBEDDING_MODELS.get(
-            clean_name,
+            name,
             {
-                'label': f'OpenAI Embedding - {clean_name}',
+                'label': f'OpenAI Embedding - {name}',
                 'dimensions': 1536,
                 'supports': {'input': ['text']},
             },
@@ -542,26 +533,26 @@ class OpenAI(Plugin):
             try:
                 if dimensions is not None and encoding_format is not None:
                     response = await self._runtime_client().embeddings.create(
-                        model=clean_name,
+                        model=name,
                         input=texts,
                         dimensions=dimensions,
                         encoding_format=encoding_format,
                     )
                 elif dimensions is not None:
                     response = await self._runtime_client().embeddings.create(
-                        model=clean_name,
+                        model=name,
                         input=texts,
                         dimensions=dimensions,
                     )
                 elif encoding_format is not None:
                     response = await self._runtime_client().embeddings.create(
-                        model=clean_name,
+                        model=name,
                         input=texts,
                         encoding_format=encoding_format,
                     )
                 else:
                     response = await self._runtime_client().embeddings.create(
-                        model=clean_name,
+                        model=name,
                         input=texts,
                     )
             except APIStatusError as e:
@@ -572,10 +563,10 @@ class OpenAI(Plugin):
             return EmbedResponse(embeddings=embeddings)
 
         return embedder(
-            name,
+            open_ai_name(name),
             embed_fn,
             metadata=embedder_action_metadata(
-                name=name,
+                name=open_ai_name(name),
                 info=EmbedderInfo(
                     label=embedder_info['label'],
                     supports=EmbedderSupports(input=embedder_info['supports']['input']),

@@ -89,7 +89,7 @@ class ModelGarden(Plugin):
 
         Args:
             action_type: The kind of action to resolve.
-            name: The namespaced name of the action to resolve.
+            name: The model id without the ``modelgarden/`` prefix.
 
         Returns:
             Action object if found, None otherwise.
@@ -103,24 +103,22 @@ class ModelGarden(Plugin):
         """Create an Action object for a Model Garden Vertex AI model.
 
         Args:
-            name: The namespaced name of the model.
+            name: The model id without the ``modelgarden/`` prefix, publisher
+                included (``anthropic/claude-sonnet-4-6``).
 
         Returns:
             Action object for the model.
         """
-        # Extract local name (remove plugin prefix)
-        clean_name = (
-            name.replace(MODELGARDEN_PLUGIN_NAME + '/', '') if name.startswith(MODELGARDEN_PLUGIN_NAME) else name
-        )
+        full_name = model_garden_name(name)
 
-        if clean_name.startswith('anthropic/'):
+        if name.startswith('anthropic/'):
             from .anthropic import AnthropicModelGarden as AnthropicWorker
 
-            location = self.model_locations.get(clean_name, self.location)
+            location = self.model_locations.get(name, self.location)
             if not self.project_id:
                 raise ValueError('project_id must be provided')
             model_proxy = AnthropicWorker(
-                model=clean_name,
+                model=name,
                 location=location,
                 project_id=self.project_id,
             )
@@ -129,7 +127,7 @@ class ModelGarden(Plugin):
             model_info = model_proxy.get_model_info()
 
             return create_model(
-                name,
+                full_name,
                 handler,
                 config_schema=model_proxy.get_config_schema(),
                 metadata={
@@ -140,21 +138,21 @@ class ModelGarden(Plugin):
                 },
             )
 
-        location = self.model_locations.get(clean_name, self.location)
+        location = self.model_locations.get(name, self.location)
         if not self.project_id:
             raise ValueError('project_id must be provided')
         model_proxy = ModelGardenModel(
-            model=clean_name,
+            model=name,
             location=location,
             project_id=self.project_id,
         )
 
         # Get model info and handler
-        model_info = SUPPORTED_OPENAI_COMPAT_MODELS.get(clean_name, {})
+        model_info = SUPPORTED_OPENAI_COMPAT_MODELS.get(name, {})
         handler = model_proxy.to_openai_compatible_model()
 
         return create_model(
-            name,
+            full_name,
             handler,
             config_schema=OpenAIConfig,
             metadata={
