@@ -40,7 +40,7 @@ from pydantic import (
     model_validator,
 )
 from pydantic.alias_generators import to_camel
-from typing_extensions import TypedDict, TypeVar
+from typing_extensions import Self, TypedDict, TypeVar
 
 from genkit._core import _typing as typing_mod
 from genkit._core._base import GenkitModel, dump_keeping_unknown
@@ -981,6 +981,18 @@ class AgentResult(GenkitModel):
         return [as_artifact(a) for a in v]
 
 
+_FLAT_OUTPUT_NAMES = frozenset({
+    'output_format',
+    'outputFormat',
+    'output_schema',
+    'outputSchema',
+    'output_constrained',
+    'outputConstrained',
+    'output_content_type',
+    'outputContentType',
+})
+
+
 class OutputConfig(GenkitModel):
     """Output settings for a model request.
 
@@ -1022,10 +1034,9 @@ class ModelRequest(GenkitModel, Generic[ModelRequestConfigT]):
         Pass output settings as ``output=OutputConfig(...)``. The flat
         names (``output_format`` etc.) are convenience properties you read
         and write after construction — they are not constructor arguments,
-        so passing them there leaves output unset.
+        and passing them there raises a ValidationError.
     """
 
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
     messages: list[Message]
     docs: list[Document] | None = None
     config: ModelRequestConfigT | None = None
@@ -1084,6 +1095,40 @@ class ModelRequest(GenkitModel, Generic[ModelRequestConfigT]):
         if v is None:
             return v
         return as_output_config(v)
+
+    @model_validator(mode='before')
+    @classmethod
+    def _point_flat_output_names_at_output_config(cls, data: object) -> object:
+        # output_format etc. read like constructor args but aren't, and the
+        # plain "extra field" error doesn't say where JSON mode goes.
+        if isinstance(data, Mapping):
+            flat = sorted(k for k in data if k in _FLAT_OUTPUT_NAMES)
+            if flat:
+                raise ValueError(
+                    f'{", ".join(flat)} cannot be passed to ModelRequest; '
+                    'use output=OutputConfig(format=..., json_schema=..., constrained=..., content_type=...)'
+                )
+        return data
+
+    def model_copy(self, *, update: Mapping[str, Any] | None = None, deep: bool = False) -> Self:
+        """Copy the request; unknown update keys raise like they do in the constructor."""
+        if not update:
+            return super().model_copy(deep=deep)
+        fields = type(self).model_fields
+        by_alias = {f.alias: name for name, f in fields.items() if f.alias}
+        known: dict[str, Any] = {}
+        unknown: dict[str, Any] = {}
+        for key, value in update.items():
+            if key in fields:
+                known[key] = value
+            elif key in by_alias:
+                known[by_alias[key]] = value
+            else:
+                unknown[key] = value
+        if unknown:
+            # Same ValidationError the constructor raises for these keys.
+            type(self).model_validate({'messages': [], **unknown})
+        return super().model_copy(update=known, deep=deep)
 
     # Flat accessors: the plugin-author convenience surface over nested output.
 

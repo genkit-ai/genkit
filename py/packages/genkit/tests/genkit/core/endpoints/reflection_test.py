@@ -46,13 +46,13 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from pydantic import BaseModel, Field
 
-from genkit import Genkit
+from genkit import Genkit, Part
 from genkit._core._action import ActionKind
 from genkit._core._middleware import BaseMiddleware
-from genkit._core._model import ModelConfig
+from genkit._core._model import Message, ModelConfig, ModelRequest, ModelResponse
 from genkit._core._reflection import create_reflection_asgi_app
 from genkit._core._registry import Registry
-from genkit._core._typing import ActionMetadata
+from genkit._core._typing import ActionMetadata, Role
 from genkit.model import model_ref
 
 
@@ -459,6 +459,66 @@ async def test_values_lists_a2ui_catalog() -> None:
         response = await client.get('/api/values?type=a2ui-catalog')
         assert response.status_code == 200
         assert response.json() == {catalog['id']: catalog}
+    finally:
+        await client.aclose()
+
+
+_DEV_UI_MESSAGES = [
+    {'role': 'system', 'content': [{'text': 'Be brief.'}]},
+    {'role': 'user', 'content': [{'text': 'hello'}]},
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('key', 'body'),
+    [
+        # Model playground: always goes through generate with these top-level keys.
+        (
+            '/util/generate',
+            {
+                'model': 'echo',
+                'messages': _DEV_UI_MESSAGES,
+                'config': {'temperature': 0.5},
+                'tools': [],
+                'use': [],
+                'output': {'format': 'text'},
+                'returnToolRequests': False,
+            },
+        ),
+        # Action runner on a /model/ key: the JSON from the editor, shaped like the model's input schema.
+        (
+            '/model/echo',
+            {
+                'messages': _DEV_UI_MESSAGES,
+                'config': {'temperature': 0.5},
+                'tools': [],
+                'toolChoice': 'auto',
+                'output': {'format': 'text'},
+                'docs': [],
+            },
+        ),
+    ],
+    ids=['model-playground', 'action-runner'],
+)
+async def test_model_request_from_dev_ui_runs(key: str, body: dict[str, Any]) -> None:
+    """A Dev UI model run body posted to /api/runAction reaches the model and returns its reply."""
+    ai = Genkit()
+    seen: list[ModelRequest] = []
+
+    async def echo(request: ModelRequest) -> ModelResponse:
+        seen.append(request)
+        return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text(request.messages[-1].text)]))
+
+    ai.define_model(name='echo', fn=echo)
+
+    client = await _registry_asgi_client(ai.registry)
+    try:
+        response = await client.post('/api/runAction', json={'key': key, 'input': body})
+        assert response.status_code == 200, response.text
+        assert response.json()['result']['message']['content'] == [{'text': 'hello'}]
+        assert seen[0].output_format == 'text'
+        assert seen[0].config == {'temperature': 0.5}
     finally:
         await client.aclose()
 
