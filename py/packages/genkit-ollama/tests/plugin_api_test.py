@@ -569,7 +569,6 @@ async def test_wrap_connection_errors_translates_transport_error() -> None:
             raise httpx.ConnectError('refused')
 
     assert 'http://localhost:11434' in str(exc_info.value)
-    assert exc_info.value.status == 'UNAVAILABLE'
 
 
 @pytest.mark.asyncio
@@ -582,7 +581,6 @@ async def test_wrap_connection_errors_timeout_has_distinct_message() -> None:
     message = str(exc_info.value)
     assert 'timed out' in message
     assert 'http://localhost:11434' in message
-    assert exc_info.value.status == 'DEADLINE_EXCEEDED'
 
 
 @pytest.mark.asyncio
@@ -593,17 +591,17 @@ async def test_wrap_connection_errors_translates_builtin_connection_error() -> N
             raise ConnectionError('Failed to connect to Ollama.')
 
     assert 'http://localhost:11434' in str(exc_info.value)
-    assert exc_info.value.status == 'UNAVAILABLE'
 
 
-def test_connection_error_is_classified_and_still_a_connection_error() -> None:
-    """Fallback acts on GenkitError; existing `except ConnectionError` keeps working."""
+def test_connection_error_is_unclassified() -> None:
+    """A down server has no reported status: Retry retries it, Fallback does not switch models.
+
+    Matches Go and the other plugins' raw transport errors.
+    """
     error = OllamaConnectionError('Cannot reach the Ollama server.')
 
-    assert isinstance(error, GenkitError)
     assert isinstance(error, ConnectionError)
-    assert error.status == 'UNAVAILABLE'
-    assert error.http_code == 503
+    assert not isinstance(error, GenkitError)
 
 
 @pytest.mark.asyncio

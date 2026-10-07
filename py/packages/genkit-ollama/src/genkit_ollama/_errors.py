@@ -23,28 +23,17 @@ from contextlib import asynccontextmanager
 
 import httpx
 
-from genkit import GenkitError
-from genkit.plugin_api import StatusName
 
-
-class OllamaConnectionError(GenkitError, ConnectionError):
+class OllamaConnectionError(ConnectionError):
     """Raised when the Ollama server is unreachable or times out.
 
-    A ``GenkitError`` with status ``UNAVAILABLE`` (``DEADLINE_EXCEEDED`` for a
-    timeout), so Retry and Fallback can act on it: a down local server falls
-    back to the next model. Also a ``ConnectionError``, so code catching the
-    standard exception still works.
+    Subclasses ``ConnectionError`` so callers catching the standard exception
+    still work.
+
+    Deliberately not a ``GenkitError``: a transport failure has no status the
+    server reported, so it stays unclassified, matching the other plugins and
+    Go. Retry retries it; Fallback does not switch models on it.
     """
-
-    def __init__(self, message: str, *, status: StatusName = 'UNAVAILABLE') -> None:
-        """Initialize the error.
-
-        Args:
-            message: What failed and how to fix it.
-            status: ``UNAVAILABLE`` for an unreachable server,
-                ``DEADLINE_EXCEEDED`` for a timeout.
-        """
-        super().__init__(message=message, status=status)
 
 
 @asynccontextmanager
@@ -77,9 +66,7 @@ async def wrap_connection_errors(server_address: str) -> AsyncIterator[None]:
         # Already actionable (e.g. nested wrap); don't re-wrap.
         raise
     except httpx.TimeoutException as exc:
-        raise OllamaConnectionError(
-            f'Request to Ollama server at {server_address} timed out.', status='DEADLINE_EXCEEDED'
-        ) from exc
+        raise OllamaConnectionError(f'Request to Ollama server at {server_address} timed out.') from exc
     except (httpx.TransportError, ConnectionError) as exc:
         raise OllamaConnectionError(
             f'Cannot reach the Ollama server at {server_address}. '
