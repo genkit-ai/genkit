@@ -507,7 +507,7 @@ def _describe_config_problems(
             repeated[field] = sorted(spellings, key=lambda k: k != field)
         else:
             unknown.append(key)
-    parts = [f'{" and ".join(spellings)} are the same setting; pass one' for spellings in repeated.values()]
+    parts = [f'{_join_words(spellings)} are the same setting; pass one' for spellings in repeated.values()]
     if unknown:
         keys = ', '.join(repr(key) for key in unknown)
         noun = 'key' if len(unknown) == 1 else 'keys'
@@ -516,6 +516,13 @@ def _describe_config_problems(
         f'config {_config_path(err["loc"])!r}: {err["msg"]}' for err in problems if err['type'] != 'extra_forbidden'
     )
     return '; '.join(parts)
+
+
+def _join_words(words: list[str]) -> str:
+    """`a and b`, or `a, b, and c` for three or more."""
+    if len(words) <= 2:
+        return ' and '.join(words)
+    return f'{", ".join(words[:-1])}, and {words[-1]}'
 
 
 def _config_path(loc: tuple[int | str, ...]) -> str:
