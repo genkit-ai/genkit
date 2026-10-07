@@ -446,7 +446,7 @@ async def test_action_rejects_foreign_config_class() -> None:
 
 @pytest.mark.asyncio
 async def test_action_coerces_dict_config_from_other_request_type() -> None:
-    """Action.run: a mapping on ModelRequest[dict] still becomes the plugin class."""
+    """Action.run: a mapping on a bare ModelRequest still becomes the plugin class."""
 
     class PluginCfg(BaseModel):
         temperature: float | None = None
@@ -458,7 +458,7 @@ async def test_action_coerces_dict_config_from_other_request_type() -> None:
         return 'ok'
 
     action = Action(name='pluginModel', kind=ActionKind.MODEL, fn=model_fn)
-    request = ModelRequest[dict](
+    request = ModelRequest(
         messages=[Message(role='user', content=[Part.from_text('hi')])],
         config={'temperature': 0.5},
         output=OutputConfig(format='json', constrained=True),

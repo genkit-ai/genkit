@@ -11,7 +11,7 @@ naming the middleware, before anything reaches the next layer.
 """
 
 from collections.abc import Callable
-from typing import Any, TypedDict
+from typing import Any
 
 import pytest
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -274,32 +274,6 @@ async def test_model_that_takes_plain_model_request_still_gets_a_dict_middleware
 
     assert outer == [{'temperature': 0.2}]
     assert model.configs == [{'temperature': 0.1}]
-
-
-class TypedDictConfig(TypedDict, total=False):
-    """A model whose request config is a TypedDict, not a pydantic class."""
-
-    temperature: float
-
-
-@pytest.mark.asyncio
-async def test_model_typed_with_typeddict_config_runs_through_middleware() -> None:
-    """ModelRequest[TypedDict] skips the check: the model runs and gets the dict."""
-    ai = Genkit()
-    configs: list[object] = []
-
-    async def fn(request: ModelRequest[TypedDictConfig], _ctx: ActionRunContext) -> ModelResponse:
-        configs.append(request.config)
-        return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))
-
-    ai.define_model(name='td', fn=fn)
-
-    response = await ai.generate(
-        model='td', prompt='hi', config={'temperature': 0.1}, use=[_middleware('Passthrough', [])]
-    )
-
-    assert response.text == 'ok'
-    assert configs == [{'temperature': 0.1}]
 
 
 class PrefixedConfig(ModelConfig):

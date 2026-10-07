@@ -23,7 +23,7 @@ import secrets
 import time
 from collections.abc import Awaitable, Callable, Generator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, TypeGuard, TypeVar, cast
+from typing import Any, TypeVar, cast
 
 from pydantic import BaseModel, ValidationError
 
@@ -1545,14 +1545,6 @@ async def generate_turn(
     )
 
 
-def is_model_class(value: object) -> TypeGuard[type[BaseModel]]:
-    """True for a pydantic model class; False for TypedDicts, dict, unions, and parameterized generics."""
-    try:
-        return isinstance(value, type) and issubclass(value, BaseModel)
-    except TypeError:  # dict[str, Any] passes isinstance(_, type) on 3.10
-        return False
-
-
 async def call_model(
     *,
     options: GenerateActionOptions,
@@ -1614,8 +1606,8 @@ async def call_model(
     # to a bare request (the config didn't fit), the model action reports it.
     config_class = declared_config_type(turn_model.input_class) if turn_model.input_class is not None else None
     on_handoff: Callable[[ModelHookParams, MiddlewareDef], None] | None = None
-    if is_model_class(config_class) and isinstance(request.config, config_class):
-        held_class: type[BaseModel] = config_class
+    if config_class is not None and isinstance(request.config, config_class):
+        held_class = config_class
         checked: dict[str, object] = dict(vars(request.config))
         # The config a check rejected stays on the shared request, so a layer
         # that retries next would trip on it again. Re-raise the first error so
