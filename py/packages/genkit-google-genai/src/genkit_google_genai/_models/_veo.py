@@ -33,10 +33,11 @@ from genkit.model import ModelInfo, ModelRequest, OperationError, Supports
 from genkit.plugin_api import context_api_key, wrap_http_error
 from genkit_google_genai._constants import is_multi_regional_location, multi_regional_base_url
 from genkit_google_genai._models._sdk_config import (
+    VEO_MANAGED_BODY_FIELDS,
     attach_config_extra,
     dump_family_config,
+    keep_client_extra_body,
     sdk_config_error,
-    split_sdk_fields,
 )
 
 # Quote autocomplete needs a Literal, so this alias is the Veo catalog.
@@ -399,16 +400,16 @@ class VeoModel:
         if not dumped:
             return None
 
+        # Every other declared VeoConfig field is a GenerateVideosConfig field
+        # (veo_test.py pins this), so the rest goes to the SDK type as-is.
         extra = dumped.pop('extra', None)
-        known, leftovers = split_sdk_fields(dumped, genai_types.GenerateVideosConfig)
         try:
-            cfg = genai_types.GenerateVideosConfig(**known) if known else genai_types.GenerateVideosConfig()
+            cfg = genai_types.GenerateVideosConfig(**dumped)
         except ValidationError as e:
             raise sdk_config_error(action_name=self._name, error=e) from e
 
-        if leftovers:
-            cfg.http_options = genai_types.HttpOptions(extra_body={'parameters': leftovers})
-        return attach_config_extra(cfg, extra, action_name=self._name)
+        cfg = attach_config_extra(cfg, extra, action_name=self._name, managed_body_fields=VEO_MANAGED_BODY_FIELDS)
+        return keep_client_extra_body(cfg, (self._client_kwargs or {}).get('http_options'))
 
     @property
     def metadata(self) -> dict:
