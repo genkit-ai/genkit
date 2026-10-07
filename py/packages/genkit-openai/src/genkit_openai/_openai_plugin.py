@@ -18,6 +18,7 @@
 """OpenAI OpenAI API Compatible Plugin for Genkit."""
 
 import enum
+import os
 from typing import Any, Literal, TypeAlias, cast
 
 from openai import APIStatusError, AsyncOpenAI
@@ -66,6 +67,7 @@ from genkit_openai._models._audio import OpenAISttConfig, OpenAITtsConfig
 from genkit_openai._models._image import OpenAIDalleConfig, OpenAIGptImageConfig
 from genkit_openai._models._model_info import KnownGpt, get_default_openai_model_info
 from genkit_openai._models._utils import reraise_openai_error
+from genkit_openai._secrets import context_api_key, missing_key_error, reject_config_api_key
 from genkit_openai._typing import OpenAIConfig
 
 
@@ -305,6 +307,10 @@ class OpenAI(Plugin):
         """
         self._openai_params = openai_params
         self._runtime_client = loop_local_client(lambda: AsyncOpenAI(**self._openai_params))
+        # Only used when the plugin has no key of its own. Its placeholder key is
+        # never sent: every call through it swaps in the caller's key first.
+        tenant_only_params: dict[str, Any] = {**openai_params, 'api_key': 'unset'}
+        self._tenant_only_client = loop_local_client(lambda: AsyncOpenAI(**tenant_only_params))
         self._list_actions_cache: list[ActionMetadata] | None = None
 
     async def init(self) -> list[Action]:
@@ -396,6 +402,25 @@ class OpenAI(Plugin):
 
         return None
 
+    def _client_for_call(self, request: ModelRequest, ctx: ActionRunContext) -> AsyncOpenAI:
+        """The plugin's client, or a copy carrying the caller's ``context.secrets`` key.
+
+        A tenant who passed their own key is the one who should be billed. The
+        copy shares the plugin client's connection pool, and concurrent tenants
+        each get their own copy instead of swapping the key on a shared client.
+        A plugin built without a key serves only callers who bring one. A key
+        on ``request.config`` raises instead of being dropped, because running
+        that call on the plugin's key would bill the wrong account.
+        """
+        reject_config_api_key(request.config)
+        key = context_api_key(ctx.context or {})
+        if self._openai_params.get('api_key') or os.environ.get('OPENAI_API_KEY'):
+            client = self._runtime_client()
+            return client.with_options(api_key=key) if key else client
+        if key is None:
+            raise missing_key_error()
+        return self._tenant_only_client().with_options(api_key=key)
+
     def _create_model_action(self, name: str) -> Action:
         """Create an Action object for an OpenAI model.
 
@@ -412,7 +437,11 @@ class OpenAI(Plugin):
         model_info = self.get_model_info(clean_name) or {}
 
         async def _generate(request: ModelRequest[OpenAIConfig], ctx: ActionRunContext) -> ModelResponse:
-            openai_model = OpenAIModelHandler(OpenAIModel(clean_name, self._runtime_client()))
+            catalog = SUPPORTED_OPENAI_MODELS.get(cast(KnownGpt, clean_name))
+            supports = catalog.supports if catalog is not None else get_default_openai_model_info(clean_name).supports
+            openai_model = OpenAIModelHandler(
+                OpenAIModel(clean_name, self._client_for_call(request, ctx), supports=supports)
+            )
             return await openai_model.generate(request, ctx)
 
         return create_model(
@@ -449,7 +478,7 @@ class OpenAI(Plugin):
         info_dict, config_schema = _get_multimodal_info_dict(clean_name, model_type, supported_models)
 
         async def _generate(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
-            model_instance = model_class(clean_name, self._runtime_client())
+            model_instance = model_class(clean_name, self._client_for_call(request, ctx))
             return await model_instance.generate(request, ctx)
 
         return create_model(

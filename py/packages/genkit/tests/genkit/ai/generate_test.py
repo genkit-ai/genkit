@@ -280,6 +280,58 @@ async def test_generate_stream_chunk_text_from_factory_part(
 
 
 @pytest.mark.asyncio
+async def test_generate_stream_earlier_chunk_accumulated_text_stays_put(
+    setup_test: tuple[Genkit, ScriptedModel],
+) -> None:
+    """An earlier stream chunk's accumulated_text does not grow as later chunks arrive."""
+    ai, pm = setup_test
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('abc')]),
+        )
+    )
+    pm.chunks = [
+        [
+            ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('a')]),
+            ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('b')]),
+            ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('c')]),
+        ],
+    ]
+
+    stream_result = ai.generate_stream(model='scriptedModel', prompt='do it')
+    first: ModelResponseChunk | None = None
+    async for chunk in stream_result.stream:
+        if first is None:
+            first = chunk
+    assert first is not None
+    assert first.accumulated_text == 'a'
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_chunk_output_uses_format_parser(
+    setup_test: tuple[Genkit, ScriptedModel],
+) -> None:
+    """Streaming with output_format='array' puts the parsed list on chunk.output."""
+    ai, pm = setup_test
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('[{"id": 1}]')]),
+        )
+    )
+    pm.chunks = [
+        [
+            ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('[{"id": 1}]')]),
+        ],
+    ]
+
+    stream_result = ai.generate_stream(model='scriptedModel', prompt='list', output_format='array')
+    chunks = [chunk async for chunk in stream_result.stream]
+    assert chunks[0].output == [{'id': 1}]
+
+
+@pytest.mark.asyncio
 async def test_simulates_doc_grounding(
     setup_test: tuple[Genkit, ScriptedModel],
 ) -> None:
@@ -1478,6 +1530,64 @@ async def test_generate_context_reaches_tool_run() -> None:
 
     assert response.text == 'done'
     assert seen == [{'user_id': 'u-123'}]
+
+
+@pytest.mark.asyncio
+async def test_generate_without_context_uses_enclosing_flow_context() -> None:
+    """``ai.generate()`` inside a flow, with no ``context=``, gives middleware and tools the flow's context.
+
+    Tools would inherit it on their own; middleware only sees what reaches the run.
+    """
+    seen: list[tuple[str, dict[str, object]]] = []
+
+    ai = Genkit()
+    pm, _ = define_scripted_model(ai)
+
+    # The engine builds middleware from its class, so the recorder closes over `seen`.
+    class RecordContext(BaseMiddleware):
+        async def wrap_model(
+            self,
+            params: ModelHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ) -> ModelResponse:
+            seen.append(('middleware', dict(ctx.custom_context)))
+            return await next_fn(params, ctx)
+
+    @ai.tool(name='check_allergies')
+    async def check_allergies(_: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
+        seen.append(('tool', dict(ctx.context)))
+        return 'no nuts'
+
+    pm.responses = [
+        ModelResponse(
+            message=Message(
+                role=Role.MODEL,
+                content=[Part(tool_request=ToolRequest(name='check_allergies', input={}, ref='r1'))],
+            ),
+        ),
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('done')]),
+        ),
+    ]
+
+    @ai.flow()
+    async def plan_order(_: None) -> str:
+        return (
+            await ai.generate(
+                model='scriptedModel',
+                prompt='Plan the order.',
+                tools=['check_allergies'],
+                use=[RecordContext()],
+            )
+        ).text
+
+    auth = {'auth': {'uid': 'diner-42'}}
+    await plan_order.run(context=auth)
+
+    # Model turn that asks for the tool, the tool run, then the model turn that answers.
+    assert seen == [('middleware', auth), ('tool', auth), ('middleware', auth)]
 
 
 @pytest.mark.asyncio

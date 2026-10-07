@@ -41,7 +41,8 @@ from coding_agent import coding_agent, list_workspace_files, read_workspace_file
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from file_store_agent import file_store_agent
-from genkit_fastapi import serve_agent, serve_flow
+from genkit_fastapi import serve_flow
+from genkit_fastapi.exp import serve_agent
 from orchestrator_agent import orchestrator_agent
 from research_agent import research_agent
 from task_agent import task_agent
