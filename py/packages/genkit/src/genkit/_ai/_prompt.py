@@ -31,7 +31,7 @@ from dotpromptz.typing import (
     PromptInputConfig,
     PromptMetadata,
 )
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 from typing_extensions import Never, Self
 
 from genkit._ai._generate import (
@@ -848,7 +848,7 @@ def check_prompt_input(
     """Raise ``INVALID_ARGUMENT`` naming the prompt and field when input doesn't match."""
     if isinstance(schema, type) and issubclass(schema, BaseModel):
         try:
-            TypeAdapter(schema).validate_python(data)
+            schema.model_validate(data)
         except ValidationError as error:
             raise GenkitError(
                 message=f"Invalid input for action '{name}': {error}",
