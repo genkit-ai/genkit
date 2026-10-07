@@ -26,11 +26,11 @@ from typing import Any, Literal, TypeAlias
 from google import genai
 from google.genai import types as genai_types
 from google.genai.errors import APIError
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, Operation, Part, Role
 from genkit.model import ModelInfo, ModelRequest, OperationError, Supports
-from genkit.plugin_api import wrap_http_error
+from genkit.plugin_api import context_api_key, wrap_http_error
 from genkit_google_genai._constants import is_multi_regional_location, multi_regional_base_url
 from genkit_google_genai._models._sdk_config import (
     attach_config_extra,
@@ -38,7 +38,6 @@ from genkit_google_genai._models._sdk_config import (
     sdk_config_error,
     split_sdk_fields,
 )
-from genkit_google_genai._models._secrets import context_api_key, misplaced_key_error
 
 # Quote autocomplete needs a Literal, so this alias is the Veo catalog.
 # ``veo_model`` takes ``KnownVeo | str`` so unlisted ids still work.
@@ -108,16 +107,6 @@ class VeoConfig(BaseModel):
         default=None, alias='apiVersion', description='Override the API version for this call.'
     )
     location: str | None = Field(default=None, description='Override the Vertex AI location for this call.')
-
-    @model_validator(mode='before')
-    @classmethod
-    def _api_key_belongs_in_secrets(cls, data: Any) -> Any:  # noqa: ANN401
-        """A key in ``extra`` points at context.secrets; core rejects one at the top level."""
-        if isinstance(data, Mapping):
-            extra = data.get('extra')
-            if isinstance(extra, Mapping) and (extra.get('api_key') is not None or extra.get('apiKey') is not None):
-                raise misplaced_key_error()
-        return data
 
 
 DEFAULT_VEO_SUPPORT = Supports(

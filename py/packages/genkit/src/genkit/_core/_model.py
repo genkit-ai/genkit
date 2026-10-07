@@ -90,7 +90,7 @@ class ModelConfig(GenerationCommonConfig):
     model_config: ClassVar[ConfigDict] = ConfigDict(extra='forbid')
 
     extra: dict[str, Any] | None = None
-    """Provider settings the model's config class doesn't declare, sent as-is and not checked.
+    """Provider settings the model's config class doesn't declare, sent as-is.
 
     Keys are the provider's wire names. The plugin merges them into its
     request after the declared fields, so a colliding key wins. Fields Genkit
@@ -99,8 +99,9 @@ class ModelConfig(GenerationCommonConfig):
     body for Gemini, OpenAI and Anthropic, ``options`` for Ollama, and
     ``additionalModelRequestFields`` for Bedrock.
 
-    Don't put API keys or other secrets here: config travels with the request
-    into traces.
+    Keys aren't validated, except that an API key here raises like one at the
+    top level: config travels with the request into traces. Don't put other
+    secrets here either.
     """
 
 
@@ -149,38 +150,6 @@ class ModelConfigDict(TypedDict, extra_items=Any, total=False):
     top_p: float | None
     stop_sequences: Sequence[str] | None
     extra: dict[str, Any] | None
-
-
-_API_KEY_SPELLINGS = ('api_key', 'apiKey')
-
-
-def reject_config_api_key(config: object) -> None:
-    """A per-request key in config raises on every model, with or without a config class.
-
-    Config is recorded in traces and a plugin may not read a key from it, so
-    the caller is pointed at ``context.secrets`` rather than told the key is
-    unknown. Takes a dict or a config object. What's inside ``extra`` isn't
-    checked.
-    """
-    if isinstance(config, Mapping):
-        bag = cast(Mapping[str, Any], config)
-        found = any(bag.get(key) is not None for key in _API_KEY_SPELLINGS)
-    elif isinstance(config, BaseModel):
-        model_extra = config.model_extra or {}
-        found = any(
-            getattr(config, key, None) is not None or model_extra.get(key) is not None for key in _API_KEY_SPELLINGS
-        )
-    else:
-        return
-    if not found:
-        return
-    raise GenkitError(
-        status='INVALID_ARGUMENT',
-        message=(
-            "API key belongs in context.secrets, not config. Pass the key as context={'secrets': {'api_key': ...}}."
-        ),
-        reason=RuntimeErrorReason.INVALID_INPUT,
-    )
 
 
 # TypeVars for generic types

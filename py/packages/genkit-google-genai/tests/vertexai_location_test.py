@@ -630,21 +630,6 @@ class TestResolveRequestClient:
         assert await model._resolve_request_client(_text_request({'location': 'eu'})) is client
 
     @pytest.mark.asyncio
-    async def test_extra_api_key_is_invalid_argument(self) -> None:
-        """A tenant key inside config `extra` belongs in context.secrets."""
-        client = MagicMock()
-        client.vertexai = False
-        model = GeminiModel(
-            'gemini-2.5-flash',
-            client,
-            client_kwargs={'vertexai': False, 'api_key': 'plugin-key', 'credentials': MagicMock()},
-        )
-        for bag in ({'api_key': 'override-key'}, {'apiKey': 'override-key'}):
-            with pytest.raises(GenkitError, match='context.secrets') as exc:
-                await model._resolve_request_client(_text_request({'extra': bag}))
-            assert exc.value.status == 'INVALID_ARGUMENT'
-
-    @pytest.mark.asyncio
     async def test_secrets_api_key_builds_request_client(self) -> None:
         """context.secrets.api_key is the per-tenant slot on generate too."""
         client = MagicMock()
@@ -680,7 +665,8 @@ class TestResolveRequestClient:
         assert mock_ctor.call_args.kwargs['api_key'] == 'sk-camel'
 
     @pytest.mark.asyncio
-    async def test_empty_secrets_is_invalid_argument(self) -> None:
+    async def test_secrets_without_api_key_uses_plugin_client(self) -> None:
+        """context.secrets is shared with other plugins and the app; without api_key the plugin client runs."""
         client = MagicMock()
         client.vertexai = False
         model = GeminiModel(
@@ -688,9 +674,8 @@ class TestResolveRequestClient:
             client,
             client_kwargs={'vertexai': False, 'api_key': 'plugin-key'},
         )
-        with pytest.raises(GenkitError, match='context.secrets') as exc:
-            await model._resolve_request_client(_text_request(), context={'secrets': {}})
-        assert exc.value.status == 'INVALID_ARGUMENT'
+        for context in ({'secrets': {}}, {'secrets': {'db_password': 'x'}}):
+            assert await model._resolve_request_client(_text_request(), context=context) is client
 
     @pytest.mark.asyncio
     async def test_secrets_api_key_surrounding_whitespace_stripped(self) -> None:

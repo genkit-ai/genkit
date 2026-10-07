@@ -45,12 +45,12 @@ from genkit._core._model import (
     ModelResponseChunk,
     config_type_path,
     get_basic_usage_stats,
-    reject_config_api_key,
     text_from_content,
     text_from_message,
 )
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
+from genkit._core._secrets import reject_config_api_key
 from genkit._core._typing import ActionMetadata, GenerationCommonConfig, ModelInfo
 
 # Type alias for model functions (must be async)

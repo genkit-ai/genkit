@@ -864,11 +864,13 @@ async def test_background_model_action_run_directly_with_config_api_key_raises()
     assert started == []
 
 
+@pytest.mark.parametrize('spelling', ['api_key', 'apiKey'])
 @pytest.mark.asyncio
-async def test_generate_extra_api_key_is_not_checked() -> None:
-    """`config={'extra': {'api_key': k}}` isn't rejected; `extra` is sent as-is and isn't checked."""
+async def test_generate_extra_api_key_raises_pointing_to_secrets(spelling: str) -> None:
+    """`config={'extra': {'api_key': k}}` raises the same error; `extra` goes on the wire and into traces."""
     ai, fn = _ai_with_model()
 
-    await ai.generate(model='strict', prompt='hi', config={'extra': {'api_key': KEY}})
+    with pytest.raises(GenkitError) as err:
+        await ai.generate(model='strict', prompt='hi', config={'extra': {spelling: KEY}})
 
-    assert _config_value(fn.requests[-1].config, 'extra') == {'api_key': KEY}
+    _assert_points_to_secrets(err, fn)
