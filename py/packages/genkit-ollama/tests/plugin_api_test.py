@@ -505,8 +505,10 @@ async def test_model_action_does_not_wrap_media_fetch_error() -> None:
     client_mock.chat = AsyncMock()
     plugin.client = lambda: client_mock
 
-    image_client = MagicMock()
-    image_client.get = AsyncMock(side_effect=httpx.ConnectError('image host unreachable'))
+    def unreachable(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError('image host unreachable')
+
+    image_client = httpx.AsyncClient(transport=httpx.MockTransport(unreachable))
 
     action = plugin._create_model_action('m')
     request = ModelRequest(

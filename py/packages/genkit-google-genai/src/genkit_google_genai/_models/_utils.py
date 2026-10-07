@@ -52,11 +52,11 @@ import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, cast
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit, urlunsplit
 
 from google import genai
 
-from genkit import Part
+from genkit import GenkitError, Part
 from genkit.model import ToolRequest, ToolResponse
 from genkit.plugin_api import get_cached_client
 
@@ -487,6 +487,9 @@ class PartConverter:
     async def _download_image(cls, url: str) -> tuple[bytes, str | None]:
         """Downloads media content from a URL and returns raw bytes with MIME type.
 
+        Redirects are followed and private or loopback addresses are not
+        blocked, so apps that pass end-user URLs here should vet them first.
+
         Args:
             url: The URL to download.
 
@@ -494,6 +497,7 @@ class PartConverter:
             A tuple containing the content (bytes) and its MIME type (str or None).
 
         Raises:
+            GenkitError: INVALID_ARGUMENT if the body is larger than 20MB.
             httpx.HTTPStatusError: If the server returns an error status code.
         """
         client = get_cached_client(
@@ -501,6 +505,26 @@ class PartConverter:
             headers=cls._DOWNLOAD_HEADERS,
             follow_redirects=True,
         )
-        response = await client.get(url, timeout=60.0)
-        response.raise_for_status()
-        return response.content, response.headers.get('content-type')
+        async with client.stream('GET', url, timeout=60.0) as response:
+            response.raise_for_status()
+            declared = response.headers.get('content-length', '')
+            if declared.isdigit() and int(declared) > _MAX_MEDIA_DOWNLOAD_BYTES:
+                raise _media_too_large(url)
+            body = bytearray()
+            async for chunk in response.aiter_bytes():
+                body.extend(chunk)
+                if len(body) > _MAX_MEDIA_DOWNLOAD_BYTES:
+                    raise _media_too_large(url)
+            return bytes(body), response.headers.get('content-type')
+
+
+# A truncated image or video is a corrupt file, so a URL over the cap fails
+# instead of sending the first 20MB.
+_MAX_MEDIA_DOWNLOAD_BYTES = 20 * 1024 * 1024
+
+
+def _media_too_large(url: str) -> GenkitError:
+    # Signed URLs carry credentials in the query string, so the message only names host and path.
+    parts = urlsplit(url)
+    where = urlunsplit((parts.scheme, parts.netloc.rpartition('@')[2], parts.path, '', ''))
+    return GenkitError(status='INVALID_ARGUMENT', message=f'media at {where} is larger than 20MB')
