@@ -65,6 +65,7 @@ from genkit._ai._prompt import (
     ExecutablePrompt,
     GenerateCall,
     ModelStreamResponse,
+    check_prompt_registered,
     define_helper,
     define_partial,
     define_schema,
@@ -817,7 +818,16 @@ class Genkit:
         input_schema: type[InputT] | None = None,
         output_schema: type[OutputT] | None = None,
     ) -> ExecutablePrompt[InputT, OutputT] | ExecutablePrompt[Any, Any]:
-        """Look up a prompt by name and optional variant."""
+        """Look up a prompt by name and optional variant.
+
+        The name is checked right away, so a typo fails where you wrote it
+        instead of on the first request. Define a prompt before looking it up.
+
+        Raises:
+            GenkitError: NOT_FOUND if no prompt with this name and variant is
+                registered yet.
+        """
+        check_prompt_registered(self.registry, name=name, variant=variant)
         return ExecutablePrompt(
             registry=self.registry,
             name=name,

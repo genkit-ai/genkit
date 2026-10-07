@@ -1208,6 +1208,19 @@ def _transform_prompt_metadata(
     }
 
 
+def _read_prompt_file(file_path: Path) -> str:
+    # a file we can't read is as broken as one we can't parse, so it stops
+    # startup with its path instead of silently dropping the rest of the folder.
+    try:
+        with file_path.open(encoding='utf-8') as f:
+            return f.read()
+    except (OSError, UnicodeDecodeError) as e:
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f'Failed to read prompt file {file_path}: {e}',
+        ) from e
+
+
 def load_prompt(registry: Registry, path: Path, filename: str, prefix: str = '', ns: str = '') -> None:
     """Load a .prompt file and register it as a lazy-loaded prompt."""
     if not filename.endswith('.prompt'):
@@ -1224,10 +1237,17 @@ def load_prompt(registry: Registry, path: Path, filename: str, prefix: str = '',
 
     file_path = path / (prefix.rstrip('/') + '/' + filename if prefix else filename)
 
-    with Path(file_path).open(encoding='utf-8') as f:
-        source = f.read()
+    source = _read_prompt_file(file_path)
 
-    parsed_prompt = registry.dotprompt.parse(source)
+    try:
+        parsed_prompt = registry.dotprompt.parse(source)
+    except Exception as e:
+        # a broken file should stop the deploy with a pointer to it, not
+        # quietly leave its prompt (and the rest of the folder) unregistered.
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f'Failed to parse prompt file {file_path}: {e}',
+        ) from e
     registry_key = registry_definition_key(name, variant, ns)
 
     # Memoized prompt instance
@@ -1320,15 +1340,23 @@ def load_prompt_folder_recursively(registry: Registry, dir_path: Path, ns: str, 
     if not full_path.exists() or not full_path.is_dir():
         return
 
-    # Iterate through directory entries
+    # a folder we can't list would silently drop every prompt inside it, so
+    # it stops startup with its path, same as a file we can't read.
     try:
-        for entry in os.scandir(full_path):
+        entries = list(os.scandir(full_path))
+    except OSError as e:
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f'Failed to list prompt folder {full_path}: {e}',
+        ) from e
+
+    try:
+        for entry in entries:
             if entry.is_file() and entry.name.endswith('.prompt'):
                 if entry.name.startswith('_'):
                     # This is a partial
                     partial_name = entry.name[1:-7]  # Remove "_" prefix and ".prompt" suffix
-                    with Path(entry.path).open(encoding='utf-8') as f:
-                        source = f.read()
+                    source = _read_prompt_file(Path(entry.path))
 
                     # Strip frontmatter if present
                     if source.startswith('---'):
@@ -1346,8 +1374,8 @@ def load_prompt_folder_recursively(registry: Registry, dir_path: Path, ns: str, 
                 # Recursively process subdirectories
                 new_sub_dir = os.path.join(sub_dir, entry.name) if sub_dir else entry.name
                 load_prompt_folder_recursively(registry, dir_path, ns, new_sub_dir)
-    except PermissionError:
-        logger.warning(f'Permission denied accessing directory: {full_path}')
+    except GenkitError:
+        raise
     except Exception as e:
         logger.exception(f'Error loading prompts from {full_path}', exc_info=e)
 
@@ -1362,16 +1390,21 @@ def load_prompt_folder(registry: Registry, dir_path: str | Path = './prompts', n
         registry: The registry to register prompts in.
         dir_path: Path to the prompts directory. Defaults to './prompts'.
         ns: Namespace for prompts. Defaults to 'dotprompt'.
+
+    Raises:
+        GenkitError: INVALID_ARGUMENT if the path is missing or isn't a
+            directory, if a folder in it can't be listed, or if a
+            ``.prompt`` file in it can't be read or fails to parse.
     """
     path = Path(dir_path).resolve()
 
+    # a path you passed on purpose that loads nothing is always a typo, so it
+    # fails here rather than as NOT_FOUND on the first request.
     if not path.exists():
-        logger.warning(f'Prompt directory does not exist: {path}')
-        return
+        raise GenkitError(status='INVALID_ARGUMENT', message=f'Prompt directory not found: {path}')
 
     if not path.is_dir():
-        logger.warning(f'Prompt path is not a directory: {path}')
-        return
+        raise GenkitError(status='INVALID_ARGUMENT', message=f'Prompt path is not a directory: {path}')
 
     load_prompt_folder_recursively(registry, path, ns, '')
     logger.info(f'Loaded prompts from directory: {path}')
@@ -1417,12 +1450,30 @@ async def lookup_prompt(registry: Registry, name: str, variant: str | None = Non
             message=f'Prompt action found but no ExecutablePrompt available for {name}',
         )
 
+    raise prompt_not_found_error(name=name, variant=variant)
+
+
+def prompt_not_found_error(*, name: str, variant: str | None) -> GenkitError:
+    """The error a caller gets for a prompt name (or variant) nobody registered."""
     variant_str = f' (variant {variant})' if variant else ''
-    raise GenkitError(
+    return GenkitError(
         status='NOT_FOUND',
         message=f'Prompt {name}{variant_str} not found',
         reason=RuntimeErrorReason.ACTION_NOT_FOUND,
     )
+
+
+def check_prompt_registered(registry: Registry, *, name: str, variant: str | None) -> None:
+    """Raise NOT_FOUND unless a prompt with this name and variant is already registered.
+
+    Only sees prompts that exist right now (``define_prompt`` calls and the
+    loaded prompt directory), so a prompt has to be defined before it's
+    looked up.
+    """
+    for ns in (None, 'dotprompt'):
+        if registry.registered_action(ActionKind.PROMPT, registry_definition_key(name, variant, ns)) is not None:
+            return
+    raise prompt_not_found_error(name=name, variant=variant)
 
 
 async def prompt(
