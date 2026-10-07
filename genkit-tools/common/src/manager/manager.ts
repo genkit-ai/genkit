@@ -40,6 +40,7 @@ import {
   type DevToolsInfo,
 } from '../utils/utils';
 import { ProcessManager } from './process-manager';
+import { REFLECTION_SECRET_HEADER, secretForRuntime } from './reflection-auth';
 import {
   GenkitToolsError,
   RuntimeEvent,
@@ -66,6 +67,14 @@ export interface RuntimeManagerOptions {
   experimentalReflectionV2?: boolean;
   /** Reflection V2 Port */
   reflectionV2Port?: number;
+  /** Interface the Reflection V2 server binds. Defaults to `127.0.0.1`. */
+  reflectionV2Host?: string;
+  /**
+   * Shared secret for the reflection API. v1: sent as
+   * `x-genkit-reflection-secret` to runtimes that don't advertise their own.
+   * v2: required in every runtime's `register`. Undefined disables auth.
+   */
+  reflectionSecret?: string;
 }
 
 export abstract class BaseRuntimeManager {
@@ -285,6 +294,12 @@ export abstract class BaseRuntimeManager {
    * Handles an HTTP error.
    */
   protected httpErrorHandler(error: AxiosError, message?: string): never {
+    // Only runtime reflection servers answer 401 (the body is empty by
+    // design), so explain the secret mismatch instead of a bare failure.
+    if (error.response?.status === 401) {
+      throw new GenkitToolsError(unauthorizedMessage());
+    }
+
     const newError = new GenkitToolsError(message || 'Internal Error');
 
     if (error.response) {
@@ -318,13 +333,17 @@ export class RuntimeManager extends BaseRuntimeManager {
   private eventEmitter = new EventEmitter();
   private watchers: chokidar.FSWatcher[] = [];
   private healthCheckInterval?: NodeJS.Timeout;
+  // Secrets advertised in discovery files, by runtime ID. Kept out of
+  // RuntimeInfo because RuntimeInfo is served to the Dev UI browser.
+  private runtimeSecrets: Record<string, string> = {};
 
   private constructor(
     telemetryServerUrl: string | undefined,
     private manageHealth: boolean,
     projectRoot: string,
     processManager?: ProcessManager,
-    disableRealtimeTelemetry?: boolean
+    disableRealtimeTelemetry?: boolean,
+    private readonly reflectionSecret?: string
   ) {
     super(
       telemetryServerUrl,
@@ -350,7 +369,8 @@ export class RuntimeManager extends BaseRuntimeManager {
       options.manageHealth ?? true,
       options.projectRoot,
       options.processManager,
-      options.disableRealtimeTelemetry
+      options.disableRealtimeTelemetry,
+      options.reflectionSecret
     );
     await manager.setupRuntimesWatcher();
     await manager.setupDevUiWatcher();
@@ -459,7 +479,9 @@ export class RuntimeManager extends BaseRuntimeManager {
       );
     }
     const response = await axios
-      .get(`${runtime.reflectionServerUrl}/api/actions`)
+      .get(`${runtime.reflectionServerUrl}/api/actions`, {
+        headers: this.authHeaders(runtime),
+      })
       .catch((err) => this.httpErrorHandler(err, 'Error listing actions.'));
     return response.data as Record<string, Action>;
   }
@@ -487,6 +509,7 @@ export class RuntimeManager extends BaseRuntimeManager {
           params: {
             type: input.type,
           },
+          headers: this.authHeaders(runtime),
         }
       );
       return response.data as Record<string, unknown>;
@@ -529,6 +552,7 @@ export class RuntimeManager extends BaseRuntimeManager {
           {
             headers: {
               'Content-Type': 'application/json',
+              ...this.authHeaders(runtime),
             },
             responseType: 'stream',
           }
@@ -608,6 +632,7 @@ export class RuntimeManager extends BaseRuntimeManager {
         .post(`${runtime.reflectionServerUrl}/api/runAction`, input, {
           headers: {
             'Content-Type': 'application/json',
+            ...this.authHeaders(runtime),
           },
           responseType: 'stream', // Use stream to get early headers
         })
@@ -698,6 +723,7 @@ export class RuntimeManager extends BaseRuntimeManager {
         {
           headers: {
             'Content-Type': 'application/json',
+            ...this.authHeaders(runtime),
           },
         }
       );
@@ -723,13 +749,34 @@ export class RuntimeManager extends BaseRuntimeManager {
    */
   private async notifyRuntime(runtime: RuntimeInfo) {
     try {
-      await axios.post(`${runtime.reflectionServerUrl}/api/notify`, {
-        telemetryServerUrl: this.telemetryServerUrl,
-        reflectionApiSpecVersion: GENKIT_REFLECTION_API_SPEC_VERSION,
-      });
+      await axios.post(
+        `${runtime.reflectionServerUrl}/api/notify`,
+        {
+          telemetryServerUrl: this.telemetryServerUrl,
+          reflectionApiSpecVersion: GENKIT_REFLECTION_API_SPEC_VERSION,
+        },
+        { headers: this.authHeaders(runtime) }
+      );
     } catch (error) {
+      if ((error as AxiosError).response?.status === 401) {
+        logger.error(unauthorizedMessage(runtime));
+        return;
+      }
       logger.error(`Failed to notify runtime ${runtime.id}: ${error}`);
     }
+  }
+
+  /**
+   * Reflection auth header for a runtime (see {@link secretForRuntime}). Old
+   * runtimes ignore the header.
+   */
+  private authHeaders(runtime: RuntimeInfo): Record<string, string> {
+    const secret = secretForRuntime(
+      runtime.reflectionServerUrl,
+      this.runtimeSecrets[runtime.id],
+      this.reflectionSecret
+    );
+    return secret ? { [REFLECTION_SECRET_HEADER]: secret } : {};
   }
 
   /**
@@ -839,12 +886,17 @@ export class RuntimeManager extends BaseRuntimeManager {
         // file already got deleted, ignore...
         return;
       }
-      const { content, runtimeInfo } = await retriable(
+      const { runtimeInfo, reflectionSecret } = await retriable(
         async () => {
           const content = await fs.readFile(filePath, 'utf-8');
-          const runtimeInfo = JSON.parse(content) as RuntimeInfo;
+          // Dev runtimes advertise the secret they enforce so any local CLI
+          // process can reach them. Split it off here so RuntimeInfo, which
+          // is emitted in events and served to the Dev UI, never carries it.
+          const { reflectionSecret, ...runtimeInfo } = JSON.parse(
+            content
+          ) as RuntimeFileData;
           runtimeInfo.projectName = projectNameFromGenkitFilePath(filePath);
-          return { content, runtimeInfo };
+          return { runtimeInfo, reflectionSecret };
         },
         { maxRetries: 10, delayMs: 500 }
       );
@@ -881,6 +933,11 @@ export class RuntimeManager extends BaseRuntimeManager {
               process.exit(1);
             }
           }
+          // Only stored for tracked runtimes, so handleRemovedRuntime cleans it
+          // up. The health check above does not need it.
+          if (typeof reflectionSecret === 'string' && reflectionSecret) {
+            this.runtimeSecrets[runtimeInfo.id] = reflectionSecret;
+          }
           this.filenameToRuntimeMap[fileName] = runtimeInfo;
           this.idToFileMap[runtimeInfo.id] = fileName;
           this.eventEmitter.emit(RuntimeEvent.ADD, runtimeInfo);
@@ -892,10 +949,20 @@ export class RuntimeManager extends BaseRuntimeManager {
           await this.removeRuntime(fileName);
         }
       } else {
-        logger.error(`Unexpected file in the runtimes directory: ${content}`);
+        // Never log the raw file: it may carry reflectionSecret.
+        logger.error(
+          `Unexpected file in the runtimes directory: ${path.basename(filePath)} ` +
+            `(fields: ${Object.keys(runtimeInfo).join(', ') || 'none'})`
+        );
       }
     } catch (error) {
-      logger.error(`Error processing file ${filePath}:`, error);
+      // V8 quotes part of the input in JSON SyntaxErrors, which could expose
+      // the secret from a truncated or corrupt runtime file.
+      if (error instanceof SyntaxError) {
+        logger.error(`Error processing file ${filePath}: invalid JSON.`);
+      } else {
+        logger.error(`Error processing file ${filePath}:`, error);
+      }
     }
   }
 
@@ -908,6 +975,7 @@ export class RuntimeManager extends BaseRuntimeManager {
       const runtime = this.filenameToRuntimeMap[fileName];
       delete this.filenameToRuntimeMap[fileName];
       delete this.idToFileMap[runtime.id];
+      delete this.runtimeSecrets[runtime.id];
       this.eventEmitter.emit(RuntimeEvent.REMOVE, runtime);
       logger.debug(`Removed runtime with id ${runtime.id}.`);
     }
@@ -993,6 +1061,20 @@ export class RuntimeManager extends BaseRuntimeManager {
     }
     logger.debug(`Removed unhealthy runtime ${fileName} from manager.`);
   }
+}
+
+/** On-disk shape of a runtime discovery file. */
+type RuntimeFileData = RuntimeInfo & { reflectionSecret?: string };
+
+/** Explains a 401 from a runtime's reflection API and how to fix it. */
+function unauthorizedMessage(runtime?: RuntimeInfo): string {
+  const who = runtime ? `Runtime ${runtime.id}` : 'The runtime';
+  return (
+    `${who} rejected the reflection secret. It was started with a ` +
+    'GENKIT_REFLECTION_SECRET_TOKEN this CLI does not know. Set the same ' +
+    'GENKIT_REFLECTION_SECRET_TOKEN for the CLI, or restart the runtime ' +
+    'through this CLI (e.g. `genkit start -- ...`).'
+  );
 }
 
 /**

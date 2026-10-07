@@ -33,7 +33,7 @@ from genkit._core._action import ActionRunContext
 from genkit._core._model import AgentInput, AgentResult, Message, SessionState
 from genkit._core._registry import Registry
 from genkit._core._telemetry._attrs import Attr, metadata_key
-from genkit._core._telemetry.http import ActiveSpan
+from genkit._core._telemetry._http import ActiveSpan
 from genkit.exp.agent import AgentFinishReason, InMemorySessionStore
 
 UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I)

@@ -20,22 +20,23 @@
 from typing import Literal, TypeAlias
 
 from genkit.model import ModelInfo, Supports
-from genkit_openai._typing import SupportedOutputFormat
 
+# 'json' in output means the endpoint accepts schema-less JSON mode.
 MULTIMODAL_MODEL_SUPPORTS = Supports(
     multiturn=True,
     media=True,
     tools=True,
     system_role=True,
-    output=[SupportedOutputFormat.JSON_MODE, SupportedOutputFormat.STRUCTURED_OUTPUTS, SupportedOutputFormat.TEXT],
+    output=['json', 'text'],
 )
 
+# gpt-4's endpoint rejects schema-less JSON mode, so output lists only 'text'.
 GPT_4_MODEL_SUPPORTS = Supports(
     multiturn=True,
     media=False,
     tools=True,
     system_role=True,
-    output=[SupportedOutputFormat.TEXT],
+    output=['text'],
 )
 
 GPT_35_MODEL_SUPPORTS = Supports(
@@ -43,7 +44,7 @@ GPT_35_MODEL_SUPPORTS = Supports(
     media=False,
     tools=True,
     system_role=True,
-    output=[SupportedOutputFormat.JSON_MODE, SupportedOutputFormat.TEXT],
+    output=['json', 'text'],
 )
 
 O_SERIES_MODEL_SUPPORTS = Supports(
@@ -51,7 +52,7 @@ O_SERIES_MODEL_SUPPORTS = Supports(
     media=True,
     tools=True,
     system_role=False,
-    output=[SupportedOutputFormat.JSON_MODE, SupportedOutputFormat.TEXT],
+    output=['json', 'text'],
 )
 
 GPT_5_MODEL_SUPPORTS = Supports(
@@ -59,7 +60,7 @@ GPT_5_MODEL_SUPPORTS = Supports(
     media=True,
     tools=True,
     system_role=True,
-    output=[SupportedOutputFormat.JSON_MODE, SupportedOutputFormat.TEXT],
+    output=['json', 'text'],
 )
 
 GPT_OSS_MODEL_SUPPORTS = Supports(
@@ -67,7 +68,7 @@ GPT_OSS_MODEL_SUPPORTS = Supports(
     media=False,
     tools=True,
     system_role=True,
-    output=[SupportedOutputFormat.JSON_MODE, SupportedOutputFormat.TEXT],
+    output=['json', 'text'],
 )
 
 # Quote autocomplete needs a Literal. The catalog below is what you edit when
@@ -144,7 +145,7 @@ SUPPORTED_OPENAI_MODELS: dict[KnownGpt, ModelInfo] = {
             media=False,
             tools=True,
             system_role=False,
-            output=[SupportedOutputFormat.JSON_MODE, SupportedOutputFormat.TEXT],
+            output=['json', 'text'],
         ),
     ),
     'o4-mini': ModelInfo(label='OpenAI - o4-mini', supports=O_SERIES_MODEL_SUPPORTS),
@@ -159,7 +160,7 @@ SUPPORTED_OPENAI_MODELS: dict[KnownGpt, ModelInfo] = {
             media=True,
             tools=False,
             system_role=True,
-            output=[SupportedOutputFormat.TEXT],
+            output=['text'],
         ),
     ),
     'gpt-5.1': ModelInfo(label='OpenAI - gpt-5.1', supports=GPT_5_MODEL_SUPPORTS),
@@ -174,7 +175,7 @@ SUPPORTED_OPENAI_MODELS: dict[KnownGpt, ModelInfo] = {
             media=True,
             tools=False,
             system_role=True,
-            output=[SupportedOutputFormat.JSON_MODE, SupportedOutputFormat.TEXT],
+            output=['json', 'text'],
         ),
     ),
     # --- OSS models (hosted) ---

@@ -21,7 +21,7 @@ import json
 import logging
 
 import pytest
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from genkit_fastapi import genkit_fastapi_handler, serve_flow
 from pydantic import BaseModel
@@ -121,6 +121,26 @@ def test_unknown_body_shape_still_returns_400() -> None:
         'message': 'Action request must be wrapped in {"data": ...} object',
         'status': 'INVALID_ARGUMENT',
     }
+
+
+def test_serve_flow_message_body_is_rejected_as_bad_request() -> None:
+    """POST {"message": "hi"} to a flow route is 400, not a 500 from inside the flow."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def greet(name: str) -> str:
+        return f'Hi {name}'
+
+    app = FastAPI()
+    app.include_router(serve_flow(greet, base_path='/greet'))
+    client = TestClient(app)
+
+    response = client.post('/greet', json={'message': 'hi'})
+
+    assert response.status_code == 400
+    parsed = json.loads(response.text)
+    assert_is_error_response(parsed)
+    assert 'must be wrapped in {"data": ...}' in parsed['message']
 
 
 def test_500_flow_exception_returns_valid_json() -> None:
@@ -434,6 +454,25 @@ def test_served_flow_provider_failure_logs_traceback(caplog: pytest.LogCaptureFi
     assert any(record.exc_info for record in caplog.records)
 
 
+def test_served_flow_client_error_logs_one_warning_without_traceback(caplog: pytest.LogCaptureFixture) -> None:
+    """A 4xx on a served flow is the caller's mistake: one warning, no traceback."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def lookup_order(_: str) -> str:
+        raise PublicError('NOT_FOUND', 'order not found')
+
+    app = FastAPI()
+    app.include_router(serve_flow(lookup_order, base_path='/orders'))
+    with caplog.at_level(logging.DEBUG, logger='genkit_fastapi.handler'):
+        response = TestClient(app).post('/orders', json={'data': 'A-1001'})
+
+    records = [record for record in caplog.records if record.name == 'genkit_fastapi.handler']
+    assert response.status_code == 404
+    assert [record.levelno for record in records] == [logging.WARNING]
+    assert records[0].exc_info is None
+
+
 def test_fastapi_stream_provider_401_sends_sse_internal_error() -> None:
     """A streamed flow whose model call fails with a provider 401 ends with Internal Error."""
     ai = Genkit()
@@ -567,3 +606,28 @@ def test_fastapi_handler_wrapper_returning_non_action_returns_json_internal_erro
 
     assert response.status_code == 500
     assert response.json() == {'message': 'Internal Error', 'status': 'INTERNAL'}
+
+
+def test_fastapi_context_provider_http_exception_keeps_its_status() -> None:
+    """An HTTPException from context_provider is the app's own response, not a 500."""
+    ai = Genkit()
+
+    def require_token(_request: RequestData) -> dict[str, object]:
+        raise HTTPException(status_code=401, detail='no token', headers={'WWW-Authenticate': 'Bearer'})
+
+    @ai.flow()
+    async def chat(_: str) -> str:
+        return 'ok'
+
+    app = FastAPI()
+
+    @app.post('/chat', response_model=None)
+    @genkit_fastapi_handler(ai, context_provider=require_token)
+    async def chat_route():
+        return chat
+
+    response = TestClient(app).post('/chat', json={'data': 'x'})
+
+    assert response.status_code == 401
+    assert response.json() == {'detail': 'no token'}
+    assert response.headers['www-authenticate'] == 'Bearer'

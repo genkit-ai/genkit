@@ -1,7 +1,7 @@
 # Copyright 2025 Google LLC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for tool restart builder and run_tool_after_restart."""
+"""Tests for Part.restart, Part.respond, and run_tool_after_restart."""
 
 import pytest
 
@@ -11,9 +11,7 @@ from genkit._ai._tools import (
     ToolRunContext,
     _tool_original_input,
     _tool_resumed_metadata,
-    respond_to_interrupt,
     restart_interrupt_error,
-    restart_tool,
     run_tool_after_restart,
 )
 from genkit._core._error import GenkitError, RuntimeErrorReason
@@ -26,11 +24,11 @@ async def _echo_tool(x: object) -> object:
 
 
 def test_restart_sets_resumed_metadata_and_preserves_interrupt() -> None:
-    """``restart_tool``: copy interrupt metadata, set ``resumed``; ``interrupt`` stays on the restart TRP."""
+    """``Part.restart``: copy interrupt metadata, set ``resumed``; ``interrupt`` stays on the restart TRP."""
     interrupt_trp = Part.from_tool_request(
         name='pay', ref='r1', input={'amount': 10}, metadata={'interrupt': {'reason': 'hold'}}
     )
-    out = restart_tool(interrupt=interrupt_trp, resumed_metadata={'k': 'v'})
+    out = interrupt_trp.restart(resumed_metadata={'k': 'v'})
     assert type(out) is Part
     assert out.metadata is not None
     assert out.metadata.get('resumed') == {'k': 'v'}
@@ -42,7 +40,7 @@ def test_restart_sets_resumed_metadata_and_preserves_interrupt() -> None:
 def test_restart_replace_input_sets_replaced_input() -> None:
     """Restart with new input sets ``replacedInput`` to prior input and updates ``tool_request.input``."""
     interrupt_trp = Part.from_tool_request(name='pay', ref='r1', input={'amount': 10}, metadata={'interrupt': True})
-    out = restart_tool(replace_input={'amount': 99}, interrupt=interrupt_trp, resumed_metadata={'by': 'u'})
+    out = interrupt_trp.restart(replace_input={'amount': 99}, resumed_metadata={'by': 'u'})
     assert type(out) is Part
     assert out.metadata is not None
     assert out.metadata.get('replacedInput') == {'amount': 10}
@@ -53,9 +51,9 @@ def test_restart_replace_input_sets_replaced_input() -> None:
 
 
 def test_restart_resumed_defaults_to_true() -> None:
-    """When ``resumed_metadata=None``, restart TRP sets ``metadata.resumed`` to True."""
+    """When ``resumed_metadata`` is omitted, restart sets ``metadata.resumed`` to True."""
     interrupt_trp = Part.from_tool_request(name='pay', ref='r1', input={}, metadata={'interrupt': True})
-    out = restart_tool(interrupt=interrupt_trp, resumed_metadata=None)
+    out = interrupt_trp.restart(resumed_metadata=None)
     assert type(out) is Part
     assert out.metadata is not None
     assert out.metadata.get('resumed') is True
@@ -197,8 +195,8 @@ async def test_run_tool_after_restart_nested_interrupt_includes_reason() -> None
     assert isinstance(ei.value.cause, Interrupt)
 
 
-def test_respond_to_interrupt_wire_format_basic() -> None:
-    """respond_to_interrupt produces a Part with matching ref/name and interruptResponse metadata."""
+def test_respond_wire_format_basic() -> None:
+    """Part.respond produces a Part with matching ref/name and interruptResponse metadata."""
     interrupt_trp = Part.from_tool_request(
         name='ask_user',
         ref='ref-abc',
@@ -206,7 +204,7 @@ def test_respond_to_interrupt_wire_format_basic() -> None:
         metadata={'interrupt': {'reason': 'needs_approval'}},
     )
 
-    result = respond_to_interrupt('yes', interrupt=interrupt_trp)
+    result = interrupt_trp.respond('yes')
 
     assert type(result) is Part
     assert result.tool_response is not None
@@ -217,11 +215,11 @@ def test_respond_to_interrupt_wire_format_basic() -> None:
     assert result.metadata.get('interruptResponse') is True
 
 
-def test_respond_to_interrupt_wire_format_with_metadata() -> None:
-    """respond_to_interrupt attaches custom metadata under interruptResponse key."""
+def test_respond_wire_format_with_metadata() -> None:
+    """Part.respond attaches custom metadata under interruptResponse key."""
     interrupt_trp = Part.from_tool_request(name='confirm', ref='ref-xyz', input={}, metadata={'interrupt': True})
 
-    result = respond_to_interrupt({'approved': True}, interrupt=interrupt_trp, metadata={'by': 'admin'})
+    result = interrupt_trp.respond({'approved': True}, metadata={'by': 'admin'})
 
     assert result.tool_response is not None
     assert result.tool_response.ref == 'ref-xyz'
@@ -230,12 +228,12 @@ def test_respond_to_interrupt_wire_format_with_metadata() -> None:
     assert result.metadata.get('interruptResponse') == {'by': 'admin'}
 
 
-def test_restart_tool_directly() -> None:
-    """``restart_tool`` works directly without a ``Tool`` reference."""
+def test_restart_directly() -> None:
+    """``Part.restart`` works directly without a ``Tool`` reference."""
     interrupt_trp = Part.from_tool_request(
         name='middleware_tool', ref='r1', input={'p': 1}, metadata={'interrupt': True}
     )
-    out = restart_tool(interrupt=interrupt_trp, resumed_metadata={'tool_approved': True})
+    out = interrupt_trp.restart(resumed_metadata={'tool_approved': True})
 
     assert out.tool_request is not None
     assert out.tool_request.name == 'middleware_tool'
@@ -245,11 +243,11 @@ def test_restart_tool_directly() -> None:
 
 
 def test_restart_preserves_ref_on_wire() -> None:
-    """``restart_tool`` preserves the original tool_request.ref so the resumed TRP can be correlated."""
+    """``Part.restart`` preserves the original tool_request.ref so the resumed TRP can be correlated."""
     interrupt_trp = Part.from_tool_request(
         name='pay', ref='corr-id-1', input={'amount': 50}, metadata={'interrupt': True}
     )
-    out = restart_tool(interrupt=interrupt_trp)
+    out = interrupt_trp.restart()
 
     assert out.tool_request is not None
     assert out.tool_request.ref == 'corr-id-1'
