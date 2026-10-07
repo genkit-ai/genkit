@@ -397,7 +397,9 @@ class OpenAI(Plugin):
         model_info = self.get_model_info(clean_name) or {}
 
         async def _generate(request: ModelRequest[OpenAIConfig], ctx: ActionRunContext) -> ModelResponse:
-            openai_model = OpenAIModelHandler(OpenAIModel(clean_name, self._runtime_client()))
+            catalog = SUPPORTED_OPENAI_MODELS.get(cast(KnownGpt, clean_name))
+            supports = catalog.supports if catalog is not None else get_default_openai_model_info(clean_name).supports
+            openai_model = OpenAIModelHandler(OpenAIModel(clean_name, self._runtime_client(), supports=supports))
             return await openai_model.generate(request, ctx)
 
         return create_model(

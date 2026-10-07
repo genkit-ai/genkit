@@ -30,52 +30,13 @@ from pydantic import BaseModel
 
 from genkit import ContextProvider, Genkit, GenkitError, PublicError, RequestData
 from genkit._core._error import log_served_failure, served_error_json, served_stream_error_event
-from genkit.exp.agent import Agent, SessionSnapshot
-from genkit.plugin_api import Action, ActionKind
+from genkit.plugin_api import Action
 
 logger = logging.getLogger(__name__)
-
-
-def parse_snapshot_lookup_input(input_val: dict[str, Any] | str | None) -> tuple[str | None, str | None]:
-    """Parse snapshot lookup params from payload dict or bare snapshot ID string."""
-    if isinstance(input_val, str):
-        return input_val, None
-    if isinstance(input_val, dict):
-        sid = input_val.get('snapshotId') or input_val.get('snapshot_id')
-        sess_id = input_val.get('sessionId') or input_val.get('session_id')
-        if bool(sid) == bool(sess_id):
-            raise GenkitError(
-                status='INVALID_ARGUMENT',
-                message=(
-                    "getSnapshot requires exactly one of 'snapshotId' (or 'snapshot_id') "
-                    "or 'sessionId' (or 'session_id')."
-                ),
-            )
-        return sid, sess_id
-    raise GenkitError(
-        status='INVALID_ARGUMENT',
-        message='getSnapshot input must be a dictionary or snapshot ID string.',
-    )
-
-
-def parse_abort_input(input_val: dict[str, Any] | str | None) -> str:
-    """Parse snapshot ID from payload dict or bare snapshot ID string."""
-    if isinstance(input_val, str):
-        return input_val
-    if isinstance(input_val, dict):
-        sid = input_val.get('snapshotId') or input_val.get('snapshot_id')
-        if sid:
-            return sid
-    raise GenkitError(
-        status='INVALID_ARGUMENT',
-        message="abort requires 'snapshotId' (or 'snapshot_id') in input.",
-    )
-
 
 # Compact JSON (no spaces) for smaller wire payload.
 JSON_SEPARATORS = (',', ':')
 
-StateT = TypeVar('StateT', bound=BaseModel)
 InputT = TypeVar('InputT')
 OutputT = TypeVar('OutputT')
 ChunkT = TypeVar('ChunkT')
@@ -117,36 +78,19 @@ async def _read_json_request_body(*, request: Request) -> object:
 
 
 def extract_action_input(body: dict[str, Any]) -> object:
-    """Extract action input payload from supported wire formats."""
+    """Extract action input from the stable ``data`` / ``input`` / ``{}`` envelopes."""
     if 'data' in body:
         return body['data']
     if 'input' in body:
         return body['input']
-    if 'message' in body:
-        return {'message': {'role': 'user', 'content': [{'text': str(body['message'])}]}}
-    if 'snapshotId' in body or 'sessionId' in body:
-        return body
     # Callable clients omit ``data`` when runFlow has no input (POST ``{}``).
-    # Match Express: ``request.body.data`` is undefined, not a wire error.
+    # A missing wrapper is not a wire error; the action decides if input is required.
     if not body:
         return None
     raise PublicError(
         'INVALID_ARGUMENT',
         'Action request must be wrapped in {"data": ...} object',
     )
-
-
-def resolve_session_init(body: dict[str, Any], query_params: Mapping[str, str]) -> object:
-    """Resolve per-run init data, injecting session_id from query parameters if present."""
-    init = body.get('init')
-    query_session_id = query_params.get('session_id') or query_params.get('thread_id')
-    if not query_session_id:
-        return init
-    if isinstance(init, dict) and not init.get('session_id') and not init.get('sessionId'):
-        return {**init, 'session_id': query_session_id}
-    if init is None:
-        return {'session_id': query_session_id}
-    return init
 
 
 def wants_stream(request: Request) -> bool:
@@ -181,27 +125,44 @@ async def handle_genkit_request(
 ) -> Response | dict[str, Any]:
     """Run one Genkit action request and return its FastAPI response.
 
-    This is the wire contract every route sits on. It reads the JSON body in
-    whichever shape the client sends (``data`` / ``input`` / ``message``, or a
-    snapshot/session lookup), threads ``init`` (an agent's session identity), and
-    then either streams SSE frames — ``data: {"message": ...}`` chunks followed by
-    a final ``data: {"result": ...}`` — or returns a one-shot ``{"result": ...}``.
+    This is the wire contract every stable route sits on. It reads ``data`` /
+    ``input`` / ``{}`` plus body ``init``, then either streams SSE frames —
+    ``data: {"message": ...}`` chunks followed by a final ``data: {"result": ...}``
+    — or returns a one-shot ``{"result": ...}``.
 
     ``context`` and ``init`` are handed straight to the action, so you can resolve
-    auth, session identity, and per-request state however you like and pass them in.
-    That makes this the escape hatch for full control: write your own ``@app.post``
-    endpoint with any ``Depends(...)`` params you need, build context and init, and
-    call this to get the exact Genkit wire format without re-implementing it.
+    auth and per-request state however you like and pass them in. That makes this
+    the escape hatch for full control: write your own ``@app.post`` endpoint with
+    any ``Depends(...)`` params you need, build context and init, and call this to
+    get the exact Genkit wire format without re-implementing it.
 
     Args:
         request: The incoming FastAPI request.
         action: The flow or agent action to run.
         context: Optional context dict passed through to the action.
-        init: Optional session identity / init payload passed through to the action.
+        init: Optional init payload passed through to the action.
 
     Returns:
         A streaming SSE response, a ``{"result": ...}`` dict, or an error Response.
     """
+    return await _handle_action_request(
+        request=request,
+        action=action,
+        context=context,
+        init=init,
+    )
+
+
+async def _handle_action_request(
+    *,
+    request: Request,
+    action: Action[InputT, OutputT, ChunkT, InitT],
+    context: dict[str, object] | None = None,
+    init: InitT | dict[str, Any] | None = None,
+    extract_input: Callable[[dict[str, Any]], object] | None = None,
+    resolve_init: Callable[[dict[str, Any], Mapping[str, str]], object] | None = None,
+    empty_status: int | None = None,
+) -> Response | dict[str, Any]:
     try:
         body = await _read_json_request_body(request=request)
     except PublicError as err:
@@ -217,11 +178,16 @@ async def handle_genkit_request(
     body = cast(dict[str, Any], body)
 
     try:
-        input_data = extract_action_input(body)
+        input_data = (extract_input or extract_action_input)(body)
     except GenkitError as err:
         return json_error_response(err)
 
-    resolved_init = init if init is not None else resolve_session_init(body, request.query_params)
+    if init is not None:
+        resolved_init = init
+    elif resolve_init is not None:
+        resolved_init = resolve_init(body, request.query_params)
+    else:
+        resolved_init = body.get('init')
     action_obj = cast(Action[Any, Any, Any, Any], action)
 
     if wants_stream(request):
@@ -241,8 +207,8 @@ async def handle_genkit_request(
 
     try:
         response = await action_obj.run(input_data, context=context, init=resolved_init)
-        if response.response is None and action_obj.kind == ActionKind.AGENT_SNAPSHOT:
-            return Response(status_code=404)
+        if response.response is None and empty_status is not None:
+            return Response(status_code=empty_status)
         return {'result': to_dict(response.response)}
     except Exception as e:
         log_served_failure(adapter_logger=logger, error=e, where='run')
@@ -347,6 +313,9 @@ def _mount_action(
     action: Action[InputT, OutputT, ChunkT, InitT],
     *,
     context_dependency: Callable[..., Any] | None = None,
+    extract_input: Callable[[dict[str, Any]], object] | None = None,
+    resolve_init: Callable[[dict[str, Any], Mapping[str, str]], object] | None = None,
+    empty_status: int | None = None,
 ) -> None:
     """Register one action on the router, honoring FastAPI DI when asked.
 
@@ -360,17 +329,26 @@ def _mount_action(
             request: Request,
             context: Any = Depends(context_dependency),  # noqa: ANN401, B008
         ) -> Response | dict[str, Any]:
-            return await handle_genkit_request(
-                request,
+            return await _handle_action_request(
+                request=request,
                 action=action,
                 context=context if isinstance(context, dict) else None,
+                extract_input=extract_input,
+                resolve_init=resolve_init,
+                empty_status=empty_status,
             )
 
         router.post(path, response_model=None)(endpoint_with_context)
         return
 
     async def endpoint(request: Request) -> Response | dict[str, Any]:
-        return await handle_genkit_request(request, action=action)
+        return await _handle_action_request(
+            request=request,
+            action=action,
+            extract_input=extract_input,
+            resolve_init=resolve_init,
+            empty_status=empty_status,
+        )
 
     router.post(path, response_model=None)(endpoint)
 
@@ -405,76 +383,4 @@ def serve_flow(
         flow,
         context_dependency=context_dependency,
     )
-    return router
-
-
-def serve_agent(
-    agent: Agent[StateT],
-    *,
-    base_path: str | None = None,
-    context_dependency: Callable[..., Any] | None = None,
-) -> APIRouter:
-    """Build an APIRouter serving an agent and its snapshot/abort endpoints over HTTP.
-
-    Mount the returned router like any other::
-
-        app.include_router(serve_agent(weather_agent), prefix='/api')
-
-    Args:
-        agent: The agent to serve.
-        base_path: Route path. Defaults to /<agent name>.
-        context_dependency: A FastAPI dependency whose resolved value becomes the
-            action context, applied to the turn, getSnapshot, and abort routes.
-            Use this to reuse existing ``Depends``-based auth / resources.
-
-    Returns:
-        An APIRouter with the turn route plus snapshot/abort endpoints.
-    """
-    resolved_base_path = f'/{agent.name}' if base_path is None else base_path
-    router = APIRouter(tags=[agent.name])
-
-    _mount_action(
-        router,
-        resolved_base_path,
-        agent,
-        context_dependency=context_dependency,
-    )
-
-    if agent.store is not None:
-
-        async def snapshot_fn(input_val: dict[str, Any] | str | None = None) -> SessionSnapshot | None:
-            sid, sess_id = parse_snapshot_lookup_input(input_val)
-            return await agent.get_snapshot_data(snapshot_id=sid, session_id=sess_id)
-
-        async def abort_fn(input_val: dict[str, Any] | str | None = None) -> dict[str, object]:
-            snapshot_id = parse_abort_input(input_val)
-            status = await agent.abort_snapshot_data(snapshot_id)
-            return {'snapshotId': snapshot_id, 'status': str(status) if status else None}
-
-        snapshot_action = Action(
-            kind=ActionKind.AGENT_SNAPSHOT,
-            name=f'{agent.name}_snapshot',
-            fn=snapshot_fn,
-            description=f'Gets snapshot data for {agent.name}',
-        )
-        abort_action = Action(
-            kind=ActionKind.AGENT_ABORT,
-            name=f'{agent.name}_abort',
-            fn=abort_fn,
-            description=f'Aborts {agent.name} agent by snapshotId',
-        )
-
-        _mount_action(
-            router,
-            f'{resolved_base_path}/getSnapshot',
-            snapshot_action,
-            context_dependency=context_dependency,
-        )
-        _mount_action(
-            router,
-            f'{resolved_base_path}/abort',
-            abort_action,
-            context_dependency=context_dependency,
-        )
-
     return router

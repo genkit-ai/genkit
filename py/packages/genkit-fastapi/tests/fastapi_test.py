@@ -123,6 +123,26 @@ def test_unknown_body_shape_still_returns_400() -> None:
     }
 
 
+def test_serve_flow_message_body_is_rejected_as_bad_request() -> None:
+    """POST {"message": "hi"} to a flow route is 400, not a 500 from inside the flow."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def greet(name: str) -> str:
+        return f'Hi {name}'
+
+    app = FastAPI()
+    app.include_router(serve_flow(greet, base_path='/greet'))
+    client = TestClient(app)
+
+    response = client.post('/greet', json={'message': 'hi'})
+
+    assert response.status_code == 400
+    parsed = json.loads(response.text)
+    assert_is_error_response(parsed)
+    assert 'must be wrapped in {"data": ...}' in parsed['message']
+
+
 def test_500_flow_exception_returns_valid_json() -> None:
     """500 (flow exception) must return valid JSON (not TypeError).
 

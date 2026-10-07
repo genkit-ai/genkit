@@ -33,17 +33,13 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 from genkit import Genkit
 from genkit._core._action import Action
-from genkit._core._environment import GENKIT_ENV
-from genkit._core._telemetry._instrumentation import (
-    instrumentations,
+from genkit.plugin_api import ActionKind
+from genkit.telemetry import (
+    DirectHttpInstrumentation,
+    configure_instrumentation,
     is_instrumented_by,
-    parent_path_context,
     reset_instrumentation,
 )
-from genkit._core._telemetry._log_exporter import reset_log_export
-from genkit._core._telemetry.http import GenkitBuiltinInstrumentation
-from genkit.plugin_api import ActionKind
-from genkit.telemetry import configure_instrumentation
 
 
 def _hex_id(value: str, length: int) -> bool:
@@ -98,9 +94,8 @@ def _cloud_enable(**kwargs: Any) -> Generator[InMemorySpanExporter, None, None]:
 def _isolate_telemetry(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
     """Each test starts with no providers, unset collector env, and its own tracer."""
     reset_instrumentation()
-    reset_log_export()
     _reset_google_cloud_telemetry()
-    monkeypatch.delenv(GENKIT_ENV, raising=False)
+    monkeypatch.delenv('GENKIT_ENV', raising=False)
     monkeypatch.delenv('GENKIT_TELEMETRY_SERVER', raising=False)
     monkeypatch.setattr(Genkit, '_start_reflection_background', lambda self: None)
     isolated = TracerProvider()
@@ -110,13 +105,10 @@ def _isolate_telemetry(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None,
         'genkit_google_cloud.telemetry.config.trace_api.get_tracer_provider',
         lambda: isolated,
     )
-    path_token = parent_path_context.set('')
     try:
         yield
     finally:
-        parent_path_context.reset(path_token)
         reset_instrumentation()
-        reset_log_export()
         _reset_google_cloud_telemetry()
         isolated.shutdown()
 
@@ -145,7 +137,8 @@ async def test_enable_google_cloud_telemetry_does_not_install_genai_instrumentat
         result = await action.run()
         _force_flush()
 
-        assert [i for i in instrumentations if isinstance(i, GenAiInstrumentation)] == [yours]
+        assert is_instrumented_by(GenAiInstrumentation)
+        assert yours.emit_metrics is True
         assert _hex_id(result.trace_id, 32)
         joke = [span for span in cloud.get_finished_spans() if span.name == 'joke']
         assert len(joke) == 1
@@ -185,7 +178,7 @@ async def test_enable_under_genkit_start_still_adds_the_ui_poster(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """force_dev_export=True under genkit start turns GenAI spans on; Genkit() still adds the Traces tab poster."""
-    monkeypatch.setenv(GENKIT_ENV, 'dev')
+    monkeypatch.setenv('GENKIT_ENV', 'dev')
     monkeypatch.setenv('GENKIT_TELEMETRY_SERVER', 'http://127.0.0.1:4033')
 
     with _cloud_enable(force_dev_export=True):
@@ -196,5 +189,5 @@ async def test_enable_under_genkit_start_still_adds_the_ui_poster(
     result = await action.run()
 
     assert is_instrumented_by(GenAiInstrumentation)
-    assert is_instrumented_by(GenkitBuiltinInstrumentation)
+    assert is_instrumented_by(DirectHttpInstrumentation)
     assert _hex_id(result.trace_id, 32)
