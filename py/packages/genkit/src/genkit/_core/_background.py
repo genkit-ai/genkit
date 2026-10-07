@@ -63,7 +63,7 @@ def _operation_action(
     kind: ActionKind,
     name: str,
     fn: Callable[..., Awaitable[Operation]],
-    model_name: str,
+    suffix: str = '',
     description: str,
     metadata: dict[str, object],
     config_schema: type[BaseModel] | dict[str, Any] | None = None,
@@ -74,6 +74,10 @@ def _operation_action(
     ``(ctx, request)`` and ``(request, ctx)`` both work: the wrapper forwards
     through ``params.call``. The stamp is the start action key, so a caller
     who passes the Operation back reaches the right check/cancel.
+
+    The registry may add the plugin prefix after this is built, so the key is
+    read from the name this action was registered under (minus ``suffix``,
+    e.g. ``/check``) when it runs.
     """
 
     # wraps keeps fn's annotations on the wrapper, e.g. ModelRequest[VeoConfig].
@@ -81,7 +85,7 @@ def _operation_action(
     async def run_and_stamp(input: object, ctx: ActionRunContext) -> Operation:  # noqa: A002
         op = await action.params.call(fn, input, ctx)
         if isinstance(op, Operation):
-            stamp_operation_action(operation=op, name=model_name)
+            stamp_operation_action(operation=op, name=action.name.removesuffix(suffix))
         return op
 
     action = Action(
@@ -334,7 +338,6 @@ def background_model(
         kind=ActionKind.BACKGROUND_MODEL,
         name=name,
         fn=start,
-        model_name=name,
         metadata=model_meta,
         description=description or f'Background model: {label}',
         config_schema=config_schema,
@@ -344,7 +347,7 @@ def background_model(
         kind=ActionKind.CHECK_OPERATION,
         name=f'{name}/check',
         fn=check,
-        model_name=name,
+        suffix='/check',
         metadata={'outputSchema': output_schema_meta},
         description=f'Check operation status for {label}',
     )
@@ -355,7 +358,7 @@ def background_model(
             kind=ActionKind.CANCEL_OPERATION,
             name=f'{name}/cancel',
             fn=cancel,
-            model_name=name,
+            suffix='/cancel',
             metadata={'outputSchema': output_schema_meta},
             description=f'Cancel operation for {label}',
         )
