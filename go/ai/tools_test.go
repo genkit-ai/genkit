@@ -1661,8 +1661,8 @@ func TestPartClone_IsolatesInterruptPayloads(t *testing.T) {
 
 // TestDeprecatedRestart_CarriesResumeAsGiven pins that the deprecated Restart
 // builds a part from whatever resume data it is handed: a non-object value
-// rides to the loop, which reads it as a bare restart, rather than turning
-// the whole call into a nil part.
+// rides to the loop, which rejects it when it plans the resume, rather than
+// turning the whole call into a nil part.
 func TestDeprecatedRestart_CarriesResumeAsGiven(t *testing.T) {
 	tl := NewTool("t", "d", func(ctx *ToolContext, _ struct{}) (string, error) { return "", nil })
 	part := NewToolRequestPart(&ToolRequest{Name: "t"})
