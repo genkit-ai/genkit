@@ -146,6 +146,42 @@ def enable_google_cloud_telemetry(
         )
         ```
 
+        Sample 10% of traces. ``ParentBased`` keeps the caller's decision
+        when a request arrives with a ``traceparent``, so a trace that
+        started upstream is not cut in half:
+
+        ```python
+        from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
+
+        enable_google_cloud_telemetry(
+            project_id='my-project',
+            sampler=ParentBased(TraceIdRatioBased(0.1)),
+        )
+        # => about 1 in 10 new traces reach Cloud Trace
+        #    a request whose caller sampled it is always kept
+        ```
+
+        If the app already set a ``TracerProvider``, put the sampler on it
+        and leave ``sampler=`` off:
+
+        ```python
+        from opentelemetry import trace
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
+
+        # 1. App's provider, with the sampler
+        trace.set_tracer_provider(TracerProvider(sampler=ParentBased(TraceIdRatioBased(0.1))))
+
+        # 2. Cloud Trace joins that provider and inherits its sampler
+        enable_google_cloud_telemetry(project_id='my-project')
+        # => Cloud Trace gets the same 10% the app's exporter gets
+
+        # Passing sampler= here instead raises:
+        # enable_google_cloud_telemetry(sampler=ParentBased(TraceIdRatioBased(0.1)))
+        # => GenkitError INVALID_ARGUMENT: a tracer provider is already set;
+        #    pass TracerProvider(sampler=...) when you create it instead of sampler=
+        ```
+
     See Also:
         - Cloud Trace: https://cloud.google.com/trace/docs
         - Cloud Monitoring: https://cloud.google.com/monitoring/docs

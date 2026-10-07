@@ -27,12 +27,19 @@ from genkit_google_cloud.telemetry.tracing import (
     enable_google_cloud_telemetry,
 )
 from genkit_otel import GenAiInstrumentation
-from opentelemetry import _logs, trace as trace_api
+from opentelemetry import _logs, context as otel_context, trace as trace_api
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-from opentelemetry.sdk.trace.sampling import ALWAYS_OFF
-from opentelemetry.trace import NoOpTracer, TracerProvider as ApiTracerProvider
+from opentelemetry.sdk.trace.sampling import ALWAYS_OFF, ParentBased, TraceIdRatioBased
+from opentelemetry.trace import (
+    NonRecordingSpan,
+    NoOpTracer,
+    SpanContext,
+    TraceFlags,
+    TracerProvider as ApiTracerProvider,
+    set_span_in_context,
+)
 from opentelemetry.util._once import Once
 
 from genkit import Genkit, GenkitError
@@ -291,6 +298,39 @@ async def test_enable_with_no_tracer_and_always_off_sampler_sends_nothing_to_clo
         assert isinstance(provider, TracerProvider)
         assert provider.sampler is ALWAYS_OFF
         assert _span_names(cloud) == []
+
+
+@pytest.mark.asyncio
+async def test_enable_with_parent_based_ratio_sampler_drops_new_roots_and_keeps_sampled_parents(
+    real_otel_globals: None,
+) -> None:
+    """ParentBased(TraceIdRatioBased(0.0)): a new trace is dropped; a request whose caller sampled it is kept."""
+    sampler = ParentBased(TraceIdRatioBased(0.0))
+    with _cloud_enable(sampler=sampler) as cloud:
+        # 1. No upstream trace: the ratio decides, and 0.0 drops it.
+        await Action(name='joke', kind=ActionKind.FLOW, fn=_joke).run()
+        _force_flush()
+        assert _span_names(cloud) == []
+
+        # 2. Upstream caller sent a sampled traceparent: the parent decides, so Cloud gets it.
+        upstream = SpanContext(
+            trace_id=0x4BF92F3577B34DA6A3CE929D0E0E4736,
+            span_id=0x00F067AA0BA902B7,
+            is_remote=True,
+            trace_flags=TraceFlags(TraceFlags.SAMPLED),
+        )
+        token = otel_context.attach(set_span_in_context(NonRecordingSpan(upstream)))
+        try:
+            await Action(name='joke', kind=ActionKind.FLOW, fn=_joke).run()
+        finally:
+            otel_context.detach(token)
+        _force_flush()
+
+        provider = trace_api.get_tracer_provider()
+        assert isinstance(provider, TracerProvider)
+        assert provider.sampler is sampler
+        joke = [span for span in cloud.get_finished_spans() if span.name == 'joke']
+        assert [span.context.trace_id if span.context else None for span in joke] == [upstream.trace_id]
 
 
 @pytest.mark.asyncio
