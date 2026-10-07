@@ -22,7 +22,8 @@ from typing import Any, cast
 
 import boto3.session
 import pytest
-from genkit_amazon_bedrock import Bedrock, BedrockConfig, ModelDefinition, bedrock_name
+from genkit_amazon_bedrock import Bedrock, BedrockConfig, ModelDefinition
+from genkit_amazon_bedrock.plugin import bedrock_name
 from genkit_amazon_bedrock.transport import BedrockTransport
 from pydantic import ValidationError
 
