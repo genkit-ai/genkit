@@ -5,9 +5,11 @@
 
 """define_model accepts ModelRequest / ModelRequest[Cfg] and rejects the rest."""
 
-from typing import Annotated, Any, Optional
+import typing
+from typing import Annotated, Any, Optional, cast
 
 import pytest
+import typing_extensions
 from pydantic import BaseModel
 
 from genkit import Genkit, Part
@@ -70,20 +72,39 @@ def test_annotated_wrapper_unwrapped_and_allowed(ai: Genkit) -> None:
     ai.define_model(name='annotated', fn=fn)
 
 
-def test_dict_and_any_parametrizations_allowed_unblessed(ai: Genkit) -> None:
-    """ModelRequest[dict] and ModelRequest[Any] still register; they do not validate a schema."""
+def test_any_parametrization_allowed(ai: Genkit) -> None:
+    """ModelRequest[Any] registers like bare ModelRequest; no config class to check."""
 
-    async def fn_d(request: ModelRequest[dict], ctx: ActionRunContext) -> ModelResponse:
+    async def fn(request: ModelRequest[Any], ctx: ActionRunContext) -> ModelResponse:
         return OK
 
-    async def fn_a(request: ModelRequest[Any], ctx: ActionRunContext) -> ModelResponse:
-        return OK
-
-    ai.define_model(name='param_dict', fn=fn_d)
-    ai.define_model(name='param_any', fn=fn_a)
+    ai.define_model(name='param_any', fn=fn)
 
 
 # --- rejected antipatterns ----------------------------------------------------
+
+
+class StdlibTypedDictConfig(typing.TypedDict, total=False):
+    """Pydantic itself rejects this before Python 3.12; ours fires first."""
+
+    temperature: float
+
+
+class ExtensionsTypedDictConfig(typing_extensions.TypedDict, total=False):
+    temperature: float
+
+
+@pytest.mark.parametrize(
+    'config_type',
+    [StdlibTypedDictConfig, ExtensionsTypedDictConfig, dict, dict[str, Any], Cfg | None],
+    ids=['typing.TypedDict', 'typing_extensions.TypedDict', 'dict', 'dict[str, Any]', 'union'],
+)
+def test_non_model_config_type_rejected(config_type: object) -> None:
+    """ModelRequest[X] raises where the annotation is evaluated unless X is a pydantic model."""
+    with pytest.raises(GenkitError, match='config type must be a pydantic BaseModel subclass') as exc:
+        cast(Any, ModelRequest)[config_type]
+
+    assert exc.value.status == 'INVALID_ARGUMENT'
 
 
 def test_union_with_none_rejected(ai: Genkit) -> None:
