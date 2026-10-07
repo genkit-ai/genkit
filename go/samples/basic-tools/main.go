@@ -22,6 +22,9 @@
 //     announce that the tool sometimes has more to say.
 //   - tool.SendChunk streams progress while the rollout runs, so a slow tool
 //     does not look like a hang.
+//   - tool.Fail returns an error to the model instead of failing the flow. Ask
+//     for a service that does not exist ("Ship checkout to production.") and
+//     the model reads the names of the real ones and calls the tool again.
 //
 // Streaming is best-effort: with a caller that is not streaming, SendChunk is a
 // no-op, so the tool still works when nobody is listening, and the returned
@@ -58,6 +61,7 @@ import (
 	"log"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/firebase/genkit/go/ai"
@@ -109,6 +113,9 @@ var rolloutStages = []struct {
 	{"checking health", 92},
 }
 
+// services are the names the tool can deploy.
+var services = []string{"checkout-api", "payments-api", "search-api"}
+
 // stageDuration stands in for work that really takes time. It is what makes
 // the streamed progress worth watching.
 const stageDuration = 250 * time.Millisecond
@@ -136,6 +143,13 @@ func main() {
 	deployService := genkit.DefineTool(g, "deployService",
 		"Deploys a service to an environment and reports how the rollout went.",
 		func(ctx *ai.ToolContext, input Deploy) (*Rollout, error) {
+			// A wrong name is a mistake the model can fix, so it answers the
+			// call rather than failing the flow. Any other error still would.
+			if !slices.Contains(services, input.Service) {
+				return nil, tool.Fail(ctx, fmt.Errorf("no service named %q; the services are %s",
+					input.Service, strings.Join(services, ", ")))
+			}
+
 			latencies := make([]float64, 0, len(rolloutStages))
 			for i, stage := range rolloutStages {
 				// Sent before the work, so the client sees the step it is
