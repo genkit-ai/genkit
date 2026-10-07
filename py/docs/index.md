@@ -53,9 +53,7 @@
 
 ::: genkit.ActionRunContext
 
-::: genkit.ExecutablePrompt
-
-::: genkit.PromptGenerateOptions
+::: genkit.Prompt
 
 ::: genkit.GenkitError
 

@@ -9,6 +9,7 @@ import pytest
 
 from genkit import Message, ModelResponseChunk, Part
 from genkit._ai._formats import JsonFormat
+from genkit._core._model import chunk_for_stream
 
 
 class TestJsonFormatStreaming:
@@ -20,7 +21,7 @@ class TestJsonFormatStreaming:
         fmt = json_fmt.handle({'type': 'object'})
 
         chunk = ModelResponseChunk(content=[Part.from_text('{"id": 1, "name": "test"}')])
-        result = fmt.parse_chunk(ModelResponseChunk(chunk, index=0, previous_chunks=[]))
+        result = fmt.parse_chunk(chunk_for_stream(chunk, index=0, previous_chunks=[]))
         assert result == {'id': 1, 'name': 'test'}
 
     def test_handles_partial_json(self) -> None:
@@ -30,12 +31,12 @@ class TestJsonFormatStreaming:
 
         # Chunk 1: partial object
         chunk1 = ModelResponseChunk(content=[Part.from_text('{"id": 1')])
-        result1 = fmt.parse_chunk(ModelResponseChunk(chunk1, index=0, previous_chunks=[]))
+        result1 = fmt.parse_chunk(chunk_for_stream(chunk1, index=0, previous_chunks=[]))
         assert result1 == {'id': 1}
 
         # Chunk 2: complete object
         chunk2 = ModelResponseChunk(content=[Part.from_text(', "name": "test"}')])
-        result2 = fmt.parse_chunk(ModelResponseChunk(chunk2, index=0, previous_chunks=[chunk1]))
+        result2 = fmt.parse_chunk(chunk_for_stream(chunk2, index=0, previous_chunks=[chunk1]))
         assert result2 == {'id': 1, 'name': 'test'}
 
     def test_handles_preamble_with_code_fence(self) -> None:
@@ -45,12 +46,12 @@ class TestJsonFormatStreaming:
 
         # Chunk 1: preamble
         chunk1 = ModelResponseChunk(content=[Part.from_text('Here is the JSON:\n\n```json\n')])
-        result1 = fmt.parse_chunk(ModelResponseChunk(chunk1, index=0, previous_chunks=[]))
+        result1 = fmt.parse_chunk(chunk_for_stream(chunk1, index=0, previous_chunks=[]))
         assert result1 is None
 
         # Chunk 2: actual data
         chunk2 = ModelResponseChunk(content=[Part.from_text('{"id": 1}\n```')])
-        result2 = fmt.parse_chunk(ModelResponseChunk(chunk2, index=0, previous_chunks=[chunk1]))
+        result2 = fmt.parse_chunk(chunk_for_stream(chunk2, index=0, previous_chunks=[chunk1]))
         assert result2 == {'id': 1}
 
 
@@ -97,7 +98,7 @@ class TestJsonFormatMessage:
         fmt = json_fmt.handle({'type': 'object'})
 
         result = fmt.parse_chunk(
-            ModelResponseChunk(
+            chunk_for_stream(
                 ModelResponseChunk(content=[Part.from_text('", "baz": [1,2')]),
                 index=0,
                 previous_chunks=[

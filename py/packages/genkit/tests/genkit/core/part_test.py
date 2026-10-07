@@ -54,6 +54,7 @@ from genkit._core._model import (
     as_model_request,
     as_model_response_chunk,
     as_part,
+    chunk_for_stream,
 )
 from genkit._core._typing import (
     Artifact as ArtifactData,
@@ -436,6 +437,19 @@ def test_agent_stream_chunk_model_chunk_is_veneer() -> None:
     assert type(chunk.model_chunk) is ModelResponseChunk
     assert type(chunk.model_chunk.content[0]) is Part
     assert chunk.model_chunk.content[0].text == 'hi'
+
+
+def test_agent_stream_chunk_keeps_model_chunk_index_and_output() -> None:
+    """AgentStreamChunk keeps the streamed chunk's index and parsed output."""
+    streamed = chunk_for_stream(
+        ModelResponseChunk(content=[Part.from_text('hi')]),
+        index=2,
+        chunk_parser=lambda _c: 'parsed',
+    )
+    wrap = AgentStreamChunk(model_chunk=streamed)
+    assert wrap.model_chunk is not None
+    assert wrap.model_chunk.index == 2
+    assert wrap.model_chunk.output == 'parsed'
 
 
 def test_candidate_message_is_message() -> None:

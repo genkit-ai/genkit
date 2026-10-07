@@ -325,7 +325,11 @@ class TestVeoModelLifecycle:
         client.aio.models.generate_videos = AsyncMock(return_value=_sdk_op(name='operations/1', done=False))
         veo = VeoModel('veo-3.0-generate-001', client)
         request = _text_request(
-            config=VeoConfig.model_validate({'aspectRatio': '16:9', 'durationSeconds': 5, 'fooBar': 1}),
+            config=VeoConfig.model_validate({
+                'aspectRatio': '16:9',
+                'durationSeconds': 5,
+                'extra': {'parameters': {'fooBar': 1}},
+            }),
         )
 
         await veo.start(request, ActionRunContext())
@@ -474,7 +478,7 @@ class TestVeoContextClient:
                 'aspectRatio': '16:9',
                 'baseUrl': 'https://request.example',
                 'apiVersion': 'v1',
-                'fooBar': 1,
+                'extra': {'parameters': {'fooBar': 1}},
             }),
         )
         ctx = ActionRunContext(context={'config': {'base_url': 'https://context.example'}})
@@ -768,17 +772,6 @@ class TestVeoContextClient:
                 await veo.start(_text_request(), ActionRunContext(context=bag))
             assert raised.value.status == 'INVALID_ARGUMENT'
             assert 'secrets' in str(raised.value)
-
-    @pytest.mark.asyncio
-    async def test_request_config_api_key_is_invalid_argument(self) -> None:
-        veo = VeoModel('veo-3.0-generate-001', MagicMock())
-        cfg = VeoConfig.model_validate({'api_key': 'sk-gemini-habit'})
-
-        with pytest.raises(GenkitError) as raised:
-            await veo.start(_text_request(config=cfg), ActionRunContext())
-
-        assert raised.value.status == 'INVALID_ARGUMENT'
-        assert 'secrets' in str(raised.value)
 
     @pytest.mark.asyncio
     async def test_client_ctor_failure_is_invalid_argument(self) -> None:

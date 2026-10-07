@@ -40,10 +40,11 @@ from genkit_google_genai._models._gemini import (
     is_image_model,
     is_tts_model,
 )
+from genkit_google_genai._models._utils import ToolWire
 from google import genai
 from google.genai import types as genai_types
 from google.genai.errors import APIError
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from pytest_mock import MockerFixture
 
 from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, Part, Role
@@ -755,7 +756,10 @@ def test_gemini_model__get_tools(
     gemini_model_instance: GeminiModel,
 ) -> None:
     """Unit test for GeminiModel._get_tools."""
-    mock_create_tool.return_value = genai_types.Tool()
+    mock_create_tool.return_value = (
+        genai_types.Tool(),
+        ToolWire(original_name='tool_1', wire_name='tool_1', wrapped=False),
+    )
 
     request_tools = [
         ToolDefinition(
@@ -827,11 +831,13 @@ def test_gemini_model__create_tool(
 
     mock_convert_schema_property.return_value = genai_types.Schema()
 
-    gemini_tool = gemini_model_instance._create_tool(
+    gemini_tool, wire = gemini_model_instance._create_tool(
         tool_defined,
     )
 
     assert isinstance(gemini_tool, genai_types.Tool)
+    assert wire.original_name == 'model_tool'
+    assert wire.wire_name == 'model_tool'
 
 
 @pytest.mark.parametrize(
@@ -1479,21 +1485,10 @@ async def test_gemini_model__speech_config_keeps_multi_speaker_voice_config(
     assert [s.speaker for s in speakers] == ['Alice']
 
 
-@pytest.mark.asyncio
-async def test_gemini_model__unknown_speech_config_key_is_rejected(
-    tts_model_instance: GeminiModel,
-) -> None:
-    """An unknown speech config key is reported instead of silently dropped."""
-    request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
-        config=GeminiTtsConfig.model_validate({'speechConfig': {'languageCodes': 'en-US'}}),
-    )
-
-    with pytest.raises(GenkitError) as exc_info:
-        await tts_model_instance._genkit_to_googleai_cfg(request)
-
-    assert exc_info.value.status == 'INVALID_ARGUMENT'
-    assert 'speech_config' in str(exc_info.value)
+def test_gemini_tts_config_with_unknown_speech_config_key_raises_validation_error() -> None:
+    """`speechConfig={'languageCodes': ...}` fails at construction instead of being silently dropped."""
+    with pytest.raises(ValidationError, match='languageCodes'):
+        GeminiTtsConfig.model_validate({'speechConfig': {'languageCodes': 'en-US'}})
 
 
 @pytest.mark.asyncio

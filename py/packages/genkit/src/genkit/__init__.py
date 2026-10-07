@@ -37,9 +37,8 @@ Example:
 from genkit._ai._aio import Genkit
 from genkit._ai._formats._types import FormatDef, FormatterConfig
 from genkit._ai._prompt import (
-    ExecutablePrompt,
     ModelStreamResponse,
-    PromptGenerateOptions,
+    Prompt,
 )
 from genkit._ai._tools import (
     MultipartToolResponse,
@@ -50,7 +49,7 @@ from genkit._ai._tools import (
 from genkit._core._action import Action as Flow, ActionRunContext, StreamResponse
 from genkit._core._context import ContextProvider, RequestData
 from genkit._core._dap import DynamicActionProvider
-from genkit._core._error import GenkitError, Interrupt, PublicError, RuntimeErrorReason
+from genkit._core._error import GenkitError, GenkitRuntimeError, Interrupt, PublicError, RuntimeErrorReason
 from genkit._core._logger import get_logger
 from genkit._core._model import (
     Document,
@@ -83,6 +82,7 @@ __all__ = [
     # What came back
     'ModelResponse',
     'ModelResponseChunk',
+    'GenkitRuntimeError',
     'ModelStreamResponse',
     'StreamResponse',
     'FinishReason',
@@ -101,8 +101,7 @@ __all__ = [
     # Flows, prompts, errors
     'Flow',
     'ActionRunContext',
-    'ExecutablePrompt',
-    'PromptGenerateOptions',
+    'Prompt',
     'GenkitError',
     'PublicError',
     'RuntimeErrorReason',

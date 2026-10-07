@@ -129,7 +129,8 @@ class ModelGardenModel:
 
         async def _generate(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
             client = await self.create_client()
-            openai_model = OpenAIModel(self.name, client)
+            info = SUPPORTED_OPENAI_COMPAT_MODELS.get(self.name, get_default_model_info(self.name))
+            openai_model = OpenAIModel(self.name, client, supports=info.supports)
             return await openai_model.generate(request, ctx)
 
         return _generate

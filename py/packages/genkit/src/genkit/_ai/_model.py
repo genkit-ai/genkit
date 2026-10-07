@@ -461,10 +461,11 @@ def assert_correct_config_class(
 ) -> None:
     """A typed config object has to belong to the model this call hits.
 
-    Dicts stay legal. Omit / ``None`` skip this. A model with no Python
-    class (JSON-only or unset) cannot be checked.
+    Dicts stay legal, and so does a plain ``ModelConfig``: its set fields
+    are checked like a dict. Omit / ``None`` skip this. A model with no
+    Python class (JSON-only or unset) cannot be checked.
     """
-    if not isinstance(config, BaseModel):
+    if not isinstance(config, BaseModel) or is_shared_config(config):
         return
     if schema is None or isinstance(config, schema):
         return
@@ -482,8 +483,11 @@ def check_config_dict(*, config: object, schema: type[BaseModel] | None, model: 
     Layers merge by top-level key, so a missing top-level field is fine
     here — another layer may supply it. A nested object is sent whole, so
     a missing field inside one raises. ``None`` means "clear the default"
-    and isn't checked.
+    and isn't checked. A plain ``ModelConfig`` is checked by the fields it
+    set.
     """
+    if is_shared_config(config):
+        config = normalize_config(config=config)
     if schema is None or not isinstance(config, Mapping):
         return
     layer = {key: value for key, value in cast(Mapping[str, Any], config).items() if value is not None}
@@ -495,15 +499,40 @@ def check_config_dict(*, config: object, schema: type[BaseModel] | None, model: 
             return
         raise GenkitError(
             status='INVALID_ARGUMENT',
-            message=f'{model}: {_describe_config_problems(problems)}',
+            message=f'{model}: {_describe_config_problems(problems, layer=layer, schema=schema)}',
             reason=RuntimeErrorReason.INVALID_INPUT,
             cause=e,
         ) from e
 
 
-def _describe_config_problems(problems: list[ErrorDetails]) -> str:
-    unknown = [_config_path(err['loc']) for err in problems if err['type'] == 'extra_forbidden']
-    parts: list[str] = []
+def is_shared_config(config: object) -> bool:
+    """True for a plain ``ModelConfig``, which any model accepts.
+
+    It's the class people reach for when the same code runs against several
+    models, so its fields are copied into whichever class the model has.
+    """
+    return type(config) is ModelConfig
+
+
+def _describe_config_problems(
+    problems: list[ErrorDetails], *, layer: Mapping[str, Any], schema: type[BaseModel]
+) -> str:
+    # pydantic binds one spelling of a setting and calls the other unknown;
+    # the caller didn't misspell anything, they wrote the setting twice.
+    names = config_field_names(schema)
+    repeated: dict[str, list[str]] = {}
+    unknown: list[str] = []
+    for err in problems:
+        if err['type'] != 'extra_forbidden':
+            continue
+        key = _config_path(err['loc'])
+        field = names.get(key) if len(err['loc']) == 1 else None
+        spellings = [k for k in layer if field and names.get(k) == field]
+        if field and len(spellings) > 1:
+            repeated[field] = sorted(spellings, key=lambda k: k != field)
+        else:
+            unknown.append(key)
+    parts = [f'{" and ".join(spellings)} are the same setting; pass one' for spellings in repeated.values()]
     if unknown:
         keys = ', '.join(repr(key) for key in unknown)
         noun = 'key' if len(unknown) == 1 else 'keys'
