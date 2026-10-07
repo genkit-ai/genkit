@@ -42,7 +42,7 @@ from genkit.plugin_api import (
 )
 from genkit_anthropic._config import AnthropicConfig
 from genkit_anthropic._model_info import get_model_info
-from genkit_anthropic._secrets import context_api_key, reject_config_api_key
+from genkit_anthropic._secrets import context_api_key
 from genkit_anthropic._utils import (
     build_cache_usage,
     get_cache_control,
