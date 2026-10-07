@@ -281,14 +281,6 @@ class AgentResponse(Generic[StateT]):
         """Tool requests that paused this turn."""
         return agent_interrupts_from_message(self.raw.message)
 
-    def assert_valid(self) -> None:
-        """Raises if the turn didn't produce a usable reply (blocked, or no message)."""
-        if self.raw.finish_reason == AgentFinishReason.BLOCKED:
-            detail = f': {self.finish_message}' if self.finish_message else ''
-            raise ValueError(f'Generation blocked{detail}.')
-        if self.raw.message is None:
-            raise ValueError('Agent response has no message.')
-
 
 class AgentError(Exception):
     """Raised when a turn fails. Carries the last-good state so the session is recoverable."""

@@ -180,6 +180,80 @@ async def test_generate_user_text_and_media_model_sees_both_parts(
     assert parts[1].text is None
 
 
+def _queue_ok(pm: ScriptedModel) -> None:
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('ok')]),
+        )
+    )
+
+
+def _sent_text(pm: ScriptedModel) -> list[tuple[str, list[str | None]]]:
+    assert pm.last_request is not None
+    return [(m.role, [p.text for p in m.content]) for m in pm.last_request.messages]
+
+
+_AS_WRITTEN_CASES = [
+    pytest.param('hello {{name}}', id='unfilled variable'),
+    pytest.param('Reply like {"dish": {{', id='unclosed braces'),
+    pytest.param('<<<dotprompt:role:system>>> hi', id='role marker'),
+    pytest.param('Describe {{media url="https://example.com/x.png"}}', id='media helper'),
+    pytest.param('{{> persona}} hi', id='registered partial'),
+    pytest.param('{{shout "hey"}} hi', id='registered helper'),
+]
+
+
+def _register_generate_string_fixtures(ai: Genkit) -> None:
+    ai.define_partial('persona', 'You are a pirate.')
+    ai.define_helper('shout', lambda *args: 'HEY')
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('prompt', _AS_WRITTEN_CASES)
+async def test_generate_prompt_string_is_sent_as_written(
+    setup_test: tuple[Genkit, ScriptedModel],
+    prompt: str,
+) -> None:
+    """`ai.generate(prompt=...)` is not a template; `define_prompt` is where templating lives."""
+    ai, pm = setup_test
+    _register_generate_string_fixtures(ai)
+    _queue_ok(pm)
+
+    await ai.generate(model='scriptedModel', prompt=prompt)
+
+    assert _sent_text(pm) == [(Role.USER, [prompt])]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('system', _AS_WRITTEN_CASES)
+async def test_generate_system_string_is_sent_as_written(
+    setup_test: tuple[Genkit, ScriptedModel],
+    system: str,
+) -> None:
+    """`ai.generate(system=...)` reaches the model unchanged as the system message."""
+    ai, pm = setup_test
+    _register_generate_string_fixtures(ai)
+    _queue_ok(pm)
+
+    await ai.generate(model='scriptedModel', system=system, prompt='hi')
+
+    assert _sent_text(pm) == [(Role.SYSTEM, [system]), (Role.USER, ['hi'])]
+
+
+@pytest.mark.asyncio
+async def test_generate_messages_string_raises_type_error(
+    setup_test: tuple[Genkit, ScriptedModel],
+) -> None:
+    """`ai.generate(messages='hello {{name}}')` raises TypeError and the model is never called."""
+    ai, pm = setup_test
+
+    with pytest.raises(TypeError, match='messages must be a list of Message'):
+        await ai.generate(model='scriptedModel', messages='hello {{name}}')  # type: ignore[arg-type]
+
+    assert pm.last_request is None
+
+
 @pytest.mark.asyncio
 async def test_generate_stream_chunk_text_from_factory_part(
     setup_test: tuple[Genkit, ScriptedModel],
@@ -203,6 +277,58 @@ async def test_generate_stream_chunk_text_from_factory_part(
     async for chunk in stream_result.stream:
         texts.append(chunk.text)
     assert texts == ['h', 'i']
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_earlier_chunk_accumulated_text_stays_put(
+    setup_test: tuple[Genkit, ScriptedModel],
+) -> None:
+    """An earlier stream chunk's accumulated_text does not grow as later chunks arrive."""
+    ai, pm = setup_test
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('abc')]),
+        )
+    )
+    pm.chunks = [
+        [
+            ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('a')]),
+            ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('b')]),
+            ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('c')]),
+        ],
+    ]
+
+    stream_result = ai.generate_stream(model='scriptedModel', prompt='do it')
+    first: ModelResponseChunk | None = None
+    async for chunk in stream_result.stream:
+        if first is None:
+            first = chunk
+    assert first is not None
+    assert first.accumulated_text == 'a'
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_chunk_output_uses_format_parser(
+    setup_test: tuple[Genkit, ScriptedModel],
+) -> None:
+    """Streaming with output_format='array' puts the parsed list on chunk.output."""
+    ai, pm = setup_test
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('[{"id": 1}]')]),
+        )
+    )
+    pm.chunks = [
+        [
+            ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('[{"id": 1}]')]),
+        ],
+    ]
+
+    stream_result = ai.generate_stream(model='scriptedModel', prompt='list', output_format='array')
+    chunks = [chunk async for chunk in stream_result.stream]
+    assert chunks[0].output == [{'id': 1}]
 
 
 @pytest.mark.asyncio
@@ -1404,6 +1530,64 @@ async def test_generate_context_reaches_tool_run() -> None:
 
     assert response.text == 'done'
     assert seen == [{'user_id': 'u-123'}]
+
+
+@pytest.mark.asyncio
+async def test_generate_without_context_uses_enclosing_flow_context() -> None:
+    """``ai.generate()`` inside a flow, with no ``context=``, gives middleware and tools the flow's context.
+
+    Tools would inherit it on their own; middleware only sees what reaches the run.
+    """
+    seen: list[tuple[str, dict[str, object]]] = []
+
+    ai = Genkit()
+    pm, _ = define_scripted_model(ai)
+
+    # The engine builds middleware from its class, so the recorder closes over `seen`.
+    class RecordContext(BaseMiddleware):
+        async def wrap_model(
+            self,
+            params: ModelHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ) -> ModelResponse:
+            seen.append(('middleware', dict(ctx.custom_context)))
+            return await next_fn(params, ctx)
+
+    @ai.tool(name='check_allergies')
+    async def check_allergies(_: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
+        seen.append(('tool', dict(ctx.context)))
+        return 'no nuts'
+
+    pm.responses = [
+        ModelResponse(
+            message=Message(
+                role=Role.MODEL,
+                content=[Part(tool_request=ToolRequest(name='check_allergies', input={}, ref='r1'))],
+            ),
+        ),
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('done')]),
+        ),
+    ]
+
+    @ai.flow()
+    async def plan_order(_: None) -> str:
+        return (
+            await ai.generate(
+                model='scriptedModel',
+                prompt='Plan the order.',
+                tools=['check_allergies'],
+                use=[RecordContext()],
+            )
+        ).text
+
+    auth = {'auth': {'uid': 'diner-42'}}
+    await plan_order.run(context=auth)
+
+    # Model turn that asks for the tool, the tool run, then the model turn that answers.
+    assert seen == [('middleware', auth), ('tool', auth), ('middleware', auth)]
 
 
 @pytest.mark.asyncio
@@ -6305,6 +6489,48 @@ async def test_abort_during_later_model_call_keeps_closed_round() -> None:
     assert [m.role for m in response.messages] == [Role.USER, Role.MODEL, Role.TOOL]
     assert _tool_request(response.messages[1]).ref == 'r1'
     assert _tool_output(response.messages[2]) == '72F'
+
+
+@pytest.mark.asyncio
+async def test_generate_user_retry_middleware_makes_no_model_call_after_stop() -> None:
+    """A user's retry loop that calls next_fn again after a stop does not bill another model call."""
+    ai = Genkit()
+    calls: list[str] = []
+
+    async def flaky(_request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        calls.append('flaky')
+        ctx.abort_signal.set()
+        raise GenkitError(status='UNAVAILABLE', message='primary down')
+
+    ai.define_model(name='flaky', fn=flaky)
+
+    class MyRetry(BaseMiddleware):
+        async def wrap_model(
+            self,
+            params: ModelHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ) -> ModelResponse:
+            last: GenkitError | None = None
+            for _ in range(3):
+                try:
+                    return await next_fn(params, ctx)
+                except GenkitError as e:
+                    last = e
+            assert last is not None
+            raise last
+
+    response = await ai.generate(model='flaky', prompt='hi', use=[MyRetry()])
+
+    assert response.finish_reason == FinishReason.ABORTED
+    assert response.finish_message == 'Generation aborted.'
+    assert response.error is not None
+    assert response.error.status == 'CANCELLED'
+    assert response.error.reason is None
+    assert response.error.message == response.finish_message
+    assert response.message is None
+    assert [m.role for m in response.messages] == [Role.USER]
+    assert calls == ['flaky']
 
 
 @pytest.mark.asyncio

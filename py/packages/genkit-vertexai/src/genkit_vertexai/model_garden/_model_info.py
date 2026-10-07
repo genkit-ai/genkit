@@ -21,6 +21,7 @@ from genkit.model import ModelInfo, Supports
 LLAMA_3_1 = 'meta/llama-3.1-405b-instruct-maas'
 LLAMA_3_2 = 'meta/llama-3.2-90b-vision-instruct-maas'
 
+# 'json' in output means the endpoint accepts schema-less JSON mode.
 SUPPORTED_OPENAI_COMPAT_MODELS: dict[str, ModelInfo] = {
     LLAMA_3_1: ModelInfo(
         label='ModelGarden - Meta - llama-3.1',
@@ -30,7 +31,7 @@ SUPPORTED_OPENAI_COMPAT_MODELS: dict[str, ModelInfo] = {
             tools=True,
             system_role=True,
             long_running=False,
-            output=['json_mode', 'text'],
+            output=['json', 'text'],
         ),
     ),
     LLAMA_3_2: ModelInfo(
@@ -40,17 +41,18 @@ SUPPORTED_OPENAI_COMPAT_MODELS: dict[str, ModelInfo] = {
             media=True,
             tools=True,
             system_role=True,
-            output=['json_mode', 'text'],
+            output=['json', 'text'],
         ),
     ),
 }
 
+# 'json' in output means the endpoint accepts schema-less JSON mode.
 DEFAULT_SUPPORTS = Supports(
     multiturn=True,
     media=True,
     tools=True,
     system_role=True,
-    output=['json_mode', 'text'],
+    output=['json', 'text'],
 )
 
 

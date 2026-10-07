@@ -14,26 +14,20 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Experimental APIs. Agents stay here even after Genkit Python is GA.
+"""Experimental FastAPI handlers.
+
+Handlers here serve APIs that are still experimental in Genkit and may change
+between minor releases. Importing ``genkit_fastapi`` does not load this module.
 
 ```python
-from genkit.exp import Genkit
-from genkit.exp.agent import InMemorySessionStore
-from genkit_google_genai import GoogleAI
+from genkit_fastapi.exp import serve_agent
 
-ai = Genkit(plugins=[GoogleAI()])
-agent = ai.define_agent(
-    name='weatherAgent',
-    model=GoogleAI.gemini_model('gemini-flash-latest'),
-    system='Weather assistant.',
-    store=InMemorySessionStore(),
-)
+app.include_router(serve_agent(weather_agent), prefix='/api')
 ```
 """
 
-from genkit.exp._api import Genkit, current_session
+from ._agent import serve_agent
 
 __all__ = [
-    'Genkit',
-    'current_session',
+    'serve_agent',
 ]

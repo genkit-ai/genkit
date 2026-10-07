@@ -1,7 +1,7 @@
 # Copyright 2026 Google LLC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for serve_agent in genkit_fastapi."""
+"""Tests for serve_agent in genkit_fastapi.exp."""
 
 from __future__ import annotations
 
@@ -19,7 +19,8 @@ if not hasattr(_genkit_agent, 'InMemorySessionStore'):
 InMemorySessionStore = _genkit_agent.InMemorySessionStore
 AgentInit = _genkit_agent.AgentInit
 
-from genkit_fastapi import handle_genkit_request, serve_agent  # noqa: E402
+from genkit_fastapi import handle_genkit_request  # noqa: E402
+from genkit_fastapi.exp import serve_agent  # noqa: E402
 
 from genkit._core._model import (  # noqa: E402
     Message,
@@ -141,8 +142,34 @@ def test_context_dependency_allows_the_turn() -> None:
     assert 'Hi there!' in json.dumps(sse_events(response.text)[-1]['result'])
 
 
-def test_handle_genkit_request_powers_a_hand_rolled_route() -> None:
-    """The public primitive serves the wire format from a custom endpoint."""
+def test_serve_agent_message_body_starts_a_turn() -> None:
+    """POST {"message": "hi"} to serve_agent starts a turn."""
+    client_obj = client(build_agent('msgAgent'))
+
+    response = client_obj.post('/api/chat', json={'message': 'hi'})
+
+    assert response.status_code == 200
+    assert 'Hi there!' in json.dumps(response.json()['result'])
+
+
+def test_serve_agent_session_id_query_param_continues_session() -> None:
+    """POST /chat?session_id=s1 runs the turn in session s1."""
+    client_obj = client(build_agent('sessionAgent'))
+
+    response = client_obj.post('/api/chat?session_id=s1', json={'message': 'Hi'})
+
+    assert response.status_code == 200
+    result = response.json()['result']
+    assert result['sessionId'] == 's1'
+    assert 'Hi there!' in json.dumps(result)
+
+    snap = client_obj.post('/api/chat/getSnapshot', json={'sessionId': 's1'})
+    assert snap.status_code == 200
+    assert snap.json()['result']['sessionId'] == 's1'
+
+
+def test_handle_genkit_request_agent_route_with_data_envelope_runs_turn() -> None:
+    """A custom route that calls handle_genkit_request with {"data": ...} runs a turn."""
     agent = build_agent('handRolledAgent')
     app = FastAPI()
 
@@ -158,7 +185,12 @@ def test_handle_genkit_request_powers_a_hand_rolled_route() -> None:
 
     client_obj = TestClient(app)
 
-    response = client_obj.post('/custom', json={'message': 'Hi'})
+    response = client_obj.post(
+        '/custom',
+        json={'data': {'message': {'role': 'user', 'content': [{'text': 'Hi'}]}}},
+    )
 
     assert response.status_code == 200
-    assert 'Hi there!' in json.dumps(response.json()['result'])
+    result = response.json()['result']
+    assert result['sessionId'] == 'session-789'
+    assert 'Hi there!' in json.dumps(result)
