@@ -533,7 +533,22 @@ class BedrockEmbedder:
                 raise
 
         tasks = [asyncio.create_task(_bounded(index, call)) for index, call in calls]
-        _, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+        try:
+            _, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+        except BaseException:
+            # create_task does not tie the tasks to this coroutine, and
+            # asyncio.wait does not cancel what it waits on, so a cancelled
+            # caller would leave the whole batch running and billing.
+            for task in tasks:
+                task.cancel()
+            # Same reason as below: retrieve the outcomes before letting the
+            # cancellation through. A second cancel can land on this gather,
+            # so swallow it and let the original exception surface.
+            try:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            except BaseException:  # noqa: S110
+                pass
+            raise
         for task in pending:
             # Without this the rest of the batch still bills one call each.
             task.cancel()
