@@ -112,9 +112,11 @@ export const SummarizeOptionsSchema = z.object({
 
   /**
    * Number of most recent non-system messages to keep un-summarized.
-   * Everything before this window is replaced with a summary. Falls back
-   * to top-level `preserveRecent` (if smaller) when the history has
-   * `<= summarize.preserveRecent` messages. Minimum: 1.
+   * Everything before this window is replaced with a summary. When the
+   * prompt exceeds `maxInputTokens` and the non-system history fits within
+   * the effective keep window (after any `maxMessages` cap), falls back to
+   * top-level `preserveRecent` (if smaller) so older turns can still be
+   * summarized. Minimum: 1.
    * @default 6
    */
   preserveRecent: z
@@ -1726,10 +1728,6 @@ export const contextCompression: GenerateMiddleware<
         1,
         Math.trunc(effectiveSummaryPreserveRecent ?? baseSummaryPreserveRecent)
       );
-      const clampedFallback =
-        fallbackPreserveRecent !== undefined && fallbackPreserveRecent > 0
-          ? Math.max(1, Math.trunc(fallbackPreserveRecent))
-          : undefined;
 
       const { systemMessages, nonSystemMessages } = partitionMessages(
         messages,
@@ -1759,10 +1757,10 @@ export const contextCompression: GenerateMiddleware<
       // summarized rather than skipped.
       if (
         nonSystemMessages.length <= targetKeep &&
-        clampedFallback !== undefined &&
-        clampedFallback < targetKeep
+        fallbackPreserveRecent !== undefined &&
+        fallbackPreserveRecent < targetKeep
       ) {
-        targetKeep = clampedFallback;
+        targetKeep = fallbackPreserveRecent;
       }
 
       if (nonSystemMessages.length <= targetKeep) {
