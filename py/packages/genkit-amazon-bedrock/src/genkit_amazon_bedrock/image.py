@@ -60,11 +60,10 @@ _AMAZON_IMAGE_MIME = 'image/png'
 
 _NO_IMAGES_MESSAGE = 'bedrock image: no images generated'
 
-# Both spellings of Genkit's own generation knobs and of a stray api key: none
-# is a Bedrock image parameter, and a key on an outbound body would leak a credential.
+# Both spellings of Genkit's own generation knobs: none is a Bedrock image parameter.
 _GENKIT_CONFIG_KEYS: frozenset[str] = frozenset(
     key for name, field in ModelConfig.model_fields.items() for key in (name, field.alias) if key is not None
-) | {'api_key', 'apiKey'}
+)
 
 
 def _image_family(model_id: str) -> ImageFamily | None:
@@ -184,7 +183,7 @@ def _normalize_image_config(config: Any) -> dict[str, Any]:  # noqa: ANN401
     BedrockConfig rather than a plain dict, and its declared Converse fields
     (``maxTokens``, ``toolChoice``, ...) would end up on an image body.
 
-    Genkit's own generation knobs (``temperature``, ``apiKey``, and the rest of
+    Genkit's own generation knobs (``temperature``, ``topP``, and the rest of
     the common config) are dropped in either spelling: the framework coerces
     every config into ModelConfig, and Bedrock's image APIs take none of them.
 

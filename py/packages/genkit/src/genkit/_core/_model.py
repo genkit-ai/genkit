@@ -90,7 +90,7 @@ class ModelConfig(GenerationCommonConfig):
     model_config: ClassVar[ConfigDict] = ConfigDict(extra='forbid')
 
     extra: dict[str, Any] | None = None
-    """Provider settings the model's config class doesn't declare, sent as-is and not checked.
+    """Provider settings the model's config class doesn't declare, sent as-is.
 
     Keys are the provider's wire names. The plugin merges them into its
     request after the declared fields, so a colliding key wins. Fields Genkit
@@ -99,8 +99,9 @@ class ModelConfig(GenerationCommonConfig):
     body for Gemini, OpenAI and Anthropic, ``options`` for Ollama, and
     ``additionalModelRequestFields`` for Bedrock.
 
-    Don't put API keys or other secrets here: config travels with the request
-    into traces.
+    Keys aren't validated, except that an API key here raises like one at the
+    top level: config travels with the request into traces. Don't put other
+    secrets here either.
     """
 
 

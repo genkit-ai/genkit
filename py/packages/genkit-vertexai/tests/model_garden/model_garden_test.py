@@ -30,7 +30,7 @@ from genkit_vertexai.model_garden.anthropic import AnthropicModelGarden
 from genkit_vertexai.model_garden.model_garden import ModelGardenModel
 from openai.types.chat import ChatCompletion
 
-from genkit import ActionRunContext, Genkit, Message, Part, Role
+from genkit import ActionRunContext, Genkit, GenkitError, Message, Part, Role
 from genkit._ai._formats import built_in_formats
 from genkit.model import ModelRequest, OutputConfig
 from genkit.plugin_api import ActionKind
@@ -120,15 +120,29 @@ def test_model_garden_plugin_deprecated_alias() -> None:
 
 def test_anthropic_model_garden_uses_anthropic_config_schema() -> None:
     """Anthropic Model Garden advertises the schema enforced by its handler."""
-    schema = AnthropicModelGarden.get_config_schema()
-    assert issubclass(schema, AnthropicConfig)
+    assert AnthropicModelGarden.get_config_schema() is AnthropicConfig
 
 
 def test_anthropic_model_garden_does_not_advertise_api_key() -> None:
-    """Vertex authenticates with Google credentials, so apiKey is not offered."""
+    """The advertised schema has no apiKey; a per-request key goes in context.secrets."""
     properties = AnthropicModelGarden.get_config_schema().model_json_schema()['properties']
     assert 'apiKey' not in properties
     assert 'apiVersion' in properties
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'model_name', ['modelgarden/meta/llama-3.2-90b-vision-instruct-maas', 'modelgarden/anthropic/claude-sonnet-4']
+)
+async def test_resolve_without_project_is_failed_precondition(model_name: str) -> None:
+    """No project configured is a local setup problem, not a bad request."""
+    with patch.dict('os.environ', {}, clear=True):
+        plugin = ModelGarden(location='us-central1')
+
+    with pytest.raises(GenkitError, match='project_id must be provided') as raised:
+        await plugin.resolve(ActionKind.MODEL, model_name)
+
+    assert raised.value.status == 'FAILED_PRECONDITION'
 
 
 @pytest.mark.asyncio

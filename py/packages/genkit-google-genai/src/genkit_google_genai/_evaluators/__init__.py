@@ -40,8 +40,8 @@ Example:
         dataset=dataset,
     )
 
-    for result in results.root:
-        print(f'Score: {result.evaluation.score}')
+    for result in results:
+        print(f'Score: {result.evaluation[0].score}')
     ```
 """
 
