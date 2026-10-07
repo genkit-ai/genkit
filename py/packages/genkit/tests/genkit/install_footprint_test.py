@@ -110,4 +110,6 @@ def test_genkit_dev_server_starts_without_unused_libraries(tmp_path: Path) -> No
 
 def test_genkit_base_dependencies_exclude_unused_libraries() -> None:
     """The requirements `uv add genkit` installs list none of rich, psutil, pillow, sse-starlette, or asgiref."""
-    assert _requirement_names('genkit').isdisjoint(_UNUSED_DISTRIBUTIONS)
+    names = _requirement_names('genkit')
+    assert 'pydantic' in names, names
+    assert names.isdisjoint(_UNUSED_DISTRIBUTIONS)

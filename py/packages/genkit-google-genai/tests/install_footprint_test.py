@@ -72,4 +72,5 @@ def test_import_genkit_google_genai_works_without_aiplatform(tmp_path: Path) -> 
 def test_genkit_google_genai_base_dependencies_exclude_aiplatform() -> None:
     """The requirements `uv add genkit-google-genai` installs don't list google-cloud-aiplatform."""
     names = {re.split(r'[\s<>=!~;\[]', req, maxsplit=1)[0].lower() for req in requires('genkit-google-genai') or []}
+    assert 'google-genai' in names, names
     assert 'google-cloud-aiplatform' not in names
