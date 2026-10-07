@@ -16,6 +16,8 @@
 
 """Tests for Retry middleware."""
 
+import asyncio
+import time
 from typing import NoReturn
 from unittest.mock import AsyncMock, patch
 
@@ -24,10 +26,10 @@ from genkit_middleware import Retry
 from pydantic import ValidationError
 
 from genkit import ActionRunContext, FinishReason, Genkit, Message, ModelResponse, ModelResponseChunk, Part, Role
-from genkit._ai._testing import define_programmable_model
 from genkit._core._error import GenkitError
 from genkit.middleware import GenerateMiddlewareContext, ModelHookParams
 from genkit.model import ModelRequest
+from genkit.testing import define_scripted_model
 
 
 def _make_params() -> ModelHookParams:
@@ -142,12 +144,12 @@ async def test_retry_after_is_delay_floor(ctx: GenerateMiddlewareContext) -> Non
             )
         return ModelResponse(message=None)
 
-    with patch('genkit_middleware._retry.sleep', new_callable=AsyncMock) as sleep:
+    with patch('genkit_middleware._retry.sleep_unless_stopped', new_callable=AsyncMock) as sleep:
         result = await retry.wrap_model(_make_params(), ctx, next_fn)
 
     assert result is not None
     assert call_count == 2
-    sleep.assert_awaited_once_with(5.0)
+    sleep.assert_awaited_once_with(5.0, ctx.abort_signal)
 
 
 @pytest.mark.asyncio
@@ -168,12 +170,12 @@ async def test_local_delay_wins_when_larger_than_retry_after(ctx: GenerateMiddle
             )
         return ModelResponse(message=None)
 
-    with patch('genkit_middleware._retry.sleep', new_callable=AsyncMock) as sleep:
+    with patch('genkit_middleware._retry.sleep_unless_stopped', new_callable=AsyncMock) as sleep:
         result = await retry.wrap_model(_make_params(), ctx, next_fn)
 
     assert result is not None
     assert call_count == 2
-    sleep.assert_awaited_once_with(0.5)
+    sleep.assert_awaited_once_with(0.5, ctx.abort_signal)
 
 
 @pytest.mark.asyncio
@@ -194,12 +196,12 @@ async def test_zero_retry_after_preserves_local_delay(ctx: GenerateMiddlewareCon
             )
         return ModelResponse(message=None)
 
-    with patch('genkit_middleware._retry.sleep', new_callable=AsyncMock) as sleep:
+    with patch('genkit_middleware._retry.sleep_unless_stopped', new_callable=AsyncMock) as sleep:
         result = await retry.wrap_model(_make_params(), ctx, next_fn)
 
     assert result is not None
     assert call_count == 2
-    sleep.assert_awaited_once_with(0.1)
+    sleep.assert_awaited_once_with(0.1, ctx.abort_signal)
 
 
 @pytest.mark.asyncio
@@ -222,13 +224,13 @@ async def test_retry_after_floor_is_applied_before_jitter(ctx: GenerateMiddlewar
 
     with (
         patch('genkit_middleware._retry.random.random', return_value=0.5),
-        patch('genkit_middleware._retry.sleep', new_callable=AsyncMock) as sleep,
+        patch('genkit_middleware._retry.sleep_unless_stopped', new_callable=AsyncMock) as sleep,
     ):
         result = await retry.wrap_model(_make_params(), ctx, next_fn)
 
     assert result is not None
     assert call_count == 2
-    sleep.assert_awaited_once_with(5.5)
+    sleep.assert_awaited_once_with(5.5, ctx.abort_signal)
 
 
 @pytest.mark.asyncio
@@ -249,12 +251,12 @@ async def test_retry_after_is_capped_by_max_delay(ctx: GenerateMiddlewareContext
             )
         return ModelResponse(message=None)
 
-    with patch('genkit_middleware._retry.sleep', new_callable=AsyncMock) as sleep:
+    with patch('genkit_middleware._retry.sleep_unless_stopped', new_callable=AsyncMock) as sleep:
         result = await retry.wrap_model(_make_params(), ctx, next_fn)
 
     assert result is not None
     assert call_count == 2
-    sleep.assert_awaited_once_with(60.0)
+    sleep.assert_awaited_once_with(60.0, ctx.abort_signal)
 
 
 @pytest.mark.asyncio
@@ -281,13 +283,13 @@ async def test_small_retry_after_preserves_local_delay_cap(
 
     with (
         patch('genkit_middleware._retry.random.random', return_value=0.5),
-        patch('genkit_middleware._retry.sleep', new_callable=AsyncMock) as sleep,
+        patch('genkit_middleware._retry.sleep_unless_stopped', new_callable=AsyncMock) as sleep,
     ):
         result = await retry.wrap_model(_make_params(), ctx, next_fn)
 
     assert result is not None
     assert call_count == 2
-    sleep.assert_awaited_once_with(0.1)
+    sleep.assert_awaited_once_with(0.1, ctx.abort_signal)
 
 
 @pytest.mark.asyncio
@@ -307,7 +309,7 @@ async def test_retry_does_not_retry_unauthenticated_error(ctx: GenerateMiddlewar
         )
 
     with (
-        patch('genkit_middleware._retry.sleep', new_callable=AsyncMock) as sleep,
+        patch('genkit_middleware._retry.sleep_unless_stopped', new_callable=AsyncMock) as sleep,
         pytest.raises(GenkitError),
     ):
         await retry.wrap_model(_make_params(), ctx, next_fn)
@@ -376,7 +378,7 @@ async def test_generate_with_failing_model_and_retry_retries_unclassified_error_
 async def test_prompt_with_failing_on_chunk_and_retry_calls_model_once() -> None:
     """`await prompt(on_chunk=raises, use=[Retry()])` calls the model once and returns the callback's message."""
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
     pm.responses = [
         ModelResponse(
             finish_reason=FinishReason.STOP,
@@ -384,9 +386,9 @@ async def test_prompt_with_failing_on_chunk_and_retry_calls_model_once() -> None
         )
     ]
     pm.chunks = [[ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('partial')])]]
-    prompt = ai.define_prompt(model='programmableModel', prompt='hi')
+    prompt = ai.define_prompt(model='scriptedModel', prompt='hi')
 
-    def on_chunk(_: ModelResponseChunk) -> None:
+    def on_chunk(_: object) -> None:
         raise RuntimeError('model sink closed')
 
     response = await prompt(
@@ -397,3 +399,71 @@ async def test_prompt_with_failing_on_chunk_and_retry_calls_model_once() -> None
     assert pm.request_count == 1
     assert response.finish_reason == FinishReason.FAILED
     assert response.finish_message == 'model sink closed'
+
+
+@pytest.mark.asyncio
+async def test_retry_makes_no_new_attempt_after_caller_stops(ctx: GenerateMiddlewareContext) -> None:
+    """Model fails UNAVAILABLE after the caller stopped: one call, original error raised."""
+    retry = Retry(max_retries=3, no_jitter=True)
+    error = GenkitError(message='Service unavailable', status='UNAVAILABLE')
+    call_count = 0
+
+    async def next_fn(params, ctx) -> NoReturn:
+        nonlocal call_count
+        call_count += 1
+        ctx.abort_signal.set()
+        raise error
+
+    started = time.monotonic()
+    with pytest.raises(GenkitError) as exc_info:
+        await retry.wrap_model(_make_params(), ctx, next_fn)
+
+    assert time.monotonic() - started < 0.5
+    assert exc_info.value is error
+    assert call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_retry_backoff_wait_ends_when_caller_stops(ctx: GenerateMiddlewareContext) -> None:
+    """Caller stops during a 30s backoff: the wait ends right away and no second call runs."""
+    retry = Retry(max_retries=3, initial_delay_ms=30_000, no_jitter=True)
+    error = GenkitError(message='Service unavailable', status='UNAVAILABLE')
+    call_count = 0
+
+    async def next_fn(params, ctx) -> NoReturn:
+        nonlocal call_count
+        call_count += 1
+        asyncio.get_running_loop().call_later(0.05, ctx.abort_signal.set)
+        raise error
+
+    started = time.monotonic()
+    with pytest.raises(GenkitError) as exc_info:
+        await asyncio.wait_for(retry.wrap_model(_make_params(), ctx, next_fn), timeout=5)
+
+    assert time.monotonic() - started < 2
+    assert exc_info.value is error
+    assert call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_retry_waits_out_the_backoff_when_caller_has_not_stopped(
+    ctx: GenerateMiddlewareContext,
+) -> None:
+    """UNAVAILABLE then success: Retry waits the full backoff, then returns the second answer."""
+    retry = Retry(max_retries=1, initial_delay_ms=200, no_jitter=True)
+    success = ModelResponse(message=None)
+    call_count = 0
+
+    async def next_fn(params, ctx) -> ModelResponse:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise GenkitError(message='Service unavailable', status='UNAVAILABLE')
+        return success
+
+    started = time.monotonic()
+    result = await retry.wrap_model(_make_params(), ctx, next_fn)
+
+    assert time.monotonic() - started >= 0.2
+    assert result is success
+    assert call_count == 2

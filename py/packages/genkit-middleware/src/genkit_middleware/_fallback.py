@@ -23,11 +23,10 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from genkit import GenkitError
+from genkit import GenkitError, ModelResponse
 from genkit._ai._generate import StreamingCallbackError
-from genkit._core._action import Action, ActionKind
-from genkit._core._model import ModelResponse
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
+from genkit.plugin_api import Action, ActionKind
 from genkit_middleware._statuses import TRANSIENT_STATUSES
 
 # Everything Retry would retry, plus failures another model may not have:
@@ -77,6 +76,8 @@ class Fallback(BaseMiddleware[FallbackConfig]):
         assert last_error is not None  # noqa: S101
         on_chunk = ctx.on_chunk
         for model_name in self.config.models:
+            if ctx.abort_signal.is_set():
+                raise last_error
             fallback_action = await self._resolve_fallback_model(ctx, model_name)
             try:
                 result = await fallback_action.run(

@@ -43,7 +43,7 @@ from genkit._core._logger import get_logger
 from genkit._core._middleware import GenerateMiddleware
 from genkit._core._model import AgentInit, AgentInput, ModelRef
 from genkit._core._registry import Registry
-from genkit._core._telemetry.http import connect_developer_ui_collector
+from genkit._core._telemetry._http import connect_developer_ui_collector
 
 logger = get_logger(__name__)
 

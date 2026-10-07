@@ -37,6 +37,8 @@ from genkit._core._error import (
     parse_retry_after_ms,
     wrap_http_error,
 )
+from genkit._core._model import AgentOutput, SessionSnapshot
+from genkit._core._typing import GenkitRuntimeError as WireError
 from genkit.plugin_api import ErrorResponseMetadata
 
 
@@ -79,8 +81,49 @@ def test_runtime_error_reason_accessor_keeps_reason_nested() -> None:
     }
     assert GenkitRuntimeError(message='bad', details={'reason': 5}).reason is None
     assert GenkitRuntimeError(message='bad', details={'reason': 'not-valid'}).reason is None
-    with pytest.raises(AttributeError):
+    with pytest.raises(ValidationError):
         error.reason = RuntimeErrorReason.TOOL_FAILED  # type: ignore[misc]
+
+
+def test_genkit_runtime_error_fields_are_read_only() -> None:
+    """Assigning ``error.message = 'x'`` raises a validation error."""
+    error = GenkitRuntimeError(status='INTERNAL', message='bad')
+    with pytest.raises(ValidationError):
+        error.message = 'x'
+    assert error.message == 'bad'
+
+
+def test_snapshot_and_agent_output_decode_the_same_error_type() -> None:
+    """A persisted turn and a live response expose the same ``.reason``."""
+    wire = {'status': 'ABORTED', 'message': 'stopped', 'details': {'reason': 'MAX_TURNS_EXCEEDED'}}
+    snapshot = SessionSnapshot.model_validate({'snapshotId': 's1', 'createdAt': '2026-10-06T00:00:00Z', 'error': wire})
+    output = AgentOutput.model_validate({'error': wire})
+
+    assert isinstance(snapshot.error, GenkitRuntimeError)
+    assert isinstance(output.error, GenkitRuntimeError)
+    assert snapshot.error.reason is RuntimeErrorReason.MAX_TURNS_EXCEEDED
+    assert output.error.reason is RuntimeErrorReason.MAX_TURNS_EXCEEDED
+
+
+def test_snapshot_accepts_generated_wire_error() -> None:
+    """A store holding the generated wire class still builds a snapshot with ``.reason``."""
+    wire = WireError(status='NOT_FOUND', message='gone', details={'reason': 'TOOL_NOT_FOUND'})
+    snapshot = SessionSnapshot.model_validate({'snapshotId': 's1', 'createdAt': '2026-10-06T00:00:00Z', 'error': wire})
+
+    assert isinstance(snapshot.error, GenkitRuntimeError)
+    assert snapshot.error.reason is RuntimeErrorReason.TOOL_NOT_FOUND
+
+
+def test_agent_output_error_rejects_object_that_only_looks_like_an_error() -> None:
+    """AgentOutput(error=Obj()) with only message/status/details attributes raises ValidationError."""
+
+    class Obj:
+        message = 'm'
+        status = 'INTERNAL'
+        details = {'reason': 'TOOL_FAILED'}
+
+    with pytest.raises(ValidationError):
+        AgentOutput(error=Obj())  # type: ignore[arg-type]
 
 
 def test_genkit_error_reason_stays_in_details() -> None:
