@@ -46,9 +46,15 @@ from typing_extensions import TypeVar
 from genkit._core._channel import Channel, CloseableQueue
 from genkit._core._compat import StrEnum
 from genkit._core._error import GenkitError, Interrupt, RuntimeErrorReason, mark_request_error
-from genkit._core._model import EmbedRequest, ModelRequest, ModelResponse, config_type_path, declared_config_type
+from genkit._core._model import (
+    EmbedRequest,
+    ModelRequest,
+    ModelResponse,
+    config_type_path,
+    declared_config_type,
+    reject_config_api_key,
+)
 from genkit._core._schema import to_json_schema
-from genkit._core._secrets import reject_config_api_key
 from genkit._core._telemetry._attrs import Attr, metadata_key
 from genkit._core._telemetry._instrumentation import (
     SpanContext,

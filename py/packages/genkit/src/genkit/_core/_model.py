@@ -152,6 +152,62 @@ class ModelConfigDict(TypedDict, extra_items=Any, total=False):
     extra: dict[str, Any] | None
 
 
+SECRETS_HINT = "Pass the key as context={'secrets': {'api_key': ...}}."
+_KEY_SLOTS = ('api_key', 'apiKey')
+
+
+def misplaced_api_key_error() -> GenkitError:
+    """The ``INVALID_ARGUMENT`` error for an API key found in config."""
+    return GenkitError(
+        status='INVALID_ARGUMENT',
+        message=f'API key belongs in context.secrets, not config. {SECRETS_HINT}',
+        reason=RuntimeErrorReason.INVALID_INPUT,
+    )
+
+
+def _has_key(bag: Mapping[str, object]) -> bool:
+    return any(bag.get(slot) is not None for slot in _KEY_SLOTS)
+
+
+def reject_config_api_key(config: object) -> None:
+    """Raise when a request config carries an API key.
+
+    Core calls this in generate, in the ``/util/generate`` action, and on every
+    model and background-model action run, so plugins don't need to. Checks
+    ``api_key`` / ``apiKey`` on a config dict or model, on a model's undeclared
+    fields, and inside ``extra``. A key in any of those would be
+    traced, and a key in ``extra`` would also go to the provider as a body
+    field while the call authenticates with the plugin's key.
+
+    Example:
+        ```python
+        reject_config_api_key({'temperature': 0.2})
+        # => None
+        reject_config_api_key({'extra': {'api_key': 'sk-tenant'}})
+        # => GenkitError INVALID_ARGUMENT: API key belongs in context.secrets, not config. ...
+        ```
+
+    Args:
+        config: The request config, as a dict or a config object.
+
+    Raises:
+        GenkitError: ``INVALID_ARGUMENT`` when a key is present.
+    """
+    if config is None:
+        return
+    bags: list[object]
+    if isinstance(config, Mapping):
+        top = cast(Mapping[str, object], config)
+        bags = [top, top.get('extra')]
+    else:
+        if any(getattr(config, slot, None) is not None for slot in _KEY_SLOTS):
+            raise misplaced_api_key_error()
+        bags = [getattr(config, 'model_extra', None), getattr(config, 'extra', None)]
+    for bag in bags:
+        if isinstance(bag, Mapping) and _has_key(cast(Mapping[str, object], bag)):
+            raise misplaced_api_key_error()
+
+
 # TypeVars for generic types
 OutputT = TypeVar('OutputT', default=object)
 ConfigT = TypeVar('ConfigT', bound=ModelConfig, default=ModelConfig)
