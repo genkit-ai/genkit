@@ -30,6 +30,7 @@ import (
 
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/status"
+	"github.com/firebase/genkit/go/internal/base"
 	"github.com/firebase/genkit/go/internal/registry"
 	test_utils "github.com/firebase/genkit/go/tests/utils"
 	"github.com/google/go-cmp/cmp"
@@ -434,7 +435,8 @@ func TestGenerate(t *testing.T) {
 					Name:         "gablorken",
 					OutputSchema: map[string]any{"type": string("number")},
 					Metadata: map[string]any{
-						"multipart": false,
+						"multipart":    false,
+						"resumeSchema": map[string]any{"type": string("object")},
 					},
 				},
 			},
@@ -535,14 +537,13 @@ func TestGenerate(t *testing.T) {
 			t.Fatalf("expected 1 content part, got %d", len(res.Message.Content))
 		}
 
-		metadata := res.Message.Content[0].Metadata
-		if metadata == nil {
-			t.Fatal("expected metadata in content part")
+		if !res.Message.Content[0].IsInterrupt() {
+			t.Fatal("expected an interrupted tool request")
 		}
 
-		interrupt, ok := metadata["interrupt"].(map[string]any)
+		interrupt, ok := res.Message.Content[0].Interrupt.Data.(map[string]any)
 		if !ok {
-			t.Fatal("expected interrupt metadata")
+			t.Fatalf("interrupt data = %T, want map[string]any", res.Message.Content[0].Interrupt.Data)
 		}
 
 		reason, ok := interrupt["reason"].(string)
@@ -1104,9 +1105,12 @@ func TestToolInterruptsAndResume(t *testing.T) {
 			t.Fatal("expected second part to be a tool request")
 		}
 
-		interruptMeta, ok := interruptedPart.Metadata["interrupt"].(map[string]any)
+		if !interruptedPart.IsInterrupt() {
+			t.Fatal("expected the tool request to be interrupted")
+		}
+		interruptMeta, ok := interruptedPart.Interrupt.Data.(map[string]any)
 		if !ok {
-			t.Fatal("expected interrupt metadata in tool request")
+			t.Fatalf("interrupt data = %T, want map[string]any", interruptedPart.Interrupt.Data)
 		}
 
 		if reason, ok := interruptMeta["reason"].(string); !ok || reason != "user_intervention_required" {
@@ -1204,13 +1208,16 @@ func TestToolInterruptsAndResume(t *testing.T) {
 			t.Errorf("expected interrupt to be false, got %v", replacedInput.Interrupt)
 		}
 
-		if _, hasInterrupt := restartPart.Metadata["interrupt"]; hasInterrupt {
-			t.Error("expected interrupt metadata to be removed")
+		if restartPart.Interrupt != nil {
+			t.Error("expected the interrupt state to be dropped from the restart part")
 		}
 
-		resumedMeta, ok := restartPart.Metadata["resumed"].(map[string]any)
+		if restartPart.Restart == nil {
+			t.Fatal("expected restart state on the restart part")
+		}
+		resumedMeta, ok := restartPart.Restart.Resume.(map[string]any)
 		if !ok {
-			t.Fatal("expected resumed metadata")
+			t.Fatalf("resume data = %T, want map[string]any", restartPart.Restart.Resume)
 		}
 
 		if resumedMeta["data"] != "resumed_data" {
@@ -2591,7 +2598,7 @@ func TestModelResponseInterrupts(t *testing.T) {
 			Name:  "confirmAction",
 			Input: map[string]any{},
 		})
-		interruptPart.Metadata = map[string]any{"interrupt": true}
+		interruptPart.Interrupt = &ToolInterrupt{}
 
 		resp := &ModelResponse{
 			Message: &Message{
@@ -4685,5 +4692,687 @@ func TestResumedToolMessageOrder(t *testing.T) {
 	}
 	if want := []string{"alpha", "beta"}; !slices.Equal(names, want) {
 		t.Errorf("resumed tool message order = %v, want %v", names, want)
+	}
+}
+
+// softToolErrors is a stand-in for the SoftToolErrors middleware in
+// plugins/middleware: it puts a policy covering the given tools, or every tool
+// when none are given, on each turn's context.
+func softToolErrors(tools ...string) Middleware {
+	policy := &base.SoftToolErrors{Covers: func(name string) bool {
+		return len(tools) == 0 || slices.Contains(tools, name)
+	}}
+	return MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
+		return &Hooks{
+			WrapGenerate: func(ctx context.Context, params *GenerateParams, next GenerateNext) (*ModelResponse, error) {
+				return next(base.SoftToolErrorsKey.NewContext(ctx, policy), params)
+			},
+		}, nil
+	})
+}
+
+// softFailModel requests toolName on its first turn and answers the tool
+// response it then receives with "done", recording that response in *got
+// when got is not nil.
+func softFailModel(t *testing.T, r api.Registry, toolName string, got **Part) {
+	t.Helper()
+	defineFakeModel(t, r, fakeModelConfig{
+		name: "test/softFail",
+		handler: func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+			if last := req.Messages[len(req.Messages)-1]; last.Role == RoleTool {
+				if got != nil {
+					*got = last.Content[0]
+				}
+				return &ModelResponse{Request: req, Message: NewModelTextMessage("done")}, nil
+			}
+			return &ModelResponse{Request: req, Message: &Message{
+				Role:    RoleModel,
+				Content: []*Part{NewToolRequestPart(&ToolRequest{Name: toolName, Input: map[string]any{}})},
+			}}, nil
+		},
+	})
+}
+
+// assertToolError fails t unless p answers its call with an error whose
+// message contains want, and returns the message.
+func assertToolError(t *testing.T, p *Part, want string) string {
+	t.Helper()
+	if p == nil {
+		t.Fatal("the model never received a tool response")
+	}
+	if !p.IsToolError() {
+		t.Fatalf("IsToolError() = false for %+v, want true", p)
+	}
+	out, _ := p.ToolResponse.Output.(map[string]any)
+	msg, _ := out["error"].(string)
+	if !strings.Contains(msg, want) {
+		t.Errorf("Output = %v, want an error containing %q", p.ToolResponse.Output, want)
+	}
+	return msg
+}
+
+func TestToolErrorsReturnedToModel(t *testing.T) {
+	failWith := func(err error) ToolFunc[map[string]any, string] {
+		return func(ctx *ToolContext, in map[string]any) (string, error) { return "", err }
+	}
+
+	for _, tc := range []struct {
+		name    string
+		request string // the tool the model calls; only "lookup" exists
+		toolErr error
+		use     []Middleware
+		wantErr error  // the loop fails with this
+		wantMsg string // or the model reads exactly this error
+	}{
+		// The model reads the message the tool wrote, not the context the
+		// tool action added around it.
+		{name: "a marked error answers the call without a policy", request: "lookup",
+			toolErr: &base.ToolFailError{Err: errors.New("no such city")}, wantMsg: "no such city"},
+		{name: "an unmarked error fails the loop without a policy", request: "lookup",
+			toolErr: errors.New("boom"), wantErr: ErrToolFailed},
+		// The response already names the call, so the model reads the tool's
+		// error without the tool action's "error calling tool" prefix.
+		{name: "the policy returns the tool's own error", request: "lookup",
+			toolErr: errors.New("boom"), use: []Middleware{softToolErrors()}, wantMsg: "boom"},
+		{name: "the policy returns a call to a missing tool", request: "missing",
+			use: []Middleware{softToolErrors()}, wantMsg: `tool "missing" not found`},
+		{name: "a missing tool fails the loop without a policy", request: "missing",
+			wantErr: ErrToolNotFound},
+		{name: "the policy skips tools it does not cover", request: "lookup",
+			toolErr: errors.New("boom"), use: []Middleware{softToolErrors("other")}, wantErr: ErrToolFailed},
+		// A timeout or cancellation the tool's own context raised stops the
+		// loop like the caller's would, unless the tool marks it.
+		{name: "the policy keeps a tool's own deadline", request: "lookup",
+			toolErr: fmt.Errorf("rpc: %w", context.DeadlineExceeded), use: []Middleware{softToolErrors()}, wantErr: context.DeadlineExceeded},
+		{name: "the policy keeps a tool's own cancellation", request: "lookup",
+			toolErr: fmt.Errorf("rpc: %w", context.Canceled), use: []Middleware{softToolErrors()}, wantErr: context.Canceled},
+		{name: "a marked deadline answers the call", request: "lookup",
+			toolErr: &base.ToolFailError{Err: context.DeadlineExceeded}, wantMsg: "context deadline exceeded"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newTestRegistry(t)
+			var got *Part
+			softFailModel(t, r, tc.request, &got)
+			lookup := defineTool(r, "lookup", "fails", failWith(tc.toolErr))
+
+			resp, err := Generate(testCtx, r, WithModelName("test/softFail"), WithPrompt("go"), WithTools(lookup),
+				WithUse(tc.use...))
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("err = %v, want %v", err, tc.wantErr)
+				}
+				return
+			}
+			assertNoError(t, err)
+			if resp.Text() != "done" {
+				t.Errorf("Text() = %q, want %q", resp.Text(), "done")
+			}
+			if msg := assertToolError(t, got, tc.wantMsg); msg != tc.wantMsg {
+				t.Errorf("error message = %q, want %q", msg, tc.wantMsg)
+			}
+		})
+	}
+
+	// The policy covers the tool's failures, not the hooks': a hook that
+	// replaces the tool's error with its own stops the loop on purpose,
+	// wherever it sits relative to the policy.
+	t.Run("the policy keeps a hook's own error", func(t *testing.T) {
+		denied := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
+			return &Hooks{WrapTool: func(ctx context.Context, p *ToolParams, next ToolNext) (*MultipartToolResponse, error) {
+				if _, err := next(ctx, p); err != nil {
+					return nil, errors.New("budget exhausted")
+				}
+				return nil, errors.New("unreachable")
+			}}, nil
+		})
+		for _, order := range [][]Middleware{{softToolErrors(), denied}, {denied, softToolErrors()}} {
+			r := newTestRegistry(t)
+			softFailModel(t, r, "lookup", nil)
+			lookup := defineTool(r, "lookup", "fails", failWith(errors.New("boom")))
+
+			_, err := Generate(testCtx, r, WithModelName("test/softFail"), WithPrompt("go"), WithTools(lookup),
+				WithUse(order...))
+			if !errors.Is(err, ErrToolFailed) || !strings.Contains(err.Error(), "budget exhausted") {
+				t.Errorf("err = %v, want ErrToolFailed carrying the hook's error", err)
+			}
+		}
+	})
+
+	// A hook that answers for the tool, without running it, can mark its
+	// error the way a tool author does.
+	t.Run("a marked error from a hook answers the call", func(t *testing.T) {
+		ran := false
+		refuse := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
+			return &Hooks{WrapTool: func(ctx context.Context, p *ToolParams, next ToolNext) (*MultipartToolResponse, error) {
+				return nil, &base.ToolFailError{Err: errors.New("pick a city in Europe")}
+			}}, nil
+		})
+		r := newTestRegistry(t)
+		var got *Part
+		softFailModel(t, r, "lookup", &got)
+		lookup := defineTool(r, "lookup", "records the call", func(ctx *ToolContext, in map[string]any) (string, error) {
+			ran = true
+			return "ok", nil
+		})
+
+		_, err := Generate(testCtx, r, WithModelName("test/softFail"), WithPrompt("go"), WithTools(lookup),
+			WithUse(refuse))
+		assertNoError(t, err)
+		if ran {
+			t.Error("the tool ran, want the hook to answer for it")
+		}
+		assertToolError(t, got, "pick a city in Europe")
+	})
+
+	t.Run("hooks see the tool's error before it becomes a response", func(t *testing.T) {
+		var seen error
+		observer := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
+			return &Hooks{WrapTool: func(ctx context.Context, p *ToolParams, next ToolNext) (*MultipartToolResponse, error) {
+				resp, err := next(ctx, p)
+				seen = err
+				return resp, fmt.Errorf("observed: %w", err)
+			}}, nil
+		})
+		r := newTestRegistry(t)
+		var got *Part
+		softFailModel(t, r, "lookup", &got)
+		lookup := defineTool(r, "lookup", "fails", failWith(errors.New("boom")))
+
+		_, err := Generate(testCtx, r, WithModelName("test/softFail"), WithPrompt("go"), WithTools(lookup),
+			WithUse(softToolErrors(), observer))
+		assertNoError(t, err)
+		if seen == nil || !strings.HasSuffix(seen.Error(), "boom") {
+			t.Errorf("hook saw %v, want the tool's error", seen)
+		}
+		// A hook that wraps the tool's error passes it up, so the policy
+		// still covers it, message and all.
+		assertToolError(t, got, "observed: ")
+	})
+
+	t.Run("an interrupt stays an interrupt", func(t *testing.T) {
+		r := newTestRegistry(t)
+		softFailModel(t, r, "ask", nil)
+		ask := defineTool(r, "ask", "interrupts", func(ctx *ToolContext, in map[string]any) (string, error) {
+			return "", ctx.Interrupt(&InterruptOptions{Metadata: map[string]any{"q": "sure?"}})
+		})
+
+		resp, err := Generate(testCtx, r, WithModelName("test/softFail"), WithPrompt("go"), WithTools(ask),
+			WithUse(softToolErrors()))
+		assertNoError(t, err)
+		if resp.FinishReason != "interrupted" {
+			t.Errorf("FinishReason = %q, want interrupted", resp.FinishReason)
+		}
+	})
+
+	t.Run("a stopped caller stays stopped", func(t *testing.T) {
+		r := newTestRegistry(t)
+		var got *Part
+		softFailModel(t, r, "lookup", &got)
+		ctx, cancel := context.WithCancel(testCtx)
+		defer cancel()
+		lookup := defineTool(r, "lookup", "stops the caller", func(tc *ToolContext, in map[string]any) (string, error) {
+			cancel()
+			return "", tc.Err()
+		})
+
+		_, err := Generate(ctx, r, WithModelName("test/softFail"), WithPrompt("go"), WithTools(lookup),
+			WithUse(softToolErrors()))
+		if !errors.Is(err, status.ErrCancelled) {
+			t.Fatalf("err = %v, want a cancellation", err)
+		}
+		if got != nil {
+			t.Errorf("the model received %+v, want no tool response", got)
+		}
+	})
+
+	t.Run("a Generate inside a tool starts without the policy", func(t *testing.T) {
+		r := newTestRegistry(t)
+		var got *Part
+		softFailModel(t, r, "outer", &got)
+		defineFakeModel(t, r, fakeModelConfig{
+			name:    "test/inner",
+			handler: toolCallingModelHandler("inner", map[string]any{}, "unused"),
+		})
+		inner := defineTool(r, "inner", "fails", failWith(errors.New("inner boom")))
+		var innerErr error
+		outer := defineTool(r, "outer", "runs a Generate", func(tc *ToolContext, in map[string]any) (string, error) {
+			_, innerErr = Generate(tc, r, WithModelName("test/inner"), WithPrompt("go"), WithTools(inner))
+			return "", innerErr
+		})
+
+		_, err := Generate(testCtx, r, WithModelName("test/softFail"), WithPrompt("go"), WithTools(outer),
+			WithUse(softToolErrors()))
+		assertNoError(t, err)
+		if !errors.Is(innerErr, ErrToolFailed) {
+			t.Errorf("inner Generate err = %v, want ErrToolFailed", innerErr)
+		}
+		assertToolError(t, got, "inner boom")
+	})
+
+	t.Run("a restarted tool's error answers the call", func(t *testing.T) {
+		r := newTestRegistry(t)
+		var got *Part
+		softFailModel(t, r, "flaky", &got)
+		calls := 0
+		flaky := defineTool(r, "flaky", "interrupts, then fails", func(ctx *ToolContext, in map[string]any) (string, error) {
+			calls++
+			if calls == 1 {
+				return "", ctx.Interrupt(nil)
+			}
+			return "", &base.ToolFailError{Err: errors.New("still broken")}
+		})
+
+		res, err := Generate(testCtx, r, WithModelName("test/softFail"), WithPrompt("go"), WithTools(flaky))
+		assertNoError(t, err)
+		_, err = Generate(testCtx, r, WithModelName("test/softFail"), WithMessages(res.History()...), WithTools(flaky),
+			WithToolRestarts(flaky.Restart(res.Interrupts()[0], nil)))
+		assertNoError(t, err)
+		assertToolError(t, got, "still broken")
+	})
+
+	// A sibling's interrupt pauses the round, so the error is stashed on its
+	// request and replayed on resume, still marked as an error.
+	t.Run("an error in an interrupted round survives the resume", func(t *testing.T) {
+		r := newTestRegistry(t)
+		asks := 0
+		ask := defineTool(r, "ask", "interrupts once", func(ctx *ToolContext, in map[string]any) (string, error) {
+			asks++
+			if asks == 1 {
+				return "", ctx.Interrupt(nil)
+			}
+			return "yes", nil
+		})
+		lookup := defineTool(r, "lookup", "fails", failWith(&base.ToolFailError{Err: errors.New("no such city")}))
+		var toolMsg *Message
+		defineFakeModel(t, r, fakeModelConfig{
+			name: "test/twoTools",
+			handler: func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+				if last := req.Messages[len(req.Messages)-1]; last.Role == RoleTool {
+					toolMsg = last
+					return &ModelResponse{Request: req, Message: NewModelTextMessage("done")}, nil
+				}
+				return &ModelResponse{Request: req, Message: &Message{
+					Role: RoleModel,
+					Content: []*Part{
+						NewToolRequestPart(&ToolRequest{Name: "ask", Input: map[string]any{}}),
+						NewToolRequestPart(&ToolRequest{Name: "lookup", Input: map[string]any{}}),
+					},
+				}}, nil
+			},
+		})
+
+		res, err := Generate(testCtx, r, WithModelName("test/twoTools"), WithPrompt("go"), WithTools(ask, lookup))
+		assertNoError(t, err)
+		_, err = Generate(testCtx, r, WithModelName("test/twoTools"), WithMessages(res.History()...), WithTools(ask, lookup),
+			WithToolRestarts(ask.Restart(res.Interrupts()[0], nil)))
+		assertNoError(t, err)
+		if toolMsg == nil || len(toolMsg.Content) != 2 {
+			t.Fatalf("tool message = %+v, want two responses", toolMsg)
+		}
+		assertToolError(t, toolMsg.Content[1], "no such city")
+	})
+}
+
+// TestResumeRejectedBeforeAnyToolRuns pins that a resume is checked as a
+// whole before any tool runs: when one pending request has no resolution, or
+// a restart payload or response that does not match the tool's schema, the
+// resume fails and a sibling with a valid restart has not run.
+func TestResumeRejectedBeforeAnyToolRuns(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		want error
+		// resolve returns the directives for the second request, "confirm".
+		resolve func(t *testing.T, part *Part) []*Part
+	}{
+		{"no resolution", ErrUnresolvedToolRequest, func(*testing.T, *Part) []*Part { return nil }},
+		{"mistyped restart payload", status.ErrInvalidArgument, func(t *testing.T, part *Part) []*Part {
+			restart, err := part.ToToolRestart(map[string]any{"approved": "yes"})
+			assertNoError(t, err)
+			return []*Part{restart}
+		}},
+		{"mistyped response", status.ErrInvalidArgument, func(t *testing.T, part *Part) []*Part {
+			respond, err := part.ToToolResponse(map[string]any{"not": "a string"})
+			assertNoError(t, err)
+			return []*Part{respond}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newTestRegistry(t)
+			defineFakeModel(t, r, fakeModelConfig{
+				name: "test/twoInterrupts",
+				handler: func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+					return &ModelResponse{Request: req, Message: &Message{
+						Role: RoleModel,
+						Content: []*Part{
+							NewToolRequestPart(&ToolRequest{Name: "charge", Ref: "1", Input: map[string]any{}}),
+							NewToolRequestPart(&ToolRequest{Name: "confirm", Ref: "2", Input: map[string]any{}}),
+						},
+					}}, nil
+				},
+			})
+			type confirmation struct {
+				Approved bool `json:"approved"`
+			}
+			charges := 0
+			charge := defineTool(r, "charge", "charges a card",
+				func(ctx *ToolContext, _ map[string]any) (string, error) {
+					if !ctx.IsResumed() {
+						return "", ctx.Interrupt(nil)
+					}
+					charges++
+					return "charged", nil
+				})
+			confirm := NewResumableTool("confirm", "asks to confirm",
+				func(ctx context.Context, _ map[string]any, res *confirmation) (string, error) {
+					return "", &base.ToolInterruptError{}
+				})
+			confirm.Register(r)
+
+			res, err := Generate(testCtx, r,
+				WithModelName("test/twoInterrupts"), WithPrompt("go"), WithTools(charge, confirm))
+			assertNoError(t, err)
+			var parts []*Part
+			for _, part := range res.Interrupts() {
+				if call, ok := charge.Interrupted(part); ok {
+					parts = append(parts, call.Restart(nil))
+				} else {
+					parts = append(parts, tc.resolve(t, part)...)
+				}
+			}
+			_, err = Generate(testCtx, r, WithModelName("test/twoInterrupts"),
+				WithMessages(res.History()...), WithTools(charge, confirm), WithResume(parts...))
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("resume error = %v, want %v", err, tc.want)
+			}
+			if charges != 0 {
+				t.Errorf("charge ran %d times before the resume was rejected, want 0", charges)
+			}
+		})
+	}
+}
+
+// TestResumeRejectsToolRequestPartWithoutRequest pins that a tool request
+// part with no request in the last model message, which the kind check alone
+// lets through, fails the resume with ErrInvalidPart rather than panicking
+// when the resume is planned.
+func TestResumeRejectsToolRequestPartWithoutRequest(t *testing.T) {
+	r, tool, res := interruptedForResume(t)
+	history := res.History()
+	last := history[len(history)-1]
+	last.Content = append(last.Content, NewToolRequestPart(nil))
+	_, err := Generate(testCtx, r, WithModelName("test/resumeModel"),
+		WithMessages(history...), WithTools(tool),
+		WithToolResponses(tool.Respond(res.Message.Content[0], "answer", nil)))
+	if !errors.Is(err, ErrInvalidPart) {
+		t.Errorf("resume error = %v, want ErrInvalidPart", err)
+	}
+}
+
+// TestResumeFailureRecordsFinishedSiblings pins that a resume whose
+// restarted tool fails waits for its restarted siblings and returns them on
+// the partial: a sibling that finishes after the failure is recorded as
+// pending output, so resuming from the partial replays it rather than
+// running it again.
+func TestResumeFailureRecordsFinishedSiblings(t *testing.T) {
+	r := newTestRegistry(t)
+	var modelCalls int
+	defineFakeModel(t, r, fakeModelConfig{
+		name: "test/twoInterrupts",
+		handler: func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+			modelCalls++
+			if modelCalls > 1 {
+				return &ModelResponse{Request: req, Message: NewModelTextMessage("done")}, nil
+			}
+			return &ModelResponse{Request: req, Message: &Message{
+				Role: RoleModel,
+				Content: []*Part{
+					NewToolRequestPart(&ToolRequest{Name: "charge", Ref: "1", Input: map[string]any{}}),
+					NewToolRequestPart(&ToolRequest{Name: "confirm", Ref: "2", Input: map[string]any{}}),
+				},
+			}}, nil
+		},
+	})
+	confirmFailed := make(chan struct{})
+	charges := 0
+	charge := defineTool(r, "charge", "charges a card",
+		func(ctx *ToolContext, _ map[string]any) (string, error) {
+			if !ctx.IsResumed() {
+				return "", ctx.Interrupt(nil)
+			}
+			<-confirmFailed // Finishes only after its sibling failed.
+			charges++
+			return "charged", nil
+		})
+	failConfirm := true
+	confirm := defineTool(r, "confirm", "asks to confirm",
+		func(ctx *ToolContext, _ map[string]any) (string, error) {
+			if !ctx.IsResumed() {
+				return "", ctx.Interrupt(nil)
+			}
+			if failConfirm {
+				close(confirmFailed)
+				return "", errors.New("confirmation service down")
+			}
+			return "confirmed", nil
+		})
+
+	res, err := Generate(testCtx, r,
+		WithModelName("test/twoInterrupts"), WithPrompt("go"), WithTools(charge, confirm))
+	assertNoError(t, err)
+	var restarts []*Part
+	for _, part := range res.Interrupts() {
+		if part.ToolRequest.Name == "charge" {
+			restarts = append(restarts, charge.Restart(part, nil))
+		} else {
+			restarts = append(restarts, confirm.Restart(part, nil))
+		}
+	}
+	partial, err := Generate(testCtx, r,
+		WithModelName("test/twoInterrupts"), WithMessages(res.History()...),
+		WithTools(charge, confirm), WithToolRestarts(restarts...))
+	if !errors.Is(err, ErrToolFailed) {
+		t.Fatalf("resume error = %v, want ErrToolFailed", err)
+	}
+	if charges != 1 {
+		t.Fatalf("charge ran %d times, want 1", charges)
+	}
+	if partial == nil || partial.Message == nil {
+		t.Fatalf("partial = %+v, want the resumed message", partial)
+	}
+	if got := partial.FinishReason; got != FinishReasonFailed {
+		t.Errorf("FinishReason = %q, want %q", got, FinishReasonFailed)
+	}
+	parts := partial.Message.Content
+	if _, ok := parts[0].Metadata["pendingOutput"]; !ok {
+		t.Errorf("charge part metadata = %v, want pendingOutput", parts[0].Metadata)
+	}
+	if !parts[1].IsInterrupt() {
+		t.Errorf("confirm part metadata = %v, want it still interrupted", parts[1].Metadata)
+	}
+
+	failConfirm = false
+	final, err := Generate(testCtx, r,
+		WithModelName("test/twoInterrupts"), WithMessages(partial.History()...),
+		WithTools(charge, confirm), WithToolRestarts(confirm.Restart(parts[1], nil)))
+	assertNoError(t, err)
+	if charges != 1 {
+		t.Errorf("charge ran %d times after resuming from the partial, want 1", charges)
+	}
+	if got := final.Text(); got != "done" {
+		t.Errorf("final text = %q, want %q", got, "done")
+	}
+}
+
+// jsRestartOf builds the restart part the JS runtime's restartTool builds for
+// an interrupted request: the interrupted part's metadata spread onto the
+// restart, "interrupt" key included, with "resumed" added, and
+// "replacedInput" too when it is not nil. It goes through JSON so the part is
+// exactly what a peer runtime would send.
+func jsRestartOf(t *testing.T, interrupt *Part, resumed, replacedInput any) *Part {
+	t.Helper()
+	raw, err := json.Marshal(interrupt)
+	assertNoError(t, err)
+	var wire map[string]any
+	assertNoError(t, json.Unmarshal(raw, &wire))
+	meta, _ := wire["metadata"].(map[string]any)
+	if meta == nil {
+		meta = map[string]any{}
+		wire["metadata"] = meta
+	}
+	meta["resumed"] = resumed
+	if replacedInput != nil {
+		meta["replacedInput"] = replacedInput
+	}
+	raw, err = json.Marshal(wire)
+	assertNoError(t, err)
+	var restart Part
+	assertNoError(t, json.Unmarshal(raw, &restart))
+	return &restart
+}
+
+// TestResumeReadsJSRestartMarkers pins how the loop reads a restart part as a
+// peer runtime sends it. The part still carries the interrupt it resolves,
+// and the restart supersedes it. The resumed marker is read by truthiness, as
+// the JS runtime reads it: an object is the payload, true is a bare restart,
+// delivered as an empty payload, and false is no resumption, even with a
+// replaced input beside it. Any other value is rejected before the tool
+// runs, since Go delivers only an object and "denied" must not read as a
+// bare restart.
+func TestResumeReadsJSRestartMarkers(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		marker        any
+		replacedInput any
+		wantResumed   map[string]any // nil: the tool re-executes afresh
+		wantErr       error          // the tool does not re-execute
+	}{
+		{name: "object", marker: map[string]any{"approved": true}, wantResumed: map[string]any{"approved": true}},
+		{name: "true", marker: true, wantResumed: map[string]any{}},
+		{name: "string", marker: "approved", wantErr: status.ErrInvalidArgument},
+		{name: "number", marker: 1.0, wantErr: status.ErrInvalidArgument},
+		{name: "array", marker: []any{"a"}, wantErr: status.ErrInvalidArgument},
+		{name: "false", marker: false},
+		{name: "false with replaced input", marker: false, replacedInput: map[string]any{"old": true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newTestRegistry(t)
+			defineFakeModel(t, r, fakeModelConfig{
+				name: "test/jsRestart",
+				handler: func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+					if req.Messages[len(req.Messages)-1].Role == RoleTool {
+						return &ModelResponse{Request: req, Message: NewModelTextMessage("done")}, nil
+					}
+					return &ModelResponse{Request: req, Message: &Message{Role: RoleModel, Content: []*Part{
+						NewToolRequestPart(&ToolRequest{Name: "confirm", Input: map[string]any{}}),
+					}}}, nil
+				},
+			})
+			var resumed []map[string]any
+			confirm := defineTool(r, "confirm", "asks to confirm",
+				func(ctx *ToolContext, _ map[string]any) (string, error) {
+					resumed = append(resumed, ctx.Resumed)
+					if !ctx.IsResumed() {
+						return "", ctx.Interrupt(nil)
+					}
+					return "confirmed", nil
+				})
+
+			res, err := Generate(testCtx, r, WithModelName("test/jsRestart"), WithPrompt("go"), WithTools(confirm))
+			assertNoError(t, err)
+			restart := jsRestartOf(t, res.Interrupts()[0], tc.marker, tc.replacedInput)
+			if !restart.IsInterrupt() {
+				t.Fatalf("restart = %+v, want the interrupt it resolves still on it", restart)
+			}
+
+			_, err = Generate(testCtx, r, WithModelName("test/jsRestart"),
+				WithMessages(res.History()...), WithTools(confirm), WithToolRestarts(restart))
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("resume error = %v, want %v", err, tc.wantErr)
+				}
+				if len(resumed) != 1 {
+					t.Errorf("tool ran %d times, want 1", len(resumed))
+				}
+				return
+			}
+			if tc.wantResumed == nil {
+				if !errors.Is(err, status.ErrFailedPrecondition) {
+					t.Fatalf("resume error = %v, want the tool's fresh interrupt", err)
+				}
+			} else {
+				assertNoError(t, err)
+			}
+			if len(resumed) != 2 {
+				t.Fatalf("tool ran %d times, want 2", len(resumed))
+			}
+			if diff := cmp.Diff(tc.wantResumed, resumed[1]); diff != "" {
+				t.Errorf("Resumed on re-execution mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// TestResumeBareTrueInMemory pins that a restart built in memory with true
+// as its resume data is a bare restart, as the same part is after a JSON
+// round trip, through the deprecated verb and on the typed field alike.
+func TestResumeBareTrueInMemory(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		restart func(confirm *ToolAction[map[string]any, string], interrupt *Part) *Part
+	}{
+		{"deprecated Restart", func(confirm *ToolAction[map[string]any, string], interrupt *Part) *Part {
+			return confirm.Restart(interrupt, &RestartOptions{ResumedMetadata: true})
+		}},
+		{"typed field", func(_ *ToolAction[map[string]any, string], interrupt *Part) *Part {
+			p := interrupt.typedClone()
+			p.Restart = &ToolRestart{Resume: true}
+			return p
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newTestRegistry(t)
+			defineFakeModel(t, r, fakeModelConfig{
+				name: "test/bareTrue",
+				handler: func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+					if req.Messages[len(req.Messages)-1].Role == RoleTool {
+						return &ModelResponse{Request: req, Message: NewModelTextMessage("done")}, nil
+					}
+					return &ModelResponse{Request: req, Message: &Message{Role: RoleModel, Content: []*Part{
+						NewToolRequestPart(&ToolRequest{Name: "confirm", Input: map[string]any{}}),
+					}}}, nil
+				},
+			})
+			var resumed map[string]any
+			confirm := defineTool(r, "confirm", "asks to confirm",
+				func(ctx *ToolContext, _ map[string]any) (string, error) {
+					if !ctx.IsResumed() {
+						return "", ctx.Interrupt(nil)
+					}
+					resumed = ctx.Resumed
+					return "confirmed", nil
+				})
+
+			res, err := Generate(testCtx, r, WithModelName("test/bareTrue"), WithPrompt("go"), WithTools(confirm))
+			assertNoError(t, err)
+			_, err = Generate(testCtx, r, WithModelName("test/bareTrue"),
+				WithMessages(res.History()...), WithTools(confirm),
+				WithToolRestarts(tc.restart(confirm, res.Interrupts()[0])))
+			assertNoError(t, err)
+			if diff := cmp.Diff(map[string]any{}, resumed); diff != "" {
+				t.Errorf("Resumed mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// TestResumeReportsNilPart pins that a nil in the resume list, which the
+// deprecated verbs return for a part they cannot restart, is reported as
+// such rather than as a part of the wrong kind.
+func TestResumeReportsNilPart(t *testing.T) {
+	r, tool, res := interruptedForResume(t)
+	_, err := Generate(testCtx, r, WithModelName("test/resumeModel"),
+		WithMessages(res.History()...), WithTools(tool), WithToolRestarts(nil))
+	if err == nil || !strings.Contains(err.Error(), "part is nil") {
+		t.Errorf("error = %v, want it to report the nil part", err)
 	}
 }

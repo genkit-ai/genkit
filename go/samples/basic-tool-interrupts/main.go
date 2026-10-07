@@ -19,15 +19,24 @@
 // transferMoney interrupts when a transfer is large enough to need approving.
 // Interrupting ends the turn with the tool unfinished, so the flow reads the
 // interrupt, decides, and runs a second turn that restarts the tool with the
-// answer attached. The tool then acts on it. (Tool.RespondWith is the other
-// option, answering a call outright instead of letting the tool run again.)
+// answer attached. The tool then acts on it. (Respond is the other option,
+// answering a call outright instead of letting the tool run again.)
+//
+// DefineResumableTool takes a third type parameter for what comes back on
+// the resume, so the flow and the tool share one type for the answer:
+//
+//   - The tool function takes a plain context.Context and an *Approval. The
+//     parameter is nil on the first call and set on the resume, so the tool
+//     reads a typed value instead of asking whether it was resumed and then
+//     pulling metadata out by key.
+//   - tool.Interrupt pauses with a typed value the flow reads back with
+//     ai.InterruptAs.
+//   - The tool's Interrupted claims the paused call, with its input decoded,
+//     and Restart on that call carries a typed Approval back. Nothing on that
+//     path can fail, so there is no error to handle.
 //
 // The approve field stands in for the person: a real app would hand the pending
 // interrupt to a client and run the second turn when they answer.
-//
-// basic-tool-interrupts-exp is this same sample written against the in-preview
-// tools API in genkit/exp. Reading the two side by side is the shortest way to
-// see what that API changes.
 //
 // Run it:
 //
@@ -69,6 +78,7 @@ import (
 	"net/http"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/ai/tool"
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/core/status"
@@ -98,11 +108,20 @@ type (
 		Balance float64 `json:"balance" jsonschema_description:"The balance after the transfer"`
 	}
 
-	// TransferInterrupt is the typed metadata the tool attaches when it pauses,
-	// so whoever answers knows what they are approving.
+	// Approval is the answer carried back into the tool when it is resumed. It
+	// is the third type parameter of the tool, so a shape can be given to it
+	// here rather than agreed on key by key between the tool and the flow.
+	Approval struct {
+		Approved bool `json:"approved"`
+	}
+
+	// TransferInterrupt is what the tool adds when it pauses. The tool request
+	// already carries what the model asked for, and the flow reads that typed
+	// from the claimed call, so this holds only what the tool knew: why it
+	// paused and what the account holds.
 	TransferInterrupt struct {
-		ToAccount string  `json:"toAccount"`
-		Amount    float64 `json:"amount"`
+		Reason  string  `json:"reason"`
+		Balance float64 `json:"balance"`
 	}
 
 	// TransferRequest is what the flow takes.
@@ -134,29 +153,28 @@ func main() {
 	// GOOGLE_API_KEY, which is the recommended practice.
 	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
 
-	// An interruptible tool is an ordinary one: pausing is something the tool
-	// function does, not something its signature declares.
-	transferMoney := genkit.DefineTool(g, "transferMoney",
+	// A resumable tool declares what it is resumed with, so the answer
+	// arrives as a third parameter rather than as metadata to look up.
+	transferMoney := genkit.DefineResumableTool(g, "transferMoney",
 		"Transfers money to another account.",
-		func(tc *ai.ToolContext, input TransferInput) (*TransferResult, error) {
+		func(ctx context.Context, input TransferInput, approval *Approval) (*TransferResult, error) {
 			if input.Amount > accountBalance {
 				// An ordinary answer, not an interrupt: the model can explain
 				// this to the user without anyone being asked anything.
 				return &TransferResult{Status: "rejected", Balance: accountBalance}, nil
 			}
-			// IsResumed is false on the first call and true once the tool has
-			// been restarted, which is what tells a fresh large transfer from
-			// an answered one.
-			if !tc.IsResumed() && input.Amount > approvalLimit {
-				return nil, ai.InterruptWith(tc, TransferInterrupt{
-					ToAccount: input.ToAccount,
-					Amount:    input.Amount,
+			// approval is nil on the first call and set when the tool is
+			// resumed, which is what tells a fresh large transfer from an
+			// answered one.
+			if approval == nil && input.Amount > approvalLimit {
+				return nil, tool.Interrupt(ctx, TransferInterrupt{
+					Reason:  "over_limit",
+					Balance: accountBalance,
 				})
 			}
-			// The answer travels as metadata, so it is read back a key at a
-			// time. Letting the tool decide, rather than the flow, is what
-			// keeps the rule it paused on in one place.
-			if approved, ok := ai.ResumedValue[bool](tc, "approved"); ok && !approved {
+			// Letting the tool decide, rather than the flow, is what keeps the
+			// rule it paused on in one place.
+			if approval != nil && !approval.Approved {
 				return &TransferResult{Status: "declined", Balance: accountBalance}, nil
 			}
 
@@ -197,23 +215,23 @@ func main() {
 				return &Transfer{Reply: resp.Text(), Balance: accountBalance}, nil
 			}
 
-			// Answer every interrupt. RestartWith builds a part rather than
-			// calling the model, so the decision travels with the next request.
-			var restarts []*ai.Part
+			// Answer every interrupt. Interrupted claims the paused call for
+			// this tool, and Restart builds a part rather than calling the
+			// model, so the decision travels with the next request.
+			var parts []*ai.Part
 			for _, interrupt := range interrupts {
-				meta, ok := ai.InterruptAs[TransferInterrupt](interrupt)
+				call, ok := transferMoney.Interrupted(interrupt)
 				if !ok {
 					return nil, status.Errorf(status.ErrInternal, "unexpected interrupt: %s", interrupt.ToolRequest.Name)
 				}
+				// The input says what the model asked for; the interrupt data
+				// adds what only the tool knew when it paused.
+				meta, _ := ai.InterruptAs[TransferInterrupt](interrupt)
 				logger.Info(ctx, "transfer needs approval",
-					"amount", meta.Amount, "toAccount", meta.ToAccount, "approve", input.Approve)
+					"amount", call.Input.Amount, "toAccount", call.Input.ToAccount,
+					"reason", meta.Reason, "balance", meta.Balance, "approve", input.Approve)
 
-				part, err := transferMoney.RestartWith(interrupt,
-					ai.WithResumedMetadata[TransferInput](map[string]any{"approved": input.Approve}))
-				if err != nil {
-					return nil, fmt.Errorf("could not answer the approval: %w", err)
-				}
-				restarts = append(restarts, part)
+				parts = append(parts, call.Restart(Approval{Approved: input.Approve}))
 			}
 
 			// Turn two: the same conversation, plus the answers. History
@@ -222,7 +240,7 @@ func main() {
 				ai.WithModel(model),
 				ai.WithMessages(resp.History()...),
 				ai.WithTools(transferMoney),
-				ai.WithToolRestarts(restarts...),
+				ai.WithResume(parts...),
 				forward,
 			)
 			if err != nil {

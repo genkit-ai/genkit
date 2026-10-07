@@ -25,10 +25,14 @@ import httpx
 
 
 class OllamaConnectionError(ConnectionError):
-    """Raised when the Ollama server is unreachable.
+    """Raised when the Ollama server is unreachable or times out.
 
     Subclasses ``ConnectionError`` so callers catching the standard exception
     still work.
+
+    Deliberately not a ``GenkitError``: a transport failure has no status the
+    server reported, so it stays unclassified, matching the other plugins and
+    Go. Retry retries it; Fallback does not switch models on it.
     """
 
 

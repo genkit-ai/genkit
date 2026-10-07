@@ -31,7 +31,10 @@ import (
 type Hooks struct {
 	// Tools are additional tools to register during the generation this
 	// middleware is attached to. They are available to the model alongside
-	// any user-supplied tools.
+	// any user-supplied tools. Every tool constructor's result is a [Tool],
+	// so a middleware can contribute one that interrupts; the application,
+	// which holds only the part, resolves the interrupt with
+	// [Part.ToToolRestart] and [Part.ToToolResponse].
 	Tools []Tool
 	// WrapGenerate wraps each iteration of the tool loop. It sees the
 	// accumulated request, the iteration index, and the streaming callback.
@@ -44,6 +47,14 @@ type Hooks struct {
 	// multiple tools execute in parallel for the same Generate() call; any
 	// state closed over from the enclosing scope that this hook mutates must
 	// be guarded with sync primitives.
+	//
+	// An interrupt the hook raises with tool.Interrupt, to hold the call
+	// without running the tool, is the hook's own: the restart that answers
+	// it reaches this hook through tool.ResumeData, and the tool then runs
+	// as a fresh call that may interrupt in turn. A restart answering a
+	// later stage, such an interrupt of the tool's included, reports
+	// tool.Released here when the interrupted call records that this hook
+	// let it through and the restart keeps the call's input.
 	WrapTool func(ctx context.Context, params *ToolParams, next ToolNext) (*MultipartToolResponse, error)
 }
 

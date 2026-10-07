@@ -156,9 +156,9 @@ var (
 // defineCommanderAgent registers the incident tools, two investigator
 // sub-agents, and the commander that runs them in the background.
 func defineCommanderAgent(g *genkit.Genkit) *aix.Agent[any] {
-	queryLogs := genkitx.DefineTool(g, "query_logs",
+	queryLogs := genkit.DefineTool(g, "query_logs",
 		"Scans the last 30 minutes of warnings and errors for one service. The scan is slow.",
-		func(ctx context.Context, in struct {
+		func(ctx *ai.ToolContext, in struct {
 			Service string `json:"service" jsonschema_description:"The service to scan e.g. checkout-api"`
 		}) (string, error) {
 			if err := slowBackend(ctx, logScanLatency); err != nil {
@@ -171,9 +171,9 @@ func defineCommanderAgent(g *genkit.Genkit) *aix.Agent[any] {
 			return logs, nil
 		})
 
-	recentDeploys := genkitx.DefineTool(g, "recent_deploys",
+	recentDeploys := genkit.DefineTool(g, "recent_deploys",
 		"Lists what shipped to one service in the last 24 hours, newest first.",
-		func(ctx context.Context, in struct {
+		func(ctx *ai.ToolContext, in struct {
 			Service string `json:"service" jsonschema_description:"The service to list deploys for e.g. checkout-api"`
 		}) (string, error) {
 			if err := slowBackend(ctx, deployLookupLatency); err != nil {
@@ -186,15 +186,15 @@ func defineCommanderAgent(g *genkit.Genkit) *aix.Agent[any] {
 			return deploys, nil
 		})
 
-	readStatusBoard := genkitx.DefineTool(g, "read_status_board",
+	readStatusBoard := genkit.DefineTool(g, "read_status_board",
 		"Reads the incident channel: the updates posted so far, plus whatever other responders have said since. Cheap and safe to call while waiting on an investigation.",
-		func(ctx context.Context, in struct{}) (string, error) {
+		func(ctx *ai.ToolContext, in struct{}) (string, error) {
 			return renderStatusBoard(), nil
 		})
 
-	postStatus := genkitx.DefineTool(g, "post_status",
+	postStatus := genkit.DefineTool(g, "post_status",
 		"Posts an update to the incident channel. Use it to keep responders informed while the investigation runs.",
-		func(ctx context.Context, in struct {
+		func(ctx *ai.ToolContext, in struct {
 			Message string `json:"message" jsonschema_description:"The update to post, one or two sentences"`
 		}) (string, error) {
 			statusPage.Lock()
