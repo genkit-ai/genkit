@@ -404,9 +404,11 @@ func toAnthropicRequest(provider string, i *ai.ModelRequest, config anthropic.Me
 		req.ToolChoice = toolChoice
 	}
 
-	if i.Output != nil && i.Output.Format == "json" && i.Output.Schema != nil && i.Output.Constrained {
-		// Native structured output via OutputConfig. Set only the format so a
-		// config-provided OutputConfig.Effort survives.
+	if i.Output != nil && i.Output.Schema != nil && i.Output.Constrained {
+		// Native structured output via OutputConfig, for every format that
+		// asks for it: the API takes an array or an enum at the schema root
+		// as well as an object. Set only the format so a config-provided
+		// OutputConfig.Effort survives.
 		req.OutputConfig.Format = anthropic.JSONOutputFormatParam{
 			Schema: pluginjsonschema.EnforceStrict(i.Output.Schema),
 			// Type is elided, defaults to "json_schema"

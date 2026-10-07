@@ -710,6 +710,26 @@ func TestToAnthropicRequest_StructuredOutput(t *testing.T) {
 	}
 }
 
+// The array and enum formats ask for a constraint too. Without one their
+// request would reach the API with neither a constraint nor, since the model
+// claims constrained output, the format instructions.
+func TestToAnthropicRequest_StructuredOutputNonObjectRoot(t *testing.T) {
+	for format, schema := range map[string]map[string]any{
+		"array": {"type": "array", "items": map[string]any{"type": "string"}},
+		"enum":  {"type": "string", "enum": []any{"red", "green"}},
+	} {
+		req := userRequest()
+		req.Output = &ai.ModelOutputConfig{Format: format, Schema: schema, Constrained: true}
+		got, err := toAnthropicRequest("anthropic", req, anthropic.MessageNewParams{MaxTokens: 100})
+		if err != nil {
+			t.Fatalf("%s: unexpected error: %v", format, err)
+		}
+		if got.OutputConfig.Format.Schema["type"] != schema["type"] {
+			t.Errorf("%s: OutputConfig schema = %v, want the %s schema", format, got.OutputConfig.Format.Schema, format)
+		}
+	}
+}
+
 // userRequest builds a minimal request carrying a single user message. The
 // config travels beside the request now, so it is not part of it.
 func userRequest() *ai.ModelRequest {

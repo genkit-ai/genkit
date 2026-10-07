@@ -14,37 +14,21 @@
 
 // Package anthropiclive is the live checklist tier for the plugins built on
 // the shared Anthropic Messages API code: the anthropic plugin and the Model
-// Garden Claude models. It runs the shared [livetest] checklist with the gaps
-// that code has whatever the plugin, so both plugins record them once.
+// Garden Claude models. It runs the shared [livetest] checklist, and is where
+// a gap or a check that code has whatever the plugin is recorded once for
+// both plugins.
 package anthropiclive
 
 import (
-	"maps"
 	"testing"
 
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/internal/livetest"
 )
 
-// familyGaps are the cases the shared Anthropic code cannot pass yet,
-// whatever the plugin.
-var familyGaps = map[string]string{
-	// The code constrains only the json format. The models claim
-	// constrained output, so the framework leaves the format instructions
-	// out, and an array or enum request reaches the API with neither a
-	// constraint nor instructions.
-	"generate/array output":               "no output_format is sent for the array format",
-	"generate/array output streaming":     "no output_format is sent for the array format",
-	"generate/enum output":                "no output_format is sent for the enum format",
-	"generate/enum output is constrained": "no output_format is sent for the enum format",
-}
-
 // Run walks the plugin registered on g through the shared checklist. See
 // [livetest.Run] for what it defines on g.
 func Run(t *testing.T, g *genkit.Genkit, s livetest.Suite) {
 	t.Helper()
-	skip := maps.Clone(familyGaps)
-	maps.Copy(skip, s.Skip)
-	s.Skip = skip
 	livetest.Run(t, g, s)
 }
