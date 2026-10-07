@@ -43,6 +43,7 @@ from genkit._core._model import (
     ModelRequest,
     ModelResponse,
     ModelResponseChunk,
+    check_config_schema_matches_request,
     config_type_path,
     get_basic_usage_stats,
     text_from_content,
@@ -401,6 +402,8 @@ def model(
             status='INVALID_ARGUMENT',
             message=f"define_model '{name}' cannot set longRunning. Use define_background_model.",
         )
+
+    check_config_schema_matches_request(name=name, fn=fn, config_schema=config_schema)
 
     if config_schema:
         model_options['customOptions'] = to_json_schema(config_schema)

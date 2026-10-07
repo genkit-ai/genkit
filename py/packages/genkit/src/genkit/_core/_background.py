@@ -26,7 +26,7 @@ from pydantic import BaseModel
 
 from genkit._core._action import Action, ActionKind, ActionRunContext, get_current_context
 from genkit._core._error import GenkitError, RuntimeErrorReason
-from genkit._core._model import ModelRequest, ModelResponse
+from genkit._core._model import ModelRequest, ModelResponse, check_config_schema_matches_request
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
 from genkit._core._typing import (
@@ -304,6 +304,7 @@ def background_model(
     Plugin ``init`` / ``resolve`` return this. ``define_background_model``
     registers the start / check / cancel actions.
     """
+    check_config_schema_matches_request(name=name, fn=start, config_schema=config_schema)
     # Build model metadata
     model_meta: dict[str, Any] = metadata.copy() if metadata else {}
     model_options: dict[str, Any] = {}

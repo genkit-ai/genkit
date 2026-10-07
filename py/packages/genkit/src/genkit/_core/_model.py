@@ -22,12 +22,13 @@ properties and methods on top of the generated wire types.
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from functools import cached_property
 from importlib import import_module
-from typing import Any, ClassVar, Generic, Literal, cast
+from typing import Annotated, Any, ClassVar, Generic, Literal, cast, get_args, get_origin, get_type_hints
 
 from pydantic import (
     BaseModel,
@@ -175,6 +176,75 @@ def declared_config_type(cls: type) -> type | None:
     if isinstance(arg, TypeVar) or arg is Any:
         return None
     return arg
+
+
+def request_annotation_config(fn: Callable[..., object]) -> object | None:
+    """The class on ``ModelRequest[ThatClass]``, or None when the annotation names none.
+
+    Plain ``ModelRequest``, ``ModelRequest[Any]``, and a missing annotation
+    all mean the author didn't name a class. ``config_schema=`` is what
+    fills that in.
+    """
+    try:
+        hints = get_type_hints(fn, include_extras=True)
+        params = list(inspect.signature(fn).parameters)
+    except Exception:  # noqa: BLE001 - unresolvable annotations: treat as untyped
+        return None
+    if not params:
+        return None
+    if params[0] == 'self' and len(params) > 1:
+        params = params[1:]
+    ann = hints.get(params[0])
+    if ann is None:
+        return None
+    if get_origin(ann) is Annotated:
+        ann = get_args(ann)[0]
+    if isinstance(ann, type) and issubclass(ann, ModelRequest):
+        return declared_config_type(ann)
+    if get_origin(ann) is ModelRequest:
+        args = get_args(ann)
+        if not args:
+            return None
+        arg = args[0]
+        if arg is Any or isinstance(arg, TypeVar):
+            return None
+        return arg
+    return None
+
+
+def config_arg_label(arg: object) -> str:
+    """A short name for the class an annotation or ``config_schema=`` names."""
+    if arg is dict:
+        return 'dict'
+    if isinstance(arg, type) and issubclass(arg, BaseModel):
+        return config_type_path(arg)
+    return getattr(arg, '__name__', repr(arg))
+
+
+def check_config_schema_matches_request(
+    *,
+    name: str,
+    fn: Callable[..., object],
+    config_schema: object,
+) -> None:
+    """A request annotation that names a class must be the registered class.
+
+    ``request.config`` is the class passed as ``config_schema=``. Naming a
+    different class on the function is a mistake caught when the model is
+    defined, before any call runs.
+    """
+    if not isinstance(config_schema, type) or not issubclass(config_schema, BaseModel):
+        return
+    annotated = request_annotation_config(fn)
+    if annotated is None or annotated is config_schema:
+        return
+    raise GenkitError(
+        status='INVALID_ARGUMENT',
+        message=(
+            f"Model '{name}': request is annotated ModelRequest[{config_arg_label(annotated)}] "
+            f'but config_schema is {config_arg_label(config_schema)}'
+        ),
+    )
 
 
 def config_type_path(cls: type) -> str:

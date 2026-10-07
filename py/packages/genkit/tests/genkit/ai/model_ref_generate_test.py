@@ -66,6 +66,17 @@ class AliasedNestedConfig(BaseModel):
 def _config_value(config: Any, key: str) -> Any:
     if isinstance(config, dict):
         return config.get(key)
+    if isinstance(config, BaseModel):
+        if key in type(config).model_fields:
+            return getattr(config, key)
+        for name, field in type(config).model_fields.items():
+            aliases = {
+                field.alias,
+                field.validation_alias if isinstance(field.validation_alias, str) else None,
+                field.serialization_alias,
+            }
+            if key in aliases:
+                return getattr(config, name)
     return getattr(config, key, None)
 
 
@@ -1133,7 +1144,7 @@ async def test_generate_wrong_family_dict_still_legal() -> None:
     await ai.generate(model='flash', prompt='hi', config={'frequency_penalty': 0.2})
 
     assert echo.last_request is not None
-    assert _config_value(echo.last_request.config, 'frequency_penalty') == 0.2
+    assert isinstance(echo.last_request.config, CustomConfig)
 
 
 @pytest.mark.asyncio

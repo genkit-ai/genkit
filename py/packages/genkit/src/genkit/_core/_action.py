@@ -19,6 +19,7 @@
 import asyncio
 import inspect
 import json
+import operator
 import re
 import sys
 import time
@@ -38,7 +39,7 @@ from typing import (
     get_type_hints,
 )
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import AliasChoices, BaseModel, ConfigDict, TypeAdapter, ValidationError
 from pydantic.alias_generators import to_camel
 from pydantic.errors import PydanticInvalidForJsonSchema, PydanticSchemaGenerationError, PydanticUserError
 from typing_extensions import TypeVar
@@ -46,7 +47,7 @@ from typing_extensions import TypeVar
 from genkit._core._channel import Channel, CloseableQueue
 from genkit._core._compat import StrEnum
 from genkit._core._error import GenkitError, Interrupt, RuntimeErrorReason
-from genkit._core._model import config_type_path, declared_config_type
+from genkit._core._model import ModelRequest, config_type_path, declared_config_type
 from genkit._core._schema import to_json_schema
 from genkit._core._telemetry._attrs import Attr, metadata_key
 from genkit._core._telemetry._instrumentation import (
@@ -691,6 +692,50 @@ class ActionRunContext(Generic[ChunkT]):
         return _action_context.get(None)
 
 
+def untyped_model_request(ann: object) -> bool:
+    """True when the annotation is plain ``ModelRequest`` or ``ModelRequest[Any]``.
+
+    Those don't name a class, so the class passed as ``config_schema=`` is
+    what ``request.config`` becomes.
+    """
+    if ann is Any:
+        return True
+    if isinstance(ann, type) and issubclass(ann, ModelRequest):
+        return declared_config_type(ann) is None
+    if get_origin(ann) is ModelRequest:
+        args = get_args(ann)
+        return not args or args[0] is Any
+    return False
+
+
+def model_request_input_type(ann: object, config_schema: type[BaseModel] | None) -> object:
+    """Use the registered class when the function didn't name one."""
+    if config_schema is None or not untyped_model_request(ann):
+        return ann
+    return operator.getitem(cast(Any, ModelRequest), config_schema)
+
+
+def fold_registered_config_keys(*, config: Mapping[Any, Any], schema: type[BaseModel]) -> dict[str, Any]:
+    """Rewrite aliases to field names so two spellings of one setting are one field.
+
+    The model reads attributes on its config class. ``maxOutputTokens`` and
+    ``max_output_tokens`` have to land on that one field before the class is built.
+    """
+    names: dict[str, str] = {}
+    for name, field in schema.model_fields.items():
+        names[name] = name
+        if field.alias:
+            names[field.alias] = name
+        accepted = field.validation_alias
+        if isinstance(accepted, str):
+            names[accepted] = name
+        elif isinstance(accepted, AliasChoices):
+            for choice in accepted.choices:
+                if isinstance(choice, str):
+                    names[choice] = name
+    return {names.get(str(key), str(key)): value for key, value in config.items()}
+
+
 class Action(Generic[InputT, OutputT, ChunkT, InitT]):
     """A named, traced, remotely callable function."""
 
@@ -903,7 +948,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
 
     def _initialize_io_schemas(self, annotations: dict[str, Any]) -> None:
         if self._params.input is not None:
-            input_type = annotations.get(self._params.input.name, Any)
+            input_type = model_request_input_type(annotations.get(self._params.input.name, Any), self._config_schema)
             type_adapter, self._input_schema = json_schema_for(
                 input_type, kind=self._kind, name=self._name, label=f"input '{self._params.input.name}'"
             )
@@ -980,15 +1025,15 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         # signal that "no input" is a legitimate way to invoke this action.
         if input is None and self._params.input_optional:
             return input
-        payload: object = input
+        payload: object = self._payload_with_folded_config(input)
         # A differently-typed ModelRequest with a mapping config is dumped and
         # re-parsed into the plugin class. A Pydantic config instance of the
         # wrong class is a caller mistake — dump would silently coerce it.
-        if isinstance(input, BaseModel):
+        if isinstance(payload, BaseModel):
             try:
-                return self._input_type.validate_python(input)
+                return self._coerce_registered_config(self._input_type.validate_python(payload))
             except ValidationError:
-                config = getattr(input, 'config', None)
+                config = getattr(payload, 'config', None)
                 if isinstance(config, BaseModel):
                     expected = declared_config_type(self._input_class) if self._input_class is not None else None
                     want = config_type_path(expected) if isinstance(expected, type) else 'the plugin config class'
@@ -1001,10 +1046,11 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
                         status='INVALID_ARGUMENT',
                         reason=RuntimeErrorReason.INVALID_INPUT,
                     ) from None
-                payload = input.model_dump(mode='python')
+                payload = payload.model_dump(mode='python')
+                payload = self._payload_with_folded_config(payload)
 
         try:
-            return self._input_type.validate_python(payload)
+            return self._coerce_registered_config(self._input_type.validate_python(payload))
         except ValidationError as e:
             msg = (
                 f"Action '{self.name}' requires input but none was provided. Please supply a valid input payload."
@@ -1017,6 +1063,58 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
                 cause=e,
                 reason=RuntimeErrorReason.INVALID_INPUT,
             ) from e
+
+    def _payload_with_folded_config(self, payload: object) -> object:
+        """Rewrite config aliases to field names before the class is built."""
+        if self._config_schema is None:
+            return payload
+        if isinstance(payload, Mapping):
+            bag = cast(dict[str, Any], dict(payload))
+            config = bag.get('config')
+            if isinstance(config, Mapping) and not isinstance(config, BaseModel):
+                bag['config'] = fold_registered_config_keys(config=config, schema=self._config_schema)
+                return bag
+            return payload
+        if isinstance(payload, BaseModel):
+            config = getattr(payload, 'config', None)
+            if isinstance(config, Mapping) and not isinstance(config, BaseModel):
+                dumped = payload.model_dump(mode='python', exclude={'config'})
+                dumped['config'] = fold_registered_config_keys(config=config, schema=self._config_schema)
+                return dumped
+        return payload
+
+    def _coerce_registered_config(self, validated: InputT | None) -> InputT | None:
+        """A model that registered a class always receives that class.
+
+        There is no "no configuration": missing and ``None`` become an empty
+        instance, the same thing ``ai.generate`` with no ``config=`` sends.
+        A dict written onto the request after it was built is validated as
+        that class too.
+        """
+        if self._config_schema is None or self._input_type is None or not isinstance(validated, BaseModel):
+            return validated
+        missing = object()
+        config = getattr(validated, 'config', missing)
+        if config is missing:
+            return validated
+        if config is None:
+            dumped = validated.model_dump(mode='python')
+            dumped['config'] = {}
+            return self._input_type.validate_python(dumped)
+        if isinstance(config, Mapping) and not isinstance(config, BaseModel):
+            # The dict is not the class yet, so rebuild from the rest of the request.
+            dumped = validated.model_dump(mode='python', exclude={'config'})
+            dumped['config'] = fold_registered_config_keys(config=config, schema=self._config_schema)
+            try:
+                return self._input_type.validate_python(dumped)
+            except ValidationError as e:
+                raise GenkitError(
+                    message=f"Invalid input for action '{self.name}': {e}",
+                    status='INVALID_ARGUMENT',
+                    cause=e,
+                    reason=RuntimeErrorReason.INVALID_INPUT,
+                ) from e
+        return validated
 
     async def _run_with_telemetry(
         self,

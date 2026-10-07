@@ -69,6 +69,17 @@ class GeminiLikeConfig(ModelConfig):
 def _config_value(config: Any, key: str) -> Any:  # noqa: ANN401
     if isinstance(config, dict):
         return config.get(key)
+    if isinstance(config, BaseModel):
+        if key in type(config).model_fields:
+            return getattr(config, key)
+        for name, field in type(config).model_fields.items():
+            aliases = {
+                field.alias,
+                field.validation_alias if isinstance(field.validation_alias, str) else None,
+                field.serialization_alias,
+            }
+            if key in aliases:
+                return getattr(config, name)
     return getattr(config, key, None)
 
 
@@ -481,7 +492,9 @@ async def test_generate_none_on_one_spelling_is_not_a_second_spelling() -> None:
 
     await ai.generate(model='strict', prompt='hi', config={'maxOutputTokens': 5, 'max_output_tokens': None})
 
-    assert fn.requests[-1].config == {'maxOutputTokens': 5}
+    config = fn.requests[-1].config
+    assert isinstance(config, StrictConfig)
+    assert config.max_output_tokens == 5
 
 
 @pytest.mark.asyncio
@@ -562,14 +575,17 @@ async def test_generate_incomplete_nested_setting_raises_naming_the_missing_fiel
 
 
 @pytest.mark.asyncio
-async def test_generate_missing_required_top_level_field_in_one_layer_still_runs() -> None:
-    """A required top-level field missing from the call dict still runs; another layer may supply it."""
+async def test_generate_missing_required_top_level_field_fails_as_the_registered_class() -> None:
+    """A required field missing from the call cannot become the model's config class, so generate fails."""
     ai, fn = _ai_with_model(config_schema=RequiredTopConfig, name='needs')
 
     response = await ai.generate(model='needs', prompt='hi', config={'temperature': 0.2})
 
-    assert response.text == 'ok'
-    assert _config_value(fn.requests[-1].config, 'temperature') == 0.2
+    assert response.finish_reason == 'failed'
+    assert response.error is not None
+    assert response.error.status == 'INVALID_ARGUMENT'
+    assert 'must' in response.error.message
+    assert fn.requests == []
 
 
 @pytest.mark.asyncio
