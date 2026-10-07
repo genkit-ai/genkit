@@ -17,19 +17,55 @@
 """Unittests for VertexAI Model Garden Models."""
 
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
+from anthropic import AsyncAnthropicVertex
 from genkit_anthropic import AnthropicConfig
+from genkit_openai import OpenAIConfig
+from genkit_vertexai.model_garden import ModelGarden
+from genkit_vertexai.model_garden._model_info import DEFAULT_SUPPORTS, SUPPORTED_OPENAI_COMPAT_MODELS
 from genkit_vertexai.model_garden.anthropic import AnthropicModelGarden
 from genkit_vertexai.model_garden.model_garden import ModelGardenModel
+from openai.types.chat import ChatCompletion
+
+from genkit import ActionRunContext, Genkit, Message, Part, Role
+from genkit._ai._formats import built_in_formats
+from genkit.model import ModelRequest, OutputConfig
+from genkit.plugin_api import ActionKind
+
+
+def test_catalog_output_names_are_known_formats() -> None:
+    """supports.output lists Genkit output formats, not OpenAI request options like json_mode."""
+    known = {f.name for f in built_in_formats}
+    entries = {name: info.supports for name, info in SUPPORTED_OPENAI_COMPAT_MODELS.items()}
+    entries['<default>'] = DEFAULT_SUPPORTS
+    for name, supports in entries.items():
+        unknown = set((supports.output if supports else None) or []) - known
+        assert not unknown, f'{name}: {sorted(unknown)}'
 
 
 @pytest.fixture
-@patch('genkit_vertexai.model_garden.client.OpenAIClient')
-def model_garden_instance(client: MagicMock) -> ModelGardenModel:
+def model_garden_instance() -> ModelGardenModel:
     """Model Garden fixture."""
     return ModelGardenModel(model='test', location='us-central1', project_id='project')
+
+
+def _chat_completion(text: str) -> ChatCompletion:
+    return ChatCompletion.model_validate({
+        'id': 'chatcmpl-1',
+        'object': 'chat.completion',
+        'created': 0,
+        'model': 'meta/llama-3.1-405b-instruct-maas',
+        'choices': [
+            {
+                'index': 0,
+                'finish_reason': 'stop',
+                'message': {'role': 'assistant', 'content': text},
+            }
+        ],
+        'usage': {'prompt_tokens': 1, 'completion_tokens': 1, 'total_tokens': 2},
+    })
 
 
 @pytest.mark.parametrize(
@@ -42,14 +78,13 @@ def model_garden_instance(client: MagicMock) -> ModelGardenModel:
                 'supports': {
                     'constrained': None,
                     'content_type': None,
-                    'context': None,
                     'long_running': False,
                     'multiturn': True,
                     'media': False,
                     'tools': True,
                     'system_role': True,
                     'output': [
-                        'json_mode',
+                        'json',
                         'text',
                     ],
                     'tool_choice': None,
@@ -63,14 +98,13 @@ def model_garden_instance(client: MagicMock) -> ModelGardenModel:
                 'supports': {
                     'constrained': None,
                     'content_type': None,
-                    'context': None,
                     'long_running': None,
                     'multiturn': True,
                     'media': True,
                     'tools': True,
                     'system_role': True,
                     'output': [
-                        'json_mode',
+                        'json',
                         'text',
                     ],
                     'tool_choice': None,
@@ -99,3 +133,165 @@ def test_anthropic_model_garden_does_not_advertise_api_key() -> None:
     properties = AnthropicModelGarden.get_config_schema().model_json_schema()['properties']
     assert 'apiKey' not in properties
     assert 'apiVersion' in properties
+
+
+@pytest.mark.asyncio
+async def test_model_garden_llama_json_request_sends_json_object() -> None:
+    """ai.generate(model='modelgarden/meta/llama-3.1-405b-instruct-maas', output_format='json') sends json_object."""
+    captured: dict[str, Any] = {}
+    client = MagicMock()
+
+    async def create(**kwargs: Any) -> ChatCompletion:
+        captured.update(kwargs)
+        return ChatCompletion.construct(
+            id='1',
+            object='chat.completion',
+            created=1,
+            model='llama',
+            choices=[
+                {
+                    'index': 0,
+                    'message': {'role': 'assistant', 'content': '{"a": 1}'},
+                    'finish_reason': 'stop',
+                }
+            ],
+        )
+
+    client.chat.completions.create = AsyncMock(side_effect=create)
+    garden = ModelGardenModel(
+        model='meta/llama-3.1-405b-instruct-maas',
+        location='us-central1',
+        project_id='p',
+    )
+    ctx = MagicMock(spec=ActionRunContext)
+    type(ctx).is_streaming = PropertyMock(return_value=False)
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part.from_text('give me json')])],
+        output=OutputConfig(format='json'),
+        config=OpenAIConfig(),
+    )
+
+    with patch.object(garden, 'create_client', AsyncMock(return_value=client)):
+        await garden.to_openai_compatible_model()(request, ctx)
+
+    assert captured['response_format'] == {'type': 'json_object'}
+
+
+@pytest.mark.asyncio
+async def test_model_garden_openai_compatible_model_resolves_and_generates() -> None:
+    """ai.generate on a catalog Llama model sends the prompt to the OpenAI client and returns its reply."""
+    client = MagicMock()
+    client.chat.completions.create = AsyncMock(return_value=_chat_completion('hello from llama'))
+
+    with patch(
+        'genkit_vertexai.model_garden.model_garden.ModelGardenModel.create_client',
+        new=AsyncMock(return_value=client),
+    ):
+        ai = Genkit(plugins=[ModelGarden(project_id='my-project', location='us-central1')])
+        response = await ai.generate(model='modelgarden/meta/llama-3.1-405b-instruct-maas', prompt='hi')
+
+    assert response.text == 'hello from llama'
+    client.chat.completions.create.assert_awaited_once()
+    sent = client.chat.completions.create.call_args.kwargs
+    assert sent['model'] == 'meta/llama-3.1-405b-instruct-maas'
+    assert sent['messages'] == [{'role': 'user', 'content': 'hi'}]
+
+
+class _FakeCredentials:
+    """Google credentials stand-in with a token that can expire."""
+
+    def __init__(self) -> None:
+        self.token = 'tok-1'
+        self.valid = True
+        self.refresh_count = 0
+
+    def refresh(self, _request: object) -> None:
+        self.refresh_count += 1
+        if self.refresh_count > 1:
+            self.token = 'tok-2'
+        self.valid = True
+
+
+@pytest.mark.asyncio
+async def test_model_garden_repeated_generate_refreshes_credentials_once() -> None:
+    """Three ai.generate calls on a Llama model refresh Google credentials once and reuse one OpenAI client."""
+    creds = _FakeCredentials()
+    clients: list[MagicMock] = []
+
+    def make_client(**kwargs: object) -> MagicMock:
+        client = MagicMock()
+        client.api_key = kwargs.get('api_key')
+        client.chat.completions.create = AsyncMock(return_value=_chat_completion('ok'))
+        clients.append(client)
+        return client
+
+    with (
+        patch('genkit_vertexai.model_garden.client.auth.default', return_value=(creds, 'my-project')),
+        patch('genkit_vertexai.model_garden.client.google.auth.transport.requests.Request'),
+        patch('genkit_vertexai.model_garden.client._AsyncOpenAI', side_effect=make_client),
+    ):
+        ai = Genkit(plugins=[ModelGarden(project_id='my-project', location='us-central1')])
+        for _ in range(3):
+            response = await ai.generate(model='modelgarden/meta/llama-3.1-405b-instruct-maas', prompt='hi')
+            assert response.text == 'ok'
+
+    assert creds.refresh_count == 1
+    assert len(clients) == 1
+
+
+@pytest.mark.asyncio
+async def test_model_garden_generate_after_token_expiry_sends_fresh_token() -> None:
+    """After cached credentials expire, the next generate refreshes and sends the new token."""
+    creds = _FakeCredentials()
+    clients: list[MagicMock] = []
+
+    def make_client(**kwargs: object) -> MagicMock:
+        client = MagicMock()
+        client.api_key = kwargs.get('api_key')
+        client.chat.completions.create = AsyncMock(return_value=_chat_completion('ok'))
+        clients.append(client)
+        return client
+
+    with (
+        patch('genkit_vertexai.model_garden.client.auth.default', return_value=(creds, 'my-project')),
+        patch('genkit_vertexai.model_garden.client.google.auth.transport.requests.Request'),
+        patch('genkit_vertexai.model_garden.client._AsyncOpenAI', side_effect=make_client),
+    ):
+        ai = Genkit(plugins=[ModelGarden(project_id='my-project', location='us-central1')])
+        first = await ai.generate(model='modelgarden/meta/llama-3.1-405b-instruct-maas', prompt='hi')
+        assert first.text == 'ok'
+        assert clients[0].api_key == 'tok-1'
+
+        creds.valid = False
+        second = await ai.generate(model='modelgarden/meta/llama-3.1-405b-instruct-maas', prompt='hi')
+        assert second.text == 'ok'
+
+    assert creds.refresh_count == 2
+    assert len(clients) == 1
+    assert clients[0].api_key == 'tok-2'
+
+
+@pytest.mark.asyncio
+async def test_generate_model_garden_claude_registers_full_publisher_path() -> None:
+    """`modelgarden/anthropic/claude-…` registers under that name; Claude gets the id without the publisher."""
+    claude = 'modelgarden/anthropic/claude-sonnet-4-5'
+    reply = MagicMock()
+    reply.content = [MagicMock(type='text', text='hello')]
+    reply.usage = MagicMock(input_tokens=1, output_tokens=1)
+    reply.stop_reason = 'end_turn'
+    client = MagicMock(spec=AsyncAnthropicVertex)
+    client.messages = MagicMock()
+    client.beta = MagicMock()
+    client.messages.create = AsyncMock(return_value=reply)
+    client.beta.messages.create = AsyncMock(return_value=reply)
+    with patch('genkit_vertexai.model_garden.anthropic.AsyncAnthropicVertex', return_value=client):
+        ai = Genkit(plugins=[ModelGarden(project_id='p', location='us-central1')])
+        response = await ai.generate(model=claude, prompt='hi')
+        action = await ai.registry.resolve_action(ActionKind.MODEL, claude)
+
+    assert response.text == 'hello'
+    sent = client.messages.create.await_args or client.beta.messages.create.await_args
+    assert sent is not None
+    assert sent.kwargs['model'].startswith('claude-sonnet-4-5')
+    assert action is not None
+    assert action.name == 'modelgarden/anthropic/claude-sonnet-4-5'

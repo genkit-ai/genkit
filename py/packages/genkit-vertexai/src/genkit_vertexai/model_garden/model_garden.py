@@ -22,7 +22,7 @@ from that publisher is resolved or called.
 """
 
 import os
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, cast
 
 from genkit_vertexai import constants as const
@@ -33,9 +33,10 @@ from genkit_vertexai.model_garden._model_info import (
 
 from genkit import ActionRunContext, GenkitError, ModelResponse
 from genkit.model import ModelRequest, model as create_model, model_action_metadata
-from genkit.plugin_api import Action, ActionKind, ActionMetadata, Plugin, to_json_schema
+from genkit.plugin_api import Action, ActionKind, ActionMetadata, Plugin, loop_local_client, to_json_schema
 
 if TYPE_CHECKING:
+    from genkit_vertexai.model_garden.client import CachedOpenAI
     from openai import AsyncOpenAI
 
 MODELGARDEN_PLUGIN_NAME = 'modelgarden'
@@ -95,20 +96,22 @@ class ModelGardenModel:
                 model is deployed.
         """
         self.name = model
-        self._openai_params = {'location': location, 'project_id': project_id}
+
+        def _new_cached_client() -> 'CachedOpenAI':
+            # client.py imports openai, which is an extra; load it on first generate.
+            from genkit_vertexai.model_garden.client import CachedOpenAI
+
+            return CachedOpenAI(location=location, project_id=project_id)
+
+        self._runtime_client = loop_local_client(_new_cached_client)
 
     async def create_client(self) -> 'AsyncOpenAI':
-        """Create the AsyncOpenAI client with refreshed credentials.
-
-        This offloads the blocking ``credentials.refresh()`` call to a
-        thread via ``OpenAIClient.create()``.
+        """Return the per-loop AsyncOpenAI client, refreshing the token only when expired.
 
         Returns:
             The authenticated AsyncOpenAI client.
         """
-        from genkit_vertexai.model_garden.client import OpenAIClient
-
-        return await OpenAIClient.create(**self._openai_params)
+        return await self._runtime_client().get()
 
     def get_model_info(self) -> dict[str, object] | None:
         """Retrieve metadata and supported features for the specified model.
@@ -133,7 +136,7 @@ class ModelGardenModel:
             ),
         }
 
-    def to_openai_compatible_model(self) -> Callable:
+    def to_openai_compatible_model(self) -> Callable[[ModelRequest, ActionRunContext], Awaitable[ModelResponse]]:
         """Convert the Model Garden model into an OpenAI-compatible Genkit model function.
 
         Returns:
@@ -148,7 +151,8 @@ class ModelGardenModel:
             from genkit_openai._models import OpenAIModel
 
             client = await self.create_client()
-            openai_model = OpenAIModel(self.name, client)
+            info = SUPPORTED_OPENAI_COMPAT_MODELS.get(self.name, get_default_model_info(self.name))
+            openai_model = OpenAIModel(self.name, client, supports=info.supports)
             return await openai_model.generate(request, ctx)
 
         return _generate
@@ -213,7 +217,7 @@ class ModelGarden(Plugin):
 
         Args:
             action_type: The kind of action to resolve.
-            name: The namespaced name of the action to resolve.
+            name: The model id without the ``modelgarden/`` prefix.
 
         Returns:
             Action object if found, None otherwise.
@@ -227,17 +231,15 @@ class ModelGarden(Plugin):
         """Create an Action object for a Model Garden Vertex AI model.
 
         Args:
-            name: The namespaced name of the model.
+            name: The model id without the ``modelgarden/`` prefix, publisher
+                included (``anthropic/claude-sonnet-4-6``).
 
         Returns:
             Action object for the model.
         """
-        # Extract local name (remove plugin prefix)
-        clean_name = (
-            name.replace(MODELGARDEN_PLUGIN_NAME + '/', '') if name.startswith(MODELGARDEN_PLUGIN_NAME) else name
-        )
+        full_name = model_garden_name(name)
 
-        if clean_name.startswith('anthropic/'):
+        if name.startswith('anthropic/'):
             try:
                 from .anthropic import AnthropicModelGarden as AnthropicWorker
             except ModuleNotFoundError as e:
@@ -245,11 +247,11 @@ class ModelGarden(Plugin):
                     raise
                 raise GenkitError(status='FAILED_PRECONDITION', message=_CLAUDE_EXTRA_MISSING) from e
 
-            location = self.model_locations.get(clean_name, self.location)
+            location = self.model_locations.get(name, self.location)
             if not self.project_id:
                 raise ValueError('project_id must be provided')
             model_proxy = AnthropicWorker(
-                model=clean_name,
+                model=name,
                 location=location,
                 project_id=self.project_id,
             )
@@ -258,7 +260,7 @@ class ModelGarden(Plugin):
             model_info = model_proxy.get_model_info()
 
             return create_model(
-                name,
+                full_name,
                 handler,
                 config_schema=model_proxy.get_config_schema(),
                 metadata={
@@ -276,21 +278,21 @@ class ModelGarden(Plugin):
                 raise
             raise GenkitError(status='FAILED_PRECONDITION', message=_OPENAI_COMPAT_EXTRA_MISSING) from e
 
-        location = self.model_locations.get(clean_name, self.location)
+        location = self.model_locations.get(name, self.location)
         if not self.project_id:
             raise ValueError('project_id must be provided')
         model_proxy = ModelGardenModel(
-            model=clean_name,
+            model=name,
             location=location,
             project_id=self.project_id,
         )
 
         # Get model info and handler
-        model_info = SUPPORTED_OPENAI_COMPAT_MODELS.get(clean_name, {})
+        model_info = SUPPORTED_OPENAI_COMPAT_MODELS.get(name, {})
         handler = model_proxy.to_openai_compatible_model()
 
         return create_model(
-            name,
+            full_name,
             handler,
             config_schema=OpenAIConfig,
             metadata={

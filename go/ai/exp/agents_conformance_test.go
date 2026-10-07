@@ -151,6 +151,13 @@ type harness struct {
 	// by agent name, so the getSnapshotData/abort/waitUntilCompleted steps can
 	// resolve snapshots directly (the public, local-caller path).
 	stores map[string]*localstore.InMemorySessionStore[customState]
+	// blocked holds, for each agent whose fixture blocks a turn until it is
+	// aborted, a channel the fixture signals on entering that turn. The abort
+	// step waits on it, so the abort lands with the blocked turn in flight and
+	// every turn sent ahead of it committed, as the spec's cases assume.
+	// Without it the abort can land before Run starts a queued turn, which
+	// Run then drops.
+	blocked map[string]chan struct{}
 }
 
 func setupHarness(t *testing.T) *harness {
@@ -207,6 +214,9 @@ func setupHarness(t *testing.T) *harness {
 		pm:     pm,
 		agents: map[string]*exp.Agent[customState]{},
 		stores: map[string]*localstore.InMemorySessionStore[customState]{},
+		blocked: map[string]chan struct{}{
+			"customAgentAbortable": make(chan struct{}, 1),
+		},
 	}
 
 	// newStore makes a fresh store for a server-managed agent and records it.
@@ -266,6 +276,10 @@ func setupHarness(t *testing.T) *harness {
 			if err := sess.Run(ctx, func(ctx context.Context, in *exp.AgentInput) (*exp.TurnResult, error) {
 				sess.AddMessages(in.Message)
 				if in.Message != nil && in.Message.Text() == "block" {
+					select {
+					case h.blocked["customAgentAbortable"] <- struct{}{}:
+					default:
+					}
 					<-ctx.Done()
 					// No TurnResult: the turn commits nothing, so the message
 					// it just added rolls back with it.
@@ -274,12 +288,6 @@ func setupHarness(t *testing.T) *harness {
 				sess.AddMessages(ai.NewModelTextMessage("ack"))
 				return nil, nil
 			}); err != nil {
-				return nil, err
-			}
-			// An abort can land after the first turn but before Run starts the
-			// queued "block" turn. Run then returns nil; propagate the stop so
-			// this abortable fixture does not report a successful invocation.
-			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
 			return &exp.AgentResult{Message: ai.NewModelTextMessage("done")}, nil
@@ -450,6 +458,13 @@ func TestAgentConformance(t *testing.T) {
 				case "getSnapshotData":
 					executeGetSnapshotData(t, label, store, step, captures)
 				case "abort":
+					if ch := h.blocked[tc.Agent]; ch != nil {
+						select {
+						case <-ch:
+						case <-time.After(10 * time.Second):
+							t.Fatalf("%s: the agent never reached its blocking turn", label)
+						}
+					}
 					executeAbort(t, label, agent, store, step, captures)
 				case "waitUntilCompleted":
 					executeWaitUntilCompleted(t, label, store, step, captures)

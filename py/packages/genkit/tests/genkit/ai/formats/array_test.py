@@ -11,6 +11,7 @@ from pydantic import BaseModel, TypeAdapter
 from genkit import Message, ModelResponseChunk, Part
 from genkit._ai._formats._array import ArrayFormat
 from genkit._core._error import GenkitError, RuntimeErrorReason
+from genkit._core._model import chunk_for_stream
 
 
 class TestArrayFormatStreaming:
@@ -23,17 +24,17 @@ class TestArrayFormatStreaming:
 
         # Chunk 1: [{"id": 1,
         chunk1 = ModelResponseChunk(content=[Part.from_text('[{"id": 1,')])
-        result1 = fmt.parse_chunk(ModelResponseChunk(chunk1, index=0, previous_chunks=[]))
+        result1 = fmt.parse_chunk(chunk_for_stream(chunk1, index=0, previous_chunks=[]))
         assert result1 == []
 
         # Chunk 2: "name": "first"}
         chunk2 = ModelResponseChunk(content=[Part.from_text('"name": "first"}')])
-        result2 = fmt.parse_chunk(ModelResponseChunk(chunk2, index=0, previous_chunks=[chunk1]))
+        result2 = fmt.parse_chunk(chunk_for_stream(chunk2, index=0, previous_chunks=[chunk1]))
         assert result2 == [{'id': 1, 'name': 'first'}]
 
         # Chunk 3: , {"id": 2, "name": "second"}]
         chunk3 = ModelResponseChunk(content=[Part.from_text(', {"id": 2, "name": "second"}]')])
-        result3 = fmt.parse_chunk(ModelResponseChunk(chunk3, index=0, previous_chunks=[chunk1, chunk2]))
+        result3 = fmt.parse_chunk(chunk_for_stream(chunk3, index=0, previous_chunks=[chunk1, chunk2]))
         assert result3 == [{'id': 2, 'name': 'second'}]
 
     def test_handles_single_item_arrays(self) -> None:
@@ -42,7 +43,7 @@ class TestArrayFormatStreaming:
         fmt = array_fmt.handle({'type': 'array', 'items': {'type': 'object'}})
 
         chunk = ModelResponseChunk(content=[Part.from_text('[{"id": 1, "name": "single"}]')])
-        result = fmt.parse_chunk(ModelResponseChunk(chunk, index=0, previous_chunks=[]))
+        result = fmt.parse_chunk(chunk_for_stream(chunk, index=0, previous_chunks=[]))
         assert result == [{'id': 1, 'name': 'single'}]
 
     def test_handles_preamble_with_code_fence(self) -> None:
@@ -52,12 +53,12 @@ class TestArrayFormatStreaming:
 
         # Chunk 1: preamble with code fence start
         chunk1 = ModelResponseChunk(content=[Part.from_text('Here is the array you requested:\n\n```json\n[')])
-        result1 = fmt.parse_chunk(ModelResponseChunk(chunk1, index=0, previous_chunks=[]))
+        result1 = fmt.parse_chunk(chunk_for_stream(chunk1, index=0, previous_chunks=[]))
         assert result1 == []
 
         # Chunk 2: the actual data
         chunk2 = ModelResponseChunk(content=[Part.from_text('{"id": 1, "name": "item"}]\n```')])
-        result2 = fmt.parse_chunk(ModelResponseChunk(chunk2, index=0, previous_chunks=[chunk1]))
+        result2 = fmt.parse_chunk(chunk_for_stream(chunk2, index=0, previous_chunks=[chunk1]))
         assert result2 == [{'id': 1, 'name': 'item'}]
 
 

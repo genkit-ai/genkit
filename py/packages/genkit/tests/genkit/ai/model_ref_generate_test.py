@@ -11,13 +11,13 @@ import pytest
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
-from genkit import Genkit
+from genkit import Genkit, Message, Part
 from genkit._ai._model import ModelConfig
 from genkit._ai._prompt import GenerateCall, to_generate_options
 from genkit._core._action import ActionRunContext
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import ModelRequest, ModelResponse
-from genkit._core._typing import Operation
+from genkit._core._typing import Operation, Role
 from genkit.exp import Genkit as ExpGenkit
 from genkit.model import model, model_ref
 from genkit.testing import EchoModel, define_echo_model
@@ -749,7 +749,10 @@ async def test_to_generate_options_uses_constructor_ref() -> None:
     ai = Genkit(model=flash)
     define_echo_model(ai, name='flash')
 
-    options = await to_generate_options(registry=ai.registry, call=GenerateCall(prompt='hi'))
+    options = await to_generate_options(
+        registry=ai.registry,
+        call=GenerateCall(messages=[Message(role=Role.USER, content=[Part.from_text('hi')])]),
+    )
 
     assert options.model == 'flash'
     assert _config_value(options.config, 'temperature') == 0.7
