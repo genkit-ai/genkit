@@ -363,7 +363,14 @@ func (s *SessionRunner[State]) Run(ctx context.Context, fn func(ctx context.Cont
 					// End the turn inside its span, as a successful one does,
 					// so a committed failure tags this span with its snapshot.
 					// A TurnResult beside the error is what commits it.
-					s.endTurn(ctx, reason, err, tr != nil)
+					committed := tr != nil
+					s.endTurn(ctx, reason, err, committed)
+					if committed {
+						// A committed failure records the state its snapshot
+						// saved, as a success does; RunInNewSpan keeps an
+						// output returned beside the error.
+						return turnSpanOutput[State]{State: s.State()}, err
+					}
 					return nil, err
 				}
 				// A returned TurnResult sets the reason, nil reports none.

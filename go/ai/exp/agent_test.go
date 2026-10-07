@@ -1795,8 +1795,8 @@ func TestAgent_TurnSpanOutput_WithSnapshots(t *testing.T) {
 
 // TestAgent_CommittedFailedTurn_TurnSpanCarriesSnapshotID verifies that a
 // failed turn that committed tags its own turn span with the snapshot it
-// persisted, as a successful turn does, and not the root agent span it ran
-// under.
+// persisted and records that snapshot's state as the span output, as a
+// successful turn does, and does not tag the root agent span it ran under.
 func TestAgent_CommittedFailedTurn_TurnSpanCarriesSnapshotID(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
@@ -1828,6 +1828,19 @@ func TestAgent_CommittedFailedTurn_TurnSpanCarriesSnapshotID(t *testing.T) {
 	// The turn span still records the failure.
 	if v, _ := spanAttr(span, "genkit:state"); v != "error" {
 		t.Errorf("turn span genkit:state = %q, want %q", v, "error")
+	}
+	// Its output is the state the failed turn's snapshot saved, as a
+	// committed success's is.
+	state := turnSpanState(t, span)
+	snap, err := store.GetSnapshot(ctx, out.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if got, want := state.Custom.Counter, snap.State.Custom.Counter; got != want || got != 5 {
+		t.Errorf("turn span state.custom.counter = %d, want %d (the failed turn's snapshot) and 5", got, want)
+	}
+	if got, want := len(state.Messages), len(snap.State.Messages); got != want {
+		t.Errorf("turn span len(state.messages) = %d, want %d (the failed turn's snapshot)", got, want)
 	}
 
 	root := spans.byName(agentName)
