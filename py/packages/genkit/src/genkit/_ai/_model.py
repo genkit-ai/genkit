@@ -556,3 +556,63 @@ def reject_config_api_key(config: Mapping[str, Any]) -> None:
         ),
         reason=RuntimeErrorReason.INVALID_INPUT,
     )
+
+
+def check_middleware_config(*, config: object, schema: type | None, model: str, middleware: str) -> None:
+    """Middleware changes fields on the config generate built; it doesn't swap the object.
+
+    generate turns the call's config into the model's class once, so every
+    middleware and the model see the same shape. A dict, ``None``, or another
+    class put back into ``request.config`` would reach inner layers as that
+    shape instead, so it raises here, naming the middleware that did it.
+    Set fields are re-checked and stored parsed, since plain assignment
+    (``config.temperature = 'hot'``) and ``model_copy(update=...)`` don't
+    validate.
+    """
+    if not (isinstance(schema, type) and issubclass(schema, BaseModel)):
+        return
+    prefix = f"{model}: middleware '{middleware}'"
+    if not isinstance(config, schema):
+        got = (
+            'None'
+            if config is None
+            else type(config).__name__
+            if type(config).__module__ == 'builtins'
+            else config_type_path(type(config))
+        )
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f'{prefix} replaced request.config with {got}; change fields on request.config instead',
+            reason=RuntimeErrorReason.INVALID_INPUT,
+        )
+    cls = type(config)
+    values: dict[str, Any] = vars(config)
+    if cls.model_config.get('extra') == 'forbid':
+        unknown = [key for key in values if key not in cls.model_fields]
+        if unknown:
+            keys = ', '.join(repr(key) for key in unknown)
+            noun = 'key' if len(unknown) == 1 else 'keys'
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=f"{prefix} set unknown config {noun} {keys}; put provider-only settings in config['extra']",
+                reason=RuntimeErrorReason.INVALID_INPUT,
+            )
+    # Validate each set value on a copy, then store the parsed value back so a
+    # nested dict (``config.output_config = {...}``) reaches the model as its
+    # class too. Writing ``__dict__`` directly keeps ``model_fields_set`` as the
+    # middleware left it, so ``exclude_unset`` dumps don't change.
+    scratch = config.model_copy()
+    for name in cls.model_fields:
+        if name not in values:
+            continue
+        try:
+            cls.__pydantic_validator__.validate_assignment(scratch, name, values[name])
+        except ValidationError as e:
+            msg = e.errors()[0]['msg'] if e.errors() else str(e)
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=f'{prefix} set config {name!r}: {msg}',
+                reason=RuntimeErrorReason.INVALID_INPUT,
+                cause=e,
+            ) from e
+        values[name] = scratch.__dict__[name]

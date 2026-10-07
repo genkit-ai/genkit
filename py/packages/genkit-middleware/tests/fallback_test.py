@@ -202,6 +202,42 @@ async def test_fallback_ref_entry_config_reaches_fallback_model() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('entry', 'temperature'),
+    [
+        (model_ref('backup', config_schema=ThinkingConfig, config=ThinkingConfig(temperature=0.2)), 0.2),
+        ('backup', None),
+    ],
+    ids=['ref_entry', 'string_entry'],
+)
+async def test_fallback_backup_with_same_config_class_gets_that_class(entry: object, temperature: float | None) -> None:
+    """A backup that shares the primary's config class gets a ThinkingConfig, not a dict or None."""
+    ai = Genkit()
+    seen: list[object] = []
+
+    async def primary(_request: ModelRequest[ThinkingConfig], _ctx: ActionRunContext) -> ModelResponse:
+        raise GenkitError(status='UNAVAILABLE', message='down')
+
+    async def backup(request: ModelRequest[ThinkingConfig], _ctx: ActionRunContext) -> ModelResponse:
+        seen.append(request.config)
+        return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))
+
+    ai.define_model(name='primary', fn=primary, config_schema=ThinkingConfig)
+    ai.define_model(name='backup', fn=backup, config_schema=ThinkingConfig)
+
+    response = await ai.generate(
+        model='primary',
+        prompt='hi',
+        config={'temperature': 0.9},
+        use=[Fallback(models=[entry])],  # type: ignore[list-item]
+    )
+
+    assert response.text == 'ok'
+    assert isinstance(seen[0], ThinkingConfig)
+    assert seen[0].temperature == temperature
+
+
+@pytest.mark.asyncio
 async def test_fallback_stops_when_aborted() -> None:
     """Test that fallback halts and re-raises when the abort signal is already set."""
     ai = Genkit()

@@ -35,6 +35,7 @@ from genkit._ai._model import (
     ModelRequest,
     ModelResponse,
     ModelResponseChunk,
+    check_middleware_config,
     resolve_model_name,
     text_from_content,
 )
@@ -87,6 +88,7 @@ from genkit._core._model import (
     Part,
     as_message,
     chunk_for_stream,
+    declared_config_type,
     reject_unanswered_interrupts,
 )
 from genkit._core._protocols import RegistryLike, SessionLike
@@ -418,11 +420,14 @@ async def dispatch_hooks(
     next_fn: Callable[[HookParamsT, GenerateMiddlewareContext], Awaitable[HookResultT]],
     extra: Callable[[HookParamsT], dict[str, object] | None] | None = None,
     after_result: Callable[[HookResultT], None] | None = None,
+    on_handoff: Callable[[HookParamsT, MiddlewareDef], None] | None = None,
 ) -> HookResultT:
     """Run wrap_{hook} outside-in, then next_fn.
 
     ``after_result`` runs after next_fn and after each hook that returns.
     A hook that raises leaves the last successful result in place.
+    ``on_handoff`` runs when a middleware calls next, with that middleware,
+    before the params reach the next layer.
     """
 
     def with_after_result(
@@ -439,6 +444,20 @@ async def dispatch_hooks(
 
         return stamped
 
+    def checked_by(
+        mw: MiddlewareDef,
+        fn: Callable[[HookParamsT, GenerateMiddlewareContext], Awaitable[HookResultT]],
+    ) -> Callable[[HookParamsT, GenerateMiddlewareContext], Awaitable[HookResultT]]:
+        if on_handoff is None:
+            return fn
+        check = on_handoff
+
+        async def checked(p: HookParamsT, c: GenerateMiddlewareContext) -> HookResultT:
+            check(p, mw)
+            return await fn(p, c)
+
+        return checked
+
     async def leaf(
         p: HookParamsT,
         c: GenerateMiddlewareContext,
@@ -450,12 +469,13 @@ async def dispatch_hooks(
     runner = with_after_result(leaf)
     for mw in reversed(middleware):
         wrap = hook_wrap(mw, hook)
+        inner = checked_by(mw, runner)
 
         async def run_next(
             p: HookParamsT,
             c: GenerateMiddlewareContext,
             _mw: MiddlewareDef = mw,
-            _inner: Callable[[HookParamsT, GenerateMiddlewareContext], Awaitable[HookResultT]] = runner,
+            _inner: Callable[[HookParamsT, GenerateMiddlewareContext], Awaitable[HookResultT]] = inner,
             _wrap: HookWrap[HookParamsT, HookResultT] = wrap,
         ) -> HookResultT:
             return await hop(
@@ -1584,6 +1604,25 @@ async def call_model(
         call.answered = answered
         return answered
 
+    # generate built the config as the model's class once. Middleware edits
+    # that object; a swapped-in dict or other class would reach inner layers
+    # as a second shape, so each handoff is checked. When the build fell back
+    # to a bare request (the config didn't fit), the model action reports it.
+    config_class = declared_config_type(turn_model.input_class) if turn_model.input_class is not None else None
+    on_handoff: Callable[[ModelHookParams, MiddlewareDef], None] | None = None
+    if isinstance(config_class, type) and isinstance(request.config, config_class):
+        held_class: type = config_class
+
+        def check_handoff(params: ModelHookParams, mw: MiddlewareDef) -> None:
+            check_middleware_config(
+                config=params.request.config,
+                schema=held_class,
+                model=turn_model.name,
+                middleware=middleware_name(mw),
+            )
+
+        on_handoff = check_handoff
+
     with chunks.intercept_model_stream(ctx, role=Role.MODEL):
         response = as_model_response(
             raw=await dispatch_hooks(
@@ -1592,6 +1631,7 @@ async def call_model(
                 params=ModelHookParams(request=request),
                 ctx=ctx,
                 next_fn=run_action,
+                on_handoff=on_handoff,
             ),
             name=turn_model.name,
         )

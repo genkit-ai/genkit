@@ -24,7 +24,7 @@ from typing import Any, cast
 from pydantic import BaseModel, Field, field_validator
 
 from genkit import GenkitError, ModelResponse
-from genkit._core._model import ModelRef
+from genkit._core._model import ModelRef, ModelRequest
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
 from genkit.plugin_api import Action, ActionKind
 
@@ -127,7 +127,13 @@ class Fallback(BaseMiddleware[FallbackConfig]):
                 raise last_error
             model_name = entry if isinstance(entry, str) else entry.name
             fallback_action = await self._resolve_fallback_model(ctx, model_name)
-            fallback_request = params.request.model_copy(update={'config': fallback_request_config(entry)})
+            # A plain ModelRequest with a dict config, so the backup model parses
+            # it into its own class like any other call. A copy of the primary's
+            # typed request would pass a dict straight through when both models
+            # share a config class.
+            fallback_request = ModelRequest.model_validate(
+                {**dict(params.request), 'config': fallback_request_config(entry) or {}},
+            )
             try:
                 result = await fallback_action.run(
                     input=fallback_request,
