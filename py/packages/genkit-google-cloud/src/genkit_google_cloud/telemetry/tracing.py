@@ -110,10 +110,12 @@ def enable_google_cloud_telemetry(
             Pass ``ALWAYS_ON``, ``ALWAYS_OFF``, or ``TraceIdRatioBased(0.1)``
             from ``opentelemetry.sdk.trace.sampling``. With no ``sampler=``,
             the SDK default applies (parent-based, always on, unless
-            ``OTEL_TRACES_SAMPLER`` says otherwise). If a tracer is already
-            set, ``sampler=`` raises ``INVALID_ARGUMENT``; build
-            ``TracerProvider(sampler=...)`` yourself instead.
-            ``sampler=`` with ``disable_traces=True`` also raises.
+            ``OTEL_TRACES_SAMPLER`` says otherwise). If the app already set
+            an SDK ``TracerProvider``, leave ``sampler=`` off: Cloud Trace
+            joins that provider and uses its sampler. Passing ``sampler=``
+            then raises ``INVALID_ARGUMENT``, since a provider's sampler is
+            fixed when it is built. ``sampler=`` with ``disable_traces=True``
+            also raises.
         force_dev_export: If True, export Cloud telemetry even when
             ``GENKIT_ENV=dev``. Defaults to False.
         disable_metrics: If True, Cloud Monitoring is not hung. Traces and
