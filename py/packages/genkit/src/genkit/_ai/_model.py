@@ -461,11 +461,10 @@ def assert_correct_config_class(
 ) -> None:
     """A typed config object has to belong to the model this call hits.
 
-    Dicts stay legal, and so does a plain ``ModelConfig``: its set fields
-    are checked like a dict. Omit / ``None`` skip this. A model with no
-    Python class (JSON-only or unset) cannot be checked.
+    Dicts stay legal. Omit / ``None`` skip this. A model with no Python
+    class (JSON-only or unset) cannot be checked.
     """
-    if not isinstance(config, BaseModel) or is_shared_config(config):
+    if not isinstance(config, BaseModel):
         return
     if schema is None or isinstance(config, schema):
         return
@@ -483,11 +482,8 @@ def check_config_dict(*, config: object, schema: type[BaseModel] | None, model: 
     Layers merge by top-level key, so a missing top-level field is fine
     here — another layer may supply it. A nested object is sent whole, so
     a missing field inside one raises. ``None`` means "clear the default"
-    and isn't checked. A plain ``ModelConfig`` is checked by the fields it
-    set.
+    and isn't checked.
     """
-    if is_shared_config(config):
-        config = normalize_config(config=config)
     if schema is None or not isinstance(config, Mapping):
         return
     layer = {key: value for key, value in cast(Mapping[str, Any], config).items() if value is not None}
@@ -503,15 +499,6 @@ def check_config_dict(*, config: object, schema: type[BaseModel] | None, model: 
             reason=RuntimeErrorReason.INVALID_INPUT,
             cause=e,
         ) from e
-
-
-def is_shared_config(config: object) -> bool:
-    """True for a plain ``ModelConfig``, which any model accepts.
-
-    It's the class people reach for when the same code runs against several
-    models, so its fields are copied into whichever class the model has.
-    """
-    return type(config) is ModelConfig
 
 
 def _describe_config_problems(

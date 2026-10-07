@@ -33,20 +33,6 @@ class OtherConfig(ModelConfig):
     """Some other plugin's class."""
 
 
-class CappedConfig(ModelConfig):
-    """A plugin class that narrows a common setting's range."""
-
-    temperature: float | None = Field(default=None, le=1.0)
-
-
-class BareConfig(BaseModel):
-    """A plugin class that declares none of the common settings."""
-
-    model_config = ConfigDict(extra='forbid')
-
-    safe_prompt: bool | None = None
-
-
 class TaskBudget(BaseModel):
     """A nested setting that is not useful until `total` is set."""
 
@@ -433,108 +419,89 @@ async def test_generate_valid_config_runs_unchanged() -> None:
 
 
 @pytest.mark.asyncio
-async def test_generate_model_config_on_model_with_own_class_is_accepted() -> None:
-    """`config=ModelConfig(temperature=0.2)` on a model with its own class reaches it with temperature 0.2."""
-    ai, fn = _ai_with_model()
-
-    response = await ai.generate(model='strict', prompt='hi', config=ModelConfig(temperature=0.2))
-
-    assert response.text == 'ok'
-    assert _config_value(fn.requests[-1].config, 'temperature') == 0.2
-
-
-@pytest.mark.asyncio
-async def test_generate_model_config_value_checked_against_model_class() -> None:
-    """`ModelConfig(temperature=1.5)` on a model whose class caps temperature at 1.0 raises naming `temperature`."""
-    ai, fn = _ai_with_model(config_schema=CappedConfig, name='capped')
-
-    with pytest.raises(GenkitError) as err:
-        await ai.generate(model='capped', prompt='hi', config=ModelConfig(temperature=1.5))
-
-    _assert_rejected(err, fn, "capped: config 'temperature'")
-
-
-@pytest.mark.asyncio
-async def test_generate_model_config_on_class_without_common_settings_raises() -> None:
-    """`ModelConfig(temperature=0.2)` on a model whose class has no `temperature` raises naming it."""
-    ai, fn = _ai_with_model(config_schema=BareConfig, name='bare')
-
-    with pytest.raises(GenkitError) as err:
-        await ai.generate(model='bare', prompt='hi', config=ModelConfig(temperature=0.2))
-
-    _assert_rejected(err, fn, "bare: unknown config key 'temperature'")
-
-
-@pytest.mark.asyncio
-async def test_generate_model_config_on_model_without_config_class_runs() -> None:
-    """`ModelConfig(temperature=0.2)` on a model with no config class runs and reaches it as temperature 0.2."""
-    ai, fn = _ai_with_model(config_schema=None, name='loose')
-
-    response = await ai.generate(model='loose', prompt='hi', config=ModelConfig(temperature=0.2))
-
-    assert response.text == 'ok'
-    assert _config_value(fn.requests[-1].config, 'temperature') == 0.2
-
-
-@pytest.mark.asyncio
-async def test_generate_model_config_on_model_ref_merges_over_ref_default() -> None:
-    """`ModelConfig(temperature=0.2)` over a ref with 0.5 and safe_prompt runs with 0.2 and keeps safe_prompt."""
-    ai, fn = _ai_with_model()
-    ref = model_ref('strict', config_schema=StrictConfig, config=StrictConfig(temperature=0.5, safe_prompt=True))
-
-    await ai.generate(model=ref, prompt='hi', config=ModelConfig(temperature=0.2))
-
-    config = fn.requests[-1].config
-    assert _config_value(config, 'temperature') == 0.2
-    assert _config_value(config, 'safe_prompt') is True
-
-
-@pytest.mark.asyncio
-async def test_prompt_defined_with_model_config_runs() -> None:
-    """A prompt defined and called with `ModelConfig(...)` runs with both the define and call settings."""
-    ai, fn = _ai_with_model()
-    prompt = ai.define_prompt(name='shared', model='strict', prompt='hi', config=ModelConfig(temperature=0.2))
-
-    response = await prompt(config=ModelConfig(max_output_tokens=7))
-
-    assert response.text == 'ok'
-    config = fn.requests[-1].config
-    assert _config_value(config, 'temperature') == 0.2
-    assert _config_value(config, 'max_output_tokens') == 7
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize('snake_value', [5, 6], ids=['same_value', 'different_value'])
-async def test_generate_both_spellings_of_one_setting_raises_same_setting(snake_value: int) -> None:
-    """`{'maxOutputTokens': 5, 'max_output_tokens': 5 or 6}` raises "are the same setting; pass one", not "unknown"."""
+@pytest.mark.parametrize(
+    'config',
+    [
+        {'maxOutputTokens': 5, 'max_output_tokens': 5},
+        {'maxOutputTokens': 5, 'max_output_tokens': 6},
+        {'max_output_tokens': 5, 'maxOutputTokens': 5},
+    ],
+    ids=['same_value', 'different_value', 'snake_case_first'],
+)
+async def test_generate_both_spellings_of_one_setting_raises_same_setting(config: dict[str, int]) -> None:
+    """Both spellings raise "are the same setting; pass one" with the field name first, whatever the dict order."""
     ai, fn = _ai_with_model()
 
     with pytest.raises(GenkitError) as err:
-        await ai.generate(model='strict', prompt='hi', config={'maxOutputTokens': 5, 'max_output_tokens': snake_value})
+        await ai.generate(model='strict', prompt='hi', config=config)
 
-    _assert_rejected(err, fn, 'strict: max_output_tokens and maxOutputTokens are the same setting; pass one')
-    assert 'unknown' not in err.value.original_message
+    _assert_rejected(err, fn)
+    assert err.value.original_message == 'strict: max_output_tokens and maxOutputTokens are the same setting; pass one'
 
 
 @pytest.mark.asyncio
-async def test_generate_both_spellings_and_typo_names_both() -> None:
-    """Both spellings plus `temprature` raise one error naming the duplicate setting and the typo."""
+async def test_generate_two_settings_each_in_both_spellings_names_both_pairs() -> None:
+    """`maxOutputTokens`/`max_output_tokens` plus `topK`/`top_k` name both pairs in one error."""
     ai, fn = _ai_with_model()
 
     with pytest.raises(GenkitError) as err:
         await ai.generate(
             model='strict',
             prompt='hi',
-            config={'maxOutputTokens': 5, 'max_output_tokens': 5, 'temprature': 0.2},
+            config={'maxOutputTokens': 5, 'max_output_tokens': 5, 'topK': 3, 'top_k': 3},
         )
 
-    _assert_rejected(
-        err,
-        fn,
-        'max_output_tokens and maxOutputTokens are the same setting; pass one',
-        "unknown config key 'temprature'",
+    _assert_rejected(err, fn)
+    assert err.value.original_message == (
+        'strict: max_output_tokens and maxOutputTokens are the same setting; pass one; '
+        'top_k and topK are the same setting; pass one'
     )
-    assert "'max_output_tokens'" not in err.value.original_message
+
+
+@pytest.mark.asyncio
+async def test_generate_both_spellings_of_plugin_declared_alias_raises_same_setting() -> None:
+    """A plugin class's own alias pair (`thinking_config`/`thinkingConfig`) gets the same message."""
+    ai, fn = _ai_with_model(config_schema=GeminiLikeConfig, name='gem')
+
+    with pytest.raises(GenkitError) as err:
+        await ai.generate(
+            model='gem',
+            prompt='hi',
+            config={'thinkingConfig': {'thinkingBudget': 0}, 'thinking_config': {'thinkingBudget': 0}},
+        )
+
+    _assert_rejected(err, fn)
+    assert err.value.original_message == 'gem: thinking_config and thinkingConfig are the same setting; pass one'
+
+
+@pytest.mark.asyncio
+async def test_generate_none_on_one_spelling_is_not_a_second_spelling() -> None:
+    """`{'maxOutputTokens': 5, 'max_output_tokens': None}` runs: None is unset, so only one spelling is set."""
+    ai, fn = _ai_with_model()
+
+    await ai.generate(model='strict', prompt='hi', config={'maxOutputTokens': 5, 'max_output_tokens': None})
+
+    assert fn.requests[-1].config == {'maxOutputTokens': 5}
+
+
+@pytest.mark.asyncio
+async def test_generate_both_spellings_typo_and_bad_value_all_in_one_error() -> None:
+    """Both spellings, a typo, and a bad value raise one error: same setting, then unknown key, then the value."""
+    ai, fn = _ai_with_model()
+
+    with pytest.raises(GenkitError) as err:
+        await ai.generate(
+            model='strict',
+            prompt='hi',
+            config={'maxOutputTokens': 5, 'max_output_tokens': 5, 'temprature': 0.2, 'top_p': 'high'},
+        )
+
+    _assert_rejected(err, fn)
+    assert err.value.original_message.startswith(
+        'strict: max_output_tokens and maxOutputTokens are the same setting; pass one; '
+        "unknown config key 'temprature'; put provider-only settings in config['extra']; "
+        "config 'top_p': "
+    )
 
 
 @pytest.mark.asyncio
