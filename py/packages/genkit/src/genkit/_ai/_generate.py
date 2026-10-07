@@ -23,7 +23,7 @@ import secrets
 import time
 from collections.abc import Awaitable, Callable, Generator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, TypeGuard, TypeVar, cast
+from typing import Any, TypeVar, cast
 
 from pydantic import BaseModel, ValidationError
 
@@ -31,10 +31,10 @@ from genkit._ai._formats._types import FormatDef, Formatter
 from genkit._ai._messages import inject_instructions
 from genkit._ai._model import (
     Message,
+    MiddlewareConfigCheck,
     ModelRequest,
     ModelResponse,
     ModelResponseChunk,
-    check_middleware_config,
     resolve_model_name,
     text_from_content,
 )
@@ -93,6 +93,7 @@ from genkit._core._model import (
 from genkit._core._protocols import RegistryLike
 from genkit._core._registry import Registry
 from genkit._core._schema import check_output_schema
+from genkit._core._secrets import reject_config_api_key
 from genkit._core._telemetry._instrumentation import SpanContext, run_in_new_span, set_span_state
 from genkit._core._tool import Tool
 from genkit._core._typing import (
@@ -133,17 +134,14 @@ class StreamingCallbackError(Exception):
 
 
 def streaming_callback_cause(*, exc: BaseException) -> Exception | None:
-    """Find the caller exception carried through action error wrappers."""
+    """Find the caller's on_chunk exception through whatever wrapped it."""
     current: BaseException | None = exc
     seen: set[int] = set()
     while current is not None and id(current) not in seen:
         seen.add(id(current))
         if isinstance(current, StreamingCallbackError):
             return current.cause
-        if isinstance(current, GenkitError) and current.cause is not None:
-            current = current.cause
-        else:
-            current = current.__cause__
+        current = current.__cause__
     return None
 
 
@@ -766,6 +764,9 @@ async def run_generate(
             message=f'max turns cannot be negative, got {options.max_turns}',
             reason=RuntimeErrorReason.INVALID_INPUT,
         )
+    # The veneer already checked ahead of its span. /util/generate (Dev UI,
+    # reflection) starts here, so it fails before middleware or the model runs.
+    reject_config_api_key(options.config)
     registry = registry if registry.is_child else registry.new_child()
 
     if options.tools:
@@ -1150,14 +1151,14 @@ INTERNAL_FINISH_MESSAGE = 'internal error'
 def public_error(exc: BaseException) -> PublicError | None:
     if isinstance(exc, PublicError):
         return exc
-    if isinstance(exc, GenkitError) and isinstance(exc.cause, PublicError):
-        return exc.cause
     return None
 
 
 def boxed_finish_message(*, exc: BaseException, pipe_failed: bool) -> str:
     # The string on a returned response is what a flow can put in a 200.
     # PublicError is how a tool author publishes that sentence.
+    # The cause clause below keeps a plugin's wrapped provider error out of
+    # finish_message.
     if pipe_failed:
         if isinstance(exc, GenkitError):
             return exc.original_message or type(exc).__name__
@@ -1545,14 +1546,6 @@ async def generate_turn(
     )
 
 
-def is_model_class(value: object) -> TypeGuard[type[BaseModel]]:
-    """True for a pydantic model class; False for TypedDicts, dict, unions, and parameterized generics."""
-    try:
-        return isinstance(value, type) and issubclass(value, BaseModel)
-    except TypeError:  # dict[str, Any] passes isinstance(_, type) on 3.10
-        return False
-
-
 async def call_model(
     *,
     options: GenerateActionOptions,
@@ -1614,30 +1607,11 @@ async def call_model(
     # to a bare request (the config didn't fit), the model action reports it.
     config_class = declared_config_type(turn_model.input_class) if turn_model.input_class is not None else None
     on_handoff: Callable[[ModelHookParams, MiddlewareDef], None] | None = None
-    if is_model_class(config_class) and isinstance(request.config, config_class):
-        held_class: type[BaseModel] = config_class
-        checked: dict[str, object] = dict(vars(request.config))
-        # The config a check rejected stays on the shared request, so a layer
-        # that retries next would trip on it again. Re-raise the first error so
-        # it keeps naming the layer that put it there.
-        rejected: list[tuple[object, GenkitError]] = []
+    if config_class is not None and isinstance(request.config, config_class):
+        config_check = MiddlewareConfigCheck(config=request.config, schema=config_class, model=turn_model.name)
 
         def check_handoff(params: ModelHookParams, mw: MiddlewareDef) -> None:
-            config = params.request.config
-            for bad, err in rejected:
-                if bad is config:
-                    raise err
-            try:
-                check_middleware_config(
-                    config=config,
-                    schema=held_class,
-                    model=turn_model.name,
-                    middleware=middleware_name(mw),
-                    checked=checked,
-                )
-            except GenkitError as err:
-                rejected.append((config, err))
-                raise
+            config_check.check(params.request.config, middleware_name(mw))
 
         on_handoff = check_handoff
 
@@ -2244,11 +2218,18 @@ def to_pending_response(request: Part, response: Part) -> Part:
 
 
 def interrupt_from_exc(exc: Exception) -> Interrupt | None:
-    """If ``exc`` is (or wraps) an Interrupt exception, return that interrupt."""
-    if isinstance(exc, Interrupt):
-        return exc
-    if isinstance(exc, GenkitError) and exc.cause is not None and isinstance(exc.cause, Interrupt):
-        return exc.cause
+    """If ``exc`` is an Interrupt, or was raised from one, return it.
+
+    A tool that pauses again on restart is still an interrupt the caller
+    can answer, even when the action runner wraps the raise.
+    """
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        if isinstance(current, Interrupt):
+            return current
+        seen.add(id(current))
+        current = current.__cause__
     return None
 
 

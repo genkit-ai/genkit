@@ -211,8 +211,10 @@ class OpenAIConfig(ModelConfig):
         web_search_options: Web search tool configuration.
             See: https://platform.openai.com/docs/api-reference/chat/create#chat-create-web_search_options
 
-        max_output_tokens: Accepted but not sent, so it doesn't cap the reply.
-            Use ``max_tokens`` to cap reply length.
+        max_output_tokens: Genkit's cross-model reply cap (``maxOutputTokens``
+            in the Dev UI). Sent as ``max_tokens``, or ``max_completion_tokens``
+            on reasoning models. ``max_tokens`` and ``max_completion_tokens``
+            win when set.
 
         extra: Request body fields this class doesn't declare, such as a
             field a newer API version or an OpenAI-compatible server added.
@@ -225,14 +227,12 @@ class OpenAIConfig(ModelConfig):
     """
 
     # Dev UI and reflection send camelCase. frequencyPenalty binds and goes
-    # out as frequency_penalty. maxOutputTokens binds on the schema; it is
-    # not a create() kwarg (use max_tokens / maxTokens for a token cap).
+    # out as frequency_penalty; maxOutputTokens goes out as the token cap.
     # populate_by_name keeps the snake_case Python fields working too.
     # Unknown keys raise (inherited from ModelConfig); a create() param this
     # class doesn't declare goes in ``extra`` and is sent as ``extra_body``.
     model_config: ClassVar[ConfigDict] = ConfigDict(
         alias_generator=to_camel,
-        extra='forbid',
         populate_by_name=True,
     )
 

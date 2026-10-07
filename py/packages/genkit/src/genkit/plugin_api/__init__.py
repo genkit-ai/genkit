@@ -25,6 +25,7 @@ from genkit._core._error import (
     StatusName,
     from_http_code,
     get_callable_json,
+    mark_provider_error,
     parse_retry_after_ms,
     wrap_http_error,
 )
@@ -33,6 +34,12 @@ from genkit._core._loop_cache import _loop_local_client as loop_local_client
 from genkit._core._middleware import new_middleware
 from genkit._core._plugin import MiddlewarePlugin, Plugin
 from genkit._core._schema import to_json_schema
+from genkit._core._secrets import (
+    SECRETS_HINT,
+    context_api_key,
+    misplaced_api_key_error,
+    reject_config_api_key,
+)
 from genkit._core._typing import ActionMetadata
 
 __all__ = [
@@ -46,6 +53,7 @@ __all__ = [
     'ErrorResponseMetadata',
     'StatusName',
     'from_http_code',
+    'mark_provider_error',
     'parse_retry_after_ms',
     'wrap_http_error',
     # HTTP / version stamping
@@ -60,4 +68,9 @@ __all__ = [
     'get_cached_client',
     # Error serialization
     'get_callable_json',
+    # Per-request API key on context.secrets
+    'SECRETS_HINT',
+    'context_api_key',
+    'misplaced_api_key_error',
+    'reject_config_api_key',
 ]

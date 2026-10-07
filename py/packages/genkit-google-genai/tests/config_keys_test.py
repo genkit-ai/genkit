@@ -14,7 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""What a Gemini, Veo or Lyria config key does: rejected, sent, or merged via extra.
+"""What a Gemini or Veo config key does: rejected, sent, or merged via extra.
 
 Each generate test captures the HTTP body the google-genai SDK would send,
 so the pins hold on the wire, not on an intermediate config object.
@@ -27,10 +27,9 @@ from unittest.mock import patch
 
 import pytest
 from genkit_google_genai import GeminiConfig, GeminiImageConfig, GoogleAI, VeoConfig, VertexAI
-from genkit_google_genai._models._lyria import LyriaConfig
 from google.auth.credentials import AnonymousCredentials
 from google.genai import _api_client
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 from genkit import Genkit, GenkitError
 
@@ -89,13 +88,16 @@ def _vertexai() -> Genkit:
         (
             {
                 'safety_settings': [
-                    {'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_ONLY_HIGH', 'method': 'SEVERITY'}
+                    {'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_ONLY_HIGH', 'methd': 'SEVERITY'}
                 ]
             },
-            'safety_settings.0.method',
+            'safety_settings.0.methd',
         ),
+        ({'google_search': {'exclude_domainz': ['x']}}, 'google_search.exclude_domainz'),
+        ({'url_context': {'max_urls': 3}}, 'url_context.max_urls'),
+        ({'code_execution': {'timeout': 3}}, 'code_execution.timeout'),
     ],
-    ids=['thinking_config', 'safety_settings'],
+    ids=['thinking_config', 'safety_settings', 'google_search', 'url_context', 'code_execution'],
 )
 @pytest.mark.asyncio
 async def test_generate_gemini_unknown_nested_config_key_raises(sent: _Sent, config: dict[str, Any], key: str) -> None:
@@ -106,6 +108,44 @@ async def test_generate_gemini_unknown_nested_config_key_raises(sent: _Sent, con
     assert raised.value.status == 'INVALID_ARGUMENT'
     assert repr(key) in str(raised.value)
     assert sent.bodies == []
+
+
+@pytest.mark.parametrize(
+    ('model', 'config', 'wire_path', 'wire_value'),
+    [
+        (
+            'vertexai/gemini-2.5-flash',
+            {
+                'safety_settings': [
+                    {'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_ONLY_HIGH', 'method': 'SEVERITY'}
+                ]
+            },
+            ('safetySettings', 0, 'method'),
+            'SEVERITY',
+        ),
+        (
+            'vertexai/gemini-2.5-flash-image',
+            {'image_config': {'output_mime_type': 'image/jpeg'}},
+            ('generationConfig', 'imageConfig', 'imageOutputOptions', 'mimeType'),
+            'image/jpeg',
+        ),
+    ],
+    ids=['safety_settings.method', 'image_config.output_mime_type'],
+)
+@pytest.mark.asyncio
+async def test_generate_gemini_sdk_field_in_nested_setting_reaches_request(
+    sent: _Sent, model: str, config: dict[str, Any], wire_path: tuple[str | int, ...], wire_value: str
+) -> None:
+    """A field the google-genai type declares passes the unknown-key check and lands on the wire.
+
+    Both fields are Vertex-only; google-genai refuses them on the Gemini API.
+    """
+    await _vertexai().generate(model=model, prompt='hi', config=config)
+
+    value: Any = sent.body
+    for part in wire_path:
+        value = value[part]
+    assert value == wire_value
 
 
 @pytest.mark.asyncio
@@ -119,12 +159,6 @@ async def test_generate_operation_veo_unknown_config_key_raises_and_sends_nothin
     assert raised.value.status == 'INVALID_ARGUMENT'
     assert "'durationSecs'" in str(raised.value)
     assert sent.bodies == []
-
-
-def test_lyria_config_with_unknown_key_raises_validation_error() -> None:
-    """`LyriaConfig` used to drop unknown keys silently; now it fails naming the key."""
-    with pytest.raises(ValidationError, match='sampleCnt'):
-        LyriaConfig.model_validate({'sampleCnt': 2})
 
 
 # -- api key ------------------------------------------------------------------
@@ -165,7 +199,7 @@ async def test_generate_operation_veo_extra_merges_into_request_parameters(sent:
 
 @pytest.mark.asyncio
 async def test_generate_operation_veo_generate_audio_reaches_request(sent: _Sent) -> None:
-    """`generateAudio=True` still reaches the request now that unknown keys are rejected (control)."""
+    """`generateAudio=True` is a declared field and is sent under `parameters`."""
     await _vertexai().generate_operation(
         model='vertexai/veo-3.0-generate-001', prompt='a cat', config={'generateAudio': True}
     )

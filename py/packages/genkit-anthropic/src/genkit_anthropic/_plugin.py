@@ -28,13 +28,14 @@ from genkit.plugin_api import (
     ActionKind,
     ActionMetadata,
     Plugin,
+    context_api_key,
     loop_local_client,
+    reject_config_api_key,
     to_json_schema,
 )
 from genkit_anthropic._config import AnthropicConfig
 from genkit_anthropic._model_info import SUPPORTED_ANTHROPIC_MODELS, KnownClaude, get_model_info
-from genkit_anthropic._models import AnthropicModel
-from genkit_anthropic._secrets import context_api_key, missing_key_error
+from genkit_anthropic._models import AnthropicModel, pinned_credential_header
 
 logger = structlog.get_logger(__name__)
 
@@ -44,7 +45,17 @@ ANTHROPIC_PLUGIN_NAME = 'anthropic'
 def _has_credential(client: AsyncAnthropic) -> bool:
     if client.api_key is not None or client.auth_token is not None or client.credentials is not None:
         return True
-    return any(name.lower() in ('x-api-key', 'authorization') for name in client._custom_headers)  # noqa: SLF001
+    return pinned_credential_header(client) is not None
+
+
+def _missing_key_error() -> GenkitError:
+    return GenkitError(
+        status='FAILED_PRECONDITION',
+        message=(
+            'Anthropic needs an API key: set ANTHROPIC_API_KEY or pass Anthropic(api_key=...), '
+            "or send a per-request key as context={'secrets': {'api_key': ...}}."
+        ),
+    )
 
 
 # Only this plugin's namespace. A vertexai/ paste is a different name —
@@ -170,11 +181,12 @@ class Anthropic(Plugin):
         model_info = get_model_info(name)
 
         async def _generate(request: ModelRequest[AnthropicConfig], ctx: ActionRunContext) -> ModelResponse:
+            # A key in config is the more specific error, so it wins over a missing plugin key.
+            reject_config_api_key(request.config)
             client = self._runtime_client()
-            context = ctx.context if isinstance(ctx.context, dict) else {}
             # A plugin built without a credential serves only callers who bring a key.
-            if not _has_credential(client) and context_api_key(context) is None:
-                raise missing_key_error()
+            if not _has_credential(client) and context_api_key(ctx.context) is None:
+                raise _missing_key_error()
             model = AnthropicModel(
                 model_name=name,
                 client=client,

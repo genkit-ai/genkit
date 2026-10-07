@@ -88,23 +88,27 @@ def attach_leftovers(
 # Body fields Genkit builds from the request, compared the way google-genai's
 # extra_body merge aligns keys (underscores dropped, lowercased), so
 # `Contents` or `SYSTEM_INSTRUCTION` can't slip past.
-_MANAGED_BODY_FIELDS = frozenset({'contents', 'systeminstruction', 'tools', 'toolconfig', 'cachedcontent'})
+GEMINI_MANAGED_BODY_FIELDS = frozenset({'contents', 'systeminstruction', 'tools', 'toolconfig', 'cachedcontent'})
 # generationConfig fields Genkit sets from the request's output config.
-_MANAGED_GENERATION_FIELDS = frozenset({'responseschema', 'responsejsonschema', 'responsemimetype'})
+GEMINI_MANAGED_GENERATION_FIELDS = frozenset({'responseschema', 'responsejsonschema', 'responsemimetype'})
+# Veo's predictLongRunning body: `instances` carries the prompt and input media.
+VEO_MANAGED_BODY_FIELDS = frozenset({'instances'})
 
 
 def _wire_key(key: str) -> str:
     return key.replace('_', '').lower()
 
 
-def _managed_extra_field(extra: dict[str, Any]) -> str | None:
+def _managed_extra_field(
+    extra: dict[str, Any], *, body_fields: frozenset[str], generation_fields: frozenset[str]
+) -> str | None:
     for key, value in extra.items():
         wire = _wire_key(key)
-        if wire in _MANAGED_BODY_FIELDS:
+        if wire in body_fields:
             return key
         if wire == 'generationconfig' and isinstance(value, dict):
             for inner in cast(dict[str, Any], value):
-                if _wire_key(inner) in _MANAGED_GENERATION_FIELDS:
+                if _wire_key(inner) in generation_fields:
                     return f'{key}.{inner}'
     return None
 
@@ -138,6 +142,8 @@ def attach_config_extra(
     extra: dict[str, Any] | None,
     *,
     action_name: str,
+    managed_body_fields: frozenset[str],
+    managed_generation_fields: frozenset[str] = frozenset(),
 ) -> Any:  # noqa: ANN401
     """Send ``config.extra`` verbatim at the top level of the request body.
 
@@ -145,11 +151,12 @@ def attach_config_extra(
     merges ``extra_body`` into the built request recursively, so
     ``{'generationConfig': {'newKnob': 1}}`` adds one key instead of replacing
     the block, and a colliding leaf wins over the declared field. Fields
-    Genkit builds from the request are rejected.
+    Genkit builds from the request (``managed_body_fields``, and
+    ``managed_generation_fields`` under ``generationConfig``) are rejected.
     """
     if not extra:
         return config
-    field = _managed_extra_field(extra)
+    field = _managed_extra_field(extra, body_fields=managed_body_fields, generation_fields=managed_generation_fields)
     if field is not None:
         raise GenkitError(
             status='INVALID_ARGUMENT',
