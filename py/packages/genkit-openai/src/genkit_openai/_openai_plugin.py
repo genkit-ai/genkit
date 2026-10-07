@@ -22,6 +22,7 @@ from typing import Any, Literal, TypeAlias, cast
 
 from openai import APIStatusError, AsyncOpenAI
 from openai.types import Model
+from pydantic import BaseModel
 
 from genkit import ActionRunContext, Embedding, GenkitError, ModelResponse
 from genkit.embedder import (
@@ -61,6 +62,8 @@ from genkit_openai._models import (
     OpenAISTTModel,
     OpenAITTSModel,
 )
+from genkit_openai._models._audio import OpenAISttConfig, OpenAITtsConfig
+from genkit_openai._models._image import OpenAIDalleConfig, OpenAIGptImageConfig
 from genkit_openai._models._model_info import KnownGpt, get_default_openai_model_info
 from genkit_openai._models._utils import reraise_openai_error
 from genkit_openai._typing import OpenAIConfig
@@ -179,7 +182,7 @@ def _get_multimodal_info_dict(
     name: str,
     model_type: _ModelType,
     supported_models: dict[str, ModelInfo],
-) -> tuple[dict[str, object], dict[str, Any] | None]:
+) -> tuple[dict[str, object], type[BaseModel]]:
     """Build the info dictionary for a multimodal model.
 
     Uses registry metadata when available, falls back to default supports.
@@ -190,14 +193,15 @@ def _get_multimodal_info_dict(
         supported_models: Registry of known models and their metadata.
 
     Returns:
-        A tuple containing the info dictionary and the model-specific config
-        schema, if one is registered.
+        A tuple containing the info dictionary and the config class this
+        endpoint checks against.
     """
+    schema = multimodal_config_class(name=name, model_type=model_type)
     model_info = supported_models.get(name)
     if model_info:
         return (
             model_info.model_dump(by_alias=True, exclude_none=True, exclude={'config_schema'}),
-            model_info.config_schema,
+            schema,
         )
 
     default_supports = _DEFAULT_SUPPORTS.get(model_type)
@@ -206,8 +210,19 @@ def _get_multimodal_info_dict(
             'label': f'OpenAI - {name}',
             'supports': default_supports.model_dump(by_alias=True, exclude_none=True) if default_supports else {},
         },
-        None,
+        schema,
     )
+
+
+def multimodal_config_class(*, name: str, model_type: _ModelType) -> type[BaseModel]:
+    """The config class an image, TTS, or STT model checks generate() against."""
+    if model_type == _ModelType.TTS:
+        return OpenAITtsConfig
+    if model_type == _ModelType.STT:
+        return OpenAISttConfig
+    if 'gpt-image' in name:
+        return OpenAIGptImageConfig
+    return OpenAIDalleConfig
 
 
 def _multimodal_action_metadata(
@@ -397,7 +412,9 @@ class OpenAI(Plugin):
         model_info = self.get_model_info(clean_name) or {}
 
         async def _generate(request: ModelRequest[OpenAIConfig], ctx: ActionRunContext) -> ModelResponse:
-            openai_model = OpenAIModelHandler(OpenAIModel(clean_name, self._runtime_client()))
+            catalog = SUPPORTED_OPENAI_MODELS.get(cast(KnownGpt, clean_name))
+            supports = catalog.supports if catalog is not None else get_default_openai_model_info(clean_name).supports
+            openai_model = OpenAIModelHandler(OpenAIModel(clean_name, self._runtime_client(), supports=supports))
             return await openai_model.generate(request, ctx)
 
         return create_model(

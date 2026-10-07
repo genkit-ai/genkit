@@ -46,7 +46,7 @@ from genkit._ai._agents._session_stores._inmemory_store import InMemorySessionSt
 from genkit._ai._agents._types import TurnContext, TurnResult
 from genkit._ai._tools import Interrupt, ToolRunContext
 from genkit._core._action import ActionRunContext
-from genkit._core._error import GenkitError
+from genkit._core._error import GenkitError, GenkitRuntimeError
 from genkit._core._model import (
     AgentInit,
     AgentInput,
@@ -60,7 +60,6 @@ from genkit._core._model import (
 )
 from genkit._core._typing import (
     AgentFinishReason,
-    GenkitRuntimeError,
     Role,
 )
 from genkit.exp import Genkit

@@ -73,15 +73,13 @@ class ResolvedModel:
 
 
 def python_config_schema(schema: object) -> type[BaseModel] | None:
-    """The class a call's config is checked against, or None for no check.
-
-    ``GenerationCommonConfig`` is what a looked-up ref carries for a model that
-    declared no class, so it means "not checked", the same as calling that
-    model by name.
-    """
-    if schema is GenerationCommonConfig:
-        return None
+    """The class a call's config is checked against, or None for no check."""
     return schema if isinstance(schema, type) and issubclass(schema, BaseModel) else None
+
+
+def ref_defers_to_registered_class(schema: type[BaseModel] | None) -> bool:
+    """True when the ref named plain ModelConfig, so the model's class is used."""
+    return schema is ModelConfig or schema is GenerationCommonConfig
 
 
 def config_field_names(schema: type[BaseModel]) -> dict[str, str]:
@@ -235,11 +233,12 @@ async def resolve_for_generate(
 ) -> ResolvedModel:
     """Name, config bag, and the config class this generate will check against.
 
-    A ModelRef already has the class. A string name reads it off the
-    registered model action.
+    A plugin class on a ModelRef is the class this call checks. Plain
+    ``ModelConfig`` on a ref means the same as the model name: check
+    against the class the model registered.
     """
     resolved = resolve_call_model(model=model, config=config, registry=registry, message=message)
-    if resolved.config_schema is not None:
+    if resolved.config_schema is not None and not ref_defers_to_registered_class(resolved.config_schema):
         return resolved
     action = await registry.resolve_model(resolved.name)
     raw = getattr(action, '_config_schema', None) if action is not None else None
@@ -450,10 +449,11 @@ def assert_correct_config_class(
 ) -> None:
     """A typed config object has to belong to the model this call hits.
 
-    Dicts stay legal. Omit / ``None`` skip this. A model with no Python
-    class (JSON-only or unset) cannot be checked.
+    Dicts stay legal, and so does a plain ``ModelConfig``: its set fields
+    are checked like a dict. Omit / ``None`` skip this. A model with no
+    Python class (JSON-only or unset) cannot be checked.
     """
-    if not isinstance(config, BaseModel):
+    if not isinstance(config, BaseModel) or is_shared_config(config):
         return
     if schema is None or isinstance(config, schema):
         return
@@ -468,30 +468,59 @@ def assert_correct_config_class(
 def check_config_dict(*, config: object, schema: type[BaseModel] | None, model: str) -> None:
     """A dict config has to fit the model's class before anything is sent.
 
-    Each layer (ref, call, prompt) is checked on its own, so a missing field
-    is fine here; only unknown keys and bad values raise. ``None`` means
-    "clear the default" and isn't checked.
+    Layers merge by top-level key, so a missing top-level field is fine
+    here — another layer may supply it. A nested object is sent whole, so
+    a missing field inside one raises. ``None`` means "clear the default"
+    and isn't checked. A plain ``ModelConfig`` is checked by the fields it
+    set.
     """
+    if is_shared_config(config):
+        config = normalize_config(config=config)
     if schema is None or not isinstance(config, Mapping):
         return
     layer = {key: value for key, value in cast(Mapping[str, Any], config).items() if value is not None}
     try:
         schema.model_validate(layer)
     except ValidationError as e:
-        problems = [err for err in e.errors() if err['type'] != 'missing']
+        problems = [err for err in e.errors() if not (err['type'] == 'missing' and len(err['loc']) == 1)]
         if not problems:
             return
         raise GenkitError(
             status='INVALID_ARGUMENT',
-            message=f'{model}: {_describe_config_problems(problems)}',
+            message=f'{model}: {_describe_config_problems(problems, layer=layer, schema=schema)}',
             reason=RuntimeErrorReason.INVALID_INPUT,
             cause=e,
         ) from e
 
 
-def _describe_config_problems(problems: list[ErrorDetails]) -> str:
-    unknown = [_config_path(err['loc']) for err in problems if err['type'] == 'extra_forbidden']
-    parts: list[str] = []
+def is_shared_config(config: object) -> bool:
+    """True for a plain ``ModelConfig``, which any model accepts.
+
+    It's the class people reach for when the same code runs against several
+    models, so its fields are copied into whichever class the model has.
+    """
+    return type(config) is ModelConfig
+
+
+def _describe_config_problems(
+    problems: list[ErrorDetails], *, layer: Mapping[str, Any], schema: type[BaseModel]
+) -> str:
+    # pydantic binds one spelling of a setting and calls the other unknown;
+    # the caller didn't misspell anything, they wrote the setting twice.
+    names = config_field_names(schema)
+    repeated: dict[str, list[str]] = {}
+    unknown: list[str] = []
+    for err in problems:
+        if err['type'] != 'extra_forbidden':
+            continue
+        key = _config_path(err['loc'])
+        field = names.get(key) if len(err['loc']) == 1 else None
+        spellings = [k for k in layer if field and names.get(k) == field]
+        if field and len(spellings) > 1:
+            repeated[field] = sorted(spellings, key=lambda k: k != field)
+        else:
+            unknown.append(key)
+    parts = [f'{" and ".join(spellings)} are the same setting; pass one' for spellings in repeated.values()]
     if unknown:
         keys = ', '.join(repr(key) for key in unknown)
         noun = 'key' if len(unknown) == 1 else 'keys'
