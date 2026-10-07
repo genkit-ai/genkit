@@ -570,9 +570,10 @@ def test_trailing_assistant_kept_under_tool_choice_none() -> None:
     assert 'toolConfig' not in kwargs
 
 
-def test_additional_model_request_fields_forwarded_verbatim() -> None:
+def test_extra_forwarded_as_additional_model_request_fields() -> None:
+    """`extra` reaches Converse as `additionalModelRequestFields`."""
     thinking = {'thinking': {'type': 'enabled', 'budget_tokens': 2048}}
-    request = user_text_request(config=BedrockConfig(additional_model_request_fields=thinking))
+    request = user_text_request(config=BedrockConfig(extra=thinking))
     kwargs = build_converse_request('amazon.nova-lite-v1:0', request)
     assert kwargs['additionalModelRequestFields'] == thinking
 

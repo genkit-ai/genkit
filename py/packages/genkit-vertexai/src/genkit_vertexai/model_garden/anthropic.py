@@ -27,6 +27,7 @@ from genkit_anthropic import AnthropicConfig
 # genkit-vertexai release in lockstep, so Model Garden reuses the Claude
 # model class instead of copying it.
 from genkit_anthropic._models import AnthropicModel
+from genkit_vertexai.model_garden._secrets import reject_secrets_api_key
 from pydantic import ConfigDict
 from pydantic.config import JsonDict
 
@@ -91,6 +92,7 @@ class AnthropicModelGarden:
         """
 
         async def _generate(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+            reject_secrets_api_key(ctx.context)
             model = AnthropicModel(
                 model_name=self._model_name,
                 client=cast(AsyncAnthropic, self._runtime_client()),

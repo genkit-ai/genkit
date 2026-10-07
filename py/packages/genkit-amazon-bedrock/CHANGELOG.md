@@ -21,8 +21,8 @@ First release of the plugin.
   multi-turn chat, system prompts, tool calling, reasoning content, and
   streamed deltas.
 - `BedrockConfig` with Bedrock-specific knobs on top of the core `ModelConfig`
-  fields, plus `additional_model_request_fields` for anything Converse does not
-  model.
+  fields, plus `extra` for anything Converse does not model (sent as
+  `additionalModelRequestFields`).
 - Prompt caching via `cache_point_part()`.
 - Embedders for the Titan text, Titan multimodal, Cohere v3 and Nova-2
   families, over InvokeModel.

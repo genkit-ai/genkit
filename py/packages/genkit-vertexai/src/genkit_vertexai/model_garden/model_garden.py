@@ -36,6 +36,7 @@ from genkit_vertexai.model_garden._model_info import (
     SUPPORTED_OPENAI_COMPAT_MODELS,
     get_default_model_info,
 )
+from genkit_vertexai.model_garden._secrets import reject_secrets_api_key
 from genkit_vertexai.model_garden.client import OpenAIClient
 
 MODELGARDEN_PLUGIN_NAME = 'modelgarden'
@@ -128,6 +129,7 @@ class ModelGardenModel:
         """
 
         async def _generate(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+            reject_secrets_api_key(ctx.context)
             client = await self.create_client()
             info = SUPPORTED_OPENAI_COMPAT_MODELS.get(self.name, get_default_model_info(self.name))
             openai_model = OpenAIModel(self.name, client, supports=info.supports)

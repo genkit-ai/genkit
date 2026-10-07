@@ -116,7 +116,8 @@ def build_amazon_image_body(prompt: str, config: dict[str, Any], *, include_qual
     """Builds the InvokeModel body for Titan Image and Nova Canvas.
 
     Only ``imageGenerationConfig`` is honoured, and only when it is a mapping;
-    every other config key is dropped. Its entries are
+    every other config key is dropped (``extra`` is merged over the result by
+    the caller). Its entries are
     merged key-by-key over the defaults. ``image_generation_config`` is accepted
     as an alternative spelling, as BedrockConfig accepts both casings, and the
     camelCase key wins when a caller passes both.
@@ -177,8 +178,21 @@ def _image_config_dict(config: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in config.items() if key not in _GENKIT_CONFIG_KEYS}
 
 
-def _normalize_image_config(config: Any) -> dict[str, Any]:  # noqa: ANN401
-    """Coerces the request config into a plain dict.
+def _image_extra(config: dict[str, Any]) -> dict[str, Any]:
+    """Reads ``extra`` off a config dict; empty when there is none."""
+    extra = config.get('extra')
+    if extra is None:
+        return {}
+    if not isinstance(extra, dict):
+        raise GenkitError(
+            message=f"bedrock image: config['extra'] must be a mapping, got {type(extra).__name__}",
+            status='INVALID_ARGUMENT',
+        )
+    return cast(dict[str, Any], extra)
+
+
+def _normalize_image_config(config: Any) -> tuple[dict[str, Any], dict[str, Any]]:  # noqa: ANN401
+    """Coerces the request config into a plain dict and its ``extra`` entries.
 
     Deliberately not ``converters.normalize_config``: that returns a
     BedrockConfig rather than a plain dict, and its declared Converse fields
@@ -187,30 +201,38 @@ def _normalize_image_config(config: Any) -> dict[str, Any]:  # noqa: ANN401
     Genkit's own generation knobs (``temperature``, ``apiKey``, and the rest of
     the common config) are dropped in either spelling: the framework coerces
     every config into ModelConfig, and Bedrock's image APIs take none of them.
+    ``extra`` is one of those knobs, so it comes back separately for the
+    caller to merge over the finished body. The merge is top-level: a key in
+    ``extra`` replaces that key of the body, and a nested object is not
+    merged field by field.
 
     Args:
         config: The raw ``request.config`` value.
 
     Returns:
-        The config as a mutable dict, minus Genkit's generic knobs; empty when
-        none was given.
+        The config as a mutable dict minus Genkit's generic knobs, and the
+        ``extra`` mapping; both empty when none was given.
 
     Raises:
-        GenkitError: INVALID_ARGUMENT for unsupported config types. Failing
-            loudly beats sending a body that quietly ignores the caller's
-            settings.
+        GenkitError: INVALID_ARGUMENT for unsupported config types or a
+            non-mapping ``extra``. Failing loudly beats sending a body that
+            quietly ignores the caller's settings.
     """
     if config is None:
-        return {}
+        return {}, {}
     if isinstance(config, dict):
-        return _image_config_dict(config)
-    dump = getattr(config, 'model_dump', None)
-    if callable(dump):
-        return _image_config_dict(cast(dict[str, Any], dump(exclude_none=True)))
-    raise GenkitError(
-        message=f'bedrock image: unexpected config type {type(config).__name__}, want a mapping or pydantic model',
-        status='INVALID_ARGUMENT',
-    )
+        raw = cast(dict[str, Any], config)
+    else:
+        dump = getattr(config, 'model_dump', None)
+        if not callable(dump):
+            raise GenkitError(
+                message=(
+                    f'bedrock image: unexpected config type {type(config).__name__}, want a mapping or pydantic model'
+                ),
+                status='INVALID_ARGUMENT',
+            )
+        raw = cast(dict[str, Any], dump(exclude_none=True))
+    return _image_config_dict(raw), _image_extra(raw)
 
 
 def _response_images(payload: dict[str, Any]) -> list[Any]:
@@ -272,19 +294,24 @@ class BedrockImageModel:
                 message='bedrock image: no text prompt found for image generation',
                 status='INVALID_ARGUMENT',
             )
-        config = _normalize_image_config(request.config)
+        config, extra = _normalize_image_config(request.config)
         logger.debug('Bedrock image request', model=self._model_id, family=family)
 
         if family == 'stability':
             body = build_stability_image_body(prompt, config)
-            payload = await self._invoke(body)
+        else:
+            body = build_amazon_image_body(prompt, config, include_quality=family == 'nova_canvas')
+        # extra is the caller's escape hatch for fields the plugin doesn't
+        # model. It replaces top-level keys of the body as written.
+        body.update(extra)
+        payload = await self._invoke(body)
+
+        if family == 'stability':
             # The wire body keeps the caller's casing; only the MIME is lowered.
             output_format = str(body.get('output_format') or 'png').lower()
             mime = f'image/{output_format}'
             images = self._stability_images(payload)
         else:
-            body = build_amazon_image_body(prompt, config, include_quality=family == 'nova_canvas')
-            payload = await self._invoke(body)
             mime = _AMAZON_IMAGE_MIME
             images = self._amazon_images(payload)
 

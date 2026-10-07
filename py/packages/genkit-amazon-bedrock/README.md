@@ -164,10 +164,10 @@ any model ID resolves on demand either way.
 `BedrockConfig` inherits the core `ModelConfig` fields, so the Dev UI offers
 `topK` and `version`. Converse has no equivalent parameters and both values
 are dropped. Models that support a top-k knob take it
-through `additionalModelRequestFields` instead:
+through `extra` instead, which is sent as Converse `additionalModelRequestFields`:
 
 ```python
-BedrockConfig(additional_model_request_fields={'top_k': 40})
+BedrockConfig(extra={'top_k': 40})
 ```
 
 ### Inference profiles
