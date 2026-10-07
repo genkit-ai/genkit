@@ -671,9 +671,6 @@ class OpenAIModel:
             return OpenAIConfig(
                 version=config.version,
                 temperature=config.temperature,
-                # Ride as max_tokens: _openai_create_kwargs renames it to
-                # max_completion_tokens for reasoning models, and compatible
-                # backends that only know max_tokens keep the cap.
                 max_tokens=int(config.max_output_tokens) if config.max_output_tokens is not None else None,
                 top_p=config.top_p,
                 stop=config.stop_sequences,

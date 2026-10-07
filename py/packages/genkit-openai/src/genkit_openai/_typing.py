@@ -129,8 +129,7 @@ class OpenAIConfig(ModelConfig):
         top_p: Nucleus sampling probability (0.0 to 1.0).
             See: https://platform.openai.com/docs/api-reference/chat/create#chat-create-top_p
 
-        max_tokens: Maximum tokens to generate. Use this to cap reply length;
-            reasoning models receive it as max_completion_tokens.
+        max_tokens: Maximum tokens to generate (deprecated, use max_completion_tokens).
             See: https://platform.openai.com/docs/api-reference/chat/create#chat-create-max_tokens
 
         max_completion_tokens: Upper bound for tokens including reasoning tokens.
@@ -246,6 +245,7 @@ class OpenAIConfig(ModelConfig):
     top_p: float | None = Field(default=None, ge=0.0, le=1.0)
 
     # https://platform.openai.com/docs/api-reference/chat/create#chat-create-max_tokens
+    # Deprecated: use max_completion_tokens instead
     max_tokens: int | None = None
 
     # https://platform.openai.com/docs/api-reference/chat/create#chat-create-max_completion_tokens

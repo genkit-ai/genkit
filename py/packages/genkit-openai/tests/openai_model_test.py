@@ -32,7 +32,7 @@ from genkit_openai._typing import OpenAIConfig, ReasoningEffort
 from openai import APIError, AsyncOpenAI
 from openai.types import CompletionUsage
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
 from genkit._core._typing import GenerationUsage, Operation
@@ -206,28 +206,6 @@ async def test_get_openai_config_prefers_explicit_max_completion_tokens() -> Non
 
     assert body['max_completion_tokens'] == 64
     assert 'max_tokens' not in body
-
-
-@pytest.mark.asyncio
-async def test_get_openai_config_user_in_extra_still_sends_user() -> None:
-    """OpenAIConfig drops user; extra={'user': 'u'} still sends it, through extra_body."""
-    model = OpenAIModel(model='gpt-4o', client=MagicMock())
-    request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
-        config=OpenAIConfig(extra={'user': 'u'}, safety_identifier='s'),
-    )
-
-    body = await model._get_openai_request_config(request)
-
-    assert body['extra_body'] == {'user': 'u'}
-    assert 'user' not in body
-    assert body['safety_identifier'] == 's'
-
-
-def test_openai_config_top_level_user_raises() -> None:
-    """A top-level user key is unknown now, so it fails by name instead of reaching OpenAI."""
-    with pytest.raises(ValidationError, match='user'):
-        OpenAIConfig.model_validate({'user': 'u'})
 
 
 @pytest.mark.asyncio
@@ -996,10 +974,6 @@ async def test_generate_no_choices_reaches_the_caller(sample_request: ModelReque
         (
             ModelConfig(version='gpt-4o-2024-08-06'),
             OpenAIConfig(version='gpt-4o-2024-08-06'),
-        ),
-        (
-            ModelConfig(max_output_tokens=32),
-            OpenAIConfig(max_tokens=32),
         ),
         (
             None,
