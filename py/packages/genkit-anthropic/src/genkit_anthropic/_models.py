@@ -28,7 +28,7 @@ import json
 from typing import Any, Literal, Protocol, cast
 
 import structlog
-from anthropic import APIError, AsyncAnthropic
+from anthropic import APIError, APIResponseValidationError, AsyncAnthropic
 from anthropic.types import Message as AnthropicMessage
 
 from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
@@ -38,6 +38,7 @@ from genkit.plugin_api import (
     StatusName,
     context_api_key,
     from_http_code,
+    mark_provider_error,
     parse_retry_after_ms,
     reject_config_api_key,
 )
@@ -72,16 +73,69 @@ class _ModelDumpable(Protocol):
         ...
 
 
+# Error types Anthropic reports in an error body. A stream that already
+# returned 200 reports a later failure only this way, as an SSE `error` event.
+# See https://docs.anthropic.com/en/api/errors
+_ERROR_TYPE_TO_STATUS: dict[str, StatusName] = {
+    'invalid_request_error': 'INVALID_ARGUMENT',
+    'request_too_large': 'INVALID_ARGUMENT',
+    'authentication_error': 'UNAUTHENTICATED',
+    'permission_error': 'PERMISSION_DENIED',
+    'not_found_error': 'NOT_FOUND',
+    'rate_limit_error': 'RESOURCE_EXHAUSTED',
+    # HTTP 402, which has no canonical status. Same as OpenAI's
+    # insufficient_quota: Fallback can switch providers.
+    'billing_error': 'RESOURCE_EXHAUSTED',
+    'timeout_error': 'DEADLINE_EXCEEDED',
+    'api_error': 'INTERNAL',
+    'overloaded_error': 'UNAVAILABLE',
+}
+
+
+def _error_body_detail(body: object) -> tuple[str | None, str | None]:
+    """Read ``(type, message)`` from ``{'type': 'error', 'error': {'type': ..., 'message': ...}}``."""
+    if not isinstance(body, dict):
+        return None, None
+    detail = cast(dict[str, object], body).get('error')
+    if not isinstance(detail, dict):
+        return None, None
+    detail = cast(dict[str, object], detail)
+    error_type = detail.get('type')
+    message = detail.get('message')
+    return (
+        error_type if isinstance(error_type, str) else None,
+        message if isinstance(message, str) and message else None,
+    )
+
+
 def _from_anthropic_error(error: APIError) -> GenkitError:
-    """Convert an Anthropic SDK error to its Genkit equivalent."""
+    """Convert an Anthropic SDK error to its Genkit equivalent.
+
+    The status comes from a failing HTTP status (>= 400) or, when that is
+    missing, below 400, or unmapped, from the error type in the body. An
+    unreadable 2xx response is INTERNAL. Anything else, such as a connection
+    failure or timeout, is re-raised unchanged so it stays unclassified.
+    """
+    if isinstance(error, APIResponseValidationError):
+        return mark_provider_error(error=GenkitError(status='INTERNAL', message=error.message, cause=error))
+
     status_code = getattr(error, 'status_code', None)
-    if not isinstance(status_code, int):
-        status: StatusName = 'UNKNOWN'
-    elif status_code == 529:
-        # Anthropic-specific: 529 is overloaded (service unavailable).
-        status = 'UNAVAILABLE'
-    else:
-        status = from_http_code(status_code)
+    failing_code = status_code if isinstance(status_code, int) and status_code >= 400 else None
+    status: StatusName | None = None
+    if failing_code is not None:
+        # 529 is Anthropic's overloaded status.
+        status = 'UNAVAILABLE' if failing_code == 529 else from_http_code(failing_code)
+
+    message = error.message
+    if status is None or status == 'UNKNOWN':
+        error_type, body_message = _error_body_detail(error.body)
+        body_status = _ERROR_TYPE_TO_STATUS.get(error_type) if error_type else None
+        if body_status is None:
+            raise error
+        status = body_status
+        # The SDK sets the message of an SSE error event to the repr of its body.
+        if failing_code is None:
+            message = body_message or message
 
     response = getattr(error, 'response', None)
     retry_after_header = response.headers.get('retry-after') if response is not None else None
@@ -90,10 +144,13 @@ def _from_anthropic_error(error: APIError) -> GenkitError:
     if retry_after_ms is not None:
         response_metadata = {'retry_after_ms': retry_after_ms}
 
-    return GenkitError(
-        status=status,
-        message=error.message,
-        response_metadata=response_metadata,
+    return mark_provider_error(
+        error=GenkitError(
+            status=status,
+            message=message,
+            cause=error,
+            response_metadata=response_metadata,
+        )
     )
 
 
@@ -285,11 +342,17 @@ class AnthropicModel:
             Generated response.
         """
         reject_config_api_key(request.config)
-        config = _normalize_config(request.config)
-        use_beta = self._uses_beta_api(config)
         context = ctx.context if ctx is not None and isinstance(ctx.context, dict) else None
         client = self._client_for_key(context_api_key(context))
-        params = self._build_params(request, config=config, use_beta=use_beta)
+        # A config that fails validation, a bad thinking budget, an unsigned
+        # thinking part, or a malformed data URI is caller input, so retry
+        # skips it. Pydantic's ValidationError is a ValueError.
+        try:
+            config = _normalize_config(request.config)
+            use_beta = self._uses_beta_api(config)
+            params = self._build_params(request, config=config, use_beta=use_beta)
+        except ValueError as e:
+            raise GenkitError(status='INVALID_ARGUMENT', message=str(e), cause=e) from e
         streaming = ctx and ctx.is_streaming
 
         logger.debug('Anthropic generate request', model=self.model_name, streaming=bool(streaming))
