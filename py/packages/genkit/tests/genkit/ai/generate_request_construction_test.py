@@ -146,7 +146,7 @@ async def test_invalid_config_value_is_still_resendable(ai_and_seen: tuple[Genki
     response = await ai.generate(model='conforming', prompt='hi', config={'temperature': 'high'})
     assert response.finish_reason == FinishReason.FAILED
     assert response.finish_message is not None
-    assert "Invalid input for action 'conforming'" in response.finish_message
+    assert "Invalid input for model 'conforming'" in response.finish_message
     assert response.error is not None
     assert response.message is None
     assert [m.role for m in response.messages] == [Role.USER]
@@ -164,7 +164,7 @@ async def test_invalid_config_with_docs_is_still_resendable(ai_and_seen: tuple[G
     )
     assert response.finish_reason == FinishReason.FAILED
     assert response.finish_message is not None
-    assert "Invalid input for action 'conforming'" in response.finish_message
+    assert "Invalid input for model 'conforming'" in response.finish_message
     assert response.error is not None
     assert response.message is None
     assert [m.role for m in response.messages] == [Role.USER]
@@ -177,7 +177,7 @@ async def test_strict_config_rejects_unknown_keys_as_failed_response(ai_and_seen
     response = await ai.generate(model='strict', prompt='hi', config={'thinking': True})
     assert response.finish_reason == FinishReason.FAILED
     assert response.finish_message is not None
-    assert "Invalid input for action 'strict'" in response.finish_message
+    assert "Invalid input for model 'strict'" in response.finish_message
     assert response.error is not None
     assert response.message is None
     assert [m.role for m in response.messages] == [Role.USER]

@@ -28,7 +28,7 @@ from __future__ import annotations
 import base64
 from typing import Any
 
-from openai import APIStatusError, AsyncOpenAI
+from openai import APIError, AsyncOpenAI
 from openai._legacy_response import HttpxBinaryResponseContent
 from openai.types.audio import Transcription, Translation
 
@@ -344,7 +344,7 @@ class OpenAITTSModel:
             response_format = params.get('response_format', 'mp3')
             result = await self._client.audio.speech.create(**params)
             return _to_tts_response(result, response_format)
-        except (APIStatusError, ValueError) as e:
+        except (APIError, ValueError) as e:
             reraise_openai_error(e)
 
 
@@ -406,5 +406,5 @@ class OpenAISTTModel:
             # Transcription | TranscriptionVerbose | TranscriptionDiarized | str.
             # _to_stt_response handles all of these via isinstance/hasattr checks.
             return _to_stt_response(result)  # pyright: ignore[reportArgumentType]
-        except (APIStatusError, ValueError) as e:
+        except (APIError, ValueError) as e:
             reraise_openai_error(e)

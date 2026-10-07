@@ -63,7 +63,7 @@ from genkit._core._tool import Tool
 from genkit._core._typing import (
     BaseDataPoint,
     Embedding,
-    EvalResponse,
+    EvalFnResponse,
     FinishReason,
     Media,
     Operation,
@@ -89,7 +89,7 @@ __all__ = [
     # Embed, evaluate, and background jobs
     'Embedding',
     'BaseDataPoint',
-    'EvalResponse',
+    'EvalFnResponse',
     'Operation',
     # Tools and HITL
     'tool',

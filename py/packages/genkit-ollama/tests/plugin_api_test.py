@@ -30,7 +30,7 @@ from genkit_ollama.embedders import EmbeddingDefinition
 from genkit_ollama.models import ModelDefinition, OllamaConfig, OllamaModel, OllamaSupports
 from pydantic import BaseModel
 
-from genkit import Document, Genkit, Message, ModelResponse, Part, Role
+from genkit import Document, Genkit, GenkitError, Message, ModelResponse, Part, Role
 from genkit.embedder import EmbedRequest
 from genkit.model import ModelRequest
 from genkit.plugin_api import ActionKind, to_json_schema
@@ -451,6 +451,21 @@ async def test_list_actions_does_not_wrap_http_status_error(ollama_plugin_instan
 
 
 @pytest.mark.asyncio
+async def test_list_actions_classifies_response_error(ollama_plugin_instance: Ollama) -> None:
+    """An Ollama ResponseError from /api/tags carries the server's HTTP status."""
+    error = ollama_api.ResponseError('unauthorized', 401)
+    client_mock = MagicMock()
+    client_mock.list = AsyncMock(side_effect=error)
+    ollama_plugin_instance.client = lambda: client_mock
+
+    with pytest.raises(GenkitError) as exc_info:
+        await ollama_plugin_instance.list_actions()
+
+    assert exc_info.value.status == 'UNAUTHENTICATED'
+    assert exc_info.value.__cause__ is error
+
+
+@pytest.mark.asyncio
 async def test_model_action_wraps_connection_error() -> None:
     """The model action callable surfaces a down server as OllamaConnectionError.
 
@@ -576,6 +591,17 @@ async def test_wrap_connection_errors_translates_builtin_connection_error() -> N
             raise ConnectionError('Failed to connect to Ollama.')
 
     assert 'http://localhost:11434' in str(exc_info.value)
+
+
+def test_connection_error_is_unclassified() -> None:
+    """A down server has no reported status: Retry retries it, Fallback does not switch models.
+
+    Matches Go and the other plugins' raw transport errors.
+    """
+    error = OllamaConnectionError('Cannot reach the Ollama server.')
+
+    assert isinstance(error, ConnectionError)
+    assert not isinstance(error, GenkitError)
 
 
 @pytest.mark.asyncio

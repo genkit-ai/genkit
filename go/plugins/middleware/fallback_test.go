@@ -18,6 +18,7 @@ package middleware
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -377,5 +378,64 @@ func TestFallbackModelNotFound(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not found") {
 		t.Errorf("error %q does not contain %q", err.Error(), "not found")
+	}
+}
+
+// TestFallbackThroughGenerateAction runs Fallback the way the Dev UI does:
+// through the registered /util/generate action, with the middleware referenced
+// by name. Guards against the action running without a Genkit on the context,
+// which made the fallback lookup dereference a nil *genkit.Genkit.
+func TestFallbackThroughGenerateAction(t *testing.T) {
+	g := genkit.Init(context.Background(), genkit.WithPlugins(&Middleware{}))
+
+	defineTestModel(t, g, "test/primary", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		return nil, core.NewError(core.UNAVAILABLE, "primary down")
+	})
+	defineTestModel(t, g, "test/secondary", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		return &ai.ModelResponse{Message: ai.NewModelTextMessage("secondary ok")}, nil
+	})
+
+	action := genkit.LookupAction(g, "/util/generate")
+	if action == nil {
+		t.Fatal("generate action not registered")
+	}
+	input := `{
+		"model": "test/primary",
+		"messages": [{"role": "user", "content": [{"text": "hello"}]}],
+		"use": [{"name": "genkit-middleware/fallback", "config": {"models": [{"name": "test/secondary"}]}}]
+	}`
+	out, err := action.RunJSON(context.Background(), json.RawMessage(input), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var resp ai.ModelResponse
+	if err := json.Unmarshal(out, &resp); err != nil {
+		t.Fatal(err)
+	}
+	if got := resp.Text(); got != "secondary ok" {
+		t.Errorf("got %q, want %q", got, "secondary ok")
+	}
+}
+
+// TestFallbackOnBareRegistry runs Fallback through ai.Generate on a bare
+// registry rather than genkit.Generate. The loop puts a Genkit backing the
+// registry on the context itself, so the fallback model still resolves.
+func TestFallbackOnBareRegistry(t *testing.T) {
+	r := newTestRegistry(t)
+	primary := defineModel(t, r, "test/primary", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		return nil, core.NewError(core.UNAVAILABLE, "primary down")
+	})
+	defineModel(t, r, "test/secondary", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		return &ai.ModelResponse{Message: ai.NewModelTextMessage("secondary ok")}, nil
+	})
+
+	fb := &Fallback{Models: []ai.ModelRef{ai.NewModelRef("test/secondary", nil)}}
+
+	resp, err := ai.Generate(ctx, r, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithUse(fb))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := resp.Text(); got != "secondary ok" {
+		t.Errorf("got %q, want %q", got, "secondary ok")
 	}
 }
