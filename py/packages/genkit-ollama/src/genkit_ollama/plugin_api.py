@@ -42,6 +42,7 @@ from genkit.plugin_api import (
     Plugin,
     loop_local_client,
     to_json_schema,
+    wrap_http_error,
 )
 from genkit_ollama._errors import wrap_connection_errors
 from genkit_ollama.constants import (
@@ -275,14 +276,12 @@ class Ollama(Plugin):
 
         # Register pre-configured models
         for model_def in self.models:
-            name = ollama_name(model_def.name)
-            action = self._create_model_action(name)
+            action = self._create_model_action(model_def.name)
             actions.append(action)
 
         # Register pre-configured embedders
         for embedder_def in self.embedders:
-            name = ollama_name(embedder_def.name)
-            action = self._create_embedder_action(name)
+            action = self._create_embedder_action(embedder_def.name)
             actions.append(action)
 
         return actions
@@ -292,7 +291,7 @@ class Ollama(Plugin):
 
         Args:
             action_type: The kind of action to resolve.
-            name: The namespaced name of the action to resolve.
+            name: The id without the ``ollama/`` prefix.
 
         Returns:
             Action object if found, None otherwise.
@@ -307,18 +306,15 @@ class Ollama(Plugin):
         """Create an Action object for an Ollama model.
 
         Args:
-            name: The namespaced name of the model.
+            name: The model id as received (no plugin-prefix stripping).
 
         Returns:
             Action object for the model.
         """
-        # Extract local name (remove plugin prefix)
-        clean_name = name.replace(OLLAMA_PLUGIN_NAME + '/', '') if name.startswith(OLLAMA_PLUGIN_NAME) else name
-
         # Try to find the model definition from pre-configured models
         model_ref = None
         for model_def in self.models:
-            if model_def.name == clean_name:
+            if model_def.name == name:
                 model_ref = model_def
                 break
 
@@ -326,7 +322,7 @@ class Ollama(Plugin):
         # resolved models advertise the full capability set (see JS/Go parity note
         # on _DYNAMIC_MODEL_SUPPORTS).
         if model_ref is None:
-            model_ref = ModelDefinition(name=clean_name, supports=_DYNAMIC_MODEL_SUPPORTS)
+            model_ref = ModelDefinition(name=name, supports=_DYNAMIC_MODEL_SUPPORTS)
 
         model = OllamaModel(
             client=self.client,
@@ -335,9 +331,9 @@ class Ollama(Plugin):
         )
 
         action_metadata = model_action_metadata(
-            name=name,
+            name=ollama_name(name),
             config_schema=OllamaConfig,
-            info=ollama_model_info(model_ref, f'Ollama - {clean_name}'),
+            info=ollama_model_info(model_ref, f'Ollama - {name}'),
         )
 
         async def _run(request: ModelRequest, ctx: ActionRunContext | None = None) -> ModelResponse:
@@ -349,7 +345,7 @@ class Ollama(Plugin):
                 return await model.generate(request, ctx, client=client)
 
         action = create_model(
-            name,
+            ollama_name(name),
             _run,
             config_schema=OllamaConfig,
             metadata=action_metadata.metadata,
@@ -365,15 +361,12 @@ class Ollama(Plugin):
         """Create an Action object for an Ollama embedder.
 
         Args:
-            name: The namespaced name of the embedder.
+            name: The embedder id as received (no plugin-prefix stripping).
 
         Returns:
             Action object for the embedder.
         """
-        # Extract local name (remove plugin prefix)
-        clean_name = name.replace(OLLAMA_PLUGIN_NAME + '/', '') if name.startswith(OLLAMA_PLUGIN_NAME) else name
-
-        embedder_ref = EmbeddingDefinition(name=clean_name)
+        embedder_ref = EmbeddingDefinition(name=name)
         embedder = OllamaEmbedder(
             client=self.client,
             embedding_definition=embedder_ref,
@@ -389,10 +382,10 @@ class Ollama(Plugin):
                     return await embedder.embed(request, client=client)
 
         return create_embedder(
-            name,
+            ollama_name(name),
             _run,
             info=EmbedderInfo(
-                label=f'Ollama Embedding - {clean_name}',
+                label=f'Ollama Embedding - {name}',
                 dimensions=embedder_ref.dimensions,
                 supports=EmbedderSupports(input=['text']),
                 config_schema=to_json_schema(ollama_api.Options),
@@ -411,7 +404,10 @@ class Ollama(Plugin):
         """
         async with self._client_for_request() as client:
             async with wrap_connection_errors(self.server_address):
-                response = await client.list()
+                try:
+                    response = await client.list()
+                except ollama_api.ResponseError as e:
+                    raise wrap_http_error(e, status_code=e.status_code) from e
 
         actions = []
         for model in response.models:

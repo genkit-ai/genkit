@@ -22,6 +22,8 @@ AgentInit = _genkit_agent.AgentInit
 from genkit_fastapi import handle_genkit_request  # noqa: E402
 from genkit_fastapi.exp import serve_agent  # noqa: E402
 
+from genkit._ai._agents._client import error_from_http  # noqa: E402
+from genkit._core._error import RuntimeErrorReason  # noqa: E402
 from genkit._core._model import (  # noqa: E402
     Message,
     ModelResponse,
@@ -33,8 +35,8 @@ from genkit.exp import Genkit  # noqa: E402
 from genkit.testing import define_scripted_model  # noqa: E402
 
 
-def build_agent(name: str) -> Any:
-    """A server-backed prompt agent whose model replies with a fixed line."""
+def build_agent(name: str, *, server_managed: bool = True) -> Any:
+    """A prompt agent whose model replies with a fixed line; server-backed unless told otherwise."""
     ai = Genkit()
     define_scripted_model(
         ai,
@@ -48,7 +50,7 @@ def build_agent(name: str) -> Any:
         chunks=[[ModelResponseChunkModel(role=Role.MODEL, content=[Part.from_text('Hi there!')])]],
     )
     ai.define_prompt(name=name, model='scriptedModel', system='You echo things.')
-    return ai.define_prompt_agent(name=name, store=InMemorySessionStore())
+    return ai.define_prompt_agent(name=name, store=InMemorySessionStore() if server_managed else None)
 
 
 def sse_events(text: str) -> list[dict[str, Any]]:
@@ -194,3 +196,66 @@ def test_handle_genkit_request_agent_route_with_data_envelope_runs_turn() -> Non
     result = response.json()['result']
     assert result['sessionId'] == 'session-789'
     assert 'Hi there!' in json.dumps(result)
+
+
+@pytest.mark.parametrize(
+    'path, body, message',
+    [
+        pytest.param('/api/chat', {'foo': 'bar'}, 'Action request must be wrapped in {"data": ...} object', id='turn'),
+        pytest.param(
+            '/api/chat/getSnapshot',
+            {'snapshotId': 's1', 'sessionId': 'x1'},
+            "getSnapshot requires exactly one of 'snapshotId' (or 'snapshot_id') or 'sessionId' (or 'session_id').",
+            id='get-snapshot',
+        ),
+        pytest.param(
+            '/api/chat/abort', {'data': {}}, "abort requires 'snapshotId' (or 'snapshot_id') in input.", id='abort'
+        ),
+    ],
+)
+def test_serve_agent_bad_input_returns_400_with_its_message(path: str, body: dict[str, Any], message: str) -> None:
+    """Agent-route input errors are fixed adapter text, so the caller sees what to fix."""
+    response = client(build_agent('badInputAgent')).post(path, json=body)
+
+    assert response.status_code == 400
+    assert response.json() == {'message': message, 'status': 'INVALID_ARGUMENT'}
+
+
+@pytest.mark.parametrize(
+    'server_managed, init, message, reason',
+    [
+        pytest.param(
+            True,
+            {'state': {'custom': {'table': 4}}},
+            "Cannot send 'state' to agent 'initAgent': this agent uses a server-managed store. "
+            "Send 'snapshotId' or 'sessionId' instead.",
+            None,
+            id='state-to-server-managed',
+        ),
+        pytest.param(
+            False,
+            {'snapshotId': 'snap-1'},
+            "Cannot use 'snapshotId' with agent 'initAgent': this agent has no store configured "
+            "(client-managed state). Send 'state' instead.",
+            RuntimeErrorReason.SESSION_STORE_NOT_CONFIGURED,
+            id='snapshot-id-without-store',
+        ),
+    ],
+)
+def test_serve_agent_init_mismatch_returns_agent_init_error(
+    server_managed: bool, init: dict[str, Any], message: str, reason: RuntimeErrorReason | None
+) -> None:
+    """AgentInitError is a PublicError, so a remote client sees the status, message, and reason it would in-process."""
+    response = client(build_agent('initAgent', server_managed=server_managed)).post(
+        '/api/chat', json={'input': {'message': {'role': 'user', 'content': [{'text': 'Hi'}]}}, 'init': init}
+    )
+
+    assert response.status_code == 400
+    expected: dict[str, Any] = {'message': message, 'status': 'FAILED_PRECONDITION'}
+    if reason is not None:
+        expected['details'] = {'reason': reason.value}
+    assert response.json() == expected
+
+    err = error_from_http(status_code=response.status_code, body=response.text)
+    assert err.status == 'FAILED_PRECONDITION'
+    assert err.reason is reason

@@ -32,12 +32,12 @@ from genkit_middleware.exp import Artifacts
 
 from genkit import GenkitError, Message, ModelResponse, Part
 from genkit._ai._agents._session import Session, run_with_session
-from genkit._ai._testing import define_programmable_model
 from genkit._core._model import Artifact, GenerateActionOptions, SessionState
 from genkit._core._typing import FinishReason, Role
 from genkit.exp import Genkit
 from genkit.middleware import GenerateHookParams, GenerateMiddlewareContext, MiddlewareRef
 from genkit.model import ToolRequest
+from genkit.testing import define_scripted_model
 
 
 def _make_params(options: GenerateActionOptions | None = None) -> GenerateHookParams:
@@ -213,7 +213,7 @@ async def test_wrap_generate_does_not_mutate_envelope(ctx: GenerateMiddlewareCon
 async def test_agent_using_artifacts_without_middleware_plugin_saves_written_file_to_chat() -> None:
     """use=[Artifacts()] on an agent works with no Middleware() plugin: write_artifact lands on chat.artifacts."""
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
     pm.responses = [
         ModelResponse(
             finish_reason=FinishReason.STOP,
@@ -235,7 +235,7 @@ async def test_agent_using_artifacts_without_middleware_plugin_saves_written_fil
             message=Message(role=Role.MODEL, content=[Part.from_text('saved')]),
         ),
     ]
-    agent = ai.define_agent(name='workspaceAgent', model='programmableModel', use=[Artifacts()])
+    agent = ai.define_agent(name='workspaceAgent', model='scriptedModel', use=[Artifacts()])
 
     chat = agent.chat()
     out = await chat.send('Write poem.txt')
@@ -248,7 +248,7 @@ async def test_agent_using_artifacts_without_middleware_plugin_saves_written_fil
 async def test_generate_naming_artifacts_middleware_with_middleware_plugin_raises_not_found() -> None:
     """With Middleware() registered, use=[MiddlewareRef(name='artifacts')] (a .prompt's use:) raises NOT_FOUND."""
     ai = Genkit(plugins=[Middleware()])
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
     pm.responses = [
         ModelResponse(
             finish_reason=FinishReason.STOP,
@@ -257,7 +257,7 @@ async def test_generate_naming_artifacts_middleware_with_middleware_plugin_raise
     ]
 
     with pytest.raises(GenkitError) as err:
-        await ai.generate(model='programmableModel', prompt='hi', use=[MiddlewareRef(name='artifacts')])
+        await ai.generate(model='scriptedModel', prompt='hi', use=[MiddlewareRef(name='artifacts')])
 
     assert err.value.status == 'NOT_FOUND'
     assert '"artifacts"' in str(err.value)
@@ -267,7 +267,7 @@ async def test_generate_naming_artifacts_middleware_with_middleware_plugin_raise
 async def test_generate_naming_retry_middleware_with_middleware_plugin_runs() -> None:
     """With Middleware() registered, use=[MiddlewareRef(name='retry')] still resolves and the call returns."""
     ai = Genkit(plugins=[Middleware()])
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
     pm.responses = [
         ModelResponse(
             finish_reason=FinishReason.STOP,
@@ -275,7 +275,7 @@ async def test_generate_naming_retry_middleware_with_middleware_plugin_runs() ->
         )
     ]
 
-    res = await ai.generate(model='programmableModel', prompt='hi', use=[MiddlewareRef(name='retry')])
+    res = await ai.generate(model='scriptedModel', prompt='hi', use=[MiddlewareRef(name='retry')])
 
     assert res.text == 'ok'
 

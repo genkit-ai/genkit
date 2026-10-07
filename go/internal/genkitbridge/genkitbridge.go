@@ -40,13 +40,14 @@ var RegistryOf func(host any) api.Registry
 
 // SeedContextForRegistry returns ctx with the *genkit.Genkit backing reg
 // attached, so it can be retrieved with genkit.FromContext. It is installed by
-// the genkit package's init and called by ai/exp's agent constructors to seed
-// the Genkit instance into every agent turn, so an agent's prompt, tools, and
-// middleware can resolve and run other actions without direct registry access.
+// the genkit package's init. ai/exp's agent constructors call it to seed the
+// Genkit instance into every agent turn, and ai's generate action calls it to
+// seed each run, so prompts, tools, and middleware can resolve and run other
+// actions without direct registry access.
 //
 // The Genkit instance is reconstructed from reg (a *genkit.Genkit is a thin
-// wrapper over its registry), so ai/exp need not hold a *genkit.Genkit itself
-// and the registry-level agent constructors stay genkit-agnostic. It is nil
-// until the genkit package is linked into the build; ai/exp treats a nil hook
-// as "no seeding", leaving agents defined on a bare registry untouched.
+// wrapper over its registry), so ai and ai/exp need not hold a *genkit.Genkit
+// themselves and stay genkit-agnostic. It is nil until the genkit package is
+// linked into the build; callers treat a nil hook as "no seeding", leaving
+// actions defined on a bare registry untouched.
 var SeedContextForRegistry func(ctx context.Context, reg api.Registry) context.Context

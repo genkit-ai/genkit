@@ -27,7 +27,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 from genkit_google_genai import GoogleAI, VertexAI
-from genkit_google_genai._google import _inject_attribution_headers, googleai_name, vertexai_name
+from genkit_google_genai._google import _inject_attribution_headers, _plugin_client, googleai_name, vertexai_name
 from genkit_google_genai._models._embedder import VERTEX_KNOWN_EMBEDDERS
 from genkit_google_genai._models._gemini import (
     DEFAULT_SUPPORTS_MODEL,
@@ -37,9 +37,11 @@ from genkit_google_genai._models._gemini import (
 )
 from google import genai
 from google.auth.credentials import Credentials
+from google.auth.exceptions import DefaultCredentialsError
 from google.genai.types import HttpOptions
 
-from genkit import Genkit, Message, Part, Role
+from genkit import Document, Genkit, GenkitError, Message, Part, Role
+from genkit.embedder import EmbedRequest
 from genkit.model import ModelInfo, ModelRequest
 from genkit.plugin_api import GENKIT_CLIENT_HEADER, ActionKind
 
@@ -223,7 +225,7 @@ def test_googleai__resolve_model(
         supports=DEFAULT_SUPPORTS_MODEL,
     )
 
-    action = plugin._resolve_model(name=expected_model_name)
+    action = plugin._resolve_model(name=key)
 
     assert action is not None
     assert action.kind == ActionKind.MODEL
@@ -234,16 +236,14 @@ def test_googleai__resolve_model(
 @pytest.mark.parametrize(
     'input_name, expected_model_name, expected_dimensions, expected_support_inputs',
     [
-        ('googleai/gemini-embedding-2', 'googleai/gemini-embedding-2', 3072, ['text', 'image', 'video']),
-        # Bare (unprefixed) names resolve to the namespaced action name.
         ('gemini-embedding-2', 'googleai/gemini-embedding-2', 3072, ['text', 'image', 'video']),
         (
-            'googleai/gemini-embedding-2-preview',
+            'gemini-embedding-2-preview',
             'googleai/gemini-embedding-2-preview',
             3072,
             ['text', 'image', 'video'],
         ),
-        ('googleai/custom-embedder', 'googleai/custom-embedder', None, ['text']),
+        ('custom-embedder', 'googleai/custom-embedder', None, ['text']),
     ],
 )
 def test_googleai__resolve_embedder(
@@ -269,7 +269,6 @@ def test_googleai__resolve_embedder(
 @pytest.mark.parametrize(
     'input_name, expected_model_name',
     [
-        ('vertexai/multimodalembedding@001', 'vertexai/multimodalembedding@001'),
         ('multimodalembedding@001', 'vertexai/multimodalembedding@001'),
     ],
 )
@@ -292,7 +291,6 @@ def test_vertexai__resolve_embedder_multimodalembedding(
 @pytest.mark.parametrize(
     'input_name, expected_model_name',
     [
-        ('vertexai/gemini-embedding-2', 'vertexai/gemini-embedding-2'),
         ('gemini-embedding-2', 'vertexai/gemini-embedding-2'),
     ],
 )
@@ -682,7 +680,7 @@ def test_vertexai__resolve_model(
         supports=DEFAULT_SUPPORTS_MODEL,
     )
 
-    action = plugin._resolve_model(name=expected_model_name)
+    action = plugin._resolve_model(name=key)
 
     assert action is not None
     assert action.kind == ActionKind.MODEL
@@ -714,7 +712,7 @@ def test_vertexai__resolve_embedder(
     """Tests for VertexAI._resolve_embedder method."""
     plugin = vertexai_plugin_instance
 
-    action = plugin._resolve_embedder(name=expected_model_name)
+    action = plugin._resolve_embedder(name=clean_name)
 
     assert action is not None
     assert action.kind == ActionKind.EMBEDDER
@@ -819,7 +817,7 @@ async def test_googleai_resolve_background_model(googleai_plugin_instance: Googl
     """Test resolve action for background model."""
     plugin = googleai_plugin_instance
 
-    action = await plugin.resolve(action_type=ActionKind.BACKGROUND_MODEL, name=googleai_name('veo-2.0-generate-001'))
+    action = await plugin.resolve(action_type=ActionKind.BACKGROUND_MODEL, name='veo-2.0-generate-001')
     assert action is not None
     assert action.kind == ActionKind.BACKGROUND_MODEL
     assert action.name == googleai_name('veo-2.0-generate-001')
@@ -830,9 +828,7 @@ async def test_googleai_resolve_check_operation(googleai_plugin_instance: Google
     """Test resolve action for check operation."""
     plugin = googleai_plugin_instance
 
-    action = await plugin.resolve(
-        action_type=ActionKind.CHECK_OPERATION, name=googleai_name('veo-2.0-generate-001/check')
-    )
+    action = await plugin.resolve(action_type=ActionKind.CHECK_OPERATION, name='veo-2.0-generate-001/check')
     assert action is not None
     assert action.kind == ActionKind.CHECK_OPERATION
     assert action.name == googleai_name('veo-2.0-generate-001/check')
@@ -861,7 +857,7 @@ async def test_vertexai_resolve_evaluator(vertexai_plugin_instance: VertexAI) ->
     """Test resolve action for evaluator."""
     plugin = vertexai_plugin_instance
 
-    action = await plugin.resolve(action_type=ActionKind.EVALUATOR, name=vertexai_name('fluency'))
+    action = await plugin.resolve(action_type=ActionKind.EVALUATOR, name='fluency')
     assert action is not None
     assert action.kind == ActionKind.EVALUATOR
     assert action.name == vertexai_name('fluency')
@@ -901,3 +897,31 @@ async def test_system_prompt_handling() -> None:
     assert cfg.system_instruction.parts is not None  # type: ignore
     assert len(cfg.system_instruction.parts) == 1  # type: ignore
     assert cfg.system_instruction.parts[0].text == 'You are a helpful assistant'  # type: ignore
+
+
+@pytest.mark.asyncio
+@patch.dict(os.environ, {'GCLOUD_PROJECT': 'menu-prod'}, clear=True)
+async def test_lazy_client_credential_failure_is_unauthenticated_in_action_body() -> None:
+    """The plugin client is built on first use inside the action; missing ADC there is UNAUTHENTICATED."""
+    no_adc = DefaultCredentialsError('Your default credentials were not found.')
+    with patch('google.genai.client.Client', side_effect=no_adc):
+        plugin = VertexAI()
+        embedder_action = await plugin.resolve(ActionKind.EMBEDDER, vertexai_name('text-embedding-005'))
+        assert embedder_action is not None
+
+        with pytest.raises(GenkitError) as raised:
+            await embedder_action.run(EmbedRequest(input=[Document.from_text('Smoked salmon tartine')]))
+
+    assert raised.value.status == 'UNAUTHENTICATED'
+    assert raised.value.cause is no_adc
+
+
+@pytest.mark.asyncio
+async def test_lazy_client_unknown_failure_stays_raw() -> None:
+    """An SDK failure that is not a credential problem keeps its own type."""
+    boom = RuntimeError('SDK bug')
+    with patch('google.genai.client.Client', side_effect=boom):
+        with pytest.raises(RuntimeError) as raised:
+            _plugin_client({'vertexai': False, 'api_key': 'k'})
+
+    assert raised.value is boom
