@@ -29,6 +29,7 @@ import (
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/core/status"
+	"github.com/firebase/genkit/go/internal/base"
 )
 
 // --- counter: a config whose BuildMiddleware tracks hook invocations ---
@@ -745,7 +746,7 @@ func TestWrapToolInterrupts(t *testing.T) {
 	interrupter := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
 		return &Hooks{
 			WrapTool: func(ctx context.Context, p *ToolParams, next ToolNext) (*MultipartToolResponse, error) {
-				return nil, NewToolInterruptError(map[string]any{"reason": "blocked"})
+				return nil, &base.ToolInterruptError{Data: map[string]any{"reason": "blocked"}}
 			},
 		}, nil
 	})
@@ -803,7 +804,7 @@ func TestWrapToolShortCircuitEmitsToolSpan(t *testing.T) {
 		{
 			name: "interrupt",
 			hook: func(ctx context.Context, p *ToolParams, next ToolNext) (*MultipartToolResponse, error) {
-				return nil, NewToolInterruptError(map[string]any{"reason": "blocked"})
+				return nil, &base.ToolInterruptError{Data: map[string]any{"reason": "blocked"}}
 			},
 			wantState: "error",
 		},
@@ -1169,14 +1170,17 @@ func TestMiddlewareHookOrderOnToolRestart(t *testing.T) {
 		}, nil
 	})
 
-	restartPart, err := tool.RestartWith(interruptedPart, WithNewInput[restartInput](restartInput{Interrupt: false}))
-	assertNoError(t, err)
+	call, ok := tool.Interrupted(interruptedPart)
+	if !ok {
+		t.Fatal("Interrupted did not claim the tool's own interrupt")
+	}
+	restartPart := call.RestartWithInput(restartInput{Interrupt: false}, nil)
 
 	resumed, err := Generate(testCtx, r,
 		WithModel(model),
 		WithMessages(first.History()...),
 		WithTools(tool),
-		WithToolRestarts(restartPart),
+		WithResume(restartPart),
 		WithUse(tracker),
 	)
 	assertNoError(t, err)
@@ -1374,5 +1378,62 @@ func TestWrapGenerateOptionsAreIsolatedPerIteration(t *testing.T) {
 	}
 	if got := len(spans.allByName("generate")); got != len(want) {
 		t.Errorf("got %d generate spans, want %d (one per iteration)", got, len(want))
+	}
+}
+
+// A middleware can contribute a resumable tool: it is a Tool like any
+// other. The application holds only the part, so it resolves the interrupt
+// with Part.ToToolRestart, and the typed resume still reaches the tool.
+func TestMiddlewareContributesResumableTool(t *testing.T) {
+	r := newTestRegistry(t)
+	defineFakeModel(t, r, fakeModelConfig{
+		name:    "test/askModel",
+		handler: toolCallingModelHandler("mw/askUser", map[string]any{"question": "proceed?"}, "done"),
+	})
+
+	type askInput struct {
+		Question string `json:"question"`
+	}
+	type answer struct {
+		Text string `json:"text"`
+	}
+	var got *answer
+	askUser := NewResumableTool("mw/askUser", "asks the person a question",
+		func(ctx context.Context, in askInput, a *answer) (string, error) {
+			if a == nil {
+				return "", &base.ToolInterruptError{Data: in}
+			}
+			got = a
+			return a.Text, nil
+		})
+	inject := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
+		return &Hooks{Tools: []Tool{askUser}}, nil
+	})
+
+	resp, err := Generate(testCtx, r,
+		WithModelName("test/askModel"),
+		WithPrompt("go"),
+		WithUse(inject),
+	)
+	assertNoError(t, err)
+	interrupts := resp.Interrupts()
+	if len(interrupts) != 1 {
+		t.Fatalf("got %d interrupts, want 1 (finish=%s)", len(interrupts), resp.FinishReason)
+	}
+
+	restart, err := interrupts[0].ToToolRestart(answer{Text: "yes"})
+	assertNoError(t, err)
+	resp, err = Generate(testCtx, r,
+		WithModelName("test/askModel"),
+		WithMessages(resp.History()...),
+		WithResume(restart),
+		WithUse(inject),
+	)
+	assertNoError(t, err)
+	if got == nil || got.Text != "yes" {
+		t.Errorf("resumed tool saw %+v, want the typed answer", got)
+	}
+	if resp.Text() != "done" {
+		t.Errorf("got %q, want %q", resp.Text(), "done")
 	}
 }
