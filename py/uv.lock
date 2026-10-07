@@ -1663,7 +1663,7 @@ otel = [
     { name = "genkit-otel" },
 ]
 vertex-ai = [
-    { name = "genkit-vertexai" },
+    { name = "genkit-vertexai", extra = ["anthropic", "openai"] },
 ]
 
 [package.metadata]
@@ -1684,7 +1684,7 @@ requires-dist = [
     { name = "genkit-ollama", marker = "extra == 'ollama'", editable = "packages/genkit-ollama" },
     { name = "genkit-openai", marker = "extra == 'openai'", editable = "packages/genkit-openai" },
     { name = "genkit-otel", marker = "extra == 'otel'", editable = "packages/genkit-otel" },
-    { name = "genkit-vertexai", marker = "extra == 'vertex-ai'", editable = "packages/genkit-vertexai" },
+    { name = "genkit-vertexai", extras = ["anthropic", "openai"], marker = "extra == 'vertex-ai'", editable = "packages/genkit-vertexai" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "json5", specifier = ">=0.10.0" },
     { name = "jsonschema", specifier = ">=4.23.0" },

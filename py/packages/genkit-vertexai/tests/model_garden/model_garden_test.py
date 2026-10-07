@@ -16,6 +16,10 @@
 
 """Unittests for VertexAI Model Garden Models."""
 
+import json
+import subprocess  # noqa: S404
+import sys
+import textwrap
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
@@ -29,10 +33,20 @@ from genkit_vertexai.model_garden.anthropic import AnthropicModelGarden
 from genkit_vertexai.model_garden.model_garden import ModelGardenModel
 from openai.types.chat import ChatCompletion
 
-from genkit import ActionRunContext, Genkit, Message, Part, Role
+from genkit import ActionRunContext, Genkit, GenkitError, Message, Part, Role
 from genkit._ai._formats import built_in_formats
 from genkit.model import ModelRequest, OutputConfig
 from genkit.plugin_api import ActionKind
+
+CLAUDE = 'modelgarden/anthropic/claude-sonnet-4@20250514'
+LLAMA = 'modelgarden/meta/llama-3.1-405b-instruct-maas'
+MISTRAL = 'modelgarden/mistralai/mistral-small-2503'
+
+CLAUDE_EXTRA_MISSING = "Model Garden Claude models need the anthropic extra: uv add 'genkit-vertexai[anthropic]'"
+OPENAI_EXTRA_MISSING = (
+    'Model Garden Llama, Mistral, and other OpenAI-compatible models need the openai extra: '
+    "uv add 'genkit-vertexai[openai]'"
+)
 
 
 def test_catalog_output_names_are_known_formats() -> None:
@@ -295,3 +309,124 @@ async def test_generate_model_garden_claude_registers_full_publisher_path() -> N
     assert sent.kwargs['model'].startswith('claude-sonnet-4-5')
     assert action is not None
     assert action.name == 'modelgarden/anthropic/claude-sonnet-4-5'
+
+
+def _uninstall(monkeypatch: pytest.MonkeyPatch, *modules: str) -> None:
+    """Makes `modules` import as if absent, and drops the Claude worker module so it imports again."""
+    for module in modules:
+        monkeypatch.setitem(sys.modules, module, None)
+    monkeypatch.delitem(sys.modules, 'genkit_vertexai.model_garden.anthropic', raising=False)
+
+
+def test_import_genkit_vertexai_does_not_load_publisher_sdks() -> None:
+    """`import genkit_vertexai` and `ModelGarden()` leave the Anthropic and OpenAI SDKs and plugins unloaded."""
+    code = textwrap.dedent("""
+        import json, sys
+        import genkit_vertexai
+        from genkit_vertexai.model_garden import ModelGarden
+        ModelGarden(project_id='my-project')
+        publishers = ('anthropic', 'genkit_anthropic', 'openai', 'genkit_openai')
+        print(json.dumps(sorted(m for m in publishers if m in sys.modules)))
+    """)
+    proc = subprocess.run(  # noqa: S603
+        [sys.executable, '-c', code], capture_output=True, text=True, timeout=120
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('model', 'missing', 'project_id', 'message'),
+    [
+        pytest.param(CLAUDE, ('genkit_anthropic', 'genkit_openai'), 'p', CLAUDE_EXTRA_MISSING, id='claude-no-extras'),
+        pytest.param(CLAUDE, ('genkit_anthropic',), 'p', CLAUDE_EXTRA_MISSING, id='claude-openai-extra-only'),
+        pytest.param(CLAUDE, ('anthropic',), 'p', CLAUDE_EXTRA_MISSING, id='claude-sdk-missing'),
+        pytest.param(CLAUDE, ('genkit_anthropic',), None, CLAUDE_EXTRA_MISSING, id='claude-no-project-extra-first'),
+        pytest.param(LLAMA, ('genkit_anthropic', 'genkit_openai'), 'p', OPENAI_EXTRA_MISSING, id='llama-no-extras'),
+        pytest.param(LLAMA, ('genkit_openai',), None, OPENAI_EXTRA_MISSING, id='llama-no-project-extra-first'),
+        pytest.param(MISTRAL, ('genkit_openai',), 'p', OPENAI_EXTRA_MISSING, id='mistral-uncataloged'),
+    ],
+)
+async def test_generate_model_garden_model_without_its_extra_raises_install_command(
+    monkeypatch: pytest.MonkeyPatch, model: str, missing: tuple[str, ...], project_id: str | None, message: str
+) -> None:
+    """Generating with a Model Garden model whose extra is missing raises FAILED_PRECONDITION naming `uv add`."""
+    for var in ('GCLOUD_PROJECT', 'GOOGLE_CLOUD_PROJECT'):
+        monkeypatch.delenv(var, raising=False)
+    _uninstall(monkeypatch, *missing)
+    ai = Genkit(plugins=[ModelGarden(project_id=project_id)])
+
+    with pytest.raises(GenkitError) as exc_info:
+        await ai.generate(model=model, prompt='hi')
+
+    assert exc_info.value.status == 'FAILED_PRECONDITION'
+    assert exc_info.value.original_message == message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('model', 'missing', 'forget'),
+    [
+        pytest.param(CLAUDE, 'genkit_anthropic._models', (), id='claude'),
+        pytest.param(LLAMA, 'genkit_openai._openai_plugin', ('genkit_openai',), id='llama'),
+    ],
+)
+async def test_generate_model_garden_broken_publisher_install_raises_import_error(
+    monkeypatch: pytest.MonkeyPatch, model: str, missing: str, forget: tuple[str, ...]
+) -> None:
+    """A publisher package that is installed but fails to import raises that import error, not the extra hint."""
+    for module in forget:
+        monkeypatch.delitem(sys.modules, module)
+    _uninstall(monkeypatch, missing)
+    ai = Genkit(plugins=[ModelGarden(project_id='p')])
+
+    with pytest.raises(ModuleNotFoundError) as exc_info:
+        await ai.generate(model=model, prompt='hi')
+
+    assert exc_info.value.name == missing
+
+
+@pytest.mark.asyncio
+async def test_model_garden_list_actions_without_openai_extra_returns_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without `[openai]`, the model list the Dev UI reads is empty."""
+    _uninstall(monkeypatch, 'genkit_openai')
+
+    assert await ModelGarden(project_id='p').list_actions() == []
+
+
+@pytest.mark.asyncio
+async def test_model_garden_list_actions_broken_openai_install_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`list_actions()` raises when genkit-openai is installed but can't import, instead of listing nothing."""
+    monkeypatch.delitem(sys.modules, 'genkit_openai')
+    _uninstall(monkeypatch, 'genkit_openai._openai_plugin')
+
+    with pytest.raises(ModuleNotFoundError) as exc_info:
+        await ModelGarden(project_id='p').list_actions()
+
+    assert exc_info.value.name == 'genkit_openai._openai_plugin'
+
+
+@pytest.mark.asyncio
+async def test_model_garden_list_actions_with_openai_extra_lists_llama_models() -> None:
+    """With `[openai]`, the Dev UI lists every built-in OpenAI-compatible model, Llama included."""
+    actions = await ModelGarden(project_id='p').list_actions()
+
+    names = [a.name for a in actions]
+    assert names == [f'modelgarden/{model}' for model in SUPPORTED_OPENAI_COMPAT_MODELS]
+    assert LLAMA in names
+
+
+@pytest.mark.asyncio
+async def test_resolve_uncataloged_openai_compat_model_advertises_default_supports() -> None:
+    """An uncataloged OpenAI-compatible model advertises the label and supports its handler runs with."""
+    ai = Genkit(plugins=[ModelGarden(project_id='p')])
+
+    action = await ai.registry.resolve_action(ActionKind.MODEL, MISTRAL)
+
+    assert action is not None
+    info = action.metadata['model']
+    assert isinstance(info, dict)
+    assert info['label'] == 'ModelGarden - mistralai/mistral-small-2503'
+    assert info['supports'] == DEFAULT_SUPPORTS.model_dump()

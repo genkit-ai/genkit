@@ -57,6 +57,13 @@ def get_toml_value(filepath: str, key: str) -> str:
     return match.group(1) if match else ''
 
 
+def get_genkit_pins(filepath: str) -> list[tuple[str, str]]:
+    """Exact intra-repo pins (`genkit-openai==0.12.0`) in a pyproject.toml, as (name, version)."""
+    with open(filepath, encoding='utf-8') as f:
+        content = f.read()
+    return re.findall(r'["\'](genkit[a-z0-9-]*)(?:\[[^\]]*\])?\s*==\s*([^"\';,\s]+)', content)
+
+
 def main() -> None:
     print(f'{BLUE}=== Genkit Python Consistency Check ==={NC}\n')
 
@@ -101,6 +108,11 @@ def main() -> None:
             print(f'  {RED}✗{NC} {pkg_name}: missing LICENSE')
             errors += 1
             pkg_errors += 1
+        for dep, pinned in get_genkit_pins(toml_path):
+            if pinned != core_version:
+                print(f"  {RED}✗{NC} {pkg_name}: pins {dep}=={pinned} (expected '{core_version}')")
+                errors += 1
+                pkg_errors += 1
 
         if pkg_errors == 0:
             print(f'  {GREEN}✓{NC} {pkg_name} ({pkg_version})')

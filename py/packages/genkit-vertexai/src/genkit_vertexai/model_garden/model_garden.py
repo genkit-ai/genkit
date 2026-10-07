@@ -22,8 +22,10 @@ from that publisher is resolved or called.
 """
 
 import os
-from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, cast
+from collections.abc import Awaitable, Callable, Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from genkit_vertexai import constants as const
 from genkit_vertexai.model_garden._model_info import (
@@ -32,7 +34,7 @@ from genkit_vertexai.model_garden._model_info import (
 )
 
 from genkit import ActionRunContext, GenkitError, ModelResponse
-from genkit.model import ModelRequest, model as create_model, model_action_metadata
+from genkit.model import ModelInfo, ModelRequest, model as create_model, model_action_metadata
 from genkit.plugin_api import Action, ActionKind, ActionMetadata, Plugin, loop_local_client, to_json_schema
 
 if TYPE_CHECKING:
@@ -41,17 +43,55 @@ if TYPE_CHECKING:
 
 MODELGARDEN_PLUGIN_NAME = 'modelgarden'
 
+
+@dataclass(frozen=True)
+class _Extra:
+    """An optional publisher dependency of genkit-vertexai.
+
+    Attributes:
+        packages: Top-level packages the extra installs. A missing extra fails
+            with ``ModuleNotFoundError.name`` set to one of these. Any other
+            name (a broken transitive dependency or a submodule) re-raises as-is.
+        missing_message: The error message naming the install command.
+    """
+
+    packages: frozenset[str]
+    missing_message: str
+
+
 # claude and the openai-compatible publishers are separate extras, so an app
 # only installs the SDK for the models it actually calls.
-_CLAUDE_EXTRA_MISSING = "Model Garden Claude models need the anthropic extra: uv add 'genkit-vertexai[anthropic]'"
-_OPENAI_COMPAT_EXTRA_MISSING = (
-    'Model Garden Llama, Mistral, and other OpenAI-compatible models need the openai extra: '
-    "uv add 'genkit-vertexai[openai]'"
+_ANTHROPIC_EXTRA = _Extra(
+    packages=frozenset({'anthropic', 'genkit_anthropic'}),
+    missing_message="Model Garden Claude models need the anthropic extra: uv add 'genkit-vertexai[anthropic]'",
 )
-# A missing extra fails with `e.name` set to one of these top-level packages.
-# Anything else (a broken transitive dependency or submodule) re-raises as-is.
-_ANTHROPIC_EXTRA = frozenset({'anthropic', 'genkit_anthropic'})
-_OPENAI_EXTRA = frozenset({'openai', 'genkit_openai'})
+_OPENAI_EXTRA = _Extra(
+    packages=frozenset({'openai', 'genkit_openai'}),
+    missing_message=(
+        'Model Garden Llama, Mistral, and other OpenAI-compatible models need the openai extra: '
+        "uv add 'genkit-vertexai[openai]'"
+    ),
+)
+
+
+@contextmanager
+def _requires_extra(extra: _Extra) -> Iterator[None]:
+    """Turns a missing extra inside the block into FAILED_PRECONDITION naming `uv add`.
+
+    Raises:
+        GenkitError: FAILED_PRECONDITION when one of ``extra.packages`` isn't installed.
+    """
+    try:
+        yield
+    except ModuleNotFoundError as e:
+        if e.name not in extra.packages:
+            raise
+        raise GenkitError(status='FAILED_PRECONDITION', message=extra.missing_message) from e
+
+
+def _openai_compat_model_info(name: str) -> ModelInfo:
+    """Catalog info for an OpenAI-compatible model, or the defaults for an uncataloged one."""
+    return SUPPORTED_OPENAI_COMPAT_MODELS.get(name) or get_default_model_info(name)
 
 
 def model_garden_name(name: str) -> str:
@@ -125,7 +165,7 @@ class ModelGardenModel:
             is provided). The 'supports' key contains a dictionary representing
             the model's capabilities (e.g., tools, streaming).
         """
-        model_info = SUPPORTED_OPENAI_COMPAT_MODELS.get(self.name, get_default_model_info(self.name))
+        model_info = _openai_compat_model_info(self.name)
         supports = model_info.supports
         return {
             'name': model_info.label,
@@ -145,13 +185,14 @@ class ModelGardenModel:
         """
 
         async def _generate(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
-            # Private import across packages, on purpose. genkit-openai and
-            # genkit-vertexai release in lockstep, so Model Garden reuses the
-            # OpenAI-compatible model class instead of copying it.
+            # Private import across packages, on purpose. The [openai] extra
+            # pins genkit-openai to this package's exact version, so Model
+            # Garden reuses the OpenAI-compatible model class instead of
+            # copying it.
             from genkit_openai._models import OpenAIModel
 
             client = await self.create_client()
-            info = SUPPORTED_OPENAI_COMPAT_MODELS.get(self.name, get_default_model_info(self.name))
+            info = _openai_compat_model_info(self.name)
             openai_model = OpenAIModel(self.name, client, supports=info.supports)
             return await openai_model.generate(request, ctx)
 
@@ -227,8 +268,21 @@ class ModelGarden(Plugin):
 
         return await self._create_model_action(name)
 
+    def _location_and_project(self, name: str) -> tuple[str, str]:
+        """Region and project the model ``name`` runs in.
+
+        Raises:
+            ValueError: No project ID was passed or found in the environment.
+        """
+        if not self.project_id:
+            raise ValueError('project_id must be provided')
+        return self.model_locations.get(name, self.location), self.project_id
+
     async def _create_model_action(self, name: str) -> Action:
         """Create an Action object for a Model Garden Vertex AI model.
+
+        The publisher's extra is checked before the project ID, so a missing
+        extra is the first error reported.
 
         Args:
             name: The model id without the ``modelgarden/`` prefix, publisher
@@ -240,68 +294,36 @@ class ModelGarden(Plugin):
         full_name = model_garden_name(name)
 
         if name.startswith('anthropic/'):
-            try:
-                from .anthropic import AnthropicModelGarden as AnthropicWorker
-            except ModuleNotFoundError as e:
-                if e.name not in _ANTHROPIC_EXTRA:
-                    raise
-                raise GenkitError(status='FAILED_PRECONDITION', message=_CLAUDE_EXTRA_MISSING) from e
+            with _requires_extra(_ANTHROPIC_EXTRA):
+                from .anthropic import AnthropicModelGarden
 
-            location = self.model_locations.get(name, self.location)
-            if not self.project_id:
-                raise ValueError('project_id must be provided')
-            model_proxy = AnthropicWorker(
-                model=name,
-                location=location,
-                project_id=self.project_id,
-            )
-
-            handler = model_proxy.get_handler()
-            model_info = model_proxy.get_model_info()
-
+            location, project_id = self._location_and_project(name)
+            claude = AnthropicModelGarden(model=name, location=location, project_id=project_id)
+            config_schema = claude.get_config_schema()
             return create_model(
                 full_name,
-                handler,
-                config_schema=model_proxy.get_config_schema(),
+                claude.get_handler(),
+                config_schema=config_schema,
                 metadata={
                     'model': {
-                        **model_info.model_dump(),
-                        'customOptions': to_json_schema(model_proxy.get_config_schema()),
+                        **claude.get_model_info().model_dump(),
+                        'customOptions': to_json_schema(config_schema),
                     },
                 },
             )
 
-        try:
+        with _requires_extra(_OPENAI_EXTRA):
             from genkit_openai import OpenAIConfig
-        except ModuleNotFoundError as e:
-            if e.name not in _OPENAI_EXTRA:
-                raise
-            raise GenkitError(status='FAILED_PRECONDITION', message=_OPENAI_COMPAT_EXTRA_MISSING) from e
 
-        location = self.model_locations.get(name, self.location)
-        if not self.project_id:
-            raise ValueError('project_id must be provided')
-        model_proxy = ModelGardenModel(
-            model=name,
-            location=location,
-            project_id=self.project_id,
-        )
-
-        # Get model info and handler
-        model_info = SUPPORTED_OPENAI_COMPAT_MODELS.get(name, {})
-        handler = model_proxy.to_openai_compatible_model()
-
+        location, project_id = self._location_and_project(name)
+        openai_compat = ModelGardenModel(model=name, location=location, project_id=project_id)
         return create_model(
             full_name,
-            handler,
+            openai_compat.to_openai_compatible_model(),
             config_schema=OpenAIConfig,
             metadata={
                 'model': {
-                    **(
-                        model_info.model_dump()  # type: ignore[union-attr]
-                        if hasattr(model_info, 'model_dump')
-                        else cast(dict[str, object], model_info)
-                    ),
+                    **_openai_compat_model_info(name).model_dump(),
                     'customOptions': to_json_schema(OpenAIConfig),
                 },
             },
@@ -319,18 +341,14 @@ class ModelGarden(Plugin):
             Empty when the ``openai`` extra isn't installed, so the Dev UI only lists models that can run.
         """
         try:
-            from genkit_openai import OpenAIConfig
-        except ModuleNotFoundError as e:
-            if e.name not in _OPENAI_EXTRA:
-                raise
+            with _requires_extra(_OPENAI_EXTRA):
+                from genkit_openai import OpenAIConfig
+        except GenkitError:
             return []
 
-        actions_list = []
-        for model, model_info in SUPPORTED_OPENAI_COMPAT_MODELS.items():
-            actions_list.append(
-                model_action_metadata(
-                    name=model_garden_name(model), info=model_info.model_dump(), config_schema=OpenAIConfig
-                )
+        return [
+            model_action_metadata(
+                name=model_garden_name(model), info=model_info.model_dump(), config_schema=OpenAIConfig
             )
-
-        return actions_list
+            for model, model_info in SUPPORTED_OPENAI_COMPAT_MODELS.items()
+        ]
