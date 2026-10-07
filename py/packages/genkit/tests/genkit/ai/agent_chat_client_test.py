@@ -33,8 +33,8 @@ from genkit._ai._agents._client import (
 from genkit._ai._agents._runtime import AgentInitError
 from genkit._ai._agents._types import StateManagement
 from genkit._ai._json_patch import apply_json_patch
-from genkit._ai._testing import define_programmable_model
 from genkit._core._channel import CloseableQueue
+from genkit._core._error import GenkitError
 from genkit._core._model import (
     AgentInit,
     AgentInput,
@@ -61,6 +61,7 @@ from genkit._core._typing import (
 )
 from genkit.exp import Genkit
 from genkit.exp.agent import InMemorySessionStore
+from genkit.testing import define_scripted_model
 
 # ---------------------------------------------------------------------------
 # Unit tests for JSON patch application
@@ -151,15 +152,49 @@ class MockAgentTransport(AgentTransport[Any]):
 # ---------------------------------------------------------------------------
 
 
-def test_restart_applies_replace_input() -> None:
+def test_agent_interrupt_restart_has_no_replace_input() -> None:
+    """intr.restart(replace_input=...) is a TypeError; the helper does not take a new input."""
     intr = AgentInterrupt('transfer', 'ref-1', {'amount': 100})
-    part = intr.restart(replace_input={'amount': 50, 'approved': True})
+    with pytest.raises(TypeError, match='replace_input'):
+        intr.restart(replace_input={'amount': 50})  # type: ignore[call-arg]
 
+
+def test_restart_with_no_args_marks_resumed() -> None:
+    """intr.restart() marks the tool request resumed."""
+    intr = AgentInterrupt('transfer', 'ref-1', {'amount': 100})
+    part = intr.restart()
     assert part.tool_request is not None
-    assert part.tool_request.input == {'amount': 50, 'approved': True}
+    assert part.tool_request.input == {'amount': 100}
     assert part.metadata is not None
-    assert part.metadata.get('replacedInput') == {'amount': 100}
     assert part.metadata.get('resumed') is True
+
+
+def test_respond_carries_output_only() -> None:
+    """intr.respond(output) carries the output and no interruptResponse metadata."""
+    intr = AgentInterrupt('transfer', 'ref-1', {'amount': 100})
+    part = intr.respond({'approved': True})
+    assert part.tool_response is not None
+    assert part.tool_response.output == {'approved': True}
+    assert part.metadata is None
+
+
+def test_chat_resume_rejects_paused_part() -> None:
+    """chat.resume(restart=[paused]) raises before the turn is sent."""
+    chat = AgentChat(MockAgentTransport())
+    paused = Part.from_tool_request(name='pay', ref='r1', input={}, metadata={'interrupt': True})
+    with pytest.raises(GenkitError, match='still an interrupt'):
+        chat.resume_stream(restart=[paused])
+
+
+def test_chat_resume_respond_with_paused_part_raises_before_send() -> None:
+    """chat.resume_stream(respond=[paused]) is INVALID_ARGUMENT before anything is sent."""
+    transport = MockAgentTransport()
+    chat = AgentChat(transport)
+    paused = Part.from_tool_request(name='pay', ref='r1', input={}, metadata={'interrupt': True})
+    with pytest.raises(GenkitError, match='Part.respond') as exc:
+        chat.resume_stream(respond=[paused])
+    assert exc.value.status == 'INVALID_ARGUMENT'
+    assert transport.send_payloads == []
 
 
 # ---------------------------------------------------------------------------
@@ -541,7 +576,7 @@ async def test_server_managed_running_view_matches_snapshot_over_real_tool_loop(
     """Against the real in-process runtime, a server-managed turn's running view
     rebuilt from chunks must line up with the authoritative store snapshot."""
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     store = InMemorySessionStore()
 
@@ -549,7 +584,7 @@ async def test_server_managed_running_view_matches_snapshot_over_real_tool_loop(
     async def weather(city: str) -> str:
         return '12C'
 
-    ai.define_prompt(name='weatherAgent', model='programmableModel', system='Use the weather tool.', tools=[weather])
+    ai.define_prompt(name='weatherAgent', model='scriptedModel', system='Use the weather tool.', tools=[weather])
     agent = ai.define_prompt_agent(name='weatherAgent', store=store)
 
     # Turn 1: model calls the tool; turn 2: model answers with the tool result.
@@ -625,7 +660,7 @@ async def test_server_managed_failed_turn_rolls_back_optimistic_user_message() -
 async def test_no_store_inprocess_transport_assembles_output_message() -> None:
     """InProcessTransport must return a complete AgentOutput even without a session store."""
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
     pm.chunks = [
         [
             ModelResponseChunkModel(role=Role.MODEL, content=[Part.from_text('Hi ')]),
@@ -639,7 +674,7 @@ async def test_no_store_inprocess_transport_assembles_output_message() -> None:
         )
     )
 
-    agent = ai.define_agent(name='noStoreAgent', model='programmableModel', system='Reply briefly.')
+    agent = ai.define_agent(name='noStoreAgent', model='scriptedModel', system='Reply briefly.')
     chat = agent.chat()
     out = await chat.send('Hello')
 
@@ -893,11 +928,11 @@ async def test_session_handling_multiple_tool_interrupts() -> None:
 @pytest.mark.asyncio
 async def test_in_process_persistent_connection() -> None:
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     store = InMemorySessionStore()
 
-    ai.define_prompt(name='testEchoAgent', model='programmableModel', system='You echo things.')
+    ai.define_prompt(name='testEchoAgent', model='scriptedModel', system='You echo things.')
     agent = ai.define_prompt_agent(name='testEchoAgent', store=store)
 
     pm.responses.append(
@@ -938,12 +973,12 @@ async def test_in_process_persistent_connection() -> None:
 @pytest.mark.asyncio
 async def test_attached_turn_abort() -> None:
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     store = InMemorySessionStore()
 
     # Define a simple agent
-    ai.define_prompt(name='abortAgent', model='programmableModel', system='Hello')
+    ai.define_prompt(name='abortAgent', model='scriptedModel', system='Hello')
     agent = ai.define_prompt_agent(name='abortAgent', store=store)
 
     # We make the mock model sleep to simulate a slow response
@@ -1000,9 +1035,9 @@ async def test_await_turn_under_timeout_detaches() -> None:
     """A deadline around `await turn.response` detaches like turn.abort(): the deadline
     surfaces as TimeoutError, the prompt stays in history, and the next turn works."""
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
-    ai.define_prompt(name='timeoutAgent', model='programmableModel', system='Hello')
+    ai.define_prompt(name='timeoutAgent', model='scriptedModel', system='Hello')
     agent = ai.define_prompt_agent(name='timeoutAgent', store=InMemorySessionStore())
 
     async def slow_response(*args: Any, **kwargs: Any) -> ModelResponse:
@@ -1045,9 +1080,9 @@ async def test_await_turn_under_timeout_detaches() -> None:
 async def test_stream_turn_under_timeout_detaches() -> None:
     """A deadline around `async for chunk in turn` detaches the same way."""
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
-    ai.define_prompt(name='streamTimeoutAgent', model='programmableModel', system='Hello')
+    ai.define_prompt(name='streamTimeoutAgent', model='scriptedModel', system='Hello')
     agent = ai.define_prompt_agent(name='streamTimeoutAgent', store=InMemorySessionStore())
 
     async def slow_response(*args: Any, **kwargs: Any) -> ModelResponse:
@@ -1076,7 +1111,7 @@ async def test_stream_turn_under_timeout_detaches() -> None:
 @pytest.mark.asyncio
 async def test_session_abort() -> None:
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     store = InMemorySessionStore()
 
@@ -1095,9 +1130,7 @@ async def test_session_abort() -> None:
             raise
 
     # Define a simple agent that uses this tool
-    ai.define_prompt(
-        name='sessionAbortAgent', model='programmableModel', system='Use the slow tool.', tools=[slow_tool]
-    )
+    ai.define_prompt(name='sessionAbortAgent', model='scriptedModel', system='Use the slow tool.', tools=[slow_tool])
     agent = ai.define_prompt_agent(name='sessionAbortAgent', store=store)
 
     pm.responses.append(
@@ -1135,10 +1168,10 @@ async def test_session_abort() -> None:
 @pytest.mark.asyncio
 async def test_session_abort_without_snapshot_raises() -> None:
     ai = Genkit()
-    define_programmable_model(ai)
+    define_scripted_model(ai)
 
     # No store → client-managed → there's never a server snapshot to abort.
-    ai.define_prompt(name='noStoreAgent', model='programmableModel', system='Hello')
+    ai.define_prompt(name='noStoreAgent', model='scriptedModel', system='Hello')
     agent = ai.define_prompt_agent(name='noStoreAgent')
 
     chat = agent.chat()
@@ -1490,10 +1523,10 @@ async def test_undrained_resume_stream_does_not_leak_into_next_turn() -> None:
 
 @pytest.mark.asyncio
 async def test_inprocess_undrained_streams_stay_isolated() -> None:
-    """Same isolation with a real in-process agent (programmable model)."""
+    """Same isolation with a real in-process agent (scripted model)."""
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
-    ai.define_prompt(name='isoAgent', model='programmableModel', system='echo')
+    pm, _ = define_scripted_model(ai)
+    ai.define_prompt(name='isoAgent', model='scriptedModel', system='echo')
     agent = ai.define_prompt_agent(name='isoAgent', store=InMemorySessionStore())
 
     pm.chunks = [

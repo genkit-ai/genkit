@@ -166,8 +166,8 @@ def test_edit_file_reads_from_disk() -> None:
 async def test_tools_returns_read_and_list(ctx) -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         fs = Filesystem(root_dir=tmpdir)
-        tool_actions = fs.tools(ctx)
-        names = {t.name for t in tool_actions}
+        tools = fs.tools(ctx)
+        names = {t.name for t in tools}
         assert 'list_files' in names
         assert 'read_file' in names
         assert 'write_file' not in names
@@ -177,8 +177,8 @@ async def test_tools_returns_read_and_list(ctx) -> None:
 async def test_tools_returns_write_when_allowed(ctx) -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         fs = Filesystem(root_dir=tmpdir, allow_write_access=True)
-        tool_actions = fs.tools(ctx)
-        names = {t.name for t in tool_actions}
+        tools = fs.tools(ctx)
+        names = {t.name for t in tools}
         assert 'write_file' in names
         assert 'edit_file' in names
 
@@ -188,5 +188,5 @@ async def test_tools_have_nonempty_descriptions(ctx) -> None:
     """Model-facing tool descriptions must be set — nested defs have no docstring."""
     with tempfile.TemporaryDirectory() as tmpdir:
         fs = Filesystem(root_dir=tmpdir, allow_write_access=True)
-        for action in fs.tools(ctx):
-            assert action.description, f'{action.name} has empty description'
+        for t in fs.tools(ctx):
+            assert t.description, f'{t.name} has empty description'

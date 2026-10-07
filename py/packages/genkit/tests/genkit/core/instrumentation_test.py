@@ -13,16 +13,20 @@ import pytest
 
 from genkit._core._action import Action
 from genkit._core._telemetry._instrumentation import (
-    SpanContext,
-    SpanMetadata,
     flush_instrumentations,
-    reset_instrumentation,
-    run_in_new_span,
     set_custom_metadata_attributes,
     set_span_state,
 )
 from genkit.plugin_api import ActionKind
-from genkit.telemetry import FlushableInstrumentation, configure_instrumentation, is_instrumented_by
+from genkit.telemetry import (
+    FlushableInstrumentation,
+    SpanContext,
+    SpanMetadata,
+    configure_instrumentation,
+    is_instrumented_by,
+    reset_instrumentation,
+    run_in_new_span,
+)
 
 
 class RecordedSpan:
@@ -323,6 +327,7 @@ def test_telemetry_exports_provider_types() -> None:
     for name in ('SpanNext', 'DisposableInstrumentation', 'FlushableInstrumentation'):
         assert name in telemetry.__all__
         assert getattr(telemetry, name) is not None
+    assert 'instrumentations' not in telemetry.__all__
 
 
 def test_flush_instrumentations_flushes_flushable() -> None:
@@ -346,3 +351,43 @@ def test_flush_instrumentations_flushes_flushable() -> None:
     flush_instrumentations()
 
     assert buffered.flushed == 1
+
+
+def test_reset_instrumentation_removes_every_configured_provider() -> None:
+    """After reset_instrumentation(), no provider configured before it is still installed."""
+    first = FakeInstrumentation('first', [])
+    configure_instrumentation(first)
+    configure_instrumentation(RecordedSpanBackend())
+
+    reset_instrumentation()
+
+    assert not is_instrumented_by(FakeInstrumentation)
+    assert not is_instrumented_by(RecordedSpanBackend)
+
+
+def test_reset_instrumentation_disposes_each_provider_once() -> None:
+    """reset_instrumentation() calls dispose() exactly once on a provider that has one."""
+
+    class Holding(FakeInstrumentation):
+        def __init__(self) -> None:
+            super().__init__('holding', [])
+            self.disposed = 0
+
+        def dispose(self) -> None:
+            self.disposed += 1
+
+    holding = Holding()
+    configure_instrumentation(holding)
+
+    reset_instrumentation()
+
+    assert holding.disposed == 1
+
+
+class RecordedSpanBackend:
+    async def run_in_new_span(
+        self,
+        metadata: SpanMetadata,
+        next: Callable[[SpanContext], Awaitable[object]],
+    ) -> object:
+        return await next(RecordedSpan('backend'))

@@ -20,7 +20,13 @@ import pytest
 from genkit_evaluators import register_genkit_evaluators
 
 from genkit import BaseDataPoint, Genkit
-from genkit.evaluator import EvalRequest
+from genkit.evaluator import EvalRequest, Score
+
+
+def _one_score(evaluation: Score | list[Score]) -> Score:
+    """Built-in evaluators return one Score for the row."""
+    assert isinstance(evaluation, Score)
+    return evaluation
 
 
 @pytest.fixture
@@ -47,9 +53,9 @@ async def test_deep_equal(ai: Genkit) -> None:
     resp = await eval_action.run(input=req)
     results = resp.response.root
     assert len(results) == 3
-    assert results[0].evaluation.score is True
-    assert results[1].evaluation.score is False
-    assert results[2].evaluation.error is not None
+    assert _one_score(results[0].evaluation).score is True
+    assert _one_score(results[1].evaluation).score is False
+    assert _one_score(results[2].evaluation).error is not None
 
 
 @pytest.mark.asyncio
@@ -69,9 +75,9 @@ async def test_regex(ai: Genkit) -> None:
     resp = await eval_action.run(input=req)
     results = resp.response.root
     assert len(results) == 3
-    assert results[0].evaluation.score is True
-    assert results[1].evaluation.score is False
-    assert results[2].evaluation.error is not None
+    assert _one_score(results[0].evaluation).score is True
+    assert _one_score(results[1].evaluation).score is False
+    assert _one_score(results[2].evaluation).error is not None
 
 
 @pytest.mark.asyncio
@@ -91,7 +97,31 @@ async def test_jsonata(ai: Genkit) -> None:
     resp = await eval_action.run(input=req)
     results = resp.response.root
     assert len(results) == 3
-    assert results[0].evaluation.score is not False and results[0].evaluation.score != ''
+    first = _one_score(results[0].evaluation)
+    assert first.score is not False and first.score != ''
     # age=31 with age 33 -> false or empty result -> FAIL
-    assert results[1].evaluation.score is False or results[1].evaluation.status == 'FAIL'
-    assert results[2].evaluation.error is not None
+    second = _one_score(results[1].evaluation)
+    assert second.score is False or second.status == 'FAIL'
+    assert _one_score(results[2].evaluation).error is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('evaluator', 'datapoint'),
+    [
+        ('genkitEval/regex', {'input': 'sample', 'reference': 'ba?a?a', 'output': 'banana'}),
+        ('genkitEval/deep_equal', {'input': 'sample', 'reference': 'hello', 'output': 'hello'}),
+        ('genkitEval/jsonata', {'input': 'sample', 'reference': 'age=33', 'output': {'age': 33}}),
+    ],
+)
+async def test_built_in_evaluators_return_one_score(ai: Genkit, evaluator: str, datapoint: dict[str, object]) -> None:
+    """ai.evaluate with a built-in evaluator gives that row's evaluation as one Score."""
+    response = await ai.evaluate(
+        evaluator=evaluator,
+        dataset=[BaseDataPoint.model_validate({**datapoint, 'test_case_id': 'case1'})],
+    )
+
+    assert len(response.root) == 1
+    assert response.root[0].test_case_id == 'case1'
+    evaluation = _one_score(response.root[0].evaluation)
+    assert evaluation.status == 'PASS'

@@ -54,8 +54,7 @@ from google.cloud.firestore import (
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
 
-from genkit import GenkitError, RuntimeErrorReason
-from genkit._core._typing import GenkitRuntimeError
+from genkit import GenkitError, GenkitRuntimeError, RuntimeErrorReason
 from genkit.exp.agent import (
     TERMINAL_STATUSES,
     AgentFinishReason,

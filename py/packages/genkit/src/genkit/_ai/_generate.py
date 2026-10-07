@@ -27,7 +27,6 @@ from typing import Any, TypeVar, cast
 
 from pydantic import BaseModel, ValidationError
 
-from genkit._ai._agents._session import get_current_session
 from genkit._ai._formats._types import FormatDef, Formatter
 from genkit._ai._messages import inject_instructions
 from genkit._ai._model import (
@@ -41,7 +40,6 @@ from genkit._ai._model import (
 from genkit._ai._tools import (
     ORIGINAL_OUTPUT_SCHEMA_KEY,
     Interrupt,
-    Tool,
     as_multipart_tool_response,
     dump_tool_metadata,
     dump_tool_output,
@@ -57,6 +55,7 @@ from genkit._core._action import (
     ActionKind,
     ActionRunContext,
     create_action_key,
+    get_current_context,
     parse_action_key,
     parse_dap_qualified_name,
 )
@@ -86,11 +85,14 @@ from genkit._core._model import (
     OutputConfig,
     Part,
     as_message,
+    chunk_for_stream,
+    reject_unanswered_interrupts,
 )
-from genkit._core._protocols import RegistryLike, SessionLike
+from genkit._core._protocols import RegistryLike
 from genkit._core._registry import Registry
 from genkit._core._schema import check_output_schema
 from genkit._core._telemetry._instrumentation import SpanContext, run_in_new_span, set_span_state
+from genkit._core._tool import Tool
 from genkit._core._typing import (
     FinishReason,
     GenerateActionOutputConfig,
@@ -107,6 +109,7 @@ DEFAULT_MAX_TURNS = 50
 
 logger = get_logger(__name__)
 
+T = TypeVar('T')
 HookParamsT = TypeVar('HookParamsT')
 HookResultT = TypeVar('HookResultT')
 HookWrap = Callable[
@@ -248,6 +251,7 @@ async def run_logged_hook(
         )
 
 
+@dataclass(frozen=True)
 class ScopedGenkitView:
     """A GenkitLike view over the call-scoped registry for one generate invocation.
 
@@ -256,11 +260,7 @@ class ScopedGenkitView:
     hand it this thin wrapper instead of the full Genkit veneer.
     """
 
-    def __init__(self, reg: RegistryLike) -> None:
-        self.registry: RegistryLike = reg
-
-    def current_session(self) -> SessionLike | None:
-        return get_current_session()
+    registry: RegistryLike
 
 
 def register_middleware(
@@ -380,6 +380,31 @@ def hook_wrap(mw: MiddlewareDef, hook: str) -> HookWrap[HookParamsT, HookResultT
     return cast(HookWrap[HookParamsT, HookResultT], wrap)
 
 
+async def hop(*, body: Awaitable[T]) -> T:
+    """Run ``body`` on a child task so a long use= list or tool loop can return.
+
+    The child yields once before ``body`` so an eager task factory does not
+    keep stacking hops on this call.
+
+    asyncio re-raises KeyboardInterrupt and SystemExit out of the event loop
+    instead of into the awaiting task. The child returns them as a value and
+    the parent raises them here, so outer turn and middleware frames unwind
+    in order, the same as before the hop.
+    """
+
+    async def child() -> tuple[T | None, KeyboardInterrupt | SystemExit | None]:
+        await asyncio.sleep(0)
+        try:
+            return await body, None
+        except (KeyboardInterrupt, SystemExit) as exc:
+            return None, exc
+
+    result, exc = await asyncio.create_task(child())
+    if exc is not None:
+        raise exc
+    return cast(T, result)
+
+
 async def dispatch_hooks(
     *,
     middleware: list[MiddlewareDef],
@@ -410,7 +435,15 @@ async def dispatch_hooks(
 
         return stamped
 
-    runner = with_after_result(next_fn)
+    async def leaf(
+        p: HookParamsT,
+        c: GenerateMiddlewareContext,
+    ) -> HookResultT:
+        # Hop even when use=[] so a logging middleware cannot change whether
+        # a ContextVar the model set is still set after generate.
+        return await hop(body=next_fn(p, c))
+
+    runner = with_after_result(leaf)
     for mw in reversed(middleware):
         wrap = hook_wrap(mw, hook)
 
@@ -421,14 +454,16 @@ async def dispatch_hooks(
             _inner: Callable[[HookParamsT, GenerateMiddlewareContext], Awaitable[HookResultT]] = runner,
             _wrap: HookWrap[HookParamsT, HookResultT] = wrap,
         ) -> HookResultT:
-            return await run_logged_hook(
-                mw=_mw,
-                hook=hook,
-                params=p,
-                ctx=c,
-                wrap=_wrap,
-                inner=_inner,
-                extra=extra(p) if extra is not None else None,
+            return await hop(
+                body=run_logged_hook(
+                    mw=_mw,
+                    hook=hook,
+                    params=p,
+                    ctx=c,
+                    wrap=_wrap,
+                    inner=_inner,
+                    extra=extra(p) if extra is not None else None,
+                )
             )
 
         runner = with_after_result(run_next)
@@ -658,7 +693,13 @@ async def generate_action(
     Thin wrapper so in-process callers get a trace span named ``generate``
     around the whole call.  The registered ``/util/generate`` action skips
     this wrapper because the action runtime already opens its own span.
+
+    With no ``context``, the run uses the enclosing action's (e.g. the flow
+    calling ``ai.generate`` or a prompt). Tools would inherit it anyway, but
+    middleware only sees what's passed here.
     """
+    if context is None:
+        context = get_current_context()
 
     async def body(_span: SpanContext) -> ModelResponse:
         result = await run_generate(
@@ -731,7 +772,7 @@ async def run_generate(
     mw_pipeline: MiddlewarePipeline | None = None
     if middleware:
         mw_pipeline = prepare_middleware(middleware, ctx=ctx)
-        mw_tools: list[Action[Any, Any, Any, Any]] = []
+        mw_tools: list[Tool] = []
         for mw in mw_pipeline.middleware:
             mw_tools.extend(mw.tools(mw_pipeline.ctx))
 
@@ -747,7 +788,8 @@ async def run_generate(
                         message=(f"tool '{name}' is contributed by middleware but already declared elsewhere"),
                         reason=RuntimeErrorReason.INVALID_INPUT,
                     )
-                registry.register_action_from_instance(t)
+                # The child registry stores Actions; Tool is the handle authors return.
+                registry.register_action_from_instance(t.action())
                 contributed_names.append(name)
             options = options.model_copy()
             options.tools = existing + contributed_names
@@ -823,7 +865,7 @@ class ChunkAccumulator:
         prev_to_send = copy.copy(self.prev_chunks)
         self.prev_chunks.append(chunk)
 
-        return ModelResponseChunk(
+        return chunk_for_stream(
             chunk,
             index=self.message_index,
             previous_chunks=prev_to_send,
@@ -1470,14 +1512,16 @@ async def generate_turn(
         return after_tools
     # Tools already ran. This is the conversation if a later pipe fails.
     call.set_messages(after_tools.messages)
-    return await run_wrap_generate(
-        registry=registry,
-        options=after_tools.options,
-        mw_pipeline=mw_pipeline,
-        current_turn=current_turn + 1,
-        message_index=after_tools.message_index,
-        call=call,
-        resolved=resolved,
+    return await hop(
+        body=run_wrap_generate(
+            registry=registry,
+            options=after_tools.options,
+            mw_pipeline=mw_pipeline,
+            current_turn=current_turn + 1,
+            message_index=after_tools.message_index,
+            call=call,
+            resolved=resolved,
+        )
     )
 
 
@@ -1506,6 +1550,8 @@ async def call_model(
     call.request = request
 
     async def run_action(params: ModelHookParams, c: GenerateMiddlewareContext) -> ModelResponse:
+        # After they stop, another model call would be billed and thrown away.
+        raise_if_aborted(c.abort_signal)
         if is_debug_enabled(logger):
             logger.debug(
                 'calling model',
@@ -1573,13 +1619,12 @@ def stop_after_model(
         formatter=formatter,
         message=generated_msg,
     )
-    response.assert_valid()
 
     if response.operation is not None:
         return attach_resendable_history(response, options.messages)
 
     if generated_msg is None:
-        response.assert_valid_schema()
+        response._assert_valid_schema()
         log_model_responded(
             model=options.model,
             turn=current_turn,
@@ -1594,7 +1639,7 @@ def stop_after_model(
 
     if options.return_tool_requests or len(tool_requests) == 0:
         if len(tool_requests) == 0:
-            response.assert_valid_schema()
+            response._assert_valid_schema()
         log_model_responded(
             model=options.model,
             turn=current_turn,
@@ -1774,8 +1819,7 @@ def stamp_output(
         response._message_parser = lambda msg: parse(msg)
     if out and out.schema_type:
         response._schema_type = out.schema_type
-    response.assert_valid()
-    response.assert_valid_schema()
+    response._assert_valid_schema()
     return response
 
 
@@ -2253,6 +2297,7 @@ async def resolve_resume_options(
     """Handle resume options by resolving pending tool calls from a previous turn."""
     if not options.resume:
         return (options, None, None)
+    reject_unanswered_interrupts(options.resume)
 
     messages = list(options.messages or [])
     last_message = messages[-1] if messages else None
