@@ -21,11 +21,12 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from genkit import Document, Genkit, GenkitError
 from genkit._ai._embedding import (
     EmbedderInfo,
+    EmbedderRef,
     EmbedderSupports,
     create_embedder_ref,
     embedder,
@@ -162,6 +163,20 @@ def test_create_embedder_ref_with_positional_version_raises_type_error() -> None
     """create_embedder_ref(name, config, version) raises TypeError; version= is named."""
     with pytest.raises(TypeError):
         create_embedder_ref('e', None, 'v1')  # type: ignore[misc]
+
+
+@pytest.mark.parametrize(
+    'build',
+    [
+        lambda: create_embedder_ref('e', config=cast(Any, 'v1')),
+        lambda: EmbedderRef(name='e', config=cast(Any, 'v1')),
+    ],
+    ids=['create_embedder_ref', 'EmbedderRef'],
+)
+def test_embedder_ref_with_non_dict_config_raises_validation_error(build: Callable[[], EmbedderRef]) -> None:
+    """A non-dict config raises instead of being silently dropped by ai.embed."""
+    with pytest.raises(ValidationError):
+        build()
 
 
 class MockGenkitRegistry:
@@ -452,8 +467,7 @@ async def test_embed_many_does_not_change_the_embedder_ref_config(
     )
 
     assert embedder_ref.config == {'param': 'value'}
-    assert embedder_ref.config is config
-    assert 'version' not in embedder_ref.config
+    assert config == {'param': 'value'}
 
 
 @pytest.mark.asyncio

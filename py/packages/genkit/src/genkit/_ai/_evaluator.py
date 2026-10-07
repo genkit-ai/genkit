@@ -53,8 +53,9 @@ T = TypeVar('T')
 # Must be async (coroutine function).
 EvaluatorFn = Callable[[BaseDataPoint, T], Coroutine[Any, Any, EvalFnResponse]]
 
-# User-provided batch evaluator: one EvalRequest.
-BatchEvaluatorFn = Callable[[EvalRequest], Coroutine[Any, Any, list[EvalFnResponse]]]
+# User-provided batch evaluator: one EvalRequest. Returns the rows as a list
+# or as an EvalResponse.
+BatchEvaluatorFn = Callable[[EvalRequest], Coroutine[Any, Any, list[EvalFnResponse] | EvalResponse]]
 
 
 class EvaluatorRef(BaseModel):
@@ -195,7 +196,11 @@ def define_batch_evaluator(
     metadata: dict[str, object] | None = None,
     description: str | None = None,
 ) -> Action:
-    """Register a batch evaluator. ``fn`` is the action: one ``EvalRequest``."""
+    """Register a batch evaluator that runs ``fn`` once on the whole ``EvalRequest``.
+
+    ``fn`` returns the rows as a list or an ``EvalResponse``. The action wraps
+    them so ``action.run(...).response`` is always an ``EvalResponse``.
+    """
     evaluator_meta: dict[str, object] = metadata.copy() if metadata else {}
     if 'evaluator' not in evaluator_meta:
         evaluator_meta['evaluator'] = {}
@@ -217,8 +222,9 @@ def define_batch_evaluator(
     # the action hands back the rows as one model so the Dev UI and
     # `genkit eval:run` get a JSON array, the same as a per-row evaluator.
     # fn stays the metadata_fn, so its signature is still checked when defined.
+    # model_validate takes a list or an EvalResponse; the constructor rejects the latter.
     async def batch_fn(req: EvalRequest, ctx: ActionRunContext) -> EvalResponse:
-        return EvalResponse(await action.params.call(fn, req, ctx))
+        return EvalResponse.model_validate(await action.params.call(fn, req, ctx))
 
     action = registry.register_action(
         name=name,

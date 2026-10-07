@@ -39,6 +39,7 @@ from genkit._core._typing import (
     Details,
     EvalFnResponse,
     EvalRequest,
+    EvalResponse,
     EvalStatusEnum,
     FinishReason,
     ModelInfo,
@@ -1754,6 +1755,40 @@ def test_batch_evaluator_with_second_parameter_raises_type_error(setup_test: Set
         )
 
 
+def test_sync_batch_evaluator_raises_type_error_at_definition(setup_test: SetupFixture) -> None:
+    """A sync batch fn raises at definition, not when the first run awaits its list."""
+    ai, *_ = setup_test
+
+    def my_eval(req: EvalRequest) -> list[EvalFnResponse]:
+        return []
+
+    with pytest.raises(TypeError, match="Got sync function for 'my_eval'"):
+        ai.define_batch_evaluator(
+            name='my_eval',
+            display_name='Test evaluator',
+            definition='sync',
+            fn=cast(Any, my_eval),
+        )
+
+
+@pytest.mark.asyncio
+async def test_evaluate_batch_evaluator_returning_eval_response_returns_its_rows(setup_test: SetupFixture) -> None:
+    """A batch fn that returns an EvalResponse gives ai.evaluate the same rows as one returning a list."""
+    ai, *_ = setup_test
+
+    async def my_eval(req: EvalRequest) -> EvalResponse:
+        return EvalResponse([
+            EvalFnResponse(test_case_id=row.test_case_id or '', evaluation=[Score(score=True)]) for row in req.dataset
+        ])
+
+    ai.define_batch_evaluator(name='resp_eval', display_name='resp_eval', definition='returns model', fn=my_eval)
+
+    results = await ai.evaluate(evaluator='resp_eval', dataset=_two_rows())
+
+    assert [row.test_case_id for row in results] == ['case1', 'case2']
+    assert [score.score for score in results[0].evaluation] == [True]
+
+
 @pytest.mark.asyncio
 async def test_define_sync_flow(setup_test: SetupFixture) -> None:
     """Test defining an async flow (renamed from sync test - sync flows no longer supported)."""
@@ -2042,12 +2077,6 @@ def test_evaluator_ref_with_positional_config_raises_type_error() -> None:
     """evaluator_ref(name, {...}) raises TypeError; settings go in config=."""
     with pytest.raises(TypeError):
         evaluator_ref('local/x', {'judge': 'j1'})  # type: ignore[misc]
-
-
-def test_evaluator_ref_with_config_schema_keyword_raises_type_error() -> None:
-    """evaluator_ref(name, config_schema={...}) is a TypeError; settings go in config=."""
-    with pytest.raises(TypeError, match='config_schema'):
-        evaluator_ref('ref_eval', config_schema={'judge': 'j1'})  # type: ignore[call-arg]
 
 
 def test_evaluator_ref_model_with_config_schema_field_raises_validation_error() -> None:

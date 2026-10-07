@@ -1057,7 +1057,7 @@ class Genkit:
         """
         merged: dict[str, object] = {}
         if isinstance(embedder, EmbedderRef):
-            if isinstance(embedder.config, dict):
+            if embedder.config:
                 merged.update(embedder.config)
             if embedder.version:
                 merged['version'] = embedder.version
@@ -1586,8 +1586,10 @@ class Genkit:
     ) -> list[EvalFnResponse]:
         """Evaluate a dataset using the specified evaluator.
 
-        Returns one row per datapoint, in dataset order, for per-row and batch
-        evaluators alike. Each row's ``evaluation`` is a list of scores.
+        Returns a list of rows. A per-row evaluator gives one row per
+        datapoint, in dataset order. A batch evaluator gives the rows its
+        function returned, as returned. Each row's ``evaluation`` is a list of
+        scores.
 
         ``config`` is merged over the ``EvaluatorRef``'s settings (the call
         wins per key) and handed to the evaluator as its second argument. When
