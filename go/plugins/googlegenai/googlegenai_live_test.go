@@ -17,7 +17,6 @@ package googlegenai_test
 import (
 	"context"
 	"fmt"
-	"maps"
 	"strings"
 	"testing"
 	"time"
@@ -46,21 +45,10 @@ type genaiSuite struct {
 	videoRef  func(id string) ai.ModelRef
 }
 
-// genaiGaps are the cases the plugin cannot pass yet on either backend, keyed
-// like [livetest.Suite.Skip].
-var genaiGaps = map[string]string{
-	"generate/cancel while streaming": "the stream keeps reading after its context is cancelled",
-	"agent/abort while streaming":     "the stream keeps reading after its context is cancelled",
-}
-
 // runGenAI walks the backend registered on g through the shared checklist and
 // then the Google GenAI one, under a "googlegenai" subtest.
 func runGenAI(t *testing.T, g *genkit.Genkit, s genaiSuite) {
 	t.Helper()
-	skip := maps.Clone(genaiGaps)
-	maps.Copy(skip, s.Skip)
-	s.Skip = skip
-
 	flash := func(config *genai.GenerateContentConfig) ai.ModelRef { return s.ref(s.flash, config) }
 	gen := func(t *testing.T, opts ...ai.GenerateOption) *ai.ModelResponse {
 		t.Helper()

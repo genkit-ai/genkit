@@ -225,6 +225,9 @@ func generate(
 		if err != nil {
 			return nil, wrapAPIError(err)
 		}
+		if ctx.Err() != nil {
+			break
+		}
 		sawChunk = true
 		for _, c := range chunk.Candidates {
 			if merged == nil {
@@ -261,6 +264,12 @@ func generate(
 		if chunk.PromptFeedback != nil {
 			feedback = chunk.PromptFeedback
 		}
+	}
+	// The SDK only logs a failed read rather than yielding it, so a stream
+	// whose context ends mid-read stops with no error. Report the cause, as
+	// the read error would.
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("model stream: %w", err)
 	}
 	if !sawChunk {
 		// A stream can end without yielding a chunk: the SDK only logs a

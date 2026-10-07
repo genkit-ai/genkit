@@ -1828,6 +1828,35 @@ func TestGenerateStreamEmptyStream(t *testing.T) {
 	}
 }
 
+// A cancel mid-stream must fail the call. The SDK only logs the failed read,
+// so without a check the stream would end as if the model had finished.
+func TestGenerateStreamCancelled(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprintf(w, "data: %s\n\n", `{"candidates":[{"content":{"role":"model","parts":[{"text":"1 2 3"}]}}]}`)
+		w.(http.Flusher).Flush()
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	defer srv.Close()
+	defer close(release)
+	client := newTestClient(t, srv.URL)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cb := func(context.Context, *ai.ModelResponseChunk) error {
+		cancel()
+		return nil
+	}
+	_, err := generate(ctx, client, "gemini-flash-latest", streamInput(), &genai.GenerateContentConfig{}, cb)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("generate error = %v, want one wrapping context.Canceled", err)
+	}
+}
+
 func TestGenerateStreamPromptBlocked(t *testing.T) {
 	srv := httptest.NewServer(sseHandler(
 		`{"promptFeedback":{"blockReason":"SAFETY"}}`,
