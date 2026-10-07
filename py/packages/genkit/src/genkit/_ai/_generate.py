@@ -27,7 +27,6 @@ from typing import Any, TypeGuard, TypeVar, cast
 
 from pydantic import BaseModel, ValidationError
 
-from genkit._ai._agents._session import get_current_session
 from genkit._ai._formats._types import FormatDef, Formatter
 from genkit._ai._messages import inject_instructions
 from genkit._ai._model import (
@@ -91,7 +90,7 @@ from genkit._core._model import (
     declared_config_type,
     reject_unanswered_interrupts,
 )
-from genkit._core._protocols import RegistryLike, SessionLike
+from genkit._core._protocols import RegistryLike
 from genkit._core._registry import Registry
 from genkit._core._schema import check_output_schema
 from genkit._core._telemetry._instrumentation import SpanContext, run_in_new_span, set_span_state
@@ -254,6 +253,7 @@ async def run_logged_hook(
         )
 
 
+@dataclass(frozen=True)
 class ScopedGenkitView:
     """A GenkitLike view over the call-scoped registry for one generate invocation.
 
@@ -262,11 +262,7 @@ class ScopedGenkitView:
     hand it this thin wrapper instead of the full Genkit veneer.
     """
 
-    def __init__(self, reg: RegistryLike) -> None:
-        self.registry: RegistryLike = reg
-
-    def current_session(self) -> SessionLike | None:
-        return get_current_session()
+    registry: RegistryLike
 
 
 def register_middleware(
