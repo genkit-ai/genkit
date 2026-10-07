@@ -26,20 +26,17 @@ from genkit_google_genai._evaluators import (
 )
 from genkit_google_genai._evaluators._evaluation import (
     EvaluatorFactory,
-    VertexAIEvaluationMetricConfig,
-    _is_config,
     _stringify,
 )
 from google.auth.exceptions import DefaultCredentialsError, RefreshError
 
 from genkit import BaseDataPoint, GenkitError
 
+from genkit import BaseDataPoint
+
 
 def test_vertex_ai_evaluation_metric_type_values() -> None:
     """Test that VertexAIEvaluationMetricType has expected values."""
-    from genkit_google_genai import VertexAIEvaluationMetricType as RootMetricType
-
-    assert RootMetricType is VertexAIEvaluationMetricType
     assert VertexAIEvaluationMetricType.BLEU == 'BLEU'
     assert VertexAIEvaluationMetricType.ROUGE == 'ROUGE'
     assert VertexAIEvaluationMetricType.FLUENCY == 'FLUENCY'
@@ -55,23 +52,6 @@ def test_vertex_ai_evaluation_metric_type_is_str_enum() -> None:
     metric = VertexAIEvaluationMetricType.FLUENCY
     assert isinstance(metric, str)
     assert metric == 'FLUENCY'
-
-
-def test_vertex_ai_evaluation_metric_config_basic() -> None:
-    """Test VertexAIEvaluationMetricConfig model."""
-    config = VertexAIEvaluationMetricConfig(
-        type=VertexAIEvaluationMetricType.BLEU,
-        metric_spec={'use_sentence_level': True},
-    )
-    assert config.type == VertexAIEvaluationMetricType.BLEU
-    assert config.metric_spec == {'use_sentence_level': True}
-
-
-def test_vertex_ai_evaluation_metric_config_defaults() -> None:
-    """Test VertexAIEvaluationMetricConfig default values."""
-    config = VertexAIEvaluationMetricConfig(type=VertexAIEvaluationMetricType.SAFETY)
-    assert config.type == VertexAIEvaluationMetricType.SAFETY
-    assert config.metric_spec is None
 
 
 def test_stringify_string_input() -> None:
@@ -96,18 +76,6 @@ def test_stringify_number_input() -> None:
     """Test _stringify with number input returns JSON."""
     result = _stringify(42)
     assert result == '42'
-
-
-def test_is_config_with_metric_type() -> None:
-    """Test _is_config returns False for metric type."""
-    metric = VertexAIEvaluationMetricType.FLUENCY
-    assert _is_config(metric) is False
-
-
-def test_is_config_with_metric_config() -> None:
-    """Test _is_config returns True for metric config."""
-    config = VertexAIEvaluationMetricConfig(type=VertexAIEvaluationMetricType.FLUENCY)
-    assert _is_config(config) is True
 
 
 def test_evaluator_factory_initialization() -> None:
@@ -207,26 +175,32 @@ def test_create_vertex_evaluators_with_metric_types() -> None:
     assert mock_registry.define_evaluator.call_count == 2
 
 
-def test_create_vertex_evaluators_with_metric_configs() -> None:
-    """Test create_vertex_evaluators with metric configs."""
+@pytest.mark.asyncio
+async def test_evaluator_request_sends_empty_metric_spec() -> None:
+    """Fluency evaluator sends fluencyInput with an empty metricSpec to Vertex."""
     mock_registry = MagicMock()
-    mock_registry.define_evaluator = MagicMock()
-
-    metrics = [
-        VertexAIEvaluationMetricConfig(
-            type=VertexAIEvaluationMetricType.BLEU,
-            metric_spec={'use_sentence_level': True},
-        ),
-    ]
 
     create_vertex_evaluators(
         registry=mock_registry,
-        metrics=metrics,
+        metrics=[VertexAIEvaluationMetricType.FLUENCY],
         project_id='test-project',
         location='us-central1',
     )
+    evaluator_fn = mock_registry.define_evaluator.call_args.kwargs['fn']
 
-    mock_registry.define_evaluator.assert_called_once()
+    with patch.object(
+        EvaluatorFactory,
+        'evaluate_instances',
+        AsyncMock(return_value={'fluencyResult': {'score': 4.0}}),
+    ) as mock_evaluate:
+        await evaluator_fn(BaseDataPoint(output='The soup is ready.'))
+
+    mock_evaluate.assert_awaited_once_with({
+        'fluencyInput': {
+            'metricSpec': {},
+            'instance': {'prediction': 'The soup is ready.'},
+        }
+    })
 
 
 def test_create_vertex_evaluators_names_format() -> None:

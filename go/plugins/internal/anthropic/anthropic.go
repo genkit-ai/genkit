@@ -518,7 +518,7 @@ func toAnthropicParts(parts []*ai.Part) ([]anthropic.ContentBlockParamUnion, err
 			toolReq := p.ToolRequest
 			blocks = append(blocks, anthropic.NewToolUseBlock(toolReq.Ref, toolReq.Input, toolReq.Name))
 		case p.IsToolResponse():
-			block, err := toAnthropicToolResultBlock(p.ToolResponse)
+			block, err := toAnthropicToolResultBlock(p.ToolResponse, p.IsToolError())
 			if err != nil {
 				return nil, err
 			}
@@ -534,13 +534,14 @@ func toAnthropicParts(parts []*ai.Part) ([]anthropic.ContentBlockParamUnion, err
 }
 
 // toAnthropicToolResultBlock translates an [ai.ToolResponse] to an Anthropic
-// tool_result block.
+// tool_result block. isError marks a response that answers the call with an
+// error (see [ai.Part.IsToolError]).
 //
 // Multipart tools return rich content parts alongside their structured output.
 // Anthropic exposes a single content array per tool_result rather than separate
 // fields, so the structured output is emitted as a leading text block and the
 // content parts follow as text, image, or document blocks.
-func toAnthropicToolResultBlock(toolResp *ai.ToolResponse) (anthropic.ContentBlockParamUnion, error) {
+func toAnthropicToolResultBlock(toolResp *ai.ToolResponse, isError bool) (anthropic.ContentBlockParamUnion, error) {
 	if toolResp == nil {
 		return anthropic.ContentBlockParamUnion{}, status.Errorf(ai.ErrInvalidPart, "tool response part carries no tool response")
 	}
@@ -574,7 +575,7 @@ func toAnthropicToolResultBlock(toolResp *ai.ToolResponse) (anthropic.ContentBlo
 		OfToolResult: &anthropic.ToolResultBlockParam{
 			ToolUseID: toolResp.Ref,
 			Content:   content,
-			IsError:   anthropic.Bool(false),
+			IsError:   anthropic.Bool(isError),
 		},
 	}, nil
 }
