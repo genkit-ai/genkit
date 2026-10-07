@@ -161,15 +161,12 @@ def _isolate_telemetry(
     monkeypatch.delenv('GENKIT_ENV', raising=False)
     monkeypatch.delenv('GENKIT_TELEMETRY_SERVER', raising=False)
     monkeypatch.setattr(Genkit, '_start_reflection_background', lambda self: None)
-    path_token = parent_path_context.set('')
     if 'real_otel_globals' in request.fixturenames:
         _reset_otel_globals()
         try:
             yield
         finally:
-            parent_path_context.reset(path_token)
             reset_instrumentation()
-            reset_log_export()
             _reset_google_cloud_telemetry()
             _reset_otel_globals()
         return
@@ -425,7 +422,7 @@ def test_enable_with_sampler_after_app_sets_tracer_under_genkit_start_still_rais
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """GENKIT_ENV=dev still raises INVALID_ARGUMENT when sampler= meets the app's tracer."""
-    monkeypatch.setenv(GENKIT_ENV, 'dev')
+    monkeypatch.setenv('GENKIT_ENV', 'dev')
     provider = TracerProvider()
     trace_api.set_tracer_provider(provider)
 
