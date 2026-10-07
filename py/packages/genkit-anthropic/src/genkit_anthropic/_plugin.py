@@ -148,7 +148,7 @@ class Anthropic(Plugin):
 
         Args:
             action_type: The kind of action to resolve.
-            name: The namespaced name of the action to resolve.
+            name: The id without the ``anthropic/`` prefix.
 
         Returns:
             Action object if found, None otherwise.
@@ -162,15 +162,12 @@ class Anthropic(Plugin):
         """Create an Action object for an Anthropic model.
 
         Args:
-            name: The namespaced name of the model.
+            name: The model id as received (no plugin-prefix stripping).
 
         Returns:
             Action object for the model.
         """
-        # Extract local name (remove plugin prefix)
-        clean_name = name.replace(f'{ANTHROPIC_PLUGIN_NAME}/', '') if name.startswith(ANTHROPIC_PLUGIN_NAME) else name
-
-        model_info = get_model_info(clean_name)
+        model_info = get_model_info(name)
 
         async def _generate(request: ModelRequest[AnthropicConfig], ctx: ActionRunContext) -> ModelResponse:
             client = self._runtime_client()
@@ -179,14 +176,14 @@ class Anthropic(Plugin):
             if not _has_credential(client) and context_api_key(context) is None:
                 raise missing_key_error()
             model = AnthropicModel(
-                model_name=clean_name,
+                model_name=name,
                 client=client,
                 default_api_version=self._default_api_version,
             )
             return await model.generate(request, ctx)
 
         return create_model(
-            name,
+            anthropic_name(name),
             _generate,
             config_schema=AnthropicConfig,
             metadata={

@@ -123,7 +123,7 @@ def test_known_gpt_matches_catalog() -> None:
 def test_create_model_action_types_openai_config() -> None:
     """Chat actions opt into ModelRequest[OpenAIConfig]."""
     plugin = OpenAI(api_key='test-key')
-    action = plugin._create_model_action('openai/gpt-4o')
+    action = plugin._create_model_action('gpt-4o')
 
     hints = get_type_hints(action._fn)  # noqa: SLF001
     request_type = hints['request']
@@ -135,7 +135,7 @@ def test_create_model_action_types_openai_config() -> None:
 async def test_create_model_action_camel_case_lands_on_the_wire() -> None:
     """Dev UI camelCase binds, then create() gets OpenAI snake_case names."""
     plugin = OpenAI(api_key='test-key')
-    action = plugin._create_model_action('openai/gpt-4o')
+    action = plugin._create_model_action('gpt-4o')
     validated = action._validate_input(  # noqa: SLF001
         {
             'messages': [{'role': 'user', 'content': [{'text': 'hi'}]}],

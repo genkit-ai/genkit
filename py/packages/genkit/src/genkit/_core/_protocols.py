@@ -72,11 +72,10 @@ class RegistryLike(Protocol):
 
 
 class SessionLike(Protocol):
-    """Structural interface for agent session state peekable from generate middleware.
+    """Structural interface for the agent session returned by ``genkit.exp.current_session()``.
 
     The concrete ``Session`` in ``_ai._agents._session`` satisfies this protocol.
-    Middleware should treat ``GenerateMiddlewareContext.session`` as optional and only
-    call methods when a bind is present.
+    Outside an agent there's no session, so callers check for ``None`` first.
     """
 
     async def get_artifacts(self) -> list[Artifact]:
@@ -110,8 +109,4 @@ class GenkitLike(Protocol):
     @property
     def registry(self) -> RegistryLike:
         """The call-scoped registry for this generate invocation."""
-        ...
-
-    def current_session(self) -> SessionLike | None:
-        """Return the bound agent session, if running inside one."""
         ...
