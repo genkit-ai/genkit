@@ -43,7 +43,6 @@ func TestGoogleAILive(t *testing.T) {
 			ToolResponseMedia: true,
 			BadKeyPlugin:      &googlegenai.GoogleAI{APIKey: "invalid"},
 			Skip: map[string]string{
-				"generate/bad api key":      "the Gemini API answers a rejected key with 400 API_KEY_INVALID, not 401",
 				"googlegenai/imagen output": "the Gemini API answers the Imagen 4 models with 404",
 			},
 		},
