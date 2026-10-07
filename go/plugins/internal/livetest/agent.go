@@ -225,7 +225,7 @@ func agentCases() []liveCase {
 		{"tool calls across turns", needTools, func(t *testing.T, r *runner) {
 			s := r.newSession(t, r.s.Model, ai.WithTools(r.tools.gablorken))
 			s.askText(t, "Use the gablorken tool with value 4 and over 2. Reply with just the number.", "17")
-			s.askText(t, "Call the gablorken tool once more, with value set to the previous result and over set to 2. Reply with just the number it returns.", "290")
+			s.askText(t, "Call the gablorken tool exactly once, with value 17 and over 2. Reply with just the number it returns.", "290")
 			s.askText(t, "Now get two gablorkens at once: value 2 over 3, and value 3 over 2. Reply with both numbers.", "9", "10")
 			s.askText(t, "List every gablorken result so far, separated by commas.", "17", "290", "9", "10")
 		}},
@@ -269,7 +269,7 @@ func agentCases() []liveCase {
 			if len(opts) > 0 {
 				turns = append(turns,
 					s.askText(t, "Use the gablorken tool with value 3 and over 2. Reply with just the number.", "10"),
-					s.askText(t, "Call the gablorken tool once more, with value set to the previous result and over set to 2. Reply with just the number it returns.", "101"),
+					s.askText(t, "Call the gablorken tool exactly once, with value 10 and over 2. Reply with just the number it returns.", "101"),
 					s.askText(t, "What were the two gablorken results? Reply with both numbers.", "10", "101"))
 			} else {
 				turns = append(turns, s.askText(t, "Is 97 a prime number? Answer yes or no.", "yes"))

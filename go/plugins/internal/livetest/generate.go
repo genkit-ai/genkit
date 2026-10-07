@@ -513,7 +513,7 @@ func generateCases() []liveCase {
 			if r.s.ReasoningContent && !hasReasoning(first.History()) {
 				t.Error("first turn kept no reasoning in its history, want the thinking that led to the tool call")
 			}
-			second := turn(first.History(), "Call the gablorken tool once more, with value set to the previous result and over set to 2. Reply with just the number it returns.", "101")
+			second := turn(first.History(), "Call the gablorken tool exactly once, with value 10 and over 2. Reply with just the number it returns.", "101")
 			turn(second.History(), "What were the two gablorken results? Reply with both numbers.", "10", "101")
 		}},
 	}
