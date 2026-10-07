@@ -46,7 +46,7 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from pydantic import BaseModel, Field
 
-from genkit import ActionRunContext, Genkit
+from genkit import ActionRunContext, Genkit, PublicError
 from genkit._core._action import ActionKind
 from genkit._core._middleware import BaseMiddleware
 from genkit._core._model import ModelConfig
@@ -493,3 +493,48 @@ async def test_no_cors_headers_returned(asgi_client: AsyncClient) -> None:
         },
     )
     assert 'access-control-allow-origin' not in preflight.headers
+
+
+def _define_missing(ai: Genkit):  # noqa: ANN202
+    @ai.flow()
+    async def missing(account: str) -> str:
+        raise ValueError('no such account')
+
+    return missing
+
+
+@pytest.mark.asyncio
+async def test_dev_ui_run_of_failing_flow_returns_message_and_trace_id(hex_ids: None) -> None:
+    """A Dev UI runAction of `missing` returns the body's message, code INTERNAL, and the run's trace id."""
+    ai = Genkit()
+    _define_missing(ai)
+    app = create_reflection_asgi_app(ai.registry)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as client:
+        response = await client.post('/api/runAction', json={'key': '/flow/missing', 'input': 'acme'})
+
+    error = response.json()['error']
+    assert error['message'] == 'no such account'
+    assert error['code'] == 13
+    assert error['details']['traceId'] == response.headers['x-genkit-trace-id']
+    assert len(error['details']['traceId']) == 32
+
+
+@pytest.mark.asyncio
+async def test_dev_ui_run_of_public_error_flow_returns_its_status_and_trace_id(hex_ids: None) -> None:
+    """A Dev UI runAction of a flow raising PublicError NOT_FOUND returns its message, code, and the run's trace id."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def order(order_id: str) -> str:
+        raise PublicError('NOT_FOUND', f'no order {order_id}')
+
+    app = create_reflection_asgi_app(ai.registry)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as client:
+        response = await client.post('/api/runAction', json={'key': '/flow/order', 'input': '99'})
+
+    error = response.json()['error']
+    assert error['message'] == 'no order 99'
+    assert error['code'] == 5
+    assert error['details']['traceId'] == response.headers['x-genkit-trace-id']

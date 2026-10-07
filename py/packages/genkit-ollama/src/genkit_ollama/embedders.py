@@ -17,13 +17,15 @@
 
 """Ollama embedders."""
 
+import json
 from collections.abc import Callable
 
 import ollama as ollama_api
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
-from genkit import Embedding
+from genkit import Embedding, GenkitError
 from genkit.embedder import EmbedRequest, EmbedResponse
+from genkit.plugin_api import wrap_http_error
 
 
 class EmbeddingDefinition(BaseModel):
@@ -91,14 +93,25 @@ class OllamaEmbedder:
 
         Returns:
             An EmbedResponse containing the generated vector embeddings.
+
+        Raises:
+            GenkitError: The server's HTTP status for a rejected call (e.g.
+                NOT_FOUND for a model that is not pulled), or INTERNAL for a
+                response that is not a valid embed response.
         """
         if client is None:
             client = self._get_client()
         input_raw: list[str] = []
         for doc in request.input:
             input_raw.extend([str(content.text) for content in doc.content if content.text is not None])
-        response = await client.embed(
-            model=self.embedding_definition.name,
-            input=input_raw,
-        )
-        return EmbedResponse(embeddings=[Embedding(embedding=list(embedding)) for embedding in response.embeddings])
+        try:
+            response = await client.embed(
+                model=self.embedding_definition.name,
+                input=input_raw,
+            )
+            return EmbedResponse(embeddings=[Embedding(embedding=list(embedding)) for embedding in response.embeddings])
+        except ollama_api.ResponseError as e:
+            # No real HTTP status (-1) is re-raised as-is by wrap_http_error.
+            raise wrap_http_error(e, status_code=e.status_code) from e
+        except (json.JSONDecodeError, ValidationError) as e:
+            raise GenkitError(status='INTERNAL', message='ollama embed: malformed response from server', cause=e) from e

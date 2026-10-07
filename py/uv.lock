@@ -1601,18 +1601,12 @@ version = "0.12.0"
 source = { editable = "packages/genkit" }
 dependencies = [
     { name = "anyio" },
-    { name = "asgiref" },
     { name = "dotpromptz" },
     { name = "httpx" },
     { name = "json5" },
     { name = "jsonschema" },
     { name = "partial-json-parser" },
-    { name = "pillow" },
-    { name = "psutil" },
     { name = "pydantic" },
-    { name = "python-multipart" },
-    { name = "rich" },
-    { name = "sse-starlette" },
     { name = "starlette" },
     { name = "strenum", marker = "python_full_version < '3.11'" },
     { name = "structlog" },
@@ -1669,7 +1663,6 @@ vertex-ai = [
 [package.metadata]
 requires-dist = [
     { name = "anyio", specifier = ">=4.9.0" },
-    { name = "asgiref", specifier = ">=3.8.1" },
     { name = "dotpromptz", specifier = ">=0.1.5" },
     { name = "genkit-a2ui", marker = "extra == 'a2ui'", editable = "packages/genkit-a2ui" },
     { name = "genkit-amazon-bedrock", marker = "extra == 'amazon-bedrock'", editable = "packages/genkit-amazon-bedrock" },
@@ -1689,12 +1682,7 @@ requires-dist = [
     { name = "json5", specifier = ">=0.10.0" },
     { name = "jsonschema", specifier = ">=4.23.0" },
     { name = "partial-json-parser", specifier = ">=0.2.1.1.post5" },
-    { name = "pillow", specifier = ">=12.1.1" },
-    { name = "psutil", specifier = ">=7.0.0" },
     { name = "pydantic", specifier = ">=2.10.5" },
-    { name = "python-multipart", specifier = ">=0.0.22" },
-    { name = "rich", specifier = ">=13.0.0" },
-    { name = "sse-starlette", specifier = ">=2.2.1" },
     { name = "starlette", specifier = ">=0.46.1" },
     { name = "strenum", marker = "python_full_version < '3.11'", specifier = ">=0.4.15" },
     { name = "structlog", specifier = ">=25.2.0" },
@@ -1873,19 +1861,21 @@ version = "0.12.0"
 source = { editable = "packages/genkit-google-genai" }
 dependencies = [
     { name = "genkit" },
-    { name = "google-cloud-aiplatform" },
     { name = "google-genai" },
-    { name = "strenum", marker = "python_full_version < '3.11'" },
+    { name = "httpx" },
+    { name = "pydantic" },
     { name = "structlog" },
+    { name = "typing-extensions" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "genkit", editable = "packages/genkit" },
-    { name = "google-cloud-aiplatform", specifier = ">=1.77.0" },
     { name = "google-genai", specifier = ">=2.14.0,<3" },
-    { name = "strenum", marker = "python_full_version < '3.11'", specifier = ">=0.4.15" },
+    { name = "httpx", specifier = ">=0.28.1" },
+    { name = "pydantic", specifier = ">=2.10.5" },
     { name = "structlog", specifier = ">=25.2.0" },
+    { name = "typing-extensions", specifier = ">=4.2" },
 ]
 
 [[package]]
