@@ -26,7 +26,6 @@ from __future__ import annotations
 import pytest
 
 from genkit import Genkit as StableGenkit
-from genkit._ai._testing import define_programmable_model
 from genkit._core._action import ActionRunContext
 from genkit._core._model import AgentInput, AgentResult, Message, ModelResponse, Part
 from genkit._core._typing import (
@@ -44,6 +43,7 @@ from genkit.exp.agent import (
     TurnResult,
     remote_agent,
 )
+from genkit.testing import define_scripted_model
 
 
 def test_stable_genkit_has_no_agent_methods() -> None:
@@ -88,7 +88,7 @@ def test_from_genkit_exp_agent_imports() -> None:
 @pytest.mark.asyncio
 async def test_exp_genkit_define_agent_one_turn() -> None:
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
     pm.responses.append(
         ModelResponse(
             finish_reason=FinishReason.STOP,
@@ -96,7 +96,7 @@ async def test_exp_genkit_define_agent_one_turn() -> None:
         )
     )
 
-    agent = ai.define_agent(name='echoAgent', model='programmableModel', system='Reply briefly.')
+    agent = ai.define_agent(name='echoAgent', model='scriptedModel', system='Reply briefly.')
     out = await agent.chat().send('hello')
 
     assert out.text == 'ok'
@@ -105,8 +105,8 @@ async def test_exp_genkit_define_agent_one_turn() -> None:
 @pytest.mark.asyncio
 async def test_exp_genkit_define_prompt_agent_one_turn() -> None:
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
-    ai.define_prompt(name='promptAgent', model='programmableModel', system='Reply briefly.')
+    pm, _ = define_scripted_model(ai)
+    ai.define_prompt(name='promptAgent', model='scriptedModel', system='Reply briefly.')
     pm.responses.append(
         ModelResponse(
             finish_reason=FinishReason.STOP,
@@ -144,8 +144,8 @@ async def test_exp_genkit_define_custom_agent_one_turn() -> None:
 @pytest.mark.asyncio
 async def test_exp_genkit_agent_lookup() -> None:
     ai = Genkit()
-    define_programmable_model(ai)
-    defined = ai.define_agent(name='lookupAgent', model='programmableModel')
+    define_scripted_model(ai)
+    defined = ai.define_agent(name='lookupAgent', model='scriptedModel')
     found = await ai.agent('lookupAgent')
 
     assert found is defined
@@ -154,7 +154,7 @@ async def test_exp_genkit_agent_lookup() -> None:
 @pytest.mark.asyncio
 async def test_exp_genkit_still_generates() -> None:
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
     pm.responses.append(
         ModelResponse(
             finish_reason=FinishReason.STOP,
@@ -162,7 +162,7 @@ async def test_exp_genkit_still_generates() -> None:
         )
     )
 
-    response = await ai.generate(model='programmableModel', prompt='hello')
+    response = await ai.generate(model='scriptedModel', prompt='hello')
 
     assert response.text == 'gen'
 

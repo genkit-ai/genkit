@@ -40,6 +40,7 @@ from genkit_google_genai._models._gemini import (
     is_image_model,
     is_tts_model,
 )
+from genkit_google_genai._models._utils import ToolWire
 from google import genai
 from google.auth.exceptions import DefaultCredentialsError, RefreshError
 from google.genai import types as genai_types
@@ -756,7 +757,10 @@ def test_gemini_model__get_tools(
     gemini_model_instance: GeminiModel,
 ) -> None:
     """Unit test for GeminiModel._get_tools."""
-    mock_create_tool.return_value = genai_types.Tool()
+    mock_create_tool.return_value = (
+        genai_types.Tool(),
+        ToolWire(original_name='tool_1', wire_name='tool_1', wrapped=False),
+    )
 
     request_tools = [
         ToolDefinition(
@@ -828,11 +832,13 @@ def test_gemini_model__create_tool(
 
     mock_convert_schema_property.return_value = genai_types.Schema()
 
-    gemini_tool = gemini_model_instance._create_tool(
+    gemini_tool, wire = gemini_model_instance._create_tool(
         tool_defined,
     )
 
     assert isinstance(gemini_tool, genai_types.Tool)
+    assert wire.original_name == 'model_tool'
+    assert wire.wire_name == 'model_tool'
 
 
 @pytest.mark.parametrize(

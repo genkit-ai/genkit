@@ -13,9 +13,9 @@ from pydantic import BaseModel
 from typing_extensions import TypedDict
 
 from genkit import ActionRunContext, Genkit, GenkitError, Message, ModelResponse, Part, ToolRunContext, tool
-from genkit._ai._testing import ProgrammableModel, define_programmable_model
 from genkit._core._schema import to_json_schema
 from genkit._core._typing import FinishReason, Role, ToolRequest
+from genkit.testing import ScriptedModel, define_scripted_model
 
 
 class WeatherInput(BaseModel):
@@ -49,15 +49,15 @@ WEATHER_SCHEMA = {
 }
 
 
-def _app() -> tuple[Genkit, ProgrammableModel]:
+def _app() -> tuple[Genkit, ScriptedModel]:
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
     return ai, pm
 
 
 async def _model_calls_tool(
     ai: Genkit,
-    pm: ProgrammableModel,
+    pm: ScriptedModel,
     *,
     name: str,
     tool_input: object,
@@ -78,7 +78,7 @@ async def _model_calls_tool(
             message=Message(role=Role.MODEL, content=[Part.from_text('done')]),
         )
     )
-    return await ai.generate(model='programmableModel', prompt='hi', tools=[name], context=context)
+    return await ai.generate(model='scriptedModel', prompt='hi', tools=[name], context=context)
 
 
 def _tool_output(response: ModelResponse) -> object:
@@ -87,7 +87,7 @@ def _tool_output(response: ModelResponse) -> object:
     return part.tool_response.output
 
 
-def _advertised_schema(pm: ProgrammableModel) -> object:
+def _advertised_schema(pm: ScriptedModel) -> object:
     assert pm.last_request is not None and pm.last_request.tools
     return pm.last_request.tools[0].input_schema
 

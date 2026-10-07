@@ -18,16 +18,31 @@
 
 import warnings
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
 from genkit_anthropic import AnthropicConfig
+from genkit_openai import OpenAIConfig
 from genkit_vertexai.model_garden import ModelGarden, ModelGardenPlugin
+from genkit_vertexai.model_garden._model_info import DEFAULT_SUPPORTS, SUPPORTED_OPENAI_COMPAT_MODELS
 from genkit_vertexai.model_garden.anthropic import AnthropicModelGarden
 from genkit_vertexai.model_garden.model_garden import ModelGardenModel
+from openai.types.chat import ChatCompletion
 
-from genkit import GenkitError
+from genkit import ActionRunContext, GenkitError, Message, Part, Role
+from genkit._ai._formats import built_in_formats
+from genkit.model import ModelRequest, OutputConfig
 from genkit.plugin_api import ActionKind
+
+
+def test_catalog_output_names_are_known_formats() -> None:
+    """supports.output lists Genkit output formats, not OpenAI request options like json_mode."""
+    known = {f.name for f in built_in_formats}
+    entries = {name: info.supports for name, info in SUPPORTED_OPENAI_COMPAT_MODELS.items()}
+    entries['<default>'] = DEFAULT_SUPPORTS
+    for name, supports in entries.items():
+        unknown = set((supports.output if supports else None) or []) - known
+        assert not unknown, f'{name}: {sorted(unknown)}'
 
 
 @pytest.fixture
@@ -47,14 +62,13 @@ def model_garden_instance(client: MagicMock) -> ModelGardenModel:
                 'supports': {
                     'constrained': None,
                     'content_type': None,
-                    'context': None,
                     'long_running': False,
                     'multiturn': True,
                     'media': False,
                     'tools': True,
                     'system_role': True,
                     'output': [
-                        'json_mode',
+                        'json',
                         'text',
                     ],
                     'tool_choice': None,
@@ -68,14 +82,13 @@ def model_garden_instance(client: MagicMock) -> ModelGardenModel:
                 'supports': {
                     'constrained': None,
                     'content_type': None,
-                    'context': None,
                     'long_running': None,
                     'multiturn': True,
                     'media': True,
                     'tools': True,
                     'system_role': True,
                     'output': [
-                        'json_mode',
+                        'json',
                         'text',
                     ],
                     'tool_choice': None,
@@ -130,3 +143,45 @@ async def test_resolve_without_project_is_failed_precondition(model_name: str) -
         await plugin.resolve(ActionKind.MODEL, model_name)
 
     assert raised.value.status == 'FAILED_PRECONDITION'
+
+
+@pytest.mark.asyncio
+async def test_model_garden_llama_json_request_sends_json_object() -> None:
+    """ai.generate(model='modelgarden/meta/llama-3.1-405b-instruct-maas', output_format='json') sends json_object."""
+    captured: dict[str, Any] = {}
+    client = MagicMock()
+
+    async def create(**kwargs: Any) -> ChatCompletion:
+        captured.update(kwargs)
+        return ChatCompletion.construct(
+            id='1',
+            object='chat.completion',
+            created=1,
+            model='llama',
+            choices=[
+                {
+                    'index': 0,
+                    'message': {'role': 'assistant', 'content': '{"a": 1}'},
+                    'finish_reason': 'stop',
+                }
+            ],
+        )
+
+    client.chat.completions.create = AsyncMock(side_effect=create)
+    garden = ModelGardenModel(
+        model='meta/llama-3.1-405b-instruct-maas',
+        location='us-central1',
+        project_id='p',
+    )
+    ctx = MagicMock(spec=ActionRunContext)
+    type(ctx).is_streaming = PropertyMock(return_value=False)
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part.from_text('give me json')])],
+        output=OutputConfig(format='json'),
+        config=OpenAIConfig(),
+    )
+
+    with patch.object(garden, 'create_client', AsyncMock(return_value=client)):
+        await garden.to_openai_compatible_model()(request, ctx)
+
+    assert captured['response_format'] == {'type': 'json_object'}

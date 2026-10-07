@@ -56,6 +56,7 @@ from genkit._core._action import (
     ActionKind,
     ActionRunContext,
     create_action_key,
+    get_current_context,
     parse_action_key,
     parse_dap_qualified_name,
 )
@@ -85,6 +86,8 @@ from genkit._core._model import (
     OutputConfig,
     Part,
     as_message,
+    chunk_for_stream,
+    reject_unanswered_interrupts,
 )
 from genkit._core._protocols import RegistryLike, SessionLike
 from genkit._core._registry import Registry
@@ -691,7 +694,13 @@ async def generate_action(
     Thin wrapper so in-process callers get a trace span named ``generate``
     around the whole call.  The registered ``/util/generate`` action skips
     this wrapper because the action runtime already opens its own span.
+
+    With no ``context``, the run uses the enclosing action's (e.g. the flow
+    calling ``ai.generate`` or a prompt). Tools would inherit it anyway, but
+    middleware only sees what's passed here.
     """
+    if context is None:
+        context = get_current_context()
 
     async def body(_span: SpanContext) -> ModelResponse:
         result = await run_generate(
@@ -857,7 +866,7 @@ class ChunkAccumulator:
         prev_to_send = copy.copy(self.prev_chunks)
         self.prev_chunks.append(chunk)
 
-        return ModelResponseChunk(
+        return chunk_for_stream(
             chunk,
             index=self.message_index,
             previous_chunks=prev_to_send,
@@ -1542,6 +1551,8 @@ async def call_model(
     call.request = request
 
     async def run_action(params: ModelHookParams, c: GenerateMiddlewareContext) -> ModelResponse:
+        # After they stop, another model call would be billed and thrown away.
+        raise_if_aborted(c.abort_signal)
         if is_debug_enabled(logger):
             logger.debug(
                 'calling model',
@@ -1609,13 +1620,12 @@ def stop_after_model(
         formatter=formatter,
         message=generated_msg,
     )
-    response.assert_valid()
 
     if response.operation is not None:
         return attach_resendable_history(response, options.messages)
 
     if generated_msg is None:
-        response.assert_valid_schema()
+        response._assert_valid_schema()
         log_model_responded(
             model=options.model,
             turn=current_turn,
@@ -1630,7 +1640,7 @@ def stop_after_model(
 
     if options.return_tool_requests or len(tool_requests) == 0:
         if len(tool_requests) == 0:
-            response.assert_valid_schema()
+            response._assert_valid_schema()
         log_model_responded(
             model=options.model,
             turn=current_turn,
@@ -1810,8 +1820,7 @@ def stamp_output(
         response._message_parser = lambda msg: parse(msg)
     if out and out.schema_type:
         response._schema_type = out.schema_type
-    response.assert_valid()
-    response.assert_valid_schema()
+    response._assert_valid_schema()
     return response
 
 
@@ -2296,6 +2305,7 @@ async def resolve_resume_options(
     """Handle resume options by resolving pending tool calls from a previous turn."""
     if not options.resume:
         return (options, None, None)
+    reject_unanswered_interrupts(options.resume)
 
     messages = list(options.messages or [])
     last_message = messages[-1] if messages else None

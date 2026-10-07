@@ -27,8 +27,7 @@ from openai.types import CompletionUsage
 from openai.types.completion_usage import CompletionTokensDetails, PromptTokensDetails
 
 from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
-from genkit.model import ModelConfig, ModelRequest, ModelUsage, ToolDefinition
-from genkit_openai._models._model_info import SUPPORTED_OPENAI_MODELS, KnownGpt
+from genkit.model import ModelConfig, ModelRequest, ModelUsage, Supports, ToolDefinition
 from genkit_openai._models._utils import (
     DictMessageAdapter,
     MessageAdapter,
@@ -37,7 +36,7 @@ from genkit_openai._models._utils import (
     reraise_openai_error,
     strip_markdown_fences,
 )
-from genkit_openai._typing import OpenAIConfig, SupportedOutputFormat
+from genkit_openai._typing import OpenAIConfig
 
 logger = structlog.get_logger(__name__)
 
@@ -229,15 +228,20 @@ def _finish_state(
 class OpenAIModel:
     """Handles OpenAI API interactions for the Genkit plugin."""
 
-    def __init__(self, model: str, client: AsyncOpenAI) -> None:
+    def __init__(self, model: str, client: AsyncOpenAI, *, supports: Supports | None = None) -> None:
         """Initializes the OpenAIModel instance with the specified model and OpenAI client parameters.
 
         Args:
             model: The OpenAI model to use for generating responses.
             client: Async OpenAI client instance.
+            supports: This model's advertised capabilities. ``'json'`` in
+                ``supports.output`` means the endpoint accepts schema-less JSON
+                mode. ``None`` (or an entry that omits ``output``) still sends
+                ``json_object`` so a fine-tune keeps working.
         """
         self._model = model
         self._openai_client = client
+        self._supports = supports
 
     @property
     def name(self) -> str:
@@ -346,12 +350,11 @@ class OpenAIModel:
                     },
                 }
 
-            model = SUPPORTED_OPENAI_MODELS.get(cast(KnownGpt, self._model))
-            # Unlisted chat ids still asked for JSON; send json_object and let
-            # the provider reject it if that model cannot do it.
-            if model is None:
-                return {'type': 'json_object'}
-            if model.supports and model.supports.output and SupportedOutputFormat.JSON_MODE in model.supports.output:
+            # 'json' in supports.output means this endpoint accepts schema-less
+            # JSON mode. An unlisted id or an entry that omits output still
+            # sends json_object so a fine-tune keeps working.
+            outputs = self._supports.output if self._supports is not None else None
+            if outputs is None or 'json' in outputs:
                 return {'type': 'json_object'}
 
         return {'type': 'text'}

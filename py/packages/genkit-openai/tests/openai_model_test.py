@@ -26,6 +26,7 @@ import httpx
 import pytest
 from genkit_openai._models import OpenAIModel
 from genkit_openai._models._model import _usage_from_completion
+from genkit_openai._models._model_info import GPT_4_MODEL_SUPPORTS, SUPPORTED_OPENAI_MODELS
 from genkit_openai._models._utils import strip_markdown_fences
 from genkit_openai._typing import OpenAIConfig, ReasoningEffort
 from openai import APIError, AsyncOpenAI
@@ -35,7 +36,7 @@ from pydantic import BaseModel
 
 from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
 from genkit._core._typing import GenerationUsage, Operation
-from genkit.model import ModelConfig, ModelRequest, OutputConfig, ToolRequest
+from genkit.model import ModelConfig, ModelRequest, OutputConfig, Supports, ToolRequest
 
 
 def test_unknown_chat_id_json_mode_uses_json_object() -> None:
@@ -50,12 +51,37 @@ def test_unknown_chat_id_json_mode_uses_json_object() -> None:
 
 def test_gpt_6_astra_json_mode_uses_json_object() -> None:
     """A schema-less JSON request to gpt-6-astra sends json_object, as the catalog advertises."""
-    model = OpenAIModel(model='gpt-6-astra', client=MagicMock())
+    info = SUPPORTED_OPENAI_MODELS['gpt-6-astra']
+    model = OpenAIModel(model='gpt-6-astra', client=MagicMock(), supports=info.supports)
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('Hi')])],
         output=OutputConfig(format='json'),
     )
     assert model._get_response_format(request) == {'type': 'json_object'}
+
+
+def test_gpt_4_json_request_uses_text() -> None:
+    """gpt-4 does not list json output, so a schema-less JSON request sends text."""
+    model = OpenAIModel(model='gpt-4', client=MagicMock(), supports=GPT_4_MODEL_SUPPORTS)
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part.from_text('Hi')])],
+        output=OutputConfig(format='json'),
+    )
+    assert model._get_response_format(request) == {'type': 'text'}
+
+
+def test_openai_model_text_only_supports_json_request_sends_text() -> None:
+    """An OpenAI-compatible model built with supports.output=['text'] sends text for a schema-less JSON request."""
+    model = OpenAIModel(
+        model='some-text-only-compat',
+        client=MagicMock(),
+        supports=Supports(output=['text']),
+    )
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part.from_text('give me json')])],
+        output=OutputConfig(format='json'),
+    )
+    assert model._get_response_format(request) == {'type': 'text'}
 
 
 def test_get_messages(sample_request: ModelRequest) -> None:

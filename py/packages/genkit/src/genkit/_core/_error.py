@@ -26,7 +26,7 @@ from email.utils import parsedate_to_datetime
 from enum import IntEnum
 from typing import Any, ClassVar, Literal, TypedDict, cast
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from pydantic.alias_generators import to_camel
 from pydantic_core import to_jsonable_python
 
@@ -120,12 +120,31 @@ def runtime_error_reason(details: object) -> RuntimeErrorReason | None:
 
 
 class GenkitRuntimeError(GenkitRuntimeErrorData):
-    """Classified generate failure sitting on ``response.error``.
+    """Classified failure carried as data: ``response.error``, ``AgentOutput.error``, ``SessionSnapshot.error``.
 
-    The wire is still status, message, and details. ``reason`` is the
-    framework why when we put one in details, so callers can branch
-    without parsing the message.
+    Wire shape is the shared ``RuntimeError`` schema (status, message, details).
+
+    Plain data, not an exception: generate returns failures as values, so
+    ``raise res.error`` would make a returning call look like a throwing one.
+    ``reason`` is set when the framework classified the failure, so callers
+    can branch without parsing the message.
+
+    Fields can't be reassigned. ``details`` is the dict as received.
     """
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
+
+    # A failure value isn't a set member or dict key, and dict details
+    # can't hash anyway.
+    __hash__ = None  # type: ignore[assignment]
+
+    @model_validator(mode='before')
+    @classmethod
+    def _from_wire(cls, value: object) -> object:
+        # A session store built against the generated class still loads.
+        if isinstance(value, GenkitRuntimeErrorData) and not isinstance(value, cls):
+            return value.model_dump(exclude_none=True)
+        return value
 
     @property
     def reason(self) -> RuntimeErrorReason | None:

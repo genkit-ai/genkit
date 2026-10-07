@@ -34,11 +34,12 @@ kept in mind when modifying media handling or tool conversion logic:
    server-side references. Downloading them is unnecessary and would require
    authentication. They are passed through as ``file_data``.
 
-3. **Tool input schemas must use object types, not bare primitives**:
-   LLMs always send tool arguments as JSON objects with named keys (e.g.
-   ``{'celsius': 21.5}``). A tool with a bare ``float`` input generates
-   a ``{'type': 'number'}`` schema, which causes a validation mismatch when
-   the model sends ``{'celsius': 21.5}``. Use Pydantic models for tool inputs.
+3. **Tool inputs that aren't objects ride under an ``input`` field**:
+   Gemini reads a tool's parameters as named fields and always sends call
+   arguments as an object, so a bare ``{'type': 'number'}`` looks like a tool
+   that takes nothing. A non-object input is declared as
+   ``{'input': <schema>}``, unwrapped from ``args['input']`` when the model
+   calls the tool, and re-wrapped when an earlier call is sent back in history.
 
 4. **GoogleSearch vs GoogleSearchRetrieval type mismatch**:
    The ``google.genai`` SDK's ``Tool.google_search`` field expects a
@@ -48,6 +49,8 @@ kept in mind when modifying media handling or tool conversion logic:
 
 import base64
 import logging
+from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any, cast
 from urllib.parse import urlparse
 
@@ -59,6 +62,32 @@ from genkit.model import ToolRequest, ToolResponse
 from genkit.plugin_api import get_cached_client
 
 logger = logging.getLogger(__name__)
+
+# The field a non-object tool input rides under on the wire.
+TOOL_INPUT_FIELD = 'input'
+
+
+@dataclass(frozen=True)
+class ToolWire:
+    """One tool as declared to Gemini this turn."""
+
+    original_name: str
+    wire_name: str
+    wrapped: bool
+
+
+class ToolTable:
+    """Per-request map from Gemini wire names back to the tools we declared."""
+
+    def __init__(self, entries: Sequence[ToolWire] = ()) -> None:
+        self._by_wire = {e.wire_name: e for e in entries}
+        self._by_original = {e.original_name: e for e in entries}
+
+    def for_wire(self, name: str) -> ToolWire | None:
+        return self._by_wire.get(name)
+
+    def for_original(self, name: str) -> ToolWire | None:
+        return self._by_original.get(name)
 
 
 def _function_response_part(part: genai.types.Part) -> genai.types.FunctionResponsePart | None:
@@ -132,7 +161,9 @@ class PartConverter:
     })
 
     @classmethod
-    async def to_gemini(cls, part: Part) -> genai.types.Part | list[genai.types.Part]:
+    async def to_gemini(
+        cls, part: Part, *, tools: ToolTable | None = None
+    ) -> genai.types.Part | list[genai.types.Part]:
         """Maps a Genkit Part to a Gemini Part.
 
         This method inspects the root type of the Genkit Part and converts it
@@ -142,6 +173,7 @@ class PartConverter:
 
         Args:
             part: The Genkit Part object to convert.
+            tools: Tools declared this turn; drives wrap and wire names.
 
         Returns:
             A `genai.types.Part` object representing the converted content.
@@ -149,13 +181,24 @@ class PartConverter:
         if part.text is not None:
             return genai.types.Part(text=part.text or ' ')
         if part.tool_request is not None:
+            args = part.tool_request.input
+            entry = tools.for_original(part.tool_request.name) if tools else None
+            if entry and entry.wrapped:
+                # declared wrapped: always send {input: value}, None included,
+                # so a second turn doesn't send args=None to a required field
+                args = {TOOL_INPUT_FIELD: args}
+            elif args is not None and not isinstance(args, dict):
+                # Gemini rejects call args that aren't an object, so a string
+                # from history (Any tool, or a tool dropped from this turn)
+                # still goes under input
+                args = {TOOL_INPUT_FIELD: args}
+            wire_name = entry.wire_name if entry else part.tool_request.name.replace('/', '__')
             # Round-trip the call id when we have one so the model can correlate
             # tool responses to the original request.
             return genai.types.Part(
                 function_call=genai.types.FunctionCall(
-                    # Gemini throws on '/' in tool name
-                    name=part.tool_request.name.replace('/', '__'),
-                    args=part.tool_request.input,
+                    name=wire_name,
+                    args=args,
                     id=part.tool_request.ref,
                 ),
                 thought_signature=cls._extract_thought_signature(part.metadata),
@@ -217,7 +260,8 @@ class PartConverter:
             # list, int, None, ...). Envelope it as ``{name, content}`` so
             # the wire payload is always a dict; the inbound converter
             # unwraps the same envelope so callers see the original value.
-            gemini_tool_name = tool_response.name.replace('/', '__')
+            response_entry = tools.for_original(tool_response.name) if tools else None
+            gemini_tool_name = response_entry.wire_name if response_entry else tool_response.name.replace('/', '__')
             return genai.types.Part(
                 function_response=genai.types.FunctionResponse(
                     id=tool_response.ref,
@@ -312,7 +356,7 @@ class PartConverter:
         return genai.types.Part()
 
     @classmethod
-    def from_gemini(cls, part: genai.types.Part) -> Part:
+    def from_gemini(cls, part: genai.types.Part, *, tools: ToolTable | None = None) -> Part:
         """Maps a Gemini Part back to a Genkit Part.
 
         This method inspects the type of the Gemini Part and converts it into
@@ -321,6 +365,7 @@ class PartConverter:
 
         Args:
             part: The `genai.types.Part` object to convert.
+            tools: Tools declared this turn; drives unwrap and original names.
 
         Returns:
             A Genkit `Part` object representing the converted content.
@@ -333,12 +378,21 @@ class PartConverter:
             # Tool refs come only from the model's call id. A synthetic part
             # index isn't unique across turns, so resume can't tell repeated
             # calls to the same tool apart.
+            wire_name = part.function_call.name or ''
+            entry = tools.for_wire(wire_name) if tools else None
+            name = entry.original_name if entry else wire_name.replace('__', '/')
+            args: object = part.function_call.args if part.function_call.args is not None else {}
+            # only tools we declared wrapped are unwrapped, so an object tool
+            # with its own `input` field still gets all of its args
+            if entry and entry.wrapped and isinstance(args, dict) and TOOL_INPUT_FIELD in args:
+                # a stray key next to input is ignored, same as an object tool
+                # ignoring a field the model added that the tool never declared
+                args = args[TOOL_INPUT_FIELD]
             return Part(
                 tool_request=ToolRequest(
                     ref=getattr(part.function_call, 'id', None),
-                    # restore slashes
-                    name=(part.function_call.name or '').replace('__', '/'),
-                    input=part.function_call.args if part.function_call.args is not None else {},
+                    name=name,
+                    input=args,
                 ),
                 metadata=cls._encode_thought_signature(part.thought_signature),
             )
@@ -355,11 +409,12 @@ class PartConverter:
                 media = _media_from_function_response_part(fr_part)
                 if media is not None:
                     content.append(media)
+            response_wire = part.function_response.name or ''
+            response_entry = tools.for_wire(response_wire) if tools else None
             return Part(
                 tool_response=ToolResponse(
                     ref=getattr(part.function_response, 'id', None),
-                    # restore slashes
-                    name=(part.function_response.name or '').replace('__', '/'),
+                    name=response_entry.original_name if response_entry else response_wire.replace('__', '/'),
                     output=output,
                     content=content or None,
                 )

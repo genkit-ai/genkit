@@ -1,0 +1,104 @@
+/**
+ * Copyright 2026 Google LLC
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { createHash, randomBytes, timingSafeEqual } from 'crypto';
+
+/** Header carrying the reflection secret on v1 requests. */
+export const REFLECTION_SECRET_HEADER = 'x-genkit-reflection-secret';
+
+/** Environment variable holding the reflection secret, for CLI and runtimes. */
+export const REFLECTION_SECRET_ENV = 'GENKIT_REFLECTION_SECRET_TOKEN';
+
+/**
+ * JSON-RPC error code the v2 server returns when `register` fails auth.
+ * Runtimes treat it as terminal and stop reconnecting.
+ */
+export const REFLECTION_AUTH_ERROR_CODE = -32001;
+
+/**
+ * Default interface the v2 WebSocket server binds. Loopback: a registered
+ * socket can be sent runAction, so it is not reachable from other hosts unless
+ * `--reflection-v2-host` says otherwise.
+ */
+export const DEFAULT_REFLECTION_V2_HOST = '127.0.0.1';
+
+/** Whether a bind host is loopback, and so unreachable from other machines. */
+export function isLoopbackHost(host: string): boolean {
+  return (
+    host === 'localhost' ||
+    host === '::1' ||
+    host === '[::1]' ||
+    /^127\.\d+\.\d+\.\d+$/.test(host)
+  );
+}
+
+/**
+ * URL a spawned runtime dials for a v2 server bound to `host`. A wildcard bind
+ * is reachable on loopback, and `0.0.0.0` is not a valid destination
+ * everywhere, so it is advertised as `127.0.0.1`. Runtimes elsewhere (another
+ * container, a device) rewrite the host themselves, e.g. from the env file.
+ */
+export function reflectionV2Url(host: string, port: number): string {
+  let advertised = host;
+  if (host === '0.0.0.0' || host === '::' || host === '[::]') {
+    advertised = DEFAULT_REFLECTION_V2_HOST;
+  } else if (host.includes(':') && !host.startsWith('[')) {
+    advertised = `[${host}]`;
+  }
+  return `ws://${advertised}:${port}`;
+}
+
+/** Generates a fresh, per-run reflection secret. */
+export function generateReflectionSecret(): string {
+  return randomBytes(32).toString('base64url');
+}
+
+/** Whether a URL points at the local machine (localhost, 127.x, or ::1). */
+export function isLoopbackUrl(url: string): boolean {
+  let hostname: string;
+  try {
+    hostname = new URL(url).hostname;
+  } catch {
+    return false;
+  }
+  return isLoopbackHost(hostname);
+}
+
+/**
+ * Picks the secret to send to a v1 runtime.
+ *
+ * A runtime's own advertised secret always wins: a dev runtime spawned by a
+ * different CLI process enforces that process's secret, not ours. The
+ * configured secret is only offered to loopback runtimes, since a discovery
+ * file can name any URL.
+ */
+export function secretForRuntime(
+  runtimeUrl: string,
+  advertised: string | undefined,
+  configured: string | undefined
+): string | undefined {
+  return advertised ?? (isLoopbackUrl(runtimeUrl) ? configured : undefined);
+}
+
+/**
+ * Constant-time secret comparison. Hashing first gives equal-length inputs,
+ * which timingSafeEqual requires, without leaking the expected length.
+ */
+export function secretsEqual(a: string, b: string): boolean {
+  const ha = createHash('sha256').update(a).digest();
+  const hb = createHash('sha256').update(b).digest();
+  return timingSafeEqual(ha, hb);
+}
