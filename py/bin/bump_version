@@ -148,13 +148,15 @@ update_version() {
   if $DRY_RUN; then
     echo -e "  Would update: $file ($pkg_name)"
   else
-    # Use sed to replace version line
+    # Use sed to replace the version line and exact intra-repo pins
+    # (e.g. genkit-openai==X.Y.Z in genkit-vertexai's extras).
+    local pin_expr="s/\\(\"genkit[a-z0-9-]*\\(\\[[a-z0-9,-]*\\]\\)\\{0,1\\}\\)==$CURRENT_VERSION\"/\\1==$NEW_VERSION\"/g"
     if [[ "$OSTYPE" == "darwin"* ]]; then
       # macOS sed
-      sed -i '' "s/^version *= *\"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/" "$file"
+      sed -i '' -e "s/^version *= *\"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/" -e "$pin_expr" "$file"
     else
       # GNU sed
-      sed -i "s/^version *= *\"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/" "$file"
+      sed -i -e "s/^version *= *\"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/" -e "$pin_expr" "$file"
     fi
     echo -e "  ${GREEN}✓${NC} Updated: $file ($pkg_name)"
   fi
