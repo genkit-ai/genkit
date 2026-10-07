@@ -30,7 +30,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 
 from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, Operation, Part, Role
 from genkit.model import ModelInfo, ModelRequest, OperationError, Supports
-from genkit.plugin_api import wrap_http_error
+from genkit.plugin_api import context_api_key, misplaced_api_key_error, wrap_http_error
 from genkit_google_genai._constants import is_multi_regional_location, multi_regional_base_url
 from genkit_google_genai._models._sdk_config import (
     attach_config_extra,
@@ -38,7 +38,6 @@ from genkit_google_genai._models._sdk_config import (
     sdk_config_error,
     split_sdk_fields,
 )
-from genkit_google_genai._models._secrets import context_api_key, misplaced_key_error
 
 # Quote autocomplete needs a Literal, so this alias is the Veo catalog.
 # ``veo_model`` takes ``KnownVeo | str`` so unlisted ids still work.
@@ -117,7 +116,7 @@ class VeoConfig(BaseModel):
             extra = data.get('extra')
             for bag in (data, extra if isinstance(extra, Mapping) else {}):
                 if bag.get('api_key') is not None or bag.get('apiKey') is not None:
-                    raise misplaced_key_error()
+                    raise misplaced_api_key_error()
         return data
 
 
@@ -362,7 +361,7 @@ class VeoModel:
             action_name=self._name,
         )
         if dumped and (dumped.get('api_key') is not None or dumped.get('apiKey') is not None):
-            raise misplaced_key_error()
+            raise misplaced_api_key_error()
 
         try:
             response: genai_types.GenerateVideosOperation = await self._client_for_context(
@@ -410,7 +409,7 @@ class VeoModel:
         if not dumped:
             return None
         if dumped.get('api_key') is not None or dumped.get('apiKey') is not None:
-            raise misplaced_key_error()
+            raise misplaced_api_key_error()
         for key in _CLIENT_OPTION_KEYS:
             dumped.pop(key, None)
         if not dumped:
