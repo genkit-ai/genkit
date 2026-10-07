@@ -2420,12 +2420,14 @@ func resumePartFor(parts []*Part, req *ToolRequest, respond bool) *Part {
 // resumePayload returns the payload restart rs delivers, as the map the
 // tool reads from [ToolContext.Resumed]: its resume data, which must be a JSON
 // object, or an empty map for a bare restart, so the call still reads as a
-// resumption. Any other marker is an error, not a bare restart: a peer
-// runtime may mark a restart with any truthy JSON value (the JS restartTool
-// passes its resumedMetadata through as given), and reading "denied" as a
-// bare restart would run the tool as if it had been approved.
+// resumption. A bare restart is nil or true, so a part built in memory with
+// true reads as it does after a JSON round trip. Any other marker is an
+// error, not a bare restart: a peer runtime may mark a restart with any
+// truthy JSON value (the JS restartTool passes its resumedMetadata through
+// as given), and reading "denied" as a bare restart would run the tool as if
+// it had been approved.
 func resumePayload(rs *ToolRestart) (map[string]any, error) {
-	if base.IsNil(rs.Resume) {
+	if base.IsNil(rs.Resume) || rs.Resume == true {
 		return map[string]any{}, nil
 	}
 	return base.ObjectPayload(rs.Resume, "resume data")

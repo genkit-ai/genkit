@@ -642,8 +642,8 @@ func (t *ToolAction[In, Out]) Respond(toolReq *Part, output any, opts *RespondOp
 
 // Restart creates a part for [WithToolRestarts] to re-execute an interrupted tool call with additional context.
 // Returns nil if the part is not a tool request. The resume data is carried as
-// given: a value that is not a JSON object resumes the tool with an empty
-// payload, the way a peer runtime's marker would.
+// given: nil or true is a bare restart, and any other value that is not a
+// JSON object fails the resume with INVALID_ARGUMENT before any tool runs.
 //
 // Deprecated: Use [ToolAction.RestartWith] instead for strongly-typed options.
 func (t *ToolAction[In, Out]) Restart(p *Part, opts *RestartOptions) *Part {

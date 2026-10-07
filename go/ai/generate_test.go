@@ -5303,6 +5303,59 @@ func TestResumeReadsJSRestartMarkers(t *testing.T) {
 	}
 }
 
+// TestResumeBareTrueInMemory pins that a restart built in memory with true
+// as its resume data is a bare restart, as the same part is after a JSON
+// round trip, through the deprecated verb and on the typed field alike.
+func TestResumeBareTrueInMemory(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		restart func(confirm *ToolAction[map[string]any, string], interrupt *Part) *Part
+	}{
+		{"deprecated Restart", func(confirm *ToolAction[map[string]any, string], interrupt *Part) *Part {
+			return confirm.Restart(interrupt, &RestartOptions{ResumedMetadata: true})
+		}},
+		{"typed field", func(_ *ToolAction[map[string]any, string], interrupt *Part) *Part {
+			p := interrupt.typedClone()
+			p.Restart = &ToolRestart{Resume: true}
+			return p
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newTestRegistry(t)
+			defineFakeModel(t, r, fakeModelConfig{
+				name: "test/bareTrue",
+				handler: func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+					if req.Messages[len(req.Messages)-1].Role == RoleTool {
+						return &ModelResponse{Request: req, Message: NewModelTextMessage("done")}, nil
+					}
+					return &ModelResponse{Request: req, Message: &Message{Role: RoleModel, Content: []*Part{
+						NewToolRequestPart(&ToolRequest{Name: "confirm", Input: map[string]any{}}),
+					}}}, nil
+				},
+			})
+			var resumed map[string]any
+			confirm := defineTool(r, "confirm", "asks to confirm",
+				func(ctx *ToolContext, _ map[string]any) (string, error) {
+					if !ctx.IsResumed() {
+						return "", ctx.Interrupt(nil)
+					}
+					resumed = ctx.Resumed
+					return "confirmed", nil
+				})
+
+			res, err := Generate(testCtx, r, WithModelName("test/bareTrue"), WithPrompt("go"), WithTools(confirm))
+			assertNoError(t, err)
+			_, err = Generate(testCtx, r, WithModelName("test/bareTrue"),
+				WithMessages(res.History()...), WithTools(confirm),
+				WithToolRestarts(tc.restart(confirm, res.Interrupts()[0])))
+			assertNoError(t, err)
+			if diff := cmp.Diff(map[string]any{}, resumed); diff != "" {
+				t.Errorf("Resumed mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 // TestResumeReportsNilPart pins that a nil in the resume list, which the
 // deprecated verbs return for a part they cannot restart, is reported as
 // such rather than as a part of the wrong kind.
