@@ -30,7 +30,7 @@ from genkit_openai._models._utils import strip_markdown_fences
 from genkit_openai._typing import OpenAIConfig, ReasoningEffort
 from openai.types import CompletionUsage
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
 from genkit._core._typing import GenerationUsage, Operation
@@ -230,18 +230,25 @@ async def test_get_openai_config_prefers_explicit_max_completion_tokens() -> Non
 
 
 @pytest.mark.asyncio
-async def test_get_openai_config_with_user_still_sends_user() -> None:
-    """OpenAIConfig(user='u') is no longer a declared field but still goes out as user."""
+async def test_get_openai_config_user_in_extra_still_sends_user() -> None:
+    """OpenAIConfig drops user; extra={'user': 'u'} still sends it, through extra_body."""
     model = OpenAIModel(model='gpt-4o', client=MagicMock())
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
-        config=OpenAIConfig.model_validate({'user': 'u', 'safety_identifier': 's'}),
+        config=OpenAIConfig(extra={'user': 'u'}, safety_identifier='s'),
     )
 
     body = await model._get_openai_request_config(request)
 
-    assert body['user'] == 'u'
+    assert body['extra_body'] == {'user': 'u'}
+    assert 'user' not in body
     assert body['safety_identifier'] == 's'
+
+
+def test_openai_config_top_level_user_raises() -> None:
+    """A top-level user key is unknown now, so it fails by name instead of reaching OpenAI."""
+    with pytest.raises(ValidationError, match='user'):
+        OpenAIConfig.model_validate({'user': 'u'})
 
 
 @pytest.mark.asyncio

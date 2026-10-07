@@ -165,7 +165,8 @@ class OpenAIConfig(ModelConfig):
 
         safety_identifier: Stable identifier for detecting policy violations.
             Use this instead of OpenAI's retired ``user`` field, which is no
-            longer an ``OpenAIConfig`` field.
+            longer an ``OpenAIConfig`` field. A server that still needs
+            ``user`` can get it through ``extra={'user': ...}``.
             See: https://platform.openai.com/docs/api-reference/chat/create#chat-create-safety_identifier
 
         prompt_cache_key: Identifier for caching optimization.
