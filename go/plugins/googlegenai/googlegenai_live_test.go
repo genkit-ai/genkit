@@ -51,9 +51,6 @@ type genaiSuite struct {
 var genaiGaps = map[string]string{
 	"generate/cancel while streaming": "the stream keeps reading after its context is cancelled",
 	"agent/abort while streaming":     "the stream keeps reading after its context is cancelled",
-	// The plugin turns code execution output into custom parts and has no
-	// way back: the next request fails with "unknown part in the request".
-	"googlegenai/code execution across turns": "custom parts in history are rejected",
 }
 
 // runGenAI walks the backend registered on g through the shared checklist and

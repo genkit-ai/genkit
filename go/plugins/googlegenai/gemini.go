@@ -797,8 +797,18 @@ func toGeminiPart(p *ai.Part) (*genai.Part, error) {
 			fc.ThoughtSignature = metadataSignature(p.Metadata)
 		}
 		return fc, nil
+	case p.IsCustom():
+		// Code execution comes back as custom parts, which the next turn
+		// sends back as history.
+		if ec := ToExecutableCode(p); ec != nil {
+			gp = genai.NewPartFromExecutableCode(ec.Code, genai.Language(ec.Language))
+		} else if cr := ToCodeExecutionResult(p); cr != nil {
+			gp = genai.NewPartFromCodeExecutionResult(genai.Outcome(cr.Outcome), cr.Output)
+		} else {
+			return nil, status.Errorf(status.ErrInvalidArgument, "unknown custom part in the request: %v", p.Custom)
+		}
 	default:
-		return nil, status.Errorf(status.ErrInvalidArgument, "unknown part in the request: %q", p.Kind)
+		return nil, status.Errorf(status.ErrInvalidArgument, "unknown part kind %d in the request", p.Kind)
 	}
 
 	// Restore ThoughtSignature if present in metadata.

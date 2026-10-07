@@ -1013,6 +1013,36 @@ func genToolName(length int, chars string) string {
 	return string(r)
 }
 
+// Code execution answers come back as custom parts, and the next turn sends
+// them back in its history.
+func TestToGeminiPartCodeExecution(t *testing.T) {
+	sig := []byte("sig")
+	code := newExecutableCodePart("PYTHON", "print(1)")
+	code.Metadata = map[string]any{"signature": sig}
+	gp, err := toGeminiPart(code)
+	if err != nil {
+		t.Fatalf("toGeminiPart(executableCode) error = %v", err)
+	}
+	if gp.ExecutableCode == nil || gp.ExecutableCode.Code != "print(1)" || gp.ExecutableCode.Language != genai.LanguagePython {
+		t.Errorf("ExecutableCode = %+v, want the code and its language", gp.ExecutableCode)
+	}
+	if string(gp.ThoughtSignature) != "sig" {
+		t.Errorf("ThoughtSignature = %q, want %q", gp.ThoughtSignature, "sig")
+	}
+
+	gp, err = toGeminiPart(newCodeExecutionResultPart("OUTCOME_OK", "1\n"))
+	if err != nil {
+		t.Fatalf("toGeminiPart(codeExecutionResult) error = %v", err)
+	}
+	if gp.CodeExecutionResult == nil || gp.CodeExecutionResult.Outcome != genai.OutcomeOK || gp.CodeExecutionResult.Output != "1\n" {
+		t.Errorf("CodeExecutionResult = %+v, want the outcome and output", gp.CodeExecutionResult)
+	}
+
+	if _, err := toGeminiPart(ai.NewCustomPart(map[string]any{"other": 1})); err == nil {
+		t.Error("toGeminiPart(unknown custom part) error = nil, want it rejected")
+	}
+}
+
 // TestThoughtSignatureRoundTrip tests that thought signatures are properly preserved
 // when converting between Genkit and Gemini part formats.
 func TestThoughtSignatureRoundTrip(t *testing.T) {
