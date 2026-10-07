@@ -22,7 +22,6 @@ import pytest
 
 from genkit import Part
 from genkit._ai._agents._base import define_custom_agent
-from genkit._ai._agents._client import AgentError
 from genkit._ai._agents._runtime import AgentInitError, SessionRunner
 from genkit._core._action import ActionRunContext
 from genkit._core._error import GenkitError, RuntimeErrorReason, runtime_error_reason
@@ -165,17 +164,18 @@ async def test_snapshot_id_on_client_managed_agent_raises_agent_init_error() -> 
 
 
 @pytest.mark.asyncio
-async def test_chat_surfaces_missing_snapshot_as_agent_error() -> None:
-    """App-facing chat API wraps the failed AgentOutput into AgentError."""
+async def test_send_to_missing_snapshot_returns_failed_response() -> None:
+    """chat(snapshot_id='gone').send returns the miss on res.error."""
     registry = Registry()
     store = InMemorySessionStore()
     agent = define_custom_agent(registry, 'missingSnapChat', echo_fn, store=store)
 
-    with pytest.raises(AgentError) as exc:
-        await agent.chat(snapshot_id='gone').send('hi')
+    res = await agent.chat(snapshot_id='gone').send('hi')
 
-    assert exc.value.status == 'NOT_FOUND'
-    assert exc.value.reason is RuntimeErrorReason.SNAPSHOT_NOT_FOUND
+    assert res.finish_reason == AgentFinishReason.FAILED
+    assert res.error is not None
+    assert res.error.status == 'NOT_FOUND'
+    assert res.error.reason is RuntimeErrorReason.SNAPSHOT_NOT_FOUND
 
 
 @pytest.mark.asyncio

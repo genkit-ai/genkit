@@ -30,13 +30,17 @@ store, which is the source of truth:
      settles ABORTED and never becomes the session's resume point. abort()
      returns the snapshot's status from *before* this call (``pending`` when
      it cancelled in-flight work). The in-memory chat keeps the prompt (it
-     was still asked) and still points at that aborted leaf, so send() is
-     rejected. chat(session_id=) continues from the last completed turn.
+     was still asked) and still points at that aborted leaf, so a send
+     returns res.error (that snapshot isn't resumable). chat(session_id=)
+     continues from the last completed turn.
      load_chat(session_id=) would show the aborted row.
 
-  3. a real server error (e.g. the model is exhausted) — the chat client raises
-     AgentError, the optimistic prompt is rolled back, and the resume handle stays
-     pinned to the last good turn, so the next send picks up from there.
+  3. a real server error (e.g. the model is exhausted) — the chat returns
+     the turn with res.error set, the optimistic prompt is rolled back, and
+     the resume handle stays pinned to the last good turn, so the next send
+     picks up from there. AgentError is still raised if a call never produces
+     a turn result (e.g. dropped connection or invalid init), so calls still
+     wrap send in try/except AgentError.
 
 And a fourth, related point: a detached turn that *succeeds* still never streams
 its reply back to your in-memory chat, so before continuing you reload from the
@@ -133,10 +137,9 @@ async def server_side_task_abort() -> None:
     # abort() returns the *previous* status: pending, because the turn was still running.
     assert status == SnapshotStatus.PENDING
     # The prompt stays — it was still asked. The chat still points at the
-    # aborted leaf, so send() is rejected until you reload.
+    # aborted leaf, so a send returns res.error until you reload.
     assert turns(chat) == ['a1/user', 'reply/model', 'slow a2/user']
 
-    # The live chat still points at the aborted leaf, so send() is rejected.
     # The store's session leaf is that aborted row; chat(session_id=) is how
     # you continue from the last completed turn.
     leaf = await agent.get_snapshot(session_id=session_id)
@@ -158,10 +161,13 @@ async def server_side_failure() -> None:
     last_good = chat.snapshot_id
 
     try:
-        await chat.send('please fail')
-        raise AssertionError('expected AgentError')
+        failed = await chat.send('please fail')
+        assert failed.finish_reason == AgentFinishReason.FAILED
+        assert failed.error is not None
+        assert 'model exhausted' in failed.error.message
     except AgentError as err:
-        assert 'model exhausted' in err.message
+        raise AssertionError('turn ran, expected res.error rather than AgentError') from err
+
     # No reply landed, so the prompt is dropped and the resume handle holds.
     assert turns(chat) == ['b1/user', 'reply/model']
     assert chat.snapshot_id == last_good

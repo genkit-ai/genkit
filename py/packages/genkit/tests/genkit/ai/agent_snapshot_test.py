@@ -21,13 +21,12 @@ import pytest
 
 from genkit import Part
 from genkit._ai._agents._base import define_custom_agent
-from genkit._ai._agents._client import AgentError
 from genkit._ai._agents._runtime import SessionRunner
 from genkit._ai._agents._session_stores._inmemory_store import InMemorySessionStore
 from genkit._ai._agents._snapshot import is_heartbeat_expired, resolve_snapshot
 from genkit._ai._agents._types import TurnContext, TurnResult
 from genkit._core._action import ActionKind, ActionRunContext
-from genkit._core._error import GenkitError
+from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import AgentInput, AgentResult, Message, SessionSnapshot, SessionState
 from genkit._core._registry import Registry
 from genkit._core._typing import (
@@ -209,13 +208,14 @@ async def test_custom_agent_turn_that_raises_resolves_as_failed() -> None:
     last_good_parent = chat.snapshot_id
     history_before_failure = list(chat.messages)
 
-    with pytest.raises(AgentError) as exc_info:
-        await chat.send('please fail now')
-    assert exc_info.value.status == 'INTERNAL'
-    assert exc_info.value.message == 'boom'
+    failed = await chat.send('please fail now')
+    assert failed.finish_reason == AgentFinishReason.FAILED
+    assert failed.error is not None
+    assert failed.error.status == 'INTERNAL'
+    assert failed.error.message == 'boom'
     # The failed turn is a dead end: the resume handle stays on the last good
     # parent and the unanswered prompt is dropped from the running view.
-    assert exc_info.value.snapshot_id == last_good_parent
+    assert failed.snapshot_id == last_good_parent
     assert chat.snapshot_id == last_good_parent
     assert chat.messages == history_before_failure
 
@@ -298,8 +298,11 @@ async def test_chat_points_at_detached_snapshot_so_send_needs_completed_or_reloa
     assert chat.snapshot_id == task.snapshot_id
     assert chat._resume_snapshot_id == task.snapshot_id  # noqa: SLF001
 
-    with pytest.raises(AgentError, match='not resumable'):
-        await chat.send('too soon')
+    too_soon = await chat.send('too soon')
+    assert too_soon.finish_reason == AgentFinishReason.FAILED
+    assert too_soon.error is not None
+    assert too_soon.error.reason is RuntimeErrorReason.SNAPSHOT_NOT_RESUMABLE
+    assert 'not resumable' in too_soon.error.message
 
     status = await task.abort()
     # abort() returns the previous status: pending while the turn was running.
@@ -307,8 +310,11 @@ async def test_chat_points_at_detached_snapshot_so_send_needs_completed_or_reloa
     # The prompt stays — it was still asked. The resume id still names the
     # aborted snapshot, so a bare send keeps failing until we reload.
     assert chat.messages != history_before_detach
-    with pytest.raises(AgentError, match='not resumable'):
-        await chat.send('still stranded')
+    still = await chat.send('still stranded')
+    assert still.finish_reason == AgentFinishReason.FAILED
+    assert still.error is not None
+    assert still.error.reason is RuntimeErrorReason.SNAPSHOT_NOT_RESUMABLE
+    assert 'not resumable' in still.error.message
 
     chat = agent.chat(session_id=session_id)
     out = await chat.send('are you there?')
@@ -350,8 +356,11 @@ async def test_load_chat_by_session_hydrates_aborted_leaf() -> None:
 
     reloaded = await agent.load_chat(session_id=session_id)
     assert reloaded.snapshot_id == task.snapshot_id
-    with pytest.raises(AgentError, match='not resumable'):
-        await reloaded.send('still there?')
+    rejected = await reloaded.send('still there?')
+    assert rejected.finish_reason == AgentFinishReason.FAILED
+    assert rejected.error is not None
+    assert rejected.error.reason is RuntimeErrorReason.SNAPSHOT_NOT_RESUMABLE
+    assert 'not resumable' in rejected.error.message
 
     resumed = agent.chat(session_id=session_id)
     out = await resumed.send('still there?')

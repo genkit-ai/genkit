@@ -23,9 +23,10 @@ import json
 import re
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Generator, Sequence
 from dataclasses import dataclass, field
+from functools import cached_property
 from typing import Any, Generic, Protocol, TypeVar, cast
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ValidationError, field_validator
 from typing_extensions import TypeVar as TypeVarExt
 
 from genkit._ai._agents._runtime import AgentInitError, seeded_init_fields
@@ -224,6 +225,8 @@ class AgentResponse(Generic[StateT]):
     @property
     def text(self) -> str:
         """Full text content of the response message."""
+        if self.raw.finish_reason == AgentFinishReason.FAILED:
+            return ''
         return text_of(self.raw.message.content) if self.raw.message else ''
 
     @property
@@ -266,9 +269,29 @@ class AgentResponse(Generic[StateT]):
         """Artifacts emitted during this turn."""
         return self.raw.artifacts or []
 
+    @cached_property
+    def error(self) -> GenkitRuntimeError | None:
+        """Why this turn failed, or None when it didn't.
+
+        Same fields generate puts on ``response.error`` (status, message,
+        details, and reason), so one check reads both.
+        """
+        wire = self.raw.error
+        if wire is None:
+            return None
+        if isinstance(wire, GenkitRuntimeError):
+            return wire
+        return GenkitRuntimeError(status=wire.status, message=wire.message, details=wire.details)
+
     @property
     def message(self) -> Message | None:
-        """The response message."""
+        """The response message.
+
+        A failed turn's wire message is the previous reply. Showing it
+        would look like this turn answered.
+        """
+        if self.raw.finish_reason == AgentFinishReason.FAILED:
+            return None
         return self.raw.message
 
     @property
@@ -283,7 +306,13 @@ class AgentResponse(Generic[StateT]):
 
 
 class AgentError(Exception):
-    """Raised when a turn fails. Carries the last-good state so the session is recoverable."""
+    """Raised when a call never got a turn result.
+
+    A failed turn returns an ``AgentResponse`` (``finish_reason`` failed,
+    ``.error`` set) so the caller still has the last good snapshot or
+    state. This is the connection that dropped, or an init the server
+    rejects as misuse, where there is nothing to return.
+    """
 
     def __init__(
         self,
@@ -386,7 +415,7 @@ def to_agent_error(
     state: Any,  # noqa: ANN401
     snapshot_id: str | None,
 ) -> AgentError:
-    """Wrap a transport or runtime failure as an AgentError with last-good session context."""
+    """Wrap a call that never produced a turn result, keeping the last good session."""
     if isinstance(e, AgentError):
         return e
     if isinstance(e, GenkitError):
@@ -1103,9 +1132,11 @@ class AgentChat(Generic[StateT]):
     ) -> AgentResponse[StateT]:
         """Runs a turn and returns the completed response.
 
-        Primary path (like ``Action.run`` / ``ai.generate``). Pumps the transport
-        so custom-state patches and message stitching still apply; does not expose
-        a chunk stream. For incremental chunks use :meth:`send_stream`.
+        A turn that finishes failed still returns: ``finish_reason`` is
+        ``failed`` and ``.error`` says why. ``AgentError`` is only when the
+        call never got a turn result. Pumps the transport so custom-state
+        patches and message stitching still apply; does not expose a chunk
+        stream. For incremental chunks use :meth:`send_stream`.
         """
         return await self._start_turn(input).run()
 
@@ -1296,6 +1327,11 @@ class AgentChat(Generic[StateT]):
         reconstructs the resume handle every request.
         """
         if self._transport.state_management == 'client':
+            # snapshot_id on an agent with no store is misuse. Send the id
+            # so the server rejects the init; a state blob would look like
+            # a brand-new session and the caller would never see why.
+            if self._resume_snapshot_id:
+                return AgentInit(snapshot_id=self._resume_snapshot_id)
             # No server store, so the client is the source of truth: ship the
             # full live state every turn.
             return AgentInit(state=self._session_state())
@@ -1315,20 +1351,38 @@ class AgentChat(Generic[StateT]):
         self._custom = apply_json_patch(doc=self._custom, patch=patch_list)
 
     def _commit_output(self, *, raw: AgentOutput, message_count_before: int) -> AgentResponse[StateT]:
-        """Folds a turn's final output into the session and builds the turn result."""
+        """Folds a turn's final output into the session and builds the turn result.
+
+        A failed turn returns with the last good snapshot or state. The
+        caller reads why on ``.error`` and sends again from there.
+        """
         self._update_from_output(raw=raw, message_count_before=message_count_before)
-        response: AgentResponse[StateT] = AgentResponse(raw=raw, messages=list(self.messages), state=self.state)
-        if raw.finish_reason == AgentFinishReason.FAILED:
-            err = raw.error
-            raise AgentError(
-                message=err.message if err else 'Agent turn failed.',
-                status=err.status if err and err.status else 'UNKNOWN',
-                details=err.details if err else None,
-                state=self.state,
-                snapshot_id=self._snapshot_id,
-                response=response,
-            )
-        return response
+        raw = self._with_resume_snapshot(raw)
+        return AgentResponse(raw=raw, messages=list(self.messages), state=self._response_state(raw))
+
+    def _with_resume_snapshot(self, raw: AgentOutput) -> AgentOutput:
+        """Put the last completed snapshot id on a failed turn that omitted one.
+
+        A new connection whose first turn fails has no snapshot of its own.
+        The chat is still on the previous completed one, and that is the
+        id the caller resumes from.
+        """
+        if raw.finish_reason == AgentFinishReason.FAILED and raw.snapshot_id is None and self._snapshot_id is not None:
+            return raw.model_copy(update={'snapshot_id': self._snapshot_id})
+        return raw
+
+    def _response_state(self, raw: AgentOutput) -> StateT | None:
+        """Typed custom state for the response, or None when it can't be read.
+
+        Invalid custom state is itself the failed turn. Validating that
+        blob again would raise and hide the error the turn returned.
+        """
+        try:
+            return self.state
+        except ValidationError:
+            if raw.finish_reason != AgentFinishReason.FAILED:
+                raise
+            return None
 
     def _on_turn_error(self, e: Exception) -> Exception:
         return to_agent_error(
