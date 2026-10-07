@@ -115,7 +115,7 @@ Runnable version: [google-genai-media](https://github.com/genkit-ai/genkit/tree/
 
 ### Vertex AI Evaluators
 
-Built-in evaluators for assessing model output quality. Evaluators are automatically registered when using the VertexAI plugin and are accessed via `ai.evaluate()`:
+Built-in evaluators for assessing model output quality, accessed via `ai.evaluate()`. The VertexAI plugin registers them only when a project resolves (`VertexAI(project=...)` or `GOOGLE_CLOUD_PROJECT`); `VertexAI(api_key=...)` without a project lists none. They authenticate with Application Default Credentials, not `api_key` or `credentials`:
 
 ```python
 from genkit import BaseDataPoint, Genkit

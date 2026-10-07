@@ -18,6 +18,7 @@
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from genkit_google_genai._evaluators import (
     VertexAIEvaluationMetricType,
@@ -25,19 +26,15 @@ from genkit_google_genai._evaluators import (
 )
 from genkit_google_genai._evaluators._evaluation import (
     EvaluatorFactory,
-    VertexAIEvaluationMetricConfig,
-    _is_config,
     _stringify,
 )
+from google.auth.exceptions import DefaultCredentialsError, RefreshError
 
-from genkit import BaseDataPoint, Genkit
+from genkit import BaseDataPoint, Genkit, GenkitError
 
 
 def test_vertex_ai_evaluation_metric_type_values() -> None:
     """Test that VertexAIEvaluationMetricType has expected values."""
-    from genkit_google_genai import VertexAIEvaluationMetricType as RootMetricType
-
-    assert RootMetricType is VertexAIEvaluationMetricType
     assert VertexAIEvaluationMetricType.BLEU == 'BLEU'
     assert VertexAIEvaluationMetricType.ROUGE == 'ROUGE'
     assert VertexAIEvaluationMetricType.FLUENCY == 'FLUENCY'
@@ -53,23 +50,6 @@ def test_vertex_ai_evaluation_metric_type_is_str_enum() -> None:
     metric = VertexAIEvaluationMetricType.FLUENCY
     assert isinstance(metric, str)
     assert metric == 'FLUENCY'
-
-
-def test_vertex_ai_evaluation_metric_config_basic() -> None:
-    """Test VertexAIEvaluationMetricConfig model."""
-    config = VertexAIEvaluationMetricConfig(
-        type=VertexAIEvaluationMetricType.BLEU,
-        metric_spec={'use_sentence_level': True},
-    )
-    assert config.type == VertexAIEvaluationMetricType.BLEU
-    assert config.metric_spec == {'use_sentence_level': True}
-
-
-def test_vertex_ai_evaluation_metric_config_defaults() -> None:
-    """Test VertexAIEvaluationMetricConfig default values."""
-    config = VertexAIEvaluationMetricConfig(type=VertexAIEvaluationMetricType.SAFETY)
-    assert config.type == VertexAIEvaluationMetricType.SAFETY
-    assert config.metric_spec is None
 
 
 def test_stringify_string_input() -> None:
@@ -94,18 +74,6 @@ def test_stringify_number_input() -> None:
     """Test _stringify with number input returns JSON."""
     result = _stringify(42)
     assert result == '42'
-
-
-def test_is_config_with_metric_type() -> None:
-    """Test _is_config returns False for metric type."""
-    metric = VertexAIEvaluationMetricType.FLUENCY
-    assert _is_config(metric) is False
-
-
-def test_is_config_with_metric_config() -> None:
-    """Test _is_config returns True for metric config."""
-    config = VertexAIEvaluationMetricConfig(type=VertexAIEvaluationMetricType.FLUENCY)
-    assert _is_config(config) is True
 
 
 def test_evaluator_factory_initialization() -> None:
@@ -158,8 +126,6 @@ async def test_evaluator_factory_evaluate_instances_structure() -> None:
 @pytest.mark.asyncio
 async def test_evaluator_factory_evaluate_instances_error_handling() -> None:
     """Test that evaluate_instances raises GenkitError on API failure."""
-    from genkit._core._error import GenkitError
-
     factory = EvaluatorFactory(
         project_id='test-project',
         location='us-central1',
@@ -207,26 +173,32 @@ def test_create_vertex_evaluators_with_metric_types() -> None:
     assert mock_registry.define_evaluator.call_count == 2
 
 
-def test_create_vertex_evaluators_with_metric_configs() -> None:
-    """Test create_vertex_evaluators with metric configs."""
+@pytest.mark.asyncio
+async def test_evaluator_request_sends_empty_metric_spec() -> None:
+    """Fluency evaluator sends fluencyInput with an empty metricSpec to Vertex."""
     mock_registry = MagicMock()
-    mock_registry.define_evaluator = MagicMock()
-
-    metrics = [
-        VertexAIEvaluationMetricConfig(
-            type=VertexAIEvaluationMetricType.BLEU,
-            metric_spec={'use_sentence_level': True},
-        ),
-    ]
 
     create_vertex_evaluators(
         registry=mock_registry,
-        metrics=metrics,
+        metrics=[VertexAIEvaluationMetricType.FLUENCY],
         project_id='test-project',
         location='us-central1',
     )
+    evaluator_fn = mock_registry.define_evaluator.call_args.kwargs['fn']
 
-    mock_registry.define_evaluator.assert_called_once()
+    with patch.object(
+        EvaluatorFactory,
+        'evaluate_instances',
+        AsyncMock(return_value={'fluencyResult': {'score': 4.0}}),
+    ) as mock_evaluate:
+        await evaluator_fn(BaseDataPoint(output='The soup is ready.'))
+
+    mock_evaluate.assert_awaited_once_with({
+        'fluencyInput': {
+            'metricSpec': {},
+            'instance': {'prediction': 'The soup is ready.'},
+        }
+    })
 
 
 def test_create_vertex_evaluators_names_format() -> None:
@@ -311,3 +283,108 @@ async def test_vertexai_evaluator_row_evaluation_is_a_list() -> None:
     assert type(results) is list
     assert [row.test_case_id for row in results] == ['case1']
     assert [score.score for score in results[0].evaluation] == [4.5]
+
+
+def _factory() -> EvaluatorFactory:
+    return EvaluatorFactory(project_id='menu-prod', location='us-central1')
+
+
+def _http_client(response: httpx.Response | Exception) -> AsyncMock:
+    client = AsyncMock()
+    if isinstance(response, Exception):
+        client.post = AsyncMock(side_effect=response)
+    else:
+        client.post = AsyncMock(return_value=response)
+    return client
+
+
+def _creds() -> MagicMock:
+    credentials = MagicMock()
+    credentials.token = 'mock-token'
+    return credentials
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('code', 'status'),
+    [(400, 'INVALID_ARGUMENT'), (403, 'PERMISSION_DENIED'), (429, 'RESOURCE_EXHAUSTED'), (503, 'UNAVAILABLE')],
+)
+async def test_evaluate_instances_http_status_is_classified(code: int, status: str) -> None:
+    """A 429 from the eval service is retryable and a 400 is not."""
+    response = httpx.Response(
+        code,
+        json={'error': {'message': 'eval call failed'}},
+        headers={'Retry-After': '2'},
+        request=httpx.Request('POST', 'https://aiplatform.googleapis.com/v1beta1:evaluateInstances'),
+    )
+    with (
+        patch('genkit_google_genai._evaluators._evaluation.google_auth_default', return_value=(_creds(), 'menu-prod')),
+        patch('genkit_google_genai._evaluators._evaluation.get_cached_client', return_value=_http_client(response)),
+        pytest.raises(GenkitError, match='eval call failed') as raised,
+    ):
+        await _factory().evaluate_instances({'fluencyInput': {}})
+
+    assert raised.value.status == status
+    assert raised.value.response_metadata == {'retry_after_ms': 2000.0}
+
+
+@pytest.mark.asyncio
+async def test_evaluate_instances_transport_failure_stays_raw() -> None:
+    """A refused connection has no known status, so it reaches the caller unchanged."""
+    refused = httpx.ConnectError('connection refused')
+    with (
+        patch('genkit_google_genai._evaluators._evaluation.google_auth_default', return_value=(_creds(), 'menu-prod')),
+        patch('genkit_google_genai._evaluators._evaluation.get_cached_client', return_value=_http_client(refused)),
+        pytest.raises(httpx.ConnectError) as raised,
+    ):
+        await _factory().evaluate_instances({'fluencyInput': {}})
+
+    assert raised.value is refused
+
+
+@pytest.mark.asyncio
+async def test_evaluate_instances_non_json_success_is_internal() -> None:
+    response = httpx.Response(200, text='<html>proxy page</html>')
+    with (
+        patch('genkit_google_genai._evaluators._evaluation.google_auth_default', return_value=(_creds(), 'menu-prod')),
+        patch('genkit_google_genai._evaluators._evaluation.get_cached_client', return_value=_http_client(response)),
+        pytest.raises(GenkitError) as raised,
+    ):
+        await _factory().evaluate_instances({'fluencyInput': {}})
+
+    assert raised.value.status == 'INTERNAL'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'auth_error',
+    [DefaultCredentialsError('Your default credentials were not found.'), RefreshError('invalid_grant')],
+)
+async def test_evaluate_instances_credential_failure_is_unauthenticated(auth_error: Exception) -> None:
+    with (
+        patch('genkit_google_genai._evaluators._evaluation.google_auth_default', side_effect=auth_error),
+        pytest.raises(GenkitError) as raised,
+    ):
+        await _factory().evaluate_instances({'fluencyInput': {}})
+
+    assert raised.value.status == 'UNAUTHENTICATED'
+    assert raised.value.cause is auth_error
+
+
+@pytest.mark.asyncio
+async def test_evaluator_fn_malformed_result_is_internal() -> None:
+    """A 200 body missing the metric's result field is a malformed provider response."""
+    factory = _factory()
+    evaluator_fn = factory.create_evaluator_fn(
+        VertexAIEvaluationMetricType.FLUENCY,
+        lambda datapoint: {'fluencyInput': {}},
+        lambda r: r['fluencyResult']['score'],
+    )
+    with (
+        patch.object(factory, 'evaluate_instances', AsyncMock(return_value={'unexpected': {}})),
+        pytest.raises(GenkitError) as raised,
+    ):
+        await evaluator_fn(BaseDataPoint(input='Describe the tartine', output='Smoked salmon on rye'))
+
+    assert raised.value.status == 'INTERNAL'
+    assert isinstance(raised.value.cause, KeyError)

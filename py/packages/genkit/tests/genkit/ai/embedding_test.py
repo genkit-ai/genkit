@@ -482,25 +482,28 @@ async def test_embed_many_config_reaches_embedder_as_options(
 
 
 @pytest.mark.asyncio
-async def test_embed_with_options_keyword_raises_type_error(
+async def test_embed_with_no_config_sends_none_options(
     mock_genkit_instance: tuple[Genkit, MockGenkitRegistry],
 ) -> None:
-    """ai.embed(options=...) is a TypeError; settings go in config=."""
-    genkit_instance, _ = mock_genkit_instance
+    """With no ref config, no version, and no config=, the embedder gets options=None like a Dev UI run."""
+    genkit_instance, registry = mock_genkit_instance
 
-    with pytest.raises(TypeError, match='options'):
-        await genkit_instance.embed(embedder='any', content='hi', options={'dim': 3})  # type: ignore[call-arg]
+    async def fake_embedder_fn(request: EmbedRequest) -> EmbedResponse:
+        return EmbedResponse(embeddings=[Embedding(embedding=[1.0])])
 
+    registry.register_action(
+        name='bare-embedder',
+        kind='embedder',
+        fn=fake_embedder_fn,
+        metadata=embedder_action_metadata('bare-embedder').metadata,
+        description='A fake embedder for testing',
+    )
 
-@pytest.mark.asyncio
-async def test_embed_many_with_options_keyword_raises_type_error(
-    mock_genkit_instance: tuple[Genkit, MockGenkitRegistry],
-) -> None:
-    """ai.embed_many(options=...) is a TypeError; settings go in config=."""
-    genkit_instance, _ = mock_genkit_instance
+    await genkit_instance.embed(embedder='bare-embedder', content='hi')
+    await genkit_instance.embed_many(embedder='bare-embedder', content=['hi'])
 
-    with pytest.raises(TypeError, match='options'):
-        await genkit_instance.embed_many(embedder='any', content=['hi'], options={'dim': 3})  # type: ignore[call-arg]
+    embed_action = await registry.resolve_action('embedder', 'bare-embedder')
+    assert [call.args[0].options for call in embed_action.run.call_args_list] == [None, None]
 
 
 @pytest.mark.asyncio

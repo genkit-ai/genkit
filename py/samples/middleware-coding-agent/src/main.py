@@ -21,7 +21,7 @@ from pathlib import Path
 from genkit_google_genai import GoogleAI
 from genkit_middleware import Filesystem, Middleware, Skills, ToolApproval
 
-from genkit import Genkit, Message, Part, Role, restart_tool
+from genkit import Genkit, Message, Part, Role
 
 here = Path(__file__).resolve().parent.parent
 workspace = here / 'workspace'
@@ -88,7 +88,7 @@ async def main() -> None:
                     continue
                 print(f'{req.name}: {req.input}')
                 if input('Approve? (y/N): ').strip().lower() in ('y', 'yes'):
-                    approved.append(restart_tool(interrupt=interrupt, resumed_metadata={'tool_approved': True}))
+                    approved.append(interrupt.restart(resumed_metadata={'tool_approved': True}))
             if not approved:
                 print('Denied.')
                 break

@@ -36,9 +36,11 @@ EXCLUDED = frozenset({
 })
 PRIM = {'string': 'str', 'number': 'float', 'integer': 'int', 'boolean': 'bool'}
 # Schema type transformations: rename and/or omit fields before emission.
-# Keys: schema type name. Values: {'output_name': str} and/or {'suffix': str, 'omit': [str]}.
+# Keys: schema type name. Values: {'output_name': str}, {'omit': [str]}, and/or {'suffix': str}.
 # - output_name: emit and reference as this name (e.g. Message -> MessageData)
-# - suffix: emit as {name}{suffix}, omit listed fields (hand-written subclass adds them back)
+# - omit: drop the listed fields from the emitted class
+# - suffix: emit as {name}{suffix}; a hand-written subclass adds the omitted fields back.
+#   Without a suffix, omitted fields are gone from Python for good.
 TRANSFORMATIONS = {
     'Message': {'output_name': 'MessageData'},
     'Part': {'output_name': 'PartData'},
@@ -50,6 +52,9 @@ TRANSFORMATIONS = {
     # Documents take the same Part as messages. The schema names a
     # text|media subset; we do not emit a second type for that.
     'DocumentPart': {'output_name': 'PartData'},
+    # docs= always goes into the prompt and nothing in Python reads
+    # supports.context, so the field isn't emitted.
+    'Supports': {'omit': ['context']},
 }
 
 

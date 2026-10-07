@@ -16,9 +16,11 @@
 
 """Unit tests for the error module."""
 
+from typing import Any, Literal
 from unittest.mock import MagicMock
 
 import pytest
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from genkit._core import _error as error_mod
 from genkit._core._error import (
@@ -27,12 +29,17 @@ from genkit._core._error import (
     PublicError,
     ReflectionError,
     RuntimeErrorReason,
+    format_validation_error,
     get_callable_json,
     get_error_stack,
     get_http_status,
+    get_reflection_json,
+    mark_request_error,
     parse_retry_after_ms,
     wrap_http_error,
 )
+from genkit._core._model import AgentOutput, SessionSnapshot
+from genkit._core._typing import GenkitRuntimeError as WireError
 from genkit.plugin_api import ErrorResponseMetadata
 
 
@@ -75,8 +82,49 @@ def test_runtime_error_reason_accessor_keeps_reason_nested() -> None:
     }
     assert GenkitRuntimeError(message='bad', details={'reason': 5}).reason is None
     assert GenkitRuntimeError(message='bad', details={'reason': 'not-valid'}).reason is None
-    with pytest.raises(AttributeError):
+    with pytest.raises(ValidationError):
         error.reason = RuntimeErrorReason.TOOL_FAILED  # type: ignore[misc]
+
+
+def test_genkit_runtime_error_fields_are_read_only() -> None:
+    """Assigning ``error.message = 'x'`` raises a validation error."""
+    error = GenkitRuntimeError(status='INTERNAL', message='bad')
+    with pytest.raises(ValidationError):
+        error.message = 'x'
+    assert error.message == 'bad'
+
+
+def test_snapshot_and_agent_output_decode_the_same_error_type() -> None:
+    """A persisted turn and a live response expose the same ``.reason``."""
+    wire = {'status': 'ABORTED', 'message': 'stopped', 'details': {'reason': 'MAX_TURNS_EXCEEDED'}}
+    snapshot = SessionSnapshot.model_validate({'snapshotId': 's1', 'createdAt': '2026-10-06T00:00:00Z', 'error': wire})
+    output = AgentOutput.model_validate({'error': wire})
+
+    assert isinstance(snapshot.error, GenkitRuntimeError)
+    assert isinstance(output.error, GenkitRuntimeError)
+    assert snapshot.error.reason is RuntimeErrorReason.MAX_TURNS_EXCEEDED
+    assert output.error.reason is RuntimeErrorReason.MAX_TURNS_EXCEEDED
+
+
+def test_snapshot_accepts_generated_wire_error() -> None:
+    """A store holding the generated wire class still builds a snapshot with ``.reason``."""
+    wire = WireError(status='NOT_FOUND', message='gone', details={'reason': 'TOOL_NOT_FOUND'})
+    snapshot = SessionSnapshot.model_validate({'snapshotId': 's1', 'createdAt': '2026-10-06T00:00:00Z', 'error': wire})
+
+    assert isinstance(snapshot.error, GenkitRuntimeError)
+    assert snapshot.error.reason is RuntimeErrorReason.TOOL_NOT_FOUND
+
+
+def test_agent_output_error_rejects_object_that_only_looks_like_an_error() -> None:
+    """AgentOutput(error=Obj()) with only message/status/details attributes raises ValidationError."""
+
+    class Obj:
+        message = 'm'
+        status = 'INTERNAL'
+        details = {'reason': 'TOOL_FAILED'}
+
+    with pytest.raises(ValidationError):
+        AgentOutput(error=Obj())  # type: ignore[arg-type]
 
 
 def test_genkit_error_reason_stays_in_details() -> None:
@@ -162,26 +210,75 @@ def test_public_error() -> None:
 
 def test_get_http_status() -> None:
     genkit_error = GenkitError(status='PERMISSION_DENIED', message='No access')
-    assert get_http_status(genkit_error) == 403
+    assert get_http_status(genkit_error) == 500
 
     non_genkit_error = ValueError('Some other error')
     assert get_http_status(non_genkit_error) == 500
 
+    wrapped = GenkitError(
+        status='INTERNAL',
+        message='Error while running action boom',
+        cause=ValueError('secret'),
+    )
+    assert get_http_status(wrapped) == 500
+
 
 def test_get_callable_json() -> None:
-    genkit_error = GenkitError(status='INVALID_ARGUMENT', message='Oops')
+    genkit_error = GenkitError(status='INVALID_ARGUMENT', message='bad id 12345')
     json_data = get_callable_json(genkit_error)
-    assert isinstance(json_data, dict)
-    assert json_data['status'] == 'INVALID_ARGUMENT'
-    assert json_data['message'] == 'Oops'
-    assert 'details' in json_data
+    assert json_data == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert '12345' not in str(json_data)
 
     non_genkit_error = TypeError('Type error')
     json_data = get_callable_json(non_genkit_error)
-    assert isinstance(json_data, dict)
-    assert json_data['status'] == 'INTERNAL'
-    assert json_data['message'] == 'Type error'
-    assert 'details' in json_data
+    assert json_data == {'message': 'Internal Error', 'status': 'INTERNAL'}
+
+    wrapped = GenkitError(
+        status='INTERNAL',
+        message='Error while running action boom',
+        cause=ValueError('secret'),
+    )
+    json_data = get_callable_json(wrapped)
+    assert json_data == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert 'secret' not in str(json_data)
+
+    public = PublicError(status='NOT_FOUND', message='missing recipe')
+    json_data = get_callable_json(public)
+    assert json_data['message'] == 'missing recipe'
+    assert json_data['status'] == 'NOT_FOUND'
+    assert 'stack' not in json_data.get('details', {})
+    assert get_http_status(public) == 404
+
+
+def test_served_error_body_for_internal_wrapper_around_wrapped_raw_error_is_internal_error() -> None:
+    """An INTERNAL wrapper around another wrapped raw raise sends neither wrapper's text."""
+    nested = GenkitError(
+        status='INTERNAL',
+        message='outer secret',
+        cause=GenkitError(status='INTERNAL', message='inner secret', cause=ValueError('raw secret')),
+    )
+
+    assert get_callable_json(nested) == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert get_http_status(nested) == 500
+
+
+def test_served_error_body_for_wrapped_public_error_is_internal_error() -> None:
+    """A hand-built INTERNAL wrapper around a PublicError is redacted on the served body."""
+    wrapped = GenkitError(
+        status='INTERNAL',
+        message='hide this',
+        cause=PublicError(status='NOT_FOUND', message='no order 99'),
+    )
+
+    assert get_callable_json(wrapped) == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert get_http_status(wrapped) == 500
+
+
+def test_dev_ui_error_body_for_genkit_error_keeps_its_real_message() -> None:
+    """The Dev UI error body still shows a GenkitError's own message; only served flows redact it."""
+    error = GenkitError(status='INVALID_ARGUMENT', message='bad id 12345')
+
+    assert 'bad id 12345' in get_reflection_json(error).message
 
 
 def test_get_error_stack() -> None:
@@ -215,9 +312,9 @@ def test_wrap_http_error_coerces_string_status_code() -> None:
     assert error.status == 'UNAVAILABLE'
 
 
-@pytest.mark.parametrize('status_code', [None, 'nope', 0, -1, 200, 301])
+@pytest.mark.parametrize('status_code', [None, 'nope', 0, -1, 200, 301, 402, 413, 418])
 def test_wrap_http_error_leaves_missing_status_unclassified(status_code: object) -> None:
-    """No HTTP failure status means retry still sees the raw error."""
+    """No HTTP failure status, or a 4xx with no canonical status, means retry still sees the raw error."""
     cause = RuntimeError('model failed')
     with pytest.raises(RuntimeError) as raised:
         wrap_http_error(cause, status_code=status_code)
@@ -246,17 +343,175 @@ def test_wrap_http_error_reads_retry_after() -> None:
     error = wrap_http_error(FakeError(), status_code=429, message='rate limited')
     assert error.status == 'RESOURCE_EXHAUSTED'
     assert error.response_metadata == {'retry_after_ms': 60000.0}
-    assert error.to_callable_serializable().message == 'rate limited'
+    assert error.original_message == 'rate limited'
+    assert error.to_callable_serializable().model_dump(exclude_none=True) == {
+        'message': 'Internal Error',
+        'status': 'INTERNAL',
+    }
 
 
-def test_callable_wire_uses_original_message_when_cause_is_set() -> None:
-    """The callable wire shows the provider text, not the SDK repr."""
+def test_served_error_body_for_provider_401_is_internal_error() -> None:
+    """A plugin error built from a provider 401 serves as 500 Internal Error, with no provider text."""
+    error = wrap_http_error(RuntimeError('API key not valid'), status_code=401)
+
+    assert get_callable_json(error) == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert get_http_status(error) == 500
+    assert 'API key not valid' not in str(get_callable_json(error))
+
+
+def test_in_process_provider_error_keeps_unauthenticated() -> None:
+    """wrap_http_error still classifies a 401 as UNAUTHENTICATED for Retry and Fallback."""
+    error = wrap_http_error(RuntimeError('API key not valid'), status_code=401)
+
+    assert error.status == 'UNAUTHENTICATED'
+    assert error.original_message == 'API key not valid'
+
+
+def test_wrap_http_error_keeps_provider_status_in_process() -> None:
+    """A provider 429 stays RESOURCE_EXHAUSTED in-process so Retry still sees it."""
+    error = wrap_http_error(RuntimeError('quota'), status_code=429)
+
+    assert error.status == 'RESOURCE_EXHAUSTED'
+    assert get_callable_json(error) == {'message': 'Internal Error', 'status': 'INTERNAL'}
+
+
+def test_served_error_body_for_unmarked_genkit_error_is_internal_error() -> None:
+    """A GenkitError built by hand, not a PublicError, serves as 500 Internal Error."""
     error = GenkitError(
         status='UNAVAILABLE',
         message='overloaded',
         cause=RuntimeError('APIError(503 UNAVAILABLE)'),
     )
-    assert get_callable_json(error)['message'] == 'overloaded'
+
+    assert get_callable_json(error) == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert get_http_status(error) == 500
+
+
+def test_served_error_body_for_action_input_error_keeps_400() -> None:
+    """The served action's own input check stays 400 with a generic sentence."""
+    error = mark_request_error(error=GenkitError(status='INVALID_ARGUMENT', message='expected str, got dict'))
+
+    assert get_callable_json(error) == {'message': 'Invalid argument', 'status': 'INVALID_ARGUMENT'}
+    assert get_http_status(error) == 400
+
+
+def test_served_error_body_for_public_input_error_keeps_400() -> None:
+    """A PublicError for a bad request body stays 400 with its sentence."""
+    error = PublicError(
+        'INVALID_ARGUMENT',
+        'Action request must be wrapped in {"data": ...} object',
+    )
+
+    assert get_callable_json(error) == {
+        'message': 'Action request must be wrapped in {"data": ...} object',
+        'status': 'INVALID_ARGUMENT',
+    }
+    assert get_http_status(error) == 400
+
+
+def test_served_error_body_omits_details_on_non_public_genkit_error() -> None:
+    """A provider dump in details does not leave the process on a non-PublicError."""
+    error = GenkitError(
+        status='INVALID_ARGUMENT',
+        message='bad key',
+        details={'error': {'message': 'API key expired'}},
+    )
+
+    assert get_callable_json(error) == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert 'API key expired' not in str(get_callable_json(error))
+
+
+def test_served_error_body_includes_public_error_details_without_stack() -> None:
+    """A PublicError's details go on the wire; stack does not."""
+    error = PublicError('NOT_FOUND', 'no order 99', details={'id': '99', 'stack': 'trace'})
+
+    assert get_callable_json(error) == {
+        'message': 'no order 99',
+        'status': 'NOT_FOUND',
+        'details': {'id': '99'},
+    }
+
+
+def test_served_error_body_for_not_found_wrapping_unavailable_is_internal_error() -> None:
+    """A NOT_FOUND that wraps UNAVAILABLE is still 500; only PublicError keeps 404."""
+    error = GenkitError(
+        status='NOT_FOUND',
+        message='no order',
+        cause=GenkitError(status='UNAVAILABLE', message='store down'),
+    )
+
+    assert get_callable_json(error) == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert get_http_status(error) == 500
+
+
+def test_served_error_body_dumps_pydantic_details_on_public_error() -> None:
+    """A PublicError whose details hold a model still JSON-encodes."""
+    import json
+
+    from pydantic import BaseModel
+
+    class Extra(BaseModel):
+        id: str
+
+    error = PublicError('NOT_FOUND', 'no order 99', details={'m': Extra(id='99')})
+    body = get_callable_json(error)
+
+    assert body == {
+        'message': 'no order 99',
+        'status': 'NOT_FOUND',
+        'details': {'m': {'id': '99'}},
+    }
+    json.dumps(body)
+
+
+def test_served_error_body_dumps_models_nested_in_lists_on_public_error() -> None:
+    """A PublicError with models nested in a list still JSON-encodes those details."""
+    import json
+
+    from pydantic import BaseModel
+
+    class FieldViolation(BaseModel):
+        field: str
+
+    error = PublicError(
+        'INVALID_ARGUMENT',
+        'bad',
+        details={'violations': [FieldViolation(field='a')]},
+    )
+    body = get_callable_json(error)
+
+    assert body == {
+        'message': 'bad',
+        'status': 'INVALID_ARGUMENT',
+        'details': {'violations': [{'field': 'a'}]},
+    }
+    json.dumps(body)
+
+
+def test_to_callable_serializable_redacts_like_get_callable_json() -> None:
+    """A non-public error's wire body drops the message and details, same as get_callable_json."""
+    error = GenkitError(
+        status='INVALID_ARGUMENT',
+        message='bad id 12345',
+        details={'secret': 'ssn'},
+    )
+
+    body = error.to_callable_serializable()
+    assert body.model_dump(exclude_none=True) == get_callable_json(error)
+    # => {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert error.original_message == 'bad id 12345'
+
+
+def test_to_callable_serializable_keeps_public_error_text() -> None:
+    """A PublicError keeps its message and details; stack is stripped."""
+    error = PublicError('NOT_FOUND', 'no order 99', details={'reason': 'MISSING', 'stack': 'trace'})
+
+    body = error.to_callable_serializable()
+    assert body.model_dump(exclude_none=True) == {
+        'message': 'no order 99',
+        'status': 'NOT_FOUND',
+        'details': {'reason': 'MISSING'},
+    }
 
 
 @pytest.mark.parametrize(
@@ -305,3 +560,120 @@ def test_parse_retry_after_returns_none_on_timestamp_oserror(monkeypatch: pytest
     monkeypatch.setattr(error_mod, 'parsedate_to_datetime', lambda _: retry_at)
 
     assert parse_retry_after_ms('Thu, 01 Jan 1601 00:00:00') is None
+
+
+class _Item(BaseModel):
+    dish: str
+    qty: int
+
+
+class _Order(BaseModel):
+    table: int
+    items: list[_Item]
+
+
+class _StrictItem(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    dish: str
+
+
+def _validation_error(schema: Any, value: object) -> ValidationError:  # noqa: ANN401
+    with pytest.raises(ValidationError) as exc:
+        TypeAdapter(schema).validate_python(value)
+    return exc.value
+
+
+@pytest.mark.parametrize(
+    ('schema', 'value', 'want'),
+    [
+        pytest.param(str, None, 'Input should be a valid string, got None', id='str'),
+        pytest.param(
+            int, 'abc', "Input should be a valid integer, unable to parse string as an integer, got 'abc'", id='int'
+        ),
+        pytest.param(
+            _Item, None, 'Input should be a valid dictionary or instance of _Item, got None', id='model given None'
+        ),
+        pytest.param(
+            _Order, {'table': 4, 'items': [{'dish': 'pad thai'}]}, 'items[0].qty: Field required', id='nested missing'
+        ),
+        pytest.param(
+            dict[str, int],
+            {'tip': 'x'},
+            "tip: Input should be a valid integer, unable to parse string as an integer, got 'x'",
+            id='dict value',
+        ),
+        pytest.param(
+            Literal['small', 'large'], 'medium', "Input should be 'small' or 'large', got 'medium'", id='literal'
+        ),
+        pytest.param(_StrictItem, {'dish': 'x', 'tip': 5}, 'tip: Extra inputs are not permitted, got 5', id='extra'),
+        pytest.param(
+            int | str,
+            [1],
+            'int: Input should be a valid integer, got [1]; str: Input should be a valid string, got [1]',
+            id='union keeps branch names',
+        ),
+        pytest.param(
+            _Order,
+            {'table': 'x', 'items': [{}, {}]},
+            "table: Input should be a valid integer, unable to parse string as an integer, got 'x'; "
+            'items[0].dish: Field required; items[0].qty: Field required; and 2 more',
+            id='caps at three',
+        ),
+        pytest.param(
+            _Item,
+            {'dish': 'pad thai', 'qty': 'y' * 200},
+            'qty: Input should be a valid integer, unable to parse string as an integer, '
+            "got 'yyyyyyyyyyyyyyyyy...yyyyyyyyyyyyyyyyyy'",
+            id='long value is shortened',
+        ),
+    ],
+)
+def test_format_validation_error_is_one_line_per_problem(schema: Any, value: object, want: str) -> None:  # noqa: ANN401
+    """Each Pydantic error becomes `path: message, got <value>`, with no header, bracket, or docs URL."""
+    assert format_validation_error(_validation_error(schema, value)) == want
+
+
+def test_genkit_error_wrapping_validation_error_shows_the_short_form_once() -> None:
+    """`GenkitError(cause=ValidationError)` reads `status: message: <short form>`, not Pydantic's dump."""
+    cause = _validation_error(_Item, {'dish': 'pad thai'})
+
+    error = GenkitError(status='INVALID_ARGUMENT', message="Invalid input for flow 'order'", cause=cause)
+
+    assert str(error) == "INVALID_ARGUMENT: Invalid input for flow 'order': qty: Field required"
+    assert error.cause is cause
+
+
+def test_reflection_json_adds_run_trace_id_when_error_has_none() -> None:
+    """`get_reflection_json(ValueError('x'), trace_id='abc')` puts the run id on details."""
+    ref = get_reflection_json(ValueError('x'), trace_id='abc')
+
+    assert ref.details is not None
+    assert ref.details.trace_id == 'abc'
+    assert ref.message == 'x'
+
+
+def test_reflection_json_keeps_error_trace_id_over_run_trace_id() -> None:
+    """A GenkitError that already has a trace id keeps it when the run supplies another."""
+    error = GenkitError(status='FAILED_PRECONDITION', message='not paid', trace_id='keep-me')
+    ref = get_reflection_json(error, trace_id='run-id')
+
+    assert ref.details is not None
+    assert ref.details.trace_id == 'keep-me'
+
+
+def test_reflection_json_without_trace_id_is_unchanged() -> None:
+    """No `trace_id` argument means no `details.trace_id` is added."""
+    ref = get_reflection_json(ValueError('x'))
+
+    assert ref.details is None or ref.details.trace_id is None
+
+
+def test_genkit_error_with_empty_validation_error_has_no_trailing_colon() -> None:
+    """An empty ValidationError adds nothing after the message."""
+    error = GenkitError(
+        status='INVALID_ARGUMENT',
+        message='title missing',
+        cause=ValidationError.from_exception_data('Recipe', []),
+    )
+
+    assert str(error) == 'INVALID_ARGUMENT: title missing'

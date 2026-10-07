@@ -27,7 +27,6 @@ from typing import Any, TypeVar, cast
 
 from pydantic import BaseModel, ValidationError
 
-from genkit._ai._agents._session import get_current_session
 from genkit._ai._formats._types import FormatDef, Formatter
 from genkit._ai._messages import inject_instructions
 from genkit._ai._model import (
@@ -56,6 +55,7 @@ from genkit._core._action import (
     ActionKind,
     ActionRunContext,
     create_action_key,
+    get_current_context,
     parse_action_key,
     parse_dap_qualified_name,
 )
@@ -85,8 +85,10 @@ from genkit._core._model import (
     OutputConfig,
     Part,
     as_message,
+    chunk_for_stream,
+    reject_unanswered_interrupts,
 )
-from genkit._core._protocols import RegistryLike, SessionLike
+from genkit._core._protocols import RegistryLike
 from genkit._core._registry import Registry
 from genkit._core._schema import check_output_schema
 from genkit._core._telemetry._instrumentation import SpanContext, run_in_new_span, set_span_state
@@ -129,17 +131,14 @@ class StreamingCallbackError(Exception):
 
 
 def streaming_callback_cause(*, exc: BaseException) -> Exception | None:
-    """Find the caller exception carried through action error wrappers."""
+    """Find the caller's on_chunk exception through whatever wrapped it."""
     current: BaseException | None = exc
     seen: set[int] = set()
     while current is not None and id(current) not in seen:
         seen.add(id(current))
         if isinstance(current, StreamingCallbackError):
             return current.cause
-        if isinstance(current, GenkitError) and current.cause is not None:
-            current = current.cause
-        else:
-            current = current.__cause__
+        current = current.__cause__
     return None
 
 
@@ -249,6 +248,7 @@ async def run_logged_hook(
         )
 
 
+@dataclass(frozen=True)
 class ScopedGenkitView:
     """A GenkitLike view over the call-scoped registry for one generate invocation.
 
@@ -257,11 +257,7 @@ class ScopedGenkitView:
     hand it this thin wrapper instead of the full Genkit veneer.
     """
 
-    def __init__(self, reg: RegistryLike) -> None:
-        self.registry: RegistryLike = reg
-
-    def current_session(self) -> SessionLike | None:
-        return get_current_session()
+    registry: RegistryLike
 
 
 def register_middleware(
@@ -694,7 +690,13 @@ async def generate_action(
     Thin wrapper so in-process callers get a trace span named ``generate``
     around the whole call.  The registered ``/util/generate`` action skips
     this wrapper because the action runtime already opens its own span.
+
+    With no ``context``, the run uses the enclosing action's (e.g. the flow
+    calling ``ai.generate`` or a prompt). Tools would inherit it anyway, but
+    middleware only sees what's passed here.
     """
+    if context is None:
+        context = get_current_context()
 
     async def body(_span: SpanContext) -> ModelResponse:
         result = await run_generate(
@@ -860,7 +862,7 @@ class ChunkAccumulator:
         prev_to_send = copy.copy(self.prev_chunks)
         self.prev_chunks.append(chunk)
 
-        return ModelResponseChunk(
+        return chunk_for_stream(
             chunk,
             index=self.message_index,
             previous_chunks=prev_to_send,
@@ -1125,14 +1127,14 @@ INTERNAL_FINISH_MESSAGE = 'internal error'
 def public_error(exc: BaseException) -> PublicError | None:
     if isinstance(exc, PublicError):
         return exc
-    if isinstance(exc, GenkitError) and isinstance(exc.cause, PublicError):
-        return exc.cause
     return None
 
 
 def boxed_finish_message(*, exc: BaseException, pipe_failed: bool) -> str:
     # The string on a returned response is what a flow can put in a 200.
     # PublicError is how a tool author publishes that sentence.
+    # The cause clause below keeps a plugin's wrapped provider error out of
+    # finish_message.
     if pipe_failed:
         if isinstance(exc, GenkitError):
             return exc.original_message or type(exc).__name__
@@ -1545,6 +1547,8 @@ async def call_model(
     call.request = request
 
     async def run_action(params: ModelHookParams, c: GenerateMiddlewareContext) -> ModelResponse:
+        # After they stop, another model call would be billed and thrown away.
+        raise_if_aborted(c.abort_signal)
         if is_debug_enabled(logger):
             logger.debug(
                 'calling model',
@@ -1612,13 +1616,12 @@ def stop_after_model(
         formatter=formatter,
         message=generated_msg,
     )
-    response.assert_valid()
 
     if response.operation is not None:
         return attach_resendable_history(response, options.messages)
 
     if generated_msg is None:
-        response.assert_valid_schema()
+        response._assert_valid_schema()
         log_model_responded(
             model=options.model,
             turn=current_turn,
@@ -1633,7 +1636,7 @@ def stop_after_model(
 
     if options.return_tool_requests or len(tool_requests) == 0:
         if len(tool_requests) == 0:
-            response.assert_valid_schema()
+            response._assert_valid_schema()
         log_model_responded(
             model=options.model,
             turn=current_turn,
@@ -1813,8 +1816,7 @@ def stamp_output(
         response._message_parser = lambda msg: parse(msg)
     if out and out.schema_type:
         response._schema_type = out.schema_type
-    response.assert_valid()
-    response.assert_valid_schema()
+    response._assert_valid_schema()
     return response
 
 
@@ -2177,11 +2179,18 @@ def to_pending_response(request: Part, response: Part) -> Part:
 
 
 def interrupt_from_exc(exc: Exception) -> Interrupt | None:
-    """If ``exc`` is (or wraps) an Interrupt exception, return that interrupt."""
-    if isinstance(exc, Interrupt):
-        return exc
-    if isinstance(exc, GenkitError) and exc.cause is not None and isinstance(exc.cause, Interrupt):
-        return exc.cause
+    """If ``exc`` is an Interrupt, or was raised from one, return it.
+
+    A tool that pauses again on restart is still an interrupt the caller
+    can answer, even when the action runner wraps the raise.
+    """
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        if isinstance(current, Interrupt):
+            return current
+        seen.add(id(current))
+        current = current.__cause__
     return None
 
 
@@ -2292,6 +2301,7 @@ async def resolve_resume_options(
     """Handle resume options by resolving pending tool calls from a previous turn."""
     if not options.resume:
         return (options, None, None)
+    reject_unanswered_interrupts(options.resume)
 
     messages = list(options.messages or [])
     last_message = messages[-1] if messages else None

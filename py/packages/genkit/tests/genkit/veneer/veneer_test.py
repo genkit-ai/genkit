@@ -21,17 +21,9 @@ from genkit import (
     ModelResponse,
     ModelResponseChunk,
     Part,
-    respond_to_interrupt,
-    restart_tool,
 )
 from genkit._ai._formats._types import FormatDef, Formatter, FormatterConfig
 from genkit._ai._model import text_from_message
-from genkit._ai._testing import (
-    EchoModel,
-    ProgrammableModel,
-    define_echo_model,
-    define_programmable_model,
-)
 from genkit._core._action import ActionKind, ActionRunContext
 from genkit._core._model import ModelRequest, OutputConfig
 from genkit._core._typing import (
@@ -52,9 +44,15 @@ from genkit._core._typing import (
 )
 from genkit.evaluator import EvaluatorRef, evaluator_ref
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, MiddlewareRef, ModelHookParams
+from genkit.testing import (
+    EchoModel,
+    ScriptedModel,
+    define_echo_model,
+    define_scripted_model,
+)
 
-# type SetupFixture = tuple[Genkit, EchoModel, ProgrammableModel]
-SetupFixture = tuple[Genkit, EchoModel, ProgrammableModel]
+# type SetupFixture = tuple[Genkit, EchoModel, ScriptedModel]
+SetupFixture = tuple[Genkit, EchoModel, ScriptedModel]
 
 
 def _ok_schema_response() -> ModelResponse:
@@ -70,7 +68,7 @@ def setup_test() -> SetupFixture:
     """Setup a test fixture for the veneer tests."""
     ai = Genkit(model='echoModel')
 
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
     echo, _ = define_echo_model(ai)
 
     return (ai, echo, pm)
@@ -460,7 +458,7 @@ async def test_generate_with_interrupting_tools(
     )
 
     response = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='hi',
         tools=['test_tool', 'test_interrupt'],
     )
@@ -563,7 +561,7 @@ async def test_generate_with_interrupt_respond(
     )
 
     interrupted_response = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='hi',
         tools=['test_tool', 'test_interrupt'],
     )
@@ -601,10 +599,10 @@ async def test_generate_with_interrupt_respond(
         ),
     ]
 
-    respond_wrapped = respond_to_interrupt({'bar': 2}, interrupt=interrupted_response.interrupts[0])
+    respond_wrapped = interrupted_response.interrupts[0].respond({'bar': 2})
     assert type(respond_wrapped) is Part
     response = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         messages=interrupted_response.messages,
         resume_respond=[respond_wrapped],
         tools=['test_tool', 'test_interrupt'],
@@ -681,7 +679,7 @@ async def test_generate_with_tools_and_output(setup_test: SetupFixture) -> None:
     )
 
     response = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='hi',
         tool_choice='required',
         tools=['testTool'],
@@ -758,7 +756,7 @@ async def test_generate_stream_with_tools(setup_test: SetupFixture) -> None:
     ]
 
     stream_result = ai.generate_stream(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='hi',
         tool_choice='required',
         tools=['testTool'],
@@ -820,7 +818,7 @@ async def test_generate_stream_no_need_to_await_response(
         ],
     ]
 
-    stream_result = ai.generate_stream(model='programmableModel', prompt='do it')
+    stream_result = ai.generate_stream(model='scriptedModel', prompt='do it')
     chunks = ''
     async for chunk in stream_result.stream:
         chunks += chunk.text
@@ -870,7 +868,7 @@ async def test_generate_with_output(setup_test: SetupFixture) -> None:
     )
 
     response = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='hi',
         output_schema=TestSchema,
         output_format='json',
@@ -882,7 +880,7 @@ async def test_generate_with_output(setup_test: SetupFixture) -> None:
     assert response.request == want
 
     stream_result = ai.generate_stream(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='hi',
         output_schema=TestSchema,
         output_format='json',
@@ -940,7 +938,7 @@ async def test_generate_defaults_to_json_format(
     )
 
     response = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='hi',
         output_schema=TestSchema,
     )
@@ -948,7 +946,7 @@ async def test_generate_defaults_to_json_format(
     assert response.request == want
 
     stream_result = ai.generate_stream(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='hi',
         output_schema=TestSchema,
     )
@@ -1000,7 +998,7 @@ async def test_generate_json_format_unconstrained(
     )
 
     response = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='hi',
         output_schema=TestSchema,
         output_constrained=False,
@@ -1009,7 +1007,7 @@ async def test_generate_json_format_unconstrained(
     assert response.request == want
 
     stream_result = ai.generate_stream(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='hi',
         output_schema=TestSchema,
         output_constrained=False,
@@ -1022,7 +1020,7 @@ async def test_generate_json_format_unconstrained(
 async def test_generate_with_middleware() -> None:
     """When middleware is provided, applies it."""
     ai = Genkit(model='echoModel')
-    define_programmable_model(ai)
+    define_scripted_model(ai)
     define_echo_model(ai)
 
     @ai.middleware(name='pre_mw')
@@ -1084,7 +1082,7 @@ async def test_generate_with_middleware() -> None:
 async def test_generate_passes_through_current_action_context() -> None:
     """Test that generate uses current action context by default."""
     ai = Genkit(model='echoModel')
-    define_programmable_model(ai)
+    define_scripted_model(ai)
     define_echo_model(ai)
 
     @ai.middleware(name='inject_ctx')
@@ -1127,7 +1125,7 @@ async def test_generate_passes_through_current_action_context() -> None:
 async def test_generate_uses_explicitly_passed_in_context() -> None:
     """Generate uses specific context instead of current action context."""
     ai = Genkit(model='echoModel')
-    define_programmable_model(ai)
+    define_scripted_model(ai)
     define_echo_model(ai)
 
     @ai.middleware(name='inject_ctx')
@@ -1171,7 +1169,7 @@ async def test_generate_uses_explicitly_passed_in_context() -> None:
 async def test_generate_uses_inline_middleware_instance_with_context() -> None:
     """Test that generate works with inline middleware instances directly (no registration needed)."""
     ai = Genkit(model='echoModel')
-    define_programmable_model(ai)
+    define_scripted_model(ai)
     define_echo_model(ai)
 
     class InjectContextMiddleware(BaseMiddleware):
@@ -1276,7 +1274,7 @@ async def test_generate_json_format_unconstrained_with_instructions(
     )
 
     response = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='hi',
         output_schema=TestSchema,
         output_constrained=False,
@@ -1286,7 +1284,7 @@ async def test_generate_json_format_unconstrained_with_instructions(
     assert response.request == want
 
     stream_result = ai.generate_stream(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='hi',
         output_schema=TestSchema,
         output_constrained=False,
@@ -1318,7 +1316,7 @@ async def test_generate_output_instructions_true_injects_standard(
 
     # True -> the standard schema preamble is injected.
     on = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='hi',
         output_schema=TestSchema,
         output_constrained=False,
@@ -1331,7 +1329,7 @@ async def test_generate_output_instructions_true_injects_standard(
 
     # Unset -> json's default (False) means nothing is injected.
     off = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='hi',
         output_schema=TestSchema,
         output_constrained=False,
@@ -1456,7 +1454,7 @@ async def test_define_format(setup_test: SetupFixture) -> None:
     chunks = []
 
     stream_result = ai.generate_stream(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='hi',
         output_schema=TestSchema,
         output_format='banana',
@@ -2014,22 +2012,8 @@ async def test_evaluate_batch_with_no_config_passes_none_to_evaluator(setup_test
 
 
 @pytest.mark.asyncio
-async def test_batch_evaluator_run_directly_gets_request_options(setup_test: SetupFixture) -> None:
-    """Running a batch evaluator action the way the Dev UI does hands it request.options, None when absent."""
-    ai, *_ = setup_test
-    seen = _define_recording_batch_evaluator(ai, 'direct_batch_eval')
-    action = await ai.registry.resolve_evaluator('direct_batch_eval')
-    assert action is not None
-
-    await action.run(EvalRequest(dataset=_one_row(), eval_run_id='run1', options={'k': 1}))
-    await action.run(EvalRequest(dataset=_one_row(), eval_run_id='run2'))
-
-    assert seen == [{'k': 1}, None]
-
-
-@pytest.mark.asyncio
-async def test_evaluator_ref_config_keyword_reaches_the_evaluator(setup_test: SetupFixture) -> None:
-    """evaluator_ref(name, config={...}) hands that dict to the evaluator."""
+async def test_evaluate_with_ref_settings_only_passes_ref_settings(setup_test: SetupFixture) -> None:
+    """Config on the evaluator ref alone reaches the evaluator as that dict."""
     ai, *_ = setup_test
     seen = _define_recording_evaluator(ai, 'ref_eval')
 
@@ -2067,26 +2051,6 @@ async def test_evaluate_config_wins_over_ref_settings_per_key(setup_test: SetupF
 
     assert seen == [{'judge': 'j1', 'threshold': 0.9}]
     assert ref.config == {'judge': 'j1', 'threshold': 0.1}
-
-
-@pytest.mark.asyncio
-async def test_evaluate_with_options_keyword_raises_type_error(setup_test: SetupFixture) -> None:
-    """ai.evaluate(options=...) is a TypeError; settings go in config=."""
-    ai, *_ = setup_test
-    _define_recording_evaluator(ai, 'kw_eval')
-
-    with pytest.raises(TypeError, match='options'):
-        await ai.evaluate(evaluator='kw_eval', dataset=_one_row(), options={'threshold': 0.5})  # type: ignore[call-arg]
-
-
-@pytest.mark.asyncio
-async def test_evaluate_with_positional_arguments_raises_type_error(setup_test: SetupFixture) -> None:
-    """ai.evaluate('name', dataset) is a TypeError; evaluate takes keywords only."""
-    ai, *_ = setup_test
-    _define_recording_evaluator(ai, 'pos_eval')
-
-    with pytest.raises(TypeError):
-        await ai.evaluate('pos_eval', _one_row())  # type: ignore[misc]
 
 
 @pytest.mark.asyncio
@@ -2230,7 +2194,7 @@ async def test_generate_echoes_full_request_when_model_raises(setup_test: SetupF
     pm.response_cb = boom
 
     response = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='hi',
         tools=['test_tool'],
         **_echo_request_kwargs(),
@@ -2257,7 +2221,7 @@ async def test_generate_echoes_full_request_when_hook_raises(setup_test: SetupFi
             raise ValueError('hook exploded')
 
     response = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='hi',
         tools=['test_tool'],
         use=[MiddlewareRef(name='raising_mw')],
@@ -2282,7 +2246,7 @@ async def test_generate_echoes_full_request_when_max_turns_exceeded(
     )
 
     response = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='hi',
         tools=['test_tool'],
         max_turns=1,
@@ -2307,7 +2271,7 @@ async def test_generate_echoes_full_request_when_tool_missing(setup_test: SetupF
     )
 
     response = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='hi',
         tools=['test_tool'],
         **_echo_request_kwargs(),
@@ -2346,7 +2310,7 @@ async def test_generate_echoes_full_request_across_interrupt_and_resume(
     )
 
     interrupted = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='hi',
         tools=['test_interrupt'],
         **_echo_request_kwargs(),
@@ -2355,9 +2319,9 @@ async def test_generate_echoes_full_request_across_interrupt_and_resume(
     _assert_request_fully_echoed(interrupted)
 
     resumed = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         messages=interrupted.messages,
-        resume_respond=[respond_to_interrupt({'bar': 2}, interrupt=interrupted.interrupts[0])],
+        resume_respond=[interrupted.interrupts[0].respond({'bar': 2})],
         tools=['test_interrupt'],
         **_echo_request_kwargs(),
     )
@@ -2391,7 +2355,7 @@ async def test_generate_echoes_full_request_when_restart_interrupts_again(
     )
 
     interrupted = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='hi',
         tools=['test_interrupt'],
         **_echo_request_kwargs(),
@@ -2399,9 +2363,9 @@ async def test_generate_echoes_full_request_when_restart_interrupts_again(
     _assert_request_fully_echoed(interrupted)
 
     again = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         messages=interrupted.messages,
-        resume_restart=restart_tool(interrupt=interrupted.interrupts[0]),
+        resume_restart=interrupted.interrupts[0].restart(),
         tools=['test_interrupt'],
         **_echo_request_kwargs(),
     )
@@ -2421,9 +2385,9 @@ async def test_generate_echoes_full_request_when_restart_interrupts_again(
         )
     )
     answered = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         messages=again.messages,
-        resume_respond=[respond_to_interrupt({'ok': True}, interrupt=again.interrupts[0])],
+        resume_respond=[again.interrupts[0].respond({'ok': True})],
         tools=['test_interrupt'],
         **_echo_request_kwargs(),
     )
@@ -2472,7 +2436,7 @@ async def test_generate_restart_can_pause_any_number_of_times(
     )
 
     response = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='hi',
         tools=['gatekeeper'],
         **_echo_request_kwargs(),
@@ -2482,9 +2446,9 @@ async def test_generate_restart_can_pause_any_number_of_times(
     # Restarts two and three have to behave exactly like the first one.
     for attempt in range(2, 4):
         response = await ai.generate(
-            model='programmableModel',
+            model='scriptedModel',
             messages=response.messages,
-            resume_restart=restart_tool(interrupt=response.interrupts[0]),
+            resume_restart=response.interrupts[0].restart(),
             tools=['gatekeeper'],
             **_echo_request_kwargs(),
         )
@@ -2501,9 +2465,9 @@ async def test_generate_restart_can_pause_any_number_of_times(
 
     # The fourth restart succeeds, so the run closes normally.
     answered = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         messages=response.messages,
-        resume_restart=restart_tool(interrupt=response.interrupts[0]),
+        resume_restart=response.interrupts[0].restart(),
         tools=['gatekeeper'],
         **_echo_request_kwargs(),
     )
@@ -2566,7 +2530,7 @@ async def test_generate_resolved_sibling_survives_repeated_interrupts(
     )
 
     response = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='pay and approve',
         tools=['charge_card', 'approve'],
     )
@@ -2584,9 +2548,9 @@ async def test_generate_resolved_sibling_survives_repeated_interrupts(
 
     for attempt in range(2, 5):
         response = await ai.generate(
-            model='programmableModel',
+            model='scriptedModel',
             messages=response.messages,
-            resume_restart=restart_tool(interrupt=response.interrupts[0]),
+            resume_restart=response.interrupts[0].restart(),
             tools=['charge_card', 'approve'],
         )
         if attempt < 5 and response.interrupts:

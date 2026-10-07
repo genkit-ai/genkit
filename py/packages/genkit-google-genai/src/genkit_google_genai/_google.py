@@ -48,6 +48,7 @@ Example:
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Callable
 from typing import Any, NoReturn
@@ -82,6 +83,7 @@ from genkit.plugin_api import (
     loop_local_client,
     to_json_schema,
 )
+from genkit_google_genai._auth import GOOGLE_AUTH_ERRORS, raise_auth_error
 from genkit_google_genai._evaluators import (
     VertexAIEvaluationMetricType,
     create_vertex_evaluators,
@@ -148,6 +150,8 @@ from genkit_google_genai._models._veo import (
     is_veo_model,
     veo_model_info,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class GenaiModels:
@@ -241,6 +245,19 @@ PLUGIN_DISPLAY_NAME: dict[str, str] = {
 }
 
 
+def _plugin_client(client_kwargs: dict[str, Any]) -> genai.Client:
+    """Build the plugin's client on first use in a loop.
+
+    Construction is lazy, so it runs inside the first action body. Vertex with
+    no project resolves ADC here; a missing or rejected credential becomes
+    UNAUTHENTICATED instead of a bare google.auth error.
+    """
+    try:
+        return genai.client.Client(**client_kwargs)
+    except GOOGLE_AUTH_ERRORS as e:
+        raise_auth_error(e)
+
+
 def _new_gemini(plugin: GoogleAI | VertexAI, clean_name: str) -> GeminiModel:
     """Construct a GeminiModel using the plugin's loop-local client."""
     return GeminiModel(
@@ -297,25 +314,24 @@ def _create_embedder_action(
     """Create an Action object for an embedder.
 
     Args:
-        name: The namespaced name of the embedder.
+        name: The embedder id without the plugin prefix.
         client_getter: Function returning the loop-local Google GenAI client.
         plugin_name: The name of the plugin (googleai or vertexai).
 
     Returns:
         Action object for the embedder.
     """
-    clean_name = name.removeprefix(f'{plugin_name}/')
-    full_name = f'{plugin_name}/{clean_name}'
-    label = f'{PLUGIN_DISPLAY_NAME[plugin_name]} - {clean_name}'
+    full_name = f'{plugin_name}/{name}'
+    label = f'{PLUGIN_DISPLAY_NAME[plugin_name]} - {name}'
     embed_info = get_embedder_info(
-        name=clean_name,
+        name=name,
         label=label,
         is_vertex=(plugin_name == VERTEXAI_PLUGIN_NAME),
     )
 
     async def _run(request: Any) -> Any:  # noqa: ANN401
         embedder = Embedder(
-            version=clean_name,
+            version=name,
             client=client_getter(),
             is_vertex=(plugin_name == VERTEXAI_PLUGIN_NAME),
         )
@@ -338,7 +354,7 @@ def _create_veo_background_action(
     never as a blocking MODEL.
 
     Args:
-        name: The namespaced name of the model.
+        name: The model id without the plugin prefix.
         client_getter: Function returning the loop-local Google GenAI client.
         plugin_name: The name of the plugin (googleai or vertexai).
         client_kwargs: Plugin-level client kwargs, cloned when a call
@@ -347,16 +363,14 @@ def _create_veo_background_action(
     Returns:
         BackgroundAction pairing the start and check actions.
     """
-    prefix = f'{plugin_name}/'
-    clean_name = name.removeprefix(prefix)
-    full_name = f'{prefix}{clean_name}'
+    full_name = f'{plugin_name}/{name}'
 
     async def _start(request: ModelRequest[VeoConfig], ctx: ActionRunContext) -> Operation:
-        veo = VeoModel(clean_name, client_getter(), client_kwargs=client_kwargs)
+        veo = VeoModel(name, client_getter(), client_kwargs=client_kwargs)
         return await veo.start(request, ctx)
 
     async def _check(op: Operation, ctx: ActionRunContext) -> Operation:
-        veo = VeoModel(clean_name, client_getter(), client_kwargs=client_kwargs)
+        veo = VeoModel(name, client_getter(), client_kwargs=client_kwargs)
         return await veo.check(op, ctx)
 
     return background_model(
@@ -364,7 +378,7 @@ def _create_veo_background_action(
         _start,
         _check,
         config_schema=VeoConfig,
-        info=veo_model_info(clean_name),
+        info=veo_model_info(name),
         metadata={'type': 'background-model'},
     )
 
@@ -638,7 +652,7 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
         }
         self._base_url_pinned = bool(self._client_kwargs['http_options'].base_url)
         # Single loop-local client accessor used everywhere in plugin runtime paths.
-        self._runtime_client = loop_local_client(lambda: genai.client.Client(**self._client_kwargs))
+        self._runtime_client = loop_local_client(lambda: _plugin_client(self._client_kwargs))
         self._list_actions_cache: list[ActionMetadata] | None = None
 
     def _interactions_client_options(self) -> ClientOptions:
@@ -672,19 +686,19 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
         actions: list[Action] = []
         # Gemini Models
         for name in genai_models.gemini:
-            if action := self._resolve_model(googleai_name(name)):
+            if action := self._resolve_model(name):
                 actions.append(action)
 
         # Veo Models (background models)
         for name in genai_models.veo:
-            actions.extend(self._resolve_veo_model(googleai_name(name)).actions)
+            actions.extend(self._resolve_veo_model(name).actions)
 
         client_options = self._interactions_client_options()
         plugin_api_key = self._plugin_api_key()
         for name in list_known_deep_research_models():
             actions.extend(
                 create_deep_research_background_action(
-                    googleai_name(name),
+                    name,
                     plugin_api_key=plugin_api_key,
                     client_options=client_options,
                 ).actions
@@ -708,7 +722,7 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
 
         # Embedders
         for name in genai_models.embedders:
-            actions.append(self._resolve_embedder(googleai_name(name)))
+            actions.append(self._resolve_embedder(name))
 
         return actions
 
@@ -717,7 +731,7 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
 
         Args:
             action_type: The kind of action to resolve.
-            name: The namespaced name of the action to resolve.
+            name: The id without the ``googleai/`` prefix.
 
         Returns:
             Action object if found, None otherwise.
@@ -739,10 +753,9 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
 
     def _resolve_background_action(self, name: str) -> BackgroundAction | None:
         """Resolve a background action for Veo or Deep Research."""
-        clean = name.removeprefix(f'{GOOGLEAI_PLUGIN_NAME}/')
-        if is_veo_model(clean):
+        if is_veo_model(name):
             return self._resolve_veo_model(name)
-        if is_deep_research_model_name(clean):
+        if is_deep_research_model_name(name):
             return create_deep_research_background_action(
                 deep_research_model(name),
                 plugin_api_key=self._plugin_api_key(),
@@ -754,7 +767,7 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
         """Create a BackgroundAction for a Veo video generation model.
 
         Args:
-            name: The namespaced name of the model.
+            name: The model id without the ``googleai/`` prefix.
 
         Returns:
             BackgroundAction for the Veo model.
@@ -765,7 +778,7 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
         """Create an Action object for a Google AI model.
 
         Args:
-            name: The namespaced name of the model.
+            name: The model id without the ``googleai/`` prefix.
 
         Returns:
             Action object for the model, or None if this id has no generate
@@ -773,64 +786,62 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
             EMBEDDER actions, and retired/unimplemented ids fail closed
             instead of defaulting to Gemini).
         """
-        # Extract local name (remove plugin prefix)
-        clean_name = name.removeprefix(f'{GOOGLEAI_PLUGIN_NAME}/')
-
         # Interactions families before the shared fail-closed table so Vertex
         # can keep them unroutable while Google AI actually serves them.
-        if is_deep_research_model_name(clean_name):
+        if is_deep_research_model_name(name):
             return None
-        if is_antigravity_model_name(clean_name):
+        if is_antigravity_model_name(name):
             return create_antigravity_action(
-                name,
+                googleai_name(name),
                 plugin_api_key=self._plugin_api_key(),
                 client_options=self._interactions_client_options(),
             )
-        if is_lyria_model_name(clean_name):
+        if is_lyria_model_name(name):
             return create_lyria_action(
-                name,
+                googleai_name(name),
                 plugin_api_key=self._plugin_api_key(),
                 client_options=self._interactions_client_options(),
             )
 
-        if is_unroutable_model_id(clean_name):
+        if is_unroutable_model_id(name):
             return None
         # One annotated closure per family. Action validates request.config
         # from the fn annotation; a single _run cannot switch schemas at runtime.
-        model_info = google_model_info(clean_name)
-        SUPPORTED_MODELS[clean_name] = model_info
+        model_info = google_model_info(name)
+        SUPPORTED_MODELS[name] = model_info
+        action_name = googleai_name(name)
 
-        if is_tts_model(clean_name):
+        if is_tts_model(name):
 
             async def _run_tts(request: ModelRequest[GeminiTtsConfig], ctx: ActionRunContext) -> ModelResponse:
-                return await _new_gemini(self, clean_name).generate(request, ctx)
+                return await _new_gemini(self, name).generate(request, ctx)
 
-            return _model_action(name, _run_tts, model_info, GeminiTtsConfig)
+            return _model_action(action_name, _run_tts, model_info, GeminiTtsConfig)
 
-        if is_image_model(clean_name):
+        if is_image_model(name):
 
             async def _run_image(request: ModelRequest[GeminiImageConfig], ctx: ActionRunContext) -> ModelResponse:
-                return await _new_gemini(self, clean_name).generate(request, ctx)
+                return await _new_gemini(self, name).generate(request, ctx)
 
-            return _model_action(name, _run_image, model_info, GeminiImageConfig)
+            return _model_action(action_name, _run_image, model_info, GeminiImageConfig)
 
-        if is_gemma_model(clean_name):
+        if is_gemma_model(name):
 
             async def _run_gemma(request: ModelRequest[GemmaConfig], ctx: ActionRunContext) -> ModelResponse:
-                return await _new_gemini(self, clean_name).generate(request, ctx)
+                return await _new_gemini(self, name).generate(request, ctx)
 
-            return _model_action(name, _run_gemma, model_info, GemmaConfig)
+            return _model_action(action_name, _run_gemma, model_info, GemmaConfig)
 
         async def _run(request: ModelRequest[GeminiConfig], ctx: ActionRunContext) -> ModelResponse:
-            return await _new_gemini(self, clean_name).generate(request, ctx)
+            return await _new_gemini(self, name).generate(request, ctx)
 
-        return _model_action(name, _run, model_info, GeminiConfig)
+        return _model_action(action_name, _run, model_info, GeminiConfig)
 
     def _resolve_embedder(self, name: str) -> Action:
         """Create an Action object for a Google AI embedder.
 
         Args:
-            name: The namespaced name of the embedder.
+            name: The embedder id without the ``googleai/`` prefix.
 
         Returns:
             Action object for the embedder.
@@ -1043,7 +1054,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
             'http_options': opts,
         }
         # Single loop-local client accessor used everywhere in plugin runtime paths.
-        self._runtime_client = loop_local_client(lambda: genai.client.Client(**self._client_kwargs))
+        self._runtime_client = loop_local_client(lambda: _plugin_client(self._client_kwargs))
         self._list_actions_cache: list[ActionMetadata] | None = None
 
     async def init(self) -> list[Action]:
@@ -1056,34 +1067,34 @@ class VertexAI(GoogleFamilyRefs, Plugin):
         actions: list[Action] = []
 
         for name in genai_models.gemini:
-            if action := self._resolve_model(vertexai_name(name)):
+            if action := self._resolve_model(name):
                 actions.append(action)
 
         # Veo Models (background models)
         for name in genai_models.veo:
-            actions.extend(self._resolve_veo_model(vertexai_name(name)).actions)
+            actions.extend(self._resolve_veo_model(name).actions)
 
         for name in VERTEX_KNOWN_EMBEDDERS:
-            actions.append(self._resolve_embedder(vertexai_name(name)))
+            actions.append(self._resolve_embedder(name))
 
-        # Register Vertex AI evaluators
-        # Deferred import to avoid circular dependency
-        from genkit import Genkit
-
+        # Vertex evaluators talk to a project-scoped Evaluation API. Express
+        # mode (api_key, no project) can still start the app; those evaluators
+        # simply are not registered.
         if not self._project:
-            raise ValueError(
-                'VertexAI plugin requires a project ID to use evaluators. '
-                'Set the project parameter or GOOGLE_CLOUD_PROJECT environment variable.'
+            logger.debug('VertexAI has no project; skipping Vertex evaluator registration')
+        else:
+            # Deferred import to avoid circular dependency
+            from genkit import Genkit
+
+            registry = Genkit()
+            actions.extend(
+                create_vertex_evaluators(
+                    registry,
+                    list(VertexAIEvaluationMetricType),
+                    project_id=self._project,
+                    location=self._location,
+                )
             )
-        registry = Genkit()
-        actions.extend(
-            create_vertex_evaluators(
-                registry,
-                list(VertexAIEvaluationMetricType),
-                project_id=self._project,
-                location=self._location,
-            )
-        )
 
         return actions
 
@@ -1096,7 +1107,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
         """
         actions = []
         for name in VERTEX_KNOWN_EMBEDDERS:
-            actions.append(self._resolve_embedder(vertexai_name(name)))
+            actions.append(self._resolve_embedder(name))
         return actions
 
     async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
@@ -1104,7 +1115,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
 
         Args:
             action_type: The kind of action to resolve.
-            name: The namespaced name of the action to resolve.
+            name: The id without the ``vertexai/`` prefix.
 
         Returns:
             Action object if found, None otherwise.
@@ -1112,21 +1123,14 @@ class VertexAI(GoogleFamilyRefs, Plugin):
         if action_type == ActionKind.MODEL:
             return self._resolve_model(name)
         elif action_type == ActionKind.BACKGROUND_MODEL:
-            # For Veo models, return the start action
-            prefix = VERTEXAI_PLUGIN_NAME + '/'
-            clean_name = name.replace(prefix, '') if name.startswith(prefix) else name
-            if is_veo_model(clean_name):
+            if is_veo_model(name):
                 bg_action = self._resolve_veo_model(name)
                 return bg_action.start_action
             return None
         elif action_type == ActionKind.CHECK_OPERATION:
-            # Check action names are in format {model_name}/check
-            # Extract the model name and resolve if it's a Veo model
             if name.endswith('/check'):
-                model_name = name[:-6]  # Remove '/check' suffix
-                prefix = VERTEXAI_PLUGIN_NAME + '/'
-                clean_name = model_name.replace(prefix, '') if model_name.startswith(prefix) else model_name
-                if is_veo_model(clean_name):
+                model_name = name.removesuffix('/check')
+                if is_veo_model(model_name):
                     bg_action = self._resolve_veo_model(model_name)
                     return bg_action.check_action
             return None
@@ -1140,7 +1144,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
         """Create a BackgroundAction for a Veo video generation model.
 
         Args:
-            name: The namespaced name of the model.
+            name: The model id without the ``vertexai/`` prefix.
 
         Returns:
             BackgroundAction for the Veo model.
@@ -1151,27 +1155,33 @@ class VertexAI(GoogleFamilyRefs, Plugin):
         """Create an Action object for a Vertex AI evaluator.
 
         Args:
-            name: The namespaced name of the evaluator.
+            name: The evaluator id without the ``vertexai/`` prefix.
 
         Returns:
             Action object for the evaluator.
         """
-        # Extract local name (remove plugin prefix)
-        clean_name = name.replace(VERTEXAI_PLUGIN_NAME + '/', '') if name.startswith(VERTEXAI_PLUGIN_NAME) else name
-
         try:
-            metric_type = VertexAIEvaluationMetricType(clean_name.upper())
+            metric_type = VertexAIEvaluationMetricType(name.upper())
         except ValueError:
             return None
+
+        # The name is a real Vertex metric, so "not found" would send people
+        # hunting for a typo. Say what's actually missing instead. The
+        # evaluators authenticate with ADC only (api_key and credentials are
+        # not used), so name both requirements.
+        if not self._project:
+            raise GenkitError(
+                message=(
+                    'Vertex evaluators need a project and Application Default Credentials; '
+                    'pass VertexAI(project=...) or set GOOGLE_CLOUD_PROJECT, '
+                    'and run `gcloud auth application-default login`'
+                ),
+                status='FAILED_PRECONDITION',
+            )
 
         from genkit import Genkit
 
         registry = Genkit()
-        if not self._project:
-            raise ValueError(
-                'VertexAI plugin requires a project ID to use evaluators. '
-                'Set the project parameter or GOOGLE_CLOUD_PROJECT environment variable.'
-            )
 
         actions = create_vertex_evaluators(
             registry,
@@ -1185,7 +1195,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
         """Create an Action object for a Vertex AI model.
 
         Args:
-            name: The namespaced name of the model.
+            name: The model id without the ``vertexai/`` prefix.
 
         Returns:
             Action object for the model, or None if this id has no generate
@@ -1193,61 +1203,59 @@ class VertexAI(GoogleFamilyRefs, Plugin):
             EMBEDDER actions, and retired/unimplemented ids fail closed
             instead of defaulting to Gemini).
         """
-        # Extract local name (remove plugin prefix)
-        clean_name = name.replace(VERTEXAI_PLUGIN_NAME + '/', '') if name.startswith(VERTEXAI_PLUGIN_NAME) else name
-
-        if is_unroutable_model_id(clean_name):
+        if is_unroutable_model_id(name):
             return None
 
         # One annotated closure per family. Action validates request.config
         # from the fn annotation; a single _run cannot switch schemas at runtime.
         # Tuned Gemini endpoints (endpoints/ID or projects/.../endpoints/ID)
         # route through GeminiModel with the standard Gemini config schema.
-        if is_tuned_gemini_name(clean_name):
+        action_name = vertexai_name(name)
+        if is_tuned_gemini_name(name):
             model_info = ModelInfo(
-                label=f'{PLUGIN_DISPLAY_NAME[VERTEXAI_PLUGIN_NAME]} - {clean_name}',
+                label=f'{PLUGIN_DISPLAY_NAME[VERTEXAI_PLUGIN_NAME]} - {name}',
                 supports=google_model_info('gemini').supports,
             )
 
             async def _run_tuned(request: ModelRequest[GeminiConfig], ctx: ActionRunContext) -> ModelResponse:
-                return await _new_gemini(self, clean_name).generate(request, ctx)
+                return await _new_gemini(self, name).generate(request, ctx)
 
-            return _model_action(name, _run_tuned, model_info, GeminiConfig)
+            return _model_action(action_name, _run_tuned, model_info, GeminiConfig)
 
-        model_info = google_model_info(clean_name)
-        SUPPORTED_MODELS[clean_name] = model_info
+        model_info = google_model_info(name)
+        SUPPORTED_MODELS[name] = model_info
 
-        if is_tts_model(clean_name):
+        if is_tts_model(name):
 
             async def _run_tts(request: ModelRequest[GeminiTtsConfig], ctx: ActionRunContext) -> ModelResponse:
-                return await _new_gemini(self, clean_name).generate(request, ctx)
+                return await _new_gemini(self, name).generate(request, ctx)
 
-            return _model_action(name, _run_tts, model_info, GeminiTtsConfig)
+            return _model_action(action_name, _run_tts, model_info, GeminiTtsConfig)
 
-        if is_image_model(clean_name):
+        if is_image_model(name):
 
             async def _run_image(request: ModelRequest[GeminiImageConfig], ctx: ActionRunContext) -> ModelResponse:
-                return await _new_gemini(self, clean_name).generate(request, ctx)
+                return await _new_gemini(self, name).generate(request, ctx)
 
-            return _model_action(name, _run_image, model_info, GeminiImageConfig)
+            return _model_action(action_name, _run_image, model_info, GeminiImageConfig)
 
-        if is_gemma_model(clean_name):
+        if is_gemma_model(name):
 
             async def _run_gemma(request: ModelRequest[GemmaConfig], ctx: ActionRunContext) -> ModelResponse:
-                return await _new_gemini(self, clean_name).generate(request, ctx)
+                return await _new_gemini(self, name).generate(request, ctx)
 
-            return _model_action(name, _run_gemma, model_info, GemmaConfig)
+            return _model_action(action_name, _run_gemma, model_info, GemmaConfig)
 
         async def _run(request: ModelRequest[GeminiConfig], ctx: ActionRunContext) -> ModelResponse:
-            return await _new_gemini(self, clean_name).generate(request, ctx)
+            return await _new_gemini(self, name).generate(request, ctx)
 
-        return _model_action(name, _run, model_info, GeminiConfig)
+        return _model_action(action_name, _run, model_info, GeminiConfig)
 
     def _resolve_embedder(self, name: str) -> Action:
         """Create an Action object for a Vertex AI embedder.
 
         Args:
-            name: The namespaced name of the embedder.
+            name: The embedder id without the ``vertexai/`` prefix.
 
         Returns:
             Action object for the embedder.
@@ -1293,18 +1301,19 @@ class VertexAI(GoogleFamilyRefs, Plugin):
                 )
             )
 
-        for metric in VertexAIEvaluationMetricType:
-            # create_vertex_evaluators handles namespacing but we only need metadata here.
-            evaluator_name = vertexai_name(metric.lower())
-            actions_list.append(
-                ActionMetadata(
-                    name=evaluator_name,
-                    action_type=ActionKind.EVALUATOR,
-                    input_json_schema=to_json_schema(EvalRequest),
-                    output_json_schema=to_json_schema(list[EvalFnResponse]),
-                    metadata={'type': 'evaluator'},
+        if self._project:
+            for metric in VertexAIEvaluationMetricType:
+                # create_vertex_evaluators handles namespacing but we only need metadata here.
+                evaluator_name = vertexai_name(metric.lower())
+                actions_list.append(
+                    ActionMetadata(
+                        name=evaluator_name,
+                        action_type=ActionKind.EVALUATOR,
+                        input_json_schema=to_json_schema(EvalRequest),
+                        output_json_schema=to_json_schema(list[EvalFnResponse]),
+                        metadata={'type': 'evaluator'},
+                    )
                 )
-            )
 
         self._list_actions_cache = actions_list
         return actions_list
