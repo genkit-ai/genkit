@@ -419,37 +419,89 @@ async def test_generate_valid_config_runs_unchanged() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('snake_value', [5, 6], ids=['same_value', 'different_value'])
-async def test_generate_both_spellings_of_one_setting_raises_same_setting(snake_value: int) -> None:
-    """`{'maxOutputTokens': 5, 'max_output_tokens': 5 or 6}` raises "are the same setting; pass one", not "unknown"."""
+@pytest.mark.parametrize(
+    'config',
+    [
+        {'maxOutputTokens': 5, 'max_output_tokens': 5},
+        {'maxOutputTokens': 5, 'max_output_tokens': 6},
+        {'max_output_tokens': 5, 'maxOutputTokens': 5},
+    ],
+    ids=['same_value', 'different_value', 'snake_case_first'],
+)
+async def test_generate_both_spellings_of_one_setting_raises_same_setting(config: dict[str, int]) -> None:
+    """Both spellings raise "are the same setting; pass one" with the field name first, whatever the dict order."""
     ai, fn = _ai_with_model()
 
     with pytest.raises(GenkitError) as err:
-        await ai.generate(model='strict', prompt='hi', config={'maxOutputTokens': 5, 'max_output_tokens': snake_value})
+        await ai.generate(model='strict', prompt='hi', config=config)
 
-    _assert_rejected(err, fn, 'strict: max_output_tokens and maxOutputTokens are the same setting; pass one')
-    assert 'unknown' not in err.value.original_message
+    _assert_rejected(err, fn)
+    assert err.value.original_message == 'strict: max_output_tokens and maxOutputTokens are the same setting; pass one'
 
 
 @pytest.mark.asyncio
-async def test_generate_both_spellings_and_typo_names_both() -> None:
-    """Both spellings plus `temprature` raise one error naming the duplicate setting and the typo."""
+async def test_generate_two_settings_each_in_both_spellings_names_both_pairs() -> None:
+    """`maxOutputTokens`/`max_output_tokens` plus `topK`/`top_k` name both pairs in one error."""
     ai, fn = _ai_with_model()
 
     with pytest.raises(GenkitError) as err:
         await ai.generate(
             model='strict',
             prompt='hi',
-            config={'maxOutputTokens': 5, 'max_output_tokens': 5, 'temprature': 0.2},
+            config={'maxOutputTokens': 5, 'max_output_tokens': 5, 'topK': 3, 'top_k': 3},
         )
 
-    _assert_rejected(
-        err,
-        fn,
-        'max_output_tokens and maxOutputTokens are the same setting; pass one',
-        "unknown config key 'temprature'",
+    _assert_rejected(err, fn)
+    assert err.value.original_message == (
+        'strict: max_output_tokens and maxOutputTokens are the same setting; pass one; '
+        'top_k and topK are the same setting; pass one'
     )
-    assert "'max_output_tokens'" not in err.value.original_message
+
+
+@pytest.mark.asyncio
+async def test_generate_both_spellings_of_plugin_declared_alias_raises_same_setting() -> None:
+    """A plugin class's own alias pair (`thinking_config`/`thinkingConfig`) gets the same message."""
+    ai, fn = _ai_with_model(config_schema=GeminiLikeConfig, name='gem')
+
+    with pytest.raises(GenkitError) as err:
+        await ai.generate(
+            model='gem',
+            prompt='hi',
+            config={'thinkingConfig': {'thinkingBudget': 0}, 'thinking_config': {'thinkingBudget': 0}},
+        )
+
+    _assert_rejected(err, fn)
+    assert err.value.original_message == 'gem: thinking_config and thinkingConfig are the same setting; pass one'
+
+
+@pytest.mark.asyncio
+async def test_generate_none_on_one_spelling_is_not_a_second_spelling() -> None:
+    """`{'maxOutputTokens': 5, 'max_output_tokens': None}` runs: None is unset, so only one spelling is set."""
+    ai, fn = _ai_with_model()
+
+    await ai.generate(model='strict', prompt='hi', config={'maxOutputTokens': 5, 'max_output_tokens': None})
+
+    assert fn.requests[-1].config == {'maxOutputTokens': 5}
+
+
+@pytest.mark.asyncio
+async def test_generate_both_spellings_typo_and_bad_value_all_in_one_error() -> None:
+    """Both spellings, a typo, and a bad value raise one error: same setting, then unknown key, then the value."""
+    ai, fn = _ai_with_model()
+
+    with pytest.raises(GenkitError) as err:
+        await ai.generate(
+            model='strict',
+            prompt='hi',
+            config={'maxOutputTokens': 5, 'max_output_tokens': 5, 'temprature': 0.2, 'top_p': 'high'},
+        )
+
+    _assert_rejected(err, fn)
+    assert err.value.original_message.startswith(
+        'strict: max_output_tokens and maxOutputTokens are the same setting; pass one; '
+        "unknown config key 'temprature'; put provider-only settings in config['extra']; "
+        "config 'top_p': "
+    )
 
 
 @pytest.mark.asyncio
