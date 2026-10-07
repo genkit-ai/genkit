@@ -16,15 +16,15 @@
 
 """`uv add genkit-google-genai` doesn't install the Vertex training SDK."""
 
-import re
 import subprocess  # noqa: S404
 import sys
 import textwrap
-from importlib.metadata import requires
 from pathlib import Path
 
 # The Vertex training SDK can still be installed in the dev environment through
 # other packages, so the test hides it to prove the plugin never reaches for it.
+# deptry can't check this: every google-* distribution shares the top-level
+# `google` module, so an import of google.cloud.aiplatform looks declared.
 _BLOCKED_MODULES = ['google.cloud.aiplatform', 'vertexai']
 
 _BLOCKER = textwrap.dedent(
@@ -67,10 +67,3 @@ def test_import_genkit_google_genai_works_without_aiplatform(tmp_path: Path) -> 
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == 'ok'
-
-
-def test_genkit_google_genai_base_dependencies_exclude_aiplatform() -> None:
-    """The requirements `uv add genkit-google-genai` installs don't list google-cloud-aiplatform."""
-    names = {re.split(r'[\s<>=!~;\[]', req, maxsplit=1)[0].lower() for req in requires('genkit-google-genai') or []}
-    assert 'google-genai' in names, names
-    assert 'google-cloud-aiplatform' not in names

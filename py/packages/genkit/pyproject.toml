@@ -46,7 +46,6 @@ dependencies = [
   "structlog>=25.2.0",
   "httpx>=0.28.1",
   "starlette>=0.46.1",
-  "python-multipart>=0.0.22",
   "websockets>=13.0.0",
   "typing_extensions>=4.2",
   "strenum>=0.4.15; python_version < '3.11'",
@@ -100,6 +99,27 @@ Changelog       = "https://github.com/genkit-ai/genkit/releases"
 [build-system]
 build-backend = "hatchling.build"
 requires      = ["hatchling"]
+
+[tool.deptry.per_rule_ignores]
+# Extras exist only for `pip install genkit[openai]`; genkit never imports them.
+DEP002 = [
+  "genkit-a2ui",
+  "genkit-amazon-bedrock",
+  "genkit-anthropic",
+  "genkit-django",
+  "genkit-evaluators",
+  "genkit-fastapi",
+  "genkit-flask",
+  "genkit-google-cloud",
+  "genkit-google-genai",
+  "genkit-middleware",
+  "genkit-ollama",
+  "genkit-openai",
+  "genkit-otel",
+  "genkit-vertexai",
+]
+# Standard library on Python 3.14+; imported behind a version check.
+DEP001 = ["annotationlib"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/genkit"]
