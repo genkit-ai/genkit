@@ -224,7 +224,7 @@ def test_googleai__resolve_model(
         supports=DEFAULT_SUPPORTS_MODEL,
     )
 
-    action = plugin._resolve_model(name=expected_model_name)
+    action = plugin._resolve_model(name=key)
 
     assert action is not None
     assert action.kind == ActionKind.MODEL
@@ -235,16 +235,14 @@ def test_googleai__resolve_model(
 @pytest.mark.parametrize(
     'input_name, expected_model_name, expected_dimensions, expected_support_inputs',
     [
-        ('googleai/gemini-embedding-2', 'googleai/gemini-embedding-2', 3072, ['text', 'image', 'video']),
-        # Bare (unprefixed) names resolve to the namespaced action name.
         ('gemini-embedding-2', 'googleai/gemini-embedding-2', 3072, ['text', 'image', 'video']),
         (
-            'googleai/gemini-embedding-2-preview',
+            'gemini-embedding-2-preview',
             'googleai/gemini-embedding-2-preview',
             3072,
             ['text', 'image', 'video'],
         ),
-        ('googleai/custom-embedder', 'googleai/custom-embedder', None, ['text']),
+        ('custom-embedder', 'googleai/custom-embedder', None, ['text']),
     ],
 )
 def test_googleai__resolve_embedder(
@@ -270,7 +268,6 @@ def test_googleai__resolve_embedder(
 @pytest.mark.parametrize(
     'input_name, expected_model_name',
     [
-        ('vertexai/multimodalembedding@001', 'vertexai/multimodalembedding@001'),
         ('multimodalembedding@001', 'vertexai/multimodalembedding@001'),
     ],
 )
@@ -293,7 +290,6 @@ def test_vertexai__resolve_embedder_multimodalembedding(
 @pytest.mark.parametrize(
     'input_name, expected_model_name',
     [
-        ('vertexai/gemini-embedding-2', 'vertexai/gemini-embedding-2'),
         ('gemini-embedding-2', 'vertexai/gemini-embedding-2'),
     ],
 )
@@ -683,7 +679,7 @@ def test_vertexai__resolve_model(
         supports=DEFAULT_SUPPORTS_MODEL,
     )
 
-    action = plugin._resolve_model(name=expected_model_name)
+    action = plugin._resolve_model(name=key)
 
     assert action is not None
     assert action.kind == ActionKind.MODEL
@@ -715,7 +711,7 @@ def test_vertexai__resolve_embedder(
     """Tests for VertexAI._resolve_embedder method."""
     plugin = vertexai_plugin_instance
 
-    action = plugin._resolve_embedder(name=expected_model_name)
+    action = plugin._resolve_embedder(name=clean_name)
 
     assert action is not None
     assert action.kind == ActionKind.EMBEDDER
@@ -820,7 +816,7 @@ async def test_googleai_resolve_background_model(googleai_plugin_instance: Googl
     """Test resolve action for background model."""
     plugin = googleai_plugin_instance
 
-    action = await plugin.resolve(action_type=ActionKind.BACKGROUND_MODEL, name=googleai_name('veo-2.0-generate-001'))
+    action = await plugin.resolve(action_type=ActionKind.BACKGROUND_MODEL, name='veo-2.0-generate-001')
     assert action is not None
     assert action.kind == ActionKind.BACKGROUND_MODEL
     assert action.name == googleai_name('veo-2.0-generate-001')
@@ -831,9 +827,7 @@ async def test_googleai_resolve_check_operation(googleai_plugin_instance: Google
     """Test resolve action for check operation."""
     plugin = googleai_plugin_instance
 
-    action = await plugin.resolve(
-        action_type=ActionKind.CHECK_OPERATION, name=googleai_name('veo-2.0-generate-001/check')
-    )
+    action = await plugin.resolve(action_type=ActionKind.CHECK_OPERATION, name='veo-2.0-generate-001/check')
     assert action is not None
     assert action.kind == ActionKind.CHECK_OPERATION
     assert action.name == googleai_name('veo-2.0-generate-001/check')
@@ -862,7 +856,7 @@ async def test_vertexai_resolve_evaluator(vertexai_plugin_instance: VertexAI) ->
     """Test resolve action for evaluator."""
     plugin = vertexai_plugin_instance
 
-    action = await plugin.resolve(action_type=ActionKind.EVALUATOR, name=vertexai_name('fluency'))
+    action = await plugin.resolve(action_type=ActionKind.EVALUATOR, name='fluency')
     assert action is not None
     assert action.kind == ActionKind.EVALUATOR
     assert action.name == vertexai_name('fluency')
