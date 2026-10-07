@@ -23,12 +23,13 @@ from unittest import mock
 from unittest.mock import MagicMock, patch
 
 import pytest
-from genkit_google_cloud.telemetry.config import GcpTelemetry
+from genkit_google_cloud.telemetry.config import GcpTelemetry, _adc_project_id
 from genkit_google_cloud.telemetry.tracing import (
     _reset_google_cloud_telemetry,
     enable_google_cloud_telemetry,
 )
 from genkit_otel import GenAiInstrumentation
+from google.auth.exceptions import DefaultCredentialsError
 from opentelemetry import _logs
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter
@@ -60,6 +61,13 @@ def _reset_instrumentation() -> Generator[None, None, None]:
 def _stub_cloud_logging_exporter() -> Generator[MagicMock, None, None]:
     with patch('genkit_google_cloud.telemetry.config.CloudLoggingExporter') as mock_exporter:
         yield mock_exporter
+
+
+@pytest.fixture(autouse=True)
+def _adc_project() -> Generator[MagicMock, None, None]:
+    """ADC lookup stub; returns no project unless a test sets one."""
+    with patch('genkit_google_cloud.telemetry.config._adc_project_id', return_value=None) as mock_adc:
+        yield mock_adc
 
 
 def test_enable_google_cloud_telemetry_wraps_with_gcp_adjusting_exporter() -> None:
@@ -504,6 +512,80 @@ def test_config_warns_when_firebase_project_id_is_ignored(
 
     messages = [c.args[0] for c in logger.warning.call_args_list]
     assert any('FIREBASE_PROJECT_ID' in m for m in messages) is warns
+
+
+def _prod_exporter_patches() -> tuple[Any, ...]:
+    return (
+        mock.patch.dict(os.environ, {_GENKIT_ENV: _ENV_PROD}, clear=False),
+        patch('genkit_google_cloud.telemetry.config.GenkitGCPExporter'),
+        patch('genkit_google_cloud.telemetry.config.GcpAdjustingTraceExporter'),
+        patch('genkit_google_cloud.telemetry.config._hang_exporter_on_process_tracer'),
+        patch('genkit_google_cloud.telemetry.config.GoogleCloudResourceDetector'),
+        patch('genkit_google_cloud.telemetry.config.CloudMonitoringMetricsExporter'),
+        patch('genkit_google_cloud.telemetry.config.GenkitMetricExporter'),
+        patch('genkit_google_cloud.telemetry.config.PeriodicExportingMetricReader'),
+        patch('genkit_google_cloud.telemetry.config.metrics'),
+    )
+
+
+def test_firebase_only_falls_back_to_adc_project_and_keeps_log_trace_correlation(
+    monkeypatch: pytest.MonkeyPatch,
+    _adc_project: MagicMock,
+    _stub_cloud_logging_exporter: MagicMock,
+) -> None:
+    """With only FIREBASE_PROJECT_ID set, the ADC project goes to every exporter and to logging.googleapis.com/trace."""
+    for key in ('GOOGLE_CLOUD_PROJECT', 'GCLOUD_PROJECT'):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv('FIREBASE_PROJECT_ID', 'firebase-proj')
+    _adc_project.return_value = 'adc-proj'
+
+    manager = GcpTelemetry()
+    env, gcp, adjusting, hang, detector, monitoring, metric_exp, reader, meter = _prod_exporter_patches()
+    with env, gcp as traces, adjusting, hang, detector, monitoring as cloud_metrics, metric_exp, reader, meter:
+        manager.initialize()
+
+    assert _exporter_project(traces) == 'adc-proj'
+    assert _exporter_project(cloud_metrics) == 'adc-proj'
+    assert _exporter_project(_stub_cloud_logging_exporter) == 'adc-proj'
+
+    provider = TracerProvider()
+    try:
+        with provider.get_tracer('test').start_as_current_span('order') as span:
+            event = manager._inject_trace_context(MagicMock(), 'info', {'event': 'order placed'})
+            trace_id = span.get_span_context().trace_id
+    finally:
+        provider.shutdown()
+    assert event['logging.googleapis.com/trace'] == f'projects/adc-proj/traces/{trace_id:032x}'
+
+
+def test_explicit_project_skips_adc_lookup(_adc_project: MagicMock) -> None:
+    """project_id= wins, so ADC is never asked."""
+    env, gcp, adjusting, hang, detector, monitoring, metric_exp, reader, meter = _prod_exporter_patches()
+    with env, gcp as traces, adjusting, hang, detector, monitoring, metric_exp, reader, meter:
+        enable_google_cloud_telemetry(project_id='explicit-proj')
+
+    _adc_project.assert_not_called()
+    assert _exporter_project(traces) == 'explicit-proj'
+
+
+def test_dev_without_force_skips_adc_lookup(monkeypatch: pytest.MonkeyPatch, _adc_project: MagicMock) -> None:
+    """Under genkit start with no export, enable() does not probe ADC."""
+    for key in ('GOOGLE_CLOUD_PROJECT', 'GCLOUD_PROJECT'):
+        monkeypatch.delenv(key, raising=False)
+    with mock.patch.dict(os.environ, {_GENKIT_ENV: _ENV_DEV}):
+        enable_google_cloud_telemetry()
+
+    _adc_project.assert_not_called()
+
+
+def test_adc_project_id_is_none_without_default_credentials() -> None:
+    """No ADC on the machine means no project, not a raise."""
+    from genkit_google_cloud.telemetry import config
+
+    with patch.object(config, 'google_auth_default', side_effect=DefaultCredentialsError('no ADC')):
+        assert _adc_project_id() is None
+    with patch.object(config, 'google_auth_default', return_value=(MagicMock(), 'adc-proj')):
+        assert _adc_project_id() == 'adc-proj'
 
 
 def test_legacy_force_export_parameter() -> None:

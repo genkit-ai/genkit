@@ -100,7 +100,8 @@ def enable_google_cloud_telemetry(
 
     Args:
         project_id: Google Cloud project ID. Wins over ``GOOGLE_CLOUD_PROJECT``,
-            ``GCLOUD_PROJECT``, and the project on ``credentials``. Required
+            ``GCLOUD_PROJECT``, the project on ``credentials``, and the
+            Application Default Credentials project, in that order. Required
             when using external credentials (e.g., Workload Identity
             Federation).
         credentials: Service account credentials dict for authenticating with
@@ -189,14 +190,14 @@ def enable_google_cloud_telemetry(
         - Cloud Monitoring: https://cloud.google.com/monitoring/docs
         - Cloud Logging: https://cloud.google.com/logging/docs
     """
-    _reject_unusable_cloud_setup(sampler=sampler, disable_traces=disable_traces)
-
     global _enable_google_cloud_telemetry_already_called
     if _enable_google_cloud_telemetry_already_called:
         raise GenkitError(
             status='FAILED_PRECONDITION',
             message='enable_google_cloud_telemetry() was already called. Call it once from the app.',
         )
+    # Before the flag is set, so a rejected call can be fixed and retried.
+    _reject_unusable_cloud_setup(sampler=sampler, disable_traces=disable_traces)
     _enable_google_cloud_telemetry_already_called = True
 
     # Handle legacy force_export parameter

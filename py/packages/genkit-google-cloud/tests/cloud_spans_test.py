@@ -16,6 +16,8 @@
 
 """enable_google_cloud_telemetry() hangs Cloud; Genkit() under genkit start fills the Traces tab."""
 
+import subprocess  # noqa: S404 - runs this interpreter on a fixed script
+import sys
 from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Any
@@ -148,6 +150,13 @@ class NonSdkLoggerProvider:
 @pytest.fixture
 def real_otel_globals() -> None:
     """Opt a test into the process OpenTelemetry globals instead of a stub provider."""
+
+
+@pytest.fixture(autouse=True)
+def _no_adc_project() -> Generator[None, None, None]:
+    """Keep the developer's own ADC project out of these tests."""
+    with patch('genkit_google_cloud.telemetry.config._adc_project_id', return_value=None):
+        yield
 
 
 @pytest.fixture(autouse=True)
@@ -509,3 +518,46 @@ def test_enable_with_sampler_and_disable_traces_raises_invalid_argument(
             pass
 
     assert raised.value.status == 'INVALID_ARGUMENT'
+
+
+def test_enable_twice_with_sampler_on_a_fresh_process_raises_already_called(
+    real_otel_globals: None,
+) -> None:
+    """A repeat call with sampler= hits the once-per-process guard, not the app-tracer sampler error."""
+    with _cloud_enable(sampler=ALWAYS_OFF):
+        installed = trace_api.get_tracer_provider()
+        with pytest.raises(GenkitError, match='already called') as raised:
+            enable_google_cloud_telemetry(sampler=ALWAYS_OFF)
+
+    assert raised.value.status == 'FAILED_PRECONDITION'
+    assert isinstance(installed, TracerProvider)
+    assert installed.sampler is ALWAYS_OFF
+
+
+def test_nothing_registered_matches_only_the_default_otel_proxies(
+    real_otel_globals: None,
+) -> None:
+    """The default tracer and logger proxies count as unset; a same-named class elsewhere does not."""
+    from genkit_google_cloud.telemetry.config import _nothing_registered
+
+    class ProxyLoggerProvider:  # same name as OTel's, but the app's module
+        pass
+
+    assert _nothing_registered(trace_api.get_tracer_provider())
+    assert _nothing_registered(_logs.get_logger_provider())
+    assert not _nothing_registered(ProxyLoggerProvider())
+    assert not _nothing_registered(NonSdkLoggerProvider())
+
+
+def test_import_survives_otel_moving_the_logger_proxy() -> None:
+    """genkit_google_cloud imports even if OTel drops ProxyLoggerProvider from _logs._internal."""
+    script = (
+        'import opentelemetry._logs._internal as m\n'
+        'del m.ProxyLoggerProvider\n'
+        'import genkit_google_cloud.telemetry.config\n'
+        "print('imported')\n"
+    )
+    result = subprocess.run([sys.executable, '-c', script], capture_output=True, text=True, check=False)  # noqa: S603
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == 'imported'

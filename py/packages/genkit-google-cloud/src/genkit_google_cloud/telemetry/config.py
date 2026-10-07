@@ -28,8 +28,9 @@ from typing import Any
 
 import structlog
 from genkit_otel import GenAiInstrumentation
+from google.auth import default as google_auth_default
+from google.auth.exceptions import DefaultCredentialsError
 from opentelemetry import _logs, metrics, trace as trace_api
-from opentelemetry._logs._internal import ProxyLoggerProvider
 from opentelemetry.exporter.cloud_logging import CloudLoggingExporter  # ty: ignore[deprecated]
 from opentelemetry.exporter.cloud_monitoring import CloudMonitoringMetricsExporter
 from opentelemetry.resourcedetector.gcp_resource_detector import GoogleCloudResourceDetector
@@ -66,8 +67,16 @@ def _nothing_registered(provider: object) -> bool:
     Exact type, not ``isinstance``: a registered subclass of the proxy is the
     app's provider, and ``set_*_provider`` over it is a warned no-op, so a new
     provider would export to nothing.
+
+    ``ProxyLoggerProvider`` is only importable from ``opentelemetry._logs._internal``,
+    so it is matched by name and module. If an OTel release moves it, enable()
+    raises ``FAILED_PRECONDITION`` instead of ``import genkit_google_cloud``
+    failing.
     """
-    return type(provider) in (ProxyTracerProvider, ProxyLoggerProvider)
+    cls = type(provider)
+    if cls is ProxyTracerProvider:
+        return True
+    return cls.__name__ == 'ProxyLoggerProvider' and cls.__module__.startswith('opentelemetry._logs')
 
 
 def _reject_unusable_cloud_setup(*, sampler: Sampler | None, disable_traces: bool) -> None:
@@ -121,17 +130,10 @@ def _hang_exporter_on_process_tracer(*, exporter: SpanExporter, sampler: Sampler
     the tracer so ``sampler=`` has somewhere to go.
     """
     provider = trace_api.get_tracer_provider()
-    if _nothing_registered(provider):
-        provider = TracerProvider(sampler=sampler) if sampler is not None else TracerProvider()
+    if not isinstance(provider, TracerProvider):
+        # _reject_unusable_cloud_setup already ruled out anything but OTel's default proxy.
+        provider = TracerProvider(sampler=sampler)
         trace_api.set_tracer_provider(provider)
-    elif not isinstance(provider, TracerProvider):
-        raise GenkitError(
-            status='FAILED_PRECONDITION',
-            message=(
-                'the process tracer is not opentelemetry.sdk.trace.TracerProvider; '
-                'register that class so Cloud Trace can be added'
-            ),
-        )
     processor = SimpleSpanProcessor(exporter) if is_dev_environment() else BatchSpanProcessor(exporter)
     provider.add_span_processor(processor)
 
@@ -144,17 +146,10 @@ def _hang_exporter_on_process_logger(*, exporter: LogRecordExporter) -> None:
     prompt text.
     """
     provider = _logs.get_logger_provider()
-    if _nothing_registered(provider):
+    if not isinstance(provider, LoggerProvider):
+        # _reject_unusable_cloud_setup already ruled out anything but OTel's default proxy.
         provider = LoggerProvider()
         _logs.set_logger_provider(provider)
-    elif not isinstance(provider, LoggerProvider):
-        raise GenkitError(
-            status='FAILED_PRECONDITION',
-            message=(
-                'the process logger is not opentelemetry.sdk._logs.LoggerProvider; '
-                'register that class so Cloud Logging can be added'
-            ),
-        )
     processor = SimpleLogRecordProcessor(exporter) if is_dev_environment() else BatchLogRecordProcessor(exporter)
     provider.add_log_record_processor(processor)
 
@@ -192,6 +187,20 @@ def resolve_project_id(
         return credentials['project_id']
 
     return None
+
+
+def _adc_project_id() -> str | None:
+    """Project on Application Default Credentials, or None when ADC has none.
+
+    Same last fallback as Go ``googlecloud``. The Cloud exporters already look
+    this up on their own; resolving it here also lets structlog stamp
+    ``logging.googleapis.com/trace``.
+    """
+    try:
+        _, project_id = google_auth_default()
+    except DefaultCredentialsError:
+        return None
+    return project_id or None
 
 
 class GcpTelemetry:
@@ -279,6 +288,10 @@ class GcpTelemetry:
         """
         is_dev = is_dev_environment()
         should_export = self.force_dev_export or not is_dev
+
+        if should_export and not self.project_id:
+            # Only when exporting: an ADC lookup can probe the metadata server.
+            self.project_id = _adc_project_id()
 
         self._configure_logging()
 
