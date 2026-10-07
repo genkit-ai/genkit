@@ -2028,14 +2028,20 @@ async def test_batch_evaluator_run_directly_gets_request_options(setup_test: Set
 
 
 @pytest.mark.asyncio
-async def test_evaluator_ref_config_reaches_evaluator(setup_test: SetupFixture) -> None:
-    """ai.evaluate(evaluator=evaluator_ref(name, config={...})) hands the evaluator that dict."""
+async def test_evaluator_ref_config_keyword_reaches_the_evaluator(setup_test: SetupFixture) -> None:
+    """evaluator_ref(name, config={...}) hands that dict to the evaluator."""
     ai, *_ = setup_test
     seen = _define_recording_evaluator(ai, 'ref_eval')
 
     await ai.evaluate(evaluator=evaluator_ref('ref_eval', config={'judge': 'j1'}), dataset=_one_row())
 
     assert seen == [{'judge': 'j1'}]
+
+
+def test_evaluator_ref_with_positional_config_raises_type_error() -> None:
+    """evaluator_ref(name, {...}) raises TypeError; settings go in config=."""
+    with pytest.raises(TypeError):
+        evaluator_ref('local/x', {'judge': 'j1'})  # type: ignore[misc]
 
 
 def test_evaluator_ref_with_config_schema_keyword_raises_type_error() -> None:

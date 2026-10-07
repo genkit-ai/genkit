@@ -152,6 +152,18 @@ def test_create_embedder_ref_with_config_and_version() -> None:
     assert ref.version == 'beta'
 
 
+def test_create_embedder_ref_with_positional_config_raises_type_error() -> None:
+    """create_embedder_ref(name, {...}) raises TypeError; settings go in config=."""
+    with pytest.raises(TypeError):
+        create_embedder_ref('e', {'task': 'retrieval'})  # type: ignore[misc]
+
+
+def test_create_embedder_ref_with_positional_version_raises_type_error() -> None:
+    """create_embedder_ref(name, config, version) raises TypeError; version= is named."""
+    with pytest.raises(TypeError):
+        create_embedder_ref('e', None, 'v1')  # type: ignore[misc]
+
+
 class MockGenkitRegistry:
     """A mock registry to simulate action lookup."""
 
@@ -251,6 +263,34 @@ async def test_embed_with_embedder_ref(
     assert called_request.input == [content]
     # ref config, version, and call config all arrive as request.options
     assert called_request.options == {'param': 'value', 'additional_option': True, 'version': 'v1'}
+
+
+@pytest.mark.asyncio
+async def test_create_embedder_ref_config_keyword_reaches_the_embedder(
+    mock_genkit_instance: tuple[Genkit, MockGenkitRegistry],
+) -> None:
+    """create_embedder_ref(name, config={...}) arrives at the embedder as request.options."""
+    genkit_instance, registry = mock_genkit_instance
+
+    async def fake_embedder_fn(request: EmbedRequest) -> EmbedResponse:
+        return EmbedResponse(embeddings=[Embedding(embedding=[1.0])])
+
+    registry.register_action(
+        name='kw-embedder',
+        kind='embedder',
+        fn=fake_embedder_fn,
+        metadata=embedder_action_metadata('kw-embedder').metadata,
+        description='A fake embedder for testing',
+    )
+    ref = create_embedder_ref('kw-embedder', config={'task': 'retrieval'})
+
+    response = await genkit_instance.embed(embedder=ref, content='hello')
+
+    assert response[0].embedding == [1.0]
+    embed_action = await registry.resolve_action('embedder', 'kw-embedder')
+    called_request = embed_action.run.call_args[0][0]
+    assert isinstance(called_request, EmbedRequest)
+    assert called_request.options == {'task': 'retrieval'}
 
 
 @pytest.mark.asyncio
