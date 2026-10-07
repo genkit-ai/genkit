@@ -22,7 +22,8 @@ import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from typing import Any, cast
 
-from django.http import HttpRequest, HttpResponse, HttpResponseBase, JsonResponse, StreamingHttpResponse
+from django.core.exceptions import PermissionDenied, SuspiciousOperation
+from django.http import Http404, HttpRequest, HttpResponse, HttpResponseBase, JsonResponse, StreamingHttpResponse
 from django.views.decorators.csrf import csrf_exempt
 from pydantic import BaseModel
 
@@ -161,6 +162,9 @@ def genkit_django_handler(
                         context = await context
                     if isinstance(context, dict):
                         action_context = context
+                except (PermissionDenied, Http404, SuspiciousOperation):
+                    # Django's own denial; re-raise so it stays 403/404/400.
+                    raise
                 except Exception as e:
                     log_served_failure(adapter_logger=logger, error=e, where='context provider')
                     return _error_response(e)

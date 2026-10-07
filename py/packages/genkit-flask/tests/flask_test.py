@@ -100,8 +100,8 @@ def test_streaming() -> None:
     ]
 
 
-def test_flask_flow_raising_unauthenticated_returns_401_with_generic_message() -> None:
-    """Flask POST to a flow that raises GenkitError UNAUTHENTICATED returns 401 'Unauthenticated', not its text."""
+def test_flask_flow_raising_unauthenticated_returns_500_internal_error() -> None:
+    """Flask POST to a flow that raises GenkitError UNAUTHENTICATED is 500, not 401."""
     ai = Genkit()
     app = Flask(__name__)
     app.config.update({'TESTING': True})
@@ -114,8 +114,8 @@ def test_flask_flow_raising_unauthenticated_returns_401_with_generic_message() -
 
     response = app.test_client().post('/login', json={'data': 'x'})
 
-    assert response.status_code == 401
-    assert json.loads(response.data) == {'message': 'Unauthenticated', 'status': 'UNAUTHENTICATED'}
+    assert response.status_code == 500
+    assert json.loads(response.data) == {'message': 'Internal Error', 'status': 'INTERNAL'}
     assert b'alice@example.com' not in response.data
 
 

@@ -32,12 +32,12 @@ from anthropic import APIError, AsyncAnthropic
 from anthropic.types import Message as AnthropicMessage
 
 from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
-from genkit._core._error import mark_provider_error
 from genkit.model import Constrained, ModelRequest, ModelUsage, ToolRequest, get_basic_usage_stats
 from genkit.plugin_api import (
     ErrorResponseMetadata,
     StatusName,
     from_http_code,
+    mark_provider_error,
     parse_retry_after_ms,
 )
 from genkit_anthropic._config import BETA_KWARG_KEYS, STABLE_KWARG_KEYS, AnthropicConfig
