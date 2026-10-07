@@ -172,6 +172,33 @@ def decode_data_uri_bytes(url: str) -> bytes:
         raise ValueError('Invalid base64 data provided in media URL') from e
 
 
+_CLIENT_SETTING_FIELDS = ('timeout', 'extra_headers', 'extra_query', 'extra_body')
+
+
+def check_extra_body(extra: dict[str, Any], *, managed: tuple[str, ...], label: str) -> dict[str, Any]:
+    """Return ``extra`` as an ``extra_body``, or raise when it names a field Genkit builds or a client setting."""
+    for field in _CLIENT_SETTING_FIELDS:
+        if field in extra:
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=(
+                    f'{label}: {field!r} is a client setting, not a request field; '
+                    'pass it to OpenAI(timeout=..., default_headers=...)'
+                ),
+            )
+    for field in managed:
+        if field in extra:
+            hint = '; pin a model with version' if field == 'model' else ''
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=(
+                    f'{label}: extra field {field!r} is built by Genkit from the request '
+                    f'and cannot be set from config{hint}'
+                ),
+            )
+    return dict(extra)
+
+
 def pop_extra_body(config: dict[str, Any], *, managed: tuple[str, ...], label: str) -> dict[str, Any] | None:
     """Pop ``extra`` off a dumped config as an ``extra_body``, rejecting fields Genkit builds.
 
@@ -186,15 +213,7 @@ def pop_extra_body(config: dict[str, Any], *, managed: tuple[str, ...], label: s
     extra = config.pop('extra', None)
     if not extra:
         return None
-    for field in managed:
-        if field in extra:
-            raise GenkitError(
-                status='INVALID_ARGUMENT',
-                message=(
-                    f'{label}: extra field {field!r} is built by Genkit from the request and cannot be set from config'
-                ),
-            )
-    return dict(extra)
+    return check_extra_body(extra, managed=managed, label=label)
 
 
 def extract_config_dict(request: ModelRequest) -> dict[str, Any]:

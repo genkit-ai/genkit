@@ -27,17 +27,17 @@ from openai.types import CompletionUsage
 from openai.types.completion_usage import CompletionTokensDetails, PromptTokensDetails
 
 from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
-from genkit.model import ModelConfig, ModelRequest, ModelUsage, ToolDefinition
-from genkit_openai._models._model_info import SUPPORTED_OPENAI_MODELS, KnownGpt
+from genkit.model import ModelConfig, ModelRequest, ModelUsage, Supports, ToolDefinition
 from genkit_openai._models._utils import (
     DictMessageAdapter,
     MessageAdapter,
     MessageConverter,
+    check_extra_body,
     extract_response_metadata,
     reraise_openai_error,
     strip_markdown_fences,
 )
-from genkit_openai._typing import OpenAIConfig, SupportedOutputFormat
+from genkit_openai._typing import OpenAIConfig
 
 logger = structlog.get_logger(__name__)
 
@@ -48,8 +48,10 @@ _GENKIT_ONLY = frozenset({'api_key', 'top_k', 'version', 'max_output_tokens', 's
 
 # Body fields Genkit builds from the request. `extra` can't set them: the
 # schema can't see inside the passthrough, and overwriting them silently would
-# replace the conversation or break response parsing.
+# replace the model the action resolved (pin one with `version`), the
+# conversation, or break response parsing.
 _MANAGED_BODY_FIELDS = (
+    'model',
     'messages',
     'tools',
     'tool_choice',
@@ -58,19 +60,6 @@ _MANAGED_BODY_FIELDS = (
     'response_format',
     'stream',
 )
-
-
-def _check_extra(extra: dict[str, Any]) -> dict[str, Any]:
-    """The ``extra`` map as an ``extra_body``, or raise when it names a field Genkit builds."""
-    for field in _MANAGED_BODY_FIELDS:
-        if field in extra:
-            raise GenkitError(
-                status='INVALID_ARGUMENT',
-                message=(
-                    f'openai: extra field {field!r} is built by Genkit from the request and cannot be set from config'
-                ),
-            )
-    return dict(extra)
 
 
 def _uses_max_completion_tokens(model: str | None) -> bool:
@@ -119,7 +108,7 @@ def _openai_create_kwargs(*, config: OpenAIConfig, model: str | None = None) -> 
     if 'stop' not in body and config.stop_sequences is not None:
         body['stop'] = config.stop_sequences
     if config.extra:
-        body['extra_body'] = _check_extra(config.extra)
+        body['extra_body'] = check_extra_body(config.extra, managed=_MANAGED_BODY_FIELDS, label='openai')
     return body
 
 
@@ -254,15 +243,20 @@ def _finish_state(
 class OpenAIModel:
     """Handles OpenAI API interactions for the Genkit plugin."""
 
-    def __init__(self, model: str, client: AsyncOpenAI) -> None:
+    def __init__(self, model: str, client: AsyncOpenAI, *, supports: Supports | None = None) -> None:
         """Initializes the OpenAIModel instance with the specified model and OpenAI client parameters.
 
         Args:
             model: The OpenAI model to use for generating responses.
             client: Async OpenAI client instance.
+            supports: This model's advertised capabilities. ``'json'`` in
+                ``supports.output`` means the endpoint accepts schema-less JSON
+                mode. ``None`` (or an entry that omits ``output``) still sends
+                ``json_object`` so a fine-tune keeps working.
         """
         self._model = model
         self._openai_client = client
+        self._supports = supports
 
     @property
     def name(self) -> str:
@@ -371,12 +365,11 @@ class OpenAIModel:
                     },
                 }
 
-            model = SUPPORTED_OPENAI_MODELS.get(cast(KnownGpt, self._model))
-            # Unlisted chat ids still asked for JSON; send json_object and let
-            # the provider reject it if that model cannot do it.
-            if model is None:
-                return {'type': 'json_object'}
-            if model.supports and model.supports.output and SupportedOutputFormat.JSON_MODE in model.supports.output:
+            # 'json' in supports.output means this endpoint accepts schema-less
+            # JSON mode. An unlisted id or an entry that omits output still
+            # sends json_object so a fine-tune keeps working.
+            outputs = self._supports.output if self._supports is not None else None
+            if outputs is None or 'json' in outputs:
                 return {'type': 'json_object'}
 
         return {'type': 'text'}

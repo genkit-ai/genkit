@@ -109,14 +109,27 @@ def _managed_extra_field(extra: dict[str, Any]) -> str | None:
     return None
 
 
+def _existing_wire_key(target: dict[str, Any], key: str) -> str | None:
+    """The key already in ``target`` that google-genai would treat as the same name."""
+    wire = _wire_key(key)
+    for existing in target:
+        if _wire_key(existing) == wire:
+            return existing
+    return None
+
+
 def _deep_merge(target: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:
     merged = dict(target)
     for key, value in update.items():
-        current = merged.get(key)
-        if isinstance(current, dict) and isinstance(value, dict):
-            merged[key] = _deep_merge(cast(dict[str, Any], current), cast(dict[str, Any], value))
-        else:
+        existing = _existing_wire_key(merged, key)
+        if existing is None:
             merged[key] = value
+            continue
+        current = merged[existing]
+        if isinstance(current, dict) and isinstance(value, dict):
+            merged[existing] = _deep_merge(cast(dict[str, Any], current), cast(dict[str, Any], value))
+        else:
+            merged[existing] = value
     return merged
 
 
