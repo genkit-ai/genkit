@@ -48,9 +48,10 @@ _THINKING_SCHEMA = {
     'properties': {
         'enabled': {'type': 'boolean'},
         'budgetTokens': {'type': 'integer', 'minimum': 1024},
+        'budget_tokens': {'type': 'integer', 'minimum': 1024},
         'adaptive': {'type': 'boolean'},
         'display': {'type': 'string', 'enum': ['summarized', 'omitted']},
-        'type': {'type': 'string'},
+        'type': {'type': 'string', 'enum': ['enabled', 'disabled', 'adaptive']},
     },
     'additionalProperties': False,
     'description': (
@@ -88,6 +89,10 @@ _TOOL_CHOICE_SCHEMA = {
         'name': {
             'type': 'string',
             'description': 'Tool name to require when type is tool.',
+        },
+        'disable_parallel_tool_use': {
+            'type': 'boolean',
+            'description': 'Allow at most one tool call in the reply. Not valid with type none.',
         },
     },
     'required': ['type'],
@@ -184,8 +189,9 @@ class ThinkingConfig(BaseModel):
     budget_tokens: float | None = Field(default=None, alias='budgetTokens', ge=1024)
     adaptive: bool | None = None
     display: Literal['summarized', 'omitted'] | None = None
-    # the API's own spelling (`{'type': 'enabled', ...}`); kept open so a new mode doesn't need a release.
-    type: str | None = None
+    # The API's own spelling (`{'type': 'enabled', ...}`). A mode this list lacks
+    # can go out through `extra={'thinking': {...}}`, which replaces the setting.
+    type: Literal['enabled', 'disabled', 'adaptive'] | None = None
 
     @model_validator(mode='after')
     def _check_thinking(self) -> 'ThinkingConfig':
@@ -301,11 +307,13 @@ class AnthropicConfig(ModelConfig):
 
     model_config = ConfigDict(
         alias_generator=to_camel,
-        extra='forbid',
         json_schema_extra=_anthropic_config_schema_extra,
         populate_by_name=True,
     )
 
+    # Config fields that are never create() kwargs. api_version picks the API
+    # surface. api_key is declared by ModelConfig; generate rejects it before
+    # params are built, since the per-request key comes from context.secrets.
     SDK_UNSUPPORTED_KEYS: ClassVar[frozenset[str]] = frozenset({'api_version', 'api_key'})
 
     thinking: Annotated[ThinkingConfig | None, WithJsonSchema(_THINKING_SCHEMA)] = Field(

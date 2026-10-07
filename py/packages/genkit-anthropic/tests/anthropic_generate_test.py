@@ -246,6 +246,18 @@ async def test_generate_claude_secrets_without_api_key_uses_plugin_key() -> None
     assert api.api_key() == PLUGIN_KEY
 
 
+@pytest.mark.asyncio
+async def test_generate_claude_top_level_context_api_key_is_ignored() -> None:
+    """An `api_key` an app's own auth context provider set on the top-level context doesn't reach Claude."""
+    api = FakeClaudeApi()
+    ai = _genkit(api)
+
+    response = await ai.generate(model=MODEL, prompt='hi', context={'api_key': 'app-caller-key'})
+
+    assert response.text == 'ok'
+    assert api.api_key() == PLUGIN_KEY
+
+
 @pytest.mark.parametrize(
     'secrets',
     [
@@ -278,14 +290,23 @@ async def test_generate_claude_blank_secrets_key_fails_instead_of_using_plugin_k
     assert api.requests == []
 
 
-@pytest.mark.parametrize('config', [{'api_key': TENANT_KEY}, {'apiKey': TENANT_KEY}])
+@pytest.mark.parametrize(
+    'config',
+    [{'api_key': TENANT_KEY}, {'apiKey': TENANT_KEY}, {'extra': {'api_key': TENANT_KEY}}],
+    ids=['api_key', 'apiKey', 'extra'],
+)
+@pytest.mark.parametrize('plugin_key', [PLUGIN_KEY, None], ids=['plugin-key', 'no-plugin-key'])
 @pytest.mark.asyncio
+@pytest.mark.usefixtures('no_env_key')
 async def test_generate_claude_config_api_key_fails_pointing_to_secrets(
-    config: dict[str, Any],
+    config: dict[str, Any], plugin_key: str | None
 ) -> None:
-    """A key in config fails with INVALID_ARGUMENT naming `context.secrets` without echoing it; nothing is sent."""
+    """A key in config or config.extra fails INVALID_ARGUMENT naming `context.secrets`, with or without a plugin key.
+
+    The key is not echoed and nothing is sent.
+    """
     api = FakeClaudeApi()
-    ai = _genkit(api)
+    ai = _genkit(api, api_key=plugin_key)
 
     response = await ai.generate(model=MODEL, prompt='hi', config=config)
 
@@ -301,9 +322,10 @@ async def test_generate_claude_config_api_key_fails_pointing_to_secrets(
     ('client_params', 'reason'),
     [
         ({'api_key': None, 'auth_token': 'corp-bearer'}, 'auth token'),
-        ({'default_headers': {'X-Api-Key': 'pinned'}}, 'x-api-key'),
+        ({'default_headers': {'X-Api-Key': 'pinned'}}, 'X-Api-Key'),
+        ({'default_headers': {'Authorization': 'Bearer corp'}}, 'Authorization'),
     ],
-    ids=['auth-token-client', 'fixed-x-api-key-header-client'],
+    ids=['auth-token-client', 'fixed-x-api-key-header-client', 'fixed-authorization-header-client'],
 )
 @pytest.mark.asyncio
 async def test_generate_claude_secrets_key_on_client_that_cannot_swap_key_fails(
@@ -317,7 +339,7 @@ async def test_generate_claude_secrets_key_on_client_that_cannot_swap_key_fails(
 
     assert response.finish_reason == FinishReason.FAILED
     assert response.error is not None
-    assert response.error.status == 'INVALID_ARGUMENT'
+    assert response.error.status == 'FAILED_PRECONDITION'
     assert reason in response.error.message
     assert TENANT_KEY not in response.error.message
     assert api.requests == []

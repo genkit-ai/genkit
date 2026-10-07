@@ -16,9 +16,21 @@
 
 """Tests for the typed Anthropic config schema."""
 
+from typing import Any
+
 import pytest
-from genkit_anthropic._config import AnthropicConfig, ThinkingConfig
-from pydantic import ValidationError
+from genkit_anthropic._config import (
+    AnthropicConfig,
+    AnyToolChoice,
+    AutoToolChoice,
+    OutputConfig,
+    RequestMetadata,
+    SpecificToolChoice,
+    TaskBudget,
+    ThinkingConfig,
+    ToolChoiceNone,
+)
+from pydantic import BaseModel, ValidationError
 
 from genkit.plugin_api import to_json_schema
 
@@ -286,3 +298,42 @@ def test_beta_only_fields_rejected_on_stable_surface(raw: dict) -> None:
 def test_beta_only_fields_allowed_without_explicit_stable(raw: dict) -> None:
     """Beta-only fields are accepted unless stable is explicitly requested."""
     assert AnthropicConfig.model_validate(raw) is not None
+
+
+def test_thinking_type_typo_raises() -> None:
+    """`{'type': 'adaptiv'}` fails before the request is sent."""
+    with pytest.raises(ValidationError):
+        ThinkingConfig.model_validate({'type': 'adaptiv'})
+
+
+def _accepted_keys(model: type[BaseModel]) -> set[str]:
+    keys: set[str] = set()
+    for name, field in model.model_fields.items():
+        keys.add(name)
+        if field.alias:
+            keys.add(field.alias)
+    return keys
+
+
+@pytest.mark.parametrize(
+    'path,models',
+    [
+        (['thinking'], [ThinkingConfig]),
+        (['output_config'], [OutputConfig]),
+        (['output_config', 'task_budget'], [TaskBudget]),
+        (['tool_choice'], [AutoToolChoice, AnyToolChoice, SpecificToolChoice, ToolChoiceNone]),
+        (['metadata'], [RequestMetadata]),
+    ],
+    ids=['thinking', 'output_config', 'task_budget', 'tool_choice', 'metadata'],
+)
+def test_dev_ui_schema_lists_every_nested_key_the_config_accepts(
+    path: list[str], models: list[type[BaseModel]]
+) -> None:
+    """With `additionalProperties: false`, the Dev UI form rejects any key the hand-written schema leaves out."""
+    node: dict[str, Any] = to_json_schema(AnthropicConfig)
+    for key in path:
+        node = node['properties'][key]
+
+    assert node['additionalProperties'] is False
+    accepted = set().union(*(_accepted_keys(m) for m in models))
+    assert accepted <= set(node['properties'])

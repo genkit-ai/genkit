@@ -36,12 +36,13 @@ from genkit.model import Constrained, ModelRequest, ModelUsage, ToolRequest, get
 from genkit.plugin_api import (
     ErrorResponseMetadata,
     StatusName,
+    context_api_key,
     from_http_code,
     parse_retry_after_ms,
+    reject_config_api_key,
 )
 from genkit_anthropic._config import AnthropicConfig
 from genkit_anthropic._model_info import get_model_info
-from genkit_anthropic._secrets import context_api_key, reject_request_config_api_key
 from genkit_anthropic._utils import (
     build_cache_usage,
     get_cache_control,
@@ -175,11 +176,8 @@ def _to_anthropic_thinking_config(thinking: dict[str, Any] | None) -> dict[str, 
         result['type'] = 'disabled'
         return result
 
-    if thinking_type is not None:
-        result['type'] = thinking_type
-    if 'type' not in result:
-        return None
-    return result
+    # No mode set: there's no SDK type to send.
+    return None
 
 
 # Body fields Genkit builds from the request. `extra` can't set them: the
@@ -225,6 +223,19 @@ def _merge_config_extra(params: dict[str, Any], extra: dict[str, Any] | None) ->
                 )
             raise GenkitError(status='INVALID_ARGUMENT', message=message)
     params['extra_body'] = dict(extra)
+
+
+def pinned_credential_header(client: AsyncAnthropic) -> str | None:
+    """The credential header ``client`` pins in ``default_headers``, if any.
+
+    ``copy(api_key=...)`` keeps custom headers, so a pinned ``x-api-key`` or
+    ``Authorization`` would still go out next to a tenant key and could
+    authenticate the call.
+    """
+    for name in client._custom_headers:  # noqa: SLF001
+        if name.lower() in ('x-api-key', 'authorization'):
+            return name
+    return None
 
 
 class AnthropicModel:
@@ -273,10 +284,10 @@ class AnthropicModel:
         Returns:
             Generated response.
         """
-        reject_request_config_api_key(request.config)
+        reject_config_api_key(request.config)
         config = _normalize_config(request.config)
         use_beta = self._uses_beta_api(config)
-        context = ctx.context if ctx is not None and isinstance(ctx.context, dict) else {}
+        context = ctx.context if ctx is not None and isinstance(ctx.context, dict) else None
         client = self._client_for_key(context_api_key(context))
         params = self._build_params(request, config=config, use_beta=use_beta)
         streaming = ctx and ctx.is_streaming
@@ -368,11 +379,11 @@ class AnthropicModel:
         # copy() cannot unset these, so the override would leave the base credential authenticating the request.
         elif self.client.auth_token is not None:
             reason = 'the plugin client authenticates with an auth token'
-        elif any(name.lower() == 'x-api-key' for name in self.client._custom_headers):  # noqa: SLF001
-            reason = 'the plugin client sets its own x-api-key header'
+        elif (header := pinned_credential_header(self.client)) is not None:
+            reason = f'the plugin client sets its own {header} header'
         if reason is not None:
             raise GenkitError(
-                status='INVALID_ARGUMENT',
+                status='FAILED_PRECONDITION',
                 message=f'A per-request API key from context.secrets cannot be used: {reason}.',
             )
 
@@ -418,7 +429,7 @@ class AnthropicModel:
         params['messages'] = self._to_anthropic_messages(request.messages)
         params['max_tokens'] = int(max_tokens)
 
-        # api_version and api_key select the API surface and client; they are not create() kwargs.
+        # Not create() kwargs; see AnthropicConfig.SDK_UNSUPPORTED_KEYS.
         for key in AnthropicConfig.SDK_UNSUPPORTED_KEYS:
             params.pop(key, None)
 
@@ -489,7 +500,7 @@ class AnthropicModel:
                     params['tool_choice'] = request.tool_choice
 
         # The API rejects tool_choice when the request carries no tools.
-        if not params.get('tools') and not (extra or {}).get('tools'):
+        if not params.get('tools'):
             params.pop('tool_choice', None)
 
         _merge_config_extra(params, extra)
