@@ -60,7 +60,7 @@ async def get_weather(input: WeatherInput) -> WeatherOutput:
     )
 
 
-# Same object you mount with serve_agent(agent) under /api/weatherAgent.
+# Same object you mount with genkit_fastapi.exp.serve_agent(agent) under /api/weatherAgent.
 agent = ai.define_agent(
     name='weatherAgent',
     model=GoogleAI.gemini_model('gemini-flash-latest'),

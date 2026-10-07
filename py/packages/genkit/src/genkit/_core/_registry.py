@@ -49,7 +49,7 @@ from genkit._core._model import (
     ModelResponse,
     ModelResponseChunk,
 )
-from genkit._core._plugin import Plugin
+from genkit._core._plugin import Plugin, resolved_action_name
 from genkit._core._typing import (
     ActionMetadata,
     EmbedResponse,
@@ -300,6 +300,7 @@ class Registry:
         description: str | None = None,
         metadata: dict[str, object] | None = None,
         span_metadata: dict[str, SpanAttributeValue] | None = None,
+        _strict_io: bool = False,
     ) -> Action[InputT, OutputT, ChunkT]:
         """Register a new action with the registry.
 
@@ -315,6 +316,7 @@ class Registry:
             description: Optional human-readable description of the action.
             metadata: Optional dictionary of metadata about the action.
             span_metadata: Optional dictionary of tracing span metadata.
+            _strict_io: Treat None as a value and validate the return.
 
         Returns:
             The newly created and registered Action instance.
@@ -327,6 +329,7 @@ class Registry:
             description=description,
             metadata=metadata,
             span_metadata=span_metadata,
+            _strict_io=_strict_io,
         )
         action_typed = cast(Action[InputT, OutputT, ChunkT], action)
         with self._lock:
@@ -586,23 +589,19 @@ class Registry:
     def register_action_instance(self, action: Action, *, namespace: str | None = None) -> None:
         """Register an existing Action instance with optional namespace normalization.
 
-        If a namespace is provided, the action name will be normalized to ensure
-        it has the correct plugin prefix.
+        If a namespace is provided, the action is registered as
+        ``{namespace}/{name}`` unless its name already starts with
+        ``{namespace}/``.
 
         Args:
             action: The action instance to register.
             namespace: Optional plugin namespace to prefix the action name.
         """
         name = action.name
-        if namespace:
-            if '/' in name:
-                # Name already has a namespace, replace it
-                _, local = name.split('/', 1)
-                name = f'{namespace}/{local}'
-            else:
-                # Name is local, prefix with namespace
-                name = f'{namespace}/{name}'
-            # Update the action's name via the module-level helper to respect encapsulation
+        # provider ids legitimately contain slashes (publishers, tuned
+        # endpoints, ARNs), so the whole name is kept under the plugin prefix.
+        if namespace and not name.startswith(f'{namespace}/'):
+            name = f'{namespace}/{name}'
             set_action_name(action, name)
 
         with self._lock:
@@ -686,8 +685,10 @@ class Registry:
         Tries an exact (kind, name) cache hit first. DAP-qualified names
         (``provider:innerKind/innerName``) go through that provider. If the
         name contains a slash, the first segment is treated as a plugin id:
-        that plugin is initialized and plugin.resolve is used. Falls back to
-        parent registry if nothing found.
+        that plugin is initialized and plugin.resolve is called with the rest
+        of the name (``fast-model`` for ``myplug/fast-model``). A returned
+        action is named and stored under the id the caller asked for. Falls
+        back to parent registry if nothing found.
 
         Args:
             kind: The type of action to resolve.
@@ -728,11 +729,14 @@ class Registry:
                     if kind in self._entries and target in self._entries[kind]:
                         return await self._trigger_lazy_loading(self._entries[kind][target])
 
-                action = await plugin.resolve(kind, target)
+                action = await plugin.resolve(kind, local)
                 if action is not None:
+                    # The caller asked for ``target``; store and name it there
+                    # so a later lookup of that id finds this action, even if
+                    # the plugin returned a different name.
+                    set_action_name(action, resolved_action_name(plugin=plugin_name, requested_id=local))
                     self.register_action_instance(action, namespace=plugin_name)
-                    with self._lock:
-                        return await self._trigger_lazy_loading(self._entries.get(kind, {}).get(target))
+                    return await self._trigger_lazy_loading(action)
 
         # Final fallback: delegate to parent registry.
         if self._parent is not None:

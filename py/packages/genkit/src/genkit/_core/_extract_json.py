@@ -32,7 +32,24 @@ def parse_partial_json(json_string: str) -> Any:  # noqa: ANN401
 
 
 def extract_json(text: str, throw_on_bad_json: bool = True) -> Any:  # noqa: ANN401
-    """Extract JSON from text with lenient parsing (handles trailing commas, partial JSON, etc.)."""
+    """Extract complete JSON from text with lenient parsing (trailing commas, code fences, surrounding prose).
+
+    A finished reply cut off mid-object isn't JSON. A ``{name}`` placeholder
+    in the prose is skipped so a later object can still be found.
+    """
+    return scan_json(text, throw_on_bad_json=throw_on_bad_json, allow_partial=False)
+
+
+def extract_partial_json(text: str) -> Any:  # noqa: ANN401
+    """Extract JSON from streaming text. Never raises.
+
+    Returns complete JSON, a repaired partial object, or None.
+    """
+    return scan_json(text, throw_on_bad_json=False, allow_partial=True)
+
+
+def scan_json(text: str, *, throw_on_bad_json: bool, allow_partial: bool) -> Any:  # noqa: ANN401
+    """Scan ``text`` for a JSON value. Used by extract_json and extract_partial_json."""
     if not text.strip():
         return None
 
@@ -75,10 +92,18 @@ def extract_json(text: str, throw_on_bad_json: bool = True) -> Any:  # noqa: ANN
         elif char == closing_char:
             nesting_count -= 1
             if not nesting_count:
-                return json5.loads(text[start_pos or 0 : i + 1])
+                try:
+                    return json5.loads(text[start_pos or 0 : i + 1])
+                except ValueError:
+                    # {name} or a set literal is a balanced group that isn't
+                    # JSON; keep looking so surrounding prose doesn't hide the
+                    # object they asked for.
+                    opening_char = None
+                    closing_char = None
+                    start_pos = None
+                    nesting_count = 0
 
-    # Handle incomplete JSON structure
-    if start_pos is not None and nesting_count > 0:
+    if allow_partial and start_pos is not None and nesting_count > 0:
         try:
             return parse_partial_json(text[start_pos:])
         except Exception as e:

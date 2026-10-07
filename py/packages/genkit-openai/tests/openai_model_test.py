@@ -22,18 +22,21 @@ from collections.abc import AsyncIterator, Callable
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, PropertyMock
 
+import httpx
 import pytest
 from genkit_openai._models import OpenAIModel
 from genkit_openai._models._model import _usage_from_completion
+from genkit_openai._models._model_info import GPT_4_MODEL_SUPPORTS, SUPPORTED_OPENAI_MODELS
 from genkit_openai._models._utils import strip_markdown_fences
 from genkit_openai._typing import OpenAIConfig, ReasoningEffort
+from openai import APIError, AsyncOpenAI
 from openai.types import CompletionUsage
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 from pydantic import BaseModel
 
 from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
 from genkit._core._typing import GenerationUsage, Operation
-from genkit.model import ModelConfig, ModelRequest, OutputConfig, ToolRequest
+from genkit.model import ModelConfig, ModelRequest, OutputConfig, Supports, ToolRequest
 
 
 def test_unknown_chat_id_json_mode_uses_json_object() -> None:
@@ -48,12 +51,37 @@ def test_unknown_chat_id_json_mode_uses_json_object() -> None:
 
 def test_gpt_6_astra_json_mode_uses_json_object() -> None:
     """A schema-less JSON request to gpt-6-astra sends json_object, as the catalog advertises."""
-    model = OpenAIModel(model='gpt-6-astra', client=MagicMock())
+    info = SUPPORTED_OPENAI_MODELS['gpt-6-astra']
+    model = OpenAIModel(model='gpt-6-astra', client=MagicMock(), supports=info.supports)
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('Hi')])],
         output=OutputConfig(format='json'),
     )
     assert model._get_response_format(request) == {'type': 'json_object'}
+
+
+def test_gpt_4_json_request_uses_text() -> None:
+    """gpt-4 does not list json output, so a schema-less JSON request sends text."""
+    model = OpenAIModel(model='gpt-4', client=MagicMock(), supports=GPT_4_MODEL_SUPPORTS)
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part.from_text('Hi')])],
+        output=OutputConfig(format='json'),
+    )
+    assert model._get_response_format(request) == {'type': 'text'}
+
+
+def test_openai_model_text_only_supports_json_request_sends_text() -> None:
+    """An OpenAI-compatible model built with supports.output=['text'] sends text for a schema-less JSON request."""
+    model = OpenAIModel(
+        model='some-text-only-compat',
+        client=MagicMock(),
+        supports=Supports(output=['text']),
+    )
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part.from_text('give me json')])],
+        output=OutputConfig(format='json'),
+    )
+    assert model._get_response_format(request) == {'type': 'text'}
 
 
 def test_get_messages(sample_request: ModelRequest) -> None:
@@ -1707,3 +1735,67 @@ class TestResponseMetadata:
         assert response.custom['systemFingerprint'] == 'fp_deepseek'
         assert response.raw is not None
         assert response.raw['choices'][0]['message']['content'] == fenced
+
+
+async def _stream_through_sdk(sse_body: str, sample_request: ModelRequest) -> tuple[list[str], BaseException]:
+    """Stream through the real OpenAI SDK against a canned SSE body; return chunks and the error."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={'content-type': 'text/event-stream'}, content=sse_body.encode())
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = AsyncOpenAI(api_key='test-key', http_client=http_client, max_retries=0)
+    model = OpenAIModel(model='gpt-4o', client=client)
+    chunks: list[str] = []
+    ctx = MagicMock(spec=ActionRunContext)
+    type(ctx).is_streaming = PropertyMock(return_value=True)
+    ctx.send_chunk.side_effect = lambda chunk: chunks.append(chunk.text)
+
+    with pytest.raises(Exception) as exc_info:
+        await model.generate(sample_request, ctx)
+    await http_client.aclose()
+    return chunks, exc_info.value
+
+
+def _stream_failing_after_first_token(error: dict[str, Any]) -> str:
+    """A 200 stream that emits one token, then a chunk carrying an `error` object."""
+    first = {
+        'id': 'chatcmpl-1',
+        'object': 'chat.completion.chunk',
+        'created': 1700000000,
+        'model': 'gpt-4o',
+        'choices': [{'index': 0, 'delta': {'role': 'assistant', 'content': 'Grilled'}, 'finish_reason': None}],
+    }
+    return f'data: {json.dumps(first)}\n\ndata: {json.dumps({"error": error})}\n\n'
+
+
+@pytest.mark.asyncio
+async def test_generate_classifies_known_mid_stream_error(sample_request: ModelRequest) -> None:
+    """A rate limit reported mid-stream after a 200 is RESOURCE_EXHAUSTED, so retry backs off."""
+    chunks, error = await _stream_through_sdk(
+        _stream_failing_after_first_token({
+            'message': 'Rate limit reached for gpt-4o',
+            'type': 'requests',
+            'code': 'rate_limit_exceeded',
+        }),
+        sample_request,
+    )
+
+    assert chunks == ['Grilled']
+    assert isinstance(error, GenkitError)
+    assert error.status == 'RESOURCE_EXHAUSTED'
+    assert error.original_message == 'Rate limit reached for gpt-4o'
+    assert type(error.cause) is APIError
+
+
+@pytest.mark.asyncio
+async def test_generate_leaves_unknown_mid_stream_error_raw(sample_request: ModelRequest) -> None:
+    """A mid-stream error the plugin does not know reaches the caller as the SDK raised it."""
+    chunks, error = await _stream_through_sdk(
+        _stream_failing_after_first_token({'message': 'Upstream reset', 'type': 'brand_new_error'}),
+        sample_request,
+    )
+
+    assert chunks == ['Grilled']
+    assert type(error) is APIError
+    assert error.message == 'Upstream reset'

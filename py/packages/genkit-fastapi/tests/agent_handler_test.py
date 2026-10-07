@@ -1,7 +1,7 @@
 # Copyright 2026 Google LLC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for serve_agent in genkit_fastapi."""
+"""Tests for serve_agent in genkit_fastapi.exp."""
 
 from __future__ import annotations
 
@@ -19,9 +19,11 @@ if not hasattr(_genkit_agent, 'InMemorySessionStore'):
 InMemorySessionStore = _genkit_agent.InMemorySessionStore
 AgentInit = _genkit_agent.AgentInit
 
-from genkit_fastapi import handle_genkit_request, serve_agent  # noqa: E402
+from genkit_fastapi import handle_genkit_request  # noqa: E402
+from genkit_fastapi.exp import serve_agent  # noqa: E402
 
-from genkit._ai._testing import define_programmable_model  # noqa: E402
+from genkit._ai._agents._client import error_from_http  # noqa: E402
+from genkit._core._error import RuntimeErrorReason  # noqa: E402
 from genkit._core._model import (  # noqa: E402
     Message,
     ModelResponse,
@@ -30,23 +32,25 @@ from genkit._core._model import (  # noqa: E402
 )
 from genkit._core._typing import FinishReason, Role  # noqa: E402
 from genkit.exp import Genkit  # noqa: E402
+from genkit.testing import define_scripted_model  # noqa: E402
 
 
-def build_agent(name: str) -> Any:
-    """A server-backed prompt agent whose model replies with a fixed line."""
+def build_agent(name: str, *, server_managed: bool = True) -> Any:
+    """A prompt agent whose model replies with a fixed line; server-backed unless told otherwise."""
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
-    ai.define_prompt(name=name, model='programmableModel', system='You echo things.')
-    agent = ai.define_prompt_agent(name=name, store=InMemorySessionStore())
-
-    pm.responses.append(
-        ModelResponse(
-            finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part.from_text('Hi there!')]),
-        )
+    define_scripted_model(
+        ai,
+        name='scriptedModel',
+        responses=[
+            ModelResponse(
+                finish_reason=FinishReason.STOP,
+                message=Message(role=Role.MODEL, content=[Part.from_text('Hi there!')]),
+            )
+        ],
+        chunks=[[ModelResponseChunkModel(role=Role.MODEL, content=[Part.from_text('Hi there!')])]],
     )
-    pm.chunks = [[ModelResponseChunkModel(role=Role.MODEL, content=[Part.from_text('Hi there!')])]]
-    return agent
+    ai.define_prompt(name=name, model='scriptedModel', system='You echo things.')
+    return ai.define_prompt_agent(name=name, store=InMemorySessionStore() if server_managed else None)
 
 
 def sse_events(text: str) -> list[dict[str, Any]]:
@@ -140,8 +144,34 @@ def test_context_dependency_allows_the_turn() -> None:
     assert 'Hi there!' in json.dumps(sse_events(response.text)[-1]['result'])
 
 
-def test_handle_genkit_request_powers_a_hand_rolled_route() -> None:
-    """The public primitive serves the wire format from a custom endpoint."""
+def test_serve_agent_message_body_starts_a_turn() -> None:
+    """POST {"message": "hi"} to serve_agent starts a turn."""
+    client_obj = client(build_agent('msgAgent'))
+
+    response = client_obj.post('/api/chat', json={'message': 'hi'})
+
+    assert response.status_code == 200
+    assert 'Hi there!' in json.dumps(response.json()['result'])
+
+
+def test_serve_agent_session_id_query_param_continues_session() -> None:
+    """POST /chat?session_id=s1 runs the turn in session s1."""
+    client_obj = client(build_agent('sessionAgent'))
+
+    response = client_obj.post('/api/chat?session_id=s1', json={'message': 'Hi'})
+
+    assert response.status_code == 200
+    result = response.json()['result']
+    assert result['sessionId'] == 's1'
+    assert 'Hi there!' in json.dumps(result)
+
+    snap = client_obj.post('/api/chat/getSnapshot', json={'sessionId': 's1'})
+    assert snap.status_code == 200
+    assert snap.json()['result']['sessionId'] == 's1'
+
+
+def test_handle_genkit_request_agent_route_with_data_envelope_runs_turn() -> None:
+    """A custom route that calls handle_genkit_request with {"data": ...} runs a turn."""
     agent = build_agent('handRolledAgent')
     app = FastAPI()
 
@@ -157,7 +187,75 @@ def test_handle_genkit_request_powers_a_hand_rolled_route() -> None:
 
     client_obj = TestClient(app)
 
-    response = client_obj.post('/custom', json={'message': 'Hi'})
+    response = client_obj.post(
+        '/custom',
+        json={'data': {'message': {'role': 'user', 'content': [{'text': 'Hi'}]}}},
+    )
 
     assert response.status_code == 200
-    assert 'Hi there!' in json.dumps(response.json()['result'])
+    result = response.json()['result']
+    assert result['sessionId'] == 'session-789'
+    assert 'Hi there!' in json.dumps(result)
+
+
+@pytest.mark.parametrize(
+    'path, body, message',
+    [
+        pytest.param('/api/chat', {'foo': 'bar'}, 'Action request must be wrapped in {"data": ...} object', id='turn'),
+        pytest.param(
+            '/api/chat/getSnapshot',
+            {'snapshotId': 's1', 'sessionId': 'x1'},
+            "getSnapshot requires exactly one of 'snapshotId' (or 'snapshot_id') or 'sessionId' (or 'session_id').",
+            id='get-snapshot',
+        ),
+        pytest.param(
+            '/api/chat/abort', {'data': {}}, "abort requires 'snapshotId' (or 'snapshot_id') in input.", id='abort'
+        ),
+    ],
+)
+def test_serve_agent_bad_input_returns_400_with_its_message(path: str, body: dict[str, Any], message: str) -> None:
+    """Agent-route input errors are fixed adapter text, so the caller sees what to fix."""
+    response = client(build_agent('badInputAgent')).post(path, json=body)
+
+    assert response.status_code == 400
+    assert response.json() == {'message': message, 'status': 'INVALID_ARGUMENT'}
+
+
+@pytest.mark.parametrize(
+    'server_managed, init, message, reason',
+    [
+        pytest.param(
+            True,
+            {'state': {'custom': {'table': 4}}},
+            "Cannot send 'state' to agent 'initAgent': this agent uses a server-managed store. "
+            "Send 'snapshotId' or 'sessionId' instead.",
+            None,
+            id='state-to-server-managed',
+        ),
+        pytest.param(
+            False,
+            {'snapshotId': 'snap-1'},
+            "Cannot use 'snapshotId' with agent 'initAgent': this agent has no store configured "
+            "(client-managed state). Send 'state' instead.",
+            RuntimeErrorReason.SESSION_STORE_NOT_CONFIGURED,
+            id='snapshot-id-without-store',
+        ),
+    ],
+)
+def test_serve_agent_init_mismatch_returns_agent_init_error(
+    server_managed: bool, init: dict[str, Any], message: str, reason: RuntimeErrorReason | None
+) -> None:
+    """AgentInitError is a PublicError, so a remote client sees the status, message, and reason it would in-process."""
+    response = client(build_agent('initAgent', server_managed=server_managed)).post(
+        '/api/chat', json={'input': {'message': {'role': 'user', 'content': [{'text': 'Hi'}]}}, 'init': init}
+    )
+
+    assert response.status_code == 400
+    expected: dict[str, Any] = {'message': message, 'status': 'FAILED_PRECONDITION'}
+    if reason is not None:
+        expected['details'] = {'reason': reason.value}
+    assert response.json() == expected
+
+    err = error_from_http(status_code=response.status_code, body=response.text)
+    assert err.status == 'FAILED_PRECONDITION'
+    assert err.reason is reason

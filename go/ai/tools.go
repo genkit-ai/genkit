@@ -132,6 +132,15 @@ func IsToolInterruptError(err error) (bool, map[string]any) {
 	return false, nil
 }
 
+// IsToolFailError reports whether err, or any error it wraps, was made with
+// tool.Fail (ai/exp/tool): an error the loop returns to the model as the
+// tool's response instead of failing the generation. Use it to check in a
+// test that a tool returns its error to the model.
+func IsToolFailError(err error) bool {
+	var fail *base.ToolFailError
+	return errors.As(err, &fail)
+}
+
 // NewToolInterruptError creates a tool interrupt error with the given metadata.
 // This is intended for use in middleware that needs to interrupt tool execution
 // without calling the tool itself.
@@ -557,7 +566,7 @@ func (t *ToolAction[In, Out]) RunRawMultipart(ctx context.Context, input any) (*
 	}
 	output, err := t.action.RunJSON(ctx, mi, nil)
 	if err != nil {
-		return nil, fmt.Errorf("error calling tool %v: %w", t.Name(), err)
+		return nil, &toolCallError{name: t.Name(), err: err}
 	}
 
 	var resp MultipartToolResponse
@@ -566,6 +575,20 @@ func (t *ToolAction[In, Out]) RunRawMultipart(ctx context.Context, input any) (*
 	}
 	return &resp, nil
 }
+
+// toolCallError is the error of a tool's action, prefixed with the tool's
+// name for the caller. The tool loop drops the prefix when it returns the
+// error to the model, whose tool response already names the call.
+type toolCallError struct {
+	name string
+	err  error
+}
+
+func (e *toolCallError) Error() string {
+	return fmt.Sprintf("error calling tool %v: %v", e.name, e.err)
+}
+
+func (e *toolCallError) Unwrap() error { return e.err }
 
 // LookupTool looks up the tool in the registry by provided name and returns it.
 // It checks for "tool.v2" first, then falls back to "tool" for legacy compatibility.
