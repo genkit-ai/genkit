@@ -46,7 +46,7 @@ from typing_extensions import TypeVar
 from genkit._core._channel import Channel, CloseableQueue
 from genkit._core._compat import StrEnum
 from genkit._core._error import GenkitError, Interrupt, RuntimeErrorReason
-from genkit._core._model import config_type_path, declared_config_type
+from genkit._core._model import ModelRequest, config_type_path, declared_config_type
 from genkit._core._schema import to_json_schema
 from genkit._core._telemetry._attrs import Attr, metadata_key
 from genkit._core._telemetry._instrumentation import (
@@ -54,6 +54,7 @@ from genkit._core._telemetry._instrumentation import (
     run_in_new_span,
     to_json_attr,
 )
+from genkit._core._typing import EmbedRequest
 
 # =============================================================================
 # Span attribute types and tracing helpers
@@ -360,6 +361,21 @@ def find_input_and_context(
             )
 
     return ActionParams(input=input_param, context=context_param)
+
+
+def known_request_type(kind: ActionKind) -> type | None:
+    """The request type generate or embed always sends for this kind.
+
+    A model action is always given a ModelRequest, and an embedder an
+    EmbedRequest. Used when the handler's annotation is only a name we
+    cannot load (imported under TYPE_CHECKING), so the first call does
+    not fail on a type we already know.
+    """
+    if kind in (ActionKind.MODEL, ActionKind.BACKGROUND_MODEL):
+        return ModelRequest
+    if kind == ActionKind.EMBEDDER:
+        return EmbedRequest
+    return None
 
 
 def json_schema_for(
@@ -904,6 +920,9 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
     def _initialize_io_schemas(self, annotations: dict[str, Any]) -> None:
         if self._params.input is not None:
             input_type = annotations.get(self._params.input.name, Any)
+            fixed = known_request_type(self._kind)
+            if isinstance(input_type, str) and fixed is not None:
+                input_type = fixed
             type_adapter, self._input_schema = json_schema_for(
                 input_type, kind=self._kind, name=self._name, label=f"input '{self._params.input.name}'"
             )
