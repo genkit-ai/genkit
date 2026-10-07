@@ -25,7 +25,6 @@ from genkit._core._error import (
     StatusName,
     from_http_code,
     get_callable_json,
-    get_http_status,
     parse_retry_after_ms,
     wrap_http_error,
 )
@@ -61,5 +60,4 @@ __all__ = [
     'get_cached_client',
     # Error serialization
     'get_callable_json',
-    'get_http_status',
 ]

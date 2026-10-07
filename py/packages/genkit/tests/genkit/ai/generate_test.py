@@ -22,12 +22,7 @@ from genkit import Document, Genkit, Message, ModelResponse, ModelResponseChunk,
 from genkit._ai._formats._types import FormatDef, Formatter, FormatterConfig
 from genkit._ai._generate import DEFAULT_MAX_TURNS, ChunkAccumulator, augment_with_context, generate_action
 from genkit._ai._model import text_from_content, text_from_message
-from genkit._ai._testing import (
-    ProgrammableModel,
-    define_echo_model,
-    define_programmable_model,
-)
-from genkit._ai._tools import Interrupt, ToolRunContext, define_tool, restart_tool
+from genkit._ai._tools import Interrupt, ToolRunContext, define_tool
 from genkit._core._action import ActionRunContext
 from genkit._core._error import GenkitError, PublicError, RuntimeErrorReason
 from genkit._core._model import GenerateActionOptions, ModelRequest, Resume
@@ -49,6 +44,11 @@ from genkit.middleware import (
     ToolHookParams,
 )
 from genkit.plugin_api import ActionKind, MiddlewarePlugin, new_middleware
+from genkit.testing import (
+    ScriptedModel,
+    define_echo_model,
+    define_scripted_model,
+)
 
 
 def _to_dict(obj: object) -> object:
@@ -73,11 +73,11 @@ def _to_json(obj: object, indent: int | None = None) -> str:
 
 
 @pytest.fixture
-def setup_test() -> tuple[Genkit, ProgrammableModel]:
+def setup_test() -> tuple[Genkit, ScriptedModel]:
     """Setup the test."""
     ai = Genkit()
 
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='testTool')
     async def test_tool() -> object:
@@ -89,7 +89,7 @@ def setup_test() -> tuple[Genkit, ProgrammableModel]:
 
 @pytest.mark.asyncio
 async def test_simple_text_generate_request(
-    setup_test: tuple[Genkit, ProgrammableModel],
+    setup_test: tuple[Genkit, ScriptedModel],
 ) -> None:
     """Test that the generate action can generate text."""
     ai, pm = setup_test
@@ -104,7 +104,7 @@ async def test_simple_text_generate_request(
     response = await generate_action(
         ai.registry,
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=[
                 Message(
                     role=Role.USER,
@@ -127,7 +127,7 @@ async def test_simple_text_generate_request(
 
 @pytest.mark.asyncio
 async def test_generate_user_from_text_model_from_text_reads_without_root(
-    setup_test: tuple[Genkit, ProgrammableModel],
+    setup_test: tuple[Genkit, ScriptedModel],
 ) -> None:
     ai, pm = setup_test
     pm.responses.append(
@@ -138,7 +138,7 @@ async def test_generate_user_from_text_model_from_text_reads_without_root(
     )
 
     response = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
     )
 
@@ -149,7 +149,7 @@ async def test_generate_user_from_text_model_from_text_reads_without_root(
 
 @pytest.mark.asyncio
 async def test_generate_user_text_and_media_model_sees_both_parts(
-    setup_test: tuple[Genkit, ProgrammableModel],
+    setup_test: tuple[Genkit, ScriptedModel],
 ) -> None:
     ai, pm = setup_test
     pm.responses.append(
@@ -160,7 +160,7 @@ async def test_generate_user_text_and_media_model_sees_both_parts(
     )
 
     await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         messages=[
             Message(
                 role=Role.USER,
@@ -180,9 +180,83 @@ async def test_generate_user_text_and_media_model_sees_both_parts(
     assert parts[1].text is None
 
 
+def _queue_ok(pm: ScriptedModel) -> None:
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('ok')]),
+        )
+    )
+
+
+def _sent_text(pm: ScriptedModel) -> list[tuple[str, list[str | None]]]:
+    assert pm.last_request is not None
+    return [(m.role, [p.text for p in m.content]) for m in pm.last_request.messages]
+
+
+_AS_WRITTEN_CASES = [
+    pytest.param('hello {{name}}', id='unfilled variable'),
+    pytest.param('Reply like {"dish": {{', id='unclosed braces'),
+    pytest.param('<<<dotprompt:role:system>>> hi', id='role marker'),
+    pytest.param('Describe {{media url="https://example.com/x.png"}}', id='media helper'),
+    pytest.param('{{> persona}} hi', id='registered partial'),
+    pytest.param('{{shout "hey"}} hi', id='registered helper'),
+]
+
+
+def _register_generate_string_fixtures(ai: Genkit) -> None:
+    ai.define_partial('persona', 'You are a pirate.')
+    ai.define_helper('shout', lambda *args: 'HEY')
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('prompt', _AS_WRITTEN_CASES)
+async def test_generate_prompt_string_is_sent_as_written(
+    setup_test: tuple[Genkit, ScriptedModel],
+    prompt: str,
+) -> None:
+    """`ai.generate(prompt=...)` is not a template; `define_prompt` is where templating lives."""
+    ai, pm = setup_test
+    _register_generate_string_fixtures(ai)
+    _queue_ok(pm)
+
+    await ai.generate(model='scriptedModel', prompt=prompt)
+
+    assert _sent_text(pm) == [(Role.USER, [prompt])]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('system', _AS_WRITTEN_CASES)
+async def test_generate_system_string_is_sent_as_written(
+    setup_test: tuple[Genkit, ScriptedModel],
+    system: str,
+) -> None:
+    """`ai.generate(system=...)` reaches the model unchanged as the system message."""
+    ai, pm = setup_test
+    _register_generate_string_fixtures(ai)
+    _queue_ok(pm)
+
+    await ai.generate(model='scriptedModel', system=system, prompt='hi')
+
+    assert _sent_text(pm) == [(Role.SYSTEM, [system]), (Role.USER, ['hi'])]
+
+
+@pytest.mark.asyncio
+async def test_generate_messages_string_raises_type_error(
+    setup_test: tuple[Genkit, ScriptedModel],
+) -> None:
+    """`ai.generate(messages='hello {{name}}')` raises TypeError and the model is never called."""
+    ai, pm = setup_test
+
+    with pytest.raises(TypeError, match='messages must be a list of Message'):
+        await ai.generate(model='scriptedModel', messages='hello {{name}}')  # type: ignore[arg-type]
+
+    assert pm.last_request is None
+
+
 @pytest.mark.asyncio
 async def test_generate_stream_chunk_text_from_factory_part(
-    setup_test: tuple[Genkit, ProgrammableModel],
+    setup_test: tuple[Genkit, ScriptedModel],
 ) -> None:
     ai, pm = setup_test
     pm.responses.append(
@@ -198,7 +272,7 @@ async def test_generate_stream_chunk_text_from_factory_part(
         ],
     ]
 
-    stream_result = ai.generate_stream(model='programmableModel', prompt='do it')
+    stream_result = ai.generate_stream(model='scriptedModel', prompt='do it')
     texts: list[str] = []
     async for chunk in stream_result.stream:
         texts.append(chunk.text)
@@ -206,8 +280,60 @@ async def test_generate_stream_chunk_text_from_factory_part(
 
 
 @pytest.mark.asyncio
+async def test_generate_stream_earlier_chunk_accumulated_text_stays_put(
+    setup_test: tuple[Genkit, ScriptedModel],
+) -> None:
+    """An earlier stream chunk's accumulated_text does not grow as later chunks arrive."""
+    ai, pm = setup_test
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('abc')]),
+        )
+    )
+    pm.chunks = [
+        [
+            ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('a')]),
+            ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('b')]),
+            ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('c')]),
+        ],
+    ]
+
+    stream_result = ai.generate_stream(model='scriptedModel', prompt='do it')
+    first: ModelResponseChunk | None = None
+    async for chunk in stream_result.stream:
+        if first is None:
+            first = chunk
+    assert first is not None
+    assert first.accumulated_text == 'a'
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_chunk_output_uses_format_parser(
+    setup_test: tuple[Genkit, ScriptedModel],
+) -> None:
+    """Streaming with output_format='array' puts the parsed list on chunk.output."""
+    ai, pm = setup_test
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('[{"id": 1}]')]),
+        )
+    )
+    pm.chunks = [
+        [
+            ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('[{"id": 1}]')]),
+        ],
+    ]
+
+    stream_result = ai.generate_stream(model='scriptedModel', prompt='list', output_format='array')
+    chunks = [chunk async for chunk in stream_result.stream]
+    assert chunks[0].output == [{'id': 1}]
+
+
+@pytest.mark.asyncio
 async def test_simulates_doc_grounding(
-    setup_test: tuple[Genkit, ProgrammableModel],
+    setup_test: tuple[Genkit, ScriptedModel],
 ) -> None:
     """Test that docs are correctly grounded and injected into prompt."""
     ai, pm = setup_test
@@ -222,7 +348,7 @@ async def test_simulates_doc_grounding(
     response = await generate_action(
         ai.registry,
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=[
                 Message(
                     role=Role.USER,
@@ -847,7 +973,7 @@ async def test_middleware_refusing_the_answer_keeps_the_tokens_it_cost() -> None
     survive the failure.
     """
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
     pm.responses = [
         ModelResponse(
             finish_reason=FinishReason.STOP,
@@ -858,7 +984,7 @@ async def test_middleware_refusing_the_answer_keeps_the_tokens_it_cost() -> None
     ]
 
     response = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='card please',
         use=[RefuseTheAnswerMiddleware()],
     )
@@ -891,7 +1017,7 @@ async def test_a_turn_that_never_reached_the_model_reports_no_tokens() -> None:
             raise GenkitError(status='INTERNAL', message='refused before the call')
 
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
     pm.responses = [
         ModelResponse(
             finish_reason=FinishReason.STOP,
@@ -900,7 +1026,7 @@ async def test_a_turn_that_never_reached_the_model_reports_no_tokens() -> None:
         )
     ]
 
-    response = await ai.generate(model='programmableModel', prompt='hi', use=[RefuseBeforeTheModel()])
+    response = await ai.generate(model='scriptedModel', prompt='hi', use=[RefuseBeforeTheModel()])
 
     assert response.finish_reason == FinishReason.FAILED
     assert response.usage is not None
@@ -1019,7 +1145,7 @@ async def test_generate_middleware_can_modify_stream() -> None:
                 )
             return resp
 
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     pm.responses.append(
         ModelResponse(
@@ -1043,7 +1169,7 @@ async def test_generate_middleware_can_modify_stream() -> None:
     response = await generate_action(
         ai.registry,
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=[
                 Message(
                     role=Role.USER,
@@ -1139,7 +1265,7 @@ async def test_stream_interception_chains_across_model_and_generate_hooks() -> N
                 ),
             )
 
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     pm.responses.append(
         ModelResponse(
@@ -1162,7 +1288,7 @@ async def test_stream_interception_chains_across_model_and_generate_hooks() -> N
     response = await generate_action(
         ai.registry,
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=[
                 Message(role=Role.USER, content=[Part.from_text('test streaming mw')]),
             ],
@@ -1230,7 +1356,7 @@ async def test_wrap_generate_called_per_turn() -> None:
             ]
 
     ai = Genkit(plugins=[GenerateTrackerPlugin()])
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='testTool')
     async def _test_tool() -> object:
@@ -1246,7 +1372,7 @@ async def test_wrap_generate_called_per_turn() -> None:
     response = await generate_action(
         ai.registry,
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
             use=[MiddlewareRef(name='track_gen')],
         ),
@@ -1272,7 +1398,7 @@ async def test_wrap_generate_called_per_turn() -> None:
     response2 = await generate_action(
         ai.registry,
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
             tools=['testTool'],
             use=[MiddlewareRef(name='track_gen2')],
@@ -1306,7 +1432,7 @@ async def test_wrap_tool_called_on_tool_execution() -> None:
             return [new_middleware(Tracker, name='track_tool', description='track tool')]
 
     ai = Genkit(plugins=[ToolTrackerPlugin()])
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='myTool')
     async def my_tool() -> object:
@@ -1330,7 +1456,7 @@ async def test_wrap_tool_called_on_tool_execution() -> None:
     response = await generate_action(
         ai.registry,
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
             tools=['myTool'],
             use=[MiddlewareRef(name='track_tool')],
@@ -1370,7 +1496,7 @@ async def test_generate_context_reaches_tool_run() -> None:
     seen: list[dict[str, object]] = []
 
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='ctxTool')
     async def ctx_tool(_: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
@@ -1395,7 +1521,7 @@ async def test_generate_context_reaches_tool_run() -> None:
     response = await generate_action(
         ai.registry,
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
             tools=['ctxTool'],
         ),
@@ -1404,6 +1530,64 @@ async def test_generate_context_reaches_tool_run() -> None:
 
     assert response.text == 'done'
     assert seen == [{'user_id': 'u-123'}]
+
+
+@pytest.mark.asyncio
+async def test_generate_without_context_uses_enclosing_flow_context() -> None:
+    """``ai.generate()`` inside a flow, with no ``context=``, gives middleware and tools the flow's context.
+
+    Tools would inherit it on their own; middleware only sees what reaches the run.
+    """
+    seen: list[tuple[str, dict[str, object]]] = []
+
+    ai = Genkit()
+    pm, _ = define_scripted_model(ai)
+
+    # The engine builds middleware from its class, so the recorder closes over `seen`.
+    class RecordContext(BaseMiddleware):
+        async def wrap_model(
+            self,
+            params: ModelHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ) -> ModelResponse:
+            seen.append(('middleware', dict(ctx.custom_context)))
+            return await next_fn(params, ctx)
+
+    @ai.tool(name='check_allergies')
+    async def check_allergies(_: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
+        seen.append(('tool', dict(ctx.context)))
+        return 'no nuts'
+
+    pm.responses = [
+        ModelResponse(
+            message=Message(
+                role=Role.MODEL,
+                content=[Part(tool_request=ToolRequest(name='check_allergies', input={}, ref='r1'))],
+            ),
+        ),
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('done')]),
+        ),
+    ]
+
+    @ai.flow()
+    async def plan_order(_: None) -> str:
+        return (
+            await ai.generate(
+                model='scriptedModel',
+                prompt='Plan the order.',
+                tools=['check_allergies'],
+                use=[RecordContext()],
+            )
+        ).text
+
+    auth = {'auth': {'uid': 'diner-42'}}
+    await plan_order.run(context=auth)
+
+    # Model turn that asks for the tool, the tool run, then the model turn that answers.
+    assert seen == [('middleware', auth), ('tool', auth), ('middleware', auth)]
 
 
 @pytest.mark.asyncio
@@ -1423,7 +1607,7 @@ async def test_generate_resume_context_reaches_tool_run() -> None:
         name='ctx_res_tool', ref='ref-abc', input={'approved': True}, metadata={'resumed': True}
     )
 
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
     pm.responses.append(
         ModelResponse(
             finish_reason=FinishReason.STOP,
@@ -1434,7 +1618,7 @@ async def test_generate_resume_context_reaches_tool_run() -> None:
     response = await generate_action(
         ai.registry,
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=[
                 Message(role=Role.USER, content=[Part.from_text('hi')]),
                 Message(role=Role.MODEL, content=[intr_trp]),
@@ -1467,7 +1651,7 @@ async def test_wrap_tool_middleware_custom_context_reaches_tool_run() -> None:
             ctx.custom_context['added_by_mw'] = True
             return await next_fn(params, ctx)
 
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='ctxTool')
     async def ctx_tool(_: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
@@ -1492,7 +1676,7 @@ async def test_wrap_tool_middleware_custom_context_reaches_tool_run() -> None:
     response = await generate_action(
         ai.registry,
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
             tools=['ctxTool'],
             use=[MiddlewareRef(name='enrich_tool_ctx')],
@@ -1541,7 +1725,7 @@ async def test_wrap_tool_custom_context_visible_to_generate_and_model_on_next_tu
             ctx.custom_context['added_by_mw'] = True
             return await next_fn(params, ctx)
 
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='ctxTool')
     async def ctx_tool() -> str:
@@ -1566,7 +1750,7 @@ async def test_wrap_tool_custom_context_visible_to_generate_and_model_on_next_tu
     response = await generate_action(
         ai.registry,
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
             tools=['ctxTool'],
             use=[MiddlewareRef(name='enrich_and_track')],
@@ -1608,7 +1792,7 @@ async def test_middleware_wrap_tool_interrupt_handled_as_interrupt_not_crash() -
         ) -> MultipartToolResponse:
             raise Interrupt({'blocked': True})
 
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='blockedTool')
     async def blocked_tool() -> str:
@@ -1626,7 +1810,7 @@ async def test_middleware_wrap_tool_interrupt_handled_as_interrupt_not_crash() -
     response = await generate_action(
         ai.registry,
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('do it')])],
             tools=['blockedTool'],
             use=[MiddlewareRef(name='interrupt_all')],
@@ -1668,7 +1852,7 @@ async def test_middleware_contributed_tools_available_to_model() -> None:
 
             return [tool(middleware_tool)]
 
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     # Turn 1: model calls the middleware-contributed tool
     pm.responses.append(
@@ -1690,7 +1874,7 @@ async def test_middleware_contributed_tools_available_to_model() -> None:
     response = await generate_action(
         ai.registry,
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
             use=[MiddlewareRef(name='tool_provider_mw')],
         ),
@@ -1801,7 +1985,7 @@ async def test_middleware_in_one_call_share_an_isolated_registry() -> None:
             ctx.ai.registry.register_action_from_instance(leak)
             return await next_fn(params, ctx)
 
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
     pm.responses.append(
         ModelResponse(
             finish_reason=FinishReason.STOP,
@@ -1812,7 +1996,7 @@ async def test_middleware_in_one_call_share_an_isolated_registry() -> None:
     response = await generate_action(
         ai.registry,
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
             use=[
                 MiddlewareRef(name='provider_mw'),
@@ -1881,7 +2065,7 @@ async def test_queue_drain_streams_each_message_at_one_index() -> None:
             self._queued.append(Message(role=Role.USER, content=[Part.from_text('extra-context')]))
             return result
 
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='trigger')
     async def trigger() -> str:
@@ -1906,7 +2090,7 @@ async def test_queue_drain_streams_each_message_at_one_index() -> None:
     response = await generate_action(
         ai.registry,
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('go')])],
             tools=['trigger'],
             use=[MiddlewareRef(name='enqueuing_mw')],
@@ -1946,7 +2130,7 @@ async def test_restart_path_routes_through_wrap_tool_middleware() -> None:
             invocations.append(params.tool.name)
             return await next_fn(params, ctx)
 
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='approveMe')
     async def approve_me() -> str:
@@ -1964,7 +2148,7 @@ async def test_restart_path_routes_through_wrap_tool_middleware() -> None:
     response = await generate_action(
         ai.registry,
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=[
                 Message(role=Role.USER, content=[Part.from_text('do it')]),
                 Message(
@@ -1993,7 +2177,7 @@ async def test_restart_path_routes_through_wrap_tool_middleware() -> None:
 @pytest.mark.asyncio
 async def test_generate_restart_without_approval_returns_interrupted() -> None:
     """Restarting without approval pauses again; they can approve on the next call."""
-    ai = Genkit(model='programmableModel')
+    ai = Genkit(model='scriptedModel')
 
     @ai.middleware(name='approval_mw')
     class ApprovalMW(BaseMiddleware):
@@ -2009,7 +2193,7 @@ async def test_generate_restart_without_approval_returns_interrupted() -> None:
                 return await next_fn(params, ctx)
             raise Interrupt({'message': f'Tool not in approved list: {params.tool.name}'})
 
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='sensitiveTool')
     async def sensitive_tool() -> str:
@@ -2032,7 +2216,7 @@ async def test_generate_restart_without_approval_returns_interrupted() -> None:
         messages=history,
         tools=['sensitiveTool'],
         use=[ApprovalMW()],
-        resume_restart=restart_tool(interrupt=interrupt_part),
+        resume_restart=interrupt_part.restart(),
     )
     assert response.finish_reason == FinishReason.INTERRUPTED
     assert response.finish_message == 'One or more tool calls resulted in interrupts.'
@@ -2050,8 +2234,7 @@ async def test_generate_restart_without_approval_returns_interrupted() -> None:
         messages=response.messages,
         tools=['sensitiveTool'],
         use=[ApprovalMW()],
-        resume_restart=restart_tool(
-            interrupt=response.interrupts[0],
+        resume_restart=response.interrupts[0].restart(
             resumed_metadata={'toolApproved': True},
         ),
     )
@@ -2067,8 +2250,8 @@ async def test_generate_restart_without_approval_returns_interrupted() -> None:
 @pytest.mark.asyncio
 async def test_generate_restart_interrupt_returns_interrupted() -> None:
     """A tool that pauses again on restart returns INTERRUPTED they can answer."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='hold')
     async def hold() -> str:
@@ -2083,7 +2266,7 @@ async def test_generate_restart_interrupt_returns_interrupted() -> None:
     response = await ai.generate(
         messages=first.messages,
         tools=['hold'],
-        resume_restart=restart_tool(interrupt=first.interrupts[0]),
+        resume_restart=first.interrupts[0].restart(),
     )
     assert response.finish_reason == FinishReason.INTERRUPTED
     assert response.finish_message == 'One or more tool calls resulted in interrupts.'
@@ -2100,7 +2283,7 @@ async def test_generate_restart_interrupt_returns_interrupted() -> None:
 async def test_parallel_tool_requests_all_complete() -> None:
     """Multiple tool requests in one model turn are resolved together (asyncio.gather); all succeed."""
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='tool_a')
     async def tool_a() -> str:
@@ -2138,7 +2321,7 @@ async def test_parallel_tool_requests_all_complete() -> None:
     response = await generate_action(
         ai.registry,
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=[
                 Message(role=Role.USER, content=[Part.from_text('hi')]),
             ],
@@ -2171,7 +2354,7 @@ async def test_parallel_tool_requests_all_complete() -> None:
 async def test_generate_inline_tool_without_root_registration() -> None:
     """Passing a Tool from another registry into ``ai.generate`` resolves for that call only."""
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     other = Registry()
 
@@ -2201,7 +2384,7 @@ async def test_generate_inline_tool_without_root_registration() -> None:
     )
 
     response = await ai.generate(
-        model='programmableModel',
+        model='scriptedModel',
         prompt='call it',
         tools=[inline_tool],
     )
@@ -2212,7 +2395,7 @@ async def test_generate_inline_tool_without_root_registration() -> None:
 
 @pytest.mark.asyncio
 async def test_parallel_tool_requests_one_interrupt_keeps_pending_output_for_others(
-    setup_test: tuple[Genkit, ProgrammableModel],
+    setup_test: tuple[Genkit, ScriptedModel],
 ) -> None:
     """With asyncio.gather in resolve_tool_requests: one interrupt still records pendingOutput for others."""
     ai, pm = setup_test
@@ -2247,7 +2430,7 @@ async def test_parallel_tool_requests_one_interrupt_keeps_pending_output_for_oth
     response = await generate_action(
         ai.registry,
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=[
                 Message(role=Role.USER, content=[Part.from_text('hi')]),
             ],
@@ -2277,7 +2460,7 @@ async def test_generate_and_model_middleware_execution_order() -> None:
     """
     execution_order: list[str] = []
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     pm.responses.append(
         ModelResponse(
@@ -2310,7 +2493,7 @@ async def test_generate_and_model_middleware_execution_order() -> None:
             execution_order.append('modelAfter')
             return resp
 
-    # The programmable model appends to execution_order when called.
+    # The scripted model appends to execution_order when called.
     pm.responses.copy()
     pm.responses.clear()
 
@@ -2325,7 +2508,7 @@ async def test_generate_and_model_middleware_execution_order() -> None:
     response = await generate_action(
         ai.registry,
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
             use=[MiddlewareRef(name='order_mw')],
         ),
@@ -2352,7 +2535,7 @@ async def test_generate_model_tool_middleware_ordering_across_turns() -> None:
     """
     execution_order: list[str] = []
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='orderTool')
     async def order_tool() -> str:
@@ -2422,7 +2605,7 @@ async def test_generate_model_tool_middleware_ordering_across_turns() -> None:
     response = await generate_action(
         ai.registry,
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
             tools=['orderTool'],
             use=[MiddlewareRef(name='full_order_mw')],
@@ -2466,7 +2649,7 @@ async def test_middleware_contributed_tool_resolvable_during_restart() -> None:
 
             return [tool(injected_tool, name='injectedTool')]
 
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     # The model will be called after restart — return a final response.
     pm.responses.append(
@@ -2483,7 +2666,7 @@ async def test_middleware_contributed_tool_resolvable_during_restart() -> None:
     response = await generate_action(
         ai.registry,
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=[
                 Message(role=Role.USER, content=[Part.from_text('do it')]),
                 Message(
@@ -2522,7 +2705,8 @@ async def test_generate_action_spec(spec: dict[str, Any]) -> None:
     """Run tests based on external generate action specifications."""
     ai = Genkit()
 
-    pm, _ = define_programmable_model(ai)
+    model_name = spec.get('input', {}).get('model', 'scriptedModel')
+    pm, _ = define_scripted_model(ai, name=model_name)
 
     @ai.tool(name='testTool')
     async def test_tool() -> object:
@@ -2678,7 +2862,7 @@ async def test_wrap_generate_middleware_cannot_inject_a_tool_after_the_door() ->
 
 @pytest.mark.asyncio
 async def test_generate_with_empty_messages_lets_the_model_speak_first(
-    setup_test: tuple[Genkit, ProgrammableModel],
+    setup_test: tuple[Genkit, ScriptedModel],
 ) -> None:
     """An empty conversation is a valid start; the model writes the first turn."""
     ai, pm = setup_test
@@ -2691,7 +2875,7 @@ async def test_generate_with_empty_messages_lets_the_model_speak_first(
 
     response = await generate_action(
         ai.registry,
-        GenerateActionOptions(model='programmableModel', messages=[]),
+        GenerateActionOptions(model='scriptedModel', messages=[]),
     )
     assert response.finish_reason == FinishReason.STOP
     assert response.text == 'hello'
@@ -2706,8 +2890,8 @@ async def test_generate_with_empty_messages_lets_the_model_speak_first(
 @pytest.mark.asyncio
 async def test_generate_without_prompt_lets_the_model_speak_first() -> None:
     """Omitting prompt and messages is the same empty start."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     pm.responses.append(
         ModelResponse(
             finish_reason=FinishReason.STOP,
@@ -2727,8 +2911,8 @@ async def test_generate_without_prompt_lets_the_model_speak_first() -> None:
 @pytest.mark.asyncio
 async def test_generate_rejects_negative_max_turns() -> None:
     """A negative cap is not a generation; they get the argument back before a request."""
-    ai = Genkit(model='programmableModel')
-    define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    define_scripted_model(ai)
 
     with pytest.raises(GenkitError, match='max turns cannot be negative, got -1') as raised:
         await ai.generate(prompt='hi', max_turns=-1)
@@ -2740,8 +2924,8 @@ async def test_generate_rejects_negative_max_turns() -> None:
 @pytest.mark.asyncio
 async def test_generate_max_turns_zero_drops_first_tool_round() -> None:
     """A cap of zero is zero tool rounds, not the omitted default."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='lookup')
     async def lookup() -> str:
@@ -2763,8 +2947,8 @@ async def test_generate_max_turns_zero_drops_first_tool_round() -> None:
 @pytest.mark.asyncio
 async def test_generate_returns_on_blocked_finish() -> None:
     """Blocked is a refusal that still returns so the text stays on the response."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     pm.responses = [
         ModelResponse(
             finish_reason=FinishReason.BLOCKED,
@@ -2789,8 +2973,8 @@ async def test_generate_returns_on_blocked_finish() -> None:
 @pytest.mark.asyncio
 async def test_generate_blocked_without_message_keeps_prior_history() -> None:
     """A provider can block without returning refusal content."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     pm.responses = [
         ModelResponse(
             finish_reason=FinishReason.BLOCKED,
@@ -2811,8 +2995,8 @@ async def test_generate_blocked_without_message_keeps_prior_history() -> None:
 @pytest.mark.asyncio
 async def test_generate_aborted_with_content_preserves_terminal_message() -> None:
     """A model response aborted with partial content retains that model message."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     pm.responses = [
         ModelResponse(
             finish_reason=FinishReason.ABORTED,
@@ -2835,8 +3019,8 @@ async def test_generate_aborted_with_content_preserves_terminal_message() -> Non
 @pytest.mark.asyncio
 async def test_generate_aborted_without_content_preserves_prior_history() -> None:
     """A model response aborted with no content preserves prior history and sets message=None."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     pm.responses = [
         ModelResponse(
             finish_reason=FinishReason.ABORTED,
@@ -2856,8 +3040,8 @@ async def test_generate_aborted_without_content_preserves_prior_history() -> Non
 @pytest.mark.asyncio
 async def test_generate_schema_failure_preserves_history() -> None:
     """A schema parsing failure preserves the prompt and the raw terminal model reply."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     class Recipe(BaseModel):
         title: str
@@ -2905,8 +3089,8 @@ def _tool_output(message: Message) -> object:
 @pytest.mark.asyncio
 async def test_return_tool_requests_keeps_model_message_without_running_tool() -> None:
     """The caller can deliberately take responsibility for an open tool request."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     called = False
 
     @ai.tool(name='lookup')
@@ -2942,8 +3126,8 @@ async def test_max_turns_budget_is_spent_entirely_on_tool_rounds() -> None:
     allows max_turns tool rounds plus the model call that replies, so the
     history comes back as max_turns model/tool pairs followed by the answer.
     """
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     tool_calls = 0
 
     @ai.tool(name='step')
@@ -2992,8 +3176,8 @@ async def test_max_turns_exceeded_leaves_the_unanswered_round_out_of_history() -
     request was never answered, so it is left out of response.messages -- what
     you get back is the completed rounds only, which you can send again as-is.
     """
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     tool_calls = 0
 
     @ai.tool(name='step')
@@ -3032,8 +3216,8 @@ async def test_max_turns_exceeded_leaves_the_unanswered_round_out_of_history() -
 @pytest.mark.asyncio
 async def test_closed_history_after_tool_turn_keeps_intermediate_messages() -> None:
     """A dead turn after a tool turn still has that tool request and reply on .messages."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     class Recipe(BaseModel):
         title: str
@@ -3076,8 +3260,8 @@ async def test_closed_history_after_tool_turn_keeps_intermediate_messages() -> N
 @pytest.mark.asyncio
 async def test_generate_blocked_after_tool_turn_keeps_prior_history() -> None:
     """A blocked model response without content after a tool turn preserves completed tool rounds."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='lookup')
     async def lookup() -> str:
@@ -3106,8 +3290,8 @@ async def test_generate_blocked_after_tool_turn_keeps_prior_history() -> None:
 @pytest.mark.asyncio
 async def test_generate_blocked_with_content_after_tool_turn_preserves_refusal() -> None:
     """A blocked model response with refusal content after a tool turn includes the terminal model reply."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='lookup')
     async def lookup() -> str:
@@ -3139,8 +3323,8 @@ async def test_generate_blocked_with_content_after_tool_turn_preserves_refusal()
 @pytest.mark.asyncio
 async def test_generate_aborted_after_tool_turn_keeps_prior_history() -> None:
     """A provider abort without content after a tool turn keeps the closed rounds."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='lookup')
     async def lookup() -> str:
@@ -3169,8 +3353,8 @@ async def test_generate_aborted_after_tool_turn_keeps_prior_history() -> None:
 @pytest.mark.asyncio
 async def test_provider_abort_with_text_after_tool_keeps_the_reply() -> None:
     """After lookup returns, a provider abort that includes text keeps that model reply."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='lookup')
     async def lookup() -> str:
@@ -3209,8 +3393,8 @@ def _tool_request(message: Message) -> ToolRequest:
 @pytest.mark.asyncio
 async def test_generate_successful_tool_turn_preserves_full_history() -> None:
     """A completed tool turn followed by a successful reply contains all 4 messages."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='lookup')
     async def lookup() -> str:
@@ -3240,8 +3424,8 @@ async def test_generate_successful_tool_turn_preserves_full_history() -> None:
 @pytest.mark.asyncio
 async def test_generate_completes_within_max_turns_and_preserves_all_rounds() -> None:
     """Multi-round tool execution completing within max_turns returns all message rounds."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='step_one')
     async def step_one() -> str:
@@ -3284,8 +3468,8 @@ async def test_generate_completes_within_max_turns_and_preserves_all_rounds() ->
 @pytest.mark.asyncio
 async def test_generate_schema_failure_after_tool_turn_preserves_history() -> None:
     """Output schema failure after a tool turn preserves completed tool rounds and terminal reply."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     class Recipe(BaseModel):
         title: str
@@ -3326,8 +3510,8 @@ async def test_generate_schema_failure_after_tool_turn_preserves_history() -> No
 @pytest.mark.asyncio
 async def test_max_turns_after_tool_turn_drops_unanswered_request() -> None:
     """Hitting max tool turns keeps closed rounds and drops the unanswered call."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='lookup')
     async def lookup() -> str:
@@ -3353,8 +3537,8 @@ async def test_max_turns_after_tool_turn_drops_unanswered_request() -> None:
 @pytest.mark.asyncio
 async def test_unknown_tool_on_first_turn_drops_unanswered_request() -> None:
     """An unknown tool on the first turn leaves only the user prompt to resend."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='lookup')
     async def lookup() -> str:
@@ -3379,8 +3563,8 @@ async def test_unknown_tool_on_first_turn_drops_unanswered_request() -> None:
 @pytest.mark.asyncio
 async def test_unknown_tool_after_tool_turn_drops_unanswered_request() -> None:
     """An unknown tool drops the unanswered request and keeps closed rounds."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='lookup')
     async def lookup() -> str:
@@ -3445,8 +3629,8 @@ def _model_says(text: str) -> ModelResponse:
 @pytest.mark.asyncio
 async def test_wrap_generate_injected_tool_does_not_run() -> None:
     """A hook-added name is not a tool they passed. The model asking for it is unknown."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     ran: list[str] = []
 
     @ai.tool(name='sneaky')
@@ -3472,8 +3656,8 @@ async def test_wrap_generate_injected_tool_does_not_run() -> None:
 @pytest.mark.asyncio
 async def test_wrap_generate_cannot_swap_the_named_tool_for_another() -> None:
     """They named lookup. A hook that writes sneaky cannot run sneaky."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     ran: list[str] = []
 
     @ai.tool(name='lookup')
@@ -3506,8 +3690,8 @@ async def test_wrap_generate_cannot_swap_the_named_tool_for_another() -> None:
 @pytest.mark.asyncio
 async def test_wrap_generate_cannot_strip_the_named_tool() -> None:
     """They named lookup. A hook that clears tools= still runs lookup."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     ran: list[str] = []
 
     @ai.tool(name='lookup')
@@ -3535,8 +3719,8 @@ async def test_wrap_generate_cannot_strip_the_named_tool() -> None:
 @pytest.mark.asyncio
 async def test_wrap_generate_named_tool_still_runs_after_a_swap() -> None:
     """They named lookup. The model asking for lookup still runs it after the hook wrote sneaky."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     ran: list[str] = []
 
     @ai.tool(name='lookup')
@@ -3567,8 +3751,8 @@ async def test_wrap_generate_named_tool_still_runs_after_a_swap() -> None:
 @pytest.mark.asyncio
 async def test_wrap_generate_injected_tool_after_closed_round_does_not_run() -> None:
     """After a closed lookup round, a hook-added sneaky is still unknown."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     ran: list[str] = []
 
     @ai.tool(name='lookup')
@@ -3606,8 +3790,8 @@ async def test_wrap_generate_injected_tool_after_closed_round_does_not_run() -> 
 @pytest.mark.asyncio
 async def test_wrap_generate_cannot_replace_the_named_tool_action() -> None:
     """They named lookup. Re-registering that name in a hook still runs the door Action."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     ran: list[str] = []
 
     @ai.tool(name='lookup')
@@ -3655,8 +3839,8 @@ async def test_wrap_generate_cannot_replace_the_named_tool_action() -> None:
 @pytest.mark.asyncio
 async def test_wrap_generate_cannot_replace_the_named_tool_after_a_closed_round() -> None:
     """After a closed lookup round, a hook re-register still cannot swap the Action."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     ran: list[str] = []
 
     @ai.tool(name='lookup')
@@ -3716,8 +3900,8 @@ async def test_wrap_generate_cannot_replace_the_named_tool_after_a_closed_round(
 @pytest.mark.asyncio
 async def test_resume_restart_cannot_replace_the_named_tool_action() -> None:
     """They named lookup. Restart still runs the door Action after a hook re-register."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     ran: list[str] = []
 
     @ai.tool(name='lookup')
@@ -3762,7 +3946,7 @@ async def test_resume_restart_cannot_replace_the_named_tool_action() -> None:
     second = await ai.generate(
         messages=list(first.messages),
         tools=['lookup'],
-        resume_restart=restart_tool(interrupt=first.interrupts[0], replace_input={'ok': True}),
+        resume_restart=first.interrupts[0].restart(replace_input={'ok': True}),
         use=[SwapBody()],
     )
 
@@ -3776,8 +3960,8 @@ async def test_resume_restart_cannot_replace_the_named_tool_action() -> None:
 @pytest.mark.asyncio
 async def test_tool_failure_after_tool_turn_keeps_closed_rounds() -> None:
     """A tool that blows up drops the unfinished round and returns the closed ones."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     calls = {'n': 0}
 
     @ai.tool(name='lookup')
@@ -3809,8 +3993,8 @@ async def test_tool_failure_after_tool_turn_keeps_closed_rounds() -> None:
 @pytest.mark.asyncio
 async def test_tool_runtime_error_message_is_internal() -> None:
     """A tool RuntimeError does not publish its text on the returned response."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='lookup')
     async def lookup() -> str:
@@ -3831,8 +4015,8 @@ async def test_tool_runtime_error_message_is_internal() -> None:
 @pytest.mark.asyncio
 async def test_tool_public_error_message_is_the_sentence() -> None:
     """PublicError is how the tool author publishes the sentence on the response."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='lookup_order')
     async def lookup_order() -> str:
@@ -3854,8 +4038,8 @@ async def test_tool_public_error_message_is_the_sentence() -> None:
 @pytest.mark.asyncio
 async def test_output_schema_does_not_replace_tool_failure() -> None:
     """Output validation cannot mask the runtime failure that ended generation."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     class Recipe(BaseModel):
         title: str
@@ -3894,8 +4078,8 @@ async def test_provider_failed_finish_is_not_relabelled_invalid_output() -> None
     as invalid output. Read finish_reason and finish_message to find out what
     went wrong; response.output is None and response.error stays unset.
     """
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     class Recipe(BaseModel):
         title: str
@@ -3919,8 +4103,8 @@ async def test_provider_failed_finish_is_not_relabelled_invalid_output() -> None
 @pytest.mark.asyncio
 async def test_one_parallel_tool_failure_drops_successful_sibling() -> None:
     """A partial set of tool responses is not a resendable conversation round."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     stable_calls = 0
 
     @ai.tool(name='stable')
@@ -3962,8 +4146,8 @@ async def test_one_parallel_tool_failure_drops_successful_sibling() -> None:
 @pytest.mark.asyncio
 async def test_sibling_interrupt_goes_with_failed_tool_round() -> None:
     """A tool failure drops the whole open round, including a sibling interrupt."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     pause_done = asyncio.Event()
 
     @ai.tool(name='pauser')
@@ -4006,8 +4190,8 @@ async def test_sibling_interrupt_goes_with_failed_tool_round() -> None:
 @pytest.mark.asyncio
 async def test_first_turn_model_failure_returns_closed_history() -> None:
     """A model that dies on the first turn returns the user prompt and no model message."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     def die(_request: ModelRequest) -> ModelResponse:
         raise RuntimeError('model exploded')
@@ -4030,8 +4214,8 @@ async def test_first_turn_model_failure_returns_closed_history() -> None:
 @pytest.mark.asyncio
 async def test_model_failure_after_tool_turn_keeps_closed_rounds() -> None:
     """A model that dies on the next turn still returns the closed tool turn."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='lookup')
     async def lookup() -> str:
@@ -4101,8 +4285,8 @@ class _CityQuery(BaseModel):
 @pytest.mark.asyncio
 async def test_generate_invalid_tool_args_drops_unanswered_request() -> None:
     """A tool request whose args fail the schema drops that unanswered call."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='lookup')
     async def lookup(query: _CityQuery) -> str:
@@ -4127,8 +4311,8 @@ async def test_generate_invalid_tool_args_drops_unanswered_request() -> None:
 @pytest.mark.asyncio
 async def test_generate_invalid_tool_args_after_tool_turn_keeps_closed_rounds() -> None:
     """Bad tool args on the next turn still keep the closed tool round."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='lookup')
     async def lookup(query: _CityQuery) -> str:
@@ -4166,8 +4350,8 @@ class _Unserializable:
 @pytest.mark.asyncio
 async def test_generate_unserializable_tool_output_drops_unanswered_request() -> None:
     """A tool that ran but cannot serialize its return drops that unanswered call."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='lookup')
     async def lookup() -> object:
@@ -4192,8 +4376,8 @@ async def test_generate_unserializable_tool_output_drops_unanswered_request() ->
 @pytest.mark.asyncio
 async def test_generate_unserializable_tool_output_after_tool_turn_keeps_closed_rounds() -> None:
     """Unserializable output on the next turn still keeps the closed tool round."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     calls = {'n': 0}
 
     @ai.tool(name='lookup')
@@ -4225,8 +4409,8 @@ async def test_generate_unserializable_tool_output_after_tool_turn_keeps_closed_
 
 @pytest.mark.asyncio
 async def test_failed_history_can_be_reused_without_rerunning_closed_tool() -> None:
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     tool_calls = 0
 
     @ai.tool(name='lookup')
@@ -4468,8 +4652,8 @@ def test_generate_stream_does_not_accept_timeout() -> None:
 @pytest.mark.asyncio
 async def test_generate_on_chunk_failure_returns_closed_history() -> None:
     """A dead on_chunk sink on the first model token returns the user prompt."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     pm.responses = [
         ModelResponse(
             finish_reason=FinishReason.STOP,
@@ -4484,7 +4668,7 @@ async def test_generate_on_chunk_failure_returns_closed_history() -> None:
     response = await generate_action(
         ai.registry,
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
         ),
         on_chunk=on_chunk,
@@ -4504,8 +4688,8 @@ async def test_generate_on_chunk_failure_returns_closed_history() -> None:
 @pytest.mark.asyncio
 async def test_generate_on_chunk_failure_echoes_full_request() -> None:
     """A streaming callback that raises still reports the request the turn sent."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='testTool')
     async def _test_tool() -> object:
@@ -4526,7 +4710,7 @@ async def test_generate_on_chunk_failure_echoes_full_request() -> None:
     response = await generate_action(
         ai.registry,
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
             docs=[Document(content=[Part.from_text('doc content 1')])],
             config={'temperature': 0.5},
@@ -4551,8 +4735,8 @@ async def test_generate_on_chunk_failure_echoes_full_request() -> None:
 @pytest.mark.asyncio
 async def test_generate_on_chunk_genkit_error_is_internal_not_the_sink_reason() -> None:
     """A sink that raises GenkitError is still a dead pipe, not TOOL_FAILED."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     pm.responses = [
         ModelResponse(
             finish_reason=FinishReason.STOP,
@@ -4571,7 +4755,7 @@ async def test_generate_on_chunk_genkit_error_is_internal_not_the_sink_reason() 
     response = await generate_action(
         ai.registry,
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
         ),
         on_chunk=on_chunk,
@@ -4685,7 +4869,7 @@ async def _assert_no_extra_tasks(before: set[int]) -> None:
     assert still_running == []
 
 
-def _always_requests_tool(pm: ProgrammableModel, *, name: str = 'step') -> None:
+def _always_requests_tool(pm: ScriptedModel, *, name: str = 'step') -> None:
     def always_tool(_request: ModelRequest) -> ModelResponse:
         return _model_calls_tool(name=name, ref=str(pm.request_count + 1))
 
@@ -4695,8 +4879,8 @@ def _always_requests_tool(pm: ProgrammableModel, *, name: str = 'step') -> None:
 @pytest.mark.asyncio
 async def test_generate_with_five_middleware_and_max_turns_50_returns_aborted_after_51_model_calls() -> None:
     """ai.generate with five no-op middleware and max_turns=50 aborts after 51 model calls."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='step')
     async def step() -> str:
@@ -4721,8 +4905,8 @@ async def test_generate_with_five_middleware_and_max_turns_50_returns_aborted_af
 @pytest.mark.asyncio
 async def test_generate_stream_with_five_middleware_and_max_turns_50_returns_aborted_after_51_model_calls() -> None:
     """ai.generate_stream with five no-op middleware and max_turns=50 closes aborted after 51 model calls."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='step')
     async def step() -> str:
@@ -4749,8 +4933,8 @@ async def test_generate_stream_with_five_middleware_and_max_turns_50_returns_abo
 @pytest.mark.asyncio
 async def test_generate_with_five_middleware_and_max_turns_200_returns_aborted() -> None:
     """ai.generate with five middleware and max_turns=200 aborts at 200; no RecursionError."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='step')
     async def step() -> str:
@@ -4775,8 +4959,8 @@ async def test_generate_with_five_middleware_and_max_turns_200_returns_aborted()
 @pytest.mark.asyncio
 async def test_generate_stream_with_five_middleware_and_max_turns_200_returns_aborted() -> None:
     """ai.generate_stream with five middleware and max_turns=200 closes aborted at 200."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='step')
     async def step() -> str:
@@ -4811,8 +4995,8 @@ async def test_generate_eager_task_factory_two_hundred_tool_turns_returns() -> N
     previous = loop.get_task_factory()
     loop.set_task_factory(eager_factory)
     try:
-        ai = Genkit(model='programmableModel')
-        pm, _ = define_programmable_model(ai)
+        ai = Genkit(model='scriptedModel')
+        pm, _ = define_scripted_model(ai)
 
         @ai.tool(name='step')
         async def step() -> str:
@@ -4838,8 +5022,8 @@ async def test_generate_eager_task_factory_two_hundred_tool_turns_returns() -> N
 @pytest.mark.asyncio
 async def test_generate_turn_0_middleware_after_next_sees_the_final_answer() -> None:
     """wrap_generate after await next on the first wrap sees the final stop text."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     after_next: list[tuple[FinishReason | None, str]] = []
 
     class AfterNext(BaseMiddleware):
@@ -4925,8 +5109,8 @@ async def test_generate_middleware_awaiting_next_inside_taskgroup_returns_stop()
     if task_group_cls is None:
         pytest.skip('asyncio.TaskGroup requires Python 3.11')
 
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     class InTaskGroup(BaseMiddleware):
         async def wrap_generate(
@@ -5046,8 +5230,8 @@ def test_generate_system_exit_on_a_later_turn_unwinds_middleware_before_the_loop
 @pytest.mark.asyncio
 async def test_generate_with_400_middleware_returns_the_model_text() -> None:
     """ai.generate with 400 middleware returns the model text, and the outer wrap sees it after next."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     after_next: list[str] = []
 
     class AfterNext(BaseMiddleware):
@@ -5089,8 +5273,8 @@ async def test_generate_eager_task_factory_four_hundred_middleware_returns() -> 
     previous = loop.get_task_factory()
     loop.set_task_factory(eager_factory)
     try:
-        ai = Genkit(model='programmableModel')
-        pm, _ = define_programmable_model(ai)
+        ai = Genkit(model='scriptedModel')
+        pm, _ = define_scripted_model(ai)
         pm.responses = [_model_says('from a deep list')]
         response = await ai.generate(prompt='go', use=_four_hundred_noop_middleware())
 
@@ -5103,8 +5287,8 @@ async def test_generate_eager_task_factory_four_hundred_middleware_returns() -> 
 @pytest.mark.asyncio
 async def test_generate_with_400_middleware_runs_the_tool_and_returns_the_model_text() -> None:
     """ai.generate with 400 middleware runs the tool once, then returns the model text."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     tool_runs = 0
 
     @ai.tool(name='step')
@@ -5197,8 +5381,8 @@ def _recording_layer(name: str, steps: list[str]) -> BaseMiddleware:
 @pytest.mark.asyncio
 async def test_generate_middleware_before_and_after_stay_in_order_across_a_tool_turn() -> None:
     """Outer and inner middleware around 400 hooks keep before/after order through a tool turn."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     steps: list[str] = []
 
     @ai.tool(name='step')
@@ -5258,8 +5442,8 @@ async def test_generate_middleware_before_and_after_stay_in_order_across_a_tool_
 @pytest.mark.asyncio
 async def test_generate_outer_middleware_text_is_what_the_caller_gets() -> None:
     """The outermost middleware's rewritten text is the text ai.generate returns."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     pm.responses = [_model_says('secret')]
 
     class Rewrite(BaseMiddleware):
@@ -5288,8 +5472,8 @@ async def test_generate_outer_middleware_text_is_what_the_caller_gets() -> None:
 @pytest.mark.asyncio
 async def test_generate_middleware_that_returns_without_calling_next_skips_the_model() -> None:
     """An inner middleware that returns its own response never calls the model."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     pm.responses = [_model_says('should not run')]
     seen: list[str] = []
 
@@ -5330,8 +5514,8 @@ async def test_generate_middleware_that_returns_without_calling_next_skips_the_m
 @pytest.mark.asyncio
 async def test_generate_middleware_value_set_before_next_is_what_the_model_returns() -> None:
     """A value set before await next is what the model reads, through 400 hooks."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     marker: contextvars.ContextVar[str] = contextvars.ContextVar('marker', default='unset')
 
     class SetMarker(BaseMiddleware):
@@ -5360,8 +5544,8 @@ async def test_generate_middleware_value_set_before_next_is_what_the_model_retur
 @pytest.mark.asyncio
 async def test_generate_outer_middleware_after_next_still_reads_the_value_it_set() -> None:
     """After await next, the outer middleware still reads the value it set, not the inner one."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     pm.responses = [_model_says('model text')]
     marker: contextvars.ContextVar[str] = contextvars.ContextVar('marker', default='unset')
 
@@ -5410,8 +5594,8 @@ async def test_generate_without_use_and_with_logging_use_leave_same_contextvar()
             return await next_fn(params, ctx)
 
     async def run(*, use: list[BaseMiddleware]) -> tuple[list[str], str]:
-        ai = Genkit(model='programmableModel')
-        pm, _ = define_programmable_model(ai)
+        ai = Genkit(model='scriptedModel')
+        pm, _ = define_scripted_model(ai)
 
         @ai.tool(name='step')
         async def step() -> str:
@@ -5443,8 +5627,8 @@ async def test_generate_without_use_and_with_logging_use_leave_same_contextvar()
 @pytest.mark.asyncio
 async def test_generate_with_400_middleware_second_turn_error_keeps_the_closed_tool_round() -> None:
     """A second-turn middleware error keeps the closed tool round and drops that turn."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='lookup')
     async def lookup() -> str:
@@ -5482,8 +5666,8 @@ async def test_generate_with_400_middleware_second_turn_error_keeps_the_closed_t
 @pytest.mark.asyncio
 async def test_generate_with_400_middleware_model_hook_error_returns_internal() -> None:
     """A model hook that raises returns failed/INTERNAL and does not call the model."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     pm.responses = [_model_says('should not run')]
 
     class BoomModel(BaseMiddleware):
@@ -5513,8 +5697,8 @@ async def test_generate_with_400_middleware_model_hook_error_returns_internal() 
 @pytest.mark.asyncio
 async def test_generate_with_400_middleware_tool_hook_error_returns_internal() -> None:
     """A tool hook that raises returns failed/INTERNAL and drops the open tool round."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='lookup')
     async def lookup() -> str:
@@ -5549,8 +5733,8 @@ async def test_generate_with_400_middleware_tool_hook_error_returns_internal() -
 @pytest.mark.asyncio
 async def test_generate_with_400_middleware_one_of_two_tools_failing_drops_the_open_round() -> None:
     """One of two tools raising drops both outputs; the caller gets the user message only."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='stable')
     async def stable() -> str:
@@ -5590,8 +5774,8 @@ async def test_generate_with_400_middleware_one_of_two_tools_failing_drops_the_o
 @pytest.mark.asyncio
 async def test_generate_with_400_middleware_tool_interrupt_pauses_instead_of_failing() -> None:
     """A tool hook that interrupts pauses the generate instead of returning failed."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='blocked')
     async def blocked() -> str:
@@ -5632,8 +5816,8 @@ async def test_generate_with_400_middleware_tool_interrupt_pauses_instead_of_fai
 @pytest.mark.asyncio
 async def test_generate_with_400_middleware_runs_both_tools() -> None:
     """ai.generate with 400 middleware runs both tools, then returns the model text."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='alpha')
     async def alpha() -> str:
@@ -5673,8 +5857,8 @@ async def test_generate_with_400_middleware_runs_both_tools() -> None:
 @pytest.mark.asyncio
 async def test_generate_stream_with_400_middleware_returns_chunks_and_the_model_text() -> None:
     """ai.generate_stream with 400 middleware yields the chunk text and then the final text."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     pm.responses = [_model_says('final')]
     pm.chunks = [[ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('c0')])]]
 
@@ -5692,8 +5876,8 @@ async def test_generate_stream_with_400_middleware_returns_chunks_and_the_model_
 @pytest.mark.asyncio
 async def test_generate_stream_with_400_middleware_includes_chunks_from_the_later_turn() -> None:
     """A streaming wrap on turn 0 still sees chunks the later turn emits, through 400 hooks."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     turn0_chunks: list[str] = []
 
     class Turn0ChunkSpy(BaseMiddleware):
@@ -5825,8 +6009,8 @@ async def test_generate_cancelled_with_400_middleware_finishes_inner_cleanup_bef
 @pytest.mark.asyncio
 async def test_generate_with_400_middleware_cancelled_during_the_tool_raises_cancelled_error() -> None:
     """Cancelling generate while the tool is running finishes the tool cleanup, then raises CancelledError."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     started = asyncio.Event()
     cleanup: list[str] = []
 
@@ -5921,8 +6105,8 @@ async def test_generate_stream_with_400_middleware_cancelled_while_the_model_han
 @pytest.mark.asyncio
 async def test_generate_turn_0_middleware_sees_chunks_from_later_turns() -> None:
     """A streaming wrap_generate on turn 0 still intercepts chunks emitted by later turns."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     turn0_chunks: list[str] = []
 
     class Turn0ChunkSpy(BaseMiddleware):
@@ -5978,8 +6162,8 @@ async def test_generate_turn_0_middleware_sees_chunks_from_later_turns() -> None
 
 @pytest.mark.asyncio
 async def test_recovered_middleware_failure_uses_latest_closed_history() -> None:
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     tool_calls = 0
 
     @ai.tool(name='lookup')
@@ -6034,8 +6218,8 @@ async def test_recovered_middleware_failure_uses_latest_closed_history() -> None
 @pytest.mark.asyncio
 async def test_abort_after_tool_turn_keeps_closed_rounds() -> None:
     """Abort after a tool returns: the closed round stays, the next model call does not run."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     abort_signal = asyncio.Event()
 
     @ai.tool(name='lookup')
@@ -6051,7 +6235,7 @@ async def test_abort_after_tool_turn_keeps_closed_rounds() -> None:
     response = await generate_action(
         ai.registry,
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('keep going')])],
             tools=['lookup'],
         ),
@@ -6072,8 +6256,8 @@ async def test_abort_after_tool_turn_keeps_closed_rounds() -> None:
 @pytest.mark.asyncio
 async def test_abort_during_first_tool_drops_unfinished_round() -> None:
     """Abort while the first tool is running: only the user message stays."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     abort_signal = asyncio.Event()
     started = asyncio.Event()
 
@@ -6089,7 +6273,7 @@ async def test_abort_during_first_tool_drops_unfinished_round() -> None:
         return await generate_action(
             ai.registry,
             GenerateActionOptions(
-                model='programmableModel',
+                model='scriptedModel',
                 messages=[Message(role=Role.USER, content=[Part.from_text('keep going')])],
                 tools=['lookup'],
             ),
@@ -6115,15 +6299,15 @@ async def test_abort_during_first_tool_drops_unfinished_round() -> None:
 @pytest.mark.asyncio
 async def test_already_cancelled_generate_returns_prompt() -> None:
     """A generate cancelled before it starts returns the prompt and does not call the model."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     abort_signal = asyncio.Event()
     abort_signal.set()
 
     response = await generate_action(
         ai.registry,
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('keep going')])],
         ),
         abort_signal=abort_signal,
@@ -6159,15 +6343,15 @@ async def test_already_cancelled_generate_returns_prompt() -> None:
 @pytest.mark.asyncio
 async def test_already_cancelled_generate_returns_prior_messages() -> None:
     """A generate cancelled before it starts returns the messages they passed in."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     abort_signal = asyncio.Event()
     abort_signal.set()
 
     response = await generate_action(
         ai.registry,
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=[
                 Message(role=Role.USER, content=[Part.from_text('first')]),
                 Message(role=Role.MODEL, content=[Part.from_text('ok')]),
@@ -6308,11 +6492,53 @@ async def test_abort_during_later_model_call_keeps_closed_round() -> None:
 
 
 @pytest.mark.asyncio
+async def test_generate_user_retry_middleware_makes_no_model_call_after_stop() -> None:
+    """A user's retry loop that calls next_fn again after a stop does not bill another model call."""
+    ai = Genkit()
+    calls: list[str] = []
+
+    async def flaky(_request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        calls.append('flaky')
+        ctx.abort_signal.set()
+        raise GenkitError(status='UNAVAILABLE', message='primary down')
+
+    ai.define_model(name='flaky', fn=flaky)
+
+    class MyRetry(BaseMiddleware):
+        async def wrap_model(
+            self,
+            params: ModelHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ) -> ModelResponse:
+            last: GenkitError | None = None
+            for _ in range(3):
+                try:
+                    return await next_fn(params, ctx)
+                except GenkitError as e:
+                    last = e
+            assert last is not None
+            raise last
+
+    response = await ai.generate(model='flaky', prompt='hi', use=[MyRetry()])
+
+    assert response.finish_reason == FinishReason.ABORTED
+    assert response.finish_message == 'Generation aborted.'
+    assert response.error is not None
+    assert response.error.status == 'CANCELLED'
+    assert response.error.reason is None
+    assert response.error.message == response.finish_message
+    assert response.message is None
+    assert [m.role for m in response.messages] == [Role.USER]
+    assert calls == ['flaky']
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize('status', ['ABORTED', 'NOT_FOUND', 'INVALID_ARGUMENT', 'FAILED_PRECONDITION'])
 async def test_provider_status_failure_keeps_closed_rounds(status: str) -> None:
     """A provider status is failure data after generation starts, not a setup error."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='lookup')
     async def lookup() -> str:
@@ -6344,8 +6570,8 @@ async def test_provider_status_failure_keeps_closed_rounds(status: str) -> None:
 @pytest.mark.asyncio
 async def test_generate_middleware_failure_keeps_closed_rounds() -> None:
     """A generate hook that fails between turns returns the conversation entering that turn."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='lookup')
     async def lookup() -> str:
@@ -6384,8 +6610,8 @@ async def test_generate_middleware_failure_keeps_closed_rounds() -> None:
 @pytest.mark.asyncio
 async def test_middleware_rewrite_then_raise_keeps_one_model_turn() -> None:
     """A later wrap_generate that raises after an inner rewrite keeps one model message."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     pm.responses = [_model_says('secret')]
 
     class Config(BaseModel):
@@ -6428,8 +6654,8 @@ async def test_middleware_rewrite_then_raise_keeps_one_model_turn() -> None:
 @pytest.mark.asyncio
 async def test_generate_middleware_genkit_error_keeps_closed_rounds() -> None:
     """A GenkitError from wrap_generate after a closed tool round is still resendable."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='lookup')
     async def lookup() -> str:
@@ -6471,8 +6697,8 @@ async def test_generate_middleware_genkit_error_keeps_closed_rounds() -> None:
 @pytest.mark.asyncio
 async def test_generate_first_turn_middleware_genkit_error_drops_unanswered_model() -> None:
     """A wrap_generate GenkitError after generate has entered is still resendable."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     pm.responses = [
         ModelResponse(
             finish_reason=FinishReason.STOP,
@@ -6510,8 +6736,8 @@ async def test_generate_first_turn_middleware_genkit_error_drops_unanswered_mode
 @pytest.mark.asyncio
 async def test_generate_first_turn_middleware_runtime_error_drops_unanswered_model() -> None:
     """A wrap_generate RuntimeError after generate has entered is still resendable."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     pm.responses = [
         ModelResponse(
             finish_reason=FinishReason.STOP,
@@ -6544,8 +6770,8 @@ async def test_generate_first_turn_middleware_runtime_error_drops_unanswered_mod
 @pytest.mark.asyncio
 async def test_generate_middleware_genkit_error_after_next_fn_keeps_closed_rounds() -> None:
     """A wrap_generate GenkitError after next_fn still leaves the closed tool round."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='lookup')
     async def lookup() -> str:
@@ -6592,8 +6818,8 @@ async def test_generate_middleware_genkit_error_after_next_fn_keeps_closed_round
 @pytest.mark.asyncio
 async def test_generate_middleware_genkit_error_after_next_fn_keeps_model_turn() -> None:
     """A wrap_generate GenkitError after a completed model turn is still resendable."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     class Config(BaseModel):
         pass
@@ -6634,8 +6860,8 @@ async def test_generate_middleware_genkit_error_after_next_fn_keeps_model_turn()
 @pytest.mark.asyncio
 async def test_generate_middleware_validation_error_after_next_fn_keeps_model_turn() -> None:
     """A wrap_generate schema error after a completed model turn is still resendable."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     class Recipe(BaseModel):
         title: str
@@ -6677,8 +6903,8 @@ async def test_generate_middleware_validation_error_after_next_fn_keeps_model_tu
 @pytest.mark.asyncio
 async def test_generate_middleware_validation_error_after_next_fn_keeps_closed_rounds() -> None:
     """A wrap_generate schema error after next_fn still leaves the closed tool round."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     class Recipe(BaseModel):
         title: str
@@ -6725,8 +6951,8 @@ async def test_generate_middleware_validation_error_after_next_fn_keeps_closed_r
 @pytest.mark.asyncio
 async def test_generate_middleware_action_input_error_after_next_fn_keeps_model_turn() -> None:
     """An invalid model input error after a completed model turn is still resendable."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     class Config(BaseModel):
         pass
@@ -6770,8 +6996,8 @@ async def test_generate_middleware_action_input_error_after_next_fn_keeps_model_
 @pytest.mark.asyncio
 async def test_generate_wrap_model_action_input_error_after_next_fn_drops_unanswered_model() -> None:
     """A wrap_model invalid model input after the model returned is still resendable."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     class Config(BaseModel):
         pass
@@ -6814,8 +7040,8 @@ async def test_generate_wrap_model_action_input_error_after_next_fn_drops_unansw
 @pytest.mark.asyncio
 async def test_generate_wrap_model_action_input_error_after_next_fn_keeps_closed_rounds() -> None:
     """A wrap_model invalid model input after next_fn still leaves the closed tool round."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='lookup')
     async def lookup() -> str:
@@ -6867,8 +7093,8 @@ async def test_generate_wrap_model_action_input_error_after_next_fn_keeps_closed
 @pytest.mark.asyncio
 async def test_generate_wrap_model_action_input_error_before_next_fn_drops_unanswered_model() -> None:
     """A wrap_model invalid model input after generate has entered is still resendable."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     class Config(BaseModel):
         pass
@@ -6907,8 +7133,8 @@ async def test_generate_wrap_model_action_input_error_before_next_fn_drops_unans
 @pytest.mark.asyncio
 async def test_generate_wrap_model_action_input_error_before_next_fn_keeps_closed_rounds() -> None:
     """A wrap_model invalid model input before the next model call still leaves the closed tool round."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='lookup')
     async def lookup() -> str:
@@ -6959,8 +7185,8 @@ async def test_generate_wrap_model_action_input_error_before_next_fn_keeps_close
 @pytest.mark.asyncio
 async def test_generate_wrap_model_action_input_error_after_short_circuit_next_fn_drops_unanswered_model() -> None:
     """A wrap_model Invalid input after a cache-style next_fn is still resendable."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     class Config(BaseModel):
         pass
@@ -7014,8 +7240,8 @@ async def test_generate_wrap_model_action_input_error_after_short_circuit_next_f
 @pytest.mark.asyncio
 async def test_generate_wrap_generate_dict_after_next_fn_keeps_model_turn() -> None:
     """A wrap_generate dict after a completed model turn is still resendable."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     class Config(BaseModel):
         pass
@@ -7053,8 +7279,8 @@ async def test_generate_wrap_generate_dict_after_next_fn_keeps_model_turn() -> N
 @pytest.mark.asyncio
 async def test_generate_wrap_generate_dict_after_next_fn_keeps_closed_rounds() -> None:
     """A wrap_generate dict after next_fn still leaves the closed tool round."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='lookup')
     async def lookup() -> str:
@@ -7097,8 +7323,8 @@ async def test_generate_wrap_generate_dict_after_next_fn_keeps_closed_rounds() -
 @pytest.mark.asyncio
 async def test_generate_wrap_generate_dict_before_next_fn_drops_unanswered_model() -> None:
     """A wrap_generate dict after generate has entered is still resendable."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     class Config(BaseModel):
         pass
@@ -7133,8 +7359,8 @@ async def test_generate_wrap_generate_dict_before_next_fn_drops_unanswered_model
 @pytest.mark.asyncio
 async def test_generate_wrap_generate_dict_after_short_circuit_next_fn_keeps_model_turn() -> None:
     """A wrap_generate dict after a cache-style next_fn is still resendable."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     class Config(BaseModel):
         pass
@@ -7190,8 +7416,8 @@ async def test_generate_wrap_generate_dict_after_short_circuit_next_fn_keeps_mod
 @pytest.mark.asyncio
 async def test_generate_wrap_generate_action_input_error_after_short_circuit_next_fn_keeps_model_turn() -> None:
     """A wrap_generate Invalid input after a cache-style next_fn is still resendable."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     class Config(BaseModel):
         pass
@@ -7251,8 +7477,8 @@ async def test_generate_wrap_generate_action_input_error_after_short_circuit_nex
 @pytest.mark.asyncio
 async def test_generate_wrap_generate_dict_after_short_circuit_dict_next_fn_drops_unanswered_model() -> None:
     """A wrap_generate dict after a cache-style dict next_fn is still resendable."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     class Config(BaseModel):
         pass
@@ -7298,8 +7524,8 @@ async def test_generate_wrap_generate_dict_after_short_circuit_dict_next_fn_drop
 @pytest.mark.asyncio
 async def test_generate_wrap_model_dict_after_short_circuit_dict_next_fn_drops_unanswered_model() -> None:
     """A wrap_model dict after a cache-style dict next_fn is still resendable."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     class Config(BaseModel):
         pass
@@ -7345,8 +7571,8 @@ async def test_generate_wrap_model_dict_after_short_circuit_dict_next_fn_drops_u
 @pytest.mark.asyncio
 async def test_generate_wrap_model_dict_before_next_fn_drops_unanswered_model() -> None:
     """A wrap_model dict after generate has entered is still resendable."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     class Config(BaseModel):
         pass
@@ -7381,8 +7607,8 @@ async def test_generate_wrap_model_dict_before_next_fn_drops_unanswered_model() 
 @pytest.mark.asyncio
 async def test_generate_wrap_model_runtime_error_before_next_fn_drops_unanswered_model() -> None:
     """A wrap_model RuntimeError after generate has entered is still resendable."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     class Config(BaseModel):
         pass
@@ -7416,8 +7642,8 @@ async def test_generate_wrap_model_runtime_error_before_next_fn_drops_unanswered
 @pytest.mark.asyncio
 async def test_generate_wrap_model_dict_after_next_fn_drops_unanswered_model() -> None:
     """A wrap_model dict after the model returned is still resendable."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     class Config(BaseModel):
         pass
@@ -7454,8 +7680,8 @@ async def test_generate_wrap_model_dict_after_next_fn_drops_unanswered_model() -
 @pytest.mark.asyncio
 async def test_generate_middleware_action_input_error_after_next_fn_keeps_closed_rounds() -> None:
     """An invalid model input error after next_fn still leaves the closed tool round."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='lookup')
     async def lookup() -> str:
@@ -7504,8 +7730,8 @@ async def test_generate_middleware_action_input_error_after_next_fn_keeps_closed
 @pytest.mark.asyncio
 async def test_generate_middleware_interrupt_after_next_fn_keeps_model_turn() -> None:
     """A wrap_generate Interrupt after a completed model turn is a dead turn, not a tool pause."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     class Config(BaseModel):
         pass
@@ -7543,8 +7769,8 @@ async def test_generate_middleware_interrupt_after_next_fn_keeps_model_turn() ->
 @pytest.mark.asyncio
 async def test_generate_middleware_interrupt_after_next_fn_keeps_closed_rounds() -> None:
     """A wrap_generate Interrupt after next_fn still leaves the closed tool round."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='lookup')
     async def lookup() -> str:
@@ -7587,8 +7813,8 @@ async def test_generate_middleware_interrupt_after_next_fn_keeps_closed_rounds()
 @pytest.mark.asyncio
 async def test_generate_on_chunk_validation_error_returns_closed_history() -> None:
     """A dead on_chunk sink that raises ValidationError is still a dead pipe."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     class Recipe(BaseModel):
         title: str
@@ -7607,7 +7833,7 @@ async def test_generate_on_chunk_validation_error_returns_closed_history() -> No
     response = await generate_action(
         ai.registry,
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
         ),
         on_chunk=on_chunk,
@@ -7628,8 +7854,8 @@ async def test_generate_on_chunk_validation_error_returns_closed_history() -> No
 @pytest.mark.asyncio
 async def test_generate_format_parse_error_keeps_model_text() -> None:
     """A custom format that cannot parse the model text still returns that text."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     class Recipe(BaseModel):
         title: str
@@ -7686,8 +7912,8 @@ async def test_util_generate_dead_turn_paints_span_error(exporter) -> None:
     class Recipe(BaseModel):
         title: str
 
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     pm.responses = [
         ModelResponse(
             finish_reason=FinishReason.STOP,
@@ -7699,7 +7925,7 @@ async def test_util_generate_dead_turn_paints_span_error(exporter) -> None:
     assert action is not None
     action_response = await action.run(
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('give me a recipe')])],
             output=GenerateActionOutputConfig(
                 json_schema=Recipe.model_json_schema(),
@@ -7724,8 +7950,8 @@ async def test_failed_generate_marks_span_error(exporter) -> None:
     class Recipe(BaseModel):
         title: str
 
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     pm.responses = [
         ModelResponse(
             finish_reason=FinishReason.STOP,
@@ -7745,8 +7971,8 @@ async def test_failed_generate_marks_span_error(exporter) -> None:
 @pytest.mark.asyncio
 async def test_generate_middleware_dropping_failure_still_keeps_closed_rounds() -> None:
     """A hook that discards an inner failure cannot discard its completed history."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='lookup')
     async def lookup() -> str:
@@ -7789,8 +8015,8 @@ async def test_generate_middleware_dropping_failure_still_keeps_closed_rounds() 
 @pytest.mark.asyncio
 async def test_generate_returns_typed_output_when_schema_matches() -> None:
     """Matching JSON is parsed and handed back as the schema type."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     class Recipe(BaseModel):
         title: str
@@ -7826,8 +8052,8 @@ async def test_model_response_output_is_typed_optional() -> None:
         name: str
         population: int
 
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     pm.responses = [
         ModelResponse(
             finish_reason=FinishReason.STOP,
@@ -7843,8 +8069,8 @@ async def test_model_response_output_is_typed_optional() -> None:
 @pytest.mark.asyncio
 async def test_generate_enum_off_list_is_error_finish() -> None:
     """An enum reply that is not one of the listed values is invalid output."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     pm.responses = [
         ModelResponse(
             finish_reason=FinishReason.STOP,
@@ -7872,8 +8098,8 @@ async def test_generate_enum_off_list_is_error_finish() -> None:
 @pytest.mark.asyncio
 async def test_generate_array_of_scalars() -> None:
     """A JSON array of strings is the output, not a parse miss."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     pm.responses = [
         ModelResponse(
             finish_reason=FinishReason.STOP,
@@ -7895,8 +8121,8 @@ async def test_generate_array_of_scalars() -> None:
 @pytest.mark.asyncio
 async def test_generate_unknown_format_is_invalid_argument() -> None:
     """An unresolved output format fails before the model is called."""
-    ai = Genkit(model='programmableModel')
-    define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    define_scripted_model(ai)
 
     with pytest.raises(GenkitError, match='Unable to resolve format') as raised:
         await ai.generate(prompt='hi', output_format='no-such-format')
@@ -7908,8 +8134,8 @@ async def test_generate_unknown_format_is_invalid_argument() -> None:
 @pytest.mark.asyncio
 async def test_unknown_middleware_raises_with_invalid_input() -> None:
     """A middleware name that is not registered is a bad argument, not a missing action."""
-    ai = Genkit(model='programmableModel')
-    define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    define_scripted_model(ai)
 
     with pytest.raises(GenkitError) as raised:
         await ai.generate(prompt='hi', use=[MiddlewareRef(name='ghost')])
@@ -7966,8 +8192,8 @@ async def test_generate_without_model_or_default_raises_model_not_found() -> Non
 @pytest.mark.asyncio
 async def test_generate_jsonl_with_object_schema_raises_invalid_schema() -> None:
     """jsonl needs an array of objects; a lone object schema is INVALID_SCHEMA."""
-    ai = Genkit(model='programmableModel')
-    define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    define_scripted_model(ai)
 
     with pytest.raises(GenkitError) as raised:
         await ai.generate(prompt='hi', output_format='jsonl', output_schema={'type': 'object'})
@@ -7981,8 +8207,8 @@ async def test_generate_jsonl_with_object_schema_raises_invalid_schema() -> None
 @pytest.mark.asyncio
 async def test_generate_enum_with_object_schema_raises_invalid_schema() -> None:
     """enum needs a string schema; an object schema is INVALID_SCHEMA."""
-    ai = Genkit(model='programmableModel')
-    define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    define_scripted_model(ai)
 
     with pytest.raises(GenkitError) as raised:
         await ai.generate(prompt='hi', output_format='enum', output_schema={'type': 'object'})
@@ -7996,8 +8222,8 @@ async def test_generate_enum_with_object_schema_raises_invalid_schema() -> None:
 @pytest.mark.asyncio
 async def test_generate_array_with_object_schema_raises_invalid_schema() -> None:
     """array format needs an array schema; an object schema is INVALID_SCHEMA."""
-    ai = Genkit(model='programmableModel')
-    define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    define_scripted_model(ai)
 
     with pytest.raises(GenkitError) as raised:
         await ai.generate(prompt='hi', output_format='array', output_schema={'type': 'object'})
@@ -8011,8 +8237,8 @@ async def test_generate_array_with_object_schema_raises_invalid_schema() -> None
 @pytest.mark.asyncio
 async def test_generate_output_returns_none_on_plain_text_reply() -> None:
     """Reading .output on a plain conversational turn yields None without throwing."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     pm.responses = [
         ModelResponse(
             finish_reason=FinishReason.STOP,
@@ -8039,8 +8265,8 @@ async def test_generate_four_output_scenarios_with_schema() -> None:
     class Dish(BaseModel):
         dish: str
 
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     raw_text_only = 'Sorry, I cannot help with that.'
     raw_text_unparseable = 'Here is your recipe:\n```json\n{dish: bad_json\n```\nHope you like it!'
@@ -8128,8 +8354,8 @@ async def test_generate_four_output_scenarios_with_format_json_no_schema() -> No
     3. Returns text + parseable output -> extracts dict, error is None
     4. Returns parseable output only -> extracts dict, error is None
     """
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     raw_text_only = 'Sorry, I cannot help with that.'
     raw_text_unparseable = 'Here is your recipe:\n```json\n{dish: bad_json\n```\nHope you like it!'
@@ -8212,8 +8438,8 @@ async def test_generate_four_output_scenarios_with_format_json_no_schema() -> No
 @pytest.mark.asyncio
 async def test_generate_array_format_no_schema_unparseable_records_invalid_output() -> None:
     """format='array' without schema marks INVALID_OUTPUT when model emits unparseable prose."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     pm.responses = [
         ModelResponse(
             finish_reason=FinishReason.STOP,
@@ -8236,8 +8462,8 @@ async def test_generate_array_format_no_schema_unparseable_records_invalid_outpu
 @pytest.mark.asyncio
 async def test_generate_array_format_object_reply_records_invalid_output() -> None:
     """format='array' marks INVALID_OUTPUT when model returns a JSON object instead of a list."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     pm.responses = [
         ModelResponse(
             finish_reason=FinishReason.STOP,
@@ -8261,8 +8487,8 @@ async def test_generate_array_format_object_reply_records_invalid_output() -> No
 @pytest.mark.asyncio
 async def test_generate_json_format_blocked_preserves_blocked_reason() -> None:
     """An abnormal finish like BLOCKED keeps its finish reason and does not mark INVALID_OUTPUT."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
     pm.responses = [
         ModelResponse(
             finish_reason=FinishReason.BLOCKED,
@@ -8279,8 +8505,8 @@ async def test_generate_json_format_blocked_preserves_blocked_reason() -> None:
 @pytest.mark.asyncio
 async def test_generate_json_format_with_tool_call_validates_only_final_turn() -> None:
     """Intermediate tool request turns do not fail format validation before final reply."""
-    ai = Genkit(model='programmableModel')
-    pm, _ = define_programmable_model(ai)
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='lookup')
     async def lookup(query: str) -> str:
@@ -8304,3 +8530,260 @@ async def test_generate_json_format_with_tool_call_validates_only_final_turn() -
     assert response.error is None
     assert response.output == {'result': 'special ingredient'}
     assert response.messages[-1].text == '{"result": "special ingredient"}'
+
+
+class _City(BaseModel):
+    name: str
+    population: int
+
+
+def _reply(text: str, finish_reason: FinishReason = FinishReason.STOP) -> ModelResponse:
+    return ModelResponse(
+        finish_reason=finish_reason,
+        message=Message(role=Role.MODEL, content=[Part.from_text(text)]),
+    )
+
+
+@pytest.mark.asyncio
+async def test_generate_output_schema_cut_off_with_length_returns_none() -> None:
+    """A reply cut off at `{"name":"X","population": 21` with finish LENGTH gives `output is None` and INVALID_OUTPUT.
+
+    `finish_reason` stays LENGTH, so the caller can tell a token cap from bad JSON.
+    """
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [_reply('{"name":"X","population": 21', FinishReason.LENGTH)]
+
+    response = await ai.generate(prompt='a city', output_schema=_City)
+
+    assert response.output is None
+    assert response.finish_reason == FinishReason.LENGTH
+    assert response.error is not None
+    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert response.text == '{"name":"X","population": 21'
+
+
+@pytest.mark.asyncio
+async def test_generate_output_schema_cut_off_with_stop_returns_none() -> None:
+    """The same cut-off reply with finish STOP also gives `output is None` and INVALID_OUTPUT."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [_reply('{"name":"X","population": 21')]
+
+    response = await ai.generate(prompt='a city', output_schema=_City)
+
+    assert response.output is None
+    assert response.finish_reason == FinishReason.STOP
+    assert response.error is not None
+    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+
+
+@pytest.mark.asyncio
+async def test_generate_output_schema_complete_json_with_length_returns_instance() -> None:
+    """A complete object that also hit the token cap is still a City with no error."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [_reply('{"name":"X","population": 2100}', FinishReason.LENGTH)]
+
+    response = await ai.generate(prompt='a city', output_schema=_City)
+
+    assert response.output == _City(name='X', population=2100)
+    assert response.error is None
+    assert response.finish_reason == FinishReason.LENGTH
+
+
+@pytest.mark.asyncio
+async def test_generate_output_in_code_fence_returns_instance() -> None:
+    """A complete object inside a ```json fence with prose around it still parses to a City."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [_reply('Here you go:\n```json\n{"name": "Paris", "population": 2100000}\n```\nEnjoy!')]
+
+    response = await ai.generate(prompt='a city', output_schema=_City)
+
+    assert response.output == _City(name='Paris', population=2100000)
+    assert response.error is None
+
+
+@pytest.mark.asyncio
+async def test_generate_json_format_cut_off_returns_none() -> None:
+    """`output_format='json'` with no schema gives `output is None` and INVALID_OUTPUT for a cut-off object."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [_reply('{"a": 1, "b": [1, 2', FinishReason.LENGTH)]
+
+    response = await ai.generate(prompt='json please', output_format='json')
+
+    assert response.output is None
+    assert response.error is not None
+    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+
+
+@pytest.mark.asyncio
+async def test_generate_json_format_complete_returns_dict() -> None:
+    """`output_format='json'` with no schema returns the dict for a complete object."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [_reply('{"a": 1, "b": [1, 2]}')]
+
+    response = await ai.generate(prompt='json please', output_format='json')
+
+    assert response.output == {'a': 1, 'b': [1, 2]}
+    assert response.error is None
+
+
+@pytest.mark.asyncio
+async def test_generate_json_format_brace_in_prose_returns_later_object() -> None:
+    """generate(output_format='json') returns {'a': 1} when the model replies `Fill in {name}: {"a": 1}`."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [_reply('Fill in {name}: {"a": 1}')]
+
+    response = await ai.generate(prompt='fill the template', output_format='json')
+
+    assert response.output == {'a': 1}
+    assert response.error is None
+
+
+@pytest.mark.asyncio
+async def test_generate_output_schema_brace_in_prose_wrong_shape_returns_none() -> None:
+    """generate(output_schema=City) on `{x} {"other": 1}` gives output is None and INVALID_OUTPUT."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [_reply('{x} {"other": 1}')]
+
+    response = await ai.generate(prompt='a city', output_schema=_City)
+
+    assert response.output is None
+    assert response.error is not None
+    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+
+
+@pytest.mark.asyncio
+async def test_generate_output_schema_cut_off_with_length_error_says_cut_off() -> None:
+    """generate(output_schema=City) cut off at the token limit says so in the INVALID_OUTPUT message."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [_reply('{"name":"X","population": 21', FinishReason.LENGTH)]
+
+    response = await ai.generate(prompt='a city', output_schema=_City)
+
+    assert response.output is None
+    assert response.error is not None
+    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert 'cut off at the token limit' in response.error.message
+    assert 'finish_reason=length' in response.error.message
+
+
+@pytest.mark.asyncio
+async def test_generate_output_schema_bad_json_with_stop_error_says_not_valid_json() -> None:
+    """generate(output_schema=City) on `{not json}` with finish stop keeps the not-valid-JSON message."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [_reply('{not json}')]
+
+    response = await ai.generate(prompt='a city', output_schema=_City)
+
+    assert response.output is None
+    assert response.error is not None
+    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert 'not valid JSON' in response.error.message
+
+
+@pytest.mark.asyncio
+async def test_generate_array_format_cut_off_keeps_finished_items() -> None:
+    """generate(output_format='array') keeps finished items when the model hits the token cap mid-item."""
+    text = '[{"a":1},{"a":2},{"a":'
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [_reply(text, FinishReason.LENGTH)]
+
+    response = await ai.generate(prompt='list 50 recipes', output_format='array')
+
+    assert response.output == [{'a': 1}, {'a': 2}]
+    assert response.error is None
+    assert response.finish_reason == FinishReason.LENGTH
+
+    stream_ai = Genkit(model='scriptedModel')
+    stream_pm, _ = define_scripted_model(stream_ai)
+    stream_pm.responses = [_reply(text, FinishReason.LENGTH)]
+    stream_pm.chunks = [[ModelResponseChunk(role=Role.MODEL, content=[Part.from_text(text)])]]
+    stream = stream_ai.generate_stream(prompt='list 50 recipes', output_format='array')
+    chunks = [chunk.output async for chunk in stream.stream]
+    streamed = await stream.response
+    assert streamed.output == response.output
+    assert chunks[-1] == response.output
+    assert streamed.finish_reason == FinishReason.LENGTH
+    assert streamed.error is None
+
+
+@pytest.mark.asyncio
+async def test_generate_array_format_cut_off_before_first_item_returns_none() -> None:
+    """generate(output_format='array') gives output is None and INVALID_OUTPUT when the model stops at `[{"a":`."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [_reply('[{"a":', FinishReason.LENGTH)]
+
+    response = await ai.generate(prompt='list 50 recipes', output_format='array')
+
+    assert response.output is None
+    assert response.error is not None
+    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert response.finish_reason == FinishReason.LENGTH
+
+
+@pytest.mark.asyncio
+async def test_generate_array_format_string_items_returns_list() -> None:
+    """generate(output_format='array') returns ["a", "b"] when the model replies with that array."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [_reply('["a", "b"]')]
+
+    response = await ai.generate(prompt='a list', output_format='array')
+
+    assert response.output == ['a', 'b']
+    assert response.error is None
+
+
+@pytest.mark.asyncio
+async def test_generate_jsonl_format_drops_cut_off_last_line() -> None:
+    """`output_format='jsonl'` keeps the complete lines and drops a cut-off last line."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [_reply('{"name": "a"}\n{"name": "b"}\n{"name": "c', FinishReason.LENGTH)]
+
+    response = await ai.generate(prompt='lines', output_format='jsonl')
+
+    assert response.output == [{'name': 'a'}, {'name': 'b'}]
+    assert response.error is None
+
+
+@pytest.mark.asyncio
+async def test_generate_custom_format_parser_output_is_used_for_cut_off_reply() -> None:
+    """A custom FormatDef whose parser closes a cut-off object still gets its City back."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+
+    class ClosingFormat(FormatDef):
+        def __init__(self) -> None:
+            super().__init__('closing', FormatterConfig(format='json'))
+
+        def handle(self, schema: dict[str, object] | None) -> Formatter[object, object]:
+            return Formatter(
+                message_parser=lambda msg: json.loads(msg.text + '}'),
+                chunk_parser=lambda _chunk: None,
+                instructions=None,
+            )
+
+    ai.define_format(ClosingFormat())
+    pm.responses = [_reply('{"name":"X","population": 21', FinishReason.LENGTH)]
+
+    response = await ai.generate(
+        prompt='a city',
+        output_schema=_City,
+        output_format='closing',
+        output_instructions=False,
+    )
+
+    assert response.output == _City(name='X', population=21)
+    assert response.error is None

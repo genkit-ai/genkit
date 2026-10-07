@@ -64,10 +64,6 @@ EXPORT_TIMEOUT_SECONDS = 300
 FLUSH_TIMEOUT_SECONDS = 2.0
 
 
-class GenkitBuiltinInstrumentation:
-    """Marker on the Developer UI poster so we never inject it twice."""
-
-
 @dataclass
 class ActiveSpan:
     trace_id: str
@@ -81,7 +77,7 @@ class ActiveSpan:
     status_message: str | None = None
 
 
-PARENT_SPAN: ContextVar[ActiveSpan | None] = ContextVar('genkit_direct_http_parent', default=None)
+_parent_span: ContextVar[ActiveSpan | None] = ContextVar('genkit_direct_http_parent', default=None)
 
 
 class DirectSpanContext:
@@ -231,7 +227,12 @@ class CollectorHttpSink:
 
 
 class DirectHttpInstrumentation:
-    """Mints its own ids and POSTs finished spans to the Developer UI collector."""
+    """HTTP poster that mints Genkit spans and writes them to a sink.
+
+    Testers pass a recording sink. The Developer UI Traces tab uses
+    :class:`DevUIInstrumentation`, a distinct type, so a test sink
+    does not count as the tab already being on.
+    """
 
     def __init__(
         self,
@@ -247,7 +248,7 @@ class DirectHttpInstrumentation:
         metadata: SpanMetadata,
         next: SpanNext[T],
     ) -> T:
-        parent = PARENT_SPAN.get()
+        parent = _parent_span.get()
         is_action = span_is_action.get()
         qualified_path = build_qualified_path(metadata, is_action=is_action)
         span = ActiveSpan(
@@ -260,7 +261,7 @@ class DirectHttpInstrumentation:
         )
         self.sink.export_spans([span], resource_attributes=self.resource_attributes)
         path_token = parent_path_context.set(qualified_path)
-        parent_token = PARENT_SPAN.set(span)
+        parent_token = _parent_span.set(span)
         ctx = DirectSpanContext(span)
         try:
             try:
@@ -287,7 +288,7 @@ class DirectHttpInstrumentation:
         finally:
             span.end_time_unix_nano = now_unix_nano()
             self.sink.export_spans([span], resource_attributes=self.resource_attributes)
-            PARENT_SPAN.reset(parent_token)
+            _parent_span.reset(parent_token)
             parent_path_context.reset(path_token)
 
     def dispose(self) -> None:
@@ -297,8 +298,17 @@ class DirectHttpInstrumentation:
         self.sink.flush()
 
 
-class DirectBuiltin(DirectHttpInstrumentation, GenkitBuiltinInstrumentation):
-    """The auto-injected Developer UI poster."""
+class DevUIInstrumentation(DirectHttpInstrumentation):
+    """The poster that fills the Developer UI Traces tab.
+
+    ``genkit start`` and handshake/notify install this. A recording sink
+    used in tests is a plain DirectHttpInstrumentation and does not
+    count as the Traces tab already being on.
+    """
+
+
+def reset_parent_span() -> None:
+    _parent_span.set(None)
 
 
 def build_qualified_path(metadata: SpanMetadata, *, is_action: bool = False) -> str:
@@ -312,8 +322,8 @@ def telemetry_server_url() -> str | None:
     return url or None
 
 
-def direct_http_for_collector(*, url: str) -> DirectBuiltin:
-    return DirectBuiltin(CollectorHttpSink(collector_otlp_url(url)))
+def direct_http_for_collector(*, url: str) -> DevUIInstrumentation:
+    return DevUIInstrumentation(CollectorHttpSink(collector_otlp_url(url)))
 
 
 def genkit_dev_instrumentation() -> Instrumentation | None:
@@ -338,7 +348,7 @@ def connect_developer_ui_collector(*, url: str) -> None:
     """
     if not url:
         return
-    if is_instrumented_by(GenkitBuiltinInstrumentation):
+    if is_instrumented_by(DevUIInstrumentation):
         return
     configure_instrumentation(direct_http_for_collector(url=url))
 
@@ -347,7 +357,7 @@ def maybe_inject_dev_instrumentation() -> None:
     """``Genkit()`` in dev installs the poster once when a collector URL is set."""
     if not is_dev_environment():
         return
-    if is_instrumented_by(GenkitBuiltinInstrumentation):
+    if is_instrumented_by(DevUIInstrumentation):
         return
     inst = genkit_dev_instrumentation()
     if inst is not None:

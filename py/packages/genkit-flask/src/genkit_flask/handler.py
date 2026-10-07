@@ -25,6 +25,7 @@ from typing import Any, TypeAlias, TypeVar, cast
 
 from flask import Response, request
 from pydantic import BaseModel
+from werkzeug.exceptions import HTTPException
 
 from genkit import ContextProvider, Genkit, GenkitError, PublicError, RequestData
 from genkit._core._action import input_from_json
@@ -158,6 +159,9 @@ def genkit_flask_handler(
                         context = await context
                     if isinstance(context, dict):
                         action_context = context
+                except HTTPException:
+                    # The app's own abort(401) passes through.
+                    raise
                 except Exception as e:
                     log_served_failure(adapter_logger=logger, error=e, where='context provider')
                     return _error_response(e)

@@ -120,7 +120,12 @@ def _usage_from_metadata(usage_metadata: Any) -> ModelUsage:  # noqa: ANN401
     )
 
 
-from genkit_google_genai._models._utils import PartConverter  # noqa: E402
+from genkit_google_genai._models._utils import (  # noqa: E402
+    TOOL_INPUT_FIELD,
+    PartConverter,
+    ToolTable,
+    ToolWire,
+)
 
 
 class HarmCategory(StrEnum):
@@ -1188,34 +1193,55 @@ class GeminiModel:
         Returns:
              list of Gemini tools
         """
-        tools = []
-        for tool in request.tools or []:
-            genai_tool = self._create_tool(tool)
-            tools.append(genai_tool)
-
+        tools, _table = self._declare_tools(request)
         return tools
 
-    def _create_tool(self, tool: ToolDefinition) -> genai_types.Tool:
+    def _declare_tools(self, request: ModelRequest) -> tuple[list[genai_types.Tool], ToolTable]:
+        """Declare this turn's tools and the table that unwraps their calls."""
+        tools: list[genai_types.Tool] = []
+        entries: list[ToolWire] = []
+        for tool in request.tools or []:
+            genai_tool, wire = self._create_tool(tool)
+            tools.append(genai_tool)
+            entries.append(wire)
+        return tools, ToolTable(entries)
+
+    def _create_tool(self, tool: ToolDefinition) -> tuple[genai_types.Tool, ToolWire]:
         """Create a tool that is compatible with Google Genai API.
 
         Args:
             tool: Genkit Tool Definition
 
         Returns:
-            Genai tool compatible with Gemini API.
+            Genai tool compatible with Gemini API, plus how it was declared.
         """
         params = self._convert_schema_property(tool.input_schema)
+        wrapped = False
         # Empty params: Gemini requires type=OBJECT even for no-arg tools.
         if not params:
             params = genai_types.Schema(type=genai_types.Type.OBJECT, properties={})
+        elif params.type != genai_types.Type.OBJECT:
+            # wrap after convert so OBJECT / Type.OBJECT / $ref enums / ['null']
+            # all see the same type Gemini will
+            wrapped = True
+            params = genai_types.Schema(
+                type=genai_types.Type.OBJECT,
+                properties={TOOL_INPUT_FIELD: params},
+                required=[TOOL_INPUT_FIELD],
+            )
 
+        wire_name = tool.name.replace('/', '__')
         function = genai_types.FunctionDeclaration(
-            name=tool.name,
+            name=wire_name,
             description=tool.description,
             parameters=params,
             response=self._convert_schema_property(tool.output_schema) if tool.output_schema else None,
         )
-        return genai_types.Tool(function_declarations=[function])
+        return genai_types.Tool(function_declarations=[function]), ToolWire(
+            original_name=tool.name,
+            wire_name=wire_name,
+            wrapped=wrapped,
+        )
 
     def _convert_schema_property(
         self, input_schema: dict[str, object] | None, defs: dict[str, object] | None = None
@@ -1366,9 +1392,11 @@ class GeminiModel:
             if version:
                 model_name = version
 
+        declared_tools, tool_table = self._declare_tools(request)
+
         # TODO(#4361): Do not move - this method mutates `request` by extracting system
         # prompts into configuration object
-        request_cfg = await self._genkit_to_googleai_cfg(request=request)
+        request_cfg = await self._genkit_to_googleai_cfg(request=request, declared_tools=declared_tools)
 
         # TTS models require response_modalities: ["AUDIO"]; some reject a request that names no voice
         if is_tts_model(model_name):
@@ -1403,7 +1431,7 @@ class GeminiModel:
         client = await self._resolve_request_client(request, context=ctx.context)
 
         request_contents, cached_content = await self._build_messages(
-            request=request, model_name=model_name, client=client
+            request=request, model_name=model_name, client=client, tools=tool_table
         )
 
         if cached_content and cached_content.name:
@@ -1418,10 +1446,15 @@ class GeminiModel:
                 ctx=ctx,
                 model_name=model_name,
                 client=client,
+                tools=tool_table,
             )
         else:
             response = await self._generate(
-                request_contents=request_contents, request_cfg=request_cfg, model_name=model_name, client=client
+                request_contents=request_contents,
+                request_cfg=request_cfg,
+                model_name=model_name,
+                client=client,
+                tools=tool_table,
             )
 
         response.usage = self._create_usage_stats(request=request, response=response)
@@ -1550,6 +1583,7 @@ class GeminiModel:
         request_cfg: genai_types.GenerateContentConfig | None,
         model_name: str,
         client: genai.Client | None = None,
+        tools: ToolTable | None = None,
     ) -> ModelResponse:
         """Call google-genai generate.
 
@@ -1558,6 +1592,7 @@ class GeminiModel:
             request_cfg: request configuration
             model_name: name of generation model to use
             client: optional client to use for the request
+            tools: tools declared this turn
 
         Returns:
             genai response.
@@ -1583,7 +1618,7 @@ class GeminiModel:
                 message=f'Unexpected error during generation: {type(e).__name__}: {str(e)}',
             ) from e
 
-        content = await self._contents_from_response(response)
+        content = await self._contents_from_response(response, tools=tools)
 
         # Ensure we always have at least one content item to avoid UI errors
         if not content:
@@ -1596,7 +1631,7 @@ class GeminiModel:
                 c_content = []
                 if c.content and c.content.parts:
                     for part in c.content.parts:
-                        converted = PartConverter.from_gemini(part=part)
+                        converted = PartConverter.from_gemini(part=part, tools=tools)
                         if converted:
                             c_content.append(converted)
 
@@ -1633,6 +1668,7 @@ class GeminiModel:
         ctx: ActionRunContext,
         model_name: str,
         client: genai.Client | None = None,
+        tools: ToolTable | None = None,
     ) -> ModelResponse:
         """Call google-genai generate for streaming.
 
@@ -1642,6 +1678,7 @@ class GeminiModel:
             ctx: action context
             model_name: name of generation model to use
             client: optional client to use for the request
+            tools: tools declared this turn
 
         Returns:
             empty genai response
@@ -1660,7 +1697,7 @@ class GeminiModel:
             finish_reason = FinishReason.UNKNOWN
             usage_metadata: Any = None
             async for response_chunk in generator:
-                content = await self._contents_from_response(response_chunk)
+                content = await self._contents_from_response(response_chunk, tools=tools)
                 if content:  # Only process if we have content
                     accumulated_content.extend(content)
                     ctx.send_chunk(
@@ -1710,7 +1747,11 @@ class GeminiModel:
         }
 
     async def _build_messages(
-        self, request: ModelRequest, model_name: str, client: genai.Client | None = None
+        self,
+        request: ModelRequest,
+        model_name: str,
+        client: genai.Client | None = None,
+        tools: ToolTable | None = None,
     ) -> tuple[list[genai_types.Content], genai_types.CachedContent | None]:
         """Build google-genai request contents from Genkit request.
 
@@ -1719,6 +1760,7 @@ class GeminiModel:
             model_name: name of generation model to use
             client: client to use for context-cache operations. Defaults to
                 the plugin-configured client.
+            tools: tools declared this turn
 
         Returns:
             list of google-genai contents.
@@ -1731,7 +1773,7 @@ class GeminiModel:
                 continue
             content_parts: list[genai_types.Part] = []
             for p in msg.content:
-                converted = await PartConverter.to_gemini(p)
+                converted = await PartConverter.to_gemini(p, tools=tools)
                 if isinstance(converted, list):
                     content_parts.extend(converted)
                 else:
@@ -1756,11 +1798,14 @@ class GeminiModel:
 
         return request_contents, cache
 
-    async def _contents_from_response(self, response: genai_types.GenerateContentResponse) -> list:
+    async def _contents_from_response(
+        self, response: genai_types.GenerateContentResponse, *, tools: ToolTable | None = None
+    ) -> list:
         """Retrieve contents from google-genai response.
 
         Args:
             response: google-genai response.
+            tools: tools declared this turn.
 
         Returns:
             list of generated contents.
@@ -1770,14 +1815,19 @@ class GeminiModel:
             for candidate in response.candidates:
                 if candidate.content and candidate.content.parts:
                     for part in candidate.content.parts:
-                        converted = PartConverter.from_gemini(part=part)
+                        converted = PartConverter.from_gemini(part=part, tools=tools)
                         if converted:  # Only append if conversion succeeded
                             content.append(converted)
 
         # Ensure we always return a list, even if empty
         return content if content else []
 
-    async def _genkit_to_googleai_cfg(self, request: ModelRequest) -> genai_types.GenerateContentConfig | None:
+    async def _genkit_to_googleai_cfg(
+        self,
+        request: ModelRequest,
+        *,
+        declared_tools: list[genai_types.Tool] | None = None,
+    ) -> genai_types.GenerateContentConfig | None:
         """Converts a Genkit ModelRequest to a Gemini GenerateContentConfig.
 
         The conversion follows a linear pipeline:
@@ -1825,7 +1875,7 @@ class GeminiModel:
                         raise sdk_config_error(action_name=self._version, error=e) from e
 
         # Tools from top-level field and config-level fields
-        tools.extend(self._get_tools(request))
+        tools.extend(declared_tools if declared_tools is not None else self._get_tools(request))
 
         has_output = bool(request.output_format or request.output_schema)
 

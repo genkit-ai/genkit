@@ -35,15 +35,12 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor
 
 from genkit._core._error import GenkitError
-from genkit._core._telemetry._instrumentation import (
-    instrumentations,
+from genkit.telemetry import (
+    configure_instrumentation,
     is_instrumented_by,
     reset_instrumentation,
 )
-from genkit._core._telemetry._log_exporter import reset_log_export
-from genkit.telemetry import configure_instrumentation
 
-# Environment variable and value constants (matching genkit._core._environment)
 _GENKIT_ENV = 'GENKIT_ENV'
 _ENV_DEV = 'dev'
 _ENV_PROD = 'prod'
@@ -52,11 +49,9 @@ _ENV_PROD = 'prod'
 @pytest.fixture(autouse=True)
 def _reset_instrumentation() -> Generator[None, None, None]:
     reset_instrumentation()
-    reset_log_export()
     _reset_google_cloud_telemetry()
     yield
     reset_instrumentation()
-    reset_log_export()
     _reset_google_cloud_telemetry()
 
 
@@ -245,7 +240,7 @@ def test_enable_disable_traces_keeps_their_genai_settings() -> None:
     ):
         enable_google_cloud_telemetry(disable_traces=True)
 
-    assert theirs in instrumentations
+    assert is_instrumented_by(GenAiInstrumentation)
     assert theirs.emit_metrics is False
 
 
