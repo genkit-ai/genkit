@@ -26,9 +26,8 @@ from email.utils import parsedate_to_datetime
 from enum import IntEnum
 from typing import Any, ClassVar, Literal, TypedDict, cast
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, model_validator
 from pydantic.alias_generators import to_camel
-from pydantic_core import to_jsonable_python
 
 from genkit._core._compat import StrEnum
 from genkit._core._typing import GenkitRuntimeError as GenkitRuntimeErrorData
@@ -608,11 +607,14 @@ def _generic_client_message(status: StatusName) -> str:
     return status.replace('_', ' ').capitalize()
 
 
+_ANY_ADAPTER: TypeAdapter[Any] = TypeAdapter(Any)
+
+
 def _client_details(details: Any) -> Any:  # noqa: ANN401
     """Details safe to put on the wire: dump nested models, drop stack, omit empty."""
     if not details:
         return None
-    dumped = to_jsonable_python(details, by_alias=True, exclude_none=True)
+    dumped = _ANY_ADAPTER.dump_python(details, mode='json', by_alias=True, exclude_none=True)
     if isinstance(dumped, dict):
         dumped.pop('stack', None)
         return dumped or None
