@@ -18,10 +18,11 @@
 """Tests for the Gemini model implementation."""
 
 import base64
-from typing import Any, get_args
+from typing import Any, cast, get_args
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from genkit_google_genai._models import _gemini
 from genkit_google_genai._models._gemini import (
     DEFAULT_SUPPORTS_MODEL,
     GeminiConfig,
@@ -1640,3 +1641,74 @@ async def test_generate_adds_no_voice_to_a_multi_speaker_config(mocker: MockerFi
     assert isinstance(sent_config.speech_config, genai_types.SpeechConfig)
     assert sent_config.speech_config.voice_config is None
     assert sent_config.speech_config.multi_speaker_voice_config is not None
+
+
+# Each strict nested Gemini setting and the google.genai type it is sent as.
+_NESTED_SDK_MIRRORS: list[tuple[type[BaseModel], type[BaseModel]]] = [
+    (_gemini.SafetySettingsSchema, genai_types.SafetySetting),
+    (_gemini.PrebuiltVoiceConfig, genai_types.PrebuiltVoiceConfig),
+    (_gemini.FunctionCallingConfig, genai_types.FunctionCallingConfig),
+    (_gemini.ThinkingConfigSchema, genai_types.ThinkingConfig),
+    (_gemini.FileSearchConfigSchema, genai_types.FileSearch),
+    (_gemini.ImageConfigSchema, genai_types.ImageConfig),
+    (_gemini.VoiceConfigSchema, genai_types.VoiceConfig),
+    (_gemini.SpeakerVoiceConfigSchema, genai_types.SpeakerVoiceConfig),
+    (_gemini.MultiSpeakerVoiceConfigSchema, genai_types.MultiSpeakerVoiceConfig),
+    (_gemini.SpeechConfigSchema, genai_types.SpeechConfig),
+]
+
+
+@pytest.mark.parametrize(('ours', 'sdk'), _NESTED_SDK_MIRRORS, ids=lambda c: c.__name__)
+def test_nested_gemini_setting_declares_exactly_the_sdk_fields(ours: type[BaseModel], sdk: type[BaseModel]) -> None:
+    """A strict nested setting accepts every key its google-genai type accepts, and no other."""
+    assert set(ours.model_fields) == set(sdk.model_fields)
+
+
+@pytest.mark.parametrize(
+    ('config_class', 'field', 'nested'),
+    [
+        (GeminiConfig, 'safetySettings', _gemini.SafetySettingsSchema),
+        (GeminiConfig, 'functionCallingConfig', _gemini.FunctionCallingConfig),
+        (GeminiConfig, 'thinkingConfig', _gemini.ThinkingConfigSchema),
+        (GeminiConfig, 'fileSearch', _gemini.FileSearchConfigSchema),
+        (GeminiImageConfig, 'imageConfig', _gemini.ImageConfigSchema),
+    ],
+)
+def test_gemini_config_form_lists_every_nested_field(
+    config_class: type[BaseModel], field: str, nested: type[BaseModel]
+) -> None:
+    """The hand-written Dev UI schema for a nested setting lists every field the class accepts."""
+    schema = config_class.model_json_schema(by_alias=True)['properties'][field]
+    properties = schema.get('items', schema)['properties']
+
+    assert set(properties) == {f.alias or name for name, f in nested.model_fields.items()}
+
+
+@pytest.mark.asyncio
+async def test_gemini_model__tool_toggle_false_attaches_no_tool(gemini_model_instance: GeminiModel) -> None:
+    """`code_execution`, `google_search`, and `url_context` set to False add no tool."""
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
+        config=GeminiConfig.model_validate({'code_execution': False, 'google_search': False, 'url_context': False}),
+    )
+
+    cfg = await gemini_model_instance._genkit_to_googleai_cfg(request)
+
+    assert cfg is None or not cfg.tools
+
+
+@pytest.mark.asyncio
+async def test_gemini_model__tool_toggle_empty_options_attaches_tool(gemini_model_instance: GeminiModel) -> None:
+    """An empty options dict attaches the tool, same as True."""
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
+        config=GeminiConfig.model_validate({'code_execution': {}, 'google_search': {}, 'url_context': {}}),
+    )
+
+    cfg = await gemini_model_instance._genkit_to_googleai_cfg(request)
+
+    assert cfg is not None
+    tools = cast(list[genai_types.Tool], cfg.tools)
+    assert [t.code_execution is not None for t in tools] == [True, False, False]
+    assert [t.google_search is not None for t in tools] == [False, True, False]
+    assert [t.url_context is not None for t in tools] == [False, False, True]
