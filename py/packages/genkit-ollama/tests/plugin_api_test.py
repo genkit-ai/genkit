@@ -27,10 +27,10 @@ from genkit_ollama import Ollama, OllamaConnectionError, RequestHeaderParams, ol
 from genkit_ollama._errors import wrap_connection_errors
 from genkit_ollama.constants import OllamaAPITypes
 from genkit_ollama.embedders import EmbeddingDefinition
-from genkit_ollama.models import ModelDefinition, OllamaConfig, OllamaSupports
+from genkit_ollama.models import ModelDefinition, OllamaConfig, OllamaModel, OllamaSupports
 from pydantic import BaseModel
 
-from genkit import Document, GenkitError, Message, Part, Role
+from genkit import Document, Genkit, GenkitError, Message, ModelResponse, Part, Role
 from genkit.embedder import EmbedRequest
 from genkit.model import ModelRequest
 from genkit.plugin_api import ActionKind, to_json_schema
@@ -103,7 +103,7 @@ async def test_initialize(ollama_plugin_instance: Ollama) -> None:
 @pytest.mark.asyncio
 async def test_resolve_action(kind: ActionKind, name: str, ollama_plugin_instance: Ollama) -> None:
     """Unit Tests for resolve action method."""
-    action = await ollama_plugin_instance.resolve(kind, ollama_name(name))
+    action = await ollama_plugin_instance.resolve(kind, name)
 
     assert action is not None
     assert action.kind == kind
@@ -130,7 +130,7 @@ async def test_create_model_action_chat_with_media() -> None:
     plugin = Ollama(
         models=[ModelDefinition(name='llava', api_type=OllamaAPITypes.CHAT, supports=OllamaSupports(media=True))]
     )
-    action = plugin._create_model_action(ollama_name('llava'))
+    action = plugin._create_model_action('llava')
 
     supports = cast(dict[str, Any], cast(dict[str, Any], action.metadata)['model']['supports'])
     assert supports['multiturn'] is True
@@ -142,7 +142,7 @@ async def test_create_model_action_chat_with_media() -> None:
 async def test_create_model_action_generate_gates_capabilities() -> None:
     """A GENERATE model reports multiturn/tools/media all False."""
     plugin = Ollama(models=[ModelDefinition(name='gen', api_type=OllamaAPITypes.GENERATE)])
-    action = plugin._create_model_action(ollama_name('gen'))
+    action = plugin._create_model_action('gen')
 
     supports = cast(dict[str, Any], cast(dict[str, Any], action.metadata)['model']['supports'])
     assert supports['multiturn'] is False
@@ -157,7 +157,7 @@ async def test_dynamic_model_advertises_generic_capabilities() -> None:
     generic capability set, matching the JS GENERIC_MODEL_INFO and the Go
     defaultOllamaSupports for un-probed models."""
     plugin = Ollama()
-    action = plugin._create_model_action(ollama_name('some-unconfigured-model'))
+    action = plugin._create_model_action('some-unconfigured-model')
 
     supports = cast(dict[str, Any], cast(dict[str, Any], action.metadata)['model']['supports'])
     assert supports['multiturn'] is True
@@ -170,7 +170,7 @@ async def test_dynamic_model_advertises_generic_capabilities() -> None:
 async def test_create_model_action_custom_options_is_ollama_config() -> None:
     """The model action advertises OllamaConfig (with Ollama-only knobs) as its schema."""
     plugin = Ollama(models=[ModelDefinition(name='m')])
-    action = plugin._create_model_action(ollama_name('m'))
+    action = plugin._create_model_action('m')
 
     model_meta = cast(dict[str, Any], cast(dict[str, Any], action.metadata)['model'])
     assert model_meta['customOptions'] == to_json_schema(OllamaConfig)
@@ -345,7 +345,7 @@ async def test_model_action_passes_request_context_to_header_callable() -> None:
     sdk_client.chat.return_value = ollama_api.ChatResponse(message=ollama_api.Message(role='assistant', content='hi'))
     sdk_client._client.aclose = AsyncMock()
 
-    action = plugin._create_model_action(ollama_name('m'))
+    action = plugin._create_model_action('m')
     request = ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('Hello')])])
 
     with patch('ollama.AsyncClient', return_value=sdk_client) as async_client:
@@ -381,7 +381,7 @@ async def test_embedder_action_passes_request_context_to_header_callable() -> No
     sdk_client.embed.return_value = ollama_api.EmbedResponse(embeddings=[[0.1, 0.2]])
     sdk_client._client.aclose = AsyncMock()
 
-    action = plugin._create_embedder_action(ollama_name('e'))
+    action = plugin._create_embedder_action('e')
     request = EmbedRequest(input=[Document.from_text(text='hello')])
 
     with patch('ollama.AsyncClient', return_value=sdk_client):
@@ -480,7 +480,7 @@ async def test_model_action_wraps_connection_error() -> None:
     # in before resolving the action.
     plugin.client = lambda: client_mock
 
-    action = plugin._create_model_action(ollama_name('m'))
+    action = plugin._create_model_action('m')
     request = ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('Hello')])])
 
     with pytest.raises(OllamaConnectionError):
@@ -496,7 +496,7 @@ async def test_model_action_wraps_transport_timeout() -> None:
     client_mock.chat = AsyncMock(side_effect=httpx.ReadTimeout('timed out'))
     plugin.client = lambda: client_mock
 
-    action = plugin._create_model_action(ollama_name('m'))
+    action = plugin._create_model_action('m')
     request = ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('Hello')])])
 
     with pytest.raises(OllamaConnectionError):
@@ -523,7 +523,7 @@ async def test_model_action_does_not_wrap_media_fetch_error() -> None:
     image_client = MagicMock()
     image_client.get = AsyncMock(side_effect=httpx.ConnectError('image host unreachable'))
 
-    action = plugin._create_model_action(ollama_name('m'))
+    action = plugin._create_model_action('m')
     request = ModelRequest(
         messages=[
             Message(
@@ -554,7 +554,7 @@ async def test_embedder_action_wraps_connection_error() -> None:
     client_mock.embed = AsyncMock(side_effect=ConnectionError('Failed to connect to Ollama.'))
     plugin.client = lambda: client_mock
 
-    action = plugin._create_embedder_action(ollama_name('e'))
+    action = plugin._create_embedder_action('e')
     request = EmbedRequest(input=[Document.from_text(text='hello')])
 
     with pytest.raises(OllamaConnectionError):
@@ -625,3 +625,21 @@ async def test_wrap_connection_errors_passes_through_http_status_error() -> None
     with pytest.raises(httpx.HTTPStatusError):
         async with wrap_connection_errors('http://localhost:11434'):
             raise httpx.HTTPStatusError('boom', request=request, response=response)
+
+
+@pytest.mark.asyncio
+async def test_generate_ollama_id_with_ollama_segment_sends_id_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`ollama/ollama/llama3` sends `ollama/llama3` to the Ollama server."""
+    seen: list[str] = []
+
+    async def fake_generate(self: OllamaModel, request: object, ctx: object, client: object = None) -> ModelResponse:
+        seen.append(self.model_definition.name)
+        return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))
+
+    monkeypatch.setattr(OllamaModel, 'generate', fake_generate)
+    ai = Genkit(plugins=[Ollama()])
+
+    response = await ai.generate(model='ollama/ollama/llama3', prompt='hi')
+
+    assert response.text == 'ok'
+    assert seen == ['ollama/llama3']

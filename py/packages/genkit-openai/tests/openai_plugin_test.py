@@ -25,6 +25,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
+from genkit_openai._models import OpenAIModelHandler
 from genkit_openai._models._audio import SUPPORTED_STT_MODELS, SUPPORTED_TTS_MODELS
 from genkit_openai._models._image import SUPPORTED_IMAGE_MODELS
 from genkit_openai._models._model_info import SUPPORTED_OPENAI_MODELS
@@ -33,7 +34,7 @@ from openai import APIStatusError, APITimeoutError
 from openai.types import Model
 from openai.types.chat import ChatCompletion
 
-from genkit import Document, Genkit, GenkitError
+from genkit import Document, Genkit, GenkitError, Message, ModelResponse, Part, Role
 from genkit._ai._formats import built_in_formats
 from genkit.embedder import EmbedRequest, EmbedResponse
 from genkit.model import Supports
@@ -80,7 +81,7 @@ async def test_openai_plugin_resolve_action(kind: ActionKind, name: str) -> None
     """Unit Tests for resolve method."""
     plugin = OpenAI(api_key='test-key')
 
-    action = await plugin.resolve(kind, f'openai/{name}')
+    action = await plugin.resolve(kind, name)
 
     assert action is not None
     assert action.name == f'openai/{name}'
@@ -133,7 +134,7 @@ async def test_gpt_6_astra_registered_without_tools() -> None:
     plugin = OpenAI(api_key='test-key')
 
     init_action = next((a for a in await plugin.init() if a.name == 'openai/gpt-6-astra'), None)
-    resolved = await plugin.resolve(ActionKind.MODEL, OpenAI.gpt_model('gpt-6-astra').name)
+    resolved = await plugin.resolve(ActionKind.MODEL, 'gpt-6-astra')
 
     assert init_action is not None
     assert resolved is not None
@@ -149,7 +150,7 @@ async def test_unlisted_chat_model_resolves_with_default_supports() -> None:
     """An id outside the catalog is registered with multiturn only, so tools, media, and json stay hidden."""
     plugin = OpenAI(api_key='test-key')
 
-    action = await plugin.resolve(ActionKind.MODEL, 'openai/gpt-6-nova')
+    action = await plugin.resolve(ActionKind.MODEL, 'gpt-6-nova')
 
     assert action is not None
     assert action.metadata is not None
@@ -255,7 +256,7 @@ async def test_openai_runtime_clients_are_loop_local() -> None:
 async def test_openai_plugin_resolve_action_not_found(kind: ActionKind, name: str) -> None:
     """Unit Tests for resolve method with non-existent model."""
     plugin = OpenAI(api_key='test-key')
-    action = await plugin.resolve(kind, f'openai/{name}')
+    action = await plugin.resolve(kind, name)
 
     # Should still return an action even for unknown models
     assert action is not None
@@ -309,7 +310,7 @@ def _embedding_client(embedding: list[float] | None = None) -> MagicMock:
 
 async def _run_embedder(client: MagicMock, options: dict[str, Any] | None = None) -> EmbedResponse:
     """Run the embedder action function against a stub client."""
-    action = _plugin_with(client)._create_embedder_action('openai/text-embedding-3-small')
+    action = _plugin_with(client)._create_embedder_action('text-embedding-3-small')
     return await action._fn(EmbedRequest(input=[Document.from_text('hello')], options=options))
 
 
@@ -503,3 +504,50 @@ async def test_openai_unlisted_model_json_request_sends_json_object() -> None:
     await ai.generate(model='openai/ft:gpt-4o:acme', prompt='give me json', output_format='json')
 
     assert captured['response_format'] == {'type': 'json_object'}
+
+
+@pytest.mark.asyncio
+async def test_generate_openai_double_prefixed_id_sends_prefixed_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`openai/openai/gpt-4o` sends `openai/gpt-4o` upstream."""
+    seen: list[str] = []
+
+    async def fake_generate(self: OpenAIModelHandler, request: object, ctx: object) -> ModelResponse:
+        seen.append(self._model._model)
+        return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))
+
+    monkeypatch.setattr(OpenAIModelHandler, 'generate', fake_generate)
+    ai = Genkit(plugins=[OpenAI(api_key='test-key', base_url='https://openrouter.ai/api/v1')])
+
+    response = await ai.generate(model='openai/openai/gpt-4o', prompt='hi')
+
+    assert response.text == 'ok'
+    assert seen == ['openai/gpt-4o']
+
+
+@pytest.mark.asyncio
+async def test_generate_openai_plain_id_sends_plain_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`openai/gpt-4o` still sends `gpt-4o`."""
+    seen: list[str] = []
+
+    async def fake_generate(self: OpenAIModelHandler, request: object, ctx: object) -> ModelResponse:
+        seen.append(self._model._model)
+        return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))
+
+    monkeypatch.setattr(OpenAIModelHandler, 'generate', fake_generate)
+    ai = Genkit(plugins=[OpenAI(api_key='test-key')])
+
+    response = await ai.generate(model='openai/gpt-4o', prompt='hi')
+
+    assert response.text == 'ok'
+    assert seen == ['gpt-4o']
+
+
+@pytest.mark.asyncio
+async def test_embed_openai_double_prefixed_id_sends_prefixed_model() -> None:
+    """`openai/openai/text-embedding-3-small` sends `openai/text-embedding-3-small` upstream."""
+    client = _embedding_client()
+    ai = Genkit(plugins=[_plugin_with(client)])
+
+    await ai.embed(embedder='openai/openai/text-embedding-3-small', content='hi')
+
+    assert client.embeddings.create.call_args.kwargs['model'] == 'openai/text-embedding-3-small'

@@ -36,6 +36,6 @@ from genkit.exp import Genkit
 DEFAULT_MODEL = GoogleAI.gemini_model('gemini-flash-latest')
 LITE_MODEL = GoogleAI.gemini_model('gemini-flash-lite-latest')
 
-# The Middleware plugin powers the drop-in `Artifacts()` and `ToolApproval()`
-# behaviors the workspace and banking agents lean on.
+# The Middleware plugin lists `ToolApproval`, `Filesystem` and the rest in the
+# Dev UI; the agents pass their middleware instances directly in `use=[...]`.
 ai = Genkit(plugins=[GoogleAI(), Middleware()], model=DEFAULT_MODEL)
