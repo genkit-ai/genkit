@@ -17,7 +17,7 @@
 package base
 
 // ToolFailError marks a tool error as a result for the model rather than a
-// failure of the tool loop. Created by ai/exp/tool (Fail), read by
+// failure of the tool loop. Created by ai/tool (Fail), read by
 // ai/generate.go, which answers the tool request with the error message.
 type ToolFailError struct {
 	Err error

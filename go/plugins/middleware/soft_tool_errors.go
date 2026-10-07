@@ -36,7 +36,7 @@ import (
 // before it becomes a response, wherever SoftToolErrors sits in the chain.
 //
 // A tool author can return a specific error to the model without this
-// middleware, with tool.Fail from the ai/exp/tool package.
+// middleware, with tool.Fail from the ai/tool package.
 //
 // Usage:
 //

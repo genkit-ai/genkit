@@ -255,7 +255,7 @@ class EvaluatorFactory:
                 ) from e
 
             return EvalFnResponse(
-                evaluation=score,
+                evaluation=[score],
                 test_case_id=datapoint.test_case_id or '',
             )
 

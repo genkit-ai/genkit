@@ -168,6 +168,9 @@ type resumeOptionOutput struct {
 	revisedRequest      *GenerateActionOptions
 	interruptedResponse *ModelResponse
 	toolMessage         *Message
+	// failedMessage is the revised last message of a resume whose tool
+	// failed, set beside the error.
+	failedMessage *Message
 }
 
 // resumedToolRequestOutput is the return type for resolveResumedToolRequest.
@@ -448,6 +451,22 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 	return generateWithRequest(ctx, r, opts, mmws, cb, true /* spanTurnZero */)
 }
 
+// withoutToolCall returns ctx without the state of a tool call it may run
+// inside. A Generate called from a tool or a WrapTool hook is a call of its
+// own: its WrapGenerate hooks, its model, and its tools see no restart and
+// run in no hook stage, and none of them can attach parts to, stream
+// through, or claim the enclosing call. The enclosing call keeps its state on its own context.
+func withoutToolCall(ctx context.Context) context.Context {
+	ctx = base.ToolCallKey.NewContext(ctx, nil)
+	ctx = base.ToolRestartKey.NewContext(ctx, nil)
+	ctx = base.ToolHookKey.NewContext(ctx, "")
+	ctx = base.ToolResumeKey.NewContext(ctx, nil)
+	ctx = base.ToolOriginalInputKey.NewContext(ctx, nil)
+	ctx = base.ToolReleasedKey.NewContext(ctx, false)
+	ctx = base.ToolPartSinkKey.NewContext(ctx, nil)
+	return base.ToolChunkSenderKey.NewContext(ctx, nil)
+}
+
 // generateWithRequest runs the tool loop. spanTurnZero reports whether the
 // first turn opens its own "generate" span; the generate action passes false
 // because its own span already serves as that one.
@@ -455,6 +474,7 @@ func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 	// The soft-failure policy belongs to the call whose middleware set it: a
 	// Generate run from inside a tool starts without its parent's.
 	ctx = base.SoftToolErrorsKey.NewContext(ctx, nil)
+	ctx = withoutToolCall(ctx)
 
 	if opts.Model == "" {
 		if defaultModel, ok := r.LookupValue(api.DefaultModelKey).(string); ok && defaultModel != "" {
@@ -657,10 +677,22 @@ func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 		// Resume on the first turn is handled here so that restarted tool
 		// execution is both wrapped by WrapGenerate and recorded under this
 		// turn's span (generate > tool > generate > model > tool).
-		if currentTurn == 0 && opts.Resume != nil && (len(opts.Resume.Respond) > 0 || len(opts.Resume.Restart) > 0) {
-			resumeOutput, err := handleResumeOption(ctx, r, opts, runTool)
+		if currentTurn == 0 && resumeRequested(opts) {
+			resumeOutput, err := handleResumeOption(ctx, r, opts, runTool, wrappedCb)
 			if err != nil {
-				return nil, err
+				if resumeOutput == nil || resumeOutput.failedMessage == nil {
+					return nil, err
+				}
+				// The partial keeps the resumed message rather than
+				// ending at a turn seam: the caller's conversation
+				// already ends on it, and it records the siblings that
+				// finished, so a retry replays them instead of running
+				// them again.
+				failedReq := *req
+				failedReq.Messages = opts.Messages[:len(opts.Messages)-1]
+				partial := failurePartial(ctx, nil, &failedReq, err)
+				partial.Message = resumeOutput.failedMessage
+				return partial, err
 			}
 
 			if ir := resumeOutput.interruptedResponse; ir != nil {
@@ -1000,22 +1032,95 @@ type toolRun struct {
 // its context from the one it was handed keeps it.
 var toolRunKey = base.NewContextKey[*toolRun]()
 
+// toolStage is one WrapTool hook of a tool call's chain, in chain order; the
+// tool itself is the stage after the last one. id identifies the stage on an
+// interrupt it raises ([ToolInterrupt.RaisedBy]): the middleware's name, made
+// unique within the chain with a "#n" suffix when the name repeats, as inline
+// middleware's does.
+type toolStage struct {
+	id, name string
+	hook     func(ctx context.Context, params *ToolParams, next ToolNext) (*MultipartToolResponse, error)
+}
+
+// toolStages lists the WrapTool hooks of mws in chain order, with their ids.
+func toolStages(mws []namedHooks) []toolStage {
+	var stages []toolStage
+	seen := map[string]int{}
+	for _, mw := range mws {
+		if mw.hooks == nil || mw.hooks.WrapTool == nil {
+			continue
+		}
+		seen[mw.name]++
+		id := mw.name
+		if n := seen[mw.name]; n > 1 {
+			id = fmt.Sprintf("%s#%d", mw.name, n)
+		}
+		stages = append(stages, toolStage{id: id, name: mw.name, hook: mw.hooks.WrapTool})
+	}
+	return stages
+}
+
+// toolStageContext derives the context stage i of a call to the tool named
+// toolName runs with, i == len(stages) being the tool itself. It names the
+// stage, so that tool.Interrupt attributes an interrupt to it, marks the tool
+// stage with a fresh [base.ToolCall] for the tool function to claim, and,
+// when the call is a restart, delivers the restart to the stage it answers:
+// that stage receives the resume payload and the original input; a stage
+// before it, which ran and let the call through, is marked released; a stage
+// after it, which never ran, sees a fresh call, as every stage does when the
+// middleware that raised the interrupt is no longer in the chain. The keys
+// are set on every stage, restart or not, so nothing a hook's context carries
+// leaks into the next stage and nothing an enclosing tool call's context
+// carries leaks into this one.
+func toolStageContext(ctx context.Context, toolName string, stages []toolStage, i int) context.Context {
+	id := ""
+	var call *base.ToolCall
+	if i < len(stages) {
+		id = stages[i].id
+	} else {
+		call = &base.ToolCall{Name: toolName}
+	}
+	ctx = base.ToolHookKey.NewContext(ctx, id)
+	ctx = base.ToolCallKey.NewContext(ctx, call)
+	var resume, original any
+	released := false
+	if restart := base.ToolRestartKey.FromContext(ctx); restart != nil {
+		answered := len(stages)
+		if restart.RaisedBy != "" {
+			answered = slices.IndexFunc(stages, func(s toolStage) bool { return s.id == restart.RaisedBy })
+		}
+		switch {
+		case restart.RaisedBy == "" && restart.Released == nil:
+			// The interrupt does not say which stage raised it, so every
+			// stage reads the answer, as all did before stages were told
+			// apart, and none counts as having let the call through.
+			resume, original = restart.Resume, restart.OriginalInput
+		case i == answered:
+			resume, original = restart.Resume, restart.OriginalInput
+		case i < len(stages):
+			// A hook is released only if the interrupted call records that
+			// it let the call through, and only for the input it saw then.
+			// A hook the chain gained since, or one facing a replaced
+			// input, sees a fresh call and decides again.
+			released = restart.OriginalInput == nil && slices.Contains(restart.Released, stages[i].id)
+		}
+	}
+	ctx = base.ToolResumeKey.NewContext(ctx, resume)
+	ctx = base.ToolOriginalInputKey.NewContext(ctx, original)
+	return base.ToolReleasedKey.NewContext(ctx, released)
+}
+
 // buildToolRunner composes the WrapTool hooks from mws (outer-to-inner) into
 // a single function that executes a tool. The returned function is safe to
 // invoke from concurrent goroutines; each invocation threads its own params
-// through the shared hook chain. When no WrapTool hooks are configured, the
+// through the shared hook chain. Each stage runs with the context
+// toolStageContext derives for it. When no WrapTool hooks are configured, the
 // tool is invoked directly without allocating a ToolParams wrapper.
 func buildToolRunner(mws []namedHooks) toolRunnerFunc {
-	hasHook := false
-	for _, mw := range mws {
-		if mw.hooks != nil && mw.hooks.WrapTool != nil {
-			hasHook = true
-			break
-		}
-	}
-	if !hasHook {
+	stages := toolStages(mws)
+	if len(stages) == 0 {
 		return func(ctx context.Context, tool Tool, req *ToolRequest) (*MultipartToolResponse, error) {
-			resp, err := tool.RunRawMultipart(ctx, req.Input)
+			resp, err := tool.RunRawMultipart(toolStageContext(ctx, tool.Name(), nil, 0), req.Input)
 			return answerToolError(ctx, tool.Name(), resp, err, true)
 		}
 	}
@@ -1024,33 +1129,39 @@ func buildToolRunner(mws []namedHooks) toolRunnerFunc {
 		if run != nil {
 			run.ran = true
 		}
-		resp, err := params.Tool.RunRawMultipart(ctx, params.Request.Input)
+		resp, err := params.Tool.RunRawMultipart(toolStageContext(ctx, params.Tool.Name(), stages, len(stages)), params.Request.Input)
 		if run != nil {
 			run.err = err
 		}
 		return resp, err
 	}
-	for i := len(mws) - 1; i >= 0; i-- {
-		mw := mws[i]
-		if mw.hooks == nil || mw.hooks.WrapTool == nil {
-			continue
-		}
-		hook := mw.hooks.WrapTool
-		name := mw.name
+	for i := len(stages) - 1; i >= 0; i-- {
+		stage := stages[i]
 		next := chain
 		chain = func(ctx context.Context, params *ToolParams) (*MultipartToolResponse, error) {
-			if !logger.FromContext(ctx).Enabled(ctx, slog.LevelDebug) {
-				return hook(ctx, params, next)
+			ctx = toolStageContext(ctx, params.Tool.Name(), stages, i)
+			debug := logger.FromContext(ctx).Enabled(ctx, slog.LevelDebug)
+			var start time.Time
+			if debug {
+				logger.Debug(ctx, "middleware hook started", "middleware", stage.name, "hook", "tool", "tool", params.Tool.Name())
+				start = time.Now()
 			}
-			logger.Debug(ctx, "middleware hook started", "middleware", name, "hook", "tool", "tool", params.Tool.Name())
-			start := time.Now()
 			var nextCalled atomic.Bool
-			resp, err := hook(ctx, params, func(ctx context.Context, p *ToolParams) (*MultipartToolResponse, error) {
+			resp, err := stage.hook(ctx, params, func(ctx context.Context, p *ToolParams) (*MultipartToolResponse, error) {
 				nextCalled.Store(true)
 				return next(ctx, p)
 			})
-			logger.Debug(ctx, "middleware hook finished",
-				hookLogArgs(name, "tool", start, nextCalled.Load(), err, "tool", params.Tool.Name())...)
+			// An interrupt raised further in passed through this hook, which
+			// let the call through: recorded on the interrupt, so that the
+			// restart answering it releases this hook and no other.
+			var tie *base.ToolInterruptError
+			if nextCalled.Load() && errors.As(err, &tie) && tie.RaisedBy != stage.id {
+				tie.Released = append([]string{stage.id}, tie.Released...)
+			}
+			if debug {
+				logger.Debug(ctx, "middleware hook finished",
+					hookLogArgs(stage.name, "tool", start, nextCalled.Load(), err, "tool", params.Tool.Name())...)
+			}
 			return resp, err
 		}
 	}
@@ -1116,10 +1227,17 @@ func recordToolShortCircuit(ctx context.Context, name string, input any, resp *M
 // FinishReason interrupted under its FAILED_PRECONDITION error and is
 // answered with [WithResume] rather than re-sent.
 //
+// A resume whose restarted tool failed also keeps the resumed message, with
+// the failed request as it was and its siblings' outcomes recorded on their
+// requests. A resume waits for every restarted tool before it returns, so
+// resuming from that response again replays the siblings that finished
+// instead of running them a second time.
+//
 // A tool error the model can act on does not stop the loop: an error made
-// with tool.Fail (ai/exp/tool), or one that the SoftToolErrors middleware
-// (plugins/middleware) covers, answers the call with a response for which
-// [Part.IsToolError] is true, and the loop continues.
+// with [github.com/firebase/genkit/go/ai/tool.Fail], or one that the
+// SoftToolErrors middleware (plugins/middleware) covers, answers the call
+// with a response for which [Part.IsToolError] is true, and the loop
+// continues.
 //
 // Errors reported before a request is made (unknown model or tool, invalid
 // options) carry a nil response.
@@ -1227,7 +1345,15 @@ func Generate(ctx context.Context, r api.Registry, opts ...GenerateOption) (*Mod
 		},
 	}
 
-	if len(genOpts.RespondParts) > 0 || len(genOpts.RestartParts) > 0 {
+	if len(genOpts.pausedParts) > 0 {
+		req := genOpts.pausedParts[0].ToolRequest
+		refStr := req.Name
+		if req.Ref != "" {
+			refStr += "#" + req.Ref
+		}
+		return nil, status.Errorf(status.ErrInvalidArgument, "ai.Generate: WithResume got tool request %q, which is still interrupted; resolve it with InterruptedCall.Restart or InterruptedCall.Respond, or with Part.ToToolRestart or Part.ToToolResponse", refStr)
+	}
+	if genOpts.resume || len(genOpts.RespondParts) > 0 || len(genOpts.RestartParts) > 0 {
 		actionOpts.Resume = &GenerateActionResume{
 			Respond: genOpts.RespondParts,
 			Restart: genOpts.RestartParts,
@@ -1562,6 +1688,41 @@ func toolFailureError(ctx context.Context, name string, cause error) error {
 	return status.Errorf(ErrToolFailed, "tool %q failed: %w", name, cause)
 }
 
+// toolStreamer lets the tools of one round, which run concurrently, stream
+// model response chunks through cb with
+// [github.com/firebase/genkit/go/ai/tool.SendChunk]. cb, the wrapped stream
+// callback, mutates shared role and index state and writes the single stream
+// sink, neither of which is safe for concurrent use, so every tool-originated
+// send is serialized under one mutex. Streaming is best effort, so a sink
+// error is logged and dropped rather than failing the tool's authoritative
+// return value. The zero value with a nil cb installs no senders.
+type toolStreamer struct {
+	cb ModelStreamCallback
+	mu sync.Mutex
+}
+
+// send streams chunk through cb.
+func (s *toolStreamer) send(ctx context.Context, chunk *ModelResponseChunk) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.cb(ctx, chunk); err != nil {
+		logger.Debug(ctx, "tool stream callback failed, dropping chunk", "error", err)
+	}
+}
+
+// context returns ctx with the chunk sender installed, or ctx itself when
+// there is no stream to send to.
+func (s *toolStreamer) context(ctx context.Context) context.Context {
+	if s == nil || s.cb == nil {
+		return ctx
+	}
+	return base.ToolChunkSenderKey.NewContext(ctx, func(sendCtx context.Context, chunk any) {
+		if c, ok := chunk.(*ModelResponseChunk); ok {
+			s.send(sendCtx, c)
+		}
+	})
+}
+
 // toolRunnerFunc runs a tool through the WrapTool hook chain and returns the
 // raw [MultipartToolResponse], or the response that answers the call with an
 // error the loop returns to the model. Returned by [buildToolRunner].
@@ -1594,7 +1755,7 @@ func answerToolError(ctx context.Context, name string, resp *MultipartToolRespon
 // so context a hook added by wrapping stays; only a [toolCallError] no hook
 // changed loses the tool-name prefix the response already carries.
 func toolErrorAnswer(ctx context.Context, name string, err error, fromTool bool) *MultipartToolResponse {
-	var tie *toolInterruptError
+	var tie *base.ToolInterruptError
 	if ctx.Err() != nil || errors.As(err, &tie) {
 		return nil
 	}
@@ -1617,21 +1778,45 @@ func toolErrorAnswer(ctx context.Context, name string, err error, fromTool bool)
 	}
 }
 
-// interruptedPart clones a tool request part and marks it interrupted. The
-// interrupt's metadata is the marker when it carries any; otherwise the
-// marker is true, since a nil value would make the part read as not
-// interrupted at all (see [Part.IsInterrupt]).
-func interruptedPart(p *Part, tie *toolInterruptError) *Part {
-	newPart := clone(p)
-	if newPart.Metadata == nil {
-		newPart.Metadata = make(map[string]any)
+// interruptedPart returns the copy of tool request p that records the
+// interrupt raised for it, carrying the interrupt's data (nil for a bare
+// interrupt) as typed state; the wire marker is written when the part is
+// marshaled. The data is stored as the JSON object it serializes to, the
+// shape it has after a wire hop, so a reader such as [InterruptAs] sees one
+// shape wherever the part came from. tool.Interrupt already normalized it;
+// the conversion here covers an error built with a struct directly. The
+// stage that raised the interrupt is recorded with it, for the restart to
+// answer (see restartedToolResponse).
+func interruptedPart(p *Part, tie *base.ToolInterruptError) (*Part, error) {
+	data, err := base.ObjectPayload(tie.Data, "interrupt data")
+	if err != nil {
+		return nil, err
 	}
-	if tie.Metadata != nil {
-		newPart.Metadata["interrupt"] = tie.Metadata
-	} else {
-		newPart.Metadata["interrupt"] = true
+	newPart := p.typedClone()
+	newPart.Interrupt = &ToolInterrupt{Data: bareIfNil(data), RaisedBy: tie.RaisedBy, ReleasedBy: tie.Released}
+	return newPart, nil
+}
+
+// resolvedPart returns the copy of tool request p that records its interrupt,
+// if any, as resolved, for the message history.
+func resolvedPart(p *Part) *Part {
+	newPart := p.typedClone()
+	if newPart.Interrupt != nil {
+		newPart.Interrupt.Resolved = true
 	}
 	return newPart
+}
+
+// stripPendingKeys deletes the keys stampPendingToolOutcome writes from m in
+// place and returns m, or nil when nothing is left.
+func stripPendingKeys(m map[string]any) map[string]any {
+	for _, key := range [...]string{"pendingOutput", "pendingMetadata", "pendingContent"} {
+		delete(m, key)
+	}
+	if len(m) == 0 {
+		return nil
+	}
+	return m
 }
 
 // stampPendingToolOutcome records a resolved tool call's response on its
@@ -1676,24 +1861,7 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 	toolMsg := &Message{Role: RoleTool}
 	revisedMsg := clone(resp.Message)
 
-	// Tools run concurrently (one goroutine each, below), and tool.SendPartial /
-	// tool.SendChunk let a tool stream through cb from inside its goroutine. cb
-	// (the wrapped stream callback) mutates shared role/index state and writes
-	// the single stream sink, neither of which is safe for concurrent use, so
-	// serialize every tool-originated send under one mutex. Streaming is
-	// best-effort, so a sink error is logged and dropped rather than failing the
-	// tool's authoritative return value.
-	var streamMu sync.Mutex
-	streamChunk := func(sendCtx context.Context, chunk *ModelResponseChunk) {
-		if cb == nil {
-			return
-		}
-		streamMu.Lock()
-		defer streamMu.Unlock()
-		if err := cb(sendCtx, chunk); err != nil {
-			logger.Debug(sendCtx, "tool stream callback failed, dropping chunk", "error", err)
-		}
-	}
+	stream := &toolStreamer{cb: cb}
 
 	for i, part := range revisedMsg.Content {
 		if !part.IsToolRequest() {
@@ -1703,7 +1871,10 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 		go func(idx int, p *Part) {
 			toolReq := p.ToolRequest
 			respond := func(resp *MultipartToolResponse) {
-				newPart := clone(p)
+				// p is already private to this call (revisedMsg is a deep
+				// clone of the model message), and the stamp writes only its
+				// metadata, so a shallow copy with its own map is enough.
+				newPart := p.typedClone()
 				stampPendingToolOutcome(newPart, resp)
 				revisedMsg.Content[idx] = newPart
 
@@ -1721,41 +1892,35 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 				return
 			}
 
-			// Inject per-tool streaming senders so tools can stream via
-			// tool.SendPartial (wrapped partial responses) and
-			// tool.SendChunk (raw model response chunks). Both route through
-			// streamChunk, which serializes sends across the concurrent tools.
-			toolCtx := ctx
-			if cb != nil {
-				toolCtx = base.ToolPartialSenderKey.NewContext(ctx, func(sendCtx context.Context, output any) {
-					streamChunk(sendCtx, &ModelResponseChunk{
-						Role: RoleTool,
-						Content: []*Part{NewPartialToolResponsePart(&ToolResponse{
-							Name:   toolReq.Name,
-							Ref:    toolReq.Ref,
-							Output: output,
-						})},
-					})
-				})
-				toolCtx = base.ToolChunkSenderKey.NewContext(toolCtx, func(sendCtx context.Context, chunk any) {
-					if c, ok := chunk.(*ModelResponseChunk); ok {
-						streamChunk(sendCtx, c)
-					}
-				})
-			}
+			toolCtx := stream.context(ctx)
+
+			// The part sink spans the whole call, WrapTool hooks included,
+			// so a hook can attach parts before or after running the tool.
+			// A fresh call answers no restart, including one an enclosing
+			// tool call was answering when it called Generate.
+			sink := &base.PartSink{}
+			defer sink.Close() // On an error or interrupt, too.
+			toolCtx = base.ToolPartSinkKey.NewContext(toolCtx, sink)
+			toolCtx = base.ToolRestartKey.NewContext(toolCtx, nil)
 
 			multipartResp, err := runTool(toolCtx, tool, toolReq)
 			if err != nil {
-				var tie *toolInterruptError
+				var tie *base.ToolInterruptError
 				if errors.As(err, &tie) {
 					logger.Debug(ctx, "tool triggered an interrupt", "tool", toolReq.Name)
-					revisedMsg.Content[idx] = interruptedPart(p, tie)
+					interrupt, ierr := interruptedPart(p, tie)
+					if ierr != nil {
+						resultChan <- result[*MultipartToolResponse]{index: idx, err: toolFailureError(ctx, toolReq.Name, ierr)}
+						return
+					}
+					revisedMsg.Content[idx] = interrupt
 					resultChan <- result[*MultipartToolResponse]{index: idx, err: tie}
 					return
 				}
 				resultChan <- result[*MultipartToolResponse]{index: idx, err: toolFailureError(ctx, toolReq.Name, err)}
 				return
 			}
+			multipartResp = foldAttachedParts(multipartResp, sink)
 
 			respond(multipartResp)
 		}(i, part)
@@ -1772,7 +1937,7 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 		res := <-resultChan
 		receivedIndexes = append(receivedIndexes, res.index)
 		if res.err != nil {
-			var tie *toolInterruptError
+			var tie *base.ToolInterruptError
 			if errors.As(res.err, &tie) {
 				hasInterrupts = true
 				continue
@@ -2019,9 +2184,12 @@ func (c *ModelResponseChunk) Interrupts() []*Part {
 	return parts
 }
 
-// ToolResponses returns the tool response parts from the chunk.
-// Use [Part.IsPartial] to distinguish streaming progress updates
-// from final tool results.
+// ToolResponses returns the tool response parts from the chunk. Progress a
+// tool streams with [github.com/firebase/genkit/go/ai/tool.SendChunk] is not
+// among them unless the tool builds it as a tool response itself: progress
+// is usually a [RoleTool] chunk of text parts. A tool that streams a
+// [NewPartialToolResponsePart] can be told from a final result with
+// [Part.IsPartial].
 func (c *ModelResponseChunk) ToolResponses() []*Part {
 	var parts []*Part
 	if c == nil {
@@ -2155,7 +2323,9 @@ func (m *Message) MediaParts() []*Part {
 // NewResume constructs a [GenerateActionResume] from Part slices.
 // This is useful when building [GenerateActionOptions] directly (e.g., from a
 // rendered prompt) and need to set the Resume field from [*Part] values
-// produced by [ToolAction.RestartWith] or [ToolAction.RespondWith].
+// produced by [InterruptedCall.Restart] and [InterruptedCall.Respond], or
+// [Part.ToToolRestart] and [Part.ToToolResponse]. [WithResume] is the
+// same for [Generate].
 func NewResume(restarts, responds []*Part) *GenerateActionResume {
 	return &GenerateActionResume{
 		Restart: restarts,
@@ -2238,15 +2408,107 @@ func (ModelRef) JSONSchema() *jsonschema.Schema {
 	}
 }
 
-// handleResumedToolRequest resolves a tool request from a previous, interrupted model turn,
-// when generation is being resumed. It determines the outcome of the tool request based on
-// pending output, or explicit 'respond' or 'restart' directives in the resume options.
-func handleResumedToolRequest(ctx context.Context, r api.Registry, genOpts *GenerateActionOptions, p *Part, runTool toolRunnerFunc) (*resumedToolRequestOutput, error) {
+// resumeStep is how one pending tool request of a resume resolves, decided
+// by planResumedToolRequest before any tool runs.
+type resumeStep struct {
+	request *Part // The request in history.
+	tool    Tool  // Nil when a pending output is replayed.
+	respond *Part // The Respond directive that answers the request, if any.
+	restart *Part // The Restart directive that re-executes it, if any.
+}
+
+// planResumedToolRequest decides how tool request p resolves in a resume:
+// by replaying the pending output a previous run left on it, or by the
+// Respond or Restart directive in genOpts.Resume that matches it. It runs for
+// every pending request before any tool runs, and so does everything that can
+// reject the resume without running a tool: a request with no resolution, a
+// tool that is not found, a response that does not match the tool's output
+// schema, a restart whose resume data is not a JSON object, and a restart
+// payload for the tool that does not match its resume schema. A rejected
+// resume thus leaves no tool half-run next to it.
+func planResumedToolRequest(r api.Registry, genOpts *GenerateActionOptions, p *Part) (*resumeStep, error) {
 	if p == nil || !p.IsToolRequest() {
 		return nil, status.Errorf(ErrInvalidPart, "handleResumedToolRequest: part is not a tool request")
 	}
+	// The kind check alone lets through a tool request part with no request,
+	// which history assembled by hand can carry; every step below reads it.
+	if p.ToolRequest == nil {
+		return nil, status.Errorf(ErrInvalidPart, "handleResumedToolRequest: tool request part has no request")
+	}
+	if _, ok := p.Metadata["pendingOutput"]; ok {
+		return &resumeStep{request: p}, nil
+	}
 
-	if pendingOutputVal, ok := p.Metadata["pendingOutput"]; ok {
+	toolReq := p.ToolRequest
+	var respondPart, restartPart *Part
+	if genOpts.Resume != nil {
+		respondPart = resumePartFor(genOpts.Resume.Respond, toolReq, true)
+		restartPart = resumePartFor(genOpts.Resume.Restart, toolReq, false)
+	}
+	if respondPart == nil && restartPart == nil {
+		refStr := toolReq.Name
+		if toolReq.Ref != "" {
+			refStr += "#" + toolReq.Ref
+		}
+		// A hold a WrapTool hook raised is the one interrupt the tool's
+		// typed claim declines, so a claim loop over the tools skips it
+		// silently; say so, since that is the likeliest reason it went
+		// unanswered.
+		hint := ""
+		if it := p.interruptState(); it != nil && it.RaisedBy != "" {
+			hint = fmt.Sprintf(" The interrupt is a hold by middleware %q, which the tool's Interrupted does not claim; answer it with Part.ToToolRestart or Part.ToToolResponse.", it.RaisedBy)
+		}
+		return nil, status.Errorf(ErrUnresolvedToolRequest, "unresolved tool request %q was not handled by the Resume argument; you must supply Respond or Restart directives, or ensure there is pending output from a previous tool call.%s", refStr, hint)
+	}
+
+	tool := LookupTool(r, toolReq.Name)
+	if tool == nil {
+		// Not answered under a soft-failure policy: the caller named this
+		// tool in the resume, not the model.
+		return nil, status.Errorf(ErrToolNotFound, "handleResumedToolRequest: tool %q not found", toolReq.Name)
+	}
+	if respondPart != nil {
+		if schema := tool.Definition().OutputSchema; len(schema) > 0 {
+			if err := base.ValidateValue(respondPart.ToolResponse.Output, schema); err != nil {
+				return nil, status.Errorf(status.ErrInvalidArgument, "handleResumedToolRequest: tool %q output validation failed: %w", tool.Name(), err)
+			}
+		}
+		return &resumeStep{request: p, tool: tool, respond: respondPart}, nil
+	}
+	if rs := restartPart.restartState(); rs != nil {
+		payload, err := resumePayload(rs)
+		if err != nil {
+			return nil, status.Errorf(status.ErrInvalidArgument, "handleResumedToolRequest: tool %q: %w; a bare restart carries true or no payload", tool.Name(), err)
+		}
+
+		// A payload that reaches the tool, rather than a hook that held the
+		// call, is checked by its JSON shape against the schema the tool
+		// advertises for its resume type. The tool reads it the same way
+		// when it runs; checking here as well is what keeps a bad payload
+		// from failing the resume after a sibling ran. A tool that
+		// advertises none (one behind a foreign action) is not checked.
+		if it := p.interruptState(); it == nil || it.RaisedBy == "" {
+			if schema, ok := tool.Definition().Metadata[toolResumeSchemaKey].(map[string]any); ok {
+				m, err := base.ObjectPayload(payload, "resume data")
+				if err == nil {
+					err = base.ValidateValue(m, schema)
+				}
+				if err != nil {
+					return nil, status.Errorf(status.ErrInvalidArgument, "handleResumedToolRequest: tool %q resume data validation failed: %w", tool.Name(), err)
+				}
+			}
+		}
+	}
+	return &resumeStep{request: p, tool: tool, restart: restartPart}, nil
+}
+
+// handleResumedToolRequest carries out step: it replays the pending output,
+// builds the response a Respond directive supplies, or re-executes the tool
+// for a Restart directive.
+func handleResumedToolRequest(ctx context.Context, step *resumeStep, runTool toolRunnerFunc, stream *toolStreamer) (*resumedToolRequestOutput, error) {
+	p := step.request
+	switch {
+	case step.tool == nil:
 		// Only the metadata map needs detaching from the caller's part; a
 		// deep clone would JSON round-trip the (possibly large) pending
 		// payload just to delete it.
@@ -2256,7 +2518,7 @@ func handleResumedToolRequest(ctx context.Context, r api.Registry, genOpts *Gene
 		delete(reqPart.Metadata, "pendingMetadata")
 		delete(reqPart.Metadata, "pendingContent")
 
-		newRespPart := NewResponseForToolRequest(p, pendingOutputVal)
+		newRespPart := NewResponseForToolRequest(p, p.Metadata["pendingOutput"])
 		newRespPart.Metadata = map[string]any{"source": "pending"}
 		// Restore the response metadata and content parts the original call
 		// carried, stashed next to pendingOutput. The content is []*Part in
@@ -2268,144 +2530,205 @@ func handleResumedToolRequest(ctx context.Context, r api.Registry, genOpts *Gene
 		if content, ok := base.ConvertTo[[]*Part](p.Metadata["pendingContent"]); ok && len(content) > 0 {
 			newRespPart.ToolResponse.Content = content
 		}
-
 		return &resumedToolRequestOutput{
 			toolRequest:  &reqPart,
 			toolResponse: newRespPart,
 		}, nil
+
+	case step.respond != nil:
+		newToolResp := NewToolResponsePart(step.respond.ToolResponse)
+		newToolResp.Metadata = step.respond.Metadata
+		return &resumedToolRequestOutput{
+			toolRequest:  resolvedPart(p),
+			toolResponse: newToolResp,
+		}, nil
 	}
 
-	if genOpts.Resume != nil {
-		toolReq := p.ToolRequest
+	// History records the request as it ran, so a restart that replaced the
+	// input amends the request, whether the tool then completes or
+	// interrupts again.
+	p = withRestartInput(p, step.restart)
+	newToolResp, interrupt, err := restartedToolResponse(ctx, step.tool, p, step.restart, runTool, stream)
+	if interrupt != nil {
+		return &resumedToolRequestOutput{interrupt: interrupt}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &resumedToolRequestOutput{
+		toolRequest:  resolvedPart(p),
+		toolResponse: newToolResp,
+	}, nil
+}
 
-		for _, respondPart := range genOpts.Resume.Respond {
-			if respondPart.ToolResponse != nil &&
-				respondPart.ToolResponse.Name == toolReq.Name &&
-				respondPart.ToolResponse.Ref == toolReq.Ref {
-				newToolReq := clone(p)
-				if interruptVal, ok := newToolReq.Metadata["interrupt"]; ok {
-					delete(newToolReq.Metadata, "interrupt")
-					newToolReq.Metadata["resolvedInterrupt"] = interruptVal
-				}
-
-				tool := LookupTool(r, toolReq.Name)
-				if tool == nil {
-					return nil, status.Errorf(ErrToolNotFound, "handleResumedToolRequest: tool %q not found", toolReq.Name)
-				}
-
-				toolDefinition := tool.Definition()
-				if len(toolDefinition.OutputSchema) > 0 {
-					outputBytes, err := json.Marshal(respondPart.ToolResponse.Output)
-					if err != nil {
-						return nil, status.Errorf(status.ErrInvalidArgument, "handleResumedToolRequest: failed to marshal tool output for validation: %w", err)
-					}
-
-					schemaBytes, err := json.Marshal(toolDefinition.OutputSchema)
-					if err != nil {
-						return nil, status.Errorf(status.ErrInternal, "handleResumedToolRequest: tool %q has invalid output schema: %w", toolReq.Name, err)
-					}
-
-					if err := base.ValidateRaw(outputBytes, schemaBytes); err != nil {
-						return nil, status.Errorf(status.ErrInvalidArgument, "handleResumedToolRequest: tool %q output validation failed: %w", toolReq.Name, err)
-					}
-				}
-
-				newToolResp := NewToolResponsePart(respondPart.ToolResponse)
-				newToolResp.Metadata = respondPart.Metadata
-
-				return &resumedToolRequestOutput{
-					toolRequest:  newToolReq,
-					toolResponse: newToolResp,
-				}, nil
-			}
+// resumePartFor returns the first of parts whose tool name and ref match req:
+// the tool response of a Respond directive when respond is set, otherwise the
+// tool request of a Restart directive. Nil when none matches.
+func resumePartFor(parts []*Part, req *ToolRequest, respond bool) *Part {
+	for _, p := range parts {
+		if p == nil {
+			continue
 		}
-
-		for _, restartPart := range genOpts.Resume.Restart {
-			if restartPart.ToolRequest != nil &&
-				restartPart.ToolRequest.Name == toolReq.Name &&
-				restartPart.ToolRequest.Ref == toolReq.Ref {
-				tool := LookupTool(r, restartPart.ToolRequest.Name)
-				if tool == nil {
-					// Not answered under a soft-failure policy: the caller
-					// named this tool in the restart, not the model.
-					return nil, status.Errorf(ErrToolNotFound, "handleResumedToolRequest: tool %q not found", restartPart.ToolRequest.Name)
-				}
-
-				resumedCtx := ctx
-				if resumedVal, ok := restartPart.Metadata["resumed"]; ok {
-					// TODO: Better handling here or in tools.go.
-					switch resumedVal := resumedVal.(type) {
-					case map[string]any:
-						resumedCtx = resumedCtxKey.NewContext(resumedCtx, resumedVal)
-					case bool:
-						if resumedVal {
-							resumedCtx = resumedCtxKey.NewContext(resumedCtx, map[string]any{})
-						}
-					}
-				}
-				if originalInputVal, ok := restartPart.Metadata["replacedInput"]; ok {
-					resumedCtx = origInputCtxKey.NewContext(resumedCtx, originalInputVal)
-				}
-
-				restartToolReq := &ToolRequest{
-					Name:  restartPart.ToolRequest.Name,
-					Ref:   restartPart.ToolRequest.Ref,
-					Input: restartPart.ToolRequest.Input,
-				}
-				multipartResp, err := runTool(resumedCtx, tool, restartToolReq)
-				if err != nil {
-					var tie *toolInterruptError
-					if errors.As(err, &tie) {
-						logger.Debug(ctx, "restarted tool triggered an interrupt", "tool", restartPart.ToolRequest.Name)
-						return &resumedToolRequestOutput{
-							interrupt: interruptedPart(p, tie),
-						}, nil
-					}
-					return nil, toolFailureError(ctx, restartPart.ToolRequest.Name, err)
-				}
-
-				newToolReq := clone(p)
-				if interruptVal, ok := newToolReq.Metadata["interrupt"]; ok {
-					delete(newToolReq.Metadata, "interrupt")
-					newToolReq.Metadata["resolvedInterrupt"] = interruptVal
-				}
-
-				newToolResp := NewToolResponsePart(&ToolResponse{
-					Name:    restartPart.ToolRequest.Name,
-					Ref:     restartPart.ToolRequest.Ref,
-					Output:  multipartResp.Output,
-					Content: multipartResp.Content,
-				})
-				newToolResp.Metadata = multipartResp.Metadata
-
-				return &resumedToolRequestOutput{
-					toolRequest:  newToolReq,
-					toolResponse: newToolResp,
-				}, nil
+		if respond {
+			if p.ToolResponse != nil && p.ToolResponse.Name == req.Name && p.ToolResponse.Ref == req.Ref {
+				return p
 			}
+		} else if p.ToolRequest != nil && p.ToolRequest.Name == req.Name && p.ToolRequest.Ref == req.Ref {
+			return p
 		}
 	}
+	return nil
+}
 
-	refStr := p.ToolRequest.Name
-	if p.ToolRequest.Ref != "" {
-		refStr = "#" + p.ToolRequest.Ref
+// withRestartInput returns tool request p as restartPart re-executes it: p
+// itself, or, when the restart replaced the input, a copy of p carrying the
+// new input. The original input is not recorded on the copy: on a tool
+// request in history that key would read as a restart.
+func withRestartInput(p, restartPart *Part) *Part {
+	rs := restartPart.restartState()
+	if rs == nil || rs.OriginalInput == nil {
+		return p
 	}
-	return nil, status.Errorf(ErrUnresolvedToolRequest, "unresolved tool request %q was not handled by the Resume argument; you must supply Respond or Restart directives, or ensure there is pending output from a previous tool call", refStr)
+	revised := p.typedClone()
+	req := *p.ToolRequest
+	req.Input = restartPart.ToolRequest.Input
+	revised.ToolRequest = &req
+	return revised
+}
+
+// resumePayload returns the payload restart rs delivers: its resume data,
+// which must be a JSON object, or an empty map for a bare restart, so the
+// call still reads as a resumption. A bare restart is nil or true, so a part
+// built in memory with true reads as it does after a JSON round trip. Any
+// other marker is an error, not a bare restart: a peer runtime may mark a
+// restart with any truthy JSON value (the JS restartTool passes its
+// resumedMetadata through as given), and reading "denied" as a bare restart
+// would run the tool as if it had been approved.
+func resumePayload(rs *ToolRestart) (any, error) {
+	if base.IsNil(rs.Resume) || rs.Resume == true {
+		return map[string]any{}, nil
+	}
+	if err := base.CheckObjectPayload(rs.Resume, "resume data"); err != nil {
+		return nil, err
+	}
+	return rs.Resume, nil
+}
+
+// restartedToolResponse re-executes tool for a Restart directive and builds
+// its tool response. The stage the restart answers, the WrapTool hook that
+// held the call or the tool itself, sees it through the context: the resume
+// payload it was given (an empty map for a bare restart, so the call still
+// reads as a resumption) and, when the caller replaced the input, the
+// original one. The payload rides as given, a map or the caller's struct, and
+// each reader converts it to what it returns, so a typed restart reaches the
+// tool's resume parameter without a conversion. A tool that interrupts again
+// returns the interrupted copy of p instead of a response.
+func restartedToolResponse(ctx context.Context, tool Tool, p, restartPart *Part, runTool toolRunnerFunc, stream *toolStreamer) (resp, interrupt *Part, err error) {
+	name := restartPart.ToolRequest.Name
+	resumedCtx := stream.context(ctx)
+	var restart *base.ToolRestart
+	if rs := restartPart.restartState(); rs != nil {
+		resume, err := resumePayload(rs)
+		if err != nil {
+			// Checked when the resume was planned; kept for a caller that
+			// runs a step it did not plan.
+			return nil, nil, status.Errorf(status.ErrInvalidArgument, "tool %q: %w", name, err)
+		}
+		// A restart answers the stage that raised the interrupt: the
+		// WrapTool hook the interrupted request in history names, or the
+		// tool itself. The hook chain delivers the payload to that stage
+		// alone (see toolStageContext), so a hook's hold never reaches the
+		// tool's resume parameter: the tool re-executes as a fresh call
+		// that may interrupt on its own.
+		var (
+			raisedBy string
+			released []string
+		)
+		if it := p.interruptState(); it != nil {
+			raisedBy, released = it.RaisedBy, it.ReleasedBy
+		}
+		// The payload is not checked here: a tool with a resume type knows
+		// whether it arrived as that type, and validates it against its
+		// resume schema when it did not (see NewResumableTool).
+		restart = &base.ToolRestart{Resume: resume, OriginalInput: rs.OriginalInput, RaisedBy: raisedBy, Released: released}
+	}
+	// Set even when nil, so a restart an enclosing tool call was answering
+	// does not reach this one.
+	resumedCtx = base.ToolRestartKey.NewContext(resumedCtx, restart)
+
+	sink := &base.PartSink{}
+	defer sink.Close() // On an error or interrupt, too.
+	resumedCtx = base.ToolPartSinkKey.NewContext(resumedCtx, sink)
+	multipartResp, err := runTool(resumedCtx, tool, &ToolRequest{
+		Name:  name,
+		Ref:   restartPart.ToolRequest.Ref,
+		Input: restartPart.ToolRequest.Input,
+	})
+	if err != nil {
+		var tie *base.ToolInterruptError
+		if errors.As(err, &tie) {
+			logger.Debug(ctx, "restarted tool triggered an interrupt", "tool", name)
+			interrupt, ierr := interruptedPart(p, tie)
+			if ierr != nil {
+				return nil, nil, toolFailureError(ctx, name, ierr)
+			}
+			return nil, interrupt, nil
+		}
+		return nil, nil, toolFailureError(ctx, name, err)
+	}
+	multipartResp = foldAttachedParts(multipartResp, sink)
+
+	newToolResp := NewToolResponsePart(&ToolResponse{
+		Name:    name,
+		Ref:     restartPart.ToolRequest.Ref,
+		Output:  multipartResp.Output,
+		Content: multipartResp.Content,
+	})
+	newToolResp.Metadata = multipartResp.Metadata
+	return newToolResp, nil, nil
+}
+
+// resumeRequested reports whether opts asks the loop to resume: a resume with
+// directives, or an empty one over a conversation that ends on the model's
+// tool requests, whose every request must then be resolved, by a pending
+// output, for the resume to go through. An empty resume over any other
+// conversation is a no-op, so a caller may pass one on every turn.
+func resumeRequested(opts *GenerateActionOptions) bool {
+	if opts.Resume == nil {
+		return false
+	}
+	if len(opts.Resume.Respond) > 0 || len(opts.Resume.Restart) > 0 {
+		return true
+	}
+	if len(opts.Messages) == 0 {
+		return false
+	}
+	last := opts.Messages[len(opts.Messages)-1]
+	return last != nil && last.Role == RoleModel && slices.ContainsFunc(last.Content, (*Part).IsToolRequest)
 }
 
 // handleResumeOption amends message history to handle `resume` arguments.
 // It returns the amended history.
-func handleResumeOption(ctx context.Context, r api.Registry, genOpts *GenerateActionOptions, runTool toolRunnerFunc) (*resumeOptionOutput, error) {
-	if genOpts.Resume == nil || (len(genOpts.Resume.Respond) == 0 && len(genOpts.Resume.Restart) == 0) {
+func handleResumeOption(ctx context.Context, r api.Registry, genOpts *GenerateActionOptions, runTool toolRunnerFunc, cb ModelStreamCallback) (*resumeOptionOutput, error) {
+	if !resumeRequested(genOpts) {
 		return &resumeOptionOutput{revisedRequest: genOpts}, nil
 	}
 
+	// Validate runs first so that a nil part, which a deprecated verb returns
+	// for a request it cannot restart, is reported as nil rather than as the
+	// wrong kind.
 	for _, part := range genOpts.Resume.Respond {
+		if err := part.Validate(); err != nil {
+			return nil, status.Errorf(status.ErrInvalidArgument, "handleResumeOption: respond part: %w", err)
+		}
 		if !part.IsToolResponse() {
 			return nil, status.Errorf(status.ErrInvalidArgument, "handleResumeOption: respond part is not a tool response")
 		}
 	}
 	for _, part := range genOpts.Resume.Restart {
+		if err := part.Validate(); err != nil {
+			return nil, status.Errorf(ErrInvalidPart, "handleResumeOption: restart part: %w", err)
+		}
 		if !part.IsToolRequest() {
 			return nil, status.Errorf(ErrInvalidPart, "handleResumeOption: restart part is not a tool request")
 		}
@@ -2436,30 +2759,53 @@ func handleResumeOption(ctx context.Context, r api.Registry, genOpts *GenerateAc
 
 	resultChan := make(chan result[*resumedToolRequestOutput], toolReqCount)
 	newContent := make([]*Part, len(lastMessage.Content))
+	// Restarted tools stream as the tools of a model turn do.
+	stream := &toolStreamer{cb: cb}
 
+	// Every request is planned before any tool runs, so a resume that
+	// cannot go through fails without having run part of it.
+	steps := make(map[int]*resumeStep, toolReqCount)
 	for i, part := range lastMessage.Content {
 		if !part.IsToolRequest() {
 			newContent[i] = part
 			continue
 		}
+		step, err := planResumedToolRequest(r, genOpts, part)
+		if err != nil {
+			return nil, fmt.Errorf("handleResumeOption: failed to resolve resumed tool request: %w", err)
+		}
+		steps[i] = step
+	}
 
-		go func(idx int, p *Part) {
-			output, err := handleResumedToolRequest(ctx, r, genOpts, p, runTool)
+	for i, step := range steps {
+		go func(idx int, step *resumeStep) {
+			output, err := handleResumedToolRequest(ctx, step, runTool, stream)
 			resultChan <- result[*resumedToolRequestOutput]{
 				index: idx,
 				value: output,
 				err:   err,
 			}
-		}(i, part)
+		}(i, step)
 	}
 
+	// Unlike a first run, a resume waits for every restarted sibling even
+	// after one fails: the caller approved these calls, and the failure
+	// below records how the others ended, so a retry of the resume does not
+	// run a finished one again.
 	respByIndex := make(map[int]*Part, toolReqCount)
 	interrupted := false
+	failedIndex := -1
+	var failure error
 
 	for range toolReqCount {
 		res := <-resultChan
 		if res.err != nil {
-			return nil, fmt.Errorf("handleResumeOption: failed to resolve resumed tool request: %w", res.err)
+			// The earliest failing request in the message is reported,
+			// so the error does not depend on which tool finished first.
+			if failure == nil || res.index < failedIndex {
+				failedIndex, failure = res.index, res.err
+			}
+			continue
 		}
 
 		if res.value.interrupt != nil {
@@ -2473,7 +2819,7 @@ func handleResumeOption(ctx context.Context, r api.Registry, genOpts *GenerateAc
 
 	lastMessage.Content = newContent
 
-	if interrupted {
+	if interrupted || failure != nil {
 		// Siblings resolved in this resume (restarted runs, supplied
 		// responses, replayed pending outputs) are preserved as
 		// pendingOutput on their request parts, the way a first-run
@@ -2486,6 +2832,21 @@ func handleResumeOption(ctx context.Context, r api.Registry, genOpts *GenerateAc
 				Metadata: respPart.Metadata,
 			})
 		}
+	}
+
+	if failure != nil {
+		// A failed request keeps its part from history, so the next
+		// resume answers it again.
+		for idx, step := range steps {
+			if newContent[idx] == nil {
+				newContent[idx] = step.request
+			}
+		}
+		return &resumeOptionOutput{failedMessage: lastMessage},
+			fmt.Errorf("handleResumeOption: failed to resolve resumed tool request: %w", failure)
+	}
+
+	if interrupted {
 		return &resumeOptionOutput{
 			interruptedResponse: &ModelResponse{
 				Message:       lastMessage,
@@ -2509,15 +2870,18 @@ func handleResumeOption(ctx context.Context, r api.Registry, genOpts *GenerateAc
 		}
 	}
 
+	// Message metadata, not part metadata: the typed restart state lives on the
+	// individual tool request parts, while this marks the whole tool message as
+	// the product of a resumption.
 	toolMessage := &Message{
 		Role:    RoleTool,
 		Content: toolResps,
 		Metadata: map[string]any{
-			"resumed": true,
+			metaResumed: true,
 		},
 	}
 	if genOpts.Resume.Metadata != nil {
-		toolMessage.Metadata["resumed"] = genOpts.Resume.Metadata
+		toolMessage.Metadata[metaResumed] = genOpts.Resume.Metadata
 	}
 	revisedMessages := append(slices.Clone(messages), toolMessage)
 
