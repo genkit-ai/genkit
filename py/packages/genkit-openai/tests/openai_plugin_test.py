@@ -68,6 +68,18 @@ async def test_openai_plugin_init() -> None:
     assert len(embedder_actions) > 0, 'Should have at least one embedder'
 
 
+@pytest.mark.asyncio
+async def test_openai_gpt_image_custom_options_unchanged() -> None:
+    """openai/gpt-image-1 still advertises its quality enum under customOptions."""
+    plugin = OpenAI(api_key='test-key')
+    result = await plugin.init()
+    gpt_image = next(a for a in result if a.name == 'openai/gpt-image-1')
+    assert gpt_image.metadata is not None
+    card = cast(dict[str, Any], gpt_image.metadata['model'])
+    assert card['customOptions']['properties']['quality']['enum'] == ['low', 'medium', 'high']
+    assert 'configSchema' not in card
+
+
 @pytest.mark.parametrize(
     'kind, name',
     [

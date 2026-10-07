@@ -28,7 +28,7 @@ from genkit._core._action import Action, ActionKind, ActionRunContext, get_curre
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import ModelRequest, ModelResponse
 from genkit._core._registry import Registry
-from genkit._core._schema import to_json_schema
+from genkit._core._schema import absorb_model_info, apply_config_class, to_json_schema
 from genkit._core._typing import (
     ModelInfo,
     Operation,
@@ -308,8 +308,9 @@ def background_model(
     model_meta: dict[str, Any] = metadata.copy() if metadata else {}
     model_options: dict[str, Any] = {}
 
-    if info:
-        model_options.update(info.model_dump(by_alias=True, exclude_none=True))
+    info_schema = absorb_model_info(options=model_options, info=info)
+    if info_schema is not None and 'customOptions' not in model_options:
+        model_options['customOptions'] = info_schema
 
     # generate_operation looks at this flag. A background model is a
     # poll-handle model, so the flag is set when the action is built.
@@ -325,8 +326,7 @@ def background_model(
     label = label or model_options.get('label') or name
     model_options['label'] = label
 
-    if config_schema:
-        model_options['customOptions'] = to_json_schema(config_schema)
+    apply_config_class(options=model_options, config_schema=config_schema)
 
     model_meta['model'] = model_options
 

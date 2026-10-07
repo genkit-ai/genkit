@@ -50,7 +50,7 @@ from genkit._core._model import (
     text_from_message,
 )
 from genkit._core._registry import Registry
-from genkit._core._schema import to_json_schema
+from genkit._core._schema import absorb_model_info, apply_config_class, to_json_schema
 from genkit._core._typing import ActionMetadata, GenerationCommonConfig, ModelInfo
 
 # Type alias for model functions (must be async)
@@ -343,17 +343,23 @@ def resolve_model_ref(*, model: ModelRef[Any], config: dict[str, Any]) -> Resolv
 
 def model_action_metadata(
     name: str,
-    info: dict[str, object] | None = None,
+    info: ModelInfo | Mapping[str, Any] | None = None,
     config_schema: type | dict[str, Any] | None = None,
 ) -> ActionMetadata:
     """Create ActionMetadata for a model action."""
-    info = info if info is not None else {}
+    options: dict[str, object] = {}
+    info_schema = absorb_model_info(options=options, info=info)
+    if info_schema is not None and 'customOptions' not in options:
+        options['customOptions'] = info_schema
+    apply_config_class(options=options, config_schema=config_schema)
+    if 'customOptions' not in options:
+        options['customOptions'] = None
     return ActionMetadata(
         action_type=ActionKind.MODEL,
         name=name,
         input_json_schema=to_json_schema(ModelRequest),
         output_json_schema=to_json_schema(ModelResponse),
-        metadata={'model': {**info, 'customOptions': to_json_schema(config_schema) if config_schema else None}},
+        metadata={'model': options},
     )
 
 
@@ -439,17 +445,22 @@ def model(
     can isinstance-check a Pydantic instance against a string model name.
     """
     model_options: dict[str, object] = {}
-
-    if info:
-        model_options.update(info.model_dump(by_alias=True, exclude_none=True))
+    info_schema = absorb_model_info(options=model_options, info=info)
+    if info_schema is not None and 'customOptions' not in model_options:
+        model_options['customOptions'] = info_schema
 
     if metadata and 'model' in metadata:
         existing = metadata['model']
         if isinstance(existing, dict):
             existing_dict = cast(dict[str, object], existing)
             for key, value in existing_dict.items():
-                if isinstance(key, str) and key not in model_options:
-                    model_options[key] = value
+                if not isinstance(key, str) or key in model_options:
+                    continue
+                if key in ('configSchema', 'config_schema'):
+                    if 'customOptions' not in model_options and value is not None:
+                        model_options['customOptions'] = value
+                    continue
+                model_options[key] = value
 
     if 'label' not in model_options or not model_options['label']:
         model_options['label'] = name
@@ -460,8 +471,7 @@ def model(
             message=f"define_model '{name}' cannot set longRunning. Use define_background_model.",
         )
 
-    if config_schema:
-        model_options['customOptions'] = to_json_schema(config_schema)
+    apply_config_class(options=model_options, config_schema=config_schema)
 
     model_meta: dict[str, object] = metadata.copy() if metadata else {}
     model_meta['model'] = model_options

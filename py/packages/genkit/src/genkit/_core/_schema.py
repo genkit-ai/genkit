@@ -25,6 +25,7 @@ from jsonschema.validators import validator_for
 from pydantic import TypeAdapter
 
 from genkit._core._error import GenkitError, RuntimeErrorReason
+from genkit._core._typing import ModelInfo
 
 
 class InvalidOutputSchemaError(GenkitError):
@@ -47,6 +48,38 @@ def to_json_schema(schema: type | dict[str, Any] | str | None) -> dict[str, Any]
         return schema
     type_adapter = TypeAdapter(schema)
     return type_adapter.json_schema()
+
+
+def absorb_model_info(
+    *,
+    options: dict[str, object],
+    info: ModelInfo | Mapping[str, Any] | None,
+) -> object | None:
+    """Copy card fields onto ``options`` and return the info's config schema.
+
+    The Dev UI config form reads ``customOptions``. A schema on the model
+    info is that form, so it is not copied under ``configSchema``.
+    """
+    if isinstance(info, ModelInfo):
+        options.update(info.model_dump(by_alias=True, exclude_none=True, exclude={'config_schema'}))
+        return info.config_schema
+    if not isinstance(info, Mapping):
+        return None
+    schema: object | None = None
+    for key, value in info.items():
+        if key in ('configSchema', 'config_schema'):
+            if schema is None and value is not None:
+                schema = value
+            continue
+        if key not in options:
+            options[key] = value
+    return schema
+
+
+def apply_config_class(*, options: dict[str, object], config_schema: type | dict[str, Any] | None) -> None:
+    """A config class also checks ``config=`` on the call, so it wins the form."""
+    if config_schema:
+        options['customOptions'] = to_json_schema(config_schema)
 
 
 def check_output_schema(json_schema: dict[str, Any]) -> None:

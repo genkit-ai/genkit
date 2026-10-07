@@ -8,18 +8,31 @@
 import warnings
 
 import pytest
+from httpx import ASGITransport, AsyncClient
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from genkit import FinishReason, Message, ModelResponse, ModelResponseChunk, Part, Role
-from genkit._ai._model import text_from_content
+from genkit._ai._model import define_model, text_from_content
+from genkit._core._action import ActionRunContext
 from genkit._core._error import RuntimeErrorReason
 from genkit._core._model import OutputConfig, chunk_for_stream
+from genkit._core._reflection import create_reflection_asgi_app
+from genkit._core._registry import Registry
 from genkit._core._schema import InvalidOutputSchemaError, to_json_schema
 from genkit._core._typing import (
     ActionMetadata,
+    Operation,
     ToolRequest,
 )
-from genkit.model import ModelRequest, ModelUsage, get_basic_usage_stats, model_action_metadata
+from genkit.model import (
+    ModelInfo,
+    ModelRequest,
+    ModelUsage,
+    background_model,
+    get_basic_usage_stats,
+    model,
+    model_action_metadata,
+)
 
 
 class PluginConfig(BaseModel):
@@ -366,6 +379,109 @@ def test_model_action_metadata() -> None:
     assert action_metadata.input_json_schema is not None
     assert action_metadata.output_json_schema is not None
     assert action_metadata.metadata == {'model': {'customOptions': None, 'label': 'test_label'}}
+
+
+_QUALITY_SCHEMA = {
+    'type': 'object',
+    'properties': {'quality': {'type': 'string', 'enum': ['low', 'high']}},
+}
+
+
+async def _echo_model(request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+    return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))
+
+
+def _model_card(action: object) -> dict[str, object]:
+    metadata = getattr(action, 'metadata', None)
+    assert isinstance(metadata, dict)
+    card = metadata['model']
+    assert isinstance(card, dict)
+    return card
+
+
+def test_model_info_config_schema_becomes_custom_options() -> None:
+    """model(..., info=ModelInfo(config_schema=S)) has metadata['model']['customOptions'] == S."""
+    action = model('acme/m', _echo_model, info=ModelInfo(config_schema=_QUALITY_SCHEMA))
+    assert _model_card(action)['customOptions'] == _QUALITY_SCHEMA
+
+
+def test_model_info_config_schema_does_not_emit_config_schema_key() -> None:
+    """The same metadata has no configSchema key."""
+    action = model('acme/m', _echo_model, info=ModelInfo(config_schema=_QUALITY_SCHEMA))
+    assert 'configSchema' not in _model_card(action)
+
+
+def test_model_config_schema_class_wins_over_info_config_schema() -> None:
+    """With both a config class and an info schema set, customOptions is the class's JSON schema."""
+
+    class Quality(BaseModel):
+        quality: str
+
+    action = model(
+        'acme/m',
+        _echo_model,
+        config_schema=Quality,
+        info=ModelInfo(config_schema=_QUALITY_SCHEMA),
+    )
+    card = _model_card(action)
+    assert card['customOptions'] == to_json_schema(Quality)
+    assert card['customOptions'] != _QUALITY_SCHEMA
+    assert 'configSchema' not in card
+
+
+def test_model_without_any_config_schema_has_no_custom_options() -> None:
+    """A model with no config class and no info schema has no config form."""
+    action = model('acme/m', _echo_model)
+    assert _model_card(action) == {'label': 'acme/m'}
+
+
+def test_model_action_metadata_accepts_model_info() -> None:
+    """model_action_metadata(info=ModelInfo(...)) returns the same customOptions as the dumped dict."""
+    info = ModelInfo(label='acme/m', config_schema=_QUALITY_SCHEMA)
+    from_info = model_action_metadata('acme/m', info=info)
+    from_dict = model_action_metadata('acme/m', info=info.model_dump(by_alias=True, exclude_none=True))
+    assert from_info.metadata is not None
+    assert from_dict.metadata is not None
+    assert from_info.metadata['model']['customOptions'] == _QUALITY_SCHEMA
+    assert from_dict.metadata['model']['customOptions'] == from_info.metadata['model']['customOptions']
+    assert 'configSchema' not in from_info.metadata['model']
+    assert 'configSchema' not in from_dict.metadata['model']
+
+
+async def _start_background(request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    return Operation(id='op')
+
+
+async def _check_background(operation: Operation, _ctx: ActionRunContext) -> Operation:
+    return operation
+
+
+def test_background_model_info_config_schema_becomes_custom_options() -> None:
+    """background_model(..., info=ModelInfo(config_schema=S)) advertises S as customOptions."""
+    action = background_model(
+        'acme/bg',
+        _start_background,
+        _check_background,
+        info=ModelInfo(config_schema=_QUALITY_SCHEMA),
+    )
+    card = _model_card(action.start_action)
+    assert card['customOptions'] == _QUALITY_SCHEMA
+    assert 'configSchema' not in card
+
+
+@pytest.mark.asyncio
+async def test_reflection_list_actions_model_custom_options_from_info() -> None:
+    """/api/actions shows the info schema under metadata.model.customOptions."""
+    registry = Registry()
+    define_model(registry, 'acme/m', _echo_model, info=ModelInfo(config_schema=_QUALITY_SCHEMA))
+    app = create_reflection_asgi_app(registry)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url='http://test') as client:
+        response = await client.get('/api/actions')
+    assert response.status_code == 200
+    card = response.json()['/model/acme/m']['metadata']['model']
+    assert card['customOptions'] == _QUALITY_SCHEMA
+    assert 'configSchema' not in card
 
 
 def test_text_from_content_with_parts() -> None:
