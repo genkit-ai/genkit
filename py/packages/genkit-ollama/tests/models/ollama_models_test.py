@@ -16,6 +16,7 @@
 
 """Unit tests for Ollama models package."""
 
+import json
 import unittest
 from collections.abc import AsyncIterator
 from typing import Any, cast
@@ -29,7 +30,7 @@ from genkit_ollama.models import ModelDefinition, OllamaConfig, OllamaModel, _co
 from pydantic import ConfigDict, ValidationError
 
 from genkit import ActionRunContext, GenkitError, Message, ModelResponseChunk, Part, Role
-from genkit.model import ModelConfig, ModelRequest, ModelUsage
+from genkit.model import ModelConfig, ModelRequest, ModelUsage, ToolDefinition
 
 
 class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
@@ -99,6 +100,71 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
                 await model.generate(self.request, self.ctx)
         self.assertIs(raised.exception, stream_error)
         self.assertEqual(raised.exception.status_code, -1)
+
+    async def test_generate_marks_non_json_server_body_internal(self) -> None:
+        """A proxy error page instead of JSON is the server's fault, not the caller's."""
+        model = OllamaModel(
+            client=self.mock_client,
+            model_definition=ModelDefinition(name='chat-model', api_type=OllamaAPITypes.CHAT),
+        )
+        client = MagicMock()
+        client.chat = AsyncMock(side_effect=json.JSONDecodeError('Expecting value', '<html>502 Bad Gateway</html>', 0))
+
+        with self.assertRaises(GenkitError) as raised:
+            await model.generate(self.request, client=client)
+
+        self.assertEqual(raised.exception.status, 'INTERNAL')
+        self.assertIsInstance(raised.exception.__cause__, json.JSONDecodeError)
+
+    async def test_generate_rejects_mistyped_config_as_invalid_argument(self) -> None:
+        """A config value Options cannot coerce is the caller's to fix, so retry skips it."""
+        model = OllamaModel(
+            client=self.mock_client,
+            model_definition=ModelDefinition(name='chat-model', api_type=OllamaAPITypes.CHAT),
+        )
+        client = MagicMock()
+        client.chat = AsyncMock()
+        request = ModelRequest(
+            messages=[Message(role=Role.USER, content=[Part.from_text('Suggest a dish.')])],
+            config={'numPredict': 'a lot'},
+        )
+
+        with self.assertRaises(GenkitError) as raised:
+            await model.generate(request, client=client)
+
+        self.assertEqual(raised.exception.status, 'INVALID_ARGUMENT')
+        self.assertIn('num_predict', str(raised.exception))
+        client.chat.assert_not_called()
+
+    async def test_generate_rejects_malformed_tool_schema_as_invalid_argument(self) -> None:
+        """A tool schema Ollama's Tool model rejects is the caller's to fix."""
+        model = OllamaModel(
+            client=self.mock_client,
+            model_definition=ModelDefinition(name='chat-model', api_type=OllamaAPITypes.CHAT),
+        )
+        client = MagicMock()
+        client.chat = AsyncMock()
+        request = ModelRequest(
+            messages=[Message(role=Role.USER, content=[Part.from_text('Book a table for four.')])],
+            tools=[
+                ToolDefinition(
+                    name='book_table',
+                    description='Reserve a table.',
+                    # description must be a string; Ollama's Property model rejects 4.
+                    input_schema={
+                        'type': 'object',
+                        'properties': {'party_size': {'type': 'integer', 'description': 4}},
+                    },
+                )
+            ],
+        )
+
+        with self.assertRaises(GenkitError) as raised:
+            await model.generate(request, client=client)
+
+        self.assertEqual(raised.exception.status, 'INVALID_ARGUMENT')
+        self.assertIn('invalid tool definition', str(raised.exception))
+        client.chat.assert_not_called()
 
     @patch(
         'genkit_ollama.models.get_basic_usage_stats',
@@ -1417,18 +1483,37 @@ class TestResolveImage(unittest.IsolatedAsyncioTestCase):
         mock_response.raise_for_status.assert_called_once()
 
     @patch('genkit_ollama.models.get_cached_client')
-    async def test_http_url_raises_on_failure(self, mock_get_client: MagicMock) -> None:
-        """HTTP errors during image download should propagate."""
-        mock_client = AsyncMock()
-        mock_response = MagicMock()
-        mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
-            '403 Forbidden', request=MagicMock(), response=MagicMock()
-        )
-        mock_client.get.return_value = mock_response
-        mock_get_client.return_value = mock_client
+    async def test_http_url_client_error_is_invalid_argument(self, mock_get_client: MagicMock) -> None:
+        """A 4xx from the image host means the caller's URL is bad.
 
-        with self.assertRaises(httpx.HTTPStatusError):
-            await OllamaModel._resolve_image('https://example.com/secret.jpg')
+        INVALID_ARGUMENT, not NOT_FOUND, so Fallback does not switch models
+        over a URL no model can fetch.
+        """
+        for status in (403, 404, 410):
+            with self.subTest(status=status):
+                request = httpx.Request('GET', 'https://menu.example/dishes/tiramisu.jpg')
+                mock_client = AsyncMock()
+                mock_client.get.return_value = httpx.Response(status, request=request)
+                mock_get_client.return_value = mock_client
+
+                with self.assertRaises(GenkitError) as raised:
+                    await OllamaModel._resolve_image('https://menu.example/dishes/tiramisu.jpg')
+
+                self.assertEqual(raised.exception.status, 'INVALID_ARGUMENT')
+                self.assertIsInstance(raised.exception.__cause__, httpx.HTTPStatusError)
+
+    @patch('genkit_ollama.models.get_cached_client')
+    async def test_http_url_transient_error_stays_raw(self, mock_get_client: MagicMock) -> None:
+        """408/429/5xx from the image host stay unclassified so Retry can try again."""
+        for status in (408, 429, 500, 503):
+            with self.subTest(status=status):
+                request = httpx.Request('GET', 'https://menu.example/dishes/tiramisu.jpg')
+                mock_client = AsyncMock()
+                mock_client.get.return_value = httpx.Response(status, request=request)
+                mock_get_client.return_value = mock_client
+
+                with self.assertRaises(httpx.HTTPStatusError):
+                    await OllamaModel._resolve_image('https://menu.example/dishes/tiramisu.jpg')
 
 
 class TestBuildChatMessagesWithMedia(unittest.IsolatedAsyncioTestCase):
