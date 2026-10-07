@@ -419,11 +419,18 @@ async def test_model_garden_list_actions_with_openai_extra_lists_llama_models() 
     names = [a.name for a in actions]
     assert names == [f'modelgarden/{model}' for model in SUPPORTED_OPENAI_COMPAT_MODELS]
     assert LLAMA in names
+    metadata = actions[names.index(LLAMA)].metadata
+    assert metadata is not None
+    llama = metadata['model']
+    assert isinstance(llama, dict)
+    catalog = SUPPORTED_OPENAI_COMPAT_MODELS['meta/llama-3.1-405b-instruct-maas'].supports
+    assert catalog is not None
+    assert llama['supports'] == catalog.model_dump(by_alias=True, exclude_none=True)
 
 
 @pytest.mark.asyncio
 async def test_resolve_uncataloged_openai_compat_model_advertises_default_supports() -> None:
-    """An uncataloged OpenAI-compatible model advertises the label and supports its handler runs with."""
+    """An uncataloged OpenAI-compatible model advertises, in camelCase, the label and supports its handler runs with."""
     ai = Genkit(plugins=[ModelGarden(project_id='p')])
 
     action = await ai.registry.resolve_action(ActionKind.MODEL, MISTRAL)
@@ -432,4 +439,4 @@ async def test_resolve_uncataloged_openai_compat_model_advertises_default_suppor
     info = action.metadata['model']
     assert isinstance(info, dict)
     assert info['label'] == 'ModelGarden - mistralai/mistral-small-2503'
-    assert info['supports'] == DEFAULT_SUPPORTS.model_dump()
+    assert info['supports'] == DEFAULT_SUPPORTS.model_dump(by_alias=True, exclude_none=True)

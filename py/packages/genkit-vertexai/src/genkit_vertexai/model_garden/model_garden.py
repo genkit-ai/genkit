@@ -35,7 +35,7 @@ from genkit_vertexai.model_garden._model_info import (
 
 from genkit import ActionRunContext, GenkitError, ModelResponse
 from genkit.model import ModelInfo, ModelRequest, model as create_model, model_action_metadata
-from genkit.plugin_api import Action, ActionKind, ActionMetadata, Plugin, loop_local_client, to_json_schema
+from genkit.plugin_api import Action, ActionKind, ActionMetadata, Plugin, loop_local_client
 
 if TYPE_CHECKING:
     from genkit_vertexai.model_garden.client import CachedOpenAI
@@ -299,17 +299,11 @@ class ModelGarden(Plugin):
 
             location, project_id = self._location_and_project(name)
             claude = AnthropicModelGarden(model=name, location=location, project_id=project_id)
-            config_schema = claude.get_config_schema()
             return create_model(
                 full_name,
                 claude.get_handler(),
-                config_schema=config_schema,
-                metadata={
-                    'model': {
-                        **claude.get_model_info().model_dump(),
-                        'customOptions': to_json_schema(config_schema),
-                    },
-                },
+                config_schema=claude.get_config_schema(),
+                info=claude.get_model_info(),
             )
 
         with _requires_extra(_OPENAI_EXTRA):
@@ -321,12 +315,7 @@ class ModelGarden(Plugin):
             full_name,
             openai_compat.to_openai_compatible_model(),
             config_schema=OpenAIConfig,
-            metadata={
-                'model': {
-                    **_openai_compat_model_info(name).model_dump(),
-                    'customOptions': to_json_schema(OpenAIConfig),
-                },
-            },
+            info=_openai_compat_model_info(name),
         )
 
     async def list_actions(self) -> list[ActionMetadata]:
@@ -348,7 +337,9 @@ class ModelGarden(Plugin):
 
         return [
             model_action_metadata(
-                name=model_garden_name(model), info=model_info.model_dump(), config_schema=OpenAIConfig
+                name=model_garden_name(model),
+                info=model_info.model_dump(by_alias=True, exclude_none=True),
+                config_schema=OpenAIConfig,
             )
             for model, model_info in SUPPORTED_OPENAI_COMPAT_MODELS.items()
         ]
