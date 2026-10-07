@@ -26,6 +26,7 @@ from genkit_google_genai._models._sdk_config import (
     attach_config_extra,
     attach_leftovers,
 )
+from genkit_google_genai._models._secrets import reject_request_config_api_key
 from google.genai import types as genai_types
 from pydantic import ValidationError
 
@@ -101,6 +102,12 @@ async def test_extra_cannot_set_structured_output_fields(field: str) -> None:
         await _cfg(GeminiConfig.model_validate({'extra': {'generationConfig': {field: 'x'}}}))
 
     assert f"'generationConfig.{field}'" in str(err.value)
+
+
+def test_api_key_in_extra_is_rejected() -> None:
+    """A key in `extra` would ride the wire and land in traces; it belongs in context.secrets."""
+    with pytest.raises(GenkitError, match='context.secrets'):
+        reject_request_config_api_key(GeminiConfig.model_validate({'extra': {'api_key': 'sk'}}))
 
 
 def test_declared_sampling_knobs_stay_flat_and_typed() -> None:
