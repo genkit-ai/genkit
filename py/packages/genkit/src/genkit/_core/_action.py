@@ -46,7 +46,7 @@ from typing_extensions import TypeVar
 from genkit._core._channel import Channel, CloseableQueue
 from genkit._core._compat import StrEnum
 from genkit._core._error import GenkitError, Interrupt, RuntimeErrorReason
-from genkit._core._model import EmbedRequest, ModelRequest, config_type_path, declared_config_type
+from genkit._core._model import EmbedRequest, ModelRequest, ModelResponse, config_type_path, declared_config_type
 from genkit._core._schema import to_json_schema
 from genkit._core._telemetry._attrs import Attr, metadata_key
 from genkit._core._telemetry._instrumentation import (
@@ -54,6 +54,7 @@ from genkit._core._telemetry._instrumentation import (
     run_in_new_span,
     to_json_attr,
 )
+from genkit._core._typing import EmbedResponse, Operation
 
 # =============================================================================
 # Span attribute types and tracing helpers
@@ -362,19 +363,25 @@ def find_input_and_context(
     return ActionParams(input=input_param, context=context_param)
 
 
-def known_request_type(kind: ActionKind) -> type | None:
-    """The request type generate or embed always sends for this kind.
+def known_annotation_names(kind: ActionKind) -> dict[str, object]:
+    """Genkit types a handler of this kind always takes or returns, by name.
 
-    A model action is always given a ModelRequest, and an embedder an
-    EmbedRequest. Used when the handler's annotation is only a name we
-    cannot load (imported under TYPE_CHECKING), so the first call does
-    not fail on a type we already know.
+    A model gets a ModelRequest and returns a ModelResponse, an embedder
+    gets an EmbedRequest and returns an EmbedResponse, and a background
+    model's start, check, and cancel deal in Operations. When the handler
+    imports these only under TYPE_CHECKING, resolve_type_hints looks the
+    missing names up here, so ``ModelRequest[GardenConfig]`` keeps its
+    config type and any other missing name still raises.
     """
-    if kind in (ActionKind.MODEL, ActionKind.BACKGROUND_MODEL):
-        return ModelRequest
+    if kind == ActionKind.MODEL:
+        return {'ModelRequest': ModelRequest, 'ModelResponse': ModelResponse}
+    if kind == ActionKind.BACKGROUND_MODEL:
+        return {'ModelRequest': ModelRequest, 'Operation': Operation}
+    if kind in (ActionKind.CHECK_OPERATION, ActionKind.CANCEL_OPERATION):
+        return {'Operation': Operation}
     if kind == ActionKind.EMBEDDER:
-        return EmbedRequest
-    return None
+        return {'EmbedRequest': EmbedRequest, 'EmbedResponse': EmbedResponse}
+    return {}
 
 
 def json_schema_for(
@@ -443,18 +450,22 @@ def signature_of(fn: Callable[..., object]) -> inspect.Signature:
     return inspect.signature(fn)
 
 
-def resolve_type_hints(fn: Callable[..., object]) -> dict[str, Any]:
+def resolve_type_hints(fn: Callable[..., object], known: Mapping[str, object] | None = None) -> dict[str, Any]:
     """``fn``'s annotations as types. A name that can't be found stays a string.
 
     ``get_type_hints`` fails outright if any one name is missing, so then each
     annotation is resolved on its own. A missing context class doesn't also
     hide the input model.
+
+    ``known`` fills in names missing from ``fn``'s module (see
+    known_annotation_names). The module's own names win.
     """
     try:
         return get_type_hints(fn)
     except Exception:
         module_globals = getattr(inspect.unwrap(fn), '__globals__', {})
-        return {name: _resolve_one(a, module_globals) for name, a in _annotations_as_written(fn).items()}
+        namespace = {**known, **module_globals} if known else module_globals
+        return {name: _resolve_one(a, namespace) for name, a in _annotations_as_written(fn).items()}
 
 
 def _annotations_as_written(fn: Callable[..., object]) -> dict[str, Any]:
@@ -463,8 +474,14 @@ def _annotations_as_written(fn: Callable[..., object]) -> dict[str, Any]:
         import annotationlib
 
         annotations = annotationlib.get_annotations(fn, format=annotationlib.Format.FORWARDREF)
+        if not any(isinstance(a, annotationlib.ForwardRef) for a in annotations.values()):
+            return annotations
+        # A ForwardRef's __forward_arg__ swaps names it did find for
+        # placeholders ('ModelRequest[__annotationlib_name_1__]'), so take
+        # the source text, the string `from __future__ import annotations` gives.
+        as_text = annotationlib.get_annotations(fn, format=annotationlib.Format.STRING)
         return {
-            name: a.__forward_arg__ if isinstance(a, annotationlib.ForwardRef) else a for name, a in annotations.items()
+            name: as_text[name] if isinstance(a, annotationlib.ForwardRef) else a for name, a in annotations.items()
         }
     return dict(inspect.getfullargspec(fn).annotations)
 
@@ -740,7 +757,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         # is one) and metadata_fn is the user's function, whose signature
         # decides the input and context.
         user_fn = metadata_fn if metadata_fn else fn
-        hints = resolve_type_hints(user_fn)
+        hints = resolve_type_hints(user_fn, known_annotation_names(kind))
         self._params: ActionParams = find_input_and_context(user_fn, hints, kind=kind, name=name)
         self._fn: Callable[..., Awaitable[OutputT]] = fn
         self._fn_is_wrapper: bool = metadata_fn is not None
@@ -919,9 +936,6 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
     def _initialize_io_schemas(self, annotations: dict[str, Any]) -> None:
         if self._params.input is not None:
             input_type = annotations.get(self._params.input.name, Any)
-            fixed = known_request_type(self._kind)
-            if isinstance(input_type, str) and fixed is not None:
-                input_type = fixed
             type_adapter, self._input_schema = json_schema_for(
                 input_type, kind=self._kind, name=self._name, label=f"input '{self._params.input.name}'"
             )
