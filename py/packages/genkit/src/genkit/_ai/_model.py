@@ -45,6 +45,7 @@ from genkit._core._model import (
     ModelResponseChunk,
     config_type_path,
     get_basic_usage_stats,
+    reject_config_api_key,
     text_from_content,
     text_from_message,
 )
@@ -527,21 +528,3 @@ def check_call_config(*, config: object, schema: type[BaseModel] | None, model: 
     """Call-time config check: a typed object's class and a dict's keys and values."""
     assert_correct_config_class(config=config, schema=schema, model=model)
     check_config_dict(config=config, schema=schema, model=model)
-
-
-def reject_config_api_key(config: Mapping[str, Any]) -> None:
-    """A per-request key in config raises on every model, with or without a config class.
-
-    Config is recorded in traces and a plugin may not read a key from it, so
-    the caller is pointed at ``context.secrets`` rather than told the key is
-    unknown. What's inside ``extra`` isn't checked.
-    """
-    if config.get('api_key') is None and config.get('apiKey') is None:
-        return
-    raise GenkitError(
-        status='INVALID_ARGUMENT',
-        message=(
-            "API key belongs in context.secrets, not config. Pass the key as context={'secrets': {'api_key': ...}}."
-        ),
-        reason=RuntimeErrorReason.INVALID_INPUT,
-    )
