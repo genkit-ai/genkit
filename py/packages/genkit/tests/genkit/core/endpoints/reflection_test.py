@@ -46,7 +46,7 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from pydantic import BaseModel, Field
 
-from genkit import Genkit
+from genkit import ActionRunContext, Genkit
 from genkit._core._action import ActionKind
 from genkit._core._middleware import BaseMiddleware
 from genkit._core._model import ModelConfig
@@ -185,38 +185,52 @@ async def test_run_action_standard(asgi_client: AsyncClient, mock_registry: Magi
 
 
 @pytest.mark.asyncio
-async def test_run_action_with_context(asgi_client: AsyncClient, mock_registry: MagicMock) -> None:
-    """Test that an action with context works correctly."""
-    mock_action = AsyncMock()
-    mock_output = MagicMock()
-    mock_output.response = {'result': 'success'}
-    mock_output.trace_id = 'test_trace_id'
-    mock_output.span_id = 'test_span_id'
-    mock_action.run.return_value = mock_output
+async def test_run_action_context_reaches_flow_and_subflow() -> None:
+    """runAction `context` reaches the flow, and a subflow called without `context=` sees the same dict."""
+    ai = Genkit()
+    caller = {'auth': {'uid': 'u_42', 'tier': 'gold'}, 'locale': 'en-US'}
 
-    async def mock_resolve_action_by_key(key: str) -> AsyncMock:
-        return mock_action
+    @ai.flow()
+    async def allergy_check(dish: str, ctx: ActionRunContext) -> dict[str, Any]:
+        return dict(ctx.context)
 
-    mock_registry.resolve_action_by_key = mock_resolve_action_by_key
+    @ai.flow()
+    async def order_dish(dish: str, ctx: ActionRunContext) -> dict[str, Any]:
+        return {'flow': dict(ctx.context), 'subflow': await allergy_check(dish)}
 
-    response = await asgi_client.post(
-        '/api/runAction',
-        json={
-            'key': 'test_action',
-            'input': {'data': 'test'},
-            'context': {'user': 'test_user'},
-        },
-    )
+    app = create_reflection_asgi_app(ai.registry)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as client:
+        response = await client.post(
+            '/api/runAction',
+            json={'key': '/flow/order_dish', 'input': 'Smoked Salmon Tartine', 'context': caller},
+        )
 
     assert response.status_code == 200
-    mock_action.run.assert_called_once_with(
-        input={'data': 'test'},
-        context={'user': 'test_user'},
-        on_trace_start=ANY,
-        on_chunk=None,
-        telemetry_labels=None,
-        init=None,
-    )
+    assert response.json()['result'] == {'flow': caller, 'subflow': caller}
+
+
+@pytest.mark.asyncio
+async def test_run_action_rejects_non_object_context() -> None:
+    """runAction with `context: "gold"` answers 400 and never runs the flow."""
+    ai = Genkit()
+    calls = 0
+
+    @ai.flow()
+    async def order_dish(dish: str) -> str:
+        nonlocal calls
+        calls += 1
+        return dish
+
+    app = create_reflection_asgi_app(ai.registry)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as client:
+        response = await client.post(
+            '/api/runAction',
+            json={'key': '/flow/order_dish', 'input': 'Tartine', 'context': 'gold'},
+        )
+
+    assert response.status_code == 400
+    assert response.json() == {'error': 'context must be a JSON object when provided'}
+    assert calls == 0
 
 
 @pytest.mark.asyncio

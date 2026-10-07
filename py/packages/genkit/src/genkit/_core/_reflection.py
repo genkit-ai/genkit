@@ -292,6 +292,13 @@ def create_reflection_asgi_app(
         action = await registry.resolve_action_by_key(payload['key'])
         if not action:
             return JSONResponse({'error': f'Action not found: {payload["key"]}'}, status_code=404)
+        context = payload.get('context')
+        if context is not None and not isinstance(context, dict):
+            return JSONResponse(
+                {'error': 'context must be a JSON object when provided'},
+                status_code=400,
+                headers={'x-genkit-version': version},
+            )
 
         runner = ActionRunner(
             action=action,

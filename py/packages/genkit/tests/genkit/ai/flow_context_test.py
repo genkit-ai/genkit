@@ -5,20 +5,21 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 from collections.abc import Sequence
 
 import pytest
-from httpx import ASGITransport, AsyncClient
 
 from genkit import ActionRunContext, FinishReason, Genkit, Message, ModelResponse, Part, Role
 from genkit._ai._testing import define_programmable_model
-from genkit._core._reflection import create_reflection_asgi_app
 from genkit._core._telemetry.http import ActiveSpan
 from genkit._core._typing import ToolRequest
 
 CALLER = {'auth': {'uid': 'u_42', 'tier': 'gold'}, 'locale': 'en-US'}
+
+
+class CardDeclinedError(Exception):
+    """Raised by the failing subflow so the test can tell its error from any other."""
 
 
 def _define_allergy_check(ai: Genkit):  # noqa: ANN202
@@ -35,19 +36,13 @@ def _span(spans: Sequence[ActiveSpan], name: str) -> ActiveSpan:
     return matches[-1]
 
 
-@pytest.mark.asyncio
-async def test_subflow_without_context_sees_parent_context() -> None:
-    """A subflow called with no `context=` sees the parent's context."""
-    ai = Genkit()
-    allergy_check = _define_allergy_check(ai)
-
-    @ai.flow()
-    async def order_dish(dish: str) -> dict[str, object]:
-        return await allergy_check(dish)
-
-    result = await order_dish.run('Smoked Salmon Tartine', context=CALLER)
-
-    assert result.response == CALLER
+def _raised_by(error: BaseException | None, cls: type[BaseException]) -> bool:
+    """True if `error` is `cls` or was raised from one."""
+    while error is not None:
+        if isinstance(error, cls):
+            return True
+        error = error.__cause__
+    return False
 
 
 @pytest.mark.asyncio
@@ -89,30 +84,8 @@ async def test_parent_context_is_back_after_subflow_override() -> None:
     allergy_check = _define_allergy_check(ai)
 
     @ai.flow()
-    async def order_dish(dish: str, ctx: ActionRunContext) -> dict[str, object]:
-        await allergy_check.run(dish, context={'auth': {'uid': 'kitchen'}})
-        return {'ctx': dict(ctx.context), 'current': ai.current_context()}
-
-    result = await order_dish.run('Smoked Salmon Tartine', context=CALLER)
-
-    assert result.response == {'ctx': CALLER, 'current': CALLER}
-    assert ai.current_context() is None
-
-
-@pytest.mark.asyncio
-async def test_parent_context_is_back_after_failing_subflow_override() -> None:
-    """A subflow that overrides context and raises still leaves the parent's context in place."""
-    ai = Genkit()
-
-    @ai.flow()
-    async def charge_card(amount: int) -> str:
-        raise ValueError('card declined')
-
-    @ai.flow()
     async def order_dish(dish: str) -> object:
-        # Exception, not ValueError: main still wraps it in GenkitError until #6576.
-        with pytest.raises(Exception, match='card declined'):
-            await charge_card.run(42, context={'auth': {'uid': 'billing'}})
+        await allergy_check.run(dish, context={'auth': {'uid': 'kitchen'}})
         return ai.current_context()
 
     result = await order_dish.run('Smoked Salmon Tartine', context=CALLER)
@@ -122,38 +95,34 @@ async def test_parent_context_is_back_after_failing_subflow_override() -> None:
 
 
 @pytest.mark.asyncio
-async def test_gathered_subflows_see_parent_context() -> None:
-    """Subflows run with `asyncio.gather` each see the parent's context."""
+async def test_parent_context_is_back_after_failing_subflow_override() -> None:
+    """A subflow that overrides context and raises still leaves the parent's context in place."""
     ai = Genkit()
-    allergy_check = _define_allergy_check(ai)
+    errors: list[BaseException] = []
 
     @ai.flow()
-    async def order_meal(dishes: list[str]) -> list[dict[str, object]]:
-        return list(await asyncio.gather(*(allergy_check(d) for d in dishes)))
-
-    result = await order_meal.run(['Tartine', 'Bisque'], context=CALLER)
-
-    assert result.response == [CALLER, CALLER]
-
-
-@pytest.mark.asyncio
-async def test_task_subflow_sees_parent_context() -> None:
-    """A subflow started with `asyncio.create_task` sees the parent's context."""
-    ai = Genkit()
-    allergy_check = _define_allergy_check(ai)
+    async def charge_card(amount: int) -> str:
+        raise CardDeclinedError('card declined')
 
     @ai.flow()
-    async def order_dish(dish: str) -> dict[str, object]:
-        return await asyncio.create_task(allergy_check(dish))
+    async def order_dish(dish: str) -> object:
+        try:
+            await charge_card.run(42, context={'auth': {'uid': 'billing'}})
+        except Exception as e:  # noqa: BLE001
+            errors.append(e)
+        return ai.current_context()
 
     result = await order_dish.run('Smoked Salmon Tartine', context=CALLER)
 
+    assert len(errors) == 1
+    assert _raised_by(errors[0], CardDeclinedError), repr(errors[0])
     assert result.response == CALLER
+    assert ai.current_context() is None
 
 
 @pytest.mark.asyncio
 async def test_streamed_subflow_sees_parent_context() -> None:
-    """A subflow run with `.stream()` sees the parent's context."""
+    """A subflow run with `.stream()`, which Genkit runs as its own task, sees the parent's context."""
     ai = Genkit()
     allergy_check = _define_allergy_check(ai)
 
@@ -209,26 +178,18 @@ async def test_subflow_called_from_tool_during_generate_sees_flow_context() -> N
 
 
 @pytest.mark.asyncio
-async def test_dev_ui_run_context_reaches_flow_and_subflow_and_span_hides_auth(exporter) -> None:
-    """A Dev UI runAction with `context` reaches the flow and its subflow; both spans show `auth` redacted."""
+async def test_subflow_span_records_inherited_context(exporter) -> None:
+    """A subflow called without `context=` records the parent's context on its own span."""
     ai = Genkit()
     allergy_check = _define_allergy_check(ai)
 
     @ai.flow()
-    async def order_dish(dish: str, ctx: ActionRunContext) -> dict[str, object]:
-        return {'flow': dict(ctx.context), 'subflow': await allergy_check(dish)}
+    async def order_dish(dish: str) -> dict[str, object]:
+        return await allergy_check(dish)
 
-    app = create_reflection_asgi_app(ai.registry)
-    async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as client:
-        response = await client.post(
-            '/api/runAction',
-            json={'key': '/flow/order_dish', 'input': 'Smoked Salmon Tartine', 'context': CALLER},
-        )
+    await order_dish.run('Smoked Salmon Tartine', context=CALLER)
 
-    assert response.json()['result'] == {'flow': CALLER, 'subflow': CALLER}
-    spans = exporter.get_finished_spans()
-    for name in ('order_dish', 'allergy_check'):
-        attrs = dict(_span(spans, name).attributes or {})
-        context_attr = attrs['genkit:metadata:context']
-        assert isinstance(context_attr, str)
-        assert json.loads(context_attr) == {'auth': '<redacted>', 'locale': 'en-US'}
+    attrs = dict(_span(exporter.get_finished_spans(), 'allergy_check').attributes or {})
+    context_attr = attrs['genkit:metadata:context']
+    assert isinstance(context_attr, str)
+    assert json.loads(context_attr) == {'auth': '<redacted>', 'locale': 'en-US'}

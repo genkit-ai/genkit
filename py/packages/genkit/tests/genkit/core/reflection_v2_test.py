@@ -994,3 +994,44 @@ async def test_reflection_server_v2_run_action_rejects_non_object_context(
         assert calls == 0
     finally:
         await _stop_client(client, task)
+
+
+@pytest.mark.asyncio
+async def test_reflection_server_v2_run_bidi_action_context_reaches_agent(
+    fake_manager: FakeReflectionManager,
+) -> None:
+    """A bidi (agent) runAction with `context` runs the agent with that context."""
+    registry = Registry()
+    caller = {'auth': {'uid': 'u_42', 'tier': 'gold'}, 'locale': 'en-US'}
+
+    async def concierge_agent(_init: Any, input_stream: Any, send_chunk: Any) -> dict[str, Any]:
+        async for _inp in input_stream:
+            pass
+        return {'context': Genkit.current_context()}
+
+    registry.register_action_from_instance(
+        BidiAction(
+            ActionKind.AGENT,
+            'test/concierge',
+            concierge_agent,
+            metadata={'agent': {'stateManagement': 'client'}},
+            init_schema=AgentInit,
+            input_schema=AgentInput,
+        )
+    )
+
+    client, task = await _run_client_lifecycle(registry, fake_manager)
+    try:
+        await ack_register(fake_manager)
+        await fake_manager.write_rpc({
+            'jsonrpc': '2.0',
+            'method': 'runAction',
+            'params': {'key': '/agent/test/concierge', 'input': {}, 'context': caller},
+            'id': 'bidi-ctx',
+        })
+        resp = await _read_run_action_reply(fake_manager)
+        assert resp.get('id') == 'bidi-ctx'
+        assert resp.get('error') is None
+        assert resp['result']['result'] == {'context': caller}
+    finally:
+        await _stop_client(client, task)
