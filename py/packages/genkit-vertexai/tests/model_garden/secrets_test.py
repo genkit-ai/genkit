@@ -55,7 +55,7 @@ def openai_compatible_handler() -> Callable[[ModelRequest, ActionRunContext], Aw
 
 
 def hi_request() -> ModelRequest:
-    return ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('hi')])])
+    return ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('hi')])], config={})
 
 
 @pytest.mark.asyncio
@@ -63,7 +63,7 @@ async def test_generate_model_garden_openai_compatible_secrets_api_key_raises_in
     """The same key on a Model Garden OpenAI-compatible model raises INVALID_ARGUMENT and never fetches a token."""
     generate = openai_compatible_handler()
 
-    with patch('genkit_vertexai.model_garden.model_garden.OpenAIClient.create') as create_client:
+    with patch.object(ModelGardenModel, 'create_client') as create_client:
         with pytest.raises(GenkitError) as exc_info:
             await generate(hi_request(), ActionRunContext(context={'secrets': {'api_key': 'tenant-key'}}))
 
@@ -78,7 +78,7 @@ async def test_generate_model_garden_secrets_without_api_key_runs_on_google_cred
     generate = openai_compatible_handler()
     create_client = AsyncMock(side_effect=RuntimeError('reached the client'))
 
-    with patch('genkit_vertexai.model_garden.model_garden.OpenAIClient.create', create_client):
+    with patch.object(ModelGardenModel, 'create_client', create_client):
         with pytest.raises(RuntimeError, match='reached the client'):
             await generate(hi_request(), ActionRunContext(context={'secrets': {'db_password': 'x'}}))
 
