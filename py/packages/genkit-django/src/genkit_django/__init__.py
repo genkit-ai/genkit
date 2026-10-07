@@ -70,8 +70,8 @@ Wire protocol:
       ``text/event-stream`` with ``data: {"message": ...}`` chunks and a
       final ``data: {"result": ...}`` event.
     - Non-stream: ``{"result": <flow_output>}`` on success. A ``PublicError``
-      keeps its HTTP status and message; any other ``GenkitError`` keeps its
-      status and gets a generic message; anything else is 500 Internal Error.
+      keeps its HTTP status and message; any other ``GenkitError`` (including
+      a provider-marked failure) is 500 Internal Error.
 
 The returned view is automatically ``csrf_exempt`` because this is a JSON API.
 

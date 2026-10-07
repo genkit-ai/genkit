@@ -28,11 +28,12 @@ from genkit_google_genai._interactions._options import ClientOptions
 from google.genai.interactions import Interaction
 
 from genkit import GenkitError, get_logger
-from genkit._core._error import ErrorResponseMetadata, mark_provider_error
+from genkit._core._error import ErrorResponseMetadata
 from genkit.plugin_api import (
     GENKIT_CLIENT_HEADER,
     from_http_code,
     get_cached_client,
+    mark_provider_error,
     parse_retry_after_ms,
 )
 
