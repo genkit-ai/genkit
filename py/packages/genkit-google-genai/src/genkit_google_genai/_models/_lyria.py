@@ -23,7 +23,7 @@ audio API.
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from genkit.model import ModelInfo, Supports
 
@@ -58,7 +58,7 @@ class LyriaConfig(BaseModel):
     sample_count: int | None = Field(default=None, ge=1, alias='sampleCount')
     location: str | None = Field(default=None)
 
-    model_config = {'populate_by_name': True}
+    model_config = ConfigDict(extra='forbid', populate_by_name=True)
 
 
 LYRIA_MODEL_INFO = ModelInfo(
