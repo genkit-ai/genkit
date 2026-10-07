@@ -46,7 +46,7 @@ from typing_extensions import TypeVar
 from genkit._core._channel import Channel, CloseableQueue
 from genkit._core._compat import StrEnum
 from genkit._core._error import GenkitError, Interrupt, RuntimeErrorReason
-from genkit._core._model import ModelRequest, config_type_path, declared_config_type
+from genkit._core._model import EmbedRequest, ModelRequest, config_type_path, declared_config_type
 from genkit._core._schema import to_json_schema
 from genkit._core._telemetry._attrs import Attr, metadata_key
 from genkit._core._telemetry._instrumentation import (
@@ -54,7 +54,6 @@ from genkit._core._telemetry._instrumentation import (
     run_in_new_span,
     to_json_attr,
 )
-from genkit._core._typing import EmbedRequest
 
 # =============================================================================
 # Span attribute types and tracing helpers

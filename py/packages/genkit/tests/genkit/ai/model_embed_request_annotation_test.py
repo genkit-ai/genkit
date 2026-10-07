@@ -68,10 +68,13 @@ from typing import TYPE_CHECKING
 from genkit._core._typing import Embedding, EmbedResponse
 
 if TYPE_CHECKING:
-    from genkit._core._typing import EmbedRequest
+    from genkit.embedder import EmbedRequest
+
+received: list[object] = []
 
 
 async def embed(request: EmbedRequest) -> EmbedResponse:
+    received.extend(request.input)
     return EmbedResponse(embeddings=[Embedding(embedding=[1.0, 2.0])])
 """
 
@@ -144,10 +147,12 @@ def test_define_model_with_type_checking_request_annotation_registers() -> None:
 
 @pytest.mark.asyncio
 async def test_embed_plugin_embedder_with_type_checking_request_annotation_returns_embeddings() -> None:
-    fn = _load('garden_embedder', _TYPE_CHECKING_EMBEDDER).embed
-    ai = Genkit(plugins=[_EmbedPlugin(fn)])
+    module = _load('garden_embedder', _TYPE_CHECKING_EMBEDDER)
+    ai = Genkit(plugins=[_EmbedPlugin(module.embed)])
     embeddings = await ai.embed(embedder='garden-embed/vectors', content=Document.from_text('hello'))
     assert embeddings[0].embedding == [1.0, 2.0]
+    # genkit.embedder.EmbedRequest declares list[Document], so that's what the handler gets.
+    assert [type(d) for d in module.received] == [Document]
 
 
 def test_define_flow_with_type_checking_request_annotation_still_raises() -> None:
