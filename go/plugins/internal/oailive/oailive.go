@@ -59,24 +59,28 @@ func Run(t *testing.T, g *genkit.Genkit, s Suite) {
 	skip := maps.Clone(baseGaps)
 	maps.Copy(skip, s.Skip)
 	s.Skip = skip
-	livetest.Run(t, g, s.Suite)
-	ctx := t.Context()
-	t.Run("compat_oai", func(t *testing.T) {
-		t.Run("extra config passthrough", func(t *testing.T) {
-			if s.ExtraConfig == nil {
-				t.Skip("Suite.ExtraConfig is not set")
-			}
-			resp, err := genkit.Generate(ctx, g,
-				ai.WithModel(s.Model),
-				ai.WithConfig(s.ExtraConfig),
-				ai.WithPrompt("What is the capital of France? Reply with just the city name."),
-			)
-			if err != nil {
-				t.Fatalf("Generate() error = %v", err)
-			}
-			if !strings.Contains(strings.ToLower(resp.Text()), "paris") {
-				t.Errorf("Text() = %q, want it to contain %q", resp.Text(), "Paris")
-			}
-		})
-	})
+	livetest.Run(t, g, s.Suite, livetest.Group{Name: "compat_oai", Cases: []livetest.Case{
+		{
+			Name: "extra config passthrough",
+			Needs: func() string {
+				if s.ExtraConfig == nil {
+					return "Suite.ExtraConfig is not set"
+				}
+				return ""
+			},
+			Run: func(t *testing.T) {
+				resp, err := genkit.Generate(t.Context(), g,
+					ai.WithModel(s.Model),
+					ai.WithConfig(s.ExtraConfig),
+					ai.WithPrompt("What is the capital of France? Reply with just the city name."),
+				)
+				if err != nil {
+					t.Fatalf("Generate() error = %v", err)
+				}
+				if !strings.Contains(strings.ToLower(resp.Text()), "paris") {
+					t.Errorf("Text() = %q, want it to contain %q", resp.Text(), "Paris")
+				}
+			},
+		},
+	}})
 }

@@ -19,9 +19,10 @@
 // agent journeys every model plugin must pass, plus [RunEmbedder] for plugins
 // that serve embedders. A plugin family (the OpenAI-compatible plugins, the
 // Anthropic plugins, the Google GenAI backends) wraps [Suite] in a suite of its
-// own whose Run calls [Run] and then adds the family's checks. A plugin's live
-// test calls its family's runner, or [Run] directly, and keeps only the checks
-// that are its alone as plain subtests.
+// own whose Run adds the family's gaps to [Suite.Skip] and its checks as a
+// [Group], and calls [Run]. A plugin's live test calls its family's runner, or
+// [Run] directly, and keeps only the checks that are its alone as plain
+// subtests.
 //
 // # Running
 //
@@ -43,9 +44,10 @@
 //
 // A case that needs a capability runs when the model's registered
 // [ai.ModelSupports] claims it. A claim is a promise, so a claimed capability
-// whose case fails is a defect in the plugin or in its catalog. A known
-// provider gap is recorded in [Suite.Skip] with its reason; a key there that
-// names no case fails the run, so a typo cannot hide a case.
+// whose case fails is a defect in the plugin or in its catalog. A known gap,
+// in the plugin or in the provider, is recorded in [Suite.Skip] with its
+// reason; a key there that names no case fails the run, so a typo cannot hide
+// a case.
 package livetest
 
 import (
@@ -165,9 +167,27 @@ type Suite struct {
 	// rejects, to check that the refusal classifies as UNAUTHENTICATED. Nil
 	// skips the case, for plugins that authenticate ambiently.
 	BadKeyPlugin api.Plugin
-	// Skip maps a case name, as in "generate/tool choice none", to the reason
-	// the provider cannot pass it.
+	// Skip maps a case name, as in "generate/tool choice none" or
+	// "compat_oai/extra config passthrough", to the reason the plugin or the
+	// provider cannot pass it.
 	Skip map[string]string
+}
+
+// Group is a set of checks a family or plugin tier adds to the checklist. Its
+// cases run after the shared ones, as subtests of a subtest named Name, and
+// [Suite.Skip] names them as "Name/case".
+type Group struct {
+	Name  string
+	Cases []Case
+}
+
+// Case is one check in a [Group].
+type Case struct {
+	Name string
+	// Needs returns why the case cannot run against the suite, or "" when
+	// it can. Nil runs the case always.
+	Needs func() string
+	Run   func(t *testing.T)
 }
 
 // liveCase is one entry of the checklist.
@@ -194,12 +214,12 @@ type runner struct {
 	agents int
 }
 
-// Run walks the plugin registered on g through the shared checklist. Build g
-// with [Init]. It defines the tools gablorken, transferFunds, lookupOrder,
-// runDiagnostics and fetchSwatch and agents named livetestAgent1 onward on g,
-// so call it once per Genkit instance and keep those names free in the
-// plugin's own subtests.
-func Run(t *testing.T, g *genkit.Genkit, s Suite) {
+// Run walks the plugin registered on g through the shared checklist and then
+// through groups. Build g with [Init]. It defines the tools gablorken,
+// transferFunds, lookupOrder, runDiagnostics and fetchSwatch and agents named
+// livetestAgent1 onward on g, so call it once per Genkit instance and keep
+// those names free in the plugin's own subtests.
+func Run(t *testing.T, g *genkit.Genkit, s Suite, groups ...Group) {
 	t.Helper()
 	if s.Model == nil {
 		t.Fatal("livetest: Suite.Model is required")
@@ -227,15 +247,27 @@ func Run(t *testing.T, g *genkit.Genkit, s Suite) {
 		r.reasoningCaps = supportsOf(t, g, s.ReasoningModel)
 	}
 
-	groups := []struct {
+	type group struct {
 		name  string
 		cases []liveCase
-	}{
+	}
+	all := []group{
 		{"generate", generateCases()},
 		{"agent", agentCases()},
 	}
-	known := map[string]bool{}
 	for _, grp := range groups {
+		cases := make([]liveCase, len(grp.Cases))
+		for i, c := range grp.Cases {
+			needs := always
+			if c.Needs != nil {
+				needs = func(*runner) string { return c.Needs() }
+			}
+			cases[i] = liveCase{c.Name, needs, func(t *testing.T, _ *runner) { c.Run(t) }}
+		}
+		all = append(all, group{grp.Name, cases})
+	}
+	known := map[string]bool{}
+	for _, grp := range all {
 		for _, c := range grp.cases {
 			known[grp.name+"/"+c.name] = true
 		}
@@ -251,12 +283,12 @@ func Run(t *testing.T, g *genkit.Genkit, s Suite) {
 		t.Fatalf("livetest: Suite.Skip names no case: %q", unknown)
 	}
 
-	for _, grp := range groups {
+	for _, grp := range all {
 		t.Run(grp.name, func(t *testing.T) {
 			for _, c := range grp.cases {
 				t.Run(c.name, func(t *testing.T) {
 					if reason, ok := s.Skip[grp.name+"/"+c.name]; ok {
-						t.Skip("provider gap: " + reason)
+						t.Skip("known gap: " + reason)
 					}
 					if reason := c.needs(r); reason != "" {
 						t.Skip(reason)
