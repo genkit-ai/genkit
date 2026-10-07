@@ -334,11 +334,3 @@ class OpenAIConfig(ModelConfig):
     # https://platform.openai.com/docs/api-reference/chat/create#chat-create-web_search_options
     # https://platform.openai.com/docs/guides/tools-web-search
     web_search_options: dict[str, Any] | None = None
-
-
-class SupportedOutputFormat(StrEnum):
-    """Model Output Formats."""
-
-    JSON_MODE = 'json_mode'
-    STRUCTURED_OUTPUTS = 'structured_outputs'
-    TEXT = 'text'

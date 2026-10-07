@@ -62,9 +62,9 @@ from genkit._ai._model import (
     resolve_for_generate,
 )
 from genkit._ai._prompt import (
-    ExecutablePrompt,
     GenerateCall,
     ModelStreamResponse,
+    Prompt,
     define_helper,
     define_partial,
     define_schema,
@@ -558,7 +558,7 @@ class Genkit:
         """Register a custom output format."""
         self.registry.register_value('format', format.name, format)
 
-    # Overload 1: Both input_schema and output_schema typed -> ExecutablePrompt[InputT, OutputT]
+    # Overload 1: Both input_schema and output_schema typed -> Prompt[InputT, OutputT]
     @overload
     def define_prompt(
         self,
@@ -584,7 +584,7 @@ class Genkit:
         docs: list[Document] | None = None,
         input_schema: type[InputT],
         output_schema: type[OutputT],
-    ) -> ExecutablePrompt[InputT, OutputT]: ...
+    ) -> Prompt[InputT, OutputT]: ...
 
     @overload
     def define_prompt(
@@ -611,9 +611,9 @@ class Genkit:
         docs: list[Document] | None = None,
         input_schema: type[InputT],
         output_schema: type[OutputT],
-    ) -> ExecutablePrompt[InputT, OutputT]: ...
+    ) -> Prompt[InputT, OutputT]: ...
 
-    # Overload 2: Only input_schema typed -> ExecutablePrompt[InputT, Any]
+    # Overload 2: Only input_schema typed -> Prompt[InputT, Any]
     @overload
     def define_prompt(
         self,
@@ -639,7 +639,7 @@ class Genkit:
         docs: list[Document] | None = None,
         input_schema: type[InputT],
         output_schema: dict[str, object] | str | None = None,
-    ) -> ExecutablePrompt[InputT, Any]: ...
+    ) -> Prompt[InputT, Any]: ...
 
     @overload
     def define_prompt(
@@ -666,9 +666,9 @@ class Genkit:
         docs: list[Document] | None = None,
         input_schema: type[InputT],
         output_schema: dict[str, object] | str | None = None,
-    ) -> ExecutablePrompt[InputT, Any]: ...
+    ) -> Prompt[InputT, Any]: ...
 
-    # Overload 3: Only output_schema typed -> ExecutablePrompt[Any, OutputT]
+    # Overload 3: Only output_schema typed -> Prompt[Any, OutputT]
     @overload
     def define_prompt(
         self,
@@ -694,7 +694,7 @@ class Genkit:
         docs: list[Document] | None = None,
         input_schema: dict[str, object] | str | None = None,
         output_schema: type[OutputT],
-    ) -> ExecutablePrompt[Any, OutputT]: ...
+    ) -> Prompt[Any, OutputT]: ...
 
     @overload
     def define_prompt(
@@ -721,9 +721,9 @@ class Genkit:
         docs: list[Document] | None = None,
         input_schema: dict[str, object] | str | None = None,
         output_schema: type[OutputT],
-    ) -> ExecutablePrompt[Any, OutputT]: ...
+    ) -> Prompt[Any, OutputT]: ...
 
-    # Overload 4: Neither typed -> ExecutablePrompt[Any, Any]
+    # Overload 4: Neither typed -> Prompt[Any, Any]
     @overload
     def define_prompt(
         self,
@@ -749,7 +749,7 @@ class Genkit:
         docs: list[Document] | None = None,
         input_schema: type | dict[str, object] | str | None = None,
         output_schema: type | dict[str, object] | str | None = None,
-    ) -> ExecutablePrompt[Any, Any]: ...
+    ) -> Prompt[Any, Any]: ...
 
     @overload
     def define_prompt(
@@ -776,7 +776,7 @@ class Genkit:
         docs: list[Document] | None = None,
         input_schema: type | dict[str, object] | str | None = None,
         output_schema: type | dict[str, object] | str | None = None,
-    ) -> ExecutablePrompt[Any, Any]: ...
+    ) -> Prompt[Any, Any]: ...
 
     def define_prompt(
         self,
@@ -802,7 +802,7 @@ class Genkit:
         docs: list[Document] | None = None,
         input_schema: type | dict[str, object] | str | None = None,
         output_schema: type | dict[str, object] | str | None = None,
-    ) -> ExecutablePrompt[Any, Any]:
+    ) -> Prompt[Any, Any]:
         """Register a prompt template.
 
         Example:
@@ -810,7 +810,7 @@ class Genkit:
             res = await joke(input={'topic': 'cats'})
             print(res.text)
         """
-        executable_prompt = ExecutablePrompt(
+        executable_prompt = Prompt(
             self.registry,
             variant=variant,
             model=model,
@@ -838,7 +838,7 @@ class Genkit:
             register_prompt_actions(self.registry, executable_prompt, name, variant)
         return executable_prompt
 
-    # Overload 1: Neither typed -> ExecutablePrompt[Any, Any]
+    # Overload 1: Neither typed -> Prompt[Any, Any]
     @overload
     def prompt(
         self,
@@ -847,7 +847,7 @@ class Genkit:
         variant: str | None = None,
         input_schema: None = None,
         output_schema: None = None,
-    ) -> ExecutablePrompt[Any, Any]: ...
+    ) -> Prompt[Any, Any]: ...
 
     # Overload 2: Only input_schema typed
     @overload
@@ -858,7 +858,7 @@ class Genkit:
         variant: str | None = None,
         input_schema: type[InputT],
         output_schema: None = None,
-    ) -> ExecutablePrompt[InputT, Any]: ...
+    ) -> Prompt[InputT, Any]: ...
 
     # Overload 3: Only output_schema typed
     @overload
@@ -869,7 +869,7 @@ class Genkit:
         variant: str | None = None,
         input_schema: None = None,
         output_schema: type[OutputT],
-    ) -> ExecutablePrompt[Any, OutputT]: ...
+    ) -> Prompt[Any, OutputT]: ...
 
     # Overload 4: Both input_schema and output_schema typed
     @overload
@@ -880,7 +880,7 @@ class Genkit:
         variant: str | None = None,
         input_schema: type[InputT],
         output_schema: type[OutputT],
-    ) -> ExecutablePrompt[InputT, OutputT]: ...
+    ) -> Prompt[InputT, OutputT]: ...
 
     def prompt(
         self,
@@ -889,9 +889,9 @@ class Genkit:
         variant: str | None = None,
         input_schema: type[InputT] | None = None,
         output_schema: type[OutputT] | None = None,
-    ) -> ExecutablePrompt[InputT, OutputT] | ExecutablePrompt[Any, Any]:
+    ) -> Prompt[InputT, OutputT] | Prompt[Any, Any]:
         """Look up a prompt by name and optional variant."""
-        return ExecutablePrompt(
+        return Prompt(
             registry=self.registry,
             name=name,
             variant=variant,
@@ -1513,7 +1513,7 @@ class Genkit:
             registry,
             options,
             on_chunk=on_chunk,
-            context=context if context is not None else get_current_context(),
+            context=context,
         )
 
     async def embed(
