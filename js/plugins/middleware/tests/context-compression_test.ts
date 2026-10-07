@@ -3984,7 +3984,7 @@ describe('contextCompression middleware', () => {
     });
     assert.strictEqual(getCc(truncRes)?.toolResponsesTruncated, 1);
     assert.strictEqual(getCc(truncRes)?.toolResponsesSafetyCapped, 0);
-    const expectedTrunc = `ok\n\n${'X'.repeat(98)}\n\n[Truncated 199902 characters]`;
+    const expectedTrunc = `ok\n\n${'X'.repeat(96)}\n\n[Truncated 199904 characters]`;
     assert.strictEqual(sentToolResp().output, expectedTrunc);
     assert.strictEqual('content' in sentToolResp(), false);
     assert.strictEqual(
@@ -4011,7 +4011,7 @@ describe('contextCompression middleware', () => {
     assert.strictEqual(getCc(capRes)?.toolResponsesSafetyCapped, 1);
     assert.strictEqual(
       sentToolResp().output,
-      `ok\n\n${'A'.repeat(100)}\n\n${'B'.repeat(398)}\n\n---\n\n[TRUNCATED: Response was 1602 chars but only first 500 are shown.]`
+      `ok\n\n${'A'.repeat(100)}\n\n${'B'.repeat(394)}\n\n---\n\n[TRUNCATED: Response was 1602 chars but only first 500 are shown.]`
     );
     assert.strictEqual('content' in sentToolResp(), false);
 
@@ -4043,11 +4043,37 @@ describe('contextCompression middleware', () => {
       toolResponses: { maxChars: 100, preserveRecent: 0 },
     });
     assert.strictEqual(getCc(mediaTruncRes)?.toolResponsesTruncated, 1);
+    const expectedOmittedMediaChars =
+      dataUrl.length - '[media: image/png]'.length;
     assert.strictEqual(
       sentToolResp().output,
-      'ok\n\n[media: image/png]\n\n[Truncated 1000 characters]'
+      `ok\n\n[media: image/png]\n\n[Truncated ${expectedOmittedMediaChars} characters]`
     );
     assert.strictEqual('content' in sentToolResp(), false);
+
+    // Non-data media URLs emit a complete compact descriptor (never sliced mid-URL) or omit it if budget is too tight
+    const remoteUrl = `https://example.com/assets/${'img'.repeat(100)}.jpg`;
+    const remoteMediaPart: Part = {
+      media: { url: remoteUrl, contentType: 'image/jpeg' },
+    };
+    await runWithTool('ok', [remoteMediaPart], {
+      maxInputTokens: 20,
+      toolResponses: { maxChars: 50, preserveRecent: 0 },
+    });
+    assert.strictEqual(
+      sentToolResp().output,
+      `ok\n\n[media: image/jpeg]\n\n[Truncated ${remoteUrl.length - '[media: image/jpeg]'.length} characters]`
+    );
+    assert.strictEqual('content' in sentToolResp(), false);
+
+    await runWithTool('ok', [remoteMediaPart], {
+      maxInputTokens: 20,
+      toolResponses: { maxChars: 10, preserveRecent: 0 },
+    });
+    assert.strictEqual(
+      sentToolResp().output,
+      `ok\n\n[Truncated ${remoteUrl.length} characters]`
+    );
 
     // 5. Preserves structured non-text part in content when it fits exactly within remaining budget (2 + 18 === 20)
     await runWithTool(

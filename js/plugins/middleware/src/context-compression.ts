@@ -677,14 +677,17 @@ function sliceCodePointSafe(str: string, limit: number): string {
   return str.slice(0, limit);
 }
 
-function formatMediaDescriptor(media: NonNullable<Part['media']>): string {
+function formatMediaDescriptor(
+  media: NonNullable<Part['media']>,
+  compact = false
+): string {
   const isDataUri = media.url.startsWith('data:');
   const sepIdx = isDataUri ? media.url.search(/[;,]/) : -1;
   const inferredType =
     isDataUri && sepIdx > 5 ? media.url.slice(5, sepIdx).trim() : undefined;
   const contentType = media.contentType || inferredType;
-  if (isDataUri) {
-    return `[media: ${contentType || 'data'}]`;
+  if (isDataUri || compact) {
+    return `[media: ${contentType || (isDataUri ? 'data' : 'media')}]`;
   }
   return contentType
     ? `[media: ${contentType} (${media.url})]`
@@ -705,22 +708,42 @@ function stringifyToolContentPart(part: Part): string {
   return stringifyOutput(part);
 }
 
-function getToolContentPartCharLength(part: Part): number {
-  if (typeof part.text === 'string') return part.text.length;
-  if (typeof part.reasoning === 'string') return part.reasoning.length;
-  if ('data' in part && part.data !== undefined) {
-    return stringifyOutput(part.data).length;
+function estimatePartChars(p: Part): number {
+  if (typeof p.text === 'string') return p.text.length;
+  if (typeof p.reasoning === 'string') return p.reasoning.length;
+  if ('data' in p && p.data !== undefined) {
+    return stringifyOutput(p.data).length;
   }
-  if ('custom' in part && part.custom !== undefined) {
-    return stringifyOutput(part.custom).length;
+  if ('custom' in p && p.custom !== undefined) {
+    return stringifyOutput(p.custom).length;
   }
-  if (part.resource) return stringifyOutput(part.resource).length;
-  if (part.media?.url) {
-    return part.media.url.startsWith('data:')
+  if (p.resource) return stringifyOutput(p.resource).length;
+  if (p.media?.url) {
+    // Use a fixed character approximation for inline base64 data URIs
+    // to reflect fixed image token billing rather than raw string length.
+    return p.media.url.startsWith('data:')
       ? DATA_URI_APPROX_CHARS
-      : part.media.url.length;
+      : p.media.url.length;
   }
-  return stringifyOutput(part).length;
+  if (p.toolRequest) return stringifyOutput(p.toolRequest).length;
+  if (p.toolResponse) {
+    if (!p.toolResponse.content?.length) {
+      return stringifyOutput(p.toolResponse).length;
+    }
+    const { content, ...restToolResponse } = p.toolResponse;
+    return (
+      stringifyOutput(restToolResponse).length +
+      content.reduce((cSum, cPart) => cSum + estimatePartChars(cPart), 0)
+    );
+  }
+  return 0;
+}
+
+function getRawToolContentPartCharLength(part: Part): number {
+  if (part.media?.url) {
+    return part.media.url.length;
+  }
+  return estimatePartChars(part);
 }
 
 function getToolResponseCharLength(
@@ -736,7 +759,7 @@ function getToolResponseCharLength(
   return (
     outputLen +
     toolResponse.content.reduce(
-      (sum, cPart) => sum + getToolContentPartCharLength(cPart),
+      (sum, cPart) => sum + estimatePartChars(cPart),
       0
     )
   );
@@ -782,11 +805,17 @@ function truncateToolResponse(
 
   const hasOutput = toolResponse.output !== undefined;
   const outputStr = hasOutput ? stringifyOutput(toolResponse.output) : '';
-  const contentLengths = toolResponse.content.map(getToolContentPartCharLength);
+  const contentLengths = toolResponse.content.map(estimatePartChars);
   const contentTotalLen = contentLengths.reduce((sum, len) => sum + len, 0);
   const totalChars = outputStr.length + contentTotalLen;
 
   if (totalChars <= limit) return null;
+
+  const rawPartLengths = toolResponse.content.map(
+    getRawToolContentPartCharLength
+  );
+  const rawTotalChars =
+    outputStr.length + rawPartLengths.reduce((sum, len) => sum + len, 0);
 
   const { content, ...restToolResponse } = toolResponse;
   if (hasOutput && (outputStr.length > limit || contentTotalLen === 0)) {
@@ -795,7 +824,7 @@ function truncateToolResponse(
       ...restToolResponse,
       output:
         sliced +
-        formatToolTruncationMarker(mode, totalChars, sliced.length, limit),
+        formatToolTruncationMarker(mode, rawTotalChars, sliced.length, limit),
     };
   }
 
@@ -807,45 +836,56 @@ function truncateToolResponse(
   for (let i = 0; i < content.length; i++) {
     const cPart = content[i];
     const partLen = contentLengths[i];
+    const rawPartLen = rawPartLengths[i];
+    const isTextOrReasoning =
+      typeof cPart.text === 'string' || typeof cPart.reasoning === 'string';
+    const textVal = isTextOrReasoning
+      ? typeof cPart.text === 'string'
+        ? cPart.text
+        : cPart.reasoning!
+      : undefined;
+    const sepCost = textVal && outputSegments.length > 0 ? 2 : 0;
 
-    if (partLen <= remaining) {
-      if (
-        typeof cPart.text === 'string' ||
-        typeof cPart.reasoning === 'string'
-      ) {
-        const textVal =
-          typeof cPart.text === 'string' ? cPart.text : cPart.reasoning!;
-        if (textVal) outputSegments.push(textVal);
+    if (partLen + sepCost <= remaining) {
+      if (isTextOrReasoning) {
+        if (textVal) {
+          outputSegments.push(textVal);
+          remaining -= partLen + sepCost;
+        }
       } else {
         keptContent.push(cPart);
+        remaining -= partLen;
       }
-      remaining -= partLen;
-      keptChars += partLen;
+      keptChars += rawPartLen;
       continue;
     }
 
+    const overflowSepCost = outputSegments.length > 0 ? 2 : 0;
     if (cPart.media?.url) {
-      const descriptor = formatMediaDescriptor(cPart.media);
-      if (cPart.media.url.startsWith('data:')) {
+      const descriptor = formatMediaDescriptor(cPart.media, true);
+      if (overflowSepCost + descriptor.length <= remaining) {
         outputSegments.push(descriptor);
-      } else {
-        const sliced = sliceCodePointSafe(descriptor, remaining);
-        keptChars += sliced.length;
-        if (sliced) outputSegments.push(sliced);
+        keptChars += descriptor.length;
       }
       break;
     }
 
+    const sliceBudget = Math.max(0, remaining - overflowSepCost);
     const sliced = sliceCodePointSafe(
       stringifyToolContentPart(cPart),
-      remaining
+      sliceBudget
     );
     keptChars += sliced.length;
     if (sliced) outputSegments.push(sliced);
     break;
   }
 
-  const marker = formatToolTruncationMarker(mode, totalChars, keptChars, limit);
+  const marker = formatToolTruncationMarker(
+    mode,
+    rawTotalChars,
+    keptChars,
+    limit
+  );
   return {
     ...restToolResponse,
     output: outputSegments.join('\n\n') + marker,
@@ -1131,36 +1171,6 @@ function adjustForOvershoot(
     adjustedPreserveRecent: preserveRecent,
     adjustedSummaryPreserveRecent: summaryPreserveRecent,
   };
-}
-
-function estimatePartChars(p: Part): number {
-  if (p.text) return p.text.length;
-  if (p.reasoning) return p.reasoning.length;
-  if ('data' in p && p.data !== undefined) {
-    return stringifyOutput(p.data).length;
-  }
-  if ('custom' in p && p.custom) {
-    return stringifyOutput(p.custom).length;
-  }
-  if (p.media?.url) {
-    // Use a fixed character approximation for inline base64 data URIs
-    // to reflect fixed image token billing rather than raw string length.
-    return p.media.url.startsWith('data:')
-      ? DATA_URI_APPROX_CHARS
-      : p.media.url.length;
-  }
-  if (p.toolRequest) return stringifyOutput(p.toolRequest).length;
-  if (p.toolResponse) {
-    if (!p.toolResponse.content?.length) {
-      return stringifyOutput(p.toolResponse).length;
-    }
-    const { content, ...restToolResponse } = p.toolResponse;
-    return (
-      stringifyOutput(restToolResponse).length +
-      content.reduce((cSum, cPart) => cSum + estimatePartChars(cPart), 0)
-    );
-  }
-  return 0;
 }
 
 /**
