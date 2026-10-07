@@ -11,12 +11,12 @@ naming the middleware, before anything reaches the next layer.
 """
 
 from collections.abc import Callable
-from typing import Any
+from typing import Any, TypedDict
 
 import pytest
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from genkit import Genkit, Message, ModelResponse, Part
+from genkit import Genkit, GenkitError, Message, ModelResponse, Part
 from genkit._core._action import ActionRunContext
 from genkit._core._middleware import BaseMiddleware
 from genkit._core._model import ModelRequest
@@ -274,3 +274,114 @@ async def test_model_that_takes_plain_model_request_still_gets_a_dict_middleware
 
     assert outer == [{'temperature': 0.2}]
     assert model.configs == [{'temperature': 0.1}]
+
+
+class TypedDictConfig(TypedDict, total=False):
+    """A model whose request config is a TypedDict, not a pydantic class."""
+
+    temperature: float
+
+
+@pytest.mark.asyncio
+async def test_model_typed_with_typeddict_config_runs_through_middleware() -> None:
+    """ModelRequest[TypedDict] skips the check: the model runs and gets the dict."""
+    ai = Genkit()
+    configs: list[object] = []
+
+    async def fn(request: ModelRequest[TypedDictConfig], _ctx: ActionRunContext) -> ModelResponse:
+        configs.append(request.config)
+        return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))
+
+    ai.define_model(name='td', fn=fn)
+
+    response = await ai.generate(
+        model='td', prompt='hi', config={'temperature': 0.1}, use=[_middleware('Passthrough', [])]
+    )
+
+    assert response.text == 'ok'
+    assert configs == [{'temperature': 0.1}]
+
+
+class PrefixedConfig(ModelConfig):
+    """A config whose validator isn't idempotent, plus a frozen field."""
+
+    region: str | None = Field(default=None, frozen=True)
+
+    @field_validator('version')
+    @classmethod
+    def _prefix(cls, value: str | None) -> str | None:
+        return None if value is None else f'models/{value}'
+
+
+@pytest.mark.asyncio
+async def test_fields_middleware_did_not_touch_are_not_revalidated() -> None:
+    """Three pass-through layers: version stays 'models/v1', frozen region passes, the stop list is the same object."""
+    ai = Genkit()
+    configs: list[Any] = []
+
+    async def fn(request: ModelRequest[PrefixedConfig], _ctx: ActionRunContext) -> ModelResponse:
+        configs.append(request.config)
+        return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))
+
+    ai.define_model(name='prefixed', fn=fn, config_schema=PrefixedConfig)
+    outer: list[Any] = []
+
+    response = await ai.generate(
+        model='prefixed',
+        prompt='hi',
+        config={'version': 'v1', 'region': 'us', 'stop_sequences': ['END']},
+        use=[_middleware('A', outer), _middleware('B', []), _middleware('C', [])],
+    )
+
+    assert response.text == 'ok'
+    assert configs[0].version == 'models/v1'
+    assert configs[0].region == 'us'
+    assert configs[0].stop_sequences is outer[0].stop_sequences
+
+
+@pytest.mark.asyncio
+async def test_middleware_changed_field_is_validated_once() -> None:
+    """A middleware setting version='v2' reaches the model as 'models/v2', through later layers too."""
+    ai = Genkit()
+    configs: list[Any] = []
+
+    async def fn(request: ModelRequest[PrefixedConfig], _ctx: ActionRunContext) -> ModelResponse:
+        configs.append(request.config)
+        return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))
+
+    ai.define_model(name='prefixed', fn=fn, config_schema=PrefixedConfig)
+
+    await ai.generate(
+        model='prefixed',
+        prompt='hi',
+        use=[_middleware('Rewrite', [], _set_field('version', 'v2')), _middleware('B', []), _middleware('C', [])],
+    )
+
+    assert configs[0].version == 'models/v2'
+
+
+class _RetryOnce(BaseMiddleware):
+    """Calls next again when it raises, like a broad user retry."""
+
+    async def wrap_model(self, params: Any, ctx: Any, next_fn: Any) -> Any:  # noqa: ANN401
+        try:
+            return await next_fn(params, ctx)
+        except GenkitError:
+            return await next_fn(params, ctx)
+
+
+@pytest.mark.asyncio
+async def test_outer_retry_does_not_take_the_blame_for_inner_swap() -> None:
+    """When an outer layer retries after Inner put a dict in, the error still names Inner."""
+    ai, model = _ai()
+
+    response = await ai.generate(
+        model='strict',
+        prompt='hi',
+        use=[_RetryOnce(), _middleware('Inner', [], _replace_with({'temperature': 0.1}))],
+    )
+
+    assert response.finish_message == (
+        "strict: middleware 'Inner' replaced request.config with dict; change fields on request.config instead"
+    )
+    assert model.configs == []

@@ -23,7 +23,7 @@ import secrets
 import time
 from collections.abc import Awaitable, Callable, Generator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, TypeVar, cast
+from typing import Any, TypeGuard, TypeVar, cast
 
 from pydantic import BaseModel, ValidationError
 
@@ -1549,6 +1549,14 @@ async def generate_turn(
     )
 
 
+def is_model_class(value: object) -> TypeGuard[type[BaseModel]]:
+    """True for a pydantic model class; False for TypedDicts, dict, unions, and parameterized generics."""
+    try:
+        return isinstance(value, type) and issubclass(value, BaseModel)
+    except TypeError:  # dict[str, Any] passes isinstance(_, type) on 3.10
+        return False
+
+
 async def call_model(
     *,
     options: GenerateActionOptions,
@@ -1610,16 +1618,30 @@ async def call_model(
     # to a bare request (the config didn't fit), the model action reports it.
     config_class = declared_config_type(turn_model.input_class) if turn_model.input_class is not None else None
     on_handoff: Callable[[ModelHookParams, MiddlewareDef], None] | None = None
-    if isinstance(config_class, type) and isinstance(request.config, config_class):
-        held_class: type = config_class
+    if is_model_class(config_class) and isinstance(request.config, config_class):
+        held_class: type[BaseModel] = config_class
+        checked: dict[str, object] = dict(vars(request.config))
+        # The config a check rejected stays on the shared request, so a layer
+        # that retries next would trip on it again. Re-raise the first error so
+        # it keeps naming the layer that put it there.
+        rejected: list[tuple[object, GenkitError]] = []
 
         def check_handoff(params: ModelHookParams, mw: MiddlewareDef) -> None:
-            check_middleware_config(
-                config=params.request.config,
-                schema=held_class,
-                model=turn_model.name,
-                middleware=middleware_name(mw),
-            )
+            config = params.request.config
+            for bad, err in rejected:
+                if bad is config:
+                    raise err
+            try:
+                check_middleware_config(
+                    config=config,
+                    schema=held_class,
+                    model=turn_model.name,
+                    middleware=middleware_name(mw),
+                    checked=checked,
+                )
+            except GenkitError as err:
+                rejected.append((config, err))
+                raise
 
         on_handoff = check_handoff
 

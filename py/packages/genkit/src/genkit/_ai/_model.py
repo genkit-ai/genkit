@@ -558,19 +558,27 @@ def reject_config_api_key(config: Mapping[str, Any]) -> None:
     )
 
 
-def check_middleware_config(*, config: object, schema: type | None, model: str, middleware: str) -> None:
+def check_middleware_config(
+    *,
+    config: object,
+    schema: type[BaseModel],
+    model: str,
+    middleware: str,
+    checked: dict[str, object],
+) -> None:
     """Middleware changes fields on the config generate built; it doesn't swap the object.
 
     generate turns the call's config into the model's class once, so every
     middleware and the model see the same shape. A dict, ``None``, or another
     class put back into ``request.config`` would reach inner layers as that
     shape instead, so it raises here, naming the middleware that did it.
-    Set fields are re-checked and stored parsed, since plain assignment
+
+    ``checked`` holds the field values as of the last check. Only values that
+    are new since then are validated and stored parsed, since plain assignment
     (``config.temperature = 'hot'``) and ``model_copy(update=...)`` don't
-    validate.
+    validate. Untouched fields keep their objects and their validators don't
+    run again. ``checked`` is updated in place.
     """
-    if not (isinstance(schema, type) and issubclass(schema, BaseModel)):
-        return
     prefix = f"{model}: middleware '{middleware}'"
     if not isinstance(config, schema):
         got = (
@@ -597,22 +605,28 @@ def check_middleware_config(*, config: object, schema: type | None, model: str, 
                 message=f"{prefix} set unknown config {noun} {keys}; put provider-only settings in config['extra']",
                 reason=RuntimeErrorReason.INVALID_INPUT,
             )
-    # Validate each set value on a copy, then store the parsed value back so a
+    # Validate each new value on a copy, then store the parsed value back so a
     # nested dict (``config.output_config = {...}``) reaches the model as its
     # class too. Writing ``__dict__`` directly keeps ``model_fields_set`` as the
     # middleware left it, so ``exclude_unset`` dumps don't change.
-    scratch = config.model_copy()
-    for name in cls.model_fields:
-        if name not in values:
-            continue
-        try:
-            cls.__pydantic_validator__.validate_assignment(scratch, name, values[name])
-        except ValidationError as e:
-            msg = e.errors()[0]['msg'] if e.errors() else str(e)
-            raise GenkitError(
-                status='INVALID_ARGUMENT',
-                message=f'{prefix} set config {name!r}: {msg}',
-                reason=RuntimeErrorReason.INVALID_INPUT,
-                cause=e,
-            ) from e
-        values[name] = scratch.__dict__[name]
+    changed = [
+        name
+        for name in cls.model_fields
+        if name in values and (name not in checked or values[name] is not checked[name])
+    ]
+    if changed:
+        scratch = config.model_copy()
+        for name in changed:
+            try:
+                cls.__pydantic_validator__.validate_assignment(scratch, name, values[name])
+            except ValidationError as e:
+                msg = e.errors()[0]['msg'] if e.errors() else str(e)
+                raise GenkitError(
+                    status='INVALID_ARGUMENT',
+                    message=f'{prefix} set config {name!r}: {msg}',
+                    reason=RuntimeErrorReason.INVALID_INPUT,
+                    cause=e,
+                ) from e
+            values[name] = scratch.__dict__[name]
+    checked.clear()
+    checked.update(values)
