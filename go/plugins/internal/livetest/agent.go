@@ -261,7 +261,7 @@ func agentCases() []liveCase {
 		}},
 		{"reasoning across turns", needReasoning, func(t *testing.T, r *runner) {
 			var opts []ai.PromptOption
-			if supportsOf(t, r.g, r.s.ReasoningModel).Tools {
+			if r.reasoningCaps.Tools {
 				opts = append(opts, ai.WithTools(r.tools.gablorken))
 			}
 			s := r.newSession(t, r.s.ReasoningModel, opts...)
@@ -286,7 +286,7 @@ func agentCases() []liveCase {
 			}
 		}},
 		{"media across turns", needVision, func(t *testing.T, r *runner) {
-			caps := supportsOf(t, r.g, r.vision)
+			caps := r.visionCaps
 			var opts []ai.PromptOption
 			if caps.Tools {
 				tools := []ai.ToolRef{r.tools.gablorken}
@@ -337,6 +337,15 @@ func agentCases() []liveCase {
 			if err != nil {
 				t.Fatalf("RunDetached() error = %v", err)
 			}
+			// A case that fails before its own abort must not leave the turn
+			// running into the cases after it, or into the session store's
+			// removed directory.
+			defer func() {
+				ctx, cancel := context.WithTimeout(context.WithoutCancel(r.ctx), time.Minute)
+				defer cancel()
+				task.Abort(ctx)
+				task.Wait(ctx)
+			}()
 			// A model that answers without the tool settles the task, so
 			// waiting on it reports that rather than a timeout.
 			settled := make(chan *aix.SessionSnapshot[any], 1)

@@ -181,11 +181,13 @@ type liveCase struct {
 
 // runner carries what the cases share within one [Run].
 type runner struct {
-	g     *genkit.Genkit
-	s     Suite
-	ctx   context.Context
-	caps  ai.ModelSupports
-	tools *fixtures
+	g   *genkit.Genkit
+	s   Suite
+	ctx context.Context
+	// caps, visionCaps and reasoningCaps are what Model, vision and
+	// ReasoningModel claim. A case gates on the claims of the model it runs.
+	caps, visionCaps, reasoningCaps ai.ModelSupports
+	tools                           *fixtures
 	// vision is the model for the image cases, nil when none applies.
 	vision ai.ModelArg
 	// agents counts the agents defined so far, to keep their names unique.
@@ -218,8 +220,11 @@ func Run(t *testing.T, g *genkit.Genkit, s Suite) {
 	case r.caps.Media:
 		r.vision = s.Model
 	}
+	if r.vision != nil {
+		r.visionCaps = supportsOf(t, g, r.vision)
+	}
 	if s.ReasoningModel != nil {
-		supportsOf(t, g, s.ReasoningModel) // fails early on an unresolvable model
+		r.reasoningCaps = supportsOf(t, g, s.ReasoningModel)
 	}
 
 	groups := []struct {
@@ -313,9 +318,31 @@ func needVision(r *runner) string {
 	return ""
 }
 
+// needVisionTools runs a case that gives the vision model tools.
+func needVisionTools(r *runner) string {
+	if reason := needVision(r); reason != "" {
+		return reason
+	}
+	if !r.visionCaps.Tools {
+		return "the vision model does not claim tool support"
+	}
+	return ""
+}
+
 func needReasoning(r *runner) string {
 	if r.s.ReasoningModel == nil {
 		return "Suite.ReasoningModel is not set"
+	}
+	return ""
+}
+
+// needReasoningTools runs a case that gives the reasoning model tools.
+func needReasoningTools(r *runner) string {
+	if reason := needReasoning(r); reason != "" {
+		return reason
+	}
+	if !r.reasoningCaps.Tools {
+		return "the reasoning model does not claim tool support"
 	}
 	return ""
 }

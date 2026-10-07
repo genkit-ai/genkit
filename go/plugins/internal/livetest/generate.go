@@ -196,9 +196,15 @@ func generateCases() []liveCase {
 				t.Errorf("FinishReason = %q, want %q on the partial response", resp.FinishReason, ai.FinishReasonAborted)
 			}
 		}},
-		{"unknown model", always, func(t *testing.T, r *runner) {
-			provider, _, _ := strings.Cut(r.s.Model.Name(), "/")
-			wantRefused(t, r, r.g, ai.NewModelRef(provider+"/livetest-no-such-model", nil), status.NotFound)
+		// A plugin that resolves only the models it registered fails an
+		// unknown one locally, so the provider's answer is never checked.
+		{"unknown model", func(r *runner) string {
+			if genkit.LookupModel(r.g, unknownModel(r)) == nil {
+				return "the plugin resolves no unregistered model names, so none reaches the provider"
+			}
+			return ""
+		}, func(t *testing.T, r *runner) {
+			wantRefused(t, r, r.g, ai.NewModelRef(unknownModel(r), nil), status.NotFound)
 		}},
 		{"bad api key", func(r *runner) string {
 			if r.s.BadKeyPlugin == nil {
@@ -334,7 +340,7 @@ func generateCases() []liveCase {
 			if !r.s.ToolResponseMedia {
 				return "Suite.ToolResponseMedia is not set"
 			}
-			return needAll(needTools, needVision)(r)
+			return needVisionTools(r)
 		}, func(t *testing.T, r *runner) {
 			resp := r.gen(t, r.vision,
 				ai.WithTools(r.tools.swatch),
@@ -493,7 +499,7 @@ func generateCases() []liveCase {
 		// produced (Gemini thought signatures, Anthropic thinking
 		// signatures, DeepSeek reasoning content), and reject a later turn
 		// whose history drops or garbles them.
-		{"reasoning with tools across turns", needAll(needReasoning, needTools), func(t *testing.T, r *runner) {
+		{"reasoning with tools across turns", needReasoningTools, func(t *testing.T, r *runner) {
 			var streamOpts []ai.GenerateOption
 			if r.s.StreamOnlyReasoning {
 				streamOpts = append(streamOpts, ai.WithStreaming(func(context.Context, *ai.ModelResponseChunk) error { return nil }))
@@ -517,6 +523,13 @@ func generateCases() []liveCase {
 			turn(second.History(), "What were the two gablorken results? Reply with both numbers.", "10", "101")
 		}},
 	}
+}
+
+// unknownModel is a model name under the provider of Model that no provider
+// serves.
+func unknownModel(r *runner) string {
+	provider, _, _ := strings.Cut(r.s.Model.Name(), "/")
+	return provider + "/livetest-no-such-model"
 }
 
 // wantRefused checks that the provider refuses a request to model on g with
