@@ -143,8 +143,8 @@ class GenerateMiddlewareContext:
 
     ``ai`` is a lightweight Genkit-like view scoped to this one invocation: its
     ``registry`` is the call's child registry (so middleware sees this call's own
-    tool/middleware registrations, not the global ones), and ``current_session()``
-    returns the active agent session when running inside one. Also carries
+    tool/middleware registrations, not the global ones). Inside an agent, read
+    the session with ``genkit.exp.current_session()``. Also carries
     caller-provided metadata (``custom_context``), streaming hooks, and the abort
     signal for the whole generate invocation.
     """
