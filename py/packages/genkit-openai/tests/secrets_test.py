@@ -14,16 +14,20 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Rules every model plugin applies to a per-request key on context.secrets."""
+"""Unit tests for genkit_openai._secrets."""
 
 from typing import Any
 
 import pytest
+from genkit_openai._secrets import (
+    SECRETS_HINT,
+    context_api_key,
+    reject_config_api_key,
+)
 from pydantic import BaseModel, ConfigDict
 
 from genkit import GenkitError
 from genkit.model import ModelConfig
-from genkit.plugin_api import SECRETS_HINT, context_api_key, reject_config_api_key
 
 
 @pytest.mark.parametrize(

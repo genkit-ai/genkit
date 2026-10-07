@@ -755,37 +755,24 @@ class TestVeoContextClient:
         assert opts.api_version == 'v1'
 
     @pytest.mark.asyncio
-    async def test_secrets_without_api_key_and_top_level_key_use_plugin_client(self) -> None:
-        """Other app secrets, a null key, or an app's top-level `api_key` keep the plugin client."""
-        plugin = MagicMock()
-        plugin.aio.models.generate_videos = AsyncMock(return_value=_pending_sdk_op())
-        veo = VeoModel('veo-3.0-generate-001', plugin)
-
-        contexts = (
-            {'secrets': {}},
-            {'secrets': {'db_password': 'x'}},
-            {'secrets': {'api_key': None}},
-            {'api_key': 'app-caller-key'},
-            {'apiKey': 'app-caller-key'},
-        )
-        with patch('genkit_google_genai._models._veo.genai.Client') as ctor:
-            for context in contexts:
-                await veo.start(_text_request(), ActionRunContext(context=context))
-
-        ctor.assert_not_called()
-        assert plugin.aio.models.generate_videos.await_count == len(contexts)
-
-    @pytest.mark.asyncio
-    async def test_blank_secrets_api_key_is_invalid_argument(self) -> None:
+    async def test_empty_secrets_pocket_is_invalid_argument(self) -> None:
         veo = VeoModel('veo-3.0-generate-001', MagicMock())
-        for blank in ('', '   '):
+        for pocket in ({}, {'api_key': None}, {'api_key': ''}):
             with pytest.raises(GenkitError) as raised:
                 await veo.start(
                     _text_request(),
-                    ActionRunContext(context={'secrets': {'api_key': blank}}),
+                    ActionRunContext(context={'secrets': pocket}),
                 )
             assert raised.value.status == 'INVALID_ARGUMENT'
-            assert 'is blank' in str(raised.value)
+
+    @pytest.mark.asyncio
+    async def test_top_level_api_key_is_invalid_argument(self) -> None:
+        veo = VeoModel('veo-3.0-generate-001', MagicMock())
+        for bag in ({'api_key': 'sk-wrong'}, {'apiKey': 'sk-wrong'}):
+            with pytest.raises(GenkitError) as raised:
+                await veo.start(_text_request(), ActionRunContext(context=bag))
+            assert raised.value.status == 'INVALID_ARGUMENT'
+            assert 'secrets' in str(raised.value)
 
     @pytest.mark.asyncio
     async def test_client_ctor_failure_is_invalid_argument(self) -> None:
@@ -941,4 +928,3 @@ class TestVeoErrorClassification:
             await veo.start(_text_request(), ActionRunContext(context={'secrets': {'api_key': 'sk-tenant'}}))
 
         assert raised.value is boom
-
