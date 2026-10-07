@@ -21,10 +21,12 @@ from __future__ import annotations
 import inspect
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
-from typing import Annotated, Any, TypeAlias, cast, get_args, get_origin, get_type_hints
+from typing import TYPE_CHECKING, Annotated, Any, TypeAlias, cast, get_args, get_origin, get_type_hints
 
 from pydantic import AliasChoices, BaseModel, ValidationError
-from pydantic_core import ErrorDetails
+
+if TYPE_CHECKING:
+    from pydantic_core import ErrorDetails
 
 from genkit._core._action import (
     Action,
