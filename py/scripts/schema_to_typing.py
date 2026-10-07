@@ -36,9 +36,11 @@ EXCLUDED = frozenset({
 })
 PRIM = {'string': 'str', 'number': 'float', 'integer': 'int', 'boolean': 'bool'}
 # Schema type transformations: rename and/or omit fields before emission.
-# Keys: schema type name. Values: {'output_name': str} and/or {'suffix': str, 'omit': [str]}.
+# Keys: schema type name. Values: {'output_name': str}, {'omit': [str]}, and/or {'suffix': str}.
 # - output_name: emit and reference as this name (e.g. Message -> MessageData)
-# - suffix: emit as {name}{suffix}, omit listed fields (hand-written subclass adds them back)
+# - omit: drop the listed fields from the emitted class
+# - suffix: emit as {name}{suffix}; a hand-written subclass adds the omitted fields back.
+#   Without a suffix, omitted fields are gone from Python for good.
 TRANSFORMATIONS = {
     'Message': {'output_name': 'MessageData'},
     'Part': {'output_name': 'PartData'},
@@ -50,6 +52,9 @@ TRANSFORMATIONS = {
     # Documents take the same Part as messages. The schema names a
     # text|media subset; we do not emit a second type for that.
     'DocumentPart': {'output_name': 'PartData'},
+    # docs= always goes into the prompt and nothing in Python reads
+    # supports.context, so the field isn't emitted.
+    'Supports': {'omit': ['context']},
 }
 
 
@@ -239,9 +244,23 @@ def _py_type(prop: dict, schema: dict, defs: dict, class_name: str, field_name: 
     for key in ('anyOf', 'oneOf'):
         if key in prop:
             opts = prop[key]
-            refs = [o.get('$ref', '').split('/')[-1] for o in opts if o.get('$ref')]
-            if refs:
-                return ' | '.join(_output_name(r) for r in refs)
+            ref_names = [o.get('$ref', '').split('/')[-1] for o in opts if o.get('$ref')]
+            other = [o for o in opts if not o.get('$ref')]
+            if ref_names and not other:
+                return ' | '.join(_output_name(r) for r in ref_names)
+            if ref_names and other:
+                # One object or a list of them is a real value. Keeping only
+                # the ref branch would drop the list, so two scores could not come back.
+                parts: list[str] = []
+                for opt in opts:
+                    ref = opt.get('$ref')
+                    if ref:
+                        parts.append(_output_name(str(ref).split('/')[-1]))
+                        continue
+                    resolved = _py_type(opt, schema, defs, class_name, field_name)
+                    if resolved:
+                        parts.append(resolved)
+                return ' | '.join(parts) if parts else 'Any'
             types = sorted({_py_type(o, schema, defs, class_name, field_name) for o in opts} - {''})
             return ' | '.join(types) if types else 'Any'
     if prop.get('type') == 'array':

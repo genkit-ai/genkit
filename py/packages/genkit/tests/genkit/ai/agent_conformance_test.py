@@ -44,10 +44,9 @@ from genkit._ai._agents._client import TERMINAL_SNAPSHOT_STATUSES
 from genkit._ai._agents._runtime import SessionRunner
 from genkit._ai._agents._session_stores._inmemory_store import InMemorySessionStore
 from genkit._ai._agents._types import TurnContext, TurnResult
-from genkit._ai._testing import ProgrammableModel, define_programmable_model
 from genkit._ai._tools import Interrupt, ToolRunContext
 from genkit._core._action import ActionRunContext
-from genkit._core._error import GenkitError
+from genkit._core._error import GenkitError, GenkitRuntimeError
 from genkit._core._model import (
     AgentInit,
     AgentInput,
@@ -61,11 +60,11 @@ from genkit._core._model import (
 )
 from genkit._core._typing import (
     AgentFinishReason,
-    GenkitRuntimeError,
     Role,
 )
 from genkit.exp import Genkit
 from genkit.exp.agent import Agent
+from genkit.testing import ScriptedModel, define_scripted_model
 
 DEFAULT_STEP_TIMEOUT_S = 5.0
 
@@ -420,13 +419,13 @@ TurnBody = Callable[[SessionRunner, ActionRunContext, AgentInput, TurnContext], 
 @dataclass
 class Harness:
     ai: Genkit
-    pm: ProgrammableModel
+    pm: ScriptedModel
     agents: dict[str, Agent] = field(default_factory=dict)
 
 
 def setup_harness() -> Harness:
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
     h = Harness(ai=ai, pm=pm)
     _register_tools(ai=ai)
     _register_prompt_agents(ai=ai, agents=h.agents)
@@ -459,7 +458,7 @@ def _register_prompt_agents(*, ai: Genkit, agents: dict[str, Agent]) -> None:
     for spec in PROMPT_AGENTS:
         agents[spec.name] = ai.define_agent(
             name=spec.name,
-            model='programmableModel',
+            model='scriptedModel',
             config={'temperature': 1},
             tools=list(spec.tools) if spec.tools else None,
             store=InMemorySessionStore() if spec.store else None,
@@ -553,7 +552,7 @@ def _register_custom_agents(*, ai: Genkit, agents: dict[str, Agent]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def program_model(*, pm: ProgrammableModel, step: SendStep) -> None:
+def program_model(*, pm: ScriptedModel, step: SendStep) -> None:
     pm.reset()
     responses = step.model_responses or []
     pm.responses = [
@@ -707,7 +706,7 @@ def _assert_expect_error(*, thrown: BaseException | None, expect_err: SendExpect
         )
 
 
-async def execute_send(*, agent: Agent, pm: ProgrammableModel, step: SendStep, captures: dict[str, Any]) -> None:
+async def execute_send(*, agent: Agent, pm: ScriptedModel, step: SendStep, captures: dict[str, Any]) -> None:
     resolved = resolve_step(step=step, captures=captures)
     assert isinstance(resolved, SendStep)
     program_model(pm=pm, step=resolved)

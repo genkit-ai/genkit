@@ -28,11 +28,14 @@ if typing.TYPE_CHECKING:
     from genkit import ActionRunContext, ModelResponse
     from genkit.model import ModelRequest
 
-from genkit_openai.models import (
+# Private import across packages, on purpose. genkit-openai and
+# genkit-vertexai release in lockstep, so Model Garden reuses the
+# OpenAI-compatible model class instead of copying it.
+from genkit_openai._models import OpenAIModel
+from genkit_vertexai.model_garden._model_info import (
     SUPPORTED_OPENAI_COMPAT_MODELS,
     get_default_model_info,
 )
-from genkit_openai.models.model import OpenAIModel
 from genkit_vertexai.model_garden.client import OpenAIClient
 
 MODELGARDEN_PLUGIN_NAME = 'modelgarden'
@@ -126,7 +129,8 @@ class ModelGardenModel:
 
         async def _generate(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
             client = await self.create_client()
-            openai_model = OpenAIModel(self.name, client)
+            info = SUPPORTED_OPENAI_COMPAT_MODELS.get(self.name, get_default_model_info(self.name))
+            openai_model = OpenAIModel(self.name, client, supports=info.supports)
             return await openai_model.generate(request, ctx)
 
         return _generate

@@ -18,19 +18,26 @@
 
 from __future__ import annotations
 
+import subprocess  # noqa: S404
+import sys
+
 import pytest
-from genkit_middleware import Artifacts
+from genkit_middleware import Middleware
 from genkit_middleware._artifacts import (
     ARTIFACTS_LISTING_MARKER,
     build_artifact_listing,
     extract_artifact_text,
 )
+from genkit_middleware.exp import Artifacts
 
-from genkit import ModelResponse, Part
+from genkit import GenkitError, Message, ModelResponse, Part
 from genkit._ai._agents._session import Session, run_with_session
 from genkit._core._model import Artifact, GenerateActionOptions, SessionState
-from genkit._core._typing import Role
-from genkit.middleware import GenerateHookParams, GenerateMiddlewareContext
+from genkit._core._typing import FinishReason, Role
+from genkit.exp import Genkit
+from genkit.middleware import GenerateHookParams, GenerateMiddlewareContext, MiddlewareRef
+from genkit.model import ToolRequest
+from genkit.testing import define_scripted_model
 
 
 def _make_params(options: GenerateActionOptions | None = None) -> GenerateHookParams:
@@ -74,7 +81,7 @@ async def test_write_artifact_uses_current_session(ctx: GenerateMiddlewareContex
         assert set(tools) == {'read_artifact', 'write_artifact'}
 
         write = tools['write_artifact']
-        result = await write.run(input={'name': 'poem.txt', 'content': 'roses are red'})
+        result = await write.action().run(input={'name': 'poem.txt', 'content': 'roses are red'})
         assert result.response.output['status'] == 'Artifact "poem.txt" saved successfully.'
         arts = await session.get_artifacts()
         assert len(arts) == 1
@@ -93,7 +100,7 @@ async def test_read_artifact_returns_found(ctx: GenerateMiddlewareContext) -> No
     async def check() -> None:
         read = next(t for t in mw.tools(ctx) if t.name == 'read_artifact')
 
-        result = await read.run(input={'name': 'notes.txt'})
+        result = await read.action().run(input={'name': 'notes.txt'})
         assert result.response.output['name'] == 'notes.txt'
         assert result.response.output['content'] == 'hello'
         assert result.response.output['found'] is True
@@ -105,7 +112,7 @@ async def test_read_artifact_returns_found(ctx: GenerateMiddlewareContext) -> No
 async def test_read_artifact_without_session(ctx: GenerateMiddlewareContext) -> None:
     mw = Artifacts()
     read = next(t for t in mw.tools(ctx) if t.name == 'read_artifact')
-    result = await read.run(input={'name': 'missing.txt'})
+    result = await read.action().run(input={'name': 'missing.txt'})
     assert result.response.output['name'] == 'missing.txt'
     assert 'no active agent session' in result.response.output['content'].lower()
     assert result.response.output['found'] is False
@@ -200,3 +207,86 @@ async def test_wrap_generate_does_not_mutate_envelope(ctx: GenerateMiddlewareCon
         assert 'a.txt' in listing
 
     await run_with_session(session=session, coro=check())
+
+
+@pytest.mark.asyncio
+async def test_agent_using_artifacts_without_middleware_plugin_saves_written_file_to_chat() -> None:
+    """use=[Artifacts()] on an agent works with no Middleware() plugin: write_artifact lands on chat.artifacts."""
+    ai = Genkit()
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(
+                role=Role.MODEL,
+                content=[
+                    Part(
+                        tool_request=ToolRequest(
+                            name='write_artifact',
+                            input={'name': 'poem.txt', 'content': 'roses are red'},
+                            ref='w1',
+                        )
+                    )
+                ],
+            ),
+        ),
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('saved')]),
+        ),
+    ]
+    agent = ai.define_agent(name='workspaceAgent', model='scriptedModel', use=[Artifacts()])
+
+    chat = agent.chat()
+    out = await chat.send('Write poem.txt')
+
+    assert out.text == 'saved'
+    assert [(a.name, extract_artifact_text(a)) for a in chat.artifacts] == [('poem.txt', 'roses are red')]
+
+
+@pytest.mark.asyncio
+async def test_generate_naming_artifacts_middleware_with_middleware_plugin_raises_not_found() -> None:
+    """With Middleware() registered, use=[MiddlewareRef(name='artifacts')] (a .prompt's use:) raises NOT_FOUND."""
+    ai = Genkit(plugins=[Middleware()])
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('ok')]),
+        )
+    ]
+
+    with pytest.raises(GenkitError) as err:
+        await ai.generate(model='scriptedModel', prompt='hi', use=[MiddlewareRef(name='artifacts')])
+
+    assert err.value.status == 'NOT_FOUND'
+    assert '"artifacts"' in str(err.value)
+
+
+@pytest.mark.asyncio
+async def test_generate_naming_retry_middleware_with_middleware_plugin_runs() -> None:
+    """With Middleware() registered, use=[MiddlewareRef(name='retry')] still resolves and the call returns."""
+    ai = Genkit(plugins=[Middleware()])
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('ok')]),
+        )
+    ]
+
+    res = await ai.generate(model='scriptedModel', prompt='hi', use=[MiddlewareRef(name='retry')])
+
+    assert res.text == 'ok'
+
+
+def test_import_genkit_middleware_does_not_load_genkit_exp() -> None:
+    """In a fresh interpreter, import genkit_middleware leaves genkit.exp out of sys.modules."""
+    out = subprocess.run(  # noqa: S603
+        [sys.executable, '-c', "import sys, genkit_middleware; print('genkit.exp' in sys.modules)"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert out.stdout.strip() == 'False'

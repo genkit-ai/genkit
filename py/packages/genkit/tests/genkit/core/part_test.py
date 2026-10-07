@@ -21,7 +21,7 @@ from collections.abc import Callable
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from genkit import Document, Media, Message, Part, respond_to_interrupt, restart_tool
+from genkit import Document, Media, Message, Part
 from genkit._ai._agents._client import (
     SessionSnapshot as ClientSessionSnapshot,
     SessionState as ClientSessionState,
@@ -54,6 +54,7 @@ from genkit._core._model import (
     as_model_request,
     as_model_response_chunk,
     as_part,
+    chunk_for_stream,
 )
 from genkit._core._typing import (
     Artifact as ArtifactData,
@@ -400,9 +401,9 @@ def test_document_from_text() -> None:
     assert doc.text == 'hi'
 
 
-def test_respond_to_interrupt_returns_part() -> None:
+def test_part_respond_returns_part() -> None:
     interrupt = Part.from_tool_request(name='ask', input={'q': 'ok?'}, ref='r1')
-    reply = respond_to_interrupt('yes', interrupt=interrupt)
+    reply = interrupt.respond('yes')
     assert type(reply) is Part
     assert reply.tool_response is not None
     assert reply.tool_response.name == 'ask'
@@ -410,9 +411,9 @@ def test_respond_to_interrupt_returns_part() -> None:
     assert reply.metadata == {'interruptResponse': True}
 
 
-def test_restart_tool_returns_part() -> None:
+def test_part_restart_returns_part() -> None:
     interrupt = Part.from_tool_request(name='pay', input={'amount': 10}, ref='r1')
-    restart = restart_tool(interrupt=interrupt, resumed_metadata={'k': 'v'})
+    restart = interrupt.restart(resumed_metadata={'k': 'v'})
     assert type(restart) is Part
     assert restart.tool_request is not None
     assert restart.tool_request.name == 'pay'
@@ -436,6 +437,19 @@ def test_agent_stream_chunk_model_chunk_is_veneer() -> None:
     assert type(chunk.model_chunk) is ModelResponseChunk
     assert type(chunk.model_chunk.content[0]) is Part
     assert chunk.model_chunk.content[0].text == 'hi'
+
+
+def test_agent_stream_chunk_keeps_model_chunk_index_and_output() -> None:
+    """AgentStreamChunk keeps the streamed chunk's index and parsed output."""
+    streamed = chunk_for_stream(
+        ModelResponseChunk(content=[Part.from_text('hi')]),
+        index=2,
+        chunk_parser=lambda _c: 'parsed',
+    )
+    wrap = AgentStreamChunk(model_chunk=streamed)
+    assert wrap.model_chunk is not None
+    assert wrap.model_chunk.index == 2
+    assert wrap.model_chunk.output == 'parsed'
 
 
 def test_candidate_message_is_message() -> None:
@@ -540,7 +554,7 @@ def _two_kind_on_resume() -> Resume:
 
 _MESSAGE_WRAPS: dict[str, Callable[[Message], object]] = {
     'as_message': as_message,
-    'GenerateActionOptions': lambda m: GenerateActionOptions(model='programmableModel', messages=[m]),
+    'GenerateActionOptions': lambda m: GenerateActionOptions(model='scriptedModel', messages=[m]),
     'AgentInput': lambda m: AgentInput(message=m),
     'AgentOutput': lambda m: AgentOutput(message=m),
     'AgentResult': lambda m: AgentResult(message=m),
@@ -555,7 +569,7 @@ _ARTIFACT_WRAPS: dict[str, Callable[[Artifact], object]] = {
 }
 
 _RESUME_WRAPS: dict[str, Callable[[Resume], object]] = {
-    'GenerateActionOptions.resume': lambda r: GenerateActionOptions(model='programmableModel', messages=[], resume=r),
+    'GenerateActionOptions.resume': lambda r: GenerateActionOptions(model='scriptedModel', messages=[], resume=r),
     'AgentInput.resume': lambda r: AgentInput(resume=r),
 }
 
@@ -675,7 +689,7 @@ def test_require_model_response_rejects_a_two_kind_part_already_on_message() -> 
     assert resp.message is not None
     resp.message.content[0] = Part.model_construct(text='caption', media=Media(url='https://y'))
     with pytest.raises(ValidationError, match='exactly one'):
-        require_model_response(raw=resp, name='programmableModel')
+        require_model_response(raw=resp, name='scriptedModel')
 
 
 def test_as_candidate_rebuilds_and_keeps_message_text() -> None:
@@ -698,7 +712,7 @@ def test_as_model_request_rebuilds_and_keeps_message_text() -> None:
 
 def test_require_model_response_rebuilds_and_keeps_message_text() -> None:
     resp = ModelResponse(message=Message(role='model', content=[Part.from_text('ok')]), finish_reason=FinishReason.STOP)
-    walked = require_model_response(raw=resp, name='programmableModel')
+    walked = require_model_response(raw=resp, name='scriptedModel')
     assert walked is not resp
     assert walked.message is not None
     assert walked.message.content[0].text == 'ok'
@@ -832,7 +846,7 @@ def test_response_request_keeps_typed_config() -> None:
 def test_generate_options_without_messages_raises() -> None:
     """A /generate payload with no messages fails before it hits the model."""
     with pytest.raises(ValidationError, match='messages'):
-        GenerateActionOptions.model_validate({'model': 'programmableModel'})
+        GenerateActionOptions.model_validate({'model': 'scriptedModel'})
 
 
 def test_pending_content_reports_the_kind_rule() -> None:

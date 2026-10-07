@@ -22,13 +22,11 @@ from collections.abc import Awaitable, Callable
 
 from pydantic import BaseModel, Field
 
-from genkit import Part
-from genkit._ai._model import Message
-from genkit._ai._tools import tool
-from genkit._core._action import Action
-from genkit._core._model import Artifact, GenerateActionOptions, ModelResponse
-from genkit._core._typing import Role
+from genkit import Message, ModelResponse, Part, Role, Tool, tool
+from genkit.exp import current_session
+from genkit.exp.agent import Artifact
 from genkit.middleware import BaseMiddleware, GenerateHookParams, GenerateMiddlewareContext
+from genkit.model import GenerateActionOptions
 
 ARTIFACTS_LISTING_MARKER = 'artifacts-middleware-listing'
 
@@ -139,11 +137,11 @@ def inject_artifact_listing(options: GenerateActionOptions, listing: str) -> Gen
 class Artifacts(BaseMiddleware[ArtifactsConfig]):
     """Session artifact tools plus an injected artifact listing in the system prompt."""
 
-    def tools(self, ctx: GenerateMiddlewareContext) -> list[Action]:
-        tools: list[Action] = []
+    def tools(self, ctx: GenerateMiddlewareContext) -> list[Tool]:
+        tools: list[Tool] = []
 
         async def read_artifact(input: ReadArtifactInput) -> ReadArtifactOutput:
-            session = ctx.ai.current_session()
+            session = current_session()
             if session is None:
                 return ReadArtifactOutput(
                     name=input.name,
@@ -178,13 +176,13 @@ class Artifacts(BaseMiddleware[ArtifactsConfig]):
                     'Use this to inspect artifacts produced by sub-agents or '
                     'previously created artifacts.'
                 ),
-            ).action()
+            )
         )
 
         if not self.config.readonly:
 
             async def write_artifact(input: WriteArtifactInput) -> WriteArtifactOutput:
-                session = ctx.ai.current_session()
+                session = current_session()
                 if session is None:
                     return WriteArtifactOutput(status='Error: no active session.')
 
@@ -201,7 +199,7 @@ class Artifacts(BaseMiddleware[ArtifactsConfig]):
                         'replaced. Use this to produce files, reports, code, or other '
                         'deliverables.'
                     ),
-                ).action()
+                )
             )
 
         return tools
@@ -212,7 +210,7 @@ class Artifacts(BaseMiddleware[ArtifactsConfig]):
         ctx: GenerateMiddlewareContext,
         next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
-        session = ctx.ai.current_session()
+        session = current_session()
         artifacts = await session.get_artifacts() if session is not None else []
         listing = build_artifact_listing(artifacts)
         params.options = inject_artifact_listing(params.options, listing)

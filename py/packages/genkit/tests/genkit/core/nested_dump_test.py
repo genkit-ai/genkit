@@ -27,7 +27,6 @@ import pytest
 from pydantic import BaseModel, SerializerFunctionWrapHandler, model_serializer
 
 from genkit import Genkit
-from genkit._ai._testing import EchoModel, define_echo_model
 from genkit._core._model import (
     Document,
     GenerateActionOptions,
@@ -44,6 +43,7 @@ from genkit._core._model import (
 from genkit._core._typing import Media, ToolRequest
 from genkit.exp.agent import FileSessionStore
 from genkit.model import model_ref
+from genkit.testing import EchoModel, define_echo_model
 
 
 class Chat(BaseModel):
