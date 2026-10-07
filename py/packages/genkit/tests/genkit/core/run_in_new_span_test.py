@@ -16,7 +16,6 @@ from pydantic import BaseModel
 from genkit import Genkit, Message, ModelResponse, Part, Role
 from genkit._ai._tools import Interrupt, ToolRunContext
 from genkit._core._action import Action, ActionRunContext
-from genkit._core._error import GenkitError
 from genkit._core._telemetry._attrs import metadata_key
 from genkit._core._telemetry._http import ActiveSpan
 from genkit._core._telemetry._instrumentation import (
@@ -262,9 +261,8 @@ async def test_cancelled_span_leaves_state_unset(exporter, caplog: pytest.LogCap
 async def test_tool_interrupt_is_not_recorded_as_span_error(exporter, caplog: pytest.LogCaptureFixture) -> None:
     """Tool interrupts are control flow — the tool span must not look like a failure.
 
-    Drives a real ``@ai.tool`` that raises ``Interrupt``. The carve-out only
-    works because Action wraps that into ``GenkitError`` *outside* the span
-    body; this locks that ordering so a future refactor can't silently undo it.
+    Drives a real ``@ai.tool`` that raises ``Interrupt``; the caller gets that
+    same ``Interrupt`` back.
     """
     ai = Genkit()
 
@@ -276,10 +274,10 @@ async def test_tool_interrupt_is_not_recorded_as_span_error(exporter, caplog: py
     assert action is not None
 
     with caplog.at_level(logging.DEBUG):
-        with pytest.raises(GenkitError) as ei:
+        with pytest.raises(Interrupt) as ei:
             await action.run({'amount': 100})
 
-    assert isinstance(ei.value.cause, Interrupt)
+    assert ei.value.metadata == {'reason': 'needs_approval'}
 
     span = _by_name(exporter.get_finished_spans(), 'transfer')
     attrs = dict(span.attributes or {})
@@ -363,20 +361,14 @@ async def test_action_span_metadata_uses_short_keys(exporter) -> None:
 
 @pytest.mark.asyncio
 async def test_action_error_attribute_keeps_original_text(exporter) -> None:
-    """Regression: the action span should record ``str(original_e)`` in ``genkit:error``,
-
-    not the wrapped GenkitError's ``"Error while running action ..."`` message. This
-    locks in the SoC contract: ``run_in_new_span`` records the exception it sees, and
-    ``_run_with_telemetry`` wraps GenkitError OUTSIDE the with-block so the wrap
-    doesn't clobber the recorded attribute.
-    """
+    """The action span records the body's own error text in ``genkit:error``."""
 
     async def kaboom(_: str | None) -> None:
         raise ValueError('original boom')
 
     action = Action(name='kaboomAction', kind=ActionKind.CUSTOM, fn=kaboom)
 
-    with pytest.raises(GenkitError):
+    with pytest.raises(ValueError, match='original boom'):
         await action.run()
 
     span = _by_name(exporter.get_finished_spans(), 'kaboomAction')

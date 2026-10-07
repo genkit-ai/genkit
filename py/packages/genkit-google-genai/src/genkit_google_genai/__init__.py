@@ -72,14 +72,12 @@ See Also:
     - Vertex AI: https://cloud.google.com/vertex-ai
 """
 
-from genkit_google_genai._evaluators import VertexAIEvaluationMetricType
 from genkit_google_genai._google import (
     GoogleAI,
     VertexAI,
 )
 from genkit_google_genai._models._antigravity import AntigravityConfig
 from genkit_google_genai._models._deep_research import DeepResearchConfig
-from genkit_google_genai._models._embedder import EmbeddingTaskType
 from genkit_google_genai._models._gemini import (
     GeminiConfig,
     GeminiImageConfig,
@@ -92,7 +90,6 @@ from genkit_google_genai._models._veo import VeoConfig
 __all__ = [
     'AntigravityConfig',
     'DeepResearchConfig',
-    'EmbeddingTaskType',
     'GeminiConfig',
     'GeminiImageConfig',
     'GeminiTtsConfig',
@@ -101,5 +98,4 @@ __all__ = [
     'LyriaConfig',
     'VeoConfig',
     'VertexAI',
-    'VertexAIEvaluationMetricType',
 ]
