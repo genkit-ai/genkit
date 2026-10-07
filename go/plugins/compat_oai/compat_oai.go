@@ -209,6 +209,12 @@ type OpenAICompatible struct {
 	// top of the completion marks it as counted apart.
 	SeparateReasoningTokens bool
 
+	// ClassifyError optionally names the status of an error response the
+	// provider sends with a misleading HTTP code, such as an unknown model
+	// answered with 400 rather than 404. It returns "" to keep the status the
+	// HTTP code gives.
+	ClassifyError func(err *openai.Error) status.Name
+
 	// descs caches the action descriptors of listed models by name; they are
 	// deterministic per name, and rebuilding a full model action per listed
 	// model on every reflection poll is wasteful. A plugin instance lists
@@ -451,6 +457,7 @@ func NewChatModel[Config ChatConfig](o *OpenAICompatible, id string, opts ai.Mod
 			WithToolChoice(input.ToolChoice).
 			WithOutputFormats(supports.Output)
 		g.constrained = supports.Constrained
+		g.classify = o.ClassifyError
 		return g.Generate(ctx, input, cb)
 	})
 }
@@ -531,7 +538,7 @@ func (o *OpenAICompatible) newEmbedder(provider, id string, embedOpts *ai.Embedd
 
 		embeddingResp, err := o.clientForKey(config.APIKey).Embeddings.New(ctx, params)
 		if err != nil {
-			return nil, WrapAPIError(err)
+			return nil, classifyAPIError(err, o.ClassifyError)
 		}
 
 		resp := &ai.EmbedResponse{}

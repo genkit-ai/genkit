@@ -633,23 +633,28 @@ func TestGenerateStreamReportsProviderFailure(t *testing.T) {
 // the error rather than the finish reason, and a truncated answer returned as a
 // success would reach neither.
 func TestGenerateStreamTopLevelFailureEndsStream(t *testing.T) {
-	// The code the gateway reports decides the status the failure carries. A
-	// code that maps to nothing stays unclassified rather than becoming
-	// Unknown, which the retry middleware would give up on.
+	// The code the gateway reports decides the status the failure carries,
+	// as an HTTP status or a status name in any case and dash style. A code
+	// that maps to nothing stays unclassified rather than becoming Unknown,
+	// which the retry middleware would give up on, and so does a provider's
+	// own numbering.
 	for name, tc := range map[string]struct {
-		code int
+		code string // the code's JSON value
 		want status.Name
 	}{
-		"rate limited upstream": {code: 429, want: status.ResourceExhausted},
-		"dead upstream":         {code: 502, want: status.Internal},
-		"unmapped code":         {code: 402, want: ""},
+		"rate limited upstream": {code: `429`, want: status.ResourceExhausted},
+		"dead upstream":         {code: `502`, want: status.Internal},
+		"unmapped code":         {code: `402`, want: ""},
+		"status name":           {code: `"resource-exhausted"`, want: status.ResourceExhausted},
+		"unknown name":          {code: `"model_overloaded"`, want: ""},
+		"provider numbering":    {code: `1302`, want: ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "text/event-stream")
 				for _, event := range []string{
 					`{"id":"1","object":"chat.completion.chunk","created":1,"model":"openai/gpt-5","choices":[{"index":0,"delta":{"role":"assistant","content":"partial out"},"finish_reason":null}]}`,
-					fmt.Sprintf(`{"id":"1","object":"chat.completion.chunk","created":1,"model":"openai/gpt-5","provider":"Together","error":{"code":%d,"message":"Provider disconnected","metadata":{"error_type":"provider_unavailable"}},"choices":[{"index":0,"delta":{"content":""},"finish_reason":"error","native_finish_reason":"provider_error"}]}`, tc.code),
+					fmt.Sprintf(`{"id":"1","object":"chat.completion.chunk","created":1,"model":"openai/gpt-5","provider":"Together","error":{"code":%s,"message":"Provider disconnected","metadata":{"error_type":"provider_unavailable"}},"choices":[{"index":0,"delta":{"content":""},"finish_reason":"error","native_finish_reason":"provider_error"}]}`, tc.code),
 				} {
 					_, _ = io.WriteString(w, "data: "+event+"\n\n")
 				}

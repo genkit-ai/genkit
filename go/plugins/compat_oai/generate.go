@@ -48,6 +48,8 @@ type ModelGenerator struct {
 	// claims it only without tools gets no JSON mode on a request with
 	// tools, as it gets no schema.
 	constrained ai.ConstrainedSupport
+	// classify is the provider's [OpenAICompatible.ClassifyError].
+	classify func(*openai.Error) status.Name
 	// Store any errors that occur during building
 	err error
 }
@@ -622,7 +624,7 @@ func (g *ModelGenerator) generateStream(ctx context.Context, req *ai.ModelReques
 	// the middleware around it are told the generation failed, rather than
 	// handed a short answer that reads as a complete one.
 	if err := stream.Err(); err != nil {
-		return nil, wrapStreamError(err)
+		return nil, wrapStreamError(err, g.classify)
 	}
 
 	if usageSeen {
@@ -676,24 +678,45 @@ func (g *ModelGenerator) generateStream(ctx context.Context, req *ai.ModelReques
 // message. Reading the code back out of it is the one way to recover the status
 // the failure carries.
 //
+// The code is an HTTP status or a status name, which some providers spell in
+// lower case with dashes (xAI sends "resource-exhausted"). A provider's own
+// numbering, such as Z.ai's four-digit codes, is not an HTTP status and is not
+// read as one.
+//
 // An error that classifies to nothing is left unclassified rather than marked
 // Unknown, since the retry middleware reissues an unclassified error and gives
 // up on an Unknown one, and a failure this cannot read is not a reason to stop
 // trying.
-func wrapStreamError(err error) error {
-	err = WrapAPIError(err)
+func wrapStreamError(err error, classify func(*openai.Error) status.Name) error {
+	err = classifyAPIError(err, classify)
 	if _, classified := status.Classified(err); classified {
 		return fmt.Errorf("stream error: %w", err)
 	}
 	message := err.Error()
 	if brace := strings.IndexByte(message, '{'); brace >= 0 {
-		if code, ok := extractErrorObject(message[brace:])["code"].(float64); ok {
-			if name := status.FromHTTPCode(int(code)); name != status.Unknown {
-				return status.Errorf(status.Base(name), "stream error: %w", err)
-			}
+		if name := statusOfCode(extractErrorObject(message[brace:])["code"]); name != "" {
+			return status.Errorf(status.Base(name), "stream error: %w", err)
 		}
 	}
 	return fmt.Errorf("stream error: %w", err)
+}
+
+// statusOfCode reads the code of an error object as a status, or returns ""
+// when it names none.
+func statusOfCode(code any) status.Name {
+	var name status.Name
+	switch c := code.(type) {
+	case float64:
+		if c >= 400 && c < 600 {
+			name = status.FromHTTPCode(int(c))
+		}
+	case string:
+		name = status.Name(strings.ToUpper(strings.ReplaceAll(c, "-", "_")))
+	}
+	if !name.IsValid() || name == status.OK || name == status.Unknown {
+		return ""
+	}
+	return name
 }
 
 // extractTokenCount reads a token count a provider reports as a usage field the
@@ -954,7 +977,7 @@ func addCustomTokens(usage *ai.GenerationUsage, name string, count int) {
 func (g *ModelGenerator) generateComplete(ctx context.Context, req *ai.ModelRequest) (*ai.ModelResponse, error) {
 	completion, err := g.client.Chat.Completions.New(ctx, *g.request)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create completion: %w", WrapAPIError(err))
+		return nil, fmt.Errorf("failed to create completion: %w", classifyAPIError(err, g.classify))
 	}
 
 	resp, err := convertChatCompletionToModelResponse(completion, g.separateReasoning)
