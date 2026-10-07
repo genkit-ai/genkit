@@ -120,9 +120,9 @@ func IsToolInterruptError(err error) (bool, map[string]any) {
 }
 
 // IsToolFailError reports whether err, or any error it wraps, was made with
-// tool.Fail (ai/exp/tool): an error the loop returns to the model as the
-// tool's response instead of failing the generation. Use it to check in a
-// test that a tool returns its error to the model.
+// [github.com/firebase/genkit/go/ai/tool.Fail]: an error the loop returns to
+// the model as the tool's response instead of failing the generation. Use it
+// to check in a test that a tool returns its error to the model.
 func IsToolFailError(err error) bool {
 	var fail *base.ToolFailError
 	return errors.As(err, &fail)

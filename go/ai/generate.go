@@ -1162,9 +1162,10 @@ func recordToolShortCircuit(ctx context.Context, name string, input any, resp *M
 // instead of running them a second time.
 //
 // A tool error the model can act on does not stop the loop: an error made
-// with tool.Fail (ai/exp/tool), or one that the SoftToolErrors middleware
-// (plugins/middleware) covers, answers the call with a response for which
-// [Part.IsToolError] is true, and the loop continues.
+// with [github.com/firebase/genkit/go/ai/tool.Fail], or one that the
+// SoftToolErrors middleware (plugins/middleware) covers, answers the call
+// with a response for which [Part.IsToolError] is true, and the loop
+// continues.
 //
 // Errors reported before a request is made (unknown model or tool, invalid
 // options) carry a nil response.

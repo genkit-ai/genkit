@@ -15,7 +15,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package tool provides the runtime verbs called from inside a running tool
-// function or WrapTool hook: [Interrupt], [AttachParts], [SendChunk],
+// function or WrapTool hook: [Interrupt], [Fail], [AttachParts], [SendChunk],
 // [ResumeData], and [OriginalInput]. They take a
 // [context.Context], so they work in every tool: [ai.ToolContext] embeds the
 // context they take.
@@ -67,6 +67,31 @@ func Interrupt(ctx context.Context, data any) error {
 		ie.Data = m
 	}
 	return ie
+}
+
+// Fail marks err as a result for the model rather than a failure of the tool
+// loop. The loop answers the tool call with {"error": err.Error()} (see
+// [ai.Part.IsToolError]) and continues, so the model can correct its input
+// and try again. Return any other error to stop the loop.
+//
+// Use it for errors the model can act on, such as invalid input or a missing
+// record. A WrapTool hook may also return it. To return every error of a
+// tool you do not own to the model, use the SoftToolErrors middleware in
+// plugins/middleware instead. [ai.IsToolFailError] reports whether an error
+// was made with Fail.
+//
+// ctx is the context the tool function or hook received, as for [Interrupt].
+//
+//	rows, err := db.Query(ctx, in.SQL)
+//	if errors.Is(err, ErrSyntax) {
+//		return nil, tool.Fail(ctx, err) // the model fixes the query
+//	}
+//	return rows, err // a lost connection stops the loop
+func Fail(ctx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &base.ToolFailError{Err: err}
 }
 
 // SendChunk streams an [ai.ModelResponseChunk] during tool execution, e.g.

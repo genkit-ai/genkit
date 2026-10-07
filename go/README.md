@@ -720,7 +720,22 @@ response, _ := genkit.Generate(ctx, g,
 fmt.Println(response.Text())
 ```
 
-A tool error fails the whole generation rather than being reported to the model, so a miss the model could work around (no such city, no rows matched) belongs in the result rather than in an `error`.
+A tool error fails the whole generation. For an error the model can work around, return `tool.Fail` from the `ai/tool` package instead: the error answers the call as `{"error": "..."}` and the loop continues, so the model can correct its input. Any other error still stops the generation:
+
+```go
+lookupTool := genkit.DefineTool(g, "cityPopulation",
+    "Returns the population of a city.",
+    func(ctx *ai.ToolContext, input CityInput) (int, error) {
+        pop, err := db.Population(ctx, input.City)
+        if errors.Is(err, ErrNoSuchCity) {
+            return 0, tool.Fail(ctx, err) // the model tries another spelling
+        }
+        return pop, err // a lost connection stops the loop
+    },
+)
+```
+
+To return every error of a tool you do not own, such as an MCP tool, use the [`SoftToolErrors`](plugins/middleware/soft_tool_errors.go) middleware.
 
 The `ai/tool` package adds to a tool without changing its signature. `tool.AttachParts` adds parts that are not values, such as an image or a document, to the tool's response; they reach the client, and the model as far as its provider accepts them in a tool response. `tool.SendChunk` streams an `ai.ModelResponseChunk` the tool builds itself, such as progress, to the client while the tool runs (a no-op when the caller isn't streaming; the return value is always authoritative). `*ai.ToolContext` embeds the context they take:
 
@@ -943,7 +958,7 @@ response, _ := genkit.Generate(ctx, g,
 The `middleware` plugin also ships with:
 
 - [`ToolApproval`](plugins/middleware/tool_approval.go) — interrupts any tool not on an allow list and resumes once the call is explicitly approved on restart.
-- [`SoftToolErrors`](plugins/middleware/soft_tool_errors.go) — returns tool errors, and calls to tools that do not exist, to the model as the tool's response so it can correct itself, instead of failing the generation. A tool can do the same for a single error by returning `tool.Fail(ctx, err)` (`ai/exp/tool`).
+- [`SoftToolErrors`](plugins/middleware/soft_tool_errors.go) — returns tool errors, and calls to tools that do not exist, to the model as the tool's response so it can correct itself, instead of failing the generation. A tool can do the same for a single error by returning `tool.Fail(ctx, err)` (`ai/tool`).
 - [`Filesystem`](samples/basic-middleware/filesystem) — gives the model `list_files` and `read_file` tools (plus `write_file` and `edit_file` when `AllowWriteAccess` is set), all confined to a single `RootDir` via `os.Root` (Go 1.25+) so paths cannot escape via `..`, absolute paths, or symlinks.
 - [`Skills`](samples/basic-middleware/skills) — exposes a library of `SKILL.md` files following the [Agent Skills](https://agentskills.io) specification, so a skill written for any compliant agent works here. Scans `.agents/skills` and `skills` by default, on disk or inside `SkillFS`, so skills can ship in the binary through `//go:embed`. The model sees each skill's name and description, loads one on demand through `use_skill`, and reads the files a skill bundles through `read_skill_file` when `AllowResourceAccess` is set. `Preload` injects a skill up front when the application, rather than the model, decides it applies.
 
