@@ -153,7 +153,10 @@ export interface AgentChat<State = unknown, Opts extends object = never> {
    * Submits a detached (background) turn. The returned task keeps using the
    * resolved options for polling and aborting.
    */
-  detach(input: string | AgentInput, opts?: Opts): Promise<DetachedTask<State>>;
+  detach(
+    input: string | AgentInput,
+    opts?: Opts
+  ): Promise<DetachedTask<State, Opts>>;
 
   /** Aborts the current snapshot. */
   abort(opts?: Opts): Promise<SessionSnapshot['status'] | undefined>;
@@ -250,7 +253,7 @@ export interface AgentInterrupt<Input = unknown, Output = unknown> {
 /**
  * A handle to a background (detached) task.
  */
-export interface DetachedTask<State = unknown> {
+export interface DetachedTask<State = unknown, Opts extends object = never> {
   readonly snapshotId: string;
 
   /** Yields status until a terminal state. */
@@ -259,8 +262,11 @@ export interface DetachedTask<State = unknown> {
   /** Resolves when the task reaches a terminal state. */
   wait(opts?: { intervalMs?: number }): Promise<SessionSnapshot<State>>;
 
-  /** Aborts the task. */
-  abort(): Promise<SessionSnapshot['status'] | undefined>;
+  /**
+   * Aborts the task. Per-call options override the ones resolved at detach
+   * time key by key (ex. to abort under an operator's identity).
+   */
+  abort(opts?: Opts): Promise<SessionSnapshot['status'] | undefined>;
 }
 
 /**
@@ -625,8 +631,33 @@ class AgentChunkImpl<State = unknown> implements AgentChunk<State> {
 // DetachedTask
 // ---------------------------------------------------------------------------
 
+/**
+ * Merges transport options: `bound` shallowly overridden by `perCall`.
+ *
+ * Shallow on purpose, so a per-call `context` replaces the bound one rather
+ * than merging into it (merging auth objects would be surprising and easy to
+ * get wrong). `undefined` per-call values are skipped so that ex.
+ * `{ context: req.ctx }` with `ctx` unset does not silently drop the bound
+ * identity.
+ */
+function mergeOpts<B extends object, P extends object>(
+  bound: B | undefined,
+  perCall: P | undefined
+): (B & Partial<P>) | undefined {
+  if (!bound && !perCall) {
+    return undefined;
+  }
+  const defined: Partial<P> = { ...perCall };
+  for (const key in defined) {
+    if (defined[key] === undefined) {
+      delete defined[key];
+    }
+  }
+  return Object.assign({}, bound, defined);
+}
+
 class DetachedTaskImpl<State = unknown, Opts extends object = never>
-  implements DetachedTask<State>
+  implements DetachedTask<State, Opts>
 {
   constructor(
     readonly snapshotId: string,
@@ -668,8 +699,11 @@ class DetachedTaskImpl<State = unknown, Opts extends object = never>
     return last;
   }
 
-  abort(): Promise<SessionSnapshot['status'] | undefined> {
-    return this.transport.abort(this.snapshotId, this.transportOpts);
+  abort(opts?: Opts): Promise<SessionSnapshot['status'] | undefined> {
+    return this.transport.abort(
+      this.snapshotId,
+      mergeOpts(this.transportOpts, opts)
+    );
   }
 }
 
@@ -708,17 +742,9 @@ export class AgentChatImpl<State = unknown, Opts extends object = never>
     return this.clientState?.custom as State | undefined;
   }
 
-  /**
-   * Resolves the transport options for a call: the chat's bound options,
-   * shallowly overridden by the per-call ones. Shallow on purpose, so a
-   * per-call `context` replaces the bound one rather than merging into it
-   * (merging auth objects would be surprising and easy to get wrong).
-   */
+  /** The chat's bound options, overridden by the per-call ones. */
   private resolveOpts(opts?: Opts): Opts | undefined {
-    if (!this.boundOpts && !opts) {
-      return undefined;
-    }
-    return Object.assign({}, this.boundOpts, opts);
+    return mergeOpts(this.boundOpts, opts);
   }
 
   /**
@@ -936,7 +962,7 @@ export class AgentChatImpl<State = unknown, Opts extends object = never>
     // Transport-specific options (bound + per-call) ride along untouched; the
     // caller's `abortSignal` is replaced by the controller wired to it above.
     const turnOpts: AgentTurnOptions<Opts> & { abortSignal: AbortSignal } =
-      Object.assign({}, this.boundOpts, opts, {
+      Object.assign({}, mergeOpts(this.boundOpts, opts), {
         abortSignal: controller.signal,
       });
     const { stream: rawStream, output } = this.transport.runTurn(
@@ -1032,7 +1058,7 @@ export class AgentChatImpl<State = unknown, Opts extends object = never>
   async detach(
     input: string | AgentInput,
     opts?: Opts
-  ): Promise<DetachedTask<State>> {
+  ): Promise<DetachedTask<State, Opts>> {
     const agentInput: AgentInput = { ...toAgentInput(input), detach: true };
     if (agentInput.message) {
       this.messages.push(agentInput.message);

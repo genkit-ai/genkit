@@ -636,16 +636,35 @@ describe('custom transport', () => {
     assert.equal(res.snapshotId, 'snap-1');
   });
 
-  it('rejects options the transport does not declare', () => {
-    const { transport } = fakeTransport();
+  it('skips undefined per-call options instead of clearing bound ones', async () => {
+    const { transport, turns, abortCalls } = fakeTransport();
     const agent = createAgentAPI<{ count: number }, TagOptions>(transport);
-    // @ts-expect-error `context` is not a TagOptions key.
-    agent.chat({}, { context: {} });
-    // `abortSignal` is always accepted alongside transport options.
-    void agent
-      .chat()
-      .send('hi', { tag: 'x', abortSignal: new AbortController().signal });
+
+    const chat = agent.chat({}, { tag: 'bound' });
+    await chat.send('a', { tag: undefined });
+    await chat.abort({ tag: undefined });
+    assert.deepEqual(
+      turns.map((t) => t.tag),
+      ['bound']
+    );
+    assert.deepEqual(abortCalls, [{ snapshotId: 'snap-1', tag: 'bound' }]);
   });
+
+  it('lets a detached task abort with overridden options', async () => {
+    const { transport, abortCalls } = fakeTransport();
+    const agent = createAgentAPI<{ count: number }, TagOptions>(transport);
+
+    const task = await agent.chat({}, { tag: 'user' }).detach('job');
+    await task.abort();
+    await task.abort({ tag: 'operator' });
+    assert.deepEqual(
+      abortCalls.map((c) => c.tag),
+      ['user', 'operator']
+    );
+  });
+
+  // Type-level checks (ex. rejecting undeclared options) live in
+  // `tests/types/`, checked by `tsconfig.types-test.json`.
 
   it('can decorate the HTTP transport', async () => {
     const originalFetch = globalThis.fetch;

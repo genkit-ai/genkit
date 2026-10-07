@@ -29,11 +29,7 @@ import {
   type ActionContext,
 } from '@genkit-ai/core';
 import { TestSpanExporter } from '../../core/tests/utils.js';
-import {
-  AgentError,
-  createAgentAPI,
-  type AgentTransport,
-} from '../src/agent-core.js';
+import { AgentError } from '../src/agent-core.js';
 import {
   AgentStreamChunk,
   SessionRunner,
@@ -4305,8 +4301,9 @@ Now respond to the latest message.`,
         const chat = agent.chat({}, { context: alice });
         await chat.send('hi');
         const snapshotId = chat.snapshotId!;
-        assert.ok(store.writes.length > 0);
-        assert.ok(uids(store.writes).every((u) => u === 'alice'));
+        // Sets (not `.every`) so an empty list fails too; explicit asserts
+        // also keep a failure from re-tokenizing this large file.
+        assert.deepStrictEqual(new Set(uids(store.writes)), new Set(['alice']));
 
         store.reads = [];
         const restored = await agent.loadChat({ snapshotId }, { context: bob });
@@ -4326,9 +4323,51 @@ Now respond to the latest message.`,
         const task = await chat.detach('long job');
         await task.wait({ intervalMs: 1 });
         await task.abort();
-        assert.ok(store.reads.length > 0);
-        assert.ok(uids(store.reads).every((u) => u === 'alice'));
-        assert.ok(uids(store.writes).every((u) => u === 'alice'));
+        assert.deepStrictEqual(new Set(uids(store.reads)), new Set(['alice']));
+        assert.deepStrictEqual(new Set(uids(store.writes)), new Set(['alice']));
+
+        // A per-call option on the task overrides the detach-time one.
+        store.writes = [];
+        await task.abort({ context: bob });
+        assert.deepStrictEqual(uids(store.writes), ['bob']);
+      });
+
+      it('per-call undefined context does not clear the bound one', async () => {
+        const store = new RecordingStore();
+        const { agent } = defineUidAgent('ctxUndefined', store);
+
+        const chat = agent.chat({}, { context: alice });
+        const res = await chat.send('hi', { context: undefined });
+        assert.strictEqual(res.text, 'uid=alice');
+        const turn = chat.sendStream('again', { context: undefined });
+        for await (const _ of turn.stream) {
+          // drain
+        }
+        assert.strictEqual((await turn.response).text, 'uid=alice');
+
+        store.writes = [];
+        await chat.abort({ context: undefined });
+        assert.deepStrictEqual(uids(store.writes), ['alice']);
+      });
+
+      it('chats keep the ambient context they were created under', async () => {
+        const store = new RecordingStore();
+        const { agent, seen } = defineUidAgent('ctxCaptured', store);
+
+        const chat = runWithContext(alice, () => agent.chat());
+        // Driven later, outside the original context (ex. a queue worker).
+        await runWithContext(bob, () => chat.send('hi'));
+        assert.deepStrictEqual(uids(seen), ['alice']);
+
+        store.reads = [];
+        const task = await chat.detach('long job');
+        await task.wait({ intervalMs: 1 });
+        assert.deepStrictEqual(new Set(uids(store.reads)), new Set(['alice']));
+
+        const restored = await runWithContext(alice, () =>
+          agent.loadChat({ snapshotId: chat.snapshotId! })
+        );
+        assert.strictEqual((await restored.send('hi')).text, 'uid=alice');
       });
 
       it('falls back to the ambient context when none is passed', async () => {
@@ -4359,30 +4398,8 @@ Now respond to the latest message.`,
         assert.strictEqual(res.text, 'uid=bob');
       });
 
-      it('rejects context on transports that do not declare it', () => {
-        // Type-level check: a transport with the default (no) options, like
-        // `remoteAgent`, must not accept `context`.
-        const transport: AgentTransport = {
-          runTurn: () => ({
-            stream: (async function* () {})(),
-            output: Promise.resolve({ finishReason: 'stop' as const }),
-          }),
-          getSnapshot: async () => undefined,
-          abort: async () => undefined,
-        };
-        const api = createAgentAPI(transport);
-        // @ts-expect-error `context` is not a remote option.
-        api.chat({}, { context: alice });
-        // @ts-expect-error `context` is not a remote option.
-        void api.getSnapshot('id', { context: alice });
-        const chat = api.chat();
-        // @ts-expect-error `context` is not a remote option.
-        void chat.send('hi', { context: alice }).catch(() => {});
-        // `abortSignal` is always accepted.
-        void chat
-          .send('hi', { abortSignal: new AbortController().signal })
-          .catch(() => {});
-      });
+      // Type-level checks (ex. rejecting `context` on transports that do not
+      // declare it) live in `tests/types/`, checked by `tsconfig.types-test.json`.
     });
   });
 });

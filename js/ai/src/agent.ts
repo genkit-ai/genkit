@@ -682,7 +682,11 @@ export type GetSnapshotDataAction<S = unknown> = Action<
 export interface LocalAgentOptions {
   /**
    * Action context (ex. auth) for agent turns and session store calls.
-   * Defaults to the ambient context (`getContext()`) when omitted.
+   *
+   * When omitted, `chat` / `loadChat` bind the ambient context
+   * (`getContext()`) at creation, so the chat and its detached tasks keep that
+   * identity. Other calls (`getSnapshot`, `abort`, or a chat created with no
+   * ambient context) use the ambient context at call time.
    */
   context?: ActionContext;
 }
@@ -1459,12 +1463,28 @@ export function defineCustomAgent<State = unknown>(
 
   const agentApi = createAgentAPI<State, LocalAgentOptions>(transport);
 
+  // Chats capture the ambient context at creation when none is passed, so the
+  // chat (and any task it detaches) keeps the identity it was created under,
+  // even if later driven from a timer, queue worker, or another request.
+  const withAmbientContext = (
+    opts?: LocalAgentOptions
+  ): LocalAgentOptions | undefined => {
+    const context = opts?.context ?? getContext();
+    return context ? { ...opts, context } : opts;
+  };
+  const chat: AgentAPI<State, LocalAgentOptions>['chat'] = (init, opts) =>
+    agentApi.chat(init, withAmbientContext(opts));
+  const loadChat: AgentAPI<State, LocalAgentOptions>['loadChat'] = (
+    lookup,
+    opts
+  ) => agentApi.loadChat(lookup, withAmbientContext(opts));
+
   // Expose the AgentAPI surface on the composite. `abort`/`getSnapshotData`
   // already exist on the composite (richer signatures); we add `chat`,
   // `loadChat`, and `getSnapshot`.
   Object.assign(composite, {
-    chat: agentApi.chat,
-    loadChat: agentApi.loadChat,
+    chat,
+    loadChat,
     getSnapshot: agentApi.getSnapshot,
   });
 
