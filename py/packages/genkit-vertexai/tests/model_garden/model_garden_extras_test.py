@@ -222,3 +222,37 @@ def test_genkit_vertexai_base_dependencies_exclude_unused_sdks() -> None:
     })
     assert {'genkit', 'google-auth'} <= base
     assert by_extra == {'anthropic': {'genkit-anthropic'}, 'openai': {'genkit-openai'}}
+
+
+@pytest.mark.parametrize(
+    'model',
+    [
+        pytest.param('modelgarden/anthropic/claude-sonnet-4@20250514', id='claude'),
+        pytest.param('modelgarden/meta/llama-3.1-405b-instruct-maas', id='llama'),
+    ],
+)
+def test_generate_model_garden_broken_sdk_dependency_surfaces_real_import_error(model: str) -> None:
+    """An installed SDK missing its own dependency (`distro`) raises that import error, not the extra hint."""
+    result = _generate_without(model, blocked=('distro',))
+
+    assert result['message'] not in {CLAUDE_MESSAGE, OPENAI_COMPAT_MESSAGE}
+    assert 'distro' in result['message']
+
+
+def test_model_garden_list_actions_broken_openai_dependency_raises() -> None:
+    """`list_actions()` raises when `openai` is installed but can't import, instead of listing nothing."""
+    result, _ = _run_python(
+        """
+        import asyncio, json
+        from genkit_vertexai.model_garden import ModelGarden
+        try:
+            asyncio.run(ModelGarden(project_id='my-project').list_actions())
+        except ModuleNotFoundError as e:
+            print(json.dumps({'error': type(e).__name__, 'name': e.name}))
+        else:
+            print(json.dumps({'error': None}))
+        """,
+        blocked=('distro',),
+    )
+
+    assert result == {'error': 'ModuleNotFoundError', 'name': 'distro'}

@@ -47,6 +47,10 @@ _OPENAI_COMPAT_EXTRA_MISSING = (
     'Model Garden Llama, Mistral, and other OpenAI-compatible models need the openai extra: '
     "uv add 'genkit-vertexai[openai]'"
 )
+# A missing extra fails with `e.name` set to one of these top-level packages.
+# Anything else (a broken transitive dependency or submodule) re-raises as-is.
+_ANTHROPIC_EXTRA = frozenset({'anthropic', 'genkit_anthropic'})
+_OPENAI_EXTRA = frozenset({'openai', 'genkit_openai'})
 
 
 def model_garden_name(name: str) -> str:
@@ -237,6 +241,8 @@ class ModelGarden(Plugin):
             try:
                 from .anthropic import AnthropicModelGarden as AnthropicWorker
             except ModuleNotFoundError as e:
+                if e.name not in _ANTHROPIC_EXTRA:
+                    raise
                 raise GenkitError(status='FAILED_PRECONDITION', message=_CLAUDE_EXTRA_MISSING) from e
 
             location = self.model_locations.get(clean_name, self.location)
@@ -266,6 +272,8 @@ class ModelGarden(Plugin):
         try:
             from genkit_openai import OpenAIConfig
         except ModuleNotFoundError as e:
+            if e.name not in _OPENAI_EXTRA:
+                raise
             raise GenkitError(status='FAILED_PRECONDITION', message=_OPENAI_COMPAT_EXTRA_MISSING) from e
 
         location = self.model_locations.get(clean_name, self.location)
@@ -310,7 +318,9 @@ class ModelGarden(Plugin):
         """
         try:
             from genkit_openai import OpenAIConfig
-        except ModuleNotFoundError:
+        except ModuleNotFoundError as e:
+            if e.name not in _OPENAI_EXTRA:
+                raise
             return []
 
         actions_list = []
