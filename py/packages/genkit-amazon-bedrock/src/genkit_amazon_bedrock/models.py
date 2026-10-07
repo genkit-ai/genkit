@@ -44,9 +44,8 @@ from botocore.exceptions import (
 )
 
 from genkit import ActionRunContext, GenkitError, ModelResponse
-from genkit._core._error import mark_provider_error
 from genkit.model import ModelRequest
-from genkit.plugin_api import ErrorResponseMetadata, StatusName, from_http_code
+from genkit.plugin_api import ErrorResponseMetadata, StatusName, from_http_code, mark_provider_error
 from genkit_amazon_bedrock.converters import build_converse_request, to_model_response, usage_log_fields
 from genkit_amazon_bedrock.stream import consume_converse_stream
 
