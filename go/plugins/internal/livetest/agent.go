@@ -332,6 +332,8 @@ func agentCases() []liveCase {
 			case <-r.tools.started:
 			default:
 			}
+			r.tools.holdDiagnostics.Store(true)
+			defer r.tools.holdDiagnostics.Store(false)
 			task, err := s.agent.RunDetached(r.ctx, &aix.AgentInput{Message: ai.NewUserTextMessage(
 				`Call the runDiagnostics tool with target "database" and tell me what it reports.`)}, aix.WithSessionID[any](s.id))
 			if err != nil {
@@ -372,6 +374,9 @@ func agentCases() []liveCase {
 			if snap.Status != aix.SnapshotStatusAborted {
 				t.Fatalf("Status = %q, want %q", snap.Status, aix.SnapshotStatusAborted)
 			}
+			// The user's request for diagnostics stays in history, and a model
+			// may run them on the next turn.
+			r.tools.holdDiagnostics.Store(false)
 
 			// The aborted turn left a tool request nothing answered; the
 			// conversation must carry on without it.

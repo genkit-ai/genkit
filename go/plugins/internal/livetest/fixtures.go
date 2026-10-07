@@ -83,9 +83,12 @@ type fixtures struct {
 	// each failure.
 	lookupOrder *ai.ToolAction[orderInput, orderResult]
 	failLookups atomic.Int32
-	// diagnostics blocks until its context ends, after signaling started.
-	diagnostics *ai.ToolAction[diagnosticsInput, string]
-	started     chan struct{}
+	// diagnostics blocks until its context ends, after signaling started,
+	// while holdDiagnostics is set, and reports at once otherwise: a model
+	// may run it again on a later turn, which must not stall.
+	diagnostics     *ai.ToolAction[diagnosticsInput, string]
+	started         chan struct{}
+	holdDiagnostics atomic.Bool
 	// swatch returns a red image inside its tool response.
 	swatch *ai.ToolAction[swatchInput, *ai.MultipartToolResponse]
 }
@@ -134,6 +137,9 @@ func defineFixtures(g *genkit.Genkit) *fixtures {
 	f.diagnostics = genkit.DefineTool(g, "runDiagnostics",
 		"Runs a diagnostic scan on a target system and returns its report.",
 		func(tc *ai.ToolContext, _ diagnosticsInput) (string, error) {
+			if !f.holdDiagnostics.Load() {
+				return "All systems nominal.", nil
+			}
 			select {
 			case f.started <- struct{}{}:
 			default:
