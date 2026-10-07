@@ -43,13 +43,15 @@ Example:
 
 Requirements:
     - Requires Google Cloud Application Default Credentials (ADC) or explicit credentials.
+    - Claude models need ``genkit-vertexai[anthropic]``; Llama, Mistral, and other
+      OpenAI-compatible models need ``genkit-vertexai[openai]``.
 
 See Also:
     - Vertex AI Model Garden: https://cloud.google.com/vertex-ai/docs/model-garden
     - Vertex AI Vector Search: https://cloud.google.com/vertex-ai/docs/vector-search
 """
 
-from genkit_vertexai.model_garden import ModelGarden, ModelGardenPlugin
+from genkit_vertexai.model_garden import ModelGarden
 
 
 def package_name() -> str:
@@ -63,6 +65,5 @@ def package_name() -> str:
 
 __all__ = [
     'ModelGarden',
-    'ModelGardenPlugin',
     'package_name',
 ]
