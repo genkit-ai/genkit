@@ -155,6 +155,22 @@ func TestCollectionOptionsAccumulate(t *testing.T) {
 		}
 	})
 
+	t.Run("resume sorts parts by kind and appends", func(t *testing.T) {
+		g := applyGen(
+			WithResume(
+				NewToolResponsePart(&ToolResponse{Name: "answered"}),
+				NewToolRequestPart(&ToolRequest{Name: "restarted"}),
+			),
+			WithResume(NewToolRequestPart(&ToolRequest{Name: "restartedToo"})),
+		)
+		if len(g.RespondParts) != 1 || g.RespondParts[0].ToolResponse.Name != "answered" {
+			t.Errorf("RespondParts = %+v, want the one response part", g.RespondParts)
+		}
+		if len(g.RestartParts) != 2 {
+			t.Errorf("len(RestartParts) = %d, want 2", len(g.RestartParts))
+		}
+	})
+
 	t.Run("dataset appends", func(t *testing.T) {
 		e := &evaluatorOptions{}
 		for _, o := range []EvaluatorOption{

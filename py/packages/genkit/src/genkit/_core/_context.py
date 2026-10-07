@@ -18,9 +18,23 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
-from typing import Any, Generic, TypeVar
+from collections.abc import Awaitable, Callable, Iterable
+from dataclasses import dataclass, field
+from typing import Any
+
+
+def joined_headers(pairs: Iterable[tuple[str, str]]) -> dict[str, str]:
+    """Collapse the same header name into one comma-joined value.
+
+    The same header can arrive twice (two Authorization lines, each hop in
+    an X-Forwarded-For chain). A context_provider looks the name up once, so
+    keep every part instead of dropping all but the last.
+    """
+    joined: dict[str, str] = {}
+    for key, value in pairs:
+        existing = joined.get(key)
+        joined[key] = value if existing is None else f'{existing}, {value}'
+    return joined
 
 
 @dataclass
@@ -30,22 +44,30 @@ class ContextMetadata:
     trace_id: str | None = None
 
 
-T = TypeVar('T')
-
-
 @dataclass
-class RequestData(Generic[T]):
-    """A universal type that request handling extensions.
+class RequestData:
+    """What a context_provider sees for one HTTP request.
 
-    For example, Flask can map their request to this type.  This allows
-    ContextProviders to build consistent interfaces on any web framework.
+    ``headers`` keys are lowercase so ``Authorization`` and ``authorization``
+    look the same on every served flow. Repeated names become one
+    comma-joined string, so ``headers.get('authorization')`` sees every
+    value that arrived.
     """
 
-    request: T
+    request: Any = None
+    method: str = ''
+    headers: dict[str, str] = field(default_factory=dict)
+    input: Any = None
     metadata: ContextMetadata | None = None
 
+    def __post_init__(self) -> None:
+        # Header names are case-insensitive on the wire. Lowercase them so
+        # Authorization and authorization are the same lookup, and join
+        # values when mixed-case keys collapse to one name.
+        self.headers = joined_headers((key.lower(), value) for key, value in self.headers.items())
 
-ContextProvider = Callable[[RequestData[T]], dict[str, Any] | Awaitable[dict[str, Any]]]
+
+ContextProvider = Callable[[RequestData], dict[str, Any] | Awaitable[dict[str, Any]]]
 """Middleware can read request data and add information to the context that will be passed to the
 Action. If middleware throws an error, that error will fail the request and the Action will not
 be called.

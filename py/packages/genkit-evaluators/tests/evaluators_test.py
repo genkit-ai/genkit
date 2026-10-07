@@ -23,10 +23,10 @@ from genkit import BaseDataPoint, Genkit
 from genkit.evaluator import EvalRequest, Score
 
 
-def _one_score(evaluation: Score | list[Score]) -> Score:
-    """Built-in evaluators return one Score for the row."""
-    assert isinstance(evaluation, Score)
-    return evaluation
+def _only_score(evaluation: list[Score]) -> Score:
+    """These evaluators return exactly one score per row."""
+    assert len(evaluation) == 1
+    return evaluation[0]
 
 
 @pytest.fixture
@@ -53,9 +53,9 @@ async def test_deep_equal(ai: Genkit) -> None:
     resp = await eval_action.run(input=req)
     results = resp.response.root
     assert len(results) == 3
-    assert _one_score(results[0].evaluation).score is True
-    assert _one_score(results[1].evaluation).score is False
-    assert _one_score(results[2].evaluation).error is not None
+    assert _only_score(results[0].evaluation).score is True
+    assert _only_score(results[1].evaluation).score is False
+    assert _only_score(results[2].evaluation).error is not None
 
 
 @pytest.mark.asyncio
@@ -75,9 +75,9 @@ async def test_regex(ai: Genkit) -> None:
     resp = await eval_action.run(input=req)
     results = resp.response.root
     assert len(results) == 3
-    assert _one_score(results[0].evaluation).score is True
-    assert _one_score(results[1].evaluation).score is False
-    assert _one_score(results[2].evaluation).error is not None
+    assert _only_score(results[0].evaluation).score is True
+    assert _only_score(results[1].evaluation).score is False
+    assert _only_score(results[2].evaluation).error is not None
 
 
 @pytest.mark.asyncio
@@ -97,12 +97,12 @@ async def test_jsonata(ai: Genkit) -> None:
     resp = await eval_action.run(input=req)
     results = resp.response.root
     assert len(results) == 3
-    first = _one_score(results[0].evaluation)
+    first = _only_score(results[0].evaluation)
     assert first.score is not False and first.score != ''
     # age=31 with age 33 -> false or empty result -> FAIL
-    second = _one_score(results[1].evaluation)
+    second = _only_score(results[1].evaluation)
     assert second.score is False or second.status == 'FAIL'
-    assert _one_score(results[2].evaluation).error is not None
+    assert _only_score(results[2].evaluation).error is not None
 
 
 @pytest.mark.asyncio
@@ -121,7 +121,8 @@ async def test_built_in_evaluators_return_one_score(ai: Genkit, evaluator: str, 
         dataset=[BaseDataPoint.model_validate({**datapoint, 'test_case_id': 'case1'})],
     )
 
-    assert len(response.root) == 1
-    assert response.root[0].test_case_id == 'case1'
-    evaluation = _one_score(response.root[0].evaluation)
-    assert evaluation.status == 'PASS'
+    assert [row.test_case_id for row in response] == ['case1']
+    evaluation = response[0].evaluation
+    assert isinstance(evaluation, list)
+    assert len(evaluation) == 1
+    assert evaluation[0].status == 'PASS'
