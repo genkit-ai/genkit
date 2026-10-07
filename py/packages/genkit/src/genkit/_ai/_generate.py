@@ -93,6 +93,7 @@ from genkit._core._model import (
 from genkit._core._protocols import RegistryLike
 from genkit._core._registry import Registry
 from genkit._core._schema import check_output_schema
+from genkit._core._secrets import reject_config_api_key
 from genkit._core._telemetry._instrumentation import SpanContext, run_in_new_span, set_span_state
 from genkit._core._tool import Tool
 from genkit._core._typing import (
@@ -766,6 +767,9 @@ async def run_generate(
             message=f'max turns cannot be negative, got {options.max_turns}',
             reason=RuntimeErrorReason.INVALID_INPUT,
         )
+    # The veneer already checked ahead of its span. /util/generate (Dev UI,
+    # reflection) starts here, so it fails before middleware or the model runs.
+    reject_config_api_key(options.config)
     registry = registry if registry.is_child else registry.new_child()
 
     if options.tools:

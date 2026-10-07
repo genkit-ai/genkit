@@ -51,6 +51,7 @@ from genkit._core._model import (
 )
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
+from genkit._core._secrets import reject_config_api_key
 from genkit._core._typing import ActionMetadata, GenerationCommonConfig, ModelInfo
 
 # Type alias for model functions (must be async)
@@ -567,7 +568,7 @@ def _describe_config_problems(
             repeated[field] = sorted(spellings, key=lambda k: k != field)
         else:
             unknown.append(key)
-    parts = [f'{" and ".join(spellings)} are the same setting; pass one' for spellings in repeated.values()]
+    parts = [f'{_join_words(spellings)} are the same setting; pass one' for spellings in repeated.values()]
     if unknown:
         keys = ', '.join(repr(key) for key in unknown)
         noun = 'key' if len(unknown) == 1 else 'keys'
@@ -578,6 +579,13 @@ def _describe_config_problems(
     return '; '.join(parts)
 
 
+def _join_words(words: list[str]) -> str:
+    """`a and b`, or `a, b, and c` for three or more."""
+    if len(words) <= 2:
+        return ' and '.join(words)
+    return f'{", ".join(words[:-1])}, and {words[-1]}'
+
+
 def _config_path(loc: tuple[int | str, ...]) -> str:
     return '.'.join(str(part) for part in loc)
 
@@ -586,24 +594,6 @@ def check_call_config(*, config: object, schema: type[BaseModel] | None, model: 
     """Call-time config check: a typed object's class and a dict's keys and values."""
     assert_correct_config_class(config=config, schema=schema, model=model)
     check_config_dict(config=config, schema=schema, model=model)
-
-
-def reject_config_api_key(config: Mapping[str, Any]) -> None:
-    """A per-request key in config raises on every model, with or without a config class.
-
-    Config is recorded in traces and a plugin may not read a key from it, so
-    the caller is pointed at ``context.secrets`` rather than told the key is
-    unknown. What's inside ``extra`` isn't checked.
-    """
-    if config.get('api_key') is None and config.get('apiKey') is None:
-        return
-    raise GenkitError(
-        status='INVALID_ARGUMENT',
-        message=(
-            "API key belongs in context.secrets, not config. Pass the key as context={'secrets': {'api_key': ...}}."
-        ),
-        reason=RuntimeErrorReason.INVALID_INPUT,
-    )
 
 
 def _config_values(config: BaseModel) -> dict[str, Any]:

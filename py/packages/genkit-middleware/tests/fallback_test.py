@@ -20,7 +20,7 @@ from typing import Any, NoReturn
 
 import pytest
 from genkit_middleware import Fallback
-from pydantic import Field
+from pydantic import Field, ValidationError
 
 from genkit import (
     ActionRunContext,
@@ -329,3 +329,15 @@ async def test_fallback_streams_chunks_from_the_fallback_model() -> None:
 
     assert 'from-backup' in ''.join(texts)
     assert final.text == 'done'
+
+
+def test_fallback_given_a_model_action_names_the_string_to_pass() -> None:
+    """Fallback config is JSON, so a define_model action is refused with its name in the message."""
+
+    async def backup(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+        return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))
+
+    backup_model = Genkit().define_model(name='backup', fn=backup)
+
+    with pytest.raises(ValidationError, match="pass 'backup', not the action"):
+        Fallback(models=[backup_model])

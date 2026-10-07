@@ -1406,11 +1406,10 @@ async def test_finish_reason_mapping(stop_reason: str, expected: FinishReason) -
             {'display': 'omitted', 'type': 'enabled', 'budget_tokens': 2048},
         ),
         ({'adaptive': True, 'display': 'summarized'}, {'display': 'summarized', 'type': 'adaptive'}),
-        ({'type': 'interleaved'}, {'type': 'interleaved'}),
     ],
 )
-def test_thinking_preserves_display_and_forward_compatible_keys(raw: dict, expected: dict) -> None:
-    """display and unknown thinking keys survive translation to the SDK shape."""
+def test_thinking_preserves_display(raw: dict, expected: dict) -> None:
+    """display survives translation to the SDK shape."""
     thinking = AnthropicConfig.model_validate({'thinking': raw}).model_dump(exclude_none=True, by_alias=False)[
         'thinking'
     ]

@@ -48,6 +48,7 @@ from genkit.plugin_api import (
     ActionKind,
     ActionMetadata,
     Plugin,
+    context_api_key,
     loop_local_client,
     to_json_schema,
 )
@@ -67,8 +68,21 @@ from genkit_openai._models._audio import OpenAISttConfig, OpenAITtsConfig
 from genkit_openai._models._image import OpenAIDalleConfig, OpenAIGptImageConfig
 from genkit_openai._models._model_info import KnownGpt, get_default_openai_model_info
 from genkit_openai._models._utils import reraise_openai_error
-from genkit_openai._secrets import context_api_key, missing_key_error, reject_config_api_key
 from genkit_openai._typing import OpenAIConfig
+
+# Headers that tie a call to the plugin's OpenAI organization or project. A
+# tenant key runs under the tenant's own account, so these are not copied.
+_PLUGIN_ACCOUNT_HEADERS = frozenset({'openai-organization', 'openai-project'})
+
+
+def _missing_key_error() -> GenkitError:
+    return GenkitError(
+        status='FAILED_PRECONDITION',
+        message=(
+            'OpenAI needs an API key: set OPENAI_API_KEY or pass OpenAI(api_key=...), '
+            "or send a per-request key as context={'secrets': {'api_key': ...}}."
+        ),
+    )
 
 
 def open_ai_name(name: str) -> str:
@@ -311,7 +325,13 @@ class OpenAI(Plugin):
         # never sent: every call through it swaps in the caller's key first.
         tenant_only_params: dict[str, Any] = {**openai_params, 'api_key': 'unset'}
         self._tenant_only_client = loop_local_client(lambda: AsyncOpenAI(**tenant_only_params))
+        plugin_headers: dict[str, str] = dict(openai_params.get('default_headers') or {})
+        self._tenant_headers = {k: v for k, v in plugin_headers.items() if k.lower() not in _PLUGIN_ACCOUNT_HEADERS}
+        self._pins_authorization = any(k.lower() == 'authorization' for k in plugin_headers)
         self._list_actions_cache: list[ActionMetadata] | None = None
+
+    def _has_plugin_key(self) -> bool:
+        return bool(self._openai_params.get('api_key') or os.environ.get('OPENAI_API_KEY'))
 
     async def init(self) -> list[Action]:
         """Initialize plugin.
@@ -408,18 +428,55 @@ class OpenAI(Plugin):
         A tenant who passed their own key is the one who should be billed. The
         copy shares the plugin client's connection pool, and concurrent tenants
         each get their own copy instead of swapping the key on a shared client.
-        A plugin built without a key serves only callers who bring one. A key
-        on ``request.config`` raises instead of being dropped, because running
-        that call on the plugin's key would bill the wrong account.
+        A plugin built without a key serves only callers who bring one.
         """
-        reject_config_api_key(request.config)
-        key = context_api_key(ctx.context or {})
-        if self._openai_params.get('api_key') or os.environ.get('OPENAI_API_KEY'):
+        key = context_api_key(ctx.context)
+        if self._has_plugin_key():
             client = self._runtime_client()
-            return client.with_options(api_key=key) if key else client
+            return self._with_tenant_key(client, key) if key else client
         if key is None:
-            raise missing_key_error()
-        return self._tenant_only_client().with_options(api_key=key)
+            raise _missing_key_error()
+        return self._with_tenant_key(self._tenant_only_client(), key)
+
+    def _with_tenant_key(self, client: AsyncOpenAI, key: str) -> AsyncOpenAI:
+        """A copy of ``client`` that authenticates as the tenant and nothing else.
+
+        The tenant's key picks its own organization and project, so the
+        plugin's ``organization``, ``project`` (including ``OPENAI_ORG_ID`` and
+        ``OPENAI_PROJECT_ID``) and the matching ``default_headers`` are left
+        off. Sent with a foreign key they fail with 401, or bill the plugin's
+        project when the tenant is a member. ``base_url``, timeouts, retries
+        and other headers carry over.
+        """
+        if self._pins_authorization:
+            raise GenkitError(
+                status='FAILED_PRECONDITION',
+                message=(
+                    'OpenAI(default_headers=...) pins an Authorization header, which would replace '
+                    'the context.secrets key. Drop that header to serve per-request keys.'
+                ),
+            )
+        tenant = client.with_options(api_key=key, set_default_headers=self._tenant_headers)
+        tenant.organization = None
+        tenant.project = None
+        return tenant
+
+    def _embed_client(self) -> AsyncOpenAI:
+        """The plugin's client for embedders, which run on the plugin's key only.
+
+        ``Genkit.embed()`` takes no ``context``, so a ``context.secrets`` key
+        can't reach an embedder.
+        """
+        if not self._has_plugin_key():
+            raise GenkitError(
+                status='FAILED_PRECONDITION',
+                message=(
+                    "OpenAI embedders need the plugin's API key: set OPENAI_API_KEY or pass "
+                    'OpenAI(api_key=...). embed() takes no context, so context.secrets keys '
+                    "don't reach embedders."
+                ),
+            )
+        return self._runtime_client()
 
     def _create_model_action(self, name: str) -> Action:
         """Create an Action object for an OpenAI model.
@@ -528,28 +585,29 @@ class OpenAI(Plugin):
                     encoding_format = 'float'
 
             # Call with only non-None optional params to satisfy strict typings
+            client = self._embed_client()
             try:
                 if dimensions is not None and encoding_format is not None:
-                    response = await self._runtime_client().embeddings.create(
+                    response = await client.embeddings.create(
                         model=name,
                         input=texts,
                         dimensions=dimensions,
                         encoding_format=encoding_format,
                     )
                 elif dimensions is not None:
-                    response = await self._runtime_client().embeddings.create(
+                    response = await client.embeddings.create(
                         model=name,
                         input=texts,
                         dimensions=dimensions,
                     )
                 elif encoding_format is not None:
-                    response = await self._runtime_client().embeddings.create(
+                    response = await client.embeddings.create(
                         model=name,
                         input=texts,
                         encoding_format=encoding_format,
                     )
                 else:
-                    response = await self._runtime_client().embeddings.create(
+                    response = await client.embeddings.create(
                         model=name,
                         input=texts,
                     )
@@ -580,8 +638,12 @@ class OpenAI(Plugin):
         to categorize models as embedders, image generators, TTS, STT, or chat.
 
         Returns:
-            list[ActionMetadata]: A list of ActionMetadata objects.
+            list[ActionMetadata]: A list of ActionMetadata objects. Empty for a
+            plugin without its own key: listing models needs one, and the
+            built-in catalog ``init`` registers is already in the Dev UI.
         """
+        if not self._has_plugin_key():
+            return []
         if self._list_actions_cache is not None:
             return self._list_actions_cache
 
