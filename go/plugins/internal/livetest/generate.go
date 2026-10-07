@@ -454,7 +454,7 @@ func generateCases() []liveCase {
 		{"image input", needVision, func(t *testing.T, r *runner) {
 			resp := r.gen(t, r.vision,
 				ai.WithMessages(ai.NewUserMessage(
-					ai.NewMediaPart("image/png", redImage),
+					ai.NewMediaPart("image/png", RedImage),
 					ai.NewTextPart("What is the dominant color of this image? Reply with one word."),
 				)))
 			wantReply(t, resp, "red")

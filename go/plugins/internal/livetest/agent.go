@@ -297,7 +297,7 @@ func agentCases() []liveCase {
 			}
 			s := r.newSession(t, r.vision, opts...)
 			s.ask(t, ai.NewUserMessage(
-				ai.NewMediaPart("image/png", redImage),
+				ai.NewMediaPart("image/png", RedImage),
 				ai.NewTextPart("Remember this image. Reply with just OK.")))
 			s.askText(t, "What is the dominant color of the image I sent? Reply with one word.", "red")
 			if !caps.Tools {

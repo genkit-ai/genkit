@@ -151,16 +151,17 @@ func defineFixtures(g *genkit.Genkit) *fixtures {
 		func(_ *ai.ToolContext, _ swatchInput) (*ai.MultipartToolResponse, error) {
 			return &ai.MultipartToolResponse{
 				Output:  map[string]any{"attached": true},
-				Content: []*ai.Part{ai.NewMediaPart("image/png", redImage)},
+				Content: []*ai.Part{ai.NewMediaPart("image/png", RedImage)},
 			}, nil
 		})
 
 	return f
 }
 
-// redImage is a solid red 100x100 PNG as a data URL, big enough that every
-// provider's minimum-size check accepts it.
-var redImage = func() string {
+// RedImage is a solid red 100x100 PNG as a data URL, big enough that every
+// provider's minimum-size check accepts it. Plugin tiers use it for their
+// own image cases.
+var RedImage = func() string {
 	img := image.NewRGBA(image.Rect(0, 0, 100, 100))
 	draw.Draw(img, img.Bounds(), &image.Uniform{C: color.RGBA{R: 255, A: 255}}, image.Point{}, draw.Src)
 	var buf bytes.Buffer
