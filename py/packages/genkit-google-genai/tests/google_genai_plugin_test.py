@@ -173,11 +173,13 @@ async def test_vertexai_with_api_key_and_no_project_evaluate_unknown_name_says_n
     mock_list_models.return_value = GenaiModels()
     with patch.dict(os.environ, {'GCLOUD_PROJECT': '', 'GOOGLE_CLOUD_PROJECT': ''}):
         ai = Genkit(plugins=[VertexAI(api_key='k')])
-        with pytest.raises(ValueError, match='Evaluator "vertexai/not-a-metric" not found'):
+        with pytest.raises(GenkitError) as exc_info:
             await ai.evaluate(
                 evaluator='vertexai/not-a-metric',
                 dataset=[BaseDataPoint(input='hi', output='hello')],
             )
+        assert exc_info.value.status == 'NOT_FOUND'
+        assert 'vertexai/not-a-metric' in str(exc_info.value)
 
 
 @patch('genkit_google_genai._google.genai.client.Client')
