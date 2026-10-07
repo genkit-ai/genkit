@@ -41,6 +41,12 @@ CLIENT_OPTION_KEYS = frozenset({
     'experimental_debug_traces',
 })
 
+EXTRA_DESCRIPTION = (
+    "Interactions API fields this class doesn't declare, in the API's snake_case wire names. Merged into "
+    'the top level of the create body after everything else, and nested objects merge key by key, so a key '
+    'named here wins. Not checked; do not put API keys here.'
+)
+
 
 def get_api_key_from_env() -> str | None:
     """Read a Gemini API key from common environment variables."""

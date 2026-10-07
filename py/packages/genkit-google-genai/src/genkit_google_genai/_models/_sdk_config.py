@@ -118,7 +118,8 @@ def _existing_wire_key(target: dict[str, Any], key: str) -> str | None:
     return None
 
 
-def _deep_merge(target: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:
+def deep_merge(target: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:
+    """Nested dicts merge so one key in ``extra`` does not wipe the siblings next to it."""
     merged = dict(target)
     for key, value in update.items():
         existing = _existing_wire_key(merged, key)
@@ -127,7 +128,7 @@ def _deep_merge(target: dict[str, Any], update: dict[str, Any]) -> dict[str, Any
             continue
         current = merged[existing]
         if isinstance(current, dict) and isinstance(value, dict):
-            merged[existing] = _deep_merge(cast(dict[str, Any], current), cast(dict[str, Any], value))
+            merged[existing] = deep_merge(cast(dict[str, Any], current), cast(dict[str, Any], value))
         else:
             merged[existing] = value
     return merged
@@ -159,7 +160,7 @@ def attach_config_extra(
             ),
         )
     http = config.http_options or genai_types.HttpOptions()
-    http.extra_body = _deep_merge(dict(http.extra_body or {}), extra)
+    http.extra_body = deep_merge(dict(http.extra_body or {}), extra)
     config.http_options = http
     return config
 
@@ -174,7 +175,7 @@ def keep_client_extra_body(config: Any, client_http_options: object) -> Any:  # 
     request_body = config.http_options.extra_body if config.http_options else None
     client_body = getattr(client_http_options, 'extra_body', None)
     if request_body and isinstance(client_body, dict):
-        config.http_options.extra_body = _deep_merge(cast(dict[str, Any], client_body), request_body)
+        config.http_options.extra_body = deep_merge(cast(dict[str, Any], client_body), request_body)
     return config
 
 

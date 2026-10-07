@@ -80,6 +80,20 @@ config = GeminiConfig.model_validate({
 `systemInstruction`, `tools`, `toolConfig`, the structured-output fields of
 `generationConfig`, `cachedContent`); those raise `INVALID_ARGUMENT`.
 
+Antigravity, Interactions Lyria, and Deep Research work the same way. Their
+`extra` is merged into the Interactions create body, which uses snake_case
+names, and a nested object merges key by key:
+
+```python
+op = await ai.generate_operation(
+    model='googleai/deep-research-preview-04-2026',
+    prompt='Summarize recent advances in quantum error correction.',
+    config={'thinking_summaries': 'auto', 'extra': {'agent_config': {'visualization': 'auto'}}},
+)
+# create body: {..., "agent_config": {"type": "deep-research",
+#                                     "thinking_summaries": "auto", "visualization": "auto"}}
+```
+
 ### Video generation (Veo)
 
 Video is a job, not a round-trip. `generate_operation` hands back a ticket;

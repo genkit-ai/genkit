@@ -20,12 +20,11 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
 
 from genkit import ActionRunContext, Operation
-from genkit.model import BackgroundAction, ModelRef, ModelRequest, model_ref
-from genkit.plugin_api import Action, ActionKind, to_json_schema
+from genkit.model import BackgroundAction, ModelRef, ModelRequest, background_model, model_ref
 from genkit_google_genai._interactions._client import (
     cancel_interaction,
     create_interaction,
@@ -39,6 +38,7 @@ from genkit_google_genai._interactions._converters import (
 from genkit_google_genai._interactions._options import ClientOptions
 from genkit_google_genai._models._interactions_registry import deep_research_model_info
 from genkit_google_genai._models._interactions_utils import (
+    EXTRA_DESCRIPTION,
     api_key_for_context,
     client_overrides_from_config,
     extract_version,
@@ -48,6 +48,7 @@ from genkit_google_genai._models._interactions_utils import (
     remove_client_option_overrides,
     steps_with_folded_system_instruction,
 )
+from genkit_google_genai._models._sdk_config import deep_merge
 from genkit_google_genai._models._secrets import reject_request_config_api_key
 
 AGENT_CONFIG_KEYS = (
@@ -72,7 +73,7 @@ CREATE_OPTION_KEYS = (
 class McpServerConfig(BaseModel):
     """MCP server configuration for Deep Research."""
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True, alias_generator=to_camel)
+    model_config = ConfigDict(extra='forbid', populate_by_name=True, alias_generator=to_camel)
     name: str | None = None
     url: str | None = None
     headers: dict[str, str] | None = None
@@ -82,14 +83,19 @@ class McpServerConfig(BaseModel):
 class FileSearchConfig(BaseModel):
     """File search store configuration for Deep Research."""
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True, alias_generator=to_camel)
+    model_config = ConfigDict(extra='forbid', populate_by_name=True, alias_generator=to_camel)
     file_search_store_names: list[str]
 
 
 class DeepResearchConfig(BaseModel):
-    """Deep Research model configuration."""
+    """Deep Research model configuration.
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True, alias_generator=to_camel)
+    Unknown keys are rejected, including inside ``file_search`` and
+    ``mcp_servers``. An API field this class doesn't declare goes in ``extra``,
+    which is deep-merged into the create body.
+    """
+
+    model_config = ConfigDict(extra='forbid', populate_by_name=True, alias_generator=to_camel)
     base_url: str | None = None
     api_version: str | None = None
     # Milliseconds — applied to the HTTP call, not the create body.
@@ -106,6 +112,7 @@ class DeepResearchConfig(BaseModel):
     code_execution: bool | None = None
     file_search: FileSearchConfig | None = None
     mcp_servers: list[McpServerConfig] | None = None
+    extra: dict[str, Any] | None = Field(default=None, description=EXTRA_DESCRIPTION)
 
     @field_validator('thinking_summaries', 'visualization', mode='before')
     @classmethod
@@ -174,12 +181,9 @@ def create_deep_research_background_action(
     name = target.name if isinstance(target, ModelRef) else target
     version = extract_version(name)
     info = deep_research_model_info(version)
+    # A saved handle is `/background-model/googleai/<id>`, so the registered
+    # name is always `googleai/<id>` even when the caller passed the bare id.
     full_name = name if '/' in name else f'googleai/{name}'
-    action_key = f'/background-model/{full_name}'
-
-    def persist(operation: Operation) -> Operation:
-        operation.action = action_key
-        return operation
 
     async def start(request: ModelRequest[DeepResearchConfig], ctx: ActionRunContext) -> Operation:
         reject_request_config_api_key(request.config)
@@ -188,7 +192,9 @@ def create_deep_research_background_action(
         options = client_options.merge(client_overrides_from_config(config))
 
         dumped = remove_client_option_overrides(config.model_dump(exclude_none=True))
-        agent_fields, _tool_fields, create_options, passthrough = partition_keys(
+        raw_extra = dumped.pop('extra', None)
+        extra: dict[str, Any] = raw_extra if isinstance(raw_extra, dict) else {}
+        agent_fields, _tool_fields, create_options, _ = partition_keys(
             dumped,
             AGENT_CONFIG_KEYS,
             TOOL_CONFIG_KEYS,
@@ -204,15 +210,14 @@ def create_deep_research_background_action(
             'background': True,
             'agent_config': agent_config,
             **create_options,
-            **passthrough,
         }
         if tools:
             create_kwargs['tools'] = tools
         if response_format is not None:
             create_kwargs['response_format'] = response_format
 
-        interaction = await create_interaction(api_key, create_kwargs, options)
-        return persist(from_interaction(interaction))
+        interaction = await create_interaction(api_key, deep_merge(create_kwargs, extra), options)
+        return from_interaction(interaction)
 
     def _op_key_and_options(ctx: ActionRunContext) -> tuple[str, ClientOptions]:
         call_config = ctx.context.get('config')
@@ -222,36 +227,19 @@ def create_deep_research_background_action(
     async def check(operation: Operation, ctx: ActionRunContext) -> Operation:
         api_key, options = _op_key_and_options(ctx)
         interaction = await get_interaction(api_key, operation.id, options)
-        return persist(from_interaction(interaction))
+        return from_interaction(interaction)
 
     async def cancel(operation: Operation, ctx: ActionRunContext) -> Operation:
         api_key, options = _op_key_and_options(ctx)
         interaction = await cancel_interaction(api_key, operation.id, options)
-        return persist(from_interaction(interaction))
+        return from_interaction(interaction)
 
-    start_action = Action(
-        kind=ActionKind.BACKGROUND_MODEL,
-        name=full_name,
-        fn=start,
-        metadata={
-            'model': {**info.model_dump(by_alias=True), 'customOptions': to_json_schema(DeepResearchConfig)},
-            'type': 'background-model',
-        },
-    )
-    check_action = Action(
-        kind=ActionKind.CHECK_OPERATION,
-        name=f'{full_name}/check',
-        fn=check,
-        metadata={'type': 'check-operation'},
-    )
-    cancel_action = Action(
-        kind=ActionKind.CANCEL_OPERATION,
-        name=f'{full_name}/cancel',
-        fn=cancel,
-        metadata={'type': 'cancel-operation'},
-    )
-    return BackgroundAction(
-        start_action=start_action,
-        check_action=check_action,
-        cancel_action=cancel_action,
+    return background_model(
+        full_name,
+        start,
+        check,
+        cancel=cancel,
+        info=info,
+        config_schema=DeepResearchConfig,
+        metadata={'type': 'background-model'},
     )
