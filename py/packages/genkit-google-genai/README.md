@@ -57,12 +57,12 @@ async def greet(name: str) -> str:
 
 The plugin automatically discovers available models from the API upon initialization. You can use any model name supported by the API (e.g., `GoogleAI.gemini_model('gemini-flash-latest')`, `VertexAI.gemini_model('gemini-3.1-pro-preview')`).
 
-### Dynamic Configuration
+### Provider fields the plugin doesn't declare
 
-Unknown config keys raise before the request is sent, so a typo like
-`temprature` fails instead of being dropped. A request field the schema doesn't
-declare yet goes in `extra` under its REST wire name. It's merged over the top
-of the request body, recursing into nested objects:
+Gemini, Gemini image, and Veo configs reject keys they don't declare, so a
+typo like `temprature` fails before the request is sent. A request field the
+schema doesn't declare yet goes in `extra` under its REST wire name. It's
+merged over the top of the request body, recursing into nested objects:
 
 ```python
 from genkit_google_genai import GeminiConfig
