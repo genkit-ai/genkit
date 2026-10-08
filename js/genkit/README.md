@@ -376,6 +376,21 @@ const res = await chat.send('Now say that in French');
 console.log(res.text);
 ```
 
+A turn that fails keeps the tool rounds it completed: the conversation as it stood at the last turn seam persists as a `failed` snapshot carrying the error, and the `AgentError` names it. A run you stop (aborting the signal you passed to `send`, or calling `abort()` on a background task) persists an `aborted` snapshot the same way. Both resume like any other snapshot, and an input with no payload runs the turn again on the committed messages, so tool calls that already succeeded are not repeated:
+
+```ts
+try {
+  await chat.send('Book the full itinerary.');
+} catch (err) {
+  if (err instanceof AgentError) {
+    // The chat already adopted the failed snapshot; re-attempt the turn once.
+    await chat.send({});
+  }
+}
+```
+
+Whether a failure is worth another attempt is yours to decide; the framework records the error and leaves the snapshot resumable either way. `err.status` is the model's own status for a model error, and `INTERNAL` for a failed tool whatever the tool threw. Custom agents opt in by throwing `CommittedTurnError`; a bare error rolls the turn back to the previous snapshot. A custom agent that commits failures also has to handle the input with no message or resume that re-attempts a turn, since the runner hands it over as it is.
+
 Agents can be served over HTTP and accessed from the client with `remoteAgent`, which returns the exact same chat API as the server:
 
 ```ts
