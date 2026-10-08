@@ -414,13 +414,15 @@ type ollamaUsage struct {
 
 // toGenkit maps Ollama's counts onto [ai.GenerationUsage]'s convention.
 // Thinking is inside eval_count with no separate count, so ThoughtsTokens
-// stays zero.
+// stays zero. The input is never less than its cached part, which an older
+// server reports with no prompt_eval_count.
 func (u ollamaUsage) toGenkit() *ai.GenerationUsage {
+	input := max(u.PromptEvalCount, u.PromptEvalCachedCount)
 	return &ai.GenerationUsage{
-		InputTokens:         u.PromptEvalCount,
+		InputTokens:         input,
 		CachedContentTokens: u.PromptEvalCachedCount,
 		OutputTokens:        u.EvalCount,
-		TotalTokens:         u.PromptEvalCount + u.EvalCount,
+		TotalTokens:         input + u.EvalCount,
 	}
 }
 

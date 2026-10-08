@@ -1190,3 +1190,14 @@ func TestGenerateReportsUsage(t *testing.T) {
 		})
 	}
 }
+
+// TestUsageInputCoversCache pins the input to at least its cached part. An
+// older server leaves prompt_eval_count out when the whole prompt came from
+// the cache, which would report more cached tokens than input tokens.
+func TestUsageInputCoversCache(t *testing.T) {
+	got := ollamaUsage{PromptEvalCachedCount: 20, EvalCount: 9}.toGenkit()
+	want := &ai.GenerationUsage{InputTokens: 20, CachedContentTokens: 20, OutputTokens: 9, TotalTokens: 29}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("toGenkit() = %+v, want %+v", got, want)
+	}
+}
