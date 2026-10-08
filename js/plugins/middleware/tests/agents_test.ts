@@ -15,8 +15,14 @@
  */
 
 import * as assert from 'assert';
-import { z, type MessageData } from 'genkit';
-import { InMemorySessionStore, Session, genkit } from 'genkit/beta';
+import { GenkitError, z, type MessageData } from 'genkit';
+import {
+  InMemorySessionStore,
+  Session,
+  genkit,
+  type SessionSnapshot,
+  type SessionStore,
+} from 'genkit/beta';
 import { describe, it } from 'node:test';
 import { agents } from '../src/agents.js';
 import { artifacts } from '../src/artifacts.js';
@@ -1766,6 +1772,45 @@ describe('agents middleware (async)', () => {
     gate.release();
   });
 
+  it('fails a cancelled check or abort call without stopping the task', async () => {
+    const ai = genkit({});
+    const gate = makeGate();
+    const researcher = defineGatedResearcher(ai, 'researcher', gate.opened);
+    const task = await researcher.chat().detach('dig');
+    const def = agents.instantiate({
+      config: { agents: ['researcher'], async: true },
+      ai,
+      pluginConfig: undefined,
+    });
+    const taskIds = [`researcher:${task.snapshotId}`];
+    const cancelled = AbortSignal.abort();
+    for (const name of [CHECK_TOOL, ABORT_TOOL]) {
+      const t = def.tools!.find((t) => t.__action.name === name)!;
+      await assert.rejects(
+        t({ taskIds }, { abortSignal: cancelled }),
+        (e: any) => e?.name === 'AbortError',
+        `${name} must fail as a whole`
+      );
+    }
+    const row = await researcher.getSnapshotData({
+      snapshotId: task.snapshotId,
+    });
+    assert.strictEqual(row?.status, 'pending', 'the task must keep running');
+    gate.release();
+  });
+
+  it('rejects an agent reference without a name', () => {
+    assert.throws(
+      () =>
+        agents.instantiate({
+          config: { agents: [''] },
+          ai: genkit({}),
+          pluginConfig: undefined,
+        }),
+      (e: any) => e.status === 'INVALID_ARGUMENT'
+    );
+  });
+
   it('says when an abort cannot reach the worker', async () => {
     const ai = genkit({});
     const gate = makeGate();
@@ -1806,7 +1851,7 @@ describe('agents middleware (async)', () => {
     );
   });
 
-  it('does not advertise task handles on a synchronous instance', async () => {
+  it('does not advertise background work on a synchronous instance', async () => {
     const ai = genkit({});
     ai.defineAgent({
       name: 'researcher',
@@ -1834,12 +1879,13 @@ describe('agents middleware (async)', () => {
     assert.ok(delegateDef, 'the delegation tool must reach the model');
     // The schemas are what the model reads: nothing in them may point at
     // background tasks or the tools that collect them, which this instance
-    // does not have.
+    // does not have. The task handle stays: it is what continue_task spends.
     const inputSchema = JSON.stringify(delegateDef.inputSchema);
     const outputSchema = JSON.stringify(delegateDef.outputSchema);
-    assert.ok(!inputSchema.includes('background'));
-    assert.ok(!outputSchema.includes('taskId'));
-    assert.ok(!outputSchema.includes('background'));
+    assert.ok(!inputSchema.includes('background'), inputSchema);
+    assert.ok(!outputSchema.includes('background'), outputSchema);
+    assert.ok(!outputSchema.includes(CHECK_TOOL), outputSchema);
+    assert.ok(outputSchema.includes('continue_task'), outputSchema);
   });
 
   it('times out a wait, reporting running tasks as pending and keeping unresolvable errors', async () => {
@@ -2259,7 +2305,7 @@ describe('agents middleware (async)', () => {
     const abortTool = def.tools!.find((t) => t.__action.name === ABORT_TOOL)!;
     const out = await abortTool({ taskIds: [`researcher:${task.snapshotId}`] });
     assert.strictEqual(out.tasks[0].status, 'unknown');
-    assert.match(out.tasks[0].error, /not started in this conversation/);
+    assert.match(out.tasks[0].error, /not issued in this conversation/);
     const row = await researcher.getSnapshotData({
       snapshotId: task.snapshotId,
     });
@@ -2333,5 +2379,1003 @@ describe('agents middleware (async)', () => {
     assert.strictEqual(wait.tasks[0].status, 'completed');
     assert.strictEqual(wait.tasks[0].response, 'working on it');
     assert.strictEqual(wait.tasks[0].error, undefined);
+  });
+});
+
+const CONTINUE_TOOL = 'continue_task';
+
+type Genkit = ReturnType<typeof genkit>;
+
+/** The text of every message, joined, for "the run saw X" assertions. */
+function joinedText(messages: MessageData[]): string {
+  return messages
+    .flatMap((m) => m.content)
+    .map((p) => p.text ?? '')
+    .join('\n');
+}
+
+/**
+ * A sub-agent model that fails its first `n` calls and then answers `text`,
+ * recording each request's messages in `seen`.
+ */
+function failNTimesModel(
+  ai: Genkit,
+  n: number,
+  text: string,
+  seen?: MessageData[][]
+) {
+  let calls = 0;
+  return ai.defineModel({ name: 'flaky-' + Math.random() }, async (req) => {
+    seen?.push(req.messages);
+    calls++;
+    if (calls <= n) throw new Error('model melted');
+    return textResponse(text);
+  });
+}
+
+/** Defines a store-backed prompt agent on `model`. */
+function defineKeeper(
+  ai: Genkit,
+  name: string,
+  model: ReturnType<typeof failNTimesModel>,
+  store: SessionStore = new InMemorySessionStore()
+) {
+  return ai.defineAgent({ name, model, system: 'You keep going.', store });
+}
+
+/**
+ * Runs an orchestrator whose `step` picks the next model response from the
+ * conversation so far, with the agents middleware configured by `config`.
+ * `history` is the conversation before this call (see {@link mintedBy}).
+ */
+async function orchestrate(
+  ai: Genkit,
+  config: Parameters<typeof agents>[0],
+  step: (
+    messages: MessageData[]
+  ) => ReturnType<typeof toolRequest> | ReturnType<typeof textResponse>,
+  history: MessageData[] = []
+) {
+  const model = ai.defineModel(
+    { name: 'orch-continue-' + Math.random() },
+    async (req) => step(req.messages)
+  );
+  return ai.generate({
+    model,
+    messages: history,
+    prompt: 'go',
+    maxTurns: 10,
+    use: [agents(config)],
+  });
+}
+
+/** The newest output of `toolName` in `messages`, if any. */
+function lastOutput(messages: MessageData[], toolName: string): any {
+  const outs = toolOutputs(messages, toolName);
+  return outs[outs.length - 1];
+}
+
+/**
+ * A conversation in which an earlier call to `toolName` returned `taskId`,
+ * which is what lets the middleware's tools accept a handle the test planted
+ * in the store.
+ */
+function mintedBy(taskId: string, toolName: string): MessageData[] {
+  return [
+    {
+      role: 'model',
+      content: [{ toolRequest: { name: toolName, ref: 'earlier', input: {} } }],
+    },
+    {
+      role: 'tool',
+      content: [
+        {
+          toolResponse: {
+            name: toolName,
+            ref: 'earlier',
+            output: { response: '', taskId },
+          },
+        },
+      ],
+    },
+  ];
+}
+
+/**
+ * An orchestrator step that delegates `task` once, then continues the
+ * delegation's taskId (with `instructions` when given), then finishes.
+ */
+function delegateThenContinue(
+  delegateTool: string,
+  task: string,
+  instructions?: string
+) {
+  return (messages: MessageData[]) => {
+    const continued = lastOutput(messages, CONTINUE_TOOL);
+    if (continued) return textResponse('done: ' + continued.response);
+    const delegated = lastOutput(messages, delegateTool);
+    if (delegated) {
+      return toolRequest(CONTINUE_TOOL, {
+        taskId: delegated.taskId,
+        ...(instructions && { instructions }),
+      });
+    }
+    return toolRequest(delegateTool, { task });
+  };
+}
+
+/**
+ * Writes a dead worker's pending row the way a detach mints one: created
+ * now, with a heartbeat that went stale.
+ */
+async function saveDeadPendingRow(
+  store: SessionStore,
+  sessionId: string,
+  parentId?: string
+): Promise<string> {
+  const now = new Date().toISOString();
+  const stale = new Date(Date.now() - 10 * 60_000).toISOString();
+  return (await store.saveSnapshot(undefined, () => ({
+    createdAt: now,
+    updatedAt: now,
+    heartbeatAt: stale,
+    status: 'pending',
+    sessionId,
+    ...(parentId && { parentId }),
+    state: { sessionId },
+  })))!;
+}
+
+/**
+ * Defines a store-backed "keeper" sub-agent on `store`, runs one delegation
+ * to commit a conversation ("start X"), and plants a dead worker's pending
+ * row on top of it. Returns the dead task's handle and the committed
+ * (parent) snapshot ID.
+ */
+async function seedDeadKeeperTask(
+  ai: Genkit,
+  store: SessionStore,
+  model: ReturnType<typeof failNTimesModel>
+): Promise<{ deadTask: string; committedId: string; pendingId: string }> {
+  defineKeeper(ai, 'keeper', model, store);
+  const first = await orchestrate(ai, { agents: ['keeper'] }, (messages) =>
+    lastOutput(messages, 'delegate_to_keeper')
+      ? textResponse('seeded')
+      : toolRequest('delegate_to_keeper', { task: 'start X' })
+  );
+  const seeded = lastOutput(first.messages, 'delegate_to_keeper');
+  assert.ok(
+    seeded?.taskId,
+    `seeded delegation has a handle: ${JSON.stringify(seeded)}`
+  );
+  const committedId = seeded.taskId.slice('keeper:'.length);
+  const committed = await store.getSnapshot({ snapshotId: committedId });
+  const sessionId = committed?.sessionId ?? committed?.state?.sessionId;
+  assert.ok(sessionId, 'the committed row names its session');
+  const pendingId = await saveDeadPendingRow(store, sessionId!, committedId);
+  return { deadTask: `keeper:${pendingId}`, committedId, pendingId };
+}
+
+/**
+ * Wraps an in-memory store so a test can fail writes to a snapshot ID or
+ * rewrite reads of one.
+ */
+function flakyStore() {
+  const base = new InMemorySessionStore();
+  const failSave = new Map<string, Error>();
+  let getHook:
+    | ((
+        id: string | undefined,
+        snap: SessionSnapshot | undefined
+      ) => SessionSnapshot | undefined | Promise<SessionSnapshot | undefined>)
+    | undefined;
+  const store: SessionStore = {
+    async getSnapshot(opts) {
+      const snap = await base.getSnapshot(opts);
+      return getHook ? getHook(opts.snapshotId, snap) : snap;
+    },
+    async saveSnapshot(id, mutator, options) {
+      const failure = id ? failSave.get(id) : undefined;
+      if (failure) throw failure;
+      return base.saveSnapshot(id, mutator, options);
+    },
+    onSnapshotStateChange: (id, callback, options) =>
+      base.onSnapshotStateChange(id, callback, options),
+  };
+  return {
+    store,
+    failSave,
+    setGetHook(hook: typeof getHook) {
+      getHook = hook;
+    },
+  };
+}
+
+describe('agents middleware (continue)', () => {
+  it('stamps a synchronous delegation to a store-backed sub-agent with its task handle', async () => {
+    const ai = genkit({});
+    defineKeeper(ai, 'keeper', failNTimesModel(ai, 0, 'kept'));
+    const resp = await orchestrate(ai, { agents: ['keeper'] }, (messages) =>
+      lastOutput(messages, 'delegate_to_keeper')
+        ? textResponse('done')
+        : toolRequest('delegate_to_keeper', { task: 'keep X' })
+    );
+    const [got] = toolOutputs(resp.messages, 'delegate_to_keeper');
+    assert.strictEqual(got.response, 'kept');
+    assert.match(got.taskId, /^keeper:.+/);
+    assert.strictEqual(got.status, 'completed');
+  });
+
+  it('stamps a failed synchronous delegation with its handle and the continue hint', async () => {
+    const ai = genkit({});
+    defineKeeper(ai, 'flaky', failNTimesModel(ai, 99, ''));
+    const resp = await orchestrate(ai, { agents: ['flaky'] }, (messages) =>
+      lastOutput(messages, 'delegate_to_flaky')
+        ? textResponse('done')
+        : toolRequest('delegate_to_flaky', { task: 'try X' })
+    );
+    const [got] = toolOutputs(resp.messages, 'delegate_to_flaky');
+    assert.match(got.response, /model melted/);
+    assert.match(got.response, /continue_task/);
+    assert.match(got.taskId, /^flaky:.+/);
+    assert.strictEqual(got.status, 'failed');
+  });
+
+  it('merges a synchronous run and a re-check of its handle under one artifact namespace', async () => {
+    const ai = genkit({});
+    const gate = makeGate();
+    gate.release();
+    defineGatedResearcher(ai, 'researcher', gate.opened, {
+      artifacts: [{ name: 'notes.md', parts: [{ text: 'the notes' }] }],
+    });
+    const resp = await orchestrate(
+      ai,
+      { agents: ['researcher'], async: true },
+      (messages) => {
+        const delegated = lastOutput(messages, 'delegate_to_researcher');
+        if (!delegated) {
+          return toolRequest('delegate_to_researcher', { task: 'dig' });
+        }
+        if (!lastOutput(messages, CHECK_TOOL)) {
+          return toolRequest(CHECK_TOOL, { taskIds: [delegated.taskId] });
+        }
+        return textResponse('done');
+      }
+    );
+    const [delegated] = toolOutputs(resp.messages, 'delegate_to_researcher');
+    const [check] = toolOutputs(resp.messages, CHECK_TOOL);
+    assert.strictEqual(check.tasks[0].status, 'completed');
+    assert.strictEqual(
+      check.tasks[0].artifacts[0].name,
+      delegated.artifacts[0].name,
+      'one run, one namespace, whichever path folds it'
+    );
+  });
+
+  it('gives a client-managed delegation no handle and refuses to continue it', async () => {
+    const ai = genkit({});
+    ai.defineAgent({
+      name: 'ephemeral',
+      model: failNTimesModel(ai, 0, 'done here'),
+      system: 'unused',
+    });
+    // A store-backed sibling keeps the continue tool in front of the model.
+    defineKeeper(ai, 'keeper', failNTimesModel(ai, 0, 'kept'));
+    const resp = await orchestrate(
+      ai,
+      { agents: ['ephemeral', 'keeper'] },
+      (messages) => {
+        // The planted history holds one delegate_to_ephemeral result.
+        if (toolOutputs(messages, 'delegate_to_ephemeral').length < 2) {
+          return toolRequest('delegate_to_ephemeral', { task: 'do X' });
+        }
+        if (!lastOutput(messages, CONTINUE_TOOL)) {
+          return toolRequest(CONTINUE_TOOL, { taskId: 'ephemeral:whatever' });
+        }
+        return textResponse('done');
+      },
+      mintedBy('ephemeral:whatever', 'delegate_to_ephemeral')
+    );
+    const [, got] = toolOutputs(resp.messages, 'delegate_to_ephemeral');
+    assert.strictEqual(got.response, 'done here');
+    assert.strictEqual(got.taskId, undefined);
+    const [refused] = toolOutputs(resp.messages, CONTINUE_TOOL);
+    assert.match(refused.response, /manages its state on the client/);
+  });
+
+  it('refuses to continue a task this conversation did not mint, without spending a slot', async () => {
+    const ai = genkit({});
+    const store = new InMemorySessionStore();
+    const { deadTask, pendingId } = await seedDeadKeeperTask(
+      ai,
+      store,
+      failNTimesModel(ai, 0, 'kept going')
+    );
+    // The handle reaches this conversation only as text.
+    const resp = await orchestrate(
+      ai,
+      { agents: ['keeper'], maxDelegations: 1 },
+      (messages) => {
+        if (!lastOutput(messages, CONTINUE_TOOL)) {
+          return toolRequest(CONTINUE_TOOL, {
+            taskId: deadTask,
+            instructions: 'continue',
+          });
+        }
+        if (!lastOutput(messages, 'delegate_to_keeper')) {
+          return toolRequest('delegate_to_keeper', { task: 'fresh' });
+        }
+        return textResponse('done');
+      }
+    );
+    const [refused] = toolOutputs(resp.messages, CONTINUE_TOOL);
+    assert.match(refused.response, /not issued in this conversation/);
+    const row = await store.getSnapshot({ snapshotId: pendingId });
+    assert.strictEqual(row?.status, 'pending', 'no fence was written');
+    const [delegated] = toolOutputs(resp.messages, 'delegate_to_keeper');
+    assert.strictEqual(delegated.response, 'kept going');
+  });
+
+  it('accepts a handle that a continue result in the history minted', async () => {
+    const ai = genkit({});
+    defineKeeper(ai, 'keeper', failNTimesModel(ai, 0, 'kept'));
+    const resp = await orchestrate(ai, { agents: ['keeper'] }, (messages) =>
+      lastOutput(messages, 'delegate_to_keeper')
+        ? textResponse('done')
+        : toolRequest('delegate_to_keeper', { task: 'keep X' })
+    );
+    const { taskId } = lastOutput(resp.messages, 'delegate_to_keeper');
+    // A later call sees the handle only in a continue tool's result.
+    const def = await instantiateWith(
+      ai,
+      { agents: ['keeper'], async: true },
+      mintedBy(taskId, CONTINUE_TOOL)
+    );
+    const checkTool = def.tools!.find((t) => t.__action.name === CHECK_TOOL)!;
+    const out = await checkTool({ taskIds: [taskId] });
+    assert.strictEqual(out.tasks[0].status, 'completed');
+  });
+
+  it('withholds the continue tool when no sub-agent can be continued', async () => {
+    const ai = genkit({});
+    ai.defineAgent({
+      name: 'ephemeral',
+      model: failNTimesModel(ai, 0, 'unused'),
+      system: 'unused',
+    });
+    let toolNames: string[] = [];
+    let system = '';
+    await orchestrate(ai, { agents: ['ephemeral'] }, (messages) => {
+      system = systemText(messages);
+      return textResponse('done');
+    });
+    // The model hook sees the request after the generate hook, so read the
+    // tool list there.
+    const model = ai.defineModel(
+      { name: 'orch-tools-' + Math.random() },
+      async (req) => {
+        toolNames = (req.tools ?? []).map((t) => t.name);
+        return textResponse('done');
+      }
+    );
+    await ai.generate({
+      model,
+      prompt: 'go',
+      use: [agents({ agents: ['ephemeral'] })],
+    });
+    assert.ok(
+      !toolNames.includes(CONTINUE_TOOL),
+      `continue_task must not reach the model: ${toolNames}`
+    );
+    assert.ok(
+      toolNames.includes('delegate_to_ephemeral'),
+      `the delegation tool must reach the model: ${toolNames}`
+    );
+    assert.ok(
+      !system.includes(CONTINUE_TOOL),
+      `the system prompt must not mention continue_task: ${system}`
+    );
+  });
+
+  it('retries a failed task from its saved progress', async () => {
+    const ai = genkit({});
+    const seen: MessageData[][] = [];
+    defineKeeper(ai, 'flaky', failNTimesModel(ai, 1, 'recovered', seen));
+    const resp = await orchestrate(
+      ai,
+      { agents: ['flaky'] },
+      delegateThenContinue('delegate_to_flaky', 'try X')
+    );
+    const [failure] = toolOutputs(resp.messages, 'delegate_to_flaky');
+    assert.strictEqual(failure.status, 'failed');
+    const [continued] = toolOutputs(resp.messages, CONTINUE_TOOL);
+    assert.strictEqual(continued.response, 'recovered');
+    assert.strictEqual(continued.status, 'completed');
+    assert.match(continued.taskId, /^flaky:.+/);
+    // The retry ran on the committed conversation: same task, no new input.
+    assert.strictEqual(seen.length, 2, 'the sub-agent model runs twice');
+    const retry = seen[1];
+    assert.match(retry[retry.length - 1].content[0].text ?? '', /try X/);
+  });
+
+  it('steers a retry with instructions', async () => {
+    const ai = genkit({});
+    const seen: MessageData[][] = [];
+    defineKeeper(ai, 'flaky', failNTimesModel(ai, 1, 'steered', seen));
+    const resp = await orchestrate(
+      ai,
+      { agents: ['flaky'] },
+      delegateThenContinue(
+        'delegate_to_flaky',
+        'try X',
+        'skip the flaky source'
+      )
+    );
+    const [continued] = toolOutputs(resp.messages, CONTINUE_TOOL);
+    assert.strictEqual(continued.response, 'steered');
+    const retry = seen[1];
+    const last = retry[retry.length - 1];
+    assert.strictEqual(last.role, 'user');
+    assert.match(last.content[0].text ?? '', /skip the flaky source/);
+    assert.match(joinedText(retry), /try X/);
+  });
+
+  it('refuses an instructions-less follow-up on a completed task and refunds its slot', async () => {
+    const ai = genkit({});
+    const seen: MessageData[][] = [];
+    defineKeeper(ai, 'helper', failNTimesModel(ai, 0, 'answered', seen));
+    // The delegation and the corrected follow-up spend both slots, so the
+    // refusal in between must return the one it reserved.
+    const resp = await orchestrate(
+      ai,
+      { agents: ['helper'], maxDelegations: 2 },
+      (messages) => {
+        const delegated = lastOutput(messages, 'delegate_to_helper');
+        const continues = toolOutputs(messages, CONTINUE_TOOL);
+        if (!delegated) {
+          return toolRequest('delegate_to_helper', { task: 'answer X' });
+        }
+        if (continues.length === 0) {
+          return toolRequest(CONTINUE_TOOL, { taskId: delegated.taskId });
+        }
+        if (continues.length === 1) {
+          return toolRequest(CONTINUE_TOOL, {
+            taskId: delegated.taskId,
+            instructions: 'now also cover Y',
+          });
+        }
+        return textResponse('done');
+      }
+    );
+    const continues = toolOutputs(resp.messages, CONTINUE_TOOL);
+    assert.match(continues[0].response, /already completed/);
+    assert.strictEqual(continues[1].response, 'answered');
+    assert.strictEqual(continues[1].status, 'completed');
+    const followUp = joinedText(seen[1]);
+    assert.match(followUp, /answer X/);
+    assert.match(followUp, /now also cover Y/);
+  });
+
+  it('carries the delegation label onto results, reports, and continuations', async () => {
+    const ai = genkit({});
+    defineKeeper(ai, 'flaky', failNTimesModel(ai, 1, 'recovered'));
+    const resp = await orchestrate(
+      ai,
+      { agents: ['flaky'], async: true },
+      (messages) => {
+        const delegated = lastOutput(messages, 'delegate_to_flaky');
+        if (!delegated) {
+          return toolRequest('delegate_to_flaky', {
+            task: 'try X',
+            name: 'second-try',
+          });
+        }
+        if (!lastOutput(messages, CHECK_TOOL)) {
+          return toolRequest(CHECK_TOOL, { taskIds: [delegated.taskId] });
+        }
+        if (!lastOutput(messages, CONTINUE_TOOL)) {
+          return toolRequest(CONTINUE_TOOL, { taskId: delegated.taskId });
+        }
+        return textResponse('done');
+      }
+    );
+    const [failure] = toolOutputs(resp.messages, 'delegate_to_flaky');
+    assert.strictEqual(failure.name, 'second-try');
+    const [check] = toolOutputs(resp.messages, CHECK_TOOL);
+    assert.strictEqual(check.tasks[0].name, 'second-try');
+    const [continued] = toolOutputs(resp.messages, CONTINUE_TOOL);
+    assert.strictEqual(continued.response, 'recovered');
+    assert.strictEqual(continued.name, 'second-try');
+  });
+
+  it('echoes a background launch label on its report', async () => {
+    const ai = genkit({});
+    defineKeeper(ai, 'quick', failNTimesModel(ai, 0, 'quick answer'));
+    const resp = await orchestrate(
+      ai,
+      { agents: ['quick'], async: true },
+      (messages) => {
+        const launch = lastOutput(messages, 'delegate_to_quick');
+        if (!launch) {
+          return toolRequest('delegate_to_quick', {
+            task: 'answer fast',
+            background: true,
+            name: 'fast-lane',
+          });
+        }
+        if (!lastOutput(messages, WAIT_TOOL)) {
+          return toolRequest(WAIT_TOOL, { taskIds: [launch.taskId] });
+        }
+        return textResponse('done');
+      }
+    );
+    const [launch] = toolOutputs(resp.messages, 'delegate_to_quick');
+    assert.strictEqual(launch.name, 'fast-lane');
+    const [wait] = toolOutputs(resp.messages, WAIT_TOOL);
+    assert.strictEqual(wait.tasks[0].name, 'fast-lane');
+  });
+
+  it('counts a continuation against maxDelegations', async () => {
+    const ai = genkit({});
+    defineKeeper(ai, 'flaky', failNTimesModel(ai, 99, ''));
+    const resp = await orchestrate(
+      ai,
+      { agents: ['flaky'], maxDelegations: 1 },
+      delegateThenContinue('delegate_to_flaky', 'try X')
+    );
+    const [continued] = toolOutputs(resp.messages, CONTINUE_TOOL);
+    assert.match(continued.response, /Delegation limit reached/);
+  });
+
+  it('recovers an expired task from its committed progress behind a fence', async () => {
+    const ai = genkit({});
+    const store = new InMemorySessionStore();
+    const seen: MessageData[][] = [];
+    const { deadTask, pendingId } = await seedDeadKeeperTask(
+      ai,
+      store,
+      failNTimesModel(ai, 0, 'kept going', seen)
+    );
+    const resp = await orchestrate(
+      ai,
+      { agents: ['keeper'] },
+      (messages) =>
+        lastOutput(messages, CONTINUE_TOOL)
+          ? textResponse('done')
+          : toolRequest(CONTINUE_TOOL, {
+              taskId: deadTask,
+              instructions: 'continue',
+            }),
+      mintedBy(deadTask, 'delegate_to_keeper')
+    );
+    const [continued] = toolOutputs(resp.messages, CONTINUE_TOOL);
+    assert.strictEqual(continued.response, 'kept going');
+    // The fence flipped the dead row so a slow worker cannot race the
+    // recovered session; no worker is left to finalize it.
+    const fenced = await store.getSnapshot({ snapshotId: pendingId });
+    assert.strictEqual(fenced?.status, 'aborting');
+    const recovered = joinedText(seen[seen.length - 1]);
+    assert.match(recovered, /start X/);
+    assert.match(recovered, /continue/);
+  });
+
+  it('refuses to continue an expired task that saved nothing', async () => {
+    const ai = genkit({});
+    const store = new InMemorySessionStore();
+    defineKeeper(ai, 'keeper', failNTimesModel(ai, 0, 'unused'), store);
+    const pendingId = await saveDeadPendingRow(store, 'sess-dead');
+    const resp = await orchestrate(
+      ai,
+      { agents: ['keeper'] },
+      (messages) =>
+        lastOutput(messages, CONTINUE_TOOL)
+          ? textResponse('done')
+          : toolRequest(CONTINUE_TOOL, { taskId: `keeper:${pendingId}` }),
+      mintedBy(`keeper:${pendingId}`, 'delegate_to_keeper')
+    );
+    const [refused] = toolOutputs(resp.messages, CONTINUE_TOOL);
+    assert.match(refused.response, /saved no progress to continue from/);
+    assert.match(refused.response, /Delegate the task again/);
+  });
+
+  it('gates an expired task whose parent finished on instructions', async () => {
+    const ai = genkit({});
+    const { deadTask } = await seedDeadKeeperTask(
+      ai,
+      new InMemorySessionStore(),
+      failNTimesModel(ai, 0, 'kept')
+    );
+    const resp = await orchestrate(
+      ai,
+      { agents: ['keeper'] },
+      (messages) =>
+        lastOutput(messages, CONTINUE_TOOL)
+          ? textResponse('done')
+          : toolRequest(CONTINUE_TOOL, { taskId: deadTask }),
+      mintedBy(deadTask, 'delegate_to_keeper')
+    );
+    const [refused] = toolOutputs(resp.messages, CONTINUE_TOOL);
+    assert.match(refused.response, /last finished turn/);
+  });
+
+  it('continues a failed task in the background', async () => {
+    const ai = genkit({});
+    defineKeeper(ai, 'flaky', failNTimesModel(ai, 1, 'recovered later'));
+    const resp = await orchestrate(
+      ai,
+      { agents: ['flaky'], async: true },
+      (messages) => {
+        if (lastOutput(messages, WAIT_TOOL)) return textResponse('done');
+        const continued = lastOutput(messages, CONTINUE_TOOL);
+        if (continued) {
+          return toolRequest(WAIT_TOOL, { taskIds: [continued.taskId] });
+        }
+        const delegated = lastOutput(messages, 'delegate_to_flaky');
+        if (delegated) {
+          return toolRequest(CONTINUE_TOOL, {
+            taskId: delegated.taskId,
+            background: true,
+          });
+        }
+        return toolRequest('delegate_to_flaky', { task: 'try X' });
+      }
+    );
+    const [continued] = toolOutputs(resp.messages, CONTINUE_TOOL);
+    assert.strictEqual(continued.status, 'pending');
+    assert.match(continued.taskId, /^flaky:.+/);
+    const [wait] = toolOutputs(resp.messages, WAIT_TOOL);
+    assert.strictEqual(wait.tasks[0].status, 'completed');
+    assert.strictEqual(wait.tasks[0].response, 'recovered later');
+  });
+
+  it('refuses to recover an expired task its store cannot fence', async () => {
+    const ai = genkit({});
+    // A store without a change feed: the flip would land, but a worker that
+    // is only late would never see it.
+    const store = new InMemorySessionStore();
+    Object.defineProperty(store, 'onSnapshotStateChange', { value: undefined });
+    const { deadTask, pendingId } = await seedDeadKeeperTask(
+      ai,
+      store,
+      failNTimesModel(ai, 0, 'kept going')
+    );
+    const resp = await orchestrate(
+      ai,
+      { agents: ['keeper'] },
+      (messages) =>
+        lastOutput(messages, CONTINUE_TOOL)
+          ? textResponse('done')
+          : toolRequest(CONTINUE_TOOL, {
+              taskId: deadTask,
+              instructions: 'continue',
+            }),
+      mintedBy(deadTask, 'delegate_to_keeper')
+    );
+    const [refused] = toolOutputs(resp.messages, CONTINUE_TOOL);
+    assert.match(refused.response, /cannot signal its worker/);
+    const row = await store.getSnapshot({ snapshotId: pendingId });
+    assert.strictEqual(row?.status, 'pending', 'no fence was written');
+  });
+
+  it('fails a cancelled continuation without fencing the task or spending a slot', async () => {
+    const ai = genkit({});
+    const store = new InMemorySessionStore();
+    const { deadTask, pendingId } = await seedDeadKeeperTask(
+      ai,
+      store,
+      failNTimesModel(ai, 0, 'kept going')
+    );
+    const def = await instantiateWith(
+      ai,
+      { agents: ['keeper'], maxDelegations: 1 },
+      mintedBy(deadTask, 'delegate_to_keeper')
+    );
+    const continueTool = def.tools!.find(
+      (t) => t.__action.name === CONTINUE_TOOL
+    )!;
+    await assert.rejects(
+      continueTool(
+        { taskId: deadTask, instructions: 'continue' },
+        { abortSignal: AbortSignal.abort() }
+      ),
+      (e: any) => e?.name === 'AbortError'
+    );
+    const row = await store.getSnapshot({ snapshotId: pendingId });
+    assert.strictEqual(row?.status, 'pending', 'no fence was written');
+    // The cancelled call ran no sub-agent work, so a delegation still fits
+    // under the cap.
+    const delegate = def.tools!.find(
+      (t) => t.__action.name === 'delegate_to_keeper'
+    )!;
+    const delegated = await delegate({ task: 'fresh' });
+    assert.strictEqual(delegated.response, 'kept going');
+  });
+
+  it('refuses a recovery whose fence fails transiently and refunds its slot', async () => {
+    const ai = genkit({});
+    const flaky = flakyStore();
+    const { deadTask, pendingId } = await seedDeadKeeperTask(
+      ai,
+      flaky.store,
+      failNTimesModel(ai, 0, 'kept going')
+    );
+    flaky.failSave.set(pendingId, new Error('store blip'));
+    const resp = await orchestrate(
+      ai,
+      { agents: ['keeper'], maxDelegations: 1 },
+      (messages) => {
+        const continues = toolOutputs(messages, CONTINUE_TOOL);
+        if (continues.length === 1) flaky.failSave.delete(pendingId);
+        return continues.length < 2
+          ? toolRequest(CONTINUE_TOOL, {
+              taskId: deadTask,
+              instructions: 'continue',
+            })
+          : textResponse('done');
+      },
+      mintedBy(deadTask, 'delegate_to_keeper')
+    );
+    const continues = toolOutputs(resp.messages, CONTINUE_TOOL);
+    assert.match(continues[0].response, /could not fence/);
+    assert.match(continues[0].response, /Try again later/);
+    assert.strictEqual(continues[1].response, 'kept going');
+  });
+
+  for (const tc of [
+    {
+      name: 'a fence the store refuses',
+      refusal: /could not fence/,
+      arm: (flaky: ReturnType<typeof flakyStore>, pendingId: string) =>
+        flaky.failSave.set(
+          pendingId,
+          new GenkitError({
+            status: 'FAILED_PRECONDITION',
+            message: 'store cannot fence',
+          })
+        ),
+    },
+    {
+      name: 'a row gone after the fence',
+      refusal: /could not read/,
+      arm: (flaky: ReturnType<typeof flakyStore>, pendingId: string) =>
+        flaky.setGetHook((id, snap) =>
+          id === pendingId && snap?.status === 'aborting' ? undefined : snap
+        ),
+    },
+  ]) {
+    it(`keeps the slot on a dead end: ${tc.name}`, async () => {
+      const ai = genkit({});
+      const flaky = flakyStore();
+      const { deadTask, pendingId } = await seedDeadKeeperTask(
+        ai,
+        flaky.store,
+        failNTimesModel(ai, 0, 'kept going')
+      );
+      tc.arm(flaky, pendingId);
+      const resp = await orchestrate(
+        ai,
+        { agents: ['keeper'], maxDelegations: 1 },
+        (messages) =>
+          toolOutputs(messages, CONTINUE_TOOL).length < 2
+            ? toolRequest(CONTINUE_TOOL, {
+                taskId: deadTask,
+                instructions: 'continue',
+              })
+            : textResponse('done'),
+        mintedBy(deadTask, 'delegate_to_keeper')
+      );
+      const continues = toolOutputs(resp.messages, CONTINUE_TOOL);
+      assert.match(continues[0].response, tc.refusal);
+      assert.doesNotMatch(continues[0].response, /Try again later/);
+      assert.match(continues[1].response, /Delegation limit reached/);
+    });
+  }
+
+  it('refunds the slot when the parent read blips', async () => {
+    const ai = genkit({});
+    const flaky = flakyStore();
+    const { deadTask, committedId } = await seedDeadKeeperTask(
+      ai,
+      flaky.store,
+      failNTimesModel(ai, 0, 'kept going')
+    );
+    flaky.setGetHook((id, snap) => {
+      if (id === committedId) throw new Error('parent read blip');
+      return snap;
+    });
+    const resp = await orchestrate(
+      ai,
+      { agents: ['keeper'], maxDelegations: 1 },
+      (messages) => {
+        const continues = toolOutputs(messages, CONTINUE_TOOL);
+        if (continues.length === 1) flaky.setGetHook(undefined);
+        return continues.length < 2
+          ? toolRequest(CONTINUE_TOOL, {
+              taskId: deadTask,
+              instructions: 'continue',
+            })
+          : textResponse('done');
+      },
+      mintedBy(deadTask, 'delegate_to_keeper')
+    );
+    const continues = toolOutputs(resp.messages, CONTINUE_TOOL);
+    assert.match(continues[0].response, /could not be read/);
+    assert.match(continues[0].response, /Try again later/);
+    assert.strictEqual(continues[1].response, 'kept going');
+  });
+
+  it('refuses a fenced task whose live worker is winding down, then continues it once it settles', async () => {
+    const ai = genkit({});
+    const flaky = flakyStore();
+    const { deadTask, pendingId } = await seedDeadKeeperTask(
+      ai,
+      flaky.store,
+      failNTimesModel(ai, 0, 'kept going')
+    );
+    // While the hook is set, the fenced row reads with a fresh heartbeat: a
+    // live worker's beats keep it so while it drains.
+    flaky.setGetHook((id, snap) =>
+      id === pendingId && snap?.status === 'aborting'
+        ? { ...snap, heartbeatAt: new Date().toISOString() }
+        : snap
+    );
+    const resp = await orchestrate(
+      ai,
+      { agents: ['keeper'], maxDelegations: 1 },
+      (messages) => {
+        const continues = toolOutputs(messages, CONTINUE_TOOL);
+        // The worker dies without finalizing: the row goes stale again, and
+        // the same handle recovers through the parent.
+        if (continues.length === 1) flaky.setGetHook(undefined);
+        return continues.length < 2
+          ? toolRequest(CONTINUE_TOOL, {
+              taskId: deadTask,
+              instructions: 'continue',
+            })
+          : textResponse('done');
+      },
+      mintedBy(deadTask, 'delegate_to_keeper')
+    );
+    const continues = toolOutputs(resp.messages, CONTINUE_TOOL);
+    assert.match(continues[0].response, /winding down/);
+    assert.strictEqual(continues[1].response, 'kept going');
+  });
+
+  it('gates a fenced task whose completed finalize won the race on instructions', async () => {
+    const ai = genkit({});
+    const flaky = flakyStore();
+    const { deadTask, pendingId } = await seedDeadKeeperTask(
+      ai,
+      flaky.store,
+      failNTimesModel(ai, 0, 'kept going')
+    );
+    flaky.setGetHook((id, snap) =>
+      id === pendingId && snap?.status === 'aborting'
+        ? {
+            ...snap,
+            status: 'completed',
+            finishReason: 'stop',
+            heartbeatAt: undefined,
+            state: {
+              messages: [{ role: 'user', content: [{ text: 'finished' }] }],
+            },
+          }
+        : snap
+    );
+    const resp = await orchestrate(
+      ai,
+      { agents: ['keeper'] },
+      (messages) =>
+        lastOutput(messages, CONTINUE_TOOL)
+          ? textResponse('done')
+          : toolRequest(CONTINUE_TOOL, { taskId: deadTask }),
+      mintedBy(deadTask, 'delegate_to_keeper')
+    );
+    const [refused] = toolOutputs(resp.messages, CONTINUE_TOOL);
+    assert.match(refused.response, /already completed/);
+  });
+
+  it('reports an aborting task as winding down and refuses to continue it with a refund', async () => {
+    const ai = genkit({});
+    const store = new InMemorySessionStore();
+    const { committedId } = await seedDeadKeeperTask(
+      ai,
+      store,
+      failNTimesModel(ai, 0, 'kept going')
+    );
+    const committed = await store.getSnapshot({ snapshotId: committedId });
+    const now = new Date().toISOString();
+    const abortingId = (await store.saveSnapshot(undefined, () => ({
+      createdAt: now,
+      updatedAt: now,
+      heartbeatAt: now,
+      status: 'aborting',
+      sessionId: committed!.sessionId,
+      parentId: committedId,
+      state: { sessionId: committed!.sessionId },
+    })))!;
+    const task = `keeper:${abortingId}`;
+    const resp = await orchestrate(
+      ai,
+      { agents: ['keeper'], async: true, maxDelegations: 1 },
+      (messages) => {
+        if (!lastOutput(messages, CHECK_TOOL)) {
+          return toolRequest(CHECK_TOOL, { taskIds: [task] });
+        }
+        if (!lastOutput(messages, CONTINUE_TOOL)) {
+          return toolRequest(CONTINUE_TOOL, {
+            taskId: task,
+            instructions: 'go on',
+          });
+        }
+        // The planted history holds one delegate_to_keeper result.
+        if (toolOutputs(messages, 'delegate_to_keeper').length < 2) {
+          return toolRequest('delegate_to_keeper', { task: 'more' });
+        }
+        return textResponse('done');
+      },
+      mintedBy(task, 'delegate_to_keeper')
+    );
+    const [check] = toolOutputs(resp.messages, CHECK_TOOL);
+    assert.strictEqual(check.tasks[0].status, 'aborting');
+    assert.match(check.tasks[0].error, /winding down/);
+    const [refused] = toolOutputs(resp.messages, CONTINUE_TOOL);
+    assert.match(refused.response, /winding down/);
+    // The refusal returned its slot: under a cap of one, a delegation still
+    // runs afterwards.
+    const [, delegated] = toolOutputs(resp.messages, 'delegate_to_keeper');
+    assert.strictEqual(delegated.response, 'kept going');
+  });
+
+  it('reports an interrupted task without a continue hint and refuses to continue it', async () => {
+    const ai = genkit({});
+    const gate = makeGate();
+    ai.defineCustomAgent(
+      { name: 'researcher', store: new InMemorySessionStore() },
+      async (sess) => {
+        await sess.run(async () => {
+          await gate.opened;
+          sess.addMessages([
+            { role: 'model', content: [{ text: 'need a human' }] },
+          ]);
+          return { finishReason: 'interrupted' as const };
+        });
+        const msgs = sess.getMessages();
+        return {
+          message: msgs[msgs.length - 1],
+          finishReason: 'interrupted' as const,
+        };
+      }
+    );
+    const resp = await orchestrate(
+      ai,
+      { agents: ['researcher'], async: true },
+      (messages) => {
+        const launch = lastOutput(messages, 'delegate_to_researcher');
+        if (!launch) {
+          return toolRequest('delegate_to_researcher', {
+            task: 'dig into X',
+            background: true,
+          });
+        }
+        if (!lastOutput(messages, WAIT_TOOL)) {
+          gate.release();
+          return toolRequest(WAIT_TOOL, { taskIds: [launch.taskId] });
+        }
+        if (!lastOutput(messages, CONTINUE_TOOL)) {
+          return toolRequest(CONTINUE_TOOL, {
+            taskId: launch.taskId,
+            instructions: 'the answer is 42',
+          });
+        }
+        return textResponse('done');
+      }
+    );
+    const [wait] = toolOutputs(resp.messages, WAIT_TOOL);
+    assert.strictEqual(wait.tasks[0].status, 'failed');
+    assert.match(wait.tasks[0].error, /interrupted/);
+    assert.doesNotMatch(wait.tasks[0].error, /continue_task/);
+    const [refused] = toolOutputs(resp.messages, CONTINUE_TOOL);
+    assert.match(refused.response, /stopped on an interrupt/);
   });
 });

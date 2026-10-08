@@ -43,6 +43,7 @@ import { InMemorySessionStore } from '../src/session-stores.js';
 import {
   Session,
   reserveSnapshotId,
+  type GetSnapshotOptions,
   type SessionSnapshot,
   type SessionStore,
 } from '../src/session.js';
@@ -1422,6 +1423,65 @@ describe('Agent', () => {
       }));
       const aborting = await flow.getSnapshotData({ snapshotId: snapshotId! });
       assert.strictEqual(aborting?.status, 'expired');
+    });
+
+    it('reads a snapshot metadata-only, shaped and without state', async () => {
+      // A store that ignores the metadataOnly hint: the runtime still drops
+      // the state.
+      class FullReadStore extends InMemorySessionStore<{ foo: string }> {
+        override getSnapshot(opts: GetSnapshotOptions) {
+          return super.getSnapshot({ ...opts, metadataOnly: false });
+        }
+      }
+      for (const store of [
+        new InMemorySessionStore<{ foo: string }>(),
+        new FullReadStore(),
+      ]) {
+        const flow = defineCustomAgent<{ foo: string }>(
+          new Registry(),
+          {
+            name: 'metadataOnlyTest',
+            store,
+            clientTransform: { state: (state) => ({ ...state, custom: {} }) },
+          },
+          async (sess) => {
+            await sess.run(async () => {});
+            return { artifacts: [] };
+          }
+        );
+        const stale = new Date(Date.now() - 120_000).toISOString();
+        const pendingId = (await store.saveSnapshot(undefined, () => ({
+          createdAt: stale,
+          heartbeatAt: stale,
+          status: 'pending',
+          state: { sessionId: 'sess-meta', custom: { foo: 'bar' } },
+        })))!;
+        const completedId = (await store.saveSnapshot(undefined, () => ({
+          createdAt: stale,
+          status: 'completed',
+          state: { sessionId: 'sess-meta', custom: { foo: 'bar' } },
+        })))!;
+
+        const { result: pending } = await flow.getSnapshotDataAction.run({
+          snapshotId: pendingId,
+          metadataOnly: true,
+        });
+        assert.strictEqual(pending.status, 'expired');
+        assert.strictEqual(pending.state, undefined);
+        const completed = await flow.getSnapshotData({
+          snapshotId: completedId,
+          metadataOnly: true,
+        });
+        assert.strictEqual(completed?.status, 'completed');
+        assert.strictEqual(completed?.state, undefined);
+
+        // A wait returns the settled snapshot in full.
+        const { result: waited } = await flow.waitForSnapshotAction.run({
+          snapshotId: completedId,
+          metadataOnly: true,
+        });
+        assert.deepStrictEqual(waited.state?.custom, {});
+      }
     });
 
     it('keeps a pending snapshot with a fresh heartbeat as pending', async () => {
