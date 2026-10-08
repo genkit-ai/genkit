@@ -31,6 +31,7 @@ import {
   defineCustomAgent,
   definePromptAgent,
 } from '../src/agent.js';
+import { GenerationResponseError, generate } from '../src/generate.js';
 import { definePrompt } from '../src/prompt.js';
 import { InMemorySessionStore } from '../src/session-stores.js';
 import {
@@ -345,6 +346,77 @@ describe('Agent', () => {
 
       // Without a store there is nothing to reserve, so snapshotId is undefined.
       assert.strictEqual(ctxSnapshotId, undefined);
+    });
+  });
+
+  describe('generation failures', () => {
+    it('keeps the partial response out of the failure details', async () => {
+      const registry = new Registry();
+      registry.apiStability = 'beta';
+      const pm = defineProgrammableModel(registry);
+      defineTool(
+        registry,
+        { name: 'badTool', description: 'bad' },
+        async () => {
+          throw new Error('db exploded');
+        }
+      );
+      pm.handleResponse = async () => ({
+        message: {
+          role: 'model',
+          content: [{ toolRequest: { name: 'badTool', input: {}, ref: 'r1' } }],
+        },
+        finishReason: 'stop',
+      });
+      const store = new InMemorySessionStore<{}>();
+      const agent = defineCustomAgent<{}>(
+        registry,
+        { name: 'stripAgent', store },
+        async (sess) => {
+          await sess.run(async () => {
+            const res = await generate(registry, {
+              model: 'programmableModel',
+              prompt: 'secret prompt',
+              tools: ['badTool'],
+              throwOnError: false,
+            });
+            // Report the failure with its response, the way a prompt-backed
+            // agent hands the runner what the loop built.
+            if (res.error) {
+              throw new GenerationResponseError(
+                res,
+                res.error.message,
+                res.error.status as any
+              );
+            }
+          });
+          return {};
+        }
+      );
+
+      const session = agent.streamBidi({});
+      session.send({ message: { role: 'user', content: [{ text: 'go' }] } });
+      session.close();
+      const chunks: AgentStreamChunk[] = [];
+      for await (const chunk of session.stream) {
+        chunks.push(chunk);
+      }
+      const output = await session.output;
+
+      assert.strictEqual(output.finishReason, 'failed');
+      assert.strictEqual(output.error?.status, 'INTERNAL');
+      // The generation error's partial response carries the conversation; it
+      // is not what the output or the snapshot reports as the error's details.
+      const wire = JSON.stringify(output.error);
+      assert.strictEqual(wire.includes('secret prompt'), false);
+      assert.strictEqual(wire.includes('"response"'), false);
+      const snapshotId = chunks.find((c) => c.turnEnd)?.turnEnd?.snapshotId;
+      assert.ok(snapshotId, 'the failed turn reports its snapshotId');
+      const snapshot = await store.getSnapshot({ snapshotId: snapshotId! });
+      assert.strictEqual(
+        JSON.stringify(snapshot?.error).includes('secret prompt'),
+        false
+      );
     });
   });
 

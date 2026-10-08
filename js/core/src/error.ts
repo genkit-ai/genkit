@@ -43,6 +43,38 @@ export interface ErrorResponseMetadata {
 }
 
 /**
+ * The markers tracing stamps on an error as it passes through spans:
+ * `ignoreFailedSpan` once a span has claimed to be the failure's source, and
+ * `traceId` once an action has recorded the trace it failed in.
+ */
+export interface SpanFailureMarks {
+  ignoreFailedSpan?: boolean;
+  traceId?: string;
+}
+
+/**
+ * Copies the span markers `source` carries onto `target` where `target` has
+ * none of its own. An error thrown in place of one that already passed
+ * through spans (a wrapper, or the error a wrapper stood for) keeps the
+ * span that first failed as the failure's source, so an enclosing span does
+ * not claim it again.
+ */
+export function inheritSpanMarks(target: object, source: unknown): void {
+  if (typeof source !== 'object' || source === null) return;
+  const from = source as SpanFailureMarks;
+  const to = target as SpanFailureMarks;
+  if (
+    from.ignoreFailedSpan !== undefined &&
+    to.ignoreFailedSpan === undefined
+  ) {
+    to.ignoreFailedSpan = from.ignoreFailedSpan;
+  }
+  if (from.traceId !== undefined && to.traceId === undefined) {
+    to.traceId = from.traceId;
+  }
+}
+
+/**
  * Base error class for Genkit errors.
  */
 export class GenkitError extends Error {
@@ -62,26 +94,49 @@ export class GenkitError extends Error {
   // and status, but that's redundant with JSON.
   originalMessage: string;
 
+  /**
+   * The message safe to send to a client when `originalMessage` is not.
+   * A `GenkitError` is treated as user-facing by the HTTP handlers (see
+   * {@link getCallableJSON}), so an error that wraps arbitrary text (a tool's
+   * own exception, a provider SDK error) sets this to keep that text
+   * in-process only. Unset means `originalMessage` is safe.
+   */
+  publicMessage?: string;
+
   constructor({
     status,
     message,
     detail,
     source,
     responseMetadata,
+    cause,
+    publicMessage,
   }: {
     status: StatusName;
     message: string;
     detail?: any;
     source?: string;
     responseMetadata?: ErrorResponseMetadata;
+    /** The underlying error, exposed as the standard `Error.cause`. */
+    cause?: unknown;
+    publicMessage?: string;
   }) {
-    super(`${source ? `${source}: ` : ''}${status}: ${message}`);
+    super(
+      `${source ? `${source}: ` : ''}${status}: ${message}`,
+      cause === undefined ? undefined : { cause }
+    );
     this.originalMessage = message;
+    this.source = source;
     this.code = httpStatusCode(status);
     this.status = status;
     this.detail = detail;
     this.responseMetadata = responseMetadata;
+    this.publicMessage = publicMessage;
     this.name = 'GenkitError';
+    // An error that wraps another keeps the span markers tracing stamped on
+    // the cause, so the span that first failed stays the failure source and
+    // the wrapper does not claim it again on the way up.
+    inheritSpanMarks(this, cause);
   }
 
   /**
@@ -93,7 +148,7 @@ export class GenkitError extends Error {
       // but the actual Callable protocol value is "details"
       ...(this.detail === undefined ? {} : { details: this.detail }),
       status: this.status,
-      message: this.originalMessage,
+      message: this.publicMessage ?? this.originalMessage,
     };
   }
 }

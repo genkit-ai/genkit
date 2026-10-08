@@ -28,8 +28,9 @@
 //      and `AgentOutput` are generic interfaces (`<S>`) so callers can type the
 //      custom session state, rather than the tools file's non-generic
 //      `z.infer` aliases.
-//   2. The structured error shape is defined here as `RuntimeErrorSchema`
-//      (the JS runtime has no shared error-types module to import it from).
+//   2. The structured error shape (`RuntimeErrorSchema`) lives in
+//      ./model-types.ts, where a model response carries it too, and is
+//      re-exported here.
 //
 
 import { z } from '@genkit-ai/core';
@@ -37,25 +38,13 @@ import {
   MessageSchema,
   ModelResponseChunkSchema,
   PartSchema,
+  RuntimeErrorSchema,
   type MessageData,
+  type RuntimeError,
 } from './model-types.js';
 import { ToolRequestPartSchema, ToolResponsePartSchema } from './parts.js';
 
-/**
- * Schema for the canonical Genkit error wire shape (`{status, message,
- * details}`). This is the form runtimes use when an error travels as data
- * inside another value (e.g. agent outputs and session snapshots).
- */
-export const RuntimeErrorSchema = z.object({
-  /** Canonical status name (e.g. `INTERNAL`, `FAILED_PRECONDITION`). */
-  status: z.string().optional(),
-  /** Human-readable error message. */
-  message: z.string(),
-  /** Optional structured details describing the failure. */
-  details: z.any().optional(),
-});
-/** Structured error carried as data inside agent outputs and snapshots. */
-export type RuntimeError = z.infer<typeof RuntimeErrorSchema>;
+export { RuntimeErrorSchema, type RuntimeError } from './model-types.js';
 
 /**
  * Schema for tracking persistent artifacts generated during a session turn.
