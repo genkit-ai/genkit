@@ -47,14 +47,14 @@ from botocore.exceptions import (
 from genkit import ActionRunContext, GenkitError, ModelResponse
 from genkit.model import ModelRequest
 from genkit.plugin_api import ErrorResponseMetadata, StatusName, from_http_code, mark_provider_error
-from genkit_amazon_bedrock.converters import build_converse_request, to_model_response, usage_log_fields
-from genkit_amazon_bedrock.stream import consume_converse_stream
+from genkit_amazon_bedrock._converters import build_converse_request, to_model_response, usage_log_fields
+from genkit_amazon_bedrock._stream import consume_converse_stream
 
 logger = structlog.get_logger(__name__)
 
 
 class ConverseTransport(Protocol):
-    """Structural contract for the transport seam (see ``transport.py``)."""
+    """Structural contract for the transport seam (see ``_transport.py``)."""
 
     async def converse(self, **kwargs: Any) -> dict[str, Any]:  # noqa: ANN401
         """Calls the Converse API and returns the raw response dict."""

@@ -16,41 +16,17 @@
 
 """Tests for Flask plugin module exports and integration types."""
 
-from genkit_flask.handler import RequestData
-
 
 class TestFlaskModuleExports:
     """Tests for Flask plugin module-level exports."""
-
-    def test_flask_route_return_type_alias(self) -> None:
-        """Test Flask route return type alias."""
-        from genkit_flask.handler import FlaskRouteReturn
-
-        assert FlaskRouteReturn is not None
 
     def test_genkit_flask_handler_signature(self) -> None:
         """Test Genkit flask handler signature."""
         import inspect
 
-        from genkit_flask.handler import genkit_flask_handler
+        from genkit_flask._handler import genkit_flask_handler
 
         sig = inspect.signature(genkit_flask_handler)
         params = list(sig.parameters.keys())
         assert 'ai' in params
         assert 'context_provider' in params
-
-
-class TestRequestDataBase:
-    """Tests for the RequestData base class used by _FlaskRequestData."""
-
-    def test_request_data_is_importable(self) -> None:
-        """Test Request data is importable."""
-        assert RequestData is not None
-
-    def test_request_data_is_a_class(self) -> None:
-        """Test Request data is a class."""
-        assert isinstance(RequestData, type)
-
-    def test_request_data_has_init(self) -> None:
-        """Test Request data has init."""
-        assert hasattr(RequestData, '__init__')

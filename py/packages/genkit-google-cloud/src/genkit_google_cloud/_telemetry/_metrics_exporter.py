@@ -38,7 +38,7 @@ from opentelemetry.sdk.metrics.export import (
     MetricsData,
 )
 
-from .constants import METRIC_START_TIME_ADJUSTMENT_NS
+from ._constants import METRIC_START_TIME_ADJUSTMENT_NS
 
 
 class GenkitMetricExporter(MetricExporter):

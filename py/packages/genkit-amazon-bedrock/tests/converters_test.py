@@ -22,8 +22,8 @@ The expectations encode Bedrock wire-format truths, not incidental structure.
 import base64
 
 import pytest
-from genkit_amazon_bedrock.config import BedrockConfig
-from genkit_amazon_bedrock.converters import (
+from genkit_amazon_bedrock._config import BedrockConfig
+from genkit_amazon_bedrock._converters import (
     REASONING_SIGNATURE_METADATA_KEY,
     REDACTED_CONTENT_METADATA_KEY,
     build_converse_request,

@@ -14,4 +14,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Vertex AI plugin."""
+
+"""Model Garden integration for Vertex AI."""
+
+from ._plugin import ModelGarden
+
+__all__ = ['ModelGarden']

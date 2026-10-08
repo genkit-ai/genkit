@@ -47,10 +47,10 @@ See Also:
     - Ollama documentation: https://ollama.ai/
 """
 
+from genkit_ollama._embedders import EmbeddingDefinition
 from genkit_ollama._errors import OllamaConnectionError
-from genkit_ollama.embedders import EmbeddingDefinition
-from genkit_ollama.models import ModelDefinition, OllamaConfig, OllamaSupports
-from genkit_ollama.plugin_api import (
+from genkit_ollama._models import ModelDefinition, OllamaConfig, OllamaSupports
+from genkit_ollama._plugin import (
     Ollama,
     RequestHeaderFunction,
     RequestHeaderParams,

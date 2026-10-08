@@ -31,7 +31,7 @@ import structlog
 
 from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
 from genkit.model import ModelRequest, ToolDefinition, ToolRequest
-from genkit_amazon_bedrock.converters import (
+from genkit_amazon_bedrock._converters import (
     bedrock_reasoning_part,
     coerce_tool_input,
     map_finish_reason,

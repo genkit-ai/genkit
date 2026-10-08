@@ -37,6 +37,6 @@ See Also:
     - Cloud Monitoring: https://cloud.google.com/monitoring/docs
 """
 
-from .tracing import enable_google_cloud_telemetry
+from ._tracing import enable_google_cloud_telemetry
 
 __all__ = ['enable_google_cloud_telemetry']

@@ -22,7 +22,7 @@ from typing import Any, cast
 import pytest
 from botocore.exceptions import ClientError, NoCredentialsError
 from genkit_amazon_bedrock import Bedrock
-from genkit_amazon_bedrock.rerank import (
+from genkit_amazon_bedrock._rerank import (
     BedrockReranker,
     BedrockRerankOptions,
     RerankerRequest,
@@ -32,7 +32,7 @@ from genkit_amazon_bedrock.rerank import (
     coerce_rerank_options,
     is_rerank_model,
 )
-from genkit_amazon_bedrock.transport import BedrockTransport
+from genkit_amazon_bedrock._transport import BedrockTransport
 
 from genkit import Document, GenkitError, Part
 

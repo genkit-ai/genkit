@@ -50,8 +50,8 @@ from genkit.embedder import (
     EmbedResponse,
 )
 from genkit.plugin_api import mark_provider_error
-from genkit_amazon_bedrock.model_info import model_label, strip_inference_profile_prefix
-from genkit_amazon_bedrock.models import _from_botocore_error, _from_client_error
+from genkit_amazon_bedrock._model_info import model_label, strip_inference_profile_prefix
+from genkit_amazon_bedrock._models import _from_botocore_error, _from_client_error
 
 logger = structlog.get_logger(__name__)
 
@@ -122,7 +122,7 @@ EMBEDDER_INFO: dict[str, EmbedderInfo] = {
 
 
 class InvokeModelTransport(Protocol):
-    """Structural contract for the transport seam (see ``transport.py``)."""
+    """Structural contract for the transport seam (see ``_transport.py``)."""
 
     async def invoke_model(self, **kwargs: Any) -> dict[str, Any]:  # noqa: ANN401
         """Calls the InvokeModel API and returns the parsed response body."""

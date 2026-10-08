@@ -16,8 +16,8 @@
 
 """`extra` on `BedrockConfig` lands in `additionalModelRequestFields`."""
 
-from genkit_amazon_bedrock.config import BedrockConfig
-from genkit_amazon_bedrock.converters import build_converse_request
+from genkit_amazon_bedrock._config import BedrockConfig
+from genkit_amazon_bedrock._converters import build_converse_request
 
 from genkit import Message, Part, Role
 from genkit.model import ModelRequest

@@ -16,8 +16,6 @@
 
 """Tests for Django plugin module exports and integration types."""
 
-from genkit_django.handler import RequestData
-
 
 class TestDjangoModuleExports:
     """Tests for Django plugin module-level exports."""
@@ -26,25 +24,9 @@ class TestDjangoModuleExports:
         """Test Genkit django handler signature."""
         import inspect
 
-        from genkit_django.handler import genkit_django_handler
+        from genkit_django._handler import genkit_django_handler
 
         sig = inspect.signature(genkit_django_handler)
         params = list(sig.parameters.keys())
         assert 'ai' in params
         assert 'context_provider' in params
-
-
-class TestRequestDataBase:
-    """Tests for the RequestData base class used by _DjangoRequestData."""
-
-    def test_request_data_is_importable(self) -> None:
-        """Test Request data is importable."""
-        assert RequestData is not None
-
-    def test_request_data_is_a_class(self) -> None:
-        """Test Request data is a class."""
-        assert isinstance(RequestData, type)
-
-    def test_request_data_has_init(self) -> None:
-        """Test Request data has init."""
-        assert hasattr(RequestData, '__init__')

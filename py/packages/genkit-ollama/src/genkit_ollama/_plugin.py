@@ -44,16 +44,16 @@ from genkit.plugin_api import (
     to_json_schema,
     wrap_http_error,
 )
-from genkit_ollama._errors import wrap_connection_errors
-from genkit_ollama.constants import (
+from genkit_ollama._constants import (
     DEFAULT_OLLAMA_SERVER_URL,
     OllamaAPITypes,
 )
-from genkit_ollama.embedders import (
+from genkit_ollama._embedders import (
     EmbeddingDefinition,
     OllamaEmbedder,
 )
-from genkit_ollama.models import (
+from genkit_ollama._errors import wrap_connection_errors
+from genkit_ollama._models import (
     ModelDefinition,
     OllamaConfig,
     OllamaModel,

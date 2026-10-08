@@ -29,7 +29,7 @@ from pydantic import ValidationError
 
 from genkit import FinishReason, GenkitError, Message, ModelResponse, Part, Role
 from genkit.model import ModelRequest, ModelUsage, ToolDefinition, ToolRequest
-from genkit_amazon_bedrock.config import BedrockConfig
+from genkit_amazon_bedrock._config import BedrockConfig
 
 # Metadata keys used to round-trip Bedrock reasoning ("thinking") content back
 # into a follow-up request. Bedrock returns signed and sometimes redacted

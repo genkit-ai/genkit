@@ -23,7 +23,7 @@ from unittest.mock import patch
 import httpx
 import pytest
 from anthropic import AsyncAnthropicVertex
-from genkit_vertexai.model_garden import ModelGarden
+from genkit_vertexai import ModelGarden
 
 from genkit import FinishReason, Genkit
 
@@ -61,7 +61,7 @@ def api() -> Iterator[FakeVertexClaude]:
         http_client = httpx.AsyncClient(transport=httpx.MockTransport(fake.handler))
         return AsyncAnthropicVertex(access_token='google-token', http_client=http_client, **kwargs)
 
-    with patch('genkit_vertexai.model_garden.anthropic.AsyncAnthropicVertex', client):
+    with patch('genkit_vertexai._model_garden._anthropic.AsyncAnthropicVertex', client):
         yield fake
 
 

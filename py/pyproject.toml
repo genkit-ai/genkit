@@ -245,7 +245,7 @@ select = [
 "packages/genkit/src/genkit/_ai/_json_patch.py" = ["ANN401"]
 # HTTP client uses **httpx_kwargs: Any to forward arbitrary options
 # Span wrapper uses __getattr__ -> Any for dynamic delegation
-"packages/genkit-google-cloud/src/genkit_google_cloud/telemetry/_adjusting_exporter.py" = ["ANN401"]
+"packages/genkit-google-cloud/src/genkit_google_cloud/_telemetry/_adjusting_exporter.py" = ["ANN401"]
 # Private telemetry folder; helpers here are not a public docstring surface
 "packages/genkit/src/genkit/_core/_telemetry/*.py" = ["D"]
 # Re-export modules (F401 would flag imports used only for re-export)

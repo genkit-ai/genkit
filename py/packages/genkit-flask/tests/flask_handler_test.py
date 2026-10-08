@@ -17,7 +17,7 @@
 """Tests for Flask handler decorator validation."""
 
 import pytest
-from genkit_flask.handler import genkit_flask_handler
+from genkit_flask._handler import genkit_flask_handler
 
 from genkit._core._error import GenkitError
 
@@ -71,9 +71,3 @@ class TestFlaskHandlerImports:
 
         handler = genkit_flask_handler(FakeGenkit(), context_provider=None)  # type: ignore[arg-type]
         assert callable(handler)
-
-    def test_flask_route_return_alias_exists(self) -> None:
-        """Test Flask route return alias exists."""
-        from genkit_flask.handler import FlaskRouteReturn
-
-        assert FlaskRouteReturn is not None

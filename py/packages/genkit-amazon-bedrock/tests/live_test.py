@@ -30,16 +30,16 @@ import re
 from collections.abc import Iterator
 
 import pytest
-from genkit_amazon_bedrock.config import BedrockConfig
-from genkit_amazon_bedrock.converters import (
+from genkit_amazon_bedrock._config import BedrockConfig
+from genkit_amazon_bedrock._converters import (
     REASONING_SIGNATURE_METADATA_KEY,
     cache_point_part,
 )
-from genkit_amazon_bedrock.embedders import BedrockEmbedder
-from genkit_amazon_bedrock.image import BedrockImageModel
-from genkit_amazon_bedrock.models import BedrockModel
-from genkit_amazon_bedrock.rerank import BedrockReranker, BedrockRerankOptions, RerankerRequest
-from genkit_amazon_bedrock.transport import BedrockTransport
+from genkit_amazon_bedrock._embedders import BedrockEmbedder
+from genkit_amazon_bedrock._image import BedrockImageModel
+from genkit_amazon_bedrock._models import BedrockModel
+from genkit_amazon_bedrock._rerank import BedrockReranker, BedrockRerankOptions, RerankerRequest
+from genkit_amazon_bedrock._transport import BedrockTransport
 
 from genkit import ActionRunContext, Document, FinishReason, GenkitError, Message, ModelResponse, Part, Role
 from genkit.embedder import EmbedRequest
