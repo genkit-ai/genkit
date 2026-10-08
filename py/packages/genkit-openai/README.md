@@ -35,6 +35,16 @@ print(res.text)
 ```
 
 Set `OPENAI_API_KEY` in the environment, or pass `api_key=` to `OpenAI()`.
+`base_url=` points the plugin at another OpenAI-compatible server, and any other
+`AsyncOpenAI` setting goes in `client_options`:
+
+```python
+OpenAI(
+    api_key=key,
+    base_url='https://openrouter.ai/api/v1',
+    client_options={'organization': 'org-123', 'timeout': 30, 'max_retries': 5},
+)
+```
 
 ## Config
 

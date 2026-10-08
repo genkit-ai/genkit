@@ -246,7 +246,7 @@ class GcpTelemetry:
         if firebase_project_id and firebase_project_id != self.project_id:
             # Go's Firebase plugin still reads this, so a ported app may expect it to pick the project.
             logger.warning(
-                'FIREBASE_PROJECT_ID is not used for telemetry; set project_id= or GOOGLE_CLOUD_PROJECT',
+                'FIREBASE_PROJECT_ID is not used for telemetry; set project= or GOOGLE_CLOUD_PROJECT',
                 firebase_project_id=firebase_project_id,
                 project_id=self.project_id,
             )

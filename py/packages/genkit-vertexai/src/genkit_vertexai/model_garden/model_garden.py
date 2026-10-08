@@ -212,37 +212,33 @@ class ModelGarden(Plugin):
 
     def __init__(
         self,
-        project_id: str | None = None,
+        *,
+        project: str | None = None,
         location: str | None = None,
-        models: list[str] | None = None,
         model_locations: dict[str, str] | None = None,
     ) -> None:
         """Initializes the plugin and sets up its configuration.
 
-        This constructor prepares the plugin by assigning the Google Cloud project ID,
-        location, and a list of models to be used.
+        Models resolve on demand by name, so there is no list to register up front.
 
         Args:
-            project_id: The Google Cloud project ID to use. If not provided, it attempts
-                to load from the `GCLOUD_PROJECT` environment variable.
+            project: The Google Cloud project to use. If not provided, it attempts
+                to load from the `GCLOUD_PROJECT` or `GOOGLE_CLOUD_PROJECT`
+                environment variable.
             location: The Google Cloud region to use for services. If not provided,
                 it defaults to `DEFAULT_REGION`.
-            models: An optional list of model names to register with the plugin.
             model_locations: An optional dictionary mapping model names to their specific
                 Google Cloud regions. This overrides the default `location` for the
                 specified models.
         """
-        self.project_id = (
-            project_id
-            if project_id is not None
-            else os.getenv(const.GCLOUD_PROJECT) or os.getenv('GOOGLE_CLOUD_PROJECT')
+        self.project = (
+            project if project is not None else os.getenv(const.GCLOUD_PROJECT) or os.getenv('GOOGLE_CLOUD_PROJECT')
         )
 
         self.location = (
             location or os.getenv('GOOGLE_CLOUD_LOCATION') or os.getenv('GOOGLE_CLOUD_REGION') or const.DEFAULT_REGION
         )
 
-        self.models = models
         self.model_locations = model_locations or {}
 
     async def init(self) -> list[Action]:
@@ -272,14 +268,14 @@ class ModelGarden(Plugin):
         """Region and project the model ``name`` runs in.
 
         Raises:
-            GenkitError: FAILED_PRECONDITION when no project ID was passed or found in the environment.
+            GenkitError: FAILED_PRECONDITION when no project was passed or found in the environment.
         """
-        if not self.project_id:
+        if not self.project:
             raise GenkitError(
                 status='FAILED_PRECONDITION',
-                message='project_id must be provided',
+                message='project must be provided',
             )
-        return self.model_locations.get(name, self.location), self.project_id
+        return self.model_locations.get(name, self.location), self.project
 
     async def _create_model_action(self, name: str) -> Action:
         """Create an Action object for a Model Garden Vertex AI model.

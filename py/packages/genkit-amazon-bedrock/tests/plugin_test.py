@@ -504,3 +504,9 @@ async def test_generate_bedrock_arn_model_keeps_full_path() -> None:
     action = await ai.registry.resolve_action(ActionKind.MODEL, f'bedrock/{arn}')
     assert action is not None
     assert action.name == f'bedrock/{arn}'
+
+
+def test_bedrock_positional_region_raises_type_error() -> None:
+    """Bedrock('us-east-1') raises TypeError; the region is passed as region=."""
+    with pytest.raises(TypeError):
+        Bedrock('us-east-1')  # type: ignore[misc]

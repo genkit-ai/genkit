@@ -30,7 +30,7 @@ Example:
 
 
     # Enable Google Cloud Trace and Monitoring export
-    enable_google_cloud_telemetry(project_id='my-project')
+    enable_google_cloud_telemetry(project='my-project')
 
     # All subsequent Genkit actions automatically export telemetry
     ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))

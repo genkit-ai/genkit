@@ -85,13 +85,13 @@ def test_beta_only_key_in_extra_rejected_on_stable_surface() -> None:
 
 
 def test_generate_anthropic_timeout_in_extra_raises_pointing_at_plugin() -> None:
-    """`config={'extra': {'timeout': 30}}` raises INVALID_ARGUMENT pointing at Anthropic(...)."""
+    """`config={'extra': {'timeout': 30}}` raises INVALID_ARGUMENT pointing at Anthropic(client_options=...)."""
     with pytest.raises(GenkitError) as err:
         _params(AnthropicConfig(extra={'timeout': 30}))
 
     assert err.value.status == 'INVALID_ARGUMENT'
     assert "'timeout'" in str(err.value)
-    assert 'Anthropic(timeout=' in str(err.value)
+    assert "Anthropic(client_options={'timeout': ..." in str(err.value)
     assert 'default_headers' in str(err.value)
 
 

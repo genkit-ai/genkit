@@ -260,7 +260,7 @@ def _merge_config_extra(params: dict[str, Any], extra: dict[str, Any] | None) ->
                 status='INVALID_ARGUMENT',
                 message=(
                     f'anthropic: {field!r} is a client setting, not a request field; '
-                    'pass it to Anthropic(timeout=..., default_headers=...)'
+                    "pass it as Anthropic(client_options={'timeout': ..., 'default_headers': ...})"
                 ),
             )
     for field in _MANAGED_BODY_FIELDS:

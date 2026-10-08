@@ -101,10 +101,15 @@ class FakeClaudeApi:
         return self.requests[index].headers.get('x-api-key')
 
 
-def _genkit(api: FakeClaudeApi, **client_params: Any) -> Genkit:
-    client_params.setdefault('api_key', PLUGIN_KEY)
+def _genkit(
+    api: FakeClaudeApi, *, api_key: str | None = PLUGIN_KEY, base_url: str | None = None, **client_options: Any
+) -> Genkit:
     http_client = httpx.AsyncClient(transport=httpx.MockTransport(api.handler))
-    return Genkit(plugins=[Anthropic(http_client=http_client, **client_params)])
+    return Genkit(
+        plugins=[
+            Anthropic(api_key=api_key, base_url=base_url, client_options={'http_client': http_client, **client_options})
+        ]
+    )
 
 
 # --- config keys --------------------------------------------------------------
@@ -209,7 +214,7 @@ async def test_plugin_without_key_and_no_tenant_key_raises_naming_both() -> None
 
 @pytest.mark.parametrize('streaming', [False, True], ids=['generate', 'generate_stream'])
 @pytest.mark.asyncio
-async def test_tenant_key_wins_over_plugin_key(streaming: bool) -> None:
+async def test_anthropic_per_request_key_still_overrides_plugin_key(streaming: bool) -> None:
     """`context={'secrets': {'api_key': k}}` sends `x-api-key: k` instead of the plugin's key."""
     api = FakeClaudeApi()
     ai = _genkit(api)
@@ -428,3 +433,105 @@ async def test_middleware_edit_inside_nested_claude_setting_is_validated(
     assert response.finish_message is not None
     assert response.finish_message.startswith(f"{MODEL}: middleware 'Tune' {message}")
     assert api.requests == []
+
+
+# --- constructor --------------------------------------------------------------
+
+
+def test_anthropic_positional_argument_raises_type_error() -> None:
+    """Anthropic('sk-ant-...') raises TypeError; the key is passed as api_key=."""
+    with pytest.raises(TypeError):
+        Anthropic('sk-ant-key')  # type: ignore[misc]
+
+
+def test_anthropic_misspelled_api_key_raises_type_error() -> None:
+    """Anthropic(apikey=...) raises TypeError naming apikey instead of silently running without a key."""
+    with pytest.raises(TypeError, match='apikey'):
+        Anthropic(apikey='sk-ant-key')  # type: ignore[call-arg]
+
+
+def test_anthropic_models_argument_raises_type_error() -> None:
+    """Anthropic(models=[...]) raises TypeError; any Claude model resolves by name without a list."""
+    with pytest.raises(TypeError, match='models'):
+        Anthropic(models=['claude-sonnet-4-6'])  # type: ignore[call-arg]
+
+
+def test_anthropic_timeout_outside_client_options_raises_type_error() -> None:
+    """Anthropic(timeout=30) raises TypeError; client settings go in client_options={'timeout': 30}."""
+    with pytest.raises(TypeError, match='timeout'):
+        Anthropic(timeout=30)  # type: ignore[call-arg]
+
+
+def test_anthropic_api_key_in_both_places_raises() -> None:
+    """Anthropic(api_key=a, client_options={'api_key': b}) raises TypeError instead of picking one."""
+    with pytest.raises(TypeError, match='api_key'):
+        Anthropic(api_key='a', client_options={'api_key': 'b'})
+
+
+def test_anthropic_base_url_in_both_places_raises() -> None:
+    """Anthropic(base_url=a, client_options={'base_url': b}) raises TypeError instead of picking one."""
+    with pytest.raises(TypeError, match='base_url'):
+        Anthropic(base_url='https://a.example', client_options={'base_url': 'https://b.example'})
+
+
+def test_anthropic_unknown_client_options_key_raises_type_error() -> None:
+    """Anthropic(client_options={'api_kye': ...}) raises TypeError naming api_kye at construction."""
+    with pytest.raises(TypeError, match='api_kye'):
+        Anthropic(client_options={'api_kye': 'sk-ant-key'})
+
+
+@pytest.mark.asyncio
+async def test_anthropic_without_models_still_resolves_any_claude_model() -> None:
+    """ai.generate(model='anthropic/claude-future-9') sends that id even though no model list was configured."""
+    api = FakeClaudeApi()
+    ai = _genkit(api)
+
+    response = await ai.generate(model='anthropic/claude-future-9', prompt='hi')
+
+    assert response.text == 'ok'
+    assert api.body()['model'] == 'claude-future-9'
+
+
+@pytest.mark.asyncio
+async def test_anthropic_without_api_key_uses_anthropic_api_key_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Anthropic() with ANTHROPIC_API_KEY=env-key sends x-api-key: env-key."""
+    monkeypatch.setenv('ANTHROPIC_API_KEY', 'env-key')
+    api = FakeClaudeApi()
+    ai = _genkit(api, api_key=None)
+
+    await ai.generate(model=MODEL, prompt='hi')
+
+    assert api.api_key() == 'env-key'
+
+
+@pytest.mark.asyncio
+async def test_anthropic_api_key_is_sent_as_x_api_key() -> None:
+    """Anthropic(api_key='plugin-key') sends x-api-key: plugin-key on ai.generate."""
+    api = FakeClaudeApi()
+    ai = _genkit(api, api_key=PLUGIN_KEY)
+
+    await ai.generate(model=MODEL, prompt='hi')
+
+    assert api.api_key() == PLUGIN_KEY
+
+
+@pytest.mark.asyncio
+async def test_anthropic_base_url_sends_requests_to_that_server() -> None:
+    """Anthropic(base_url='https://claude-proxy.example.com') sends ai.generate to that host."""
+    api = FakeClaudeApi()
+    ai = _genkit(api, base_url='https://claude-proxy.example.com')
+
+    await ai.generate(model=MODEL, prompt='hi')
+
+    assert str(api.requests[-1].url) == 'https://claude-proxy.example.com/v1/messages'
+
+
+@pytest.mark.asyncio
+async def test_anthropic_client_options_reach_the_client() -> None:
+    """Anthropic(client_options={'default_headers': {'X-Team': 'search'}}) sends that header on ai.generate."""
+    api = FakeClaudeApi()
+    ai = _genkit(api, default_headers={'X-Team': 'search'})
+
+    await ai.generate(model=MODEL, prompt='hi')
+
+    assert api.requests[-1].headers['x-team'] == 'search'

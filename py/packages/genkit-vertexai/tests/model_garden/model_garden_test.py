@@ -158,7 +158,7 @@ async def test_resolve_without_project_is_failed_precondition(model_name: str) -
     with patch.dict('os.environ', {}, clear=True):
         plugin = ModelGarden(location='us-central1')
 
-    with pytest.raises(GenkitError, match='project_id must be provided') as raised:
+    with pytest.raises(GenkitError, match='project must be provided') as raised:
         await plugin.resolve(ActionKind.MODEL, model_name)
 
     assert raised.value.status == 'FAILED_PRECONDITION'
@@ -216,7 +216,7 @@ async def test_model_garden_openai_compatible_model_resolves_and_generates() -> 
         'genkit_vertexai.model_garden.model_garden.ModelGardenModel.create_client',
         new=AsyncMock(return_value=client),
     ):
-        ai = Genkit(plugins=[ModelGarden(project_id='my-project', location='us-central1')])
+        ai = Genkit(plugins=[ModelGarden(project='my-project', location='us-central1')])
         response = await ai.generate(model='modelgarden/meta/llama-3.1-405b-instruct-maas', prompt='hi')
 
     assert response.text == 'hello from llama'
@@ -259,7 +259,7 @@ async def test_model_garden_repeated_generate_refreshes_credentials_once() -> No
         patch('genkit_vertexai.model_garden.client.google.auth.transport.requests.Request'),
         patch('genkit_vertexai.model_garden.client._AsyncOpenAI', side_effect=make_client),
     ):
-        ai = Genkit(plugins=[ModelGarden(project_id='my-project', location='us-central1')])
+        ai = Genkit(plugins=[ModelGarden(project='my-project', location='us-central1')])
         for _ in range(3):
             response = await ai.generate(model='modelgarden/meta/llama-3.1-405b-instruct-maas', prompt='hi')
             assert response.text == 'ok'
@@ -286,7 +286,7 @@ async def test_model_garden_generate_after_token_expiry_sends_fresh_token() -> N
         patch('genkit_vertexai.model_garden.client.google.auth.transport.requests.Request'),
         patch('genkit_vertexai.model_garden.client._AsyncOpenAI', side_effect=make_client),
     ):
-        ai = Genkit(plugins=[ModelGarden(project_id='my-project', location='us-central1')])
+        ai = Genkit(plugins=[ModelGarden(project='my-project', location='us-central1')])
         first = await ai.generate(model='modelgarden/meta/llama-3.1-405b-instruct-maas', prompt='hi')
         assert first.text == 'ok'
         assert clients[0].api_key == 'tok-1'
@@ -314,7 +314,7 @@ async def test_generate_model_garden_claude_registers_full_publisher_path() -> N
     client.messages.create = AsyncMock(return_value=reply)
     client.beta.messages.create = AsyncMock(return_value=reply)
     with patch('genkit_vertexai.model_garden.anthropic.AsyncAnthropicVertex', return_value=client):
-        ai = Genkit(plugins=[ModelGarden(project_id='p', location='us-central1')])
+        ai = Genkit(plugins=[ModelGarden(project='p', location='us-central1')])
         response = await ai.generate(model=claude, prompt='hi')
         action = await ai.registry.resolve_action(ActionKind.MODEL, claude)
 
@@ -341,7 +341,7 @@ def test_import_genkit_vertexai_does_not_load_publisher_sdks() -> None:
         import json, sys
         import genkit_vertexai
         from genkit_vertexai.model_garden import ModelGarden
-        ModelGarden(project_id='my-project')
+        ModelGarden(project='my-project')
         publishers = ('anthropic', 'genkit_anthropic', 'openai', 'genkit_openai')
         print(json.dumps(sorted(m for m in publishers if m in sys.modules)))
     """)
@@ -355,7 +355,7 @@ def test_import_genkit_vertexai_does_not_load_publisher_sdks() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ('model', 'missing', 'project_id', 'message'),
+    ('model', 'missing', 'project', 'message'),
     [
         pytest.param(CLAUDE, ('genkit_anthropic', 'genkit_openai'), 'p', CLAUDE_EXTRA_MISSING, id='claude-no-extras'),
         pytest.param(CLAUDE, ('genkit_anthropic',), 'p', CLAUDE_EXTRA_MISSING, id='claude-openai-extra-only'),
@@ -367,13 +367,13 @@ def test_import_genkit_vertexai_does_not_load_publisher_sdks() -> None:
     ],
 )
 async def test_generate_model_garden_model_without_its_extra_raises_install_command(
-    monkeypatch: pytest.MonkeyPatch, model: str, missing: tuple[str, ...], project_id: str | None, message: str
+    monkeypatch: pytest.MonkeyPatch, model: str, missing: tuple[str, ...], project: str | None, message: str
 ) -> None:
     """Generating with a Model Garden model whose extra is missing raises FAILED_PRECONDITION naming `uv add`."""
     for var in ('GCLOUD_PROJECT', 'GOOGLE_CLOUD_PROJECT'):
         monkeypatch.delenv(var, raising=False)
     _uninstall(monkeypatch, *missing)
-    ai = Genkit(plugins=[ModelGarden(project_id=project_id)])
+    ai = Genkit(plugins=[ModelGarden(project=project)])
 
     with pytest.raises(GenkitError) as exc_info:
         await ai.generate(model=model, prompt='hi')
@@ -397,7 +397,7 @@ async def test_generate_model_garden_broken_publisher_install_raises_import_erro
     for module in forget:
         monkeypatch.delitem(sys.modules, module)
     _uninstall(monkeypatch, missing)
-    ai = Genkit(plugins=[ModelGarden(project_id='p')])
+    ai = Genkit(plugins=[ModelGarden(project='p')])
 
     with pytest.raises(ModuleNotFoundError) as exc_info:
         await ai.generate(model=model, prompt='hi')
@@ -410,7 +410,7 @@ async def test_model_garden_list_actions_without_openai_extra_returns_empty(monk
     """Without `[openai]`, the model list the Dev UI reads is empty."""
     _uninstall(monkeypatch, 'genkit_openai')
 
-    assert await ModelGarden(project_id='p').list_actions() == []
+    assert await ModelGarden(project='p').list_actions() == []
 
 
 @pytest.mark.asyncio
@@ -420,7 +420,7 @@ async def test_model_garden_list_actions_broken_openai_install_raises(monkeypatc
     _uninstall(monkeypatch, 'genkit_openai._openai_plugin')
 
     with pytest.raises(ModuleNotFoundError) as exc_info:
-        await ModelGarden(project_id='p').list_actions()
+        await ModelGarden(project='p').list_actions()
 
     assert exc_info.value.name == 'genkit_openai._openai_plugin'
 
@@ -428,7 +428,7 @@ async def test_model_garden_list_actions_broken_openai_install_raises(monkeypatc
 @pytest.mark.asyncio
 async def test_model_garden_list_actions_with_openai_extra_lists_llama_models() -> None:
     """With `[openai]`, the Dev UI lists every built-in OpenAI-compatible model, Llama included."""
-    actions = await ModelGarden(project_id='p').list_actions()
+    actions = await ModelGarden(project='p').list_actions()
 
     names = [a.name for a in actions]
     assert names == [f'modelgarden/{model}' for model in SUPPORTED_OPENAI_COMPAT_MODELS]
@@ -445,7 +445,7 @@ async def test_model_garden_list_actions_with_openai_extra_lists_llama_models() 
 @pytest.mark.asyncio
 async def test_resolve_uncataloged_openai_compat_model_advertises_default_supports() -> None:
     """An uncataloged OpenAI-compatible model advertises, in camelCase, the label and supports its handler runs with."""
-    ai = Genkit(plugins=[ModelGarden(project_id='p')])
+    ai = Genkit(plugins=[ModelGarden(project='p')])
 
     action = await ai.registry.resolve_action(ActionKind.MODEL, MISTRAL)
 
@@ -454,3 +454,87 @@ async def test_resolve_uncataloged_openai_compat_model_advertises_default_suppor
     assert isinstance(info, dict)
     assert info['label'] == 'ModelGarden - mistralai/mistral-small-2503'
     assert info['supports'] == DEFAULT_SUPPORTS.model_dump(by_alias=True, exclude_none=True)
+
+
+def test_model_garden_positional_project_raises_type_error() -> None:
+    """ModelGarden('my-project') raises TypeError; the project is passed as project=."""
+    with pytest.raises(TypeError):
+        ModelGarden('my-project')  # type: ignore[misc]
+
+
+def test_model_garden_project_id_raises_type_error() -> None:
+    """ModelGarden(project_id='my-project') raises TypeError; the project is passed as project=."""
+    with pytest.raises(TypeError, match='project_id'):
+        ModelGarden(project_id='my-project')  # type: ignore[call-arg]
+
+
+def test_model_garden_models_argument_raises_type_error() -> None:
+    """ModelGarden(models=[...]) raises TypeError; models resolve by name without a list."""
+    with pytest.raises(TypeError, match='models'):
+        ModelGarden(project='p', models=['meta/llama-3.1-405b-instruct-maas'])  # type: ignore[call-arg]
+
+
+def _vertex_openai_base_urls() -> tuple[list[str], Any]:
+    base_urls: list[str] = []
+
+    def make_client(**kwargs: object) -> MagicMock:
+        base_urls.append(str(kwargs['base_url']))
+        client = MagicMock()
+        client.chat.completions.create = AsyncMock(return_value=_chat_completion('ok'))
+        return client
+
+    return base_urls, make_client
+
+
+@pytest.mark.asyncio
+async def test_model_garden_project_reaches_vertex_requests() -> None:
+    """ModelGarden(project='my-project') sends ai.generate to that project's Vertex endpoint."""
+    base_urls, make_client = _vertex_openai_base_urls()
+    with (
+        patch('genkit_vertexai.model_garden.client.auth.default', return_value=(_FakeCredentials(), 'adc-project')),
+        patch('genkit_vertexai.model_garden.client.google.auth.transport.requests.Request'),
+        patch('genkit_vertexai.model_garden.client._AsyncOpenAI', side_effect=make_client),
+    ):
+        ai = Genkit(plugins=[ModelGarden(project='my-project', location='us-central1')])
+        response = await ai.generate(model=LLAMA, prompt='hi')
+
+    assert response.text == 'ok'
+    assert base_urls == [
+        'https://us-central1-aiplatform.googleapis.com/v1beta1'
+        '/projects/my-project/locations/us-central1/endpoints/openapi'
+    ]
+
+
+@pytest.mark.asyncio
+async def test_model_garden_without_project_uses_google_cloud_project_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ModelGarden() with GOOGLE_CLOUD_PROJECT=env-project sends ai.generate to env-project."""
+    monkeypatch.delenv('GCLOUD_PROJECT', raising=False)
+    monkeypatch.setenv('GOOGLE_CLOUD_PROJECT', 'env-project')
+    base_urls, make_client = _vertex_openai_base_urls()
+    with (
+        patch('genkit_vertexai.model_garden.client.auth.default', return_value=(_FakeCredentials(), 'adc-project')),
+        patch('genkit_vertexai.model_garden.client.google.auth.transport.requests.Request'),
+        patch('genkit_vertexai.model_garden.client._AsyncOpenAI', side_effect=make_client),
+    ):
+        ai = Genkit(plugins=[ModelGarden(location='us-central1')])
+        await ai.generate(model=LLAMA, prompt='hi')
+
+    assert len(base_urls) == 1
+    assert '/projects/env-project/' in base_urls[0]
+
+
+@pytest.mark.asyncio
+async def test_model_garden_without_models_still_resolves_any_model() -> None:
+    """ai.generate(model='modelgarden/mistralai/mistral-small-2503') works with no models list configured."""
+    client = MagicMock()
+    client.chat.completions.create = AsyncMock(return_value=_chat_completion('hello from mistral'))
+
+    with patch(
+        'genkit_vertexai.model_garden.model_garden.ModelGardenModel.create_client',
+        new=AsyncMock(return_value=client),
+    ):
+        ai = Genkit(plugins=[ModelGarden(project='p', location='us-central1')])
+        response = await ai.generate(model=MISTRAL, prompt='hi')
+
+    assert response.text == 'hello from mistral'
+    assert client.chat.completions.create.call_args.kwargs['model'] == 'mistralai/mistral-small-2503'

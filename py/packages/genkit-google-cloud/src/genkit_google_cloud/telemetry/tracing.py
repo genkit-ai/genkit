@@ -26,7 +26,7 @@ Usage:
     from genkit_google_genai import GoogleAI
     from genkit_google_cloud import enable_google_cloud_telemetry
 
-    enable_google_cloud_telemetry(project_id='my-project')
+    enable_google_cloud_telemetry(project='my-project')
 
     # 2. All subsequent Genkit actions automatically export telemetry
     ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
@@ -61,7 +61,8 @@ def _reset_google_cloud_telemetry() -> None:
 
 
 def enable_google_cloud_telemetry(
-    project_id: str | None = None,
+    *,
+    project: str | None = None,
     credentials: dict[str, Any] | None = None,
     sampler: Sampler | None = None,
     force_dev_export: bool = False,
@@ -94,7 +95,7 @@ def enable_google_cloud_telemetry(
     ``GENKIT_ENV=dev``.
 
     Args:
-        project_id: Google Cloud project ID. Wins over ``GOOGLE_CLOUD_PROJECT``,
+        project: Google Cloud project. Wins over ``GOOGLE_CLOUD_PROJECT``,
             ``GCLOUD_PROJECT``, the project on ``credentials``, and the
             Application Default Credentials project, in that order. Required
             when using external credentials (e.g., Workload Identity
@@ -128,7 +129,7 @@ def enable_google_cloud_telemetry(
         enable_google_cloud_telemetry()
 
         # Force export in dev environment with specific project
-        enable_google_cloud_telemetry(force_dev_export=True, project_id='my-project')
+        enable_google_cloud_telemetry(force_dev_export=True, project='my-project')
 
         # Disable metrics but keep traces
         enable_google_cloud_telemetry(disable_metrics=True)
@@ -138,7 +139,7 @@ def enable_google_cloud_telemetry(
 
         # With custom credentials for non-GCP environments
         enable_google_cloud_telemetry(
-            project_id='my-project',
+            project='my-project',
             credentials={'type': 'service_account', ...},
         )
         ```
@@ -151,7 +152,7 @@ def enable_google_cloud_telemetry(
         from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
 
         enable_google_cloud_telemetry(
-            project_id='my-project',
+            project='my-project',
             sampler=ParentBased(TraceIdRatioBased(0.1)),
         )
         # => about 1 in 10 new traces reach Cloud Trace
@@ -170,7 +171,7 @@ def enable_google_cloud_telemetry(
         trace.set_tracer_provider(TracerProvider(sampler=ParentBased(TraceIdRatioBased(0.1))))
 
         # 2. Cloud Trace joins that provider and inherits its sampler
-        enable_google_cloud_telemetry(project_id='my-project')
+        enable_google_cloud_telemetry(project='my-project')
         # => Cloud Trace gets the same 10% the app's exporter gets
 
         # Passing sampler= here instead raises:
@@ -195,7 +196,7 @@ def enable_google_cloud_telemetry(
     _enable_google_cloud_telemetry_already_called = True
 
     manager = GcpTelemetry(
-        project_id=project_id,
+        project_id=project,
         credentials=credentials,
         sampler=sampler,
         force_dev_export=force_dev_export,
