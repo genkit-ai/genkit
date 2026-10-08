@@ -80,6 +80,23 @@ print(config.model_dump(by_alias=True, exclude_none=True))
 # => {'temperature': 0.4, 'thinkingConfig': {'thinkingBudget': 1024}}
 ```
 
+Nested fields take Genkit types, not `google.genai.types` classes; the plugin
+converts them when it builds the request. The tool toggles take `True` or
+their options class:
+
+```python
+from genkit_google_genai import GeminiConfig, GoogleSearch
+
+# 1. Ground a Vertex AI request in web results, minus one domain
+config = GeminiConfig(google_search=GoogleSearch(exclude_domains=['reviews.example']), code_execution=True)
+
+print(config.model_dump(by_alias=True, exclude_none=True))
+# => {'codeExecution': True, 'googleSearch': {'excludeDomains': ['reviews.example']}}
+```
+
+A `google.genai.types` object passed at runtime (`google_search=types.GoogleSearch(...)`)
+still validates into the Genkit class, but type checkers flag it.
+
 ### Provider fields the plugin doesn't declare
 
 Gemini, Gemini image, and Veo configs reject keys they don't declare, so a
