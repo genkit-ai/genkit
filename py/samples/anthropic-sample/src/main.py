@@ -48,7 +48,7 @@ async def main() -> None:
     # thinking= is how you see the model's reasoning stream.
     stream = ai.generate_stream(
         prompt='What is 17 * 23? Think it through, then state the answer.',
-        config={'thinking': {'enabled': True, 'budgetTokens': 1024}},
+        config={'thinking': 'enabled', 'thinkingBudget': 1024},
     )
     async for chunk in stream.stream:
         if chunk.text:
