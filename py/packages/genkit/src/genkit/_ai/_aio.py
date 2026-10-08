@@ -57,6 +57,7 @@ from genkit._ai._model import (
     ModelFn,
     ModelResponse,
     ModelResponseChunk,
+    background_model_name,
     check_call_config,
     define_model,
     resolve_for_generate,
@@ -564,7 +565,7 @@ class Genkit:
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         config: ModelConfigDict,
         description: str | None = None,
         system: str | list[Part] | None = None,
@@ -591,7 +592,7 @@ class Genkit:
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         config: ModelRefConfigT | Mapping[str, Any] | None = None,
         description: str | None = None,
         system: str | list[Part] | None = None,
@@ -619,7 +620,7 @@ class Genkit:
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         config: ModelConfigDict,
         description: str | None = None,
         system: str | list[Part] | None = None,
@@ -646,7 +647,7 @@ class Genkit:
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         config: ModelRefConfigT | Mapping[str, Any] | None = None,
         description: str | None = None,
         system: str | list[Part] | None = None,
@@ -674,7 +675,7 @@ class Genkit:
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         config: ModelConfigDict,
         description: str | None = None,
         system: str | list[Part] | None = None,
@@ -701,7 +702,7 @@ class Genkit:
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         config: ModelRefConfigT | Mapping[str, Any] | None = None,
         description: str | None = None,
         system: str | list[Part] | None = None,
@@ -729,7 +730,7 @@ class Genkit:
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         config: ModelConfigDict,
         description: str | None = None,
         system: str | list[Part] | None = None,
@@ -756,7 +757,7 @@ class Genkit:
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         config: ModelRefConfigT | Mapping[str, Any] | None = None,
         description: str | None = None,
         system: str | list[Part] | None = None,
@@ -782,7 +783,7 @@ class Genkit:
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: str | ModelRef[BaseModel] | None = None,
+        model: str | ModelRef[BaseModel] | Action | None = None,
         config: Mapping[str, Any] | BaseModel | ModelConfigDict | None = None,
         description: str | None = None,
         system: str | list[Part] | None = None,
@@ -1076,7 +1077,7 @@ class Genkit:
     async def generate(
         self,
         *,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1103,7 +1104,7 @@ class Genkit:
     async def generate(
         self,
         *,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1130,7 +1131,7 @@ class Genkit:
     async def generate(
         self,
         *,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1157,7 +1158,7 @@ class Genkit:
     async def generate(
         self,
         *,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1182,7 +1183,7 @@ class Genkit:
     async def generate(
         self,
         *,
-        model: str | ModelRef[BaseModel] | None = None,
+        model: str | ModelRef[BaseModel] | Action | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1260,7 +1261,7 @@ class Genkit:
     def generate_stream(
         self,
         *,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1287,7 +1288,7 @@ class Genkit:
     def generate_stream(
         self,
         *,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1314,7 +1315,7 @@ class Genkit:
     def generate_stream(
         self,
         *,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1341,7 +1342,7 @@ class Genkit:
     def generate_stream(
         self,
         *,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1366,7 +1367,7 @@ class Genkit:
     def generate_stream(
         self,
         *,
-        model: str | ModelRef[BaseModel] | None = None,
+        model: str | ModelRef[BaseModel] | Action | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1442,7 +1443,7 @@ class Genkit:
     async def _generate(
         self,
         *,
-        model: str | ModelRef[BaseModel] | None = None,
+        model: str | ModelRef[BaseModel] | Action | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1733,7 +1734,7 @@ class Genkit:
     async def generate_operation(
         self,
         *,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | BackgroundAction[Any] | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1756,7 +1757,7 @@ class Genkit:
     async def generate_operation(
         self,
         *,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | BackgroundAction[Any] | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1778,7 +1779,7 @@ class Genkit:
     async def generate_operation(
         self,
         *,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | BackgroundAction[Any] | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1806,6 +1807,9 @@ class Genkit:
             while not op.done:
                 op = await ai.check_operation(op)
         """
+        if isinstance(model, BackgroundAction):
+            # Same as its name, once we know this registry holds that object.
+            model = background_model_name(model=model, registry=self.registry)
         resolved = await resolve_for_generate(
             model=model,
             config=config,

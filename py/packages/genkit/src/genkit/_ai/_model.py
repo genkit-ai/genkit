@@ -31,6 +31,7 @@ from genkit._core._action import (
     ActionRunContext,
     get_func_description,
 )
+from genkit._core._background import BackgroundAction
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._logger import get_logger
 from genkit._core._model import (
@@ -59,6 +60,8 @@ ModelFn = Callable[[ModelRequest, ActionRunContext], Awaitable[ModelResponse[Any
 logger = get_logger(__name__)
 
 # Veneer-facing argument shapes. Internals resolve these into ResolvedModel.
+# ModelArg is also the constructor default, stored as a registry value the
+# Dev UI lists as JSON, so it stays a name or ModelRef.
 ModelArg: TypeAlias = str | ModelRef[BaseModel]
 
 
@@ -142,38 +145,92 @@ def normalize_config(*, config: object) -> dict[str, Any]:
     )
 
 
+def _name_or_ref(model: object) -> str | ModelRef[BaseModel] | None:
+    """Unwrap a name or ModelRef. Other values stay None."""
+    if isinstance(model, ModelRef):
+        return cast(ModelRef[BaseModel], model)
+    if isinstance(model, str) and model:
+        return model
+    return None
+
+
+def _registered_action_name(*, action: Action, kind: ActionKind, registry: Registry) -> str:
+    """The action's name if this registry holds this exact object under it.
+
+    A name lookup alone would run whatever this registry has under that name:
+    another Genkit instance's model, or a later define_model that replaced it.
+    """
+    if registry.registered_action(kind, action.name) is not action:
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=(
+                f"model action '{action.name}' is not the one registered on this Genkit instance. "
+                'Pass the object this instance returned, or the model name.'
+            ),
+            reason=RuntimeErrorReason.INVALID_INPUT,
+        )
+    return action.name
+
+
+def _model_action_name(*, model: object, registry: Registry) -> str | None:
+    """Name of a define_model action registered here; None if not an action."""
+    if isinstance(model, BackgroundAction):
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f"model is background model '{model.name}'. Pass it to generate_operation.",
+            reason=RuntimeErrorReason.INVALID_INPUT,
+        )
+    if not isinstance(model, Action):
+        return None
+    if model.kind != ActionKind.MODEL:
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f"model is {model.kind} action '{model.name}', expected a model.",
+            reason=RuntimeErrorReason.INVALID_INPUT,
+        )
+    return _registered_action_name(action=model, kind=ActionKind.MODEL, registry=registry)
+
+
+def background_model_name(*, model: BackgroundAction[Any], registry: Registry) -> str:
+    """Name of a define_background_model result registered on this registry."""
+    return _registered_action_name(action=model.start_action, kind=ActionKind.BACKGROUND_MODEL, registry=registry)
+
+
 def resolve_model_arg(
     *,
     model: object | None,
     registry: Registry,
     message: str = 'No model configured.',
-) -> ModelArg:
+) -> str | ModelRef[BaseModel]:
     """Return the explicit model or the registry default (name or ModelRef).
 
     An empty string is treated as omitted so ``model=os.getenv('MODEL')``
     still picks up the constructor default when the env var is unset.
     An empty constructor default is omitted the same way: not a model
     name, and not a type error.
-    Anything else that is not a name or ModelRef is a hard error — a
-    leftover int or action must not silently run the default model.
+    A define_model action registered on this registry is the same as its
+    name. Another instance's action, or one since replaced, is an error.
+    Anything else that is not a name, ModelRef, or model action is a hard
+    error — an int or other wrong type must not silently run the default model.
     """
-    if isinstance(model, ModelRef):
-        return cast(ModelArg, model)
-    if isinstance(model, str) and model:
-        return model
+    explicit = _name_or_ref(model)
+    if explicit is not None:
+        return explicit
+    action_name = _model_action_name(model=model, registry=registry)
+    if action_name is not None:
+        return action_name
     if model is not None and model != '':
         raise GenkitError(
             status='INVALID_ARGUMENT',
-            message=f'model is {type(model).__name__}, expected str or ModelRef.',
+            message=(f'model is {type(model).__name__}, expected str, ModelRef, or a model action.'),
             reason=RuntimeErrorReason.INVALID_INPUT,
         )
     resolved = registry.lookup_value('defaultModel', 'defaultModel')
-    if isinstance(resolved, ModelRef):
-        logger.debug('no model specified, using default model', model=resolved.name)
-        return cast(ModelArg, resolved)
-    if isinstance(resolved, str) and resolved:
-        logger.debug('no model specified, using default model', model=resolved)
-        return resolved
+    default = _name_or_ref(resolved)
+    if default is not None:
+        name = default.name if isinstance(default, ModelRef) else default
+        logger.debug('no model specified, using default model', model=name)
+        return default
     if resolved is not None and resolved != '':
         raise GenkitError(
             status='INVALID_ARGUMENT',
