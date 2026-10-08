@@ -209,27 +209,32 @@ export function advertisedReflectionHost(host: string): string {
 
 /**
  * Whether a host is loopback, and so unreachable from other machines. Only
- * `localhost` and literal loopback IPs count (matching the CLI); a hostname
- * like `127.internal.example` may resolve anywhere.
+ * `localhost` and literal loopback IPs count; a hostname like
+ * `127.internal.example` may resolve anywhere.
  */
 export function isLoopbackHost(host: string): boolean {
-  if (host === 'localhost') {
-    return true;
-  }
-  if (/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)) {
-    return true;
-  }
-  const unbracketed = host.replace(/^\[(.*)\]$/, '$1');
-  if (!unbracketed.includes(':')) {
-    return false;
-  }
-  // URL normalizes IPv6 literals, which covers every spelling of ::1
-  // (e.g. 0:0:0:0:0:0:0:1). Invalid literals throw.
+  const bracketed =
+    host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
+  let hostname: string;
   try {
-    return new URL(`http://[${unbracketed}]`).hostname === '[::1]';
+    // URL normalizes IP literals the way Node's listen() reads them: 127.1 and
+    // 0x7f.1 become 127.0.0.1, any spelling of ::1 becomes [::1]. Invalid
+    // literals (e.g. 127.300.400.500) throw.
+    hostname = new URL(`http://${bracketed}`).hostname;
   } catch {
     return false;
   }
+  if (hostname === 'localhost' || hostname === '[::1]') {
+    return true;
+  }
+  // Only a parsed IPv4 literal comes back as four decimal labels; a hostname
+  // like 127.a.b.c or 127.0.0.1.nip.io stays as written.
+  const labels = hostname.split('.');
+  return (
+    labels.length === 4 &&
+    labels.every((l) => /^\d+$/.test(l)) &&
+    labels[0] === '127'
+  );
 }
 
 /**

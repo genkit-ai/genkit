@@ -298,6 +298,9 @@ describe('isLoopbackHost', () => {
       '::1',
       '[::1]',
       '0:0:0:0:0:0:0:1',
+      // Abbreviated and hex forms that listen() resolves to 127.0.0.1.
+      '127.1',
+      '0x7f.1',
     ]) {
       assert.strictEqual(isLoopbackHost(host), true, host);
     }
@@ -313,6 +316,9 @@ describe('isLoopbackHost', () => {
       // Hostnames that merely start with "127." may resolve anywhere.
       '127.internal.example',
       '127.0.0.1.nip.io',
+      '127.a.b.c',
+      // Not a valid IP literal; listen() cannot bind it either.
+      '127.300.400.500',
     ]) {
       assert.strictEqual(isLoopbackHost(host), false, host);
     }
