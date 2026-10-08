@@ -19,9 +19,10 @@
 Extends the shared :class:`ModelConfig` (``version``, ``temperature``,
 ``maxOutputTokens``, ...) with Anthropic-specific options.
 
-Unknown top-level keys raise, so a typo fails before the request is sent.
-A ``messages.create()`` param this class doesn't declare goes in ``extra``
-and is sent through the SDK's ``extra_body``. Top-level Genkit fields
+Unknown keys raise, at the top level and inside nested settings like
+``thinking``, so a typo fails before the request is sent. Anthropic body
+fields this class doesn't declare go in ``extra`` and are sent through
+the SDK's ``extra_body``. Top-level Genkit fields
 accept their usual camelCase aliases, while Anthropic-specific nested keys
 match the Anthropic plugin shape field-by-field.
 """
@@ -36,22 +37,23 @@ from pydantic.config import JsonDict
 
 from genkit.model import ModelConfig
 
-_STABLE_BODY_KEYS = frozenset(MessageCreateParamsBase.__annotations__)
-_BETA_BODY_KEYS = frozenset(BetaMessageCreateParamsBase.__annotations__)
+BETA_ONLY_KEYS = frozenset(BetaMessageCreateParamsBase.__annotations__) - frozenset(
+    MessageCreateParamsBase.__annotations__
+)
 
-BETA_ONLY_KEYS = _BETA_BODY_KEYS - _STABLE_BODY_KEYS
-
-_NESTED_CONFIG = ConfigDict(extra='allow', populate_by_name=True)
+_NESTED_CONFIG = ConfigDict(extra='forbid', populate_by_name=True)
 
 _THINKING_SCHEMA = {
     'type': 'object',
     'properties': {
         'enabled': {'type': 'boolean'},
         'budgetTokens': {'type': 'integer', 'minimum': 1024},
+        'budget_tokens': {'type': 'integer', 'minimum': 1024},
         'adaptive': {'type': 'boolean'},
         'display': {'type': 'string', 'enum': ['summarized', 'omitted']},
+        'type': {'type': 'string', 'enum': ['enabled', 'disabled', 'adaptive']},
     },
-    'additionalProperties': True,
+    'additionalProperties': False,
     'description': (
         'The thinking configuration to use for the request. Thinking is a feature that '
         'allows the model to think about the request and provide a better response.'
@@ -69,10 +71,10 @@ _OUTPUT_CONFIG_SCHEMA = {
                 'total': {'type': 'integer', 'minimum': 20000},
             },
             'required': ['total'],
-            'additionalProperties': True,
+            'additionalProperties': False,
         },
     },
-    'additionalProperties': True,
+    'additionalProperties': False,
     'description': 'Configuration for output generation, such as setting the effort parameter and task budgets.',
 }
 
@@ -88,9 +90,13 @@ _TOOL_CHOICE_SCHEMA = {
             'type': 'string',
             'description': 'Tool name to require when type is tool.',
         },
+        'disable_parallel_tool_use': {
+            'type': 'boolean',
+            'description': 'Allow at most one tool call in the reply. Not valid with type none.',
+        },
     },
     'required': ['type'],
-    'additionalProperties': True,
+    'additionalProperties': False,
     'description': (
         'The tool choice to use for the request. This can be used to specify the tool to '
         'use for the request. If not specified, the model will choose the tool to use.'
@@ -100,7 +106,7 @@ _TOOL_CHOICE_SCHEMA = {
 _METADATA_SCHEMA = {
     'type': 'object',
     'properties': {'user_id': {'type': 'string'}},
-    'additionalProperties': True,
+    'additionalProperties': False,
     'description': 'The metadata to include in the request.',
 }
 
@@ -129,7 +135,7 @@ def _anthropic_config_schema_extra(schema: JsonDict) -> None:
                 'maxOutputTokens': {
                     'type': 'number',
                     'title': 'Max output tokens',
-                    'description': 'Maximum number of tokens to generate.',
+                    'description': 'Maximum number of tokens to generate. Sent as 4096 when omitted.',
                 },
                 'topK': {
                     'type': 'number',
@@ -146,11 +152,6 @@ def _anthropic_config_schema_extra(schema: JsonDict) -> None:
                     'items': {'type': 'string'},
                     'title': 'Stop sequences',
                     'description': 'Sequences where generation should stop.',
-                },
-                'apiKey': {
-                    'type': 'string',
-                    'title': 'API key',
-                    'description': 'Overrides the plugin-configured Anthropic API key for this request.',
                 },
                 'apiVersion': {
                     'type': 'string',
@@ -170,6 +171,8 @@ def _anthropic_config_schema_extra(schema: JsonDict) -> None:
             },
         )
     )
+    # a per-request key goes in context.secrets, so the form shouldn't offer one.
+    props.pop('apiKey', None)
 
 
 class ThinkingConfig(BaseModel):
@@ -186,12 +189,14 @@ class ThinkingConfig(BaseModel):
     budget_tokens: float | None = Field(default=None, alias='budgetTokens', ge=1024)
     adaptive: bool | None = None
     display: Literal['summarized', 'omitted'] | None = None
+    # The API's own spelling (`{'type': 'enabled', ...}`). A mode this list lacks
+    # can go out through `extra={'thinking': {...}}`, which replaces the setting.
+    type: Literal['enabled', 'disabled', 'adaptive'] | None = None
 
     @model_validator(mode='after')
     def _check_thinking(self) -> 'ThinkingConfig':
         """Enforce cross-field thinking rules."""
-        extra = self.__pydantic_extra__ or {}
-        thinking_type = extra.get('type')
+        thinking_type = self.type
         enabled = self.enabled is True or thinking_type == 'enabled'
         adaptive = self.adaptive is True or thinking_type == 'adaptive'
         disabled = self.enabled is False or thinking_type == 'disabled'
@@ -235,6 +240,8 @@ class AutoToolChoice(BaseModel):
 
     model_config = _NESTED_CONFIG
     type: Literal['auto']
+    disable_parallel_tool_use: bool | None = None
+    """Allow at most one tool call in the reply."""
 
 
 class AnyToolChoice(BaseModel):
@@ -242,6 +249,8 @@ class AnyToolChoice(BaseModel):
 
     model_config = _NESTED_CONFIG
     type: Literal['any']
+    disable_parallel_tool_use: bool | None = None
+    """Allow at most one tool call in the reply."""
 
 
 class SpecificToolChoice(BaseModel):
@@ -250,6 +259,8 @@ class SpecificToolChoice(BaseModel):
     model_config = _NESTED_CONFIG
     type: Literal['tool']
     name: str
+    disable_parallel_tool_use: bool | None = None
+    """Allow at most one tool call in the reply."""
 
 
 class ToolChoiceNone(BaseModel):
@@ -282,6 +293,16 @@ class AnthropicConfig(ModelConfig):
     Extends the shared :class:`ModelConfig` with Anthropic-specific options.
     JSON keys stay snake_case for ``tool_choice`` and ``output_config`` and
     camelCase elsewhere (``apiVersion``, inherited ``maxOutputTokens``).
+
+    Claude requires a length cap, so an omitted ``max_output_tokens`` is sent
+    as 4096; a reply cut off there ends with finish reason ``length``.
+
+    ``extra`` is for Anthropic request fields this class doesn't declare
+    (``service_tier``, ``container``, ...). Its keys are merged into the top
+    level of the request body and win over the declared settings; a nested
+    value such as ``extra={'thinking': {...}}`` replaces the whole setting
+    rather than merging into it. A beta-only field in ``extra`` sends the
+    call to the beta API, the same as ``betas`` does.
     """
 
     model_config = ConfigDict(
@@ -290,6 +311,9 @@ class AnthropicConfig(ModelConfig):
         populate_by_name=True,
     )
 
+    # Config fields that are never create() kwargs. api_version picks the API
+    # surface. api_key is declared by ModelConfig; generate rejects it before
+    # params are built, since the per-request key comes from context.secrets.
     SDK_UNSUPPORTED_KEYS: ClassVar[frozenset[str]] = frozenset({'api_version', 'api_key'})
 
     thinking: Annotated[ThinkingConfig | None, WithJsonSchema(_THINKING_SCHEMA)] = Field(
