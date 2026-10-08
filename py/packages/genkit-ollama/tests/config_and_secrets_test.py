@@ -343,15 +343,17 @@ async def test_generate_ollama_secrets_without_api_key_raises_invalid_argument(s
 @pytest.mark.asyncio
 @pytest.mark.parametrize('field', ['api_key', 'apiKey'])
 async def test_generate_ollama_config_api_key_raises_naming_context_secrets(server: Server, field: str) -> None:
-    """`config={'api_key': ...}` fails INVALID_ARGUMENT pointing at context.secrets, without echoing the key."""
+    """`config={'api_key': ...}` raises INVALID_ARGUMENT from generate, pointing at context.secrets.
+
+    Genkit rejects it before the plugin runs. The key is never echoed and
+    nothing is sent.
+    """
     ai = make_ai()
 
-    response = await ai.generate(model=MODEL, prompt='hi', config={field: 'tenant-secret'})
+    with pytest.raises(GenkitError) as raised:
+        await ai.generate(model=MODEL, prompt='hi', config={field: 'tenant-secret'})
 
-    assert response.finish_reason == FinishReason.FAILED
-    assert response.error is not None
-    assert response.error.status == 'INVALID_ARGUMENT'
-    message = str(response.error.message)
-    assert 'context.secrets' in message
-    assert 'tenant-secret' not in message
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    assert 'context.secrets' in str(raised.value)
+    assert 'tenant-secret' not in str(raised.value)
     assert server.requests == []

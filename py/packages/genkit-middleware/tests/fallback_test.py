@@ -20,7 +20,7 @@ from typing import Any, NoReturn
 
 import pytest
 from genkit_middleware import Fallback
-from pydantic import Field
+from pydantic import Field, ValidationError
 
 from genkit import (
     ActionRunContext,
@@ -203,6 +203,42 @@ async def test_fallback_ref_entry_config_reaches_fallback_model() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('entry', 'temperature'),
+    [
+        (model_ref('backup', config_schema=ThinkingConfig, config=ThinkingConfig(temperature=0.2)), 0.2),
+        ('backup', None),
+    ],
+    ids=['ref_entry', 'string_entry'],
+)
+async def test_fallback_backup_with_same_config_class_gets_that_class(entry: object, temperature: float | None) -> None:
+    """A backup that shares the primary's config class gets a ThinkingConfig, not a dict or None."""
+    ai = Genkit()
+    seen: list[object] = []
+
+    async def primary(_request: ModelRequest[ThinkingConfig], _ctx: ActionRunContext) -> ModelResponse:
+        raise GenkitError(status='UNAVAILABLE', message='down')
+
+    async def backup(request: ModelRequest[ThinkingConfig], _ctx: ActionRunContext) -> ModelResponse:
+        seen.append(request.config)
+        return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))
+
+    ai.define_model(name='primary', fn=primary, config_schema=ThinkingConfig)
+    ai.define_model(name='backup', fn=backup, config_schema=ThinkingConfig)
+
+    response = await ai.generate(
+        model='primary',
+        prompt='hi',
+        config={'temperature': 0.9},
+        use=[Fallback(models=[entry])],  # type: ignore[list-item]
+    )
+
+    assert response.text == 'ok'
+    assert isinstance(seen[0], ThinkingConfig)
+    assert seen[0].temperature == temperature
+
+
+@pytest.mark.asyncio
 async def test_generate_with_unavailable_model_and_fallback_tries_next_model() -> None:
     """With `Fallback(models=['backup'])`, a model raising UNAVAILABLE falls back to `backup`."""
     ai = Genkit()
@@ -380,3 +416,15 @@ async def test_fallback_streams_chunks_from_the_fallback_model() -> None:
 
     assert 'from-backup' in ''.join(texts)
     assert final.text == 'done'
+
+
+def test_fallback_given_a_model_action_names_the_string_to_pass() -> None:
+    """Fallback config is JSON, so a define_model action is refused with its name in the message."""
+
+    async def backup(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+        return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))
+
+    backup_model = Genkit().define_model(name='backup', fn=backup)
+
+    with pytest.raises(ValidationError, match="pass 'backup', not the action"):
+        Fallback(models=[backup_model])

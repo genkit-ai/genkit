@@ -144,7 +144,6 @@ async def test_create_model_action_camel_case_lands_on_the_wire() -> None:
                 'maxOutputTokens': 256,
                 'stopSequences': ['END'],
                 'topP': 0.9,
-                'apiKey': 'should-not-leak',
             },
         }
     )
@@ -153,6 +152,7 @@ async def test_create_model_action_camel_case_lands_on_the_wire() -> None:
     assert body['frequency_penalty'] == 0.5
     assert body['top_p'] == 0.9
     assert body['stop'] == ['END']
+    assert body['max_tokens'] == 256
     assert 'max_output_tokens' not in body
     assert 'maxOutputTokens' not in body
     assert 'frequencyPenalty' not in body

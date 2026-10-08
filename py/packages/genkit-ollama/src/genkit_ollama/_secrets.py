@@ -39,10 +39,10 @@ def misplaced_key_error() -> GenkitError:
 def reject_config_api_key(config: object) -> None:
     """Raise when ``request.config`` carries an API key.
 
-    ``ModelConfig`` declares ``api_key``, so ``OllamaConfig`` accepts it even
-    with unknown keys forbidden. Left alone it would be dropped and the call
-    would run on the plugin's header. ``config.extra`` isn't checked: it goes
-    out as sampler options as written.
+    Core already rejects this before the model action runs; this is the
+    backstop for callers that hit the plugin directly. Left alone the key
+    would be dropped and the call would run on the plugin's header.
+    ``config.extra`` isn't checked: it goes out as sampler options as written.
     """
     if config is None:
         return

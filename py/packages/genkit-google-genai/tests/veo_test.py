@@ -326,7 +326,11 @@ class TestVeoModelLifecycle:
         client.aio.models.generate_videos = AsyncMock(return_value=_sdk_op(name='operations/1', done=False))
         veo = VeoModel('veo-3.0-generate-001', client)
         request = _text_request(
-            config=VeoConfig.model_validate({'aspectRatio': '16:9', 'durationSeconds': 5, 'fooBar': 1}),
+            config=VeoConfig.model_validate({
+                'aspectRatio': '16:9',
+                'durationSeconds': 5,
+                'extra': {'parameters': {'fooBar': 1}},
+            }),
         )
 
         await veo.start(request, ActionRunContext())
@@ -475,7 +479,7 @@ class TestVeoContextClient:
                 'aspectRatio': '16:9',
                 'baseUrl': 'https://request.example',
                 'apiVersion': 'v1',
-                'fooBar': 1,
+                'extra': {'parameters': {'fooBar': 1}},
             }),
         )
         ctx = ActionRunContext(context={'config': {'base_url': 'https://context.example'}})
@@ -771,17 +775,6 @@ class TestVeoContextClient:
             assert 'secrets' in str(raised.value)
 
     @pytest.mark.asyncio
-    async def test_request_config_api_key_is_invalid_argument(self) -> None:
-        veo = VeoModel('veo-3.0-generate-001', MagicMock())
-        cfg = VeoConfig.model_validate({'api_key': 'sk-gemini-habit'})
-
-        with pytest.raises(GenkitError) as raised:
-            await veo.start(_text_request(config=cfg), ActionRunContext())
-
-        assert raised.value.status == 'INVALID_ARGUMENT'
-        assert 'secrets' in str(raised.value)
-
-    @pytest.mark.asyncio
     async def test_client_ctor_failure_is_invalid_argument(self) -> None:
         plugin = MagicMock()
         plugin.vertexai = False
@@ -828,6 +821,39 @@ class TestVeoContextClient:
         kwargs = ctor.call_args.kwargs
         assert kwargs['api_key'] == 'sk-tenant'
         assert _http_option_base_url(kwargs) is None
+
+
+class TestVeoConfigExtra:
+    def test_veo_config_declares_every_generate_videos_config_field(self) -> None:
+        """VeoConfig declares every GenerateVideosConfig field and nothing else besides client options and extra."""
+        sdk = set(genai_types.GenerateVideosConfig.model_fields) - {'http_options'}
+        ours = set(VeoConfig.model_fields) - {'base_url', 'api_version', 'location', 'extra'}
+
+        assert ours == sdk
+
+    @pytest.mark.parametrize('field', ['instances', 'Instances'])
+    def test_extra_cannot_set_instances(self, field: str) -> None:
+        """`extra={'instances': ...}` raises INVALID_ARGUMENT; Genkit builds instances from the request."""
+        veo = VeoModel('veo-3.0-generate-001', MagicMock())
+        request = _text_request(config=VeoConfig.model_validate({'extra': {field: [{'prompt': 'a dog'}]}}))
+
+        with pytest.raises(GenkitError) as raised:
+            veo._get_config(request)
+
+        assert raised.value.status == 'INVALID_ARGUMENT'
+        assert repr(field) in str(raised.value)
+
+    def test_extra_keeps_plugin_level_extra_body(self) -> None:
+        """A request's `extra` layers over the plugin's extra_body instead of replacing it."""
+        plugin_http = genai_types.HttpOptions(extra_body={'parameters': {'plug': 1}})
+        veo = VeoModel('veo-3.0-generate-001', MagicMock(), client_kwargs={'http_options': plugin_http})
+        request = _text_request(config=VeoConfig.model_validate({'extra': {'parameters': {'fooBar': 1}}}))
+
+        cfg = veo._get_config(request)
+
+        assert cfg is not None
+        assert cfg.http_options is not None
+        assert cfg.http_options.extra_body == {'parameters': {'plug': 1, 'fooBar': 1}}
 
 
 class TestVeoErrorClassification:

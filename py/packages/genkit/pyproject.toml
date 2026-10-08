@@ -120,6 +120,7 @@ DEP002 = [
 ]
 # Standard library on Python 3.14+; imported behind a version check.
 DEP001 = ["annotationlib"]
+DEP003 = ["pydantic_core"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/genkit"]

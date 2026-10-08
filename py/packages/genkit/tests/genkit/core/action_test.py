@@ -423,7 +423,7 @@ async def test_action_revalidates_bare_model_request_into_plugin_config() -> Non
 
     class PluginConfig(BaseModel):
         model_config = ConfigDict(extra='allow')
-        api_key: str | None = None
+        safe_prompt: bool | None = None
 
     seen: dict[str, Any] = {}
 
@@ -435,14 +435,14 @@ async def test_action_revalidates_bare_model_request_into_plugin_config() -> Non
     # generate may hand the action a bare request that still has a dict config.
     request = ModelRequest(
         messages=[Message(role='user', content=[Part.from_text('hi')])],
-        config={'api_key': 'k'},
+        config={'safe_prompt': True},
     )
-    assert request.config == {'api_key': 'k'}
+    assert request.config == {'safe_prompt': True}
 
     result = await action.run(input=request)
     assert result.response == 'ok'
     assert isinstance(seen['config'], PluginConfig)
-    assert seen['config'].api_key == 'k'
+    assert seen['config'].safe_prompt is True
 
 
 @pytest.mark.asyncio
@@ -470,7 +470,7 @@ async def test_action_rejects_foreign_config_class() -> None:
 
 @pytest.mark.asyncio
 async def test_action_coerces_dict_config_from_other_request_type() -> None:
-    """Action.run: a mapping on ModelRequest[dict] still becomes the plugin class."""
+    """Action.run: a mapping on a bare ModelRequest still becomes the plugin class."""
 
     class PluginCfg(BaseModel):
         temperature: float | None = None
@@ -482,7 +482,7 @@ async def test_action_coerces_dict_config_from_other_request_type() -> None:
         return 'ok'
 
     action = Action(name='pluginModel', kind=ActionKind.MODEL, fn=model_fn)
-    request = ModelRequest[dict](
+    request = ModelRequest(
         messages=[Message(role='user', content=[Part.from_text('hi')])],
         config={'temperature': 0.5},
         output=OutputConfig(format='json', constrained=True),

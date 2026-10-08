@@ -17,8 +17,7 @@
 """Vertex AI Plugin for Genkit.
 
 This plugin provides integration with Google Cloud's Vertex AI platform,
-including Model Garden for accessing third-party models and Vector Search
-for RAG applications.
+including Model Garden for accessing third-party models.
 
 Example:
     ```python
@@ -48,22 +47,10 @@ Requirements:
 
 See Also:
     - Vertex AI Model Garden: https://cloud.google.com/vertex-ai/docs/model-garden
-    - Vertex AI Vector Search: https://cloud.google.com/vertex-ai/docs/vector-search
 """
 
 from genkit_vertexai.model_garden import ModelGarden
 
-
-def package_name() -> str:
-    """Get the package name for the Vertex AI plugin.
-
-    Returns:
-        The fully qualified package name as a string.
-    """
-    return 'genkit_vertexai'
-
-
 __all__ = [
     'ModelGarden',
-    'package_name',
 ]
