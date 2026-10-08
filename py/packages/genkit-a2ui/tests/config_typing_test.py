@@ -37,9 +37,9 @@ def test_surfaces_config_snake_case_kwargs() -> None:
 
 
 def test_surfaces_config_accepts_wire_names() -> None:
-    """The validate and surfaceId wire keys build the same config as the field names."""
+    """The validate and surfaceId JSON keys build the same config as the field names."""
     typed = SurfacesConfig(validation='off', surface_id='order-card')
 
     assert SurfacesConfig.model_validate({'validate': 'off', 'surfaceId': 'order-card'}) == typed
-    assert Surfaces(validate='off', surfaceId='order-card').config == typed
+    assert Surfaces(validation='off', surface_id='order-card').config == typed
     assert Surfaces(config=typed).config.validation == 'off'
