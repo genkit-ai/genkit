@@ -1667,16 +1667,42 @@ export const contextCompression: GenerateMiddleware<
             ? { ...req, messages: resolvedMessages }
             : req;
 
-        const result = await next(modifiedReq, ctx);
+        let result = await next(modifiedReq, ctx);
         if (result.usage?.inputTokens !== undefined) {
           lastInputTokens = result.usage.inputTokens;
-          if (result.message && result.usage.inputTokens > 0) {
-            result.message = {
-              ...result.message,
-              metadata: withCompressionMetadata(result.message, {
-                inputTokens: result.usage.inputTokens,
-              }),
-            };
+          if (result.usage.inputTokens > 0) {
+            // The model hook receives the raw model action output, which may
+            // report the generated message either as `message` or (for
+            // plugins such as @genkit-ai/google-genai) as
+            // `candidates[0].message`. Normalization into `message` only
+            // happens after the middleware stack returns, so stamp whichever
+            // location is populated.
+            const stamped = { inputTokens: result.usage.inputTokens };
+            if (result.message) {
+              result = {
+                ...result,
+                message: {
+                  ...result.message,
+                  metadata: withCompressionMetadata(result.message, stamped),
+                },
+              };
+            } else if (result.candidates?.[0]?.message) {
+              // Only candidates[0] is surfaced as `response.message`.
+              const [first, ...rest] = result.candidates;
+              result = {
+                ...result,
+                candidates: [
+                  {
+                    ...first,
+                    message: {
+                      ...first.message,
+                      metadata: withCompressionMetadata(first.message, stamped),
+                    },
+                  },
+                  ...rest,
+                ],
+              };
+            }
           }
         }
         return result;
