@@ -16,17 +16,17 @@
 
 """Same generate() as Gemini, on the AWS profile you already have."""
 
-from genkit_amazon_bedrock import Bedrock, ModelDefinition
+from genkit_amazon_bedrock import Bedrock
 from pydantic import BaseModel
 
 from genkit import Genkit
 
-# Declaring a model costs nothing at startup. A missing model-access
+# Listing a model costs nothing at startup. A missing model-access
 # grant only shows up when you call generate().
 ai = Genkit(
     plugins=[
         Bedrock(
-            models=[ModelDefinition(name='us.amazon.nova-lite-v1:0')],
+            models=['us.amazon.nova-lite-v1:0'],
             embedders=['amazon.titan-embed-text-v2:0'],
         )
     ],

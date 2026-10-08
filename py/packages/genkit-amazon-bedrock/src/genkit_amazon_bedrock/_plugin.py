@@ -40,7 +40,6 @@ from genkit_amazon_bedrock._config import (
     DEFAULT_TOTAL_TIMEOUT,
     BedrockConfig,
     BedrockImageConfig,
-    ModelDefinition,
 )
 from genkit_amazon_bedrock._embedders import (
     BedrockEmbedder,
@@ -73,6 +72,16 @@ def bedrock_name(name: str) -> str:
     return f'{BEDROCK_PLUGIN_NAME}/{name}'
 
 
+def _model_type(model_id: str) -> Literal['chat', 'image']:
+    """Routes a model ID: image families to InvokeModel, the rest to Converse.
+
+    Resolve is lazy, so an ID assumed to be chat would send
+    ``amazon.nova-canvas-v1:0`` down the Converse path and fail only at call
+    time. Embedders classify by ID the same way.
+    """
+    return 'image' if is_image_model(model_id) else 'chat'
+
+
 class Bedrock(Plugin):
     """Amazon Bedrock plugin for Genkit."""
 
@@ -87,7 +96,7 @@ class Bedrock(Plugin):
         max_pool_connections: int | None = None,
         total_timeout: float | None = DEFAULT_TOTAL_TIMEOUT,
         session: 'boto3.session.Session | None' = None,
-        models: list[ModelDefinition] | None = None,
+        models: list[str] | None = None,
         embedders: list[str] | None = None,
     ) -> None:
         """Initializes the Bedrock plugin.
@@ -112,8 +121,11 @@ class Bedrock(Plugin):
                 the deadline, leaving only the socket timeouts.
             session: Optional pre-configured ``boto3.session.Session`` for custom
                 credentials or advanced SDK wiring.
-            models: Bedrock models to register. Models not listed can still be
-                resolved dynamically by namespaced name.
+            models: Bedrock model IDs to list in the Dev UI, e.g.
+                ``us.anthropic.claude-sonnet-4-5-20250929-v1:0``. The route
+                comes from the ID: image-generation families go through
+                InvokeModel, everything else through Converse. Unlisted IDs
+                still resolve dynamically.
             embedders: Bedrock embedding model IDs to register, e.g.
                 ``amazon.titan-embed-text-v2:0``. As with models, unlisted IDs
                 still resolve dynamically.
@@ -183,21 +195,11 @@ class Bedrock(Plugin):
             # Same story for rerank models; the plugin has no rerank action.
             logger.debug('Bedrock resolve declined', model=name, kind='model', reason='rerank_model')
             return None
-        declared = self._declared_model_type(name)
-        # Undeclared IDs are classified rather than assumed to be chat: resolve
-        # is lazy, so otherwise bedrock/amazon.nova-canvas-v1:0 would take the
-        # Converse path and fail at call time. Embedders classify the same way.
-        model_type = declared if declared is not None else ('image' if is_image_model(name) else 'chat')
-        logger.debug('Bedrock model resolved', model=name, model_type=model_type, declared=declared is not None)
+        model_type = _model_type(name)
+        logger.debug('Bedrock model resolved', model=name, model_type=model_type, listed=name in self.models)
         return self._create_model_action(name, model_type)
 
-    def _declared_model_type(self, model_id: str) -> Literal['chat', 'text', 'image'] | None:
-        for definition in self.models:
-            if definition.name == model_id:
-                return definition.type
-        return None
-
-    def _create_model_action(self, model_id: str, model_type: Literal['chat', 'text', 'image'] = 'chat') -> Action:
+    def _create_model_action(self, model_id: str, model_type: Literal['chat', 'image'] = 'chat') -> Action:
         model_info = get_model_info(model_id, model_type)
         is_image = model_type == 'image'
 
@@ -239,26 +241,24 @@ class Bedrock(Plugin):
         """List configured Bedrock models and embedders.
 
         Only explicitly configured entries are listed, and only those this
-        plugin can actually serve: an ID in the wrong list, or a chat model
-        declared ``type='image'``, would otherwise be advertised and then fail
-        on use. Such a declaration still resolves, so the caller reads the
-        image path's reason rather than a generic model-not-found. A bare
-        ``Bedrock()`` therefore lists nothing; see ``resolve`` for why the
-        catalogue is not read.
+        plugin can actually serve: an embedding or rerank ID in ``models``, or
+        a chat ID in ``embedders``, would otherwise be advertised and then fail
+        on use. Each model is listed with the same route ``resolve`` picks, so
+        an image model carries the image config schema. A bare ``Bedrock()``
+        therefore lists nothing; see ``resolve`` for why the catalogue is not
+        read.
 
         Returns:
             ActionMetadata for each configured model and embedder.
         """
         actions: list[ActionMetadata] = [
             model_action_metadata(
-                name=bedrock_name(definition.name),
-                info=get_model_info(definition.name, definition.type).model_dump(by_alias=True, exclude_none=True),
-                config_schema=BedrockImageConfig if definition.type == 'image' else BedrockConfig,
+                name=bedrock_name(model_id),
+                info=get_model_info(model_id, _model_type(model_id)).model_dump(by_alias=True, exclude_none=True),
+                config_schema=BedrockImageConfig if _model_type(model_id) == 'image' else BedrockConfig,
             )
-            for definition in self.models
-            if not looks_like_embedding_model(definition.name)
-            and not is_rerank_model(definition.name)
-            and (definition.type != 'image' or is_image_model(definition.name))
+            for model_id in self.models
+            if not looks_like_embedding_model(model_id) and not is_rerank_model(model_id)
         ]
         models = len(actions)
         actions.extend(

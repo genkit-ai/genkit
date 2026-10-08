@@ -19,7 +19,7 @@
 Capabilities are keyed by base Bedrock model ID; cross-region inference-profile
 prefixes are stripped for lookup only - the full original model ID is always
 sent to Bedrock untouched.
-Unknown chat/text models fall back to modern Converse defaults (multimodal +
+Unknown chat models fall back to modern Converse defaults (multimodal +
 tools) with conservative catalog defaults (marked unstable in the model catalog),
 so newer or inference-profile-only models remain callable without a plugin
 release.
@@ -41,7 +41,7 @@ INFERENCE_PROFILE_PREFIXES = (
 
 
 class ModelCapability(NamedTuple):
-    """Capabilities of a Bedrock chat/text model."""
+    """Capabilities of a Bedrock chat model."""
 
     multimodal: bool
     tools: bool
@@ -154,18 +154,19 @@ def model_label(model_id: str) -> str:
 
 def get_model_info(
     model_name: str,
-    model_type: Literal['chat', 'text', 'image'] = 'chat',
+    model_type: Literal['chat', 'image'] = 'chat',
 ) -> ModelInfo:
     """Infers Genkit model info for a Bedrock model.
 
     Args:
         model_name: Bedrock model ID or inference-profile ID.
-        model_type: Routing type for the model.
+        model_type: Routing type: ``chat`` goes through Converse, ``image``
+            through InvokeModel.
 
     Returns:
         ModelInfo with capabilities from the registry, or modern Converse
         defaults with conservative catalog defaults (marked unstable in the
-        model catalog) for unknown chat/text models.
+        model catalog) for unknown chat models.
     """
     if model_type == 'image':
         return ModelInfo(

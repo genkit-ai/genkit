@@ -16,7 +16,7 @@
 
 """Configuration types for the Amazon Bedrock plugin."""
 
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
@@ -71,19 +71,3 @@ class BedrockImageConfig(BaseModel):
     """
 
     model_config = ConfigDict(extra='allow')
-
-
-class ModelDefinition(BaseModel):
-    """A Bedrock model to register with Genkit.
-
-    Capabilities are inferred from the built-in registry when not provided;
-    unknown chat models default to multimodal + tools with conservative catalog
-    defaults (marked unstable in the model catalog).
-    """
-
-    name: str
-    """Bedrock model ID, e.g. ``anthropic.claude-sonnet-4-5-20250929-v1:0``."""
-
-    type: Literal['chat', 'text', 'image'] = 'chat'
-    """Routes generate calls: chat/text via Converse, image via InvokeModel.
-    Embedders are configured separately, through ``Bedrock(embedders=...)``."""

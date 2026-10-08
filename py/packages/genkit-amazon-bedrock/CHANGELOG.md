@@ -16,7 +16,8 @@ First release of the plugin.
 - `Bedrock` plugin registering Bedrock-hosted models as Genkit model actions,
   with AWS client knobs for `region`, `max_retries`, `read_timeout`,
   `connect_timeout`, `max_pool_connections`, `total_timeout` and a
-  pre-configured `session`.
+  pre-configured `session`. `models=` and `embedders=` take plain model IDs;
+  the route (Converse or InvokeModel) is inferred from the ID.
 - Text generation over the Converse and ConverseStream APIs, covering
   multi-turn chat, system prompts, tool calling, reasoning content, and
   streamed deltas.
