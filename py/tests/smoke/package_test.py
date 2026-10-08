@@ -19,9 +19,9 @@
 import genkit_anthropic
 import genkit_google_genai
 import genkit_openai
+import genkit_vertexai
 from genkit_google_cloud import package_name as google_cloud_package_name
 from genkit_ollama import package_name as ollama_package_name
-from genkit_vertexai import package_name as vertex_ai_package_name
 
 
 def test_package_names() -> None:
@@ -38,4 +38,5 @@ def test_package_names() -> None:
     assert 'OpenAIModel' not in genkit_openai.__all__
     assert 'AnthropicModel' not in genkit_anthropic.__all__
     assert ollama_package_name() == 'genkit_ollama'
-    assert vertex_ai_package_name() == 'genkit_vertexai'
+    assert genkit_vertexai.__name__ == 'genkit_vertexai'
+    assert not hasattr(genkit_vertexai, 'package_name')
