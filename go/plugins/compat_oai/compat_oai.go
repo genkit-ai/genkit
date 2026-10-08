@@ -312,7 +312,7 @@ func (o *OpenAICompatible) clientForKey(key string) *openai.Client {
 // framework to register, or register it with [genkit.RegisterAction].
 func (o *OpenAICompatible) NewModel(id string, opts ai.ModelOptions) *ai.ModelAction {
 	o.checkInitted()
-	return newSDKModel(o.client, o.Provider, id, opts)
+	return newSDKModel(o, id, opts)
 }
 
 // DefineModel creates an unregistered model that takes its config untyped:
@@ -341,18 +341,19 @@ func (o *OpenAICompatible) DefineModel(provider, id string, opts ai.ModelOptions
 	})
 }
 
-// newSDKModel creates an unregistered model whose config is the OpenAI SDK's
-// request params type. A nil ConfigSchema defaults to the reflected SDK
-// schema and an empty label is derived from the provider and the name.
-func newSDKModel(client *openai.Client, provider, id string, opts ai.ModelOptions) *ai.ModelAction {
+// newSDKModel creates an unregistered model of o's provider whose config is
+// the OpenAI SDK's request params type. A nil ConfigSchema defaults to the
+// reflected SDK schema and an empty label is derived from the provider and
+// the name.
+func newSDKModel(o *OpenAICompatible, id string, opts ai.ModelOptions) *ai.ModelAction {
 	if opts.ConfigSchema == nil {
 		opts.ConfigSchema = sdkConfigSchema()
 	}
 	if opts.Label == "" {
-		opts.Label = internal.ProviderLabel(provider, id)
+		opts.Label = internal.ProviderLabel(o.Provider, id)
 	}
 
-	return ai.NewModelAction(api.NewName(provider, id), &opts, func(
+	return ai.NewModelAction(api.NewName(o.Provider, id), &opts, func(
 		ctx context.Context,
 		input *ai.ModelRequest,
 		config openai.ChatCompletionNewParams,
@@ -361,7 +362,8 @@ func newSDKModel(client *openai.Client, provider, id string, opts ai.ModelOption
 		if err := rejectManagedConfig(&config); err != nil {
 			return nil, err
 		}
-		return NewModelGenerator(client, id).
+		return NewModelGenerator(o.client, id).
+			withSeparateReasoning(o.SeparateReasoningTokens).
 			WithParams(config).
 			WithMessages(input.Messages).
 			WithTools(input.Tools).
@@ -624,7 +626,7 @@ func (o *OpenAICompatible) IsDefinedModel(g *genkit.Genkit, name string) bool {
 // type and curated capabilities of their own use [ListChatActions].
 func (o *OpenAICompatible) ListActions(ctx context.Context) []api.ActionDesc {
 	return listActions(ctx, o, func(id string) api.ActionDesc {
-		return newSDKModel(o.client, o.Provider, id, sdkModelOptions(o.Provider, id)).Desc()
+		return newSDKModel(o, id, sdkModelOptions(o.Provider, id)).Desc()
 	})
 }
 
@@ -634,7 +636,7 @@ func (o *OpenAICompatible) ListActions(ctx context.Context) []api.ActionDesc {
 func (o *OpenAICompatible) ResolveAction(atype api.ActionType, id string) api.Action {
 	switch atype {
 	case api.ActionTypeModel:
-		return newSDKModel(o.client, o.Provider, id, sdkModelOptions(o.Provider, id))
+		return newSDKModel(o, id, sdkModelOptions(o.Provider, id))
 	}
 	return nil
 }
@@ -703,7 +705,7 @@ func ModelOptionsFor(provider, id string, curated map[string]ai.ModelOptions, dy
 // catalog of its own, describing every model with the generic defaults.
 func ListModelActions(ctx context.Context, o *OpenAICompatible, modelOptions func(id string) ai.ModelOptions) []api.ActionDesc {
 	return listActions(ctx, o, func(id string) api.ActionDesc {
-		return newSDKModel(o.client, o.Provider, id, modelOptions(id)).Desc()
+		return newSDKModel(o, id, modelOptions(id)).Desc()
 	})
 }
 
@@ -712,7 +714,7 @@ func ListModelActions(ctx context.Context, o *OpenAICompatible, modelOptions fun
 func ResolveModelAction(o *OpenAICompatible, atype api.ActionType, id string, modelOptions func(id string) ai.ModelOptions) api.Action {
 	switch atype {
 	case api.ActionTypeModel:
-		return newSDKModel(o.client, o.Provider, id, modelOptions(id))
+		return newSDKModel(o, id, modelOptions(id))
 	}
 	return nil
 }
