@@ -29,10 +29,8 @@ import pytest
 from genkit_anthropic import (
     Anthropic,
     AnthropicConfig,
-    AutoToolChoice,
     OutputConfig,
     RequestMetadata,
-    SpecificToolChoice,
     TaskBudget,
     ThinkingConfig,
 )
@@ -47,7 +45,7 @@ def test_anthropic_config_snake_case_kwargs() -> None:
         max_output_tokens=2000,
         thinking=ThinkingConfig(enabled=True, budget_tokens=2048),
         output_config=OutputConfig(effort='high', task_budget=TaskBudget(total=20000)),
-        tool_choice=AutoToolChoice(type='auto', disable_parallel_tool_use=True),
+        disable_parallel_tool_use=True,
         metadata=RequestMetadata(user_id='diner-42'),
         api_version='beta',
         betas=['extended-cache-ttl-2025-04-11'],
@@ -58,7 +56,7 @@ def test_anthropic_config_snake_case_kwargs() -> None:
         'maxOutputTokens': 2000,
         'thinking': {'enabled': True, 'budgetTokens': 2048},
         'output_config': {'effort': 'high', 'task_budget': {'type': 'tokens', 'total': 20000}},
-        'tool_choice': {'type': 'auto', 'disable_parallel_tool_use': True},
+        'disableParallelToolUse': True,
         'metadata': {'user_id': 'diner-42'},
         'apiVersion': 'beta',
         'betas': ['extended-cache-ttl-2025-04-11'],
@@ -112,17 +110,21 @@ async def test_typed_nested_config_request_body() -> None:
         max_output_tokens=3000,
         thinking=ThinkingConfig(type='enabled', budget_tokens=2048),
         output_config=OutputConfig(task_budget=TaskBudget(total=20000)),
-        tool_choice=SpecificToolChoice(type='tool', name='lookup_menu'),
+        disable_parallel_tool_use=True,
         metadata=RequestMetadata(user_id='diner-42'),
     )
     await ai.generate(
-        model='anthropic/claude-sonnet-4-5', prompt='Is the pho in stock?', config=config, tools=['lookup_menu']
+        model='anthropic/claude-sonnet-4-5',
+        prompt='Is the pho in stock?',
+        config=config,
+        tools=['lookup_menu'],
+        tool_choice='required',
     )
 
     # 3. Check the body the plugin sent
     body = bodies[-1]
     assert body['thinking'] == {'type': 'enabled', 'budget_tokens': 2048}
     assert body['output_config'] == {'task_budget': {'type': 'tokens', 'total': 20000}}
-    assert body['tool_choice'] == {'type': 'tool', 'name': 'lookup_menu'}
+    assert body['tool_choice'] == {'type': 'any', 'disable_parallel_tool_use': True}
     assert body['metadata'] == {'user_id': 'diner-42'}
     assert body['max_tokens'] == 3000

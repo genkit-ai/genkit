@@ -1231,44 +1231,29 @@ async def test_invalid_config_raises_from_generate() -> None:
 
 
 @pytest.mark.asyncio
-async def test_config_tool_choice_and_metadata_reach_sdk() -> None:
-    """Config-level tool_choice and metadata reach the SDK kwargs."""
+async def test_config_metadata_reaches_sdk() -> None:
+    """Config-level metadata reaches the SDK kwargs."""
     mock_client = _mock_client_for_generate()
     model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
 
-    config = AnthropicConfig.model_validate({
-        'tool_choice': {'type': 'tool', 'name': 'get_weather'},
-        'metadata': {'user_id': 'user-123'},
-    })
+    config = AnthropicConfig.model_validate({'metadata': {'user_id': 'user-123'}})
     await model.generate(_tool_request(config))
 
     kwargs = mock_client.messages.create.call_args.kwargs
-    assert kwargs['tool_choice'] == {'type': 'tool', 'name': 'get_weather'}
     assert kwargs['metadata'] == {'user_id': 'user-123'}
-
-
-@pytest.mark.asyncio
-async def test_config_tool_choice_none_reaches_sdk() -> None:
-    """Config-level tool_choice none remains valid for dict compatibility."""
-    mock_client = _mock_client_for_generate()
-    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
-
-    await model.generate(_tool_request({'tool_choice': {'type': 'none'}}))
-
-    kwargs = mock_client.messages.create.call_args.kwargs
-    assert kwargs['tool_choice'] == {'type': 'none'}
-
-
-@pytest.mark.asyncio
-async def test_config_tool_choice_dropped_without_tools() -> None:
-    """Config-level tool_choice is dropped when the request carries no tools."""
-    mock_client = _mock_client_for_generate()
-    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
-
-    await model.generate(_text_request({'tool_choice': {'type': 'auto'}}))
-
-    kwargs = mock_client.messages.create.call_args.kwargs
     assert 'tool_choice' not in kwargs
+
+
+@pytest.mark.asyncio
+async def test_config_tool_choice_raises_pointing_to_generate_option() -> None:
+    """A dict config with the removed tool_choice key fails before the SDK call."""
+    mock_client = _mock_client_for_generate()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    with pytest.raises(GenkitError, match=r'ai\.generate\(tool_choice='):
+        await model.generate(_tool_request({'tool_choice': {'type': 'none'}}))
+
+    mock_client.messages.create.assert_not_called()
 
 
 def test_structured_output_merges_existing_output_config() -> None:

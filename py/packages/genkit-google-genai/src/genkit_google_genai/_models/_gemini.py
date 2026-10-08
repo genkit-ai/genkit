@@ -371,6 +371,13 @@ _TOOL_OPTION_TYPES: dict[str, type[BaseModel]] = {
     'url_context': UrlContext,
 }
 
+# Genkit's request tool_choice and the Gemini function calling mode it sends.
+_FUNCTION_CALLING_MODES: dict[str, genai_types.FunctionCallingConfigMode] = {
+    'auto': genai_types.FunctionCallingConfigMode.AUTO,
+    'required': genai_types.FunctionCallingConfigMode.ANY,
+    'none': genai_types.FunctionCallingConfigMode.NONE,
+}
+
 
 class GeminiConfig(ModelConfig):
     """Gemini Config.
@@ -2097,6 +2104,15 @@ class GeminiModel:
 
             if tools:
                 cfg.tools = cast(genai_types.ToolListUnion, tools)
+
+            # Genkit's tool_choice governs the request's function tools. An
+            # explicit function_calling_config wins, as in the JS plugin.
+            if request.tool_choice and request.tools and cfg.tool_config is None:
+                cfg.tool_config = genai_types.ToolConfig(
+                    function_calling_config=genai_types.FunctionCallingConfig(
+                        mode=_FUNCTION_CALLING_MODES[request.tool_choice]
+                    )
+                )
 
             cfg.system_instruction = genai_types.Content(parts=system_instruction) if system_instruction else None
             cfg = attach_leftovers(cfg, leftovers, nest='generationConfig')
