@@ -92,4 +92,4 @@ def package_name() -> str:
     return 'genkit_django'
 
 
-__all__ = ['package_name', genkit_django_handler.__name__]
+__all__ = ['package_name', 'genkit_django_handler']
