@@ -1569,6 +1569,54 @@ func TestInterrupted_ClaimsOnlyOwnUnresolvedInterrupts(t *testing.T) {
 	}
 }
 
+// TestMiddlewareInterrupted_ClaimsOnlyItsHolds checks that a middleware claims
+// the holds its own stages raised, a repeat's "#n" stage included, and
+// nothing else: a caller restarts every hold it claims, so a stray claim
+// would answer another stage's question.
+func TestMiddlewareInterrupted_ClaimsOnlyItsHolds(t *testing.T) {
+	const name = "genkit-middleware/toolApproval"
+	held := func(raisedBy string, resolved bool) *ai.Part {
+		p := ai.NewToolRequestPart(&ai.ToolRequest{Name: "transfer", Input: map[string]any{"amount": 200}})
+		p.Interrupt = &ai.ToolInterrupt{RaisedBy: raisedBy, Resolved: resolved}
+		return p
+	}
+	claim := func(p *ai.Part) bool {
+		_, ok := ai.MiddlewareInterrupted[map[string]any](name, p)
+		return ok
+	}
+
+	for raisedBy, want := range map[string]bool{
+		name:                         true,
+		name + "#2":                  true,
+		"":                           false, // the tool's own interrupt, or a hold that records no stage
+		name + "Judge":               false,
+		name + "#":                   false,
+		name + "#two":                false,
+		"genkit-middleware/budget":   false,
+		"genkit-middleware/budget#2": false,
+	} {
+		if got := claim(held(raisedBy, false)); got != want {
+			t.Errorf("claim of a hold raised by %q = %v, want %v", raisedBy, got, want)
+		}
+	}
+	if claim(held(name, true)) {
+		t.Error("claimed a resolved hold")
+	}
+	if claim(nil) {
+		t.Error("claimed a nil part")
+	}
+
+	// A hold read back from the wire carries its stage in metadata.
+	msgs := viaJSON(t, []*ai.Message{{Role: ai.RoleModel, Content: []*ai.Part{held(name, false)}}})
+	call, ok := ai.MiddlewareInterrupted[map[string]any](name, msgs[0].Content[0])
+	if !ok {
+		t.Fatal("did not claim a hold read back from JSON")
+	}
+	if in, _ := call.Input.(map[string]any); in["amount"] != float64(200) {
+		t.Errorf("Input = %v, want the held call's input", call.Input)
+	}
+}
+
 // TestNewResumableTool_RejectsNonObjectResumeType covers the documented
 // constraint: resume data must serialize to a JSON object. A resume type that
 // cannot is rejected at definition, which is what lets Restart on a claimed
