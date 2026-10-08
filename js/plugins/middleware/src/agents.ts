@@ -566,17 +566,20 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
         // Pending, aborting, expired, and unresolvable reports can still change
         // and are never cached.
         settledReports: new Map<string, BackgroundTaskReport>(),
-        // Task IDs this generate call launched; see launchedHere.
-        launchedTaskIds: new Set<string>(),
+        // Task IDs this generate call minted; see mintedHere.
+        mintedTaskIds: new Set<string>(),
         // Caller-chosen delegation labels by task handle, echoed on
         // background-task reports and carried onto continuations. A per-call
         // reading aid: after a restart the transcript still pairs each label
         // with its taskId at the delegation that minted it.
         labels: new Map<string, string>(),
       };
-      const delegationToolNames = new Set(
-        agentRefs.map((ref) => makeToolName(prefix, ref.name))
-      );
+      // The tools whose results mint task handles: every delegation tool and
+      // the continue tool.
+      const handleToolNames = new Set([
+        ...agentRefs.map((ref) => makeToolName(prefix, ref.name)),
+        continueTool,
+      ]);
 
       // Caches (persist across turns within the same generate cycle).
       const agentCache = new Map<string, Agent>();
@@ -960,6 +963,7 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
           out.finishReason === 'detached' ? undefined : out.snapshotId;
         if (settledId) {
           result.taskId = formatTaskId(ref.name, settledId);
+          shared.mintedTaskIds.add(result.taskId);
           result.status = settledStatus(out.finishReason);
           namespace = snapshotNamespace(ref.name, settledId);
         }
@@ -1213,7 +1217,7 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
             };
           }
           const taskId = formatTaskId(ref.name, out.snapshotId);
-          shared.launchedTaskIds.add(taskId);
+          shared.mintedTaskIds.add(taskId);
           logger.debug(
             `agents middleware: background task ${taskId} started in session ${out.sessionId}` +
               (words.continuedFrom
@@ -1430,27 +1434,33 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
       }
 
       /**
-       * Whether this conversation launched the task: this generate call did,
-       * or a delegation tool's result in the conversation names it. The
-       * background-task tools accept only those handles, so text that reaches
-       * the model (a sub-agent's result, a retrieved document) cannot steer
-       * them at another conversation's task. A re-instantiated orchestrator
-       * still collects its tasks, since its history carries the launch
-       * results.
+       * Whether this conversation minted the task handle: a delegation or
+       * continuation in this generate call returned it, or a delegation or
+       * continue tool's result in the conversation names it. The
+       * background-task tools and the continue tool accept only those
+       * handles, so text that reaches the model (a sub-agent's result, a
+       * retrieved document) cannot steer them at another conversation's task.
+       * A re-instantiated orchestrator still reaches its tasks, since its
+       * history carries the results that minted them.
        */
-      function launchedHere(taskId: string): boolean {
-        if (shared.launchedTaskIds.has(taskId)) return true;
+      function mintedHere(taskId: string): boolean {
+        if (shared.mintedTaskIds.has(taskId)) return true;
         return shared.conversationMessages.some((message) =>
           message.content?.some((part) => {
             const response = part.toolResponse;
             return (
               !!response &&
-              delegationToolNames.has(response.name) &&
+              handleToolNames.has(response.name) &&
               (response.output as { taskId?: unknown } | undefined)?.taskId ===
                 taskId
             );
           })
         );
+      }
+
+      /** The refusal for a task handle this conversation did not mint. */
+      function notMintedHere(taskId: string): string {
+        return `Task ID '${taskId}' was not issued in this conversation; only task IDs returned by this conversation's delegations and continuations can be used.`;
       }
 
       /**
@@ -1479,8 +1489,8 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
             error: new Error(error),
           };
         }
-        if (!launchedHere(taskId)) {
-          const error = `Task ID '${taskId}' was not started in this conversation; only tasks a delegation here launched can be checked, awaited, or stopped.`;
+        if (!mintedHere(taskId)) {
+          const error = notMintedHere(taskId);
           return {
             report: { taskId, status: TASK_STATUS_UNKNOWN, error },
             error: new Error(error),
@@ -1884,6 +1894,12 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
           return {
             response: `Error: task ID '${taskId}' does not match any configured agent (expected "<agent>:<snapshotId>").`,
           };
+        }
+        if (!mintedHere(taskId)) {
+          logger.debug(
+            `agents middleware: refused to continue task ${taskId}, which this conversation did not mint.`
+          );
+          return { response: `Error: ${notMintedHere(taskId)}` };
         }
         const { ref, snapshotId } = resolved;
         const begun = await beginDelegation(ref);

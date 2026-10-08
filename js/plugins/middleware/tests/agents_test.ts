@@ -2305,7 +2305,7 @@ describe('agents middleware (async)', () => {
     const abortTool = def.tools!.find((t) => t.__action.name === ABORT_TOOL)!;
     const out = await abortTool({ taskIds: [`researcher:${task.snapshotId}`] });
     assert.strictEqual(out.tasks[0].status, 'unknown');
-    assert.match(out.tasks[0].error, /not started in this conversation/);
+    assert.match(out.tasks[0].error, /not issued in this conversation/);
     const row = await researcher.getSnapshotData({
       snapshotId: task.snapshotId,
     });
@@ -2426,13 +2426,15 @@ function defineKeeper(
 /**
  * Runs an orchestrator whose `step` picks the next model response from the
  * conversation so far, with the agents middleware configured by `config`.
+ * `history` is the conversation before this call (see {@link mintedBy}).
  */
 async function orchestrate(
   ai: Genkit,
   config: Parameters<typeof agents>[0],
   step: (
     messages: MessageData[]
-  ) => ReturnType<typeof toolRequest> | ReturnType<typeof textResponse>
+  ) => ReturnType<typeof toolRequest> | ReturnType<typeof textResponse>,
+  history: MessageData[] = []
 ) {
   const model = ai.defineModel(
     { name: 'orch-continue-' + Math.random() },
@@ -2440,6 +2442,7 @@ async function orchestrate(
   );
   return ai.generate({
     model,
+    messages: history,
     prompt: 'go',
     maxTurns: 10,
     use: [agents(config)],
@@ -2450,6 +2453,32 @@ async function orchestrate(
 function lastOutput(messages: MessageData[], toolName: string): any {
   const outs = toolOutputs(messages, toolName);
   return outs[outs.length - 1];
+}
+
+/**
+ * A conversation in which an earlier call to `toolName` returned `taskId`,
+ * which is what lets the middleware's tools accept a handle the test planted
+ * in the store.
+ */
+function mintedBy(taskId: string, toolName: string): MessageData[] {
+  return [
+    {
+      role: 'model',
+      content: [{ toolRequest: { name: toolName, ref: 'earlier', input: {} } }],
+    },
+    {
+      role: 'tool',
+      content: [
+        {
+          toolResponse: {
+            name: toolName,
+            ref: 'earlier',
+            output: { response: '', taskId },
+          },
+        },
+      ],
+    },
+  ];
 }
 
 /**
@@ -2636,20 +2665,75 @@ describe('agents middleware (continue)', () => {
       ai,
       { agents: ['ephemeral', 'keeper'] },
       (messages) => {
-        if (!lastOutput(messages, 'delegate_to_ephemeral')) {
+        // The planted history holds one delegate_to_ephemeral result.
+        if (toolOutputs(messages, 'delegate_to_ephemeral').length < 2) {
           return toolRequest('delegate_to_ephemeral', { task: 'do X' });
         }
         if (!lastOutput(messages, CONTINUE_TOOL)) {
           return toolRequest(CONTINUE_TOOL, { taskId: 'ephemeral:whatever' });
         }
         return textResponse('done');
-      }
+      },
+      mintedBy('ephemeral:whatever', 'delegate_to_ephemeral')
     );
-    const [got] = toolOutputs(resp.messages, 'delegate_to_ephemeral');
+    const [, got] = toolOutputs(resp.messages, 'delegate_to_ephemeral');
     assert.strictEqual(got.response, 'done here');
     assert.strictEqual(got.taskId, undefined);
     const [refused] = toolOutputs(resp.messages, CONTINUE_TOOL);
     assert.match(refused.response, /manages its state on the client/);
+  });
+
+  it('refuses to continue a task this conversation did not mint, without spending a slot', async () => {
+    const ai = genkit({});
+    const store = new InMemorySessionStore();
+    const { deadTask, pendingId } = await seedDeadKeeperTask(
+      ai,
+      store,
+      failNTimesModel(ai, 0, 'kept going')
+    );
+    // The handle reaches this conversation only as text.
+    const resp = await orchestrate(
+      ai,
+      { agents: ['keeper'], maxDelegations: 1 },
+      (messages) => {
+        if (!lastOutput(messages, CONTINUE_TOOL)) {
+          return toolRequest(CONTINUE_TOOL, {
+            taskId: deadTask,
+            instructions: 'continue',
+          });
+        }
+        if (!lastOutput(messages, 'delegate_to_keeper')) {
+          return toolRequest('delegate_to_keeper', { task: 'fresh' });
+        }
+        return textResponse('done');
+      }
+    );
+    const [refused] = toolOutputs(resp.messages, CONTINUE_TOOL);
+    assert.match(refused.response, /not issued in this conversation/);
+    const row = await store.getSnapshot({ snapshotId: pendingId });
+    assert.strictEqual(row?.status, 'pending', 'no fence was written');
+    const [delegated] = toolOutputs(resp.messages, 'delegate_to_keeper');
+    assert.strictEqual(delegated.response, 'kept going');
+  });
+
+  it('accepts a handle that a continue result in the history minted', async () => {
+    const ai = genkit({});
+    defineKeeper(ai, 'keeper', failNTimesModel(ai, 0, 'kept'));
+    const resp = await orchestrate(ai, { agents: ['keeper'] }, (messages) =>
+      lastOutput(messages, 'delegate_to_keeper')
+        ? textResponse('done')
+        : toolRequest('delegate_to_keeper', { task: 'keep X' })
+    );
+    const { taskId } = lastOutput(resp.messages, 'delegate_to_keeper');
+    // A later call sees the handle only in a continue tool's result.
+    const def = await instantiateWith(
+      ai,
+      { agents: ['keeper'], async: true },
+      mintedBy(taskId, CONTINUE_TOOL)
+    );
+    const checkTool = def.tools!.find((t) => t.__action.name === CHECK_TOOL)!;
+    const out = await checkTool({ taskIds: [taskId] });
+    assert.strictEqual(out.tasks[0].status, 'completed');
   });
 
   it('withholds the continue tool when no sub-agent can be continued', async () => {
@@ -2852,13 +2936,17 @@ describe('agents middleware (continue)', () => {
       store,
       failNTimesModel(ai, 0, 'kept going', seen)
     );
-    const resp = await orchestrate(ai, { agents: ['keeper'] }, (messages) =>
-      lastOutput(messages, CONTINUE_TOOL)
-        ? textResponse('done')
-        : toolRequest(CONTINUE_TOOL, {
-            taskId: deadTask,
-            instructions: 'continue',
-          })
+    const resp = await orchestrate(
+      ai,
+      { agents: ['keeper'] },
+      (messages) =>
+        lastOutput(messages, CONTINUE_TOOL)
+          ? textResponse('done')
+          : toolRequest(CONTINUE_TOOL, {
+              taskId: deadTask,
+              instructions: 'continue',
+            }),
+      mintedBy(deadTask, 'delegate_to_keeper')
     );
     const [continued] = toolOutputs(resp.messages, CONTINUE_TOOL);
     assert.strictEqual(continued.response, 'kept going');
@@ -2876,10 +2964,14 @@ describe('agents middleware (continue)', () => {
     const store = new InMemorySessionStore();
     defineKeeper(ai, 'keeper', failNTimesModel(ai, 0, 'unused'), store);
     const pendingId = await saveDeadPendingRow(store, 'sess-dead');
-    const resp = await orchestrate(ai, { agents: ['keeper'] }, (messages) =>
-      lastOutput(messages, CONTINUE_TOOL)
-        ? textResponse('done')
-        : toolRequest(CONTINUE_TOOL, { taskId: `keeper:${pendingId}` })
+    const resp = await orchestrate(
+      ai,
+      { agents: ['keeper'] },
+      (messages) =>
+        lastOutput(messages, CONTINUE_TOOL)
+          ? textResponse('done')
+          : toolRequest(CONTINUE_TOOL, { taskId: `keeper:${pendingId}` }),
+      mintedBy(`keeper:${pendingId}`, 'delegate_to_keeper')
     );
     const [refused] = toolOutputs(resp.messages, CONTINUE_TOOL);
     assert.match(refused.response, /saved no progress to continue from/);
@@ -2893,10 +2985,14 @@ describe('agents middleware (continue)', () => {
       new InMemorySessionStore(),
       failNTimesModel(ai, 0, 'kept')
     );
-    const resp = await orchestrate(ai, { agents: ['keeper'] }, (messages) =>
-      lastOutput(messages, CONTINUE_TOOL)
-        ? textResponse('done')
-        : toolRequest(CONTINUE_TOOL, { taskId: deadTask })
+    const resp = await orchestrate(
+      ai,
+      { agents: ['keeper'] },
+      (messages) =>
+        lastOutput(messages, CONTINUE_TOOL)
+          ? textResponse('done')
+          : toolRequest(CONTINUE_TOOL, { taskId: deadTask }),
+      mintedBy(deadTask, 'delegate_to_keeper')
     );
     const [refused] = toolOutputs(resp.messages, CONTINUE_TOOL);
     assert.match(refused.response, /last finished turn/);
@@ -2943,13 +3039,17 @@ describe('agents middleware (continue)', () => {
       store,
       failNTimesModel(ai, 0, 'kept going')
     );
-    const resp = await orchestrate(ai, { agents: ['keeper'] }, (messages) =>
-      lastOutput(messages, CONTINUE_TOOL)
-        ? textResponse('done')
-        : toolRequest(CONTINUE_TOOL, {
-            taskId: deadTask,
-            instructions: 'continue',
-          })
+    const resp = await orchestrate(
+      ai,
+      { agents: ['keeper'] },
+      (messages) =>
+        lastOutput(messages, CONTINUE_TOOL)
+          ? textResponse('done')
+          : toolRequest(CONTINUE_TOOL, {
+              taskId: deadTask,
+              instructions: 'continue',
+            }),
+      mintedBy(deadTask, 'delegate_to_keeper')
     );
     const [refused] = toolOutputs(resp.messages, CONTINUE_TOOL);
     assert.match(refused.response, /cannot signal its worker/);
@@ -2965,11 +3065,11 @@ describe('agents middleware (continue)', () => {
       store,
       failNTimesModel(ai, 0, 'kept going')
     );
-    const def = agents.instantiate({
-      config: { agents: ['keeper'] },
+    const def = await instantiateWith(
       ai,
-      pluginConfig: undefined,
-    });
+      { agents: ['keeper'] },
+      mintedBy(deadTask, 'delegate_to_keeper')
+    );
     const continueTool = def.tools!.find(
       (t) => t.__action.name === CONTINUE_TOOL
     )!;
@@ -3005,7 +3105,8 @@ describe('agents middleware (continue)', () => {
               instructions: 'continue',
             })
           : textResponse('done');
-      }
+      },
+      mintedBy(deadTask, 'delegate_to_keeper')
     );
     const continues = toolOutputs(resp.messages, CONTINUE_TOOL);
     assert.match(continues[0].response, /could not fence/);
@@ -3053,7 +3154,8 @@ describe('agents middleware (continue)', () => {
                 taskId: deadTask,
                 instructions: 'continue',
               })
-            : textResponse('done')
+            : textResponse('done'),
+        mintedBy(deadTask, 'delegate_to_keeper')
       );
       const continues = toolOutputs(resp.messages, CONTINUE_TOOL);
       assert.match(continues[0].response, tc.refusal);
@@ -3086,7 +3188,8 @@ describe('agents middleware (continue)', () => {
               instructions: 'continue',
             })
           : textResponse('done');
-      }
+      },
+      mintedBy(deadTask, 'delegate_to_keeper')
     );
     const continues = toolOutputs(resp.messages, CONTINUE_TOOL);
     assert.match(continues[0].response, /could not be read/);
@@ -3123,7 +3226,8 @@ describe('agents middleware (continue)', () => {
               instructions: 'continue',
             })
           : textResponse('done');
-      }
+      },
+      mintedBy(deadTask, 'delegate_to_keeper')
     );
     const continues = toolOutputs(resp.messages, CONTINUE_TOOL);
     assert.match(continues[0].response, /winding down/);
@@ -3151,10 +3255,14 @@ describe('agents middleware (continue)', () => {
           }
         : snap
     );
-    const resp = await orchestrate(ai, { agents: ['keeper'] }, (messages) =>
-      lastOutput(messages, CONTINUE_TOOL)
-        ? textResponse('done')
-        : toolRequest(CONTINUE_TOOL, { taskId: deadTask })
+    const resp = await orchestrate(
+      ai,
+      { agents: ['keeper'] },
+      (messages) =>
+        lastOutput(messages, CONTINUE_TOOL)
+          ? textResponse('done')
+          : toolRequest(CONTINUE_TOOL, { taskId: deadTask }),
+      mintedBy(deadTask, 'delegate_to_keeper')
     );
     const [refused] = toolOutputs(resp.messages, CONTINUE_TOOL);
     assert.match(refused.response, /already completed/);
@@ -3193,11 +3301,13 @@ describe('agents middleware (continue)', () => {
             instructions: 'go on',
           });
         }
-        if (!lastOutput(messages, 'delegate_to_keeper')) {
+        // The planted history holds one delegate_to_keeper result.
+        if (toolOutputs(messages, 'delegate_to_keeper').length < 2) {
           return toolRequest('delegate_to_keeper', { task: 'more' });
         }
         return textResponse('done');
-      }
+      },
+      mintedBy(task, 'delegate_to_keeper')
     );
     const [check] = toolOutputs(resp.messages, CHECK_TOOL);
     assert.strictEqual(check.tasks[0].status, 'aborting');
@@ -3206,7 +3316,7 @@ describe('agents middleware (continue)', () => {
     assert.match(refused.response, /winding down/);
     // The refusal returned its slot: under a cap of one, a delegation still
     // runs afterwards.
-    const [delegated] = toolOutputs(resp.messages, 'delegate_to_keeper');
+    const [, delegated] = toolOutputs(resp.messages, 'delegate_to_keeper');
     assert.strictEqual(delegated.response, 'kept going');
   });
 
