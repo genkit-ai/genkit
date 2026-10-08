@@ -59,7 +59,7 @@ class LyriaConfig(BaseModel):
     sample_count: int | None = Field(default=None, ge=1)
     location: str | None = Field(default=None)
 
-    model_config = ConfigDict(populate_by_name=True, alias_generator=to_camel)
+    model_config = ConfigDict(validate_by_name=True, validate_by_alias=True, alias_generator=to_camel)
 
 
 LYRIA_MODEL_INFO = ModelInfo(

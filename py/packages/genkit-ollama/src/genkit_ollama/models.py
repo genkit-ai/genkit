@@ -142,7 +142,7 @@ class OllamaConfig(ModelConfig):
     ``options`` as-is, so newer sampler parameters work without an SDK bump.
     """
 
-    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+    model_config = ConfigDict(alias_generator=to_camel, validate_by_name=True, validate_by_alias=True)
 
     think: bool | Literal['low', 'medium', 'high'] | None = None
     keep_alive: float | str | None = None

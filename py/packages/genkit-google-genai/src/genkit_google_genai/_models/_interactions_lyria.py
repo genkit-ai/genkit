@@ -53,7 +53,7 @@ CREATE_OPTION_KEYS = ('response_modalities',)
 class LyriaConfig(BaseModel):
     """Google AI Interactions Lyria model configuration."""
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True, alias_generator=to_camel)
+    model_config = ConfigDict(extra='allow', validate_by_name=True, validate_by_alias=True, alias_generator=to_camel)
     base_url: str | None = None
     api_version: str | None = None
     # Milliseconds — applied to the HTTP call, not the create body.

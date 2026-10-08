@@ -389,7 +389,8 @@ class Part(GenkitModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(
         alias_generator=to_camel,
         extra='forbid',
-        populate_by_name=True,
+        validate_by_name=True,
+        validate_by_alias=True,
         validate_assignment=True,
     )
 
@@ -1079,7 +1080,7 @@ class OutputConfig(GenkitModel):
     """
 
     model_config: ClassVar[ConfigDict] = ConfigDict(
-        alias_generator=to_camel, extra='forbid', populate_by_name=True, protected_namespaces=()
+        alias_generator=to_camel, extra='forbid', validate_by_name=True, validate_by_alias=True, protected_namespaces=()
     )
     format: str | None = None
     json_schema: dict[str, Any] | None = Field(default=None, validation_alias='schema', serialization_alias='schema')
@@ -1115,7 +1116,9 @@ class ModelRequest(GenkitModel, Generic[ModelRequestConfigT]):
         so passing them there leaves output unset.
     """
 
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        alias_generator=to_camel, extra='allow', validate_by_name=True, validate_by_alias=True
+    )
     messages: list[Message]
     docs: list[Document] | None = None
     config: ModelRequestConfigT | None = None

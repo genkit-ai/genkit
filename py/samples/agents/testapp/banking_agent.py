@@ -52,14 +52,14 @@ class TransferInput(BaseModel):
     amount: float
     to_account: str = Field(alias='toAccount')
 
-    model_config = {'populate_by_name': True}
+    model_config = {'validate_by_name': True, 'validate_by_alias': True}
 
 
 class TransferOutput(BaseModel):
     success: bool
     transaction_id: str = Field(alias='transactionId')
 
-    model_config = {'populate_by_name': True}
+    model_config = {'validate_by_name': True, 'validate_by_alias': True}
 
 
 @ai.tool(name='transferMoney', description='Transfer money to a specified account.')

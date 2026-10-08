@@ -41,7 +41,7 @@ BETA_ONLY_KEYS = frozenset(BetaMessageCreateParamsBase.__annotations__) - frozen
     MessageCreateParamsBase.__annotations__
 )
 
-_NESTED_CONFIG = ConfigDict(extra='forbid', populate_by_name=True)
+_NESTED_CONFIG = ConfigDict(extra='forbid', validate_by_name=True, validate_by_alias=True)
 
 _THINKING_SCHEMA = {
     'type': 'object',
@@ -182,7 +182,7 @@ class ThinkingConfig(BaseModel):
 
     # budget_tokens takes its budgetTokens alias from the generator, not alias=,
     # so type checkers accept the snake_case kwarg. The other fields are one word.
-    model_config = ConfigDict(extra='forbid', populate_by_name=True, alias_generator=to_camel)
+    model_config = ConfigDict(extra='forbid', validate_by_name=True, validate_by_alias=True, alias_generator=to_camel)
 
     enabled: bool | None = None
     # Adaptive mode allows a fractional budget it ignores; integers enforced only when enabled.
@@ -308,7 +308,8 @@ class AnthropicConfig(ModelConfig):
     model_config = ConfigDict(
         alias_generator=to_camel,
         json_schema_extra=_anthropic_config_schema_extra,
-        populate_by_name=True,
+        validate_by_name=True,
+        validate_by_alias=True,
     )
 
     # Config fields that are never create() kwargs. api_version picks the API

@@ -72,7 +72,7 @@ def is_veo_model(name: str) -> bool:
 class VeoConfig(BaseModel):
     """Veo Config Schema."""
 
-    model_config = ConfigDict(extra='forbid', populate_by_name=True, alias_generator=to_camel)
+    model_config = ConfigDict(extra='forbid', validate_by_name=True, validate_by_alias=True, alias_generator=to_camel)
     number_of_videos: int | None = Field(default=None)
     generate_audio: bool | None = Field(default=None)
     fps: int | None = Field(default=None)
