@@ -16,7 +16,11 @@
 
 import * as assert from 'assert';
 import { describe, it } from 'node:test';
-import { GenkitError, getCallableJSON } from '../src/error.js';
+import {
+  GenkitError,
+  getCallableJSON,
+  type SpanFailureMarks,
+} from '../src/error.js';
 
 describe('GenkitError', () => {
   it('exposes the wrapped error as cause', () => {
@@ -58,17 +62,14 @@ describe('GenkitError', () => {
   });
 
   it('keeps the span markers tracing stamped on the cause', () => {
-    const cause = new Error('boom') as Error & {
-      ignoreFailedSpan?: boolean;
-      traceId?: string;
-    };
+    const cause = new Error('boom') as Error & SpanFailureMarks;
     cause.ignoreFailedSpan = true;
     cause.traceId = 'trace-1';
     const err = new GenkitError({
       status: 'INTERNAL',
       message: 'wrapped',
       cause,
-    }) as GenkitError & { ignoreFailedSpan?: boolean; traceId?: string };
+    }) as GenkitError & SpanFailureMarks;
     assert.strictEqual(err.ignoreFailedSpan, true);
     assert.strictEqual(err.traceId, 'trace-1');
   });
@@ -78,7 +79,7 @@ describe('GenkitError', () => {
       status: 'INTERNAL',
       message: 'wrapped',
       cause: new Error('boom'),
-    }) as GenkitError & { ignoreFailedSpan?: boolean; traceId?: string };
+    }) as GenkitError & SpanFailureMarks;
     assert.strictEqual(err.ignoreFailedSpan, undefined);
     assert.strictEqual(err.traceId, undefined);
   });
