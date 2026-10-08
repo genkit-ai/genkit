@@ -180,11 +180,13 @@ class ThinkingConfig(BaseModel):
     ``budgetTokens`` is required when ``enabled`` is true.
     """
 
-    model_config = _NESTED_CONFIG
+    # budget_tokens takes its budgetTokens alias from the generator, not alias=,
+    # so type checkers accept the snake_case kwarg. The other fields are one word.
+    model_config = ConfigDict(extra='forbid', populate_by_name=True, alias_generator=to_camel)
 
     enabled: bool | None = None
     # Adaptive mode allows a fractional budget it ignores; integers enforced only when enabled.
-    budget_tokens: float | None = Field(default=None, alias='budgetTokens', ge=1024)
+    budget_tokens: float | None = Field(default=None, ge=1024)
     adaptive: bool | None = None
     display: Literal['summarized', 'omitted'] | None = None
     # The API's own spelling (`{'type': 'enabled', ...}`). A mode this list lacks

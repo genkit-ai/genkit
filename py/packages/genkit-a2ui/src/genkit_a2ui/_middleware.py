@@ -23,7 +23,8 @@ import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic.alias_generators import to_camel
 
 from genkit import FinishReason, Message, ModelResponse, ModelResponseChunk, Part, Role
 from genkit._core._model import ABNORMAL_FINISH_REASONS
@@ -48,14 +49,22 @@ SKIP_REWRITE_FINISH_REASONS = ABNORMAL_FINISH_REASONS | {FinishReason.UNKNOWN}
 class SurfacesConfig(BaseModel):
     """Options for :class:`Surfaces`."""
 
-    model_config = ConfigDict(extra='forbid', populate_by_name=True)
+    model_config = ConfigDict(extra='forbid', populate_by_name=True, alias_generator=to_camel)
 
     instructions: Literal['system', 'none'] = 'system'
     # 'off' passes envelopes through unchecked, 'warn' logs and drops the
     # offending block, 'strict' kills the turn. Default is 'warn' because a
     # single hallucinated component should not cost the whole answer.
-    validation: ValidateMode = Field(default='warn', alias='validate')
-    surface_id: str | None = Field(default=None, alias='surfaceId')
+    #
+    # The wire name is 'validate', but a field by that name would shadow
+    # BaseModel.validate. Split aliases instead of alias= so type checkers
+    # accept validation= as the kwarg; runtime still takes validate=.
+    validation: ValidateMode = Field(
+        default='warn',
+        validation_alias=AliasChoices('validate', 'validation'),
+        serialization_alias='validate',
+    )
+    surface_id: str | None = None
     # Registry id from load_catalog. The Developer UI lists those same ids.
     catalog: str | None = None
     # A typo here would stamp envelopes the renderer cannot paint.
