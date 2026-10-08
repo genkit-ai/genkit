@@ -112,21 +112,26 @@ const { text } = await ai.generate({
 });
 ```
 
-A failed generation throws by default: a tool's own error, the model's, or a `GenerationResponseError` when the response was blocked or the `maxTurns` limit was reached. Pass `throwOnError: false` to get the failure on the response instead, with the conversation the loop completed up to the last finished tool round:
+A failed generation throws by default: a tool's own error, the model's, or a `GenerationResponseError` when the response was blocked or the `maxTurns` limit was reached. Pass `throwOnError: false` to get the failure on the response instead. When the loop failed (`finishReason` `failed`) or was stopped (`aborted`), `res.messages` is the conversation up to the last finished tool round, so you can send it again:
 
 ```ts
-const res = await ai.generate({
+const opts = {
   model: googleAI.model('gemini-flash-latest'),
-  prompt: 'What should I wear in Tokyo today?',
   tools: [getWeather],
   throwOnError: false,
+};
+let res = await ai.generate({
+  ...opts,
+  prompt: 'What should I wear in Tokyo today?',
 });
-if (res.error) {
-  // res.error.status says what broke; res.finishReason is 'failed', or
-  // 'aborted' when you stopped the call. res.messages can be sent again.
-  console.log(res.error.status, res.error.message);
+if (res.finishReason === 'failed' || res.finishReason === 'aborted') {
+  // res.error says what broke. res.messages already includes the prompt;
+  // retry from the last completed tool round.
+  res = await ai.generate({ ...opts, messages: res.messages });
 }
 ```
+
+Other failures are not for sending again as they are: a blocked response and structured output that does not match the schema keep the model's own reply beside `res.error`, and a restarted tool that interrupts again reports `interrupted`, which you answer with `resume`. An unknown model or tool, invalid options, and a middleware hook that fails before the first turn still throw with `throwOnError: false`, since there is no response to return.
 
 ### Interrupts (Human-in-the-Loop)
 
@@ -431,11 +436,11 @@ The Developer UI lets you visually test flows, inspect traces, and experiment wi
 
 Genkit supports a growing ecosystem of plugins for model providers, vector stores, and more:
 
-| Category       | Plugins                                                                                                          |
-| -------------- | ---------------------------------------------------------------------------------------------------------------- |
-| **Models**     | `@genkit-ai/google-genai`, `@genkit-ai/vertexai`, `@genkit-ai/compat-oai`, `genkitx-anthropic`, `genkitx-ollama` |
-| **Deployment** | `@genkit-ai/express`, `@genkit-ai/fetch`, `@genkit-ai/firebase`, `@genkit-ai/cloud-run`                          |
-| **Monitoring** | `@genkit-ai/google-cloud`                                                                                        |
+| Category | Plugins |
+|---|---|
+| **Models** | `@genkit-ai/google-genai`, `@genkit-ai/vertexai`, `@genkit-ai/compat-oai`, `genkitx-anthropic`, `genkitx-ollama` |
+| **Deployment** | `@genkit-ai/express`, `@genkit-ai/fetch`, `@genkit-ai/firebase`, `@genkit-ai/cloud-run` |
+| **Monitoring** | `@genkit-ai/google-cloud` |
 
 Browse all plugins: [npmjs.com/search?q=keywords:genkit-plugin](https://www.npmjs.com/search?q=keywords:genkit-plugin)
 

@@ -326,7 +326,7 @@ const flakyLookup = ai.defineTool(
 
 ai.defineFlow('tool-failure-on-response', async () => {
   const res = await ai.generate({
-    model: googleAI.model('gemini-3-flash-preview'),
+    model: googleAI.model('gemini-flash-latest'),
     prompt: 'What time is it in Tokyo? Use the flakyLookup tool.',
     tools: [flakyLookup],
     throwOnError: false,
