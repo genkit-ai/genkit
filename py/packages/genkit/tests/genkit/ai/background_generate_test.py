@@ -301,7 +301,7 @@ async def test_generate_operation_failed_start_is_not_a_clean_start(ai: Genkit) 
         await ai.generate_operation(model='bg-model', prompt='a cat surfing', use=[RaisesAfterStart()])
     assert raised.value.status == 'FAILED_PRECONDITION'
     assert raised.value.reason is RuntimeErrorReason.INVALID_INPUT
-    assert raised.value.original_message == 'hook after start'
+    assert raised.value.message == 'hook after start'
 
 
 class SwallowsStart(BaseMiddleware):
@@ -378,7 +378,7 @@ async def test_generate_rejects_resume_on_background_model(ai: Genkit) -> None:
 
     assert exc_info.value.status == 'FAILED_PRECONDITION'
     assert exc_info.value.reason is RuntimeErrorReason.INVALID_RESUME
-    assert 'INVALID_RESUME' not in exc_info.value.original_message
+    assert 'INVALID_RESUME' not in exc_info.value.message
     assert starts == []
 
 
@@ -494,9 +494,9 @@ async def test_generate_operation_raises_the_boxed_error_when_start_never_ran(ai
     with pytest.raises(GenkitError) as ei:
         await ai.generate_operation(model='bg-model', prompt='a cat', use=[DenyStart()])
 
-    assert ei.value.original_message == boxed.error.message
+    assert ei.value.message == boxed.error.message
     assert ei.value.status == boxed.error.status
-    assert 'did not return an operation' not in ei.value.original_message
+    assert 'did not return an operation' not in ei.value.message
 
 
 @pytest.mark.asyncio

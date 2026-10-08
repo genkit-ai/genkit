@@ -1800,7 +1800,7 @@ async def test_generate_classifies_known_mid_stream_error(sample_request: ModelR
     assert chunks == ['Grilled']
     assert isinstance(error, GenkitError)
     assert error.status == 'RESOURCE_EXHAUSTED'
-    assert error.original_message == 'Rate limit reached for gpt-4o'
+    assert error.message == 'Rate limit reached for gpt-4o'
     assert type(error.cause) is APIError
 
 

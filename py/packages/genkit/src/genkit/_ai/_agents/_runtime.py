@@ -1099,7 +1099,7 @@ async def generate_prompt_agent_turn(
 def to_error_details(exc: Exception) -> GenkitRuntimeError:
     status = getattr(exc, 'status', None) or 'INTERNAL'
     if isinstance(exc, GenkitError):
-        message = exc.original_message
+        message = exc.message
     else:
         message = str(exc) or 'Internal failure'
     details = getattr(exc, 'detail', None) or getattr(exc, 'details', None)

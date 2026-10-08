@@ -554,7 +554,7 @@ async def test_unknown_mcp_provider_fails_before_the_model() -> None:
         )
 
     assert ei.value.status == 'NOT_FOUND'
-    assert 'Unable to resolve tool mcp:nope/echo' in ei.value.original_message
+    assert 'Unable to resolve tool mcp:nope/echo' in ei.value.message
     assert pm.request_count == 0
     assert pm.last_request is None
 
@@ -584,7 +584,7 @@ async def test_unknown_mcp_tool_fails_before_the_model() -> None:
         )
 
     assert ei.value.status == 'NOT_FOUND'
-    assert 'Unable to resolve tool mcp:tool/ghost' in ei.value.original_message
+    assert 'Unable to resolve tool mcp:tool/ghost' in ei.value.message
     assert pm.request_count == 0
     assert pm.last_request is None
 
@@ -619,8 +619,8 @@ async def test_generate_mcp_star_and_local_tool_a_same_name_raises() -> None:
 
     assert ei.value.status == 'INVALID_ARGUMENT'
     assert ei.value.reason is RuntimeErrorReason.INVALID_INPUT
-    assert 'Cannot provide two tools with the same name' in ei.value.original_message
-    assert 'INVALID_INPUT' not in ei.value.original_message
+    assert 'Cannot provide two tools with the same name' in ei.value.message
+    assert 'INVALID_INPUT' not in ei.value.message
     assert pm.request_count == 0
     assert pm.last_request is None
 
@@ -655,7 +655,7 @@ async def test_generate_local_tool_a_then_mcp_star_same_name_raises() -> None:
 
     assert ei.value.status == 'INVALID_ARGUMENT'
     assert ei.value.reason is RuntimeErrorReason.INVALID_INPUT
-    assert 'Cannot provide two tools with the same name' in ei.value.original_message
-    assert 'INVALID_INPUT' not in ei.value.original_message
+    assert 'Cannot provide two tools with the same name' in ei.value.message
+    assert 'INVALID_INPUT' not in ei.value.message
     assert pm.request_count == 0
     assert pm.last_request is None

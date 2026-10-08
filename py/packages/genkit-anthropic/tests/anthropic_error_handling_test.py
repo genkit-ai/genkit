@@ -91,7 +91,7 @@ async def test_generate_maps_anthropic_status_errors(status_code: int, expected_
 
     error = exc_info.value
     assert error.status == expected_status
-    assert error.original_message == _ERROR_MESSAGE
+    assert error.message == _ERROR_MESSAGE
     assert error.cause is api_error
     assert error.__cause__ is api_error
     assert error.response_metadata is None
@@ -149,7 +149,7 @@ async def test_generate_reads_error_type_when_http_status_is_unmapped() -> None:
         await _model_failing_with(api_error).generate(_request())
 
     assert exc_info.value.status == 'INVALID_ARGUMENT'
-    assert exc_info.value.original_message == _ERROR_MESSAGE
+    assert exc_info.value.message == _ERROR_MESSAGE
     assert exc_info.value.cause is api_error
 
 
@@ -352,7 +352,7 @@ async def test_streaming_in_band_error_event_maps_its_type(error_type: str, expe
     assert chunks == ['Smoked']
     assert isinstance(error, GenkitError)
     assert error.status == expected_status
-    assert error.original_message == 'Overloaded'
+    assert error.message == 'Overloaded'
     assert isinstance(error.cause, APIStatusError)
     assert error.cause.status_code == 200
 
@@ -396,7 +396,7 @@ async def test_generate_marks_unsendable_history_invalid_argument(part: Part, me
         await model.generate(request)
 
     assert exc_info.value.status == 'INVALID_ARGUMENT'
-    assert message_fragment in exc_info.value.original_message
+    assert message_fragment in exc_info.value.message
     assert isinstance(exc_info.value.cause, ValueError)
     assert exc_info.value.__cause__ is exc_info.value.cause
     client.messages.create.assert_not_called()

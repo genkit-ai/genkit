@@ -422,8 +422,8 @@ async def test_firestore_get_slash_session_id_raises_invalid_session_id() -> Non
         await store.get_snapshot(session_id='a/b')
     assert raised.value.status == 'INVALID_ARGUMENT'
     assert raised.value.reason is RuntimeErrorReason.INVALID_SESSION_ID
-    assert "invalid session_id 'a/b'" in raised.value.original_message
-    assert 'INVALID_SESSION_ID' not in raised.value.original_message
+    assert "invalid session_id 'a/b'" in raised.value.message
+    assert 'INVALID_SESSION_ID' not in raised.value.message
 
 
 @pytest.mark.asyncio
@@ -440,8 +440,8 @@ async def test_firestore_get_empty_session_id_raises_session_id_required() -> No
         await store.get_snapshot(session_id='')
     assert raised.value.status == 'INVALID_ARGUMENT'
     assert raised.value.reason is RuntimeErrorReason.SESSION_ID_REQUIRED
-    assert 'session_id must not be empty' in raised.value.original_message
-    assert 'SESSION_ID_REQUIRED' not in raised.value.original_message
+    assert 'session_id must not be empty' in raised.value.message
+    assert 'SESSION_ID_REQUIRED' not in raised.value.message
 
 
 @pytest.mark.asyncio
@@ -454,8 +454,8 @@ async def test_firestore_get_slash_snapshot_id_raises_invalid_snapshot_id() -> N
         await store.get_snapshot(snapshot_id='a/b')
     assert raised.value.status == 'INVALID_ARGUMENT'
     assert raised.value.reason is RuntimeErrorReason.INVALID_SNAPSHOT_ID
-    assert "invalid snapshot_id 'a/b'" in raised.value.original_message
-    assert 'INVALID_SNAPSHOT_ID' not in raised.value.original_message
+    assert "invalid snapshot_id 'a/b'" in raised.value.message
+    assert 'INVALID_SNAPSHOT_ID' not in raised.value.message
 
 
 @pytest.mark.asyncio
@@ -1435,8 +1435,8 @@ async def test_firestore_save_without_session_id_raises_session_id_required() ->
         )
     assert raised.value.status == 'INVALID_ARGUMENT'
     assert raised.value.reason is RuntimeErrorReason.SESSION_ID_REQUIRED
-    assert "requires 'sessionId'" in raised.value.original_message
-    assert 'SESSION_ID_REQUIRED' not in raised.value.original_message
+    assert "requires 'sessionId'" in raised.value.message
+    assert 'SESSION_ID_REQUIRED' not in raised.value.message
     assert _snap_path('snap-1') not in h.docs
     assert _pointer_path('') not in h.docs
 
@@ -1489,8 +1489,8 @@ async def test_firestore_save_empty_session_id_raises_session_id_required() -> N
         )
     assert raised.value.status == 'INVALID_ARGUMENT'
     assert raised.value.reason is RuntimeErrorReason.SESSION_ID_REQUIRED
-    assert "requires 'sessionId'" in raised.value.original_message
-    assert 'SESSION_ID_REQUIRED' not in raised.value.original_message
+    assert "requires 'sessionId'" in raised.value.message
+    assert 'SESSION_ID_REQUIRED' not in raised.value.message
     assert _snap_path('snap-1') not in h.docs
     assert _pointer_path('sess-1') not in h.docs
 
@@ -1514,8 +1514,8 @@ async def test_firestore_save_slash_session_id_raises_invalid_session_id() -> No
         )
     assert raised.value.status == 'INVALID_ARGUMENT'
     assert raised.value.reason is RuntimeErrorReason.INVALID_SESSION_ID
-    assert "invalid session_id 'a/b'" in raised.value.original_message
-    assert 'INVALID_SESSION_ID' not in raised.value.original_message
+    assert "invalid session_id 'a/b'" in raised.value.message
+    assert 'INVALID_SESSION_ID' not in raised.value.message
     assert _snap_path('snap-1') not in h.docs
 
 
@@ -1542,8 +1542,8 @@ async def test_firestore_save_state_empty_session_id_raises_session_id_required(
         )
     assert raised.value.status == 'INVALID_ARGUMENT'
     assert raised.value.reason is RuntimeErrorReason.SESSION_ID_REQUIRED
-    assert "requires 'sessionId'" in raised.value.original_message
-    assert 'SESSION_ID_REQUIRED' not in raised.value.original_message
+    assert "requires 'sessionId'" in raised.value.message
+    assert 'SESSION_ID_REQUIRED' not in raised.value.message
     assert _snap_path('snap-1') not in h.docs
 
 
@@ -1566,8 +1566,8 @@ async def test_firestore_save_state_slash_session_id_raises_invalid_session_id()
         )
     assert raised.value.status == 'INVALID_ARGUMENT'
     assert raised.value.reason is RuntimeErrorReason.INVALID_SESSION_ID
-    assert "invalid session_id 'a/b'" in raised.value.original_message
-    assert 'INVALID_SESSION_ID' not in raised.value.original_message
+    assert "invalid session_id 'a/b'" in raised.value.message
+    assert 'INVALID_SESSION_ID' not in raised.value.message
     assert _snap_path('snap-1') not in h.docs
 
 
@@ -1590,8 +1590,8 @@ async def test_firestore_save_empty_snapshot_id_raises_invalid_snapshot_id() -> 
         )
     assert raised.value.status == 'INVALID_ARGUMENT'
     assert raised.value.reason is RuntimeErrorReason.INVALID_SNAPSHOT_ID
-    assert "invalid snapshot_id ''" in raised.value.original_message
-    assert 'INVALID_SNAPSHOT_ID' not in raised.value.original_message
+    assert "invalid snapshot_id ''" in raised.value.message
+    assert 'INVALID_SNAPSHOT_ID' not in raised.value.message
     assert _pointer_path('sess-1') not in h.docs
 
 
@@ -1614,8 +1614,8 @@ async def test_firestore_save_slash_snapshot_id_raises_invalid_snapshot_id() -> 
         )
     assert raised.value.status == 'INVALID_ARGUMENT'
     assert raised.value.reason is RuntimeErrorReason.INVALID_SNAPSHOT_ID
-    assert "invalid snapshot_id 'a/b'" in raised.value.original_message
-    assert 'INVALID_SNAPSHOT_ID' not in raised.value.original_message
+    assert "invalid snapshot_id 'a/b'" in raised.value.message
+    assert 'INVALID_SNAPSHOT_ID' not in raised.value.message
     assert _pointer_path('sess-1') not in h.docs
 
 

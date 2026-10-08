@@ -73,7 +73,7 @@ async def test_generate_operation_no_model_specified(ai: Genkit) -> None:
 
     assert 'No model specified' in str(exc_info.value)
     assert exc_info.value.reason is RuntimeErrorReason.MODEL_NOT_FOUND
-    assert 'MODEL_NOT_FOUND' not in exc_info.value.original_message
+    assert 'MODEL_NOT_FOUND' not in exc_info.value.message
 
 
 @pytest.mark.asyncio
@@ -84,7 +84,7 @@ async def test_generate_operation_model_not_found(ai: Genkit) -> None:
 
     assert 'not found' in str(exc_info.value).lower()
     assert exc_info.value.reason is RuntimeErrorReason.MODEL_NOT_FOUND
-    assert 'MODEL_NOT_FOUND' not in exc_info.value.original_message
+    assert 'MODEL_NOT_FOUND' not in exc_info.value.message
 
 
 @pytest.mark.asyncio
@@ -121,7 +121,7 @@ async def test_generate_operation_model_no_long_running_support(ai: Genkit) -> N
 
     assert 'does not support long running operations' in str(exc_info.value)
     assert exc_info.value.reason is RuntimeErrorReason.UNSUPPORTED_BY_MODEL
-    assert 'UNSUPPORTED_BY_MODEL' not in exc_info.value.original_message
+    assert 'UNSUPPORTED_BY_MODEL' not in exc_info.value.message
 
 
 @pytest.mark.asyncio
@@ -144,7 +144,7 @@ async def test_generate_operation_model_no_supports_info(ai: Genkit) -> None:
 
     assert 'does not support long running operations' in str(exc_info.value)
     assert exc_info.value.reason is RuntimeErrorReason.UNSUPPORTED_BY_MODEL
-    assert 'UNSUPPORTED_BY_MODEL' not in exc_info.value.original_message
+    assert 'UNSUPPORTED_BY_MODEL' not in exc_info.value.message
 
 
 def test_define_model_rejects_long_running(ai: Genkit) -> None:

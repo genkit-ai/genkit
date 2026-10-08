@@ -313,7 +313,7 @@ async def test_invalid_input_error_names_the_action_kind(kind: ActionKind, want:
     with pytest.raises(GenkitError) as e:
         await action.run(input='abc')
 
-    assert e.value.original_message == want
+    assert e.value.message == want
 
 
 @pytest.mark.asyncio
@@ -516,8 +516,8 @@ async def test_bidi_send_after_close_raises_connection_closed() -> None:
         await conn.send('late')
     assert raised.value.status == 'FAILED_PRECONDITION'
     assert raised.value.reason is RuntimeErrorReason.CONNECTION_CLOSED
-    assert 'already been closed' in raised.value.original_message
-    assert 'CONNECTION_CLOSED' not in raised.value.original_message
+    assert 'already been closed' in raised.value.message
+    assert 'CONNECTION_CLOSED' not in raised.value.message
     assert await conn.output() == {'turns': 0}
 
 
@@ -532,8 +532,8 @@ async def test_bidi_send_after_a_turn_then_close_raises_connection_closed() -> N
         await conn.send('late')
     assert raised.value.status == 'FAILED_PRECONDITION'
     assert raised.value.reason is RuntimeErrorReason.CONNECTION_CLOSED
-    assert 'already been closed' in raised.value.original_message
-    assert 'CONNECTION_CLOSED' not in raised.value.original_message
+    assert 'already been closed' in raised.value.message
+    assert 'CONNECTION_CLOSED' not in raised.value.message
     assert await conn.output() == {'turns': 1}
 
 
@@ -548,8 +548,8 @@ async def test_bidi_send_after_close_twice_raises_connection_closed() -> None:
         await conn.send('late')
     assert raised.value.status == 'FAILED_PRECONDITION'
     assert raised.value.reason is RuntimeErrorReason.CONNECTION_CLOSED
-    assert 'already been closed' in raised.value.original_message
-    assert 'CONNECTION_CLOSED' not in raised.value.original_message
+    assert 'already been closed' in raised.value.message
+    assert 'CONNECTION_CLOSED' not in raised.value.message
     assert await conn.output() == {'turns': 0}
 
 
@@ -619,7 +619,7 @@ async def test_await_flow_that_raises_public_error_keeps_status_and_message() ->
         await order('99')
 
     assert exc.value.status == 'NOT_FOUND'
-    assert exc.value.original_message == 'no order 99'
+    assert exc.value.message == 'no order 99'
 
 
 @pytest.mark.asyncio
@@ -635,7 +635,7 @@ async def test_await_flow_that_raises_genkit_error_keeps_status() -> None:
         await ship('99')
 
     assert exc.value.status == 'FAILED_PRECONDITION'
-    assert exc.value.original_message == 'order is not paid'
+    assert exc.value.message == 'order is not paid'
     assert exc.value.cause is None
 
 

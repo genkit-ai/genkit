@@ -137,7 +137,7 @@ def test_genkit_error_reason_stays_in_details() -> None:
 
     assert error.reason is RuntimeErrorReason.MODEL_NOT_FOUND
     assert error.details['reason'] == 'MODEL_NOT_FOUND'
-    assert 'MODEL_NOT_FOUND' not in error.original_message
+    assert 'MODEL_NOT_FOUND' not in error.message
     assert GenkitError(status='NOT_FOUND', message='missing').reason is None
     with pytest.raises(AttributeError):
         error.reason = RuntimeErrorReason.TOOL_NOT_FOUND  # type: ignore[misc]
@@ -150,7 +150,7 @@ def test_genkit_error() -> None:
         details={'extra_msg': 'Test detail'},
         source='test_source',
     )
-    assert error.original_message == 'Test message'
+    assert error.message == 'Test message'
     assert error.http_code == 400
     assert error.status == 'INVALID_ARGUMENT'
     assert error.details['extra_msg'] == 'Test detail'
@@ -168,7 +168,7 @@ def test_genkit_error() -> None:
         cause=ValueError("File not found: 'workspace/foo.py'"),
     )
     assert str(wrapped) == ("INTERNAL: Error while running action read_file: File not found: 'workspace/foo.py'")
-    assert wrapped.original_message == 'Error while running action read_file'
+    assert wrapped.message == 'Error while running action read_file'
 
 
 def test_genkit_error_to_json() -> None:
@@ -205,7 +205,7 @@ def test_public_error() -> None:
         details={'extra_msg': 'Session expired'},
     )
     assert error.status == 'UNAUTHENTICATED'
-    assert error.original_message == 'Please log in'
+    assert error.message == 'Please log in'
     assert error.details['extra_msg'] == 'Session expired'
 
 
@@ -213,7 +213,6 @@ def test_genkit_error_message_is_the_sentence_they_passed() -> None:
     """err.message is the text passed as message=, without the status prefix."""
     err = genkit.GenkitError(status='NOT_FOUND', message='missing')
     assert err.message == 'missing'
-    assert err.original_message == 'missing'
 
 
 def test_genkit_error_str_still_leads_with_the_status() -> None:
@@ -337,7 +336,7 @@ def test_wrap_http_error_classifies_status() -> None:
     error = wrap_http_error(cause, status_code=400)
     assert error.status == 'INVALID_ARGUMENT'
     assert error.cause is cause
-    assert error.original_message == 'bad request'
+    assert error.message == 'bad request'
 
 
 def test_wrap_http_error_marks_503_unavailable() -> None:
@@ -386,7 +385,7 @@ def test_wrap_http_error_reads_retry_after() -> None:
     error = wrap_http_error(FakeError(), status_code=429, message='rate limited')
     assert error.status == 'RESOURCE_EXHAUSTED'
     assert error.response_metadata == {'retry_after_ms': 60000.0}
-    assert error.original_message == 'rate limited'
+    assert error.message == 'rate limited'
     assert error.to_callable_serializable().model_dump(exclude_none=True) == {
         'message': 'Internal Error',
         'status': 'INTERNAL',
@@ -407,7 +406,7 @@ def test_in_process_provider_error_keeps_unauthenticated() -> None:
     error = wrap_http_error(RuntimeError('API key not valid'), status_code=401)
 
     assert error.status == 'UNAUTHENTICATED'
-    assert error.original_message == 'API key not valid'
+    assert error.message == 'API key not valid'
 
 
 def test_wrap_http_error_keeps_provider_status_in_process() -> None:
@@ -542,7 +541,7 @@ def test_to_callable_serializable_redacts_like_get_callable_json() -> None:
     body = error.to_callable_serializable()
     assert body.model_dump(exclude_none=True) == get_callable_json(error)
     # => {'message': 'Internal Error', 'status': 'INTERNAL'}
-    assert error.original_message == 'bad id 12345'
+    assert error.message == 'bad id 12345'
 
 
 def test_to_callable_serializable_keeps_public_error_text() -> None:

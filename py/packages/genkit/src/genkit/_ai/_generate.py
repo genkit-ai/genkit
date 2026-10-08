@@ -1161,15 +1161,15 @@ def boxed_finish_message(*, exc: BaseException, pipe_failed: bool) -> str:
     # finish_message.
     if pipe_failed:
         if isinstance(exc, GenkitError):
-            return exc.original_message or type(exc).__name__
+            return exc.message or type(exc).__name__
         return str(exc) or type(exc).__name__
     published = public_error(exc)
     if published is not None:
-        return published.original_message or INTERNAL_FINISH_MESSAGE
+        return published.message or INTERNAL_FINISH_MESSAGE
     if isinstance(exc, GenkitError) and (
         exc.cause is None or isinstance(exc.cause, GenkitError) or exc.status != 'INTERNAL'
     ):
-        return exc.original_message or INTERNAL_FINISH_MESSAGE
+        return exc.message or INTERNAL_FINISH_MESSAGE
     return INTERNAL_FINISH_MESSAGE
 
 

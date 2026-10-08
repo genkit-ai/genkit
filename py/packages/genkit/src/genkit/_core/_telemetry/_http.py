@@ -280,7 +280,7 @@ class DirectHttpInstrumentation:
                 raise
             except Exception as e:
                 span.attributes[Attr.STATE] = State.ERROR
-                err_text = e.original_message if isinstance(e, GenkitError) else str(e)
+                err_text = e.message if isinstance(e, GenkitError) else str(e)
                 span.attributes[Attr.ERROR] = err_text
                 span.status_code = 2
                 span.status_message = str(e)

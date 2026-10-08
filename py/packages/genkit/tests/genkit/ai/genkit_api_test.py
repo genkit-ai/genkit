@@ -132,7 +132,7 @@ async def test_genkit_check_operation_no_action() -> None:
         await ai.check_operation(op)
     assert exc_info.value.status == 'INVALID_ARGUMENT'
     assert exc_info.value.reason is RuntimeErrorReason.INVALID_INPUT
-    assert 'INVALID_INPUT' not in exc_info.value.original_message
+    assert 'INVALID_INPUT' not in exc_info.value.message
 
 
 @pytest.mark.asyncio
@@ -195,7 +195,7 @@ async def test_check_operation_dump_is_invalid_argument() -> None:
         await ai.check_operation(dumped)  # type: ignore[arg-type]
     assert exc_info.value.status == 'INVALID_ARGUMENT'
     assert exc_info.value.reason is RuntimeErrorReason.INVALID_INPUT
-    assert 'INVALID_INPUT' not in exc_info.value.original_message
+    assert 'INVALID_INPUT' not in exc_info.value.message
 
 
 @pytest.mark.asyncio
@@ -208,7 +208,7 @@ async def test_check_operation_boxed_response_is_invalid_argument() -> None:
         await ai.check_operation(boxed)  # type: ignore[arg-type]
     assert exc_info.value.status == 'INVALID_ARGUMENT'
     assert exc_info.value.reason is RuntimeErrorReason.INVALID_INPUT
-    assert 'INVALID_INPUT' not in exc_info.value.original_message
+    assert 'INVALID_INPUT' not in exc_info.value.message
 
 
 @pytest.mark.asyncio
@@ -219,7 +219,7 @@ async def test_check_operation_str_is_invalid_argument() -> None:
         await ai.check_operation('not-an-op')  # type: ignore[arg-type]
     assert exc_info.value.status == 'INVALID_ARGUMENT'
     assert exc_info.value.reason is RuntimeErrorReason.INVALID_INPUT
-    assert 'INVALID_INPUT' not in exc_info.value.original_message
+    assert 'INVALID_INPUT' not in exc_info.value.message
 
 
 @pytest.mark.asyncio
@@ -258,7 +258,7 @@ async def test_cancel_operation_dump_is_invalid_argument() -> None:
         await ai.cancel_operation(dumped)  # type: ignore[arg-type]
     assert exc_info.value.status == 'INVALID_ARGUMENT'
     assert exc_info.value.reason is RuntimeErrorReason.INVALID_INPUT
-    assert 'INVALID_INPUT' not in exc_info.value.original_message
+    assert 'INVALID_INPUT' not in exc_info.value.message
 
 
 @pytest.mark.asyncio
@@ -279,7 +279,7 @@ async def test_cancel_operation_without_cancel_is_unimplemented() -> None:
         await ai.cancel_operation(op)
     assert exc_info.value.status == 'UNIMPLEMENTED'
     assert exc_info.value.reason is RuntimeErrorReason.UNSUPPORTED_BY_MODEL
-    assert 'UNSUPPORTED_BY_MODEL' not in exc_info.value.original_message
+    assert 'UNSUPPORTED_BY_MODEL' not in exc_info.value.message
 
 
 @pytest.mark.asyncio
@@ -300,7 +300,7 @@ async def test_background_action_cancel_without_fn_is_unimplemented() -> None:
         await action.cancel(op)
     assert exc_info.value.status == 'UNIMPLEMENTED'
     assert exc_info.value.reason is RuntimeErrorReason.UNSUPPORTED_BY_MODEL
-    assert 'UNSUPPORTED_BY_MODEL' not in exc_info.value.original_message
+    assert 'UNSUPPORTED_BY_MODEL' not in exc_info.value.message
 
 
 @pytest.mark.asyncio

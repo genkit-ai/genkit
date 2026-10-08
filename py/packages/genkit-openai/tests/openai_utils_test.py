@@ -826,7 +826,7 @@ def test_reraise_openai_error_classifies_known_in_band_errors(
         reraise_openai_error(error)
 
     assert raised.value.status == expected_status
-    assert raised.value.original_message == body['message']
+    assert raised.value.message == body['message']
     assert raised.value.cause is error
     assert raised.value.__cause__ is error
 

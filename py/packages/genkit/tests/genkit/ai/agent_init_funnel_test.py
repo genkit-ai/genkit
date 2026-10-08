@@ -161,7 +161,7 @@ async def test_snapshot_id_on_client_managed_agent_raises_agent_init_error() -> 
     assert exc.value.status == 'FAILED_PRECONDITION'
     assert exc.value.reason is RuntimeErrorReason.SESSION_STORE_NOT_CONFIGURED
     assert 'no store configured' in str(exc.value)
-    assert 'SESSION_STORE_NOT_CONFIGURED' not in exc.value.original_message
+    assert 'SESSION_STORE_NOT_CONFIGURED' not in exc.value.message
 
 
 @pytest.mark.asyncio
@@ -188,5 +188,5 @@ async def test_unknown_agent_raises_with_action_not_found() -> None:
 
     assert exc.value.status == 'NOT_FOUND'
     assert exc.value.reason is RuntimeErrorReason.ACTION_NOT_FOUND
-    assert "Agent 'ghost' not found" in exc.value.original_message
-    assert 'ACTION_NOT_FOUND' not in exc.value.original_message
+    assert "Agent 'ghost' not found" in exc.value.message
+    assert 'ACTION_NOT_FOUND' not in exc.value.message
