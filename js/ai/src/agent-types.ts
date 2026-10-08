@@ -450,11 +450,21 @@ export interface SessionSnapshot<S = unknown> {
 /**
  * Schema for the input of an agent's `getSnapshot` companion action. Provide
  * exactly one of `snapshotId` or `sessionId`. The `waitForSnapshot` companion
- * action takes the same request but requires `snapshotId`.
+ * action takes the same request but requires `snapshotId`, and ignores
+ * `metadataOnly`: a settled snapshot is what a wait is for.
  */
 export const GetSnapshotRequestSchema = z.object({
   snapshotId: z.string().optional(),
   sessionId: z.string().optional(),
+  /**
+   * Returns the snapshot's metadata only: status, finish reason, parent,
+   * session, timestamps, and error, with no state. The read is shaped exactly
+   * as a full read (status defaulting and heartbeat expiry need only the
+   * metadata), and a store that can read a row without loading its state
+   * does so. For callers that dispatch on where a task stands, this skips
+   * loading and serializing a potentially large conversation history.
+   */
+  metadataOnly: z.boolean().optional(),
 });
 
 /**

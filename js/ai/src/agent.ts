@@ -1433,6 +1433,7 @@ export type AgentFn<State> = (
 export const GetSnapshotDataInputSchema = z.object({
   snapshotId: z.string().optional(),
   sessionId: z.string().optional(),
+  metadataOnly: z.boolean().optional(),
 });
 
 /**
@@ -1441,6 +1442,11 @@ export const GetSnapshotDataInputSchema = z.object({
 export interface GetSnapshotDataInput {
   snapshotId?: string;
   sessionId?: string;
+  /**
+   * Returns the snapshot's metadata only, with no `state`: see
+   * {@link GetSnapshotRequestSchema}. A wait ignores it.
+   */
+  metadataOnly?: boolean;
   context?: ActionContext;
 }
 
@@ -2251,6 +2257,13 @@ export function defineCustomAgent<State = unknown>(
     const effective = isHeartbeatExpired(snapshot)
       ? { ...snapshot, status: 'expired' as const }
       : snapshot;
+    if (lookup.metadataOnly) {
+      // The shaping above needs only the metadata. The state is dropped here
+      // whether or not the store honored the hint, and the client transform,
+      // which shapes state, has nothing to run on.
+      const { state: _state, ...metadata } = effective;
+      return metadata;
+    }
     return toClientSnapshot(effective);
   };
 
@@ -2267,7 +2280,13 @@ export function defineCustomAgent<State = unknown>(
         message: `waitForSnapshotData requires a 'snapshotId' for agent '${config.name}'.`,
       });
     }
-    const { abortSignal, pollIntervalMs, ...lookup } = opts;
+    // A wait returns the settled snapshot in full, so it ignores metadataOnly.
+    const {
+      abortSignal,
+      pollIntervalMs,
+      metadataOnly: _metadataOnly,
+      ...lookup
+    } = opts;
     return waitForSnapshotInStore(
       config.store,
       opts.snapshotId,

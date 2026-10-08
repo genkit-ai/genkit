@@ -119,6 +119,19 @@ function selectLeafSnapshot<S>(
 /**
  * In-memory implementation of persistent Session Store.
  */
+/**
+ * Copies a stored snapshot for a reader, leaving the state out of a
+ * metadata-only read rather than copying it only to be dropped.
+ */
+function cloneSnapshot<S>(
+  snap: SessionSnapshot<S>,
+  metadataOnly?: boolean
+): SessionSnapshot<S> {
+  if (!metadataOnly) return structuredClone(snap);
+  const { state: _state, ...metadata } = snap;
+  return structuredClone(metadata);
+}
+
 export class InMemorySessionStore<S = unknown> implements SessionStore<S> {
   private snapshots = new Map<string, SessionSnapshot<S>>();
   private listeners = new Map<
@@ -145,7 +158,7 @@ export class InMemorySessionStore<S = unknown> implements SessionStore<S> {
     if (snapshotId) {
       const snap = this.snapshots.get(snapshotId);
       if (!snap) return undefined;
-      return structuredClone(snap);
+      return cloneSnapshot(snap, opts.metadataOnly);
     }
 
     // sessionId lookup: gather every snapshot belonging to this session and
@@ -161,7 +174,7 @@ export class InMemorySessionStore<S = unknown> implements SessionStore<S> {
       sessionId!,
       this.rejectBranchingSessions
     );
-    return leaf ? structuredClone(leaf) : undefined;
+    return leaf ? cloneSnapshot(leaf, opts.metadataOnly) : undefined;
   }
 
   async saveSnapshot(
