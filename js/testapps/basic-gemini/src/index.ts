@@ -351,7 +351,8 @@ ai.defineFlow('basic-hi-with-fallback', async () => {
     use: [
       fallback(ai, {
         models: [googleAI.model('gemini-flash-latest')],
-        statuses: ['UNKNOWN'],
+        // A model that doesn't exist fails with NOT_FOUND.
+        statuses: ['NOT_FOUND', 'UNKNOWN'],
       }),
     ],
   });

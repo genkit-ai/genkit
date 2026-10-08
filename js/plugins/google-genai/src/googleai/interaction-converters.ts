@@ -662,9 +662,13 @@ const GoogleSearchCallSchema = z.object({
   arguments: GoogleSearchArgsSchema,
 });
 
+// The API returns `result` as an array of items (e.g.
+// `[{ search_suggestions }]`), and it must be sent back the same way when the
+// history is resent (e.g. on the second turn of a tool loop). An object is
+// still accepted for parts saved before this was fixed.
 const GoogleSearchResultSchema = z.object({
   callId: z.string(),
-  result: RecordUnknownSchema,
+  result: z.union([z.array(RecordUnknownSchema), RecordUnknownSchema]),
 });
 
 const ExecutableCodeSchema = z.object({

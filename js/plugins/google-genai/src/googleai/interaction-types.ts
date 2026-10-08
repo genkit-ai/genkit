@@ -389,7 +389,9 @@ export declare interface GoogleSearchCallStep {
 export declare interface GoogleSearchResultStep {
   type: 'google_search_result';
   call_id: string;
-  result: Record<string, unknown>;
+  /** The search results, e.g. `[{ search_suggestions }]`. */
+  result: Record<string, unknown>[] | Record<string, unknown>;
+  is_error?: boolean;
   signature?: string;
 }
 

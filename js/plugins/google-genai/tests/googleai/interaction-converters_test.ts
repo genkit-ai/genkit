@@ -788,6 +788,26 @@ describe('Interaction Converters', () => {
       ]);
     });
 
+    it('should round-trip a google_search_result with an array result (tool loop history)', () => {
+      // Shape returned live by gemini-3.6-flash. Resending it in the history
+      // (second turn of a tool loop) used to fail Zod validation.
+      const step: Step = {
+        type: 'google_search_result',
+        call_id: 'call_1',
+        result: [{ search_suggestions: '<div>...</div>' }],
+        signature: 'sig-result',
+      };
+      const parts = fromInteractionStep(step);
+      assert.deepStrictEqual(toInteractionSteps([{ role: 'model', content: parts }]), [
+        {
+          type: 'google_search_result',
+          call_id: 'call_1',
+          result: [{ search_suggestions: '<div>...</div>' }],
+          signature: 'sig-result',
+        },
+      ]);
+    });
+
     it('should convert custom executableCode to code_execution_call step', () => {
       const messages: MessageData[] = [
         {
