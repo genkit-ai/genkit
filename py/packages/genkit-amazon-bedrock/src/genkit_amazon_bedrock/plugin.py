@@ -180,7 +180,7 @@ class Bedrock(Plugin):
             logger.debug('Bedrock resolve declined', model=name, kind='model', reason='embedding_model')
             return None
         if is_rerank_model(name):
-            # Same for rerank models, and there is no reranker action to offer.
+            # Same for rerank models; Genkit has no reranker support.
             logger.debug('Bedrock resolve declined', model=name, kind='model', reason='rerank_model')
             return None
         declared = self._declared_model_type(name)

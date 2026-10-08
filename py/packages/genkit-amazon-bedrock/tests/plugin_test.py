@@ -258,8 +258,8 @@ async def test_the_cross_guard_leaves_cohere_chat_models_alone() -> None:
 
 @pytest.mark.asyncio
 async def test_rerank_models_do_not_resolve_as_chat_models() -> None:
-    # Neither rerank family has a Converse path, and the plugin has no
-    # reranker action, so resolving one would only defer the failure.
+    # Neither rerank family has a Converse path and Genkit has no reranker
+    # support, so resolving one would only defer the failure.
     plugin = Bedrock(region='us-east-1')
     assert await plugin.resolve(ActionKind.MODEL, 'cohere.rerank-v3-5:0') is None
     assert await plugin.resolve(ActionKind.MODEL, 'amazon.rerank-v1:0') is None

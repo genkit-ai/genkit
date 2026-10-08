@@ -140,8 +140,8 @@ def strip_inference_profile_prefix(model_id: str) -> str:
     return model_id
 
 
-# Bedrock rerank families. Neither speaks Converse, and the plugin registers no
-# reranker action, so these IDs resolve to nothing.
+# Bedrock rerank families. Genkit has no reranker support and neither family
+# speaks Converse, so these IDs resolve to nothing.
 _RERANK_PATTERNS = ('cohere.rerank', 'amazon.rerank')
 
 
