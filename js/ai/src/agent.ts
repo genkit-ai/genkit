@@ -150,6 +150,15 @@ const WIND_DOWN_HEARTBEAT_BUDGET_MS = 5 * 60_000;
 const DEFAULT_SNAPSHOT_WAIT_POLL_INTERVAL_MS = 2_000;
 
 /**
+ * Default bound (ms) on how long one request to the `waitForSnapshot`
+ * companion action holds before it answers with the snapshot as it stands;
+ * see the agent's `maxSnapshotWaitMs`. It stays under the 29-second limit
+ * some API gateways apply, so a wait that outlives it costs a re-request,
+ * not a failed one.
+ */
+const DEFAULT_MAX_SNAPSHOT_WAIT_MS = 25_000;
+
+/**
  * Bound (ms) on one store read inside a wait. A wait is long by design and a
  * read is not, and only the wait can tell the two apart, so this is where a
  * hung store is caught: without it an unbounded wait would freeze on one
@@ -285,6 +294,8 @@ function withReadTimeout<T>(
  * {@link SNAPSHOT_WAIT_READ_RETRIES} consecutive failures; a dead end (the
  * request is rejected, the row is gone) surfaces at once, including on the
  * first read. Aborting `abortSignal` ends the wait with the signal's reason.
+ * Once `maxWaitMs` has passed, the wait re-reads and returns the snapshot as
+ * it stands, settled or not.
  */
 async function waitForSnapshotInStore<S>(
   store: SessionStore<S>,
@@ -293,11 +304,13 @@ async function waitForSnapshotInStore<S>(
   opts: {
     abortSignal?: AbortSignal;
     pollIntervalMs?: number;
+    maxWaitMs?: number;
     context?: ActionContext;
   }
 ): Promise<SessionSnapshot | undefined> {
   const { abortSignal } = opts;
   abortSignal?.throwIfAborted();
+  const deadline = Date.now() + (opts.maxWaitMs ?? Infinity);
 
   const subscribable = typeof store.onSnapshotStateChange === 'function';
   const pollIntervalMs =
@@ -380,10 +393,13 @@ async function waitForSnapshotInStore<S>(
           resolve();
           return;
         }
-        const timer = setTimeout(() => {
-          wake = undefined;
-          resolve();
-        }, intervalMs);
+        const timer = setTimeout(
+          () => {
+            wake = undefined;
+            resolve();
+          },
+          Math.max(0, Math.min(intervalMs, deadline - Date.now()))
+        );
         wake = () => {
           clearTimeout(timer);
           wake = undefined;
@@ -394,7 +410,10 @@ async function waitForSnapshotInStore<S>(
       const wokenByNotification = notified;
       notified = false;
       const cur = await readOrRetry();
-      if (cur !== RETRY && (!cur || isTerminalSnapshotStatus(cur.status))) {
+      if (
+        cur !== RETRY &&
+        (!cur || isTerminalSnapshotStatus(cur.status) || Date.now() >= deadline)
+      ) {
         return cur;
       }
       if (cur === RETRY || wokenByNotification) {
@@ -1501,8 +1520,9 @@ export interface Agent<State = unknown>
   /**
    * The `waitForSnapshot` companion action (`agent-wait`): `getSnapshot`'s
    * blocking counterpart, taking the same request (with `snapshotId`
-   * required) and returning the snapshot once it settles. Mount it next to
-   * the agent so a remote client follows a detached turn in one request.
+   * required) and returning the snapshot once it settles, or as it stands
+   * once `maxSnapshotWaitMs` passes. Mount it next to the agent so a remote
+   * client follows a detached turn without polling.
    */
   readonly waitForSnapshotAction: GetSnapshotDataAction<State>;
   readonly abortAgentAction: Action<
@@ -1786,6 +1806,15 @@ export function defineCustomAgent<State = unknown>(
     stateSchema?: z.ZodType<State>;
     store?: SessionStore<State>;
     clientTransform?: ClientTransform<State>;
+    /**
+     * How long (ms) one request to the `waitForSnapshot` companion action
+     * holds before it answers with the snapshot as it stands, still
+     * `pending` or `aborting`; `remoteAgent` then asks again. Keep it under
+     * the shortest request or idle timeout between clients and this server.
+     * Defaults to 25 seconds. A wait in process (`waitForSnapshotData`, or
+     * `waitForSnapshot` on the agent itself) is not limited.
+     */
+    maxSnapshotWaitMs?: number;
   },
   fn: AgentFn<State>
 ): Agent<State> {
@@ -2228,7 +2257,8 @@ export function defineCustomAgent<State = unknown>(
   // Waits through the same shaped read as `resolveSnapshot`, so a settled
   // snapshot comes back exactly as a `getSnapshotData` read would return it.
   const runWait = async (
-    opts: WaitForSnapshotDataInput
+    opts: WaitForSnapshotDataInput,
+    maxWaitMs?: number
   ): Promise<SessionSnapshot | undefined> => {
     requireStore(config.store, 'waitForSnapshotData', config.name);
     if (!opts.snapshotId) {
@@ -2242,7 +2272,7 @@ export function defineCustomAgent<State = unknown>(
       config.store,
       opts.snapshotId,
       () => resolveSnapshot(lookup),
-      { abortSignal, pollIntervalMs, context: lookup.context }
+      { abortSignal, pollIntervalMs, maxWaitMs, context: lookup.context }
     );
   };
 
@@ -2280,12 +2310,23 @@ export function defineCustomAgent<State = unknown>(
   // one to the other keeps its payload, but it requires the snapshot ID: a
   // session's latest snapshot is whichever one is latest at resolution time,
   // and waiting on that is a race with the session's next turn. The wait runs
-  // on the request's abort signal, so a client that hangs up ends it.
+  // on the request's abort signal, so a client that hangs up ends it, and
+  // holds one request for at most `maxSnapshotWaitMs`, so a long task does
+  // not outlive a proxy's or a platform's request timeout: the client asks
+  // again.
+  const maxSnapshotWaitMs =
+    config.maxSnapshotWaitMs ?? DEFAULT_MAX_SNAPSHOT_WAIT_MS;
+  if (!(maxSnapshotWaitMs > 0)) {
+    throw new GenkitError({
+      status: 'INVALID_ARGUMENT',
+      message: `maxSnapshotWaitMs must be positive for agent '${config.name}', got ${maxSnapshotWaitMs}.`,
+    });
+  }
   const waitForSnapshotAction = defineAction(
     registry,
     {
       name: config.name,
-      description: `Waits until a snapshot of ${config.name} settles (completed, failed, aborted, or expired) and returns it. Requires a snapshotId.`,
+      description: `Waits until a snapshot of ${config.name} settles (completed, failed, aborted, or expired) and returns it, or returns it as it stands once the server's wait limit passes. Requires a snapshotId.`,
       actionType: 'agent-wait',
       inputSchema: GetSnapshotRequestSchema,
       outputSchema: SessionSnapshotSchema,
@@ -2297,12 +2338,15 @@ export function defineCustomAgent<State = unknown>(
           message: `waitForSnapshot requires a 'snapshotId' for agent '${config.name}'.`,
         });
       }
-      const snap = await runWait({
-        ...lookup,
-        snapshotId: lookup.snapshotId,
-        context: getContext(),
-        abortSignal,
-      });
+      const snap = await runWait(
+        {
+          ...lookup,
+          snapshotId: lookup.snapshotId,
+          context: getContext(),
+          abortSignal,
+        },
+        maxSnapshotWaitMs
+      );
       if (!snap) {
         throw new GenkitError({
           status: 'NOT_FOUND',
@@ -2428,6 +2472,15 @@ export function definePromptAgent<
     stateSchema?: z.ZodType<State>;
     store?: SessionStore<State>;
     clientTransform?: ClientTransform<State>;
+    /**
+     * How long (ms) one request to the `waitForSnapshot` companion action
+     * holds before it answers with the snapshot as it stands, still
+     * `pending` or `aborting`; `remoteAgent` then asks again. Keep it under
+     * the shortest request or idle timeout between clients and this server.
+     * Defaults to 25 seconds. A wait in process (`waitForSnapshotData`, or
+     * `waitForSnapshot` on the agent itself) is not limited.
+     */
+    maxSnapshotWaitMs?: number;
   }
 ) {
   let cachedPromptAction: PromptAction | undefined;
@@ -2610,6 +2663,7 @@ export function definePromptAgent<
       stateSchema: config.stateSchema,
       store: config.store,
       clientTransform: config.clientTransform,
+      maxSnapshotWaitMs: config.maxSnapshotWaitMs,
     },
     fn
   );
@@ -2729,6 +2783,15 @@ export interface AgentConfig<
   store?: SessionStore<State>;
   clientTransform?: ClientTransform<State>;
   /**
+   * How long (ms) one request to the `waitForSnapshot` companion action
+   * holds before it answers with the snapshot as it stands, still
+   * `pending` or `aborting`; `remoteAgent` then asks again. Keep it under
+   * the shortest request or idle timeout between clients and this server.
+   * Defaults to 25 seconds. A wait in process (`waitForSnapshotData`, or
+   * `waitForSnapshot` on the agent itself) is not limited.
+   */
+  maxSnapshotWaitMs?: number;
+  /**
    * Input values for the prompt's input variables. Lets the same prompt
    * definition power differently-customized agents (e.g. supplying a different
    * `role` or `tone`). Type-checked against the prompt's `input.schema`.
@@ -2752,8 +2815,14 @@ export function defineAgent<
 >(registry: Registry, config: AgentConfig<State, I>): Agent<State> {
   // Extract agent-specific fields from the combined config; the rest is
   // forwarded to definePrompt.
-  const { stateSchema, store, clientTransform, promptInput, ...promptConfig } =
-    config;
+  const {
+    stateSchema,
+    store,
+    clientTransform,
+    maxSnapshotWaitMs,
+    promptInput,
+    ...promptConfig
+  } = config;
 
   // Register the prompt.
   definePrompt(registry, promptConfig);
@@ -2766,5 +2835,6 @@ export function defineAgent<
     stateSchema,
     store,
     clientTransform,
+    maxSnapshotWaitMs,
   });
 }

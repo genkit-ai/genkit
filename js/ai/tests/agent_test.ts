@@ -2469,14 +2469,18 @@ describe('Agent', () => {
      * is called (or the invocation is aborted), so a detached invocation stays
      * pending for exactly as long as a test needs.
      */
-    function defineGatedAgent(name: string, store: SessionStore<S>) {
+    function defineGatedAgent(
+      name: string,
+      store: SessionStore<S>,
+      config: { maxSnapshotWaitMs?: number } = {}
+    ) {
       let release!: () => void;
       const gate = new Promise<void>((resolve) => {
         release = resolve;
       });
       const agent = defineCustomAgent<S>(
         new Registry(),
-        { name, store },
+        { name, store, ...config },
         async (sess, { abortSignal }) => {
           await sess.run(async () => {
             await Promise.race([
@@ -2659,6 +2663,33 @@ describe('Agent', () => {
       });
       assert.strictEqual(snap?.status, 'expired');
       assert.strictEqual(reads, 2);
+    });
+
+    it('answers the companion action with the snapshot as it stands once its limit passes', async () => {
+      const store = new InMemorySessionStore<S>();
+      const { agent, release } = defineGatedAgent('waitLimit', store, {
+        maxSnapshotWaitMs: 20,
+      });
+      const snapshotId = await detach(agent);
+
+      // One request holds for at most the limit; the client asks again.
+      const answered = await agent.waitForSnapshotAction({ snapshotId });
+      assert.strictEqual(answered.status, 'pending');
+
+      // A wait in process is not limited.
+      const waiting = agent.waitForSnapshotData({ snapshotId });
+      release();
+      assert.strictEqual((await waiting)?.status, 'completed');
+    });
+
+    it('rejects a wait limit that is not positive', () => {
+      assert.throws(
+        () =>
+          defineGatedAgent('waitLimitZero', new InMemorySessionStore<S>(), {
+            maxSnapshotWaitMs: 0,
+          }),
+        (e: any) => e.status === 'INVALID_ARGUMENT'
+      );
     });
 
     it('returns undefined for a missing snapshot and NOT_FOUND via the companion action', async () => {
