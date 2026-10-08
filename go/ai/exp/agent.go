@@ -3251,6 +3251,16 @@ func agentLoop[State any](r api.Registry, prompt ai.Prompt, defaultInput any) Ag
 					return nil
 				},
 			)
+			// A refusal is a failed turn. [ai.Generate] hands a blocked
+			// response back as data, but a turn that ends on one has no
+			// answer to commit, and continuing from it would send the model
+			// its own refusal.
+			if err == nil && modelResp != nil && modelResp.FinishReason == ai.FinishReasonBlocked {
+				err = status.Errorf(ai.ErrGenerationBlocked, "generation blocked")
+				if modelResp.FinishMessage != "" {
+					err = status.Errorf(ai.ErrGenerationBlocked, "generation blocked: %s", modelResp.FinishMessage)
+				}
+			}
 			if err != nil {
 				// The partial's history ends at a turn seam (see
 				// [ai.Generate]), so it is a conversation the caller can
@@ -3261,7 +3271,19 @@ func agentLoop[State any](r api.Registry, prompt ai.Prompt, defaultInput any) Ag
 				if modelResp == nil || modelResp.Request == nil {
 					return nil, fmt.Errorf("generate: %w", err)
 				}
-				sess.SetMessages(turnSessionMessages(modelResp.History()))
+				// A loop failure (failed or aborted) leaves the seam as its
+				// history: no message from the failing step, or the resumed
+				// message a failed restart recorded its siblings on. Any
+				// other reason is a completion the model finished and the
+				// turn rejected (blocked, or output off the schema). Its
+				// message is not one to continue from, since a re-attempt
+				// would send the model its own rejected output, so only the
+				// request's messages are committed.
+				committed := modelResp.History()
+				if modelResp.FinishReason != ai.FinishReasonFailed && modelResp.FinishReason != ai.FinishReasonAborted {
+					committed = modelResp.Request.Messages
+				}
+				sess.SetMessages(turnSessionMessages(committed))
 				// No reason: the TurnResult here only says the turn committed,
 				// and [SessionRunner.Run] derives the rest from the error it
 				// is handed. The success arm forwards generate's reason
