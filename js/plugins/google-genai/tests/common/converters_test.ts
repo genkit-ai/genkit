@@ -1542,6 +1542,293 @@ describe('toGeminiTool', () => {
     assert.deepStrictEqual(got, want);
   });
 
+  it('should resolve array item references in MCP tool schemas', () => {
+    const got = toGeminiTool({
+      name: 'create_draft',
+      description: 'Create a draft',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          attachments: {
+            type: 'array',
+            items: { $ref: '#/$defs/Attachment' },
+          },
+        },
+        $defs: {
+          Attachment: {
+            type: 'object',
+            properties: { content: { type: 'string' } },
+            required: ['content'],
+          },
+        },
+      },
+    });
+
+    assert.deepStrictEqual(got.parameters?.properties?.attachments, {
+      type: SchemaType.ARRAY,
+      items: {
+        type: SchemaType.OBJECT,
+        properties: { content: { type: SchemaType.STRING } },
+        required: ['content'],
+      },
+    });
+  });
+
+  it('should resolve a root reference with definitions beside it', () => {
+    const got = toGeminiTool({
+      name: 'root_ref',
+      description: 'Tool with a referenced input schema',
+      inputSchema: {
+        $ref: '#/$defs/Args',
+        $defs: {
+          Args: {
+            type: 'object',
+            properties: { query: { type: 'string' } },
+            required: ['query'],
+          },
+        },
+      },
+    });
+    assert.deepStrictEqual(got.parameters, {
+      type: SchemaType.OBJECT,
+      properties: { query: { type: SchemaType.STRING } },
+      required: ['query'],
+    });
+  });
+
+  it('should allow Genkit annotations beside a tool schema reference', () => {
+    const got = toGeminiTool({
+      name: 'annotated_ref',
+      description: 'Tool with an annotated reference',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          name: {
+            $ref: '#/$defs/Name',
+            'x-genkit-ui-label': 'Name',
+          },
+        },
+        $defs: { Name: { type: 'string' } },
+      },
+    });
+    assert.deepStrictEqual(got.parameters?.properties?.name, {
+      type: SchemaType.STRING,
+    });
+  });
+
+  it('should reject unresolved tool schema references before sending them to Gemini', () => {
+    assert.throws(
+      () =>
+        toGeminiTool({
+          name: 'bad_ref',
+          description: 'Tool with a missing definition',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              items: { type: 'array', items: { $ref: '#/$defs/Missing' } },
+            },
+          },
+        }),
+      /Unresolved tool schema reference #\/\$defs\/Missing/
+    );
+  });
+
+  it('should reject constraints beside a tool schema reference', () => {
+    assert.throws(
+      () =>
+        toGeminiTool({
+          name: 'bad_combination',
+          description: 'Tool with intersecting constraints',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              item: {
+                $ref: '#/$defs/Item',
+                properties: { label: { type: 'string' } },
+              },
+            },
+            $defs: {
+              Item: {
+                type: 'object',
+                properties: { id: { type: 'string' } },
+                required: ['id'],
+              },
+            },
+          },
+        }),
+      /Unsupported sibling keyword properties alongside tool schema reference/
+    );
+  });
+
+  it('should reject nullable beside a tool schema reference', () => {
+    assert.throws(
+      () =>
+        toGeminiTool({
+          name: 'nullable_ref',
+          description: 'Tool with a nullable reference',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              value: { $ref: '#/$defs/Value', nullable: true },
+            },
+            $defs: { Value: { type: 'string', nullable: false } },
+          },
+        }),
+      /Unsupported sibling keyword nullable alongside tool schema reference/
+    );
+  });
+
+  it('should reject nested schema resources with their own reference scope', () => {
+    assert.throws(
+      () =>
+        toGeminiTool({
+          name: 'nested_resource',
+          description: 'Tool with a nested schema resource',
+          inputSchema: {
+            type: 'object',
+            properties: { item: { $ref: '#/$defs/Item' } },
+            $defs: {
+              Item: {
+                $id: 'https://example.test/item',
+                type: 'object',
+                properties: { name: { $ref: '#/$defs/Name' } },
+                $defs: { Name: { type: 'string' } },
+              },
+              Name: { type: 'integer' },
+            },
+          },
+        }),
+      /nested schema resource/i
+    );
+  });
+
+  it('should reject pointers that cross nested schema resource boundaries', () => {
+    assert.throws(
+      () =>
+        toGeminiTool({
+          name: 'crossed_resource',
+          description: 'Tool with a pointer into a nested resource',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              item: { $ref: '#/$defs/Item/properties/name' },
+            },
+            $defs: {
+              Item: {
+                $id: 'https://example.test/item',
+                type: 'object',
+                properties: { name: { $ref: '#/$defs/Name' } },
+                $defs: { Name: { type: 'string' } },
+              },
+              Name: { type: 'integer' },
+            },
+          },
+        }),
+      /Tool schema reference crosses a nested schema resource/
+    );
+  });
+
+  it('should allow nested schema IDs when no references need resolving', () => {
+    const got = toGeminiTool({
+      name: 'nested_id',
+      description: 'Tool with a nested schema ID',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          item: {
+            $id: 'https://example.test/item',
+            type: 'object',
+            properties: { name: { type: 'string' } },
+          },
+        },
+      },
+    });
+    assert.deepStrictEqual(got.parameters?.properties?.item, {
+      type: SchemaType.OBJECT,
+      properties: { name: { type: SchemaType.STRING } },
+      required: undefined,
+    });
+  });
+
+  it('should preserve the fallback for boolean item schemas', () => {
+    const got = toGeminiTool({
+      name: 'boolean_item',
+      description: 'Tool with a boolean item schema',
+      inputSchema: {
+        type: 'object',
+        properties: { items: { type: 'array', items: true } },
+      },
+    });
+    assert.deepStrictEqual(got.parameters?.properties?.items, {
+      type: SchemaType.ARRAY,
+      items: undefined,
+    });
+  });
+
+  it('should preserve the fallback for a reference to a boolean-true schema', () => {
+    const got = toGeminiTool({
+      name: 'boolean_ref',
+      description: 'Tool with an unconstrained referenced item',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          items: { type: 'array', items: { $ref: '#/$defs/Any' } },
+        },
+        $defs: { Any: true },
+      },
+    });
+    assert.deepStrictEqual(got.parameters?.properties?.items, {
+      type: SchemaType.ARRAY,
+      items: undefined,
+    });
+  });
+
+  it('should bound expansion of referenced tool schemas', () => {
+    const defs: Record<string, any> = { D14: { type: 'string' } };
+    for (let i = 13; i >= 0; i--) {
+      defs[`D${i}`] = {
+        type: 'object',
+        properties: {
+          left: { $ref: `#/$defs/D${i + 1}` },
+          right: { $ref: `#/$defs/D${i + 1}` },
+        },
+      };
+    }
+    assert.throws(
+      () =>
+        toGeminiTool({
+          name: 'large_schema',
+          description: 'Tool with repeated references',
+          inputSchema: {
+            type: 'object',
+            properties: { root: { $ref: '#/$defs/D0' } },
+            $defs: defs,
+          },
+        }),
+      /Tool schema is too large to convert/
+    );
+  });
+
+  it('should reject reference chains before they overflow the call stack', () => {
+    const defs: Record<string, any> = { D200: { type: 'string' } };
+    for (let i = 199; i >= 0; i--) {
+      defs[`D${i}`] = { $ref: `#/$defs/D${i + 1}` };
+    }
+    assert.throws(
+      () =>
+        toGeminiTool({
+          name: 'deep_schema',
+          description: 'Tool with a deep reference chain',
+          inputSchema: {
+            type: 'object',
+            properties: { value: { $ref: '#/$defs/D0' } },
+            $defs: defs,
+          },
+        }),
+      /Tool schema is too deep to convert/
+    );
+  });
+
   it('should throw an error for unsupported schema types', () => {
     assert.throws(
       () =>
