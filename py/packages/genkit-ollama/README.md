@@ -31,6 +31,7 @@ use before running Genkit:
 
 ```bash
 ollama pull llama3.2
+ollama pull llava
 ollama pull nomic-embed-text
 ```
 
@@ -38,15 +39,10 @@ ollama pull nomic-embed-text
 
 ```python
 from genkit import Genkit
-from genkit_ollama import EmbeddingDefinition, ModelDefinition, Ollama
+from genkit_ollama import Ollama
 
 ai = Genkit(
-    plugins=[
-        Ollama(
-            models=[ModelDefinition(name='llama3.2')],
-            embedders=[EmbeddingDefinition(name='nomic-embed-text')],
-        )
-    ],
+    plugins=[Ollama(models=['llama3.2', 'llava'], embedders=['nomic-embed-text'])],
     model='ollama/llama3.2',
 )
 
@@ -159,16 +155,18 @@ Ollama(request_headers=auth_headers, timeout=60.0)
 Callable headers are re-evaluated on every request, so short-lived tokens refresh
 automatically. A static dict is applied once to a cached client.
 
-### Vision models
+### Model capabilities
 
 ```python
-from genkit_ollama import ModelDefinition, Ollama, OllamaSupports
-
-Ollama(models=[ModelDefinition(name='llava', supports=OllamaSupports(media=True))])
+Ollama(models=['llama3.2', 'llava'], embedders=['nomic-embed-text'])
 ```
 
-Media support is opt-in per model to avoid advertising a capability the
-underlying model does not actually have.
+`models` and `embedders` take names. The plugin asks the server's `/api/show`
+once per model: `vision` turns on media input, `tools` turns on tool calling, and
+a model with no chat template goes through `/api/generate` instead of `/api/chat`.
+If the probe fails (server down, model not pulled, an Ollama too old to report
+`capabilities`), the model keeps the generic defaults: `/api/chat` with tools and
+media advertised. Unlisted names resolve the same way on first use.
 
 ### Troubleshooting
 

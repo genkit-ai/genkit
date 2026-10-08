@@ -16,17 +16,19 @@
 
 """Unit tests for Ollama Plugin."""
 
+import asyncio
 import unittest
+from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import ollama as ollama_api
 import pytest
-from genkit_ollama import Ollama, OllamaConnectionError, RequestHeaderParams, ollama_name
-from genkit_ollama._embedders import EmbeddingDefinition
+from genkit_ollama import Ollama, OllamaConnectionError, RequestHeaderParams, _plugin as plugin_module
 from genkit_ollama._errors import wrap_connection_errors
-from genkit_ollama._models import ModelDefinition, OllamaConfig, OllamaModel, OllamaSupports
+from genkit_ollama._models import OllamaConfig, OllamaModel, _ResolvedModel
+from genkit_ollama._plugin import ollama_name
 from pydantic import BaseModel
 
 from genkit import Document, Genkit, GenkitError, Message, ModelResponse, Part, Role
@@ -40,22 +42,20 @@ class TestOllamaInit(unittest.TestCase):
 
     def test_init_with_models(self) -> None:
         """Test correct propagation of models param."""
-        model_ref = ModelDefinition(name='test_model')
-        plugin = Ollama(models=[model_ref])
+        plugin = Ollama(models=['test_model'])
 
-        assert plugin.models[0] == model_ref
+        assert plugin.models == ['test_model']
 
     def test_init_with_embedders(self) -> None:
         """Test correct propagation of embedders param."""
-        embedder_ref = EmbeddingDefinition(name='test_embedder')
-        plugin = Ollama(embedders=[embedder_ref])
+        plugin = Ollama(embedders=['test_embedder'])
 
-        assert plugin.embedders[0] == embedder_ref
+        assert plugin.embedders == ['test_embedder']
 
     def test_init_with_options(self) -> None:
         """Test correct propagation of other options param."""
-        model_ref = ModelDefinition(name='test_model')
-        embedder_ref = EmbeddingDefinition(name='test_embedder')
+        model_ref = 'test_model'
+        embedder_ref = 'test_embedder'
         server_address = 'new.server.address'
         headers = {'Content-Type': 'json'}
 
@@ -74,18 +74,15 @@ class TestOllamaInit(unittest.TestCase):
 
 @pytest.mark.asyncio
 async def test_initialize(ollama_plugin_instance: Ollama) -> None:
-    """Test init method of Ollama plugin."""
-    model_ref = ModelDefinition(name='test_model')
-    embedder_ref = EmbeddingDefinition(name='test_embedder')
-    ollama_plugin_instance.models = [model_ref]
-    ollama_plugin_instance.embedders = [embedder_ref]
+    """init registers embedders only; models wait for their /api/show probe."""
+    ollama_plugin_instance.models = ['test_model']
+    ollama_plugin_instance.embedders = ['test_embedder']
 
     result = await ollama_plugin_instance.init()
 
-    # init returns actions for pre-configured models and embedders
-    assert len(result) == 2
-    assert result[0].kind == ActionKind.MODEL
-    assert result[1].kind == ActionKind.EMBEDDER
+    # An eagerly registered model would carry generic metadata and win over
+    # the probed listing row in the Dev UI catalog.
+    assert [a.kind for a in result] == [ActionKind.EMBEDDER]
 
 
 # _initialize_models and _initialize_embedders methods no longer exist in new plugin architecture
@@ -126,8 +123,8 @@ async def test_resolve_action(kind: ActionKind, name: str, ollama_plugin_instanc
 @pytest.mark.asyncio
 async def test_create_model_action_chat_with_media() -> None:
     """A CHAT model with media support advertises multiturn/tools/media."""
-    plugin = Ollama(models=[ModelDefinition(name='llava', api_type='chat', supports=OllamaSupports(media=True))])
-    action = plugin._create_model_action('llava')
+    plugin = Ollama()
+    action = plugin._create_model_action(_ResolvedModel(name='llava', api_type='chat', media=True))
 
     supports = cast(dict[str, Any], cast(dict[str, Any], action.metadata)['model']['supports'])
     assert supports['multiturn'] is True
@@ -138,8 +135,8 @@ async def test_create_model_action_chat_with_media() -> None:
 @pytest.mark.asyncio
 async def test_create_model_action_generate_gates_capabilities() -> None:
     """A GENERATE model reports multiturn/tools/media all False."""
-    plugin = Ollama(models=[ModelDefinition(name='gen', api_type='generate')])
-    action = plugin._create_model_action('gen')
+    plugin = Ollama()
+    action = plugin._create_model_action(_ResolvedModel(name='gen', api_type='generate'))
 
     supports = cast(dict[str, Any], cast(dict[str, Any], action.metadata)['model']['supports'])
     assert supports['multiturn'] is False
@@ -150,11 +147,11 @@ async def test_create_model_action_generate_gates_capabilities() -> None:
 
 @pytest.mark.asyncio
 async def test_dynamic_model_advertises_generic_capabilities() -> None:
-    """A dynamically-resolved model (not pre-configured) advertises the full
-    generic capability set, matching the JS GENERIC_MODEL_INFO and the Go
-    defaultOllamaSupports for un-probed models."""
+    """The fallback definition advertises the full generic capability set,
+    matching the JS GENERIC_MODEL_INFO and the Go defaultOllamaSupports for
+    un-probed models."""
     plugin = Ollama()
-    action = plugin._create_model_action('some-unconfigured-model')
+    action = plugin._create_model_action(_ResolvedModel(name='some-unconfigured-model'))
 
     supports = cast(dict[str, Any], cast(dict[str, Any], action.metadata)['model']['supports'])
     assert supports['multiturn'] is True
@@ -166,8 +163,8 @@ async def test_dynamic_model_advertises_generic_capabilities() -> None:
 @pytest.mark.asyncio
 async def test_create_model_action_custom_options_is_ollama_config() -> None:
     """The model action advertises OllamaConfig (with Ollama-only knobs) as its schema."""
-    plugin = Ollama(models=[ModelDefinition(name='m')])
-    action = plugin._create_model_action('m')
+    plugin = Ollama()
+    action = plugin._create_model_action(_ResolvedModel(name='m'))
 
     model_meta = cast(dict[str, Any], cast(dict[str, Any], action.metadata)['model'])
     assert model_meta['customOptions'] == to_json_schema(OllamaConfig)
@@ -335,14 +332,13 @@ async def test_model_action_passes_request_context_to_header_callable() -> None:
         captured['params'] = params
         return {'Authorization': 'Bearer tok'}
 
-    model_def = ModelDefinition(name='m', api_type='chat')
-    plugin = Ollama(models=[model_def], server_address='http://example:11434', request_headers=make_headers)
+    plugin = Ollama(models=['m'], server_address='http://example:11434', request_headers=make_headers)
 
     sdk_client = AsyncMock()
     sdk_client.chat.return_value = ollama_api.ChatResponse(message=ollama_api.Message(role='assistant', content='hi'))
     sdk_client._client.aclose = AsyncMock()
 
-    action = plugin._create_model_action('m')
+    action = plugin._create_model_action(_ResolvedModel(name='m', api_type='chat'))
     request = ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('Hello')])])
 
     with patch('ollama.AsyncClient', return_value=sdk_client) as async_client:
@@ -350,7 +346,7 @@ async def test_model_action_passes_request_context_to_header_callable() -> None:
 
     params = cast(RequestHeaderParams, captured['params'])
     assert params.server_address == 'http://example:11434'
-    assert params.model is model_def
+    assert params.model == 'm'
     assert params.model_request is request
     assert params.embed_request is None
     # The resolved header is applied to the freshly built per-request client.
@@ -369,7 +365,7 @@ async def test_embedder_action_passes_request_context_to_header_callable() -> No
         return {'X-Token': 'abc'}
 
     plugin = Ollama(
-        embedders=[EmbeddingDefinition(name='e')],
+        embedders=['e'],
         server_address='http://example:11434',
         request_headers=make_headers,
     )
@@ -386,7 +382,7 @@ async def test_embedder_action_passes_request_context_to_header_callable() -> No
 
     params = cast(RequestHeaderParams, captured['params'])
     assert params.server_address == 'http://example:11434'
-    assert params.model is not None and params.model.name == 'e'
+    assert params.model == 'e'
     assert params.embed_request is request
     assert params.model_request is None
     sdk_client._client.aclose.assert_awaited_once()
@@ -469,7 +465,7 @@ async def test_model_action_wraps_connection_error() -> None:
     The ollama SDK converts ``httpx.ConnectError`` into a builtin
     ``ConnectionError`` before our wrapper sees it, so that is what we simulate.
     """
-    plugin = Ollama(models=[ModelDefinition(name='m', api_type='chat')])
+    plugin = Ollama()
 
     client_mock = MagicMock()
     client_mock.chat = AsyncMock(side_effect=ConnectionError('Failed to connect to Ollama.'))
@@ -477,7 +473,7 @@ async def test_model_action_wraps_connection_error() -> None:
     # in before resolving the action.
     plugin.client = lambda: client_mock
 
-    action = plugin._create_model_action('m')
+    action = plugin._create_model_action(_ResolvedModel(name='m', api_type='chat'))
     request = ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('Hello')])])
 
     with pytest.raises(OllamaConnectionError):
@@ -487,13 +483,13 @@ async def test_model_action_wraps_connection_error() -> None:
 @pytest.mark.asyncio
 async def test_model_action_wraps_transport_timeout() -> None:
     """Timeouts the SDK does not intercept (httpx.TransportError) are also wrapped."""
-    plugin = Ollama(models=[ModelDefinition(name='m', api_type='chat')])
+    plugin = Ollama()
 
     client_mock = MagicMock()
     client_mock.chat = AsyncMock(side_effect=httpx.ReadTimeout('timed out'))
     plugin.client = lambda: client_mock
 
-    action = plugin._create_model_action('m')
+    action = plugin._create_model_action(_ResolvedModel(name='m', api_type='chat'))
     request = ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('Hello')])])
 
     with pytest.raises(OllamaConnectionError):
@@ -508,7 +504,7 @@ async def test_model_action_does_not_wrap_media_fetch_error() -> None:
     call. That transport failure must not be relabelled "Cannot reach the Ollama
     server", which would point users at the wrong fix.
     """
-    plugin = Ollama(models=[ModelDefinition(name='m', api_type='chat', supports=OllamaSupports(media=True))])
+    plugin = Ollama()
 
     # The Ollama SDK client must never be reached: image resolution fails first.
     client_mock = MagicMock()
@@ -518,7 +514,7 @@ async def test_model_action_does_not_wrap_media_fetch_error() -> None:
     image_client = MagicMock()
     image_client.get = AsyncMock(side_effect=httpx.ConnectError('image host unreachable'))
 
-    action = plugin._create_model_action('m')
+    action = plugin._create_model_action(_ResolvedModel(name='m', api_type='chat'))
     request = ModelRequest(
         messages=[
             Message(
@@ -543,7 +539,7 @@ async def test_embedder_action_wraps_connection_error() -> None:
     Mirrors the model/list_actions paths so the embedder endpoint's connection
     wrapping cannot silently regress.
     """
-    plugin = Ollama(embedders=[EmbeddingDefinition(name='e')])
+    plugin = Ollama(embedders=['e'])
 
     client_mock = MagicMock()
     client_mock.embed = AsyncMock(side_effect=ConnectionError('Failed to connect to Ollama.'))
@@ -638,3 +634,297 @@ async def test_generate_ollama_id_with_ollama_segment_sends_id_unchanged(monkeyp
 
     assert response.text == 'ok'
     assert seen == ['ollama/llama3']
+
+
+def _show(capabilities: list[str] | None, template: str | None = '{{ range .Messages }}{{ .Content }}{{ end }}') -> Any:
+    """An /api/show answer as the SDK parses it."""
+    body: dict[str, Any] = {'template': template, 'model_info': {}}
+    if capabilities is not None:
+        body['capabilities'] = capabilities
+    return ollama_api.ShowResponse.model_validate(body)
+
+
+def _plugin_with_show(show: AsyncMock, **kwargs: Any) -> tuple[Ollama, MagicMock]:
+    plugin = Ollama(**kwargs)
+    client_mock = MagicMock()
+    client_mock.show = show
+    plugin.client = lambda: client_mock
+    return plugin, client_mock
+
+
+async def _supports(plugin: Ollama, name: str) -> dict[str, Any]:
+    action = await plugin.resolve(ActionKind.MODEL, name)
+    assert action is not None
+    return cast(dict[str, Any], cast(dict[str, Any], action.metadata)['model']['supports'])
+
+
+@pytest.mark.asyncio
+async def test_resolve_reads_tools_and_vision_from_show() -> None:
+    """A vision + tools model advertises both, on /api/chat."""
+    show = AsyncMock(return_value=_show(['completion', 'tools', 'vision']))
+    plugin, _ = _plugin_with_show(show, models=['llava'])
+
+    supports = await _supports(plugin, 'llava')
+
+    assert supports['tools'] is True
+    assert supports['media'] is True
+    assert supports['multiturn'] is True
+    show.assert_awaited_once_with('llava')
+
+
+@pytest.mark.asyncio
+async def test_resolve_turns_off_what_show_does_not_report() -> None:
+    """A text-only chat model loses the generic tools and media flags."""
+    show = AsyncMock(return_value=_show(['completion']))
+    plugin, _ = _plugin_with_show(show)
+
+    supports = await _supports(plugin, 'gemma2')
+
+    assert supports['tools'] is False
+    assert supports['media'] is False
+    assert supports['multiturn'] is True
+
+
+@pytest.mark.asyncio
+async def test_resolve_routes_an_embedding_model_off_chat_capabilities() -> None:
+    """An embedding model reports neither tools nor vision, so neither is advertised."""
+    show = AsyncMock(return_value=_show(['embedding'], template=''))
+    plugin, _ = _plugin_with_show(show)
+
+    supports = await _supports(plugin, 'nomic-embed-text')
+
+    assert supports['tools'] is False
+    assert supports['media'] is False
+
+
+@pytest.mark.parametrize('template', ['{{ .Prompt }}', '', None])
+@pytest.mark.asyncio
+async def test_a_template_less_model_uses_generate(template: str | None) -> None:
+    """No chat template means /api/generate; the call goes there, not to /api/chat."""
+    show = AsyncMock(return_value=_show(['completion'], template=template))
+    plugin, client_mock = _plugin_with_show(show)
+    client_mock.generate = AsyncMock(return_value=ollama_api.GenerateResponse(response='Smoked Salmon Tartine'))
+    client_mock.chat = AsyncMock()
+
+    action = await plugin.resolve(ActionKind.MODEL, 'llama2-base')
+    assert action is not None
+    supports = cast(dict[str, Any], cast(dict[str, Any], action.metadata)['model']['supports'])
+    assert supports['multiturn'] is False
+
+    request = ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('Suggest a dish.')])])
+    await action._fn(request, None)
+
+    client_mock.generate.assert_awaited_once()
+    client_mock.chat.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_a_natively_rendered_chat_model_stays_on_chat() -> None:
+    """A raw template next to tools means the server renders chat itself."""
+    show = AsyncMock(return_value=_show(['completion', 'tools', 'thinking'], template='{{ .Prompt }}'))
+    plugin, _ = _plugin_with_show(show)
+
+    supports = await _supports(plugin, 'gpt-oss')
+
+    assert supports['multiturn'] is True
+    assert supports['tools'] is True
+
+
+@pytest.mark.parametrize(
+    'error',
+    [
+        ollama_api.ResponseError('model "llava" not found', 404),
+        ConnectionError('Failed to connect to Ollama.'),
+        httpx.ConnectError('refused'),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_failed_probe_falls_back_to_generic_chat(error: Exception) -> None:
+    """Server down or model missing: today's dynamic defaults, and resolve still succeeds."""
+    plugin, _ = _plugin_with_show(AsyncMock(side_effect=error))
+
+    action = await plugin.resolve(ActionKind.MODEL, 'llava')
+
+    assert action is not None
+    supports = cast(dict[str, Any], cast(dict[str, Any], action.metadata)['model']['supports'])
+    assert supports['tools'] is True
+    assert supports['media'] is True
+    assert supports['multiturn'] is True
+
+
+@pytest.mark.asyncio
+async def test_an_old_server_without_capabilities_falls_back() -> None:
+    """A show answer with no capabilities field keeps the generic defaults."""
+    plugin, _ = _plugin_with_show(AsyncMock(return_value=SimpleNamespace(template='{{ .Prompt }}')))
+
+    supports = await _supports(plugin, 'llama2')
+
+    assert supports['tools'] is True
+    assert supports['media'] is True
+    # Without capabilities the template alone does not move it to /api/generate.
+    assert supports['multiturn'] is True
+
+
+@pytest.mark.asyncio
+async def test_a_slow_probe_times_out_to_the_fallback() -> None:
+    """A probe is bounded by the plugin timeout when that is under five seconds."""
+
+    async def hang(name: str) -> Any:
+        await asyncio.sleep(10)
+
+    plugin, _ = _plugin_with_show(AsyncMock(side_effect=hang), timeout=0.01)
+
+    supports = await _supports(plugin, 'llava')
+
+    assert supports['tools'] is True
+
+
+@pytest.mark.asyncio
+async def test_a_raising_header_callable_does_not_break_resolve() -> None:
+    """The probe resolves headers too; a failure there is just a failed probe."""
+
+    def headers(params: RequestHeaderParams) -> dict[str, str]:
+        raise RuntimeError('token service down')
+
+    plugin = Ollama(request_headers=headers)
+
+    action = await plugin.resolve(ActionKind.MODEL, 'llava')
+
+    assert action is not None
+
+
+@pytest.mark.asyncio
+async def test_the_probe_passes_the_model_name_to_the_header_callable() -> None:
+    """Header callables see the model name on the probe, with no request attached."""
+    captured: list[RequestHeaderParams] = []
+
+    def headers(params: RequestHeaderParams) -> dict[str, str]:
+        captured.append(params)
+        return {'Authorization': 'Bearer tok'}
+
+    plugin = Ollama(request_headers=headers)
+    sdk_client = AsyncMock()
+    sdk_client.show.return_value = _show(['completion'])
+    sdk_client._client.aclose = AsyncMock()
+
+    with patch('ollama.AsyncClient', return_value=sdk_client):
+        await plugin.resolve(ActionKind.MODEL, 'llama3.2')
+
+    assert [(p.model, p.model_request, p.embed_request) for p in captured] == [('llama3.2', None, None)]
+
+
+@pytest.mark.asyncio
+async def test_a_model_is_probed_once() -> None:
+    """A successful probe is cached; ``:latest`` names the same model."""
+    show = AsyncMock(return_value=_show(['completion', 'tools']))
+    plugin, _ = _plugin_with_show(show)
+
+    await plugin.resolve(ActionKind.MODEL, 'llama3.2')
+    await plugin.resolve(ActionKind.MODEL, 'llama3.2:latest')
+
+    show.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_a_failed_probe_is_retried_after_its_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A server that was down gets asked again once the 30s failure entry expires."""
+    now = [1000.0]
+    monkeypatch.setattr(plugin_module.time, 'monotonic', lambda: now[0])
+    show = AsyncMock(side_effect=[ConnectionError('down'), _show(['completion'])])
+    plugin, _ = _plugin_with_show(show)
+
+    assert (await _supports(plugin, 'gemma2'))['tools'] is True
+    now[0] += 10
+    assert (await _supports(plugin, 'gemma2'))['tools'] is True
+    assert show.await_count == 1
+
+    now[0] += 30
+    assert (await _supports(plugin, 'gemma2'))['tools'] is False
+    assert show.await_count == 2
+
+
+class _Tag(BaseModel):
+    model: str
+    digest: str = ''
+
+
+class _Tags(BaseModel):
+    models: list[_Tag]
+
+
+@pytest.mark.asyncio
+async def test_list_actions_probes_each_model_and_skips_embedders() -> None:
+    """The Dev UI rows carry probed capabilities; embedders are not probed."""
+    answers = {
+        'llava': _show(['completion', 'tools', 'vision']),
+        'gemma2': _show(['completion']),
+    }
+
+    async def show(name: str) -> Any:
+        if name not in answers:
+            raise ollama_api.ResponseError(f'model "{name}" not found', 404)
+        return answers[name]
+
+    show_mock = AsyncMock(side_effect=show)
+    plugin, client_mock = _plugin_with_show(show_mock, models=['llama3.2'])
+    client_mock.list = AsyncMock(
+        return_value=_Tags(models=[_Tag(model='llava'), _Tag(model='gemma2'), _Tag(model='nomic-embed-text')])
+    )
+
+    actions = await plugin.list_actions()
+
+    rows = {a.name: a for a in actions}
+    assert list(rows) == ['ollama/llava', 'ollama/gemma2', 'ollama/llama3.2', 'ollama/nomic-embed-text']
+
+    def supports(name: str) -> dict[str, Any]:
+        metadata = rows[name].metadata
+        assert metadata is not None
+        return cast(dict[str, Any], metadata['model']['supports'])
+
+    assert supports('ollama/llava')['media'] is True
+    assert supports('ollama/gemma2')['tools'] is False
+    # Configured but not pulled: listed with the fallback, as before.
+    assert supports('ollama/llama3.2')['tools'] is True
+    assert sorted(c.args[0] for c in show_mock.await_args_list) == ['gemma2', 'llama3.2', 'llava']
+
+
+@pytest.mark.asyncio
+async def test_list_actions_bounds_concurrent_probes() -> None:
+    """At most four probes are in flight at once."""
+    in_flight = 0
+    peak = 0
+
+    async def show(name: str) -> Any:
+        nonlocal in_flight, peak
+        in_flight += 1
+        peak = max(peak, in_flight)
+        await asyncio.sleep(0.01)
+        in_flight -= 1
+        return _show(['completion'])
+
+    plugin, client_mock = _plugin_with_show(AsyncMock(side_effect=show))
+    client_mock.list = AsyncMock(return_value=_Tags(models=[_Tag(model=f'menu-model-{i}') for i in range(10)]))
+
+    actions = await plugin.list_actions()
+
+    assert len(actions) == 10
+    assert peak == 4
+
+
+@pytest.mark.asyncio
+async def test_list_actions_reprobes_a_repulled_model() -> None:
+    """A new digest from /api/tags invalidates the cached capabilities."""
+    show = AsyncMock(side_effect=[_show(['completion']), _show(['completion', 'tools'])])
+    plugin, client_mock = _plugin_with_show(show)
+
+    client_mock.list = AsyncMock(return_value=_Tags(models=[_Tag(model='qwen3', digest='a')]))
+    await plugin.list_actions()
+    await plugin.list_actions()
+    assert show.await_count == 1
+
+    client_mock.list = AsyncMock(return_value=_Tags(models=[_Tag(model='qwen3', digest='b')]))
+    actions = await plugin.list_actions()
+
+    assert show.await_count == 2
+    assert actions[0].metadata is not None
+    assert cast(dict[str, Any], actions[0].metadata['model']['supports'])['tools'] is True

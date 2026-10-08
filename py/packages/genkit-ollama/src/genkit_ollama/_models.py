@@ -86,12 +86,13 @@ import json
 import mimetypes
 import re
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any, Literal, cast
 
 import httpx
 import ollama as ollama_api
 import structlog
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import ConfigDict, ValidationError
 from pydantic.alias_generators import to_camel, to_snake
 
 from genkit import ActionRunContext, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
@@ -161,19 +162,19 @@ class OllamaConfig(ModelConfig):
     num_predict: int | None = None
 
 
-class OllamaSupports(BaseModel):
-    """Supports for Ollama models."""
+@dataclass(frozen=True)
+class _ResolvedModel:
+    """What the plugin knows about one Ollama model.
 
-    tools: bool = True
-    media: bool = False
-
-
-class ModelDefinition(BaseModel):
-    """Meta definition for Ollama models."""
+    Built from the server's ``/api/show`` answer, or from these defaults when
+    the probe fails: ``/api/chat`` with tools and media on, the same generic
+    set the JS and Go plugins advertise for an unprobed model.
+    """
 
     name: str
     api_type: Literal['chat', 'generate'] = 'chat'
-    supports: OllamaSupports = OllamaSupports()
+    tools: bool = True
+    media: bool = True
 
 
 class OllamaModel:
@@ -186,7 +187,7 @@ class OllamaModel:
     def __init__(
         self,
         client: Callable,
-        model_definition: ModelDefinition,
+        model_definition: _ResolvedModel,
         server_address: str = DEFAULT_OLLAMA_SERVER_URL,
     ) -> None:
         """Initializes the OllamaModel.

@@ -22,7 +22,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import ollama as ollama_api
 import pytest
-from genkit_ollama._models import ModelDefinition
 from genkit_ollama._plugin import Ollama
 
 from genkit import Genkit
@@ -35,16 +34,14 @@ def ollama_model() -> str:
 
 
 @pytest.fixture
-def chat_model_plugin(ollama_model: str) -> Ollama:
-    """Chat model plugin parameters."""
-    return Ollama(
-        models=[
-            ModelDefinition(
-                name=ollama_model.split('/')[-1],
-                api_type='chat',
-            )
-        ],
-    )
+def chat_model_plugin(ollama_model: str, mock_ollama_api_async_client: MagicMock) -> Ollama:
+    """Chat model plugin parameters; /api/show reports a chat template with tools."""
+    mock_ollama_api_async_client.return_value.show.return_value = ollama_api.ShowResponse.model_validate({
+        'template': '{{ range .Messages }}{{ .Content }}{{ end }}',
+        'capabilities': ['completion', 'tools'],
+        'model_info': {},
+    })
+    return Ollama(models=[ollama_model.split('/')[-1]])
 
 
 @pytest.fixture
@@ -70,23 +67,22 @@ def genkit_veneer_chat_model(
 
 
 @pytest.fixture
-def generate_model_plugin(ollama_model: str) -> Ollama:
-    """Generate model plugin parameters.
+def generate_model_plugin(ollama_model: str, mock_ollama_api_async_client: MagicMock) -> Ollama:
+    """Generate model plugin parameters; /api/show reports no chat template.
 
     Args:
         ollama_model: Ollama model to use for testing.
+        mock_ollama_api_async_client: The mocked SDK client the probe reaches.
 
     Returns:
         Generate model plugin parameters.
     """
-    return Ollama(
-        models=[
-            ModelDefinition(
-                name=ollama_model.split('/')[-1],
-                api_type='generate',
-            )
-        ],
-    )
+    mock_ollama_api_async_client.return_value.show.return_value = ollama_api.ShowResponse.model_validate({
+        'template': '{{ .Prompt }}',
+        'capabilities': ['completion'],
+        'model_info': {},
+    })
+    return Ollama(models=[ollama_model.split('/')[-1]])
 
 
 @pytest.fixture
@@ -127,6 +123,7 @@ def mock_ollama_api_async_client() -> Generator[MagicMock | AsyncMock, None, Non
         client_instance.chat = AsyncMock()
         client_instance.generate = AsyncMock()
         client_instance.embed = AsyncMock()
+        client_instance.show = AsyncMock()
         mock_ollama_async_client.return_value = client_instance
         yield mock_ollama_async_client
 

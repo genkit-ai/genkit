@@ -21,25 +21,11 @@ import json
 from collections.abc import Callable
 
 import ollama as ollama_api
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 
 from genkit import Embedding, GenkitError
 from genkit.embedder import EmbedRequest, EmbedResponse
 from genkit.plugin_api import wrap_http_error
-
-
-class EmbeddingDefinition(BaseModel):
-    """Defines an embedding model for Ollama.
-
-    This class specifies the characteristics of an embedding model that
-    can be used with the Ollama plugin. While Ollama models have fixed
-    output dimensions, this definition can specify the expected
-    dimensionality for informational purposes or for future truncation
-    support.
-    """
-
-    name: str
-    dimensions: int | None = None
 
 
 class OllamaEmbedder:
@@ -52,12 +38,12 @@ class OllamaEmbedder:
     def __init__(
         self,
         client: Callable,
-        embedding_definition: EmbeddingDefinition,
+        model: str,
     ) -> None:
         """Initializes the OllamaEmbedder.
 
         Sets up the client factory for communicating with the Ollama server and stores
-        the definition of the embedding model.
+        the embedding model name.
 
         Note: We store the client factory (not the client instance) to avoid async
         event loop binding issues. The client is created fresh per request to ensure
@@ -65,11 +51,10 @@ class OllamaEmbedder:
 
         Args:
             client: A callable that returns an asynchronous Ollama client instance.
-            embedding_definition: The definition describing the specific Ollama
-                embedding model to be used.
+            model: The Ollama embedding model name, e.g. ``nomic-embed-text``.
         """
         self._client_factory = client
-        self.embedding_definition = embedding_definition
+        self.model = model
 
     def _get_client(self) -> ollama_api.AsyncClient:
         """Creates a fresh async client bound to the current event loop.
@@ -106,7 +91,7 @@ class OllamaEmbedder:
             input_raw.extend([str(content.text) for content in doc.content if content.text is not None])
         try:
             response = await client.embed(
-                model=self.embedding_definition.name,
+                model=self.model,
                 input=input_raw,
             )
             return EmbedResponse(embeddings=[Embedding(embedding=list(embedding)) for embedding in response.embeddings])

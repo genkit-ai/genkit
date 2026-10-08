@@ -29,36 +29,32 @@ Example:
     from genkit import Genkit
     from genkit_ollama import Ollama
 
-    # 1. Initialize Genkit with local Ollama plugin (models resolve on demand)
-    ai = Genkit(plugins=[Ollama()])
+    # 1. List local models; capabilities come from the server's /api/show
+    ai = Genkit(plugins=[Ollama(models=['llama3.2', 'llava'], embedders=['nomic-embed-text'])])
 
     # 2. Generate content entirely on local hardware
     res = await ai.generate(
         model='ollama/llama3.2',
-        prompt='Why run AI models locally in 10 words?',
+        prompt='Suggest a dish for a gluten-free diner in 10 words.',
     )
 
     # 3. Inspect output shapes directly
     print(res.text)
-    # => Complete data privacy with zero cloud latency or API costs.
+    # => Grilled salmon with roasted potatoes and a lemon herb salad.
     ```
 
 See Also:
     - Ollama documentation: https://ollama.ai/
 """
 
-from genkit_ollama._embedders import EmbeddingDefinition
 from genkit_ollama._errors import OllamaConnectionError
-from genkit_ollama._models import ModelDefinition, OllamaConfig, OllamaSupports
+from genkit_ollama._models import OllamaConfig
 from genkit_ollama._plugin import Ollama, RequestHeaderParams, ollama_name
 
 __all__ = [
-    'EmbeddingDefinition',
-    'ModelDefinition',
     'Ollama',
     'OllamaConfig',
     'OllamaConnectionError',
-    'OllamaSupports',
     'RequestHeaderParams',
     'ollama_name',
 ]

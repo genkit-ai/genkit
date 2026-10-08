@@ -25,7 +25,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 import httpx
 import ollama as ollama_api
 import pytest
-from genkit_ollama._models import ModelDefinition, OllamaConfig, OllamaModel, _convert_parameters, _image_fetch_client
+from genkit_ollama._models import OllamaConfig, OllamaModel, _convert_parameters, _image_fetch_client, _ResolvedModel
 from pydantic import ConfigDict, ValidationError
 
 from genkit import ActionRunContext, GenkitError, Message, ModelResponseChunk, Part, Role
@@ -46,7 +46,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
         """A real HTTP 400 is INVALID_ARGUMENT so retry skips it."""
         model = OllamaModel(
             client=self.mock_client,
-            model_definition=ModelDefinition(name='chat-model', api_type='chat'),
+            model_definition=_ResolvedModel(name='chat-model', api_type='chat'),
         )
         with patch.object(
             model,
@@ -61,7 +61,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
         """A plugin misconfig is INTERNAL, not a bad caller request."""
         model = OllamaModel(
             client=self.mock_client,
-            model_definition=ModelDefinition(name='chat-model', api_type='chat'),
+            model_definition=_ResolvedModel(name='chat-model', api_type='chat'),
         )
         with patch.object(
             model,
@@ -76,7 +76,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
         """A response shape we rejected is INTERNAL so retry can try again."""
         model = OllamaModel(
             client=self.mock_client,
-            model_definition=ModelDefinition(name='chat-model', api_type='chat'),
+            model_definition=_ResolvedModel(name='chat-model', api_type='chat'),
         )
         with patch.object(
             model,
@@ -91,7 +91,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
         """A mid-stream ResponseError(status_code=-1) is not an HTTP status."""
         model = OllamaModel(
             client=self.mock_client,
-            model_definition=ModelDefinition(name='chat-model', api_type='chat'),
+            model_definition=_ResolvedModel(name='chat-model', api_type='chat'),
         )
         stream_error = ollama_api.ResponseError('model failed')
         with patch.object(model, '_generate_classified', AsyncMock(side_effect=stream_error)):
@@ -104,7 +104,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
         """A proxy error page instead of JSON is the server's fault, not the caller's."""
         model = OllamaModel(
             client=self.mock_client,
-            model_definition=ModelDefinition(name='chat-model', api_type='chat'),
+            model_definition=_ResolvedModel(name='chat-model', api_type='chat'),
         )
         client = MagicMock()
         client.chat = AsyncMock(side_effect=json.JSONDecodeError('Expecting value', '<html>502 Bad Gateway</html>', 0))
@@ -119,7 +119,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
         """A config value Options cannot coerce is the caller's to fix, so retry skips it."""
         model = OllamaModel(
             client=self.mock_client,
-            model_definition=ModelDefinition(name='chat-model', api_type='chat'),
+            model_definition=_ResolvedModel(name='chat-model', api_type='chat'),
         )
         client = MagicMock()
         client.chat = AsyncMock()
@@ -139,7 +139,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
         """A tool schema Ollama's Tool model rejects is the caller's to fix."""
         model = OllamaModel(
             client=self.mock_client,
-            model_definition=ModelDefinition(name='chat-model', api_type='chat'),
+            model_definition=_ResolvedModel(name='chat-model', api_type='chat'),
         )
         client = MagicMock()
         client.chat = AsyncMock()
@@ -175,7 +175,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
     )
     async def test_generate_chat_non_streaming(self, mock_get_basic_usage_stats: MagicMock) -> None:
         """Test generate method with CHAT API type in non-streaming mode."""
-        model_def = ModelDefinition(
+        model_def = _ResolvedModel(
             name='chat-model',
             api_type='chat',
         )
@@ -239,7 +239,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
     )
     async def test_generate_generate_non_streaming(self, mock_get_basic_usage_stats: MagicMock) -> None:
         """Test generate method with GENERATE API type in non-streaming mode."""
-        model_def = ModelDefinition(
+        model_def = _ResolvedModel(
             name='generate-model',
             api_type='generate',
         )
@@ -290,7 +290,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
     )
     async def test_generate_chat_streaming(self, mock_get_basic_usage_stats: MagicMock) -> None:
         """Test generate method with CHAT API type in streaming mode."""
-        model_def = ModelDefinition(name='chat-model', api_type='chat')
+        model_def = _ResolvedModel(name='chat-model', api_type='chat')
         ollama_model = OllamaModel(client=self.mock_client, model_definition=model_def)
         streaming_ctx = ActionRunContext(streaming_callback=MagicMock())
 
@@ -339,7 +339,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
     )
     async def test_generate_generate_streaming(self, mock_get_basic_usage_stats: MagicMock) -> None:
         """Test generate method with GENERATE API type in streaming mode."""
-        model_def = ModelDefinition(
+        model_def = _ResolvedModel(
             name='generate-model',
             api_type='generate',
         )
@@ -385,7 +385,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
     )
     async def test_generate_chat_api_response_none(self, mock_get_basic_usage_stats: MagicMock) -> None:
         """Test generate method when _chat_with_ollama returns None."""
-        model_def = ModelDefinition(name='chat-model', api_type='chat')
+        model_def = _ResolvedModel(name='chat-model', api_type='chat')
         ollama_model = OllamaModel(client=self.mock_client, model_definition=model_def)
 
         cast(Any, ollama_model)._chat_with_ollama = AsyncMock(return_value=None)
@@ -409,7 +409,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
     )
     async def test_generate_generate_api_response_none(self, mock_get_basic_usage_stats: MagicMock) -> None:
         """Test generate method when _generate_ollama_response returns None."""
-        model_def = ModelDefinition(name='generate-model', api_type='generate')
+        model_def = _ResolvedModel(name='generate-model', api_type='generate')
         ollama_model = OllamaModel(client=self.mock_client, model_definition=model_def)
 
         cast(Any, ollama_model)._generate_ollama_response = AsyncMock(return_value=None)
@@ -431,7 +431,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
     )
     async def test_generate_chat_streaming_zero_chunks(self, mock_get_basic_usage_stats: MagicMock) -> None:
         """Streaming with zero chunks returns empty content, not the error default."""
-        model_def = ModelDefinition(name='chat-model', api_type='chat')
+        model_def = _ResolvedModel(name='chat-model', api_type='chat')
         ollama_model = OllamaModel(client=self.mock_client, model_definition=model_def)
         streaming_ctx = ActionRunContext(streaming_callback=MagicMock())
 
@@ -450,7 +450,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
     )
     async def test_generate_generate_streaming_zero_chunks(self, mock_get_basic_usage_stats: MagicMock) -> None:
         """Streaming with zero chunks returns empty content, not the error default."""
-        model_def = ModelDefinition(name='generate-model', api_type='generate')
+        model_def = _ResolvedModel(name='generate-model', api_type='generate')
         ollama_model = OllamaModel(client=self.mock_client, model_definition=model_def)
         streaming_ctx = ActionRunContext(streaming_callback=MagicMock())
 
@@ -471,7 +471,7 @@ class TestOllamaModelChatWithOllama(unittest.IsolatedAsyncioTestCase):
         """Common setup."""
         self.mock_ollama_client_instance = AsyncMock()
         self.mock_ollama_client_factory = MagicMock(return_value=self.mock_ollama_client_instance)
-        self.model_definition = ModelDefinition(name='test-chat-model', api_type='chat')
+        self.model_definition = _ResolvedModel(name='test-chat-model', api_type='chat')
         self.ollama_model = OllamaModel(client=self.mock_ollama_client_factory, model_definition=self.model_definition)
         self.request = ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('Hello')])])
         self.ctx = ActionRunContext()
@@ -786,7 +786,7 @@ class TestOllamaModelGenerateOllamaResponse(unittest.IsolatedAsyncioTestCase):
         self.mock_ollama_client_instance = AsyncMock()
         self.mock_ollama_client_factory = MagicMock(return_value=self.mock_ollama_client_instance)
 
-        self.model_definition = ModelDefinition(name='test-generate-model', api_type='generate')
+        self.model_definition = _ResolvedModel(name='test-generate-model', api_type='generate')
         self.ollama_model = OllamaModel(client=self.mock_ollama_client_factory, model_definition=self.model_definition)
         self.request = ModelRequest(
             messages=[
@@ -1232,7 +1232,7 @@ class TestReasoningStreaming(unittest.IsolatedAsyncioTestCase):
         factory = MagicMock(return_value=client_instance)
         model = OllamaModel(
             client=factory,
-            model_definition=ModelDefinition(name='m', api_type='chat'),
+            model_definition=_ResolvedModel(name='m', api_type='chat'),
         )
 
         async def chunks() -> AsyncIterator[ollama_api.ChatResponse]:
@@ -1263,7 +1263,7 @@ class TestReasoningStreaming(unittest.IsolatedAsyncioTestCase):
         factory = MagicMock(return_value=client_instance)
         model = OllamaModel(
             client=factory,
-            model_definition=ModelDefinition(name='m', api_type='chat'),
+            model_definition=_ResolvedModel(name='m', api_type='chat'),
         )
 
         async def chunks() -> AsyncIterator[ollama_api.ChatResponse]:
@@ -1348,7 +1348,7 @@ class TestReasoningGenerateStreaming(unittest.IsolatedAsyncioTestCase):
         factory = MagicMock(return_value=client_instance)
         model = OllamaModel(
             client=factory,
-            model_definition=ModelDefinition(name='m', api_type='generate'),
+            model_definition=_ResolvedModel(name='m', api_type='generate'),
         )
 
         async def chunks() -> AsyncIterator[ollama_api.GenerateResponse]:
@@ -1377,7 +1377,7 @@ class TestReasoningGenerateStreaming(unittest.IsolatedAsyncioTestCase):
         factory = MagicMock(return_value=client_instance)
         model = OllamaModel(
             client=factory,
-            model_definition=ModelDefinition(name='m', api_type='generate'),
+            model_definition=_ResolvedModel(name='m', api_type='generate'),
         )
 
         async def chunks() -> AsyncIterator[ollama_api.GenerateResponse]:
