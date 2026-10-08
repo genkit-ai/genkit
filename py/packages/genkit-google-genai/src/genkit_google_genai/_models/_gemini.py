@@ -147,21 +147,36 @@ from genkit_google_genai._models._utils import (  # noqa: E402
 # strings (thinking_level='HIGH') without importing anything, and type
 # checkers still reject a value outside the set. The Dev UI schemas below
 # read the same sets with get_args.
+#
+# googlegenai_gemini_test.py pins each set to its google-genai enum, so an
+# SDK bump that adds a value fails until it is added here. The SDK's
+# *_UNSPECIFIED placeholders are listed only where Genkit already offered
+# them (HarmCategory, HarmBlockMethod, FunctionCallingMode).
 HarmCategory: TypeAlias = Literal[
     'HARM_CATEGORY_UNSPECIFIED',
     'HARM_CATEGORY_HATE_SPEECH',
     'HARM_CATEGORY_SEXUALLY_EXPLICIT',
     'HARM_CATEGORY_HARASSMENT',
     'HARM_CATEGORY_DANGEROUS_CONTENT',
+    'HARM_CATEGORY_CIVIC_INTEGRITY',
+    'HARM_CATEGORY_JAILBREAK',
+    'HARM_CATEGORY_IMAGE_HATE',
+    'HARM_CATEGORY_IMAGE_DANGEROUS_CONTENT',
+    'HARM_CATEGORY_IMAGE_HARASSMENT',
+    'HARM_CATEGORY_IMAGE_SEXUALLY_EXPLICIT',
 ]
 HarmBlockThreshold: TypeAlias = Literal[
-    'BLOCK_LOW_AND_ABOVE', 'BLOCK_MEDIUM_AND_ABOVE', 'BLOCK_ONLY_HIGH', 'BLOCK_NONE'
+    'BLOCK_LOW_AND_ABOVE', 'BLOCK_MEDIUM_AND_ABOVE', 'BLOCK_ONLY_HIGH', 'BLOCK_NONE', 'OFF'
 ]
-# Values of genai_types.HarmBlockMethod; googlegenai_gemini_test.py pins the match.
 HarmBlockMethod: TypeAlias = Literal['HARM_BLOCK_METHOD_UNSPECIFIED', 'SEVERITY', 'PROBABILITY']
-FunctionCallingMode: TypeAlias = Literal['MODE_UNSPECIFIED', 'AUTO', 'ANY', 'NONE']
+FunctionCallingMode: TypeAlias = Literal['MODE_UNSPECIFIED', 'AUTO', 'ANY', 'NONE', 'VALIDATED']
 ThinkingLevel: TypeAlias = Literal['MINIMAL', 'LOW', 'MEDIUM', 'HIGH']
-ImageAspectRatio: TypeAlias = Literal['1:1', '2:3', '3:2', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9', '21:9']
+# genai_types.ImageConfig types aspect_ratio and image_size as str. These
+# follow the Gemini image generation docs, union across image models:
+# https://ai.google.dev/gemini-api/docs/image-generation#aspect_ratios_and_image_size
+ImageAspectRatio: TypeAlias = Literal[
+    '1:1', '1:4', '1:8', '2:3', '3:2', '3:4', '4:1', '4:3', '4:5', '5:4', '8:1', '9:16', '16:9', '21:9'
+]
 ImageSize: TypeAlias = Literal['1K', '2K', '4K']
 
 

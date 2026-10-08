@@ -1666,9 +1666,9 @@ def test_nested_gemini_setting_declares_exactly_the_sdk_fields(ours: type[BaseMo
     assert set(ours.model_fields) == set(sdk.model_fields)
 
 
-def test_harm_block_method_matches_the_sdk_enum() -> None:
-    """SafetySetting.method lists exactly genai_types.HarmBlockMethod, so users needn't import google.genai."""
-    assert list(get_args(_gemini.HarmBlockMethod)) == [e.value for e in genai_types.HarmBlockMethod]
+# SDK placeholder values Genkit doesn't offer. Selecting one means "use the
+# server default", which leaving the field unset already does.
+_OMITTED_UNSPECIFIED = {'HARM_BLOCK_THRESHOLD_UNSPECIFIED', 'THINKING_LEVEL_UNSPECIFIED'}
 
 
 @pytest.mark.parametrize(
@@ -1676,14 +1676,41 @@ def test_harm_block_method_matches_the_sdk_enum() -> None:
     [
         (_gemini.HarmCategory, genai_types.HarmCategory),
         (_gemini.HarmBlockThreshold, genai_types.HarmBlockThreshold),
+        (_gemini.HarmBlockMethod, genai_types.HarmBlockMethod),
         (_gemini.FunctionCallingMode, genai_types.FunctionCallingConfigMode),
         (_gemini.ThinkingLevel, genai_types.ThinkingLevel),
     ],
-    ids=['HarmCategory', 'HarmBlockThreshold', 'FunctionCallingMode', 'ThinkingLevel'],
+    ids=['HarmCategory', 'HarmBlockThreshold', 'HarmBlockMethod', 'FunctionCallingMode', 'ThinkingLevel'],
 )
-def test_choice_literals_are_sdk_values(ours: object, sdk: type[Enum]) -> None:
-    """Every choice the config offers is a value the SDK enum accepts."""
-    assert set(get_args(ours)) <= {e.value for e in sdk}
+def test_choice_literal_matches_the_sdk_enum(ours: object, sdk: type[Enum]) -> None:
+    """Each choice Literal lists exactly its google-genai enum, so an SDK bump that adds a value fails here."""
+    assert set(get_args(ours)) == {e.value for e in sdk} - _OMITTED_UNSPECIFIED
+
+
+def test_image_choice_literals_match_the_docs() -> None:
+    """genai_types.ImageConfig types aspect_ratio and image_size as str, so these pin the documented lists.
+
+    https://ai.google.dev/gemini-api/docs/image-generation#aspect_ratios_and_image_size
+    """
+    assert genai_types.ImageConfig.model_fields['aspect_ratio'].annotation == str | None
+    assert genai_types.ImageConfig.model_fields['image_size'].annotation == str | None
+    assert get_args(_gemini.ImageAspectRatio) == (
+        '1:1',
+        '1:4',
+        '1:8',
+        '2:3',
+        '3:2',
+        '3:4',
+        '4:1',
+        '4:3',
+        '4:5',
+        '5:4',
+        '8:1',
+        '9:16',
+        '16:9',
+        '21:9',
+    )
+    assert get_args(_gemini.ImageSize) == ('1K', '2K', '4K')
 
 
 @pytest.mark.parametrize(
