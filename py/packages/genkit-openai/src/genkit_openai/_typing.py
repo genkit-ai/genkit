@@ -162,10 +162,9 @@ class OpenAIConfig(ModelConfig):
         seed: Random seed for deterministic sampling (beta).
             See: https://platform.openai.com/docs/api-reference/chat/create#chat-create-seed
 
-        user: End-user identifier (deprecated, use safety_identifier).
-            See: https://platform.openai.com/docs/api-reference/chat/create#chat-create-user
-
         safety_identifier: Stable identifier for detecting policy violations.
+            OpenAI's ``user`` field is not declared; send it with
+            ``extra={'user': ...}`` for a server that reads it.
             See: https://platform.openai.com/docs/api-reference/chat/create#chat-create-safety_identifier
 
         prompt_cache_key: Identifier for caching optimization.
@@ -281,11 +280,6 @@ class OpenAIConfig(ModelConfig):
     # Determinism (beta feature)
     # https://platform.openai.com/docs/api-reference/chat/create#chat-create-seed
     seed: int | None = None
-
-    # User identification
-    # https://platform.openai.com/docs/api-reference/chat/create#chat-create-user
-    # Deprecated: use safety_identifier and prompt_cache_key instead
-    user: str | None = None
 
     # https://platform.openai.com/docs/api-reference/chat/create#chat-create-safety_identifier
     safety_identifier: str | None = None
