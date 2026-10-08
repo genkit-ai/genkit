@@ -16,6 +16,7 @@
 
 """What enable_google_cloud_telemetry() does to Cloud Trace and the Developer UI."""
 
+import inspect
 import os
 from collections.abc import Generator
 from typing import Any
@@ -72,7 +73,7 @@ def _adc_project() -> Generator[MagicMock, None, None]:
 
 def test_enable_google_cloud_telemetry_wraps_with_gcp_adjusting_exporter() -> None:
     """enable_google_cloud_telemetry() sends Cloud Trace through the adjusting exporter."""
-    # Set production environment and clear project-related env vars to ensure project_id is None
+    # Set production environment and clear project-related env vars to ensure project is None
     with (
         mock.patch.dict(os.environ, {_GENKIT_ENV: _ENV_PROD}, clear=False),
         patch('genkit_google_cloud.telemetry.config.GenkitGCPExporter') as mock_gcp_exporter,
@@ -84,7 +85,7 @@ def test_enable_google_cloud_telemetry_wraps_with_gcp_adjusting_exporter() -> No
         patch('genkit_google_cloud.telemetry.config.PeriodicExportingMetricReader'),
         patch('genkit_google_cloud.telemetry.config.metrics'),
     ):
-        # Remove project env vars to ensure project_id is None in the test
+        # Remove project env vars to ensure project is None in the test
         for key in ['FIREBASE_PROJECT_ID', 'GOOGLE_CLOUD_PROJECT', 'GCLOUD_PROJECT']:
             os.environ.pop(key, None)
 
@@ -116,8 +117,8 @@ def test_enable_google_cloud_telemetry_rejects_log_input_and_output() -> None:
         enable_google_cloud_telemetry(log_input_and_output=True)  # ty: ignore[unknown-argument]
 
 
-def test_enable_google_cloud_telemetry_with_project_id() -> None:
-    """project_id= lands on the Cloud Trace exporter they get."""
+def test_enable_google_cloud_telemetry_with_project() -> None:
+    """project= lands on the Cloud Trace exporter as its project_id."""
     with (
         mock.patch.dict(os.environ, {_GENKIT_ENV: _ENV_PROD}),
         patch('genkit_google_cloud.telemetry.config.GenkitGCPExporter') as mock_gcp_exporter,
@@ -129,7 +130,7 @@ def test_enable_google_cloud_telemetry_with_project_id() -> None:
         patch('genkit_google_cloud.telemetry.config.PeriodicExportingMetricReader'),
         patch('genkit_google_cloud.telemetry.config.metrics'),
     ):
-        enable_google_cloud_telemetry(project_id='my-test-project')
+        enable_google_cloud_telemetry(project='my-test-project')
 
         assert mock_gcp_exporter.call_args.kwargs.get('project_id') == 'my-test-project'
 
@@ -428,9 +429,9 @@ def _exporter_project(mock_ctor: MagicMock) -> str | None:
         ),
         pytest.param(
             {'GOOGLE_CLOUD_PROJECT': 'gcp-proj'},
-            {'project_id': 'explicit-proj'},
+            {'project': 'explicit-proj'},
             'explicit-proj',
-            id='project_id_beats_google_cloud_project',
+            id='project_beats_google_cloud_project',
         ),
         pytest.param(
             {'GOOGLE_CLOUD_PROJECT': 'gcp-proj', 'GCLOUD_PROJECT': 'gcloud-proj'},
@@ -465,7 +466,7 @@ def test_enable_sends_traces_metrics_and_logs_to_the_resolved_cloud_project(
     kwargs: dict[str, Any],
     expected: str | None,
 ) -> None:
-    """project_id=, then GOOGLE_CLOUD_PROJECT, then GCLOUD_PROJECT, then credentials; FIREBASE_PROJECT_ID is ignored."""
+    """project=, then GOOGLE_CLOUD_PROJECT, then GCLOUD_PROJECT, then credentials; FIREBASE_PROJECT_ID is ignored."""
     for key in ('FIREBASE_PROJECT_ID', 'GOOGLE_CLOUD_PROJECT', 'GCLOUD_PROJECT'):
         if key in env:
             monkeypatch.setenv(key, env[key])
@@ -558,10 +559,10 @@ def test_firebase_only_falls_back_to_adc_project_and_keeps_log_trace_correlation
 
 
 def test_explicit_project_skips_adc_lookup(_adc_project: MagicMock) -> None:
-    """project_id= wins, so ADC is never asked."""
+    """project= wins, so ADC is never asked."""
     env, gcp, adjusting, hang, detector, monitoring, metric_exp, reader, meter = _prod_exporter_patches()
     with env, gcp as traces, adjusting, hang, detector, monitoring, metric_exp, reader, meter:
-        enable_google_cloud_telemetry(project_id='explicit-proj')
+        enable_google_cloud_telemetry(project='explicit-proj')
 
     _adc_project.assert_not_called()
     assert _exporter_project(traces) == 'explicit-proj'
@@ -620,10 +621,10 @@ def test_enable_google_cloud_telemetry_called_twice_raises() -> None:
         patch('genkit_google_cloud.telemetry.config.PeriodicExportingMetricReader'),
         patch('genkit_google_cloud.telemetry.config.metrics'),
     ):
-        enable_google_cloud_telemetry(project_id='my-project')
+        enable_google_cloud_telemetry(project='my-project')
         mock_add_exporter.assert_called_once()
         with pytest.raises(GenkitError, match='already called') as raised:
-            enable_google_cloud_telemetry(project_id='other')
+            enable_google_cloud_telemetry(project='other')
         assert raised.value.status == 'FAILED_PRECONDITION'
         mock_add_exporter.assert_called_once()
 
@@ -658,7 +659,7 @@ def test_leftover_collector_env_in_prod_does_not_block_cloud() -> None:
         patch('genkit_google_cloud.telemetry.config.PeriodicExportingMetricReader'),
         patch('genkit_google_cloud.telemetry.config.metrics'),
     ):
-        enable_google_cloud_telemetry(project_id='my-project')
+        enable_google_cloud_telemetry(project='my-project')
         assert is_instrumented_by(GenAiInstrumentation)
 
 
@@ -687,7 +688,7 @@ def test_enable_in_prod_batches_cloud_spans() -> None:
             patch('genkit_google_cloud.telemetry.config.PeriodicExportingMetricReader'),
             patch('genkit_google_cloud.telemetry.config.metrics'),
         ):
-            enable_google_cloud_telemetry(project_id='my-project')
+            enable_google_cloud_telemetry(project='my-project')
         assert any(isinstance(proc, BatchSpanProcessor) for proc in _processors(isolated))
     finally:
         isolated.shutdown()
@@ -715,7 +716,14 @@ def test_enable_under_genkit_start_with_force_exports_on_span_end() -> None:
             patch('genkit_google_cloud.telemetry.config.PeriodicExportingMetricReader'),
             patch('genkit_google_cloud.telemetry.config.metrics'),
         ):
-            enable_google_cloud_telemetry(force_dev_export=True, project_id='my-project')
+            enable_google_cloud_telemetry(force_dev_export=True, project='my-project')
         assert any(isinstance(proc, SimpleSpanProcessor) for proc in _processors(isolated))
     finally:
         isolated.shutdown()
+
+
+def test_enable_google_cloud_telemetry_takes_project_like_google_cloud_clients() -> None:
+    """The setup kwarg is project=, matching google-cloud-* clients; project_id is only the OTel exporter kwarg."""
+    params = inspect.signature(enable_google_cloud_telemetry).parameters
+    assert 'project' in params
+    assert 'project_id' not in params

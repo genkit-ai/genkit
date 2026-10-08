@@ -329,18 +329,18 @@ class TestEvaluatorApiHost:
 
     def test_regional_host(self) -> None:
         """Regional locations use the {location}-aiplatform pattern."""
-        factory = EvaluatorFactory(project_id='p', location='us-central1')
+        factory = EvaluatorFactory(project='p', location='us-central1')
         assert factory._api_host() == 'us-central1-aiplatform.googleapis.com'
 
     def test_global_rejected(self) -> None:
         """The evaluation service is regional; 'global' is rejected."""
-        factory = EvaluatorFactory(project_id='p', location='global')
+        factory = EvaluatorFactory(project='p', location='global')
         with pytest.raises(GenkitError, match='does not support'):
             factory._api_host()
 
     def test_multi_region_rejected(self) -> None:
         """The evaluation service is regional; multi-regions are rejected."""
-        factory = EvaluatorFactory(project_id='p', location='eu')
+        factory = EvaluatorFactory(project='p', location='eu')
         with pytest.raises(GenkitError, match='does not support'):
             factory._api_host()
 

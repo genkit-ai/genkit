@@ -120,7 +120,7 @@ class ModelGardenModel:
         self,
         model: str,
         location: str,
-        project_id: str,
+        project: str,
     ) -> None:
         """Initialize the ModelGardenModel instance.
 
@@ -132,7 +132,7 @@ class ModelGardenModel:
                 in the way <publisher>/<model> (e.g., 'meta/llama3.2-pro-max').
             location: The Google Cloud region where the Model Garden service
                 is hosted (e.g., 'us-central1').
-            project_id: The Google Cloud project ID where the Model Garden
+            project: The Google Cloud project ID where the Model Garden
                 model is deployed.
         """
         self.name = model
@@ -141,7 +141,7 @@ class ModelGardenModel:
             # client.py imports openai, which is an extra; load it on first generate.
             from genkit_vertexai.model_garden.client import CachedOpenAI
 
-            return CachedOpenAI(location=location, project_id=project_id)
+            return CachedOpenAI(location=location, project=project)
 
         self._runtime_client = loop_local_client(_new_cached_client)
 
@@ -212,7 +212,7 @@ class ModelGarden(Plugin):
 
     def __init__(
         self,
-        project_id: str | None = None,
+        project: str | None = None,
         location: str | None = None,
         models: list[str] | None = None,
         model_locations: dict[str, str] | None = None,
@@ -223,7 +223,7 @@ class ModelGarden(Plugin):
         location, and a list of models to be used.
 
         Args:
-            project_id: The Google Cloud project ID to use. If not provided, it attempts
+            project: The Google Cloud project ID to use. If not provided, it attempts
                 to load from the `GCLOUD_PROJECT` environment variable.
             location: The Google Cloud region to use for services. If not provided,
                 it defaults to `DEFAULT_REGION`.
@@ -232,10 +232,8 @@ class ModelGarden(Plugin):
                 Google Cloud regions. This overrides the default `location` for the
                 specified models.
         """
-        self.project_id = (
-            project_id
-            if project_id is not None
-            else os.getenv(const.GCLOUD_PROJECT) or os.getenv('GOOGLE_CLOUD_PROJECT')
+        self.project = (
+            project if project is not None else os.getenv(const.GCLOUD_PROJECT) or os.getenv('GOOGLE_CLOUD_PROJECT')
         )
 
         self.location = (
@@ -274,12 +272,12 @@ class ModelGarden(Plugin):
         Raises:
             GenkitError: FAILED_PRECONDITION when no project ID was passed or found in the environment.
         """
-        if not self.project_id:
+        if not self.project:
             raise GenkitError(
                 status='FAILED_PRECONDITION',
-                message='project_id must be provided',
+                message='project must be provided',
             )
-        return self.model_locations.get(name, self.location), self.project_id
+        return self.model_locations.get(name, self.location), self.project
 
     async def _create_model_action(self, name: str) -> Action:
         """Create an Action object for a Model Garden Vertex AI model.
@@ -300,8 +298,8 @@ class ModelGarden(Plugin):
             with _requires_extra(_ANTHROPIC_EXTRA):
                 from .anthropic import AnthropicModelGarden
 
-            location, project_id = self._location_and_project(name)
-            claude = AnthropicModelGarden(model=name, location=location, project_id=project_id)
+            location, project = self._location_and_project(name)
+            claude = AnthropicModelGarden(model=name, location=location, project=project)
             return create_model(
                 full_name,
                 claude.get_handler(),
@@ -312,8 +310,8 @@ class ModelGarden(Plugin):
         with _requires_extra(_OPENAI_EXTRA):
             from genkit_openai import OpenAIConfig
 
-        location, project_id = self._location_and_project(name)
-        openai_compat = ModelGardenModel(model=name, location=location, project_id=project_id)
+        location, project = self._location_and_project(name)
+        openai_compat = ModelGardenModel(model=name, location=location, project=project)
         return create_model(
             full_name,
             openai_compat.to_openai_compatible_model(),

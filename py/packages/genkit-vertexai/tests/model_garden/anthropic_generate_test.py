@@ -66,7 +66,7 @@ def api() -> Iterator[FakeVertexClaude]:
 
 
 def _genkit() -> Genkit:
-    return Genkit(plugins=[ModelGarden(project_id='my-project', location='us-east5')])
+    return Genkit(plugins=[ModelGarden(project='my-project', location='us-east5')])
 
 
 @pytest.mark.asyncio
