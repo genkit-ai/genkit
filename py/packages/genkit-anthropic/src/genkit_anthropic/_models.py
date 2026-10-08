@@ -242,8 +242,28 @@ def _to_anthropic_thinking_config(thinking: dict[str, Any] | None) -> dict[str, 
 # conversation, the streaming mode, or the structured-output format Genkit
 # merges into output_config (the declared field still works). `betas` is
 # the header Genkit sends from the declared setting, not a body field.
-_MANAGED_BODY_FIELDS = ('model', 'messages', 'system', 'tools', 'tool_choice', 'stream', 'output_config', 'betas')
+# `tool_choice` is left out on purpose: extra={'tool_choice': {...}} is how a
+# caller sends a shape Genkit's option lacks, such as {'type': 'tool', ...}.
+_MANAGED_BODY_FIELDS = ('model', 'messages', 'system', 'tools', 'stream', 'output_config', 'betas')
 _CLIENT_SETTING_FIELDS = ('timeout', 'extra_headers', 'extra_query', 'extra_body')
+
+# Genkit's tool_choice values and the Anthropic tool_choice type each maps to.
+_TOOL_CHOICE_TYPES = {'auto': 'auto', 'required': 'any', 'none': 'none'}
+
+
+def _to_anthropic_tool_choice(tool_choice: str | None, disable_parallel_tool_use: bool) -> dict[str, Any] | None:
+    """Translate Genkit's tool_choice into Anthropic's object; None sends nothing.
+
+    Anthropic carries disable_parallel_tool_use only inside tool_choice, so
+    the flag alone sends {'type': 'auto', ...}, the API's default with tools.
+    The 'none' variant has no such field.
+    """
+    if tool_choice is None:
+        return {'type': 'auto', 'disable_parallel_tool_use': True} if disable_parallel_tool_use else None
+    choice: dict[str, Any] = {'type': _TOOL_CHOICE_TYPES[tool_choice]}
+    if disable_parallel_tool_use and tool_choice != 'none':
+        choice['disable_parallel_tool_use'] = True
+    return choice
 
 
 def _merge_config_extra(params: dict[str, Any], extra: dict[str, Any] | None) -> None:
@@ -485,6 +505,7 @@ class AnthropicModel:
         metadata = params.pop('metadata', None)
         version = params.pop('version', None)
         betas = params.pop('betas', None)
+        disable_parallel_tool_use = bool(params.pop('disable_parallel_tool_use', False))
 
         params['model'] = version or self.model_name
         params['messages'] = self._to_anthropic_messages(request.messages)
@@ -551,18 +572,9 @@ class AnthropicModel:
                 }
                 for t in request.tools
             ]
-
-            if request.tool_choice:
-                if request.tool_choice == 'required':
-                    params['tool_choice'] = {'type': 'any'}
-                elif request.tool_choice == 'auto':
-                    params['tool_choice'] = {'type': 'auto'}
-                elif isinstance(request.tool_choice, dict):
-                    params['tool_choice'] = request.tool_choice
-
-        # The API rejects tool_choice when the request carries no tools.
-        if not params.get('tools'):
-            params.pop('tool_choice', None)
+            tool_choice = _to_anthropic_tool_choice(request.tool_choice, disable_parallel_tool_use)
+            if tool_choice is not None:
+                params['tool_choice'] = tool_choice
 
         _merge_config_extra(params, extra)
         return params

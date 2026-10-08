@@ -21,17 +21,14 @@ from typing import Any
 import pytest
 from genkit_anthropic._config import (
     AnthropicConfig,
-    AnyToolChoice,
-    AutoToolChoice,
     OutputConfig,
     RequestMetadata,
-    SpecificToolChoice,
     TaskBudget,
     ThinkingConfig,
-    ToolChoiceNone,
 )
 from pydantic import BaseModel, ValidationError
 
+from genkit import GenkitError
 from genkit.plugin_api import to_json_schema
 
 # --- thinking ---------------------------------------------------------------
@@ -115,24 +112,16 @@ def test_output_config_effort_max_valid_and_advertised() -> None:
 # --- tool_choice ------------------------------------------------------------
 
 
-def test_tool_choice_tool_requires_name() -> None:
-    with pytest.raises(ValidationError):
-        AnthropicConfig.model_validate({'tool_choice': {'type': 'tool'}})
+@pytest.mark.parametrize('key', ['tool_choice', 'toolChoice'])
+def test_tool_choice_key_points_to_generate_option(key: str) -> None:
+    """The removed config key names its replacement instead of the generic unknown-key error."""
+    with pytest.raises(GenkitError, match=r'ai\.generate\(tool_choice='):
+        AnthropicConfig.model_validate({key: {'type': 'auto'}})
 
 
-@pytest.mark.parametrize(
-    'tool_choice',
-    [
-        {'type': 'auto'},
-        {'type': 'any'},
-        {'type': 'tool', 'name': 'get_weather'},
-        {'type': 'none'},
-    ],
-)
-def test_tool_choice_variants_valid(tool_choice: dict) -> None:
-    cfg = AnthropicConfig.model_validate({'tool_choice': tool_choice})
-    assert cfg.tool_choice is not None
-    assert cfg.tool_choice.type == tool_choice['type']
+def test_disable_parallel_tool_use_accepts_both_spellings() -> None:
+    assert AnthropicConfig.model_validate({'disableParallelToolUse': True}).disable_parallel_tool_use is True
+    assert AnthropicConfig(disable_parallel_tool_use=True).disable_parallel_tool_use is True
 
 
 # --- top level --------------------------------------------------------------
@@ -172,12 +161,11 @@ def test_extra_survives_validate_dump() -> None:
         {'thinking': {'enabled': True, 'budgetTokens': 2048, 'budgetToken': 1}},
         {'output_config': {'effort': 'high', 'efort': 'low'}},
         {'output_config': {'task_budget': {'total': 20000, 'totl': 1}}},
-        {'tool_choice': {'type': 'tool', 'name': 'lookup_menu', 'nmae': 'lookup_menu'}},
         {'metadata': {'user_id': 'u', 'userid': 'u'}},
     ],
 )
 def test_anthropic_config_with_unknown_nested_key_raises_validation_error(raw: dict) -> None:
-    """A typo inside `thinking`, `output_config`, `tool_choice` or `metadata` fails the same way."""
+    """A typo inside `thinking`, `output_config` or `metadata` fails the same way."""
     with pytest.raises(ValidationError, match='Extra inputs are not permitted'):
         AnthropicConfig.model_validate(raw)
 
@@ -199,7 +187,7 @@ def test_json_schema_advertises_js_shaped_keys() -> None:
         'apiVersion',
         'betas',
         'maxOutputTokens',
-        'tool_choice',
+        'disableParallelToolUse',
         'metadata',
         'thinking',
         'output_config',
@@ -213,12 +201,12 @@ def test_json_schema_advertises_js_shaped_keys() -> None:
         props['betas']['description']
         == 'Anthropic beta feature headers to enable for this request. An empty list suppresses the defaults.'
     )
-    assert props['tool_choice']['type'] == 'object'
-    assert props['tool_choice']['properties']['type']['enum'] == ['auto', 'any', 'tool', 'none']
-    assert 'oneOf' not in props['tool_choice']
+    assert props['disableParallelToolUse']['type'] == 'boolean'
 
-    # snake_case keys must NOT drift to camelCase.
+    # Tool choice is the generate option, not a config key.
+    assert 'tool_choice' not in props
     assert 'toolChoice' not in props
+    # snake_case keys must NOT drift to camelCase.
     assert 'outputConfig' not in props
 
     # Nested snake_case/camelCase keys are preserved.
@@ -321,10 +309,9 @@ def _accepted_keys(model: type[BaseModel]) -> set[str]:
         (['thinking'], [ThinkingConfig]),
         (['output_config'], [OutputConfig]),
         (['output_config', 'task_budget'], [TaskBudget]),
-        (['tool_choice'], [AutoToolChoice, AnyToolChoice, SpecificToolChoice, ToolChoiceNone]),
         (['metadata'], [RequestMetadata]),
     ],
-    ids=['thinking', 'output_config', 'task_budget', 'tool_choice', 'metadata'],
+    ids=['thinking', 'output_config', 'task_budget', 'metadata'],
 )
 def test_dev_ui_schema_lists_every_nested_key_the_config_accepts(
     path: list[str], models: list[type[BaseModel]]

@@ -492,6 +492,53 @@ async def test_typed_nested_config_request_body(monkeypatch: pytest.MonkeyPatch)
     ]
 
 
+@pytest.mark.parametrize(
+    ('tool_choice', 'config', 'tool_config'),
+    [
+        ('auto', None, {'functionCallingConfig': {'mode': 'AUTO'}}),
+        ('required', None, {'functionCallingConfig': {'mode': 'ANY'}}),
+        # 'none' used to be ignored, leaving Gemini free to call the tools.
+        ('none', None, {'functionCallingConfig': {'mode': 'NONE'}}),
+        (None, None, None),
+        # An explicit function_calling_config wins over the option.
+        (
+            'none',
+            GeminiConfig(function_calling_config=FunctionCallingConfig(mode='ANY')),
+            {'functionCallingConfig': {'mode': 'ANY'}},
+        ),
+    ],
+    ids=['auto', 'required', 'none', 'unset', 'config-wins'],
+)
+@pytest.mark.asyncio
+async def test_tool_choice_request_body(
+    monkeypatch: pytest.MonkeyPatch,
+    tool_choice: Literal['auto', 'required', 'none'] | None,
+    config: GeminiConfig | None,
+    tool_config: dict[str, Any] | None,
+) -> None:
+    """Genkit's tool_choice goes out as toolConfig.functionCallingConfig.mode."""
+    # 1. Route google-genai's HTTP calls to a fake API and register one tool
+    bodies: list[dict[str, Any]] = []
+    monkeypatch.setattr(httpx.AsyncClient, 'send', _fake_gemini_api(bodies))
+    ai = Genkit(plugins=[GoogleAI(api_key='fake-key')])
+
+    @ai.tool(name='lookup_menu')
+    async def lookup_menu(dish: str) -> str:
+        return 'ramen'
+
+    # 2. Generate with the tool choice
+    await ai.generate(
+        model='googleai/gemini-2.5-flash',
+        prompt='Is the pho in stock?',
+        tools=['lookup_menu'],
+        tool_choice=tool_choice,
+        config=config,
+    )
+
+    # 3. The body carries the mapped mode, or no toolConfig for unset
+    assert bodies[-1].get('toolConfig') == tool_config
+
+
 def test_choice_fields_are_closed_literals() -> None:
     """Choice fields take plain strings from a closed set.
 
