@@ -737,6 +737,117 @@ describe('Google AI Gemini', () => {
         );
       });
 
+      it('never sends thinkingBudget or contextCache (Interactions API)', async () => {
+        const model = defineModel('gemini-flash-latest', defaultPluginOptions);
+        mockFetchResponse(defaultApiResponse);
+        await model.run({
+          ...minimalRequest,
+          config: {
+            thinkingConfig: { thinkingLevel: 'HIGH', thinkingBudget: 1024 },
+            contextCache: true,
+          },
+        });
+
+        const apiRequest: CreateInteractionRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.deepStrictEqual(apiRequest.generation_config, {
+          thinking_level: 'high',
+        });
+      });
+
+      it('warns once per model when thinkingBudget is ignored (Interactions API)', async () => {
+        const warnStub = sinon.stub(logger, 'warn');
+        // An unlisted model (routed to Interactions) not used by other tests,
+        // since the warning is only logged once per model and field.
+        const model = defineModel(
+          'gemini-thinking-budget-test',
+          defaultPluginOptions
+        );
+        const request = {
+          ...minimalRequest,
+          config: { thinkingConfig: { thinkingBudget: 1024 } },
+        };
+        mockFetchResponse(defaultApiResponse);
+        await model.run(request);
+        mockFetchResponse(defaultApiResponse);
+        await model.run(request);
+
+        const budgetWarnings = warnStub
+          .getCalls()
+          .filter((c) => String(c.args[0]).includes('thinkingBudget'));
+        assert.strictEqual(budgetWarnings.length, 1);
+        assert.ok(String(budgetWarnings[0].args[0]).includes('thinkingLevel'));
+      });
+
+      it('handles every config schema field explicitly (Interactions API)', () => {
+        // The Interactions API rejects unknown `generation_config` fields with
+        // a 400, so every field in the plugin's config schemas must be either
+        // handled in gemini.ts / toInteractionGenerationConfig, or known to be
+        // accepted as a snake_case `generation_config` field. If this fails
+        // after adding a schema field, map it explicitly (translate it, or
+        // drop it with a warning) and add it to the right list below.
+        const handledInGemini = [
+          'apiKey',
+          'baseUrl',
+          'apiVersion',
+          'version',
+          'safetySettings',
+          'codeExecution',
+          'functionCallingConfig',
+          'responseModalities',
+          'googleSearchRetrieval',
+          'googleSearch',
+          'google_search',
+          'fileSearch',
+          'urlContext',
+          'retrievalConfig',
+          'serviceTier',
+          'previousInteractionId',
+          'store',
+          'speechConfig',
+          'thinkingConfig',
+          'contextCache',
+          'toolConfig',
+          'tools',
+        ];
+        // Verified live to be accepted in `generation_config`.
+        const acceptedByApi = [
+          'temperature',
+          'topP',
+          'topK',
+          'maxOutputTokens',
+          'stopSequences',
+          'imageConfig',
+        ];
+        const known = new Set([...handledInGemini, ...acceptedByApi]);
+        for (const schema of [
+          GeminiConfigSchema,
+          GeminiTtsConfigSchema,
+          GeminiImageConfigSchema,
+        ]) {
+          for (const field of Object.keys(schema.shape)) {
+            assert.ok(known.has(field), `unhandled config field: ${field}`);
+          }
+        }
+      });
+
+      it('still sends thinkingBudget to generateContent models', async () => {
+        const model = defineModel('gemini-2.5-flash', defaultPluginOptions);
+        mockFetchResponse(defaultApiResponse);
+        await model.run({
+          ...minimalRequest,
+          config: { thinkingConfig: { thinkingBudget: 1024 } },
+        });
+
+        const apiRequest: GenerateContentRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.deepStrictEqual(apiRequest.generationConfig?.thinkingConfig, {
+          thinkingBudget: 1024,
+        });
+      });
+
       it('keeps a location set on the googleMaps tool over retrievalConfig.latLng (Interactions API)', async () => {
         const model = defineModel('gemini-flash-latest', defaultPluginOptions);
         mockFetchResponse(defaultApiResponse);

@@ -130,6 +130,29 @@ function isDefaultSafetySetting(setting: {
   );
 }
 
+/** Hints for config fields the Interactions API doesn't support. */
+const DROPPED_CONFIG_FIELD_HINTS: Record<string, string> = {
+  'thinkingConfig.thinkingBudget':
+    " Use thinkingConfig.thinkingLevel ('LOW' | 'MEDIUM' | 'HIGH') instead.",
+};
+
+/** `model:field` pairs that have already been warned about. */
+const warnedDroppedConfigFields = new Set<string>();
+
+/**
+ * Warns (once per model and field) that a config field isn't supported by an
+ * Interactions model and was ignored.
+ */
+function warnDroppedConfigField(model: string, field: string) {
+  const key = `${model}:${field}`;
+  if (warnedDroppedConfigFields.has(key)) return;
+  warnedDroppedConfigFields.add(key);
+  logger.warn(
+    `${field} is not supported by '${model}' and was ignored.` +
+      (DROPPED_CONFIG_FIELD_HINTS[field] ?? '')
+  );
+}
+
 /**
  * Copies a `retrievalConfig.latLng` user location onto the Interactions
  * `google_maps` tools, which take `latitude`/`longitude` directly (there is no
@@ -243,8 +266,10 @@ export const GeminiConfigSchema = GenerationCommonConfigSchema.extend({
     .describe('Enables the model to generate and run code.')
     .optional(),
   // TODO(v2): Remove. This plugin does not implement context caching, so this
-  // field has no effect (it is passed through, and models on the Interactions
-  // path reject it). Kept for now because removing it is a breaking change.
+  // field has no effect (it is passed through on generateContent models and
+  // dropped with a warning on Interactions models, which reject it). Kept for
+  // now because removing it is a breaking change.
+  /** @deprecated Not implemented by this plugin. Will be removed in v2. */
   contextCache: z
     .boolean()
     .describe(
@@ -965,7 +990,10 @@ export function defineModel(
 
       if (useInteractions) {
         // The Gemini API's Interactions endpoint does not accept
-        // `safety_settings` (it returns 400). Permissive settings can be
+        // `safety_settings` (it returns 400), even though the published
+        // Interactions spec lists the field. The Gemini Enterprise Agent
+        // Platform accepts it, so the vertexAI plugin should map safety
+        // settings rather than copy this guard. Permissive settings can be
         // dropped safely: per the Gemini API docs, the adjustable safety
         // filters are Off by default for current Gemini models, so BLOCK_NONE
         // (and HARM_CATEGORY_UNSPECIFIED entries) never block anything beyond
@@ -1098,7 +1126,12 @@ export function defineModel(
       };
 
       const interactionGenerationConfig: ModelGenerationConfig =
-        toInteractionGenerationConfig(sanitizedConfigOptions);
+        toInteractionGenerationConfig(
+          sanitizedConfigOptions,
+          useInteractions
+            ? (field) => warnDroppedConfigField(modelVersion, field)
+            : undefined
+        );
 
       if (useInteractions) {
         if (functionCallingConfig) {

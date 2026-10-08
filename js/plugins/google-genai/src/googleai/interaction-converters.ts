@@ -433,10 +433,35 @@ export function toInteractionSpeechConfig(
   return undefined;
 }
 
+/**
+ * Converts the remaining request config into the Interactions
+ * `generation_config`.
+ *
+ * The API rejects unknown `generation_config` fields with a 400, so config
+ * fields this plugin defines are mapped explicitly:
+ *  - `speechConfig` is converted to `speech_config`;
+ *  - `thinkingConfig.thinkingLevel` / `includeThoughts` become
+ *    `thinking_level` / `thinking_summaries`. There is no `thinking_config`,
+ *    so other thinking fields (e.g. `thinkingBudget`) are dropped;
+ *  - `contextCache` (not implemented by this plugin) is dropped.
+ * Everything else, including keys the user passes through that aren't in the
+ * schema, is forwarded in snake_case.
+ *
+ * @param config The request config, without fields handled elsewhere.
+ * @param onDropped Called with the name of each config field that was dropped.
+ */
 export function toInteractionGenerationConfig(
-  config: Record<string, unknown>
+  config: Record<string, unknown>,
+  onDropped?: (field: string) => void
 ): ModelGenerationConfig {
-  const { speechConfig, ...rest } = config;
+  const {
+    speechConfig,
+    thinkingConfig,
+    thinking_config,
+    contextCache,
+    context_cache,
+    ...rest
+  } = config;
   const result = convertObjectKeysToSnakeCase(rest);
 
   const interactionSpeechConfig = toInteractionSpeechConfig(speechConfig);
@@ -444,35 +469,23 @@ export function toInteractionGenerationConfig(
     result.speech_config = interactionSpeechConfig;
   }
 
-  if (isObject(result.thinking_config)) {
-    const tc = result.thinking_config;
-    let hasOtherProps = false;
-    const newTc: Record<string, unknown> = {};
-
-    for (const [key, value] of Object.entries(tc)) {
-      if (key === 'thinking_level') {
-        if (typeof value === 'string') {
-          result.thinking_level = value.toLowerCase();
-        } else {
-          result.thinking_level = value;
-        }
-      } else if (key === 'include_thoughts') {
-        if (typeof value === 'boolean') {
-          result.thinking_summaries = value ? 'auto' : 'none';
-        } else {
-          result.thinking_summaries = value;
-        }
+  const thinking = thinkingConfig ?? thinking_config;
+  if (isObject(thinking)) {
+    for (const [key, value] of Object.entries(thinking)) {
+      if (key === 'thinkingLevel' || key === 'thinking_level') {
+        result.thinking_level =
+          typeof value === 'string' ? value.toLowerCase() : value;
+      } else if (key === 'includeThoughts' || key === 'include_thoughts') {
+        result.thinking_summaries =
+          typeof value === 'boolean' ? (value ? 'auto' : 'none') : value;
       } else {
-        hasOtherProps = true;
-        newTc[key] = value;
+        onDropped?.(`thinkingConfig.${key}`);
       }
     }
+  }
 
-    if (hasOtherProps) {
-      result.thinking_config = newTc;
-    } else {
-      delete result.thinking_config;
-    }
+  if (contextCache !== undefined || context_cache !== undefined) {
+    onDropped?.('contextCache');
   }
 
   return result;

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { googleAI } from '@genkit-ai/google-genai';
+import { googleAI, type UrlCitation } from '@genkit-ai/google-genai';
 import * as fs from 'fs';
 import {
   Document,
@@ -86,12 +86,21 @@ ai.defineFlow('deep-research-code-execution', async (_, { sendChunk }) => {
   return operation.output?.message?.content;
 });
 
-// The MCP flows below need an MCP server. This default points at a public
-// THIRD-PARTY demo server that we do not control: prompts and tool calls are
-// sent to it. To use it, delete the "// Third-party demo server: " prefix
-// (acknowledging that), or pass your own server as `serverUrl`.
+// The MCP flows below need the URL of an MCP server, passed as `serverUrl`.
+// The demo server is a third-party server we don't control: prompts and tool
+// calls are sent to it.
 const DEMO_MCP_SERVER_URL =
-  '// Third-party demo server: https://mcpplaygroundonline.com/mcp-complex-server';
+  'https://mcpplaygroundonline.com/mcp-complex-server';
+
+function requireMcpServerUrl(serverUrl: string | undefined): string {
+  if (!serverUrl) {
+    throw new Error(
+      'Pass serverUrl: the URL of an MCP server to use. For example, the ' +
+        `third-party demo server (prompts are sent to it): ${DEMO_MCP_SERVER_URL}`
+    );
+  }
+  return serverUrl;
+}
 
 ai.defineFlow(
   'deep-research-mcp',
@@ -108,7 +117,7 @@ ai.defineFlow(
     const prompt =
       input?.prompt ??
       'Research the impact of Model Context Protocol on AI agent development and summarize key findings.';
-    const serverUrl = input?.serverUrl ?? DEMO_MCP_SERVER_URL;
+    const serverUrl = requireMcpServerUrl(input?.serverUrl);
     const allowedTools = input?.allowedTools ?? ['analyze_data'];
 
     let { operation } = await ai.generate({
@@ -153,7 +162,7 @@ ai.defineFlow(
     const prompt =
       input?.prompt ??
       'Research the impact of Model Context Protocol on AI agent development and summarize key findings.';
-    const serverUrl = input?.serverUrl ?? DEMO_MCP_SERVER_URL;
+    const serverUrl = requireMcpServerUrl(input?.serverUrl);
     const mode = input?.mode ?? 'validated';
     const tools = input?.tools ?? ['analyze_data'];
 
@@ -259,6 +268,15 @@ ai.defineFlow('combine tools and builtins', async () => {
   return text;
 });
 
+function isUrlCitation(annotation: unknown): annotation is UrlCitation {
+  return (
+    typeof annotation === 'object' &&
+    annotation !== null &&
+    'type' in annotation &&
+    annotation.type === 'url_citation'
+  );
+}
+
 // Streams a response that uses the built-in Google Search tool. Citations
 // arrive at the end of the stream and are attached to the final text part.
 ai.defineFlow('streaming-google-search', async (_, { sendChunk }) => {
@@ -279,12 +297,14 @@ ai.defineFlow('streaming-google-search', async (_, { sendChunk }) => {
   }
 
   const { text, message } = await response;
-  const citations = (message?.content ?? []).flatMap((p) =>
-    Array.isArray(p.metadata?.annotations) ? p.metadata.annotations : []
-  );
+  const citations = (message?.content ?? [])
+    .flatMap((p): unknown[] =>
+      Array.isArray(p.metadata?.annotations) ? p.metadata.annotations : []
+    )
+    .filter(isUrlCitation);
   return {
     text,
-    citations: citations.map((c: any) => ({ title: c.title, url: c.url })),
+    citations: citations.map(({ title, url }) => ({ title, url })),
   };
 });
 

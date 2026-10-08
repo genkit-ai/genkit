@@ -173,42 +173,61 @@ describe('Interaction Converters', () => {
       });
     });
 
-    it('should preserve other properties in thinkingConfig', () => {
-      const config = {
-        thinkingConfig: {
-          thinkingLevel: 'LOW',
-          includeThoughts: false,
-          thinkingBudget: 1024,
-          unknownProp: 'test',
+    it('should drop other thinkingConfig fields (no thinking_config) and report them', () => {
+      const dropped: string[] = [];
+      const result = toInteractionGenerationConfig(
+        {
+          thinkingConfig: {
+            thinkingLevel: 'LOW',
+            includeThoughts: false,
+            thinkingBudget: 1024,
+            unknownProp: 'test',
+          },
         },
-      };
-      const result = toInteractionGenerationConfig(config);
+        (field) => dropped.push(field)
+      );
       assert.deepStrictEqual(result, {
         thinking_level: 'low',
         thinking_summaries: 'none',
-        thinking_config: {
-          thinking_budget: 1024,
-          unknown_prop: 'test',
-        },
       });
+      assert.deepStrictEqual(dropped, [
+        'thinkingConfig.thinkingBudget',
+        'thinkingConfig.unknownProp',
+      ]);
     });
 
     it('should handle already snake_cased thinking_config', () => {
-      const config = {
-        thinking_config: {
-          thinking_level: 'MEDIUM',
-          include_thoughts: true,
-          thinking_budget: 2048,
+      const dropped: string[] = [];
+      const result = toInteractionGenerationConfig(
+        {
+          thinking_config: {
+            thinking_level: 'MEDIUM',
+            include_thoughts: true,
+            thinking_budget: 2048,
+          },
         },
-      };
-      const result = toInteractionGenerationConfig(config);
+        (field) => dropped.push(field)
+      );
       assert.deepStrictEqual(result, {
         thinking_level: 'medium',
         thinking_summaries: 'auto',
-        thinking_config: {
-          thinking_budget: 2048,
-        },
       });
+      assert.deepStrictEqual(dropped, ['thinkingConfig.thinking_budget']);
+    });
+
+    it('should drop contextCache and report it', () => {
+      const dropped: string[] = [];
+      const result = toInteractionGenerationConfig(
+        { contextCache: true, temperature: 0.5 },
+        (field) => dropped.push(field)
+      );
+      assert.deepStrictEqual(result, { temperature: 0.5 });
+      assert.deepStrictEqual(dropped, ['contextCache']);
+    });
+
+    it('should forward unknown passthrough keys in snake_case', () => {
+      const result = toInteractionGenerationConfig({ someNewField: 1 });
+      assert.deepStrictEqual(result, { some_new_field: 1 });
     });
   });
 
