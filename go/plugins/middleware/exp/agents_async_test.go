@@ -645,6 +645,130 @@ func TestAgentsWaitFollowsACappedSubAgentWait(t *testing.T) {
 	}
 }
 
+// TestAgentsWaitBoundClampsTheModelTimeout pins MaxWaitSeconds: the
+// operator's bound clamps "until every task settles" (0) and any longer
+// timeout, and the tool reports TimedOut at the bound as it does at the
+// model's own timeout.
+func TestAgentsWaitBoundClampsTheModelTimeout(t *testing.T) {
+	for _, timeout := range []float64{0, 3600} {
+		t.Run(fmt.Sprintf("timeoutSeconds=%v", timeout), func(t *testing.T) {
+			g := newTestGenkit(t)
+			gate := make(chan struct{})
+			t.Cleanup(func() { close(gate) })
+			genkitx.DefineCustomAgent[any](g, "researcher",
+				func(ctx context.Context, resp aix.Responder, sess *aix.SessionRunner[any]) (*aix.AgentResult, error) {
+					return nil, sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) (*aix.TurnResult, error) {
+						select {
+						case <-gate:
+						case <-ctx.Done():
+						}
+						return nil, ctx.Err()
+					})
+				},
+				aix.WithSessionStore[any](localstore.NewInMemorySessionStore[any]()),
+			)
+
+			orch := toolModel(t, g, "test/orch-bound", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+				launches := toolOutputs(req.Messages, "delegate_to_researcher")
+				waits := toolOutputs(req.Messages, waitBackgroundTasksToolName)
+				switch {
+				case len(launches) == 0:
+					return toolReqResp(req, &ai.ToolRequest{
+						Name:  "delegate_to_researcher",
+						Input: map[string]any{"task": "endless dig", "background": true},
+					}), nil
+				case len(waits) == 0:
+					return toolReqResp(req, &ai.ToolRequest{
+						Name: waitBackgroundTasksToolName,
+						Input: map[string]any{
+							"taskIds":        []string{lenientDelegation(launches[0]).TaskID},
+							"timeoutSeconds": timeout,
+						},
+					}), nil
+				default:
+					return textResp(req, "done"), nil
+				}
+			})
+
+			start := time.Now()
+			resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("research"),
+				ai.WithUse(&Agents{Agents: []aix.AgentRef{{Name: "researcher"}}, Async: true, MaxWaitSeconds: 1}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if elapsed := time.Since(start); elapsed > 30*time.Second {
+				t.Errorf("generate took %v; the wait was not bounded", elapsed)
+			}
+			waitOuts := toolOutputs(resp.History(), waitBackgroundTasksToolName)
+			if len(waitOuts) != 1 {
+				t.Fatalf("expected 1 wait response, got %d", len(waitOuts))
+			}
+			res := decodeToolOutput[backgroundTasksResult](t, waitOuts[0])
+			if !res.TimedOut {
+				t.Errorf("want TimedOut at the operator's bound, got %+v", res)
+			}
+			if len(res.Tasks) != 1 || res.Tasks[0].Status != "pending" {
+				t.Errorf("want the task still pending, got %+v", res.Tasks)
+			}
+		})
+	}
+}
+
+// TestAgentsWaitBoundInSchema pins that the model is told the bound: the
+// timeoutSeconds description names it when MaxWaitSeconds is set and not
+// otherwise. The bounded tool decodes its own input, so it must still accept
+// a call with no arguments.
+func TestAgentsWaitBoundInSchema(t *testing.T) {
+	g := newTestGenkit(t)
+	genkitx.DefineCustomAgent[any](g, "researcher",
+		func(ctx context.Context, resp aix.Responder, sess *aix.SessionRunner[any]) (*aix.AgentResult, error) {
+			return &aix.AgentResult{}, nil
+		},
+		aix.WithSessionStore[any](localstore.NewInMemorySessionStore[any]()),
+	)
+	timeoutDescription := func(t *testing.T, mw *Agents) (string, ai.Tool) {
+		t.Helper()
+		hooks, err := mw.New(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, tool := range hooks.Tools {
+			if tool.Name() != waitBackgroundTasksToolName {
+				continue
+			}
+			props, _ := tool.Definition().InputSchema["properties"].(map[string]any)
+			timeout, _ := props["timeoutSeconds"].(map[string]any)
+			desc, _ := timeout["description"].(string)
+			return desc, tool
+		}
+		t.Fatalf("no %s tool", waitBackgroundTasksToolName)
+		return "", nil
+	}
+
+	unbounded, _ := timeoutDescription(t, &Agents{Agents: []aix.AgentRef{{Name: "researcher"}}, Async: true})
+	if unbounded == "" || strings.Contains(unbounded, "at most") {
+		t.Errorf("unbounded timeoutSeconds description = %q, want one without a bound", unbounded)
+	}
+	bounded, tool := timeoutDescription(t, &Agents{Agents: []aix.AgentRef{{Name: "researcher"}}, Async: true, MaxWaitSeconds: 7})
+	if !strings.Contains(bounded, "until every task settles, for at most 7 seconds") {
+		t.Errorf("bounded timeoutSeconds description = %q, want it to name the 7-second bound", bounded)
+	}
+	out, err := tool.RunRaw(ctx, map[string]any{})
+	if err != nil {
+		t.Fatalf("bounded wait with no arguments: %v", err)
+	}
+	if res := decodeToolOutput[backgroundTasksResult](t, out); res.Note == "" {
+		t.Errorf("Note is empty; want the guidance that tells the model what to pass")
+	}
+}
+
+func TestAgentsRejectsNegativeMaxWaitSeconds(t *testing.T) {
+	mw := &Agents{Agents: []aix.AgentRef{{Name: "researcher"}}, Async: true, MaxWaitSeconds: -1}
+	if _, err := mw.New(ctx); !errors.Is(err, status.ErrInvalidArgument) {
+		t.Fatalf("New error = %v, want INVALID_ARGUMENT", err)
+	}
+}
+
 // TestAgentsWaitForFirstSettled pins the wait tool's race join: with
 // waitFor "first" the tool returns as soon as any listed task settles, the
 // still-running tasks report as pending, and the return is not a timeout.

@@ -204,6 +204,13 @@ type Agents struct {
 	// Background delegation requires server-managed sub-agents whose stores
 	// implement [aix.SnapshotSubscriber].
 	Async bool `json:"async,omitempty" jsonschema_description:"Enables background delegation: delegation tools accept a \"background\" flag, and the check_background_tasks / wait_for_background_tasks / abort_background_tasks tools are added. Background delegation requires server-managed sub-agents whose session stores support detach."`
+	// MaxWaitSeconds bounds how long one wait_for_background_tasks call
+	// blocks, whatever timeoutSeconds the model asks for, including 0 ("until
+	// every task settles"). At the bound the tool returns the current
+	// statuses with TimedOut set, as it does at the model's own timeout, so a
+	// sub-agent that keeps running cannot hold the orchestrator's turn open
+	// past it. 0 means no bound; a negative value is rejected.
+	MaxWaitSeconds int `json:"maxWaitSeconds,omitempty" jsonschema_description:"Upper bound on how long one wait_for_background_tasks call blocks, whatever timeoutSeconds the model asks for (including 0, \"until every task settles\"). At the bound the wait returns the current statuses with timedOut set. Defaults to 0, which lets the model decide."`
 
 	// TODO: add a knob to disable or scope the continue tool (per agent, or
 	// retries vs follow-ups) once real-world usage shows which control
@@ -264,6 +271,10 @@ func (a Agents) New(ctx context.Context) (*ai.Hooks, error) {
 			return nil, status.Errorf(status.ErrInvalidArgument,
 				"agents middleware: every agent reference must have a name")
 		}
+	}
+	if a.MaxWaitSeconds < 0 {
+		return nil, status.Errorf(status.ErrInvalidArgument,
+			"agents middleware: MaxWaitSeconds must be positive, got %d", a.MaxWaitSeconds)
 	}
 
 	prefix := a.prefix()
