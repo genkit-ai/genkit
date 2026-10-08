@@ -159,7 +159,8 @@ def define_evaluator(
                     span: SpanContext, point: BaseDataPoint = datapoint, test_case_id: str = case_id
                 ) -> EvalFnResponse:
                     try:
-                        test_case_output = await fn(point, req.options)
+                        options = req.options if req.options is not None else {}
+                        test_case_output = await fn(point, options)
                         test_case_output.span_id = span.span_id
                         test_case_output.trace_id = span.trace_id
                         return test_case_output
@@ -230,6 +231,8 @@ def define_batch_evaluator(
     # fn stays the metadata_fn, so its signature is still checked when defined.
     # model_validate takes a list or an EvalResponse; the constructor rejects the latter.
     async def batch_fn(req: EvalRequest, ctx: ActionRunContext) -> EvalResponse:
+        if req.options is None:
+            req.options = {}
         return EvalResponse.model_validate(await action.params.call(fn, req, ctx))
 
     action = registry.register_action(

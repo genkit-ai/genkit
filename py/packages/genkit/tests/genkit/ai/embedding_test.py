@@ -496,10 +496,10 @@ async def test_embed_many_config_reaches_embedder_as_options(
 
 
 @pytest.mark.asyncio
-async def test_embed_with_no_config_sends_none_options(
+async def test_embed_with_no_config_sends_empty_dict_options(
     mock_genkit_instance: tuple[Genkit, MockGenkitRegistry],
 ) -> None:
-    """With no ref config, no version, and no config=, the embedder gets options=None like a Dev UI run."""
+    """With no ref config, no version, and no config=, the embedder gets options={}."""
     genkit_instance, registry = mock_genkit_instance
 
     async def fake_embedder_fn(request: EmbedRequest) -> EmbedResponse:
@@ -517,7 +517,7 @@ async def test_embed_with_no_config_sends_none_options(
     await genkit_instance.embed_many(embedder='bare-embedder', content=['hi'])
 
     embed_action = await registry.resolve_action('embedder', 'bare-embedder')
-    assert [call.args[0].options for call in embed_action.run.call_args_list] == [None, None]
+    assert [call.args[0].options for call in embed_action.run.call_args_list] == [{}, {}]
 
 
 @pytest.mark.asyncio

@@ -2034,25 +2034,25 @@ async def test_evaluate_batch_evaluator_gets_the_config_dict(setup_test: SetupFi
 
 
 @pytest.mark.asyncio
-async def test_evaluate_with_no_config_passes_none_to_evaluator(setup_test: SetupFixture) -> None:
-    """ai.evaluate with no ref settings and no config= hands the evaluator None."""
+async def test_evaluate_with_no_config_passes_empty_dict_to_evaluator(setup_test: SetupFixture) -> None:
+    """ai.evaluate with no ref settings and no config= hands the evaluator an empty dict."""
     ai, *_ = setup_test
-    seen = _define_recording_evaluator(ai, 'none_eval')
+    seen = _define_recording_evaluator(ai, 'empty_eval')
 
-    await ai.evaluate(evaluator='none_eval', dataset=_one_row())
+    await ai.evaluate(evaluator='empty_eval', dataset=_one_row())
 
-    assert seen == [None]
+    assert seen == [{}]
 
 
 @pytest.mark.asyncio
-async def test_evaluate_batch_with_no_config_passes_none_to_evaluator(setup_test: SetupFixture) -> None:
-    """The same None reaches a batch evaluator."""
+async def test_evaluate_batch_with_no_config_passes_empty_dict_to_evaluator(setup_test: SetupFixture) -> None:
+    """The same empty dict reaches a batch evaluator."""
     ai, *_ = setup_test
-    seen = _define_recording_batch_evaluator(ai, 'none_batch_eval')
+    seen = _define_recording_batch_evaluator(ai, 'empty_batch_eval')
 
-    await ai.evaluate(evaluator='none_batch_eval', dataset=_one_row())
+    await ai.evaluate(evaluator='empty_batch_eval', dataset=_one_row())
 
-    assert seen == [None]
+    assert seen == [{}]
 
 
 @pytest.mark.asyncio

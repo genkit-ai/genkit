@@ -913,7 +913,7 @@ class EmbedRequest(GenkitModel):
     """Embed request whose documents are the public Document type."""
 
     input: list[Document]
-    options: Any | None = Field(default=None)
+    options: Any = Field(default_factory=dict)
 
     @field_validator('input', mode='before')
     @classmethod
@@ -921,6 +921,11 @@ class EmbedRequest(GenkitModel):
         if not isinstance(v, list):
             return v
         return [as_document(d) for d in v]
+
+    @field_validator('options', mode='before')
+    @classmethod
+    def _wrap_options(cls, v: object) -> object:
+        return {} if v is None else v
 
 
 class SessionState(GenkitModel):

@@ -1177,17 +1177,16 @@ class Genkit:
         *,
         embedder: str | EmbedderRef | None,
         config: dict[str, object] | None,
-    ) -> dict[str, object] | None:
+    ) -> dict[str, object]:
         """Copy ref config plus version, then overlay call-site config.
 
-        Returns None when neither the ref nor the call sets anything, the same
-        as a Dev UI run of the embedder. The caller's EmbedderRef.config dict is
-        left unchanged so they can reuse the same ref on later calls.
+        Returns an empty dict when neither the ref nor the call sets anything,
+        ensuring the embedder always receives request.options as a dictionary.
+        The caller's EmbedderRef.config dict is left unchanged so they can reuse
+        the same ref on later calls.
         """
         ref_config = embedder.config if isinstance(embedder, EmbedderRef) else None
         version = embedder.version if isinstance(embedder, EmbedderRef) else None
-        if ref_config is None and not version and config is None:
-            return None
         merged: dict[str, object] = {}
         if ref_config:
             merged.update(ref_config)
@@ -1746,7 +1745,7 @@ class Genkit:
 
         ``config`` is merged over the ``EvaluatorRef``'s config (the call
         wins per key) and handed to the evaluator as its second argument. When
-        neither sets anything, the evaluator gets ``None``. An evaluator name
+        neither sets anything, the evaluator gets ``{}``. An evaluator name
         that isn't registered raises ``GenkitError`` with ``NOT_FOUND``.
 
         Example:
@@ -1771,11 +1770,7 @@ class Genkit:
         else:
             raise ValueError('Evaluator must be specified as a string name or an EvaluatorRef.')
 
-        # same rule as _embedder_options: None when nothing was set, matching
-        # what the CLI / Dev UI send, so `options is None` is the one check.
-        final_options: dict[str, object] | None = None
-        if ref_config is not None or config is not None:
-            final_options = {**(ref_config or {}), **(config or {})}
+        final_options: dict[str, object] = {**(ref_config or {}), **(config or {})}
 
         eval_action = await self.registry.resolve_evaluator(evaluator_name)
         if eval_action is None:
