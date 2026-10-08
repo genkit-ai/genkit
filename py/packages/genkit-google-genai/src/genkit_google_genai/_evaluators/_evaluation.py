@@ -33,6 +33,8 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 import httpx
+from genkit_google_genai._auth import GOOGLE_AUTH_ERRORS, raise_auth_error
+from genkit_google_genai._constants import GLOBAL_LOCATION, is_multi_regional_location, vertex_api_host
 from google.auth import default as google_auth_default
 from google.auth.transport.requests import Request
 
@@ -46,8 +48,6 @@ from genkit.plugin_api import (
     mark_provider_error,
     wrap_http_error,
 )
-from genkit_google_genai._auth import GOOGLE_AUTH_ERRORS, raise_auth_error
-from genkit_google_genai._constants import GLOBAL_LOCATION, is_multi_regional_location, vertex_api_host
 
 if TYPE_CHECKING:
     from genkit import Genkit as GenkitRegistry

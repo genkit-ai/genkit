@@ -24,8 +24,7 @@ from unittest.mock import AsyncMock, MagicMock, PropertyMock
 
 import httpx
 import pytest
-from genkit_openai._models import OpenAIModel
-from genkit_openai._models._model import _usage_from_completion
+from genkit_openai._models._model import OpenAIModel, _usage_from_completion
 from genkit_openai._models._model_info import GPT_4_MODEL_SUPPORTS, SUPPORTED_OPENAI_MODELS
 from genkit_openai._models._utils import strip_markdown_fences
 from genkit_openai._typing import OpenAIConfig, ReasoningEffort

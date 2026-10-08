@@ -27,19 +27,19 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from genkit import ActionRunContext, GenkitError, ModelResponse
-from genkit.model import ModelInfo, ModelRequest, model as create_model, model_action_metadata
-from genkit.plugin_api import Action, ActionKind, ActionMetadata, Plugin, loop_local_client
 from genkit_vertexai import _constants as const
 from genkit_vertexai._model_garden._model_info import (
     SUPPORTED_OPENAI_COMPAT_MODELS,
     get_default_model_info,
 )
 
-if TYPE_CHECKING:
-    from openai import AsyncOpenAI
+from genkit import ActionRunContext, GenkitError, ModelResponse
+from genkit.model import ModelInfo, ModelRequest, model as create_model, model_action_metadata
+from genkit.plugin_api import Action, ActionKind, ActionMetadata, Plugin, loop_local_client
 
+if TYPE_CHECKING:
     from genkit_vertexai._model_garden._client import CachedOpenAI
+    from openai import AsyncOpenAI
 
 MODELGARDEN_PLUGIN_NAME = 'modelgarden'
 
@@ -189,7 +189,7 @@ class ModelGardenModel:
             # pins genkit-openai to this package's exact version, so Model
             # Garden reuses the OpenAI-compatible model class instead of
             # copying it.
-            from genkit_openai._models import OpenAIModel
+            from genkit_openai._models._model import OpenAIModel
 
             client = await self.create_client()
             info = _openai_compat_model_info(self.name)

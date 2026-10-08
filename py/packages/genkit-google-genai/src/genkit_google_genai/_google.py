@@ -84,11 +84,11 @@ from genkit.plugin_api import (
     to_json_schema,
 )
 from genkit_google_genai._auth import GOOGLE_AUTH_ERRORS, raise_auth_error
-from genkit_google_genai._evaluators import (
+from genkit_google_genai._evaluators._evaluation import (
+    METRIC_INFO,
     VertexAIEvaluationMetricType,
     create_vertex_evaluators,
 )
-from genkit_google_genai._evaluators._evaluation import METRIC_INFO
 from genkit_google_genai._interactions._options import ClientOptions
 from genkit_google_genai._models._antigravity import AntigravityConfig, create_antigravity_action
 from genkit_google_genai._models._deep_research import (

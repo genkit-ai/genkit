@@ -25,8 +25,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
-from genkit_openai._models import OpenAIModelHandler
 from genkit_openai._models._audio import SUPPORTED_STT_MODELS, SUPPORTED_TTS_MODELS
+from genkit_openai._models._handler import OpenAIModelHandler
 from genkit_openai._models._image import SUPPORTED_IMAGE_MODELS
 from genkit_openai._models._model_info import SUPPORTED_OPENAI_MODELS
 from genkit_openai._openai_plugin import OpenAI
