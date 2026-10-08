@@ -18,7 +18,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterable, Awaitable, Callable
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
 from typing import Any
 
 import pytest
@@ -26,13 +26,13 @@ from pydantic import BaseModel
 
 from genkit import Part
 from genkit._ai._agents._base import Agent, define_custom_agent
-from genkit._ai._agents._client import AgentError
+from genkit._ai._agents._client import AgentClient, AgentError
 from genkit._ai._agents._runtime import SessionRunner
 from genkit._ai._agents._session_stores._inmemory_store import InMemorySessionStore
 from genkit._ai._agents._types import TurnResult
 from genkit._core._action import ActionRunContext
 from genkit._core._error import GenkitError, GenkitRuntimeError, RuntimeErrorReason
-from genkit._core._model import AgentInit, AgentInput, AgentOutput, AgentResult, Message
+from genkit._core._model import AgentInit, AgentInput, AgentOutput, AgentResult, Message, SessionState
 from genkit._core._registry import Registry
 from genkit._core._typing import (
     AgentFinishReason,
@@ -391,4 +391,86 @@ async def test_send_with_invalid_custom_state_returns_response_with_error() -> N
     assert isinstance(res.error, GenkitRuntimeError)
     assert res.error.reason is RuntimeErrorReason.INVALID_INPUT
     assert res.error.status == 'INVALID_ARGUMENT'
+    assert res.state is None
+
+
+class _ScriptedTransport:
+    """Hands back canned turn outputs, like a remote server would."""
+
+    def __init__(self, outputs: list[AgentOutput], *, state_management: str) -> None:
+        self.outputs = outputs
+        self.state_management = state_management
+
+    async def run_turn(
+        self,
+        *,
+        agent_input: AgentInput,
+        init: AgentInit,
+    ) -> tuple[AsyncIterable[Any], Awaitable[AgentOutput]]:
+        del agent_input, init
+
+        async def no_chunks() -> AsyncIterator[Any]:
+            for chunk in ():
+                yield chunk
+
+        async def output() -> AgentOutput:
+            return self.outputs.pop(0)
+
+        return no_chunks(), output()
+
+    async def get_snapshot(self, *, snapshot_id: str | None = None, session_id: str | None = None) -> None:
+        del snapshot_id, session_id
+        return None
+
+    async def abort_snapshot(self, snapshot_id: str) -> SnapshotStatus | None:
+        del snapshot_id
+        return None
+
+
+@pytest.mark.asyncio
+async def test_send_on_aborted_turn_hides_previous_reply_and_keeps_last_snapshot() -> None:
+    """An aborted turn shows no message, no text, and the last completed snapshot id."""
+    # 1. A remote server answers once, then reports the next turn aborted.
+    #    Its output still carries the previous reply and no snapshot id.
+    previous = _ok_message([Part.from_text('Smoked Salmon Tartine')])
+    transport = _ScriptedTransport(
+        [
+            AgentOutput(finish_reason=AgentFinishReason.STOP, snapshot_id='s1', message=previous),
+            AgentOutput(finish_reason=AgentFinishReason.ABORTED, message=previous),
+        ],
+        state_management='server',
+    )
+    chat = AgentClient(transport).chat()  # type: ignore[arg-type]
+    await chat.send('suggest a dish')
+    history = list(chat.messages)
+
+    # 2. The aborted turn does not read as an answer.
+    res = await chat.send('something without nuts')
+    assert res.finish_reason == AgentFinishReason.ABORTED
+    assert res.message is None
+    assert res.text == ''
+
+    # 3. The caller still resumes from s1, and the unanswered prompt is gone.
+    assert res.snapshot_id == 's1'
+    assert chat.snapshot_id == 's1'
+    assert chat.messages == history
+
+
+@pytest.mark.asyncio
+async def test_send_on_aborted_turn_with_invalid_state_returns_none_state() -> None:
+    """An aborted turn whose custom state fails the schema returns state None instead of raising."""
+    transport = _ScriptedTransport(
+        [
+            AgentOutput(
+                finish_reason=AgentFinishReason.ABORTED,
+                state=SessionState(custom={'done': 'nope'}),
+            ),
+        ],
+        state_management='client',
+    )
+    chat = AgentClient(transport, state_schema=_TaskState).chat()  # type: ignore[arg-type]
+
+    res = await chat.send('mark the order done')
+
+    assert res.finish_reason == AgentFinishReason.ABORTED
     assert res.state is None

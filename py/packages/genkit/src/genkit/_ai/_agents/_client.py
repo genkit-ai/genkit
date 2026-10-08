@@ -78,6 +78,11 @@ OutputT = TypeVar('OutputT')
 # returns), never takes it in, so it's covariant.
 StateT_co = TypeVar('StateT_co', bound=BaseModel, covariant=True)
 
+# A failed or aborted turn landed no reply: the chat rolls back the prompt,
+# keeps resuming from the last completed snapshot, and the response shows no
+# message. Every check for "did this turn answer?" reads this one set.
+_NO_REPLY = frozenset({AgentFinishReason.FAILED, AgentFinishReason.ABORTED})
+
 
 class SessionState(SessionStateVeneer, Generic[StateT]):
     """Session state generic over custom state."""
@@ -225,7 +230,7 @@ class AgentResponse(Generic[StateT]):
     @property
     def text(self) -> str:
         """Full text content of the response message."""
-        if self.raw.finish_reason == AgentFinishReason.FAILED:
+        if self.raw.finish_reason in _NO_REPLY:
             return ''
         return text_of(self.raw.message.content) if self.raw.message else ''
 
@@ -287,10 +292,10 @@ class AgentResponse(Generic[StateT]):
     def message(self) -> Message | None:
         """The response message.
 
-        A failed turn's wire message is the previous reply. Showing it
-        would look like this turn answered.
+        A failed or aborted turn's wire message is the previous reply.
+        Showing it would look like this turn answered.
         """
-        if self.raw.finish_reason == AgentFinishReason.FAILED:
+        if self.raw.finish_reason in _NO_REPLY:
             return None
         return self.raw.message
 
@@ -1361,13 +1366,13 @@ class AgentChat(Generic[StateT]):
         return AgentResponse(raw=raw, messages=list(self.messages), state=self._response_state(raw))
 
     def _with_resume_snapshot(self, raw: AgentOutput) -> AgentOutput:
-        """Put the last completed snapshot id on a failed turn that omitted one.
+        """Put the last completed snapshot id on a failed or aborted turn that omitted one.
 
         A new connection whose first turn fails has no snapshot of its own.
         The chat is still on the previous completed one, and that is the
         id the caller resumes from.
         """
-        if raw.finish_reason == AgentFinishReason.FAILED and raw.snapshot_id is None and self._snapshot_id is not None:
+        if raw.finish_reason in _NO_REPLY and raw.snapshot_id is None and self._snapshot_id is not None:
             return raw.model_copy(update={'snapshot_id': self._snapshot_id})
         return raw
 
@@ -1380,7 +1385,7 @@ class AgentChat(Generic[StateT]):
         try:
             return self.state
         except ValidationError:
-            if raw.finish_reason != AgentFinishReason.FAILED:
+            if raw.finish_reason not in _NO_REPLY:
                 raise
             return None
 
@@ -1427,13 +1432,10 @@ class AgentChat(Generic[StateT]):
             # send() can resume from. Keep the last completed id.
             # Everything else was asked — including a blocked refusal —
             # so the prompt stays and send continues from that snapshot.
-            if raw.finish_reason not in {
-                AgentFinishReason.FAILED,
-                AgentFinishReason.ABORTED,
-            }:
+            if raw.finish_reason not in _NO_REPLY:
                 self._resume_snapshot_id = raw.snapshot_id
 
-        if raw.finish_reason in (AgentFinishReason.FAILED, AgentFinishReason.ABORTED):
+        if raw.finish_reason in _NO_REPLY:
             # No reply landed this turn, so drop the optimistic user message
             # rather than strand it unanswered; the next turn resumes from before
             # it. The durable snapshot still holds the truth.
