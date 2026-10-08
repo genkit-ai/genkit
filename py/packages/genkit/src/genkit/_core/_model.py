@@ -82,13 +82,15 @@ class ModelConfig(GenerationCommonConfig):
     """Settings every model understands, plus ``extra`` for provider-only ones.
 
     Unknown keyword arguments raise, so ``ModelConfig(temprature=0.2)`` fails
-    where it was typed instead of being sent or silently dropped.
+    where it was typed instead of being sent or silently dropped. A
+    per-request API key goes in ``context={'secrets': {'api_key': ...}}``, not
+    here.
     """
 
     model_config: ClassVar[ConfigDict] = ConfigDict(extra='forbid')
 
     extra: dict[str, Any] | None = None
-    """Provider settings the model's config class doesn't declare, sent as-is and not checked.
+    """Provider settings the model's config class doesn't declare, sent as-is.
 
     Keys are the provider's wire names. The plugin merges them into its
     request after the declared fields, so a colliding key wins. Fields Genkit
@@ -97,8 +99,9 @@ class ModelConfig(GenerationCommonConfig):
     body for Gemini, OpenAI and Anthropic, ``options`` for Ollama, and
     ``additionalModelRequestFields`` for Bedrock.
 
-    Don't put API keys or other secrets here: config travels with the request
-    into traces.
+    Keys aren't validated, except that an API key here raises like one at the
+    top level: config travels with the request into traces. Don't put other
+    secrets here either.
     """
 
 
@@ -146,8 +149,63 @@ class ModelConfigDict(TypedDict, extra_items=Any, total=False):
     top_k: float | None
     top_p: float | None
     stop_sequences: Sequence[str] | None
-    api_key: str | None
     extra: dict[str, Any] | None
+
+
+SECRETS_HINT = "Pass the key as context={'secrets': {'api_key': ...}}."
+_KEY_SLOTS = ('api_key', 'apiKey')
+
+
+def misplaced_api_key_error() -> GenkitError:
+    """The ``INVALID_ARGUMENT`` error for an API key found in config."""
+    return GenkitError(
+        status='INVALID_ARGUMENT',
+        message=f'API key belongs in context.secrets, not config. {SECRETS_HINT}',
+        reason=RuntimeErrorReason.INVALID_INPUT,
+    )
+
+
+def _has_key(bag: Mapping[str, object]) -> bool:
+    return any(bag.get(slot) is not None for slot in _KEY_SLOTS)
+
+
+def reject_config_api_key(config: object) -> None:
+    """Raise when a request config carries an API key.
+
+    Core calls this in generate, in the ``/util/generate`` action, and on every
+    model and background-model action run, so plugins don't need to. Checks
+    ``api_key`` / ``apiKey`` on a config dict or model, on a model's undeclared
+    fields, and inside ``extra``. A key in any of those would be
+    traced, and a key in ``extra`` would also go to the provider as a body
+    field while the call authenticates with the plugin's key.
+
+    Example:
+        ```python
+        reject_config_api_key({'temperature': 0.2})
+        # => None
+        reject_config_api_key({'extra': {'api_key': 'sk-tenant'}})
+        # => GenkitError INVALID_ARGUMENT: API key belongs in context.secrets, not config. ...
+        ```
+
+    Args:
+        config: The request config, as a dict or a config object.
+
+    Raises:
+        GenkitError: ``INVALID_ARGUMENT`` when a key is present.
+    """
+    if config is None:
+        return
+    bags: list[object]
+    if isinstance(config, Mapping):
+        top = cast(Mapping[str, object], config)
+        bags = [top, top.get('extra')]
+    else:
+        if any(getattr(config, slot, None) is not None for slot in _KEY_SLOTS):
+            raise misplaced_api_key_error()
+        bags = [getattr(config, 'model_extra', None), getattr(config, 'extra', None)]
+    for bag in bags:
+        if isinstance(bag, Mapping) and _has_key(cast(Mapping[str, object], bag)):
+            raise misplaced_api_key_error()
 
 
 # TypeVars for generic types

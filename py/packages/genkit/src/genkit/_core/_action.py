@@ -46,7 +46,14 @@ from typing_extensions import TypeVar
 from genkit._core._channel import Channel, CloseableQueue
 from genkit._core._compat import StrEnum
 from genkit._core._error import GenkitError, Interrupt, RuntimeErrorReason, mark_request_error
-from genkit._core._model import EmbedRequest, ModelRequest, ModelResponse, config_type_path, declared_config_type
+from genkit._core._model import (
+    EmbedRequest,
+    ModelRequest,
+    ModelResponse,
+    config_type_path,
+    declared_config_type,
+    reject_config_api_key,
+)
 from genkit._core._schema import to_json_schema
 from genkit._core._telemetry._attrs import Attr, metadata_key
 from genkit._core._telemetry._instrumentation import (
@@ -61,6 +68,13 @@ from genkit._core._typing import EmbedResponse, Operation
 # =============================================================================
 
 SpanAttributeValue = str | bool | int | float | Sequence[str] | Sequence[bool] | Sequence[int] | Sequence[float]
+
+
+def _request_config(request: object) -> object:
+    """The ``config`` of a model request, given as an object or a dict."""
+    if isinstance(request, Mapping):
+        return cast(Mapping[str, Any], request).get('config')
+    return getattr(request, 'config', None)
 
 
 def _record_latency(output: object, latency_ms: float) -> object:
@@ -901,6 +915,11 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         # With a live input_stream, `input` isn't the payload — the stream
         # carries the per-turn inputs — so there's nothing to validate up front.
         if input_stream is None:
+            # Checked ahead of validation so a strict config class reports the
+            # secrets slot instead of an unknown key. Runs on every model call,
+            # including ones that never went through generate.
+            if self._kind in (ActionKind.MODEL, ActionKind.BACKGROUND_MODEL):
+                reject_config_api_key(_request_config(input))
             input = self._validate_input(input)
         init = self._validate_init(init)
 

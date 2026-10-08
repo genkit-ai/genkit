@@ -79,15 +79,21 @@ class _LooseConfig(BaseModel):
     extra: dict[str, Any] | None = None
 
 
+class _KeyedConfig(ModelConfig):
+    """A plugin class that declares its own ``api_key`` field."""
+
+    api_key: str | None = None
+
+
 @pytest.mark.parametrize(
     'config',
     [
         pytest.param({'api_key': 'sk-tenant'}, id='dict'),
         pytest.param({'apiKey': 'sk-tenant'}, id='dict-js-spelling'),
         pytest.param({'extra': {'api_key': 'sk-tenant'}}, id='dict-extra'),
-        pytest.param(ModelConfig(api_key='sk-tenant'), id='model-field'),
+        pytest.param(_KeyedConfig(api_key='sk-tenant'), id='model-field'),
         pytest.param(ModelConfig(extra={'apiKey': 'sk-tenant'}), id='model-extra-field'),
-        pytest.param(ModelConfig.model_validate({'apiKey': 'sk-tenant'}), id='model-js-spelling'),
+        pytest.param(_LooseConfig.model_validate({'apiKey': 'sk-tenant'}), id='undeclared-js-spelling'),
         pytest.param(_LooseConfig.model_validate({'api_key': 'sk-tenant'}), id='undeclared-field'),
         pytest.param(_LooseConfig(extra={'api_key': 'sk-tenant'}), id='non-modelconfig-extra'),
     ],

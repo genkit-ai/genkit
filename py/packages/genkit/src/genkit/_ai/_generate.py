@@ -86,6 +86,7 @@ from genkit._core._model import (
     Part,
     as_message,
     chunk_for_stream,
+    reject_config_api_key,
     reject_unanswered_interrupts,
 )
 from genkit._core._protocols import RegistryLike
@@ -743,6 +744,9 @@ async def run_generate(
             message=f'max turns cannot be negative, got {options.max_turns}',
             reason=RuntimeErrorReason.INVALID_INPUT,
         )
+    # The veneer already checked ahead of its span. /util/generate (Dev UI,
+    # reflection) starts here, so it fails before middleware or the model runs.
+    reject_config_api_key(options.config)
     registry = registry if registry.is_child else registry.new_child()
 
     if options.tools:

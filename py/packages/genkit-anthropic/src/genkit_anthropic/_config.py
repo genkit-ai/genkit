@@ -171,8 +171,6 @@ def _anthropic_config_schema_extra(schema: JsonDict) -> None:
             },
         )
     )
-    # a per-request key goes in context.secrets, so the form shouldn't offer one.
-    props.pop('apiKey', None)
 
 
 class ThinkingConfig(BaseModel):
@@ -312,9 +310,8 @@ class AnthropicConfig(ModelConfig):
     )
 
     # Config fields that are never create() kwargs. api_version picks the API
-    # surface. api_key is declared by ModelConfig; generate rejects it before
-    # params are built, since the per-request key comes from context.secrets.
-    SDK_UNSUPPORTED_KEYS: ClassVar[frozenset[str]] = frozenset({'api_version', 'api_key'})
+    # surface. (api_key was removed from ModelConfig in #6597).
+    SDK_UNSUPPORTED_KEYS: ClassVar[frozenset[str]] = frozenset({'api_version'})
 
     thinking: Annotated[ThinkingConfig | None, WithJsonSchema(_THINKING_SCHEMA)] = Field(
         default=None,

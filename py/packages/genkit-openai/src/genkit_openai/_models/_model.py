@@ -44,7 +44,7 @@ logger = structlog.get_logger(__name__)
 # Genkit common fields that are not chat.completions.create() kwargs.
 # version becomes the wire model id; stop_sequences becomes stop; extra
 # becomes extra_body; max_output_tokens becomes the max_tokens cap.
-_GENKIT_ONLY = frozenset({'api_key', 'top_k', 'version', 'max_output_tokens', 'stop_sequences', 'extra'})
+_GENKIT_ONLY = frozenset({'top_k', 'version', 'max_output_tokens', 'stop_sequences', 'extra'})
 
 # Body fields Genkit builds from the request. `extra` can't set them: the
 # schema can't see inside the passthrough, and overwriting them silently would

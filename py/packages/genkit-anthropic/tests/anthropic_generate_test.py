@@ -27,7 +27,7 @@ import httpx
 import pytest
 from genkit_anthropic import Anthropic
 
-from genkit import FinishReason, Genkit
+from genkit import FinishReason, Genkit, GenkitError
 from genkit.plugin_api import ActionKind
 
 MODEL = 'anthropic/claude-sonnet-4-6'
@@ -308,13 +308,12 @@ async def test_generate_claude_config_api_key_fails_pointing_to_secrets(
     api = FakeClaudeApi()
     ai = _genkit(api, api_key=plugin_key)
 
-    response = await ai.generate(model=MODEL, prompt='hi', config=config)
+    with pytest.raises(GenkitError) as exc_info:
+        await ai.generate(model=MODEL, prompt='hi', config=config)
 
-    assert response.finish_reason == FinishReason.FAILED
-    assert response.error is not None
-    assert response.error.status == 'INVALID_ARGUMENT'
-    assert "context={'secrets': {'api_key': ...}}" in response.error.message
-    assert TENANT_KEY not in response.error.message
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert "context={'secrets': {'api_key': ...}}" in str(exc_info.value)
+    assert TENANT_KEY not in str(exc_info.value)
     assert api.requests == []
 
 

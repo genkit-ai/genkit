@@ -423,7 +423,7 @@ async def test_action_revalidates_bare_model_request_into_plugin_config() -> Non
 
     class PluginConfig(BaseModel):
         model_config = ConfigDict(extra='allow')
-        api_key: str | None = None
+        safe_prompt: bool | None = None
 
     seen: dict[str, Any] = {}
 
@@ -435,14 +435,14 @@ async def test_action_revalidates_bare_model_request_into_plugin_config() -> Non
     # generate may hand the action a bare request that still has a dict config.
     request = ModelRequest(
         messages=[Message(role='user', content=[Part.from_text('hi')])],
-        config={'api_key': 'k'},
+        config={'safe_prompt': True},
     )
-    assert request.config == {'api_key': 'k'}
+    assert request.config == {'safe_prompt': True}
 
     result = await action.run(input=request)
     assert result.response == 'ok'
     assert isinstance(seen['config'], PluginConfig)
-    assert seen['config'].api_key == 'k'
+    assert seen['config'].safe_prompt is True
 
 
 @pytest.mark.asyncio

@@ -44,6 +44,7 @@ from genkit._core._model import (
     ModelResponseChunk,
     config_type_path,
     get_basic_usage_stats,
+    reject_config_api_key,
     text_from_content,
     text_from_message,
 )
@@ -120,14 +121,14 @@ def normalize_config(*, config: object) -> dict[str, Any]:
     """Dump a config object or dict. Does not fold or merge.
 
     Pydantic dumps the Python field names, including explicit ``None``.
-    Dict keys stay as written. ``api_key`` is copied back when dump omits it.
+    Dict keys stay as written. Fields marked ``exclude=True`` are copied back.
     """
     if config is None:
         return {}
     if isinstance(config, BaseModel):
         dumped = config.model_dump(exclude_unset=True, exclude_none=False, by_alias=False)
-        # api_key is left out of JSON on purpose; copy it back so a
-        # per-request key still reaches the plugin.
+        # a plugin can keep a client-only setting out of JSON with exclude=True;
+        # copy it back so the setting the caller passed still reaches the plugin.
         for name in config.model_fields_set:
             if name not in dumped:
                 dumped[name] = getattr(config, name)
@@ -237,6 +238,7 @@ async def resolve_for_generate(
     against the class the model registered.
     """
     resolved = resolve_call_model(model=model, config=config, registry=registry, message=message)
+    reject_config_api_key(resolved.config)
     if resolved.config_schema is not None and not ref_defers_to_registered_class(resolved.config_schema):
         return resolved
     action = await registry.resolve_model(resolved.name)
@@ -532,40 +534,3 @@ def check_call_config(*, config: object, schema: type[BaseModel] | None, model: 
     """Call-time config check: a typed object's class and a dict's keys and values."""
     assert_correct_config_class(config=config, schema=schema, model=model)
     check_config_dict(config=config, schema=schema, model=model)
-
-
-# =============================================================================
-# Model config types (from model_types.py)
-# =============================================================================
-
-
-def get_request_api_key(config: Mapping[str, object] | ModelConfig | object | None) -> str | None:
-    """Extract API key from config (snake_case or camelCase)."""
-    if config is None:
-        return None
-
-    if isinstance(config, ModelConfig):
-        return config.api_key
-
-    if isinstance(config, Mapping):
-        config_mapping = cast(Mapping[str, object], config)
-        for key in ('api_key', 'apiKey'):
-            api_key = config_mapping.get(key)
-            if isinstance(api_key, str) and api_key:
-                return api_key
-    else:
-        # Defensive fallback for plugin-specific config classes that inherit from
-        # ModelConfig or expose an api_key attribute.
-        api_key_attr = getattr(config, 'api_key', None)
-        if isinstance(api_key_attr, str) and api_key_attr:
-            return api_key_attr
-
-    return None
-
-
-def get_effective_api_key(
-    config: Mapping[str, object] | ModelConfig | object | None,
-    plugin_api_key: str | None,
-) -> str | None:
-    """Return request API key if set, otherwise plugin API key."""
-    return get_request_api_key(config) or plugin_api_key

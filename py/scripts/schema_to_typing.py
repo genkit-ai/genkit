@@ -52,6 +52,9 @@ TRANSFORMATIONS = {
     # Documents take the same Part as messages. The schema names a
     # text|media subset; we do not emit a second type for that.
     'DocumentPart': {'output_name': 'PartData'},
+    # config is recorded in traces, so a per-request key goes in
+    # context.secrets instead and model config has no slot for one.
+    'GenerationCommonConfig': {'omit': ['apiKey']},
     # docs= always goes into the prompt and nothing in Python reads
     # supports.context, so the field isn't emitted.
     'Supports': {'omit': ['context']},

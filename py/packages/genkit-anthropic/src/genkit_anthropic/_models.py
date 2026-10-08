@@ -42,7 +42,7 @@ from genkit.plugin_api import (
 )
 from genkit_anthropic._config import AnthropicConfig
 from genkit_anthropic._model_info import get_model_info
-from genkit_anthropic._secrets import context_api_key, reject_config_api_key
+from genkit_anthropic._secrets import context_api_key
 from genkit_anthropic._utils import (
     build_cache_usage,
     get_cache_control,
@@ -340,7 +340,6 @@ class AnthropicModel:
         Returns:
             Generated response.
         """
-        reject_config_api_key(request.config)
         context = ctx.context if ctx is not None and isinstance(ctx.context, dict) else None
         client = self._client_for_key(context_api_key(context))
         # A config that fails validation, a bad thinking budget, an unsigned

@@ -67,7 +67,7 @@ from genkit_openai._models._audio import OpenAISttConfig, OpenAITtsConfig
 from genkit_openai._models._image import OpenAIDalleConfig, OpenAIGptImageConfig
 from genkit_openai._models._model_info import KnownGpt, get_default_openai_model_info
 from genkit_openai._models._utils import reraise_openai_error
-from genkit_openai._secrets import context_api_key, reject_config_api_key
+from genkit_openai._secrets import context_api_key
 from genkit_openai._typing import OpenAIConfig
 
 # Headers that tie a call to the plugin's OpenAI organization or project. A
@@ -428,11 +428,8 @@ class OpenAI(Plugin):
         A tenant who passed their own key is the one who should be billed. The
         copy shares the plugin client's connection pool, and concurrent tenants
         each get their own copy instead of swapping the key on a shared client.
-        A plugin built without a key serves only callers who bring one. A key
-        on ``request.config`` raises instead of being dropped, because running
-        that call on the plugin's key would bill the wrong account.
+        A plugin built without a key serves only callers who bring one.
         """
-        reject_config_api_key(request.config)
         key = context_api_key(ctx.context)
         if self._has_plugin_key():
             client = self._runtime_client()

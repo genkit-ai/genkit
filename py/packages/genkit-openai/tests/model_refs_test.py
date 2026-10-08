@@ -144,7 +144,6 @@ async def test_create_model_action_camel_case_lands_on_the_wire() -> None:
                 'maxOutputTokens': 256,
                 'stopSequences': ['END'],
                 'topP': 0.9,
-                'apiKey': 'should-not-leak',
             },
         }
     )
