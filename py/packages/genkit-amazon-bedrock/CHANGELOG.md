@@ -28,8 +28,6 @@ First release of the plugin.
   families, over InvokeModel.
 - Image generation for the Nova Canvas, Titan Image and Stability families,
   configured with a plain dict of family-specific options.
-- `Bedrock.rerank()` helper for the Cohere and Amazon rerank families; Genkit
-  Python has no reranker action kind to register against.
 - Inference-profile and ARN model IDs, sent to Bedrock verbatim while
   capability lookup falls back to the base model.
 - AWS error codes mapped onto Genkit statuses, with `Retry-After` surfaced as
@@ -37,4 +35,4 @@ First release of the plugin.
 - Metadata-only debug logging through `structlog`.
 - Runnable sample under `py/samples/amazon-bedrock-sample/` covering chat,
   streaming, tool calling, structured output, reasoning, prompt caching,
-  vision, PDF input, embeddings, image generation, and reranking.
+  vision, PDF input, embeddings, and image generation.

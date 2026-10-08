@@ -200,3 +200,14 @@ def get_model_info(
             constrained=Constrained.NONE,
         ),
     )
+
+
+# Rerank models have no Converse path. Bedrock serves them over InvokeModel,
+# which this plugin does not wrap, so they must never resolve as chat models.
+_RERANK_PATTERNS = ('cohere.rerank', 'amazon.rerank')
+
+
+def is_rerank_model(model_id: str) -> bool:
+    """Reports whether a Bedrock model ID, inference-profile ID, or ARN names a rerank model."""
+    base_id = strip_inference_profile_prefix(model_id)
+    return any(pattern in base_id for pattern in _RERANK_PATTERNS)

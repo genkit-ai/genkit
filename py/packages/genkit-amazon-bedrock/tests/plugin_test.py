@@ -339,8 +339,8 @@ async def test_everything_listed_can_actually_resolve() -> None:
 
 @pytest.mark.asyncio
 async def test_a_declared_rerank_model_is_not_listed() -> None:
-    # The other side of the listed-can-resolve invariant: reranking is the
-    # Bedrock.rerank helper, so a rerank ID has no action to advertise.
+    # The other side of the listed-can-resolve invariant: the plugin has no
+    # rerank action, so a rerank ID has nothing to advertise.
     plugin = Bedrock(
         region='us-east-1',
         models=[
