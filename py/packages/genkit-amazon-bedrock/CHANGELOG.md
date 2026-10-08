@@ -27,7 +27,7 @@ First release of the plugin.
 - Embedders for the Titan text, Titan multimodal, Cohere v3 and Nova-2
   families, over InvokeModel.
 - Image generation for the Nova Canvas, Titan Image and Stability families,
-  configured with `BedrockImageConfig`.
+  configured with a plain dict of family-specific options.
 - `Bedrock.rerank()` helper for the Cohere and Amazon rerank families; Genkit
   Python has no reranker action kind to register against.
 - Inference-profile and ARN model IDs, sent to Bedrock verbatim while

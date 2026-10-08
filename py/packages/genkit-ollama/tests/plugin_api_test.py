@@ -24,7 +24,6 @@ import httpx
 import ollama as ollama_api
 import pytest
 from genkit_ollama import Ollama, OllamaConnectionError, RequestHeaderParams, ollama_name
-from genkit_ollama._constants import OllamaAPITypes
 from genkit_ollama._embedders import EmbeddingDefinition
 from genkit_ollama._errors import wrap_connection_errors
 from genkit_ollama._models import ModelDefinition, OllamaConfig, OllamaModel, OllamaSupports
@@ -127,9 +126,7 @@ async def test_resolve_action(kind: ActionKind, name: str, ollama_plugin_instanc
 @pytest.mark.asyncio
 async def test_create_model_action_chat_with_media() -> None:
     """A CHAT model with media support advertises multiturn/tools/media."""
-    plugin = Ollama(
-        models=[ModelDefinition(name='llava', api_type=OllamaAPITypes.CHAT, supports=OllamaSupports(media=True))]
-    )
+    plugin = Ollama(models=[ModelDefinition(name='llava', api_type='chat', supports=OllamaSupports(media=True))])
     action = plugin._create_model_action('llava')
 
     supports = cast(dict[str, Any], cast(dict[str, Any], action.metadata)['model']['supports'])
@@ -141,7 +138,7 @@ async def test_create_model_action_chat_with_media() -> None:
 @pytest.mark.asyncio
 async def test_create_model_action_generate_gates_capabilities() -> None:
     """A GENERATE model reports multiturn/tools/media all False."""
-    plugin = Ollama(models=[ModelDefinition(name='gen', api_type=OllamaAPITypes.GENERATE)])
+    plugin = Ollama(models=[ModelDefinition(name='gen', api_type='generate')])
     action = plugin._create_model_action('gen')
 
     supports = cast(dict[str, Any], cast(dict[str, Any], action.metadata)['model']['supports'])
@@ -338,7 +335,7 @@ async def test_model_action_passes_request_context_to_header_callable() -> None:
         captured['params'] = params
         return {'Authorization': 'Bearer tok'}
 
-    model_def = ModelDefinition(name='m', api_type=OllamaAPITypes.CHAT)
+    model_def = ModelDefinition(name='m', api_type='chat')
     plugin = Ollama(models=[model_def], server_address='http://example:11434', request_headers=make_headers)
 
     sdk_client = AsyncMock()
@@ -472,7 +469,7 @@ async def test_model_action_wraps_connection_error() -> None:
     The ollama SDK converts ``httpx.ConnectError`` into a builtin
     ``ConnectionError`` before our wrapper sees it, so that is what we simulate.
     """
-    plugin = Ollama(models=[ModelDefinition(name='m', api_type=OllamaAPITypes.CHAT)])
+    plugin = Ollama(models=[ModelDefinition(name='m', api_type='chat')])
 
     client_mock = MagicMock()
     client_mock.chat = AsyncMock(side_effect=ConnectionError('Failed to connect to Ollama.'))
@@ -490,7 +487,7 @@ async def test_model_action_wraps_connection_error() -> None:
 @pytest.mark.asyncio
 async def test_model_action_wraps_transport_timeout() -> None:
     """Timeouts the SDK does not intercept (httpx.TransportError) are also wrapped."""
-    plugin = Ollama(models=[ModelDefinition(name='m', api_type=OllamaAPITypes.CHAT)])
+    plugin = Ollama(models=[ModelDefinition(name='m', api_type='chat')])
 
     client_mock = MagicMock()
     client_mock.chat = AsyncMock(side_effect=httpx.ReadTimeout('timed out'))
@@ -511,9 +508,7 @@ async def test_model_action_does_not_wrap_media_fetch_error() -> None:
     call. That transport failure must not be relabelled "Cannot reach the Ollama
     server", which would point users at the wrong fix.
     """
-    plugin = Ollama(
-        models=[ModelDefinition(name='m', api_type=OllamaAPITypes.CHAT, supports=OllamaSupports(media=True))]
-    )
+    plugin = Ollama(models=[ModelDefinition(name='m', api_type='chat', supports=OllamaSupports(media=True))])
 
     # The Ollama SDK client must never be reached: image resolution fails first.
     client_mock = MagicMock()

@@ -22,7 +22,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import ollama as ollama_api
 import pytest
-from genkit_ollama._constants import OllamaAPITypes
 from genkit_ollama._models import ModelDefinition
 from genkit_ollama._plugin import Ollama
 
@@ -42,7 +41,7 @@ def chat_model_plugin(ollama_model: str) -> Ollama:
         models=[
             ModelDefinition(
                 name=ollama_model.split('/')[-1],
-                api_type=OllamaAPITypes.CHAT,
+                api_type='chat',
             )
         ],
     )
@@ -84,7 +83,7 @@ def generate_model_plugin(ollama_model: str) -> Ollama:
         models=[
             ModelDefinition(
                 name=ollama_model.split('/')[-1],
-                api_type=OllamaAPITypes.GENERATE,
+                api_type='generate',
             )
         ],
     )

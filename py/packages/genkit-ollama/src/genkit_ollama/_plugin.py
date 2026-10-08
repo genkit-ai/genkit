@@ -44,10 +44,7 @@ from genkit.plugin_api import (
     to_json_schema,
     wrap_http_error,
 )
-from genkit_ollama._constants import (
-    DEFAULT_OLLAMA_SERVER_URL,
-    OllamaAPITypes,
-)
+from genkit_ollama._constants import DEFAULT_OLLAMA_SERVER_URL
 from genkit_ollama._embedders import (
     EmbeddingDefinition,
     OllamaEmbedder,
@@ -99,7 +96,7 @@ def ollama_model_info(model_ref: ModelDefinition, label: str) -> dict[str, objec
         The serialized :class:`ModelInfo` metadata (camelCase aliases, no
         ``None`` values) ready to embed under ``metadata['model']``.
     """
-    is_chat = model_ref.api_type == OllamaAPITypes.CHAT
+    is_chat = model_ref.api_type == 'chat'
     return ModelInfo(
         label=label,
         supports=Supports(

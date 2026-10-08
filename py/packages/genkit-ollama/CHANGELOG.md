@@ -28,6 +28,9 @@ and this project adheres to
 
 ### Changed
 
+- `ModelDefinition.api_type` takes `'chat'` or `'generate'`; the
+  `OllamaAPITypes` enum is gone. Replace `OllamaAPITypes.GENERATE` with
+  `'generate'`.
 - Plugin metadata now reflects per-API-type capabilities (e.g. the `generate`
   API no longer advertises `multiturn`/`tools`).
 - `request_headers` are now propagated through to `ollama.AsyncClient`

@@ -97,10 +97,7 @@ from pydantic.alias_generators import to_camel, to_snake
 from genkit import ActionRunContext, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
 from genkit.model import ModelConfig, ModelRequest, ModelUsage, ToolRequest, get_basic_usage_stats
 from genkit.plugin_api import loop_local_client, wrap_http_error
-from genkit_ollama._constants import (
-    DEFAULT_OLLAMA_SERVER_URL,
-    OllamaAPITypes,
-)
+from genkit_ollama._constants import DEFAULT_OLLAMA_SERVER_URL
 from genkit_ollama._errors import wrap_connection_errors
 
 logger = structlog.get_logger(__name__)
@@ -175,7 +172,7 @@ class ModelDefinition(BaseModel):
     """Meta definition for Ollama models."""
 
     name: str
-    api_type: OllamaAPITypes = OllamaAPITypes.CHAT
+    api_type: Literal['chat', 'generate'] = 'chat'
     supports: OllamaSupports = OllamaSupports()
 
 
@@ -275,7 +272,7 @@ class OllamaModel:
         client: ollama_api.AsyncClient | None,
         content: list[Part],
     ) -> ModelResponse:
-        if self.model_definition.api_type == OllamaAPITypes.CHAT:
+        if self.model_definition.api_type == 'chat':
             api_response = await self._chat_with_ollama(request=request, ctx=ctx, client=client)
             if api_response:
                 logger.debug(
@@ -287,7 +284,7 @@ class OllamaModel:
                     chat_response=api_response,
                     thinking_enabled=self._thinking_requested(request.config),
                 )
-        elif self.model_definition.api_type == OllamaAPITypes.GENERATE:
+        elif self.model_definition.api_type == 'generate':
             api_response = await self._generate_ollama_response(request=request, ctx=ctx, client=client)
             if api_response:
                 logger.debug(

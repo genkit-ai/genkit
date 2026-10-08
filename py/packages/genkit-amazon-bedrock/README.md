@@ -340,10 +340,10 @@ config={'aspect_ratio': '16:9', 'output_format': 'jpeg', 'seed': 42}
 
 The media part's MIME type follows `output_format`.
 
-`BedrockImageConfig` is the exported config type for these calls. It declares
-no fields and rejects nothing, on purpose: the two families take disjoint keys,
-and `BedrockConfig` describes Converse parameters, so it would reject every
-family-specific key here.
+Image models register an open config schema. It declares no fields and rejects
+nothing, on purpose: the two families take disjoint keys, and `BedrockConfig`
+describes Converse parameters, so it would reject every family-specific key
+here. Pass image options as a plain dict.
 
 Genkit's generic generation options (`temperature`, `topP`, `maxOutputTokens`,
 and the rest of the common config) are not forwarded to image models, since
@@ -393,10 +393,8 @@ for document in response.documents:
 
 Genkit Python has no reranker primitive: `ActionKind.RERANKER` exists as a bare
 enum member, and the request and response types are not generated, so there is
-nothing to register an action against. The types this plugin exports
-(`BedrockRerankOptions`, `RankedDocumentData`, `RankedDocumentMetadata`,
-`RerankerRequest`, `RerankerResponse`) mirror the schema types by the same
-names.
+nothing to register an action against. `rerank()` returns a response with a
+`documents` list; each entry has `content` and `metadata.score`.
 
 Notes:
 
