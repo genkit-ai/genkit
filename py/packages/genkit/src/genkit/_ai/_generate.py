@@ -20,6 +20,7 @@ import asyncio
 import contextlib
 import copy
 import secrets
+import sys
 import time
 from collections.abc import Awaitable, Callable, Generator, Mapping, Sequence
 from dataclasses import dataclass
@@ -54,6 +55,7 @@ from genkit._core._action import (
     GENKIT_DYNAMIC_ACTION_PROVIDER_ATTR,
     Action,
     ActionKind,
+    ActionResponse,
     ActionRunContext,
     create_action_key,
     get_current_context,
@@ -1546,6 +1548,48 @@ async def generate_turn(
     )
 
 
+async def run_model_until_aborted(
+    *,
+    model: Action,
+    request: ModelRequest,
+    ctx: GenerateMiddlewareContext,
+) -> ActionResponse[Any]:
+    """Run the model action; cancel it once the caller stops.
+
+    The model gets ``abort_signal`` too, but one that never checks it would keep
+    streaming (and billing) after nobody is reading. The cancel arrives as
+    ``CancelledError`` with the signal set, which generate boxes as ABORTED.
+
+    The model runs in this task, not a child one, so a SystemExit or
+    KeyboardInterrupt from it still unwinds straight through the caller.
+    """
+    abort_signal = ctx.abort_signal
+    this_task = asyncio.current_task()
+    cancelled_by_abort = False
+
+    async def watch_abort() -> None:
+        nonlocal cancelled_by_abort
+        await abort_signal.wait()
+        if this_task is not None:
+            cancelled_by_abort = True
+            this_task.cancel()
+
+    watcher_task = asyncio.create_task(watch_abort())
+    try:
+        return await model.run(
+            input=request,
+            context=ctx.custom_context,
+            on_chunk=ctx.on_chunk,
+            abort_signal=abort_signal,
+        )
+    finally:
+        watcher_task.cancel()
+        # generate turns our own cancel into an ABORTED reply, so it mustn't
+        # count against an enclosing asyncio.timeout() or TaskGroup.
+        if cancelled_by_abort and this_task is not None and sys.version_info >= (3, 11):
+            this_task.uncancel()
+
+
 async def call_model(
     *,
     options: GenerateActionOptions,
@@ -1580,11 +1624,10 @@ async def call_model(
                 turn=current_turn,
                 messages=len(params.request.messages),
             )
-        result = await turn_model.run(
-            input=params.request,
-            context=c.custom_context,
-            on_chunk=c.on_chunk,
-            abort_signal=c.abort_signal,
+        result = await run_model_until_aborted(
+            model=turn_model,
+            request=params.request,
+            ctx=c,
         )
         raw = result.response
         if turn_model.kind == ActionKind.BACKGROUND_MODEL:

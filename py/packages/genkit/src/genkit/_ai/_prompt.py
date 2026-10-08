@@ -20,7 +20,7 @@
 import asyncio
 import os
 import weakref
-from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar, Generic, NamedTuple, TypedDict, TypeVar, cast
@@ -65,7 +65,7 @@ from genkit._core._action import (
     create_action_key,
     get_current_context,
 )
-from genkit._core._channel import Channel
+from genkit._core._channel import Channel, StoppableStream
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._logger import get_logger
 from genkit._core._middleware import BaseMiddleware, middleware_class_index
@@ -153,23 +153,45 @@ class ModelStreamResponse(Generic[OutputT]):
         self,
         channel: Channel[ModelResponseChunk[OutputT], ModelResponse[OutputT]],
         response_future: asyncio.Future[ModelResponse[OutputT]],
+        abort_signal: asyncio.Event | None = None,
     ) -> None:
-        """Initialize with streaming channel and response future."""
-        self._channel: Channel[ModelResponseChunk[OutputT], ModelResponse[OutputT]] = channel
+        """Initialize with streaming channel and response future.
+
+        With an ``abort_signal``, a reader that leaves the stream early sets it,
+        which stops the model call that ``response_future`` is running.
+        """
         self._response_future: asyncio.Future[ModelResponse[OutputT]] = response_future
+        stop: Callable[[], Awaitable[None]] | None = None
+        if abort_signal is not None:
+            signal = abort_signal
+
+            async def stop_model() -> None:
+                if response_future.done():
+                    return
+                signal.set()
+                # waiting here is what lets aclosing(...) promise the model call
+                # is over once the block exits.
+                await asyncio.wait([response_future])
+
+            stop = stop_model
+        self._chunks: StoppableStream[ModelResponseChunk[OutputT]] = StoppableStream(chunks=channel, stop=stop)
 
     @property
-    def stream(self) -> AsyncIterable[ModelResponseChunk[OutputT]]:
-        """Async iterable of response chunks.
+    def stream(self) -> StoppableStream[ModelResponseChunk[OutputT]]:
+        """The stream's one reader of response chunks, the same object every time.
 
         Returns:
-            An async iterable that yields ModelResponseChunk objects
+            An async iterator that yields ModelResponseChunk objects
             as they are received from the model. Each chunk contains:
             - text: The partial text generated so far
             - index: The chunk index
             - Additional metadata from the model
+
+        Leaving the ``async for`` early (``break``, an exception, or cancelling
+        the task that's reading) stops the model call, and ``response`` then
+        resolves with ``finish_reason`` ABORTED.
         """
-        return self._channel
+        return self._chunks
 
     @property
     def response(self) -> Awaitable[ModelResponse[OutputT]]:
@@ -188,15 +210,17 @@ class ModelStreamResponse(Generic[OutputT]):
         raising: ``finish_reason`` is FAILED, ``error`` is set, ``text`` is
         empty, ``message`` is None, and ``messages`` ends at the last complete
         turn. The chunks already streamed are the record of what was shown.
+        A stream the reader left early resolves the same way with
+        ``finish_reason`` ABORTED.
         """
         return self._response_future
 
     # The natural Python expectation is `async for chunk in ai.generate_stream(...)`.
-    # Delegating to the underlying channel lets that work without forcing the
+    # Delegating to the same chunks as `.stream` lets that work without forcing the
     # caller to remember the extra `.stream` hop, while `.stream` and `.response`
     # remain available for cases where you want both halves explicitly.
-    def __aiter__(self) -> AsyncIterator[ModelResponseChunk[OutputT]]:
-        return self._channel.__aiter__()
+    def __aiter__(self) -> AsyncGenerator[ModelResponseChunk[OutputT], None]:
+        return self._chunks.__aiter__()
 
 
 @dataclass
@@ -468,6 +492,16 @@ class Prompt(Generic[InputT, OutputT]):
             resume_restart=resume_restart,
             resume_metadata=resume_metadata,
         )
+        return await self._run(input=input, opts=opts, on_chunk=on_chunk, abort_signal=None)
+
+    async def _run(
+        self,
+        *,
+        input: InputT | dict[str, Any] | None,
+        opts: PromptGenerateOptions,
+        on_chunk: ModelStreamingCallback | None,
+        abort_signal: asyncio.Event | None,
+    ) -> ModelResponse[OutputT]:
         prepared = await prepare_prompt(prompt=self, input=input, opts=opts)
         result = await generate_action(
             prepared.registry,
@@ -475,6 +509,7 @@ class Prompt(Generic[InputT, OutputT]):
             on_chunk=on_chunk,
             # Same context the template already rendered, so {{@auth}} and tools agree.
             context=prepared.context,
+            abort_signal=abort_signal,
         )
         return cast(ModelResponse[OutputT], result)
 
@@ -500,32 +535,43 @@ class Prompt(Generic[InputT, OutputT]):
 
         Iterate the returned stream for chunks; there's no callback here so
         chunks only arrive one way.
+
+        Leaving the ``async for`` early (``break``, an exception, or cancelling
+        the task that's reading) stops the model call, and ``.response`` resolves
+        with ``finish_reason`` ABORTED and ``messages`` ending at the last
+        complete turn. After a plain ``break`` that lands a loop tick or two
+        later; ``contextlib.aclosing(...)`` stops it right as the block exits.
         """
         channel: Channel[ModelResponseChunk[OutputT], ModelResponse[OutputT]] = Channel()
+        abort_signal = asyncio.Event()
+        opts = PromptGenerateOptions(
+            model=model,
+            config=config,
+            messages=messages,
+            tools=tools,
+            tool_choice=tool_choice,
+            docs=docs,
+            use=use,
+            max_turns=max_turns,
+            context=context,
+            return_tool_requests=return_tool_requests,
+            resume_respond=resume_respond,
+            resume_restart=resume_restart,
+            resume_metadata=resume_metadata,
+        )
 
-        # Same run path as __call__; only the chunk sink differs.
+        # Same run path as __call__; only the chunk sink and the abort signal differ.
         response_future: asyncio.Future[ModelResponse[OutputT]] = asyncio.create_task(
-            self(
-                input,
-                model=model,
-                config=config,
-                messages=messages,
-                tools=tools,
-                tool_choice=tool_choice,
-                docs=docs,
-                use=use,
-                max_turns=max_turns,
-                context=context,
-                return_tool_requests=return_tool_requests,
-                resume_respond=resume_respond,
-                resume_restart=resume_restart,
-                resume_metadata=resume_metadata,
+            self._run(
+                input=input,
+                opts=opts,
                 on_chunk=lambda c: channel.send(cast('ModelResponseChunk[OutputT]', c)),
+                abort_signal=abort_signal,
             )
         )
         channel.set_close_future(response_future)
 
-        return ModelStreamResponse[OutputT](channel=channel, response_future=response_future)
+        return ModelStreamResponse[OutputT](channel=channel, response_future=response_future, abort_signal=abort_signal)
 
     async def render(
         self,

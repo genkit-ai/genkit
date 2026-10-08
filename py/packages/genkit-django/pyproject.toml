@@ -23,7 +23,6 @@ classifiers = [
   "Framework :: Django",
   "Framework :: AsyncIO",
   "Framework :: Django",
-  "Framework :: Django :: 4.2",
   "Framework :: Django :: 5.0",
   "Framework :: Django :: 5.1",
   "Framework :: Pydantic",
@@ -46,7 +45,7 @@ classifiers = [
 dependencies = [
   "genkit",
   "pydantic>=2.10.5",
-  "django>=4.2",
+  "django>=5.0",
 ]
 description = "A Genkit flow as a Django view"
 keywords = [

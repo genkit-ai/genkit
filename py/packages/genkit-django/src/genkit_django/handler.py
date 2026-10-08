@@ -17,6 +17,7 @@
 """Genkit Django handler for serving flows as HTTP endpoints."""
 
 import asyncio
+import contextlib
 import json
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
@@ -183,8 +184,12 @@ def genkit_django_handler(
                 async def event_stream() -> AsyncIterator[str]:
                     try:
                         stream_response = flow.stream(input=action_input, context=action_context, init=init)
-                        async for chunk in stream_response.stream:
-                            yield f'data: {json.dumps({"message": _to_dict(chunk)}, separators=_JSON_SEPARATORS)}\n\n'
+                        # a client that hangs up closes this generator; aclosing makes
+                        # that cancel the flow right away instead of whenever it's collected.
+                        async with contextlib.aclosing(stream_response.stream) as chunks:
+                            async for chunk in chunks:
+                                message = json.dumps({'message': _to_dict(chunk)}, separators=_JSON_SEPARATORS)
+                                yield f'data: {message}\n\n'
 
                         result = await stream_response.response
                         yield f'data: {json.dumps({"result": _to_dict(result)}, separators=_JSON_SEPARATORS)}\n\n'
