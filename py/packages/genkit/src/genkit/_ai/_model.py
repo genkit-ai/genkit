@@ -63,8 +63,6 @@ logger = get_logger(__name__)
 # ModelArg is also the constructor default, stored as a registry value the
 # Dev UI lists as JSON, so it stays a name or ModelRef.
 ModelArg: TypeAlias = str | ModelRef[BaseModel]
-# Call sites also take the action define_model returned on this instance.
-CallModelArg: TypeAlias = str | ModelRef[BaseModel] | Action
 
 
 @dataclass(frozen=True, kw_only=True)
