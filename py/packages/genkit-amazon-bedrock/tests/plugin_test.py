@@ -501,6 +501,6 @@ async def test_generate_bedrock_arn_model_keeps_full_path() -> None:
 
     assert response.text == 'hello'
     assert transport.calls[0]['modelId'] == arn
-    action = await ai.registry.resolve_action(ActionKind.MODEL, f'bedrock/{arn}')
+    action = await ai.lookup_model(f'bedrock/{arn}')
     assert action is not None
     assert action.name == f'bedrock/{arn}'

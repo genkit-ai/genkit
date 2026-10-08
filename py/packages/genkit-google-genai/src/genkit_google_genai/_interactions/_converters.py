@@ -61,7 +61,6 @@ from google.genai.interactions import (
 from pydantic import BaseModel
 
 from genkit import FinishReason, GenkitError, Media, Message, ModelResponse, Operation, Part
-from genkit._core._error import StatusCodes, StatusName
 from genkit.model import (
     ModelUsage,
     OperationError,
@@ -69,7 +68,7 @@ from genkit.model import (
     ToolRequest,
     ToolResponse,
 )
-from genkit.plugin_api import from_http_code, mark_provider_error
+from genkit.plugin_api import StatusName, from_http_code, mark_provider_error
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +79,27 @@ InteractionRole = Literal['user', 'model']
 # one place would silently break pairing — keep them defined once.
 THOUGHT_SIGNATURE = 'thoughtSignature'
 CALL_ID = 'callId'
+
+# Step errors carry the standard gRPC code number; these are its canonical names.
+GRPC_STATUS_NAMES: dict[int, str] = {
+    0: 'OK',
+    1: 'CANCELLED',
+    2: 'UNKNOWN',
+    3: 'INVALID_ARGUMENT',
+    4: 'DEADLINE_EXCEEDED',
+    5: 'NOT_FOUND',
+    6: 'ALREADY_EXISTS',
+    7: 'PERMISSION_DENIED',
+    8: 'RESOURCE_EXHAUSTED',
+    9: 'FAILED_PRECONDITION',
+    10: 'ABORTED',
+    11: 'OUT_OF_RANGE',
+    12: 'UNIMPLEMENTED',
+    13: 'INTERNAL',
+    14: 'UNAVAILABLE',
+    15: 'DATA_LOSS',
+    16: 'UNAUTHENTICATED',
+}
 GOOGLE_SEARCH_CALL = 'googleSearchCall'
 GOOGLE_SEARCH_RESULT = 'googleSearchResult'
 EXECUTABLE_CODE = 'executableCode'
@@ -154,11 +174,8 @@ def status_from_provider_code(code: object) -> StatusName | None:
         if 400 <= number <= 599:
             status = from_http_code(number)
         else:
-            try:
-                status = StatusCodes(number).name
-            except ValueError:
-                status = None
-    elif text.upper() in StatusCodes.__members__:
+            status = GRPC_STATUS_NAMES.get(number)
+    elif text.upper() in GRPC_STATUS_NAMES.values():
         status = text.upper()
     if status is None or status in ('OK', 'UNKNOWN'):
         return None

@@ -24,10 +24,9 @@ from typing import Any, cast
 from pydantic import BaseModel, Field, field_validator
 
 from genkit import GenkitError, ModelResponse
-from genkit._ai._generate import StreamingCallbackError
-from genkit._core._model import ModelRef, ModelRequest
-from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
-from genkit.plugin_api import Action, ActionKind
+from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams, StreamingCallbackError
+from genkit.model import ModelRef, ModelRequest
+from genkit.plugin_api import Action
 from genkit_middleware._statuses import TRANSIENT_STATUSES
 
 # Everything Retry would retry, plus failures another model may not have:
@@ -95,7 +94,7 @@ class Fallback(BaseMiddleware[FallbackConfig]):
         model_name: str,
     ) -> Action[Any, Any, Any]:
         """Look up a fallback model on the per-call registry."""
-        action = await ctx.ai.registry.resolve_action(ActionKind.MODEL, model_name)
+        action = await ctx.ai.lookup_model(model_name)
         if action is None:
             raise GenkitError(
                 status='NOT_FOUND',

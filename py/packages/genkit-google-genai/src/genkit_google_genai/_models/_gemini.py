@@ -49,7 +49,6 @@ from genkit import (
     Part,
     Role,
 )
-from genkit._core._compat import StrEnum
 from genkit.model import (
     Candidate,
     Constrained,
@@ -61,7 +60,7 @@ from genkit.model import (
     ToolDefinition,
     get_basic_usage_stats,
 )
-from genkit.plugin_api import wrap_http_error
+from genkit.plugin_api import StrEnum, wrap_http_error
 from genkit_google_genai._auth import GOOGLE_AUTH_ERRORS, raise_auth_error
 from genkit_google_genai._constants import is_multi_regional_location, multi_regional_base_url
 from genkit_google_genai._models._context_caching._constants import DEFAULT_TTL

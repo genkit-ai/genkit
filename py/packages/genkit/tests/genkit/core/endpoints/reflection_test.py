@@ -198,7 +198,7 @@ async def test_run_action_context_reaches_flow_and_subflow() -> None:
     async def order_dish(dish: str, ctx: ActionRunContext) -> dict[str, Any]:
         return {'flow': dict(ctx.context), 'subflow': await allergy_check(dish)}
 
-    app = create_reflection_asgi_app(ai.registry)
+    app = create_reflection_asgi_app(ai._registry)
     async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as client:
         response = await client.post(
             '/api/runAction',
@@ -221,7 +221,7 @@ async def test_run_action_rejects_non_object_context() -> None:
         calls += 1
         return dish
 
-    app = create_reflection_asgi_app(ai.registry)
+    app = create_reflection_asgi_app(ai._registry)
     async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as client:
         response = await client.post(
             '/api/runAction',
@@ -363,7 +363,7 @@ async def test_values_middleware_includes_derived_config_schema() -> None:
     class _Fallback(BaseMiddleware[_FallbackConfig]):
         pass
 
-    client = await _registry_asgi_client(ai.registry)
+    client = await _registry_asgi_client(ai._registry)
     try:
         response = await client.get('/api/values?type=middleware')
         assert response.status_code == 200
@@ -397,7 +397,7 @@ async def test_values_middleware_uses_class_docstring_as_description_fallback() 
         Extra paragraphs end up in the description verbatim.
         """
 
-    client = await _registry_asgi_client(ai.registry)
+    client = await _registry_asgi_client(ai._registry)
     try:
         response = await client.get('/api/values?type=middleware')
         assert response.status_code == 200
@@ -422,7 +422,7 @@ async def test_values_middleware_empty_config_schema_for_no_op() -> None:
     class _NoOp(BaseMiddleware):
         pass
 
-    client = await _registry_asgi_client(ai.registry)
+    client = await _registry_asgi_client(ai._registry)
     try:
         response = await client.get('/api/values?type=middleware')
         assert response.status_code == 200
@@ -518,7 +518,7 @@ async def test_reflection_run_evaluator_returns_json_array_of_rows(evaluator: st
     """Per-row and batch evaluators run through /api/runAction both return a JSON array of rows."""
     ai = Genkit()
     _define_always_true_evaluators(ai)
-    client = await _registry_asgi_client(ai.registry)
+    client = await _registry_asgi_client(ai._registry)
     body = {
         'key': f'/evaluator/{evaluator}',
         'input': {
@@ -553,7 +553,7 @@ async def test_dev_ui_run_of_failing_flow_returns_message_and_trace_id(hex_ids: 
     """A Dev UI runAction of `missing` returns the body's message, code INTERNAL, and the run's trace id."""
     ai = Genkit()
     _define_missing(ai)
-    app = create_reflection_asgi_app(ai.registry)
+    app = create_reflection_asgi_app(ai._registry)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as client:
         response = await client.post('/api/runAction', json={'key': '/flow/missing', 'input': 'acme'})
@@ -574,7 +574,7 @@ async def test_dev_ui_run_of_public_error_flow_returns_its_status_and_trace_id(h
     async def order(order_id: str) -> str:
         raise PublicError('NOT_FOUND', f'no order {order_id}')
 
-    app = create_reflection_asgi_app(ai.registry)
+    app = create_reflection_asgi_app(ai._registry)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as client:
         response = await client.post('/api/runAction', json={'key': '/flow/order', 'input': '99'})

@@ -104,9 +104,15 @@ class SessionLike(Protocol):
 
 
 class GenkitLike(Protocol):
-    """Structural interface for the Genkit instance exposed on middleware context."""
+    """Structural interface for the Genkit instance exposed on middleware context.
 
-    @property
-    def registry(self) -> RegistryLike:
-        """The call-scoped registry for this generate invocation."""
+    Lookups see this generate call's own registrations first, then the app's.
+    """
+
+    async def lookup_model(self, name: str) -> Action | None:
+        """Return the model action registered under ``name``, or None."""
+        ...
+
+    def lookup_value(self, *, kind: str, name: str) -> object | None:
+        """Return the value defined under ``kind`` and ``name``, or None."""
         ...

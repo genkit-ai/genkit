@@ -63,6 +63,7 @@ A_after()
 ```
 """
 
+from genkit._ai._generate import StreamingCallbackError
 from genkit._core._middleware import (
     BaseMiddleware,
     GenerateHookParams,
@@ -80,5 +81,6 @@ __all__ = [
     'GenerateMiddlewareContext',
     'MiddlewareRef',
     'ModelHookParams',
+    'StreamingCallbackError',
     'ToolHookParams',
 ]

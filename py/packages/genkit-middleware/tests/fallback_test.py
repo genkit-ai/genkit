@@ -239,8 +239,8 @@ async def test_fallback_backup_with_same_config_class_gets_that_class(entry: obj
 
 
 @pytest.mark.asyncio
-async def test_generate_with_unavailable_model_and_fallback_tries_next_model() -> None:
-    """With `Fallback(models=['backup'])`, a model raising UNAVAILABLE falls back to `backup`."""
+async def test_fallback_switches_to_backup_model_found_by_name() -> None:
+    """With `Fallback(models=['backup'])`, a model raising UNAVAILABLE falls back to the app's `backup` model."""
     ai = Genkit()
 
     async def down(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
@@ -260,6 +260,25 @@ async def test_generate_with_unavailable_model_and_fallback_tries_next_model() -
     assert response.finish_reason == FinishReason.STOP
     assert response.text == 'from backup'
     assert response.error is None
+
+
+@pytest.mark.asyncio
+async def test_fallback_unknown_backup_model_is_not_found() -> None:
+    """A backup name nothing on the app answers to fails the call with NOT_FOUND naming that model."""
+    ai = Genkit()
+
+    async def down(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        raise GenkitError(status='UNAVAILABLE', message='provider is down')
+
+    ai.define_model(name='primary', fn=down)
+
+    response = await ai.generate(model='primary', prompt='hi', use=[Fallback(models=['nope'])])
+
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.finish_message == 'No model named "nope" is registered on this app.'
+    assert response.error is not None
+    assert response.error.status == 'NOT_FOUND'
+    assert response.message is None
 
 
 @pytest.mark.asyncio

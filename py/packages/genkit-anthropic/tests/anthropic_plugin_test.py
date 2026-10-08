@@ -444,7 +444,7 @@ async def test_generate_anthropic_resolved_model_sends_id_unchanged(monkeypatch:
     ai = Genkit(plugins=[Anthropic(api_key='test-key')])
 
     response = await ai.generate(model='anthropic/claude-unlisted-test', prompt='hi')
-    action = await ai.registry.resolve_action(ActionKind.MODEL, 'anthropic/claude-unlisted-test')
+    action = await ai.lookup_model('anthropic/claude-unlisted-test')
 
     assert response.text == 'ok'
     assert seen == ['claude-unlisted-test']
@@ -465,7 +465,7 @@ async def test_generate_anthropic_double_prefixed_id_sends_prefixed_model(monkey
     ai = Genkit(plugins=[Anthropic(api_key='test-key')])
 
     await ai.generate(model='anthropic/anthropic/claude-x', prompt='hi')
-    action = await ai.registry.resolve_action(ActionKind.MODEL, 'anthropic/anthropic/claude-x')
+    action = await ai.lookup_model('anthropic/anthropic/claude-x')
 
     assert seen == ['anthropic/claude-x']
     assert action is not None

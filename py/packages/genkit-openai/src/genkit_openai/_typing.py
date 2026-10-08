@@ -35,8 +35,8 @@ from typing import Any, ClassVar, Literal
 from pydantic import ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
-from genkit._core._compat import StrEnum
 from genkit.model import ModelConfig
+from genkit.plugin_api import StrEnum
 
 
 class ReasoningEffort(StrEnum):

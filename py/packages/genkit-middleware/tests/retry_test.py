@@ -25,8 +25,17 @@ import pytest
 from genkit_middleware import Retry
 from pydantic import ValidationError
 
-from genkit import ActionRunContext, FinishReason, Genkit, Message, ModelResponse, ModelResponseChunk, Part, Role
-from genkit._core._error import GenkitError
+from genkit import (
+    ActionRunContext,
+    FinishReason,
+    Genkit,
+    GenkitError,
+    Message,
+    ModelResponse,
+    ModelResponseChunk,
+    Part,
+    Role,
+)
 from genkit.middleware import GenerateMiddlewareContext, ModelHookParams
 from genkit.model import ModelRequest
 from genkit.testing import define_scripted_model
@@ -375,8 +384,8 @@ async def test_generate_with_failing_model_and_retry_retries_unclassified_error_
 
 
 @pytest.mark.asyncio
-async def test_prompt_with_failing_on_chunk_and_retry_calls_model_once() -> None:
-    """`await prompt(on_chunk=raises, use=[Retry()])` calls the model once and returns the callback's message."""
+async def test_retry_does_not_retry_when_caller_on_chunk_raises() -> None:
+    """`await prompt(on_chunk=raises, use=[Retry()])` calls the model once and fails with the callback's message."""
     ai = Genkit()
     pm, _ = define_scripted_model(ai)
     pm.responses = [
@@ -389,7 +398,7 @@ async def test_prompt_with_failing_on_chunk_and_retry_calls_model_once() -> None
     prompt = ai.define_prompt(model='scriptedModel', prompt='hi')
 
     def on_chunk(_: object) -> None:
-        raise RuntimeError('model sink closed')
+        raise ValueError('model sink closed')
 
     response = await prompt(
         on_chunk=on_chunk,
@@ -399,6 +408,9 @@ async def test_prompt_with_failing_on_chunk_and_retry_calls_model_once() -> None
     assert pm.request_count == 1
     assert response.finish_reason == FinishReason.FAILED
     assert response.finish_message == 'model sink closed'
+    assert response.error is not None
+    assert response.error.status == 'INTERNAL'
+    assert response.message is None
 
 
 @pytest.mark.asyncio

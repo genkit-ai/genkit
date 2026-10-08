@@ -37,11 +37,11 @@ from google.auth import default as google_auth_default
 from google.auth.transport.requests import Request
 
 from genkit import BaseDataPoint, GenkitError
-from genkit._core._compat import StrEnum
 from genkit.evaluator import Details, EvalFnResponse, Score
 from genkit.plugin_api import (
     GENKIT_CLIENT_HEADER,
     Action,
+    StrEnum,
     get_cached_client,
     mark_provider_error,
     wrap_http_error,

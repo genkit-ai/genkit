@@ -26,10 +26,8 @@ from collections.abc import Awaitable, Callable
 
 from pydantic import BaseModel, Field
 
-from genkit import GenkitError
-from genkit._ai._generate import StreamingCallbackError
-from genkit._core._model import ModelResponse
-from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
+from genkit import GenkitError, ModelResponse
+from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams, StreamingCallbackError
 from genkit_middleware._statuses import TRANSIENT_STATUSES
 
 _DEFAULT_RETRY_STATUSES: list[str] = list(TRANSIENT_STATUSES)

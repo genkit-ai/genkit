@@ -183,7 +183,7 @@ class Genkit:
             ai.run_main(my_flow('Weather in Paris?'))
     """
 
-    registry: Registry
+    _registry: Registry
     _reflection_server_spec: ServerSpec | None
     _reflection_config: ReflectionConfig
     _reflection_ready: threading.Event
@@ -220,7 +220,7 @@ class Genkit:
                 )
             # Before anything that logs, so plugin initialization is covered too.
             configure_logging()
-            self.registry = Registry()
+            self._registry = Registry()
             self._reflection_server_spec = reflection_server_spec
             # The reflection API runs under GENKIT_ENV=dev, or in any environment
             # with GENKIT_REFLECTION_ENABLED=true. Resolving here keeps an invalid
@@ -238,7 +238,7 @@ class Genkit:
             self._reflection_bound_addr = None
             self._initialize_registry(model, plugins)
             # Ensure the default generate action is registered for async usage.
-            define_generate_action(self.registry)
+            define_generate_action(self._registry)
             self._register_plugin_middleware(plugins)
             maybe_inject_dev_instrumentation()
             # When reflection is on, start the server immediately in a background
@@ -260,7 +260,7 @@ class Genkit:
                     load_path = default_prompts_path
 
             if load_path:
-                load_prompt_folder(self.registry, dir_path=load_path)
+                load_prompt_folder(self._registry, dir_path=load_path)
 
         # help(Genkit) should show the keyword-only constructor, not a phantom *args.
         __init__.__signature__ = inspect.signature(__init__).replace(
@@ -329,25 +329,25 @@ class Genkit:
                 return 'done'
         """
         if chunk_type is not None:
-            return _FlowDecoratorWithChunk(self.registry, name, description, chunk_type)
-        return _FlowDecorator(self.registry, name, description)
+            return _FlowDecoratorWithChunk(self._registry, name, description, chunk_type)
+        return _FlowDecorator(self._registry, name, description)
 
     def define_helper(self, name: str, fn: Callable[..., Any]) -> None:
         """Register a Handlebars helper function."""
-        define_helper(self.registry, name, fn)
+        define_helper(self._registry, name, fn)
 
     def define_partial(self, name: str, source: str) -> None:
         """Register a Handlebars partial template."""
-        define_partial(self.registry, name, source)
+        define_partial(self._registry, name, source)
 
     def define_schema(self, name: str, schema: type[BaseModel]) -> type[BaseModel]:
         """Register a Pydantic schema for use in prompts."""
-        define_schema(self.registry, name, schema)
+        define_schema(self._registry, name, schema)
         return schema
 
     def define_json_schema(self, name: str, json_schema: dict[str, object]) -> dict[str, object]:
         """Register a JSON schema for use in prompts."""
-        self.registry.register_schema(name, json_schema)
+        self._registry.register_schema(name, json_schema)
         return json_schema
 
     def define_dynamic_action_provider(
@@ -361,7 +361,7 @@ class Genkit:
     ) -> DynamicActionProvider:
         """Register a Dynamic Action Provider (DAP)."""
         return define_dap_block(
-            self.registry,
+            self._registry,
             name,
             fn,
             description=description,
@@ -405,7 +405,7 @@ class Genkit:
 
         def wrapper(func: Callable[..., Any]) -> Tool:
             return define_tool(
-                self.registry,
+                self._registry,
                 func,
                 name,
                 description,
@@ -426,7 +426,7 @@ class Genkit:
         if res.errored:
             raise ValueError(f'middleware name {res.error_message}')
         desc = GenerateMiddleware(cls=cls, name=name, description=description)
-        self.registry.register_value('middleware', name, desc)
+        self._registry.register_value('middleware', name, desc)
         return desc
 
     def middleware(
@@ -468,7 +468,7 @@ class Genkit:
             )
         """
         return define_interrupt(
-            self.registry,
+            self._registry,
             name,
             description=description,
             input_schema=input_schema,
@@ -488,7 +488,7 @@ class Genkit:
     ) -> Action:
         """Register an evaluator action."""
         return define_evaluator(
-            self.registry,
+            self._registry,
             name=name,
             display_name=display_name,
             definition=definition,
@@ -517,7 +517,7 @@ class Genkit:
         ``req.options``. A second parameter raises ``TypeError`` when defined.
         """
         return define_batch_evaluator(
-            self.registry,
+            self._registry,
             name=name,
             display_name=display_name,
             definition=definition,
@@ -538,7 +538,7 @@ class Genkit:
         description: str | None = None,
     ) -> Action:
         """Register a custom model action."""
-        return define_model(self.registry, name, fn, config_schema, metadata, info, description)
+        return define_model(self._registry, name, fn, config_schema, metadata, info, description)
 
     def define_background_model(
         self,
@@ -554,7 +554,7 @@ class Genkit:
     ) -> BackgroundAction:
         """Register a background model for long-running AI operations."""
         return define_background_model(
-            registry=self.registry,
+            registry=self._registry,
             name=name,
             start=start,
             check=check,
@@ -575,11 +575,32 @@ class Genkit:
         description: str | None = None,
     ) -> Action:
         """Register a custom embedder action."""
-        return define_embedder(self.registry, name, fn, info, metadata, description)
+        return define_embedder(self._registry, name, fn, info, metadata, description)
 
     def define_format(self, format: FormatDef) -> None:
         """Register a custom output format."""
-        self.registry.register_value('format', format.name, format)
+        self._registry.register_value('format', format.name, format)
+
+    async def lookup_model(self, name: str) -> Action | None:
+        """Return the model action registered under ``name``, or None.
+
+        Plugin models that haven't been used yet are resolved through the
+        plugin, so ``'googleai/gemini-flash-latest'`` works before any
+        generate call.
+        """
+        return await self._registry.resolve_action(ActionKind.MODEL, name)
+
+    def lookup_value(self, *, kind: str, name: str) -> object | None:
+        """Return the value defined under ``kind`` and ``name``, or None."""
+        return self._registry.lookup_value(kind, name)
+
+    def define_value(self, *, kind: str, name: str, value: object) -> None:
+        """Store ``value`` under ``kind`` and ``name`` for later ``lookup_value``.
+
+        Raises:
+            ValueError: A value is already defined under this kind and name.
+        """
+        self._registry.register_value(kind, name, value)
 
     # Overload 1: Both input_schema and output_schema typed -> Prompt[InputT, OutputT]
     @overload
@@ -834,7 +855,7 @@ class Genkit:
             print(res.text)
         """
         executable_prompt = Prompt(
-            self.registry,
+            self._registry,
             variant=variant,
             model=model,
             config=config,
@@ -858,7 +879,7 @@ class Genkit:
             name=name,
         )
         if name:
-            register_prompt_actions(self.registry, executable_prompt, name, variant)
+            register_prompt_actions(self._registry, executable_prompt, name, variant)
         return executable_prompt
 
     # Overload 1: Neither typed -> Prompt[Any, Any]
@@ -915,7 +936,7 @@ class Genkit:
     ) -> Prompt[InputT, OutputT] | Prompt[Any, Any]:
         """Look up a prompt by name and optional variant."""
         return Prompt(
-            registry=self.registry,
+            registry=self._registry,
             name=name,
             variant=variant,
             input_schema=input_schema,
@@ -991,7 +1012,7 @@ class Genkit:
             if config.mode == 'v2':
                 assert config.v2_url is not None
                 await logger.adebug(f'Genkit Dev UI reflection v2 client connecting to {config.v2_url}')
-                server_v2 = ReflectionServerV2(self.registry, config.v2_url, secret=config.secret)
+                server_v2 = ReflectionServerV2(self._registry, config.v2_url, secret=config.secret)
                 self._reflection_ready.set()
                 await server_v2.run_forever()
                 return
@@ -1012,7 +1033,7 @@ class Genkit:
                     config.host,
                 )
 
-            app = create_reflection_asgi_app(registry=self.registry, secret=config.secret)
+            app = create_reflection_asgi_app(registry=self._registry, secret=config.secret)
             level = resolve_level()
             is_debug = level <= logging.DEBUG
             if level <= logging.DEBUG:
@@ -1074,7 +1095,7 @@ class Genkit:
     def _initialize_registry(self, model: ModelArg | None, plugins: list[Plugin] | None) -> None:
         """Initialize the registry with default model and plugins."""
         if model:
-            self.registry.register_value('defaultModel', 'defaultModel', model)
+            self._registry.register_value('defaultModel', 'defaultModel', model)
         for fmt in built_in_formats:
             self.define_format(fmt)
 
@@ -1083,7 +1104,7 @@ class Genkit:
         else:
             for plugin in plugins:
                 if isinstance(plugin, Plugin):  # pyright: ignore[reportUnnecessaryIsInstance]
-                    self.registry.register_plugin(plugin)
+                    self._registry.register_plugin(plugin)
                 else:
                     raise ValueError(f'Invalid {plugin=} provided to Genkit: must be of type `genkit.ai.Plugin`')
 
@@ -1093,7 +1114,7 @@ class Genkit:
             return
         for plugin in plugins:
             for desc in plugin.list_middleware():
-                self.registry.register_value('middleware', desc.name, desc)
+                self._registry.register_value('middleware', desc.name, desc)
 
     def run_main(self, coro: Coroutine[Any, Any, T]) -> T | None:
         """Run the user's main coroutine, blocking while the reflection server runs.
@@ -1593,12 +1614,12 @@ class Genkit:
         """Fold ``ai.generate`` kwargs into engine ``options`` and run generate_action.
 
         Inline tools and middleware live on a child registry so they die
-        with the call and stay out of ``self.registry``.
+        with the call and stay out of ``self._registry``.
         """
         if isinstance(messages, str):
             raise TypeError('messages must be a list of Message; pass text with prompt=')
 
-        registry = self.registry.new_child()
+        registry = self._registry.new_child()
         await register_tools(registry, tools)
         use = register_middleware(registry, use)
         resolved = await resolve_for_generate(model=model, config=config, registry=registry)
@@ -1670,7 +1691,7 @@ class Genkit:
         embedder_name = self._resolve_embedder_name(embedder)
         final_options = self._embedder_options(embedder=embedder, config=config)
 
-        embed_action = await self.registry.resolve_embedder(embedder_name)
+        embed_action = await self._registry.resolve_embedder(embedder_name)
         if embed_action is None:
             raise GenkitError(
                 status='NOT_FOUND',
@@ -1716,7 +1737,7 @@ class Genkit:
         embedder_name = self._resolve_embedder_name(embedder)
         final_options = self._embedder_options(embedder=embedder, config=config)
 
-        embed_action = await self.registry.resolve_embedder(embedder_name)
+        embed_action = await self._registry.resolve_embedder(embedder_name)
         if embed_action is None:
             raise GenkitError(
                 status='NOT_FOUND',
@@ -1777,7 +1798,7 @@ class Genkit:
         if ref_config is not None or config is not None:
             final_options = {**(ref_config or {}), **(config or {})}
 
-        eval_action = await self.registry.resolve_evaluator(evaluator_name)
+        eval_action = await self._registry.resolve_evaluator(evaluator_name)
         if eval_action is None:
             raise GenkitError(
                 status='NOT_FOUND',
@@ -1840,7 +1861,7 @@ class Genkit:
         per-request key. ``config`` is client knobs (``base_url``,
         ``location``, ``api_version``), not video settings.
         """
-        return await check_operation(self.registry, operation, context=context, config=config)
+        return await check_operation(self._registry, operation, context=context, config=config)
 
     async def cancel_operation(
         self,
@@ -1853,7 +1874,7 @@ class Genkit:
 
         Same ``context`` / ``config`` pockets as ``check_operation``.
         """
-        return await cancel_operation(self.registry, operation, context=context, config=config)
+        return await cancel_operation(self._registry, operation, context=context, config=config)
 
     @overload
     async def generate_operation(
@@ -1934,16 +1955,16 @@ class Genkit:
         """
         if isinstance(model, BackgroundAction):
             # Same as its name, once we know this registry holds that object.
-            model = background_model_name(model=model, registry=self.registry)
+            model = background_model_name(model=model, registry=self._registry)
         resolved = await resolve_for_generate(
             model=model,
             config=config,
-            registry=self.registry,
+            registry=self._registry,
             message='No model specified for generate_operation.',
         )
         check_call_config(config=config, schema=resolved.config_schema, model=resolved.name)
 
-        model_action = await self.registry.resolve_model(resolved.name)
+        model_action = await self._registry.resolve_model(resolved.name)
         if not model_action:
             raise GenkitError(
                 status='NOT_FOUND',

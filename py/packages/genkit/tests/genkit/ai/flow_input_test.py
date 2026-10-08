@@ -251,7 +251,7 @@ async def test_flow_stream_with_no_input_uses_python_default() -> None:
 
 @asynccontextmanager
 async def _dev_ui_client(ai: Genkit) -> AsyncIterator[AsyncClient]:
-    client = AsyncClient(transport=ASGITransport(app=create_reflection_asgi_app(ai.registry)), base_url='http://test')
+    client = AsyncClient(transport=ASGITransport(app=create_reflection_asgi_app(ai._registry)), base_url='http://test')
     try:
         yield client
     finally:

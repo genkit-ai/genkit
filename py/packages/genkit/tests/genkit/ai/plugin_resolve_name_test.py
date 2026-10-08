@@ -128,10 +128,10 @@ async def test_generate_plugin_slash_id_keeps_full_path() -> None:
 
     assert response.text == 'resolved anthropic/claude'
     assert (ActionKind.MODEL, 'anthropic/claude') in plugin.seen
-    action = await ai.registry.resolve_action(ActionKind.MODEL, 'myplug/anthropic/claude')
+    action = await ai.lookup_model('myplug/anthropic/claude')
     assert action is not None
     assert action.name == 'myplug/anthropic/claude'
-    assert await ai.registry.resolve_action(ActionKind.MODEL, 'myplug/claude') is None
+    assert await ai.lookup_model('myplug/claude') is None
 
 
 @pytest.mark.asyncio
@@ -143,7 +143,7 @@ async def test_generate_plugin_resolve_returning_prefixed_name_registers_once() 
     response = await ai.generate(model='myplug/x', prompt='hi')
 
     assert response.text == 'resolved x'
-    action = await ai.registry.resolve_action(ActionKind.MODEL, 'myplug/x')
+    action = await ai.lookup_model('myplug/x')
     assert action is not None
     assert action.name == 'myplug/x'
 
@@ -157,7 +157,7 @@ async def test_generate_plugin_resolve_returning_bare_name_gets_prefix() -> None
     response = await ai.generate(model='myplug/x', prompt='hi')
 
     assert response.text == 'resolved x'
-    action = await ai.registry.resolve_action(ActionKind.MODEL, 'myplug/x')
+    action = await ai.lookup_model('myplug/x')
     assert action is not None
     assert action.name == 'myplug/x'
 
@@ -171,7 +171,7 @@ async def test_generate_plugin_resolve_returning_other_name_is_found_under_reque
     response = await ai.generate(model='myplug/x', prompt='hi')
 
     assert response.text == 'resolved x'
-    action = await ai.registry.resolve_action(ActionKind.MODEL, 'myplug/x')
+    action = await ai.lookup_model('myplug/x')
     assert action is not None
     assert action.name == 'myplug/x'
 
@@ -198,7 +198,7 @@ async def test_generate_plugin_id_starting_with_plugin_name_is_found() -> None:
 
     assert response.text == 'resolved myplug/x'
     assert (ActionKind.MODEL, 'myplug/x') in plugin.seen
-    action = await ai.registry.resolve_action(ActionKind.MODEL, 'myplug/myplug/x')
+    action = await ai.lookup_model('myplug/myplug/x')
     assert action is not None
     assert action.name == 'myplug/myplug/x'
 
@@ -227,7 +227,7 @@ async def test_plugin_init_name_with_other_prefix_keeps_full_path() -> None:
     response = await ai.generate(model='myplug/other/x', prompt='hi')
 
     assert response.text == 'init other/x'
-    assert await ai.registry.resolve_action(ActionKind.MODEL, 'myplug/x') is None
+    assert await ai.lookup_model('myplug/x') is None
     with pytest.raises(GenkitError) as exc_info:
         await ai.generate(model='myplug/x', prompt='hi')
     assert exc_info.value.status == 'NOT_FOUND'
@@ -243,7 +243,7 @@ async def test_plugin_init_slash_names_keep_full_path() -> None:
 
     assert response.text == 'init endpoints/1'
     assert plugin.seen == []
-    assert await ai.registry.resolve_action(ActionKind.MODEL, 'myplug/1') is None
+    assert await ai.lookup_model('myplug/1') is None
 
 
 @pytest.mark.asyncio

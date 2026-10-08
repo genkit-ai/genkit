@@ -227,7 +227,7 @@ async def test_dev_ui_run_with_bad_return_reports_internal_invalid_output(hex_id
     async def charge(name: str) -> Receipt:
         return {'account': name}  # type: ignore[return-value]
 
-    client = AsyncClient(transport=ASGITransport(app=create_reflection_asgi_app(ai.registry)), base_url='http://test')
+    client = AsyncClient(transport=ASGITransport(app=create_reflection_asgi_app(ai._registry)), base_url='http://test')
     try:
         response = await client.post('/api/runAction', json={'key': '/flow/charge', 'input': 'acme'})
     finally:

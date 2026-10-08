@@ -255,12 +255,20 @@ async def run_logged_hook(
 class ScopedGenkitView:
     """A GenkitLike view over the call-scoped registry for one generate invocation.
 
-    Middleware reads ``ctx.ai.registry`` expecting the per-call child registry
-    (with this call's middleware/tool registrations), not the global one, so we
-    hand it this thin wrapper instead of the full Genkit veneer.
+    Middleware lookups should see this call's own tools and middleware on top
+    of the app's, so ``ctx.ai`` reads the per-call child registry instead of
+    the full Genkit veneer.
     """
 
-    registry: RegistryLike
+    _registry: RegistryLike
+
+    async def lookup_model(self, name: str) -> Action | None:
+        """Return the model action registered under ``name``, or None."""
+        return await self._registry.resolve_action(ActionKind.MODEL, name)
+
+    def lookup_value(self, *, kind: str, name: str) -> object | None:
+        """Return the value defined under ``kind`` and ``name``, or None."""
+        return self._registry.lookup_value(kind, name)
 
 
 def register_middleware(

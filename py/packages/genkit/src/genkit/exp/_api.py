@@ -56,7 +56,7 @@ class Genkit(StableGenkit):
 
     async def agent(self, name: str) -> Agent:
         """Look up a registered agent by name."""
-        resolved = await self.registry.resolve_action(ActionKind.AGENT, name)
+        resolved = await self._registry.resolve_action(ActionKind.AGENT, name)
         if resolved is None:
             raise GenkitError(
                 status='NOT_FOUND',
@@ -92,7 +92,7 @@ class Genkit(StableGenkit):
         back as that model instead of a dict.
         """
         return define_custom_agent(
-            registry=self.registry,
+            registry=self._registry,
             name=name,
             fn=fn,
             store=store,
@@ -184,7 +184,7 @@ class Genkit(StableGenkit):
             res = await chat.send('Weather in Paris?')
         """
         return define_agent(
-            registry=self.registry,
+            registry=self._registry,
             name=name,
             model=model,
             system=system,
@@ -217,7 +217,7 @@ class Genkit(StableGenkit):
         is defined via ai.define_prompt() or loaded from a .prompt file.
         """
         return define_prompt_agent(
-            registry=self.registry,
+            registry=self._registry,
             name=name,
             store=store,
             state_transform=state_transform,

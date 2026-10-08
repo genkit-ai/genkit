@@ -17,7 +17,7 @@
 
 """Ollama constants."""
 
-from genkit._core._compat import StrEnum
+from genkit.plugin_api import StrEnum
 
 DEFAULT_OLLAMA_SERVER_URL = 'http://127.0.0.1:11434'
 

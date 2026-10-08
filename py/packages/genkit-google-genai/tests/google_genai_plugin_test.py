@@ -664,7 +664,7 @@ async def test_resolve_model_finds_veo_as_background(mock_list_models: MagicMock
     mock_list_models.return_value = GenaiModels()
 
     ai = Genkit(plugins=[GoogleAI(api_key='test-key')])
-    action = await ai.registry.resolve_model('googleai/veo-3.0-generate-001')
+    action = await ai._registry.resolve_model('googleai/veo-3.0-generate-001')
 
     assert action is not None
     assert action.kind == ActionKind.BACKGROUND_MODEL
@@ -922,7 +922,7 @@ async def test_generate_googleai_model_resolves_unchanged(mock_list_models: Magi
     ai = Genkit(plugins=[GoogleAI(api_key='test-key')])
 
     response = await ai.generate(model='googleai/gemini-2.5-flash', prompt='hi')
-    action = await ai.registry.resolve_action(ActionKind.MODEL, 'googleai/gemini-2.5-flash')
+    action = await ai.lookup_model('googleai/gemini-2.5-flash')
 
     assert response.text == 'hello'
     sent = mock_client.return_value.aio.models.generate_content.await_args
@@ -972,7 +972,7 @@ async def test_generate_vertexai_tuned_endpoint_keeps_endpoints_segment(
     ai = Genkit(plugins=[VertexAI(project='test-project', location='us-central1')])
 
     response = await ai.generate(model='vertexai/endpoints/123', prompt='hi')
-    action = await ai.registry.resolve_action(ActionKind.MODEL, 'vertexai/endpoints/123')
+    action = await ai.lookup_model('vertexai/endpoints/123')
 
     assert response.text == 'tuned'
     sent = mock_client.return_value.aio.models.generate_content.await_args
