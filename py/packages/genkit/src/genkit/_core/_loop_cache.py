@@ -25,7 +25,7 @@ from typing import TypeVar
 T = TypeVar('T')
 
 
-def _loop_local_client(factory: Callable[[], T]) -> Callable[[], T]:
+def loop_local_client(factory: Callable[[], T]) -> Callable[[], T]:
     """Return a getter that caches one resource instance per event loop."""
     by_loop: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, T] = weakref.WeakKeyDictionary()
     lock = threading.Lock()

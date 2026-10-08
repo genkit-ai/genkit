@@ -21,11 +21,11 @@ from typing import Any
 import httpx
 
 from genkit._core._logger import get_logger
-from genkit._core._loop_cache import _loop_local_client
+from genkit._core._loop_cache import loop_local_client
 
 logger = get_logger(__name__)
 
-_get_store = _loop_local_client(dict)
+_get_store = loop_local_client(dict)
 
 
 def get_cached_client(

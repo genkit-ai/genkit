@@ -109,7 +109,7 @@ async def test_evaluator_factory_evaluate_instances_structure() -> None:
     with patch('genkit_google_genai._evaluators._evaluation.google_auth_default') as mock_auth:
         mock_auth.return_value = (mock_credentials, 'test-project')
 
-        # Mock get_cached_client to return a mock client
+        # Swap in a mock HTTP client
         mock_client = AsyncMock()
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -117,7 +117,7 @@ async def test_evaluator_factory_evaluate_instances_structure() -> None:
         mock_client.post = AsyncMock(return_value=mock_response)
         mock_client.is_closed = False
 
-        with patch('genkit_google_genai._evaluators._evaluation.get_cached_client', return_value=mock_client):
+        with patch('genkit_google_genai._evaluators._evaluation._evaluator_client', return_value=mock_client):
             result = await factory.evaluate_instances({'fluencyInput': {'prediction': 'Test'}})
 
             assert result == mock_response_data
@@ -139,7 +139,7 @@ async def test_evaluator_factory_evaluate_instances_error_handling() -> None:
     with patch('genkit_google_genai._evaluators._evaluation.google_auth_default') as mock_auth:
         mock_auth.return_value = (mock_credentials, 'test-project')
 
-        # Mock get_cached_client to return a mock client
+        # Swap in a mock HTTP client
         mock_client = AsyncMock()
         mock_response = MagicMock()
         mock_response.status_code = 500
@@ -147,7 +147,7 @@ async def test_evaluator_factory_evaluate_instances_error_handling() -> None:
         mock_client.post = AsyncMock(return_value=mock_response)
         mock_client.is_closed = False
 
-        with patch('genkit_google_genai._evaluators._evaluation.get_cached_client', return_value=mock_client):
+        with patch('genkit_google_genai._evaluators._evaluation._evaluator_client', return_value=mock_client):
             with pytest.raises(GenkitError) as exc_info:
                 await factory.evaluate_instances({'input': 'test'})
 
@@ -320,7 +320,7 @@ async def test_evaluate_instances_http_status_is_classified(code: int, status: s
     )
     with (
         patch('genkit_google_genai._evaluators._evaluation.google_auth_default', return_value=(_creds(), 'menu-prod')),
-        patch('genkit_google_genai._evaluators._evaluation.get_cached_client', return_value=_http_client(response)),
+        patch('genkit_google_genai._evaluators._evaluation._evaluator_client', return_value=_http_client(response)),
         pytest.raises(GenkitError, match='eval call failed') as raised,
     ):
         await _factory().evaluate_instances({'fluencyInput': {}})
@@ -335,7 +335,7 @@ async def test_evaluate_instances_transport_failure_stays_raw() -> None:
     refused = httpx.ConnectError('connection refused')
     with (
         patch('genkit_google_genai._evaluators._evaluation.google_auth_default', return_value=(_creds(), 'menu-prod')),
-        patch('genkit_google_genai._evaluators._evaluation.get_cached_client', return_value=_http_client(refused)),
+        patch('genkit_google_genai._evaluators._evaluation._evaluator_client', return_value=_http_client(refused)),
         pytest.raises(httpx.ConnectError) as raised,
     ):
         await _factory().evaluate_instances({'fluencyInput': {}})
@@ -348,7 +348,7 @@ async def test_evaluate_instances_non_json_success_is_internal() -> None:
     response = httpx.Response(200, text='<html>proxy page</html>')
     with (
         patch('genkit_google_genai._evaluators._evaluation.google_auth_default', return_value=(_creds(), 'menu-prod')),
-        patch('genkit_google_genai._evaluators._evaluation.get_cached_client', return_value=_http_client(response)),
+        patch('genkit_google_genai._evaluators._evaluation._evaluator_client', return_value=_http_client(response)),
         pytest.raises(GenkitError) as raised,
     ):
         await _factory().evaluate_instances({'fluencyInput': {}})
