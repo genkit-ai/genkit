@@ -1094,56 +1094,123 @@ export const contextCompression: GenerateMiddleware<
     } {
       if (!dedupConfig) return { messages, deduplicated: 0 };
 
-      // Map tool call IDs to tool request input across model messages
+      const matchByInput = dedupMatchBy === 'name-and-input';
       const toolInputByRef = new Map<string, unknown>();
-      for (const msg of messages) {
-        if (msg.role === 'model') {
-          for (const part of msg.content) {
-            if (part.toolRequest?.ref) {
-              toolInputByRef.set(part.toolRequest.ref, part.toolRequest.input);
-            }
-          }
-        }
-      }
-
       const groups = new Map<string, { msgIdx: number; partIdx: number }[]>();
+      let prevToolRequests: NonNullable<Part['toolRequest']>[] = [];
+      let consumedReqIndices = new Set<number>();
+      const matchedReqByPart = new Map<
+        string,
+        NonNullable<Part['toolRequest']>
+      >();
+      let toolResponseOrdinal = 0;
+
       for (let i = 0; i < messages.length; i++) {
         const msg = messages[i];
-        if (msg.role !== 'tool') continue;
+        if (msg.role === 'model') {
+          if (matchByInput) {
+            prevToolRequests = msg.content
+              .filter((p) => p.toolRequest !== undefined)
+              .map((p) => p.toolRequest!);
+            for (const req of prevToolRequests) {
+              if (req.ref) {
+                toolInputByRef.set(req.ref, req.input);
+              }
+            }
+            consumedReqIndices = new Set<number>();
+            matchedReqByPart.clear();
+            toolResponseOrdinal = 0;
+
+            // Pre-claim ref matches across consecutive tool messages in this turn
+            // so positional fallback never steals a ref-bearing request.
+            for (
+              let k = i + 1;
+              k < messages.length && messages[k].role === 'tool';
+              k++
+            ) {
+              for (let pIdx = 0; pIdx < messages[k].content.length; pIdx++) {
+                const respRef = messages[k].content[pIdx].toolResponse?.ref;
+                if (!respRef) continue;
+                const refIdx = prevToolRequests.findIndex(
+                  (req, idx) =>
+                    !consumedReqIndices.has(idx) && req.ref === respRef
+                );
+                if (refIdx >= 0) {
+                  consumedReqIndices.add(refIdx);
+                  matchedReqByPart.set(
+                    `${k}-${pIdx}`,
+                    prevToolRequests[refIdx]
+                  );
+                }
+              }
+            }
+          }
+          continue;
+        }
+        if (msg.role !== 'tool') {
+          if (matchByInput) {
+            prevToolRequests = [];
+            consumedReqIndices = new Set<number>();
+            matchedReqByPart.clear();
+            toolResponseOrdinal = 0;
+          }
+          continue;
+        }
 
         for (let j = 0; j < msg.content.length; j++) {
           const part = msg.content[j];
           if (!part.toolResponse) continue;
 
-          let toolInput = part.toolResponse.ref
-            ? toolInputByRef.get(part.toolResponse.ref)
-            : undefined;
+          if (!matchByInput) {
+            const key = part.toolResponse.name;
+            if (!groups.has(key)) groups.set(key, []);
+            groups.get(key)!.push({ msgIdx: i, partIdx: j });
+            continue;
+          }
 
-          // If no ref was matched, check if preceding model message had a matching toolRequest with input
-          if (
-            toolInput === undefined &&
-            i > 0 &&
-            messages[i - 1]?.role === 'model'
+          const currentOrdinal = toolResponseOrdinal++;
+          let hasMatchedInput = false;
+          let toolInput: unknown;
+
+          const turnMatchedReq = matchedReqByPart.get(`${i}-${j}`);
+          if (turnMatchedReq !== undefined) {
+            hasMatchedInput = true;
+            toolInput = turnMatchedReq.input;
+          } else if (
+            part.toolResponse.ref &&
+            toolInputByRef.has(part.toolResponse.ref)
           ) {
-            const prevParts = messages[i - 1].content;
-            const positionalPart =
-              prevParts[j]?.toolRequest?.name === part.toolResponse.name
-                ? prevParts[j]
-                : prevParts.find(
-                    (p) => p.toolRequest?.name === part.toolResponse?.name
-                  );
-            if (positionalPart?.toolRequest) {
-              toolInput = positionalPart.toolRequest.input;
+            hasMatchedInput = true;
+            toolInput = toolInputByRef.get(part.toolResponse.ref);
+          } else if (prevToolRequests.length > 0) {
+            let matchedIdx = -1;
+            if (
+              !consumedReqIndices.has(currentOrdinal) &&
+              prevToolRequests[currentOrdinal]?.name === part.toolResponse.name
+            ) {
+              matchedIdx = currentOrdinal;
+            } else {
+              matchedIdx = prevToolRequests.findIndex(
+                (req, idx) =>
+                  !consumedReqIndices.has(idx) &&
+                  req.name === part.toolResponse?.name
+              );
+            }
+            if (matchedIdx >= 0) {
+              consumedReqIndices.add(matchedIdx);
+              hasMatchedInput = true;
+              toolInput = prevToolRequests[matchedIdx].input;
             }
           }
 
-          const key =
-            dedupMatchBy === 'name-only'
-              ? part.toolResponse.name
-              : JSON.stringify({
-                  name: part.toolResponse.name,
-                  input: toolInput,
-                });
+          if (!hasMatchedInput) {
+            continue;
+          }
+
+          const key = JSON.stringify({
+            name: part.toolResponse.name,
+            input: toolInput,
+          });
           if (!groups.has(key)) groups.set(key, []);
           groups.get(key)!.push({ msgIdx: i, partIdx: j });
         }
