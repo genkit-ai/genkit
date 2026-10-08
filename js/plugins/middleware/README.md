@@ -104,7 +104,7 @@ import { InMemorySessionStore } from 'genkit/beta';
 // The sub-agent needs its own store to be delegated to in the background.
 const researcher = ai.defineAgent({
   name: 'researcher',
-  model: 'gemini-2.5-flash',
+  model: googleAI.model('gemini-flash-latest'),
   description: 'Researches a topic and summarizes well-sourced findings.',
   system: 'You are a thorough research assistant.',
   store: new InMemorySessionStore(),
@@ -112,7 +112,7 @@ const researcher = ai.defineAgent({
 
 const orchestrator = ai.defineAgent({
   name: 'orchestrator',
-  model: 'gemini-2.5-flash',
+  model: googleAI.model('gemini-flash-latest'),
   system:
     'Delegate research in the background and post an update while it runs.',
   use: [agents({ agents: ['researcher'], async: true })],
