@@ -3057,7 +3057,7 @@ describe('agents middleware (continue)', () => {
     assert.strictEqual(row?.status, 'pending', 'no fence was written');
   });
 
-  it('fails a cancelled continuation without fencing the task', async () => {
+  it('fails a cancelled continuation without fencing the task or spending a slot', async () => {
     const ai = genkit({});
     const store = new InMemorySessionStore();
     const { deadTask, pendingId } = await seedDeadKeeperTask(
@@ -3067,7 +3067,7 @@ describe('agents middleware (continue)', () => {
     );
     const def = await instantiateWith(
       ai,
-      { agents: ['keeper'] },
+      { agents: ['keeper'], maxDelegations: 1 },
       mintedBy(deadTask, 'delegate_to_keeper')
     );
     const continueTool = def.tools!.find(
@@ -3082,6 +3082,13 @@ describe('agents middleware (continue)', () => {
     );
     const row = await store.getSnapshot({ snapshotId: pendingId });
     assert.strictEqual(row?.status, 'pending', 'no fence was written');
+    // The cancelled call ran no sub-agent work, so a delegation still fits
+    // under the cap.
+    const delegate = def.tools!.find(
+      (t) => t.__action.name === 'delegate_to_keeper'
+    )!;
+    const delegated = await delegate({ task: 'fresh' });
+    assert.strictEqual(delegated.response, 'kept going');
   });
 
   it('refuses a recovery whose fence fails transiently and refunds its slot', async () => {

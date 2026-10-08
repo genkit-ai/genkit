@@ -526,8 +526,10 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
       // take an explicitly set prefix and none by default: the default
       // delegate_to prefix is a delegation verb, not an instance namespace.
       // Two instances in one generate call therefore need distinct, explicit
-      // prefixes; left at the default they both emit the bare names and the
-      // request is rejected for duplicate tools.
+      // prefixes; left at the default they both emit the bare names, and the
+      // registry keeps only the last instance's tools (it logs the overwrite).
+      // An instance resolves only its own agents' handles, so the other
+      // instance's handles then read as unknown.
       const sharedPrefix = config.toolPrefix ?? '';
       const taskTools = {
         check: makeToolName(sharedPrefix, CHECK_BACKGROUND_TASKS_TOOL),
@@ -568,6 +570,10 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
         settledReports: new Map<string, BackgroundTaskReport>(),
         // Task IDs this generate call minted; see mintedHere.
         mintedTaskIds: new Set<string>(),
+        // Task IDs the conversation's delegation and continue results carry,
+        // indexed when the generate hook captures the messages; see
+        // mintedHere.
+        historyTaskIds: new Set<string>(),
         // Caller-chosen delegation labels by task handle, echoed on
         // background-task reports and carried onto continuations. A per-call
         // reading aid: after a restart the transcript still pairs each label
@@ -1337,31 +1343,19 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
         signal?: AbortSignal
       ) => Promise<SessionSnapshot>;
 
-      const readSnapshotOnce: SnapshotFetch = async (
-        agent,
-        snapshotId,
-        signal
-      ) =>
-        (
-          await agent.getSnapshotDataAction.run(
-            { snapshotId },
-            { abortSignal: signal }
-          )
-        ).result;
-
+      const readSnapshot =
+        (metadataOnly: boolean): SnapshotFetch =>
+        async (agent, snapshotId, signal) =>
+          (
+            await agent.getSnapshotDataAction.run(
+              { snapshotId, ...(metadataOnly && { metadataOnly }) },
+              { abortSignal: signal }
+            )
+          ).result;
+      const readSnapshotOnce = readSnapshot(false);
       // For callers that dispatch on where a task stands: the same shaped read
       // without the state, which the sub-agent's store may then skip loading.
-      const readSnapshotMetadata: SnapshotFetch = async (
-        agent,
-        snapshotId,
-        signal
-      ) =>
-        (
-          await agent.getSnapshotDataAction.run(
-            { snapshotId, metadataOnly: true },
-            { abortSignal: signal }
-          )
-        ).result;
+      const readSnapshotMetadata = readSnapshot(true);
 
       // The companion action holds one request for at most the sub-agent's
       // maxSnapshotWaitMs and then answers with the row as it stands, so the
@@ -1459,18 +1453,24 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
        * history carries the results that minted them.
        */
       function mintedHere(taskId: string): boolean {
-        if (shared.mintedTaskIds.has(taskId)) return true;
-        return shared.conversationMessages.some((message) =>
-          message.content?.some((part) => {
-            const response = part.toolResponse;
-            return (
-              !!response &&
-              handleToolNames.has(response.name) &&
-              (response.output as { taskId?: unknown } | undefined)?.taskId ===
-                taskId
-            );
-          })
+        return (
+          shared.mintedTaskIds.has(taskId) || shared.historyTaskIds.has(taskId)
         );
+      }
+
+      /** The task IDs that delegation and continue results in `messages` carry. */
+      function indexHistoryTaskIds(messages: MessageData[]): Set<string> {
+        const ids = new Set<string>();
+        for (const message of messages) {
+          for (const part of message.content ?? []) {
+            const response = part.toolResponse;
+            if (!response || !handleToolNames.has(response.name)) continue;
+            const taskId = (response.output as { taskId?: unknown } | undefined)
+              ?.taskId;
+            if (typeof taskId === 'string') ids.add(taskId);
+          }
+        }
+        return ids;
       }
 
       /** The refusal for a task handle this conversation did not mint. */
@@ -1932,17 +1932,25 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
             response: `Error: agent '${ref.name}' does not expose the snapshot companion actions, so its tasks cannot be continued here; delegate the task again.`,
           };
         }
-        return continueFromStore(
-          {
-            ref,
-            agent,
-            taskId,
-            instructions: input.instructions || undefined,
-            background: !!input.background,
-            abortSignal,
-          },
-          snapshotId
-        );
+        try {
+          return await continueFromStore(
+            {
+              ref,
+              agent,
+              taskId,
+              instructions: input.instructions || undefined,
+              background: !!input.background,
+              abortSignal,
+            },
+            snapshotId
+          );
+        } catch (e: unknown) {
+          // Only a cancelled call throws here, and always before the run: the
+          // run's own failures come back as tool text. No sub-agent work
+          // happened, so the slot goes back.
+          if (abortSignal?.aborted) releaseDelegation();
+          throw e;
+        }
       }
 
       /**
@@ -2360,6 +2368,9 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
           // across the entire generate() call.  The initial value of 0 is
           // set when instantiate() creates the closure.
           shared.conversationMessages = request.messages ?? [];
+          shared.historyTaskIds = indexHistoryTaskIds(
+            shared.conversationMessages
+          );
 
           // ── Auto-discover descriptions for the system prompt ──────
           const agentDescriptions = await Promise.all(

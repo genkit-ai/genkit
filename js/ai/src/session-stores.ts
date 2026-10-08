@@ -117,9 +117,6 @@ function selectLeafSnapshot<S>(
 }
 
 /**
- * In-memory implementation of persistent Session Store.
- */
-/**
  * Copies a stored snapshot for a reader, leaving the state out of a
  * metadata-only read rather than copying it only to be dropped.
  */
@@ -132,6 +129,9 @@ function cloneSnapshot<S>(
   return structuredClone(metadata);
 }
 
+/**
+ * In-memory implementation of persistent Session Store.
+ */
 export class InMemorySessionStore<S = unknown> implements SessionStore<S> {
   private snapshots = new Map<string, SessionSnapshot<S>>();
   private listeners = new Map<
