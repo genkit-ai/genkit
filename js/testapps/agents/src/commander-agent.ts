@@ -157,8 +157,15 @@ export const deployHistorian = ai.defineAgent({
 // it can read while the investigators work.
 // ---------------------------------------------------------------------------
 
-/** Updates posted during the current incident, newest last. */
-const statusLog: { at: string; update: string }[] = [];
+/**
+ * The commander's session state: the updates posted during the incident,
+ * newest last. It lives in the session rather than in module scope, so two
+ * concurrent incidents keep separate feeds.
+ */
+const CommanderStateSchema = z.object({
+  statusLog: z.array(z.object({ at: z.string(), update: z.string() })),
+});
+type CommanderState = z.infer<typeof CommanderStateSchema>;
 
 const postStatus = ai.defineTool(
   {
@@ -172,7 +179,9 @@ const postStatus = ai.defineTool(
   },
   async ({ update }) => {
     const at = new Date().toISOString();
-    statusLog.push({ at, update });
+    ai.currentSession<CommanderState>().updateCustom((state) => ({
+      statusLog: [...(state?.statusLog ?? []), { at, update }],
+    }));
     return { posted: true, at };
   }
 );
@@ -209,6 +218,7 @@ const readStatusBoard = ai.defineTool(
 export const commanderAgent = ai.defineAgent({
   name: 'commanderAgent',
   model: defaultModel,
+  stateSchema: CommanderStateSchema,
   system: `You are the incident commander for a production incident. You owe the status feed an update now, and a root cause as soon as one is known.
 
 Work like this:
@@ -241,13 +251,13 @@ export const testCommanderAgent = ai.defineFlow(
     outputSchema: z.any(),
   },
   async (text, { sendChunk }) => {
-    statusLog.length = 0;
     const chat = commanderAgent.chat();
     const turn = chat.sendStream(text);
     for await (const chunk of turn.stream) {
       sendChunk(chunk.raw);
     }
     const res = await turn.response;
-    return { answer: res.text, statusUpdates: [...statusLog] };
+    // `res.state` is the commander's custom state.
+    return { answer: res.text, statusUpdates: res.state?.statusLog ?? [] };
   }
 );
