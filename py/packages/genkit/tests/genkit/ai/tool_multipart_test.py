@@ -107,6 +107,15 @@ def test_response_rejects_non_part_parts() -> None:
     assert 'INVALID_PART' not in ei.value.original_message
 
 
+def test_tool_response_rejects_non_dict_metadata() -> None:
+    with pytest.raises(GenkitError) as ei:
+        tool_response(1, metadata='nope')  # type: ignore[arg-type]
+    assert ei.value.status == 'INVALID_ARGUMENT'
+    assert ei.value.reason is RuntimeErrorReason.INVALID_INPUT
+    assert 'metadata' in ei.value.original_message
+    assert 'INVALID_INPUT' not in ei.value.original_message
+
+
 class CamelOut(BaseModel):
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
     content_type: str
