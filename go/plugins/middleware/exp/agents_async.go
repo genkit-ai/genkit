@@ -29,7 +29,9 @@ package exp
 // The middleware itself keeps no task registry. The task handle
 // ("<agent>:<snapshotId>") is self-contained and rides in the delegation tool
 // result, so it is recorded in the orchestrator's conversation history; a
-// re-instantiated orchestrator resumes tracking from the IDs in its history.
+// re-instantiated orchestrator resumes tracking from the IDs in its history,
+// and those IDs, with the ones this generate call minted, are the only ones
+// the background-task tools accept (see launchedHere).
 // Status goes through the sub-agent's [aix.AgentHandle] (resolved via
 // resolveAgent, i.e. genkit/exp.LookupAgent, the sanctioned path for
 // third-party middleware): the check tool dispatches the agent's getSnapshot
@@ -677,6 +679,11 @@ func (a *Agents) reportTask(ctx context.Context, g *genkit.Genkit, st *agentsSta
 	ref, snapshotID, err := a.resolveTaskID(taskID)
 	if err != nil {
 		logger.Debug(ctx, "background task id did not resolve", "taskId", taskID, "error", err)
+		return backgroundTaskReport{TaskID: taskID, Status: taskStatusUnknown, Error: err.Error()}, err
+	}
+	if !launchedHere(st, taskID) {
+		err := notLaunchedHereError(taskID, "checked, awaited, or stopped")
+		logger.Debug(ctx, "background task was not launched in this conversation", "taskId", taskID)
 		return backgroundTaskReport{TaskID: taskID, Status: taskStatusUnknown, Error: err.Error()}, err
 	}
 

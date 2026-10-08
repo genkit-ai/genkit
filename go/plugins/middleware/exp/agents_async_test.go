@@ -206,11 +206,13 @@ func TestAgentsBackgroundTasksPickUpAcrossInstantiations(t *testing.T) {
 	taskID := launches[0].TaskID
 
 	// Second call, fresh middleware instance: wait on the recorded task ID
-	// plus a missing snapshot and an unconfigured agent.
+	// plus a missing snapshot and an unconfigured agent. The call carries the
+	// first one's history, which is what makes the recorded ID one this
+	// conversation launched; the missing snapshot is seeded the same way.
 	badSnapshot := "researcher:no-such-snapshot"
 	badAgent := "ghost:whatever"
 	waiter := toolModel(t, g, "test/orch-wait", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
-		if hasToolResponse(req.Messages) {
+		if len(toolOutputs(req.Messages, waitBackgroundTasksToolName)) > 0 {
 			return textResp(req, "collected"), nil
 		}
 		return toolReqResp(req, &ai.ToolRequest{
@@ -218,7 +220,8 @@ func TestAgentsBackgroundTasksPickUpAcrossInstantiations(t *testing.T) {
 			Input: map[string]any{"taskIds": []string{taskID, badSnapshot, badAgent}},
 		}), nil
 	})
-	resp2, err := genkit.Generate(ctx, g, ai.WithModel(waiter), ai.WithPrompt("collect"),
+	resp2, err := genkit.Generate(ctx, g, ai.WithModel(waiter),
+		ai.WithMessages(append(resp1.History(), launchMessages(badSnapshot)...)...), ai.WithPrompt("collect"),
 		ai.WithUse(&Agents{Agents: []aix.AgentRef{{Name: "researcher"}}, Async: true}))
 	if err != nil {
 		t.Fatal(err)
@@ -547,7 +550,7 @@ func TestAgentsWaitTimeoutOverflowIsUnbounded(t *testing.T) {
 	// absurd timeout; before the clamp, the dead context instead failed every
 	// read and the result came back timedOut with a read error.
 	waiter := toolModel(t, g, "test/orch-overflow", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
-		if hasToolResponse(req.Messages) {
+		if len(toolOutputs(req.Messages, waitBackgroundTasksToolName)) > 0 {
 			return textResp(req, "collected"), nil
 		}
 		return toolReqResp(req, &ai.ToolRequest{
@@ -558,7 +561,8 @@ func TestAgentsWaitTimeoutOverflowIsUnbounded(t *testing.T) {
 			},
 		}), nil
 	})
-	resp, err := genkit.Generate(ctx, g, ai.WithModel(waiter), ai.WithPrompt("collect"),
+	resp, err := genkit.Generate(ctx, g, ai.WithModel(waiter),
+		ai.WithMessages(launchMessages("researcher:no-such-snapshot")...), ai.WithPrompt("collect"),
 		ai.WithUse(&Agents{Agents: []aix.AgentRef{{Name: "researcher"}}, Async: true}))
 	if err != nil {
 		t.Fatal(err)
@@ -766,6 +770,77 @@ func TestAgentsRejectsNegativeMaxWaitSeconds(t *testing.T) {
 	mw := &Agents{Agents: []aix.AgentRef{{Name: "researcher"}}, Async: true, MaxWaitSeconds: -1}
 	if _, err := mw.New(ctx); !errors.Is(err, status.ErrInvalidArgument) {
 		t.Fatalf("New error = %v, want INVALID_ARGUMENT", err)
+	}
+}
+
+// TestAgentsRefuseTasksFromAnotherConversation launches a task in one
+// conversation and names it in another whose history does not carry it. The
+// check, wait, and abort tools report it unknown with the refusal, the
+// continue tool refuses it, and the abort leaves the task running.
+func TestAgentsRefuseTasksFromAnotherConversation(t *testing.T) {
+	g := newTestGenkit(t)
+	gate := make(chan struct{})
+	t.Cleanup(func() { close(gate) })
+	genkitx.DefineCustomAgent[any](g, "researcher",
+		func(ctx context.Context, resp aix.Responder, sess *aix.SessionRunner[any]) (*aix.AgentResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) (*aix.TurnResult, error) {
+				select {
+				case <-gate:
+				case <-ctx.Done():
+				}
+				return nil, ctx.Err()
+			})
+		},
+		aix.WithSessionStore[any](localstore.NewInMemorySessionStore[any]()),
+	)
+	h := genkitx.LookupAgent(g, "researcher")
+	task, err := h.RunDetached(ctx, &aix.AgentInput{Message: ai.NewUserTextMessage("someone else's work")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskID := formatTaskID("researcher", task.SnapshotID())
+
+	tools := []string{checkBackgroundTasksToolName, waitBackgroundTasksToolName, abortBackgroundTasksToolName, "continue_task"}
+	orch := toolModel(t, g, "test/orch-foreign", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		for _, name := range tools {
+			if len(toolOutputs(req.Messages, name)) > 0 {
+				continue
+			}
+			input := map[string]any{"taskIds": []string{taskID}}
+			if name == "continue_task" {
+				input = map[string]any{"taskId": taskID, "instructions": "go on"}
+			}
+			return toolReqResp(req, &ai.ToolRequest{Name: name, Input: input}), nil
+		}
+		return textResp(req, "done"), nil
+	})
+	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("steer"),
+		ai.WithUse(&Agents{Agents: []aix.AgentRef{{Name: "researcher"}}, Async: true}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, name := range tools[:3] {
+		outs := toolOutputs(resp.History(), name)
+		if len(outs) != 1 {
+			t.Fatalf("%s: expected 1 response, got %d", name, len(outs))
+		}
+		res := decodeToolOutput[backgroundTasksResult](t, outs[0])
+		if len(res.Tasks) != 1 || res.Tasks[0].Status != taskStatusUnknown ||
+			!strings.Contains(res.Tasks[0].Error, "was not started in this conversation") {
+			t.Errorf("%s: want the task refused as unknown, got %+v", name, res.Tasks)
+		}
+	}
+	continues := delegationResponses(t, resp.History(), "continue_task")
+	if len(continues) != 1 || !strings.Contains(continues[0].Response, "was not started in this conversation") {
+		t.Errorf("continue_task: want the refusal, got %+v", continues)
+	}
+	snap, err := h.GetSnapshot(ctx, task.SnapshotID(), aix.WithMetadataOnly())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.Status != aix.SnapshotStatusPending {
+		t.Errorf("task status = %q, want %q: a refused abort must not touch it", snap.Status, aix.SnapshotStatusPending)
 	}
 }
 
@@ -1168,8 +1243,9 @@ func TestAgentsAbortAfterCompletionReportsTheResult(t *testing.T) {
 	}
 
 	a := &Agents{Agents: []aix.AgentRef{{Name: "researcher"}}, Async: true}
-	st := &agentsState{settledReports: map[string]backgroundTaskReport{}}
-	got, err := a.reportTask(ctx, g, st, formatTaskID("researcher", task.SnapshotID()), a.abortSnapshot())
+	taskID := formatTaskID("researcher", task.SnapshotID())
+	st := &agentsState{settledReports: map[string]backgroundTaskReport{}, launched: map[string]struct{}{taskID: {}}}
+	got, err := a.reportTask(ctx, g, st, taskID, a.abortSnapshot())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -104,6 +104,11 @@ func (a *Agents) runContinue(ctx context.Context, st *agentsState, in continueIn
 	if err != nil {
 		return delegationResult{Response: "Error: " + err.Error()}, nil
 	}
+	// Checked before a slot is spent: nothing ran, and the retry fails
+	// identically.
+	if !launchedHere(st, in.TaskID) {
+		return delegationResult{Response: "Error: " + notLaunchedHereError(in.TaskID, "continued").Error()}, nil
+	}
 	invocationNum, _, agent, refusal := a.beginDelegation(ctx, ref, st)
 	if refusal != nil {
 		return *refusal, nil

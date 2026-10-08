@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -76,6 +77,24 @@ func hasToolResponse(msgs []*ai.Message) bool {
 		}
 	}
 	return false
+}
+
+// launchMessages is a conversation in which a delegation earlier on returned
+// each of taskIDs ("<agent>:<snapshotId>", under the default tool prefix). The
+// background-task and continue tools accept only handles the conversation
+// launched, so a test that makes its task outside the middleware seeds the
+// generate call with these messages.
+func launchMessages(taskIDs ...string) []*ai.Message {
+	req := &ai.Message{Role: ai.RoleModel}
+	resp := &ai.Message{Role: ai.RoleTool}
+	for i, id := range taskIDs {
+		agent, _, _ := strings.Cut(id, ":")
+		tool := makeToolName(defaultToolPrefix, agent)
+		ref := fmt.Sprintf("launch-%d", i)
+		req.Content = append(req.Content, ai.NewToolRequestPart(&ai.ToolRequest{Name: tool, Ref: ref, Input: map[string]any{"task": "earlier work"}}))
+		resp.Content = append(resp.Content, ai.NewToolResponsePart(&ai.ToolResponse{Name: tool, Ref: ref, Output: map[string]any{"taskId": id}}))
+	}
+	return []*ai.Message{ai.NewUserTextMessage("earlier"), req, resp}
 }
 
 // delegateOnceModel calls toolName once with the given task, then returns
@@ -499,6 +518,43 @@ func TestAgentsSyncFailureCarriesTaskHandle(t *testing.T) {
 	}
 }
 
+// TestLaunchedHere pins which task handles count as this conversation's: one
+// this generate call minted, or one a delegation or continue tool's result in
+// the history carries, in either form the result takes there. The same handle
+// carried by any other tool's response (a sub-agent's text relayed back, a
+// retrieved document) is not one.
+func TestLaunchedHere(t *testing.T) {
+	const id = "researcher:snap-1"
+	launchTools := map[string]bool{"delegate_to_researcher": true, "continue_task": true}
+	toolMsg := func(name string, output any) []*ai.Message {
+		return []*ai.Message{{Role: ai.RoleTool, Content: []*ai.Part{
+			ai.NewToolResponsePart(&ai.ToolResponse{Name: name, Output: output}),
+		}}}
+	}
+	tests := []struct {
+		name         string
+		launched     map[string]struct{}
+		conversation []*ai.Message
+		want         bool
+	}{
+		{"minted in this call", map[string]struct{}{id: {}}, nil, true},
+		{"delegation result from history", nil, toolMsg("delegate_to_researcher", map[string]any{"taskId": id}), true},
+		{"delegation result in process", nil, toolMsg("delegate_to_researcher", delegationResult{TaskID: id}), true},
+		{"continue result", nil, toolMsg("continue_task", &delegationResult{TaskID: id}), true},
+		{"another tool's response", nil, toolMsg("search_web", map[string]any{"taskId": id}), false},
+		{"another handle", nil, toolMsg("delegate_to_researcher", map[string]any{"taskId": "researcher:snap-2"}), false},
+		{"nothing", nil, nil, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			st := &agentsState{launched: tt.launched, launchTools: launchTools, conversation: tt.conversation}
+			if got := launchedHere(st, id); got != tt.want {
+				t.Errorf("launchedHere = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestAgentsClientManagedDelegationNotContinuable(t *testing.T) {
 	// A client-managed sub-agent persists nothing, so its settled result
 	// carries no task handle, and the continue tool refuses a handle naming it:
@@ -511,11 +567,16 @@ func TestAgentsClientManagedDelegationNotContinuable(t *testing.T) {
 		}))},
 	)
 
+	// The history carries a handle naming the agent, as a delegation from a
+	// time it kept a store would have left (the continue tool accepts only
+	// handles the conversation launched), so the continue reaches the
+	// client-managed refusal. That seeded launch is the first delegation
+	// response the model sees; its own delegation is the second.
 	orch := toolModel(t, g, "test/orch", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		delegations := toolOutputs(req.Messages, "delegate_to_ephemeral")
 		resumes := toolOutputs(req.Messages, "continue_task")
 		switch {
-		case len(delegations) == 0:
+		case len(delegations) < 2:
 			return toolReqResp(req, &ai.ToolRequest{Name: "delegate_to_ephemeral", Input: map[string]any{"task": "do X"}}), nil
 		case len(resumes) == 0:
 			return toolReqResp(req, &ai.ToolRequest{Name: "continue_task",
@@ -534,16 +595,17 @@ func TestAgentsClientManagedDelegationNotContinuable(t *testing.T) {
 	)
 	mw := &Agents{Agents: []aix.AgentRef{{Name: "ephemeral"}, {Name: "keeper"}}}
 
-	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("go"), ai.WithUse(mw))
+	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch),
+		ai.WithMessages(launchMessages("ephemeral:whatever")...), ai.WithPrompt("go"), ai.WithUse(mw))
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := delegationResponses(t, resp.History(), "delegate_to_ephemeral")
-	if len(got) != 1 {
-		t.Fatalf("expected 1 delegation response, got %d", len(got))
+	if len(got) != 2 {
+		t.Fatalf("expected the seeded and 1 new delegation response, got %d", len(got))
 	}
-	if got[0].TaskID != "" || got[0].Status != "" {
-		t.Errorf("client-managed result carries a handle: taskId=%q status=%q", got[0].TaskID, got[0].Status)
+	if got[1].TaskID != "" || got[1].Status != "" {
+		t.Errorf("client-managed result carries a handle: taskId=%q status=%q", got[1].TaskID, got[1].Status)
 	}
 	resumes := delegationResponses(t, resp.History(), "continue_task")
 	if len(resumes) != 1 || !strings.Contains(resumes[0].Response, "cannot be continued") {
