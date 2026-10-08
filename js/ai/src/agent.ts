@@ -188,7 +188,6 @@ function isHeartbeatExpired(
 }
 
 /**
-/**
  * Whether a detached row is still owed a heartbeat: a `pending` one while the
  * turn runs, and an `aborting` one while the stopped turn drains toward the
  * finalize, which settles it as `aborted`.
@@ -343,22 +342,22 @@ async function waitForSnapshotInStore<S>(
     wake?.();
   };
   const onAbort = () => wake?.();
-  abortSignal?.addEventListener('abort', onAbort, { once: true });
-  // Subscribe before the first read, so a settlement that lands between the
-  // two is still delivered: the bundled stores do not replay the current
-  // status on subscribe, and a wait that read a pending row just before the
-  // settling write would otherwise learn of it only on its next tick.
   let unsubscribe: void | (() => void) = undefined;
-  if (subscribable) {
-    unsubscribe = store.onSnapshotStateChange!(
-      snapshotId,
-      (snap) => {
-        if (isTerminalSnapshotStatus(snap.status)) wakeUp();
-      },
-      { context: opts.context }
-    );
-  }
   try {
+    abortSignal?.addEventListener('abort', onAbort, { once: true });
+    // Subscribe before the first read, so a settlement that lands between the
+    // two is still delivered: the bundled stores do not replay the current
+    // status on subscribe, and a wait that read a pending row just before the
+    // settling write would otherwise learn of it only on its next tick.
+    if (subscribable) {
+      unsubscribe = store.onSnapshotStateChange!(
+        snapshotId,
+        (snap) => {
+          if (isTerminalSnapshotStatus(snap.status)) wakeUp();
+        },
+        { context: opts.context }
+      );
+    }
     // The first read prices the common already-terminal case at exactly one
     // read. A transient failure falls into the wait below and is retried
     // there, because a store blip at the moment a wait starts is no more fatal
