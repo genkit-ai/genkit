@@ -389,4 +389,49 @@ describe('DirectTelemetryInstrumentation realtime export', () => {
     // Genkit's own attributes are not overridable.
     assert.equal(exported.attributes['genkit:name'], 'attrs');
   });
+
+  // Runs a failing span and returns the exported exception event attributes.
+  async function exportedExceptionFor(err: Error) {
+    delete process.env.GENKIT_ENABLE_REALTIME_TELEMETRY;
+    let spanId = '';
+    await assert.rejects(
+      runInNewSpan(
+        { metadata: { name: 'boom' }, labels: { 'genkit:type': 'flow' } },
+        async (_m, span) => {
+          spanId = span.spanContext().spanId;
+          throw err;
+        }
+      )
+    );
+    await flushTracing();
+    const exported = posted
+      .flatMap((t) => Object.values(t.spans ?? {}))
+      .find((s: any) => s.spanId === spanId) as any;
+    return exported.timeEvents.timeEvent.map(
+      (e: any) => e.annotation.attributes
+    );
+  }
+
+  it('omits an empty exception.message, like OTel recordException', async () => {
+    // ToolInterruptError shape: empty message. The Dev UI relies on the missing
+    // message to title the span "Interrupted".
+    const err = Object.assign(new Error(), { name: 'ToolInterruptError' });
+    const [attrs] = await exportedExceptionFor(err);
+    assert.equal(attrs['exception.type'], 'ToolInterruptError');
+    assert.ok(!('exception.message' in attrs));
+    assert.ok(attrs['exception.stacktrace']);
+  });
+
+  it('prefers error code over name for exception.type', async () => {
+    const err = Object.assign(new Error('nope'), { code: 404 });
+    const [attrs] = await exportedExceptionFor(err);
+    assert.equal(attrs['exception.type'], '404');
+    assert.equal(attrs['exception.message'], 'nope');
+  });
+
+  it('records name and message for a plain error', async () => {
+    const [attrs] = await exportedExceptionFor(new TypeError('bad input'));
+    assert.equal(attrs['exception.type'], 'TypeError');
+    assert.equal(attrs['exception.message'], 'bad input');
+  });
 });

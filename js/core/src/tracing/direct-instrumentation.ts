@@ -155,11 +155,8 @@ export class DirectTelemetryInstrumentation
     } catch (e) {
       status = { code: SpanStatusCode.ERROR, message: getErrorMessage(e) };
       if (e instanceof Error) {
-        exceptions.push({
-          'exception.type': e.name || 'Error',
-          'exception.message': e.message || String(e),
-          ...(e.stack ? { 'exception.stacktrace': e.stack } : {}),
-        });
+        const exception = toExceptionAttributes(e);
+        if (exception) exceptions.push(exception);
       }
       exportSpan(true);
       throw e;
@@ -281,6 +278,27 @@ function buildSpanData(args: BuildSpanDataArgs): SpanData {
     spanData.parentSpanId = args.parentSpanId;
   }
   return spanData;
+}
+
+/**
+ * Mirrors OTel's `Span.recordException`: type prefers `code` over `name`, empty
+ * fields are omitted, and nothing is recorded without a type or message. The
+ * omission matters: the Dev UI titles interrupts "Interrupted" only when
+ * `exception.message` is missing (`ToolInterruptError` has an empty message).
+ */
+function toExceptionAttributes(
+  e: Error & { code?: unknown }
+): Record<string, string> | undefined {
+  const attrs: Record<string, string> = {};
+  if (e.code) {
+    attrs['exception.type'] = String(e.code);
+  } else if (e.name) {
+    attrs['exception.type'] = e.name;
+  }
+  if (e.message) attrs['exception.message'] = e.message;
+  if (e.stack) attrs['exception.stacktrace'] = e.stack;
+  if (!attrs['exception.type'] && !attrs['exception.message']) return undefined;
+  return attrs;
 }
 
 function genId(bytes: number): string {
