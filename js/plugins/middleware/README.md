@@ -44,6 +44,7 @@ Enables sub-agent delegation. For each configured agent the middleware injects a
 | `historyLength`    | `number`                               | `0`             | Number of recent conversation messages (user/model only) to forward to sub-agents as context.                                                                                                                                                                           |
 | `artifactStrategy` | `'inline' \| 'session'`                | `'inline'`      | `inline`: artifact content is included in the tool result **and** merged into the parent session. `session`: artifacts are merged into the parent session only (the tool result lists names only). Pair `session` with the `artifacts` middleware.                      |
 | `async`            | `boolean`                              | `false`         | Enables background delegation: delegation tools accept a `background` flag that returns a task ID immediately, and the `check_background_tasks`, `wait_for_background_tasks`, and `abort_background_tasks` tools are added. Requires sub-agents defined with a `store`. |
+| `maxWaitSeconds` | `number` | unbounded | Upper bound on one `wait_for_background_tasks` call, whatever `timeoutSeconds` the model asks for; at the bound the wait returns the current statuses with `timedOut` set. |
 
 ```typescript
 import { genkit } from 'genkit';

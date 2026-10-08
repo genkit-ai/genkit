@@ -104,6 +104,16 @@ export const AgentsOptionsSchema = z.object({
         'abort_background_tasks tools are added. Background delegation requires ' +
         'server-managed sub-agents (agents defined with a session store).'
     ),
+  maxWaitSeconds: z
+    .number()
+    .positive()
+    .optional()
+    .describe(
+      'Upper bound on how long one wait_for_background_tasks call blocks, ' +
+        'whatever timeoutSeconds the model asks for (including 0, "until ' +
+        'every task settles"). At the bound the wait returns the current ' +
+        'statuses with timedOut set. Omitted means the model decides.'
+    ),
 });
 
 export type AgentsOptions = z.infer<typeof AgentsOptionsSchema>;
@@ -432,6 +442,7 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
       const historyLength = config.historyLength ?? 0;
       const artifactStrategy = config.artifactStrategy ?? 'inline';
       const async = config.async ?? false;
+      const maxWaitSeconds = config.maxWaitSeconds;
 
       // The shared background-task tools take an explicitly set prefix and
       // none by default: the default delegate_to prefix is a delegation verb,
@@ -627,7 +638,11 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
           .number()
           .optional()
           .describe(
-            'Maximum seconds to wait before returning the current statuses. 0 or omitted waits until every task settles; a negative value returns the current statuses immediately. Values too large to represent are treated as unbounded.'
+            'Maximum seconds to wait before returning the current statuses. 0 or omitted waits until every task settles' +
+              (maxWaitSeconds === undefined
+                ? ''
+                : `, for at most ${maxWaitSeconds} seconds`) +
+              '; a negative value returns the current statuses immediately. Values too large to represent are treated as unbounded.'
           ),
         // A free string rather than an enum: an unknown value is answered
         // with guidance the model can correct, not a validation failure that
@@ -1350,9 +1365,18 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
         const first = waitFor === 'first';
 
         // A negative timeout means "don't wait": report the current statuses.
-        const timeoutSeconds = input.timeoutSeconds ?? 0;
+        // The operator's bound clamps any other value, "until every task
+        // settles" included, so a prompt cannot decide how long a request
+        // hangs.
+        let timeoutSeconds = input.timeoutSeconds ?? 0;
         if (timeoutSeconds < 0) {
           return reportTasks(taskIds, readSnapshotOnce);
+        }
+        if (
+          maxWaitSeconds !== undefined &&
+          (timeoutSeconds === 0 || timeoutSeconds > maxWaitSeconds)
+        ) {
+          timeoutSeconds = maxWaitSeconds;
         }
         const timeoutMs = timeoutSeconds * 1000;
 
