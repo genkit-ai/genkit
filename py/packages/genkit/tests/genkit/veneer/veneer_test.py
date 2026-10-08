@@ -2056,6 +2056,51 @@ async def test_evaluate_batch_with_no_config_passes_empty_dict_to_evaluator(setu
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('batch', [False, True], ids=['per_row', 'batch'])
+async def test_evaluate_with_explicit_none_config_passes_empty_dict(setup_test: SetupFixture, batch: bool) -> None:
+    """config=None on ai.evaluate is the same as leaving it out: the evaluator gets {}."""
+    ai, *_ = setup_test
+    define = _define_recording_batch_evaluator if batch else _define_recording_evaluator
+    seen = define(ai, 'explicit_none_eval')
+
+    await ai.evaluate(evaluator='explicit_none_eval', dataset=_one_row(), config=None)
+
+    assert seen == [{}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('batch', [False, True], ids=['per_row', 'batch'])
+async def test_evaluator_action_run_with_none_options_passes_empty_dict(setup_test: SetupFixture, batch: bool) -> None:
+    """A wire EvalRequest with options=None (Dev UI / CLI, bypassing ai.evaluate) still hands the evaluator {}."""
+    ai, *_ = setup_test
+    define = _define_recording_batch_evaluator if batch else _define_recording_evaluator
+    seen = define(ai, 'wire_none_eval')
+    action = await ai.registry.resolve_evaluator('wire_none_eval')
+    assert action is not None
+
+    await action.run(EvalRequest(dataset=_one_row(), eval_run_id='run1', options=None))
+
+    assert seen == [{}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('batch', [False, True], ids=['per_row', 'batch'])
+async def test_evaluator_action_run_with_falsy_options_passes_them_through(
+    setup_test: SetupFixture, batch: bool
+) -> None:
+    """Only None becomes {}; a falsy non-None value from the wire reaches the evaluator unchanged."""
+    ai, *_ = setup_test
+    define = _define_recording_batch_evaluator if batch else _define_recording_evaluator
+    seen = define(ai, 'wire_falsy_eval')
+    action = await ai.registry.resolve_evaluator('wire_falsy_eval')
+    assert action is not None
+
+    await action.run(EvalRequest(dataset=_one_row(), eval_run_id='run1', options=[]))
+
+    assert seen == [[]]
+
+
+@pytest.mark.asyncio
 async def test_evaluate_with_ref_settings_only_passes_ref_settings(setup_test: SetupFixture) -> None:
     """Config on the evaluator ref alone reaches the evaluator as that dict."""
     ai, *_ = setup_test

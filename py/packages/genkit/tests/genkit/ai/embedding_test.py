@@ -520,6 +520,20 @@ async def test_embed_with_no_config_sends_empty_dict_options(
     assert [call.args[0].options for call in embed_action.run.call_args_list] == [{}, {}]
 
 
+def test_embed_request_options_none_or_missing_becomes_empty_dict() -> None:
+    """EmbedRequest built in code or parsed from the wire (Dev UI sends options: null) always carries a dict."""
+    docs = [Document.from_text('hi')]
+
+    assert EmbedRequest(input=docs).options == {}
+    assert EmbedRequest(input=docs, options=None).options == {}
+    assert EmbedRequest.model_validate({'input': [{'content': [{'text': 'hi'}]}], 'options': None}).options == {}
+
+
+def test_embed_request_falsy_options_pass_through() -> None:
+    """Only None becomes {}; a falsy non-None options value is kept as-is."""
+    assert EmbedRequest(input=[Document.from_text('hi')], options=[]).options == []
+
+
 @pytest.mark.asyncio
 async def test_embed_unknown_embedder_raises_not_found() -> None:
     """ai.embed with an embedder name nobody registered raises GenkitError NOT_FOUND naming it."""
