@@ -376,7 +376,7 @@ const res = await chat.send('Now say that in French');
 console.log(res.text);
 ```
 
-A turn that fails keeps the tool rounds it completed: the conversation as it stood at the last turn seam persists as a `failed` snapshot carrying the error, and the `AgentError` names it. A run you stop (aborting the signal you passed to `send`, or calling `abort()` on a background task) persists an `aborted` snapshot the same way. Both resume like any other snapshot, and an input with no payload runs the turn again on the committed messages, so tool calls that already succeeded are not repeated:
+A turn that fails keeps the tool rounds it completed: the conversation as it stood at the last turn seam persists as a `failed` snapshot carrying the error, and the `AgentError` names it. A run you stop (aborting the signal you passed to `send`, calling `abort()` on a background task, or reaching the `maxTurns` limit you set) persists an `aborted` snapshot the same way. Both resume like any other snapshot, and an input with no payload runs the turn again on the committed messages, so tool calls that already succeeded are not repeated:
 
 ```ts
 try {
