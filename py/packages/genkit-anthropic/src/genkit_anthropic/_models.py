@@ -61,7 +61,6 @@ BETA_APIS: tuple[str, ...] = (
     'structured-outputs-2025-11-13',
     'task-budgets-2026-03-13',
 )
-_THINKING_MODE_KEYS = frozenset({'adaptive', 'budget_tokens', 'enabled', 'type'})
 
 
 class _ModelDumpable(Protocol):
@@ -201,46 +200,39 @@ def _normalize_config(config: object | None) -> AnthropicConfig:
     return AnthropicConfig.model_validate({k: v for k, v in vars(config).items() if v is not None})
 
 
-def _to_anthropic_thinking_config(thinking: dict[str, Any] | None) -> dict[str, Any] | None:
-    """Translate the public thinking config to the Anthropic SDK shape."""
-    if not thinking:
+def _to_anthropic_thinking(config: AnthropicConfig) -> dict[str, Any] | None:
+    """Build Anthropic's thinking object from the flat fields; None sends nothing.
+
+    AnthropicConfig's validator already enforces the cross-field rules, so
+    'enabled' always has a budget here. 'adaptive' doesn't send one.
+    """
+    mode = config.thinking_mode()
+    if mode is None:
         return None
+    result: dict[str, Any] = {}
+    if config.thinking_display is not None:
+        result['display'] = config.thinking_display
+    result['type'] = mode
+    if mode == 'enabled':
+        result['budget_tokens'] = config.thinking_budget
+    return result
 
-    thinking_type = thinking.get('type')
-    budget_tokens = thinking.get('budget_tokens')
-    adaptive = thinking.get('adaptive') is True or thinking_type == 'adaptive'
-    enabled = thinking.get('enabled') is True or thinking_type == 'enabled'
-    disabled = thinking.get('enabled') is False or thinking_type == 'disabled'
 
-    # Keys that are not mode toggles (display) pass through unchanged.
-    result: dict[str, Any] = {key: value for key, value in thinking.items() if key not in _THINKING_MODE_KEYS}
-
-    if adaptive:
-        result['type'] = 'adaptive'
-        return result
-
-    if enabled or (budget_tokens is not None and not disabled):
-        if budget_tokens is None:
-            raise ValueError('budgetTokens is required when thinking is enabled')
-        if not float(budget_tokens).is_integer():
-            raise ValueError('budgetTokens must be an integer when thinking is enabled')
-        result['type'] = 'enabled'
-        result['budget_tokens'] = int(budget_tokens)
-        return result
-
-    if disabled:
-        result['type'] = 'disabled'
-        return result
-
-    # No mode set: there's no SDK type to send.
-    return None
+def _to_anthropic_output_config(config: AnthropicConfig) -> dict[str, Any] | None:
+    """Build Anthropic's output_config from effort and task_budget; None sends nothing."""
+    result: dict[str, Any] = {}
+    if config.effort is not None:
+        result['effort'] = config.effort
+    if config.task_budget is not None:
+        result['task_budget'] = {'type': 'tokens', 'total': config.task_budget}
+    return result or None
 
 
 # Body fields Genkit builds from the request. `extra` can't set them: the
 # schema can't see inside the passthrough, and overwriting them silently would
 # replace the model the action resolved (pin one with `version`), the
 # conversation, the streaming mode, or the structured-output format Genkit
-# merges into output_config (the declared field still works). `betas` is
+# merges into output_config (effort= and task_budget= still work). `betas` is
 # the header Genkit sends from the declared setting, not a body field.
 # `tool_choice` is left out on purpose: extra={'tool_choice': {...}} is how a
 # caller sends a shape Genkit's option lacks, such as {'type': 'tool', ...}.
@@ -501,8 +493,9 @@ class AnthropicModel:
         # Handle mapped parameters
         max_tokens = params.pop('max_output_tokens', DEFAULT_MAX_OUTPUT_TOKENS)
 
-        thinking = params.pop('thinking', None)
-        metadata = params.pop('metadata', None)
+        # Flat fields the plugin builds Anthropic's nested objects from.
+        for key in ('thinking', 'thinking_budget', 'thinking_display', 'effort', 'task_budget', 'user_id'):
+            params.pop(key, None)
         version = params.pop('version', None)
         betas = params.pop('betas', None)
         disable_parallel_tool_use = bool(params.pop('disable_parallel_tool_use', False))
@@ -524,13 +517,16 @@ class AnthropicModel:
             if beta_headers:
                 params['betas'] = beta_headers
 
-        if isinstance(thinking, dict):
-            anthropic_thinking = _to_anthropic_thinking_config(thinking)
-            if anthropic_thinking is not None:
-                params['thinking'] = anthropic_thinking
+        thinking = _to_anthropic_thinking(config)
+        if thinking is not None:
+            params['thinking'] = thinking
 
-        if metadata is not None:
-            params['metadata'] = metadata
+        output_config = _to_anthropic_output_config(config)
+        if output_config is not None:
+            params['output_config'] = output_config
+
+        if config.user_id is not None:
+            params['metadata'] = {'user_id': config.user_id}
 
         system = self._extract_system(request.messages)
 
