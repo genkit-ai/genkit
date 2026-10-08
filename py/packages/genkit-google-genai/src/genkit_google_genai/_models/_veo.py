@@ -36,6 +36,7 @@ from genkit_google_genai._constants import is_multi_regional_location, multi_reg
 from genkit_google_genai._models._sdk_config import (
     VEO_MANAGED_BODY_FIELDS,
     attach_config_extra,
+    copy_http_options,
     dump_family_config,
     keep_client_extra_body,
     sdk_config_error,
@@ -316,7 +317,7 @@ class VeoModel:
 
         kwargs = dict(self._client_kwargs or {})
         plugin_opts = kwargs.get('http_options')
-        opts = plugin_opts.model_copy(deep=True) if plugin_opts is not None else genai_types.HttpOptions()
+        opts = copy_http_options(plugin_opts) if plugin_opts is not None else genai_types.HttpOptions()
         if api_key is not None:
             kwargs['api_key'] = api_key
             # The SDK rejects api_key with credentials, project, or location.
