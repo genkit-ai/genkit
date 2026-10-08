@@ -1407,10 +1407,15 @@ function defineGatedResearcher(
     finishReason?: 'stop' | 'failed' | 'aborted';
     onAbort?: () => void;
     store?: InMemorySessionStore;
+    maxSnapshotWaitMs?: number;
   } = {}
 ) {
   return ai.defineCustomAgent(
-    { name, store: opts.store ?? new InMemorySessionStore() },
+    {
+      name,
+      store: opts.store ?? new InMemorySessionStore(),
+      maxSnapshotWaitMs: opts.maxSnapshotWaitMs,
+    },
     async (sess, { abortSignal }) => {
       await sess.run(async () => {
         await Promise.race([
@@ -2161,6 +2166,49 @@ describe('agents middleware (async)', () => {
     assert.match(out.tasks[1].error, /not registered/);
     assert.strictEqual(out.tasks[2].status, 'unknown');
     assert.match(out.tasks[2].error, /does not match any configured agent/);
+  });
+
+  it('bounds a wait the model left unbounded with maxWaitSeconds', async () => {
+    const ai = genkit({});
+    const gate = makeGate();
+    const researcher = defineGatedResearcher(ai, 'researcher', gate.opened);
+    const task = await researcher.chat().detach('dig');
+    const taskId = `researcher:${task.snapshotId}`;
+
+    const def = await instantiateWith(
+      ai,
+      { agents: ['researcher'], async: true, maxWaitSeconds: 0.05 },
+      launchHistory([['researcher', taskId]])
+    );
+    const waitTool = def.tools!.find((t) => t.__action.name === WAIT_TOOL)!;
+    // No timeoutSeconds: "until every task settles", which the bound caps.
+    const out = await waitTool({ taskIds: [taskId] });
+    assert.strictEqual(out.timedOut, true);
+    assert.strictEqual(out.tasks[0].status, 'pending');
+    gate.release();
+  });
+
+  it('follows a sub-agent wait that answers before the task settles', async () => {
+    const ai = genkit({});
+    const gate = makeGate();
+    // The sub-agent's wait action answers with the pending row every 10ms.
+    const researcher = defineGatedResearcher(ai, 'researcher', gate.opened, {
+      maxSnapshotWaitMs: 10,
+    });
+    const task = await researcher.chat().detach('dig');
+    const taskId = `researcher:${task.snapshotId}`;
+
+    const def = await instantiateWith(
+      ai,
+      { agents: ['researcher'], async: true },
+      launchHistory([['researcher', taskId]])
+    );
+    const waitTool = def.tools!.find((t) => t.__action.name === WAIT_TOOL)!;
+    const waiting = waitTool({ taskIds: [taskId] });
+    setTimeout(gate.release, 50);
+    const out = await waiting;
+    assert.strictEqual(out.tasks[0].status, 'completed');
+    assert.strictEqual(out.timedOut, undefined);
   });
 
   it('refuses a task ID this conversation did not launch', async () => {
