@@ -112,7 +112,11 @@ export const SummarizeOptionsSchema = z.object({
 
   /**
    * Number of most recent non-system messages to keep un-summarized.
-   * Everything before this window is replaced with a summary. Minimum: 1.
+   * Everything before this window is replaced with a summary. When the
+   * prompt exceeds `maxInputTokens` and the non-system history fits within
+   * the effective keep window (after any `maxMessages` cap), falls back to
+   * top-level `preserveRecent` (if smaller) so older turns can still be
+   * summarized. Minimum: 1.
    * @default 6
    */
   preserveRecent: z
@@ -146,9 +150,9 @@ export const ContextCompressionOptionsSchema = z.object({
 
   /**
    * Number of most recent non-system messages to preserve untouched when
-   * compacting older messages (used as the default window for summarization
-   * or message truncation, and dynamically reduced on severe budget overshoot).
-   * Minimum: 1.
+   * compacting older messages (used as the default/fallback window for
+   * summarization and message truncation, and dynamically reduced on
+   * severe budget overshoot). Minimum: 1.
    * @default 4
    */
   preserveRecent: z
@@ -1703,7 +1707,8 @@ export const contextCompression: GenerateMiddleware<
       messages: MessageData[],
       effectiveSummaryPreserveRecent?: number,
       ctx?: { abortSignal?: AbortSignal; context?: ActionContext },
-      maxMessagesCap?: number
+      maxMessagesCap?: number,
+      fallbackPreserveRecent?: number
     ): Promise<{
       messages: MessageData[];
       summarized: boolean;
@@ -1744,6 +1749,18 @@ export const contextCompression: GenerateMiddleware<
           };
         }
         targetKeep = Math.min(summaryPreserveRecent, maxKeepForCap);
+      }
+
+      // When nonSystemMessages fits within targetKeep (e.g. 5–6 messages with
+      // default summarize.preserveRecent = 6), fall back to the general
+      // preserveRecent window (default 4) so over-budget histories are
+      // summarized rather than skipped.
+      if (
+        nonSystemMessages.length <= targetKeep &&
+        fallbackPreserveRecent !== undefined &&
+        fallbackPreserveRecent < targetKeep
+      ) {
+        targetKeep = fallbackPreserveRecent;
       }
 
       if (nonSystemMessages.length <= targetKeep) {
@@ -2132,7 +2149,10 @@ export const contextCompression: GenerateMiddleware<
                     messages,
                     adjustedSummaryPreserveRecent,
                     ctx,
-                    maxMessages
+                    maxMessages,
+                    effectiveTokens > maxInputTokens
+                      ? adjustedPreserveRecent
+                      : undefined
                   );
                   messages = sumResult.messages;
                   isSummarized = sumResult.summarized;

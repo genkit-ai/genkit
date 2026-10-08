@@ -4237,4 +4237,72 @@ describe('contextCompression middleware', () => {
     });
     assert.strictEqual(summaryCalled, true);
   });
+
+  it('summarizes 5-6 message histories with default preserveRecent options instead of dropping Turn 1 via fallback truncation', async () => {
+    const ai = genkit({});
+    let capturedRequest: GenerateRequest | undefined;
+    let summaryCalled = 0;
+
+    const summaryModel = ai.defineModel(
+      { name: 'defaultPreserveRecentSummarizer' },
+      async () => {
+        summaryCalled++;
+        return {
+          message: {
+            role: 'model',
+            content: [{ text: 'Summary of turn 1' }],
+          },
+          finishReason: 'stop',
+        };
+      }
+    );
+
+    const pm = ai.defineModel(
+      { name: 'defaultPreserveRecentMain' },
+      async (req) => {
+        capturedRequest = req;
+        return {
+          message: { role: 'model', content: [{ text: 'done' }] },
+          usage: { inputTokens: 50 },
+        };
+      }
+    );
+
+    // 5 messages totaling ~875 chars (~250 tokens), maxInputTokens = 200 -> overshootRatio = 1.25 (< 1.5)
+    const fiveMessageHistory: MessageData[] = [
+      { role: 'user', content: [{ text: 'u1 ' + 'A'.repeat(170) }] },
+      { role: 'model', content: [{ text: 'm1 ' + 'B'.repeat(170) }] },
+      { role: 'user', content: [{ text: 'u2 ' + 'C'.repeat(170) }] },
+      { role: 'model', content: [{ text: 'm2 ' + 'D'.repeat(170) }] },
+      { role: 'user', content: [{ text: 'u3 ' + 'E'.repeat(170) }] },
+    ];
+
+    const res = await ai.generate({
+      model: pm,
+      messages: fiveMessageHistory,
+      use: [
+        contextCompression({
+          maxInputTokens: 200,
+          summarize: { model: summaryModel },
+        }),
+      ],
+    });
+
+    assert.strictEqual(summaryCalled, 1);
+    const cc = (res.custom as Record<string, unknown>)?.contextCompression as
+      | Record<string, unknown>
+      | undefined;
+    assert.ok(cc);
+    assert.strictEqual(cc.summarized, true);
+    assert.strictEqual(cc.truncationNoticeInserted, false);
+    assert.ok(
+      capturedRequest!.messages[0].content[0].text?.includes(
+        'Summary of turn 1'
+      )
+    );
+
+    // Verify cross-turn resolution and re-entry on next turn
+    const resolved = resolveCompressedHistory(res.messages);
+    assert.ok(resolved[0].content[0].text?.includes('Summary of turn 1'));
+  });
 });
