@@ -285,7 +285,7 @@ func Generate(
 				}
 			case anthropic.MessageDeltaEvent:
 				applyDeltaUsage(&message.Usage, event.Usage)
-				thinking = thinkingTokens(event.Usage.JSON.ExtraFields["output_tokens_details"])
+				thinking = max(thinking, thinkingTokens(event.Usage.JSON.ExtraFields["output_tokens_details"]))
 			case anthropic.MessageStopEvent:
 				r, err := toGenkitResponse(&message, thinking)
 				if err != nil {

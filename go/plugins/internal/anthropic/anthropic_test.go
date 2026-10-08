@@ -1043,6 +1043,26 @@ func TestGenerateReportsUsage(t *testing.T) {
 			},
 		},
 		{
+			// A later delta that leaves the thinking breakdown out does not
+			// fold the thinking back into the output.
+			name:   "stream second delta without thinking",
+			stream: true,
+			body: "event: message_start\n" +
+				`data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-haiku-4-5","content":[],"stop_reason":null,"usage":{"input_tokens":75,"output_tokens":3}}}` + "\n\n" +
+				"event: message_delta\n" +
+				`data: {"type":"message_delta","delta":{"stop_reason":null},"usage":{"output_tokens":256,"output_tokens_details":{"thinking_tokens":248}}}` + "\n\n" +
+				"event: message_delta\n" +
+				`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":256}}` + "\n\n" +
+				"event: message_stop\n" +
+				`data: {"type":"message_stop"}` + "\n\n",
+			want: &ai.GenerationUsage{
+				InputTokens:    75,
+				OutputTokens:   8,
+				ThoughtsTokens: 248,
+				TotalTokens:    331,
+			},
+		},
+		{
 			// A delta's counts are cumulative, so a zeroed input count does
 			// not lower the start's, and cache writes added after the start
 			// with no split by lifetime drop the start's partial split.
