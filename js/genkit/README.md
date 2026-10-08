@@ -403,6 +403,19 @@ const res = await chat.send('Weather in Tokyo?');
 console.log(res.text);
 ```
 
+On the server, mount the agent at `url` and its companion actions under it, so `remoteAgent` can read, wait for, and stop background tasks:
+
+```ts
+import { expressHandler } from '@genkit-ai/express';
+
+app.post('/api/weatherAgent', expressHandler(weatherAgent));
+app.post('/api/weatherAgent/getSnapshot', expressHandler(weatherAgent.getSnapshotDataAction));
+app.post('/api/weatherAgent/waitForSnapshot', expressHandler(weatherAgent.waitForSnapshotAction));
+app.post('/api/weatherAgent/abort', expressHandler(weatherAgent.abortAgentAction));
+```
+
+Without the `waitForSnapshot` route, `remoteAgent` polls `getSnapshot` instead.
+
 Learn more in the [Agents documentation](https://genkit.dev/docs/js/agents/overview/).
 
 ## Middleware

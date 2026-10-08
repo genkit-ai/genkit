@@ -121,6 +121,12 @@ export class GenkitBeta extends Genkit {
       description?: string;
       stateSchema?: z.ZodType<State>;
       store?: SessionStore<State>;
+      /**
+       * How long (ms) one request to the `waitForSnapshot` companion action
+       * holds before it answers with the snapshot as it stands. Defaults to
+       * 25 seconds.
+       */
+      maxSnapshotWaitMs?: number;
     },
     fn: AgentFn<State>
   ) {
@@ -144,6 +150,12 @@ export class GenkitBeta extends Genkit {
     promptInput?: z.infer<I>;
     stateSchema?: z.ZodType<State>;
     store?: SessionStore<State>;
+    /**
+     * How long (ms) one request to the `waitForSnapshot` companion action
+     * holds before it answers with the snapshot as it stands. Defaults to
+     * 25 seconds.
+     */
+    maxSnapshotWaitMs?: number;
   }) {
     return definePromptAgent<State, I>(this.registry, config);
   }

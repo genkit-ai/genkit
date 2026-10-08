@@ -184,11 +184,12 @@ export class InMemorySessionStore<S = unknown> implements SessionStore<S> {
     };
 
     this.snapshots.set(id, structuredClone(full));
-    const snapshotListeners = this.listeners.get(id);
-    if (snapshotListeners) {
-      for (const listener of snapshotListeners) {
-        listener(structuredClone(full));
-      }
+    // Dispatch over a copy: a listener that unsubscribes while being notified
+    // (the detach runtime does, on an abort) splices itself out of the live
+    // array, and iterating that array would skip the listener after it.
+    const snapshotListeners = [...(this.listeners.get(id) ?? [])];
+    for (const listener of snapshotListeners) {
+      listener(structuredClone(full));
     }
     return id;
   }
