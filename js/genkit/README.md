@@ -382,14 +382,14 @@ A turn that fails keeps the tool rounds it completed: the conversation as it sto
 try {
   await chat.send('Book the full itinerary.');
 } catch (err) {
-  if (err instanceof AgentError && err.status === 'UNAVAILABLE') {
-    // The chat already adopted the failed snapshot; re-attempt the turn.
+  if (err instanceof AgentError) {
+    // The chat already adopted the failed snapshot; re-attempt the turn once.
     await chat.send({});
   }
 }
 ```
 
-Whether a failure is worth another attempt is yours to decide; the framework records the error and leaves the snapshot resumable either way. Custom agents opt in by throwing `CommittedTurnError`; a bare error rolls the turn back to the previous snapshot.
+Whether a failure is worth another attempt is yours to decide; the framework records the error and leaves the snapshot resumable either way. `err.status` is the model's own status for a model error, and `INTERNAL` for a failed tool whatever the tool threw. Custom agents opt in by throwing `CommittedTurnError`; a bare error rolls the turn back to the previous snapshot. A custom agent that commits failures also has to handle the input with no message or resume that re-attempts a turn, since the runner hands it over as it is.
 
 Agents can be served over HTTP and accessed from the client with `remoteAgent`, which returns the exact same chat API as the server:
 
