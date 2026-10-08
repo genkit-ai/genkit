@@ -2084,20 +2084,53 @@ async def test_evaluator_action_run_with_none_options_passes_empty_dict(setup_te
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('bad_config', [[], [('threshold', 0.5)], 'strict'], ids=['empty_list', 'pairs', 'str'])
+async def test_evaluate_with_non_mapping_config_raises_invalid_argument(
+    setup_test: SetupFixture, bad_config: object
+) -> None:
+    """config= must be a dict or a BaseModel, same as generate; a list or str raises before the evaluator runs."""
+    ai, *_ = setup_test
+    seen = _define_recording_evaluator(ai, 'bad_cfg_eval')
+
+    with pytest.raises(GenkitError) as exc_info:
+        await ai.evaluate(evaluator='bad_cfg_eval', dataset=_one_row(), config=bad_config)  # type: ignore[arg-type]
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert seen == []
+
+
+@pytest.mark.asyncio
+async def test_evaluate_with_basemodel_config_passes_dict(setup_test: SetupFixture) -> None:
+    """A BaseModel config= is dumped, so the untyped evaluator still gets a dict."""
+
+    class AllergyCheckConfig(BaseModel):
+        strict: bool = False
+
+    ai, *_ = setup_test
+    seen = _define_recording_evaluator(ai, 'model_cfg_eval')
+
+    await ai.evaluate(evaluator='model_cfg_eval', dataset=_one_row(), config=AllergyCheckConfig(strict=True))  # type: ignore[arg-type]
+
+    assert seen == [{'strict': True}]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize('batch', [False, True], ids=['per_row', 'batch'])
-async def test_evaluator_action_run_with_falsy_options_passes_them_through(
+async def test_evaluator_action_run_with_non_mapping_options_raises_invalid_argument(
     setup_test: SetupFixture, batch: bool
 ) -> None:
-    """Only None becomes {}; a falsy non-None value from the wire reaches the evaluator unchanged."""
+    """A wire EvalRequest whose options is a list fails the whole request, not one score per row."""
     ai, *_ = setup_test
     define = _define_recording_batch_evaluator if batch else _define_recording_evaluator
-    seen = define(ai, 'wire_falsy_eval')
-    action = await ai.registry.resolve_evaluator('wire_falsy_eval')
+    seen = define(ai, 'wire_bad_eval')
+    action = await ai.registry.resolve_evaluator('wire_bad_eval')
     assert action is not None
 
-    await action.run(EvalRequest(dataset=_one_row(), eval_run_id='run1', options=[]))
+    with pytest.raises(GenkitError) as exc_info:
+        await action.run(EvalRequest(dataset=_one_row(), eval_run_id='run1', options=[]))
 
-    assert seen == [[]]
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert seen == []
 
 
 @pytest.mark.asyncio

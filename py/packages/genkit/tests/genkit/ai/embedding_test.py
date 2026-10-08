@@ -529,9 +529,64 @@ def test_embed_request_options_none_or_missing_becomes_empty_dict() -> None:
     assert EmbedRequest.model_validate({'input': [{'content': [{'text': 'hi'}]}], 'options': None}).options == {}
 
 
-def test_embed_request_falsy_options_pass_through() -> None:
-    """Only None becomes {}; a falsy non-None options value is kept as-is."""
-    assert EmbedRequest(input=[Document.from_text('hi')], options=[]).options == []
+@pytest.mark.parametrize('bad_options', [[], [('dimensions', 256)], 'x'], ids=['empty_list', 'pairs', 'str'])
+def test_embed_request_non_mapping_options_raises(bad_options: object) -> None:
+    """EmbedRequest.options must be a mapping, same as ModelRequest.config; a list or str fails validation."""
+    with pytest.raises(ValidationError, match='options must be a mapping'):
+        EmbedRequest(input=[Document.from_text('hi')], options=bad_options)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('bad_config', [[], [('dimensions', 256)], 'x'], ids=['empty_list', 'pairs', 'str'])
+async def test_embed_with_non_mapping_config_raises_invalid_argument(
+    mock_genkit_instance: tuple[Genkit, MockGenkitRegistry], bad_config: object
+) -> None:
+    """ai.embed config= must be a dict or a BaseModel, same as generate; a list or str raises."""
+    genkit_instance, registry = mock_genkit_instance
+
+    async def fake_embedder_fn(request: EmbedRequest) -> EmbedResponse:
+        return EmbedResponse(embeddings=[Embedding(embedding=[0.0])])
+
+    registry.register_action(
+        name='strict-embedder',
+        kind='embedder',
+        fn=fake_embedder_fn,
+        metadata=embedder_action_metadata('strict-embedder').metadata,
+        description='A fake embedder for testing',
+    )
+
+    with pytest.raises(GenkitError) as exc_info:
+        await genkit_instance.embed(embedder='strict-embedder', content='hi', config=bad_config)  # type: ignore[arg-type]
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+
+
+@pytest.mark.asyncio
+async def test_embed_with_basemodel_config_sends_dict_options(
+    mock_genkit_instance: tuple[Genkit, MockGenkitRegistry],
+) -> None:
+    """A BaseModel config= is dumped, so the untyped embedder still gets a dict."""
+
+    class CrmEmbedConfig(BaseModel):
+        dimensions: int = 768
+
+    genkit_instance, registry = mock_genkit_instance
+
+    async def fake_embedder_fn(request: EmbedRequest) -> EmbedResponse:
+        return EmbedResponse(embeddings=[Embedding(embedding=[0.0])])
+
+    registry.register_action(
+        name='crm-embedder',
+        kind='embedder',
+        fn=fake_embedder_fn,
+        metadata=embedder_action_metadata('crm-embedder').metadata,
+        description='A fake embedder for testing',
+    )
+
+    await genkit_instance.embed(embedder='crm-embedder', content='hi', config=CrmEmbedConfig(dimensions=256))  # type: ignore[arg-type]
+
+    embed_action = await registry.resolve_action('embedder', 'crm-embedder')
+    assert embed_action.run.call_args.args[0].options == {'dimensions': 256}
 
 
 @pytest.mark.asyncio

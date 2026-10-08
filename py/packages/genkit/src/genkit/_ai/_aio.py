@@ -61,6 +61,7 @@ from genkit._ai._model import (
     background_model_name,
     check_call_config,
     define_model,
+    normalize_config,
     resolve_for_generate,
 )
 from genkit._ai._prompt import (
@@ -1181,19 +1182,18 @@ class Genkit:
         """Copy ref config plus version, then overlay call-site config.
 
         Returns an empty dict when neither the ref nor the call sets anything,
-        ensuring the embedder always receives request.options as a dictionary.
-        The caller's EmbedderRef.config dict is left unchanged so they can reuse
-        the same ref on later calls.
+        so the embedder always receives request.options as a dict. ``config``
+        goes through the same check as ``generate``: a dict or a BaseModel
+        (dumped to a dict), anything else raises INVALID_ARGUMENT. The caller's
+        EmbedderRef.config dict is left unchanged so they can reuse the same
+        ref on later calls.
         """
         ref_config = embedder.config if isinstance(embedder, EmbedderRef) else None
         version = embedder.version if isinstance(embedder, EmbedderRef) else None
-        merged: dict[str, object] = {}
-        if ref_config:
-            merged.update(ref_config)
+        merged: dict[str, object] = normalize_config(config=ref_config)
         if version:
             merged['version'] = version
-        if config:
-            merged.update(config)
+        merged.update(normalize_config(config=config))
         return merged
 
     # Overload: config=ModelConfigDict, output_schema=type[T] -> ModelResponse[T]
@@ -1770,7 +1770,7 @@ class Genkit:
         else:
             raise ValueError('Evaluator must be specified as a string name or an EvaluatorRef.')
 
-        final_options: dict[str, object] = {**(ref_config or {}), **(config or {})}
+        final_options: dict[str, object] = {**normalize_config(config=ref_config), **normalize_config(config=config)}
 
         eval_action = await self.registry.resolve_evaluator(evaluator_name)
         if eval_action is None:

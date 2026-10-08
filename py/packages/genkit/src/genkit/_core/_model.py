@@ -925,7 +925,12 @@ class EmbedRequest(GenkitModel):
     @field_validator('options', mode='before')
     @classmethod
     def _wrap_options(cls, v: object) -> object:
-        return {} if v is None else v
+        """None becomes {}; anything else must be a mapping, same as ModelRequest.config."""
+        if v is None:
+            return {}
+        if isinstance(v, Mapping) and not isinstance(v, BaseModel):
+            return v
+        raise ValueError(f'options must be a mapping, got {type(v).__name__}')
 
 
 class SessionState(GenkitModel):
