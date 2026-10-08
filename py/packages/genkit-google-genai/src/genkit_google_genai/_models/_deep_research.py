@@ -37,6 +37,9 @@ from genkit_google_genai._interactions._converters import (
     to_interaction_tool,
 )
 from genkit_google_genai._interactions._options import ClientOptions
+
+# Gemini and the Interactions file_search tool take the same three fields.
+from genkit_google_genai._models._gemini import FileSearchConfig
 from genkit_google_genai._models._interactions_registry import deep_research_model_info
 from genkit_google_genai._models._interactions_utils import (
     api_key_for_context,
@@ -77,13 +80,6 @@ class McpServerConfig(BaseModel):
     url: str | None = None
     headers: dict[str, str] | None = None
     allowed_tools: list[str] | None = None
-
-
-class FileSearchConfig(BaseModel):
-    """File search store configuration for Deep Research."""
-
-    model_config = ConfigDict(extra='allow', validate_by_name=True, validate_by_alias=True, alias_generator=to_camel)
-    file_search_store_names: list[str]
 
 
 class DeepResearchConfig(BaseModel):
