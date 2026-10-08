@@ -1348,6 +1348,41 @@ function textResponse(text: string) {
   return { message: { role: 'model' as const, content: [{ text }] } };
 }
 
+/**
+ * The conversation background delegations leave behind: one delegation tool
+ * result per `[agent, taskId]`, as an orchestrator's history carries its
+ * launches.
+ */
+function launchHistory(launches: [string, string][]): MessageData[] {
+  return launches.map(([agent, taskId]) => ({
+    role: 'tool' as const,
+    content: [
+      {
+        toolResponse: { name: `delegate_to_${agent}`, output: { taskId } },
+      },
+    ],
+  }));
+}
+
+/**
+ * Instantiates the middleware the way one generate call does, with `history`
+ * as the conversation its tools see, so the background-task tools accept the
+ * task IDs that history launched.
+ */
+async function instantiateWith(
+  ai: ReturnType<typeof genkit>,
+  config: Parameters<typeof agents.instantiate>[0]['config'],
+  history: MessageData[]
+) {
+  const def = agents.instantiate({ config, ai, pluginConfig: undefined });
+  await def.generate!(
+    { request: { messages: history }, currentTurn: 0, messageIndex: 0 } as any,
+    {} as any,
+    async () => textResponse('') as any
+  );
+  return def;
+}
+
 /** A gate a test opens to let a sub-agent turn finish. */
 function makeGate() {
   let release!: () => void;
@@ -1486,7 +1521,7 @@ describe('agents middleware (async)', () => {
     assert.strictEqual(wait.timedOut, undefined);
   });
 
-  it('collects a task launched by an earlier generate call from its ID alone', async () => {
+  it('collects a task launched by an earlier generate call from its history', async () => {
     const ai = genkit({});
     const subModel = ai.defineModel(
       { name: 'researcher-bg-' + Math.random() },
@@ -1518,9 +1553,10 @@ describe('agents middleware (async)', () => {
     const [launch] = toolOutputs(first.messages, 'delegate_to_researcher');
     assert.ok(launch.taskId);
 
-    // Second call, fresh middleware instance: wait on the recorded task ID
-    // plus a missing snapshot and an unconfigured agent, which must be
-    // reported in isolation from one another.
+    // Second call, fresh middleware instance, on the first call's history:
+    // wait on the recorded task ID plus a missing snapshot and an
+    // unconfigured agent, which must be reported in isolation from one
+    // another.
     const waiter = ai.defineModel(
       { name: 'orch-wait-' + Math.random() },
       async (req) =>
@@ -1536,7 +1572,11 @@ describe('agents middleware (async)', () => {
     );
     const second = await ai.generate({
       model: waiter,
-      prompt: 'collect',
+      messages: [
+        ...first.messages,
+        ...launchHistory([['researcher', 'researcher:no-such-snapshot']]),
+        { role: 'user', content: [{ text: 'collect' }] },
+      ],
       use: [agents({ agents: ['researcher'], async: true })],
     });
     const [wait] = toolOutputs(second.messages, WAIT_TOOL);
@@ -1636,11 +1676,11 @@ describe('agents middleware (async)', () => {
     const task = await researcher.chat().detach('dig');
     await task.wait();
 
-    const def = agents.instantiate({
-      config: { agents: ['researcher'], async: true },
+    const def = await instantiateWith(
       ai,
-      pluginConfig: undefined,
-    });
+      { agents: ['researcher'], async: true },
+      launchHistory([['researcher', `researcher:${task.snapshotId}`]])
+    );
     const waitTool = def.tools!.find((t) => t.__action.name === WAIT_TOOL)!;
     // Whichever wins, the deadline or the follow's first read, the row is
     // settled and the report must say so: a timeout returns the current
@@ -1670,11 +1710,11 @@ describe('agents middleware (async)', () => {
       return run(...args);
     }) as typeof run;
 
-    const def = agents.instantiate({
-      config: { agents: ['researcher'], async: true },
+    const def = await instantiateWith(
       ai,
-      pluginConfig: undefined,
-    });
+      { agents: ['researcher'], async: true },
+      launchHistory([['researcher', `researcher:${task.snapshotId}`]])
+    );
     const waitTool = def.tools!.find((t) => t.__action.name === WAIT_TOOL)!;
     const controller = new AbortController();
     const waiting = waitTool(
@@ -1700,11 +1740,11 @@ describe('agents middleware (async)', () => {
     });
     const task = await researcher.chat().detach('dig');
 
-    const def = agents.instantiate({
-      config: { agents: ['researcher'], async: true },
+    const def = await instantiateWith(
       ai,
-      pluginConfig: undefined,
-    });
+      { agents: ['researcher'], async: true },
+      launchHistory([['researcher', `researcher:${task.snapshotId}`]])
+    );
     const abortTool = def.tools!.find((t) => t.__action.name === ABORT_TOOL)!;
     const waitTool = def.tools!.find((t) => t.__action.name === WAIT_TOOL)!;
     const taskIds = [`researcher:${task.snapshotId}`];
@@ -1833,7 +1873,10 @@ describe('agents middleware (async)', () => {
     );
     const result = await ai.generate({
       model: waiter,
-      prompt: 'go',
+      messages: [
+        ...launchHistory([['researcher', 'researcher:no-such-snapshot']]),
+        { role: 'user', content: [{ text: 'go' }] },
+      ],
       use: [agents({ agents: ['researcher'], async: true })],
     });
     const [wait] = toolOutputs(result.messages, WAIT_TOOL);
@@ -1995,11 +2038,11 @@ describe('agents middleware (async)', () => {
     const task = await researcher.chat().detach('dig into X');
     await task.wait();
 
-    const def = agents.instantiate({
-      config: { agents: ['researcher'], async: true },
+    const def = await instantiateWith(
       ai,
-      pluginConfig: undefined,
-    });
+      { agents: ['researcher'], async: true },
+      launchHistory([['researcher', `researcher:${task.snapshotId}`]])
+    );
     const abortTool = def.tools!.find((t) => t.__action.name === ABORT_TOOL)!;
     const out = await abortTool({ taskIds: [`researcher:${task.snapshotId}`] });
     const report = out.tasks[0];
@@ -2101,11 +2144,14 @@ describe('agents middleware (async)', () => {
 
   it('parses task IDs against the longest configured agent name', async () => {
     const ai = genkit({});
-    const def = agents.instantiate({
-      config: { agents: ['a', 'a:b'], async: true },
+    const def = await instantiateWith(
       ai,
-      pluginConfig: undefined,
-    });
+      { agents: ['a', 'a:b'], async: true },
+      launchHistory([
+        ['a:b', 'a:b:1234'],
+        ['a', 'a:5678'],
+      ])
+    );
     const checkTool = def.tools!.find((t) => t.__action.name === CHECK_TOOL)!;
     // Neither agent is registered, so each report fails at resolution and
     // names the agent the handle was parsed to.
@@ -2115,6 +2161,29 @@ describe('agents middleware (async)', () => {
     assert.match(out.tasks[1].error, /not registered/);
     assert.strictEqual(out.tasks[2].status, 'unknown');
     assert.match(out.tasks[2].error, /does not match any configured agent/);
+  });
+
+  it('refuses a task ID this conversation did not launch', async () => {
+    const ai = genkit({});
+    const gate = makeGate();
+    const researcher = defineGatedResearcher(ai, 'researcher', gate.opened);
+    // Another conversation's task: its ID reaches this one only as text.
+    const task = await researcher.chat().detach('dig');
+
+    const def = await instantiateWith(
+      ai,
+      { agents: ['researcher'], async: true },
+      []
+    );
+    const abortTool = def.tools!.find((t) => t.__action.name === ABORT_TOOL)!;
+    const out = await abortTool({ taskIds: [`researcher:${task.snapshotId}`] });
+    assert.strictEqual(out.tasks[0].status, 'unknown');
+    assert.match(out.tasks[0].error, /not started in this conversation/);
+    const row = await researcher.getSnapshotData({
+      snapshotId: task.snapshotId,
+    });
+    assert.strictEqual(row?.status, 'pending', 'the abort must not reach it');
+    gate.release();
   });
 
   it('answers a background-task tool called without task IDs with guidance', async () => {

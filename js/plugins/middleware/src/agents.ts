@@ -386,12 +386,18 @@ function recentTextHistory(messages: MessageData[], n: number): MessageData[] {
  * sub-agents (defined with a `store`); a launch on any other agent is refused
  * as tool text that points the model at a synchronous delegation.
  *
- * Task handles are not access-scoped: the background-task tools read any
- * snapshot ID belonging to a configured sub-agent, whether or not this
- * conversation launched it (mirroring the sub-agent's `getSnapshot` companion
- * action, which is itself unscoped). In multi-tenant deployments treat
- * snapshot IDs as capability-like secrets: text that reaches the orchestrator
- * model can steer these tools at any ID it names.
+ * The background-task tools accept only the task IDs this conversation
+ * launched: ones this generate call started, or ones a delegation tool's
+ * result in the conversation history carries. Text that reaches the
+ * orchestrator model therefore cannot steer them at another conversation's
+ * task. A history compacted past its launch results loses those tasks'
+ * handles. The sub-agent's own companion actions (`getSnapshot`,
+ * `waitForSnapshot`, `abort`) stay unscoped, so in multi-tenant deployments
+ * treat snapshot IDs as capability-like secrets where those are exposed.
+ *
+ * `maxWaitSeconds` bounds one `wait_for_background_tasks` call whatever
+ * timeout the model asks for, so a sub-agent that keeps running cannot hold
+ * the orchestrator's turn open past it.
  *
  * @example
 
@@ -487,7 +493,12 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
         // Pending, aborting, expired, and unresolvable reports can still change
         // and are never cached.
         settledReports: new Map<string, BackgroundTaskReport>(),
+        // Task IDs this generate call launched; see launchedHere.
+        launchedTaskIds: new Set<string>(),
       };
+      const delegationToolNames = new Set(
+        agentRefs.map((ref) => makeToolName(prefix, ref.name))
+      );
 
       // Caches (persist across turns within the same generate cycle).
       const agentCache = new Map<string, Agent>();
@@ -960,6 +971,7 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
               };
             }
             const taskId = formatTaskId(ref.name, out.snapshotId);
+            shared.launchedTaskIds.add(taskId);
             return {
               taskId,
               status: 'pending',
@@ -1097,6 +1109,30 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
       }
 
       /**
+       * Whether this conversation launched the task: this generate call did,
+       * or a delegation tool's result in the conversation names it. The
+       * background-task tools accept only those handles, so text that reaches
+       * the model (a sub-agent's result, a retrieved document) cannot steer
+       * them at another conversation's task. A re-instantiated orchestrator
+       * still collects its tasks, since its history carries the launch
+       * results.
+       */
+      function launchedHere(taskId: string): boolean {
+        if (shared.launchedTaskIds.has(taskId)) return true;
+        return shared.conversationMessages.some((message) =>
+          message.content?.some((part) => {
+            const response = part.toolResponse;
+            return (
+              !!response &&
+              delegationToolNames.has(response.name) &&
+              (response.output as { taskId?: unknown } | undefined)?.taskId ===
+                taskId
+            );
+          })
+        );
+      }
+
+      /**
        * Resolves one task handle, obtains its snapshot through `fetch`, and
        * shapes the result into a report. Completed tasks surface the
        * sub-agent's final response and artifacts; terminal non-success
@@ -1114,6 +1150,13 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
         const resolved = resolveTaskId(taskId);
         if (!resolved) {
           const error = `Task ID '${taskId}' does not match any configured agent (expected "<agent>:<snapshotId>").`;
+          return {
+            report: { taskId, status: TASK_STATUS_UNKNOWN, error },
+            error: new Error(error),
+          };
+        }
+        if (!launchedHere(taskId)) {
+          const error = `Task ID '${taskId}' was not started in this conversation; only tasks a delegation here launched can be checked, awaited, or stopped.`;
           return {
             report: { taskId, status: TASK_STATUS_UNKNOWN, error },
             error: new Error(error),
