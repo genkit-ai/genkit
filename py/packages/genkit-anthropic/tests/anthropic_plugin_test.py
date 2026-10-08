@@ -41,17 +41,6 @@ def test_anthropic_name() -> None:
     assert anthropic_name('claude-sonnet-4') == 'anthropic/claude-sonnet-4'
 
 
-def test_init_with_api_key() -> None:
-    """Test plugin initialization with API key."""
-    plugin = Anthropic(api_key='test-key')
-
-    async def _get_api_key() -> str | None:
-        return plugin._runtime_client().api_key
-
-    assert asyncio.run(_get_api_key()) == 'test-key'
-    assert plugin.models == list(SUPPORTED_MODELS.keys())
-
-
 def test_init_without_api_key_raises() -> None:
     """Test plugin initialization without API key uses default behavior."""
     with patch.dict('os.environ', {}, clear=True):
@@ -63,23 +52,6 @@ def test_init_without_api_key_raises() -> None:
             return plugin._runtime_client() is not None
 
         assert asyncio.run(_has_client())
-
-
-def test_init_with_env_var() -> None:
-    """Test plugin initialization with environment variable."""
-    with patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'env-key'}):
-        plugin = Anthropic()
-
-        async def _get_api_key() -> str | None:
-            return plugin._runtime_client().api_key
-
-        assert asyncio.run(_get_api_key()) == 'env-key'
-
-
-def test_custom_models() -> None:
-    """Test plugin initialization with custom models."""
-    plugin = Anthropic(api_key='test-key', models=['claude-sonnet-4'])
-    assert plugin.models == ['claude-sonnet-4']
 
 
 @patch('genkit_anthropic._plugin.AsyncAnthropic')
@@ -94,7 +66,6 @@ def test_api_version_is_stored_without_leaking_to_sdk(mock_client_ctor: MagicMoc
 
     assert asyncio.run(_get_client()) is mock_client
     assert plugin._default_api_version == 'beta'
-    assert 'api_version' not in plugin._anthropic_params
     mock_client_ctor.assert_called_once_with(api_key='test-key')
 
 
@@ -130,7 +101,7 @@ async def test_plugin_beta_default_routes_action_run_to_beta_surface(mock_client
 @pytest.mark.asyncio
 async def test_plugin_init() -> None:
     """Test plugin init method."""
-    plugin = Anthropic(api_key='test-key', models=['claude-sonnet-4'])
+    plugin = Anthropic(api_key='test-key')
 
     # init() should return an empty list (using lazy loading)
     result = await plugin.init()

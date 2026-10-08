@@ -31,7 +31,7 @@ ai = Genkit(
         Ollama(
             models=[ModelDefinition(name=chat_model)],
             embedders=[EmbeddingDefinition(name=embedder_model)],
-            server_address=os.getenv('OLLAMA_HOST'),
+            base_url=os.getenv('OLLAMA_HOST'),
         )
     ],
     model=f'ollama/{chat_model}',

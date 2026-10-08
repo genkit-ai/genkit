@@ -34,6 +34,16 @@ print(res.text)
 ```
 
 Set `ANTHROPIC_API_KEY` in the environment, or pass `api_key=` to `Anthropic()`.
+`base_url=` points the plugin at another server, and any other `AsyncAnthropic`
+setting goes in `client_options`:
+
+```python
+Anthropic(
+    api_key=key,
+    base_url='https://claude-proxy.example.com',
+    client_options={'timeout': 30, 'max_retries': 5, 'default_headers': {'X-Team': 'search'}},
+)
+```
 
 ## Per-request API key
 
@@ -58,7 +68,7 @@ res = await ai.generate(
   `context.secrets`, and a call without one fails with `FAILED_PRECONDITION`.
 - A client whose credential can't be swapped refuses a tenant key with
   `FAILED_PRECONDITION` rather than billing its own account: an
-  `Anthropic(auth_token=...)` client, one whose `default_headers` pin
+  `Anthropic(client_options={'auth_token': ...})` client, one whose `default_headers` pin
   `x-api-key` or `Authorization`, and Claude on Vertex AI Model Garden, which
   authenticates with Google Cloud credentials.
 

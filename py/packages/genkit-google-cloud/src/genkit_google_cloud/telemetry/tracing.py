@@ -61,6 +61,7 @@ def _reset_google_cloud_telemetry() -> None:
 
 
 def enable_google_cloud_telemetry(
+    *,
     project: str | None = None,
     credentials: dict[str, Any] | None = None,
     sampler: Sampler | None = None,

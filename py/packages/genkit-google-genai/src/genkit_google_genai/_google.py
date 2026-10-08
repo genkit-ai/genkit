@@ -605,6 +605,7 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
 
     def __init__(
         self,
+        *,
         api_key: str | None = None,
         credentials: Credentials | None = None,
         debug_config: DebugConfig | None = None,
@@ -977,6 +978,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
 
     def __init__(
         self,
+        *,
         credentials: Credentials | None = None,
         project: str | None = None,
         location: str | None = None,

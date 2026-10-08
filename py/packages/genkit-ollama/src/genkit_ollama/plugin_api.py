@@ -125,7 +125,7 @@ class RequestHeaderParams:
     ``list_actions`` discovery call.
     """
 
-    server_address: str
+    base_url: str
     model: ModelDefinition | EmbeddingDefinition | None = None
     model_request: ModelRequest | None = None
     embed_request: EmbedRequest | None = None
@@ -152,9 +152,10 @@ class Ollama(Plugin):
 
     def __init__(
         self,
+        *,
         models: list[ModelDefinition] | None = None,
         embedders: list[EmbeddingDefinition] | None = None,
-        server_address: str | None = None,
+        base_url: str | None = None,
         request_headers: RequestHeaders | None = None,
         timeout: float | None = None,
     ) -> None:
@@ -164,11 +165,11 @@ class Ollama(Plugin):
             models: An Optional list of model definitions to be registered with Genkit.
             embedders: An Optional list of embedding model definitions to be
                 registered with Genkit.
-            server_address: The URL of the Ollama server. Defaults to a predefined
+            base_url: The URL of the Ollama server. Defaults to a predefined
                 Ollama server URL if not provided.
             request_headers: Optional HTTP headers to include with requests to the
                 Ollama server. May be a static dict, or a sync/async callable that
-                takes a :class:`RequestHeaderParams` (server address plus model/request
+                takes a :class:`RequestHeaderParams` (``base_url`` plus model/request
                 context) and returns a dict (or ``None``). A callable is resolved per
                 request — matching the JS plugin — so expiring auth tokens and
                 request-specific headers take effect; a static dict is applied once to a
@@ -178,7 +179,7 @@ class Ollama(Plugin):
         """
         self.models = models or []
         self.embedders = embedders or []
-        self.server_address = server_address or DEFAULT_OLLAMA_SERVER_URL
+        self.base_url = base_url or DEFAULT_OLLAMA_SERVER_URL
 
         self._request_headers_source = request_headers
         # Static dicts are baked into the cached client; callables resolve per request.
@@ -198,7 +199,7 @@ class Ollama(Plugin):
             A new ``ollama.AsyncClient`` targeting the configured server.
         """
         kwargs: dict[str, Any] = {
-            'host': self.server_address,
+            'host': self.base_url,
             'headers': self.request_headers if headers is None else headers,
         }
         if self.timeout is not None:
@@ -217,7 +218,7 @@ class Ollama(Plugin):
 
         Static (or absent) headers are baked into a per-event-loop cached client that
         is shared across requests and left open. A header *callable* is resolved on
-        every call — receiving the server address plus any model/request context —
+        every call — receiving ``base_url`` plus any model/request context —
         and applied to a *fresh* client, so expiring auth tokens or
         request-specific headers take effect. Because the Ollama SDK bakes headers in
         at construction (it has no per-request header hook), that fresh client owns
@@ -239,7 +240,7 @@ class Ollama(Plugin):
             return
 
         params = RequestHeaderParams(
-            server_address=self.server_address,
+            base_url=self.base_url,
             model=model,
             model_request=model_request,
             embed_request=embed_request,
@@ -327,7 +328,7 @@ class Ollama(Plugin):
         model = OllamaModel(
             client=self.client,
             model_definition=model_ref,
-            server_address=self.server_address,
+            base_url=self.base_url,
         )
 
         action_metadata = model_action_metadata(
@@ -372,13 +373,13 @@ class Ollama(Plugin):
             embedding_definition=embedder_ref,
         )
 
-        server_address = self.server_address
+        base_url = self.base_url
 
         async def _run(request: EmbedRequest) -> EmbedResponse:
             # Pass the embedder and embed request to a header callable (JS parity).
             # Embedding requests never fetch media, so the whole SDK call is wrapped.
             async with self._client_for_request(model=embedder_ref, embed_request=request) as client:
-                async with wrap_connection_errors(server_address):
+                async with wrap_connection_errors(base_url):
                     return await embedder.embed(request, client=client)
 
         return create_embedder(
@@ -403,7 +404,7 @@ class Ollama(Plugin):
                 - config_schema (type): The schema class used for validating the model's configuration.
         """
         async with self._client_for_request() as client:
-            async with wrap_connection_errors(self.server_address):
+            async with wrap_connection_errors(self.base_url):
                 try:
                     response = await client.list()
                 except ollama_api.ResponseError as e:

@@ -221,7 +221,7 @@ def check_extra_body(extra: dict[str, Any], *, managed: tuple[str, ...], label: 
                 status='INVALID_ARGUMENT',
                 message=(
                     f'{label}: {field!r} is a client setting, not a request field; '
-                    'pass it to OpenAI(timeout=..., default_headers=...)'
+                    "pass it as OpenAI(client_options={'timeout': ..., 'default_headers': ...})"
                 ),
             )
     for field in managed:
