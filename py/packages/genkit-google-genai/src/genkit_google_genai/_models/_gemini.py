@@ -171,7 +171,7 @@ class HarmBlockThreshold(StrEnum):
 # No field passes alias=. The camelCase wire name comes from alias_generator,
 # so type checkers see the snake_case field name as the constructor kwarg and
 # runtime still accepts both spellings.
-_NESTED_CONFIG = ConfigDict(extra='forbid', populate_by_name=True, alias_generator=to_camel)
+_NESTED_CONFIG = ConfigDict(extra='forbid', validate_by_name=True, validate_by_alias=True, alias_generator=to_camel)
 
 
 class SafetySettingsSchema(BaseModel):
@@ -296,7 +296,7 @@ class GeminiConfig(ModelConfig):
 
     # alias_generator=to_camel is inherited from ModelConfig; don't pass alias=
     # on fields here or type checkers stop accepting the snake_case kwarg.
-    model_config = ConfigDict(extra='forbid', populate_by_name=True)
+    model_config = ConfigDict(extra='forbid', validate_by_name=True, validate_by_alias=True)
 
     base_url: str | None = Field(
         default=None, description='Overrides the plugin-configured or default baseUrl, if specified.'

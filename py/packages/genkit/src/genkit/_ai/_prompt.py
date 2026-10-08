@@ -994,7 +994,6 @@ async def to_prompt_model_request(*, registry: Registry, options: GenerateAction
     output_config = OutputConfig(
         content_type=options.output.content_type if options.output else None,
         format=options.output.format if options.output else None,
-        # pyrefly: ignore[unexpected-keyword] - populate_by_name accepts the field name
         json_schema=options.output.json_schema if options.output else None,
         constrained=options.output.constrained if options.output else None,
     )

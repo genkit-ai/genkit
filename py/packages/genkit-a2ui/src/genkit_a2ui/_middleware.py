@@ -49,7 +49,7 @@ SKIP_REWRITE_FINISH_REASONS = ABNORMAL_FINISH_REASONS | {FinishReason.UNKNOWN}
 class SurfacesConfig(BaseModel):
     """Options for :class:`Surfaces`."""
 
-    model_config = ConfigDict(extra='forbid', populate_by_name=True, alias_generator=to_camel)
+    model_config = ConfigDict(extra='forbid', validate_by_name=True, validate_by_alias=True, alias_generator=to_camel)
 
     instructions: Literal['system', 'none'] = 'system'
     # 'off' passes envelopes through unchecked, 'warn' logs and drops the
