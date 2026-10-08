@@ -24,12 +24,14 @@ HTTP body the plugin sends.
 
 import json
 from collections.abc import Awaitable, Callable
+from datetime import datetime, timezone
 from typing import Any, Literal
 
 import httpx
 import pytest
 from genkit_google_genai import (
     AntigravityConfig,
+    CodeExecution,
     DeepResearchConfig,
     FileSearchConfig,
     FunctionCallingConfig,
@@ -39,26 +41,37 @@ from genkit_google_genai import (
     GeminiTtsConfig,
     GemmaConfig,
     GoogleAI,
+    GoogleSearch,
     HarmBlockMethod,
     HarmBlockThreshold,
     HarmCategory,
     ImageAspectRatio,
     ImageConfig,
+    ImageOutputOptions,
+    ImageResizeMode,
+    ImageSearch,
     ImageSize,
+    Interval,
     LyriaConfig,
     McpServerConfig,
     MultiSpeakerVoiceConfig,
+    PhishBlockThreshold,
     PrebuiltVoiceConfig,
     ProminentPeople,
+    ReplicatedVoiceConfig,
     SafetySetting,
+    SearchTypes,
     SpeakerVoiceConfig,
     SpeechConfig,
     ThinkingConfig,
     ThinkingLevel,
+    UrlContext,
     VeoConfig,
+    VideoCompressionQuality,
     VoiceConfig,
+    VoiceConsentSignature,
+    WebSearch,
 )
-from google.genai import types as genai_types
 from pydantic import BaseModel, ValidationError
 from typing_extensions import assert_type
 
@@ -89,6 +102,16 @@ def test_empty_construction() -> None:
         SpeakerVoiceConfig,
         MultiSpeakerVoiceConfig,
         SpeechConfig,
+        ImageOutputOptions,
+        ReplicatedVoiceConfig,
+        VoiceConsentSignature,
+        CodeExecution,
+        UrlContext,
+        GoogleSearch,
+        SearchTypes,
+        WebSearch,
+        ImageSearch,
+        Interval,
     ):
         assert _wire(cls()) == {}
 
@@ -113,9 +136,14 @@ def test_gemini_config_snake_case_kwargs() -> None:
         logprobs=3,
         response_modalities=['TEXT'],
         context_cache=True,
-        code_execution=True,
-        google_search=genai_types.GoogleSearch(exclude_domains=['example.com']),
-        url_context=True,
+        code_execution=CodeExecution(),
+        google_search=GoogleSearch(
+            exclude_domains=['example.com'],
+            blocking_confidence='BLOCK_HIGH_AND_ABOVE',
+            search_types=SearchTypes(web_search=WebSearch(), image_search=ImageSearch()),
+            time_range_filter=Interval(start_time=datetime(2026, 1, 1, tzinfo=timezone.utc)),
+        ),
+        url_context=UrlContext(),
         safety_settings=[
             SafetySetting(
                 category='HARM_CATEGORY_HATE_SPEECH',
@@ -159,9 +187,14 @@ def test_gemini_config_snake_case_kwargs() -> None:
         'logprobs': 3,
         'responseModalities': ['TEXT'],
         'contextCache': True,
-        'codeExecution': True,
-        'googleSearch': {'excludeDomains': ['example.com']},
-        'urlContext': True,
+        'codeExecution': {},
+        'googleSearch': {
+            'excludeDomains': ['example.com'],
+            'blockingConfidence': 'BLOCK_HIGH_AND_ABOVE',
+            'searchTypes': {'webSearch': {}, 'imageSearch': {}},
+            'timeRangeFilter': {'startTime': '2026-01-01T00:00:00Z'},
+        },
+        'urlContext': {},
         'safetySettings': [
             {'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_ONLY_HIGH', 'method': 'SEVERITY'}
         ],
@@ -216,6 +249,30 @@ def test_gemini_tts_config_nested_speech() -> None:
     single = GeminiTtsConfig(speech_config=SpeechConfig(voice_config=kore))
     assert _wire(single) == {'speechConfig': {'voiceConfig': {'prebuiltVoiceConfig': {'voiceName': 'Kore'}}}}
 
+    # A replicated voice: audio bytes dump as base64, as in the SDK type.
+    cloned = GeminiTtsConfig(
+        speech_config=SpeechConfig(
+            voice_config=VoiceConfig(
+                replicated_voice_config=ReplicatedVoiceConfig(
+                    mime_type='audio/wav',
+                    voice_sample_audio=b'chef',
+                    voice_consent_signature=VoiceConsentSignature(signature='sig-1'),
+                )
+            )
+        )
+    )
+    assert _wire(cloned) == {
+        'speechConfig': {
+            'voiceConfig': {
+                'replicatedVoiceConfig': {
+                    'mimeType': 'audio/wav',
+                    'voiceSampleAudio': 'Y2hlZg==',
+                    'voiceConsentSignature': {'signature': 'sig-1'},
+                }
+            }
+        }
+    }
+
 
 def test_gemini_image_config_nested_image() -> None:
     """GeminiImageConfig nests ImageConfig by field name."""
@@ -228,7 +285,7 @@ def test_gemini_image_config_nested_image() -> None:
             output_compression_quality=80,
             person_generation='ALLOW_ADULT',
             prominent_people='BLOCK_PROMINENT_PEOPLE',
-            image_output_options=genai_types.ImageConfigImageOutputOptions(mime_type='image/jpeg'),
+            image_output_options=ImageOutputOptions(mime_type='image/jpeg', compression_quality=75),
         ),
     )
 
@@ -241,7 +298,7 @@ def test_gemini_image_config_nested_image() -> None:
             'outputCompressionQuality': 80,
             'personGeneration': 'ALLOW_ADULT',
             'prominentPeople': 'BLOCK_PROMINENT_PEOPLE',
-            'imageOutputOptions': {'mimeType': 'image/jpeg'},
+            'imageOutputOptions': {'mimeType': 'image/jpeg', 'compressionQuality': 75},
         },
     }
 
@@ -261,8 +318,8 @@ def test_veo_config_snake_case_kwargs() -> None:
         fps=24,
         output_gcs_uri='gs://kitchen/promo.mp4',
         pubsub_topic='projects/p/topics/renders',
-        compression_quality=genai_types.VideoCompressionQuality.OPTIMIZED,
-        resize_mode=genai_types.ImageResizeMode.PAD,
+        compression_quality='OPTIMIZED',
+        resize_mode='PAD',
         labels={'team': 'kitchen'},
         last_frame={'uri': 'gs://kitchen/last.png'},
         reference_images=[{'uri': 'gs://kitchen/ref.png'}],
@@ -448,6 +505,14 @@ def test_choice_fields_are_closed_literals() -> None:
     assert_type(ImageConfig().aspect_ratio, ImageAspectRatio | None)
     assert_type(ImageConfig().image_size, ImageSize | None)
     assert_type(ImageConfig().prominent_people, ProminentPeople | None)
+    assert_type(GoogleSearch().blocking_confidence, PhishBlockThreshold | None)
+    assert_type(VeoConfig().compression_quality, VideoCompressionQuality | None)
+    assert_type(VeoConfig().resize_mode, ImageResizeMode | None)
+    assert_type(GeminiConfig().google_search, bool | GoogleSearch | None)
+    assert_type(GeminiConfig().code_execution, bool | CodeExecution | None)
+    assert_type(GeminiConfig().url_context, bool | UrlContext | None)
+    assert_type(ImageConfig().image_output_options, ImageOutputOptions | None)
+    assert_type(VoiceConfig().replicated_voice_config, ReplicatedVoiceConfig | None)
     safety = SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='BLOCK_NONE')
     assert_type(safety.category, HarmCategory)
     assert_type(safety.threshold, HarmBlockThreshold)

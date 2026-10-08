@@ -56,6 +56,11 @@ KnownVeo: TypeAlias = Literal[
     'veo-3.1-fast-generate-001',
 ]
 
+# Sent as genai_types.VideoCompressionQuality and genai_types.ImageResizeMode.
+# googlegenai_gemini_test.py pins both to the SDK enums.
+VideoCompressionQuality: TypeAlias = Literal['OPTIMIZED', 'LOSSLESS']
+ImageResizeMode: TypeAlias = Literal['CROP', 'PAD']
+
 
 def is_veo_model(name: str) -> bool:
     """Check if a model name is a Veo model.
@@ -78,8 +83,8 @@ class VeoConfig(BaseModel):
     fps: int | None = Field(default=None)
     output_gcs_uri: str | None = Field(default=None)
     pubsub_topic: str | None = Field(default=None)
-    compression_quality: genai_types.VideoCompressionQuality | None = Field(default=None)
-    resize_mode: genai_types.ImageResizeMode | None = Field(default=None)
+    compression_quality: VideoCompressionQuality | None = Field(default=None)
+    resize_mode: ImageResizeMode | None = Field(default=None)
     labels: dict[str, str] | None = Field(default=None)
     last_frame: dict[str, Any] | None = Field(default=None)
     reference_images: list[dict[str, Any]] | None = Field(default=None)

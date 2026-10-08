@@ -151,7 +151,8 @@ from genkit_google_genai._models._utils import (  # noqa: E402
 # googlegenai_gemini_test.py pins each set to its google-genai enum, so an
 # SDK bump that adds a value fails until it is added here. The SDK's
 # *_UNSPECIFIED placeholders are listed only where Genkit already offered
-# them (HarmCategory, HarmBlockMethod, FunctionCallingMode, ProminentPeople).
+# them (HarmCategory, HarmBlockMethod, FunctionCallingMode, ProminentPeople,
+# PhishBlockThreshold).
 HarmCategory: TypeAlias = Literal[
     'HARM_CATEGORY_UNSPECIFIED',
     'HARM_CATEGORY_HATE_SPEECH',
@@ -179,6 +180,15 @@ ImageAspectRatio: TypeAlias = Literal[
 ]
 ImageSize: TypeAlias = Literal['1K', '2K', '4K']
 ProminentPeople: TypeAlias = Literal['PROMINENT_PEOPLE_UNSPECIFIED', 'ALLOW_PROMINENT_PEOPLE', 'BLOCK_PROMINENT_PEOPLE']
+PhishBlockThreshold: TypeAlias = Literal[
+    'PHISH_BLOCK_THRESHOLD_UNSPECIFIED',
+    'BLOCK_LOW_AND_ABOVE',
+    'BLOCK_MEDIUM_AND_ABOVE',
+    'BLOCK_HIGH_AND_ABOVE',
+    'BLOCK_HIGHER_AND_ABOVE',
+    'BLOCK_VERY_HIGH_AND_ABOVE',
+    'BLOCK_ONLY_EXTREMELY_HIGH',
+]
 
 
 # Each strict nested class below declares every field of the google.genai type
@@ -188,7 +198,12 @@ ProminentPeople: TypeAlias = Literal['PROMINENT_PEOPLE_UNSPECIFIED', 'ALLOW_PROM
 # No field passes alias=. The camelCase wire name comes from alias_generator,
 # so type checkers see the snake_case field name as the constructor kwarg and
 # runtime still accepts both spellings.
-_NESTED_CONFIG = ConfigDict(extra='forbid', validate_by_name=True, validate_by_alias=True, alias_generator=to_camel)
+#
+# from_attributes=True lets a google.genai object passed at runtime validate
+# into its mirror, so code written against the SDK types keeps working.
+_NESTED_CONFIG = ConfigDict(
+    extra='forbid', validate_by_name=True, validate_by_alias=True, alias_generator=to_camel, from_attributes=True
+)
 
 
 class SafetySetting(BaseModel):
@@ -236,6 +251,14 @@ class FileSearchConfig(BaseModel):
     top_k: int | None = Field(default=None)
 
 
+class ImageOutputOptions(BaseModel):
+    """Image output options. Sent as ``genai_types.ImageConfigImageOutputOptions``."""
+
+    model_config = _NESTED_CONFIG
+    mime_type: str | None = None
+    compression_quality: int | None = None
+
+
 class ImageConfig(BaseModel):
     """Image config. Sent as ``genai_types.ImageConfig``."""
 
@@ -246,7 +269,33 @@ class ImageConfig(BaseModel):
     output_compression_quality: int | None = Field(default=None)
     person_generation: str | None = Field(default=None)
     prominent_people: ProminentPeople | None = Field(default=None)
-    image_output_options: genai_types.ImageConfigImageOutputOptions | None = Field(default=None)
+    image_output_options: ImageOutputOptions | None = Field(default=None)
+
+
+class VoiceConsentSignature(BaseModel):
+    """Voice consent signature. Sent as ``genai_types.VoiceConsentSignature``."""
+
+    model_config = _NESTED_CONFIG
+    signature: str | None = None
+
+
+class ReplicatedVoiceConfig(BaseModel):
+    """Replicated (custom) voice. Sent as ``genai_types.ReplicatedVoiceConfig``."""
+
+    # Audio is base64 in JSON, as in the SDK type.
+    model_config = ConfigDict(
+        extra='forbid',
+        validate_by_name=True,
+        validate_by_alias=True,
+        alias_generator=to_camel,
+        from_attributes=True,
+        ser_json_bytes='base64',
+        val_json_bytes='base64',
+    )
+    mime_type: str | None = None
+    voice_sample_audio: bytes | None = None
+    consent_audio: bytes | None = None
+    voice_consent_signature: VoiceConsentSignature | None = None
 
 
 class VoiceConfig(BaseModel):
@@ -254,14 +303,72 @@ class VoiceConfig(BaseModel):
 
     model_config = _NESTED_CONFIG
     prebuilt_voice_config: PrebuiltVoiceConfig | None = Field(default=None)
-    replicated_voice_config: genai_types.ReplicatedVoiceConfig | None = Field(default=None)
+    replicated_voice_config: ReplicatedVoiceConfig | None = Field(default=None)
 
 
-# The google.genai tool type a dict under each tool toggle is validated as.
+class CodeExecution(BaseModel):
+    """Code execution tool options. Sent as ``genai_types.ToolCodeExecution``."""
+
+    model_config = _NESTED_CONFIG
+
+
+class UrlContext(BaseModel):
+    """URL context tool options. Sent as ``genai_types.UrlContext``."""
+
+    model_config = _NESTED_CONFIG
+
+
+class WebSearch(BaseModel):
+    """Web search. Sent as ``genai_types.WebSearch``."""
+
+    model_config = _NESTED_CONFIG
+
+
+class ImageSearch(BaseModel):
+    """Image search. Sent as ``genai_types.ImageSearch``."""
+
+    model_config = _NESTED_CONFIG
+
+
+class SearchTypes(BaseModel):
+    """Search types to enable. Sent as ``genai_types.SearchTypes``."""
+
+    model_config = _NESTED_CONFIG
+    web_search: WebSearch | None = Field(default=None, description='Enables web search. Returns text results.')
+    image_search: ImageSearch | None = Field(default=None, description='Enables image search. Returns image bytes.')
+
+
+class Interval(BaseModel):
+    """Time interval, start inclusive, end exclusive. Sent as ``genai_types.Interval``."""
+
+    model_config = _NESTED_CONFIG
+    start_time: datetime | None = Field(default=None, description='Inclusive start of the interval.')
+    end_time: datetime | None = Field(default=None, description='Exclusive end of the interval.')
+
+
+class GoogleSearch(BaseModel):
+    """Google Search tool options. Sent as ``genai_types.GoogleSearch``."""
+
+    model_config = _NESTED_CONFIG
+    search_types: SearchTypes | None = Field(
+        default=None, description='The search types to enable. Web search when unset.'
+    )
+    blocking_confidence: PhishBlockThreshold | None = Field(
+        default=None, description='Block results at or above this phishing confidence. Vertex AI only.'
+    )
+    exclude_domains: list[str] | None = Field(
+        default=None, description='Domains to exclude from results, e.g. ["amazon.com"]. Vertex AI only.'
+    )
+    time_range_filter: Interval | None = Field(
+        default=None, description='Only return results in this time range. Gemini API only.'
+    )
+
+
+# The Genkit options type a value under each tool toggle is validated as.
 _TOOL_OPTION_TYPES: dict[str, type[BaseModel]] = {
-    'code_execution': genai_types.ToolCodeExecution,
-    'google_search': genai_types.GoogleSearch,
-    'url_context': genai_types.UrlContext,
+    'code_execution': CodeExecution,
+    'google_search': GoogleSearch,
+    'url_context': UrlContext,
 }
 
 
@@ -314,7 +421,7 @@ class GeminiConfig(ModelConfig):
         default=None,
     )
 
-    code_execution: bool | genai_types.ToolCodeExecution | None = Field(
+    code_execution: bool | CodeExecution | None = Field(
         default=None,
         description='Enables the model to generate and run code. True attaches the tool; a dict is the tool options.',
     )
@@ -353,7 +460,7 @@ class GeminiConfig(ModelConfig):
         description='The modalities to be used in the response.',
     )
 
-    google_search: bool | genai_types.GoogleSearch | None = Field(
+    google_search: bool | GoogleSearch | None = Field(
         default=None,
         description=(
             'Ground the response in public web data with the Google Search tool. '
@@ -376,13 +483,13 @@ class GeminiConfig(ModelConfig):
 
     @field_validator('code_execution', 'google_search', 'url_context', mode='wrap')
     @classmethod
-    def _tool_options_against_sdk_type(
+    def _tool_options(
         cls,
         value: Any,  # noqa: ANN401
         handler: ValidatorFunctionWrapHandler,
         info: ValidationInfo,
     ) -> Any:  # noqa: ANN401
-        """True/False toggles the tool; anything else validates as the SDK tool type alone.
+        """True/False toggles the tool; anything else validates as the tool options type alone.
 
         Skipping the ``bool | Tool`` union keeps the error path to the bad key
         (``google_search.exclude_domainz``) instead of one error per union arm.
@@ -417,7 +524,7 @@ class GeminiConfig(ModelConfig):
         }),
     ] = Field(default=None)
 
-    url_context: bool | genai_types.UrlContext | None = Field(
+    url_context: bool | UrlContext | None = Field(
         default=None, description='Return grounding metadata from links included in the query'
     )
 

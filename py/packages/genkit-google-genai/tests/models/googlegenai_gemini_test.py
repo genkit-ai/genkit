@@ -23,7 +23,7 @@ from typing import Any, cast, get_args
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from genkit_google_genai._models import _gemini
+from genkit_google_genai._models import _gemini, _veo
 from genkit_google_genai._models._gemini import (
     DEFAULT_SUPPORTS_MODEL,
     GeminiConfig,
@@ -1657,6 +1657,16 @@ _NESTED_SDK_MIRRORS: list[tuple[type[BaseModel], type[BaseModel]]] = [
     (_gemini.SpeakerVoiceConfig, genai_types.SpeakerVoiceConfig),
     (_gemini.MultiSpeakerVoiceConfig, genai_types.MultiSpeakerVoiceConfig),
     (_gemini.SpeechConfig, genai_types.SpeechConfig),
+    (_gemini.ImageOutputOptions, genai_types.ImageConfigImageOutputOptions),
+    (_gemini.ReplicatedVoiceConfig, genai_types.ReplicatedVoiceConfig),
+    (_gemini.VoiceConsentSignature, genai_types.VoiceConsentSignature),
+    (_gemini.CodeExecution, genai_types.ToolCodeExecution),
+    (_gemini.UrlContext, genai_types.UrlContext),
+    (_gemini.GoogleSearch, genai_types.GoogleSearch),
+    (_gemini.SearchTypes, genai_types.SearchTypes),
+    (_gemini.WebSearch, genai_types.WebSearch),
+    (_gemini.ImageSearch, genai_types.ImageSearch),
+    (_gemini.Interval, genai_types.Interval),
 ]
 
 
@@ -1664,6 +1674,16 @@ _NESTED_SDK_MIRRORS: list[tuple[type[BaseModel], type[BaseModel]]] = [
 def test_nested_gemini_setting_declares_exactly_the_sdk_fields(ours: type[BaseModel], sdk: type[BaseModel]) -> None:
     """A strict nested setting accepts every key its google-genai type accepts, and no other."""
     assert set(ours.model_fields) == set(sdk.model_fields)
+
+
+@pytest.mark.parametrize(
+    ('ours', 'sdk'),
+    [(o, s) for o, s in _NESTED_SDK_MIRRORS if not any(f.is_required() for f in o.model_fields.values())],
+    ids=lambda c: c.__name__,
+)
+def test_nested_gemini_setting_accepts_the_sdk_object(ours: type[BaseModel], sdk: type[BaseModel]) -> None:
+    """Code written against the google-genai types still validates: the SDK object coerces into its mirror."""
+    assert isinstance(ours.model_validate(sdk()), ours)
 
 
 # SDK placeholder values Genkit doesn't offer. Selecting one means "use the
@@ -1680,6 +1700,9 @@ _OMITTED_UNSPECIFIED = {'HARM_BLOCK_THRESHOLD_UNSPECIFIED', 'THINKING_LEVEL_UNSP
         (_gemini.FunctionCallingMode, genai_types.FunctionCallingConfigMode),
         (_gemini.ThinkingLevel, genai_types.ThinkingLevel),
         (_gemini.ProminentPeople, genai_types.ProminentPeople),
+        (_gemini.PhishBlockThreshold, genai_types.PhishBlockThreshold),
+        (_veo.VideoCompressionQuality, genai_types.VideoCompressionQuality),
+        (_veo.ImageResizeMode, genai_types.ImageResizeMode),
     ],
     ids=[
         'HarmCategory',
@@ -1688,6 +1711,9 @@ _OMITTED_UNSPECIFIED = {'HARM_BLOCK_THRESHOLD_UNSPECIFIED', 'THINKING_LEVEL_UNSP
         'FunctionCallingMode',
         'ThinkingLevel',
         'ProminentPeople',
+        'PhishBlockThreshold',
+        'VideoCompressionQuality',
+        'ImageResizeMode',
     ],
 )
 def test_choice_literal_matches_the_sdk_enum(ours: object, sdk: type[Enum]) -> None:
