@@ -1060,6 +1060,11 @@ async function resolveSession<State>(
  * immediately rather than waiting for the runner to drain a backlog of
  * pre-queued inputs. A detach-only message (no payload) is consumed here and
  * not forwarded, since it has no turn to process.
+ *
+ * A detach ends the input side: the inputs queued before it, and the payload
+ * riding it, are the run's last, and nothing the client sends afterwards
+ * reaches the runner. The run settles once those drain, whether or not the
+ * client closes its stream.
  */
 function pipeInputWithDetach<State>(
   inputStream: AsyncIterable<AgentInput>,
@@ -1096,6 +1101,7 @@ function pipeInputWithDetach<State>(
           if (hasPayload) {
             target.send(input);
           }
+          if (storeEnabled) break;
         } else {
           target.send(input);
         }

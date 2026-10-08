@@ -1710,8 +1710,6 @@ describe('Agent', () => {
 
       const output = await session.output;
       assert.ok(output.snapshotId);
-      // The pending row settles once the queued inputs drain and the input
-      // side closes; a client that detached has nothing more to send.
       session.close();
 
       const snapDone = await waitForSnapshotStatus(
@@ -4292,10 +4290,13 @@ describe('detach finalize', () => {
     assert.strictEqual(pending?.state, undefined);
     assert.ok(pending?.heartbeatAt);
 
-    // The row settles once the queued inputs drain and the input side closes.
+    // The row settles once the queued inputs drain. A detach ends the input
+    // side, so a client that keeps its stream open does not hold it pending,
+    // and an input sent after the detach never runs.
+    session.send({ message: { role: 'user', content: [{ text: 'late' }] } });
     release();
-    session.close();
     const done = await waitForSnapshotStatus(store, pendingId, 'completed');
+    session.close();
     // One row holds the cumulative state of all three turns; no per-turn row
     // was written beside it, and the row's lineage is intact.
     assert.strictEqual(rowCount(store), 1);
