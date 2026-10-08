@@ -20,7 +20,7 @@ import asyncio
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from functools import cached_property
-from typing import Annotated, Any, Any as JsonAny, Literal, TypeAlias, cast
+from typing import Annotated, Any, Any as JsonAny, Literal, TypeAlias, cast, get_args
 
 from google import genai
 from google.auth import default as google_auth_default
@@ -50,7 +50,6 @@ from genkit import (
     Part,
     Role,
 )
-from genkit._core._compat import StrEnum
 from genkit.model import (
     Candidate,
     Constrained,
@@ -144,24 +143,26 @@ from genkit_google_genai._models._utils import (  # noqa: E402
     ToolWire,
 )
 
-
-class HarmCategory(StrEnum):
-    """Harm categories."""
-
-    HARM_CATEGORY_UNSPECIFIED = 'HARM_CATEGORY_UNSPECIFIED'
-    HARM_CATEGORY_HATE_SPEECH = 'HARM_CATEGORY_HATE_SPEECH'
-    HARM_CATEGORY_SEXUALLY_EXPLICIT = 'HARM_CATEGORY_SEXUALLY_EXPLICIT'
-    HARM_CATEGORY_HARASSMENT = 'HARM_CATEGORY_HARASSMENT'
-    HARM_CATEGORY_DANGEROUS_CONTENT = 'HARM_CATEGORY_DANGEROUS_CONTENT'
-
-
-class HarmBlockThreshold(StrEnum):
-    """Harm block thresholds."""
-
-    BLOCK_LOW_AND_ABOVE = 'BLOCK_LOW_AND_ABOVE'
-    BLOCK_MEDIUM_AND_ABOVE = 'BLOCK_MEDIUM_AND_ABOVE'
-    BLOCK_ONLY_HIGH = 'BLOCK_ONLY_HIGH'
-    BLOCK_NONE = 'BLOCK_NONE'
+# Input-only choice sets. Literals rather than enums so callers pass plain
+# strings (thinking_level='HIGH') without importing anything, and type
+# checkers still reject a value outside the set. The Dev UI schemas below
+# read the same sets with get_args.
+HarmCategory: TypeAlias = Literal[
+    'HARM_CATEGORY_UNSPECIFIED',
+    'HARM_CATEGORY_HATE_SPEECH',
+    'HARM_CATEGORY_SEXUALLY_EXPLICIT',
+    'HARM_CATEGORY_HARASSMENT',
+    'HARM_CATEGORY_DANGEROUS_CONTENT',
+]
+HarmBlockThreshold: TypeAlias = Literal[
+    'BLOCK_LOW_AND_ABOVE', 'BLOCK_MEDIUM_AND_ABOVE', 'BLOCK_ONLY_HIGH', 'BLOCK_NONE'
+]
+# Values of genai_types.HarmBlockMethod; googlegenai_gemini_test.py pins the match.
+HarmBlockMethod: TypeAlias = Literal['HARM_BLOCK_METHOD_UNSPECIFIED', 'SEVERITY', 'PROBABILITY']
+FunctionCallingMode: TypeAlias = Literal['MODE_UNSPECIFIED', 'AUTO', 'ANY', 'NONE']
+ThinkingLevel: TypeAlias = Literal['MINIMAL', 'LOW', 'MEDIUM', 'HIGH']
+ImageAspectRatio: TypeAlias = Literal['1:1', '2:3', '3:2', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9', '21:9']
+ImageSize: TypeAlias = Literal['1K', '2K', '4K']
 
 
 # Each strict nested class below declares every field of the google.genai type
@@ -174,13 +175,13 @@ class HarmBlockThreshold(StrEnum):
 _NESTED_CONFIG = ConfigDict(extra='forbid', validate_by_name=True, validate_by_alias=True, alias_generator=to_camel)
 
 
-class SafetySettingsSchema(BaseModel):
-    """Safety settings schema. Sent as ``genai_types.SafetySetting``."""
+class SafetySetting(BaseModel):
+    """Safety setting. Sent as ``genai_types.SafetySetting``."""
 
     model_config = _NESTED_CONFIG
     category: HarmCategory
     threshold: HarmBlockThreshold
-    method: genai_types.HarmBlockMethod | None = None
+    method: HarmBlockMethod | None = None
 
 
 class PrebuiltVoiceConfig(BaseModel):
@@ -188,15 +189,6 @@ class PrebuiltVoiceConfig(BaseModel):
 
     model_config = _NESTED_CONFIG
     voice_name: str | None = Field(default=None)
-
-
-class FunctionCallingMode(StrEnum):
-    """Function calling mode."""
-
-    MODE_UNSPECIFIED = 'MODE_UNSPECIFIED'
-    AUTO = 'AUTO'
-    ANY = 'ANY'
-    NONE = 'NONE'
 
 
 class FunctionCallingConfig(BaseModel):
@@ -208,15 +200,6 @@ class FunctionCallingConfig(BaseModel):
     stream_function_call_arguments: bool | None = Field(default=None)
 
 
-class ThinkingLevel(StrEnum):
-    """Thinking level."""
-
-    MINIMAL = 'MINIMAL'
-    LOW = 'LOW'
-    MEDIUM = 'MEDIUM'
-    HIGH = 'HIGH'
-
-
 class ThinkingConfig(BaseModel):
     """Thinking config. Sent as ``genai_types.ThinkingConfig``."""
 
@@ -226,6 +209,8 @@ class ThinkingConfig(BaseModel):
     thinking_level: ThinkingLevel | None = Field(default=None)
 
 
+# Deep Research sends this same class as the Interactions file_search tool,
+# which takes the same three fields.
 class FileSearchConfig(BaseModel):
     """File search config. Sent as ``genai_types.FileSearch``."""
 
@@ -233,29 +218,6 @@ class FileSearchConfig(BaseModel):
     file_search_store_names: list[str] | None = Field(default=None)
     metadata_filter: str | None = Field(default=None)
     top_k: int | None = Field(default=None)
-
-
-class ImageAspectRatio(StrEnum):
-    """Image aspect ratio."""
-
-    RATIO_1_1 = '1:1'
-    RATIO_2_3 = '2:3'
-    RATIO_3_2 = '3:2'
-    RATIO_3_4 = '3:4'
-    RATIO_4_3 = '4:3'
-    RATIO_4_5 = '4:5'
-    RATIO_5_4 = '5:4'
-    RATIO_9_16 = '9:16'
-    RATIO_16_9 = '16:9'
-    RATIO_21_9 = '21:9'
-
-
-class ImageSize(StrEnum):
-    """Image size."""
-
-    SIZE_1K = '1K'
-    SIZE_2K = '2K'
-    SIZE_4K = '4K'
 
 
 class ImageConfig(BaseModel):
@@ -314,15 +276,15 @@ class GeminiConfig(ModelConfig):
     )
 
     safety_settings: Annotated[
-        list[SafetySettingsSchema] | None,
+        list[SafetySetting] | None,
         WithJsonSchema({
             'type': 'array',
             'items': {
                 'type': 'object',
                 'properties': {
-                    'category': {'type': 'string', 'enum': [e.value for e in HarmCategory]},
-                    'threshold': {'type': 'string', 'enum': [e.value for e in HarmBlockThreshold]},
-                    'method': {'type': 'string', 'enum': [e.value for e in genai_types.HarmBlockMethod]},
+                    'category': {'type': 'string', 'enum': list(get_args(HarmCategory))},
+                    'threshold': {'type': 'string', 'enum': list(get_args(HarmBlockThreshold))},
+                    'method': {'type': 'string', 'enum': list(get_args(HarmBlockMethod))},
                 },
                 'required': ['category', 'threshold'],
                 'additionalProperties': False,
@@ -353,7 +315,7 @@ class GeminiConfig(ModelConfig):
         WithJsonSchema({
             'type': 'object',
             'properties': {
-                'mode': {'type': 'string', 'enum': [e.value for e in FunctionCallingMode]},
+                'mode': {'type': 'string', 'enum': list(get_args(FunctionCallingMode))},
                 'allowedFunctionNames': {'type': 'array', 'items': {'type': 'string'}},
                 'streamFunctionCallArguments': {'type': 'boolean'},
             },
@@ -507,7 +469,7 @@ class GeminiConfig(ModelConfig):
                 },
                 'thinkingLevel': {
                     'type': 'string',
-                    'enum': [e.value for e in ThinkingLevel],
+                    'enum': list(get_args(ThinkingLevel)),
                     'description': (
                         'For Gemini 3.0 - Indicates the thinking level. A higher level is associated with more '
                         'detailed thinking, which is needed for solving more complex tasks.'
@@ -590,8 +552,8 @@ class GeminiImageConfig(GeminiConfig):
         WithJsonSchema({
             'type': 'object',
             'properties': {
-                'aspectRatio': {'type': 'string', 'enum': [e.value for e in ImageAspectRatio]},
-                'imageSize': {'type': 'string', 'enum': [e.value for e in ImageSize]},
+                'aspectRatio': {'type': 'string', 'enum': list(get_args(ImageAspectRatio))},
+                'imageSize': {'type': 'string', 'enum': list(get_args(ImageSize))},
                 'outputMimeType': {'type': 'string'},
                 'outputCompressionQuality': {'type': 'integer'},
                 'personGeneration': {'type': 'string'},
@@ -2065,7 +2027,7 @@ class GeminiModel:
         # Safety settings — filter out unspecified categories
         if 'safety_settings' in config:
             config['safety_settings'] = [
-                s for s in config['safety_settings'] if s['category'] != HarmCategory.HARM_CATEGORY_UNSPECIFIED
+                s for s in config['safety_settings'] if s['category'] != 'HARM_CATEGORY_UNSPECIFIED'
             ]
 
         val = config.pop('google_search', None)

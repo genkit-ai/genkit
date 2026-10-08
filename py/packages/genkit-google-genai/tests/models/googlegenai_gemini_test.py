@@ -18,6 +18,7 @@
 """Tests for the Gemini model implementation."""
 
 import base64
+from enum import Enum
 from typing import Any, cast, get_args
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1646,7 +1647,7 @@ async def test_generate_adds_no_voice_to_a_multi_speaker_config(mocker: MockerFi
 
 # Each strict nested Gemini setting and the google.genai type it is sent as.
 _NESTED_SDK_MIRRORS: list[tuple[type[BaseModel], type[BaseModel]]] = [
-    (_gemini.SafetySettingsSchema, genai_types.SafetySetting),
+    (_gemini.SafetySetting, genai_types.SafetySetting),
     (_gemini.PrebuiltVoiceConfig, genai_types.PrebuiltVoiceConfig),
     (_gemini.FunctionCallingConfig, genai_types.FunctionCallingConfig),
     (_gemini.ThinkingConfig, genai_types.ThinkingConfig),
@@ -1665,10 +1666,30 @@ def test_nested_gemini_setting_declares_exactly_the_sdk_fields(ours: type[BaseMo
     assert set(ours.model_fields) == set(sdk.model_fields)
 
 
+def test_harm_block_method_matches_the_sdk_enum() -> None:
+    """SafetySetting.method lists exactly genai_types.HarmBlockMethod, so users needn't import google.genai."""
+    assert list(get_args(_gemini.HarmBlockMethod)) == [e.value for e in genai_types.HarmBlockMethod]
+
+
+@pytest.mark.parametrize(
+    ('ours', 'sdk'),
+    [
+        (_gemini.HarmCategory, genai_types.HarmCategory),
+        (_gemini.HarmBlockThreshold, genai_types.HarmBlockThreshold),
+        (_gemini.FunctionCallingMode, genai_types.FunctionCallingConfigMode),
+        (_gemini.ThinkingLevel, genai_types.ThinkingLevel),
+    ],
+    ids=['HarmCategory', 'HarmBlockThreshold', 'FunctionCallingMode', 'ThinkingLevel'],
+)
+def test_choice_literals_are_sdk_values(ours: object, sdk: type[Enum]) -> None:
+    """Every choice the config offers is a value the SDK enum accepts."""
+    assert set(get_args(ours)) <= {e.value for e in sdk}
+
+
 @pytest.mark.parametrize(
     ('config_class', 'field', 'nested'),
     [
-        (GeminiConfig, 'safetySettings', _gemini.SafetySettingsSchema),
+        (GeminiConfig, 'safetySettings', _gemini.SafetySetting),
         (GeminiConfig, 'functionCallingConfig', _gemini.FunctionCallingConfig),
         (GeminiConfig, 'thinkingConfig', _gemini.ThinkingConfig),
         (GeminiConfig, 'fileSearch', _gemini.FileSearchConfig),
