@@ -43,6 +43,11 @@ export { type DeepResearchConfig } from './deep-research.js';
 export { type EmbeddingConfig } from './embedder.js';
 export { type GeminiConfig, type GeminiTtsConfig } from './gemini.js';
 export { type ImagenConfig } from './imagen.js';
+export {
+  type GeminiInteraction,
+  type TextAnnotation,
+  type UrlCitation,
+} from './interaction-types.js';
 export { type LyriaConfig } from './lyria.js';
 export { type GoogleAIPluginOptions };
 
@@ -129,7 +134,7 @@ async function listActions(
 export function googleAIPlugin(
   options?: GoogleAIPluginOptions
 ): GenkitPluginV2 {
-  let listActionsCache;
+  let listActionsCache: ActionMetadata[];
   return genkitPluginV2({
     name: 'googleai',
     init: async () => await initializer(options),

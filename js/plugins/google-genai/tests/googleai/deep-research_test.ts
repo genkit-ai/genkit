@@ -423,7 +423,43 @@ describe('Deep Research', () => {
           name: 'MyServer',
           url: 'http://localhost:8080',
           headers: { Authorization: 'Bearer token' },
-          allowed_tools: ['tool1', 'tool2'],
+          allowed_tools: [{ tools: ['tool1', 'tool2'] }],
+        },
+      ]);
+    });
+
+    it('supports allowedTools with mode in mcpServers', async () => {
+      const model = defineModel(
+        'deep-research-pro-preview-12-2025',
+        defaultPluginOptions
+      );
+      mockFetchResponse(mockInteractionResponse);
+
+      const request: GenerateRequest<typeof DeepResearchConfigSchema> = {
+        ...minimalRequest,
+        config: {
+          mcpServers: [
+            {
+              name: 'MyServer',
+              url: 'http://localhost:8080',
+              allowedTools: [{ mode: 'validated', tools: ['tool1'] }],
+            },
+          ],
+        },
+      };
+
+      await model.start(request);
+
+      sinon.assert.calledOnce(fetchStub);
+      const options = fetchStub.lastCall.args[1];
+      const body = JSON.parse(options.body);
+
+      assert.deepStrictEqual(body.tools, [
+        {
+          type: 'mcp_server',
+          name: 'MyServer',
+          url: 'http://localhost:8080',
+          allowed_tools: [{ mode: 'validated', tools: ['tool1'] }],
         },
       ]);
     });

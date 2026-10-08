@@ -85,7 +85,14 @@ function commonRef(
 
 const GENERIC_MODEL = commonRef('embedder');
 
+const DEPRECATED_MODELS = {
+  // When models are < 1 month from shutdown, move them here (with the
+  // shutdown date) instead. They can still be used, but no longer appear in
+  // autocomplete suggestions.
+} as const;
+
 const KNOWN_MODELS = {
+  'gemini-embedding-001': commonRef('gemini-embedding-001'),
   'gemini-embedding-2-preview': commonRef('gemini-embedding-2-preview', {
     supports: {
       input: ['text', 'image', 'video'],
@@ -96,8 +103,12 @@ const KNOWN_MODELS = {
       input: ['text', 'image', 'video'],
     },
   }),
-  'gemini-embedding-001': commonRef('gemini-embedding-001'),
 } as const;
+
+const ALL_MODELS = {
+  ...DEPRECATED_MODELS,
+  ...KNOWN_MODELS,
+};
 export type KnownModels = keyof typeof KNOWN_MODELS; // For autocomplete
 
 export type EmbedderModelName = `gemini-embedding-${string}`;
@@ -111,8 +122,8 @@ export function model(
 ): EmbedderReference<ConfigSchemaType> {
   const name = checkModelName(version);
 
-  if (isKnownKey(name, KNOWN_MODELS)) {
-    const known = KNOWN_MODELS[name];
+  if (isKnownKey(name, ALL_MODELS)) {
+    const known = ALL_MODELS[name];
     return embedderRef({
       name: known.name,
       info: known.info,
@@ -147,7 +158,7 @@ export function listActions(models: Model[]): ActionMetadata[] {
 }
 
 export function listKnownModels(options?: GoogleAIPluginOptions) {
-  return Object.keys(KNOWN_MODELS).map((name) => defineEmbedder(name, options));
+  return Object.keys(ALL_MODELS).map((name) => defineEmbedder(name, options));
 }
 
 export function defineEmbedder(
