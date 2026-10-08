@@ -28,7 +28,7 @@ import threading
 import uuid
 from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, NoReturn, TypeVar, cast, overload
 
 import anyio
 import uvicorn
@@ -74,7 +74,7 @@ from genkit._ai._prompt import (
     register_prompt_actions,
     to_generate_options,
 )
-from genkit._ai._tools import define_interrupt, define_tool
+from genkit._ai._tools import define_interrupt
 from genkit._core._action import Action, ActionKind, get_current_context
 from genkit._core._background import (
     BackgroundAction,
@@ -125,7 +125,7 @@ from genkit._core._typing import (
     Role,
 )
 
-from ._decorators import _FlowDecorator, _FlowDecoratorWithChunk
+from ._decorators import _FlowDecorator, _FlowDecoratorWithChunk, _ToolDecorator
 from ._runtime import RuntimeManager, setup_signal_handlers
 
 logger = get_logger(__name__)
@@ -352,10 +352,11 @@ class Genkit:
         description: str | None = None,
         *,
         input_schema: type[BaseModel] | dict[str, object] | None = None,
-    ) -> Callable[[Callable[..., Any]], Tool]:
+    ) -> _ToolDecorator:
         """Decorator to register a function as a tool.
 
         The return annotation is what the model binds as ``outputSchema``.
+        Awaiting the tool directly returns what the function returned.
 
         A tool takes at most one input, and that input's type is the schema the
         model fills in. For several fields, use one Pydantic model. To read the
@@ -379,17 +380,7 @@ class Genkit:
 
             res = await ai.generate(prompt='Weather in Paris?', tools=['current_weather', 'forecast'])
         """
-
-        def wrapper(func: Callable[..., Any]) -> Tool:
-            return define_tool(
-                self.registry,
-                func,
-                name,
-                description,
-                input_schema=input_schema,
-            )
-
-        return wrapper
+        return _ToolDecorator(self.registry, name, description, input_schema)
 
     def define_middleware(
         self,
@@ -426,7 +417,7 @@ class Genkit:
         *,
         input_schema: type[BaseModel] | dict[str, object] | None = None,
         description: str | None = None,
-    ) -> Tool:
+    ) -> Tool[Any, NoReturn]:
         """Register an interrupt tool that always pauses for user input.
 
         Args:
@@ -435,7 +426,7 @@ class Genkit:
             description: Tool description
 
         Returns:
-            The registered interrupt tool
+            The registered interrupt tool. Awaiting it directly raises ``Interrupt``.
 
         Example:
             ask_user = ai.define_interrupt(

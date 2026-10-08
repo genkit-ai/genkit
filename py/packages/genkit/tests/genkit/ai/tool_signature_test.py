@@ -498,7 +498,7 @@ def test_tool_with_typing_typed_dict_input_raises_type_error_before_3_12() -> No
 
 @pytest.mark.asyncio
 async def test_tool_with_int_input_rejects_string_with_invalid_argument() -> None:
-    """`await days_until(n: int)` called with 'abc' raises INVALID_ARGUMENT, and the tool advertises an integer."""
+    """`await days_until('abc')` on `(n: int)` raises INVALID_ARGUMENT; `await days_until(3)` returns '3 days'."""
     ai, _ = _app()
 
     @ai.tool()
@@ -509,7 +509,7 @@ async def test_tool_with_int_input_rejects_string_with_invalid_argument() -> Non
         await days_until('abc')
     assert exc.value.status == 'INVALID_ARGUMENT'
     assert days_until.input_schema == {'type': 'integer'}
-    assert (await days_until(3)).output == '3 days'
+    assert await days_until(3) == '3 days'
 
 
 @pytest.mark.asyncio
@@ -575,21 +575,21 @@ async def test_tool_with_typed_dict_input_receives_dict() -> None:
     assert seen == [{'city': 'Paris', 'days': 3}]
     assert _tool_output(response) == '3 days in Paris'
     with pytest.raises(GenkitError) as exc:
-        await forecast({'city': 'Paris'})
+        await forecast({'city': 'Paris'})  # ty: ignore[missing-typed-dict-key]
     assert exc.value.status == 'INVALID_ARGUMENT'
 
 
 @pytest.mark.asyncio
 async def test_tool_with_default_input_called_without_input_gets_default() -> None:
-    """`await weather()` on `weather(city: str = 'Paris')` runs with the default."""
+    """`await weather()` on `weather(city: str = 'Paris')` returns 'Sunny in Paris'; 'Rome' overrides it."""
     ai, _ = _app()
 
     @ai.tool()
     async def weather(city: str = 'Paris') -> str:
         return f'Sunny in {city}'
 
-    assert (await weather()).output == 'Sunny in Paris'
-    assert (await weather('Rome')).output == 'Sunny in Rome'
+    assert await weather() == 'Sunny in Paris'
+    assert await weather('Rome') == 'Sunny in Rome'
 
 
 @pytest.mark.asyncio
@@ -613,8 +613,8 @@ async def test_generate_context_reaches_tool_with_context_first() -> None:
 
 
 @pytest.mark.asyncio
-async def test_await_tool_with_input_and_context_called_directly_returns_result() -> None:
-    """Calling `await weather(WeatherInput(...))` on a `(input, ctx)` tool runs it and returns the output."""
+async def test_await_tool_with_input_and_context_called_directly_returns_string() -> None:
+    """`await weather(WeatherInput(city='Paris'))` on a `(input, ctx)` tool returns the string the tool built."""
     ai, _ = _app()
 
     @ai.tool()
@@ -623,5 +623,4 @@ async def test_await_tool_with_input_and_context_called_directly_returns_result(
 
     result = await weather(WeatherInput(city='Paris'))
 
-    assert result.output == '22C in Paris (ToolRunContext)'
-    assert result.content is None
+    assert result == '22C in Paris (ToolRunContext)'
