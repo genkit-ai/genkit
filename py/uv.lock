@@ -1948,7 +1948,6 @@ name = "genkit-workspace"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
-    { name = "dotpromptz" },
     { name = "genkit" },
     { name = "genkit-a2ui" },
     { name = "genkit-amazon-bedrock" },
@@ -2018,7 +2017,6 @@ lint = [
 
 [package.metadata]
 requires-dist = [
-    { name = "dotpromptz", specifier = "==0.2.0" },
     { name = "genkit", editable = "packages/genkit" },
     { name = "genkit-a2ui", editable = "packages/genkit-a2ui" },
     { name = "genkit-amazon-bedrock", editable = "packages/genkit-amazon-bedrock" },

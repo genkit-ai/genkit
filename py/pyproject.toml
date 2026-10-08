@@ -17,7 +17,6 @@
 [project]
 authors = [{ name = "Google" }]
 dependencies = [
-  "dotpromptz==0.2.0",
   "genkit",
   "genkit-amazon-bedrock",
   "genkit-anthropic",
