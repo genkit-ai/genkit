@@ -482,15 +482,31 @@ def check_config_dict(*, config: object, schema: type[BaseModel] | None, model: 
             return
         raise GenkitError(
             status='INVALID_ARGUMENT',
-            message=f'{model}: {_describe_config_problems(problems)}',
+            message=f'{model}: {_describe_config_problems(problems, layer=layer, schema=schema)}',
             reason=RuntimeErrorReason.INVALID_INPUT,
             cause=e,
         ) from e
 
 
-def _describe_config_problems(problems: Sequence[Mapping[str, Any]]) -> str:
-    unknown = [_config_path(err['loc']) for err in problems if err['type'] == 'extra_forbidden']
-    parts: list[str] = []
+def _describe_config_problems(
+    problems: Sequence[Mapping[str, Any]], *, layer: Mapping[str, Any], schema: type[BaseModel]
+) -> str:
+    # pydantic binds one spelling of a setting and calls the other unknown;
+    # the caller didn't misspell anything, they wrote the setting twice.
+    names = config_field_names(schema)
+    repeated: dict[str, list[str]] = {}
+    unknown: list[str] = []
+    for err in problems:
+        if err['type'] != 'extra_forbidden':
+            continue
+        key = _config_path(err['loc'])
+        field = names.get(key) if len(err['loc']) == 1 else None
+        spellings = [k for k in layer if field and names.get(k) == field]
+        if field and len(spellings) > 1:
+            repeated[field] = sorted(spellings, key=lambda k: k != field)
+        else:
+            unknown.append(key)
+    parts = [f'{_join_words(spellings)} are the same setting; pass one' for spellings in repeated.values()]
     if unknown:
         keys = ', '.join(repr(key) for key in unknown)
         noun = 'key' if len(unknown) == 1 else 'keys'
@@ -499,6 +515,13 @@ def _describe_config_problems(problems: Sequence[Mapping[str, Any]]) -> str:
         f'config {_config_path(err["loc"])!r}: {err["msg"]}' for err in problems if err['type'] != 'extra_forbidden'
     )
     return '; '.join(parts)
+
+
+def _join_words(words: list[str]) -> str:
+    """`a and b`, or `a, b, and c` for three or more."""
+    if len(words) <= 2:
+        return ' and '.join(words)
+    return f'{", ".join(words[:-1])}, and {words[-1]}'
 
 
 def _config_path(loc: tuple[int | str, ...]) -> str:
