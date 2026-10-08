@@ -571,7 +571,7 @@ export class SessionRunner<State = unknown> {
 
   /** Runs `fn` under the snapshot lock; see {@link snapLock}. */
   private withSnapLock<T>(fn: () => Promise<T>): Promise<T> {
-    const run = this.snapLock.then(fn, fn);
+    const run = this.snapLock.then(fn);
     this.snapLock = run.catch(() => {});
     return run;
   }
@@ -1389,16 +1389,21 @@ export function defineCustomAgent<State = unknown>(
         }
       };
 
-      const flowPromise = (async () => {
-        let result: AgentResult;
-        let finalSnapshotId: string | undefined;
+      // Resolves undefined only for a detached run whose function threw: its
+      // error is on the pending row, and the detached output already went out.
+      const flowPromise = (async (): Promise<
+        { result: AgentResult; finalSnapshotId?: string } | undefined
+      > => {
+        let settled:
+          | { result: AgentResult; finalSnapshotId?: string }
+          | undefined;
         // An error the agent function threw outside a turn. Attached, it
         // propagates as the action's own failure; detached, it lands on the
         // pending row, since there is no longer a caller to throw to.
         let fnError: unknown;
         let fnThrew = false;
         try {
-          result = await runWithSession(registry, session, () =>
+          const result = await runWithSession(registry, session, () =>
             fn(runner, {
               sendChunk,
               abortSignal: abortController.signal,
@@ -1410,7 +1415,7 @@ export function defineCustomAgent<State = unknown>(
           // write, which the version guard skips when nothing changed. A
           // detached run has nothing to write here: its finalize records the
           // cumulative state.
-          finalSnapshotId = await runner.maybeSnapshot();
+          settled = { result, finalSnapshotId: await runner.maybeSnapshot() };
         } catch (e) {
           fnError = e;
           fnThrew = true;
@@ -1425,7 +1430,7 @@ export function defineCustomAgent<State = unknown>(
           await runner.finalizePendingSnapshot(fnThrew ? fnError : undefined);
         }
         if (fnThrew && !runner.isDetached) throw fnError;
-        return { result: result!, finalSnapshotId };
+        return settled;
       })();
 
       // We race the background flow execution against the detach signal.
@@ -1436,7 +1441,7 @@ export function defineCustomAgent<State = unknown>(
         detachPromise.then(() => 'detached' as const),
       ]);
 
-      if (outcome === 'detached') {
+      if (outcome === 'detached' || outcome === undefined) {
         return {
           sessionId: session.sessionId,
           snapshotId: detachedSnapshotId!,
