@@ -175,6 +175,12 @@ export interface TurnResult {
  * `cause` is the error the turn failed with, and is what the output and the
  * snapshot report. `result` may carry the turn's own finish reason; without
  * one the runner derives it from how the turn ended.
+ *
+ * A client re-attempts a committed turn by sending an input with no message
+ * and no resume. The runner hands that input to the handler as it is, so a
+ * custom agent that commits failures has to handle it, typically by running
+ * the turn again on the conversation already in the session. The
+ * prompt-backed agent does.
  */
 export class CommittedTurnError extends Error {
   readonly result: TurnResult;
@@ -388,7 +394,7 @@ export class SessionRunner<State = unknown> {
    * the live state is the resume point. True until a turn fails without
    * committing.
    */
-  public lastTurnCommitted: boolean = true;
+  private lastTurnCommitted: boolean = true;
   /**
    * A deep copy of the session state as of the most recent *committed* turn
    * (or the initial state when no turn has committed yet). On a turn that
@@ -1547,7 +1553,7 @@ export function defineCustomAgent<State = unknown>(
           settled = {
             result,
             finalSnapshotId:
-              runner.lastTurnCommitted && !runner.lastTurnError
+              !runner.lastTurnError && runner.lastTurnFinishReason !== 'aborted'
                 ? await runner.maybeSnapshot()
                 : runner.lastGoodSnapshotId,
           };
