@@ -599,6 +599,62 @@ async def test_embed_string_with_metadata_attaches_it_to_the_document(
     assert called_request.input == [Document.from_text('hi', {'source': 'faq'})]
 
 
+@pytest.mark.asyncio
+async def test_embed_many_mixed_list_with_metadata_raises_type_error(
+    mock_genkit_instance: tuple[Genkit, MockGenkitRegistry],
+) -> None:
+    """A Document anywhere in the list rejects metadata=, not just in the first slot."""
+    genkit_instance, _ = mock_genkit_instance
+    mixed: list[Any] = ['Nut-free kitchen.', Document.from_text('Open until 10pm.')]
+
+    with pytest.raises(TypeError, match='set it on the Document'):
+        await genkit_instance.embed_many(embedder='any-embedder', content=mixed, metadata={'source': 'faq'})
+
+
+@pytest.mark.asyncio
+async def test_embed_document_with_empty_metadata_raises_type_error(
+    mock_genkit_instance: tuple[Genkit, MockGenkitRegistry],
+) -> None:
+    """metadata={} counts as passed: only None means no metadata."""
+    genkit_instance, _ = mock_genkit_instance
+
+    with pytest.raises(TypeError, match='set it on the Document'):
+        await genkit_instance.embed(embedder='any-embedder', content=Document.from_text('hi'), metadata={})
+
+
+@pytest.mark.asyncio
+async def test_embed_missing_content_raises_type_error(
+    mock_genkit_instance: tuple[Genkit, MockGenkitRegistry],
+) -> None:
+    """ai.embed without content= fails at the call, before anything runs."""
+    genkit_instance, _ = mock_genkit_instance
+
+    with pytest.raises(TypeError, match='content'):
+        await genkit_instance.embed(embedder='any-embedder')  # type: ignore[call-arg]  # pyright: ignore[reportCallIssue]
+
+
+@pytest.mark.asyncio
+async def test_embed_many_missing_content_raises_type_error(
+    mock_genkit_instance: tuple[Genkit, MockGenkitRegistry],
+) -> None:
+    """ai.embed_many without content= fails at the call, before anything runs."""
+    genkit_instance, _ = mock_genkit_instance
+
+    with pytest.raises(TypeError, match='content'):
+        await genkit_instance.embed_many(embedder='any-embedder')  # type: ignore[call-arg]  # pyright: ignore[reportCallIssue]
+
+
+@pytest.mark.asyncio
+async def test_embed_many_missing_embedder_raises_type_error(
+    mock_genkit_instance: tuple[Genkit, MockGenkitRegistry],
+) -> None:
+    """ai.embed_many without embedder= fails at the call, before anything runs."""
+    genkit_instance, _ = mock_genkit_instance
+
+    with pytest.raises(TypeError, match='embedder'):
+        await genkit_instance.embed_many(content=['hi'])  # type: ignore[call-arg]  # pyright: ignore[reportCallIssue]
+
+
 # --- Tests for _resolve_embedder_name helper ---
 
 
