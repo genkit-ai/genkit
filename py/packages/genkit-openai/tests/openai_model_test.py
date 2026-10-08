@@ -123,7 +123,7 @@ async def test_get_openai_config(sample_request: ModelRequest) -> None:
 
 @pytest.mark.asyncio
 async def test_get_openai_config_peels_genkit_keys_and_passes_the_rest() -> None:
-    """Genkit-only keys stay off create(); declared OpenAI fields go out, `extra` as `extra_body`."""
+    """Genkit-only keys stay off create(); max_output_tokens is the cap; extra goes out as extra_body."""
     model = OpenAIModel(model='gpt-4o', client=MagicMock())
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
@@ -145,6 +145,7 @@ async def test_get_openai_config_peels_genkit_keys_and_passes_the_rest() -> None
     assert body['extra_body'] == {'some_new_openai_knob': 1}
     assert 'extra' not in body
     assert body['model'] == 'gpt-4o-2024-08-06'
+    assert body['max_tokens'] == 128
     assert 'max_output_tokens' not in body
     assert 'stop_sequences' not in body
     assert 'api_key' not in body
@@ -206,6 +207,21 @@ async def test_get_openai_config_prefers_explicit_max_completion_tokens() -> Non
 
     assert body['max_completion_tokens'] == 64
     assert 'max_tokens' not in body
+
+
+@pytest.mark.asyncio
+async def test_get_openai_config_max_tokens_wins_over_max_output_tokens() -> None:
+    """`max_tokens=32` with `max_output_tokens=128` sends a cap of 32."""
+    model = OpenAIModel(model='gpt-4o', client=MagicMock())
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
+        config=OpenAIConfig(max_tokens=32, max_output_tokens=128),
+    )
+
+    body = await model._get_openai_request_config(request)
+
+    assert body['max_tokens'] == 32
+    assert 'max_output_tokens' not in body
 
 
 @pytest.mark.asyncio
