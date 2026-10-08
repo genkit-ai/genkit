@@ -4304,5 +4304,42 @@ describe('contextCompression middleware', () => {
     // Verify cross-turn resolution and re-entry on next turn
     const resolved = resolveCompressedHistory(res.messages);
     assert.ok(resolved[0].content[0].text?.includes('Summary of turn 1'));
+
+    // Verify user aborts during summarization propagate rather than falling back to the main model
+    let mainCalledAfterAbort = false;
+    const abortMain = ai.defineModel({ name: 'abortMain' }, async () => {
+      mainCalledAfterAbort = true;
+      return {
+        message: { role: 'model', content: [{ text: 'done' }] },
+        usage: { inputTokens: 10 },
+      };
+    });
+    const abortController = new AbortController();
+    const abortSummarizer = ai.defineModel(
+      { name: 'abortSummarizer' },
+      async () => {
+        abortController.abort(new Error('user aborted summarization'));
+        const abortErr = new Error('The operation was aborted');
+        abortErr.name = 'AbortError';
+        throw abortErr;
+      }
+    );
+
+    await assert.rejects(
+      () =>
+        ai.generate({
+          model: abortMain,
+          abortSignal: abortController.signal,
+          messages: fiveMessageHistory,
+          use: [
+            contextCompression({
+              maxInputTokens: 200,
+              summarize: { model: abortSummarizer },
+            }),
+          ],
+        }),
+      (err: Error) => err.name === 'AbortError'
+    );
+    assert.strictEqual(mainCalledAfterAbort, false);
   });
 });
