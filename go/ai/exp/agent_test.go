@@ -6181,6 +6181,35 @@ func TestAgent_Description(t *testing.T) {
 	})
 }
 
+// TestWithMaxSnapshotWait_Rejects pins the option's validation: the limit must
+// be positive, and it can be set once.
+func TestWithMaxSnapshotWait_Rejects(t *testing.T) {
+	noopFn := func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+		return nil, nil
+	}
+	tests := []struct {
+		name string
+		opts []AgentOption[testState]
+		want string
+	}{
+		{"zero", []AgentOption[testState]{WithMaxSnapshotWait[testState](0)}, "must be positive"},
+		{"negative", []AgentOption[testState]{WithMaxSnapshotWait[testState](-time.Second)}, "must be positive"},
+		{"twice", []AgentOption[testState]{WithMaxSnapshotWait[testState](time.Second), WithMaxSnapshotWait[testState](time.Second)}, "more than once"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			defer func() {
+				r := recover()
+				if r == nil || !strings.Contains(fmt.Sprint(r), tt.want) {
+					t.Errorf("panic = %v, want one containing %q", r, tt.want)
+				}
+			}()
+			DefineCustomAgent(newTestRegistry(t), "capped", noopFn,
+				append(tt.opts, WithSessionStore(newTestInMemStore[testState]()))...)
+		})
+	}
+}
+
 // TestAgent_RegisterCarriesCompanions verifies that registering an agent
 // ref into another registry brings the companion actions along, so the
 // agent travels as a unit (see Agent.Register).

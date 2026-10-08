@@ -96,7 +96,10 @@ func AllAgentRoutes(g *genkit.Genkit) []Route {
 //   - POST /agents/{name}/getSnapshot         getSnapshot (store-backed agents)
 //   - POST /agents/{name}/waitForSnapshot     waitForSnapshot (store-backed
 //     agents); getSnapshot's blocking counterpart, so a client follows a
-//     detached invocation in one request instead of polling
+//     detached invocation without polling. One request holds for at most
+//     the agent's wait limit (see aix.WithMaxSnapshotWait) and then returns
+//     the snapshot as it stands; a client whose snapshot is still pending
+//     or aborting asks again
 //   - POST /agents/{name}/abort               abort (abortable stores)
 //
 // Each takes the {"data": ...} request envelope and returns {"result":

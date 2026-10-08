@@ -813,8 +813,11 @@ func (a *Agent[State]) GetSnapshotAction() api.Action {
 
 // WaitForSnapshotAction returns the agent's waitForSnapshot companion action,
 // which resolves a snapshot the same way getSnapshot does and returns once it
-// settles (input [GetSnapshotRequest], output [SessionSnapshot]). It returns
-// nil when the agent is client-managed (no [SessionStore] configured).
+// settles (input [GetSnapshotRequest], output [SessionSnapshot]). One request
+// holds for at most the agent's [WithMaxSnapshotWait] limit and then returns
+// the snapshot as it stands, still pending or aborting, so a caller asks again
+// until it settles. It returns nil when the agent is client-managed (no
+// [SessionStore] configured).
 //
 // Use it to expose following a detached invocation over a transport (e.g.
 // mount it with genkit.Handler next to the agent itself), so a remote caller
@@ -895,7 +898,7 @@ func (a *Agent[State]) WaitForSnapshot(ctx context.Context, snapshotID string) (
 	if snapshotID == "" {
 		return nil, status.Errorf(status.ErrInvalidArgument, "agent %q: WaitForSnapshot: snapshotID is required", a.Name())
 	}
-	return waitSnapshot(ctx, a.store, a.transform, "waitForSnapshot", snapshotID, "")
+	return waitSnapshot(ctx, a.store, a.transform, "waitForSnapshot", snapshotID, "", 0)
 }
 
 // GetLatestSnapshot fetches a session's most recently created snapshot (whatever
@@ -1192,7 +1195,7 @@ func newCustomAgent[State any](
 			return rt.run(ctx, fn)
 		})
 
-	getSnapshot, wait, abort := newSnapshotActions(name, cfg.store, cfg.transform)
+	getSnapshot, wait, abort := newSnapshotActions(name, cfg.store, cfg.transform, cfg.maxSnapshotWait)
 
 	return &Agent[State]{
 		action:      action,
