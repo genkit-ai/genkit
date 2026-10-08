@@ -406,8 +406,8 @@ async def test_embed_many_strings_with_metadata_attach_it_to_every_document(
     embed_action = await registry.resolve_action('embedder', 'faq-embedder')
     called_request = embed_action.run.call_args[0][0]
     assert called_request.input == [
-        Document.from_text('Nut-free kitchen.', {'source': 'allergy-faq'}),
-        Document.from_text('Gluten-free buns on request.', {'source': 'allergy-faq'}),
+        Document.from_text('Nut-free kitchen.', metadata={'source': 'allergy-faq'}),
+        Document.from_text('Gluten-free buns on request.', metadata={'source': 'allergy-faq'}),
     ]
 
 
@@ -434,7 +434,7 @@ async def test_embed_document_keeps_its_own_metadata(
 
     embed_action = await registry.resolve_action('embedder', 'doc-embedder')
     called_request = embed_action.run.call_args[0][0]
-    assert called_request.input == [Document.from_text('Nut-free kitchen.', {'source': 'allergy-faq'})]
+    assert called_request.input == [Document.from_text('Nut-free kitchen.', metadata={'source': 'allergy-faq'})]
     assert faq.metadata == {'source': 'allergy-faq'}
 
 
@@ -464,7 +464,12 @@ async def test_embed_many_documents_keep_per_item_metadata(
 
     embed_action = await registry.resolve_action('embedder', 'docs-embedder')
     called_request = embed_action.run.call_args[0][0]
-    assert [doc.metadata for doc in called_request.input] == [{'source': 'allergy-faq'}, {'source': 'hours'}]
+    assert called_request.input == [
+        Document.from_text('Nut-free kitchen.', metadata={'source': 'allergy-faq'}),
+        Document.from_text('Open until 10pm.', metadata={'source': 'hours'}),
+    ]
+    assert docs[0].metadata == {'source': 'allergy-faq'}
+    assert docs[1].metadata == {'source': 'hours'}
 
 
 @pytest.mark.asyncio
