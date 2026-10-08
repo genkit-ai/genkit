@@ -60,7 +60,7 @@ TRANSFORMATIONS = {
     'Supports': {'omit': ['context']},
     # Evaluator authors type these names when building a Score. Only the
     # Python class names differ; the JSON ('PASS', details.reasoning) follows the schema.
-    'EvalStatusEnum': {'output_name': 'EvalStatus'},
+    'EvalStatusEnum': {'output_name': 'ScoreStatus'},
     # Inline Score.details object. Only Score has an object-typed details.
     'Details': {'output_name': 'ScoreDetails'},
 }

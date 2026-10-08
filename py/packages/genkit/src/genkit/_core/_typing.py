@@ -72,8 +72,8 @@ class SnapshotStatus(StrEnum):
     EXPIRED = 'expired'
 
 
-class EvalStatus(StrEnum):
-    """EvalStatus data type class."""
+class ScoreStatus(StrEnum):
+    """ScoreStatus data type class."""
 
     UNKNOWN = 'UNKNOWN'
     PASS = 'PASS'
@@ -335,7 +335,7 @@ class Score(GenkitModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     id: str | None = None
     score: bool | float | str | None = Field(default=None)
-    status: EvalStatus | None = None
+    status: ScoreStatus | None = None
     error: str | None = None
     details: ScoreDetails | None = None
 

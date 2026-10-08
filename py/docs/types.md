@@ -138,7 +138,7 @@ Types exported from genkit, genkit.model, genkit.embedder, genkit.plugin_api, ge
 
 ::: genkit.evaluator.ScoreDetails
 
-::: genkit.evaluator.EvalStatus
+::: genkit.evaluator.ScoreStatus
 
 ::: genkit.evaluator.EvaluatorRef
 

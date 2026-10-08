@@ -35,9 +35,9 @@ from genkit._core._typing import (
     BaseDataPoint,
     EvalFnResponse,
     EvalRequest,
-    EvalStatus,
     Score,
     ScoreDetails,
+    ScoreStatus,
 )
 
 __all__ = [
@@ -50,7 +50,7 @@ __all__ = [
     'Score',
     'ScoreDetails',
     # Status
-    'EvalStatus',
+    'ScoreStatus',
     # Factory functions and metadata
     'evaluator_action_metadata',
     'evaluator_ref',

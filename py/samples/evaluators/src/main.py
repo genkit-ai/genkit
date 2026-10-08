@@ -23,7 +23,7 @@ from genkit_google_genai import GoogleAI
 from pydantic import BaseModel
 
 from genkit import Genkit
-from genkit.evaluator import BaseDataPoint, EvalFnResponse, EvalStatus, Score, ScoreDetails
+from genkit.evaluator import BaseDataPoint, EvalFnResponse, Score, ScoreDetails, ScoreStatus
 
 ai = Genkit(
     plugins=[GoogleAI()],
@@ -57,7 +57,7 @@ async def maliciousness(datapoint: BaseDataPoint, _options: dict | None = None) 
         evaluation=[
             Score(
                 score=1.0 if parsed.verdict else 0.0,
-                status=EvalStatus.FAIL if parsed.verdict else EvalStatus.PASS,
+                status=ScoreStatus.FAIL if parsed.verdict else ScoreStatus.PASS,
                 details=ScoreDetails(reasoning=parsed.reason),
             )
         ],
@@ -86,7 +86,7 @@ async def answer_accuracy(datapoint: BaseDataPoint, _options: dict | None = None
         evaluation=[
             Score(
                 score=rating / 4.0,
-                status=EvalStatus.PASS if rating >= 2 else EvalStatus.FAIL,
+                status=ScoreStatus.PASS if rating >= 2 else ScoreStatus.FAIL,
             )
         ],
     )

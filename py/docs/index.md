@@ -161,7 +161,7 @@
 
 ::: genkit.evaluator.ScoreDetails
 
-::: genkit.evaluator.EvalStatus
+::: genkit.evaluator.ScoreStatus
 
 ::: genkit.evaluator.evaluator_action_metadata
 

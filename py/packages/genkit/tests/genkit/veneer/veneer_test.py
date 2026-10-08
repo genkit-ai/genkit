@@ -40,7 +40,7 @@ from genkit._core._typing import (
     ToolRequest,
     ToolResponse,
 )
-from genkit.evaluator import BaseDataPoint, EvalStatus, EvaluatorRef, ScoreDetails, evaluator_ref
+from genkit.evaluator import BaseDataPoint, EvaluatorRef, ScoreDetails, ScoreStatus, evaluator_ref
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, MiddlewareRef, ModelHookParams
 from genkit.testing import (
     EchoModel,
@@ -1888,7 +1888,7 @@ async def test_evaluate_row_evaluation_is_the_evaluators_score_list(
 
 @pytest.mark.asyncio
 async def test_evaluator_that_raises_reports_eval_status_fail_with_error(setup_test: SetupFixture) -> None:
-    """A row whose evaluator raises comes back as one EvalStatus.FAIL score with the error, and the next row runs."""
+    """A row whose evaluator raises comes back as one ScoreStatus.FAIL score with the error, and the next row runs."""
     ai, *_ = setup_test
 
     async def my_eval_fn(datapoint: BaseDataPoint, options: object | None) -> EvalFnResponse:
@@ -1903,7 +1903,7 @@ async def test_evaluator_that_raises_reports_eval_status_fail_with_error(setup_t
     assert [row.test_case_id for row in results] == ['case1', 'case2']
     assert len(results[0].evaluation) == 1
     failed = results[0].evaluation[0]
-    assert failed.status == EvalStatus.FAIL
+    assert failed.status == ScoreStatus.FAIL
     assert failed.error is not None and 'case1' in failed.error and 'row boom' in failed.error
     assert failed.model_dump(by_alias=True, exclude_none=True)['status'] == 'FAIL'
     assert [score.score for score in results[1].evaluation] == [True]
@@ -1913,15 +1913,15 @@ async def test_evaluator_that_raises_reports_eval_status_fail_with_error(setup_t
 async def test_evaluate_score_with_eval_status_pass_and_score_details_sends_pass_and_reasoning(
     setup_test: SetupFixture,
 ) -> None:
-    """Score(status=EvalStatus.PASS, details=ScoreDetails(reasoning=...)) comes back as 'PASS' plus that reasoning."""
+    """Score(status=ScoreStatus.PASS, details=ScoreDetails(reasoning=...)) comes back as 'PASS' plus that reasoning."""
     ai, *_ = setup_test
-    score = Score(score=1.0, status=EvalStatus.PASS, details=ScoreDetails(reasoning='matches the reference'))
+    score = Score(score=1.0, status=ScoreStatus.PASS, details=ScoreDetails(reasoning='matches the reference'))
     _define_scoring_evaluator(ai, 'pass_eval', [score])
 
     results = await ai.evaluate(evaluator='pass_eval', dataset=_one_row())
 
     returned = results[0].evaluation[0]
-    assert returned.status == EvalStatus.PASS
+    assert returned.status == ScoreStatus.PASS
     assert returned.details == ScoreDetails(reasoning='matches the reference')
     assert results[0].model_dump(by_alias=True, exclude_none=True)['evaluation'] == [
         {'score': 1.0, 'status': 'PASS', 'details': {'reasoning': 'matches the reference'}},
@@ -1930,17 +1930,17 @@ async def test_evaluate_score_with_eval_status_pass_and_score_details_sends_pass
 
 @pytest.mark.asyncio
 async def test_evaluate_score_with_eval_status_fail_and_unknown_sends_same_strings(setup_test: SetupFixture) -> None:
-    """EvalStatus.FAIL and EvalStatus.UNKNOWN on a score come back as the strings 'FAIL' and 'UNKNOWN'."""
+    """ScoreStatus.FAIL and ScoreStatus.UNKNOWN on a score come back as the strings 'FAIL' and 'UNKNOWN'."""
     ai, *_ = setup_test
     _define_scoring_evaluator(
         ai,
         'mixed_eval',
-        [Score(id='a', status=EvalStatus.FAIL), Score(id='b', status=EvalStatus.UNKNOWN)],
+        [Score(id='a', status=ScoreStatus.FAIL), Score(id='b', status=ScoreStatus.UNKNOWN)],
     )
 
     results = await ai.evaluate(evaluator='mixed_eval', dataset=_one_row())
 
-    assert [score.status for score in results[0].evaluation] == [EvalStatus.FAIL, EvalStatus.UNKNOWN]
+    assert [score.status for score in results[0].evaluation] == [ScoreStatus.FAIL, ScoreStatus.UNKNOWN]
     assert results[0].model_dump(by_alias=True, exclude_none=True)['evaluation'] == [
         {'id': 'a', 'status': 'FAIL'},
         {'id': 'b', 'status': 'UNKNOWN'},
