@@ -3,7 +3,7 @@
 Amazon Bedrock plugin for Genkit Python. Provides text generation with
 Bedrock-hosted models (Anthropic Claude, Amazon Nova, Meta Llama, Mistral,
 Cohere, and others) through the Bedrock Converse and ConverseStream APIs, and
-embeddings, image generation, and reranking through InvokeModel.
+embeddings and image generation through InvokeModel.
 
 > **Building with a coding agent? Install the Genkit Python skill first.**
 >
@@ -57,8 +57,8 @@ The minimal policy covering everything this plugin does:
 
 Converse is authorized by `bedrock:InvokeModel` and ConverseStream by
 `bedrock:InvokeModelWithResponseStream`; there is no separate Converse action to
-grant. Embedding, image generation and reranking all go through InvokeModel, so
-they need only the first.
+grant. Embedding and image generation go through InvokeModel, so they need only
+the first.
 
 The inference-profile resource is the part that is easy to leave out.
 Cross-region profile IDs such as `us.anthropic.claude-sonnet-4-5-20250929-v1:0`
@@ -146,8 +146,8 @@ generation end to end, retries included, and is on by default at 3600s; pass
 `None` to remove it and leave only the socket timeouts. When the deadline fires
 the caller gets a `DEADLINE_EXCEEDED` error, though the boto3 call itself cannot
 be aborted and its worker thread runs until the socket timeouts end it.
-Streaming generations, embeddings, image generation and reranking are bounded
-by the socket timeouts alone.
+Streaming generations, embeddings and image generation are bounded by the
+socket timeouts alone.
 
 `max_pool_connections` falls back to 50 rather than botocore's 10 so the pool is
 never the bottleneck; concurrency is bounded first by the event loop's default
@@ -362,66 +362,6 @@ request shape with Nova Canvas. The legacy Stable Diffusion XL schema
 and are out of scope. Nova Canvas may return fewer images than
 `numberOfImages` asked for; content-filtered images are dropped
 silently.
-
-## Reranking
-
-Reranking scores documents against a query, so a retrieval step can return its
-hits in relevance order. It is a method on the plugin instance rather than a
-Genkit action, so keep a reference to the `Bedrock` you pass to `Genkit`:
-
-```python
-from genkit import Document, Genkit
-from genkit_amazon_bedrock import Bedrock, BedrockRerankOptions
-
-bedrock = Bedrock(region='us-east-1')
-ai = Genkit(plugins=[bedrock])
-
-response = await bedrock.rerank(
-    'cohere.rerank-v3-5:0',
-    query='How do I configure authentication for Bedrock?',
-    documents=[
-        Document.from_text('Configure AWS credentials with environment variables or AWS SSO.'),
-        Document.from_text('Nova Canvas returns generated images as base64-encoded PNG data.'),
-        Document.from_text('Model access is granted per account and region in the Bedrock console.'),
-    ],
-    options=BedrockRerankOptions(top_n=2),
-)
-
-for document in response.documents:
-    print(document.metadata.score, document.content[0].text)
-```
-
-Genkit Python has no reranker primitive: there is no reranker action kind, and
-the request and response types are not generated, so there is nothing to
-register an action against. The types this plugin exports
-(`BedrockRerankOptions`, `RankedDocumentData`, `RankedDocumentMetadata`,
-`RerankerRequest`, `RerankerResponse`) mirror the schema types by the same
-names.
-
-Notes:
-
-- `top_n` (`topN` when the options are passed as a dict) is clamped down to the
-  number of documents sent, and `<= 0` or unset means all of them.
-- Results arrive in the service's descending-relevance order and are neither
-  re-sorted nor truncated client-side.
-- A ranked document carries the input document's content verbatim and fresh
-  `{score}` metadata. The input document's own metadata is not carried through.
-- Rerank models have no Converse path, so they never resolve as chat models.
-  Listing one in `models=` is ignored; pass the ID to `rerank()` instead.
-- Only `bedrock:InvokeModel` is required. `bedrock:Rerank` is not: that
-  permission belongs to the separate Bedrock Agent Runtime `Rerank` API, which
-  this plugin does not call.
-
-Which rerank models a region offers changes; check the Bedrock console.
-The two families take different bodies, so the request is built from the
-model ID. Both send `query`, `documents` and `top_n`; only Cohere takes
-`api_version`, whose schema requires the key, while the Amazon schema
-rejects any body carrying it. An ID matching neither family gets the
-Cohere body, that being the only shape AWS documents for InvokeModel
-reranking.
-
-Any model ID is passed to InvokeModel verbatim, so inference profiles
-and ARNs work too.
 
 ## Troubleshooting
 
