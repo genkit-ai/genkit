@@ -174,6 +174,16 @@ def test_programmatic_port_is_bound_exactly() -> None:
             Genkit(reflection_server_spec=ServerSpec(scheme='http', host='127.0.0.1', port=port))
 
 
+def test_programmatic_port_zero_lets_the_os_pick() -> None:
+    """ServerSpec(port=0) binds an OS-assigned port, like socket.bind and GENKIT_REFLECTION_PORT=0."""
+    with mock.patch.dict(os.environ, {GENKIT_ENV: GenkitEnvironment.DEV}, clear=True):
+        ai = Genkit(reflection_server_spec=ServerSpec(scheme='http', host='127.0.0.1', port=0))
+        assert _wait_and_get(ai, '/api/__health').status_code == 200
+        spec = ai._reflection_server_spec  # pyright: ignore[reportPrivateUsage]
+        assert spec is not None
+        assert spec.port != 0
+
+
 @pytest.mark.parametrize('manager_closes', [True, False], ids=['manager-closes', 'manager-keeps-open'])
 def test_run_main_returns_when_the_cli_rejects_the_runtime(manager_closes: bool) -> None:
     """A -32001 register rejection stops reflection, and run_main returns instead of hanging.

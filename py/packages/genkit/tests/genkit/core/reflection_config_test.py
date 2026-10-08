@@ -21,7 +21,6 @@ import pytest
 from genkit._core._reflection_config import (
     DEFAULT_REFLECTION_HOST,
     DEFAULT_REFLECTION_PORT,
-    REFLECTION_PORT_AUTO,
     advertised_reflection_host,
     is_loopback_host,
     reflection_enabled,
@@ -45,7 +44,7 @@ def test_enabled_false_beats_everything_even_dev() -> None:
         'GENKIT_REFLECTION_PORT': '3100',
         'GENKIT_REFLECTION_V2_SERVER': 'ws://127.0.0.1:3200',
     })
-    assert config.mode == 'disabled'
+    assert config.mode == 'off'
     assert not config.enabled
 
 
@@ -133,23 +132,23 @@ def test_programmatic_port_is_pinned() -> None:
     assert (config.port, config.pinned) == (9999, True)
 
 
-@pytest.mark.parametrize('port', [None, 0])
-def test_unset_programmatic_port_probes_from_3100(port: int | None) -> None:
-    config = resolve_reflection_config({'GENKIT_ENV': 'dev'}, port=port)
+def test_unset_programmatic_port_probes_from_3100() -> None:
+    config = resolve_reflection_config({'GENKIT_ENV': 'dev'}, port=None)
     assert (config.port, config.pinned) == (DEFAULT_REFLECTION_PORT, False)
 
 
-def test_programmatic_auto_matches_env_zero() -> None:
-    auto = resolve_reflection_config({'GENKIT_ENV': 'dev'}, port=REFLECTION_PORT_AUTO)
+def test_programmatic_zero_matches_env_zero() -> None:
+    # 0 lets the OS pick, as with socket.bind and GENKIT_REFLECTION_PORT=0.
+    option_zero = resolve_reflection_config({'GENKIT_ENV': 'dev'}, port=0)
     env_zero = resolve_reflection_config({'GENKIT_ENV': 'dev', 'GENKIT_REFLECTION_PORT': '0'})
-    assert (auto.port, auto.pinned) == (env_zero.port, env_zero.pinned) == (0, True)
+    assert (option_zero.port, option_zero.pinned) == (env_zero.port, env_zero.pinned) == (0, True)
 
 
 def test_programmatic_port_does_not_turn_it_on() -> None:
     assert resolve_reflection_config({}, port=9999).mode == 'off'
 
 
-@pytest.mark.parametrize('port', [-2, 70000])
+@pytest.mark.parametrize('port', [-1, 70000, True])
 def test_invalid_programmatic_port_raises_even_when_off(port: int) -> None:
     with pytest.raises(ValueError, match='reflection port'):
         resolve_reflection_config({}, port=port)
@@ -224,12 +223,24 @@ def test_invalid_port_raises_rather_than_falling_back(value: str) -> None:
         resolve_reflection_config({'GENKIT_ENV': 'dev', 'GENKIT_REFLECTION_PORT': value})
 
 
-@pytest.mark.parametrize('host', ['127.0.0.1', '127.1.2.3', 'localhost', '::1', '[::1]'])
+@pytest.mark.parametrize('host', ['127.0.0.1', '127.1.2.3', 'localhost', '::1', '[::1]', '0:0:0:0:0:0:0:1'])
 def test_loopback_hosts(host: str) -> None:
     assert is_loopback_host(host)
 
 
-@pytest.mark.parametrize('host', [ALL_INTERFACES, '192.168.1.5', '10.0.0.1', 'example.com'])
+@pytest.mark.parametrize(
+    'host',
+    [
+        ALL_INTERFACES,
+        '::',
+        '192.168.1.5',
+        '10.0.0.1',
+        'example.com',
+        # Hostnames that merely start with "127." may resolve anywhere.
+        '127.internal.example',
+        '127.0.0.1.nip.io',
+    ],
+)
 def test_routable_hosts(host: str) -> None:
     assert not is_loopback_host(host)
 

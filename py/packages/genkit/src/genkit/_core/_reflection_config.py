@@ -22,6 +22,7 @@ its own switches, so it can run without the rest of the dev behavior.
 """
 
 import hmac
+import ipaddress
 import os
 from dataclasses import dataclass
 from hashlib import sha256
@@ -31,7 +32,6 @@ __all__ = [
     'DEFAULT_REFLECTION_HOST',
     'DEFAULT_REFLECTION_PORT',
     'REFLECTION_AUTH_ERROR_CODE',
-    'REFLECTION_PORT_AUTO',
     'REFLECTION_SECRET_ENV',
     'REFLECTION_SECRET_HEADER',
     'ReflectionConfig',
@@ -54,11 +54,6 @@ DEFAULT_REFLECTION_HOST = '127.0.0.1'
 #: First port tried when none is pinned.
 DEFAULT_REFLECTION_PORT = 3100
 
-#: Programmatic port meaning "let the OS pick". Code cannot use 0 for this (it
-#: reads as unset); the environment spells the same thing
-#: ``GENKIT_REFLECTION_PORT=0``.
-REFLECTION_PORT_AUTO = -1
-
 #: JSON-RPC code the CLI returns when a v2 register fails auth. Terminal: the
 #: secret will not change, so a runtime that sees it must stop reconnecting.
 REFLECTION_AUTH_ERROR_CODE = -32001
@@ -68,13 +63,12 @@ REFLECTION_AUTH_ERROR_CODE = -32001
 class ReflectionConfig:
     """Resolved reflection API configuration.
 
-    ``mode`` is ``disabled`` when explicitly switched off with
-    ``GENKIT_REFLECTION_ENABLED=false`` (honoured everywhere), ``off`` when
-    nothing turned it on, ``v1`` when listening, and ``v2`` when dialing out to
-    the CLI.
+    ``mode`` is ``off`` when nothing turned it on or
+    ``GENKIT_REFLECTION_ENABLED=false`` turned it off, ``v1`` when listening,
+    and ``v2`` when dialing out to the CLI.
     """
 
-    mode: Literal['disabled', 'off', 'v1', 'v2']
+    mode: Literal['off', 'v1', 'v2']
     v2_url: str | None = None
     host: str = DEFAULT_REFLECTION_HOST
     port: int = DEFAULT_REFLECTION_PORT
@@ -85,7 +79,7 @@ class ReflectionConfig:
     @property
     def enabled(self) -> bool:
         """Whether a server should run at all."""
-        return self.mode in ('v1', 'v2')
+        return self.mode != 'off'
 
 
 def _parse_port(raw: str | None) -> int | None:
@@ -119,17 +113,18 @@ def _parse_enabled(raw: str | None) -> bool | None:
 def _resolve_port(env_port: int | None, port: int | None) -> tuple[int, bool]:
     """Resolve ``(port, pinned)``. A chosen port is exact; only an unchosen one probes.
 
+    ``None`` is unset; ``0`` lets the OS pick, as with ``socket.bind``.
+
     Raises:
-        ValueError: If ``port`` is not ``None``, ``0``, ``-1`` or 1..65535.
+        ValueError: If ``port`` is not ``None`` or an integer in 0..65535.
     """
     if env_port is not None:
         return env_port, True
-    if not port:
+    if port is None:
         return DEFAULT_REFLECTION_PORT, False
-    if port == REFLECTION_PORT_AUTO:
-        return 0, True
-    if port < 1 or port > 65535:
-        raise ValueError(f'reflection port must be -1 (OS-assigned) or an integer between 1 and 65535, got {port}')
+    # bool is an int subclass; True would otherwise pin port 1.
+    if isinstance(port, bool) or not isinstance(port, int) or port < 0 or port > 65535:
+        raise ValueError(f'reflection port must be an integer between 0 and 65535, got {port!r}')
     return port, True
 
 
@@ -157,10 +152,10 @@ def resolve_reflection_config(
     Args:
         env: Environment to read. Defaults to ``os.environ``.
         port: Programmatic port, used only when the environment pins none.
-            Bound exactly; ``None`` or ``0`` means unset (probe from 3100) and
-            ``REFLECTION_PORT_AUTO`` (-1) lets the OS pick, the same as
-            ``GENKIT_REFLECTION_PORT=0``. It does not turn the server on, and
-            is validated even when unused so a bad value fails early.
+            Bound exactly; ``None`` means unset (probe from 3100) and ``0``
+            lets the OS pick, the same as ``GENKIT_REFLECTION_PORT=0``. It does
+            not turn the server on, and is validated even when unused so a bad
+            value fails early.
         host: Programmatic interface, used only when ``GENKIT_REFLECTION_HOST``
             is unset. It does not turn the server on.
 
@@ -176,7 +171,7 @@ def resolve_reflection_config(
     option_port, option_pinned = _resolve_port(None, port)
     enabled = _parse_enabled(environ.get('GENKIT_REFLECTION_ENABLED'))
     if enabled is False:
-        return ReflectionConfig(mode='disabled')
+        return ReflectionConfig(mode='off')
     if enabled is None and environ.get('GENKIT_ENV') != 'dev':
         return ReflectionConfig(mode='off')
 
@@ -222,8 +217,18 @@ def advertised_reflection_host(host: str) -> str:
 
 
 def is_loopback_host(host: str) -> bool:
-    """Whether a host is unreachable from other machines."""
-    return host in ('localhost', '::1', '[::1]') or host.startswith('127.')
+    """Whether a host is unreachable from other machines.
+
+    Only ``localhost`` and literal loopback IPs count (any spelling of ``::1``,
+    dotted-quad ``127.x``); a hostname like ``127.internal.example`` may
+    resolve anywhere.
+    """
+    if host == 'localhost':
+        return True
+    try:
+        return ipaddress.ip_address(host.removeprefix('[').removesuffix(']')).is_loopback
+    except ValueError:
+        return False
 
 
 def secrets_equal(a: str, b: str) -> bool:
