@@ -1588,6 +1588,66 @@ tests:
               - { role: model, content: [{ text: recovered fine }] }
 
   # ---------------------------------------------------------------------------
+  # Rejected completion
+  # ---------------------------------------------------------------------------
+  - name: a blocked completion commits only the seam and an empty input re-attempts it
+    requires: [resumable-failures]
+    description: >
+      The model finishes but blocks its response. The turn fails, and the
+      snapshot holds the conversation the turn was sent and not the blocked
+      message, so a re-attempt does not send the model its own refusal. An
+      empty input then runs the turn again on those messages.
+    agent: promptAgentWithStore
+    steps:
+      - type: send
+        init: { sessionId: 77777777-7777-4777-8777-777777777777 }
+        inputs:
+          - message: { role: user, content: [{ text: say something risky }] }
+        modelResponses:
+          - message: { role: model, content: [{ text: I cannot help with that }] }
+            finishReason: blocked
+            finishMessage: safety
+        expectOutput:
+          finishReason: failed
+          hasSnapshotId: true
+          errorContains:
+            status: FAILED_PRECONDITION
+        captureSnapshotId: snap1
+
+      - type: getSnapshotData
+        snapshotId: '{{snap1}}'
+        expectSnapshot:
+          status: failed
+          finishReason: failed
+          messageCount: 1
+          stateContains:
+            messages:
+              - { role: user, content: [{ text: say something risky }] }
+
+      - type: send
+        init: { sessionId: 77777777-7777-4777-8777-777777777777 }
+        inputs:
+          - {}
+        modelResponses:
+          - message: { role: model, content: [{ text: here is a safe answer }] }
+            finishReason: stop
+        expectOutput:
+          message: { role: model, content: [{ text: here is a safe answer }] }
+          finishReason: stop
+        captureSnapshotId: snap2
+
+      - type: getSnapshotData
+        snapshotId: '{{snap2}}'
+        expectSnapshot:
+          parentId: '{{snap1}}'
+          status: completed
+          messageCount: 2
+          stateContains:
+            messages:
+              - { role: user, content: [{ text: say something risky }] }
+              - { role: model, content: [{ text: here is a safe answer }] }
+
+  # ---------------------------------------------------------------------------
   # The client decides
   # ---------------------------------------------------------------------------
   - name: a failed snapshot accepts a new message like any other resume point
