@@ -44,6 +44,7 @@ from genkit._core._model import (
     ModelResponse,
     ModelResponseChunk,
     config_type_path,
+    declared_config_type,
     get_basic_usage_stats,
     reject_config_api_key,
     text_from_content,
@@ -78,6 +79,12 @@ class ResolvedModel:
 def python_config_schema(schema: object) -> type[BaseModel] | None:
     """The class a call's config is checked against, or None for no check."""
     return schema if isinstance(schema, type) and issubclass(schema, BaseModel) else None
+
+
+def annotated_config_class(action: object | None) -> type[BaseModel] | None:
+    """The class on the model function's ``ModelRequest[...]`` annotation, if any."""
+    input_class = getattr(action, 'input_class', None) if action is not None else None
+    return declared_config_type(input_class) if isinstance(input_class, type) else None
 
 
 def ref_defers_to_registered_class(schema: type[BaseModel] | None) -> bool:
@@ -299,8 +306,15 @@ async def resolve_for_generate(
     if resolved.config_schema is not None and not ref_defers_to_registered_class(resolved.config_schema):
         return resolved
     action = await registry.resolve_model(resolved.name)
-    raw = getattr(action, '_config_schema', None) if action is not None else None
-    return replace(resolved, config_schema=python_config_schema(raw))
+    declared = python_config_schema(getattr(action, '_config_schema', None) if action is not None else None)
+    if declared is None:
+        # The model fn's ModelRequest[Cfg] coerces config into Cfg once the
+        # turn starts. Check the merged bag against Cfg here so a value it
+        # can't take raises before the turn, like a config_schema= class does.
+        # A foreign config object is already dumped into the bag, so it
+        # still converts.
+        check_config_dict(config=resolved.config, schema=annotated_config_class(action), model=resolved.name)
+    return replace(resolved, config_schema=declared)
 
 
 def config_schema_at_define(*, model: object | None, registry: Registry) -> tuple[str | None, type[BaseModel] | None]:
