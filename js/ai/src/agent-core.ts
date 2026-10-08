@@ -120,7 +120,9 @@ export interface WaitForSnapshotOptions {
    * cadence at which a wait re-reads a pending snapshot to notice a stale
    * heartbeat or, on a store without change notifications, a settled row;
    * over a transport that cannot wait server-side it is the polling interval.
-   * Defaults to the transport's own cadence.
+   * It has no effect on a transport that waits server-side, such as
+   * `remoteAgent` against a server that mounts the wait action. Defaults to
+   * the transport's own cadence.
    */
   intervalMs?: number;
 }
@@ -366,6 +368,11 @@ export interface AgentTransport {
    * not exist). Optional: a transport that cannot wait server-side omits it,
    * and {@link AgentAPI.waitForSnapshot} / {@link DetachedTask.wait} then poll
    * {@link getSnapshot} instead.
+   *
+   * The server may limit how long one wait holds and answer with a snapshot
+   * that has not settled; the API then waits again. A transport that finds it
+   * cannot wait server-side after all (the server has no wait route) rejects
+   * with an error whose `status` is `UNIMPLEMENTED`, and the API polls.
    */
   waitForSnapshot?(
     snapshotId: string,
@@ -411,10 +418,11 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 
 /**
  * Waits for a snapshot to settle through `transport`: server-side where the
- * transport supports it, otherwise by polling {@link AgentTransport.getSnapshot}
- * every `intervalMs` (default 1s). Resolves `undefined` when the snapshot does
- * not exist, and rejects with the signal's reason when `abortSignal` ends the
- * wait first.
+ * transport supports it, asking again while the server answers with a
+ * snapshot that has not settled, otherwise by polling
+ * {@link AgentTransport.getSnapshot} every `intervalMs` (default 1s).
+ * Resolves `undefined` when the snapshot does not exist, and rejects with the
+ * signal's reason when `abortSignal` ends the wait first.
  */
 async function waitForSnapshotViaTransport<State>(
   transport: AgentTransport,
@@ -422,9 +430,22 @@ async function waitForSnapshotViaTransport<State>(
   opts?: WaitForSnapshotOptions
 ): Promise<SessionSnapshot<State> | undefined> {
   if (transport.waitForSnapshot) {
-    return transport.waitForSnapshot(snapshotId, opts) as Promise<
-      SessionSnapshot<State> | undefined
-    >;
+    try {
+      while (true) {
+        const snap = (await transport.waitForSnapshot(snapshotId, opts)) as
+          | SessionSnapshot<State>
+          | undefined;
+        if (!snap || isSettled(snap)) {
+          return snap;
+        }
+        opts?.abortSignal?.throwIfAborted();
+      }
+    } catch (e) {
+      if ((e as { status?: unknown } | undefined)?.status !== 'UNIMPLEMENTED') {
+        throw e;
+      }
+      // The server cannot wait; poll below.
+    }
   }
   const intervalMs = opts?.intervalMs ?? 1000;
   while (true) {

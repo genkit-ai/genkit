@@ -514,6 +514,69 @@ describe('remoteAgent', () => {
     assert.equal(snap?.error?.message, 'boom');
   });
 
+  it('asks again while the server answers a wait with a snapshot still running', async () => {
+    // The server's wait limit passed with the task still running.
+    mock.onNext(() =>
+      jsonResponse({
+        result: { snapshotId: 'bg-1', createdAt: '2026', status: 'pending' },
+      })
+    );
+    mock.onNext((req) => {
+      assert.equal(req.url, '/api/a/waitForSnapshot');
+      return jsonResponse({
+        result: { snapshotId: 'bg-1', createdAt: '2026', status: 'completed' },
+      });
+    });
+    const agent = remoteAgent({ url: '/api/a' });
+    const snap = await agent.waitForSnapshot('bg-1');
+    assert.equal(snap?.status, 'completed');
+    assert.equal(mock.requests.length, 2);
+  });
+
+  it('polls getSnapshot when the server has no wait route', async () => {
+    mock.onNext(
+      () => new Response('Cannot POST /api/a/waitForSnapshot', { status: 404 })
+    );
+    mock.onNext((req) => {
+      assert.equal(req.url, '/api/a/getSnapshot');
+      return jsonResponse({
+        result: { snapshotId: 'bg-1', createdAt: '2026', status: 'pending' },
+      });
+    });
+    mock.onNext((req) => {
+      assert.equal(req.url, '/api/a/getSnapshot');
+      return jsonResponse({
+        result: { snapshotId: 'bg-1', createdAt: '2026', status: 'completed' },
+      });
+    });
+    const agent = remoteAgent({ url: '/api/a' });
+    const snap = await agent.waitForSnapshot('bg-1', { intervalMs: 1 });
+    assert.equal(snap?.status, 'completed');
+
+    // The missing route is remembered: the next wait polls straight away.
+    mock.onNext((req) => {
+      assert.equal(req.url, '/api/a/getSnapshot');
+      return jsonResponse({
+        result: { snapshotId: 'bg-2', createdAt: '2026', status: 'failed' },
+      });
+    });
+    assert.equal((await agent.waitForSnapshot('bg-2'))?.status, 'failed');
+    assert.equal(mock.requests.length, 4);
+  });
+
+  it("rejects with the wait action's own NOT_FOUND rather than polling", async () => {
+    mock.onNext(
+      () =>
+        new Response(
+          JSON.stringify({ status: 'NOT_FOUND', message: 'no such snapshot' }),
+          { status: 404, headers: { 'Content-Type': 'application/json' } }
+        )
+    );
+    const agent = remoteAgent({ url: '/api/a' });
+    await assert.rejects(agent.waitForSnapshot('nope'), /no such snapshot/);
+    assert.equal(mock.requests.length, 1);
+  });
+
   it('honors a custom waitForSnapshotUrl and forwards the abort signal', async () => {
     mock.onNext((req) => {
       assert.equal(req.url, '/wait-here');
