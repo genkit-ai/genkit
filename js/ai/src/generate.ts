@@ -37,10 +37,10 @@ import {
   resolveInstructions,
 } from './formats/index.js';
 import {
-  errorToThrow,
   generateHelper,
-  partialResponseOf,
+  loopFailureOf,
   shouldInjectFormatInstructions,
+  type LoopRecord,
 } from './generate/action.js';
 import { GenerateResponseChunk } from './generate/chunk.js';
 import {
@@ -296,13 +296,14 @@ export async function toGenerateRequest(
  * it, on `detail.response`.
  *
  * A caller catches one when the model returned a blocked response or none, or
- * when the loop refused to run past `maxTurns`. The loop
- * also builds one for every other failure once the request has resolved,
- * wrapping the cause (available as `cause`) with the conversation the loop
- * completed on `detail.response`; `generate` hands that response back when
- * asked to return failures, and otherwise throws the cause itself, so the
- * wrapper reaches the `generate` action's own callers (the reflection API)
- * rather than application code. See {@link generate} for the contract.
+ * when the loop refused to run past `maxTurns`. At `maxTurns`,
+ * `detail.response` is the round the loop refused to run, the raw last turn:
+ * it ends in tool requests nothing answered, so it is not a conversation to
+ * send again (`throwOnError: false` returns one that is). The `generate`
+ * action (the reflection API) also reports every other failure once the
+ * request has resolved as one, wrapping the cause (available as `cause`)
+ * with the conversation the loop completed on `detail.response`. See
+ * {@link generate} for the contract.
  *
  * Only the failure's classification travels on the wire: {@link toJSON}
  * carries the status, the message, and the response's finish reason, never
@@ -372,12 +373,14 @@ export class GenerationResponseError extends GenkitError {
 }
 
 /**
- * Built by the generate loop when it stopped because the caller stopped it
- * rather than because something broke. The partial response on
- * `detail.response` reports `finishReason` `aborted`. A caller catches one
- * for the `maxTurns` limit, with status `ABORTED`; every other stop reaches a
- * caller as the cancellation or timeout error itself, or, with
- * `throwOnError: false`, as a response that reports `aborted`.
+ * Reports that the generate loop stopped because the caller stopped it rather
+ * than because something broke. A caller catches one for the `maxTurns`
+ * limit, with status `ABORTED` and the round the loop refused to run on
+ * `detail.response`; every other stop reaches a caller as the cancellation or
+ * timeout error itself, or, with `throwOnError: false`, as a response that
+ * reports `aborted`. The `generate` action reports every stop as one, with a
+ * partial response that reports `finishReason` `aborted` on
+ * `detail.response`.
  *
  * The rule reads the request's `abortSignal` and the error's identity, never
  * a status: the loop stopped on the caller's behalf when the signal had fired
@@ -582,8 +585,11 @@ export async function normalizeMiddleware(
  * A failed generation throws by default: a tool's own error, the model's own
  * error, the validation error for structured output that does not match the
  * schema, a {@link GenerationBlockedError} for a blocked response, a
- * {@link GenerationResponseError} for a response without a message or for
- * the `maxTurns` limit, and a middleware hook's own error.
+ * {@link GenerationResponseError} for a response without a message, a
+ * {@link GenerationAbortedError} for the `maxTurns` limit, and a middleware
+ * hook's own error. At `maxTurns`, `detail.response` is the round the loop
+ * refused to run: it ends in tool requests nothing answered, so it is not a
+ * conversation to send again.
  *
  * With `throwOnError: false`, a failure once the request has resolved
  * resolves instead with a {@link GenerateResponse} that reports it. The
@@ -655,6 +661,7 @@ export async function generate<
   maybeRegisterDynamicMiddlewareTools(registry, resolvedMiddleware);
 
   let response: GenerateResponseData;
+  const record: LoopRecord = {};
   try {
     response = await runWithContext(resolvedOptions.context, () =>
       generateHelper(registry, {
@@ -662,17 +669,17 @@ export async function generate<
         middleware: resolvedMiddleware,
         abortSignal: resolvedOptions.abortSignal,
         streamingCallback,
+        record,
       })
     );
   } catch (e) {
-    // The loop wraps a failure with the conversation it completed. A caller
-    // that asked for failures on the response gets that response; any other
-    // gets the error the failure threw on its own.
-    if (resolvedOptions.throwOnError === false) {
-      const partial = partialResponseOf(e, registry);
-      if (partial) return partial as GenerateResponse<z.infer<O>>;
+    // The loop records a failure with the conversation it completed. A
+    // caller that asked for failures on the response gets that response.
+    const failure = loopFailureOf(record, e);
+    if (failure && resolvedOptions.throwOnError === false) {
+      return failure.partial as GenerateResponse<z.infer<O>>;
     }
-    throw errorToThrow(e);
+    throw e;
   }
   const request = await toGenerateRequest(registry, {
     ...resolvedOptions,

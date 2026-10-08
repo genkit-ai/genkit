@@ -37,7 +37,7 @@ import {
   toGenerateRequest,
   type GenerateOptions,
 } from '../../src/generate.js';
-import { generateHelper } from '../../src/generate/action.js';
+import { defineGenerateAction } from '../../src/generate/action.js';
 import { generateMiddleware } from '../../src/generate/middleware.js';
 import {
   defineModel,
@@ -2212,9 +2212,9 @@ describe('generate failures', () => {
 
   describe('on the wire (the generate action)', () => {
     const runAction = async (options: GenerateOptions) =>
-      generateHelper(registry, {
-        rawRequest: await toGenerateActionOptions(registry, options),
-      });
+      defineGenerateAction(registry)(
+        await toGenerateActionOptions(registry, options)
+      );
 
     it('keeps a model plain error text off the error body', async () => {
       defineModel(registry, { name: 'sdkModel' }, async () => {
