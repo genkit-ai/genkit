@@ -1679,8 +1679,16 @@ _OMITTED_UNSPECIFIED = {'HARM_BLOCK_THRESHOLD_UNSPECIFIED', 'THINKING_LEVEL_UNSP
         (_gemini.HarmBlockMethod, genai_types.HarmBlockMethod),
         (_gemini.FunctionCallingMode, genai_types.FunctionCallingConfigMode),
         (_gemini.ThinkingLevel, genai_types.ThinkingLevel),
+        (_gemini.ProminentPeople, genai_types.ProminentPeople),
     ],
-    ids=['HarmCategory', 'HarmBlockThreshold', 'HarmBlockMethod', 'FunctionCallingMode', 'ThinkingLevel'],
+    ids=[
+        'HarmCategory',
+        'HarmBlockThreshold',
+        'HarmBlockMethod',
+        'FunctionCallingMode',
+        'ThinkingLevel',
+        'ProminentPeople',
+    ],
 )
 def test_choice_literal_matches_the_sdk_enum(ours: object, sdk: type[Enum]) -> None:
     """Each choice Literal lists exactly its google-genai enum, so an SDK bump that adds a value fails here."""

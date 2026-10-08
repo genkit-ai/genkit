@@ -49,6 +49,7 @@ from genkit_google_genai import (
     McpServerConfig,
     MultiSpeakerVoiceConfig,
     PrebuiltVoiceConfig,
+    ProminentPeople,
     SafetySetting,
     SpeakerVoiceConfig,
     SpeechConfig,
@@ -226,7 +227,7 @@ def test_gemini_image_config_nested_image() -> None:
             output_mime_type='image/png',
             output_compression_quality=80,
             person_generation='ALLOW_ADULT',
-            prominent_people=genai_types.ProminentPeople.BLOCK_PROMINENT_PEOPLE,
+            prominent_people='BLOCK_PROMINENT_PEOPLE',
             image_output_options=genai_types.ImageConfigImageOutputOptions(mime_type='image/jpeg'),
         ),
     )
@@ -446,6 +447,7 @@ def test_choice_fields_are_closed_literals() -> None:
     assert_type(FunctionCallingConfig().mode, FunctionCallingMode | None)
     assert_type(ImageConfig().aspect_ratio, ImageAspectRatio | None)
     assert_type(ImageConfig().image_size, ImageSize | None)
+    assert_type(ImageConfig().prominent_people, ProminentPeople | None)
     safety = SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='BLOCK_NONE')
     assert_type(safety.category, HarmCategory)
     assert_type(safety.threshold, HarmBlockThreshold)
