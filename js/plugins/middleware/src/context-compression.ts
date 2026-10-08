@@ -464,42 +464,23 @@ function materializeToolPart(part: Part): Part {
     };
   }
 
-  if (ccMeta.truncated && typeof ccMeta.maxChars === 'number') {
-    const limit = ccMeta.maxChars;
-    const outputStr = stringifyOutput(part.toolResponse.output);
-    if (outputStr.length <= limit) {
+  if (
+    (ccMeta.truncated || ccMeta.capped) &&
+    typeof ccMeta.maxChars === 'number'
+  ) {
+    const mode = ccMeta.truncated ? 'truncated' : 'capped';
+    const updatedToolResponse = truncateToolResponse(
+      part.toolResponse,
+      ccMeta.maxChars,
+      mode
+    );
+    if (!updatedToolResponse) {
       return { ...part, metadata: withoutRawOutputFlag(part) };
     }
-    const sliced = sliceCodePointSafe(outputStr, limit);
-    const omitted = outputStr.length - sliced.length;
-    const marker = `\n\n[Truncated ${omitted} characters]`;
     return {
       ...part,
       metadata: withoutRawOutputFlag(part),
-      toolResponse: {
-        ...part.toolResponse,
-        output: sliced + marker,
-      },
-    };
-  }
-
-  if (ccMeta.capped && typeof ccMeta.maxChars === 'number') {
-    const limit = ccMeta.maxChars;
-    const outputStr = stringifyOutput(part.toolResponse.output);
-    if (outputStr.length <= limit) {
-      return { ...part, metadata: withoutRawOutputFlag(part) };
-    }
-    const sliced = sliceCodePointSafe(outputStr, limit);
-    const marker =
-      `\n\n---\n\n[TRUNCATED: Response was ${outputStr.length} chars ` +
-      `but only first ${limit} are shown.]`;
-    return {
-      ...part,
-      metadata: withoutRawOutputFlag(part),
-      toolResponse: {
-        ...part.toolResponse,
-        output: sliced + marker,
-      },
+      toolResponse: updatedToolResponse,
     };
   }
 
@@ -696,6 +677,222 @@ function sliceCodePointSafe(str: string, limit: number): string {
   return str.slice(0, limit);
 }
 
+function formatMediaDescriptor(
+  media: NonNullable<Part['media']>,
+  compact = false
+): string {
+  const isDataUri = media.url.startsWith('data:');
+  const sepIdx = isDataUri ? media.url.search(/[;,]/) : -1;
+  const inferredType =
+    isDataUri && sepIdx > 5 ? media.url.slice(5, sepIdx).trim() : undefined;
+  const contentType = media.contentType || inferredType;
+  if (isDataUri || compact) {
+    return `[media: ${contentType || (isDataUri ? 'data' : 'media')}]`;
+  }
+  return contentType
+    ? `[media: ${contentType} (${media.url})]`
+    : `[media: ${media.url}]`;
+}
+
+function stringifyToolContentPart(part: Part): string {
+  if (typeof part.text === 'string') return part.text;
+  if (typeof part.reasoning === 'string') return part.reasoning;
+  if ('data' in part && part.data !== undefined) {
+    return stringifyOutput(part.data);
+  }
+  if ('custom' in part && part.custom !== undefined) {
+    return stringifyOutput(part.custom);
+  }
+  if (part.resource) return stringifyOutput(part.resource);
+  if (part.media) return formatMediaDescriptor(part.media);
+  return stringifyOutput(part);
+}
+
+function estimatePartChars(p: Part): number {
+  if (typeof p.text === 'string') return p.text.length;
+  if (typeof p.reasoning === 'string') return p.reasoning.length;
+  if ('data' in p && p.data !== undefined) {
+    return stringifyOutput(p.data).length;
+  }
+  if ('custom' in p && p.custom !== undefined) {
+    return stringifyOutput(p.custom).length;
+  }
+  if (p.resource) return stringifyOutput(p.resource).length;
+  if (p.media?.url) {
+    // Use a fixed character approximation for inline base64 data URIs
+    // to reflect fixed image token billing rather than raw string length.
+    return p.media.url.startsWith('data:')
+      ? DATA_URI_APPROX_CHARS
+      : p.media.url.length;
+  }
+  if (p.toolRequest) return stringifyOutput(p.toolRequest).length;
+  if (p.toolResponse) {
+    if (!p.toolResponse.content?.length) {
+      return stringifyOutput(p.toolResponse).length;
+    }
+    const { content, ...restToolResponse } = p.toolResponse;
+    return (
+      stringifyOutput(restToolResponse).length +
+      content.reduce((cSum, cPart) => cSum + estimatePartChars(cPart), 0)
+    );
+  }
+  return 0;
+}
+
+function getRawToolContentPartCharLength(part: Part): number {
+  if (part.media?.url) {
+    return part.media.url.length;
+  }
+  return estimatePartChars(part);
+}
+
+function getToolResponseCharLength(
+  toolResponse: NonNullable<Part['toolResponse']>
+): number {
+  if (!toolResponse.content?.length) {
+    return stringifyOutput(toolResponse.output).length;
+  }
+  const outputLen =
+    toolResponse.output !== undefined
+      ? stringifyOutput(toolResponse.output).length
+      : 0;
+  return (
+    outputLen +
+    toolResponse.content.reduce(
+      (sum, cPart) => sum + estimatePartChars(cPart),
+      0
+    )
+  );
+}
+
+function formatToolTruncationMarker(
+  mode: 'truncated' | 'capped',
+  totalChars: number,
+  keptChars: number,
+  limit: number
+): string {
+  if (mode === 'truncated') {
+    const omitted = totalChars - keptChars;
+    return `\n\n[Truncated ${omitted} characters]`;
+  }
+  return (
+    `\n\n---\n\n[TRUNCATED: Response was ${totalChars} chars ` +
+    `but only first ${limit} are shown.]`
+  );
+}
+
+function truncateToolResponse(
+  toolResponse: NonNullable<Part['toolResponse']>,
+  limit: number,
+  mode: 'truncated' | 'capped'
+): NonNullable<Part['toolResponse']> | null {
+  if (!toolResponse.content?.length) {
+    const outputStr = stringifyOutput(toolResponse.output);
+    if (outputStr.length <= limit) return null;
+    const sliced = sliceCodePointSafe(outputStr, limit);
+    return {
+      ...toolResponse,
+      output:
+        sliced +
+        formatToolTruncationMarker(
+          mode,
+          outputStr.length,
+          sliced.length,
+          limit
+        ),
+    };
+  }
+
+  const hasOutput = toolResponse.output !== undefined;
+  const outputStr = hasOutput ? stringifyOutput(toolResponse.output) : '';
+  const contentLengths = toolResponse.content.map(estimatePartChars);
+  const contentTotalLen = contentLengths.reduce((sum, len) => sum + len, 0);
+  const totalChars = outputStr.length + contentTotalLen;
+
+  if (totalChars <= limit) return null;
+
+  const rawPartLengths = toolResponse.content.map(
+    getRawToolContentPartCharLength
+  );
+  const rawTotalChars =
+    outputStr.length + rawPartLengths.reduce((sum, len) => sum + len, 0);
+
+  const { content, ...restToolResponse } = toolResponse;
+  if (hasOutput && (outputStr.length > limit || contentTotalLen === 0)) {
+    const sliced = sliceCodePointSafe(outputStr, limit);
+    return {
+      ...restToolResponse,
+      output:
+        sliced +
+        formatToolTruncationMarker(mode, rawTotalChars, sliced.length, limit),
+    };
+  }
+
+  let remaining = limit - outputStr.length;
+  let keptChars = outputStr.length;
+  const outputSegments: string[] = outputStr ? [outputStr] : [];
+  const keptContent: Part[] = [];
+
+  for (let i = 0; i < content.length; i++) {
+    const cPart = content[i];
+    const partLen = contentLengths[i];
+    const rawPartLen = rawPartLengths[i];
+    const isTextOrReasoning =
+      typeof cPart.text === 'string' || typeof cPart.reasoning === 'string';
+    const textVal = isTextOrReasoning
+      ? typeof cPart.text === 'string'
+        ? cPart.text
+        : cPart.reasoning!
+      : undefined;
+    const sepCost = textVal && outputSegments.length > 0 ? 2 : 0;
+
+    if (partLen + sepCost <= remaining) {
+      if (isTextOrReasoning) {
+        if (textVal) {
+          outputSegments.push(textVal);
+          remaining -= partLen + sepCost;
+        }
+      } else {
+        keptContent.push(cPart);
+        remaining -= partLen;
+      }
+      keptChars += rawPartLen;
+      continue;
+    }
+
+    const overflowSepCost = outputSegments.length > 0 ? 2 : 0;
+    if (cPart.media?.url) {
+      const descriptor = formatMediaDescriptor(cPart.media, true);
+      if (overflowSepCost + descriptor.length <= remaining) {
+        outputSegments.push(descriptor);
+        keptChars += descriptor.length;
+      }
+      break;
+    }
+
+    const sliceBudget = Math.max(0, remaining - overflowSepCost);
+    const sliced = sliceCodePointSafe(
+      stringifyToolContentPart(cPart),
+      sliceBudget
+    );
+    keptChars += sliced.length;
+    if (sliced) outputSegments.push(sliced);
+    break;
+  }
+
+  const marker = formatToolTruncationMarker(
+    mode,
+    rawTotalChars,
+    keptChars,
+    limit
+  );
+  return {
+    ...restToolResponse,
+    output: outputSegments.join('\n\n') + marker,
+    ...(keptContent.length > 0 ? { content: keptContent } : {}),
+  };
+}
+
 /**
  * Cap the rendered conversation handed to the summarizer model so an
  * over-budget context does not overflow the summarizer's own context window.
@@ -765,19 +962,7 @@ function withCompressionMetadata(
 function renderPart(p: Part): string {
   if (p.text) return p.text;
   if (p.reasoning) return `[Reasoning: ${p.reasoning}]`;
-  if (p.media) {
-    const isDataUri = p.media.url.startsWith('data:');
-    const sepIdx = isDataUri ? p.media.url.search(/[;,]/) : -1;
-    const inferredType =
-      isDataUri && sepIdx > 5 ? p.media.url.slice(5, sepIdx).trim() : undefined;
-    const contentType = p.media.contentType || inferredType;
-    if (isDataUri) {
-      return `[media: ${contentType || 'data'}]`;
-    }
-    return contentType
-      ? `[media: ${contentType} (${p.media.url})]`
-      : `[media: ${p.media.url}]`;
-  }
+  if (p.media) return formatMediaDescriptor(p.media);
   if (p.toolRequest) {
     return `[Tool call: ${p.toolRequest.name}(${stringifyOutput(p.toolRequest.input)})]`;
   }
@@ -992,33 +1177,11 @@ function adjustForOvershoot(
  * Estimate the total character count across all message content.
  */
 function estimateMessageChars(messages: MessageData[]): number {
-  return messages.reduce((sum, m) => {
-    return (
-      sum +
-      m.content.reduce((pSum, p) => {
-        if (p.text) return pSum + p.text.length;
-        if (p.reasoning) return pSum + p.reasoning.length;
-        if ('data' in p && p.data !== undefined) {
-          return pSum + stringifyOutput(p.data).length;
-        }
-        if ('custom' in p && p.custom) {
-          return pSum + stringifyOutput(p.custom).length;
-        }
-        if (p.media?.url) {
-          // Use a fixed character approximation for inline base64 data URIs
-          // to reflect fixed image token billing rather than raw string length.
-          const urlLen = p.media.url.startsWith('data:')
-            ? DATA_URI_APPROX_CHARS
-            : p.media.url.length;
-          return pSum + urlLen;
-        }
-        if (p.toolRequest) return pSum + stringifyOutput(p.toolRequest).length;
-        if (p.toolResponse)
-          return pSum + stringifyOutput(p.toolResponse).length;
-        return pSum;
-      }, 0)
-    );
-  }, 0);
+  return messages.reduce(
+    (sum, m) =>
+      sum + m.content.reduce((pSum, p) => pSum + estimatePartChars(p), 0),
+    0
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -1327,47 +1490,31 @@ export const contextCompression: GenerateMiddleware<
             return part;
           }
 
-          const outputStr = stringifyOutput(part.toolResponse.output);
-          if (outputStr.length <= limit) return part;
-
-          const sliced = sliceCodePointSafe(outputStr, limit);
-          const omitted = outputStr.length - sliced.length;
-
           // If truncatable and clamped to toolMaxChars, it's context-compression truncation.
           // Otherwise, it was clamped by maxToolResponseChars (the hard safety cap).
-          if (isTruncatableMsg && limit === toolMaxChars) {
-            const marker = `\n\n[Truncated ${omitted} characters]`;
-            changed = true;
+          const mode =
+            isTruncatableMsg && limit === toolMaxChars ? 'truncated' : 'capped';
+          const updatedToolResponse = truncateToolResponse(
+            part.toolResponse,
+            limit,
+            mode
+          );
+          if (!updatedToolResponse) return part;
+
+          changed = true;
+          if (mode === 'truncated') {
             truncated++;
-            return {
-              ...part,
-              metadata: withCompressionMetadata(part, {
-                truncated: true,
-                maxChars: limit,
-              }),
-              toolResponse: {
-                ...part.toolResponse,
-                output: sliced + marker,
-              },
-            };
           } else {
-            const marker =
-              `\n\n---\n\n[TRUNCATED: Response was ${outputStr.length} chars ` +
-              `but only first ${limit} are shown.]`;
-            changed = true;
             capped++;
-            return {
-              ...part,
-              metadata: withCompressionMetadata(part, {
-                capped: true,
-                maxChars: limit,
-              }),
-              toolResponse: {
-                ...part.toolResponse,
-                output: sliced + marker,
-              },
-            };
           }
+          return {
+            ...part,
+            metadata: withCompressionMetadata(part, {
+              [mode]: true,
+              maxChars: limit,
+            }),
+            toolResponse: updatedToolResponse,
+          };
         });
 
         if (!changed) return msg;
@@ -1843,7 +1990,7 @@ export const contextCompression: GenerateMiddleware<
                   p.toolResponse &&
                   !hasCompressionFlag(p, 'capped') &&
                   !hasCompressionFlag(p, 'truncated') &&
-                  stringifyOutput(p.toolResponse.output).length >
+                  getToolResponseCharLength(p.toolResponse) >
                     maxToolResponseChars
               )
           );
