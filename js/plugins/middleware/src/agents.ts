@@ -1349,6 +1349,20 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
           )
         ).result;
 
+      // For callers that dispatch on where a task stands: the same shaped read
+      // without the state, which the sub-agent's store may then skip loading.
+      const readSnapshotMetadata: SnapshotFetch = async (
+        agent,
+        snapshotId,
+        signal
+      ) =>
+        (
+          await agent.getSnapshotDataAction.run(
+            { snapshotId, metadataOnly: true },
+            { abortSignal: signal }
+          )
+        ).result;
+
       // The companion action holds one request for at most the sub-agent's
       // maxSnapshotWaitMs and then answers with the row as it stands, so the
       // follow asks again until the row settles or the signal ends it.
@@ -1371,15 +1385,16 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
       // that stopped heartbeating leaves a row that is still pending or
       // aborting in the store and reads as expired, and aborting it would overwrite the one
       // signal telling the model the work is gone. A task that already
-      // settled needs no abort at all and is answered from the row alone.
+      // settled needs no abort at all and is answered from a full read of the
+      // row, which carries its result; deciding that takes only the metadata.
       const abortSnapshot: SnapshotFetch = async (
         agent,
         snapshotId,
         signal
       ) => {
-        const current = await readSnapshotOnce(agent, snapshotId, signal);
+        const current = await readSnapshotMetadata(agent, snapshotId, signal);
         if (isSettled(current.status)) {
-          return current;
+          return readSnapshotOnce(agent, snapshotId, signal);
         }
         // A cancelled call must not stop a task on its way out.
         signal?.throwIfAborted();
@@ -1934,7 +1949,9 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
        * Continues a server-managed task from the snapshot behind its handle.
        * The read goes through the sub-agent's companion action, so the
        * runtime's shaping applies: a pending row whose heartbeat went stale
-       * reads as expired here rather than as forever-running.
+       * reads as expired here rather than as forever-running. Every pre-read
+       * on this path is metadata-only: the flow dispatches on status and
+       * finish reason alone, and the run itself loads the state it resumes.
        */
       async function continueFromStore(
         c: Continuation,
@@ -1942,7 +1959,11 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
       ): Promise<DelegationResult> {
         let snapshot: SessionSnapshot;
         try {
-          snapshot = await readSnapshotOnce(c.agent, snapshotId, c.abortSignal);
+          snapshot = await readSnapshotMetadata(
+            c.agent,
+            snapshotId,
+            c.abortSignal
+          );
         } catch (e: unknown) {
           c.abortSignal?.throwIfAborted();
           logger.debug(
@@ -2065,7 +2086,11 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
         }
         let current: SessionSnapshot;
         try {
-          current = await readSnapshotOnce(c.agent, snapshotId, c.abortSignal);
+          current = await readSnapshotMetadata(
+            c.agent,
+            snapshotId,
+            c.abortSignal
+          );
         } catch (e: unknown) {
           c.abortSignal?.throwIfAborted();
           logger.debug(
@@ -2161,7 +2186,7 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
         }
         let parent: SessionSnapshot;
         try {
-          parent = await readSnapshotOnce(c.agent, parentId, c.abortSignal);
+          parent = await readSnapshotMetadata(c.agent, parentId, c.abortSignal);
         } catch (e: unknown) {
           c.abortSignal?.throwIfAborted();
           return refuseRead(
