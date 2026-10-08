@@ -15,22 +15,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-"""Genkit format package. Provides implementation for various formats like json, jsonl, etc."""
+"""Built-in output formats registered on every Genkit instance."""
 
 from genkit._ai._formats._array import ArrayFormat
 from genkit._ai._formats._enum import EnumFormat
 from genkit._ai._formats._json import JsonFormat
 from genkit._ai._formats._jsonl import JsonlFormat
 from genkit._ai._formats._text import TextFormat
-from genkit._ai._formats._types import FormatDef, Formatter
+from genkit._ai._formats._types import FormatDef
 
-
-def package_name() -> str:
-    """Get the fully qualified package name."""
-    return 'genkit._ai._formats'
-
-
-built_in_formats = [
+built_in_formats: list[FormatDef] = [
     ArrayFormat(),
     EnumFormat(),
     JsonFormat(),

@@ -35,7 +35,7 @@ from openai.types import Model
 from openai.types.chat import ChatCompletion
 
 from genkit import Document, Genkit, GenkitError, Message, ModelResponse, Part, Role
-from genkit._ai._formats import built_in_formats
+from genkit._ai._formats._builtin import built_in_formats
 from genkit.embedder import EmbedRequest, EmbedResponse
 from genkit.model import Supports
 from genkit.plugin_api import ActionKind, ActionMetadata, loop_local_client

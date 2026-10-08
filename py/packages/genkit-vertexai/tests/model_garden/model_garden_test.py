@@ -35,7 +35,7 @@ from genkit_vertexai._model_garden._plugin import ModelGardenModel
 from openai.types.chat import ChatCompletion
 
 from genkit import ActionRunContext, Genkit, GenkitError, Message, Part, Role
-from genkit._ai._formats import built_in_formats
+from genkit._ai._formats._builtin import built_in_formats
 from genkit.model import ModelRequest, OutputConfig
 from genkit.plugin_api import ActionKind
 
