@@ -1160,9 +1160,12 @@ class VertexAI(GoogleFamilyRefs, Plugin):
         Returns:
             Action object for the evaluator.
         """
-        try:
-            metric_type = VertexAIEvaluationMetricType(name.upper())
-        except ValueError:
+        # Iterate instead of calling VertexAIEvaluationMetricType(value): on
+        # Python 3.10 StrEnum comes from `strenum`, whose stub types __new__
+        # as returning the base StrEnum, so the constructor loses the subtype.
+        value = name.upper()
+        metric_type = next((m for m in VertexAIEvaluationMetricType if m.value == value), None)
+        if metric_type is None:
             return None
 
         # The name is a real Vertex metric, so "not found" would send people
