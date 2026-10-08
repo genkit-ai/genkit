@@ -24,7 +24,6 @@ from genkit._core._error import (
     ErrorResponseMetadata,
     StatusName,
     from_http_code,
-    get_callable_json,
     mark_provider_error,
     parse_retry_after_ms,
     wrap_http_error,
@@ -60,6 +59,4 @@ __all__ = [
     'to_json_schema',
     # HTTP client
     'get_cached_client',
-    # Error serialization
-    'get_callable_json',
 ]

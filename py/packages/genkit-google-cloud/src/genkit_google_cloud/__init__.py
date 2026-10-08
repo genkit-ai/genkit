@@ -49,17 +49,6 @@ See Also:
 
 from .telemetry import enable_google_cloud_telemetry
 
-
-def package_name() -> str:
-    """Get the package name for the Google Cloud plugin.
-
-    Returns:
-        The fully qualified package name as a string.
-    """
-    return 'genkit_google_cloud'
-
-
 __all__ = [
     'enable_google_cloud_telemetry',
-    'package_name',
 ]

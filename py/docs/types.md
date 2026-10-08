@@ -32,8 +32,6 @@ Types exported from genkit, genkit.model, genkit.embedder, genkit.plugin_api, ge
 
 ::: genkit.BaseDataPoint
 
-::: genkit.EvalFnResponse
-
 ::: genkit.Operation
 
 ::: genkit.tool
@@ -47,8 +45,6 @@ Types exported from genkit, genkit.model, genkit.embedder, genkit.plugin_api, ge
 ::: genkit.response
 
 ::: genkit.MultipartToolResponse
-
-::: genkit.Flow
 
 ::: genkit.ActionRunContext
 

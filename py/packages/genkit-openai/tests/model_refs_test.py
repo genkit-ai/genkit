@@ -20,18 +20,12 @@ from typing import get_args, get_type_hints
 from unittest.mock import MagicMock
 
 import pytest
-from genkit_openai import OpenAI, OpenAIConfig, openai_model
+from genkit_openai import OpenAI, OpenAIConfig
 from genkit_openai._models._model import OpenAIModel
 from genkit_openai._models._model_info import SUPPORTED_OPENAI_MODELS, KnownGpt
 
 from genkit import GenkitError
 from genkit.model import ModelRef
-
-
-def test_openai_model_still_returns_str() -> None:
-    """openai_model stays a string helper, not a ModelRef."""
-    assert openai_model('gpt-4o') == 'openai/gpt-4o'
-    assert isinstance(openai_model('gpt-4o'), str)
 
 
 def test_gpt_model_returns_model_ref() -> None:
@@ -92,7 +86,7 @@ def test_gpt_model_reject_names_the_string_path() -> None:
     assert exc_info.value.status == 'INVALID_ARGUMENT'
     message = str(exc_info.value)
     assert 'an image model' in message
-    assert "openai_model('dall-e-3')" in message
+    assert "'openai/dall-e-3'" in message
 
 
 def test_gpt_model_requires_a_name() -> None:

@@ -21,14 +21,14 @@ and advanced users who need access to the evaluator protocol types.
 
 Example:
     from genkit.evaluator import (
+        EvalFnResponse,
         EvalRequest,
-        evaluator_action_metadata,
+        Score,
     )
 """
 
 from genkit._ai._evaluator import (
     EvaluatorRef,
-    evaluator_action_metadata,
     evaluator_ref,
 )
 from genkit._core._typing import (
@@ -48,8 +48,7 @@ __all__ = [
     'Details',
     # Status
     'EvalStatusEnum',
-    # Factory functions and metadata
-    'evaluator_action_metadata',
+    # Factory functions
     'evaluator_ref',
     # Reference types
     'EvaluatorRef',

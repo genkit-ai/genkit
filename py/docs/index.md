@@ -33,8 +33,6 @@
 
 ::: genkit.BaseDataPoint
 
-::: genkit.EvalFnResponse
-
 ::: genkit.Operation
 
 ::: genkit.tool
@@ -48,8 +46,6 @@
 ::: genkit.response
 
 ::: genkit.MultipartToolResponse
-
-::: genkit.Flow
 
 ::: genkit.ActionRunContext
 
@@ -147,8 +143,6 @@
 
 ::: genkit.plugin_api.get_cached_client
 
-::: genkit.plugin_api.get_callable_json
-
 ::: genkit.plugin_api.is_dev_environment
 
 ## genkit.evaluator
@@ -162,8 +156,6 @@
 ::: genkit.evaluator.Details
 
 ::: genkit.evaluator.EvalStatusEnum
-
-::: genkit.evaluator.evaluator_action_metadata
 
 ::: genkit.evaluator.evaluator_ref
 

@@ -32,7 +32,6 @@ from genkit._core._schema import to_json_schema
 from genkit._core._telemetry._attrs import metadata_key
 from genkit._core._telemetry._instrumentation import SpanContext, run_in_new_span
 from genkit._core._typing import (
-    ActionMetadata,
     BaseDataPoint,
     EvalFnResponse,
     EvalRequest,
@@ -74,20 +73,6 @@ def evaluator_ref(name: str, *, config: dict[str, object] | None = None) -> Eval
     cannot be stored as config.
     """
     return EvaluatorRef(name=name, config=config)
-
-
-def evaluator_action_metadata(
-    name: str,
-    config_schema: type | dict[str, Any] | None = None,
-) -> ActionMetadata:
-    """Create ActionMetadata for an evaluator action."""
-    return ActionMetadata(
-        action_type=ActionKind.EVALUATOR,
-        name=name,
-        input_json_schema=to_json_schema(EvalRequest),
-        output_json_schema=to_json_schema(list[EvalFnResponse]),
-        metadata={'evaluator': {'customOptions': to_json_schema(config_schema) if config_schema else None}},
-    )
 
 
 def _get_func_description(func: Callable[..., Any], description: str | None = None) -> str:
