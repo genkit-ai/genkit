@@ -8,10 +8,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import subprocess  # noqa: S404
 import sys
+import threading
+import time
 from collections.abc import Awaitable, Callable, Generator
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, TypeVar
 
 import pytest
@@ -21,27 +25,32 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from genkit import Genkit
+from genkit import Genkit, get_logger
 from genkit._core._action import Action
 from genkit._core._environment import GENKIT_ENV
 from genkit._core._reflection import create_reflection_asgi_app
 from genkit._core._registry import Registry
+from genkit._core._telemetry._http import (
+    ActiveSpan,
+    DevUIInstrumentation,
+    _parent_span,
+    maybe_inject_dev_instrumentation,
+)
 from genkit._core._telemetry._instrumentation import (
     NoopSpanContext,
-    SpanContext,
-    SpanMetadata,
-    instrumentations,
-    is_instrumented_by,
-    parent_path_context,
-    reset_instrumentation,
-    run_in_new_span,
     set_custom_metadata_attributes,
     set_span_state,
 )
-from genkit._core._telemetry._log_exporter import reset_log_export
-from genkit._core._telemetry.http import GenkitBuiltinInstrumentation
 from genkit.plugin_api import ActionKind
-from genkit.telemetry import configure_instrumentation
+from genkit.telemetry import (
+    DirectHttpInstrumentation,
+    SpanContext,
+    SpanMetadata,
+    configure_instrumentation,
+    is_instrumented_by,
+    reset_instrumentation,
+    run_in_new_span,
+)
 
 T = TypeVar('T')
 
@@ -64,20 +73,16 @@ def _hang_exporter(exporter: InMemorySpanExporter) -> None:
 def _isolate_telemetry(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
     """Each test starts with no providers, unset collector env, and its own tracer."""
     reset_instrumentation()
-    reset_log_export()
     monkeypatch.delenv(GENKIT_ENV, raising=False)
     monkeypatch.delenv('GENKIT_TELEMETRY_SERVER', raising=False)
     monkeypatch.setattr(Genkit, '_start_reflection_background', lambda self: None)
     isolated = TracerProvider()
     monkeypatch.setattr(trace_api, 'get_tracer_provider', lambda: isolated)
     monkeypatch.setattr(trace_api, 'set_tracer_provider', lambda _provider: None)
-    path_token = parent_path_context.set('')
     try:
         yield
     finally:
-        parent_path_context.reset(path_token)
         reset_instrumentation()
-        reset_log_export()
         isolated.shutdown()
 
 
@@ -91,7 +96,7 @@ async def test_a_plain_script_returns_an_answer_and_no_trace_ids() -> None:
     assert result.response == 'Why did the cat cross the road?'
     assert result.trace_id == ''
     assert result.span_id == ''
-    assert not is_instrumented_by(GenkitBuiltinInstrumentation)
+    assert not is_instrumented_by(DirectHttpInstrumentation)
 
 
 @pytest.mark.asyncio
@@ -106,7 +111,7 @@ async def test_genkit_start_gives_the_developer_ui_real_trace_ids(
     action = Action(name='joke', kind=ActionKind.FLOW, fn=_joke)
     result = await action.run()
 
-    assert is_instrumented_by(GenkitBuiltinInstrumentation)
+    assert is_instrumented_by(DirectHttpInstrumentation)
     assert _hex_id(result.trace_id, 32)
     assert _hex_id(result.span_id, 16)
 
@@ -127,9 +132,8 @@ async def test_configuring_a_backend_yourself_in_dev_still_adds_the_ui_poster(
     configure_instrumentation(yours)
     Genkit()
 
-    assert len(instrumentations) == 2
-    assert instrumentations[0] == yours
-    assert isinstance(instrumentations[1], GenkitBuiltinInstrumentation)
+    assert is_instrumented_by(AlreadyOn)
+    assert is_instrumented_by(DirectHttpInstrumentation)
 
 
 @pytest.mark.asyncio
@@ -433,3 +437,170 @@ async def test_dev_collector_nested_actions_share_trace_id(
     assert _hex_id(inner.span_id, 16)
     assert inner.trace_id == outer.trace_id
     assert inner.span_id != outer.span_id
+
+
+def _start_collector() -> tuple[HTTPServer, list[str]]:
+    received: list[str] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            n = int(self.headers.get('Content-Length', '0'))
+            received.append(self.rfile.read(n).decode())
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, format: str, *args: Any) -> None:
+            return
+
+    server = HTTPServer(('127.0.0.1', 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, received
+
+
+def _log_posts_with(posts: list[str], text: str) -> list[str]:
+    return [p for p in list(posts) if 'resourceLogs' in p and text in p]
+
+
+def test_reset_instrumentation_stops_dev_ui_log_export(monkeypatch: pytest.MonkeyPatch) -> None:
+    """After reset_instrumentation(), a get_logger line no longer reaches the Dev UI collector."""
+    server, posts = _start_collector()
+    monkeypatch.setenv(GENKIT_ENV, 'dev')
+    monkeypatch.setenv('GENKIT_TELEMETRY_SERVER', f'http://127.0.0.1:{server.server_address[1]}')
+    try:
+        Genkit()
+        logger = get_logger('reset-test')
+        logger.info('cart looked up before reset')
+        deadline = time.monotonic() + 5
+        while not _log_posts_with(posts, 'cart looked up before reset') and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert _log_posts_with(posts, 'cart looked up before reset')
+
+        reset_instrumentation()
+        logger.info('cart looked up after reset')
+        time.sleep(0.5)
+
+        assert _log_posts_with(posts, 'cart looked up after reset') == []
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def _posted_spans(posts: list[str], name: str) -> list[dict[str, Any]]:
+    found: list[dict[str, Any]] = []
+    for body in list(posts):
+        for resource in json.loads(body).get('resourceSpans', []):
+            for scope in resource['scopeSpans']:
+                found.extend(span for span in scope['spans'] if span['name'] == name)
+    return found
+
+
+def _attr(span: dict[str, Any], key: str) -> object:
+    return next(a['value']['stringValue'] for a in span['attributes'] if a['key'] == key)
+
+
+@pytest.mark.asyncio
+async def test_span_after_reset_starts_a_new_trace(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A span opened after reset_instrumentation() is a root of its own trace, not nested under the open one."""
+    server, posts = _start_collector()
+    monkeypatch.setenv(GENKIT_ENV, 'dev')
+    monkeypatch.setenv('GENKIT_TELEMETRY_SERVER', f'http://127.0.0.1:{server.server_address[1]}')
+    trace_ids: dict[str, str] = {}
+
+    async def after(span: SpanContext) -> None:
+        trace_ids['after'] = span.trace_id
+
+    async def before(span: SpanContext) -> None:
+        trace_ids['before'] = span.trace_id
+        reset_instrumentation()
+        Genkit()
+        await run_in_new_span('after', after)
+
+    try:
+        Genkit()
+        await run_in_new_span('before', before)
+        # disposing the poster waits for its queued spans to land.
+        reset_instrumentation()
+        posted = _posted_spans(posts, 'after')
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert posted
+    assert trace_ids['after'] != trace_ids['before']
+    for span in posted:
+        assert span['traceId'] == trace_ids['after']
+        assert 'parentSpanId' not in span
+        assert _attr(span, 'genkit:path') == '/{after}'
+
+
+def test_builtin_instrumentation_is_detected_when_dev_ui_traces_are_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Under genkit start, is_instrumented_by(DirectHttpInstrumentation) is True."""
+    monkeypatch.setenv(GENKIT_ENV, 'dev')
+    monkeypatch.setenv('GENKIT_TELEMETRY_SERVER', 'http://127.0.0.1:4033')
+    assert not is_instrumented_by(DirectHttpInstrumentation)
+
+    Genkit()
+
+    assert is_instrumented_by(DirectHttpInstrumentation)
+
+
+class _MemorySink:
+    def __init__(self) -> None:
+        self._spans: list[ActiveSpan] = []
+
+    def export_spans(self, spans: list[ActiveSpan], *, resource_attributes: dict[str, object]) -> None:
+        self._spans.extend(spans)
+
+    def flush(self) -> None:
+        return
+
+    def shutdown(self) -> None:
+        return
+
+    def get_finished_spans(self) -> list[ActiveSpan]:
+        by_id: dict[str, ActiveSpan] = {}
+        for span in self._spans:
+            by_id[span.span_id] = span
+        return list(by_id.values())
+
+
+@pytest.mark.asyncio
+async def test_reset_instrumentation_clears_http_parent_so_next_span_is_a_new_root() -> None:
+    """After reset, the next HTTP/action span is not a child of the previous trace."""
+    sink = _MemorySink()
+    configure_instrumentation(DirectHttpInstrumentation(sink))
+
+    async def first(_span: SpanContext) -> str:
+        return 'first'
+
+    await run_in_new_span('first', first)
+    first_span = next(s for s in sink.get_finished_spans() if s.name == 'first')
+    first_trace = first_span.trace_id
+
+    reset_instrumentation()
+    _parent_span.set(first_span)
+    reset_instrumentation()
+
+    sink2 = _MemorySink()
+    configure_instrumentation(DirectHttpInstrumentation(sink2))
+
+    async def second(_span: SpanContext) -> str:
+        return 'second'
+
+    await run_in_new_span('second', second)
+    second_span = next(s for s in sink2.get_finished_spans() if s.name == 'second')
+    assert second_span.parent_span_id is None
+    assert second_span.trace_id != first_trace
+
+
+def test_memory_sink_does_not_suppress_dev_ui_collector(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A recording/memory DirectHttpInstrumentation does not make the Dev UI inject skip."""
+    monkeypatch.setenv(GENKIT_ENV, 'dev')
+    monkeypatch.setenv('GENKIT_TELEMETRY_SERVER', 'http://127.0.0.1:4033')
+    configure_instrumentation(DirectHttpInstrumentation(_MemorySink()))
+    assert is_instrumented_by(DirectHttpInstrumentation)
+    assert not is_instrumented_by(DevUIInstrumentation)
+
+    maybe_inject_dev_instrumentation()
+
+    assert is_instrumented_by(DevUIInstrumentation)

@@ -43,14 +43,11 @@ See Also:
 
 from typing import Any
 
-import structlog
 from opentelemetry.sdk.trace.sampling import Sampler
 
 from genkit import GenkitError
 
-from .config import GcpTelemetry
-
-logger = structlog.get_logger(__name__)
+from .config import GcpTelemetry, _reject_unusable_cloud_setup
 
 # Once per process: the app (or a test) may call enable_google_cloud_telemetry
 # once. A second call raises so Cloud Trace does not get two exporters.
@@ -72,8 +69,6 @@ def enable_google_cloud_telemetry(
     disable_traces: bool = False,
     metric_export_interval_ms: int | None = None,
     metric_export_timeout_ms: int | None = None,
-    # Legacy parameter name for backwards compatibility
-    force_export: bool | None = None,
 ) -> None:
     """Attach Cloud Trace and Cloud Monitoring exporters.
 
@@ -83,26 +78,40 @@ def enable_google_cloud_telemetry(
     minting. Under ``genkit start``, ``Genkit()`` still attaches the
     Developer UI collector.
 
+    If the app already set an SDK ``TracerProvider``, Cloud Trace is added
+    next to that exporter. Set your provider first; calling this helper
+    and then ``trace.set_tracer_provider(...)`` leaves the app's exporter
+    unused. A provider that is not the SDK class raises
+    ``FAILED_PRECONDITION``. The same check applies to the process logger.
+
     Cloud exporters are skipped when ``GENKIT_ENV=dev`` and
     ``force_dev_export=False``. ``disable_traces=True`` skips Cloud Trace
     only; GenAI still turns on. Prompt and reply text are not written
     on GenAI spans. To put raw action I/O on the span, register
     ``GenAiInstrumentation(capture_action_io=True)`` before ``Genkit()``.
     Log records the instrumentation emits (content-capture log events)
-    go to Cloud Logging.
+    go to Cloud Logging. Sampler and provider checks still run under
+    ``GENKIT_ENV=dev``.
 
     Args:
-        project_id: Google Cloud project ID. If provided, takes precedence over
-            environment variables and credentials. Required when using external
-            credentials (e.g., Workload Identity Federation).
+        project_id: Google Cloud project ID. Wins over ``GOOGLE_CLOUD_PROJECT``,
+            ``GCLOUD_PROJECT``, the project on ``credentials``, and the
+            Application Default Credentials project, in that order. Required
+            when using external credentials (e.g., Workload Identity
+            Federation).
         credentials: Service account credentials dict for authenticating with
             Google Cloud. Primarily for use outside of GCP. On GCP, credentials
             are typically inferred via Application Default Credentials (ADC).
-        sampler: OpenTelemetry trace sampler. Controls which traces are collected
-            and exported. Defaults to AlwaysOnSampler. Common options:
-            - AlwaysOnSampler: Collect all traces
-            - AlwaysOffSampler: Collect no traces
-            - TraceIdRatioBasedSampler: Sample a percentage of traces
+        sampler: Sampler used when this helper creates the process tracer.
+            Pass ``ALWAYS_ON``, ``ALWAYS_OFF``, or ``TraceIdRatioBased(0.1)``
+            from ``opentelemetry.sdk.trace.sampling``. With no ``sampler=``,
+            the SDK default applies (parent-based, always on, unless
+            ``OTEL_TRACES_SAMPLER`` says otherwise). If the app already set
+            an SDK ``TracerProvider``, leave ``sampler=`` off: Cloud Trace
+            joins that provider and uses its sampler. Passing ``sampler=``
+            then raises ``INVALID_ARGUMENT``, since a provider's sampler is
+            fixed when it is built. ``sampler=`` with ``disable_traces=True``
+            also raises.
         force_dev_export: If True, export Cloud telemetry even when
             ``GENKIT_ENV=dev``. Defaults to False.
         disable_metrics: If True, Cloud Monitoring is not hung. Traces and
@@ -113,7 +122,6 @@ def enable_google_cloud_telemetry(
             GCP requires a minimum of 5000ms. Defaults to 60000ms.
         metric_export_timeout_ms: Timeout for metrics export in milliseconds.
             Defaults to the export interval if not specified.
-        force_export: Deprecated. Use force_dev_export instead.
 
     Example:
         ```python
@@ -135,6 +143,42 @@ def enable_google_cloud_telemetry(
         )
         ```
 
+        Sample 10% of traces. ``ParentBased`` keeps the caller's decision
+        when a request arrives with a ``traceparent``, so a trace that
+        started upstream is not cut in half:
+
+        ```python
+        from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
+
+        enable_google_cloud_telemetry(
+            project_id='my-project',
+            sampler=ParentBased(TraceIdRatioBased(0.1)),
+        )
+        # => about 1 in 10 new traces reach Cloud Trace
+        #    a request whose caller sampled it is always kept
+        ```
+
+        If the app already set a ``TracerProvider``, put the sampler on it
+        and leave ``sampler=`` off:
+
+        ```python
+        from opentelemetry import trace
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
+
+        # 1. App's provider, with the sampler
+        trace.set_tracer_provider(TracerProvider(sampler=ParentBased(TraceIdRatioBased(0.1))))
+
+        # 2. Cloud Trace joins that provider and inherits its sampler
+        enable_google_cloud_telemetry(project_id='my-project')
+        # => Cloud Trace gets the same 10% the app's exporter gets
+
+        # Passing sampler= here instead raises:
+        # enable_google_cloud_telemetry(sampler=ParentBased(TraceIdRatioBased(0.1)))
+        # => GenkitError INVALID_ARGUMENT: a tracer provider is already set;
+        #    pass TracerProvider(sampler=...) when you create it instead of sampler=
+        ```
+
     See Also:
         - Cloud Trace: https://cloud.google.com/trace/docs
         - Cloud Monitoring: https://cloud.google.com/monitoring/docs
@@ -146,12 +190,9 @@ def enable_google_cloud_telemetry(
             status='FAILED_PRECONDITION',
             message='enable_google_cloud_telemetry() was already called. Call it once from the app.',
         )
+    # Before the flag is set, so a rejected call can be fixed and retried.
+    _reject_unusable_cloud_setup(sampler=sampler, disable_traces=disable_traces)
     _enable_google_cloud_telemetry_already_called = True
-
-    # Handle legacy force_export parameter
-    if force_export is not None:
-        logger.warning('force_export is deprecated, use force_dev_export instead')
-        force_dev_export = force_export
 
     manager = GcpTelemetry(
         project_id=project_id,

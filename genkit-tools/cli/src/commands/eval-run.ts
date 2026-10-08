@@ -31,10 +31,15 @@ import {
 } from '@genkit-ai/tools-common/utils';
 import * as clc from 'colorette';
 import { Command, Option } from 'commander';
-import { runWithManager } from '../utils/manager-utils';
+import {
+  EXPERIMENTAL_AUTH_OPTION_HELP,
+  runWithManager,
+} from '../utils/manager-utils';
 import { parsePositiveInt } from '../utils/option-parsers';
 
 interface EvalRunCliOptions {
+  /** --experimental-auth. */
+  experimentalAuth?: boolean;
   output?: string;
   evaluators?: string;
   force?: boolean;
@@ -77,6 +82,7 @@ export const evalRun = new Command('eval:run')
       .hideHelp()
   )
   .option('--force', 'Automatically accept all interactive prompts')
+  .option('--experimental-auth', EXPERIMENTAL_AUTH_OPTION_HELP)
   .action(async (dataset: string, options: EvalRunCliOptions) => {
     const dashDashIndex = process.argv.indexOf('--');
     let runtimeCommand: string[] | undefined;
@@ -169,5 +175,6 @@ export const evalRun = new Command('eval:run')
     await runWithManager(projectRoot, runAction, {
       runtimeCommand,
       waitForActionKeys,
+      auth: options.experimentalAuth,
     });
   });

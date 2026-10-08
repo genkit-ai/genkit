@@ -15,13 +15,13 @@ import pytest
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
+from genkit import Genkit
 from genkit._ai._model import (
     ModelConfig,
     ResolvedModel,
     assert_correct_config_class,
     config_schema_at_define,
     fold_config_aliases,
-    get_request_api_key,
     model,
     normalize_config,
     overlay_config,
@@ -33,8 +33,9 @@ from genkit._ai._model import (
 )
 from genkit._core._action import ActionRunContext
 from genkit._core._error import GenkitError, RuntimeErrorReason
-from genkit._core._model import ModelRequest, ModelResponse
+from genkit._core._model import EmbedRequest, Message, ModelRequest, ModelResponse, Part
 from genkit._core._registry import Registry
+from genkit._core._typing import EmbedResponse, Operation, Role
 from genkit.model import model_ref
 
 
@@ -46,10 +47,10 @@ class CustomConfig(BaseModel):
     safety_settings: dict[str, str] | None = None
 
 
-class ExcludedKeyConfig(ModelConfig):
-    """ModelConfig whose api_key is omitted from model_dump."""
+class ExcludedFieldConfig(ModelConfig):
+    """ModelConfig with a client-only setting omitted from model_dump."""
 
-    api_key: str | None = Field(default=None, exclude=True)
+    http_options: dict[str, str] | None = Field(default=None, exclude=True)
 
 
 class OtherFamilyConfig(BaseModel):
@@ -234,8 +235,10 @@ def test_resolve_model_ref_same_key_override_on_aliased_field() -> None:
 
 
 def test_normalize_config_restores_excluded_fields() -> None:
-    """Fields marked exclude=True still reach the plugin (per-request api_key)."""
-    assert normalize_config(config=ExcludedKeyConfig(api_key='secret')) == {'api_key': 'secret'}
+    """Fields marked exclude=True still reach the plugin."""
+    assert normalize_config(config=ExcludedFieldConfig(http_options={'timeout': '5'})) == {
+        'http_options': {'timeout': '5'}
+    }
 
 
 def test_normalize_config_passes_through_camel_case_keys() -> None:
@@ -352,8 +355,78 @@ def test_resolve_model_arg_rejects_non_name_explicit_model() -> None:
     """A leftover int must not silently run the constructor default."""
     registry = Registry()
     registry.register_value('defaultModel', 'defaultModel', 'echo-model')
-    with pytest.raises(GenkitError, match='model is int, expected str or ModelRef'):
+    with pytest.raises(GenkitError, match='model is int, expected str, ModelRef, or a model action'):
         resolve_model_arg(model=123, registry=registry)
+
+
+async def _echo_fn(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+    return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('echo')]))
+
+
+def test_resolve_model_arg_unwraps_define_model_action_to_its_name() -> None:
+    """The action this registry's define_model returned resolves to its name."""
+    ai = Genkit()
+    action = ai.define_model(name='local/echo', fn=_echo_fn)
+    assert resolve_model_arg(model=action, registry=ai.registry) == 'local/echo'
+
+
+def test_resolve_model_arg_rejects_action_from_another_instance() -> None:
+    """Another instance's action raises; it does not run this instance's same-named model."""
+    other = Genkit()
+    foreign = other.define_model(name='local/echo', fn=_echo_fn)
+    ai = Genkit()
+    ai.define_model(name='local/echo', fn=_echo_fn)
+
+    with pytest.raises(GenkitError, match="model action 'local/echo' is not the one registered") as exc_info:
+        resolve_model_arg(model=foreign, registry=ai.registry)
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+
+
+def test_resolve_model_arg_rejects_unregistered_action() -> None:
+    """An action built with genkit.model.model() and never registered raises INVALID_ARGUMENT, not NOT_FOUND."""
+    loose = model(name='loose', fn=_echo_fn)
+    with pytest.raises(GenkitError, match="model action 'loose' is not the one registered") as exc_info:
+        resolve_model_arg(model=loose, registry=Genkit().registry)
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+
+
+def test_resolve_model_arg_rejects_action_replaced_by_later_define() -> None:
+    """A later define_model with the same name replaces the entry; the old action no longer resolves."""
+    ai = Genkit()
+    first = ai.define_model(name='local/echo', fn=_echo_fn)
+    ai.define_model(name='local/echo', fn=_echo_fn)
+
+    with pytest.raises(GenkitError, match="model action 'local/echo' is not the one registered"):
+        resolve_model_arg(model=first, registry=ai.registry)
+
+
+def test_resolve_model_arg_names_the_kind_of_a_non_model_action() -> None:
+    """An embedder passed as model says it is an embedder action."""
+
+    async def embed(_request: EmbedRequest) -> EmbedResponse:
+        return EmbedResponse(embeddings=[])
+
+    ai = Genkit()
+    embedder = ai.define_embedder(name='emb', fn=embed)
+
+    with pytest.raises(GenkitError, match="model is embedder action 'emb', expected a model"):
+        resolve_model_arg(model=embedder, registry=ai.registry)
+
+
+def test_resolve_model_arg_points_a_background_model_at_generate_operation() -> None:
+    """A define_background_model result says to use generate_operation."""
+
+    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+        return Operation(id='op', done=False)
+
+    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+        return op
+
+    ai = Genkit()
+    background = ai.define_background_model(name='bg', start=start, check=check)
+
+    with pytest.raises(GenkitError, match="model is background model 'bg'. Pass it to generate_operation"):
+        resolve_model_arg(model=background, registry=ai.registry)
 
 
 def test_resolve_call_model_string_path_omits_none() -> None:
@@ -602,9 +675,3 @@ def test_resolve_model_ref_both_spellings_last_write_wins() -> None:
     )
     assert camel_last.config == {'max_output_tokens': 5}
     assert snake_last.config == {'max_output_tokens': 1}
-
-
-def test_get_request_api_key_reads_camel_dict() -> None:
-    """A wire-shaped dict still exposes the per-request key."""
-    assert get_request_api_key({'apiKey': 'secret'}) == 'secret'
-    assert get_request_api_key({'api_key': 'secret'}) == 'secret'

@@ -1793,6 +1793,65 @@ func TestAgent_TurnSpanOutput_WithSnapshots(t *testing.T) {
 	}
 }
 
+// TestAgent_CommittedFailedTurn_TurnSpanCarriesSnapshotID verifies that a
+// failed turn that committed tags its own turn span with the snapshot it
+// persisted and records that snapshot's state as the span output, as a
+// successful turn does, and does not tag the root agent span it ran under.
+func TestAgent_CommittedFailedTurn_TurnSpanCarriesSnapshotID(t *testing.T) {
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+	spans := collectSpans(t)
+
+	const agentName = "committedFailureSpanFlow"
+	af := defineCommittingFailureAgent(reg, agentName, WithSessionStore[testState](store))
+
+	out, err := af.RunText(ctx, "go")
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	if out.SnapshotID == "" {
+		t.Fatal("committed failure wrote no snapshot")
+	}
+
+	span := spans.byName("runTurn-1")
+	if span == nil {
+		t.Fatal("missing span runTurn-1")
+	}
+	got, ok := spanAttr(span, snapshotIDSpanAttrKey)
+	if !ok {
+		t.Fatalf("turn span: missing %s", snapshotIDSpanAttrKey)
+	}
+	if got != out.SnapshotID {
+		t.Errorf("turn span %s = %q, want %q (the failed turn's snapshot)", snapshotIDSpanAttrKey, got, out.SnapshotID)
+	}
+	// The turn span still records the failure.
+	if v, _ := spanAttr(span, "genkit:state"); v != "error" {
+		t.Errorf("turn span genkit:state = %q, want %q", v, "error")
+	}
+	// Its output is the state the failed turn's snapshot saved, as a
+	// committed success's is.
+	state := turnSpanState(t, span)
+	snap, err := store.GetSnapshot(ctx, out.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if got, want := state.Custom.Counter, snap.State.Custom.Counter; got != want || got != 5 {
+		t.Errorf("turn span state.custom.counter = %d, want %d (the failed turn's snapshot) and 5", got, want)
+	}
+	if got, want := len(state.Messages), len(snap.State.Messages); got != want {
+		t.Errorf("turn span len(state.messages) = %d, want %d (the failed turn's snapshot)", got, want)
+	}
+
+	root := spans.byName(agentName)
+	if root == nil {
+		t.Fatalf("missing root action span %q", agentName)
+	}
+	if v, ok := spanAttr(root, snapshotIDSpanAttrKey); ok {
+		t.Errorf("root span %q: unexpected %s = %q (want it on the turn span only)", agentName, snapshotIDSpanAttrKey, v)
+	}
+}
+
 // TestAgent_CustomPatchWholeDocumentReplace verifies the server emits the first
 // custom-state mutation of a turn as a whole-document replace: a single RFC 6902
 // replace at the root pointer, which re-bases a client that may not share the
@@ -2763,6 +2822,36 @@ func TestValidateResumeAgainstHistory(t *testing.T) {
 			// 1, so a faithful restart is not mistaken for a forgery.
 			name:   "restart input matches across json number types",
 			resume: &ToolResume{Restart: restart("numeric", "r3", map[string]any{"a": 1})},
+		},
+		{
+			// A restart that revised the input (RestartWithInput) is
+			// accountable for the original it preserves, so a revision the
+			// person made before approving is not a forgery.
+			name: "restart with replaced input preserves the original",
+			resume: &ToolResume{Restart: func() []*ai.Part {
+				parts := restart("second", "r2", map[string]any{"b": "revised"})
+				parts[0].Restart = &ai.ToolRestart{OriginalInput: map[string]any{"b": "x"}}
+				return parts
+			}()},
+		},
+		{
+			// The same restart as a peer runtime sends it, with the original
+			// under the wire key.
+			name: "restart with replaced input under the wire key",
+			resume: &ToolResume{Restart: func() []*ai.Part {
+				parts := restart("second", "r2", map[string]any{"b": "revised"})
+				parts[0].Metadata = map[string]any{"replacedInput": map[string]any{"b": "x"}, "resumed": true}
+				return parts
+			}()},
+		},
+		{
+			name: "restart with replaced input forges the original",
+			resume: &ToolResume{Restart: func() []*ai.Part {
+				parts := restart("second", "r2", map[string]any{"b": "revised"})
+				parts[0].Restart = &ai.ToolRestart{OriginalInput: map[string]any{"b": "forged"}}
+				return parts
+			}()},
+			wantErr: "modified inputs",
 		},
 		{
 			// A kind-PartToolRequest part with a nil ToolRequest pointer (e.g.

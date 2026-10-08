@@ -48,6 +48,9 @@ class _FlowDecorator:
     def __call__(self, func: Callable[[InputT, ActionRunContext], Awaitable[OutputT]]) -> Action[InputT, OutputT]: ...
 
     @overload
+    def __call__(self, func: Callable[[ActionRunContext, InputT], Awaitable[OutputT]]) -> Action[InputT, OutputT]: ...
+
+    @overload
     def __call__(self, func: Callable[[InputT], Awaitable[OutputT]]) -> Action[InputT, OutputT]: ...
 
     @overload
@@ -69,6 +72,11 @@ class _FlowDecoratorWithChunk(Generic[ChunkT]):
     @overload
     def __call__(
         self, func: Callable[[InputT, ActionRunContext], Awaitable[OutputT]]
+    ) -> Action[InputT, OutputT, ChunkT]: ...
+
+    @overload
+    def __call__(
+        self, func: Callable[[ActionRunContext, InputT], Awaitable[OutputT]]
     ) -> Action[InputT, OutputT, ChunkT]: ...
 
     @overload

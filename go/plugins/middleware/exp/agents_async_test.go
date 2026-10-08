@@ -862,6 +862,10 @@ func TestAgentsAbortReportsAbortingWhileWindingDown(t *testing.T) {
 
 	// The sub-agent deliberately ignores its cancellation until released, so
 	// the abort's single re-read deterministically finds the row unsettled.
+	// Once released it still lets go only after the stop reaches its context:
+	// the abort flip cancels the work through the store subscription on its
+	// own schedule, and an error returned before that lands is "failed", not
+	// "aborted" (see stoppedTaskSettles).
 	release := make(chan struct{})
 	var releaseOnce sync.Once
 	unblock := func() { releaseOnce.Do(func() { close(release) }) }
@@ -870,6 +874,12 @@ func TestAgentsAbortReportsAbortingWhileWindingDown(t *testing.T) {
 		func(ctx context.Context, resp aix.Responder, sess *aix.SessionRunner[any]) (*aix.AgentResult, error) {
 			err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) (*aix.TurnResult, error) {
 				<-release
+				// Bounded so a stop that never arrives fails the assertion
+				// below instead of hanging the unbounded wait.
+				select {
+				case <-ctx.Done():
+				case <-time.After(10 * time.Second):
+				}
 				return nil, errors.New("released")
 			})
 			if err != nil {

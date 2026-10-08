@@ -24,8 +24,8 @@ from urllib.parse import quote
 
 import httpx
 import pytest
-from genkit_google_genai._interactions import client as interactions_client
-from genkit_google_genai._interactions.client import (
+from genkit_google_genai._interactions import _client as interactions_client
+from genkit_google_genai._interactions._client import (
     API_REVISION,
     cancel_interaction,
     create_interaction,
@@ -34,10 +34,11 @@ from genkit_google_genai._interactions.client import (
     headers,
     timeout_seconds,
 )
-from genkit_google_genai._interactions.options import ClientOptions
+from genkit_google_genai._interactions._options import ClientOptions
 from google.genai.interactions import Interaction
 
 from genkit import GenkitError
+from genkit._core._error import get_callable_json, get_http_status
 from genkit.plugin_api import GENKIT_CLIENT_HEADER
 
 
@@ -228,6 +229,17 @@ async def test_timeout_maps_to_deadline_exceeded(http_client: MagicMock) -> None
 
 
 @pytest.mark.asyncio
+async def test_connect_error_stays_unclassified(http_client: MagicMock) -> None:
+    """A refused connection has no known status; retry sees the raw httpx error."""
+    refused = httpx.ConnectError('connection refused')
+    http_client.request.side_effect = refused
+    with patch.object(interactions_client, 'get_cached_client', return_value=http_client):
+        with pytest.raises(httpx.ConnectError) as exc_info:
+            await create_interaction('key', {'model': 'lyria'})
+    assert exc_info.value is refused
+
+
+@pytest.mark.asyncio
 async def test_request_timeout_converted_from_ms(http_client: MagicMock) -> None:
     http_client.request.return_value = mock_response(
         json_body={'id': 'ix-1', 'status': 'completed', 'steps': []},
@@ -287,3 +299,21 @@ async def test_error_without_retry_after_has_no_response_metadata(http_client: M
             await create_interaction('key', {'model': 'lyria'})
     assert exc_info.value.status == 'RESOURCE_EXHAUSTED'
     assert exc_info.value.response_metadata is None
+
+
+@pytest.mark.asyncio
+async def test_interactions_http_error_is_served_as_internal_error(http_client: MagicMock) -> None:
+    """An Interactions HTTP 401 stays UNAUTHENTICATED in-process and serves as 500 Internal Error."""
+    http_client.request.return_value = mock_response(
+        status_code=401,
+        json_body={'error': {'message': 'API key not valid'}},
+    )
+    with patch.object(interactions_client, 'get_cached_client', return_value=http_client):
+        with pytest.raises(GenkitError) as exc_info:
+            await create_interaction('key', {'model': 'lyria'})
+
+    error = exc_info.value
+    assert error.status == 'UNAUTHENTICATED'
+    assert get_callable_json(error) == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert get_http_status(error) == 500
+    assert 'API key not valid' not in str(get_callable_json(error))

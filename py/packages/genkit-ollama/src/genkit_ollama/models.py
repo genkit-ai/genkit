@@ -82,11 +82,13 @@ that rejects URLs, so we must download images explicitly. This is the only
 behavioral divergence from the JS plugin.
 """
 
+import json
 import mimetypes
 import re
 from collections.abc import Callable
 from typing import Any, Literal, cast
 
+import httpx
 import ollama as ollama_api
 import structlog
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -134,12 +136,13 @@ class OllamaConfig(ModelConfig):
     """Configuration schema for Ollama models.
 
     Extends the shared :class:`ModelConfig` with Ollama-specific sampler
-    knobs and the ``think`` chain-of-thought control. Unknown keys are
-    accepted (``extra='allow'``) and forwarded to the Ollama server's
-    ``options`` so newer sampler parameters work without an SDK bump.
+    knobs and the ``think`` chain-of-thought control. Unknown keys raise. A
+    sampler option this class doesn't declare (``repeat_penalty``,
+    ``mirostat``, ...) goes in ``extra`` and is merged into the request's
+    ``options`` as-is, so newer sampler parameters work without an SDK bump.
     """
 
-    model_config = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
 
     think: bool | Literal['low', 'medium', 'high'] | None = None
     keep_alive: float | str | None = None
@@ -238,9 +241,14 @@ class OllamaModel:
             return await self._generate_classified(request=request, ctx=ctx, client=client, content=content)
         except ollama_api.ResponseError as e:
             raise wrap_http_error(e, status_code=getattr(e, 'status_code', None)) from e
+        except json.JSONDecodeError as e:
+            # The server sent a body that is not JSON (e.g. a proxy error page).
+            # Caught before ValueError, its base class: this is not a bad request.
+            raise GenkitError(status='INTERNAL', message='ollama: server returned a non-JSON response', cause=e) from e
         except ValidationError as e:
             # A response Part/Message we could not build is not a bad caller
-            # request — retry can try again.
+            # request — retry can try again. Invalid caller config and tools
+            # are raised as INVALID_ARGUMENT while the request is built.
             raise GenkitError(status='INTERNAL', message=str(e), cause=e) from e
         except ValueError as e:
             if str(e).startswith('Unresolved API type:'):
@@ -347,16 +355,20 @@ class OllamaModel:
             fmt = ''
 
         # Build common kwargs for both streaming and non-streaming calls
-        tools = [
-            ollama_api.Tool(
-                function=ollama_api.Tool.Function(
-                    name=tool.name,
-                    description=tool.description,
-                    parameters=_convert_parameters(tool.input_schema or {}),
+        try:
+            tools = [
+                ollama_api.Tool(
+                    function=ollama_api.Tool.Function(
+                        name=tool.name,
+                        description=tool.description,
+                        parameters=_convert_parameters(tool.input_schema or {}),
+                    )
                 )
-            )
-            for tool in request.tools or []
-        ]
+                for tool in request.tools or []
+            ]
+        except ValidationError as e:
+            # The caller's tool definition, not a server response.
+            raise GenkitError(status='INVALID_ARGUMENT', message='ollama: invalid tool definition', cause=e) from e
         options = self.build_request_options(config=request.config)
         extra_kwargs = self.build_request_kwargs(config=request.config)
 
@@ -598,10 +610,10 @@ class OllamaModel:
           kwargs, not sampler options (Ollama rejects them inside ``options``).
         - Genkit's ``max_output_tokens`` maps to Ollama's ``num_predict``; an
           explicit ``num_predict`` wins when both are present.
-        - ``stop_sequences`` maps to ``stop``; ``version``/``api_key`` (genkit
-          bookkeeping) are dropped.
-        - ``OllamaConfig`` extras (e.g. ``repeatPenalty``) are forwarded
-          snake-cased so newer sampler knobs pass through untouched.
+        - ``stop_sequences`` maps to ``stop``; ``version`` (genkit
+          bookkeeping) is dropped.
+        - ``extra`` (e.g. ``{'repeat_penalty': 1.1}``) is merged in last,
+          keys unchanged, so a colliding key wins over a declared field.
 
         Known knobs are routed through ``ollama_api.Options`` purely for type
         coercion (genkit types ``max_output_tokens``/``top_k`` as floats, but
@@ -624,11 +636,12 @@ class OllamaModel:
         if isinstance(config, ModelConfig):
             # Covers OllamaConfig (a ModelConfig subclass) and plain ModelConfig.
             # model_dump defaults to by_alias=False, so declared fields come out
-            # snake_cased; only extras keep the key they were supplied with.
-            # to_snake below normalises both.
+            # snake_cased.
             raw: dict[str, Any] = config.model_dump(exclude_none=True)
         else:
             raw = {k: v for k, v in cast(dict[str, Any], config).items() if v is not None}
+        # extra is already in Ollama's option names; it skips the snake-casing below.
+        extra = raw.pop('extra', None)
 
         # Snake-case so camelCase knobs (e.g. ``topP``) hit the server field
         # instead of being silently dropped.
@@ -639,7 +652,6 @@ class OllamaModel:
         knobs.pop('keep_alive', None)
         # Genkit bookkeeping that Ollama does not understand.
         knobs.pop('version', None)
-        knobs.pop('api_key', None)
 
         if 'stop_sequences' in knobs:
             knobs['stop'] = knobs.pop('stop_sequences')
@@ -650,9 +662,15 @@ class OllamaModel:
 
         # Coerce the knobs Options models (int num_predict/top_k, etc.), then
         # merge back any it drops (e.g. min_p) so they still reach the server.
-        options: dict[str, Any] = ollama_api.Options(**knobs).model_dump(exclude_none=True)
+        try:
+            options: dict[str, Any] = ollama_api.Options(**knobs).model_dump(exclude_none=True)
+        except ValidationError as e:
+            # A config value of the wrong type is the caller's to fix.
+            raise GenkitError(status='INVALID_ARGUMENT', message='ollama: invalid model config', cause=e) from e
         for key, value in knobs.items():
             options.setdefault(key, value)
+        if isinstance(extra, dict):
+            options.update(cast(dict[str, Any], extra))
         return options
 
     @staticmethod
@@ -665,8 +683,8 @@ class OllamaModel:
         ``chat``/``generate`` calls — not sampler ``options``. The framework
         dumps a ``BaseModel`` config to a dict before the model fn sees it, so
         this reads them from any :class:`ModelConfig` instance *or* a dumped
-        dict. Both paths snake-case the keys (declared fields and ``extra``
-        keys can arrive camelCased) and return only the values that are set.
+        dict. Both paths snake-case the keys (declared fields can arrive
+        camelCased) and return only the values that are set.
 
         Args:
             config: The configuration to extract request kwargs from.
@@ -813,7 +831,21 @@ class OllamaModel:
                 follow_redirects=True,
             )
             response = await client.get(url)
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                status = e.response.status_code
+                # A 4xx means the caller's URL is bad (missing, forbidden,
+                # gone). Not NOT_FOUND: Fallback would switch models over a URL
+                # no model can fetch. 408/429 and 5xx stay raw so Retry can try
+                # the image host again.
+                if isinstance(status, int) and 400 <= status < 500 and status not in (408, 429):
+                    raise GenkitError(
+                        status='INVALID_ARGUMENT',
+                        message=f'ollama: could not fetch media URL (HTTP {status})',
+                        cause=e,
+                    ) from e
+                raise
             return response.content
 
         # Local file path or raw base64 — pass through to Image.

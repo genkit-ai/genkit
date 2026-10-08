@@ -21,7 +21,7 @@ from __future__ import annotations
 from typing import Any, cast
 
 import pytest
-from genkit_google_genai._interactions.converters import (
+from genkit_google_genai._interactions._converters import (
     ensure_tool_ids,
     from_interaction,
     from_interaction_content,
@@ -177,8 +177,9 @@ class TestToInteractionRole:
         assert to_interaction_role('tool') == 'user'
 
     def test_system_raises(self) -> None:
-        with pytest.raises(ValueError, match='system_instruction'):
+        with pytest.raises(GenkitError, match='system_instruction') as raised:
             to_interaction_role('system')
+        assert raised.value.status == 'INVALID_ARGUMENT'
 
 
 class TestToInteractionTool:
@@ -207,8 +208,9 @@ class TestToInteractionContent:
         assert result == {'type': 'image', 'data': 'DATA', 'mime_type': 'image/png'}
 
     def test_image_data_missing_separator(self) -> None:
-        with pytest.raises(ValueError, match='missing payload separator'):
+        with pytest.raises(GenkitError, match='missing payload separator') as raised:
             to_interaction_content(Part.from_media('data:image/png;base64GARBAGE', content_type='image/png'))
+        assert raised.value.status == 'INVALID_ARGUMENT'
 
     def test_image_uri(self) -> None:
         result = to_interaction_content(Part.from_media('gs://bucket/image.png', content_type='image/png'))
@@ -223,8 +225,9 @@ class TestToInteractionContent:
         assert result == {'type': 'document', 'uri': 'gs://bucket/doc.pdf', 'mime_type': 'application/pdf'}
 
     def test_unsupported_media_raises(self) -> None:
-        with pytest.raises(ValueError, match='Unsupported media type'):
+        with pytest.raises(GenkitError, match='Unsupported media type') as raised:
             to_interaction_content(Part.from_media('https://example.com/x', content_type='text/plain'))
+        assert raised.value.status == 'INVALID_ARGUMENT'
 
 
 class TestToInteractionSteps:
@@ -266,8 +269,9 @@ class TestToInteractionSteps:
 
     def test_system_role_rejected(self) -> None:
         messages = [Message(role='system', content=[Part.from_text('be terse')])]
-        with pytest.raises(ValueError, match='system_instruction'):
+        with pytest.raises(GenkitError, match='system_instruction') as raised:
             to_interaction_steps(messages)
+        assert raised.value.status == 'INVALID_ARGUMENT'
 
     def test_code_execution_call_always_sends_python(self) -> None:
         messages = [
@@ -950,6 +954,54 @@ class TestFromInteractionSync:
         with pytest.raises(ValueError, match='Interaction failed'):
             from_interaction_sync(Interaction.model_validate({'status': 'failed'}))
 
+    @pytest.mark.parametrize(
+        ('code', 'status'),
+        [
+            ('RESOURCE_EXHAUSTED', 'RESOURCE_EXHAUSTED'),
+            ('resource_exhausted', 'RESOURCE_EXHAUSTED'),
+            ('429', 'RESOURCE_EXHAUSTED'),
+            ('503', 'UNAVAILABLE'),
+            ('3', 'INVALID_ARGUMENT'),
+        ],
+    )
+    def test_failed_with_provider_code_is_classified(self, code: str, status: str) -> None:
+        """A quota failure the server reported keeps its status so retry and fallback can act on it."""
+        interaction = Interaction.model_validate({
+            'id': 'ix-1',
+            'status': 'failed',
+            'errors': [{'code': code, 'message': 'Quota exceeded for lyria'}],
+        })
+        with pytest.raises(GenkitError, match='Quota exceeded for lyria') as raised:
+            from_interaction_sync(interaction)
+        assert raised.value.status == status
+
+    def test_failed_step_error_grpc_code_is_classified(self) -> None:
+        interaction = Interaction.model_validate({
+            'id': 'ix-1',
+            'status': 'failed',
+            'steps': [{'type': 'model_output', 'error': {'code': 8, 'message': 'out of quota'}}],
+        })
+        with pytest.raises(GenkitError, match='out of quota') as raised:
+            from_interaction_sync(interaction)
+        assert raised.value.status == 'RESOURCE_EXHAUSTED'
+
+    @pytest.mark.parametrize('code', ['UNKNOWN', 'OK', '0', '2', '200', '999', 'SOMETHING_NEW', ''])
+    def test_failed_with_unusable_code_stays_unclassified(self, code: str) -> None:
+        """No real status from the server: raise a plain error rather than UNKNOWN or OK."""
+        interaction = Interaction.model_validate({
+            'id': 'ix-1',
+            'status': 'failed',
+            'errors': [{'code': code, 'message': 'model crashed'}],
+        })
+        with pytest.raises(ValueError, match='model crashed'):
+            from_interaction_sync(interaction)
+
+    @pytest.mark.parametrize('status', ['queued', 'requires_action'])
+    def test_other_in_flight_statuses_are_failed_precondition(self, status: str) -> None:
+        with pytest.raises(GenkitError, match='still running') as raised:
+            from_interaction_sync(Interaction.model_validate({'id': '123', 'status': status}))
+        assert raised.value.status == 'FAILED_PRECONDITION'
+
     def test_cancelled(self) -> None:
         result = from_interaction_sync(Interaction.model_validate({'id': '123', 'status': 'cancelled'}))
         assert result.finish_reason == 'aborted'
@@ -984,8 +1036,9 @@ class TestFromInteractionSync:
         assert result.finish_message == 'Interaction exceeded its budget'
 
     def test_in_progress_raises(self) -> None:
-        with pytest.raises(ValueError, match='still running'):
+        with pytest.raises(GenkitError, match='still running') as raised:
             from_interaction_sync(Interaction.model_validate({'id': '123', 'status': 'in_progress'}))
+        assert raised.value.status == 'FAILED_PRECONDITION'
 
     def test_unknown_status_raises(self) -> None:
         with pytest.raises(ValueError, match='Unknown interaction status'):

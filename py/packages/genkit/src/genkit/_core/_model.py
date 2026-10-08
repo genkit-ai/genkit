@@ -27,7 +27,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from functools import cached_property
 from importlib import import_module
-from typing import Any, ClassVar, Generic, Literal, cast
+from typing import Any, ClassVar, Generic, Literal, TypeGuard, cast, get_args
 
 from pydantic import (
     BaseModel,
@@ -45,7 +45,8 @@ from typing_extensions import TypedDict, TypeVar
 from genkit._core import _typing as typing_mod
 from genkit._core._base import GenkitModel, dump_keeping_unknown
 from genkit._core._error import GenkitError, GenkitRuntimeError, RuntimeErrorReason
-from genkit._core._extract_json import extract_json
+from genkit._core._extract_json import extract_json, extract_partial_json
+from genkit._core._logger import get_logger
 from genkit._core._partial import construct_partial
 from genkit._core._schema import parse_schema
 from genkit._core._typing import (
@@ -56,7 +57,6 @@ from genkit._core._typing import (
     GenerateActionOutputConfig,
     GenerationCommonConfig,
     GenerationUsage,
-    GenkitRuntimeError as GenkitRuntimeErrorData,
     JsonPatch,
     Media,
     MessageData,
@@ -75,10 +75,36 @@ from genkit._core._typing import (
     TurnEnd,
 )
 
-# Runtime schema for common generate knobs. ModelConfigDict is the
-# hand-copied autocomplete list — keep the keys matching so a new knob
-# shows up in the IDE the same day it becomes legal.
-ModelConfig = GenerationCommonConfig
+
+# ModelConfigDict is the hand-copied autocomplete list for this class — keep
+# the keys matching so a new knob shows up in the IDE the same day it becomes legal.
+class ModelConfig(GenerationCommonConfig):
+    """Settings every model understands, plus ``extra`` for provider-only ones.
+
+    Unknown keyword arguments raise, so ``ModelConfig(temprature=0.2)`` fails
+    where it was typed instead of being sent or silently dropped. A
+    per-request API key goes in ``context={'secrets': {'api_key': ...}}``, not
+    here.
+    """
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra='forbid')
+
+    extra: dict[str, Any] | None = None
+    """Provider settings the model's config class doesn't declare, sent as-is.
+
+    Keys are the provider's wire names. The plugin merges them into its
+    request after the declared fields, so a colliding key wins. Fields Genkit
+    builds from the request (messages, tools) are rejected rather than
+    overwritten. Where the map lands depends on the provider: the request
+    body for Gemini, OpenAI and Anthropic, ``options`` for Ollama, and
+    ``additionalModelRequestFields`` for Bedrock.
+
+    Keys aren't validated, except that an API key here raises like one at the
+    top level: config travels with the request into traces. Don't put other
+    secrets here either.
+    """
+
+
 ModelUsage = GenerationUsage  # public name for GenerationUsage
 
 # what callers pass as tool_choice; they type the string, not an enum.
@@ -103,15 +129,18 @@ ABNORMAL_FINISH_REASONS = frozenset({
     FinishReason.OTHER,
 })
 
+logger = get_logger(__name__)
+
 
 class ModelConfigDict(TypedDict, extra_items=Any, total=False):
     """Common knobs for dict-literal autocomplete on ``config={...}``.
 
-    ``None`` clears a ModelRef default. Extra keys (provider-specific) stay
-    in the bag and are forwarded.
+    ``None`` clears a ModelRef default. Other keys have to be declared by the
+    model's own config class, or the call raises before the model runs;
+    provider settings the class doesn't declare go in ``extra``.
 
-    Keys match ``GenerationCommonConfig`` / ``ModelConfig``. If a common
-    knob is added there and not here, autocomplete quietly drops it.
+    Keys match ``ModelConfig``. If a common knob is added there and not here,
+    autocomplete quietly drops it.
     """
 
     version: str | None
@@ -120,7 +149,63 @@ class ModelConfigDict(TypedDict, extra_items=Any, total=False):
     top_k: float | None
     top_p: float | None
     stop_sequences: Sequence[str] | None
-    api_key: str | None
+    extra: dict[str, Any] | None
+
+
+SECRETS_HINT = "Pass the key as context={'secrets': {'api_key': ...}}."
+_KEY_SLOTS = ('api_key', 'apiKey')
+
+
+def misplaced_api_key_error() -> GenkitError:
+    """The ``INVALID_ARGUMENT`` error for an API key found in config."""
+    return GenkitError(
+        status='INVALID_ARGUMENT',
+        message=f'API key belongs in context.secrets, not config. {SECRETS_HINT}',
+        reason=RuntimeErrorReason.INVALID_INPUT,
+    )
+
+
+def _has_key(bag: Mapping[str, object]) -> bool:
+    return any(bag.get(slot) is not None for slot in _KEY_SLOTS)
+
+
+def reject_config_api_key(config: object) -> None:
+    """Raise when a request config carries an API key.
+
+    Core calls this in generate, in the ``/util/generate`` action, and on every
+    model and background-model action run, so plugins don't need to. Checks
+    ``api_key`` / ``apiKey`` on a config dict or model, on a model's undeclared
+    fields, and inside ``extra``. A key in any of those would be
+    traced, and a key in ``extra`` would also go to the provider as a body
+    field while the call authenticates with the plugin's key.
+
+    Example:
+        ```python
+        reject_config_api_key({'temperature': 0.2})
+        # => None
+        reject_config_api_key({'extra': {'api_key': 'sk-tenant'}})
+        # => GenkitError INVALID_ARGUMENT: API key belongs in context.secrets, not config. ...
+        ```
+
+    Args:
+        config: The request config, as a dict or a config object.
+
+    Raises:
+        GenkitError: ``INVALID_ARGUMENT`` when a key is present.
+    """
+    if config is None:
+        return
+    bags: list[object]
+    if isinstance(config, Mapping):
+        top = cast(Mapping[str, object], config)
+        bags = [top, top.get('extra')]
+    else:
+        if any(getattr(config, slot, None) is not None for slot in _KEY_SLOTS):
+            raise misplaced_api_key_error()
+        bags = [getattr(config, 'model_extra', None), getattr(config, 'extra', None)]
+    for bag in bags:
+        if isinstance(bag, Mapping) and _has_key(cast(Mapping[str, object], bag)):
+            raise misplaced_api_key_error()
 
 
 # TypeVars for generic types
@@ -129,15 +214,16 @@ ConfigT = TypeVar('ConfigT', bound=ModelConfig, default=ModelConfig)
 # Bound to BaseModel so ModelRef is always parameterized with a concrete Pydantic config schema.
 # Covariant so ModelRef[GeminiConfig] is assignable to ModelRef[BaseModel] or ModelRef[Any].
 ModelRefConfigT = TypeVar('ModelRefConfigT', bound=BaseModel, covariant=True)
-# Unbounded so ModelRequest can carry plugin config schemas, plain dicts, or
-# ModelConfig subclasses without forcing everything through GenerationCommonConfig.
+# ModelRequest[X] takes a pydantic model class; __class_getitem__ rejects the
+# rest. Not bound to BaseModel: type checkers would then reject the common
+# bare ModelRequest(config={...}), where the config is solved as a dict.
 # Invariant: config is writable, so ModelRequest[GeminiConfig] is not a
 # ModelRequest[ModelConfig] you can assign a ModelConfig into.
 ModelRequestConfigT = TypeVar('ModelRequestConfigT')
 
 
-def declared_config_type(cls: type) -> type | None:
-    """The config class on ``ModelRequest[ThatClass]``, or None if unparametrized."""
+def declared_config_type(cls: type) -> type[BaseModel] | None:
+    """The config class on ``ModelRequest[ThatClass]``, or None if unparametrized or ``Any``."""
     meta = getattr(cls, '__pydantic_generic_metadata__', None)
     if not meta:
         return None
@@ -145,9 +231,15 @@ def declared_config_type(cls: type) -> type | None:
     if not args:
         return None
     arg = args[0]
-    if isinstance(arg, TypeVar) or arg is Any:
-        return None
-    return arg
+    return arg if _is_model_class(arg) else None
+
+
+def _is_model_class(value: object) -> TypeGuard[type[BaseModel]]:
+    """True for a pydantic model class; False for TypedDicts, dict, unions, Any, and TypeVars."""
+    try:
+        return isinstance(value, type) and issubclass(value, BaseModel)
+    except TypeError:  # dict[str, Any] passes isinstance(_, type) on 3.10
+        return False
 
 
 def config_type_path(cls: type) -> str:
@@ -155,7 +247,7 @@ def config_type_path(cls: type) -> str:
 
     Walks parent packages from the top and uses the first one that re-exports
     this class under the same name (``genkit_openai.OpenAIConfig``, not
-    ``genkit_openai.typing.OpenAIConfig``). Nested / test-local classes keep
+    ``genkit_openai._typing.OpenAIConfig``). Nested / test-local classes keep
     the defining path.
     """
     impl = f'{cls.__module__}.{cls.__qualname__}'
@@ -397,6 +489,56 @@ class Part(GenkitModel):
     def from_reasoning(cls, reasoning: str, metadata: dict[str, Any] | None = None) -> Part:
         return cls(reasoning=reasoning, metadata=metadata)
 
+    def restart(
+        self,
+        *,
+        resumed_metadata: dict[str, Any] | None = None,
+        replace_input: Any | None = None,  # noqa: ANN401
+    ) -> Part:
+        """Build the tool-request part that runs this interrupt again.
+
+        ``resumed_metadata`` is what the tool reads as ``ctx.resumed_metadata``.
+        Omit it and the tool still sees a resume (``ctx.is_resumed()`` is true).
+        ``replace_input`` swaps the tool input and keeps the previous input on
+        ``metadata['replacedInput']``.
+        """
+        tool_req = self.tool_request
+        if tool_req is None:
+            raise ValueError('restart needs a tool request part')
+        new_meta: dict[str, Any] = dict(self.metadata or {})
+        new_meta['resumed'] = resumed_metadata if resumed_metadata is not None else True
+        new_input = tool_req.input
+        if replace_input is not None:
+            new_meta['replacedInput'] = tool_req.input
+            new_input = replace_input
+        return Part.from_tool_request(
+            name=tool_req.name,
+            input=new_input,
+            ref=tool_req.ref,
+            metadata=new_meta,
+        )
+
+    def respond(
+        self,
+        output: Any,  # noqa: ANN401
+        *,
+        metadata: dict[str, Any] | None = None,
+    ) -> Part:
+        """Build the tool-response part that answers this interrupt without running the tool.
+
+        ``metadata`` is stored under ``interruptResponse`` and defaults to true when omitted.
+        """
+        tool_req = self.tool_request
+        if tool_req is None:
+            raise ValueError('respond needs a tool request part')
+        interrupt_metadata = metadata if metadata is not None else True
+        return Part.from_tool_response(
+            name=tool_req.name,
+            output=output,
+            ref=tool_req.ref,
+            metadata={'interruptResponse': interrupt_metadata},
+        )
+
 
 def as_part(value: object) -> Part:
     if isinstance(value, Part):
@@ -486,7 +628,7 @@ def as_output_config(value: object) -> OutputConfig:
 def as_resume_respond(value: object) -> Part:
     part = as_part(value)
     if part.tool_response is None:
-        raise ValueError('resume_respond needs a tool response part')
+        raise ValueError('resume_respond needs a tool response part; answer a pause with Part.respond(output)')
     return part
 
 
@@ -537,18 +679,67 @@ def _normalize_resume_parts(value: Part | list[Part] | None) -> list[Part] | Non
     return list(value) if isinstance(value, list) else [value]
 
 
+def as_resumed(part: Part) -> dict[str, Any] | None:
+    """The resume bag the tool sees: True → {}, a dict as-is, anything else None."""
+    raw = (part.metadata or {}).get('resumed')
+    if raw is True:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    return None
+
+
 def resume_options_to_resume(
     *,
     resume_respond: Part | list[Part] | None = None,
     resume_restart: Part | list[Part] | None = None,
     resume_metadata: dict[str, Any] | None = None,
 ) -> Resume | None:
-    """Build Resume from flat keyword options (``generate`` / prompts)."""
+    """Build a Resume payload from flat resume kwargs."""
     respond = _normalize_resume_parts(resume_respond)
     restart = _normalize_resume_parts(resume_restart)
     if respond is None and restart is None and resume_metadata is None:
         return None
+    # A paused request on resume_respond is INVALID_ARGUMENT naming
+    # Part.respond, which Resume() construction cannot say.
+    reject_unanswered_interrupts(respond=respond, restart=restart)
     return Resume(respond=respond, restart=restart, metadata=resume_metadata)
+
+
+def unanswered_interrupt(part: Part) -> bool:
+    """True when this is still a pause, not a restart or response."""
+    meta = part.metadata or {}
+    return part.tool_request is not None and bool(meta.get('interrupt')) and as_resumed(part) is None
+
+
+def reject_unanswered_interrupts(
+    resume: Resume | None = None,
+    *,
+    respond: list[Part] | None = None,
+    restart: list[Part] | None = None,
+) -> None:
+    if resume is not None:
+        if respond is None:
+            respond = resume.respond
+        if restart is None:
+            restart = resume.restart
+    for part in restart or []:
+        if unanswered_interrupt(part):
+            name = part.tool_request.name if part.tool_request else 'tool'
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=(
+                    f'resume part for {name!r} is still an interrupt; '
+                    'use Part.restart(...) or Part.respond(...) before generate.'
+                ),
+            )
+    for part in respond or []:
+        if part.tool_request is not None and part.tool_response is None:
+            name = part.tool_request.name
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=(f'resume_respond got the paused request for {name!r}; answer it with Part.respond(output)'),
+            )
 
 
 class Message(GenkitModel):
@@ -652,9 +843,6 @@ class GenerateActionOptions(GenkitModel):
         return as_resume(v)
 
 
-_TEXT_DATA_TYPE: str = 'text'
-
-
 class Document(GenkitModel):
     """Multi-part document that can be embedded, indexed, or retrieved."""
 
@@ -693,17 +881,6 @@ class Document(GenkitModel):
         """Create a document from a media URL."""
         return Document(content=[Part.from_media(url, content_type)], metadata=metadata)
 
-    @staticmethod
-    def from_data(
-        data: str,
-        data_type: str | None = None,
-        metadata: dict[str, Any] | None = None,
-    ) -> Document:
-        """Create a document from data, inferring text vs media from data_type."""
-        if data_type == _TEXT_DATA_TYPE:
-            return Document.from_text(data, metadata)
-        return Document.from_media(data, data_type, metadata)
-
     @cached_property
     def text(self) -> str:
         """Concatenate all text parts."""
@@ -717,24 +894,6 @@ class Document(GenkitModel):
     def media(self) -> list[Media]:
         """All media parts."""
         return [part.media for part in self.content if part.media is not None]
-
-    @cached_property
-    def data(self) -> str:
-        """Primary data: text if available, otherwise first media URL."""
-        if self.text:
-            return self.text
-        if self.media:
-            return self.media[0].url
-        return ''
-
-    @cached_property
-    def data_type(self) -> str | None:
-        """Type of primary data: 'text' or first media's content type."""
-        if self.text:
-            return _TEXT_DATA_TYPE
-        if self.media and self.media[0].content_type:
-            return self.media[0].content_type
-        return None
 
 
 class Artifact(GenkitModel):
@@ -809,7 +968,7 @@ class SessionSnapshot(GenkitModel):
     heartbeat_at: str | None = None
     status: SnapshotStatus | None = None
     finish_reason: AgentFinishReason | None = None
-    error: GenkitRuntimeErrorData | None = None
+    error: GenkitRuntimeError | None = None
     state: SessionState | None = None
 
     @field_validator('state', mode='before')
@@ -866,7 +1025,7 @@ class AgentOutput(GenkitModel):
     message: Message | None = None
     artifacts: list[Artifact] | None = None
     finish_reason: AgentFinishReason | None = None
-    error: GenkitRuntimeErrorData | None = None
+    error: GenkitRuntimeError | None = None
 
     @field_validator('message', mode='before')
     @classmethod
@@ -965,6 +1124,25 @@ class ModelRequest(GenkitModel, Generic[ModelRequestConfigT]):
     # Wire-shaped output storage; flat access via the properties below.
     output: OutputConfig = Field(default_factory=OutputConfig)
 
+    def __class_getitem__(cls, typevar_values: type[Any] | tuple[type[Any], ...]) -> Any:  # noqa: ANN401
+        """``ModelRequest[Cfg]``, where ``Cfg`` must be a pydantic model class.
+
+        Checked here, where the annotation is evaluated, so a TypedDict or
+        dict config fails when the model function is defined, with the same
+        error on every Python version.
+        """
+        arg = typevar_values[0] if isinstance(typevar_values, tuple) and typevar_values else typevar_values
+        if not (arg is Any or isinstance(arg, TypeVar) or _is_model_class(arg)):
+            label = arg.__name__ if isinstance(arg, type) and not get_args(arg) else repr(arg)
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=(
+                    f'ModelRequest[{label}]: the config type must be a pydantic '
+                    'BaseModel subclass, e.g. a ModelConfig subclass. Use bare ModelRequest to take config as a dict.'
+                ),
+            )
+        return super().__class_getitem__(typevar_values)
+
     @field_validator('config', mode='before')
     @classmethod
     def _check_config_type(cls, v: object) -> object:
@@ -979,12 +1157,10 @@ class ModelRequest(GenkitModel, Generic[ModelRequestConfigT]):
             return v
         if isinstance(v, BaseModel):
             expected = declared_config_type(cls)
-            if isinstance(expected, type) and issubclass(expected, BaseModel) and not isinstance(v, expected):
+            if expected is not None and not isinstance(v, expected):
                 raise ValueError(
                     f'config must be {config_type_path(expected)} or a mapping, got {config_type_path(type(v))}'
                 )
-            if expected is dict:
-                raise ValueError(f'config must be a mapping, got {type(v).__name__}')
             return v
         raise ValueError(f'config must be a BaseModel or mapping, got {type(v).__name__}')
 
@@ -1118,9 +1294,6 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
         if self.custom is None:
             self.custom = {}
 
-    def assert_valid(self) -> None:
-        """No-op. A blocked or empty reply is still a response the caller can read."""
-
     def _mark_invalid_output(self, message: str) -> None:
         self.error = GenkitRuntimeError(
             status='INTERNAL',
@@ -1141,7 +1314,7 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
                 return True
         return False
 
-    def assert_valid_schema(self) -> None:
+    def _assert_valid_schema(self) -> None:
         """Mark this response as unusable structured output without throwing.
 
         Raw text or a wrong-shape JSON is not a Recipe. generate()
@@ -1158,6 +1331,7 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
             return
 
         schema = self.request.output_schema if self.request is not None else None
+        cut_off = self.finish_reason == FinishReason.LENGTH
 
         try:
             parsed = self._raw_parsed_output()
@@ -1165,12 +1339,25 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
             if isinstance(exc, GenkitError) and (exc.original_message or '').startswith('Invalid output_schema'):
                 raise
             preview = (self.text or '')[:200]
-            self._mark_invalid_output(f'Model output was not valid JSON for the requested schema: {preview}')
+            if cut_off:
+                self._mark_invalid_output(
+                    'Model output was cut off at the token limit '
+                    f'(finish_reason=length) before the JSON was complete: {preview}'
+                )
+            else:
+                target = 'schema' if schema is not None else 'format'
+                self._mark_invalid_output(f'Model output was not valid JSON for the requested {target}: {preview}')
             return
 
         if parsed is None:
             preview = (self.text or '')[:200]
-            self._mark_invalid_output(f'Model output was not valid for the requested format: {preview}')
+            if cut_off:
+                self._mark_invalid_output(
+                    'Model output was cut off at the token limit '
+                    f'(finish_reason=length) before the JSON was complete: {preview}'
+                )
+            else:
+                self._mark_invalid_output(f'Model output was not valid for the requested format: {preview}')
             return
 
         if schema is not None:
@@ -1224,20 +1411,22 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
         return self.message.text
 
     @property
-    def output(self) -> OutputT:
+    def output(self) -> OutputT | None:
         """Parsed structured output, or None when the reply is not that shape.
 
         generate() does not throw when the text is not the schema. If you
         asked for a schema and this is not it, read ``error`` / ``.text``.
+        Only complete JSON counts: a reply cut off mid-object is None (check
+        ``finish_reason == 'length'`` to tell a token cap from bad JSON).
         """
         # BLOCKED and FAILED carry no legitimate content at all, so there is
         # nothing to hand back even when the caller only asked for a format.
         # The rest of ABNORMAL_FINISH_REASONS can still hold usable parts (an
         # interrupt carries tool requests), so they only gate the schema path.
         if self.finish_reason in (FinishReason.BLOCKED, FinishReason.FAILED):
-            return cast(OutputT, None)
+            return None
         if self._wants_structure and self.finish_reason in ABNORMAL_FINISH_REASONS:
-            return cast(OutputT, None)
+            return None
 
         schema = self.request.output_schema if self.request is not None else None
 
@@ -1247,14 +1436,13 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
             # Text that is not the shape they asked for is still text. Reading
             # it back is never worth an exception: `.text` holds the raw reply
             # and `error` carries INVALID_OUTPUT when structure was requested.
-            # Matches JS, where `extractJson` is called without the throw flag.
-            return cast(OutputT, None)
+            return None
 
         if schema is not None:
             try:
                 parse_schema(data=parsed, json_schema=schema)
             except GenkitError:
-                return cast(OutputT, None)
+                return None
 
         # A custom format's parser can return a scalar (e.g. enum string).
         # Skip Pydantic model validation for scalars.
@@ -1265,7 +1453,7 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
         try:
             return cast(OutputT, self._schema_type.model_validate(parsed))
         except ValidationError:
-            return cast(OutputT, None)
+            return None
 
     @property
     def messages(self) -> list[Message]:
@@ -1313,49 +1501,16 @@ class ModelResponseChunk(GenkitModel, Generic[OutputT]):
     content: list[Part]
     custom: Any | None = Field(default=None)
     aggregated: bool | None = None
-    previous_chunks: list[Any] = Field(default_factory=list, exclude=True)
-    chunk_parser: Callable[..., object] | None = Field(default=None, exclude=True)
-    schema_type: type[BaseModel] | None = Field(default=None, exclude=True)
+    # History and the format parser are stamped by the stream helper after
+    # construction so the constructor a plugin types is just the wire fields.
+    _previous_chunks: list[Any] = PrivateAttr(default_factory=list)
+    _chunk_parser: Callable[..., object] | None = PrivateAttr(default=None)
+    _schema_type: type[BaseModel] | None = PrivateAttr(default=None)
 
     @field_validator('content', mode='before')
     @classmethod
     def _wrap_parts(cls, v: object) -> object:
         return parts_from_inbound(v)
-
-    def __init__(
-        self,
-        chunk: ModelResponseChunk[Any] | None = None,
-        previous_chunks: list[Any] | None = None,
-        index: int | float | None = None,
-        chunk_parser: Callable[..., object] | None = None,
-        schema_type: type[BaseModel] | None = None,
-        **kwargs: Any,  # noqa: ANN401
-    ) -> None:
-        """Initialize from a chunk or keyword arguments."""
-        if chunk is not None:
-            payload: dict[str, Any] = {
-                'role': chunk.role,
-                'index': index,
-                'content': chunk.content,
-                'custom': chunk.custom,
-                'aggregated': chunk.aggregated,
-            }
-            BaseModel.__init__(self, **cast(Any, payload))
-        else:
-            if index is not None:
-                kwargs.setdefault('index', index)
-            if previous_chunks is not None:
-                kwargs.setdefault('previous_chunks', previous_chunks)
-            if chunk_parser is not None:
-                kwargs.setdefault('chunk_parser', chunk_parser)
-            if schema_type is not None:
-                kwargs.setdefault('schema_type', schema_type)
-            BaseModel.__init__(self, **cast(Any, kwargs))
-        self.previous_chunks = previous_chunks if previous_chunks is not None else list(self.previous_chunks or [])
-        if chunk_parser is not None:
-            self.chunk_parser = chunk_parser
-        if schema_type is not None:
-            self.schema_type = schema_type
 
     def __eq__(self, other: object) -> bool:
         """Check equality."""
@@ -1376,45 +1531,79 @@ class ModelResponseChunk(GenkitModel, Generic[OutputT]):
     def accumulated_text(self) -> str:
         """Text from all previous chunks plus this chunk."""
         prior = ''
-        if self.previous_chunks:
-            prior = ''.join(p.text for chunk in self.previous_chunks for p in chunk.content if p.text)
+        if self._previous_chunks:
+            prior = ''.join(p.text for chunk in self._previous_chunks for p in chunk.content if p.text)
         return prior + self.text
 
     @cached_property
     def output(self) -> OutputT | None:
-        """Parsed output from accumulated text.
+        """The reply so far, parsed as far as it goes. Never raises.
 
-        With no ``output_schema`` class, this is the extracted JSON value
-        (a dict, list, scalar, or ``None`` if an object has not started).
+        With ``output_schema=Recipe``, this is a partly built ``Recipe``:
+        fields that haven't arrived are ``None`` even when typed ``str``,
+        values may be cut short (``'Fluffy Panc'``), and nothing is
+        validated. Guard each field you read. ``(await stream.response).output``
+        is the only validated ``Recipe``.
 
-        When ``output_schema`` is a Pydantic model, this is an instance of
-        that class with missing fields set to ``None``. Values may still be
-        prefixes, and constraints are not enforced. Guard each field you
-        use. ``(await sr.response).output`` is the only fully validated value.
+        With no schema class, this is the JSON value so far (dict, list,
+        or scalar). It's ``None`` before an object starts or while the text
+        can't be parsed.
         """
-        parsed = (
-            self.chunk_parser(self)
-            if self.chunk_parser
-            else extract_json(self.accumulated_text, throw_on_bad_json=False)
-        )
-        if self.schema_type is not None and isinstance(parsed, dict) and not issubclass(self.schema_type, RootModel):
-            return cast(
-                'OutputT | None',
-                construct_partial(schema_type=self.schema_type, data=parsed),
-            )
-        return cast('OutputT | None', parsed)
+        try:
+            parsed = self._chunk_parser(self) if self._chunk_parser else extract_partial_json(self.accumulated_text)
+            if (
+                self._schema_type is not None
+                and isinstance(parsed, dict)
+                and not issubclass(self._schema_type, RootModel)
+            ):
+                return cast(
+                    'OutputT | None',
+                    construct_partial(schema_type=self._schema_type, data=parsed),
+                )
+            return cast('OutputT | None', parsed)
+        except Exception:
+            # one odd chunk shouldn't end a stream whose final reply may still parse.
+            logger.debug('chunk.output could not be parsed; returning None', exc_info=True)
+            return None
 
 
 def as_model_response_chunk(value: object) -> ModelResponseChunk:
     if isinstance(value, ModelResponseChunk):
-        return ModelResponseChunk(
-            chunk=value,
-            index=value.index,
-            previous_chunks=value.previous_chunks,
-            chunk_parser=value.chunk_parser,
-            schema_type=value.schema_type,
-        )
+        copied = value.model_copy()
+        # model_copy keeps stream history / parser so wrapping still has
+        # index and .output. Re-check content so a two-kind part already
+        # on the chunk cannot persist through AgentStreamChunk.
+        copied.content = [Part.model_validate(part) for part in copied.content]
+        return copied
     return ModelResponseChunk.model_validate(value)
+
+
+def chunk_for_stream(
+    source: ModelResponseChunk[OutputT],
+    *,
+    index: float | None = None,
+    previous_chunks: list[Any] | None = None,
+    chunk_parser: Callable[..., object] | None = None,
+    schema_type: type[BaseModel] | None = None,
+) -> ModelResponseChunk[OutputT]:
+    """Copy a plugin chunk and stamp stream index / parser on the copy.
+
+    Builds a fresh chunk so an already-read ``.output`` on the plugin's
+    chunk cannot override the stream's format parser.
+    """
+    chunk = ModelResponseChunk(
+        role=source.role,
+        index=index,
+        content=source.content,
+        custom=source.custom,
+        aggregated=source.aggregated,
+    )
+    # The snapshot from make is stored as-is so an earlier chunk's
+    # accumulated_text does not grow as later tokens arrive.
+    chunk._previous_chunks = previous_chunks if previous_chunks is not None else []
+    chunk._chunk_parser = chunk_parser
+    chunk._schema_type = schema_type
+    return cast(ModelResponseChunk[OutputT], chunk)
 
 
 class AgentStreamChunk(GenkitModel):

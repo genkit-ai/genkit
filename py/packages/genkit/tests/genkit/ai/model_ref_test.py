@@ -10,10 +10,12 @@ from dataclasses import FrozenInstanceError
 import pytest
 from pydantic import BaseModel
 
+from genkit import Genkit, Message, ModelResponse, Part
 from genkit._ai._model import ModelConfigDict
-from genkit._ai._prompt import PromptGenerateOptions
 from genkit._core._error import GenkitError
+from genkit._core._typing import Role
 from genkit.model import ModelConfig, ModelInfo, ModelRef, Supports, model_ref
+from genkit.testing import define_scripted_model
 
 
 class CustomConfig(BaseModel):
@@ -176,7 +178,6 @@ def test_model_config_dict_accepts_common_knobs() -> None:
         'top_p': 0.9,
         'stop_sequences': ['END'],
         'version': '001',
-        'api_key': 'test-key',
     }
 
     assert config['temperature'] == 0.5
@@ -195,10 +196,18 @@ def test_model_config_dict_keys_match_generation_common_config() -> None:
     assert set(ModelConfigDict.__annotations__) == set(ModelConfig.model_fields)
 
 
-def test_prompt_generate_options_accepts_extra_config_keys() -> None:
-    """Unknown knobs stay on the config dict so a plugin can read them."""
-    opts: PromptGenerateOptions = {'config': {'temperature': None, 'banana': True}}
-    assert opts['config'] == {'temperature': None, 'banana': True}
+@pytest.mark.asyncio
+async def test_prompt_call_config_keeps_extra_keys_for_the_plugin() -> None:
+    """`await p(config={'banana': True})` hands the unknown knob to the model so a plugin can read it."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))]
+    p = ai.define_prompt(prompt='hi')
+
+    await p(config={'temperature': 0.5, 'banana': True})
+
+    assert pm.last_request is not None
+    assert pm.last_request.config == {'temperature': 0.5, 'banana': True}
 
 
 def test_model_ref_isolates_caller_config_and_info() -> None:
