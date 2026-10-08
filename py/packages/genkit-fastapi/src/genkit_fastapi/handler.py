@@ -22,7 +22,7 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
-from typing import Any, TypeVar, cast
+from typing import Any, Protocol, TypeVar, cast
 
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import StreamingResponse
@@ -123,6 +123,41 @@ def format_stream_error(error: Exception) -> str:
     return served_stream_error_event(error=error)
 
 
+class StreamHandle(Protocol):
+    """A generate_stream / chat.send_stream handle: chunks on ``.stream``, result on ``.response``."""
+
+    @property
+    def stream(self) -> AsyncIterator[object]:
+        """Chunks as they arrive from the model."""
+        ...
+
+    @property
+    def response(self) -> Awaitable[object]:
+        """The settled turn once the stream finishes."""
+        ...
+
+
+async def to_sse(turn: StreamHandle) -> AsyncIterator[str]:
+    """Frame a streaming turn as Genkit SSE lines.
+
+    A chunk is not HTTP. This is the line that turns ``turn.stream`` /
+    ``turn.response`` into the same ``data: {message|result|error}`` frames
+    ``serve_agent`` and ``handle_genkit_request`` send, so a hand-rolled
+    FastAPI route can ``yield`` them without inventing a second wire.
+
+    Experimental: import it from ``genkit_fastapi.exp``. It may change
+    between minor releases.
+    """
+    try:
+        async for chunk in turn.stream:
+            yield format_stream_chunk(chunk)
+        result = await turn.response
+        yield format_stream_result(result)
+    except Exception as e:
+        log_served_failure(adapter_logger=logger, error=e, where='stream')
+        yield format_stream_error(e)
+
+
 async def handle_genkit_request(
     request: Request,
     *,
@@ -202,14 +237,13 @@ async def _handle_action_request(
 
         async def event_stream() -> AsyncIterator[str]:
             try:
-                stream_response = action_obj.stream(input=action_input, context=context, init=resolved_init)
-                async for chunk in stream_response.stream:
-                    yield format_stream_chunk(chunk)
-                result = await stream_response.response
-                yield format_stream_result(result)
+                stream_handle = action_obj.stream(input=action_input, context=context, init=resolved_init)
             except Exception as e:
                 log_served_failure(adapter_logger=logger, error=e, where='stream')
                 yield format_stream_error(e)
+                return
+            async for line in to_sse(stream_handle):
+                yield line
 
         return StreamingResponse(event_stream(), media_type='text/event-stream')
 

@@ -17,6 +17,7 @@
 
 """Tests for the FastAPI plugin."""
 
+import asyncio
 import json
 import logging
 
@@ -24,6 +25,7 @@ import pytest
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from genkit_fastapi import genkit_fastapi_handler, serve_flow
+from genkit_fastapi.exp import to_sse
 from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -182,6 +184,107 @@ def test_context_dependency_value_reaches_action() -> None:
 
     assert response.status_code == 200
     assert response.json()['result'] == 'user-123'
+
+
+class _Turn:
+    """A generate_stream-shaped handle for to_sse tests."""
+
+    def __init__(
+        self,
+        chunks: list[object],
+        result: object = None,
+        error: Exception | None = None,
+        *,
+        fail_after_chunks: bool = False,
+    ) -> None:
+        self._chunks = chunks
+        self._result = result
+        self._error = error
+        self._fail_after_chunks = fail_after_chunks
+
+    @property
+    def stream(self):
+        return self._iter()
+
+    async def _iter(self):
+        if self._error is not None and not self._chunks and not self._fail_after_chunks:
+            raise self._error
+        for chunk in self._chunks:
+            yield chunk
+        if self._error is not None and self._fail_after_chunks:
+            raise self._error
+
+    @property
+    def response(self):
+        return self._done()
+
+    async def _done(self):
+        if self._error is not None and not self._fail_after_chunks:
+            raise self._error
+        return self._result
+
+
+def _sse_lines(turn: _Turn) -> list[str]:
+    async def collect() -> list[str]:
+        return [line async for line in to_sse(turn)]
+
+    return asyncio.run(collect())
+
+
+def test_to_sse_text_chunk_then_result_are_data_frames() -> None:
+    """A chunk then a result become data: {message} and data: {result}."""
+    lines = _sse_lines(_Turn(chunks=[{'text': 'Hi'}], result={'ok': True}))
+
+    assert lines == [
+        'data: {"message":{"text":"Hi"}}\n\n',
+        'data: {"result":{"ok":true}}\n\n',
+    ]
+
+
+def test_to_sse_no_chunks_is_only_the_result_frame() -> None:
+    """A settled turn with no chunks is a single result frame."""
+    lines = _sse_lines(_Turn(chunks=[], result={'ok': True}))
+
+    assert lines == ['data: {"result":{"ok":true}}\n\n']
+
+
+def test_to_sse_error_after_a_chunk_is_chunk_then_error_no_result() -> None:
+    """A failure after a chunk keeps the chunk and sends error, not result."""
+    lines = _sse_lines(
+        _Turn(
+            chunks=[{'text': 'Hi'}],
+            error=GenkitError(status='INTERNAL', message='boom'),
+            fail_after_chunks=True,
+        )
+    )
+
+    assert len(lines) == 2
+    assert lines[0] == 'data: {"message":{"text":"Hi"}}\n\n'
+    assert lines[1].startswith('data: {')
+    payload = json.loads(lines[1].removeprefix('data: ').strip())
+    assert 'error' in payload
+    assert 'result' not in payload
+
+
+def test_to_sse_error_before_chunks_is_only_the_error_frame() -> None:
+    """A failure before any chunk is a single error frame."""
+    lines = _sse_lines(_Turn(chunks=[], error=GenkitError(status='INTERNAL', message='boom')))
+
+    assert len(lines) == 1
+    payload = json.loads(lines[0].removeprefix('data: ').strip())
+    assert 'error' in payload
+    assert 'result' not in payload
+    assert 'message' not in payload
+
+
+def test_to_sse_is_experimental_only() -> None:
+    """to_sse comes from genkit_fastapi.exp, not the stable import."""
+    import genkit_fastapi
+    import genkit_fastapi.exp
+
+    assert 'to_sse' not in genkit_fastapi.__all__
+    assert not hasattr(genkit_fastapi, 'to_sse')
+    assert 'to_sse' in genkit_fastapi.exp.__all__
 
 
 def test_fastapi_flow_raising_not_found_returns_500_internal_error() -> None:
