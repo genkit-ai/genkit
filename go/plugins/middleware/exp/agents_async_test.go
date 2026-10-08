@@ -578,6 +578,73 @@ func TestAgentsWaitTimeoutOverflowIsUnbounded(t *testing.T) {
 	}
 }
 
+// TestAgentsWaitFollowsACappedSubAgentWait runs a task that outlives the
+// sub-agent's waitForSnapshot limit. The companion action answers each request
+// at the limit with the row still pending, and the follow must ask again: an
+// unbounded wait reports the task completed, not timed out.
+func TestAgentsWaitFollowsACappedSubAgentWait(t *testing.T) {
+	g := newTestGenkit(t)
+
+	const limit = 20 * time.Millisecond
+	genkitx.DefineCustomAgent[any](g, "researcher",
+		func(ctx context.Context, resp aix.Responder, sess *aix.SessionRunner[any]) (*aix.AgentResult, error) {
+			var last *ai.Message
+			err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) (*aix.TurnResult, error) {
+				select {
+				case <-time.After(10 * limit):
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+				last = ai.NewModelTextMessage("slow answer")
+				sess.AddMessages(last)
+				return &aix.TurnResult{FinishReason: aix.AgentFinishReasonStop}, nil
+			})
+			if err != nil {
+				return nil, err
+			}
+			return &aix.AgentResult{Message: last}, nil
+		},
+		aix.WithSessionStore[any](localstore.NewInMemorySessionStore[any]()),
+		aix.WithMaxSnapshotWait[any](limit),
+	)
+
+	orch := toolModel(t, g, "test/orch-capped", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		launches := toolOutputs(req.Messages, "delegate_to_researcher")
+		waits := toolOutputs(req.Messages, waitBackgroundTasksToolName)
+		switch {
+		case len(launches) == 0:
+			return toolReqResp(req, &ai.ToolRequest{
+				Name:  "delegate_to_researcher",
+				Input: map[string]any{"task": "slow dig", "background": true},
+			}), nil
+		case len(waits) == 0:
+			return toolReqResp(req, &ai.ToolRequest{
+				Name:  waitBackgroundTasksToolName,
+				Input: map[string]any{"taskIds": []string{lenientDelegation(launches[0]).TaskID}},
+			}), nil
+		default:
+			return textResp(req, "done"), nil
+		}
+	})
+
+	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("research"),
+		ai.WithUse(&Agents{Agents: []aix.AgentRef{{Name: "researcher"}}, Async: true}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitOuts := toolOutputs(resp.History(), waitBackgroundTasksToolName)
+	if len(waitOuts) != 1 {
+		t.Fatalf("expected 1 wait response, got %d", len(waitOuts))
+	}
+	res := decodeToolOutput[backgroundTasksResult](t, waitOuts[0])
+	if res.TimedOut {
+		t.Errorf("an unbounded wait timed out at the sub-agent's limit: %+v", res)
+	}
+	if len(res.Tasks) != 1 || res.Tasks[0].Status != "completed" || res.Tasks[0].Response != "slow answer" {
+		t.Errorf("want the task followed to completion, got %+v", res.Tasks)
+	}
+}
+
 // TestAgentsWaitForFirstSettled pins the wait tool's race join: with
 // waitFor "first" the tool returns as soon as any listed task settles, the
 // still-running tasks report as pending, and the return is not a timeout.

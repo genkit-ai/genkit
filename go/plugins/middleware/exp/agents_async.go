@@ -353,9 +353,10 @@ func (a *Agents) taskReportTool(st *agentsState, fetch snapshotFetch) func(conte
 // Each task is followed by the sub-agent's waitForSnapshot companion action, so
 // the waiting happens next to the store that knows when the work finished
 // rather than as a snapshot read per tick here: one action dispatch per task
-// for the whole wait, which is one span each in a trace instead of a stream of
-// them, and a settlement is observed as it happens rather than on the next
-// tick. The waits run concurrently, so the slowest task sets the wall clock.
+// per the sub-agent's wait limit (see [aix.WithMaxSnapshotWait]; the handle
+// asks again until the task settles), which is a few spans in a trace instead
+// of a stream of them, and a settlement is observed as it happens rather than
+// on the next tick. The waits run concurrently, so the slowest task sets the wall clock.
 //
 // A settled task's report is cached for the rest of the generate call (no
 // snapshot re-reads or artifact re-merges when the model checks again), and

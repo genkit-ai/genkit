@@ -700,6 +700,59 @@ func (t *recordingTransport) Abort(ctx context.Context, snapshotID string) (Snap
 	return SnapshotStatusAborted, nil
 }
 
+// cappedWaitTransport answers each wait with a pending row until settleAfter
+// waits have been made, the way a waitForSnapshot action under its
+// [WithMaxSnapshotWait] limit answers a task that outlives the limit.
+type cappedWaitTransport struct {
+	recordingTransport
+	settleAfter int
+	waits       int
+	onWait      func()
+}
+
+func (t *cappedWaitTransport) WaitForSnapshot(ctx context.Context, snapshotID string) (*SessionSnapshot[json.RawMessage], error) {
+	t.waits++
+	if t.onWait != nil {
+		t.onWait()
+	}
+	if t.settleAfter > 0 && t.waits >= t.settleAfter {
+		return &SessionSnapshot[json.RawMessage]{SnapshotID: snapshotID, Status: SnapshotStatusCompleted}, nil
+	}
+	return &SessionSnapshot[json.RawMessage]{SnapshotID: snapshotID, Status: SnapshotStatusPending}, nil
+}
+
+// TestAgentHandle_WaitForSnapshotAsksAgainUntilSettled pins the handle's
+// contract over a capped wait action: a pending answer is the action's limit,
+// not the outcome, so the handle asks again until the snapshot settles or ctx
+// ends.
+func TestAgentHandle_WaitForSnapshotAsksAgainUntilSettled(t *testing.T) {
+	t.Run("settles", func(t *testing.T) {
+		tr := &cappedWaitTransport{settleAfter: 3}
+		h := &AgentHandle{name: "researcher", transport: tr}
+		snap, err := h.WaitForSnapshot(context.Background(), "snap-1")
+		if err != nil {
+			t.Fatalf("WaitForSnapshot: %v", err)
+		}
+		if snap.Status != SnapshotStatusCompleted {
+			t.Errorf("status = %q, want %q", snap.Status, SnapshotStatusCompleted)
+		}
+		if tr.waits != 3 {
+			t.Errorf("waits = %d, want 3", tr.waits)
+		}
+	})
+	t.Run("ctx ends", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		tr := &cappedWaitTransport{onWait: cancel}
+		h := &AgentHandle{name: "researcher", transport: tr}
+		if _, err := h.WaitForSnapshot(ctx, "snap-1"); !errors.Is(err, context.Canceled) {
+			t.Fatalf("WaitForSnapshot error = %v, want context.Canceled", err)
+		}
+		if tr.waits != 1 {
+			t.Errorf("waits = %d, want 1", tr.waits)
+		}
+	})
+}
+
 // TestAgentHandle_DelegatesToTransport pins the division of labour the seam
 // exists to create. The handle resolves options and validates arguments; the
 // transport receives a request that is already well formed and decides nothing
