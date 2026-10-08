@@ -75,9 +75,8 @@ export type RunActionResponse = z.infer<typeof RunActionResponseSchema>;
 
 export interface ReflectionServerOptions {
   /**
-   * Exact port to bind; fails if it is taken. `-1` lets the OS pick. When
-   * unset (or `0`), probes upward from 3100. `GENKIT_REFLECTION_PORT`
-   * overrides this.
+   * Exact port to bind; fails if it is taken. `0` lets the OS pick. When
+   * unset, probes upward from 3100. `GENKIT_REFLECTION_PORT` overrides this.
    */
   port?: number;
   /** Body size limit for the server. Defaults to `30mb`. */

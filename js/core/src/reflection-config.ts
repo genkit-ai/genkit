@@ -32,13 +32,6 @@ export const DEFAULT_REFLECTION_PORT = 3100;
 export const REFLECTION_AUTH_ERROR_CODE = -32001;
 
 /**
- * Programmatic port value meaning "let the OS pick". Code cannot use 0 for
- * this (it is Go's zero value and falsy in Python, so it reads as "unset"
- * there); the environment spells the same thing `GENKIT_REFLECTION_PORT=0`.
- */
-export const REFLECTION_PORT_AUTO = -1;
-
-/**
  * Either an exact port (0 lets the OS pick) or a probe upward from
  * {@link DEFAULT_REFLECTION_PORT}, used only when nobody chose a port.
  */
@@ -115,9 +108,10 @@ function parseEnabled(raw: string | undefined): boolean | undefined {
  * Resolves the port for the v1 server. Whoever chose a port, the environment
  * or the code, gets exactly that port; only an unchosen port is probed.
  *
- * Code values: `undefined` or `0` is unset, {@link REFLECTION_PORT_AUTO} (-1)
- * lets the OS pick, 1..65535 is exact. Anything else throws, even when the
- * environment port wins, so a bad value fails regardless of deployment.
+ * Code values: `undefined` is unset, `0` lets the OS pick (same as
+ * `GENKIT_REFLECTION_PORT=0` and `net.Server.listen`), 1..65535 is exact.
+ * Anything else throws, even when the environment port wins, so a bad value
+ * fails regardless of deployment.
  */
 export function resolveReflectionPort(
   envPort: number | undefined,
@@ -128,15 +122,12 @@ export function resolveReflectionPort(
 }
 
 function resolveOptionPort(optionPort: number | undefined): ReflectionPort {
-  if (optionPort === undefined || optionPort === 0) {
+  if (optionPort === undefined) {
     return { kind: 'probe' };
   }
-  if (optionPort === REFLECTION_PORT_AUTO) {
-    return { kind: 'pinned', port: 0 };
-  }
-  if (!Number.isInteger(optionPort) || optionPort < 1 || optionPort > 65535) {
+  if (!Number.isInteger(optionPort) || optionPort < 0 || optionPort > 65535) {
     throw new Error(
-      `reflectionPort must be -1 (OS-assigned) or an integer between 1 and 65535, got ${optionPort}.`
+      `reflectionPort must be an integer between 0 and 65535, got ${optionPort}.`
     );
   }
   return { kind: 'pinned', port: optionPort };
@@ -216,14 +207,29 @@ export function advertisedReflectionHost(host: string): string {
   return host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
 }
 
-/** Whether a host is loopback, and so unreachable from other machines. */
+/**
+ * Whether a host is loopback, and so unreachable from other machines. Only
+ * `localhost` and literal loopback IPs count (matching the CLI); a hostname
+ * like `127.internal.example` may resolve anywhere.
+ */
 export function isLoopbackHost(host: string): boolean {
-  return (
-    host === 'localhost' ||
-    host === '::1' ||
-    host === '[::1]' ||
-    /^127\./.test(host)
-  );
+  if (host === 'localhost') {
+    return true;
+  }
+  if (/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)) {
+    return true;
+  }
+  const unbracketed = host.replace(/^\[(.*)\]$/, '$1');
+  if (!unbracketed.includes(':')) {
+    return false;
+  }
+  // URL normalizes IPv6 literals, which covers every spelling of ::1
+  // (e.g. 0:0:0:0:0:0:0:1). Invalid literals throw.
+  try {
+    return new URL(`http://[${unbracketed}]`).hostname === '[::1]';
+  } catch {
+    return false;
+  }
 }
 
 /**

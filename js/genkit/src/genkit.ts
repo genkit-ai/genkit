@@ -158,7 +158,7 @@ export interface GenkitOptions {
   /** Additional attribution information to include in the x-goog-api-client header. */
   clientHeader?: string;
   /**
-   * Exact port for the reflection API; startup fails if it is taken. `-1`
+   * Exact port for the reflection API; startup fails if it is taken. `0`
    * lets the OS pick. When unset, probes upward from 3100.
    * `GENKIT_REFLECTION_PORT` overrides this.
    *
