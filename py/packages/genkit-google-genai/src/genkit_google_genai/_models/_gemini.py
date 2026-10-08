@@ -1981,6 +1981,10 @@ class GeminiModel:
                         cfg = genai_types.GenerateContentConfig(**known)
                     except ValidationError as e:
                         raise sdk_config_error(action_name=self._version, error=e) from e
+                    # The SDK types top_k as float and coerces 40 to 40.0; the
+                    # API's topK is int32. Assignment isn't revalidated.
+                    if isinstance(known.get('top_k'), int):
+                        cfg.top_k = known['top_k']
 
         # Tools from top-level field and config-level fields
         tools.extend(declared_tools if declared_tools is not None else self._get_tools(request))
