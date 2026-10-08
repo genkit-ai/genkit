@@ -19,11 +19,11 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Annotated, Any, TypeAlias, cast, get_args, get_origin, get_type_hints
 
-from pydantic import BaseModel
+from pydantic import AliasChoices, BaseModel, ValidationError
 
 from genkit._core._action import (
     Action,
@@ -49,7 +49,7 @@ from genkit._core._model import (
 )
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
-from genkit._core._typing import ActionMetadata, ModelInfo
+from genkit._core._typing import ActionMetadata, GenerationCommonConfig, ModelInfo
 
 # Type alias for model functions (must be async)
 # Use ctx.send_chunk() for streaming
@@ -72,7 +72,13 @@ class ResolvedModel:
 
 
 def python_config_schema(schema: object) -> type[BaseModel] | None:
+    """The class a call's config is checked against, or None for no check."""
     return schema if isinstance(schema, type) and issubclass(schema, BaseModel) else None
+
+
+def ref_defers_to_registered_class(schema: type[BaseModel] | None) -> bool:
+    """True when the ref named plain ModelConfig, so the model's class is used."""
+    return schema is ModelConfig or schema is GenerationCommonConfig
 
 
 def config_field_names(schema: type[BaseModel]) -> dict[str, str]:
@@ -82,6 +88,13 @@ def config_field_names(schema: type[BaseModel]) -> dict[str, str]:
         names[name] = name
         if field.alias:
             names[field.alias] = name
+        accepted = field.validation_alias
+        if isinstance(accepted, str):
+            names[accepted] = name
+        elif isinstance(accepted, AliasChoices):
+            for choice in accepted.choices:
+                if isinstance(choice, str):
+                    names[choice] = name
     return names
 
 
@@ -219,11 +232,12 @@ async def resolve_for_generate(
 ) -> ResolvedModel:
     """Name, config bag, and the config class this generate will check against.
 
-    A ModelRef already has the class. A string name reads it off the
-    registered model action.
+    A plugin class on a ModelRef is the class this call checks. Plain
+    ``ModelConfig`` on a ref means the same as the model name: check
+    against the class the model registered.
     """
     resolved = resolve_call_model(model=model, config=config, registry=registry, message=message)
-    if resolved.config_schema is not None:
+    if resolved.config_schema is not None and not ref_defers_to_registered_class(resolved.config_schema):
         return resolved
     action = await registry.resolve_model(resolved.name)
     raw = getattr(action, '_config_schema', None) if action is not None else None
@@ -447,6 +461,54 @@ def assert_correct_config_class(
         message=f'{model}: {body}' if model else body,
         reason=RuntimeErrorReason.INVALID_INPUT,
     )
+
+
+def check_config_dict(*, config: object, schema: type[BaseModel] | None, model: str) -> None:
+    """A dict config has to fit the model's class before anything is sent.
+
+    Layers merge by top-level key, so a missing top-level field is fine
+    here — another layer may supply it. A nested object is sent whole, so
+    a missing field inside one raises. ``None`` means "clear the default"
+    and isn't checked.
+    """
+    if schema is None or not isinstance(config, Mapping):
+        return
+    layer = {key: value for key, value in cast(Mapping[str, Any], config).items() if value is not None}
+    try:
+        schema.model_validate(layer)
+    except ValidationError as e:
+        problems = [err for err in e.errors() if not (err['type'] == 'missing' and len(err['loc']) == 1)]
+        if not problems:
+            return
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f'{model}: {_describe_config_problems(problems)}',
+            reason=RuntimeErrorReason.INVALID_INPUT,
+            cause=e,
+        ) from e
+
+
+def _describe_config_problems(problems: Sequence[Mapping[str, Any]]) -> str:
+    unknown = [_config_path(err['loc']) for err in problems if err['type'] == 'extra_forbidden']
+    parts: list[str] = []
+    if unknown:
+        keys = ', '.join(repr(key) for key in unknown)
+        noun = 'key' if len(unknown) == 1 else 'keys'
+        parts.append(f"unknown config {noun} {keys}; put provider-only settings in config['extra']")
+    parts.extend(
+        f'config {_config_path(err["loc"])!r}: {err["msg"]}' for err in problems if err['type'] != 'extra_forbidden'
+    )
+    return '; '.join(parts)
+
+
+def _config_path(loc: tuple[int | str, ...]) -> str:
+    return '.'.join(str(part) for part in loc)
+
+
+def check_call_config(*, config: object, schema: type[BaseModel] | None, model: str) -> None:
+    """Call-time config check: a typed object's class and a dict's keys and values."""
+    assert_correct_config_class(config=config, schema=schema, model=model)
+    check_config_dict(config=config, schema=schema, model=model)
 
 
 # =============================================================================

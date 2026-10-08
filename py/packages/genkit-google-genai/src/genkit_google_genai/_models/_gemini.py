@@ -56,8 +56,10 @@ from genkit_google_genai._constants import is_multi_regional_location, multi_reg
 from genkit_google_genai._models._context_caching._constants import DEFAULT_TTL
 from genkit_google_genai._models._context_caching._utils import generate_cache_key, validate_context_cache_request
 from genkit_google_genai._models._sdk_config import (
+    attach_config_extra,
     attach_leftovers,
     dump_family_config,
+    keep_client_extra_body,
     sdk_config_error,
     split_sdk_fields,
 )
@@ -246,9 +248,13 @@ class VoiceConfigSchema(BaseModel):
 
 
 class GeminiConfig(ModelConfig):
-    """Gemini Config."""
+    """Gemini Config.
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True)
+    Unknown keys raise. A request field this class doesn't declare goes in
+    ``extra`` under its wire name and is merged into the request body.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
 
     base_url: str | None = Field(
         None, description='Overrides the plugin-configured or default baseUrl, if specified.', alias='baseUrl'
@@ -449,6 +455,25 @@ class GeminiConfig(ModelConfig):
         default=None, alias='maxOutputTokens', description='Maximum number of tokens to generate.'
     )
     stop_sequences: list[str] | None = Field(default=None, alias='stopSequences', description='Stop sequences.')
+
+    # Sampling knobs GenerateContentConfig types. Declared so they stay flat
+    # and SDK-validated now that unknown keys raise.
+    seed: int | None = Field(default=None, description='Seed for decoding; repeats the same output for the same input.')
+    presence_penalty: float | None = Field(
+        default=None, alias='presencePenalty', description='Penalizes tokens that already appear in the output.'
+    )
+    frequency_penalty: float | None = Field(
+        default=None, alias='frequencyPenalty', description='Penalizes tokens by how often they appear in the output.'
+    )
+    candidate_count: int | None = Field(
+        default=None, alias='candidateCount', description='Number of response candidates to generate.'
+    )
+    response_logprobs: bool | None = Field(
+        default=None, alias='responseLogprobs', description='Return log probabilities of the output tokens.'
+    )
+    logprobs: int | None = Field(
+        default=None, description='Number of top candidate tokens to return log probabilities for.'
+    )
 
 
 class SpeakerVoiceConfigSchema(BaseModel):
@@ -1842,7 +1867,8 @@ class GeminiModel:
         2. Dump the typed request.config instance into a snake_case dict
         3. Extract tool-related fields from the dict
         4. Clean Genkit-specific / unsupported keys from the dict
-        5. Build GenerateContentConfig from known fields; leftovers ride on extra_body
+        5. Build GenerateContentConfig from known fields; leftovers ride on extra_body,
+           and ``config.extra`` is merged over the top of the request body
         """
         system_instruction: list[genai.types.Part] = []
 
@@ -1861,19 +1887,24 @@ class GeminiModel:
         tools: list[genai_types.Tool] = []
 
         leftovers: dict[str, Any] = {}
+        extra: dict[str, Any] | None = None
         if request.config:
             # 2. Normalize config into a dict
             dumped_config = self._normalize_config_to_dict(request.config)
 
             if dumped_config is not None:
+                # config.extra is wire-shaped; it goes on the body as-is in step 5.
+                extra = dumped_config.pop('extra', None)
+
                 # 3. Extract tool-related fields
                 self._extract_tools_from_config(dumped_config, tools)
 
                 # 4. Clean Genkit-specific and unsupported keys
                 self._clean_unsupported_keys(dumped_config)
 
-                # 5. Build GenerateContentConfig from known fields; leftovers ride
-                # on extra_body so a newly supported key still reaches the API.
+                # 5. Build GenerateContentConfig from known fields. Leftovers are
+                # declared fields the installed SDK doesn't type yet; they ride
+                # on extra_body under generationConfig.
                 known, leftovers = split_sdk_fields(dumped_config, genai_types.GenerateContentConfig)
                 if known:
                     try:
@@ -1886,7 +1917,7 @@ class GeminiModel:
 
         has_output = bool(request.output_format or request.output_schema)
 
-        if cfg is not None or tools or system_instruction or request.output_format or leftovers:
+        if cfg is not None or tools or system_instruction or request.output_format or leftovers or extra:
             if cfg is None:
                 cfg = genai_types.GenerateContentConfig()
 
@@ -1918,7 +1949,9 @@ class GeminiModel:
                 cfg.tools = cast(genai_types.ToolListUnion, tools)
 
             cfg.system_instruction = genai_types.Content(parts=system_instruction) if system_instruction else None
-            return attach_leftovers(cfg, leftovers, nest='generationConfig')
+            cfg = attach_leftovers(cfg, leftovers, nest='generationConfig')
+            cfg = attach_config_extra(cfg, extra, action_name=self._version)
+            return keep_client_extra_body(cfg, (self._client_kwargs or {}).get('http_options'))
 
         return None
 

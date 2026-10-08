@@ -19,7 +19,9 @@
 Extends the shared :class:`ModelConfig` (``version``, ``temperature``,
 ``maxOutputTokens``, ...) with Anthropic-specific options.
 
-Unknown keys pass through (``extra='allow'``). Top-level Genkit fields
+Unknown top-level keys raise, so a typo fails before the request is sent.
+A ``messages.create()`` param this class doesn't declare goes in ``extra``
+and is sent through the SDK's ``extra_body``. Top-level Genkit fields
 accept their usual camelCase aliases, while Anthropic-specific nested keys
 match the Anthropic plugin shape field-by-field.
 """
@@ -37,11 +39,6 @@ from genkit.model import ModelConfig
 _STABLE_BODY_KEYS = frozenset(MessageCreateParamsBase.__annotations__)
 _BETA_BODY_KEYS = frozenset(BetaMessageCreateParamsBase.__annotations__)
 
-# Accepted by create() alongside the body fields; `stream` is excluded because Genkit owns streaming.
-_REQUEST_KWARG_KEYS = frozenset({'extra_body', 'extra_headers', 'extra_query', 'timeout'})
-
-STABLE_KWARG_KEYS = _STABLE_BODY_KEYS | _REQUEST_KWARG_KEYS
-BETA_KWARG_KEYS = _BETA_BODY_KEYS | _REQUEST_KWARG_KEYS
 BETA_ONLY_KEYS = _BETA_BODY_KEYS - _STABLE_BODY_KEYS
 
 _NESTED_CONFIG = ConfigDict(extra='allow', populate_by_name=True)
@@ -289,7 +286,6 @@ class AnthropicConfig(ModelConfig):
 
     model_config = ConfigDict(
         alias_generator=to_camel,
-        extra='allow',
         json_schema_extra=_anthropic_config_schema_extra,
         populate_by_name=True,
     )
@@ -320,11 +316,11 @@ class AnthropicConfig(ModelConfig):
     )
 
     def beta_only_fields(self) -> set[str]:
-        """Return the names of beta-only request fields set on this config."""
+        """Return the names of beta-only request fields set on this config, including in ``extra``."""
         present = {
             name
-            for name, value in (self.__pydantic_extra__ or {}).items()
-            if name in BETA_ONLY_KEYS and value is not None
+            for name, value in (self.extra or {}).items()
+            if name in BETA_ONLY_KEYS and name != 'betas' and value is not None
         }
         if self.betas:
             present.add('betas')

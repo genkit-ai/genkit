@@ -854,6 +854,14 @@ def _text_request(config: Any) -> ModelRequest:
     )
 
 
+def _tool_request(config: Any) -> ModelRequest:
+    return ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part.from_text('Hi')])],
+        tools=[ToolDefinition(name='get_weather', description='Weather', input_schema={'type': 'object'})],
+        config=config,
+    )
+
+
 @pytest.mark.parametrize(
     ('config', 'default_api_version', 'expected'),
     [
@@ -1105,12 +1113,12 @@ def test_build_params_default_max_tokens() -> None:
 
 
 @pytest.mark.asyncio
-async def test_dict_config_unknown_key_reaches_sdk() -> None:
-    """Unknown extra keys in a dict config pass through the SDK body escape hatch."""
+async def test_dict_config_extra_reaches_sdk() -> None:
+    """Keys under `extra` in a dict config pass through the SDK body escape hatch."""
     mock_client = _mock_client_for_generate()
     model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
 
-    await model.generate(_text_request({'temperature': 0.3, 'future_option': 'x'}))
+    await model.generate(_text_request({'temperature': 0.3, 'extra': {'future_option': 'x'}}))
 
     kwargs = mock_client.messages.create.call_args.kwargs
     assert kwargs['temperature'] == 0.3
@@ -1246,9 +1254,8 @@ async def test_config_tool_choice_and_metadata_reach_sdk() -> None:
     config = AnthropicConfig.model_validate({
         'tool_choice': {'type': 'tool', 'name': 'get_weather'},
         'metadata': {'user_id': 'user-123'},
-        'tools': [{'name': 'get_weather', 'description': 'Weather', 'input_schema': {'type': 'object'}}],
     })
-    await model.generate(_text_request(config))
+    await model.generate(_tool_request(config))
 
     kwargs = mock_client.messages.create.call_args.kwargs
     assert kwargs['tool_choice'] == {'type': 'tool', 'name': 'get_weather'}
@@ -1261,12 +1268,7 @@ async def test_config_tool_choice_none_reaches_sdk() -> None:
     mock_client = _mock_client_for_generate()
     model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
 
-    await model.generate(
-        _text_request({
-            'tool_choice': {'type': 'none'},
-            'tools': [{'name': 'get_weather', 'description': 'Weather', 'input_schema': {'type': 'object'}}],
-        })
-    )
+    await model.generate(_tool_request({'tool_choice': {'type': 'none'}}))
 
     kwargs = mock_client.messages.create.call_args.kwargs
     assert kwargs['tool_choice'] == {'type': 'none'}
@@ -1339,16 +1341,16 @@ def test_backward_compat_plain_model_config() -> None:
     ],
 )
 async def test_beta_only_params_select_beta_surface(config: dict, kwarg: str) -> None:
-    """Beta-only params route to the beta surface instead of crashing the stable one."""
+    """Beta-only params in `extra` route to the beta surface instead of crashing the stable one."""
     mock_client = _mock_client_for_generate()
     model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
 
-    await model.generate(_text_request(config))
+    await model.generate(_text_request({'extra': config}))
 
     mock_client.messages.create.assert_not_called()
     kwargs = mock_client.beta.messages.create.call_args.kwargs
-    assert kwargs[kwarg] == config[kwarg]
-    assert 'extra_body' not in kwargs
+    assert kwargs['extra_body'][kwarg] == config[kwarg]
+    assert kwarg not in kwargs
 
 
 @pytest.mark.asyncio
@@ -1370,24 +1372,24 @@ async def test_unknown_params_still_route_to_extra_body_on_beta() -> None:
     mock_client = _mock_client_for_generate()
     model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
 
-    await model.generate(_text_request({'speed': 'fast', 'future_option': 'x'}))
+    await model.generate(_text_request({'extra': {'speed': 'fast', 'future_option': 'x'}}))
 
     kwargs = mock_client.beta.messages.create.call_args.kwargs
-    assert kwargs['speed'] == 'fast'
-    assert kwargs['extra_body'] == {'future_option': 'x'}
+    assert kwargs['extra_body'] == {'speed': 'fast', 'future_option': 'x'}
 
 
 @pytest.mark.asyncio
 async def test_config_stream_does_not_reach_sdk() -> None:
-    """Genkit owns streaming, so a config-level stream flag is dropped."""
+    """Genkit owns streaming: a flat `stream` is an unknown key, and `extra` can't set it."""
     mock_client = _mock_client_for_generate()
     model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
 
-    await model.generate(_text_request({'stream': True}))
+    with pytest.raises(GenkitError, match='stream'):
+        await model.generate(_text_request({'stream': True}))
+    with pytest.raises(GenkitError, match='stream'):
+        await model.generate(_text_request({'extra': {'stream': True}}))
 
-    kwargs = mock_client.messages.create.call_args.kwargs
-    assert 'stream' not in kwargs
-    assert 'stream' not in (kwargs.get('extra_body') or {})
+    mock_client.messages.create.assert_not_called()
 
 
 @pytest.mark.parametrize(

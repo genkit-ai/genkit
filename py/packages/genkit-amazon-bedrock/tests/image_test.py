@@ -23,6 +23,7 @@ import pytest
 from botocore.exceptions import ClientError, NoCredentialsError
 from genkit_amazon_bedrock.config import BedrockConfig, BedrockImageConfig
 from genkit_amazon_bedrock.image import BedrockImageModel, build_amazon_image_body, is_image_model
+from pydantic import ConfigDict
 
 from genkit import ActionRunContext, FinishReason, GenkitError, Media, Message, ModelResponse, Part, Role
 from genkit.model import ModelConfig, ModelRequest
@@ -527,13 +528,16 @@ async def test_a_pydantic_config_and_the_equivalent_dict_agree() -> None:
 
 @pytest.mark.asyncio
 async def test_a_generic_config_model_and_the_equivalent_dict_agree() -> None:
-    # ModelConfig is what the framework coerces a raw mapping into, so the two
-    # input paths must drop the same keys.
+    # a generic config object and a raw mapping are both legal inputs, so the
+    # two paths must drop the same keys.
+    class LooseConfig(ModelConfig):
+        model_config = ConfigDict(extra='allow')
+
     typed = FakeInvokeTransport(stability_response('modern-image', finish_reasons=['SUCCESS']))
     plain = FakeInvokeTransport(stability_response('modern-image', finish_reasons=['SUCCESS']))
     overrides: dict[str, Any] = {'temperature': 0.9, 'max_output_tokens': 100, 'seed': 42}
 
-    await generate(SD3, typed, image_request(config=ModelConfig.model_validate(overrides)))
+    await generate(SD3, typed, image_request(config=LooseConfig.model_validate(overrides)))
     await generate(SD3, plain, image_request(config=overrides))
 
     assert typed.bodies() == plain.bodies()

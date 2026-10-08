@@ -136,12 +136,13 @@ class OllamaConfig(ModelConfig):
     """Configuration schema for Ollama models.
 
     Extends the shared :class:`ModelConfig` with Ollama-specific sampler
-    knobs and the ``think`` chain-of-thought control. Unknown keys are
-    accepted (``extra='allow'``) and forwarded to the Ollama server's
-    ``options`` so newer sampler parameters work without an SDK bump.
+    knobs and the ``think`` chain-of-thought control. Unknown keys raise. A
+    sampler option this class doesn't declare (``repeat_penalty``,
+    ``mirostat``, ...) goes in ``extra`` and is merged into the request's
+    ``options`` as-is, so newer sampler parameters work without an SDK bump.
     """
 
-    model_config = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
 
     think: bool | Literal['low', 'medium', 'high'] | None = None
     keep_alive: float | str | None = None
@@ -611,8 +612,8 @@ class OllamaModel:
           explicit ``num_predict`` wins when both are present.
         - ``stop_sequences`` maps to ``stop``; ``version``/``api_key`` (genkit
           bookkeeping) are dropped.
-        - ``OllamaConfig`` extras (e.g. ``repeatPenalty``) are forwarded
-          snake-cased so newer sampler knobs pass through untouched.
+        - ``extra`` (e.g. ``{'repeat_penalty': 1.1}``) is merged in last,
+          keys unchanged, so a colliding key wins over a declared field.
 
         Known knobs are routed through ``ollama_api.Options`` purely for type
         coercion (genkit types ``max_output_tokens``/``top_k`` as floats, but
@@ -635,11 +636,12 @@ class OllamaModel:
         if isinstance(config, ModelConfig):
             # Covers OllamaConfig (a ModelConfig subclass) and plain ModelConfig.
             # model_dump defaults to by_alias=False, so declared fields come out
-            # snake_cased; only extras keep the key they were supplied with.
-            # to_snake below normalises both.
+            # snake_cased.
             raw: dict[str, Any] = config.model_dump(exclude_none=True)
         else:
             raw = {k: v for k, v in cast(dict[str, Any], config).items() if v is not None}
+        # extra is already in Ollama's option names; it skips the snake-casing below.
+        extra = raw.pop('extra', None)
 
         # Snake-case so camelCase knobs (e.g. ``topP``) hit the server field
         # instead of being silently dropped.
@@ -668,6 +670,8 @@ class OllamaModel:
             raise GenkitError(status='INVALID_ARGUMENT', message='ollama: invalid model config', cause=e) from e
         for key, value in knobs.items():
             options.setdefault(key, value)
+        if isinstance(extra, dict):
+            options.update(cast(dict[str, Any], extra))
         return options
 
     @staticmethod
@@ -680,8 +684,8 @@ class OllamaModel:
         ``chat``/``generate`` calls — not sampler ``options``. The framework
         dumps a ``BaseModel`` config to a dict before the model fn sees it, so
         this reads them from any :class:`ModelConfig` instance *or* a dumped
-        dict. Both paths snake-case the keys (declared fields and ``extra``
-        keys can arrive camelCased) and return only the values that are set.
+        dict. Both paths snake-case the keys (declared fields can arrive
+        camelCased) and return only the values that are set.
 
         Args:
             config: The configuration to extract request kwargs from.

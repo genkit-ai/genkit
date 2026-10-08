@@ -33,15 +33,35 @@ from openai._legacy_response import HttpxBinaryResponseContent
 from openai.types.audio import Transcription, Translation
 
 from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, Part, Role
-from genkit.model import ModelInfo, ModelRequest, Supports
+from genkit.model import ModelConfig, ModelInfo, ModelRequest, Supports
 from genkit_openai._models._utils import (
     _extract_media,
     _extract_text,
     _find_text,
     decode_data_uri_bytes,
     extract_config_dict,
+    pop_extra_body,
     reraise_openai_error,
 )
+
+
+class OpenAITtsConfig(ModelConfig):
+    """Settings the speech endpoint reads from config."""
+
+    voice: str | None = None
+    speed: float | None = None
+    response_format: str | None = None
+    instructions: str | None = None
+
+
+class OpenAISttConfig(ModelConfig):
+    """Settings the transcription endpoint reads from config."""
+
+    language: str | None = None
+    timestamp_granularities: list[str] | None = None
+    response_format: str | None = None
+    prompt: str | None = None
+
 
 # Maps audio response formats to their MIME types.
 RESPONSE_FORMAT_MEDIA_TYPES: dict[str, str] = {
@@ -148,6 +168,7 @@ def _to_tts_params(
     """
     text = _extract_text(request)
     config = extract_config_dict(request)
+    extra_body = pop_extra_body(config, managed=('input', 'model'), label='openai tts')
 
     params: dict[str, Any] = {
         'model': config.pop('version', None) or model_name,
@@ -164,6 +185,8 @@ def _to_tts_params(
     for key in ('temperature', 'max_output_tokens', 'stop_sequences', 'top_k', 'top_p'):
         config.pop(key, None)
 
+    if extra_body:
+        params['extra_body'] = extra_body
     return {k: v for k, v in params.items() if v is not None}
 
 
@@ -215,6 +238,7 @@ def _to_stt_params(
     """
     media_url, content_type = _extract_media(request)
     config = extract_config_dict(request)
+    extra_body = pop_extra_body(config, managed=('file', 'model'), label='openai stt')
 
     audio_bytes = decode_data_uri_bytes(media_url)
 
@@ -248,6 +272,8 @@ def _to_stt_params(
     for key in ('max_output_tokens', 'stop_sequences', 'top_k', 'top_p'):
         config.pop(key, None)
 
+    if extra_body:
+        params['extra_body'] = extra_body
     return {k: v for k, v in params.items() if v is not None}
 
 

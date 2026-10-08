@@ -57,7 +57,7 @@ from genkit._ai._model import (
     ModelFn,
     ModelResponse,
     ModelResponseChunk,
-    assert_correct_config_class,
+    check_call_config,
     define_model,
     resolve_for_generate,
 )
@@ -1476,7 +1476,7 @@ class Genkit:
         await register_tools(registry, tools)
         use = register_middleware(registry, use)
         resolved = await resolve_for_generate(model=model, config=config, registry=registry)
-        assert_correct_config_class(config=config, schema=resolved.config_schema, model=resolved.name)
+        check_call_config(config=config, schema=resolved.config_schema, model=resolved.name)
         # strings passed at call time are content, not templates: braces may be
         # JSON, code, or another template. templates are what you define up
         # front (define_prompt, .prompt files, define_agent's system).
@@ -1812,7 +1812,7 @@ class Genkit:
             registry=self.registry,
             message='No model specified for generate_operation.',
         )
-        assert_correct_config_class(config=config, schema=resolved.config_schema, model=resolved.name)
+        check_call_config(config=config, schema=resolved.config_schema, model=resolved.name)
 
         model_action = await self.registry.resolve_model(resolved.name)
         if not model_action:

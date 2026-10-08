@@ -123,7 +123,7 @@ async def test_get_openai_config(sample_request: ModelRequest) -> None:
 
 @pytest.mark.asyncio
 async def test_get_openai_config_peels_genkit_keys_and_passes_the_rest() -> None:
-    """Genkit-only keys stay off create(); declared OpenAI fields and extras go out."""
+    """Genkit-only keys stay off create(); declared OpenAI fields go out, `extra` as `extra_body`."""
     model = OpenAIModel(model='gpt-4o', client=MagicMock())
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
@@ -135,14 +135,15 @@ async def test_get_openai_config_peels_genkit_keys_and_passes_the_rest() -> None
             'top_k': 8,
             'version': 'gpt-4o-2024-08-06',
             'prompt_cache_key': 'abc',
-            'some_new_openai_knob': 1,
+            'extra': {'some_new_openai_knob': 1},
         }),
     )
     body = await model._get_openai_request_config(request)
     assert body['temperature'] == 0.5
     assert body['stop'] == ['END']
     assert body['prompt_cache_key'] == 'abc'
-    assert body['some_new_openai_knob'] == 1
+    assert body['extra_body'] == {'some_new_openai_knob': 1}
+    assert 'extra' not in body
     assert body['model'] == 'gpt-4o-2024-08-06'
     assert 'max_output_tokens' not in body
     assert 'stop_sequences' not in body

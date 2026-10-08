@@ -59,16 +59,26 @@ The plugin automatically discovers available models from the API upon initializa
 
 ### Dynamic Configuration
 
-Unrecognized provider parameters on the family config are forwarded to the API:
+Unknown config keys raise before the request is sent, so a typo like
+`temprature` fails instead of being dropped. A request field the schema doesn't
+declare yet goes in `extra` under its REST wire name. It's merged over the top
+of the request body, recursing into nested objects:
 
 ```python
 from genkit_google_genai import GeminiConfig
 
 config = GeminiConfig.model_validate({
     'temperature': 1.0,
-    'response_modalities': ['TEXT', 'IMAGE'],
+    'extra': {
+        'generationConfig': {'newKnob': 1},  # adds one key to generationConfig
+        'labels': {'team': 'search'},        # Vertex AI request labels
+    },
 })
 ```
+
+`extra` can't set the fields Genkit builds from the request (`contents`,
+`systemInstruction`, `tools`, `toolConfig`, the structured-output fields of
+`generationConfig`, `cachedContent`); those raise `INVALID_ARGUMENT`.
 
 ### Video generation (Veo)
 

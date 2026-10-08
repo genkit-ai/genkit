@@ -27,7 +27,7 @@ import ollama as ollama_api
 import pytest
 from genkit_ollama.constants import OllamaAPITypes
 from genkit_ollama.models import ModelDefinition, OllamaConfig, OllamaModel, _convert_parameters
-from pydantic import ValidationError
+from pydantic import ConfigDict, ValidationError
 
 from genkit import ActionRunContext, GenkitError, Message, ModelResponseChunk, Part, Role
 from genkit.model import ModelConfig, ModelRequest, ModelUsage, ToolDefinition
@@ -1041,12 +1041,12 @@ class TestBuildRequestOptions:
         options = OllamaModel.build_request_options(OllamaConfig(min_p=0.05))
         assert options['min_p'] == 0.05
 
-    def test_ollama_config_extras_snake_cased(self) -> None:
-        """Unknown OllamaConfig knobs are forwarded snake-cased (instance + camel)."""
-        snake = OllamaModel.build_request_options(OllamaConfig.model_validate({'repeat_penalty': 1.1}))
-        assert snake['repeat_penalty'] == 1.1
-        camel = OllamaModel.build_request_options(OllamaConfig.model_validate({'repeatPenalty': 1.2}))
-        assert camel['repeat_penalty'] == 1.2
+    def test_ollama_config_extra_forwarded_verbatim(self) -> None:
+        """Undeclared knobs go in `extra` and reach options unchanged (instance + dict)."""
+        typed = OllamaModel.build_request_options(OllamaConfig(extra={'repeat_penalty': 1.1}))
+        assert typed['repeat_penalty'] == 1.1
+        validated = OllamaModel.build_request_options(OllamaConfig.model_validate({'extra': {'repeat_penalty': 1.2}}))
+        assert validated['repeat_penalty'] == 1.2
 
     def test_num_predict_wins_over_max_output_tokens(self) -> None:
         """An explicit num_predict beats the inherited max_output_tokens."""
@@ -1098,12 +1098,16 @@ class TestBuildRequestKwargs:
         assert kwargs == {'think': 'low', 'keep_alive': '10m'}
 
     def test_plain_model_config_extras_surface_think_and_keep_alive(self) -> None:
-        """A plain ModelConfig carrying think/keep_alive as extras surfaces them.
+        """A ModelConfig subclass that allows unknown keys surfaces think/keep_alive extras.
 
-        ModelConfig has ``extra='allow'``, so the knobs can ride on a base
-        ModelConfig instance (including camelCased), not just OllamaConfig.
+        The knobs can ride on any ModelConfig instance (including camelCased),
+        not just OllamaConfig.
         """
-        config = ModelConfig.model_validate({'think': True, 'keepAlive': '5m'})
+
+        class LooseConfig(ModelConfig):
+            model_config = ConfigDict(extra='allow')
+
+        config = LooseConfig.model_validate({'think': True, 'keepAlive': '5m'})
         kwargs = OllamaModel.build_request_kwargs(config)
         assert kwargs == {'think': True, 'keep_alive': '5m'}
 

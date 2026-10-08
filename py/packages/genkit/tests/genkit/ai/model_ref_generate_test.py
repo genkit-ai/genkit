@@ -37,6 +37,12 @@ class ExcludedKeyConfig(ModelConfig):
     api_key: str | None = Field(default=None, exclude=True)
 
 
+class AllowExtraConfig(ModelConfig):
+    """A plugin class that still lets unknown keys through, so overlay pins see them."""
+
+    model_config = ConfigDict(extra='allow')
+
+
 class OtherFamilyConfig(BaseModel):
     """A second family's knobs, used to pin leftover keys across a hop."""
 
@@ -197,7 +203,7 @@ async def test_define_prompt_dict_none_clear_and_extra(
 ) -> None:
     """define_prompt dicts accept None-clears and extra keys the same as generate()."""
     ai, echo = ai_with_echo
-    ref = model_ref('testEcho', config_schema=ModelConfig, config=ModelConfig(temperature=0.7))
+    ref = model_ref('testEcho', config_schema=AllowExtraConfig, config=AllowExtraConfig(temperature=0.7))
 
     prompt = ai.define_prompt(
         name='echoPrompt',
@@ -452,8 +458,8 @@ async def test_empty_values_stay_on_generate(
     ai, echo = ai_with_echo
     ref = model_ref(
         'testEcho',
-        config_schema=ModelConfig,
-        config=ModelConfig(temperature=0.7, stop_sequences=['STOP'], version='001'),
+        config_schema=AllowExtraConfig,
+        config=AllowExtraConfig(temperature=0.7, stop_sequences=['STOP'], version='001'),
     )
 
     await ai.generate(
@@ -893,8 +899,8 @@ async def test_generate_both_spellings_last_write_wins(
     ai, echo = ai_with_echo
     ref = model_ref(
         'testEcho',
-        config_schema=ModelConfig,
-        config=ModelConfig(max_output_tokens=100),
+        config_schema=AllowExtraConfig,
+        config=AllowExtraConfig(max_output_tokens=100),
     )
 
     await ai.generate(

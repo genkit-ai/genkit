@@ -887,7 +887,8 @@ def test_importing_vertex_ai_evaluation_metric_type_raises() -> None:
 
 def test_gemini_config() -> None:
     """Test GeminiConfig can be instantiated."""
-    config = GeminiConfig(temperature=0.7, max_output_tokens=1000)
+    # populate_by_name accepts the field name; pyrefly only knows the explicit alias.
+    config = GeminiConfig(temperature=0.7, max_output_tokens=1000)  # pyrefly: ignore[unexpected-keyword]
     assert config.temperature == 0.7
     assert config.max_output_tokens == 1000
 
