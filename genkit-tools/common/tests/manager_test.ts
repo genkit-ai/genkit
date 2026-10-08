@@ -43,8 +43,6 @@ jest.mock('chokidar', () => ({
   }),
 }));
 
-jest.mock('axios');
-
 describe('RuntimeManager', () => {
   it('should allow unsubscribing from runtime events', async () => {
     const manager = await RuntimeManager.create({ projectRoot: '.' });
@@ -70,6 +68,12 @@ describe('RuntimeManager', () => {
   describe('notifyRuntime', () => {
     const runtime = { id: 'r1', reflectionServerUrl: 'http://localhost:9999' };
 
+    // Spy rather than jest.mock('axios'): the reflection auth tests below talk
+    // to a real local server and need the real axios.
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
     it('sends telemetryServerUrl to the runtime by default', async () => {
       const postSpy = jest
         .spyOn(axios, 'post')
@@ -83,7 +87,10 @@ describe('RuntimeManager', () => {
 
       expect(postSpy).toHaveBeenCalledWith(
         'http://localhost:9999/api/notify',
-        expect.objectContaining({ telemetryServerUrl: 'http://localhost:4033' })
+        expect.objectContaining({
+          telemetryServerUrl: 'http://localhost:4033',
+        }),
+        expect.anything()
       );
       await manager.stop();
     });
@@ -102,7 +109,8 @@ describe('RuntimeManager', () => {
 
       expect(postSpy).toHaveBeenCalledWith(
         'http://localhost:9999/api/notify',
-        expect.objectContaining({ telemetryServerUrl: undefined })
+        expect.objectContaining({ telemetryServerUrl: undefined }),
+        expect.anything()
       );
       // The manager still knows the URL so the Dev UI can read traces/logs.
       expect(manager.telemetryServerUrl).toBe('http://localhost:4033');
