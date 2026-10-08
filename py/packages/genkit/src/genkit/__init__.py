@@ -43,8 +43,8 @@ from genkit._ai._prompt import (
 from genkit._ai._tools import (
     MultipartToolResponse,
     ToolRunContext,
-    response,
     tool,
+    tool_response,
 )
 from genkit._core._action import Action as Flow, ActionRunContext, StreamResponse
 from genkit._core._context import ContextProvider, RequestData
@@ -61,7 +61,6 @@ from genkit._core._model import (
 )
 from genkit._core._tool import Tool
 from genkit._core._typing import (
-    BaseDataPoint,
     Embedding,
     EvalFnResponse,
     FinishReason,
@@ -88,7 +87,6 @@ __all__ = [
     'FinishReason',
     # Embed, evaluate, and background jobs
     'Embedding',
-    'BaseDataPoint',
     'EvalFnResponse',
     'Operation',
     # Tools and HITL
@@ -96,7 +94,7 @@ __all__ = [
     'Tool',
     'ToolRunContext',
     'Interrupt',
-    'response',
+    'tool_response',
     'MultipartToolResponse',
     # Flows, prompts, errors
     'Flow',

@@ -1625,7 +1625,7 @@ class Genkit:
         that isn't registered raises ``GenkitError`` with ``NOT_FOUND``.
 
         Example:
-            from genkit import BaseDataPoint
+            from genkit.evaluator import BaseDataPoint
 
             results = await ai.evaluate(
                 evaluator='my_eval',

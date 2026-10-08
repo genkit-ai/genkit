@@ -31,8 +31,6 @@
 
 ::: genkit.Embedding
 
-::: genkit.BaseDataPoint
-
 ::: genkit.EvalFnResponse
 
 ::: genkit.Operation
@@ -45,7 +43,7 @@
 
 ::: genkit.Interrupt
 
-::: genkit.response
+::: genkit.tool_response
 
 ::: genkit.MultipartToolResponse
 
@@ -153,15 +151,17 @@
 
 ## genkit.evaluator
 
+::: genkit.evaluator.BaseDataPoint
+
 ::: genkit.evaluator.EvalRequest
 
 ::: genkit.evaluator.EvalFnResponse
 
 ::: genkit.evaluator.Score
 
-::: genkit.evaluator.Details
+::: genkit.evaluator.ScoreDetails
 
-::: genkit.evaluator.EvalStatusEnum
+::: genkit.evaluator.EvalStatus
 
 ::: genkit.evaluator.evaluator_action_metadata
 

@@ -17,9 +17,9 @@
 """Bedrock reranking implementation (InvokeModel API).
 
 Reranking is a helper, ``Bedrock.rerank()``, not a registered action: Genkit
-Python carries only the bare ``ActionKind.RERANKER`` enum member, and the
-reranker schema types sit on the codegen denylist (``py/scripts/schema_to_typing.py``),
-so there is no primitive to register against. The four types below mirror
+Python has no reranker action kind, and the reranker schema types sit on the
+codegen denylist (``py/scripts/schema_to_typing.py``), so there is no primitive
+to register against. The four types below mirror
 ``genkit-tools/genkit-schema.json`` field for field, so call sites survive if
 core ever re-adds the primitive.
 

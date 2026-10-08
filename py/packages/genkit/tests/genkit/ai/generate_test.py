@@ -8175,6 +8175,20 @@ async def test_unknown_tool_on_request_raises_with_tool_not_found() -> None:
 
 
 @pytest.mark.asyncio
+async def test_generate_with_tool_ref_slash_retriever_raises_tool_not_found() -> None:
+    """generate(tools=['/retriever/x']) raises NOT_FOUND 'Unable to resolve tool /retriever/x'."""
+    ai = Genkit()
+    define_echo_model(ai)
+
+    with pytest.raises(GenkitError) as raised:
+        await ai.generate(model='echoModel', prompt='hi', tools=['/retriever/x'])
+    error = raised.value
+    assert error.status == 'NOT_FOUND'
+    assert error.reason is RuntimeErrorReason.TOOL_NOT_FOUND
+    assert error.original_message == 'Unable to resolve tool /retriever/x'
+
+
+@pytest.mark.asyncio
 async def test_generate_without_model_or_default_raises_model_not_found() -> None:
     """generate() with no model and no constructor default is MODEL_NOT_FOUND."""
     ai = Genkit()

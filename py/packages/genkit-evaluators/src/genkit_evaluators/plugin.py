@@ -20,10 +20,11 @@ import json
 import re
 from typing import Any
 
-from genkit import BaseDataPoint, Genkit
+from genkit import Genkit
 from genkit.evaluator import (
+    BaseDataPoint,
     EvalFnResponse,
-    EvalStatusEnum,
+    EvalStatus,
     Score,
 )
 
@@ -50,7 +51,7 @@ async def _regex_impl(datapoint: BaseDataPoint, _options: object | None = None) 
         raise ValueError('reference must be a string (regex)')
     output_str = datapoint.output if isinstance(datapoint.output, str) else json.dumps(datapoint.output)
     match = bool(re.search(datapoint.reference, output_str))
-    status = EvalStatusEnum.PASS if match else EvalStatusEnum.FAIL
+    status = EvalStatus.PASS if match else EvalStatus.FAIL
     return EvalFnResponse(
         test_case_id=datapoint.test_case_id or '',
         evaluation=[Score(score=match, status=status)],
@@ -64,7 +65,7 @@ async def _deep_equal_impl(datapoint: BaseDataPoint, _options: object | None = N
     if datapoint.reference is None:
         raise ValueError('reference was not provided')
     equal = datapoint.output == datapoint.reference
-    status = EvalStatusEnum.PASS if equal else EvalStatusEnum.FAIL
+    status = EvalStatus.PASS if equal else EvalStatus.FAIL
     return EvalFnResponse(
         test_case_id=datapoint.test_case_id or '',
         evaluation=[Score(score=equal, status=status)],
@@ -84,7 +85,7 @@ async def _jsonata_impl(datapoint: BaseDataPoint, _options: object | None = None
     expr = Jsonata(datapoint.reference)
     result = expr.evaluate(datapoint.output)
     passed = result not in (False, '', None)
-    status = EvalStatusEnum.PASS if passed else EvalStatusEnum.FAIL
+    status = EvalStatus.PASS if passed else EvalStatus.FAIL
     return EvalFnResponse(
         test_case_id=datapoint.test_case_id or '',
         evaluation=[Score(score=result, status=status)],

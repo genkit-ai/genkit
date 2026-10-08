@@ -36,9 +36,9 @@ import httpx
 from google.auth import default as google_auth_default
 from google.auth.transport.requests import Request
 
-from genkit import BaseDataPoint, GenkitError
+from genkit import GenkitError
 from genkit._core._compat import StrEnum
-from genkit.evaluator import Details, EvalFnResponse, Score
+from genkit.evaluator import BaseDataPoint, EvalFnResponse, Score, ScoreDetails
 from genkit.plugin_api import (
     GENKIT_CLIENT_HEADER,
     Action,
@@ -351,7 +351,7 @@ def _create_evaluator_for_metric(
             },
             'response_handler': lambda r: Score(
                 score=r.get('fluencyResult', {}).get('score'),
-                details=Details(reasoning=r.get('fluencyResult', {}).get('explanation')),
+                details=ScoreDetails(reasoning=r.get('fluencyResult', {}).get('explanation')),
             ),
         },
         VertexAIEvaluationMetricType.SAFETY: {
@@ -367,7 +367,7 @@ def _create_evaluator_for_metric(
             },
             'response_handler': lambda r: Score(
                 score=r.get('safetyResult', {}).get('score'),
-                details=Details(reasoning=r.get('safetyResult', {}).get('explanation')),
+                details=ScoreDetails(reasoning=r.get('safetyResult', {}).get('explanation')),
             ),
         },
         VertexAIEvaluationMetricType.GROUNDEDNESS: {
@@ -384,7 +384,7 @@ def _create_evaluator_for_metric(
             },
             'response_handler': lambda r: Score(
                 score=r.get('groundednessResult', {}).get('score'),
-                details=Details(reasoning=r.get('groundednessResult', {}).get('explanation')),
+                details=ScoreDetails(reasoning=r.get('groundednessResult', {}).get('explanation')),
             ),
         },
         VertexAIEvaluationMetricType.SUMMARIZATION_QUALITY: {
@@ -402,7 +402,7 @@ def _create_evaluator_for_metric(
             },
             'response_handler': lambda r: Score(
                 score=r.get('summarizationQualityResult', {}).get('score'),
-                details=Details(reasoning=r.get('summarizationQualityResult', {}).get('explanation')),
+                details=ScoreDetails(reasoning=r.get('summarizationQualityResult', {}).get('explanation')),
             ),
         },
         VertexAIEvaluationMetricType.SUMMARIZATION_HELPFULNESS: {
@@ -420,7 +420,7 @@ def _create_evaluator_for_metric(
             },
             'response_handler': lambda r: Score(
                 score=r.get('summarizationHelpfulnessResult', {}).get('score'),
-                details=Details(reasoning=r.get('summarizationHelpfulnessResult', {}).get('explanation')),
+                details=ScoreDetails(reasoning=r.get('summarizationHelpfulnessResult', {}).get('explanation')),
             ),
         },
         VertexAIEvaluationMetricType.SUMMARIZATION_VERBOSITY: {
@@ -438,7 +438,7 @@ def _create_evaluator_for_metric(
             },
             'response_handler': lambda r: Score(
                 score=r.get('summarizationVerbosityResult', {}).get('score'),
-                details=Details(reasoning=r.get('summarizationVerbosityResult', {}).get('explanation')),
+                details=ScoreDetails(reasoning=r.get('summarizationVerbosityResult', {}).get('explanation')),
             ),
         },
     }

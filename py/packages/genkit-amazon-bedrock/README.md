@@ -391,9 +391,9 @@ for document in response.documents:
     print(document.metadata.score, document.content[0].text)
 ```
 
-Genkit Python has no reranker primitive: `ActionKind.RERANKER` exists as a bare
-enum member, and the request and response types are not generated, so there is
-nothing to register an action against. The types this plugin exports
+Genkit Python has no reranker primitive: there is no reranker action kind, and
+the request and response types are not generated, so there is nothing to
+register an action against. The types this plugin exports
 (`BedrockRerankOptions`, `RankedDocumentData`, `RankedDocumentMetadata`,
 `RerankerRequest`, `RerankerResponse`) mirror the schema types by the same
 names.

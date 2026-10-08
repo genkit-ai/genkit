@@ -32,22 +32,25 @@ from genkit._ai._evaluator import (
     evaluator_ref,
 )
 from genkit._core._typing import (
-    Details,
+    BaseDataPoint,
     EvalFnResponse,
     EvalRequest,
-    EvalStatusEnum,
+    EvalStatus,
     Score,
+    ScoreDetails,
 )
 
 __all__ = [
+    # Dataset rows
+    'BaseDataPoint',
     # Request/Response types
     'EvalRequest',
     'EvalFnResponse',
     # Score types
     'Score',
-    'Details',
+    'ScoreDetails',
     # Status
-    'EvalStatusEnum',
+    'EvalStatus',
     # Factory functions and metadata
     'evaluator_action_metadata',
     'evaluator_ref',

@@ -41,7 +41,7 @@ from genkit._core._typing import (
 )
 
 
-def response(
+def tool_response(
     output: OutputT | None = None,
     *,
     parts: Sequence[Part] | None = None,
@@ -56,7 +56,7 @@ def response(
     if metadata is not None and not isinstance(metadata, dict):
         raise GenkitError(
             status='INVALID_ARGUMENT',
-            message=f'response() metadata must be a dict, got {type(metadata).__name__}.',
+            message=f'tool_response() metadata must be a dict, got {type(metadata).__name__}.',
             reason=RuntimeErrorReason.INVALID_INPUT,
         )
     return MultipartToolResponse(output=output, content=normalize_response_parts(parts), metadata=metadata)
@@ -81,20 +81,20 @@ def normalize_response_parts(parts: Sequence[Part] | None) -> list[Part] | None:
             if part is None:
                 raise GenkitError(
                     status='INVALID_ARGUMENT',
-                    message=f'response() parts must be a list of Parts, got {type(item).__name__} in the list.',
+                    message=f'tool_response() parts must be a list of Parts, got {type(item).__name__} in the list.',
                     reason=RuntimeErrorReason.INVALID_PART,
                 )
             out.append(require_live_part(part))
         return out
     raise GenkitError(
         status='INVALID_ARGUMENT',
-        message=f'response() parts must be a sequence of Parts, got {type(parts).__name__}.',
+        message=f'tool_response() parts must be a sequence of Parts, got {type(parts).__name__}.',
         reason=RuntimeErrorReason.INVALID_PART,
     )
 
 
 def normalize_pending_content(pending_content: object, *, tool_name: str) -> list[dict[str, Any]] | None:
-    """Validate a resume stash as the same part list ``response()`` accepts."""
+    """Validate a resume stash as the same part list ``tool_response()`` accepts."""
     if pending_content is None:
         return None
     if not isinstance(pending_content, list):
@@ -201,7 +201,7 @@ def dump_part(part: Part, *, tool_name: str | None = None, what: str = 'content'
         if tool_name is not None:
             message = f'Tool {tool_name!r} {what} is not JSON-serializable.'
         else:
-            message = f'response() {what} is not JSON-serializable.'
+            message = f'tool_response() {what} is not JSON-serializable.'
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message=message,
@@ -227,7 +227,7 @@ def require_live_part(part: Part, *, tool_name: str | None = None, where: str = 
         raise live_payload_error(tool_name=tool_name, where=where)
     raise GenkitError(
         status='INVALID_ARGUMENT',
-        message='response() parts include a part with no live payload.',
+        message='tool_response() parts include a part with no live payload.',
         reason=RuntimeErrorReason.INVALID_PART,
     )
 

@@ -128,7 +128,8 @@ Runnable version: [google-genai-media](https://github.com/genkit-ai/genkit/tree/
 Built-in evaluators for assessing model output quality, accessed via `ai.evaluate()`. The VertexAI plugin registers them only when a project resolves (`VertexAI(project=...)` or `GOOGLE_CLOUD_PROJECT`); `VertexAI(api_key=...)` without a project lists none. They authenticate with Application Default Credentials, not `api_key` or `credentials`:
 
 ```python
-from genkit import BaseDataPoint, Genkit
+from genkit import Genkit
+from genkit.evaluator import BaseDataPoint
 from genkit_google_genai import VertexAI
 
 ai = Genkit(plugins=[VertexAI(project='my-project')])

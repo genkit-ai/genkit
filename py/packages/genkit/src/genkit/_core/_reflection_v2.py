@@ -42,7 +42,7 @@ import websockets
 from pydantic import BaseModel, JsonValue, ValidationError
 from websockets.exceptions import ConnectionClosed
 
-from genkit._core._action import Action, BidiAction, input_from_json
+from genkit._core._action import Action, BidiAction, input_from_json, parse_action_key
 from genkit._core._channel import CloseableQueue
 from genkit._core._constants import GENKIT_VERSION
 from genkit._core._error import ReflectionError, ReflectionErrorDetails, StatusCodes, get_reflection_json
@@ -761,7 +761,12 @@ class ReflectionServerV2:
             await self.send_error(sid, JSON_RPC_INVALID_PARAMS, f'invalid params: {e}')
             return
 
-        action = await self.registry.resolve_action_by_key(p.key)
+        try:
+            parse_action_key(p.key)
+        except ValueError:
+            action = None
+        else:
+            action = await self.registry.resolve_action_by_key(p.key)
         if not action:
             await self.send_error(sid, JSON_RPC_INVALID_PARAMS, f'action {p.key} not found')
             return

@@ -36,7 +36,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
-from genkit._core._action import Action, BidiAction, input_from_json
+from genkit._core._action import Action, BidiAction, input_from_json, parse_action_key
 from genkit._core._constants import GENKIT_VERSION
 from genkit._core._error import get_reflection_json
 from genkit._core._logger import get_logger
@@ -290,9 +290,15 @@ def create_reflection_asgi_app(
 
     async def run(req: Request) -> Response:
         payload = await req.json()
-        action = await registry.resolve_action_by_key(payload['key'])
+        key = payload['key']
+        try:
+            parse_action_key(key)
+        except ValueError:
+            action = None
+        else:
+            action = await registry.resolve_action_by_key(key)
         if not action:
-            return JSONResponse({'error': f'Action not found: {payload["key"]}'}, status_code=404)
+            return JSONResponse({'error': f'Action not found: {key}'}, status_code=404)
         context = payload.get('context')
         if context is not None and not isinstance(context, dict):
             return JSONResponse(
