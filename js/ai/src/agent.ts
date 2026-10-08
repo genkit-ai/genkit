@@ -22,12 +22,14 @@ import {
   defineBidiAction,
   getContext,
   getErrorMessage,
+  inheritSpanMarks,
   run,
   z,
   type Action,
   type ActionContext,
   type ActionFnArg,
   type BidiAction,
+  type SpanFailureMarks,
 } from '@genkit-ai/core';
 import { Channel } from '@genkit-ai/core/async';
 import { logger } from '@genkit-ai/core/logging';
@@ -222,11 +224,7 @@ export class CommittedTurnError extends Error {
     // Keep the span markers tracing stamped on the cause, as GenkitError
     // does, so the span that first failed stays the failure source and the
     // turn span this error passes through does not claim it again.
-    if (typeof cause === 'object' && cause !== null) {
-      const marked = cause as { ignoreFailedSpan?: boolean; traceId?: string };
-      if (marked.ignoreFailedSpan) (this as any).ignoreFailedSpan = true;
-      if (marked.traceId) (this as any).traceId = marked.traceId;
-    }
+    inheritSpanMarks(this, cause);
   }
 }
 
@@ -304,7 +302,7 @@ function generationError(res: GenerateResponse): GenerationResponseError {
   const error = new Ctor(res, message, known.success ? known.data : 'INTERNAL');
   // The loop's spans already recorded where this failure came from; the turn
   // span this error passes through must not claim it as its own.
-  (error as any).ignoreFailedSpan = true;
+  (error as SpanFailureMarks).ignoreFailedSpan = true;
   return error;
 }
 
