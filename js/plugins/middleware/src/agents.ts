@@ -1006,13 +1006,22 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
       const readSnapshotOnce: SnapshotFetch = async (agent, snapshotId) =>
         (await agent.getSnapshotDataAction.run({ snapshotId })).result;
 
-      const awaitSnapshot: SnapshotFetch = async (agent, snapshotId, signal) =>
-        (
-          await agent.waitForSnapshotAction.run(
+      // The companion action holds one request for at most the sub-agent's
+      // maxSnapshotWaitMs and then answers with the row as it stands, so the
+      // follow asks again until the row settles or the signal ends it.
+      const awaitSnapshot: SnapshotFetch = async (
+        agent,
+        snapshotId,
+        signal
+      ) => {
+        while (true) {
+          const { result } = await agent.waitForSnapshotAction.run(
             { snapshotId },
             { abortSignal: signal }
-          )
-        ).result;
+          );
+          if (isSettled(result.status) || signal?.aborted) return result;
+        }
+      };
 
       // The abort reads before it stops anything, because there are rows an
       // abort must not touch. Expiry is decided on read, not stored: a worker
