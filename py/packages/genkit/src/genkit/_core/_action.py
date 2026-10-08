@@ -516,14 +516,18 @@ _EMPTY_FUNCTION_CODE = (lambda: None).__code__
 
 
 def _resolve_one(annotation: object, module_globals: dict[str, Any]) -> object:
-    """Resolve one annotation the way ``get_type_hints`` would, or return it unchanged."""
+    """Resolve one annotation the way ``get_type_hints`` would, or return it unchanged if a name is missing.
+
+    Any other error, e.g. ``ModelRequest[SomeTypedDict]`` rejecting its
+    argument, is raised as is.
+    """
     # get_type_hints takes a function, so give it an empty one in fn's module
     # whose only annotation is this one.
     stand_in = types.FunctionType(_EMPTY_FUNCTION_CODE, module_globals)
     stand_in.__annotations__ = {'x': annotation}
     try:
         return get_type_hints(stand_in)['x']
-    except Exception:
+    except NameError:
         return annotation
 
 

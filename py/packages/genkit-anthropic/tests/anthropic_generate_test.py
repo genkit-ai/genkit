@@ -21,6 +21,7 @@ the request body and headers the API would have received.
 """
 
 import json
+from collections.abc import Callable
 from typing import Any, cast
 
 import httpx
@@ -28,6 +29,7 @@ import pytest
 from genkit_anthropic import Anthropic
 
 from genkit import FinishReason, Genkit, GenkitError
+from genkit.middleware import BaseMiddleware
 from genkit.plugin_api import ActionKind
 
 MODEL = 'anthropic/claude-sonnet-4-6'
@@ -369,3 +371,60 @@ async def test_generate_claude_tool_choice_disable_parallel_tool_use_reaches_req
 
     assert response.text == 'ok'
     assert api.body()['tool_choice'] == tool_choice
+
+
+# --- middleware edits ---------------------------------------------------------
+
+
+def _edit_thinking_budget(config: Any) -> None:  # noqa: ANN401
+    config.thinking.budget_tokens = 10
+
+
+def _edit_thinking_mode(config: Any) -> None:  # noqa: ANN401
+    config.thinking.adaptive = True
+
+
+def _edit_task_budget(config: Any) -> None:  # noqa: ANN401
+    config.output_config.task_budget = {'total': 20000}
+
+
+@pytest.mark.parametrize(
+    ('config', 'edit', 'message'),
+    [
+        (
+            {'thinking': {'type': 'enabled', 'budgetTokens': 2048}},
+            _edit_thinking_budget,
+            "set config 'thinking.budgetTokens': Input should be greater than or equal to 1024",
+        ),
+        (
+            {'thinking': {'enabled': True, 'budgetTokens': 2048}},
+            _edit_thinking_mode,
+            "set config 'thinking': Value error, Cannot use both enabled and adaptive thinking modes simultaneously",
+        ),
+        (
+            {'apiVersion': 'stable', 'output_config': {}},
+            _edit_task_budget,
+            "set config 'output_config': Value error, output_config.task_budget require the beta API surface",
+        ),
+    ],
+    ids=['thinking-budget-bound', 'thinking-check', 'api-surface-check'],
+)
+@pytest.mark.asyncio
+async def test_middleware_edit_inside_nested_claude_setting_is_validated(
+    config: dict[str, Any], edit: Callable[[Any], None], message: str
+) -> None:
+    """An in-place edit inside thinking or output_config runs Claude's bounds and validators; nothing is sent."""
+    api = FakeClaudeApi()
+    ai = _genkit(api)
+
+    class Tune(BaseMiddleware):
+        async def wrap_model(self, params: Any, ctx: Any, next_fn: Any) -> Any:  # noqa: ANN401
+            edit(params.request.config)
+            return await next_fn(params, ctx)
+
+    response = await ai.generate(model=MODEL, prompt='hi', config=config, use=[Tune()])
+
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.finish_message is not None
+    assert response.finish_message.startswith(f"{MODEL}: middleware 'Tune' {message}")
+    assert api.requests == []

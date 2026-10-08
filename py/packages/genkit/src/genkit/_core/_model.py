@@ -27,7 +27,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from functools import cached_property
 from importlib import import_module
-from typing import Any, ClassVar, Generic, Literal, cast
+from typing import Any, ClassVar, Generic, Literal, TypeGuard, cast, get_args
 
 from pydantic import (
     BaseModel,
@@ -214,15 +214,16 @@ ConfigT = TypeVar('ConfigT', bound=ModelConfig, default=ModelConfig)
 # Bound to BaseModel so ModelRef is always parameterized with a concrete Pydantic config schema.
 # Covariant so ModelRef[GeminiConfig] is assignable to ModelRef[BaseModel] or ModelRef[Any].
 ModelRefConfigT = TypeVar('ModelRefConfigT', bound=BaseModel, covariant=True)
-# Unbounded so ModelRequest can carry plugin config schemas, plain dicts, or
-# ModelConfig subclasses without forcing everything through GenerationCommonConfig.
+# ModelRequest[X] takes a pydantic model class; __class_getitem__ rejects the
+# rest. Not bound to BaseModel: type checkers would then reject the common
+# bare ModelRequest(config={...}), where the config is solved as a dict.
 # Invariant: config is writable, so ModelRequest[GeminiConfig] is not a
 # ModelRequest[ModelConfig] you can assign a ModelConfig into.
 ModelRequestConfigT = TypeVar('ModelRequestConfigT')
 
 
-def declared_config_type(cls: type) -> type | None:
-    """The config class on ``ModelRequest[ThatClass]``, or None if unparametrized."""
+def declared_config_type(cls: type) -> type[BaseModel] | None:
+    """The config class on ``ModelRequest[ThatClass]``, or None if unparametrized or ``Any``."""
     meta = getattr(cls, '__pydantic_generic_metadata__', None)
     if not meta:
         return None
@@ -230,9 +231,15 @@ def declared_config_type(cls: type) -> type | None:
     if not args:
         return None
     arg = args[0]
-    if isinstance(arg, TypeVar) or arg is Any:
-        return None
-    return arg
+    return arg if _is_model_class(arg) else None
+
+
+def _is_model_class(value: object) -> TypeGuard[type[BaseModel]]:
+    """True for a pydantic model class; False for TypedDicts, dict, unions, Any, and TypeVars."""
+    try:
+        return isinstance(value, type) and issubclass(value, BaseModel)
+    except TypeError:  # dict[str, Any] passes isinstance(_, type) on 3.10
+        return False
 
 
 def config_type_path(cls: type) -> str:
@@ -1117,6 +1124,25 @@ class ModelRequest(GenkitModel, Generic[ModelRequestConfigT]):
     # Wire-shaped output storage; flat access via the properties below.
     output: OutputConfig = Field(default_factory=OutputConfig)
 
+    def __class_getitem__(cls, typevar_values: type[Any] | tuple[type[Any], ...]) -> Any:  # noqa: ANN401
+        """``ModelRequest[Cfg]``, where ``Cfg`` must be a pydantic model class.
+
+        Checked here, where the annotation is evaluated, so a TypedDict or
+        dict config fails when the model function is defined, with the same
+        error on every Python version.
+        """
+        arg = typevar_values[0] if isinstance(typevar_values, tuple) and typevar_values else typevar_values
+        if not (arg is Any or isinstance(arg, TypeVar) or _is_model_class(arg)):
+            label = arg.__name__ if isinstance(arg, type) and not get_args(arg) else repr(arg)
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=(
+                    f'ModelRequest[{label}]: the config type must be a pydantic '
+                    'BaseModel subclass, e.g. a ModelConfig subclass. Use bare ModelRequest to take config as a dict.'
+                ),
+            )
+        return super().__class_getitem__(typevar_values)
+
     @field_validator('config', mode='before')
     @classmethod
     def _check_config_type(cls, v: object) -> object:
@@ -1131,12 +1157,10 @@ class ModelRequest(GenkitModel, Generic[ModelRequestConfigT]):
             return v
         if isinstance(v, BaseModel):
             expected = declared_config_type(cls)
-            if isinstance(expected, type) and issubclass(expected, BaseModel) and not isinstance(v, expected):
+            if expected is not None and not isinstance(v, expected):
                 raise ValueError(
                     f'config must be {config_type_path(expected)} or a mapping, got {config_type_path(type(v))}'
                 )
-            if expected is dict:
-                raise ValueError(f'config must be a mapping, got {type(v).__name__}')
             return v
         raise ValueError(f'config must be a BaseModel or mapping, got {type(v).__name__}')
 

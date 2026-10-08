@@ -591,3 +591,123 @@ def check_call_config(*, config: object, schema: type[BaseModel] | None, model: 
     """Call-time config check: a typed object's class and a dict's keys and values."""
     assert_correct_config_class(config=config, schema=schema, model=model)
     check_config_dict(config=config, schema=schema, model=model)
+
+
+def _config_values(config: BaseModel) -> dict[str, Any]:
+    """``config`` as plain data, nested models included, in the shape validation takes.
+
+    ``BaseModel.model_dump`` skips GenkitModel's ``exclude_none`` default (an
+    explicit ``None`` is a value too) and its fallback serializer, so a value
+    of the wrong type comes back as itself and fails validation.
+    """
+    return BaseModel.model_dump(config, by_alias=True, round_trip=True, exclude_none=False, warnings=False)
+
+
+class MiddlewareConfigCheck:
+    """Checks ``request.config`` each time a middleware hands the request to the next layer.
+
+    generate turns the call's config into the model's class once, so every
+    middleware and the model see the same shape. Middleware changes fields on
+    that object. A dict, ``None``, or another class put back into
+    ``request.config`` would reach inner layers as that shape instead, so the
+    handoff raises, naming the middleware that did it.
+
+    Plain assignment (``config.temperature = 'hot'``), ``model_copy(update=...)``,
+    and edits inside a field (``config.stop_sequences.append(5)``,
+    ``config.thinking.budget_tokens = 10``) don't validate. Each handoff dumps
+    the config and compares it with the dump from the last check that passed.
+    If anything differs, the whole dump is validated, so nested bounds and
+    model validators see the config as the next layer will. Fields that
+    changed are stored back parsed (``config.task_budget = {'total': 1}``
+    reaches the model as ``TaskBudget``). Untouched fields keep their objects,
+    so a non-idempotent validator doesn't compound across layers.
+
+    A failed check is remembered with the config it saw. When an outer layer
+    catches the error and calls next again with that config unchanged, the
+    same error is raised, still naming the layer that made the change. Once
+    the config differs, it's checked again.
+    """
+
+    def __init__(self, *, config: BaseModel, schema: type[BaseModel], model: str) -> None:
+        """Start from ``config`` as generate built it; ``schema`` is the model's config class."""
+        self._schema = schema
+        self._model = model
+        self._checked = _config_values(config)
+        self._rejected: list[tuple[object, GenkitError]] = []
+
+    def check(self, config: object, middleware: str) -> None:
+        """Raise a GenkitError naming ``middleware`` if ``config`` can't go to the next layer.
+
+        On success, changed fields on ``config`` hold their parsed values.
+        """
+        dumped = _config_values(config) if isinstance(config, self._schema) else None
+        typed = dumped is not None
+        # Middleware edits a config of the right class in place, so it's
+        # matched by its keys and values. Anything else is matched by identity.
+        seen: object = (frozenset(vars(config)), dumped) if typed else config
+        for bad, err in self._rejected:
+            if (bad == seen) if typed else (bad is seen):
+                raise err
+        try:
+            self._check(config, dumped, f"{self._model}: middleware '{middleware}'")
+        except GenkitError as err:
+            self._rejected.append((seen, err))
+            raise
+        self._rejected.clear()
+
+    def _check(self, config: object, dumped: dict[str, Any] | None, prefix: str) -> None:
+        if not isinstance(config, self._schema) or dumped is None:
+            got = (
+                'None'
+                if config is None
+                else type(config).__name__
+                if type(config).__module__ == 'builtins'
+                else config_type_path(type(config))
+            )
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=f'{prefix} replaced request.config with {got}; change fields on request.config instead',
+                reason=RuntimeErrorReason.INVALID_INPUT,
+            )
+        cls = type(config)
+        values: dict[str, Any] = vars(config)
+        if cls.model_config.get('extra') == 'forbid':
+            unknown = [key for key in values if key not in cls.model_fields]
+            if unknown:
+                keys = ', '.join(repr(key) for key in unknown)
+                noun = 'key' if len(unknown) == 1 else 'keys'
+                raise GenkitError(
+                    status='INVALID_ARGUMENT',
+                    message=f"{prefix} set unknown config {noun} {keys}; put provider-only settings in config['extra']",
+                    reason=RuntimeErrorReason.INVALID_INPUT,
+                )
+        if dumped == self._checked:
+            return
+        keys_by_name = {name: f.serialization_alias or f.alias or name for name, f in cls.model_fields.items()}
+        names_by_key = {key: name for name, key in keys_by_name.items()}
+        missing = object()
+        changed = [
+            name for name, key in keys_by_name.items() if dumped.get(key, missing) != self._checked.get(key, missing)
+        ]
+        try:
+            parsed = cls.model_validate(dumped)
+        except ValidationError as e:
+            errors = e.errors()
+            loc = errors[0]['loc'] if errors else ()
+            if loc:
+                where = repr('.'.join([names_by_key.get(str(loc[0]), str(loc[0])), *(str(part) for part in loc[1:])]))
+            else:
+                # A model validator: blame the fields this layer changed.
+                where = ', '.join(repr(name) for name in changed) or 'values'
+            msg = errors[0]['msg'] if errors else str(e)
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=f'{prefix} set config {where}: {msg}',
+                reason=RuntimeErrorReason.INVALID_INPUT,
+                cause=e,
+            ) from e
+        # Writing ``__dict__`` directly keeps ``model_fields_set`` as the
+        # middleware left it, so ``exclude_unset`` dumps don't change.
+        for name in changed:
+            values[name] = parsed.__dict__[name]
+        self._checked = _config_values(config) if changed else dumped
