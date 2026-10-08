@@ -57,6 +57,29 @@ async def greet(name: str) -> str:
 
 The plugin automatically discovers available models from the API upon initialization. You can use any model name supported by the API (e.g., `GoogleAI.gemini_model('gemini-flash-latest')`, `VertexAI.gemini_model('gemini-3.1-pro-preview')`).
 
+### Typed config
+
+Config classes and their nested settings take snake_case keyword arguments,
+so pyright, pyrefly and ty check every key. All of them import from the
+package root. The Dev UI and JSON configs use the camelCase names
+(`thinkingConfig`, `thinkingBudget`); both spellings validate at runtime.
+
+```python
+from genkit_google_genai import GeminiConfig, GeminiTtsConfig, PrebuiltVoiceConfig, SpeechConfig, ThinkingConfig, VoiceConfig
+
+# 1. Cap thinking on a text model
+config = GeminiConfig(temperature=0.4, thinking_config=ThinkingConfig(thinking_budget=1024))
+
+# 2. Pick a prebuilt voice on a TTS model
+tts_config = GeminiTtsConfig(
+    speech_config=SpeechConfig(voice_config=VoiceConfig(prebuilt_voice_config=PrebuiltVoiceConfig(voice_name='Kore')))
+)
+
+# 3. Dump the config the way the Dev UI shows it
+print(config.model_dump(by_alias=True, exclude_none=True))
+# => {'temperature': 0.4, 'thinkingConfig': {'thinkingBudget': 1024}}
+```
+
 ### Provider fields the plugin doesn't declare
 
 Gemini, Gemini image, and Veo configs reject keys they don't declare, so a
