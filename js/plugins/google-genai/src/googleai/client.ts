@@ -504,13 +504,14 @@ async function maybeTraceRequest<T>(
 
   if (traceOptions.clientOptions?.experimental_debugTraces) {
     return tracingHooks.runInNewSpan(
-      { metadata: { name: 'httpRequest' } },
+      {
+        metadata: {
+          name: 'httpRequest',
+          // Seed input up front so the realtime "pending" span export carries it.
+          input: buildTraceMetadataInput(url, fetchOptions, traceOptions),
+        },
+      },
       async (metadata) => {
-        metadata.input = buildTraceMetadataInput(
-          url,
-          fetchOptions,
-          traceOptions
-        );
         const processedResponse = await call();
 
         if (traceOptions.streaming) {
