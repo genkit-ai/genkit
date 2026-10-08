@@ -151,7 +151,7 @@ from genkit_google_genai._models._utils import (  # noqa: E402
 # googlegenai_gemini_test.py pins each set to its google-genai enum, so an
 # SDK bump that adds a value fails until it is added here. The SDK's
 # *_UNSPECIFIED placeholders are listed only where Genkit already offered
-# them (HarmCategory, HarmBlockMethod, FunctionCallingMode).
+# them (HarmCategory, HarmBlockMethod, FunctionCallingMode, ProminentPeople).
 HarmCategory: TypeAlias = Literal[
     'HARM_CATEGORY_UNSPECIFIED',
     'HARM_CATEGORY_HATE_SPEECH',
@@ -178,6 +178,7 @@ ImageAspectRatio: TypeAlias = Literal[
     '1:1', '1:4', '1:8', '2:3', '3:2', '3:4', '4:1', '4:3', '4:5', '5:4', '8:1', '9:16', '16:9', '21:9'
 ]
 ImageSize: TypeAlias = Literal['1K', '2K', '4K']
+ProminentPeople: TypeAlias = Literal['PROMINENT_PEOPLE_UNSPECIFIED', 'ALLOW_PROMINENT_PEOPLE', 'BLOCK_PROMINENT_PEOPLE']
 
 
 # Each strict nested class below declares every field of the google.genai type
@@ -244,7 +245,7 @@ class ImageConfig(BaseModel):
     output_mime_type: str | None = Field(default=None)
     output_compression_quality: int | None = Field(default=None)
     person_generation: str | None = Field(default=None)
-    prominent_people: genai_types.ProminentPeople | None = Field(default=None)
+    prominent_people: ProminentPeople | None = Field(default=None)
     image_output_options: genai_types.ImageConfigImageOutputOptions | None = Field(default=None)
 
 
@@ -572,7 +573,7 @@ class GeminiImageConfig(GeminiConfig):
                 'outputMimeType': {'type': 'string'},
                 'outputCompressionQuality': {'type': 'integer'},
                 'personGeneration': {'type': 'string'},
-                'prominentPeople': {'type': 'string', 'enum': [e.value for e in genai_types.ProminentPeople]},
+                'prominentPeople': {'type': 'string', 'enum': list(get_args(ProminentPeople))},
                 'imageOutputOptions': {
                     'type': 'object',
                     'properties': {'mimeType': {'type': 'string'}, 'compressionQuality': {'type': 'integer'}},
