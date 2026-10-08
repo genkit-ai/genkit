@@ -49,7 +49,7 @@ from genkit_amazon_bedrock.embedders import (
     looks_like_embedding_model,
 )
 from genkit_amazon_bedrock.image import BedrockImageModel, is_image_model
-from genkit_amazon_bedrock.model_info import get_model_info
+from genkit_amazon_bedrock.model_info import get_model_info, is_rerank_model
 from genkit_amazon_bedrock.models import BedrockModel
 from genkit_amazon_bedrock.transport import BedrockTransport
 
@@ -179,6 +179,10 @@ class Bedrock(Plugin):
             # as a chat model only defers the failure to call time.
             logger.debug('Bedrock resolve declined', model=name, kind='model', reason='embedding_model')
             return None
+        if is_rerank_model(name):
+            # Same for rerank models, and there is no reranker action to offer.
+            logger.debug('Bedrock resolve declined', model=name, kind='model', reason='rerank_model')
+            return None
         declared = self._declared_model_type(name)
         # Undeclared IDs are classified rather than assumed to be chat: resolve
         # is lazy, so otherwise bedrock/amazon.nova-canvas-v1:0 would take the
@@ -253,6 +257,7 @@ class Bedrock(Plugin):
             )
             for definition in self.models
             if not looks_like_embedding_model(definition.name)
+            and not is_rerank_model(definition.name)
             and (definition.type != 'image' or is_image_model(definition.name))
         ]
         models = len(actions)

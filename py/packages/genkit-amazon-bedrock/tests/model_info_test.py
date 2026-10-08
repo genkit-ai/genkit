@@ -21,6 +21,7 @@ from genkit_amazon_bedrock.model_info import (
     INFERENCE_PROFILE_PREFIXES,
     MODEL_CAPABILITIES,
     get_model_info,
+    is_rerank_model,
     strip_inference_profile_prefix,
 )
 
@@ -169,3 +170,19 @@ def test_registry_size() -> None:
 def test_all_registry_keys_are_base_ids() -> None:
     for model_id in MODEL_CAPABILITIES:
         assert strip_inference_profile_prefix(model_id) == model_id
+
+
+@pytest.mark.parametrize(
+    ('model_id', 'expected'),
+    [
+        ('cohere.rerank-v3-5:0', True),
+        ('amazon.rerank-v1:0', True),
+        ('us.amazon.rerank-v1:0', True),
+        ('arn:aws:bedrock:us-east-1::foundation-model/cohere.rerank-v3-5:0', True),
+        ('cohere.embed-english-v3', False),
+        ('cohere.command-r-v1:0', False),
+        ('amazon.nova-lite-v1:0', False),
+    ],
+)
+def test_is_rerank_model(model_id: str, expected: bool) -> None:
+    assert is_rerank_model(model_id) is expected

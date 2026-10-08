@@ -140,6 +140,24 @@ def strip_inference_profile_prefix(model_id: str) -> str:
     return model_id
 
 
+# Bedrock rerank families. Neither speaks Converse, and the plugin registers no
+# reranker action, so these IDs resolve to nothing.
+_RERANK_PATTERNS = ('cohere.rerank', 'amazon.rerank')
+
+
+def is_rerank_model(model_id: str) -> bool:
+    """Reports whether a Bedrock model ID names a reranking model.
+
+    Args:
+        model_id: Bedrock model ID, inference-profile ID, or ARN.
+
+    Returns:
+        True for the Cohere and Amazon rerank families.
+    """
+    base_id = strip_inference_profile_prefix(model_id)
+    return any(pattern in base_id for pattern in _RERANK_PATTERNS)
+
+
 def model_label(model_id: str) -> str:
     """Formats the Dev UI label for a Bedrock model or embedder.
 
