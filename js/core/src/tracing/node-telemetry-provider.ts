@@ -33,6 +33,7 @@ import {
   LogServerExporter,
   TraceServerExporter,
   setTelemetryServerUrl,
+  telemetryServerUrl,
 } from './exporter.js';
 import { RealtimeSpanProcessor } from './realtime-span-processor.js';
 
@@ -80,8 +81,11 @@ async function enableTelemetry(
   const enableRealTimeTelemetry =
     process.env.GENKIT_ENABLE_REALTIME_TELEMETRY === 'true';
   const logExporter = new LogServerExporter();
+  // Export eagerly when a Dev UI may be watching (the Dev UI wants logs as
+  // they happen). Dev alone must count: in attach mode the URL arrives later
+  // via /api/notify, after this processor is chosen.
   const defaultLogProcessor: LogRecordProcessor =
-    isDevEnv() || enableRealTimeTelemetry
+    isDevEnv() || telemetryServerUrl || enableRealTimeTelemetry
       ? new SimpleLogRecordProcessor(logExporter)
       : new BatchLogRecordProcessor(logExporter);
 
@@ -118,12 +122,21 @@ async function cleanUpTracing(): Promise<void> {
  */
 function createTelemetryServerProcessor(): SpanProcessor {
   const exporter = new TraceServerExporter();
-  // Use RealtimeSpanProcessor in dev environment (unless disabled), or when explicitly enabled
+  // A Dev UI may be watching in dev (the URL can arrive later via
+  // /api/notify) or whenever a telemetry server is already known, e.g. a
+  // non-dev reflection runtime given GENKIT_TELEMETRY_SERVER.
+  //
+  // Outside dev, only a URL known at init counts. A URL learned later
+  // (/api/notify, v2 handshake) is still used by the exporter, but the
+  // processor stays batched and realtime stays off. Reflection runs flush on
+  // completion, so the Dev UI still sees them. Set GENKIT_TELEMETRY_SERVER
+  // for eager export. The log processor in enableTelemetry follows suit.
+  const devUiMayBeWatching = isDevEnv() || !!telemetryServerUrl;
   const enableRealTimeTelemetry =
     process.env.GENKIT_ENABLE_REALTIME_TELEMETRY === 'true';
-  if (isDevEnv() && enableRealTimeTelemetry) {
+  if (devUiMayBeWatching && enableRealTimeTelemetry) {
     return new RealtimeSpanProcessor(exporter);
-  } else if (isDevEnv()) {
+  } else if (devUiMayBeWatching) {
     return new SimpleSpanProcessor(exporter);
   }
   return new BatchSpanProcessor(exporter);

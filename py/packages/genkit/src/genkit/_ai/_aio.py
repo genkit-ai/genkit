@@ -57,7 +57,8 @@ from genkit._ai._model import (
     ModelFn,
     ModelResponse,
     ModelResponseChunk,
-    assert_correct_config_class,
+    background_model_name,
+    check_call_config,
     define_model,
     resolve_for_generate,
 )
@@ -116,8 +117,8 @@ from genkit._core._tool import Tool
 from genkit._core._typing import (
     BaseDataPoint,
     Embedding,
+    EvalFnResponse,
     EvalRequest,
-    EvalResponse,
     MiddlewareRef,
     ModelInfo,
     Operation,
@@ -564,7 +565,7 @@ class Genkit:
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         config: ModelConfigDict,
         description: str | None = None,
         system: str | list[Part] | None = None,
@@ -591,7 +592,7 @@ class Genkit:
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         config: ModelRefConfigT | Mapping[str, Any] | None = None,
         description: str | None = None,
         system: str | list[Part] | None = None,
@@ -619,7 +620,7 @@ class Genkit:
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         config: ModelConfigDict,
         description: str | None = None,
         system: str | list[Part] | None = None,
@@ -646,7 +647,7 @@ class Genkit:
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         config: ModelRefConfigT | Mapping[str, Any] | None = None,
         description: str | None = None,
         system: str | list[Part] | None = None,
@@ -674,7 +675,7 @@ class Genkit:
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         config: ModelConfigDict,
         description: str | None = None,
         system: str | list[Part] | None = None,
@@ -701,7 +702,7 @@ class Genkit:
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         config: ModelRefConfigT | Mapping[str, Any] | None = None,
         description: str | None = None,
         system: str | list[Part] | None = None,
@@ -729,7 +730,7 @@ class Genkit:
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         config: ModelConfigDict,
         description: str | None = None,
         system: str | list[Part] | None = None,
@@ -756,7 +757,7 @@ class Genkit:
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         config: ModelRefConfigT | Mapping[str, Any] | None = None,
         description: str | None = None,
         system: str | list[Part] | None = None,
@@ -782,7 +783,7 @@ class Genkit:
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: str | ModelRef[BaseModel] | None = None,
+        model: str | ModelRef[BaseModel] | Action | None = None,
         config: Mapping[str, Any] | BaseModel | ModelConfigDict | None = None,
         description: str | None = None,
         system: str | list[Part] | None = None,
@@ -1050,22 +1051,25 @@ class Genkit:
         self,
         *,
         embedder: str | EmbedderRef | None,
-        options: dict[str, object] | None,
-    ) -> dict[str, object]:
-        """Copy ref config plus version, then overlay call-site options.
+        config: dict[str, object] | None,
+    ) -> dict[str, object] | None:
+        """Copy ref config plus version, then overlay call-site config.
 
-        The caller's EmbedderRef.config dict is left unchanged so they can
-        reuse the same ref on later embed / embed_many calls.
+        Returns None when neither the ref nor the call sets anything, the same
+        as a Dev UI run of the embedder. The caller's EmbedderRef.config dict is
+        left unchanged so they can reuse the same ref on later calls.
         """
+        ref_config = embedder.config if isinstance(embedder, EmbedderRef) else None
+        version = embedder.version if isinstance(embedder, EmbedderRef) else None
+        if ref_config is None and not version and config is None:
+            return None
         merged: dict[str, object] = {}
-        if isinstance(embedder, EmbedderRef):
-            config = embedder.config
-            if isinstance(config, dict):
-                merged.update(config)
-            if embedder.version:
-                merged['version'] = embedder.version
-        if options:
-            merged.update(options)
+        if ref_config:
+            merged.update(ref_config)
+        if version:
+            merged['version'] = version
+        if config:
+            merged.update(config)
         return merged
 
     # Overload: config=ModelConfigDict, output_schema=type[T] -> ModelResponse[T]
@@ -1073,7 +1077,7 @@ class Genkit:
     async def generate(
         self,
         *,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1100,7 +1104,7 @@ class Genkit:
     async def generate(
         self,
         *,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1127,7 +1131,7 @@ class Genkit:
     async def generate(
         self,
         *,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1154,7 +1158,7 @@ class Genkit:
     async def generate(
         self,
         *,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1179,7 +1183,7 @@ class Genkit:
     async def generate(
         self,
         *,
-        model: str | ModelRef[BaseModel] | None = None,
+        model: str | ModelRef[BaseModel] | Action | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1257,7 +1261,7 @@ class Genkit:
     def generate_stream(
         self,
         *,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1284,7 +1288,7 @@ class Genkit:
     def generate_stream(
         self,
         *,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1311,7 +1315,7 @@ class Genkit:
     def generate_stream(
         self,
         *,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1338,7 +1342,7 @@ class Genkit:
     def generate_stream(
         self,
         *,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1363,7 +1367,7 @@ class Genkit:
     def generate_stream(
         self,
         *,
-        model: str | ModelRef[BaseModel] | None = None,
+        model: str | ModelRef[BaseModel] | Action | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1439,7 +1443,7 @@ class Genkit:
     async def _generate(
         self,
         *,
-        model: str | ModelRef[BaseModel] | None = None,
+        model: str | ModelRef[BaseModel] | Action | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1473,7 +1477,7 @@ class Genkit:
         await register_tools(registry, tools)
         use = register_middleware(registry, use)
         resolved = await resolve_for_generate(model=model, config=config, registry=registry)
-        assert_correct_config_class(config=config, schema=resolved.config_schema, model=resolved.name)
+        check_call_config(config=config, schema=resolved.config_schema, model=resolved.name)
         # strings passed at call time are content, not templates: braces may be
         # JSON, code, or another template. templates are what you define up
         # front (define_prompt, .prompt files, define_agent's system).
@@ -1521,9 +1525,13 @@ class Genkit:
         embedder: str | EmbedderRef | None = None,
         content: str | Document | None = None,
         metadata: dict[str, object] | None = None,
-        options: dict[str, object] | None = None,
+        config: dict[str, object] | None = None,
     ) -> list[Embedding]:
         """Generate vector embeddings for a single document or string.
+
+        ``config`` is merged over the ``EmbedderRef``'s config (the call wins
+        per key) and reaches the embedder as ``request.options``. An embedder
+        name that isn't registered raises ``GenkitError`` with ``NOT_FOUND``.
 
         Example:
             from genkit_google_genai import GoogleAI
@@ -1535,11 +1543,15 @@ class Genkit:
             vector = embeddings[0].embedding
         """
         embedder_name = self._resolve_embedder_name(embedder)
-        final_options = self._embedder_options(embedder=embedder, options=options)
+        final_options = self._embedder_options(embedder=embedder, config=config)
 
         embed_action = await self.registry.resolve_embedder(embedder_name)
         if embed_action is None:
-            raise ValueError(f'Embedder "{embedder_name}" not found')
+            raise GenkitError(
+                status='NOT_FOUND',
+                message=f"Embedder '{embedder_name}' not found.",
+                reason=RuntimeErrorReason.ACTION_NOT_FOUND,
+            )
 
         if content is None:
             raise ValueError('Content must be specified for embedding.')
@@ -1562,9 +1574,12 @@ class Genkit:
         embedder: str | EmbedderRef | None = None,
         content: list[str] | list[Document] | None = None,
         metadata: dict[str, object] | None = None,
-        options: dict[str, object] | None = None,
+        config: dict[str, object] | None = None,
     ) -> list[Embedding]:
-        """Generate vector embeddings for multiple documents in a single batch call."""
+        """Generate vector embeddings for multiple documents in a single batch call.
+
+        ``config`` works the same as on ``embed``.
+        """
         if content is None:
             raise ValueError('Content must be specified for embedding.')
 
@@ -1574,11 +1589,15 @@ class Genkit:
         ]
 
         embedder_name = self._resolve_embedder_name(embedder)
-        final_options = self._embedder_options(embedder=embedder, options=options)
+        final_options = self._embedder_options(embedder=embedder, config=config)
 
         embed_action = await self.registry.resolve_embedder(embedder_name)
         if embed_action is None:
-            raise ValueError(f'Embedder "{embedder_name}" not found')
+            raise GenkitError(
+                status='NOT_FOUND',
+                message=f"Embedder '{embedder_name}' not found.",
+                reason=RuntimeErrorReason.ACTION_NOT_FOUND,
+            )
 
         response = (
             await embed_action.run(EmbedRequest(input=documents, options=final_options))  # type: ignore[arg-type]
@@ -1587,12 +1606,23 @@ class Genkit:
 
     async def evaluate(
         self,
+        *,
         evaluator: str | EvaluatorRef | None = None,
         dataset: list[BaseDataPoint] | None = None,
-        options: dict[str, object] | None = None,
+        config: dict[str, object] | None = None,
         eval_run_id: str | None = None,
-    ) -> EvalResponse:
+    ) -> list[EvalFnResponse]:
         """Evaluate a dataset using the specified evaluator.
+
+        Returns a list of rows. A per-row evaluator gives one row per
+        datapoint, in dataset order. A batch evaluator gives the rows its
+        function returned, as returned. Each row's ``evaluation`` is a list of
+        scores.
+
+        ``config`` is merged over the ``EvaluatorRef``'s config (the call
+        wins per key) and handed to the evaluator as its second argument. When
+        neither sets anything, the evaluator gets ``None``. An evaluator name
+        that isn't registered raises ``GenkitError`` with ``NOT_FOUND``.
 
         Example:
             from genkit import BaseDataPoint
@@ -1601,24 +1631,34 @@ class Genkit:
                 evaluator='my_eval',
                 dataset=[BaseDataPoint(input='What is 2+2?', output='4')],
             )
-            print(results.root[0].evaluation.score)
+            for row in results:
+                for score in row.evaluation:
+                    print(row.test_case_id, score.score)
         """
         evaluator_name: str = ''
-        evaluator_config: dict[str, object] = {}
+        ref_config: dict[str, object] | None = None
 
         if isinstance(evaluator, EvaluatorRef):
             evaluator_name = evaluator.name
-            evaluator_config = evaluator.config_schema or {}
+            ref_config = evaluator.config
         elif isinstance(evaluator, str):
             evaluator_name = evaluator
         else:
             raise ValueError('Evaluator must be specified as a string name or an EvaluatorRef.')
 
-        final_options = {**(evaluator_config or {}), **(options or {})}
+        # same rule as _embedder_options: None when nothing was set, matching
+        # what the CLI / Dev UI send, so `options is None` is the one check.
+        final_options: dict[str, object] | None = None
+        if ref_config is not None or config is not None:
+            final_options = {**(ref_config or {}), **(config or {})}
 
         eval_action = await self.registry.resolve_evaluator(evaluator_name)
         if eval_action is None:
-            raise ValueError(f'Evaluator "{evaluator_name}" not found')
+            raise GenkitError(
+                status='NOT_FOUND',
+                message=f"Evaluator '{evaluator_name}' not found.",
+                reason=RuntimeErrorReason.ACTION_NOT_FOUND,
+            )
 
         if not eval_run_id:
             eval_run_id = str(uuid.uuid4())
@@ -1626,15 +1666,14 @@ class Genkit:
         if dataset is None:
             raise ValueError('Dataset must be specified for evaluation.')
 
-        return (
-            await eval_action.run(
-                EvalRequest(
-                    dataset=dataset,
-                    options=final_options,
-                    eval_run_id=eval_run_id,
-                ),
-            )
-        ).response
+        response = await eval_action.run(
+            EvalRequest(
+                dataset=dataset,
+                options=final_options,
+                eval_run_id=eval_run_id,
+            ),
+        )
+        return response.response.root
 
     @staticmethod
     def current_context() -> dict[str, Any] | None:
@@ -1695,7 +1734,7 @@ class Genkit:
     async def generate_operation(
         self,
         *,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | BackgroundAction[Any] | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1718,7 +1757,7 @@ class Genkit:
     async def generate_operation(
         self,
         *,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | BackgroundAction[Any] | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1740,7 +1779,7 @@ class Genkit:
     async def generate_operation(
         self,
         *,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | BackgroundAction[Any] | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1768,13 +1807,16 @@ class Genkit:
             while not op.done:
                 op = await ai.check_operation(op)
         """
+        if isinstance(model, BackgroundAction):
+            # Same as its name, once we know this registry holds that object.
+            model = background_model_name(model=model, registry=self.registry)
         resolved = await resolve_for_generate(
             model=model,
             config=config,
             registry=self.registry,
             message='No model specified for generate_operation.',
         )
-        assert_correct_config_class(config=config, schema=resolved.config_schema, model=resolved.name)
+        check_call_config(config=config, schema=resolved.config_schema, model=resolved.name)
 
         model_action = await self.registry.resolve_model(resolved.name)
         if not model_action:

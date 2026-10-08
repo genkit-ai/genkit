@@ -16,6 +16,7 @@
 
 """Evaluator type definitions for the Genkit framework."""
 
+import inspect
 import traceback
 import uuid
 from collections.abc import Callable, Coroutine
@@ -24,7 +25,7 @@ from typing import Any, ClassVar, TypeVar, cast
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
 
-from genkit._core._action import Action, ActionKind
+from genkit._core._action import Action, ActionKind, ActionRunContext
 from genkit._core._logger import get_logger
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
@@ -52,8 +53,9 @@ T = TypeVar('T')
 # Must be async (coroutine function).
 EvaluatorFn = Callable[[BaseDataPoint, T], Coroutine[Any, Any, EvalFnResponse]]
 
-# User-provided batch evaluator: one EvalRequest.
-BatchEvaluatorFn = Callable[[EvalRequest], Coroutine[Any, Any, list[EvalFnResponse]]]
+# User-provided batch evaluator: one EvalRequest. Returns the rows as a list
+# or as an EvalResponse.
+BatchEvaluatorFn = Callable[[EvalRequest], Coroutine[Any, Any, list[EvalFnResponse] | EvalResponse]]
 
 
 class EvaluatorRef(BaseModel):
@@ -62,12 +64,16 @@ class EvaluatorRef(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(extra='forbid', populate_by_name=True, alias_generator=to_camel)
 
     name: str
-    config_schema: dict[str, object] | None = None
+    config: dict[str, object] | None = None
 
 
-def evaluator_ref(name: str, config_schema: dict[str, object] | None = None) -> EvaluatorRef:
-    """Create an EvaluatorRef."""
-    return EvaluatorRef(name=name, config_schema=config_schema)
+def evaluator_ref(name: str, *, config: dict[str, object] | None = None) -> EvaluatorRef:
+    """Create an EvaluatorRef whose config is merged under ai.evaluate's config=.
+
+    Settings are named. A value in the second position is a TypeError so it
+    cannot be stored as config.
+    """
+    return EvaluatorRef(name=name, config=config)
 
 
 def evaluator_action_metadata(
@@ -152,7 +158,7 @@ def define_evaluator(
                                 span_id=span.span_id,
                                 trace_id=span.trace_id,
                                 test_case_id=test_case_id,
-                                evaluation=evaluation,
+                                evaluation=[evaluation],
                             )
                         )
                         raise e
@@ -190,7 +196,11 @@ def define_batch_evaluator(
     metadata: dict[str, object] | None = None,
     description: str | None = None,
 ) -> Action:
-    """Register a batch evaluator. ``fn`` is the action: one ``EvalRequest``."""
+    """Register a batch evaluator that runs ``fn`` once on the whole ``EvalRequest``.
+
+    ``fn`` returns the rows as a list or an ``EvalResponse``. The action wraps
+    them so ``action.run(...).response`` is always an ``EvalResponse``.
+    """
     evaluator_meta: dict[str, object] = metadata.copy() if metadata else {}
     if 'evaluator' not in evaluator_meta:
         evaluator_meta['evaluator'] = {}
@@ -206,10 +216,22 @@ def define_batch_evaluator(
 
     evaluator_description = _get_func_description(fn, description)
 
-    return registry.register_action(
+    if not inspect.iscoroutinefunction(fn):
+        raise TypeError(f"Action handlers must be async functions. Got sync function for '{name}'.")
+
+    # the action hands back the rows as one model so the Dev UI and
+    # `genkit eval:run` get a JSON array, the same as a per-row evaluator.
+    # fn stays the metadata_fn, so its signature is still checked when defined.
+    # model_validate takes a list or an EvalResponse; the constructor rejects the latter.
+    async def batch_fn(req: EvalRequest, ctx: ActionRunContext) -> EvalResponse:
+        return EvalResponse.model_validate(await action.params.call(fn, req, ctx))
+
+    action = registry.register_action(
         name=name,
         kind=ActionKind.EVALUATOR,
-        fn=fn,
+        fn=batch_fn,
+        metadata_fn=fn,
         metadata=evaluator_meta,
         description=evaluator_description,
     )
+    return action

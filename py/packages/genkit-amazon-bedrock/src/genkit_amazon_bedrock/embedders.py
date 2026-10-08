@@ -49,6 +49,7 @@ from genkit.embedder import (
     EmbedRequest,
     EmbedResponse,
 )
+from genkit.plugin_api import mark_provider_error
 from genkit_amazon_bedrock.model_info import model_label, strip_inference_profile_prefix
 from genkit_amazon_bedrock.models import _from_botocore_error, _from_client_error
 
@@ -434,6 +435,7 @@ class BedrockEmbedder:
                 raise GenkitError(
                     message=f'bedrock embed: document {index}: {_without_own_prefix(error.original_message)}',
                     status=error.status,
+                    response_metadata=error.response_metadata,
                 ) from error
             if not text and not image:
                 raise GenkitError(
@@ -522,10 +524,16 @@ class BedrockEmbedder:
                         return await call
                     except GenkitError as error:
                         # A batch failure is opaque without the failing document,
-                        # but the inner message already names the plugin.
-                        raise GenkitError(
-                            message=f'bedrock embed: document {index}: {_without_own_prefix(error.original_message)}',
-                            status=error.status,
+                        # but the inner message already names the plugin. Keep
+                        # response_metadata so retry still honours Retry-After.
+                        # Everything in here is the Bedrock call or its reply.
+                        detail = _without_own_prefix(error.original_message)
+                        raise mark_provider_error(
+                            error=GenkitError(
+                                message=f'bedrock embed: document {index}: {detail}',
+                                status=error.status,
+                                response_metadata=error.response_metadata,
+                            )
                         ) from error
             except asyncio.CancelledError:
                 # Cancelled while queued on the semaphore, so nothing awaited it.

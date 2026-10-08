@@ -57,18 +57,28 @@ async def greet(name: str) -> str:
 
 The plugin automatically discovers available models from the API upon initialization. You can use any model name supported by the API (e.g., `GoogleAI.gemini_model('gemini-flash-latest')`, `VertexAI.gemini_model('gemini-3.1-pro-preview')`).
 
-### Dynamic Configuration
+### Provider fields the plugin doesn't declare
 
-Unrecognized provider parameters on the family config are forwarded to the API:
+Gemini, Gemini image, and Veo configs reject keys they don't declare, so a
+typo like `temprature` fails before the request is sent. A request field the
+schema doesn't declare yet goes in `extra` under its REST wire name. It's
+merged over the top of the request body, recursing into nested objects:
 
 ```python
 from genkit_google_genai import GeminiConfig
 
 config = GeminiConfig.model_validate({
     'temperature': 1.0,
-    'response_modalities': ['TEXT', 'IMAGE'],
+    'extra': {
+        'generationConfig': {'newKnob': 1},  # adds one key to generationConfig
+        'labels': {'team': 'search'},        # Vertex AI request labels
+    },
 })
 ```
+
+`extra` can't set the fields Genkit builds from the request (`contents`,
+`systemInstruction`, `tools`, `toolConfig`, the structured-output fields of
+`generationConfig`, `cachedContent`); those raise `INVALID_ARGUMENT`.
 
 ### Video generation (Veo)
 
@@ -115,7 +125,7 @@ Runnable version: [google-genai-media](https://github.com/genkit-ai/genkit/tree/
 
 ### Vertex AI Evaluators
 
-Built-in evaluators for assessing model output quality. Evaluators are automatically registered when using the VertexAI plugin and are accessed via `ai.evaluate()`:
+Built-in evaluators for assessing model output quality, accessed via `ai.evaluate()`. The VertexAI plugin registers them only when a project resolves (`VertexAI(project=...)` or `GOOGLE_CLOUD_PROJECT`); `VertexAI(api_key=...)` without a project lists none. They authenticate with Application Default Credentials, not `api_key` or `credentials`:
 
 ```python
 from genkit import BaseDataPoint, Genkit
@@ -137,8 +147,8 @@ results = await ai.evaluate(
     dataset=dataset,
 )
 
-for result in results.root:
-    print(f'Score: {result.evaluation.score}')
+for result in results:
+    print(f'Score: {result.evaluation[0].score}')
 ```
 
 Runnable snippets are in [`py/samples`](../../samples).
