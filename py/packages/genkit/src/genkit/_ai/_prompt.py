@@ -43,7 +43,7 @@ from genkit._ai._generate import (
     tools_to_action_names,
 )
 from genkit._ai._model import (
-    CallModelArg,
+    ModelArg,
     ModelRef,
     ModelRequest,
     ModelResponse,
@@ -121,7 +121,7 @@ class ModelSettings(TypedDict, total=False):
     key. Applied in ``Prompt._resolve_model``.
     """
 
-    model: CallModelArg | None
+    model: ModelArg | Action | None
     config: Mapping[str, Any] | BaseModel | None
 
 
@@ -254,7 +254,7 @@ class GenerateCall(BaseModel):
     resume_metadata: dict[str, Any] | None = None
 
     # ModelSettings
-    model: CallModelArg | None = None
+    model: ModelArg | Action | None = None
     config: Mapping[str, Any] | BaseModel | None = None
 
     def with_overrides(self, opts: PromptSettings) -> Self:
@@ -274,7 +274,7 @@ class Prompt(Generic[InputT, OutputT]):
         self,
         registry: Registry,
         variant: str | None = None,
-        model: CallModelArg | None = None,
+        model: ModelArg | Action | None = None,
         config: Mapping[str, Any] | BaseModel | None = None,
         description: str | None = None,
         input_schema: type | dict[str, Any] | str | None = None,
@@ -419,7 +419,7 @@ class Prompt(Generic[InputT, OutputT]):
         self,
         input: InputT | dict[str, Any] | None = None,
         *,
-        model: CallModelArg | None = None,
+        model: ModelArg | Action | None = None,
         config: Mapping[str, Any] | BaseModel | None = None,
         messages: list[Message] | None = None,
         tools: Sequence[str | Tool] | None = None,
@@ -469,7 +469,7 @@ class Prompt(Generic[InputT, OutputT]):
         self,
         input: InputT | dict[str, Any] | None = None,
         *,
-        model: CallModelArg | None = None,
+        model: ModelArg | Action | None = None,
         config: Mapping[str, Any] | BaseModel | None = None,
         messages: list[Message] | None = None,
         tools: Sequence[str | Tool] | None = None,
@@ -518,7 +518,7 @@ class Prompt(Generic[InputT, OutputT]):
         self,
         input: InputT | dict[str, Any] | None = None,
         *,
-        model: CallModelArg | None = None,
+        model: ModelArg | Action | None = None,
         config: Mapping[str, Any] | BaseModel | None = None,
         messages: list[Message] | None = None,
         tools: Sequence[str | Tool] | None = None,
