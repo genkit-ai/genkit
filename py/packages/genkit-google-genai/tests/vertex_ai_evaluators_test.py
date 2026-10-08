@@ -31,7 +31,8 @@ from genkit_google_genai._evaluators._evaluation import (
 from google.auth.exceptions import DefaultCredentialsError, RefreshError
 
 from genkit import Genkit, GenkitError
-from genkit.evaluator import BaseDataPoint
+from genkit.evaluator import BaseDataPoint, EvalRequest
+from genkit.plugin_api import ActionKind
 
 
 def test_vertex_ai_evaluation_metric_type_values() -> None:
@@ -155,44 +156,38 @@ async def test_evaluator_factory_evaluate_instances_error_handling() -> None:
 
 
 def test_create_vertex_evaluators_with_metric_types() -> None:
-    """Test create_vertex_evaluators with simple metric types."""
-    mock_registry = MagicMock()
-    mock_registry.define_evaluator = MagicMock()
-
+    """Two metrics build two evaluator actions."""
     metrics = [
         VertexAIEvaluationMetricType.FLUENCY,
         VertexAIEvaluationMetricType.SAFETY,
     ]
 
-    create_vertex_evaluators(
-        registry=mock_registry,
+    actions = create_vertex_evaluators(
         metrics=metrics,
         project_id='test-project',
         location='us-central1',
     )
 
-    assert mock_registry.define_evaluator.call_count == 2
+    assert [a.kind for a in actions] == [ActionKind.EVALUATOR, ActionKind.EVALUATOR]
 
 
 @pytest.mark.asyncio
 async def test_evaluator_request_sends_empty_metric_spec() -> None:
     """Fluency evaluator sends fluencyInput with an empty metricSpec to Vertex."""
-    mock_registry = MagicMock()
-
-    create_vertex_evaluators(
-        registry=mock_registry,
+    [fluency] = create_vertex_evaluators(
         metrics=[VertexAIEvaluationMetricType.FLUENCY],
         project_id='test-project',
         location='us-central1',
     )
-    evaluator_fn = mock_registry.define_evaluator.call_args.kwargs['fn']
 
     with patch.object(
         EvaluatorFactory,
         'evaluate_instances',
         AsyncMock(return_value={'fluencyResult': {'score': 4.0}}),
     ) as mock_evaluate:
-        await evaluator_fn(BaseDataPoint(output='The soup is ready.'))
+        await fluency.run(
+            EvalRequest(dataset=[BaseDataPoint(output='The soup is ready.', test_case_id='case1')], eval_run_id='r')
+        )
 
     mock_evaluate.assert_awaited_once_with({
         'fluencyInput': {
@@ -204,72 +199,52 @@ async def test_evaluator_request_sends_empty_metric_spec() -> None:
 
 def test_create_vertex_evaluators_names_format() -> None:
     """Test that evaluator names follow vertexai/{metric} format."""
-    mock_registry = MagicMock()
-    evaluator_names: list[str] = []
-
-    def capture_name(*args: object, **kwargs: object) -> None:
-        if 'name' in kwargs:
-            name = kwargs['name']
-            if isinstance(name, str):
-                evaluator_names.append(name)
-
-    mock_registry.define_evaluator = capture_name
-
     metrics = [
         VertexAIEvaluationMetricType.FLUENCY,
         VertexAIEvaluationMetricType.GROUNDEDNESS,
     ]
 
-    create_vertex_evaluators(
-        registry=mock_registry,
+    actions = create_vertex_evaluators(
         metrics=metrics,
         project_id='test-project',
         location='us-central1',
     )
 
-    assert 'vertexai/fluency' in evaluator_names
-    assert 'vertexai/groundedness' in evaluator_names
+    assert [a.name for a in actions] == ['vertexai/fluency', 'vertexai/groundedness']
 
 
 def test_create_vertex_evaluators_empty_metrics() -> None:
-    """Test create_vertex_evaluators with empty metrics list."""
-    mock_registry = MagicMock()
-    mock_registry.define_evaluator = MagicMock()
-
-    create_vertex_evaluators(
-        registry=mock_registry,
+    """No metrics build no evaluators."""
+    actions = create_vertex_evaluators(
         metrics=[],
         project_id='test-project',
         location='us-central1',
     )
 
-    mock_registry.define_evaluator.assert_not_called()
+    assert actions == []
 
 
 def test_all_metric_types_supported() -> None:
-    """Test that all metric types are supported by create_vertex_evaluators."""
-    mock_registry = MagicMock()
-    mock_registry.define_evaluator = MagicMock()
-
+    """Every metric type builds an evaluator."""
     all_metrics = list(VertexAIEvaluationMetricType)
 
-    create_vertex_evaluators(
-        registry=mock_registry,
+    actions = create_vertex_evaluators(
         metrics=all_metrics,
         project_id='test-project',
         location='us-central1',
     )
 
-    assert mock_registry.define_evaluator.call_count == len(all_metrics)
+    assert len(actions) == len(all_metrics)
 
 
 @pytest.mark.asyncio
 async def test_vertexai_evaluator_row_evaluation_is_a_list() -> None:
     """ai.evaluate with vertexai/fluency returns a list of rows read as results[0].evaluation[0].score."""
     ai = Genkit()
-    create_vertex_evaluators(
-        ai, [VertexAIEvaluationMetricType.FLUENCY], project_id='test-project', location='us-central1'
-    )
+    for action in create_vertex_evaluators(
+        [VertexAIEvaluationMetricType.FLUENCY], project_id='test-project', location='us-central1'
+    ):
+        ai.registry.register_action_from_instance(action)
 
     with patch.object(
         EvaluatorFactory,

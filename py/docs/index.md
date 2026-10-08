@@ -157,6 +157,8 @@
 
 ::: genkit.evaluator.EvalStatusEnum
 
+::: genkit.evaluator.evaluator
+
 ::: genkit.evaluator.evaluator_action_metadata
 
 ::: genkit.evaluator.evaluator_ref

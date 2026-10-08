@@ -33,6 +33,7 @@ from genkit_google_genai import (
     GoogleAI,
     VertexAI,
 )
+from genkit_google_genai._evaluators import VertexAIEvaluationMetricType
 from genkit_google_genai._google import (
     GOOGLEAI_PLUGIN_NAME,
     VERTEXAI_PLUGIN_NAME,
@@ -195,6 +196,56 @@ async def test_vertexai_with_api_key_and_no_project_lists_no_evaluators(
         plugin = VertexAI(api_key='k')
         actions = await plugin.list_actions()
     assert not [a for a in actions if a.action_type == ActionKind.EVALUATOR]
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+async def test_vertex_list_actions_shows_evaluator_names_and_billed(
+    mock_list_models: MagicMock, mock_client: MagicMock
+) -> None:
+    """VertexAI(project='p').list_actions() shows every metric with its display name, definition, and billed=True."""
+    mock_list_models.return_value = GenaiModels()
+
+    listed = await VertexAI(project='p', location='us-central1').list_actions()
+
+    evaluators = {a.name: a.metadata for a in listed if a.action_type == ActionKind.EVALUATOR}
+    assert sorted(evaluators) == sorted(f'vertexai/{m.lower()}' for m in VertexAIEvaluationMetricType)
+    assert evaluators['vertexai/fluency'] == {
+        'evaluator': {
+            'evaluatorDisplayName': 'Fluency',
+            'evaluatorDefinition': 'Assesses the language mastery of an output',
+            'evaluatorIsBilled': True,
+            'label': 'vertexai/fluency',
+        }
+    }
+    for name, metadata in evaluators.items():
+        assert metadata is not None, name
+        card = cast('dict[str, object]', metadata['evaluator'])
+        assert card['evaluatorDisplayName'], name
+        assert card['evaluatorDefinition'], name
+        assert card['evaluatorIsBilled'] is True, name
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+async def test_vertex_init_does_not_create_a_second_app(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
+    """Starting VertexAI(project='p') builds its evaluators without constructing another Genkit app."""
+    mock_list_models.return_value = GenaiModels()
+    plugin = VertexAI(project='p', location='us-central1')
+
+    with patch.object(Genkit, '__init__', side_effect=AssertionError('plugin constructed a second Genkit app')):
+        actions = await plugin.init()
+        resolved = await plugin.resolve(ActionKind.EVALUATOR, 'fluency')
+
+    evaluators = [a for a in actions if a.kind == ActionKind.EVALUATOR]
+    assert sorted(a.name for a in evaluators) == sorted(f'vertexai/{m.lower()}' for m in VertexAIEvaluationMetricType)
+    fluency = next(a for a in evaluators if a.name == 'vertexai/fluency')
+    assert cast('dict[str, object]', fluency.metadata['evaluator'])['evaluatorDisplayName'] == 'Fluency'
+    assert resolved is not None
+    assert resolved.kind == ActionKind.EVALUATOR
+    assert resolved.name == 'vertexai/fluency'
 
 
 @patch('genkit_google_genai._google.genai.client.Client')
