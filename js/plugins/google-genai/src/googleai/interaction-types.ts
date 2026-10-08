@@ -30,7 +30,13 @@ export declare interface InteractionFunctionTool extends FunctionDeclaration {
  */
 export declare interface InteractionGoogleSearchTool {
   type: 'google_search';
-  search_types?: ('web_search' | 'image_search' | 'enterprise_web_search')[];
+  /** Unknown search types are passed through for forward compatibility. */
+  search_types?: (
+    | 'web_search'
+    | 'image_search'
+    | 'enterprise_web_search'
+    | (string & {})
+  )[];
 }
 
 /**

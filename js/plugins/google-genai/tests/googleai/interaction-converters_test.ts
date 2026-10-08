@@ -567,6 +567,55 @@ describe('Interaction Converters', () => {
         mime_type: 'application/pdf',
       });
     });
+
+    it('should convert a CSV MediaPart to a document', () => {
+      const result = toInteractionContent({
+        media: { url: 'data:text/csv;base64,DATA', contentType: 'text/csv' },
+      });
+      assert.deepStrictEqual(result, {
+        type: 'document',
+        data: 'DATA',
+        mime_type: 'text/csv',
+      });
+    });
+
+    it('should send a YouTube URL without contentType as video without mime_type', () => {
+      const url = 'https://www.youtube.com/watch?v=abc123';
+      assert.deepStrictEqual(toInteractionContent({ media: { url } }), {
+        type: 'video',
+        uri: url,
+      });
+      assert.deepStrictEqual(
+        toInteractionContent({ media: { url: 'https://youtu.be/abc123' } }),
+        { type: 'video', uri: 'https://youtu.be/abc123' }
+      );
+    });
+
+    it('should send other URIs without a known contentType as documents without mime_type', () => {
+      const url =
+        'https://generativelanguage.googleapis.com/v1beta/files/abc123';
+      assert.deepStrictEqual(toInteractionContent({ media: { url } }), {
+        type: 'document',
+        uri: url,
+      });
+    });
+
+    it('should still throw for a data URL without a contentType', () => {
+      assert.throws(
+        () => toInteractionContent({ media: { url: 'data:;base64,DATA' } }),
+        /Media part missing contentType/
+      );
+    });
+
+    it('should throw for an unsupported contentType', () => {
+      assert.throws(
+        () =>
+          toInteractionContent({
+            media: { url: 'gs://bucket/notes.txt', contentType: 'text/plain' },
+          }),
+        /Unsupported media type: text\/plain/
+      );
+    });
   });
 
   describe('toInteractionSteps', () => {
@@ -592,6 +641,29 @@ describe('Interaction Converters', () => {
           name: 'func',
           arguments: { a: 1 },
           id: 'ref1',
+        },
+      ]);
+    });
+
+    it('should send a ToolRequestPart thoughtSignature back as the function_call signature', () => {
+      const messages: MessageData[] = [
+        {
+          role: 'model',
+          content: [
+            {
+              toolRequest: { name: 'func', input: { a: 1 }, ref: 'ref1' },
+              metadata: { thoughtSignature: 'sig-call' },
+            },
+          ],
+        },
+      ];
+      assert.deepStrictEqual(toInteractionSteps(messages), [
+        {
+          type: 'function_call',
+          name: 'func',
+          arguments: { a: 1 },
+          id: 'ref1',
+          signature: 'sig-call',
         },
       ]);
     });
@@ -1447,6 +1519,73 @@ describe('Interaction Converters', () => {
       assert.deepStrictEqual(result.output?.message?.content, [
         { toolRequest: { name: 'lookup', ref: 'call-1', input: { q: 'x' } } },
       ]);
+    });
+
+    it('should keep the function_call signature and round-trip it in the next request', () => {
+      // Shape observed live (gemini-flash-latest, store: false): the
+      // function_call step carries its own signature.
+      const result = fromInteraction({
+        id: 'v1_abc123',
+        status: 'requires_action',
+        steps: [
+          {
+            type: 'function_call',
+            id: 'call-1',
+            name: 'lookup',
+            arguments: { q: 'x' },
+            signature: 'sig-call',
+          },
+        ],
+      });
+      const content = result.output?.message?.content ?? [];
+      assert.deepStrictEqual(content, [
+        {
+          toolRequest: { name: 'lookup', ref: 'call-1', input: { q: 'x' } },
+          metadata: { thoughtSignature: 'sig-call' },
+        },
+      ]);
+
+      // Resending the history (stateless) includes the signature again.
+      assert.deepStrictEqual(toInteractionSteps([{ role: 'model', content }]), [
+        {
+          type: 'function_call',
+          name: 'lookup',
+          arguments: { q: 'x' },
+          id: 'call-1',
+          signature: 'sig-call',
+        },
+      ]);
+    });
+
+    it('should keep the signature on completed (server-side) function calls', () => {
+      const result = fromInteractionSync({
+        status: 'completed',
+        steps: [
+          {
+            type: 'function_call',
+            id: 'call-1',
+            name: 'lookup',
+            arguments: { q: 'x' },
+            signature: 'sig-call',
+          },
+          {
+            type: 'function_result',
+            call_id: 'call-1',
+            name: 'lookup',
+            result: { a: 1 },
+          },
+        ],
+      });
+      assert.deepStrictEqual(result.message?.content[0], {
+        custom: {
+          serverFunctionCall: {
+            id: 'call-1',
+            name: 'lookup',
+            arguments: { q: 'x' },
+          },
+        },
+        metadata: { thoughtSignature: 'sig-call' },
+      });
     });
 
     it('should keep polling for in_progress', () => {

@@ -344,7 +344,7 @@ const destinationsRetriever = defineFirestoreRetriever(ai, {
   firestore: getFirestore(app),
   collection: 'destinations',
   contentField: 'knownFor',
-  embedder: googleAI.embedder('gemini-embedding-2'),
+  embedder: googleAI.embedder('gemini-embedding-001'),
   vectorField: 'embedding',
 });
 

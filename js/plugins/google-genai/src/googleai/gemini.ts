@@ -130,6 +130,34 @@ function isDefaultSafetySetting(setting: {
   );
 }
 
+/**
+ * Copies a `retrievalConfig.latLng` user location onto the Interactions
+ * `google_maps` tools, which take `latitude`/`longitude` directly (there is no
+ * retrieval config on the Interactions path). A location already set on a tool
+ * is kept.
+ *
+ * @returns Whether there was a `google_maps` tool to apply the location to.
+ */
+function applyLatLngToGoogleMapsTools(
+  tools: InteractionTool[],
+  latLng: { latitude?: number; longitude?: number }
+): boolean {
+  let found = false;
+  tools.forEach((tool, i) => {
+    if (tool.type !== 'google_maps') return;
+    found = true;
+    if ('latitude' in tool || 'longitude' in tool) return;
+    tools[i] = {
+      ...tool,
+      ...(latLng.latitude !== undefined ? { latitude: latLng.latitude } : {}),
+      ...(latLng.longitude !== undefined
+        ? { longitude: latLng.longitude }
+        : {}),
+    };
+  });
+  return found;
+}
+
 const VoiceConfigSchema = z
   .object({
     prebuiltVoiceConfig: z
@@ -965,9 +993,9 @@ export function defineModel(
             'toolConfig is not supported for this model with the Interactions API and will be ignored.'
           );
         }
-        if (retrievalConfig) {
+        if (request.candidates && request.candidates > 1) {
           logger.warn(
-            'retrievalConfig is not supported for this model with the Interactions API and will be ignored.'
+            'Multiple candidates are not supported for this model with the Interactions API; only one candidate will be returned.'
           );
         }
         if (Array.isArray(toolsFromConfig)) {
@@ -996,6 +1024,26 @@ export function defineModel(
         }
         if (urlContext) {
           interactionsTools.push(toInteractionConfigTool({ urlContext }));
+        }
+        if (retrievalConfig) {
+          // There is no retrieval config on the Interactions path; the user
+          // location is set on the google_maps tool instead.
+          const { latLng, ...unsupportedRetrievalConfig } = retrievalConfig;
+          if (
+            latLng &&
+            !applyLatLngToGoogleMapsTools(interactionsTools, latLng)
+          ) {
+            logger.warn(
+              'retrievalConfig.latLng is only used with the googleMaps tool for this model and will be ignored.'
+            );
+          }
+          const unsupportedKeys = Object.keys(unsupportedRetrievalConfig);
+          if (unsupportedKeys.length > 0) {
+            logger.warn(
+              `retrievalConfig.${unsupportedKeys.join(', retrievalConfig.')} ` +
+                'is not supported for this model with the Interactions API and will be ignored.'
+            );
+          }
         }
       }
 
@@ -1282,7 +1330,9 @@ export function defineModel(
         }
       }
 
-      if (storeFromConfig !== undefined || previousInteractionIdFromConfig) {
+      // `store: false` is already how this model behaves, so only warn when
+      // something would actually be ignored.
+      if (storeFromConfig === true || previousInteractionIdFromConfig) {
         logger.warn(
           'store and previousInteractionId are not supported for this model and will be ignored.'
         );

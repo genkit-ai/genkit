@@ -51,6 +51,7 @@ import {
   checkApiKey,
   checkModelName,
   extractVersion,
+  isStringArray,
   modelName,
 } from './utils.js';
 
@@ -352,11 +353,11 @@ export function defineModel(
           const { allowedTools, ...restMcp } = mcpServer;
           let allowed_tools: InteractionAllowedTools[] | undefined = undefined;
           if (allowedTools && allowedTools.length > 0) {
-            if (typeof allowedTools[0] === 'string') {
-              allowed_tools = [{ tools: allowedTools as string[] }];
-            } else {
-              allowed_tools = allowedTools as InteractionAllowedTools[];
-            }
+            // A plain list of tool names is shorthand for one entry with no
+            // mode.
+            allowed_tools = isStringArray(allowedTools)
+              ? [{ tools: allowedTools }]
+              : allowedTools;
           }
           tools.push({
             type: 'mcp_server',

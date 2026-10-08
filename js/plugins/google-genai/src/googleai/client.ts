@@ -28,6 +28,7 @@ import {
   processStream,
 } from '../common/utils.js';
 import { InteractionStreamResult } from './interaction-types.js';
+import { isObject } from './utils.js';
 
 import {
   ClientOptions,
@@ -625,8 +626,9 @@ async function makeRequest(
       // `model_not_found`, `quota_exceeded`) that is more precise than the
       // HTTP status, so prefer it when recognized.
       if (isInteractionUrl(url)) {
+        const apiError = isObject(errorDetail) ? errorDetail.error : undefined;
         const codeStatus = interactionErrorCodeToGenkitStatus(
-          (errorDetail as any)?.error?.code
+          isObject(apiError) ? apiError.code : undefined
         );
         if (codeStatus) {
           status = codeStatus;

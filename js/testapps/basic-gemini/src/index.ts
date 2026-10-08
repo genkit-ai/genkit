@@ -386,29 +386,17 @@ ai.defineFlow(
       },
     });
 
-    let streamedReasoning = '';
-    let streamedText = '';
-
+    // Thought summaries and the answer arrive as separate chunk parts.
     for await (const chunk of stream) {
       if (chunk.reasoning) {
-        streamedReasoning += chunk.reasoning;
         sendChunk({ type: 'thought', text: chunk.reasoning });
       }
       if (chunk.text) {
-        streamedText += chunk.text;
         sendChunk({ type: 'text', text: chunk.text });
       }
     }
 
-    const finalResponse = await response;
-
-    return {
-      streamedReasoning,
-      streamedText,
-      finalReasoning: finalResponse.reasoning,
-      finalText: finalResponse.text,
-      reasoningMatches: streamedReasoning === finalResponse.reasoning,
-    };
+    return (await response).text;
   }
 );
 
@@ -848,7 +836,7 @@ ai.defineFlow('gemini-image-editing', async (_) => {
 // Nano banana pro config
 ai.defineFlow('nano-banana-pro', async (_) => {
   const { media } = await ai.generate({
-    model: googleAI.model('gemini-3-pro-image-preview'),
+    model: googleAI.model('gemini-3-pro-image'),
     prompt: 'Generate a picture of a sunset in the mountains by a lake',
     config: {
       imageConfig: {
@@ -864,7 +852,7 @@ ai.defineFlow('nano-banana-pro', async (_) => {
 // webSearch and imageSearch with Nano Banana 2
 ai.defineFlow('nano-banana-2', async (_) => {
   const { media } = await ai.generate({
-    model: googleAI.model('gemini-3.1-flash-image-preview'),
+    model: googleAI.model('gemini-3.1-flash-image'),
     prompt:
       'Generate an accurate image of the CN Tower. Use webSearch to determine the date, weather and current time in Toronto. The weather and time should be reflected in the image (day, night, rainy, sunny, snowy etc). Also use words to show the date, time and weather on the image.',
     config: {

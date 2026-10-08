@@ -29,7 +29,6 @@ import {
 import { logger } from 'genkit/logging';
 import { GenerateRequest } from 'genkit/model';
 import {
-  Content,
   GeminiInteraction,
   InteractionSseEvent,
   InteractionStreamResult,
@@ -420,9 +419,9 @@ const INTERACTION_ERROR_CODE_TO_STATUS: Record<string, StatusName> = {
   no_image: 'ABORTED',
   // Content-policy blocks; see INTERACTION_CONTENT_BLOCK_CODES.
   ...Object.fromEntries(
-    [...INTERACTION_CONTENT_BLOCK_CODES].map((code) => [
+    [...INTERACTION_CONTENT_BLOCK_CODES].map((code): [string, StatusName] => [
       code,
-      'FAILED_PRECONDITION' as StatusName,
+      'FAILED_PRECONDITION',
     ])
   ),
   service_unavailable: 'UNAVAILABLE', // 503: server or model overloaded
@@ -501,9 +500,9 @@ export function parseInteractionStreamErrorText(text: string): Error {
     ) {
       // Prefer an explicit Google-style `status` if present, otherwise map the
       // Interactions `code`.
-      const status: StatusName = StatusNameSchema.safeParse(apiError.status)
-        .success
-        ? (apiError.status as StatusName)
+      const parsedStatus = StatusNameSchema.safeParse(apiError.status);
+      const status: StatusName = parsedStatus.success
+        ? parsedStatus.data
         : (interactionErrorCodeToGenkitStatus(apiError.code) ?? 'UNKNOWN');
       const message =
         typeof apiError.message === 'string'
@@ -543,6 +542,15 @@ export function interactionProcessStream(
     stream: generateInteractionResponseSequence(stream1),
     response: responsePromise,
   };
+}
+
+/**
+ * Reports whether a parsed SSE payload is an Interactions stream event, i.e.
+ * an object with a string `event_type`. Event payloads are not otherwise
+ * validated; their fields are read defensively where they are used.
+ */
+function isInteractionSseEvent(value: unknown): value is InteractionSseEvent {
+  return isObject(value) && typeof value.event_type === 'string';
 }
 
 function getInteractionResponseStream(
@@ -621,33 +629,39 @@ function getInteractionResponseStream(
               }
 
               if (dataText) {
+                let parsed: unknown;
                 try {
-                  const parsed = JSON.parse(dataText) as InteractionSseEvent;
-                  controller.enqueue(parsed);
-                } catch (e) {
+                  parsed = JSON.parse(dataText);
+                } catch {
                   reader.releaseLock();
                   controller.error(
                     new Error(`Error parsing JSON response: "${dataText}"`)
                   );
                   return;
                 }
+                if (isInteractionSseEvent(parsed)) {
+                  controller.enqueue(parsed);
+                }
+                // Unknown payloads (no `event_type`) are skipped, as the API
+                // docs recommend for unrecognized events.
               }
             }
             return pump();
           })
-          .catch((e: Error) => {
+          .catch((e: unknown) => {
             reader.releaseLock();
-            let err = e;
-            err.stack = e.stack;
-            if (err.name === 'AbortError') {
-              err = new GenkitError({
+            if (e instanceof Error && e.name === 'AbortError') {
+              throw new GenkitError({
                 status: 'ABORTED',
                 message: 'Request aborted when reading from the stream',
               });
-            } else {
-              err = new Error('Error reading from the stream');
             }
-            throw err;
+            // Keep the original error (e.g. a dropped connection) so the
+            // failure can be diagnosed.
+            const detail = e instanceof Error ? e.message : String(e);
+            throw new Error(`Error reading from the stream: ${detail}`, {
+              cause: e,
+            });
           });
       }
     },
@@ -753,7 +767,7 @@ async function getInteractionResponsePromise(
               value.delta.type === 'document'
             ) {
               // Media deltas have the same shape as the matching content block.
-              arr.push({ ...value.delta } as Content);
+              arr.push({ ...value.delta });
             } else if (value.delta.type === 'text_annotation_delta') {
               if (value.delta.annotations?.length) {
                 let target = [...arr]

@@ -15,6 +15,7 @@
  */
 
 import * as assert from 'assert';
+import { logger } from 'genkit/logging';
 import { GenerateRequest } from 'genkit/model';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import * as sinon from 'sinon';
@@ -662,6 +663,99 @@ describe('Google AI Gemini', () => {
           undefined,
           'retrievalConfig should not be in generationConfig'
         );
+      });
+
+      it('applies retrievalConfig.latLng to the google_maps tool (Interactions API)', async () => {
+        const model = defineModel('gemini-flash-latest', defaultPluginOptions);
+        mockFetchResponse(defaultApiResponse);
+        await model.run({
+          ...minimalRequest,
+          config: {
+            tools: [{ googleMaps: { enableWidget: true } }],
+            retrievalConfig: {
+              latLng: { latitude: 43.0896, longitude: -79.0849 },
+            },
+          },
+        });
+
+        const apiRequest: CreateInteractionRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.deepStrictEqual(apiRequest.tools, [
+          {
+            type: 'google_maps',
+            enable_widget: true,
+            latitude: 43.0896,
+            longitude: -79.0849,
+          },
+        ]);
+        assert.strictEqual(
+          'retrieval_config' in (apiRequest.generation_config ?? {}),
+          false
+        );
+      });
+
+      it('warns that candidates > 1 is ignored (Interactions API)', async () => {
+        const warnStub = sinon.stub(logger, 'warn');
+        const model = defineModel('gemini-flash-latest', defaultPluginOptions);
+        mockFetchResponse(defaultApiResponse);
+        await model.run({ ...minimalRequest, candidates: 2 });
+
+        assert.ok(
+          warnStub
+            .getCalls()
+            .some((c) => String(c.args[0]).includes('Multiple candidates')),
+          'expected a warning about multiple candidates'
+        );
+      });
+
+      it('does not warn about store: false on generateContent models', async () => {
+        const warnStub = sinon.stub(logger, 'warn');
+        const model = defineModel('gemini-2.5-flash', defaultPluginOptions);
+        mockFetchResponse(defaultApiResponse);
+        await model.run({ ...minimalRequest, config: { store: false } });
+
+        assert.ok(
+          !warnStub
+            .getCalls()
+            .some((c) => String(c.args[0]).includes('store and previous')),
+          'store: false should not warn'
+        );
+      });
+
+      it('warns about store: true on generateContent models', async () => {
+        const warnStub = sinon.stub(logger, 'warn');
+        const model = defineModel('gemini-2.5-flash', defaultPluginOptions);
+        mockFetchResponse(defaultApiResponse);
+        await model.run({ ...minimalRequest, config: { store: true } });
+
+        assert.ok(
+          warnStub
+            .getCalls()
+            .some((c) => String(c.args[0]).includes('store and previous')),
+          'store: true should warn'
+        );
+      });
+
+      it('keeps a location set on the googleMaps tool over retrievalConfig.latLng (Interactions API)', async () => {
+        const model = defineModel('gemini-flash-latest', defaultPluginOptions);
+        mockFetchResponse(defaultApiResponse);
+        await model.run({
+          ...minimalRequest,
+          config: {
+            tools: [{ googleMaps: { latitude: 1, longitude: 2 } }],
+            retrievalConfig: {
+              latLng: { latitude: 43.0896, longitude: -79.0849 },
+            },
+          },
+        });
+
+        const apiRequest: CreateInteractionRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.deepStrictEqual(apiRequest.tools, [
+          { type: 'google_maps', latitude: 1, longitude: 2 },
+        ]);
       });
 
       it('uses baseUrl and apiVersion from call config', async () => {

@@ -43,7 +43,6 @@ import {
   GoogleSearchCallStep,
   GoogleSearchResultStep,
   ImageContent,
-  InteractionDynamicTool,
   InteractionFileSearchTool,
   InteractionFunctionTool,
   InteractionGoogleSearchTool,
@@ -167,7 +166,7 @@ export function toInteractionConfigTool(toolRaw: unknown): InteractionTool {
   if ('fileSearch' in tool || 'file_search' in tool) {
     const config = tool.fileSearch || tool.file_search;
     if (config === true || config === undefined) {
-      return { type: 'file_search' } as InteractionFileSearchTool;
+      return { type: 'file_search' };
     }
     if (!isObject(config)) {
       throw new Error(
@@ -280,8 +279,15 @@ export function toInteractionConfigTool(toolRaw: unknown): InteractionTool {
     };
   }
 
-  // Pass through any other properties/custom tools, ensuring snake_case format
-  return toSnakeCaseObj(tool) as InteractionDynamicTool;
+  // Pass through any other tool that names its own `type`, in snake_case.
+  const { type, ...rest } = toSnakeCaseObj(tool);
+  if (typeof type !== 'string') {
+    throw new Error(
+      `Unsupported tool configuration: ${JSON.stringify(tool)}. ` +
+        'Use a built-in tool key (e.g. googleSearch, codeExecution) or set `type`.'
+    );
+  }
+  return { type, ...rest };
 }
 
 export function toInteractionGoogleSearch(
@@ -350,9 +356,7 @@ export function toInteractionGoogleSearch(
     }
 
     if (searchTypes.size > 0) {
-      result.search_types = Array.from(
-        searchTypes
-      ) as InteractionGoogleSearchTool['search_types'];
+      result.search_types = Array.from(searchTypes);
     }
   }
 
@@ -433,7 +437,7 @@ export function toInteractionGenerationConfig(
   config: Record<string, unknown>
 ): ModelGenerationConfig {
   const { speechConfig, ...rest } = config;
-  const result = convertObjectKeysToSnakeCase(rest) as Record<string, unknown>;
+  const result = convertObjectKeysToSnakeCase(rest);
 
   const interactionSpeechConfig = toInteractionSpeechConfig(speechConfig);
   if (interactionSpeechConfig) {
@@ -531,40 +535,51 @@ function toSpeechMetadataAnnotation(
   };
 }
 
+/** Reports whether a URL points at a YouTube video. */
+function isYouTubeUrl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.replace(/^(www\.|m\.)/, '');
+    return host === 'youtube.com' || host === 'youtu.be';
+  } catch {
+    return false;
+  }
+}
+
 function toInteractionMedia(part: Part): Content {
   if (!part.media) throw new Error('Media part missing media');
   const { url } = part.media;
   const contentType = part.media.contentType || extractMimeType(url);
-  if (!contentType) throw new Error('Media part missing contentType');
 
-  let data: string | undefined;
-  let uri: string | undefined;
-
-  if (url.startsWith('data:')) {
-    data = url.substring(url.indexOf(',') + 1);
-  } else {
-    uri = url;
+  if (!contentType) {
+    if (url.startsWith('data:')) {
+      throw new Error('Media part missing contentType');
+    }
+    // A URI whose type can't be determined (e.g. a YouTube link or a Files
+    // API URI). The server works out the type itself, so send it without a
+    // mime_type, as the generateContent path does. YouTube links are video;
+    // anything else is sent as a document (verified live: the server still
+    // treats a YouTube link sent as a document as video).
+    return { type: isYouTubeUrl(url) ? 'video' : 'document', uri: url };
   }
 
-  const out: Partial<Content> = { mime_type: contentType };
-  if (data) out.data = data;
-  if (uri) out.uri = uri;
+  // Inline data URLs are sent as `data`, everything else as a `uri`.
+  const source = url.startsWith('data:')
+    ? { data: url.substring(url.indexOf(',') + 1) }
+    : { uri: url };
+  const fields = { mime_type: contentType, ...source };
 
   if (contentType.startsWith('image/')) {
-    out.type = 'image';
-    return out as ImageContent;
+    return { type: 'image', ...fields };
   }
   if (contentType.startsWith('audio/')) {
-    out.type = 'audio';
-    return out as AudioContent;
+    return { type: 'audio', ...fields };
   }
   if (contentType.startsWith('video/')) {
-    out.type = 'video';
-    return out as VideoContent;
+    return { type: 'video', ...fields };
   }
-  if (contentType === 'application/pdf') {
-    out.type = 'document';
-    return out as DocumentContent;
+  // The Interactions API accepts PDF and CSV documents.
+  if (contentType === 'application/pdf' || contentType === 'text/csv') {
+    return { type: 'document', ...fields };
   }
 
   throw new Error(`Unsupported media type: ${contentType}`);
@@ -660,6 +675,9 @@ export function toInteractionSteps(messages: MessageData[]): Step[] {
 
     for (const part of message.content) {
       if (part.toolRequest) {
+        const signature = OptionalStringSchema.parse(
+          part.metadata?.thoughtSignature
+        );
         steps.push({
           type: 'function_call',
           name: part.toolRequest.name,
@@ -667,6 +685,7 @@ export function toInteractionSteps(messages: MessageData[]): Step[] {
             part.toolRequest.input
           ),
           id: part.toolRequest.ref || '',
+          ...(signature ? { signature } : {}),
         });
       } else if (part.toolResponse) {
         let result: unknown = part.toolResponse.output;
@@ -1050,19 +1069,21 @@ export function fromCodeExecutionResult(step: CodeExecutionResultStep): Part {
 export function fromPendingFunctionCall(
   step: FunctionCallContent | FunctionCallStep
 ): Part {
-  return {
+  // Keep the signature so it can be sent back with the function call when the
+  // history is resent (stateless, the default).
+  return maybeAddGeminiThoughtSignature(step, {
     toolRequest: {
       name: step.name,
       ref: step.id,
       input: step.arguments,
     },
-  };
+  });
 }
 
 export function fromServerFunctionCall(
   step: FunctionCallContent | FunctionCallStep
 ): Part {
-  return {
+  return maybeAddGeminiThoughtSignature(step, {
     custom: {
       serverFunctionCall: {
         id: step.id,
@@ -1070,7 +1091,7 @@ export function fromServerFunctionCall(
         arguments: step.arguments,
       },
     },
-  };
+  });
 }
 
 export function fromServerFunctionResult(

@@ -302,6 +302,11 @@ export function isObject(val: unknown): val is Record<string, unknown> {
   return typeof val === 'object' && val !== null && !Array.isArray(val);
 }
 
+/** Reports whether every element of an array is a string. */
+export function isStringArray(values: unknown[]): values is string[] {
+  return values.every((v) => typeof v === 'string');
+}
+
 export function toSnakeCaseObj(val: unknown): Record<string, unknown> {
   const snakeVal = convertObjectKeysToSnakeCase(val);
   return isObject(snakeVal) ? snakeVal : {};
