@@ -14,33 +14,39 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Typed construction of every exported config class.
+"""Typed construction of every exported config class, imported from the package root.
 
 This file is the type-checker contract: pyright, pyrefly and ty must accept
 snake_case keyword arguments and typed nested values here with no
-suppressions. The runtime asserts pin the camelCase wire dump.
+suppressions. The runtime asserts pin the camelCase config dump and the
+HTTP body the plugin sends.
 """
 
+import json
+from collections.abc import Awaitable, Callable
+from typing import Any
+
+import httpx
+import pytest
 from genkit_google_genai import (
     AntigravityConfig,
     DeepResearchConfig,
+    DeepResearchFileSearchConfig,
+    FileSearchConfig,
+    FunctionCallingConfig,
+    FunctionCallingMode,
     GeminiConfig,
     GeminiImageConfig,
     GeminiTtsConfig,
     GemmaConfig,
-    LyriaConfig,
-    VeoConfig,
-)
-from genkit_google_genai._models._deep_research import FileSearchConfig as DeepResearchFileSearch, McpServerConfig
-from genkit_google_genai._models._gemini import (
-    FileSearchConfig,
-    FunctionCallingConfig,
-    FunctionCallingMode,
+    GoogleAI,
     HarmBlockThreshold,
     HarmCategory,
     ImageAspectRatio,
     ImageConfig,
     ImageSize,
+    LyriaConfig,
+    McpServerConfig,
     MultiSpeakerVoiceConfig,
     PrebuiltVoiceConfig,
     SafetySettingsSchema,
@@ -48,11 +54,13 @@ from genkit_google_genai._models._gemini import (
     SpeechConfig,
     ThinkingConfig,
     ThinkingLevel,
+    VeoConfig,
     VoiceConfig,
 )
-from genkit_google_genai._models._lyria import LyriaConfig as VertexLyriaConfig
 from google.genai import types as genai_types
 from pydantic import BaseModel
+
+from genkit import Genkit
 
 
 def _wire(config: BaseModel) -> dict[str, object]:
@@ -68,7 +76,6 @@ def test_empty_construction() -> None:
         GemmaConfig,
         VeoConfig,
         LyriaConfig,
-        VertexLyriaConfig,
         AntigravityConfig,
         DeepResearchConfig,
         ThinkingConfig,
@@ -296,25 +303,23 @@ def test_veo_config_snake_case_kwargs() -> None:
     }
 
 
-def test_lyria_configs_snake_case_kwargs() -> None:
-    """Both Lyria config classes take snake_case kwargs; the dump is camelCase."""
-    interactions = LyriaConfig(
+def test_lyria_config_snake_case_kwargs() -> None:
+    """LyriaConfig takes snake_case kwargs; the dump is camelCase."""
+    config = LyriaConfig(
         base_url='https://kitchen.example',
         api_version='v1beta',
         timeout=30000,
         custom_headers={'x-team': 'kitchen'},
         response_modalities=['audio'],
     )
-    assert _wire(interactions) == {
+
+    assert _wire(config) == {
         'baseUrl': 'https://kitchen.example',
         'apiVersion': 'v1beta',
         'timeout': 30000,
         'customHeaders': {'x-team': 'kitchen'},
         'responseModalities': ['audio'],
     }
-
-    vertex = VertexLyriaConfig(negative_prompt='drums', seed=1, sample_count=2, location='global')
-    assert _wire(vertex) == {'negativePrompt': 'drums', 'seed': 1, 'sampleCount': 2, 'location': 'global'}
 
 
 def test_antigravity_config_snake_case_kwargs() -> None:
@@ -349,7 +354,7 @@ def test_deep_research_config_nested_kwargs() -> None:
         previous_interaction_id='int-1',
         collaborative_planning=True,
         google_search=True,
-        file_search=DeepResearchFileSearch(file_search_store_names=['fileSearchStores/menu']),
+        file_search=DeepResearchFileSearchConfig(file_search_store_names=['fileSearchStores/menu']),
         mcp_servers=[McpServerConfig(name='crm', url='https://crm.example/mcp', allowed_tools=['lookup'])],
     )
 
@@ -361,3 +366,65 @@ def test_deep_research_config_nested_kwargs() -> None:
         'fileSearch': {'fileSearchStoreNames': ['fileSearchStores/menu']},
         'mcpServers': [{'name': 'crm', 'url': 'https://crm.example/mcp', 'allowedTools': ['lookup']}],
     }
+
+
+def _fake_gemini_api(bodies: list[dict[str, Any]]) -> Callable[..., Awaitable[httpx.Response]]:
+    """Stand-in for httpx.AsyncClient.send that answers generateContent and records each POST body."""
+
+    async def send(_client: httpx.AsyncClient, request: httpx.Request, **_: object) -> httpx.Response:
+        if request.method == 'GET':
+            return httpx.Response(200, json={'models': []}, request=request)
+        bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={'candidates': [{'content': {'role': 'model', 'parts': [{'text': 'ok'}]}, 'finishReason': 'STOP'}]},
+            request=request,
+        )
+
+    return send
+
+
+@pytest.mark.asyncio
+async def test_typed_nested_config_request_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A typed nested GeminiConfig reaches the generateContent body.
+
+    google-genai camelCases the fields it types and forwards the nested
+    dicts Genkit hands it as-is, so keys inside thinkingConfig and fileSearch
+    go out snake_case. The API accepts both spellings.
+    """
+    # 1. Route google-genai's HTTP calls to a fake API
+    bodies: list[dict[str, Any]] = []
+    monkeypatch.setattr(httpx.AsyncClient, 'send', _fake_gemini_api(bodies))
+    ai = Genkit(plugins=[GoogleAI(api_key='fake-key')])
+
+    # 2. Generate with a config built from typed nested models
+    config = GeminiConfig(
+        temperature=0.4,
+        max_output_tokens=500,
+        safety_settings=[
+            SafetySettingsSchema(
+                category=HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+                threshold=HarmBlockThreshold.BLOCK_ONLY_HIGH,
+            )
+        ],
+        thinking_config=ThinkingConfig(thinking_budget=1024, thinking_level=ThinkingLevel.HIGH),
+        function_calling_config=FunctionCallingConfig(mode=FunctionCallingMode.AUTO),
+        file_search=FileSearchConfig(file_search_store_names=['fileSearchStores/menu']),
+    )
+    response = await ai.generate(model='googleai/gemini-2.5-flash', prompt='Suggest a dish.', config=config)
+
+    # 3. Check the body the plugin sent
+    assert response.text == 'ok'
+    assert bodies == [
+        {
+            'contents': [{'parts': [{'text': 'Suggest a dish.'}], 'role': 'user'}],
+            'generationConfig': {
+                'maxOutputTokens': 500,
+                'temperature': 0.4,
+                'thinkingConfig': {'thinking_budget': 1024, 'thinking_level': 'HIGH'},
+            },
+            'safetySettings': [{'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_ONLY_HIGH'}],
+            'toolConfig': {'functionCallingConfig': {'mode': 'AUTO'}},
+            'tools': [{'fileSearch': {'file_search_store_names': ['fileSearchStores/menu']}}],
+        }
+    ]

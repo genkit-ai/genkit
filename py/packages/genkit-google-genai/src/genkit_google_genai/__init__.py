@@ -77,12 +77,33 @@ from genkit_google_genai._google import (
     VertexAI,
 )
 from genkit_google_genai._models._antigravity import AntigravityConfig
-from genkit_google_genai._models._deep_research import DeepResearchConfig
+from genkit_google_genai._models._deep_research import (
+    DeepResearchConfig,
+    # Gemini's FileSearchConfig owns the bare name; this one only nests in DeepResearchConfig.
+    FileSearchConfig as DeepResearchFileSearchConfig,
+    McpServerConfig,
+)
 from genkit_google_genai._models._gemini import (
+    FileSearchConfig,
+    FunctionCallingConfig,
+    FunctionCallingMode,
     GeminiConfig,
     GeminiImageConfig,
     GeminiTtsConfig,
     GemmaConfig,
+    HarmBlockThreshold,
+    HarmCategory,
+    ImageAspectRatio,
+    ImageConfig,
+    ImageSize,
+    MultiSpeakerVoiceConfig,
+    PrebuiltVoiceConfig,
+    SafetySettingsSchema,
+    SpeakerVoiceConfig,
+    SpeechConfig,
+    ThinkingConfig,
+    ThinkingLevel,
+    VoiceConfig,
 )
 from genkit_google_genai._models._interactions_lyria import LyriaConfig
 from genkit_google_genai._models._veo import VeoConfig
@@ -90,12 +111,30 @@ from genkit_google_genai._models._veo import VeoConfig
 __all__ = [
     'AntigravityConfig',
     'DeepResearchConfig',
+    'DeepResearchFileSearchConfig',
+    'FileSearchConfig',
+    'FunctionCallingConfig',
+    'FunctionCallingMode',
     'GeminiConfig',
     'GeminiImageConfig',
     'GeminiTtsConfig',
     'GemmaConfig',
     'GoogleAI',
+    'HarmBlockThreshold',
+    'HarmCategory',
+    'ImageAspectRatio',
+    'ImageConfig',
+    'ImageSize',
     'LyriaConfig',
+    'McpServerConfig',
+    'MultiSpeakerVoiceConfig',
+    'PrebuiltVoiceConfig',
+    'SafetySettingsSchema',
+    'SpeakerVoiceConfig',
+    'SpeechConfig',
+    'ThinkingConfig',
+    'ThinkingLevel',
     'VeoConfig',
     'VertexAI',
+    'VoiceConfig',
 ]
