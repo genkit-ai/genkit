@@ -4334,12 +4334,7 @@ func TestGenerateLoopFailureHardening(t *testing.T) {
 			WithTools(fragile),
 			WithToolRestarts(restart),
 		)
-		if !errors.Is(err, status.ErrFailedPrecondition) {
-			t.Fatalf("err = %v, want FAILED_PRECONDITION", err)
-		}
-		if resumed == nil {
-			t.Fatal("response is nil, want the re-interrupted partial")
-		}
+		assertNoError(t, err)
 		if resumed.FinishReason != FinishReasonInterrupted {
 			t.Errorf("FinishReason = %q, want interrupted", resumed.FinishReason)
 		}
@@ -4405,11 +4400,9 @@ func TestGenerateLoopFailureHardening(t *testing.T) {
 			WithTools(toolA, toolB),
 			WithToolRestarts(toolA.Restart(partA, nil), toolB.Restart(partB, nil)),
 		)
-		if !errors.Is(err, status.ErrFailedPrecondition) {
-			t.Fatalf("err = %v, want FAILED_PRECONDITION from toolB's re-interrupt", err)
-		}
-		if resumed == nil {
-			t.Fatal("response is nil, want the re-interrupted partial")
+		assertNoError(t, err)
+		if resumed.FinishReason != FinishReasonInterrupted {
+			t.Errorf("FinishReason = %q, want interrupted by toolB", resumed.FinishReason)
 		}
 		var resolvedA *Part
 		for _, p := range resumed.Message.Content {
@@ -4585,8 +4578,9 @@ func TestGenerateResumePreservesMultipartContent(t *testing.T) {
 			WithTools(multiA, toolB),
 			WithToolRestarts(multiA.Restart(partA, nil), toolB.Restart(partB, nil)),
 		)
-		if !errors.Is(err, status.ErrFailedPrecondition) {
-			t.Fatalf("err = %v, want FAILED_PRECONDITION from toolB's re-interrupt", err)
+		assertNoError(t, err)
+		if resumed.FinishReason != FinishReasonInterrupted {
+			t.Errorf("FinishReason = %q, want interrupted by toolB", resumed.FinishReason)
 		}
 		var resolvedA *Part
 		for _, p := range resumed.Message.Content {
@@ -5285,7 +5279,7 @@ func TestResumeReadsJSRestartMarkers(t *testing.T) {
 				t.Fatalf("restart = %+v, want the interrupt it resolves still on it", restart)
 			}
 
-			_, err = Generate(testCtx, r, WithModelName("test/jsRestart"),
+			out, err := Generate(testCtx, r, WithModelName("test/jsRestart"),
 				WithMessages(res.History()...), WithTools(confirm), WithToolRestarts(restart))
 			if tc.wantErr != nil {
 				if !errors.Is(err, tc.wantErr) {
@@ -5296,12 +5290,9 @@ func TestResumeReadsJSRestartMarkers(t *testing.T) {
 				}
 				return
 			}
-			if tc.wantResumed == nil {
-				if !errors.Is(err, status.ErrFailedPrecondition) {
-					t.Fatalf("resume error = %v, want the tool's fresh interrupt", err)
-				}
-			} else {
-				assertNoError(t, err)
+			assertNoError(t, err)
+			if tc.wantResumed == nil && out.FinishReason != FinishReasonInterrupted {
+				t.Fatalf("FinishReason = %q, want the tool's fresh interrupt", out.FinishReason)
 			}
 			if len(resumed) != 2 {
 				t.Fatalf("tool ran %d times, want 2", len(resumed))
