@@ -294,12 +294,16 @@ async def resolve_for_generate(
     config: object = None,
     registry: Registry,
     message: str = 'No model configured.',
+    check_config: bool = True,
 ) -> ResolvedModel:
     """Name, config bag, and the config class this generate will check against.
 
     A plugin class on a ModelRef is the class this call checks. Plain
     ``ModelConfig`` on a ref means the same as the model name: check
     against the class the model registered.
+
+    Pass ``check_config=False`` when only the class is wanted and ``config``
+    isn't the bag the call will send.
     """
     resolved = resolve_call_model(model=model, config=config, registry=registry, message=message)
     reject_config_api_key(resolved.config)
@@ -307,13 +311,19 @@ async def resolve_for_generate(
         return resolved
     action = await registry.resolve_model(resolved.name)
     declared = python_config_schema(getattr(action, '_config_schema', None) if action is not None else None)
-    if declared is None:
+    if declared is None and check_config:
         # The model fn's ModelRequest[Cfg] coerces config into Cfg once the
         # turn starts. Check the merged bag against Cfg here so a value it
         # can't take raises before the turn, like a config_schema= class does.
-        # A foreign config object is already dumped into the bag, so it
-        # still converts.
-        check_config_dict(config=resolved.config, schema=annotated_config_class(action), model=resolved.name)
+        # Every layer is already merged in, so a missing required field is
+        # missing for real. A foreign config object is already dumped into
+        # the bag, so it still converts.
+        check_config_dict(
+            config=resolved.config,
+            schema=annotated_config_class(action),
+            model=resolved.name,
+            whole=True,
+        )
     return replace(resolved, config_schema=declared)
 
 
@@ -536,13 +546,14 @@ def assert_correct_config_class(
     )
 
 
-def check_config_dict(*, config: object, schema: type[BaseModel] | None, model: str) -> None:
+def check_config_dict(*, config: object, schema: type[BaseModel] | None, model: str, whole: bool = False) -> None:
     """A dict config has to fit the model's class before anything is sent.
 
     Layers merge by top-level key, so a missing top-level field is fine
     here — another layer may supply it. A nested object is sent whole, so
     a missing field inside one raises. ``None`` means "clear the default"
-    and isn't checked.
+    and isn't checked. ``whole=True`` means every layer is already merged
+    in, so a missing top-level field raises too.
     """
     if schema is None or not isinstance(config, Mapping):
         return
@@ -550,7 +561,7 @@ def check_config_dict(*, config: object, schema: type[BaseModel] | None, model: 
     try:
         schema.model_validate(layer)
     except ValidationError as e:
-        problems = [err for err in e.errors() if not (err['type'] == 'missing' and len(err['loc']) == 1)]
+        problems = [err for err in e.errors() if whole or not (err['type'] == 'missing' and len(err['loc']) == 1)]
         if not problems:
             return
         raise GenkitError(
