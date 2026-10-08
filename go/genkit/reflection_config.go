@@ -39,11 +39,6 @@ const (
 	reflectionAuthErrorCode = -32001
 )
 
-// ReflectionPortAuto, passed to [WithReflectionPort], lets the OS pick the
-// reflection port. Code cannot use 0 for this because 0 is the unset value;
-// the environment spells the same thing GENKIT_REFLECTION_PORT=0.
-const ReflectionPortAuto = -1
-
 // advertisedReflectionAddr is the host:port to write into the runtime
 // discovery file for a server listening on addr. A wildcard bind is reachable
 // on loopback, and 0.0.0.0 is not a valid destination everywhere, so it is
@@ -63,11 +58,9 @@ func advertisedReflectionAddr(addr string) string {
 type reflectionMode int
 
 const (
-	// reflectionDisabled is an explicit kill switch
-	// (GENKIT_REFLECTION_ENABLED=false), honoured everywhere.
-	reflectionDisabled reflectionMode = iota
-	// reflectionOff means nothing asked for a server.
-	reflectionOff
+	// reflectionOff means no server: either nothing asked for one, or
+	// GENKIT_REFLECTION_ENABLED=false turned it off. The zero value.
+	reflectionOff reflectionMode = iota
 	// reflectionV1 listens for the CLI.
 	reflectionV1
 	// reflectionV2 dials out to the CLI.
@@ -88,6 +81,11 @@ type reflectionConfig struct {
 	secret string
 }
 
+// enabled reports whether a reflection server (v1 or v2) should run.
+func (c reflectionConfig) enabled() bool {
+	return c.mode != reflectionOff
+}
+
 // resolveReflectionConfig decides how the reflection API should run.
 //
 // Whether it runs:
@@ -103,20 +101,20 @@ type reflectionConfig struct {
 // A chosen port, from the environment or optPort, is bound exactly; only an
 // unchosen port probes upward from 3100. The environment beats optPort on
 // purpose: whoever set the variable is typically the supervisor that already
-// published that port. optPort 0 means unset and [ReflectionPortAuto] (-1)
-// lets the OS pick, the same as GENKIT_REFLECTION_PORT=0. optPort is
-// validated even when unused so a bad value fails early.
+// published that port. A nil optPort means unset; 0 lets the OS pick, the
+// same as GENKIT_REFLECTION_PORT=0. optPort is validated even when unused so
+// a bad value fails early.
 //
 // getenv is injected so this is testable without touching the process
 // environment.
-func resolveReflectionConfig(getenv func(string) string, optPort int) (reflectionConfig, error) {
-	if optPort != ReflectionPortAuto && (optPort < 0 || optPort > 65535) {
+func resolveReflectionConfig(getenv func(string) string, optPort *int) (reflectionConfig, error) {
+	if optPort != nil && (*optPort < 0 || *optPort > 65535) {
 		return reflectionConfig{}, fmt.Errorf(
-			"reflection port must be -1 (OS-assigned) or an integer between 1 and 65535, got %d", optPort)
+			"reflection port must be an integer between 0 and 65535, got %d", *optPort)
 	}
 	switch enabled := getenv("GENKIT_REFLECTION_ENABLED"); enabled {
 	case "false":
-		return reflectionConfig{mode: reflectionDisabled}, nil
+		return reflectionConfig{mode: reflectionOff}, nil
 	case "true":
 	case "":
 		if getenv("GENKIT_ENV") != "dev" {
@@ -143,13 +141,8 @@ func resolveReflectionConfig(getenv func(string) string, optPort int) (reflectio
 	if cfg.host == "" {
 		cfg.host = defaultReflectionHost
 	}
-	switch optPort {
-	case 0:
-		// Unset: probe from the default.
-	case ReflectionPortAuto:
-		cfg.port, cfg.pinned = 0, true
-	default:
-		cfg.port, cfg.pinned = optPort, true
+	if optPort != nil {
+		cfg.port, cfg.pinned = *optPort, true
 	}
 	if envPort != "" {
 		// An invalid value fails startup rather than falling back to probing:
@@ -203,9 +196,14 @@ func requireReflectionSecret(secret string, next http.Handler) http.Handler {
 }
 
 // isLoopbackHost reports whether a host is unreachable from other machines.
+// Only literal loopback IPs (any spelling of ::1, dotted-quad 127.x) and
+// "localhost" count; a hostname like 127.internal.example does not.
 func isLoopbackHost(host string) bool {
-	return host == "localhost" || host == "::1" || host == "[::1]" ||
-		strings.HasPrefix(host, "127.")
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(strings.TrimSuffix(strings.TrimPrefix(host, "["), "]"))
+	return ip != nil && ip.IsLoopback()
 }
 
 // secretsEqual compares in constant time. Hashing first gives equal-length

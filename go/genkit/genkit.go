@@ -52,7 +52,11 @@ var configureLoggingOnce sync.Once
 // configureLogging applies GENKIT_LOG_LEVEL to the console handler and, when a
 // telemetry server is reachable, installs the handler that streams logs to it,
 // correlated with the active trace span.
-func configureLogging() {
+//
+// reflectionOn comes from the first Init's resolved reflection config, so a
+// runtime with GENKIT_REFLECTION_ENABLED=true still streams logs to whatever
+// telemetry server it is given.
+func configureLogging(reflectionOn bool) {
 	if v := os.Getenv("GENKIT_LOG_LEVEL"); v != "" {
 		var lvl slog.Level
 		if err := lvl.UnmarshalText([]byte(v)); err != nil {
@@ -66,11 +70,6 @@ func configureLogging() {
 			logger.SetLevel(lvl)
 		}
 	}
-	// Keyed on reflection being on rather than GENKIT_ENV alone, so a runtime
-	// with GENKIT_REFLECTION_ENABLED=true still streams logs to whatever
-	// telemetry server it is given.
-	cfg, err := resolveReflectionConfig(os.Getenv, 0)
-	reflectionOn := err == nil && (cfg.mode == reflectionV1 || cfg.mode == reflectionV2)
 	if api.CurrentEnvironment() == api.EnvironmentDev || reflectionOn {
 		logger.AddHandler(tracing.LogExportHandler())
 		// The CLI normally provides the telemetry server URL in the
@@ -106,10 +105,10 @@ type genkitOptions struct {
 	PromptFS     fs.FS        // Embedded filesystem containing prompts (alternative to PromptDir).
 	Plugins      []api.Plugin // Plugin to initialize automatically.
 	Experimental bool         // Whether the experimental genkit/exp surface is allowed to be used.
-	// ReflectionPort is the exact reflection API port; 0 means unset (probe
-	// from 3100) and [ReflectionPortAuto] lets the OS pick. See
-	// [WithReflectionPort].
-	ReflectionPort int
+	// ReflectionPort is the exact reflection API port; nil means unset (probe
+	// from 3100) and 0 lets the OS pick. A pointer so that 0 is not mistaken
+	// for unset. See [WithReflectionPort].
+	ReflectionPort *int
 }
 
 type GenkitOption interface {
@@ -152,8 +151,8 @@ func (o *genkitOptions) apply(gOpts *genkitOptions) error {
 		gOpts.Experimental = true
 	}
 
-	if o.ReflectionPort != 0 {
-		if gOpts.ReflectionPort != 0 {
+	if o.ReflectionPort != nil {
+		if gOpts.ReflectionPort != nil {
 			return errors.New("cannot set reflection port more than once (WithReflectionPort)")
 		}
 		gOpts.ReflectionPort = o.ReflectionPort
@@ -235,15 +234,15 @@ func WithExperimental() GenkitOption {
 }
 
 // WithReflectionPort sets the exact port for the Reflection API server; [Init]
-// panics if it cannot be bound. Pass [ReflectionPortAuto] to let the OS pick.
-// Without this option the server probes upward from 3100.
+// panics if it cannot be bound. Port 0 lets the OS pick, as with
+// [net.Listen]. Without this option the server probes upward from 3100.
 //
 // The GENKIT_REFLECTION_PORT environment variable overrides this. The option
 // does not start the server by itself: the server runs under GENKIT_ENV=dev
 // or with GENKIT_REFLECTION_ENABLED=true.
 // This option can only be applied once.
 func WithReflectionPort(port int) GenkitOption {
-	return &genkitOptions{ReflectionPort: port}
+	return &genkitOptions{ReflectionPort: &port}
 }
 
 // Init creates and initializes a new [Genkit] instance with the provided options.
@@ -304,7 +303,6 @@ func WithReflectionPort(port int) GenkitOption {
 func Init(ctx context.Context, opts ...GenkitOption) *Genkit {
 	ctx, _ = signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 
-	configureLoggingOnce.Do(configureLogging)
 	start := time.Now()
 
 	gOpts := &genkitOptions{}
@@ -313,6 +311,15 @@ func Init(ctx context.Context, opts ...GenkitOption) *Genkit {
 			panic(fmt.Errorf("genkit.Init: error applying options: %w", err))
 		}
 	}
+
+	// The reflection API runs under GENKIT_ENV=dev, or in any environment with
+	// GENKIT_REFLECTION_ENABLED=true. An invalid setting fails Init rather than
+	// silently falling back. Resolved once here and shared with logging setup.
+	reflectCfg, err := resolveReflectionConfig(os.Getenv, gOpts.ReflectionPort)
+	if err != nil {
+		panic(fmt.Errorf("genkit.Init: %w", err))
+	}
+	configureLoggingOnce.Do(func() { configureLogging(reflectCfg.enabled()) })
 
 	r := registry.New()
 	g := &Genkit{reg: r}
@@ -357,15 +364,7 @@ func Init(ctx context.Context, opts ...GenkitOption) *Genkit {
 	r.RegisterValue(api.PromptDirKey, gOpts.PromptDir)
 	r.RegisterValue(api.ExperimentalKey, gOpts.Experimental)
 
-	// The reflection API runs under GENKIT_ENV=dev, or in any environment with
-	// GENKIT_REFLECTION_ENABLED=true. An invalid setting fails Init rather than
-	// silently falling back.
-	reflectCfg, err := resolveReflectionConfig(os.Getenv, gOpts.ReflectionPort)
-	if err != nil {
-		panic(fmt.Errorf("genkit.Init: %w", err))
-	}
-
-	if reflectCfg.mode == reflectionV1 || reflectCfg.mode == reflectionV2 {
+	if reflectCfg.enabled() {
 		errCh := make(chan error, 1)
 		serverStartCh := make(chan struct{})
 		// startupErrCh carries the startup outcome to the select below. The

@@ -23,6 +23,9 @@ import (
 	"testing"
 )
 
+// ptr returns a pointer to v, for optional option values.
+func ptr[T any](v T) *T { return &v }
+
 // envFunc turns a map into the getenv signature resolveReflectionConfig takes.
 func envFunc(env map[string]string) func(string) string {
 	return func(key string) string { return env[key] }
@@ -32,7 +35,7 @@ func TestResolveReflectionConfig(t *testing.T) {
 	tests := []struct {
 		name    string
 		env     map[string]string
-		optPort int
+		optPort *int
 		want    reflectionConfig
 	}{
 		{
@@ -48,7 +51,7 @@ func TestResolveReflectionConfig(t *testing.T) {
 				"GENKIT_REFLECTION_PORT":      "3100",
 				"GENKIT_REFLECTION_V2_SERVER": "ws://127.0.0.1:3200",
 			},
-			want: reflectionConfig{mode: reflectionDisabled},
+			want: reflectionConfig{mode: reflectionOff},
 		},
 		{
 			name: "enabled=true turns it on outside dev",
@@ -98,25 +101,25 @@ func TestResolveReflectionConfig(t *testing.T) {
 		{
 			name:    "env port beats the option",
 			env:     map[string]string{"GENKIT_ENV": "dev", "GENKIT_REFLECTION_PORT": "4200"},
-			optPort: 9999,
+			optPort: ptr(9999),
 			want:    reflectionConfig{mode: reflectionV1, host: defaultReflectionHost, port: 4200, pinned: true},
 		},
 		{
 			name:    "option is pinned when the env has no port",
 			env:     map[string]string{"GENKIT_ENV": "dev"},
-			optPort: 9999,
+			optPort: ptr(9999),
 			want:    reflectionConfig{mode: reflectionV1, host: defaultReflectionHost, port: 9999, pinned: true},
 		},
 		{
-			name:    "option -1 is OS-assigned, same as env port 0",
+			name:    "option 0 is OS-assigned, same as env port 0",
 			env:     map[string]string{"GENKIT_ENV": "dev"},
-			optPort: ReflectionPortAuto,
+			optPort: ptr(0),
 			want:    reflectionConfig{mode: reflectionV1, host: defaultReflectionHost, port: 0, pinned: true},
 		},
 		{
 			name:    "option alone does not turn the server on",
 			env:     map[string]string{},
-			optPort: 9999,
+			optPort: ptr(9999),
 			want:    reflectionConfig{mode: reflectionOff},
 		},
 		{
@@ -145,7 +148,7 @@ func TestResolveReflectionConfigInvalidPort(t *testing.T) {
 	for _, port := range []string{"abc", "-1", "70000", "3100.5", " ", "+7", "0x10", "1e3", " 7", "1_000"} {
 		t.Run(port, func(t *testing.T) {
 			_, err := resolveReflectionConfig(
-				envFunc(map[string]string{"GENKIT_ENV": "dev", "GENKIT_REFLECTION_PORT": port}), 0)
+				envFunc(map[string]string{"GENKIT_ENV": "dev", "GENKIT_REFLECTION_PORT": port}), nil)
 			if err == nil {
 				t.Fatalf("expected an error for %q", port)
 			}
@@ -157,7 +160,7 @@ func TestResolveReflectionConfigInvalidEnabled(t *testing.T) {
 	for _, v := range []string{"1", "0", "yes", "on", "TRUE", "False"} {
 		t.Run(v, func(t *testing.T) {
 			_, err := resolveReflectionConfig(
-				envFunc(map[string]string{"GENKIT_REFLECTION_ENABLED": v}), 0)
+				envFunc(map[string]string{"GENKIT_REFLECTION_ENABLED": v}), nil)
 			if err == nil {
 				t.Fatalf("expected an error for %q", v)
 			}
@@ -168,9 +171,9 @@ func TestResolveReflectionConfigInvalidEnabled(t *testing.T) {
 func TestResolveReflectionConfigInvalidOptionPort(t *testing.T) {
 	// Validated even when the environment leaves the server off, so a bad
 	// value fails at Init rather than when someone later sets GENKIT_ENV.
-	for _, port := range []int{-2, 70000} {
+	for _, port := range []int{-1, 70000} {
 		t.Run(strconv.Itoa(port), func(t *testing.T) {
-			if _, err := resolveReflectionConfig(envFunc(map[string]string{}), port); err == nil {
+			if _, err := resolveReflectionConfig(envFunc(map[string]string{}), &port); err == nil {
 				t.Fatalf("expected an error for %d", port)
 			}
 		})
@@ -193,12 +196,13 @@ func TestAdvertisedReflectionAddr(t *testing.T) {
 }
 
 func TestIsLoopbackHost(t *testing.T) {
-	for _, host := range []string{"127.0.0.1", "127.1.2.3", "localhost", "::1", "[::1]"} {
+	for _, host := range []string{"127.0.0.1", "127.1.2.3", "localhost", "::1", "[::1]", "0:0:0:0:0:0:0:1"} {
 		if !isLoopbackHost(host) {
 			t.Errorf("%q should be loopback", host)
 		}
 	}
-	for _, host := range []string{"0.0.0.0", "192.168.1.5", "10.0.0.1", "example.com"} {
+	// A hostname that merely starts with "127." may resolve anywhere.
+	for _, host := range []string{"0.0.0.0", "::", "192.168.1.5", "10.0.0.1", "example.com", "127.internal.example", "127.0.0.1.nip.io"} {
 		if isLoopbackHost(host) {
 			t.Errorf("%q should not be loopback", host)
 		}

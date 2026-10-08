@@ -45,10 +45,38 @@ func dec(_ context.Context, x int) (int, error) {
 	return x - 1, nil
 }
 
+// isolateReflectionEnv clears reflection settings a developer may have
+// exported, so tests that call Init get the server (or no server) they expect
+// regardless of the shell. Empty counts as unset.
+func isolateReflectionEnv(t *testing.T) {
+	t.Helper()
+	for _, k := range []string{
+		"GENKIT_ENV",
+		"GENKIT_REFLECTION_ENABLED",
+		"GENKIT_REFLECTION_PORT",
+		"GENKIT_REFLECTION_HOST",
+		"GENKIT_REFLECTION_V2_SERVER",
+		"GENKIT_REFLECTION_SECRET_TOKEN",
+	} {
+		t.Setenv(k, "")
+	}
+}
+
+// devEnvWithoutInitServer sets GENKIT_ENV=dev, which the runtime file needs,
+// while keeping Init from starting its own server: these tests start one
+// directly, and one started by Init (with its own context) would outlive the
+// test and leave a stale runtime file behind.
+func devEnvWithoutInitServer(t *testing.T) {
+	t.Helper()
+	isolateReflectionEnv(t)
+	t.Setenv("GENKIT_ENV", "dev")
+	t.Setenv("GENKIT_REFLECTION_ENABLED", "false")
+}
+
 func TestReflectionServer(t *testing.T) {
 	t.Run("server startup and shutdown", func(t *testing.T) {
 		// The runtime file is dev-only now, and this case asserts on it.
-		t.Setenv("GENKIT_ENV", "dev")
+		devEnvWithoutInitServer(t)
 		g := Init(context.Background())
 
 		tc := tracing.NewTestOnlyTelemetryClient()
@@ -91,7 +119,7 @@ func TestReflectionServer(t *testing.T) {
 	})
 
 	t.Run("OS-assigned port is written to the runtime file", func(t *testing.T) {
-		t.Setenv("GENKIT_ENV", "dev")
+		devEnvWithoutInitServer(t)
 		g := Init(context.Background())
 
 		errCh := make(chan error, 1)
@@ -136,6 +164,7 @@ func TestReflectionServer(t *testing.T) {
 		defer taken.Close()
 		port := taken.Addr().(*net.TCPAddr).Port
 
+		isolateReflectionEnv(t)
 		g := Init(context.Background())
 		errCh := make(chan error, 1)
 		srv := startReflectionServer(context.Background(), g, reflectionConfig{
@@ -172,9 +201,12 @@ func TestWithReflectionPort(t *testing.T) {
 		port := l.Addr().(*net.TCPAddr).Port
 		l.Close()
 
+		isolateReflectionEnv(t)
 		t.Setenv("GENKIT_ENV", "dev")
+		// Cancelling the Init context shuts the server down and removes its
+		// runtime file, so nothing outlives the test.
 		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
+		t.Cleanup(cancel)
 		Init(ctx, WithReflectionPort(port))
 
 		res, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/api/__health", port))
@@ -190,7 +222,7 @@ func TestWithReflectionPort(t *testing.T) {
 				t.Fatal("expected Init to panic")
 			}
 		}()
-		Init(context.Background(), WithReflectionPort(-2))
+		Init(context.Background(), WithReflectionPort(-1))
 	})
 }
 

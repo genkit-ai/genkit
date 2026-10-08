@@ -121,12 +121,13 @@ func listenReflection(cfg reflectionConfig) (net.Listener, error) {
 		// to a dead port.
 		return net.Listen("tcp", net.JoinHostPort(cfg.host, strconv.Itoa(cfg.port)))
 	}
-	for port := cfg.port; port < cfg.port+100 && port <= 65535; port++ {
+	end := min(cfg.port+99, 65535)
+	for port := cfg.port; port <= end; port++ {
 		if l, err := net.Listen("tcp", net.JoinHostPort(cfg.host, strconv.Itoa(port))); err == nil {
 			return l, nil
 		}
 	}
-	return nil, fmt.Errorf("no available port found in range %d-%d", cfg.port, cfg.port+99)
+	return nil, fmt.Errorf("no available port found in range %d-%d", cfg.port, end)
 }
 
 // startReflectionServer starts the Reflection API server using cfg, which the

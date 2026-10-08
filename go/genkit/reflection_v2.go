@@ -138,8 +138,9 @@ type reflectionServerV2 struct {
 	bidiMu       sync.Mutex
 	bidiSessions map[string]*bidiSession
 
-	// authRejected is set when the CLI refuses this runtime's secret, which
-	// stops the session loop from reconnecting into a refusal loop.
+	// authRejected is set by readLoop when the CLI refuses this runtime's
+	// secret, which stops the session loop from reconnecting into a refusal
+	// loop.
 	authRejected atomic.Bool
 }
 
@@ -270,14 +271,11 @@ func (s *reflectionServerV2) register(ctx context.Context) {
 
 	result, err := s.sendRequest(ctx, "register", params)
 	if err != nil {
-		// Auth failures are terminal: the secret will not change, so retrying
-		// just reconnects in a loop against a CLI that keeps refusing.
+		// Auth failures are terminal. readLoop has already flagged it and
+		// stopped the session; this only reports it.
 		var rpcErr *jsonRPCError
 		if errors.As(err, &rpcErr) && rpcErr.Code == reflectionAuthErrorCode {
 			slog.Error("reflection API rejected this runtime; not reconnecting", "error", rpcErr.Message)
-			s.authRejected.Store(true)
-			// Drop the connection so the session loop wakes and sees the flag.
-			_ = s.conn.Close(websocket.StatusNormalClosure, "unauthorized")
 			return
 		}
 		slog.Error("reflection V2: register failed", "error", err)
@@ -341,6 +339,16 @@ func (s *reflectionServerV2) readLoop(ctx context.Context) {
 				go s.handleRequest(ctx, &msg)
 			}
 		} else if msg.ID != "" {
+			// -32001 is the CLI rejecting this runtime's secret, which is
+			// terminal. Flag it here, on the session goroutine, before
+			// returning: the session loop checks the flag right after
+			// readLoop returns, and the register goroutine (which only logs)
+			// may not have run yet.
+			if msg.Error != nil && msg.Error.Code == reflectionAuthErrorCode {
+				s.authRejected.Store(true)
+				s.deliverResponse(&msg)
+				return
+			}
 			s.deliverResponse(&msg)
 		}
 	}
