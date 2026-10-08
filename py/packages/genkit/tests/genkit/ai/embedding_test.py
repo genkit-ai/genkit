@@ -380,6 +380,94 @@ async def test_embed_many(mock_genkit_instance: tuple[Genkit, MockGenkitRegistry
 
 
 @pytest.mark.asyncio
+async def test_embed_many_strings_with_metadata_attach_it_to_every_document(
+    mock_genkit_instance: tuple[Genkit, MockGenkitRegistry],
+) -> None:
+    """embed_many(metadata=...) with string content lands on each Document the embedder sees."""
+    genkit_instance, registry = mock_genkit_instance
+
+    async def fake_embedder_fn(request: EmbedRequest) -> EmbedResponse:
+        return EmbedResponse(embeddings=[Embedding(embedding=[1.0]), Embedding(embedding=[2.0])])
+
+    registry.register_action(
+        name='faq-embedder',
+        kind='embedder',
+        fn=fake_embedder_fn,
+        metadata=embedder_action_metadata('faq-embedder').metadata,
+        description='A fake embedder for testing',
+    )
+
+    await genkit_instance.embed_many(
+        embedder='faq-embedder',
+        content=['Nut-free kitchen.', 'Gluten-free buns on request.'],
+        metadata={'source': 'allergy-faq'},
+    )
+
+    embed_action = await registry.resolve_action('embedder', 'faq-embedder')
+    called_request = embed_action.run.call_args[0][0]
+    assert called_request.input == [
+        Document.from_text('Nut-free kitchen.', {'source': 'allergy-faq'}),
+        Document.from_text('Gluten-free buns on request.', {'source': 'allergy-faq'}),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_embed_document_keeps_its_own_metadata(
+    mock_genkit_instance: tuple[Genkit, MockGenkitRegistry],
+) -> None:
+    """A Document with its own metadata reaches the embedder unchanged."""
+    genkit_instance, registry = mock_genkit_instance
+
+    async def fake_embedder_fn(request: EmbedRequest) -> EmbedResponse:
+        return EmbedResponse(embeddings=[Embedding(embedding=[1.0])])
+
+    registry.register_action(
+        name='doc-embedder',
+        kind='embedder',
+        fn=fake_embedder_fn,
+        metadata=embedder_action_metadata('doc-embedder').metadata,
+        description='A fake embedder for testing',
+    )
+    faq = Document.from_text('Nut-free kitchen.', metadata={'source': 'allergy-faq'})
+
+    await genkit_instance.embed(embedder='doc-embedder', content=faq)
+
+    embed_action = await registry.resolve_action('embedder', 'doc-embedder')
+    called_request = embed_action.run.call_args[0][0]
+    assert called_request.input == [Document.from_text('Nut-free kitchen.', {'source': 'allergy-faq'})]
+    assert faq.metadata == {'source': 'allergy-faq'}
+
+
+@pytest.mark.asyncio
+async def test_embed_many_documents_keep_per_item_metadata(
+    mock_genkit_instance: tuple[Genkit, MockGenkitRegistry],
+) -> None:
+    """embed_many with Documents passes each one's own metadata through unchanged."""
+    genkit_instance, registry = mock_genkit_instance
+
+    async def fake_embedder_fn(request: EmbedRequest) -> EmbedResponse:
+        return EmbedResponse(embeddings=[Embedding(embedding=[1.0]), Embedding(embedding=[2.0])])
+
+    registry.register_action(
+        name='docs-embedder',
+        kind='embedder',
+        fn=fake_embedder_fn,
+        metadata=embedder_action_metadata('docs-embedder').metadata,
+        description='A fake embedder for testing',
+    )
+    docs = [
+        Document.from_text('Nut-free kitchen.', metadata={'source': 'allergy-faq'}),
+        Document.from_text('Open until 10pm.', metadata={'source': 'hours'}),
+    ]
+
+    await genkit_instance.embed_many(embedder='docs-embedder', content=docs)
+
+    embed_action = await registry.resolve_action('embedder', 'docs-embedder')
+    called_request = embed_action.run.call_args[0][0]
+    assert [doc.metadata for doc in called_request.input] == [{'source': 'allergy-faq'}, {'source': 'hours'}]
+
+
+@pytest.mark.asyncio
 async def test_embed_many_with_embedder_ref_merges_config_the_same_as_embed(
     mock_genkit_instance: tuple[Genkit, MockGenkitRegistry],
 ) -> None:
