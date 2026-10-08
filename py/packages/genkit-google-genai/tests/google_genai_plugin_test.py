@@ -399,7 +399,7 @@ async def test_veo_start_types_family_config(mock_list_models: MagicMock, mock_c
 @patch('genkit_google_genai._google._list_genai_models')
 @pytest.mark.asyncio
 async def test_veo_action_run_dumps_leftover_and_stamps(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
-    """Action.run camelCase + leftover reaches generate_videos; start stamps the action key."""
+    """Action.run camelCase + extra reaches generate_videos; start stamps the action key."""
     mock_list_models.return_value = GenaiModels()
     op = MagicMock()
     op.name = 'operations/1'
@@ -412,7 +412,7 @@ async def test_veo_action_run_dumps_leftover_and_stamps(mock_list_models: MagicM
 
     started = await action.run({
         'messages': [{'role': 'user', 'content': [{'text': 'a cat walking'}]}],
-        'config': {'aspectRatio': '16:9', 'durationSeconds': 5, 'fooBar': 1},
+        'config': {'aspectRatio': '16:9', 'durationSeconds': 5, 'extra': {'parameters': {'fooBar': 1}}},
     })
 
     called = mock_client.return_value.aio.models.generate_videos.await_args

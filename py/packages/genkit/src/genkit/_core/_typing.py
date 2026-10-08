@@ -480,7 +480,6 @@ class GenerationCommonConfig(GenkitModel):
     top_k: float | None = None
     top_p: float | None = None
     stop_sequences: list[str] | None = None
-    api_key: str | None = None
 
 
 class GenerationUsage(GenkitModel):

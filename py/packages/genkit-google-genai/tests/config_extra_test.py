@@ -20,7 +20,12 @@ from unittest.mock import MagicMock
 
 import pytest
 from genkit_google_genai._models._gemini import GeminiConfig, GeminiModel
-from genkit_google_genai._models._sdk_config import attach_config_extra, attach_leftovers
+from genkit_google_genai._models._sdk_config import (
+    GEMINI_MANAGED_BODY_FIELDS,
+    GEMINI_MANAGED_GENERATION_FIELDS,
+    attach_config_extra,
+    attach_leftovers,
+)
 from genkit_google_genai._models._secrets import reject_request_config_api_key
 from google.genai import types as genai_types
 from pydantic import ValidationError
@@ -133,7 +138,13 @@ async def test_generate_gemini_extra_snake_case_generation_config_keeps_other_ge
     """`extra={'generation_config': {'newKnob': 2}}` merges into generationConfig instead of replacing it."""
     cfg = genai_types.GenerateContentConfig()
     cfg = attach_leftovers(cfg, {'futureKnob': 1}, nest='generationConfig')
-    cfg = attach_config_extra(cfg, {'generation_config': {'newKnob': 2}}, action_name='gemini-2.5-flash')
+    cfg = attach_config_extra(
+        cfg,
+        {'generation_config': {'newKnob': 2}},
+        action_name='gemini-2.5-flash',
+        managed_body_fields=GEMINI_MANAGED_BODY_FIELDS,
+        managed_generation_fields=GEMINI_MANAGED_GENERATION_FIELDS,
+    )
 
     assert _extra_body(cfg)['generationConfig'] == {'futureKnob': 1, 'newKnob': 2}
     assert 'generation_config' not in _extra_body(cfg)

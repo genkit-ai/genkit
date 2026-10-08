@@ -28,35 +28,10 @@ from genkit_anthropic import AnthropicConfig
 # model class instead of copying it.
 from genkit_anthropic._models import AnthropicModel
 from genkit_vertexai.model_garden._secrets import reject_secrets_api_key
-from pydantic import ConfigDict
-from pydantic.config import JsonDict
 
 from genkit import ActionRunContext, ModelResponse
 from genkit.model import ModelConfig, ModelInfo, ModelRequest, Supports
 from genkit.plugin_api import loop_local_client
-
-
-def _vertex_anthropic_config_schema_extra(schema: JsonDict) -> None:
-    """Drop options Vertex Model Garden cannot honor from the advertised schema."""
-    base_extra = AnthropicConfig.model_config.get('json_schema_extra')
-    if callable(base_extra):
-        cast(Callable[[JsonDict], None], base_extra)(schema)
-    properties = schema.get('properties')
-    if isinstance(properties, dict):
-        properties.pop('apiKey', None)
-
-
-class VertexAnthropicConfig(AnthropicConfig):
-    """Anthropic config for Vertex Model Garden.
-
-    ``apiKey`` is omitted because :class:`AsyncAnthropicVertex` authenticates
-    with ambient Google credentials and ignores a per-request Anthropic key.
-    """
-
-    model_config = ConfigDict(**{
-        **AnthropicConfig.model_config,
-        'json_schema_extra': _vertex_anthropic_config_schema_extra,
-    })
 
 
 class AnthropicModelGarden:
@@ -121,4 +96,4 @@ class AnthropicModelGarden:
     @staticmethod
     def get_config_schema() -> type[ModelConfig]:
         """Returns the config schema for this model type."""
-        return VertexAnthropicConfig
+        return AnthropicConfig

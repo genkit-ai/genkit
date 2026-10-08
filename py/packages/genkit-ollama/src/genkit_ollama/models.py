@@ -610,8 +610,8 @@ class OllamaModel:
           kwargs, not sampler options (Ollama rejects them inside ``options``).
         - Genkit's ``max_output_tokens`` maps to Ollama's ``num_predict``; an
           explicit ``num_predict`` wins when both are present.
-        - ``stop_sequences`` maps to ``stop``; ``version``/``api_key`` (genkit
-          bookkeeping) are dropped.
+        - ``stop_sequences`` maps to ``stop``; ``version`` (genkit
+          bookkeeping) is dropped.
         - ``extra`` (e.g. ``{'repeat_penalty': 1.1}``) is merged in last,
           keys unchanged, so a colliding key wins over a declared field.
 
@@ -652,7 +652,6 @@ class OllamaModel:
         knobs.pop('keep_alive', None)
         # Genkit bookkeeping that Ollama does not understand.
         knobs.pop('version', None)
-        knobs.pop('api_key', None)
 
         if 'stop_sequences' in knobs:
             knobs['stop'] = knobs.pop('stop_sequences')

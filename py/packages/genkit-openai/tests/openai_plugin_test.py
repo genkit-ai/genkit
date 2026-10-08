@@ -220,7 +220,7 @@ async def test_openai_plugin_list_actions() -> None:
 async def test_openai_runtime_clients_are_loop_local() -> None:
     """Runtime OpenAI clients are cached per event loop."""
     plugin = OpenAI(api_key='test-key')
-    plugin._runtime_client = loop_local_client(lambda: object())
+    plugin._runtime_client = loop_local_client(lambda: cast(Any, object()))
 
     first = plugin._runtime_client()
     second = plugin._runtime_client()

@@ -342,7 +342,7 @@ def define_agent(
     registry: Registry,
     name: str,
     *,
-    model: ModelRef[ModelRefConfigT] | str | None = None,
+    model: ModelRef[ModelRefConfigT] | Action | str | None = None,
     system: str | list[Part] | None = None,
     tools: Sequence[str | Tool] | None = None,
     use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
@@ -430,7 +430,8 @@ def define_prompt_agent(
                 'resume_metadata': resume_metadata,
                 'context': ctx.context,
             }
-            prepared = await prepare_prompt(prompt=executable, input={}, opts=call_opts)
+            # A prompt agent has no input to pass, so a required field renders empty.
+            prepared = await prepare_prompt(prompt=executable, input={}, opts=call_opts, validate_input=False)
             rendered_messages = list(prepared.options.messages or [])
             options = prepared.options.model_copy(
                 update={'messages': apply_preamble_tags(rendered_messages)},

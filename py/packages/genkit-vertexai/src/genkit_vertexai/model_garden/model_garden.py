@@ -192,6 +192,7 @@ class ModelGardenModel:
             # Garden reuses the OpenAI-compatible model class instead of
             # copying it.
             from genkit_openai._models import OpenAIModel
+
             client = await self.create_client()
             info = _openai_compat_model_info(self.name)
             openai_model = OpenAIModel(self.name, client, supports=info.supports)
