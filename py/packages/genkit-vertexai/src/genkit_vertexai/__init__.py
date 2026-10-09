@@ -26,7 +26,7 @@ Example:
 
     # 1. Initialize Genkit with the Model Garden plugin
     ai = Genkit(
-        plugins=[ModelGarden(project_id='my-project', location='us-central1')],
+        plugins=[ModelGarden(project='my-project', location='us-central1')],
     )
 
     # 2. Call models under the modelgarden/ namespace (not vertexai/)

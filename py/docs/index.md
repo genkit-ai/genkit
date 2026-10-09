@@ -139,8 +139,6 @@
 
 ::: genkit.plugin_api.to_json_schema
 
-::: genkit.plugin_api.get_cached_client
-
 ::: genkit.plugin_api.is_dev_environment
 
 ## genkit.evaluator

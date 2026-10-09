@@ -32,7 +32,7 @@ from genkit import Genkit
 from genkit_vertexai.model_garden import ModelGarden
 
 ai = Genkit(
-    plugins=[ModelGarden(project_id='my-project', location='us-central1')],
+    plugins=[ModelGarden(project='my-project', location='us-central1')],
 )
 
 res = await ai.generate(
