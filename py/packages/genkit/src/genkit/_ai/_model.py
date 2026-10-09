@@ -205,6 +205,7 @@ def resolve_call_model(
     config: object = None,
     registry: Registry,
     message: str = 'No model configured.',
+    schema: type[BaseModel] | None = None,
 ) -> ResolvedModel:
     """Resolve a name or stored ModelRef plus call-time config.
 
@@ -213,15 +214,66 @@ def resolve_call_model(
     can happen; ModelRequest is what turns it back into an object.
 
     The outgoing bag has no ``None`` values — name or ref — so the plugin
-    sees a missing key rather than null.
+    sees a missing key rather than null. ``schema`` is the class aliases fold
+    to (see call_config_class); a ref's own class when omitted.
     """
     resolved = resolve_model_arg(model=model, registry=registry, message=message)
-    normalized = normalize_config(config=config)
     if isinstance(resolved, ModelRef):
-        return resolve_model_ref(model=resolved, config=normalized)
-    return ResolvedModel(
-        name=resolved,
-        config={key: value for key, value in normalized.items() if value is not None},
+        return resolve_model_ref(model=resolved, config=normalize_config(config=config), schema=schema)
+    return ResolvedModel(name=resolved, config=layer_call_config(call=config))
+
+
+def layer_call_config(
+    *,
+    call: object,
+    version: str | None = None,
+    ref_config: object = None,
+    has_ref: bool = False,
+    schema: type[BaseModel] | None = None,
+) -> dict[str, Any]:
+    """``ref.version < ref.config < call``: the merge generate, embed and evaluate share.
+
+    Each layer is the fields it set (normalize_config). With a ref, layers
+    overlay with aliases folded to ``schema``'s field names. Explicit
+    ``None`` clears the layer below and never reaches the fn. With no ref
+    the call's keys stay as written.
+    """
+    if not has_ref:
+        return {key: value for key, value in normalize_config(config=call).items() if value is not None}
+    layers: list[dict[str, Any]] = []
+    if version is not None:
+        layers.append({'version': version})
+    if ref_config is not None:
+        layers.append(normalize_config(config=ref_config))
+    layers.append(normalize_config(config=call))
+    return overlay_config(layers=layers, schema=schema)
+
+
+def call_config_class(
+    *,
+    name: str,
+    kind: str,
+    ref_schema: type[BaseModel] | None,
+    action_schema: type[BaseModel] | None,
+) -> type[BaseModel] | None:
+    """The class a call's config is checked against and folded to.
+
+    The definition owns the class. A ref's config_schema only types the call
+    site, so it has to name the action's class (plain ModelConfig /
+    GenerationCommonConfig on a model ref defer to it). With no action class,
+    the ref's class is the only one there is.
+    """
+    if ref_schema is None or ref_defers_to_registered_class(ref_schema):
+        return action_schema
+    if action_schema is None or ref_schema is action_schema:
+        return ref_schema
+    raise GenkitError(
+        status='INVALID_ARGUMENT',
+        message=(
+            f"{kind} '{name}' takes config {config_type_path(action_schema)}, but the ref's config_schema is "
+            f'{config_type_path(ref_schema)}. Use {action_schema.__name__} on the ref, or pass the name.'
+        ),
+        reason=RuntimeErrorReason.INVALID_INPUT,
     )
 
 
@@ -234,17 +286,22 @@ async def resolve_for_generate(
 ) -> ResolvedModel:
     """Name, config bag, and the config class this generate will check against.
 
-    A plugin class on a ModelRef is the class this call checks. Plain
-    ``ModelConfig`` on a ref means the same as the model name: check
-    against the class the model registered.
+    The model's definition-time class is the class this call checks. A
+    ModelRef's config_schema must name it (see call_config_class), and the
+    ref's layers fold aliases to it.
     """
-    resolved = resolve_call_model(model=model, config=config, registry=registry, message=message)
+    arg = resolve_model_arg(model=model, registry=registry, message=message)
+    name = arg.name if isinstance(arg, ModelRef) else arg
+    action = await registry.resolve_model(name)
+    schema = call_config_class(
+        name=name,
+        kind='model',
+        ref_schema=python_config_schema(arg.config_schema) if isinstance(arg, ModelRef) else None,
+        action_schema=python_config_schema(action.config_schema) if action is not None else None,
+    )
+    resolved = resolve_call_model(model=arg, config=config, registry=registry, message=message, schema=schema)
     reject_config_api_key(resolved.config)
-    if resolved.config_schema is not None and not ref_defers_to_registered_class(resolved.config_schema):
-        return resolved
-    action = await registry.resolve_model(resolved.name)
-    raw = getattr(action, '_config_schema', None) if action is not None else None
-    return replace(resolved, config_schema=python_config_schema(raw))
+    return replace(resolved, config_schema=schema)
 
 
 def config_schema_at_define(*, model: object | None, registry: Registry) -> tuple[str | None, type[BaseModel] | None]:
@@ -266,21 +323,24 @@ def config_schema_at_define(*, model: object | None, registry: Registry) -> tupl
     return resolved, python_config_schema(raw)
 
 
-def resolve_model_ref(*, model: ModelRef[Any], config: dict[str, Any]) -> ResolvedModel:
+def resolve_model_ref(
+    *, model: ModelRef[Any], config: dict[str, Any], schema: type[BaseModel] | None = None
+) -> ResolvedModel:
     """Dump layers, overlay, return name + bag.
 
     Lowest to highest: ``ref.version``, dumped ``ref.config``, call
-    ``config``. No validation — unknown keys pass through.
+    ``config``. No validation — unknown keys pass through. Aliases fold to
+    ``schema``, the ref's own class when omitted.
     """
-    layers: list[dict[str, Any]] = []
-    if model.version is not None:
-        layers.append({'version': model.version})
-    if model.config is not None:
-        layers.append(normalize_config(config=model.config))
-    layers.append(config)
     return ResolvedModel(
         name=model.name,
-        config=overlay_config(layers=layers, schema=model.config_schema),
+        config=layer_call_config(
+            call=config,
+            version=model.version,
+            ref_config=model.config,
+            has_ref=True,
+            schema=schema or model.config_schema,
+        ),
         config_schema=python_config_schema(model.config_schema),
     )
 

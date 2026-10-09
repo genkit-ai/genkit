@@ -2109,7 +2109,7 @@ async def test_evaluate_with_basemodel_config_passes_dict(setup_test: SetupFixtu
     ai, *_ = setup_test
     seen = _define_recording_evaluator(ai, 'model_cfg_eval')
 
-    await ai.evaluate(evaluator='model_cfg_eval', dataset=_one_row(), config=AllergyCheckConfig(strict=True))  # type: ignore[arg-type]
+    await ai.evaluate(evaluator='model_cfg_eval', dataset=_one_row(), config=AllergyCheckConfig(strict=True))
 
     assert seen == [{'strict': True}]
 
@@ -2707,7 +2707,7 @@ async def test_evaluate_with_basemodel_config_passes_only_set_fields(setup_test:
     define = _define_recording_batch_evaluator if batch else _define_recording_evaluator
     seen = define(ai, 'set_fields_eval')
 
-    await ai.evaluate(evaluator='set_fields_eval', dataset=_one_row(), config=_AllergyCheckConfig(strict=True))  # type: ignore[arg-type]
+    await ai.evaluate(evaluator='set_fields_eval', dataset=_one_row(), config=_AllergyCheckConfig(strict=True))
 
     assert seen == [{'strict': True}]
 

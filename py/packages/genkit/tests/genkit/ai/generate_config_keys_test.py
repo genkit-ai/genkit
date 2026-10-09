@@ -647,15 +647,17 @@ async def test_generate_ref_with_shared_config_class_rejects_typo_via_model_clas
 
 
 @pytest.mark.asyncio
-async def test_generate_ref_with_plugin_class_still_checks_against_that_class() -> None:
-    """A ref that names another plugin's class still rejects this model's settings."""
+async def test_generate_ref_with_another_plugins_class_raises() -> None:
+    """A ref's config_schema must name the model's class; the model's definition owns it."""
     ai, fn = _ai_with_model(config_schema=GeminiLikeConfig, name='gem')
     ref = model_ref('gem', config_schema=OtherConfig)
 
     with pytest.raises(GenkitError) as err:
         await ai.generate(model=ref, prompt='hi', config={'safety_settings': [{'category': 'HARM'}]})
 
-    _assert_rejected(err, fn, 'safety_settings')
+    _assert_rejected(
+        err, fn, "model 'gem' takes config", 'GeminiLikeConfig', "the ref's config_schema is", 'OtherConfig'
+    )
 
 
 # -- api key ------------------------------------------------------------------

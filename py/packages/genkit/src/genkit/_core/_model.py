@@ -430,15 +430,16 @@ def fold_config_aliases(*, config: dict[str, Any], schema: type[BaseModel]) -> d
     return {names.get(key, key): value for key, value in config.items()}
 
 
-def overlay_config(*, layers: list[dict[str, Any]], schema: type[BaseModel]) -> dict[str, Any]:
+def overlay_config(*, layers: list[dict[str, Any]], schema: type[BaseModel] | None) -> dict[str, Any]:
     """Fold each layer, last layer wins, drop ``None``.
 
     ``maxOutputTokens`` and ``max_output_tokens`` are the same slot. Keys
-    the schema does not know pass through.
+    the schema does not know pass through. With no schema, keys stay as
+    written.
     """
     merged: dict[str, Any] = {}
     for layer in layers:
-        merged.update(fold_config_aliases(config=layer, schema=schema))
+        merged.update(fold_config_aliases(config=layer, schema=schema) if schema is not None else layer)
     return {key: value for key, value in merged.items() if value is not None}
 
 
