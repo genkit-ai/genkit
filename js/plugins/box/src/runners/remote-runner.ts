@@ -16,6 +16,7 @@
 
 import { ReflectionClientV1 } from '../reflection-client-v1.js';
 import type { BoxConnection, BoxRunner } from '../types.js';
+import { abortable } from './util.js';
 
 /** Options for {@link remoteRunner}. */
 export interface RemoteRunnerOptions {
@@ -52,14 +53,16 @@ export class RemoteRunner implements BoxRunner {
   }
 
   async acquire(_key: string, signal?: AbortSignal): Promise<BoxConnection> {
-    // Check readiness once; a failed check is retried on the next acquire.
+    // One readiness check, shared by every caller, so it must not depend on
+    // any one caller's signal: each caller races its own instead. A failed
+    // check is retried on the next acquire.
     this.ready ??= this.client
-      .waitForReady(this.options.readyTimeoutMs ?? 30_000, signal)
+      .waitForReady(this.options.readyTimeoutMs ?? 30_000)
       .catch((e: unknown) => {
         this.ready = undefined;
         throw e;
       });
-    await this.ready;
+    await abortable(this.ready, signal);
     return this.client;
   }
 

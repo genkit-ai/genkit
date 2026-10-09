@@ -100,6 +100,27 @@ describe('remoteRunner', () => {
     assert.strictEqual(child.exitCode, null, 'runtime still up');
   });
 
+  it('one caller aborting does not fail others waiting on the same check', async () => {
+    const port = await freePort();
+    const runner = remoteRunner({
+      url: `http://127.0.0.1:${port}`,
+      secret: SECRET,
+    });
+    const quitter = new AbortController();
+    const first = runner.acquire('k1', quitter.signal);
+    const second = runner.acquire('k2');
+    quitter.abort();
+    await assert.rejects(first, /Aborted before box became ready/);
+    // The runtime comes up after the first caller gave up.
+    const late = startRuntime(port);
+    try {
+      const conn = await second;
+      assert.ok(Object.keys(await conn.listActions()).length > 0);
+    } finally {
+      late.kill('SIGTERM');
+    }
+  });
+
   it('retries readiness after a failed check', async () => {
     const port = await freePort();
     const runner = remoteRunner({
