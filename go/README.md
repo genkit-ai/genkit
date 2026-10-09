@@ -815,7 +815,20 @@ if len(parts) > 0 {
 
 A tool can also be a pure question: its function only returns `tool.Interrupt(ctx, nil)`, the input is the question, and `call.Respond(answer)` supplies the answer as the tool's output.
 
-Without the tool value in scope (a handler that only holds the part, or an interrupt a middleware's tool raised), `part.ToToolRestart(resume)` and `part.ToToolResponse(output)` build the same parts, untyped. A restart answers whoever interrupted: a middleware that held the call, such as `ToolApproval`, reads the answer in its hook, and the tool then runs as a fresh call that can ask its own question, so `Interrupted` declines a middleware's hold.
+Without the tool value in scope (a handler that only holds the part, or an interrupt a middleware's tool raised), `part.ToToolRestart(resume)` and `part.ToToolResponse(output)` build the same parts, untyped. A restart answers whoever interrupted: a middleware that held the call, such as `ToolApproval`, reads the answer in its hook, and the tool then runs as a fresh call that can ask its own question, so `Interrupted` declines a middleware's hold. The middleware claims it instead, with the same `InterruptedCall` typed by its own answer:
+
+```go
+for _, part := range resp.Interrupts() {
+    if call, ok := transferMoney.Interrupted(part); ok {
+        parts = append(parts, call.Restart(Confirmation{Approved: true}))
+    }
+    if call, ok := middleware.ToolApprovalInterrupted(part); ok {
+        parts = append(parts, call.Restart(middleware.ToolCallDecision{Reason: "not without a ticket"}))
+    }
+}
+```
+
+A middleware author writes such a function with `ai.MiddlewareInterrupted`, which claims the holds of the middleware with a given name.
 
 [See full example](samples/basic-tool-interrupts/main.go)
 
@@ -847,7 +860,7 @@ response, _ := genkit.Generate(ctx, g,
 
 The `middleware` plugin also ships with:
 
-- [`ToolApproval`](plugins/middleware/tool_approval.go) — holds any tool call not on an allow list until a restart approves it; the tool then runs afresh, and a restart answering the tool's own interrupt passes. With a `Judge` model set, a smaller model decides those calls first: allow runs the tool, deny returns the refusal to the model, and ask interrupts.
+- [`ToolApproval`](plugins/middleware/tool_approval.go) — holds any tool call not on an allow list until the caller answers it: `ToolApprovalInterrupted(part)` claims the hold, and a restart with `ToolCallDecision{Approved: true}` runs the tool afresh. Any other restart of the hold, a bare one included, returns the refusal, with an optional `Reason`, to the model. A restart answering the tool's own interrupt passes. With a `Judge` model set, a smaller model decides those calls first: allow runs the tool, deny returns the refusal to the model, and ask interrupts.
 - [`SoftToolErrors`](plugins/middleware/soft_tool_errors.go) — returns tool errors, and calls to tools that do not exist, to the model as the tool's response so it can correct itself, instead of failing the generation. A tool can do the same for a single error by returning `tool.Fail(ctx, err)` (`ai/tool`).
 - [`Filesystem`](samples/basic-middleware/filesystem) — gives the model `list_files` and `read_file` tools (plus `write_file` and `edit_file` when `AllowWriteAccess` is set), all confined to a single `RootDir` via `os.Root` (Go 1.25+) so paths cannot escape via `..`, absolute paths, or symlinks.
 - [`Skills`](samples/basic-middleware/skills) — exposes a library of `SKILL.md` files following the [Agent Skills](https://agentskills.io) specification, so a skill written for any compliant agent works here. Scans `.agents/skills` and `skills` by default, on disk or inside `SkillFS`, so skills can ship in the binary through `//go:embed`. The model sees each skill's name and description, loads one on demand through `use_skill`, and reads the files a skill bundles through `read_skill_file` when `AllowResourceAccess` is set. `Preload` injects a skill up front when the application, rather than the model, decides it applies.
