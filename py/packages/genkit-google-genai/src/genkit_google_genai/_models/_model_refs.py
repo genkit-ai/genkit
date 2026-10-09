@@ -129,4 +129,4 @@ def family_embedder_ref(
         raise wrong_family_error(
             plugin_class=plugin_class, method='embedding', family='embedder', local=local, actual=actual
         )
-    return EmbedderRef(name=f'{namespace}/{local}', config=config, version=version)
+    return EmbedderRef[BaseModel](name=f'{namespace}/{local}', config=config, version=version)

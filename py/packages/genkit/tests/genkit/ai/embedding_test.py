@@ -173,9 +173,9 @@ def test_create_embedder_ref_with_positional_version_raises_type_error() -> None
     ],
     ids=['create_embedder_ref', 'EmbedderRef'],
 )
-def test_embedder_ref_with_non_dict_config_raises_validation_error(build: Callable[[], EmbedderRef]) -> None:
+def test_embedder_ref_with_non_dict_config_raises(build: Callable[[], EmbedderRef]) -> None:
     """A non-dict config raises instead of being silently dropped by ai.embed."""
-    with pytest.raises(ValidationError):
+    with pytest.raises(GenkitError, match='config must be a mapping when config_schema is not set, got str'):
         build()
 
 
@@ -583,7 +583,7 @@ async def test_embed_with_basemodel_config_sends_dict_options(
         description='A fake embedder for testing',
     )
 
-    await genkit_instance.embed(embedder='crm-embedder', content='hi', config=CrmEmbedConfig(dimensions=256))  # type: ignore[arg-type]
+    await genkit_instance.embed(embedder='crm-embedder', content='hi', config=CrmEmbedConfig(dimensions=256))
 
     embed_action = await registry.resolve_action('embedder', 'crm-embedder')
     assert embed_action.run.call_args.args[0].options == {'dimensions': 256}
@@ -674,7 +674,7 @@ async def test_embed_with_basemodel_config_sends_only_set_fields(
     seen: list[dict[str, Any]] = []
     _recording_embedder(ai, seen)
 
-    await ai.embed(embedder='crm-embedder', content='hi', config=config)  # type: ignore[arg-type]
+    await ai.embed(embedder='crm-embedder', content='hi', config=config)
 
     assert seen == [expected]
 
@@ -687,7 +687,7 @@ async def test_embed_ref_config_survives_unset_basemodel_field() -> None:
     _recording_embedder(ai, seen)
     ref = create_embedder_ref('crm-embedder', config={'dimensions': 256})
 
-    await ai.embed(embedder=ref, content='hi', config=_CrmEmbedConfig(task_type='QUESTION_ANSWERING'))  # type: ignore[arg-type]
+    await ai.embed(embedder=ref, content='hi', config=_CrmEmbedConfig(task_type='QUESTION_ANSWERING'))
 
     assert seen == [{'dimensions': 256, 'task_type': 'QUESTION_ANSWERING'}]
 

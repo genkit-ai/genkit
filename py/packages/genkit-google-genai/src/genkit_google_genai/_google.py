@@ -81,7 +81,6 @@ from genkit.plugin_api import (
     ActionMetadata,
     Plugin,
     loop_local_client,
-    to_json_schema,
 )
 from genkit_google_genai._auth import GOOGLE_AUTH_ERRORS, raise_auth_error
 from genkit_google_genai._evaluators import (
@@ -499,18 +498,11 @@ def _veo_background_action_metadata(name: str) -> ActionMetadata:
     not exist.
     """
     local = name.split('/')[-1]
-    return ActionMetadata(
-        action_type=ActionKind.BACKGROUND_MODEL,
+    return model_action_metadata(
         name=name,
-        input_json_schema=to_json_schema(ModelRequest[VeoConfig]),
-        output_json_schema=to_json_schema(Operation),
-        metadata={
-            'model': {
-                **veo_model_info(local).model_dump(by_alias=True),
-                'customOptions': to_json_schema(VeoConfig),
-            },
-            'type': 'background-model',
-        },
+        info=veo_model_info(local).model_dump(by_alias=True),
+        config_schema=VeoConfig,
+        background=True,
     )
 
 
@@ -878,18 +870,11 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
 
         for name in list_known_deep_research_models():
             actions_list.append(
-                ActionMetadata(
-                    action_type=ActionKind.BACKGROUND_MODEL,
+                model_action_metadata(
                     name=googleai_name(name),
-                    input_json_schema=to_json_schema(ModelRequest[DeepResearchConfig]),
-                    output_json_schema=to_json_schema(Operation),
-                    metadata={
-                        'model': {
-                            **deep_research_model_info(name).model_dump(by_alias=True),
-                            'customOptions': to_json_schema(DeepResearchConfig),
-                        },
-                        'type': 'background-model',
-                    },
+                    info=deep_research_model_info(name).model_dump(by_alias=True),
+                    config_schema=DeepResearchConfig,
+                    background=True,
                 )
             )
         for name in list_known_antigravity_models():

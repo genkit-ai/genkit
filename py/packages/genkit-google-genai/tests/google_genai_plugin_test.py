@@ -45,9 +45,10 @@ from genkit_google_genai._models._veo import VeoConfig, VeoModel
 from google.genai import types as genai_types
 
 from genkit import Genkit, GenkitError, Message, Operation, Part, Role
+from genkit._core._schema import custom_options_schema
 from genkit.evaluator import BaseDataPoint
 from genkit.model import ModelRequest
-from genkit.plugin_api import Action, ActionKind, to_json_schema
+from genkit.plugin_api import Action, ActionKind
 
 
 def _custom_options(action: Action) -> object:
@@ -260,6 +261,38 @@ async def test_googleai_resolve_model(mock_list_models: MagicMock, mock_client: 
     assert action.name == 'googleai/gemini-2.0-flash'
 
 
+def _null_defaults(node: object, path: str = '') -> list[str]:
+    """Paths in a JSON schema that publish ``"default": null``."""
+    found: list[str] = []
+    if isinstance(node, dict):
+        for key, value in cast('dict[str, object]', node).items():
+            if key == 'default' and value is None:
+                found.append(path)
+            found.extend(_null_defaults(value, f'{path}/{key}'))
+    elif isinstance(node, list):
+        for i, item in enumerate(cast('list[object]', node)):
+            found.extend(_null_defaults(item, f'{path}/{i}'))
+    return found
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+async def test_gemini_custom_options_publish_no_null_defaults(
+    mock_list_models: MagicMock, mock_client: MagicMock
+) -> None:
+    """A Dev UI form that prefills defaults must not send every optional field back as null."""
+    mock_list_models.return_value = GenaiModels()
+
+    plugin = GoogleAI(api_key='test-key')
+    action = await plugin.resolve(ActionKind.MODEL, 'gemini-2.5-flash')
+
+    assert action is not None
+    custom_options = _custom_options(action)
+    assert cast('dict[str, object]', custom_options)['properties']
+    assert _null_defaults(custom_options) == []
+
+
 @patch('genkit_google_genai._google.genai.client.Client')
 @patch('genkit_google_genai._google._list_genai_models')
 @pytest.mark.asyncio
@@ -273,7 +306,7 @@ async def test_googleai_resolve_gemini_image_uses_image_config(
     action = await plugin.resolve(ActionKind.MODEL, 'gemini-2.5-flash-image')
 
     assert action is not None
-    assert _custom_options(action) == to_json_schema(GeminiImageConfig)
+    assert _custom_options(action) == custom_options_schema(GeminiImageConfig)
     assert _request_config_type(action) is GeminiImageConfig
     assert action._config_schema is GeminiImageConfig
 

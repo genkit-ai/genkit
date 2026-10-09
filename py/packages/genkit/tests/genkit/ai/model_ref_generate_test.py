@@ -433,10 +433,10 @@ async def test_dict_none_clears_ref_default_via_generate(
 
 
 @pytest.mark.asyncio
-async def test_string_model_none_omits_key(
+async def test_string_model_none_is_a_value(
     ai_with_echo: tuple[Genkit, EchoModel],
 ) -> None:
-    """None means omit on a name too, same as on a ref."""
+    """An explicit None is a value on a name too, same as on a ref."""
     ai, echo = ai_with_echo
 
     await ai.generate(model='testEcho', config={'temperature': None}, prompt='Hello')
@@ -444,10 +444,10 @@ async def test_string_model_none_omits_key(
     assert echo.last_request is not None
     cfg = echo.last_request.config
     if isinstance(cfg, dict):
-        assert 'temperature' not in cfg
+        assert cfg['temperature'] is None
     else:
         assert cfg is not None
-        assert 'temperature' not in cfg.model_dump(exclude_unset=True)
+        assert cfg.model_dump(exclude_unset=True)['temperature'] is None
 
 
 @pytest.mark.asyncio

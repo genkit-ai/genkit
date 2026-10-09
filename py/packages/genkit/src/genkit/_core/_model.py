@@ -30,17 +30,20 @@ from importlib import import_module
 from typing import Any, ClassVar, Generic, Literal, TypeGuard, cast, get_args
 
 from pydantic import (
+    AliasChoices,
     BaseModel,
     ConfigDict,
     Field,
     PrivateAttr,
     RootModel,
+    TypeAdapter,
     ValidationError,
     field_validator,
     model_validator,
 )
 from pydantic.alias_generators import to_camel
 from pydantic.config import JsonDict
+from pydantic.fields import FieldInfo
 from typing_extensions import TypedDict, TypeVar
 
 from genkit._core import _typing as typing_mod
@@ -324,6 +327,60 @@ def config_type_path(cls: type) -> str:
     return impl
 
 
+def check_ref_config(*, name: str, schema: object, config: object, schema_required: bool) -> object:
+    """Check a ref's config against its config_schema and return a copy.
+
+    Shared by ModelRef, EmbedderRef and EvaluatorRef. With a schema, config
+    must be an instance of it. Without one (embedder and evaluator refs
+    only), config is a plain mapping. The copy keeps later mutations of the
+    caller's object from changing the ref's layer.
+    """
+    if schema is not None or schema_required:
+        if not _is_model_class(schema):
+            got = (
+                f'{schema.__module__}.{schema.__name__}'
+                if isinstance(schema, type)
+                else f'{type(schema).__module__}.{type(schema).__name__}'
+            )
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=f'{name}: config_schema must be a BaseModel subclass, got {got}',
+            )
+        if config is not None and not isinstance(config, schema):
+            expected = config_type_path(schema)
+            actual = config_type_path(type(config))
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=f'{name}: config must be an instance of {expected}, got {actual}',
+            )
+    elif config is not None and (isinstance(config, BaseModel) or not isinstance(config, Mapping)):
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=(
+                f'{name}: config must be a mapping when config_schema is not set, got {type(config).__name__}. '
+                'Pass config_schema= to use a config class.'
+            ),
+        )
+    if isinstance(config, BaseModel):
+        return config.model_copy(deep=True)
+    if isinstance(config, Mapping):
+        return _copy_containers(dict(cast(Mapping[str, Any], config)))
+    return config
+
+
+def check_ref_info(*, name: str, info: object, info_type: type[BaseModel]) -> object:
+    """Check a ref's info is ``info_type`` and return a deep copy."""
+    if info is None:
+        return None
+    if not isinstance(info, info_type):
+        actual = f'{type(info).__module__}.{type(info).__name__}'
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f'{name}: info must be an instance of {info_type.__module__}.{info_type.__name__}, got {actual}',
+        )
+    return info.model_copy(deep=True)
+
+
 @dataclass(frozen=True, kw_only=True)
 class ModelRef(Generic[ModelRefConfigT]):
     """Handle for a model tied to a config schema.
@@ -344,38 +401,236 @@ class ModelRef(Generic[ModelRefConfigT]):
     __hash__ = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
-        # If config_schema is not a BaseModel subclass, raise an error.
-        schema = self.config_schema
-        if not isinstance(schema, type) or not issubclass(schema, BaseModel):
-            got = (
-                f'{schema.__module__}.{schema.__name__}'
-                if isinstance(schema, type)
-                else f'{type(schema).__module__}.{type(schema).__name__}'
-            )
-            raise GenkitError(
-                status='INVALID_ARGUMENT',
-                message=f'{self.name}: config_schema must be a BaseModel subclass, got {got}',
-            )
-        if self.config is not None and not isinstance(self.config, schema):
-            expected = config_type_path(schema)
-            actual = config_type_path(type(self.config))
-            raise GenkitError(
-                status='INVALID_ARGUMENT',
-                message=f'{self.name}: config must be an instance of {expected}, got {actual}',
-            )
-        # If info is present, validate that it is a ModelInfo and raise an error if not.
-        if self.info is not None and not isinstance(self.info, ModelInfo):
-            actual = f'{type(self.info).__module__}.{type(self.info).__name__}'
-            raise GenkitError(
-                status='INVALID_ARGUMENT',
-                message=(f'{self.name}: info must be an instance of {ModelInfo.__module__}.ModelInfo, got {actual}'),
-            )
-        # Callers often keep the config/info they passed in. Copy so later
-        # mutations of those objects don't change the ref's defaults.
-        if self.config is not None:
-            object.__setattr__(self, 'config', self.config.model_copy(deep=True))
-        if self.info is not None:
-            object.__setattr__(self, 'info', self.info.model_copy(deep=True))
+        # Callers often keep the config/info they passed in. The checks copy
+        # them so later mutations of those objects don't change the ref's defaults.
+        config = check_ref_config(name=self.name, schema=self.config_schema, config=self.config, schema_required=True)
+        object.__setattr__(self, 'config', config)
+        info = check_ref_info(name=self.name, info=self.info, info_type=ModelInfo)
+        object.__setattr__(self, 'info', info)
+
+
+def _validates_by_name(schema: type[BaseModel]) -> bool:
+    config = schema.model_config
+    return bool(config.get('validate_by_name') or config.get('populate_by_name'))
+
+
+def config_key(schema: type[BaseModel], name: str) -> str:
+    """The key ``schema`` accepts for field ``name`` when validating a dict.
+
+    The field name when the class validates by name; otherwise its
+    validation alias or alias. Folding to this key keeps an alias-only class
+    (alias_generator without populate_by_name) from losing the value.
+    """
+    if _validates_by_name(schema):
+        return name
+    field = schema.model_fields[name]
+    accepted = field.validation_alias
+    if isinstance(accepted, str):
+        return accepted
+    if isinstance(accepted, AliasChoices):
+        for choice in accepted.choices:
+            if isinstance(choice, str):
+                return choice
+    return field.alias or name
+
+
+def config_field_names(schema: type[BaseModel]) -> dict[str, str]:
+    """Map each field name and alias to the one key the class accepts (config_key)."""
+    names: dict[str, str] = {}
+    for name, field in schema.model_fields.items():
+        key = config_key(schema, name)
+        names[name] = key
+        if field.alias:
+            names[field.alias] = key
+        accepted = field.validation_alias
+        if isinstance(accepted, str):
+            names[accepted] = key
+        elif isinstance(accepted, AliasChoices):
+            for choice in accepted.choices:
+                if isinstance(choice, str):
+                    names[choice] = key
+    return names
+
+
+def fold_config_aliases(*, config: dict[str, Any], schema: type[BaseModel]) -> dict[str, Any]:
+    """Rewrite each spelling of a field to the key the class accepts. Unknown keys stay as written."""
+    names = config_field_names(schema)
+    return {names.get(key, key): value for key, value in config.items()}
+
+
+def overlay_config(*, layers: list[dict[str, Any]], schema: type[BaseModel] | None) -> dict[str, Any]:
+    """Fold each layer, last layer wins.
+
+    ``maxOutputTokens`` and ``max_output_tokens`` are the same slot. Keys
+    the schema does not know pass through. With no schema, keys stay as
+    written. An explicit ``None`` is a value: it wins over lower layers and
+    goes on to validation.
+    """
+    merged: dict[str, Any] = {}
+    for layer in layers:
+        merged.update(fold_config_aliases(config=layer, schema=schema) if schema is not None else layer)
+    return merged
+
+
+def config_default_fields(schema: type[BaseModel]) -> list[tuple[str, FieldInfo]]:
+    """Fields whose default may be non-None, as (accepted key, field).
+
+    Required fields and factories that need validated data have no
+    standalone default. A plain ``None`` default is skipped here.
+    """
+    fields: list[tuple[str, FieldInfo]] = []
+    for name, field in schema.model_fields.items():
+        if field.is_required() or field.default_factory_takes_validated_data:
+            continue
+        if field.default_factory is None and field.default is None:
+            continue
+        fields.append((config_key(schema, name), field))
+    return fields
+
+
+def config_defaults(schema: type[BaseModel], fields: list[tuple[str, FieldInfo]] | None = None) -> dict[str, Any]:
+    """The non-None defaults a config class declares, keyed by the key it accepts.
+
+    A ``None`` default means "not set" on every built-in plugin config, so it
+    contributes nothing. Values are JSON-shaped, what a Dev UI caller would
+    send (a nested model is a dict, an Enum its value), and fresh per call, so a fn that mutates a default list
+    doesn't change the next call's.
+    """
+    defaults: dict[str, Any] = {}
+    for key, field in fields if fields is not None else config_default_fields(schema):
+        value = field.get_default(call_default_factory=True)
+        if value is None:
+            continue
+        if not isinstance(value, (str, int, float, bool)):
+            value = TypeAdapter(field.annotation).dump_python(value, mode='json', warnings=False)
+        defaults[key] = value
+    return defaults
+
+
+def _copy_containers(value: object) -> object:
+    if isinstance(value, dict):
+        return {key: _copy_containers(item) for key, item in cast(dict[Any, Any], value).items()}
+    if isinstance(value, list):
+        return [_copy_containers(item) for item in cast(list[Any], value)]
+    if isinstance(value, tuple):
+        return tuple(_copy_containers(item) for item in cast(tuple[Any, ...], value))
+    if isinstance(value, set):
+        return {_copy_containers(item) for item in cast(set[Any], value)}
+    return value
+
+
+def normalize_config(*, config: object) -> dict[str, Any]:
+    """Dump a config object or dict. Does not fold or merge.
+
+    Pydantic dumps the Python field names, including explicit ``None``.
+    Dict keys stay as written; nested dicts, lists, tuples and sets are
+    copied. Fields marked ``exclude=True`` are copied back.
+    """
+    if config is None:
+        return {}
+    if isinstance(config, BaseModel):
+        dumped = config.model_dump(exclude_unset=True, exclude_none=False, by_alias=False)
+        # a plugin can keep a client-only setting out of JSON with exclude=True;
+        # copy it back so the setting the caller passed still reaches the plugin.
+        for name in config.model_fields_set:
+            if name not in dumped:
+                dumped[name] = getattr(config, name)
+        return dumped
+    if isinstance(config, Mapping):
+        # Containers are copied all the way down, so a fn that edits a nested
+        # list can't change the caller's ref for the next call. Leaf objects
+        # (a client, a lock) are kept as they are.
+        return cast(dict[str, Any], _copy_containers(dict(cast(Mapping[str, Any], config))))
+    raise GenkitError(
+        status='INVALID_ARGUMENT',
+        message=f'config is {type(config).__name__}, expected Mapping or BaseModel.',
+        reason=RuntimeErrorReason.INVALID_INPUT,
+    )
+
+
+def check_config_dict(*, config: object, schema: type[BaseModel] | None, model: str) -> None:
+    """A dict config has to fit the model's class before anything is sent.
+
+    Keys fold to the ones the class accepts first, the same as every later
+    layer, so an alias-only class takes its field names here too. Layers
+    merge by top-level key, so a missing top-level field is fine here —
+    another layer may supply it. A nested object is sent whole, so a missing
+    field inside one raises. An explicit ``None`` is a value and is checked
+    like one.
+    """
+    if schema is None or not isinstance(config, Mapping):
+        return
+    _raise_config_problems(config=cast(Mapping[str, Any], config), schema=schema, label=model, complete=False)
+
+
+def validate_config_dict(*, config: Mapping[str, Any], schema: type[BaseModel], label: str) -> BaseModel:
+    """Validate a fully merged config against its class and return the instance.
+
+    Unlike check_config_dict this is the last layer, so a missing required
+    field is a problem too. Raises INVALID_ARGUMENT in check_config_dict's
+    wording.
+    """
+    return cast(BaseModel, _raise_config_problems(config=config, schema=schema, label=label, complete=True))
+
+
+def _raise_config_problems(
+    *, config: Mapping[str, Any], schema: type[BaseModel], label: str, complete: bool
+) -> BaseModel | None:
+    """Fold, validate, and raise one INVALID_ARGUMENT naming every problem.
+
+    Under extra='forbid' pydantic would bind one spelling of a setting and
+    call the other unknown; the caller didn't misspell anything, they wrote
+    the setting twice, so that is reported as its own problem. Other classes
+    take both spellings, and the later one wins when folded.
+    """
+    names = config_field_names(schema)
+    spellings: dict[str, list[str]] = {}
+    for key in config:
+        spellings.setdefault(names.get(key, key), []).append(key)
+    repeated = (
+        [sorted(keys, key=lambda k: k != field) for field, keys in spellings.items() if len(keys) > 1]
+        if schema.model_config.get('extra') == 'forbid'
+        else []
+    )
+    instance: BaseModel | None = None
+    problems: list[Mapping[str, Any]] = []
+    cause: ValidationError | None = None
+    try:
+        instance = schema.model_validate(fold_config_aliases(config=dict(config), schema=schema))
+    except ValidationError as e:
+        cause = e
+        problems = [err for err in e.errors() if complete or not (err['type'] == 'missing' and len(err['loc']) == 1)]
+    if not repeated and not problems:
+        return instance
+    parts = [f'{_join_words(keys)} are the same setting; pass one' for keys in repeated]
+    unknown = [_config_path(err['loc']) for err in problems if err['type'] == 'extra_forbidden']
+    if unknown:
+        keys = ', '.join(repr(key) for key in unknown)
+        noun = 'key' if len(unknown) == 1 else 'keys'
+        parts.append(f"unknown config {noun} {keys}; put provider-only settings in config['extra']")
+    parts.extend(
+        f'config {_config_path(err["loc"])!r}: {err["msg"]}' for err in problems if err['type'] != 'extra_forbidden'
+    )
+    error = GenkitError(
+        status='INVALID_ARGUMENT',
+        message=f'{label}: {"; ".join(parts)}',
+        reason=RuntimeErrorReason.INVALID_INPUT,
+        cause=cause,
+    )
+    if cause is not None:
+        raise error from cause
+    raise error
+
+
+def _join_words(words: list[str]) -> str:
+    """`a and b`, or `a, b, and c` for three or more."""
+    if len(words) <= 2:
+        return ' and '.join(words)
+    return f'{", ".join(words[:-1])}, and {words[-1]}'
+
+
+def _config_path(loc: tuple[int | str, ...]) -> str:
+    return '.'.join(str(part) for part in loc)
 
 
 # Exclusive kinds. camelCase and snake_case are the same kind so a merged

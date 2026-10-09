@@ -188,12 +188,12 @@ async def test_generate_wrong_type_config_value_raises_invalid_argument() -> Non
 
 @pytest.mark.asyncio
 async def test_generate_camel_case_key_alone_reaches_model() -> None:
-    """`{'maxOutputTokens': 5}` is the same declared setting, so it's accepted and reaches the model."""
+    """`{'maxOutputTokens': 5}` is the same declared setting; it reaches the model under the key the class accepts."""
     ai, fn = _ai_with_model()
 
     await ai.generate(model='strict', prompt='hi', config={'maxOutputTokens': 5})
 
-    assert _config_value(fn.requests[-1].config, 'maxOutputTokens') == 5
+    assert fn.requests[-1].config == {'max_output_tokens': 5}
 
 
 @pytest.mark.asyncio
@@ -519,13 +519,14 @@ async def test_generate_three_spellings_of_one_setting_lists_all_three() -> None
 
 
 @pytest.mark.asyncio
-async def test_generate_none_on_one_spelling_is_not_a_second_spelling() -> None:
-    """`{'maxOutputTokens': 5, 'max_output_tokens': None}` runs: None is unset, so only one spelling is set."""
+async def test_generate_none_on_one_spelling_is_still_a_second_spelling() -> None:
+    """`{'maxOutputTokens': 5, 'max_output_tokens': None}` raises: an explicit None is a value."""
     ai, fn = _ai_with_model()
 
-    await ai.generate(model='strict', prompt='hi', config={'maxOutputTokens': 5, 'max_output_tokens': None})
+    with pytest.raises(GenkitError) as err:
+        await ai.generate(model='strict', prompt='hi', config={'maxOutputTokens': 5, 'max_output_tokens': None})
 
-    assert fn.requests[-1].config == {'maxOutputTokens': 5}
+    _assert_rejected(err, fn, 'max_output_tokens and maxOutputTokens are the same setting')
 
 
 @pytest.mark.asyncio
@@ -549,8 +550,8 @@ async def test_generate_both_spellings_typo_and_bad_value_all_in_one_error() -> 
 
 
 @pytest.mark.asyncio
-async def test_prompt_call_other_model_clearing_prompt_key_with_none_runs() -> None:
-    """A Gemini prompt called with `model='other', config={'thinkingConfig': None}` runs and sends no thinkingConfig."""
+async def test_prompt_call_other_model_with_none_for_a_prompt_only_key_raises() -> None:
+    """`model='other', config={'thinkingConfig': None}` raises: None is a value, and other has no thinkingConfig."""
     ai = Genkit()
     gem = _Model()
     other = _Model()
@@ -563,12 +564,10 @@ async def test_prompt_call_other_model_clearing_prompt_key_with_none_runs() -> N
         config={'thinkingConfig': {'thinkingBudget': 0}},
     )
 
-    response = await prompt(model='other', config={'thinkingConfig': None})
+    with pytest.raises(GenkitError) as err:
+        await prompt(model='other', config={'thinkingConfig': None})
 
-    assert response.text == 'ok'
-    assert other.requests
-    assert _config_value(other.requests[-1].config, 'thinkingConfig') is None
-    assert _config_value(other.requests[-1].config, 'thinking_config') is None
+    _assert_rejected(err, other, "unknown config key 'thinkingConfig'")
     assert gem.requests == []
 
 
@@ -606,14 +605,14 @@ async def test_generate_incomplete_nested_setting_raises_naming_the_missing_fiel
 
 
 @pytest.mark.asyncio
-async def test_generate_missing_required_top_level_field_in_one_layer_still_runs() -> None:
-    """A required top-level field missing from the call dict still runs; another layer may supply it."""
+async def test_generate_missing_required_top_level_field_raises_before_the_model() -> None:
+    """A required field no layer supplies raises INVALID_ARGUMENT before the model runs."""
     ai, fn = _ai_with_model(config_schema=RequiredTopConfig, name='needs')
 
-    response = await ai.generate(model='needs', prompt='hi', config={'temperature': 0.2})
+    with pytest.raises(GenkitError) as err:
+        await ai.generate(model='needs', prompt='hi', config={'temperature': 0.2})
 
-    assert response.text == 'ok'
-    assert _config_value(fn.requests[-1].config, 'temperature') == 0.2
+    _assert_rejected(err, fn, "needs: config 'must': Field required")
 
 
 @pytest.mark.asyncio
@@ -647,15 +646,17 @@ async def test_generate_ref_with_shared_config_class_rejects_typo_via_model_clas
 
 
 @pytest.mark.asyncio
-async def test_generate_ref_with_plugin_class_still_checks_against_that_class() -> None:
-    """A ref that names another plugin's class still rejects this model's settings."""
+async def test_generate_ref_with_another_plugins_class_raises() -> None:
+    """A ref's config_schema must name the model's class; the model's definition owns it."""
     ai, fn = _ai_with_model(config_schema=GeminiLikeConfig, name='gem')
     ref = model_ref('gem', config_schema=OtherConfig)
 
     with pytest.raises(GenkitError) as err:
         await ai.generate(model=ref, prompt='hi', config={'safety_settings': [{'category': 'HARM'}]})
 
-    _assert_rejected(err, fn, 'safety_settings')
+    _assert_rejected(
+        err, fn, "model 'gem' takes config", 'GeminiLikeConfig', "the ref's config_schema is", 'OtherConfig'
+    )
 
 
 # -- api key ------------------------------------------------------------------

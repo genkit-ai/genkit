@@ -21,14 +21,23 @@ its defaults. Callers layer on the values they set. The fn sees the same
 input from ai.*, a ref, or a Dev UI-shaped Action.run.
 """
 
+import copy
+import dataclasses
+import enum
+import threading
 from typing import Any, cast
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
+from pydantic.alias_generators import to_camel
 
 from genkit import Genkit, GenkitError
+from genkit._ai._embedding import EmbedderInfo, EmbedderRef, create_embedder_ref
+from genkit._ai._evaluator import EvaluatorRef, evaluator_ref
+from genkit._ai._model import model_ref
 from genkit._core._action import ActionRunContext
-from genkit._core._model import EmbedRequest, EvalRequest, Message, ModelRequest, ModelResponse, Part
+from genkit._core._middleware import BaseMiddleware
+from genkit._core._model import EmbedRequest, EvalRequest, Message, ModelConfig, ModelRequest, ModelResponse, Part
 from genkit._core._typing import (
     BaseDataPoint,
     Embedding,
@@ -258,3 +267,783 @@ async def test_typed_per_row_evaluator_gets_its_options_class() -> None:
     await action.run({'dataset': [{'input': 'satay'}], 'evalRunId': 'run-1', 'options': {'strict': False}})
 
     assert seen['options'] == AllergyJudgeConfig(strict=False, allergens=['peanut'])
+
+
+# -----------------------------------------------------------------------------
+# Action boundary: the definition's non-None defaults
+# -----------------------------------------------------------------------------
+
+
+class NotSetConfig(BaseModel):
+    """Every field defaults to None, like every built-in plugin config."""
+
+    temperature: float | None = None
+    voice: str | None = None
+
+
+def _pipeline_app(config_schema: type[BaseModel] = TableConfig) -> tuple[Genkit, dict[str, Any]]:
+    """Untyped model, embedder, per-row and batch evaluator, all with config_schema."""
+    ai = Genkit()
+    seen: dict[str, Any] = {}
+
+    async def bistro(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        seen['model'] = request.config
+        return _ok()
+
+    async def crm_search(request: EmbedRequest) -> EmbedResponse:
+        seen['embedder'] = request.options
+        return _embedding()
+
+    async def allergy_check(datapoint: BaseDataPoint, options: dict[str, Any]) -> EvalFnResponse:
+        seen['per_row'] = options
+        return _score()
+
+    async def allergy_batch(request: EvalRequest) -> list[EvalFnResponse]:
+        seen['batch'] = request.options
+        return [_score()]
+
+    ai.define_model(name='bistro', fn=bistro, config_schema=config_schema)
+    ai.define_embedder('crm', crm_search, config_schema=config_schema)
+    ai.define_evaluator(name='row', display_name='Row', definition='d', fn=allergy_check, config_schema=config_schema)
+    ai.define_batch_evaluator(
+        name='batch', display_name='Batch', definition='d', fn=allergy_batch, config_schema=config_schema
+    )
+    return ai, seen
+
+
+TABLE_DEFAULTS = {'temperature': 0.7, 'allergens': ['peanut']}
+
+
+@pytest.mark.asyncio
+async def test_untyped_fns_see_schema_defaults_from_ai_calls() -> None:
+    ai, seen = _pipeline_app()
+
+    await ai.generate(model='bistro', prompt='a table for two')
+    await ai.embed(embedder='crm', content='acme corp')
+    await ai.evaluate(evaluator='row', dataset=ROWS)
+    await ai.evaluate(evaluator='batch', dataset=ROWS)
+
+    assert seen == {
+        'model': TABLE_DEFAULTS,
+        'embedder': TABLE_DEFAULTS,
+        'per_row': TABLE_DEFAULTS,
+        'batch': TABLE_DEFAULTS,
+    }
+
+
+@pytest.mark.asyncio
+async def test_untyped_fns_see_schema_defaults_from_a_dev_ui_run() -> None:
+    ai, seen = _pipeline_app()
+    eval_payload = {'dataset': [{'input': 'satay', 'testCaseId': 'row-1'}], 'evalRunId': 'run-1', 'options': None}
+
+    for kind, name, payload in [
+        ('model', 'bistro', {'messages': [], 'config': None}),
+        ('embedder', 'crm', {'input': [], 'options': None}),
+        ('evaluator', 'row', eval_payload),
+        ('evaluator', 'batch', eval_payload),
+    ]:
+        action = await ai.registry.resolve_action_by_key(f'/{kind}/{name}')
+        assert action is not None
+        await action.run(payload)
+
+    assert seen == {
+        'model': TABLE_DEFAULTS,
+        'embedder': TABLE_DEFAULTS,
+        'per_row': TABLE_DEFAULTS,
+        'batch': TABLE_DEFAULTS,
+    }
+
+
+@pytest.mark.asyncio
+async def test_dev_ui_run_overlays_set_fields_and_keeps_unknown_keys() -> None:
+    ai, seen = _pipeline_app()
+    action = await ai.registry.resolve_action_by_key('/model/bistro')
+    assert action is not None
+
+    await action.run({'messages': [], 'config': {'allergens': ['shellfish'], 'seat': 'patio'}})
+
+    assert seen['model'] == {'temperature': 0.7, 'allergens': ['shellfish'], 'seat': 'patio'}
+
+
+@pytest.mark.asyncio
+async def test_none_defaults_are_not_injected() -> None:
+    """A class whose defaults are all None contributes nothing; a missing config is {}."""
+    ai, seen = _pipeline_app(config_schema=NotSetConfig)
+    action = await ai.registry.resolve_action_by_key('/model/bistro')
+    assert action is not None
+
+    await action.run({'messages': [], 'config': None})
+    await ai.embed(embedder='crm', content='acme corp')
+
+    assert seen['model'] == {}
+    assert seen['embedder'] == {}
+
+
+@pytest.mark.asyncio
+async def test_typed_fns_see_the_class_with_defaults() -> None:
+    ai = Genkit()
+    seen: dict[str, Any] = {}
+
+    async def bistro(request: ModelRequest[TableConfig], ctx: ActionRunContext) -> ModelResponse:
+        seen['model'] = request.config
+        return _ok()
+
+    async def allergy_check(datapoint: BaseDataPoint, options: AllergyJudgeConfig) -> EvalFnResponse:
+        seen['per_row'] = options
+        return _score()
+
+    ai.define_model(name='bistro', fn=bistro)
+    ai.define_evaluator(name='row', display_name='Row', definition='d', fn=allergy_check)
+    model = await ai.registry.resolve_action_by_key('/model/bistro')
+    assert model is not None
+
+    await model.run({'messages': [], 'config': None})
+    assert seen['model'] == TableConfig()
+    await model.run({'messages': [], 'config': {'allergens': ['shellfish']}})
+    assert seen['model'] == TableConfig(allergens=['shellfish'])
+    assert seen['model'].model_fields_set == {'allergens'}
+    await ai.generate(model='bistro', prompt='a table for two')
+    assert seen['model'] == TableConfig()
+    await ai.evaluate(evaluator='row', dataset=ROWS)
+    assert seen['per_row'] == AllergyJudgeConfig()
+
+
+@pytest.mark.asyncio
+async def test_typed_fn_always_gets_an_instance_even_with_all_none_defaults() -> None:
+    ai = Genkit()
+    seen: dict[str, Any] = {}
+
+    async def bistro(request: ModelRequest[NotSetConfig], ctx: ActionRunContext) -> ModelResponse:
+        seen['model'] = request.config
+        return _ok()
+
+    action = ai.define_model(name='bistro', fn=bistro)
+    await action.run(cast(Any, {'messages': [], 'config': None}))
+
+    assert seen['model'] == NotSetConfig()
+
+
+class ReservationConfig(BaseModel):
+    """A required field: there is nothing to build from defaults alone."""
+
+    party_size: int
+
+
+@pytest.mark.asyncio
+async def test_typed_class_that_cannot_build_from_defaults_raises() -> None:
+    ai = Genkit()
+    seen: dict[str, Any] = {}
+
+    async def booking(request: ModelRequest[ReservationConfig], ctx: ActionRunContext) -> ModelResponse:
+        seen['model'] = request.config
+        return _ok()
+
+    action = ai.define_model(name='booking', fn=booking)
+
+    with pytest.raises(GenkitError, match=r"booking: config 'party_size': Field required") as err:
+        await action.run(cast(Any, {'messages': [], 'config': None}))
+    assert err.value.status == 'INVALID_ARGUMENT'
+    with pytest.raises(GenkitError, match=r"booking: config 'party_size': Field required"):
+        await ai.generate(model='booking', prompt='a table for two')
+    assert seen == {}
+
+
+# -----------------------------------------------------------------------------
+# An explicit None in config is a value
+# -----------------------------------------------------------------------------
+
+
+class KitchenConfig(BaseModel):
+    """One optional field with a real default, one non-optional."""
+
+    seed: int | None = 42
+    temperature: float = 0.7
+
+
+@pytest.mark.asyncio
+async def test_explicit_none_overrides_ref_and_default_for_an_optional_field() -> None:
+    ai, seen = _pipeline_app(config_schema=KitchenConfig)
+    ai_typed = Genkit()
+    typed_seen: dict[str, Any] = {}
+
+    async def kitchen(request: ModelRequest[KitchenConfig], ctx: ActionRunContext) -> ModelResponse:
+        typed_seen['model'] = request.config
+        return _ok()
+
+    ai_typed.define_model(name='kitchen', fn=kitchen)
+
+    await ai.embed(embedder=create_embedder_ref('crm', config={'seed': 7}), content='acme corp', config={'seed': None})
+    await ai_typed.generate(
+        model=model_ref('kitchen', config_schema=KitchenConfig, config=KitchenConfig(seed=7)),
+        prompt='hi',
+        config={'seed': None},
+    )
+
+    assert seen['embedder'] == {'seed': None, 'temperature': 0.7}
+    assert typed_seen['model'] == KitchenConfig(seed=None)
+
+
+@pytest.mark.asyncio
+async def test_explicit_none_on_a_non_optional_field_raises_on_every_path() -> None:
+    """Validation happens iff the action has a config class, typed fn or not."""
+    ai, seen = _pipeline_app(config_schema=KitchenConfig)
+    action = await ai.registry.resolve_action_by_key('/model/bistro')
+    assert action is not None
+
+    with pytest.raises(GenkitError, match=r"bistro: config 'temperature'"):
+        await ai.generate(model='bistro', prompt='hi', config={'temperature': None})
+    with pytest.raises(GenkitError, match=r"bistro: config 'temperature'") as err:
+        await action.run({'messages': [], 'config': {'temperature': None}})
+    assert err.value.status == 'INVALID_ARGUMENT'
+    with pytest.raises(GenkitError, match=r"crm: config 'temperature'"):
+        await ai.embed(embedder='crm', content='acme corp', config={'temperature': None})
+    assert seen == {}
+
+
+@pytest.mark.asyncio
+async def test_untyped_fn_without_a_class_receives_none() -> None:
+    ai = Genkit()
+    seen: dict[str, Any] = {}
+
+    async def bistro(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        seen['model'] = request.config
+        return _ok()
+
+    ai.define_model(name='bistro', fn=bistro)
+    await ai.generate(model='bistro', prompt='hi', config={'temperature': None})
+
+    assert seen['model'] == {'temperature': None}
+
+
+@pytest.mark.asyncio
+async def test_slot_level_none_still_means_nothing_set() -> None:
+    ai, seen = _pipeline_app(config_schema=KitchenConfig)
+    eval_payload = {'dataset': [{'input': 'satay', 'testCaseId': 'row-1'}], 'evalRunId': 'run-1', 'options': None}
+    batch = await ai.registry.resolve_action_by_key('/evaluator/batch')
+    assert batch is not None
+
+    await ai.generate(model='bistro', prompt='hi', config=None)
+    await batch.run(eval_payload)
+
+    defaults = {'seed': 42, 'temperature': 0.7}
+    assert seen['model'] == defaults
+    assert seen['batch'] == defaults
+
+
+# -----------------------------------------------------------------------------
+# Refs: EmbedderRef and EvaluatorRef have ModelRef's shape
+# -----------------------------------------------------------------------------
+
+
+def test_typed_embedder_ref_checks_and_copies_config() -> None:
+    config = CrmEmbedConfig(task_type='query')
+    ref = create_embedder_ref('crm', config_schema=CrmEmbedConfig, config=config, version='v2')
+    config.task_type = 'document'
+
+    assert ref.config == CrmEmbedConfig(task_type='query')
+    assert ref.version == 'v2'
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        ref.name = 'other'  # type: ignore[misc]
+    with pytest.raises(GenkitError, match=r'crm: config must be an instance of .*CrmEmbedConfig, got .*MenuOnlyConfig'):
+        EmbedderRef(name='crm', config_schema=CrmEmbedConfig, config=cast(Any, MenuOnlyConfig()))
+
+
+def test_untyped_refs_take_a_mapping_and_copy_it() -> None:
+    options: dict[str, Any] = {'allergens': ['peanut']}
+    embedder = EmbedderRef(name='crm', config=options)
+    evaluator = evaluator_ref('allergy', config=options)
+    options['allergens'].append('shellfish')
+
+    assert embedder.config == {'allergens': ['peanut']}
+    assert evaluator.config == {'allergens': ['peanut']}
+    with pytest.raises(GenkitError, match='config must be a mapping when config_schema is not set'):
+        EvaluatorRef(name='allergy', config=AllergyJudgeConfig())
+
+
+def test_typed_evaluator_ref_checks_config() -> None:
+    ref = evaluator_ref('allergy', config_schema=AllergyJudgeConfig, config=AllergyJudgeConfig(strict=False))
+
+    assert ref.config == AllergyJudgeConfig(strict=False)
+    assert ref.config_schema is AllergyJudgeConfig
+    with pytest.raises(GenkitError, match='config must be an instance of'):
+        evaluator_ref('allergy', config_schema=AllergyJudgeConfig, config=cast(Any, {'strict': False}))
+
+
+# -----------------------------------------------------------------------------
+# ai.generate / ai.embed / ai.evaluate: one merge, ref < call
+# -----------------------------------------------------------------------------
+
+
+def _typed_app() -> tuple[Genkit, dict[str, Any]]:
+    """Typed model, embedder, per-row and batch evaluator."""
+    ai = Genkit()
+    seen: dict[str, Any] = {}
+
+    async def bistro(request: ModelRequest[TableConfig], ctx: ActionRunContext) -> ModelResponse:
+        seen['model'] = request.config
+        return _ok()
+
+    async def crm_search(request: EmbedRequest[TableConfig]) -> EmbedResponse:
+        seen['embedder'] = request.options
+        return _embedding()
+
+    async def allergy_check(datapoint: BaseDataPoint, options: TableConfig) -> EvalFnResponse:
+        seen['per_row'] = options
+        return _score()
+
+    async def allergy_batch(request: EvalRequest[TableConfig]) -> list[EvalFnResponse]:
+        seen['batch'] = request.options
+        return [_score()]
+
+    ai.define_model(name='bistro', fn=bistro)
+    ai.define_embedder('crm', crm_search)
+    ai.define_evaluator(name='row', display_name='Row', definition='d', fn=allergy_check)
+    ai.define_batch_evaluator(name='batch', display_name='Batch', definition='d', fn=allergy_batch)
+    return ai, seen
+
+
+@pytest.mark.asyncio
+async def test_ref_config_survives_unset_call_fields_and_call_wins_per_field() -> None:
+    ai, seen = _typed_app()
+    ref_config = TableConfig(temperature=0.1)
+    call_config = TableConfig(allergens=['shellfish'])
+
+    await ai.generate(
+        model=model_ref('bistro', config_schema=TableConfig, config=ref_config), prompt='hi', config=call_config
+    )
+    await ai.embed(
+        embedder=create_embedder_ref('crm', config_schema=TableConfig, config=ref_config),
+        content='acme corp',
+        config=call_config,
+    )
+    for name in ('row', 'batch'):
+        await ai.evaluate(
+            evaluator=evaluator_ref(name, config_schema=TableConfig, config=ref_config),
+            dataset=ROWS,
+            config=call_config,
+        )
+
+    expected = TableConfig(temperature=0.1, allergens=['shellfish'])
+    assert seen == {'model': expected, 'embedder': expected, 'per_row': expected, 'batch': expected}
+
+
+@pytest.mark.asyncio
+async def test_untyped_fns_get_ref_and_call_layers_over_defaults() -> None:
+    ai, seen = _pipeline_app()
+
+    await ai.embed(
+        embedder=create_embedder_ref('crm', config={'temperature': 0.1, 'region': 'emea'}),
+        content='acme corp',
+        config={'allergens': ['shellfish']},
+    )
+    await ai.evaluate(evaluator=evaluator_ref('row', config={'temperature': 0.1}), dataset=ROWS)
+
+    assert seen['embedder'] == {'temperature': 0.1, 'allergens': ['shellfish'], 'region': 'emea'}
+    assert seen['per_row'] == {'temperature': 0.1, 'allergens': ['peanut']}
+
+
+@pytest.mark.asyncio
+async def test_ref_with_a_foreign_config_schema_raises_at_call_time() -> None:
+    ai, seen = _typed_app()
+
+    with pytest.raises(GenkitError, match=r"model 'bistro' takes config .*TableConfig, but the ref's config_schema"):
+        await ai.generate(model=model_ref('bistro', config_schema=MenuOnlyConfig), prompt='hi')
+    with pytest.raises(GenkitError, match=r"embedder 'crm' takes config .*TableConfig, but the ref's config_schema"):
+        await ai.embed(embedder=create_embedder_ref('crm', config_schema=MenuOnlyConfig), content='acme corp')
+    with pytest.raises(GenkitError, match=r"evaluator 'row' takes config .*TableConfig, but the ref's config_schema"):
+        await ai.evaluate(evaluator=evaluator_ref('row', config_schema=MenuOnlyConfig), dataset=ROWS)
+    assert seen == {}
+
+
+@pytest.mark.asyncio
+async def test_generic_model_config_on_a_ref_defers_to_the_model_class() -> None:
+    ai, seen = _typed_app()
+
+    await ai.generate(model=model_ref('bistro', config_schema=ModelConfig), prompt='hi', config={'temperature': 0.2})
+
+    assert seen['model'] == TableConfig(temperature=0.2)
+
+
+@pytest.mark.asyncio
+async def test_call_config_of_another_class_raises_before_the_fn_runs() -> None:
+    ai, seen = _typed_app()
+
+    with pytest.raises(GenkitError, match=r'crm: config must be .*TableConfig or a mapping, got .*MenuOnlyConfig'):
+        await ai.embed(embedder='crm', content='acme corp', config=MenuOnlyConfig())
+    with pytest.raises(GenkitError, match=r'batch: config must be .*TableConfig or a mapping, got .*MenuOnlyConfig'):
+        await ai.evaluate(evaluator='batch', dataset=ROWS, config=MenuOnlyConfig())
+    with pytest.raises(GenkitError, match=r"row: config 'temperature'"):
+        await ai.evaluate(evaluator='row', dataset=ROWS, config={'temperature': 'warm'})
+    assert seen == {}
+
+
+class AliasedEmbedConfig(BaseModel):
+    """camelCase on the wire, snake_case in Python."""
+
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra='forbid')
+
+    task_type: str | None = None
+    output_dimensionality: int | None = None
+
+
+@pytest.mark.asyncio
+async def test_embed_folds_aliases_to_the_embedder_class() -> None:
+    ai = Genkit()
+    seen: dict[str, Any] = {}
+
+    async def crm_search(request: EmbedRequest) -> EmbedResponse:
+        seen['options'] = request.options
+        return _embedding()
+
+    ai.define_embedder('crm', crm_search, config_schema=AliasedEmbedConfig)
+
+    await ai.embed(
+        embedder=create_embedder_ref('crm', config={'taskType': 'RETRIEVAL_DOCUMENT', 'outputDimensionality': 256}),
+        content='acme corp',
+        config={'task_type': 'RETRIEVAL_QUERY'},
+    )
+
+    assert seen['options'] == {'task_type': 'RETRIEVAL_QUERY', 'output_dimensionality': 256}
+
+
+@pytest.mark.asyncio
+async def test_version_is_the_lowest_caller_layer_for_models_and_embedders() -> None:
+    """ref.version < ref.config['version'] < call config['version'], for both kinds."""
+    ai, seen = _pipeline_app(config_schema=NotSetConfig)
+
+    await ai.embed(embedder=create_embedder_ref('crm', version='v1'), content='acme corp')
+    assert seen['embedder'] == {'version': 'v1'}
+    await ai.embed(embedder=create_embedder_ref('crm', version='v1', config={'version': 'v2'}), content='acme corp')
+    assert seen['embedder'] == {'version': 'v2'}
+    await ai.embed(
+        embedder=create_embedder_ref('crm', version='v1', config={'version': 'v2'}),
+        content='acme corp',
+        config={'version': 'v3'},
+    )
+    assert seen['embedder'] == {'version': 'v3'}
+
+    class VersionedConfig(NotSetConfig):
+        version: str | None = None
+
+    await ai.generate(model=model_ref('bistro', config_schema=ModelConfig, version='v1'), prompt='hi')
+    assert seen['model'] == {'version': 'v1'}
+    await ai.generate(
+        model=model_ref('bistro', config_schema=NotSetConfig, version='v1', config=VersionedConfig(version='v2')),
+        prompt='hi',
+    )
+    assert seen['model'] == {'version': 'v2'}
+    await ai.generate(
+        model=model_ref('bistro', config_schema=NotSetConfig, version='v1', config=VersionedConfig(version='v2')),
+        prompt='hi',
+        config={'version': 'v3'},
+    )
+    assert seen['model'] == {'version': 'v3'}
+
+
+# -----------------------------------------------------------------------------
+# Same values from ai.* by name, ai.* with a ref, and Action.run
+# -----------------------------------------------------------------------------
+
+
+class AliasOnlyConfig(BaseModel):
+    """camelCase aliases and no populate_by_name: only the alias validates."""
+
+    model_config = ConfigDict(alias_generator=to_camel)
+
+    task_type: str | None = None
+    output_dimensionality: int = 768
+
+
+def _alias_only_app() -> tuple[Genkit, dict[str, Any]]:
+    ai = Genkit()
+    seen: dict[str, Any] = {}
+
+    async def bistro(request: ModelRequest[AliasOnlyConfig], ctx: ActionRunContext) -> ModelResponse:
+        seen['model'] = request.config
+        return _ok()
+
+    async def crm_search(request: EmbedRequest) -> EmbedResponse:
+        seen['embedder'] = request.options
+        return _embedding()
+
+    ai.define_model(name='bistro', fn=bistro)
+    ai.define_embedder('crm', crm_search, config_schema=AliasOnlyConfig)
+    return ai, seen
+
+
+@pytest.mark.asyncio
+async def test_alias_only_class_keeps_ref_and_call_values_on_every_path() -> None:
+    ai, seen = _alias_only_app()
+    expected_model = AliasOnlyConfig.model_validate({'taskType': 'QUERY', 'outputDimensionality': 256})
+    expected_options = {'taskType': 'QUERY', 'outputDimensionality': 256}
+    ref_config = AliasOnlyConfig.model_validate({'taskType': 'QUERY'})
+
+    await ai.generate(model='bistro', prompt='hi', config={'task_type': 'QUERY', 'output_dimensionality': 256})
+    assert seen['model'] == expected_model
+    await ai.generate(
+        model=model_ref('bistro', config_schema=AliasOnlyConfig, config=ref_config),
+        prompt='hi',
+        config={'outputDimensionality': 256},
+    )
+    assert seen['model'] == expected_model
+    model = await ai.registry.resolve_action_by_key('/model/bistro')
+    assert model is not None
+    await model.run({'messages': [], 'config': {'taskType': 'QUERY', 'outputDimensionality': 256}})
+    assert seen['model'] == expected_model
+
+    await ai.embed(embedder='crm', content='acme corp', config={'task_type': 'QUERY', 'output_dimensionality': 256})
+    assert seen['embedder'] == expected_options
+    await ai.embed(
+        embedder=create_embedder_ref('crm', config={'task_type': 'QUERY'}),
+        content='acme corp',
+        config={'outputDimensionality': 256},
+    )
+    assert seen['embedder'] == expected_options
+    embedder = await ai.registry.resolve_action_by_key('/embedder/crm')
+    assert embedder is not None
+    await embedder.run({'input': [], 'options': {'task_type': 'QUERY', 'outputDimensionality': 256}})
+    assert seen['embedder'] == expected_options
+
+
+@pytest.mark.asyncio
+async def test_untyped_fn_gets_one_dict_shape_by_name_ref_and_run() -> None:
+    """A class with only None defaults still folds keys, so no fn gets two spellings of one field."""
+    ai, seen = _pipeline_app(config_schema=AliasedEmbedConfig)
+    shapes: list[dict[str, Any]] = []
+
+    await ai.embed(embedder='crm', content='acme corp', config={'taskType': 'QUERY', 'output_dimensionality': 256})
+    shapes.append(seen['embedder'])
+    await ai.embed(
+        embedder=create_embedder_ref('crm', config={'task_type': 'QUERY'}),
+        content='acme corp',
+        config={'outputDimensionality': 256},
+    )
+    shapes.append(seen['embedder'])
+    action = await ai.registry.resolve_action_by_key('/embedder/crm')
+    assert action is not None
+    await action.run({'input': [], 'options': {'taskType': 'QUERY', 'outputDimensionality': 256}})
+    shapes.append(seen['embedder'])
+
+    assert shapes == [{'task_type': 'QUERY', 'output_dimensionality': 256}] * 3
+
+
+class SeatingConfig(BaseModel):
+    """A nested model default."""
+
+    table: TableConfig = TableConfig()
+
+
+@pytest.mark.asyncio
+async def test_untyped_fn_gets_nested_defaults_as_plain_data() -> None:
+    ai, seen = _pipeline_app(config_schema=SeatingConfig)
+
+    await ai.embed(embedder='crm', content='acme corp')
+
+    assert seen['embedder'] == {'table': {'temperature': 0.7, 'allergens': ['peanut']}}
+
+
+@pytest.mark.asyncio
+async def test_fn_mutating_options_does_not_leak_into_the_ref_or_next_call() -> None:
+    ai = Genkit()
+    calls: list[dict[str, Any]] = []
+
+    async def crm_search(request: EmbedRequest) -> EmbedResponse:
+        calls.append(copy.deepcopy(request.options))
+        request.options['allergens'].append('shellfish')
+        return _embedding()
+
+    async def allergy_check(datapoint: BaseDataPoint, options: dict[str, Any]) -> EvalFnResponse:
+        calls.append(copy.deepcopy(options))
+        options['allergens'].append('shellfish')
+        return _score()
+
+    ai.define_embedder('crm', crm_search)
+    ai.define_evaluator(name='row', display_name='Row', definition='d', fn=allergy_check)
+    embedder = create_embedder_ref('crm', config={'allergens': ['peanut']})
+    evaluator = evaluator_ref('row', config={'allergens': ['peanut']})
+
+    for _ in range(2):
+        await ai.embed(embedder=embedder, content='acme corp')
+        await ai.evaluate(evaluator=evaluator, dataset=ROWS)
+
+    assert calls == [{'allergens': ['peanut']}] * 4
+    assert embedder.config == {'allergens': ['peanut']}
+    assert evaluator.config == {'allergens': ['peanut']}
+
+
+@pytest.mark.asyncio
+async def test_untyped_fn_with_a_class_gets_validation_on_a_dev_ui_run() -> None:
+    ai, seen = _pipeline_app()
+    action = await ai.registry.resolve_action_by_key('/embedder/crm')
+    assert action is not None
+
+    with pytest.raises(GenkitError, match=r"crm: config 'temperature'") as err:
+        await action.run({'input': [], 'options': {'temperature': 'warm'}})
+
+    assert err.value.status == 'INVALID_ARGUMENT'
+    assert seen == {}
+
+
+@pytest.mark.asyncio
+async def test_background_model_start_gets_schema_defaults() -> None:
+    ai = Genkit()
+    seen: dict[str, Any] = {}
+
+    async def start(request: ModelRequest, ctx: ActionRunContext) -> Operation:
+        seen['config'] = request.config
+        return Operation(id='op-1', done=False)
+
+    async def check(operation: Operation, ctx: ActionRunContext) -> Operation:
+        return operation
+
+    ai.define_background_model(name='video', start=start, check=check, config_schema=TableConfig)
+    await ai.generate_operation(model='video', prompt='a kitchen timelapse', config={'allergens': []})
+
+    assert seen['config'] == {'temperature': 0.7, 'allergens': []}
+
+
+def test_embedder_ref_checks_and_copies_info() -> None:
+    info = EmbedderInfo(label='CRM search', dimensions=768)
+    ref = create_embedder_ref('crm', info=info)
+    info.dimensions = 256
+
+    assert ref.info == EmbedderInfo(label='CRM search', dimensions=768)
+    with pytest.raises(GenkitError, match='info must be an instance of .*EmbedderInfo'):
+        EmbedderRef(name='crm', info=cast(Any, {'label': 'CRM search'}))
+
+
+@pytest.mark.asyncio
+async def test_middleware_sees_config_before_the_boundary() -> None:
+    """Middleware runs inside generate, before Action.run adds the definition's defaults."""
+    ai = Genkit()
+    seen: dict[str, list[object]] = {'untyped': [], 'typed': []}
+
+    def recorder(key: str) -> BaseMiddleware:
+        class Recorder(BaseMiddleware):
+            async def wrap_model(self, params: Any, ctx: Any, next_fn: Any) -> Any:  # noqa: ANN401
+                seen[key].append(params.request.config)
+                return await next_fn(params, ctx)
+
+        return Recorder()
+
+    async def untyped(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        seen['untyped'].append(request.config)
+        return _ok()
+
+    async def typed(request: ModelRequest[TableConfig], ctx: ActionRunContext) -> ModelResponse:
+        seen['typed'].append(request.config)
+        return _ok()
+
+    ai.define_model(name='untyped', fn=untyped, config_schema=TableConfig)
+    ai.define_model(name='typed', fn=typed)
+    await ai.generate(model='untyped', prompt='hi', use=[recorder('untyped')])
+    await ai.generate(model='typed', prompt='hi', use=[recorder('typed')])
+
+    assert seen['untyped'] == [{}, TABLE_DEFAULTS]
+    assert seen['typed'] == [TableConfig(), TableConfig()]
+
+
+class AliasForbidConfig(BaseModel):
+    """Alias-only and extra='forbid': an unfolded field name would be an unknown key."""
+
+    model_config = ConfigDict(alias_generator=to_camel, extra='forbid')
+
+    task_type: str | None = None
+
+
+@pytest.mark.asyncio
+async def test_alias_forbid_class_takes_field_names_on_every_path() -> None:
+    ai = Genkit()
+    seen: dict[str, Any] = {}
+
+    async def typed(request: ModelRequest[AliasForbidConfig], ctx: ActionRunContext) -> ModelResponse:
+        seen['typed'] = request.config
+        return _ok()
+
+    async def untyped(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        seen['untyped'] = request.config
+        return _ok()
+
+    ai.define_model(name='typed', fn=typed)
+    ai.define_model(name='untyped', fn=untyped, config_schema=AliasForbidConfig)
+
+    for name in ('typed', 'untyped'):
+        await ai.generate(model=name, prompt='hi', config={'task_type': 'QUERY'})
+        by_name = seen[name]
+        action = await ai.registry.resolve_action_by_key(f'/model/{name}')
+        assert action is not None
+        await action.run({'messages': [], 'config': {'task_type': 'QUERY'}})
+        assert seen[name] == by_name
+
+    assert seen['typed'] == AliasForbidConfig.model_validate({'taskType': 'QUERY'})
+    assert seen['untyped'] == {'taskType': 'QUERY'}
+
+
+@pytest.mark.asyncio
+async def test_missing_required_field_raises_the_same_error_typed_or_untyped() -> None:
+    ai = Genkit()
+
+    async def typed(request: ModelRequest[ReservationConfig], ctx: ActionRunContext) -> ModelResponse:
+        return _ok()
+
+    async def untyped(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        return _ok()
+
+    ai.define_model(name='booking', fn=typed)
+    ai.define_model(name='walk_in', fn=untyped, config_schema=ReservationConfig)
+
+    for name in ('booking', 'walk_in'):
+        with pytest.raises(GenkitError, match=rf"^INVALID_ARGUMENT: {name}: config 'party_size': Field required"):
+            await ai.generate(model=name, prompt='a table for two')
+        action = await ai.registry.resolve_action_by_key(f'/model/{name}')
+        assert action is not None
+        with pytest.raises(GenkitError, match=rf"{name}: config 'party_size': Field required"):
+            await action.run({'messages': [], 'config': None})
+
+
+@pytest.mark.asyncio
+async def test_config_with_an_uncopyable_leaf_still_runs() -> None:
+    """Containers are copied per call; leaf objects such as a client lock are passed as they are."""
+    ai = Genkit()
+    seen: list[dict[str, Any]] = []
+    pos_lock = threading.Lock()
+
+    async def crm_search(request: EmbedRequest) -> EmbedResponse:
+        seen.append(request.options)
+        request.options['regions'].append('apac')
+        return _embedding()
+
+    ai.define_embedder('crm', crm_search)
+    ref = create_embedder_ref('crm', config={'client': pos_lock, 'regions': ['emea']})
+
+    await ai.embed(embedder=ref, content='acme corp')
+    await ai.embed(embedder=ref, content='acme corp', config={'lock': pos_lock})
+
+    assert seen[0]['client'] is pos_lock
+    assert seen[1]['lock'] is pos_lock
+    assert seen[1]['regions'] == ['emea', 'apac']
+    ref_config = cast(dict[str, Any], ref.config)
+    assert ref_config['regions'] == ['emea']
+
+
+class Spice(enum.Enum):
+    """A default the Dev UI would send as its value."""
+
+    MILD = 'mild'
+    HOT = 'hot'
+
+
+class SpiceConfig(BaseModel):
+    """An Enum default."""
+
+    spice: Spice = Spice.MILD
+    extras: list[Spice] = [Spice.HOT]
+
+
+@pytest.mark.asyncio
+async def test_untyped_fn_gets_enum_defaults_as_their_values() -> None:
+    ai, seen = _pipeline_app(config_schema=SpiceConfig)
+
+    await ai.embed(embedder='crm', content='acme corp')
+
+    assert seen['embedder'] == {'spice': 'mild', 'extras': ['hot']}
