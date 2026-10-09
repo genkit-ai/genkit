@@ -31,10 +31,16 @@ class CustomConfig(BaseModel):
     safety_settings: dict[str, str] | None = None
 
 
-class ExcludedKeyConfig(ModelConfig):
-    """ModelConfig whose api_key is omitted from model_dump."""
+class ExcludedFieldConfig(ModelConfig):
+    """ModelConfig with a client-only setting omitted from model_dump."""
 
-    api_key: str | None = Field(default=None, exclude=True)
+    http_options: dict[str, str] | None = Field(default=None, exclude=True)
+
+
+class AllowExtraConfig(ModelConfig):
+    """A plugin class that still lets unknown keys through, so overlay pins see them."""
+
+    model_config = ConfigDict(extra='allow')
 
 
 class OtherFamilyConfig(BaseModel):
@@ -197,7 +203,7 @@ async def test_define_prompt_dict_none_clear_and_extra(
 ) -> None:
     """define_prompt dicts accept None-clears and extra keys the same as generate()."""
     ai, echo = ai_with_echo
-    ref = model_ref('testEcho', config_schema=ModelConfig, config=ModelConfig(temperature=0.7))
+    ref = model_ref('testEcho', config_schema=AllowExtraConfig, config=AllowExtraConfig(temperature=0.7))
 
     prompt = ai.define_prompt(
         name='echoPrompt',
@@ -399,17 +405,17 @@ async def test_model_config_aliased_field_same_key_override(
 
 
 @pytest.mark.asyncio
-async def test_excluded_api_key_reaches_plugin(
+async def test_excluded_field_reaches_plugin(
     ai_with_echo: tuple[Genkit, EchoModel],
 ) -> None:
-    """Per-request api_key still lands on the plugin request after veneer dump."""
+    """A setting marked exclude=True still lands on the plugin request after veneer dump."""
     ai, echo = ai_with_echo
-    ref = model_ref('testEcho', config_schema=ExcludedKeyConfig)
+    ref = model_ref('testEcho', config_schema=ExcludedFieldConfig)
 
-    await ai.generate(model=ref, config=ExcludedKeyConfig(api_key='secret'), prompt='Hello')
+    await ai.generate(model=ref, config=ExcludedFieldConfig(http_options={'timeout': '5'}), prompt='Hello')
 
     assert echo.last_request is not None
-    assert _config_value(echo.last_request.config, 'api_key') == 'secret'
+    assert _config_value(echo.last_request.config, 'http_options') == {'timeout': '5'}
 
 
 @pytest.mark.asyncio
@@ -452,8 +458,8 @@ async def test_empty_values_stay_on_generate(
     ai, echo = ai_with_echo
     ref = model_ref(
         'testEcho',
-        config_schema=ModelConfig,
-        config=ModelConfig(temperature=0.7, stop_sequences=['STOP'], version='001'),
+        config_schema=AllowExtraConfig,
+        config=AllowExtraConfig(temperature=0.7, stop_sequences=['STOP'], version='001'),
     )
 
     await ai.generate(
@@ -622,7 +628,7 @@ async def test_non_name_model_is_hard_error_not_default() -> None:
     with pytest.raises(GenkitError) as exc_info:
         await ai.generate(model=123, prompt='hi')  # type: ignore[arg-type]
 
-    assert 'model is int, expected str or ModelRef' in str(exc_info.value)
+    assert 'model is int, expected str, ModelRef, or a model action' in str(exc_info.value)
     assert exc_info.value.reason is RuntimeErrorReason.INVALID_INPUT
     assert 'INVALID_INPUT' not in exc_info.value.original_message
     assert echo.last_request is None
@@ -893,8 +899,8 @@ async def test_generate_both_spellings_last_write_wins(
     ai, echo = ai_with_echo
     ref = model_ref(
         'testEcho',
-        config_schema=ModelConfig,
-        config=ModelConfig(max_output_tokens=100),
+        config_schema=AllowExtraConfig,
+        config=AllowExtraConfig(max_output_tokens=100),
     )
 
     await ai.generate(
@@ -1378,3 +1384,132 @@ async def test_prompt_without_model_rejects_wrong_class_on_constructor_ref() -> 
 
     with pytest.raises(GenkitError, match=r'config must be .+\.CustomConfig or a mapping, got .+\.OtherFamilyConfig'):
         await joke(config=OtherFamilyConfig(frequency_penalty=0.2))
+
+
+# The action define_model returns. resolve_model_arg turns it into its name
+# (model_resolution_test.py), so these only cover that each entry point
+# accepts it.
+
+
+async def _chunk_texts(stream: Any) -> list[str]:
+    return [chunk.text async for chunk in stream.stream]
+
+
+@pytest.mark.asyncio
+async def test_generate_with_define_model_action_returns_the_same_reply_as_its_name() -> None:
+    """generate(model=the define_model action) matches model=the name."""
+    ai = Genkit()
+    _, action = define_echo_model(ai, name='local/echo')
+
+    by_action = await ai.generate(model=action, prompt='hi')
+    by_name = await ai.generate(model='local/echo', prompt='hi')
+
+    assert by_action.message == by_name.message
+
+
+@pytest.mark.asyncio
+async def test_generate_with_another_instances_action_raises_and_does_not_run_this_model() -> None:
+    """ai.generate(model=other_ai's action) raises; ai's same-named model is not called."""
+    other = Genkit()
+    _, foreign = define_echo_model(other, name='local/echo')
+    ai = Genkit()
+    echo, _ = define_echo_model(ai, name='local/echo')
+
+    with pytest.raises(GenkitError, match="model action 'local/echo' is not the one registered") as exc_info:
+        await ai.generate(model=foreign, prompt='hi')
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert echo.last_request is None
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_with_define_model_action_yields_the_same_chunks_as_its_name() -> None:
+    """generate_stream(model=action) yields the same chunks and reply as the name."""
+    ai = Genkit()
+    _, action = define_echo_model(ai, name='local/echo', stream_countdown=True)
+
+    action_stream = ai.generate_stream(model=action, prompt='hi')
+    action_chunks = await _chunk_texts(action_stream)
+    name_stream = ai.generate_stream(model='local/echo', prompt='hi')
+    name_chunks = await _chunk_texts(name_stream)
+
+    assert action_chunks == name_chunks == ['3', '2', '1']
+    assert (await action_stream.response).text == (await name_stream.response).text
+
+
+@pytest.mark.asyncio
+async def test_prompt_call_and_stream_with_define_model_action_match_its_name() -> None:
+    """prompt(model=action) and prompt.stream(model=action) override the stored model like the name."""
+    ai = Genkit()
+    _, action = define_echo_model(ai, name='local/echo', stream_countdown=True)
+    prompt = ai.define_prompt(name='p', prompt='hi', model='other/model')
+
+    assert (await prompt(model=action)).text == (await prompt(model='local/echo')).text
+    assert await _chunk_texts(prompt.stream(model=action)) == ['3', '2', '1']
+
+
+@pytest.mark.asyncio
+async def test_define_prompt_with_define_model_action_matches_its_name() -> None:
+    """define_prompt(model=action) runs the same model as define_prompt(model=the name)."""
+    ai = Genkit()
+    _, action = define_echo_model(ai, name='local/echo')
+
+    by_action = await ai.define_prompt(name='p-action', prompt='hi', model=action)()
+    by_name = await ai.define_prompt(name='p-name', prompt='hi', model='local/echo')()
+
+    assert by_action.text == by_name.text
+
+
+@pytest.mark.asyncio
+async def test_define_agent_with_define_model_action_runs_that_model() -> None:
+    """define_agent(model=action) runs the model the action names on each turn."""
+    ai = ExpGenkit()
+    echo, action = define_echo_model(ai, name='local/echo')
+
+    agent = ai.define_agent(name='echoAgent', model=action, system='Reply briefly.')
+    out = await agent.chat().send('Hello')
+
+    assert '[ECHO]' in out.text
+    assert echo.last_request is not None
+
+
+@pytest.mark.asyncio
+async def test_generate_operation_with_define_background_model_result_starts_the_operation() -> None:
+    """generate_operation(model=the define_background_model result) starts it, same as the name."""
+
+    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+        return Operation(id='bg-op', done=False)
+
+    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+        return op
+
+    ai = Genkit()
+    background = ai.define_background_model(name='bg', start=start, check=check)
+
+    operation = await ai.generate_operation(model=background, prompt='Generate video')
+
+    assert operation.id == 'bg-op'
+
+
+@pytest.mark.asyncio
+async def test_generate_operation_with_another_instances_background_model_raises() -> None:
+    """generate_operation(model=other_ai's background model) raises INVALID_ARGUMENT before starting."""
+    started: list[str] = []
+
+    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+        started.append('called')
+        return Operation(id='bg-op', done=False)
+
+    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+        return op
+
+    other = Genkit()
+    foreign = other.define_background_model(name='bg', start=start, check=check)
+    ai = Genkit()
+    ai.define_background_model(name='bg', start=start, check=check)
+
+    with pytest.raises(GenkitError, match="model action 'bg' is not the one registered") as exc_info:
+        await ai.generate_operation(model=foreign, prompt='Generate video')
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert started == []

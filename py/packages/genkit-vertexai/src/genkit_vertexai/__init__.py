@@ -17,8 +17,7 @@
 """Vertex AI Plugin for Genkit.
 
 This plugin provides integration with Google Cloud's Vertex AI platform,
-including Model Garden for accessing third-party models and Vector Search
-for RAG applications.
+including Model Garden for accessing third-party models.
 
 Example:
     ```python
@@ -27,7 +26,7 @@ Example:
 
     # 1. Initialize Genkit with the Model Garden plugin
     ai = Genkit(
-        plugins=[ModelGarden(project_id='my-project', location='us-central1')],
+        plugins=[ModelGarden(project='my-project', location='us-central1')],
     )
 
     # 2. Call models under the modelgarden/ namespace (not vertexai/)
@@ -43,26 +42,15 @@ Example:
 
 Requirements:
     - Requires Google Cloud Application Default Credentials (ADC) or explicit credentials.
+    - Claude models need ``genkit-vertexai[anthropic]``; Llama, Mistral, and other
+      OpenAI-compatible models need ``genkit-vertexai[openai]``.
 
 See Also:
     - Vertex AI Model Garden: https://cloud.google.com/vertex-ai/docs/model-garden
-    - Vertex AI Vector Search: https://cloud.google.com/vertex-ai/docs/vector-search
 """
 
-from genkit_vertexai.model_garden import ModelGarden, ModelGardenPlugin
-
-
-def package_name() -> str:
-    """Get the package name for the Vertex AI plugin.
-
-    Returns:
-        The fully qualified package name as a string.
-    """
-    return 'genkit_vertexai'
-
+from genkit_vertexai.model_garden import ModelGarden
 
 __all__ = [
     'ModelGarden',
-    'ModelGardenPlugin',
-    'package_name',
 ]

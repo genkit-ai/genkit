@@ -23,6 +23,7 @@ import {
   modelActionMetadata,
   z,
 } from 'genkit';
+import { logger } from 'genkit/logging';
 import {
   CandidateData,
   GenerationCommonConfigDescriptions,
@@ -44,9 +45,25 @@ import {
   toGeminiTool,
 } from '../common/converters.js';
 import { isKnownKey } from '../common/utils.js';
-import { generateContent, generateContentStream } from './client.js';
+import {
+  createInteraction,
+  createInteractionStream,
+  generateContent,
+  generateContentStream,
+} from './client.js';
+import {
+  fromInteractionDelta,
+  fromInteractionSync,
+  toInteractionConfigTool,
+  toInteractionGenerationConfig,
+  toInteractionResponseModalities,
+  toInteractionSteps,
+  toInteractionTool,
+} from './interaction-converters.js';
+import { InteractionTool, ModelGenerationConfig } from './interaction-types.js';
 import {
   ClientOptions,
+  CreateInteractionRequest,
   Content as GeminiMessage,
   GenerateContentRequest,
   GenerateContentResponse,
@@ -66,6 +83,7 @@ import {
   checkModelName,
   cleanSchema,
   extractVersion,
+  isObject,
   removeClientOptionOverrides,
 } from './utils.js';
 
@@ -91,6 +109,77 @@ const SafetySettingsSchema = z
     ]),
   })
   .passthrough();
+
+/**
+ * Reports whether a safety setting is equivalent to the model default (no
+ * additional filtering), i.e. it can be omitted without changing behavior.
+ *
+ * Per the Gemini API docs, the adjustable safety filters are Off by default for
+ * current Gemini models, so `BLOCK_NONE` requests the same behavior as sending
+ * no safety settings. `HARM_CATEGORY_UNSPECIFIED` entries are also dropped on
+ * the generateContent path.
+ * See https://ai.google.dev/gemini-api/docs/safety-settings
+ */
+function isDefaultSafetySetting(setting: {
+  category?: string;
+  threshold?: string;
+}): boolean {
+  return (
+    setting.category === 'HARM_CATEGORY_UNSPECIFIED' ||
+    setting.threshold === 'BLOCK_NONE'
+  );
+}
+
+/** Hints for config fields the Interactions API doesn't support. */
+const DROPPED_CONFIG_FIELD_HINTS: Record<string, string> = {
+  'thinkingConfig.thinkingBudget':
+    " Use thinkingConfig.thinkingLevel ('LOW' | 'MEDIUM' | 'HIGH') instead.",
+};
+
+/** `model:field` pairs that have already been warned about. */
+const warnedDroppedConfigFields = new Set<string>();
+
+/**
+ * Warns (once per model and field) that a config field isn't supported by an
+ * Interactions model and was ignored.
+ */
+function warnDroppedConfigField(model: string, field: string) {
+  const key = `${model}:${field}`;
+  if (warnedDroppedConfigFields.has(key)) return;
+  warnedDroppedConfigFields.add(key);
+  logger.warn(
+    `${field} is not supported by '${model}' and was ignored.` +
+      (DROPPED_CONFIG_FIELD_HINTS[field] ?? '')
+  );
+}
+
+/**
+ * Copies a `retrievalConfig.latLng` user location onto the Interactions
+ * `google_maps` tools, which take `latitude`/`longitude` directly (there is no
+ * retrieval config on the Interactions path). A location already set on a tool
+ * is kept.
+ *
+ * @returns Whether there was a `google_maps` tool to apply the location to.
+ */
+function applyLatLngToGoogleMapsTools(
+  tools: InteractionTool[],
+  latLng: { latitude?: number; longitude?: number }
+): boolean {
+  let found = false;
+  tools.forEach((tool, i) => {
+    if (tool.type !== 'google_maps') return;
+    found = true;
+    if ('latitude' in tool || 'longitude' in tool) return;
+    tools[i] = {
+      ...tool,
+      ...(latLng.latitude !== undefined ? { latitude: latLng.latitude } : {}),
+      ...(latLng.longitude !== undefined
+        ? { longitude: latLng.longitude }
+        : {}),
+    };
+  });
+  return found;
+}
 
 const VoiceConfigSchema = z
   .object({
@@ -176,11 +265,17 @@ export const GeminiConfigSchema = GenerationCommonConfigSchema.extend({
     .union([z.boolean(), z.object({}).strict()])
     .describe('Enables the model to generate and run code.')
     .optional(),
+  // TODO(v2): Remove. This plugin does not implement context caching, so this
+  // field has no effect (it is passed through on generateContent models and
+  // dropped with a warning on Interactions models, which reject it). Kept for
+  // now because removing it is a breaking change.
+  /** @deprecated Not implemented by this plugin. Will be removed in v2. */
   contextCache: z
     .boolean()
     .describe(
       'Context caching allows you to save and reuse precomputed input ' +
-        'tokens that you wish to use repeatedly.'
+        'tokens that you wish to use repeatedly. Not currently implemented ' +
+        'by this plugin.'
     )
     .optional(),
   functionCallingConfig: z
@@ -272,6 +367,16 @@ export const GeminiConfigSchema = GenerationCommonConfigSchema.extend({
   serviceTier: z
     .union([z.enum(['standard', 'flex', 'priority']), z.string()])
     .describe('Service tier for the Gemini API.')
+    .optional(),
+  previousInteractionId: z
+    .string()
+    .describe('The ID of the previous interaction, if any.')
+    .optional(),
+  store: z
+    .boolean()
+    .describe(
+      'Whether to store the interaction for later retrieval. Defaults to false.'
+    )
     .optional(),
   thinkingConfig: z
     .object({
@@ -420,11 +525,16 @@ type ConfigSchemaType =
   | GemmaConfigSchemaType;
 type ConfigSchema = z.infer<ConfigSchemaType>;
 
+const modelInteractionsMap = new Map<string, boolean>();
+
 function commonRef(
   name: string,
   info?: ModelInfo,
-  configSchema: ConfigSchemaType = GeminiConfigSchema
+  configSchema: ConfigSchemaType = GeminiConfigSchema,
+  useInteractions: boolean = true
 ): ModelReference<ConfigSchemaType> {
+  modelInteractionsMap.set(name, useInteractions);
+
   return modelRef({
     name: `googleai/${name}`,
     configSchema,
@@ -482,16 +592,57 @@ const KNOWN_GEMINI_MODELS = {
   'gemini-pro-latest': commonRef('gemini-pro-latest'),
   'gemini-flash-latest': commonRef('gemini-flash-latest'),
   'gemini-flash-lite-latest': commonRef('gemini-flash-lite-latest'),
-  'gemini-3.5-flash': commonRef('gemini-3.5-flash'),
-  'gemini-3.1-flash-lite': commonRef('gemini-3.1-flash-lite'),
-  'gemini-3.1-pro-preview-customtools': commonRef(
-    'gemini-3.1-pro-preview-customtools'
+  'gemini-3.6-flash': commonRef('gemini-3.6-flash'),
+  'gemini-3.5-flash-lite': commonRef('gemini-3.5-flash-lite'),
+
+  'gemini-3.5-flash': commonRef(
+    'gemini-3.5-flash',
+    undefined,
+    GeminiConfigSchema,
+    false
   ),
-  'gemini-3.1-pro-preview': commonRef('gemini-3.1-pro-preview'),
-  'gemini-3-flash-preview': commonRef('gemini-3-flash-preview'),
-  'gemini-2.5-pro': commonRef('gemini-2.5-pro'),
-  'gemini-2.5-flash': commonRef('gemini-2.5-flash'),
-  'gemini-2.5-flash-lite': commonRef('gemini-2.5-flash-lite'),
+  'gemini-3.1-flash-lite': commonRef(
+    'gemini-3.1-flash-lite',
+    undefined,
+    GeminiConfigSchema,
+    false
+  ),
+  'gemini-3.1-pro-preview-customtools': commonRef(
+    'gemini-3.1-pro-preview-customtools',
+    undefined,
+    GeminiConfigSchema,
+    false
+  ),
+  'gemini-3.1-pro-preview': commonRef(
+    'gemini-3.1-pro-preview',
+    undefined,
+    GeminiConfigSchema,
+    false
+  ),
+  'gemini-3-flash-preview': commonRef(
+    'gemini-3-flash-preview',
+    undefined,
+    GeminiConfigSchema,
+    false
+  ),
+  'gemini-2.5-pro': commonRef(
+    'gemini-2.5-pro',
+    undefined,
+    GeminiConfigSchema,
+    false
+  ),
+  'gemini-2.5-flash': commonRef(
+    'gemini-2.5-flash',
+    undefined,
+    GeminiConfigSchema,
+    false
+  ),
+  'gemini-2.5-flash-lite': commonRef(
+    'gemini-2.5-flash-lite',
+    undefined,
+    GeminiConfigSchema,
+    false
+  ),
 };
 export type KnownGeminiModels = keyof typeof KNOWN_GEMINI_MODELS;
 export type GeminiModelName = `gemini-${string}`;
@@ -507,17 +658,20 @@ const KNOWN_TTS_MODELS = {
   'gemini-2.5-flash-preview-tts': commonRef(
     'gemini-2.5-flash-preview-tts',
     { ...GENERIC_TTS_MODEL.info },
-    GeminiTtsConfigSchema
+    GeminiTtsConfigSchema,
+    false
   ),
   'gemini-2.5-pro-preview-tts': commonRef(
     'gemini-2.5-pro-preview-tts',
     { ...GENERIC_TTS_MODEL.info },
-    GeminiTtsConfigSchema
+    GeminiTtsConfigSchema,
+    false
   ),
   'gemini-3.1-flash-tts-preview': commonRef(
     'gemini-3.1-flash-tts-preview',
     { ...GENERIC_TTS_MODEL.info },
-    GeminiTtsConfigSchema
+    GeminiTtsConfigSchema,
+    false
   ),
 };
 export type KnownTtsModels = keyof typeof KNOWN_TTS_MODELS;
@@ -527,30 +681,28 @@ export function isTTSModelName(value: string): value is TTSModelName {
 }
 
 const KNOWN_IMAGE_MODELS = {
+  'gemini-3.1-flash-lite-image': commonRef(
+    'gemini-3.1-flash-lite-image',
+    { ...GENERIC_IMAGE_MODEL.info },
+    GeminiImageConfigSchema
+  ),
   'gemini-3.1-flash-image': commonRef(
     'gemini-3.1-flash-image',
     { ...GENERIC_IMAGE_MODEL.info },
-    GeminiImageConfigSchema
+    GeminiImageConfigSchema,
+    false
   ),
   'gemini-3-pro-image': commonRef(
     'gemini-3-pro-image',
     { ...GENERIC_IMAGE_MODEL.info },
-    GeminiImageConfigSchema
-  ),
-  'gemini-3.1-flash-image-preview': commonRef(
-    'gemini-3.1-flash-image-preview',
-    { ...GENERIC_IMAGE_MODEL.info },
-    GeminiImageConfigSchema
-  ),
-  'gemini-3-pro-image-preview': commonRef(
-    'gemini-3-pro-image-preview',
-    { ...GENERIC_IMAGE_MODEL.info },
-    GeminiImageConfigSchema
+    GeminiImageConfigSchema,
+    false
   ),
   'gemini-2.5-flash-image': commonRef(
     'gemini-2.5-flash-image',
     { ...GENERIC_IMAGE_MODEL.info },
-    GeminiImageConfigSchema
+    GeminiImageConfigSchema,
+    false
   ),
 } as const;
 export type KnownImageModels = keyof typeof KNOWN_IMAGE_MODELS;
@@ -563,15 +715,27 @@ const KNOWN_GEMMA_MODELS = {
   'gemma-4-26b-a4b-it': commonRef(
     'gemma-4-26b-a4b-it',
     undefined,
-    GemmaConfigSchema
+    GemmaConfigSchema,
+    false
   ),
-  'gemma-4-31b-it': commonRef('gemma-4-31b-it', undefined, GemmaConfigSchema),
+  'gemma-4-31b-it': commonRef(
+    'gemma-4-31b-it',
+    undefined,
+    GemmaConfigSchema,
+    false
+  ),
 } as const;
 export type KnownGemmaModels = keyof typeof KNOWN_GEMMA_MODELS;
 export type GemmaModelName = `gemma-${string}`;
 export function isGemmaModelName(value: string): value is GemmaModelName {
   return value.startsWith('gemma-');
 }
+
+const DEPRECATED_MODELS = {
+  // When models are < 1 month from shutdown, move them here instead.
+  // They will still be instantiated with the correct options,
+  // but they will no longer appear in autocomplete suggestions.
+};
 
 const KNOWN_MODELS = {
   ...KNOWN_GEMINI_MODELS,
@@ -580,14 +744,19 @@ const KNOWN_MODELS = {
   ...KNOWN_GEMMA_MODELS,
 };
 
+const ALL_MODELS = {
+  ...DEPRECATED_MODELS,
+  ...KNOWN_MODELS,
+};
+
 export function model(
   version: string,
   config: ConfigSchema = {}
 ): ModelReference<ConfigSchemaType> {
   const name = checkModelName(version);
 
-  if (isKnownKey(name, KNOWN_MODELS)) {
-    return KNOWN_MODELS[name].withConfig(config);
+  if (isKnownKey(name, ALL_MODELS)) {
+    return ALL_MODELS[name].withConfig(config);
   }
 
   if (isTTSModelName(name)) {
@@ -645,7 +814,7 @@ export function listActions(models: Model[]): ActionMetadata[] {
 }
 
 export function listKnownModels(options?: GoogleAIPluginOptions) {
-  return Object.keys(KNOWN_MODELS).map((name: string) =>
+  return Object.keys(ALL_MODELS).map((name: string) =>
     defineModel(name, options)
   );
 }
@@ -702,6 +871,7 @@ export function defineModel(
 
       const modelVersion = request.config?.version || extractVersion(ref);
       const isGemma = isGemmaModelName(modelVersion);
+      const useInteractions = modelInteractionsMap.get(modelVersion) ?? true;
 
       // Make a copy so that modifying the request will not produce side-effects
       const messages = request.messages.map((m) => ({ ...m }));
@@ -720,17 +890,41 @@ export function defineModel(
       // systemInstructions to be provided as a separate input. The first
       // message detected with role=system will be used for systemInstructions.
       let systemInstruction: GeminiMessage | undefined = undefined;
+      let interactionsSystemInstruction: string | undefined = undefined;
       const systemMessage = messages.find((m) => m.role === 'system');
       if (systemMessage) {
         messages.splice(messages.indexOf(systemMessage), 1);
         systemInstruction = toGeminiSystemInstruction(systemMessage);
+        if (
+          useInteractions &&
+          systemMessage.content.some((c) => c.text === undefined)
+        ) {
+          // Technically it's not the model itself, but 'useInteractions' or not,
+          // however, useInteractions is determined by which model... so
+          // this makes the most sense without dragging the user into
+          // the nitty gritty of how their stuff is going through the backend.
+          throw new GenkitError({
+            status: 'INVALID_ARGUMENT',
+            message:
+              'System message contains non-text content which is not supported for this model.',
+          });
+        }
+        interactionsSystemInstruction = systemMessage.content
+          .map((c) => c.text)
+          .join('\n');
       }
 
       const tools: Tool[] = [];
+      const interactionsTools: InteractionTool[] = [];
+
       if (request.tools?.length) {
-        tools.push({
-          functionDeclarations: request.tools.map(toGeminiTool),
-        });
+        if (useInteractions) {
+          interactionsTools.push(...request.tools.map(toInteractionTool));
+        } else {
+          tools.push({
+            functionDeclarations: request.tools.map(toGeminiTool),
+          });
+        }
       }
 
       const requestOptions: ConfigSchema = {
@@ -752,6 +946,9 @@ export function defineModel(
         tools: toolsFromConfig,
         retrievalConfig,
         serviceTier,
+        previousInteractionId: previousInteractionIdFromConfig,
+        store: storeFromConfig,
+        responseModalities: responseModalitiesFromConfig,
         ...restOfConfigOptions
       } = requestOptions;
 
@@ -791,7 +988,95 @@ export function defineModel(
         } as UrlContextTool);
       }
 
+      if (useInteractions) {
+        // The Gemini API's Interactions endpoint does not accept
+        // `safety_settings` (it returns 400), even though the published
+        // Interactions spec lists the field. The Gemini Enterprise Agent
+        // Platform accepts it, so the vertexAI plugin should map safety
+        // settings rather than copy this guard. Permissive settings can be
+        // dropped safely: per the Gemini API docs, the adjustable safety
+        // filters are Off by default for current Gemini models, so BLOCK_NONE
+        // (and HARM_CATEGORY_UNSPECIFIED entries) never block anything beyond
+        // the default. Built-in protections against core harms always apply.
+        // See https://ai.google.dev/gemini-api/docs/safety-settings
+        //
+        // Blocking thresholds (BLOCK_ONLY_HIGH and stricter) cannot be honored,
+        // so throw rather than silently weaken the requested filtering.
+        const blockingSafetySettings = (safetySettingsFromConfig ?? []).filter(
+          (setting) => !isDefaultSafetySetting(setting)
+        );
+        if (blockingSafetySettings.length > 0) {
+          throw new GenkitError({
+            status: 'INVALID_ARGUMENT',
+            message:
+              `safetySettings with blocking thresholds are not supported for model '${modelVersion}'. ` +
+              'This model applies no additional safety filters by default ' +
+              '(built-in protections against core harms still apply). ' +
+              'Remove the safetySettings or set their thresholds to BLOCK_NONE.',
+            detail: { safetySettings: blockingSafetySettings },
+          });
+        }
+        if (toolConfigConfig) {
+          logger.warn(
+            'toolConfig is not supported for this model with the Interactions API and will be ignored.'
+          );
+        }
+        if (request.candidates && request.candidates > 1) {
+          logger.warn(
+            'Multiple candidates are not supported for this model with the Interactions API; only one candidate will be returned.'
+          );
+        }
+        if (Array.isArray(toolsFromConfig)) {
+          interactionsTools.push(
+            ...toolsFromConfig.map(toInteractionConfigTool)
+          );
+        }
+        if (codeExecutionFromConfig) {
+          interactionsTools.push(
+            toInteractionConfigTool({ codeExecution: codeExecutionFromConfig })
+          );
+        }
+        if (googleSearchRetrieval) {
+          interactionsTools.push(
+            toInteractionConfigTool({ googleSearch: googleSearchRetrieval })
+          );
+        }
+        if (googleSearch || google_search) {
+          const gs = google_search || googleSearch;
+          interactionsTools.push(
+            toInteractionConfigTool({ google_search: gs })
+          );
+        }
+        if (fileSearch) {
+          interactionsTools.push(toInteractionConfigTool({ fileSearch }));
+        }
+        if (urlContext) {
+          interactionsTools.push(toInteractionConfigTool({ urlContext }));
+        }
+        if (retrievalConfig) {
+          // There is no retrieval config on the Interactions path; the user
+          // location is set on the google_maps tool instead.
+          const { latLng, ...unsupportedRetrievalConfig } = retrievalConfig;
+          if (
+            latLng &&
+            !applyLatLngToGoogleMapsTools(interactionsTools, latLng)
+          ) {
+            logger.warn(
+              'retrievalConfig.latLng is only used with the googleMaps tool for this model and will be ignored.'
+            );
+          }
+          const unsupportedKeys = Object.keys(unsupportedRetrievalConfig);
+          if (unsupportedKeys.length > 0) {
+            logger.warn(
+              `retrievalConfig.${unsupportedKeys.join(', retrievalConfig.')} ` +
+                'is not supported for this model with the Interactions API and will be ignored.'
+            );
+          }
+        }
+      }
+
       let toolConfig: ToolConfig | undefined;
+
       if (functionCallingConfig) {
         toolConfig = {
           functionCallingConfig: {
@@ -836,8 +1121,53 @@ export function defineModel(
         request.output?.format === 'json' ||
         request.output?.contentType === 'application/json';
 
-      const generationConfig: GenerationConfig = {
+      const sanitizedConfigOptions = {
         ...removeClientOptionOverrides(restOfConfigOptions),
+      };
+
+      const interactionGenerationConfig: ModelGenerationConfig =
+        toInteractionGenerationConfig(
+          sanitizedConfigOptions,
+          useInteractions
+            ? (field) => warnDroppedConfigField(modelVersion, field)
+            : undefined
+        );
+
+      if (useInteractions) {
+        if (functionCallingConfig) {
+          const mode = functionCallingConfig.mode?.toLowerCase();
+          const validMode =
+            mode && mode !== 'mode_unspecified' ? mode : undefined;
+          if (validMode || functionCallingConfig.allowedFunctionNames?.length) {
+            interactionGenerationConfig.tool_choice = {
+              allowed_tools: {
+                ...(validMode ? { mode: validMode } : {}),
+                ...(functionCallingConfig.allowedFunctionNames
+                  ? { tools: functionCallingConfig.allowedFunctionNames }
+                  : {}),
+              },
+            };
+          }
+        } else if (request.toolChoice) {
+          const mode =
+            typeof request.toolChoice === 'string'
+              ? request.toolChoice === 'required'
+                ? 'any'
+                : request.toolChoice
+              : 'any';
+          interactionGenerationConfig.tool_choice = {
+            allowed_tools: {
+              mode,
+            },
+          };
+        }
+      }
+
+      const generationConfig: GenerationConfig = {
+        ...sanitizedConfigOptions,
+        ...(responseModalitiesFromConfig
+          ? { responseModalities: responseModalitiesFromConfig }
+          : {}),
         candidateCount: request.candidates || undefined,
         responseMimeType: jsonMode ? 'application/json' : undefined,
       };
@@ -860,6 +1190,187 @@ export function defineModel(
         }
       }
 
+      const requestApiKey = calculateApiKey(
+        pluginOptions?.apiKey,
+        requestOptions.apiKey
+      );
+
+      if (useInteractions) {
+        const storeOptedIn =
+          storeFromConfig === true || pluginOptions?.store === true;
+
+        if (previousInteractionIdFromConfig && !storeOptedIn) {
+          throw new GenkitError({
+            status: 'INVALID_ARGUMENT',
+            message: 'store must be true when previousInteractionId is set.',
+          });
+        }
+
+        let previousInteractionId = previousInteractionIdFromConfig;
+        let newMessages = messages;
+
+        // If previousInteractionId was not explicitly set in config,
+        // only extract previousInteractionId from the last model message's metadata
+        // if the caller explicitly opted in to store (store: true).
+        if (!previousInteractionId && storeOptedIn) {
+          for (let i = messages.length - 1; i >= 0; i--) {
+            const prevId = messages[i]?.metadata?.interactionId;
+            if (
+              messages[i].role === 'model' &&
+              prevId &&
+              typeof prevId === 'string'
+            ) {
+              previousInteractionId = prevId;
+              newMessages = messages.slice(i + 1);
+              break;
+            }
+          }
+        } else if (previousInteractionId) {
+          // Config overrides messages if both are present.
+          // Still slice messages if messages contains prior history up to that turn.
+          for (let i = messages.length - 1; i >= 0; i--) {
+            if (messages[i].role === 'model') {
+              newMessages = messages.slice(i + 1);
+              break;
+            }
+          }
+        }
+
+        const store = storeOptedIn;
+
+        // Turn-level speech metadata (speaker/style) is only accepted together
+        // with a speech_config; without one the server returns a generic 400
+        // ("Request contains an invalid argument"), so explain what to set.
+        const speechConfig = interactionGenerationConfig.speech_config;
+        if (!speechConfig) {
+          const hasSpeechMetadata = newMessages
+            .filter((m) => m.role === 'user')
+            .flatMap((m) => m.content)
+            .some(
+              (p) =>
+                p.text !== undefined && isObject(p.metadata?.speechMetadata)
+            );
+          if (hasSpeechMetadata) {
+            throw new GenkitError({
+              status: 'INVALID_ARGUMENT',
+              message:
+                `speechMetadata (speaker/style) requires a voice for model ` +
+                `'${modelVersion}'. Set ` +
+                'config.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName ' +
+                '(or multiSpeakerVoiceConfig for multiple speakers).',
+            });
+          }
+        }
+
+        // Multi-speaker TTS requires every non-empty text part to name a
+        // speaker that matches one of the configured speakers. The server's
+        // own error talks about "text turns", so explain what to set instead.
+        if (speechConfig && !Array.isArray(speechConfig)) {
+          const speakerNames = speechConfig.speakers
+            .map((s) => s.speaker)
+            .filter((name): name is string => !!name);
+          const textParts = newMessages
+            .filter((m) => m.role === 'user')
+            .flatMap((m) => m.content)
+            .filter((p) => !!p.text?.trim());
+          const invalidTurn = textParts.some((p) => {
+            const speechMetadata = p.metadata?.speechMetadata;
+            return (
+              !isObject(speechMetadata) ||
+              typeof speechMetadata.speaker !== 'string' ||
+              !speakerNames.includes(speechMetadata.speaker)
+            );
+          });
+          if (invalidTurn) {
+            throw new GenkitError({
+              status: 'INVALID_ARGUMENT',
+              message:
+                `Multi-speaker speech for model '${modelVersion}' requires ` +
+                'each turn to be a separate text part with ' +
+                '`metadata: { speechMetadata: { speaker } }` set to one of ' +
+                `the configured speakers (${speakerNames.join(', ')}).`,
+            });
+          }
+        }
+
+        const req: CreateInteractionRequest = {
+          system_instruction: interactionsSystemInstruction,
+          model: modelVersion,
+          tools: interactionsTools.length ? interactionsTools : undefined,
+          generation_config: interactionGenerationConfig,
+          stream: streamingRequested,
+          input: toInteractionSteps(newMessages),
+          service_tier: serviceTier,
+          store,
+        };
+
+        if (jsonMode) {
+          req.response_format = {
+            type: 'text',
+            mime_type: 'application/json',
+          };
+          if (request.output?.constrained) {
+            req.response_format.schema = pluginOptions?.legacyResponseSchema
+              ? cleanSchema(request.output.schema)
+              : request.output.schema;
+          }
+        }
+
+        if (responseModalitiesFromConfig) {
+          req.response_modalities = toInteractionResponseModalities(
+            responseModalitiesFromConfig
+          );
+        } else if (isTTSModelName(modelVersion)) {
+          req.response_modalities = ['audio'];
+        } else if (isImageModelName(modelVersion)) {
+          req.response_modalities = ['text', 'image'];
+        }
+
+        if (
+          previousInteractionId &&
+          typeof previousInteractionId === 'string'
+        ) {
+          req.previous_interaction_id = previousInteractionId;
+        }
+        if (!streamingRequested) {
+          const response = await createInteraction(
+            requestApiKey,
+            req,
+            clientOpt
+          );
+          const out = fromInteractionSync(response);
+          return out;
+        } else {
+          const result = await createInteractionStream(
+            requestApiKey,
+            req,
+            clientOpt
+          );
+          for await (const event of result.stream) {
+            if (event.event_type === 'step.delta') {
+              const chunkParts = fromInteractionDelta(event.delta);
+              if (chunkParts.length > 0) {
+                sendChunk({
+                  index: 0,
+                  content: chunkParts,
+                });
+              }
+            }
+          }
+          const response = await result.response;
+          const out = fromInteractionSync(response);
+          return out;
+        }
+      }
+
+      // `store: false` is already how this model behaves, so only warn when
+      // something would actually be ignored.
+      if (storeFromConfig === true || previousInteractionIdFromConfig) {
+        logger.warn(
+          'store and previousInteractionId are not supported for this model and will be ignored.'
+        );
+      }
+
       let generateContentRequest: GenerateContentRequest = {
         systemInstruction,
         generationConfig,
@@ -872,16 +1383,11 @@ export function defineModel(
         serviceTier,
       };
 
-      const generateApiKey = calculateApiKey(
-        pluginOptions?.apiKey,
-        requestOptions.apiKey
-      );
-
       let response: GenerateContentResponse;
 
       if (streamingRequested) {
         const result = await generateContentStream(
-          generateApiKey,
+          requestApiKey,
           modelVersion,
           generateContentRequest,
           clientOpt
@@ -900,7 +1406,7 @@ export function defineModel(
         response = await result.response;
       } else {
         response = await generateContent(
-          generateApiKey,
+          requestApiKey,
           modelVersion,
           generateContentRequest,
           clientOpt

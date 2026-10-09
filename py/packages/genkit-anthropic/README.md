@@ -35,6 +35,33 @@ print(res.text)
 
 Set `ANTHROPIC_API_KEY` in the environment, or pass `api_key=` to `Anthropic()`.
 
+## Per-request API key
+
+To bill a call to someone else's Anthropic account, pass their key in
+`context.secrets`. It's used for that call only:
+
+```python
+res = await ai.generate(
+    model='anthropic/claude-sonnet-4-6',
+    prompt='hi',
+    context={'secrets': {'api_key': tenant_key}},
+)
+```
+
+- `apiKey` works as well as `api_key`. Other entries in `context.secrets`
+  are left alone, so a call whose secrets hold no key runs on the plugin's
+  key. A key that is blank or not a string raises `INVALID_ARGUMENT`.
+- A key in `config` or `config.extra` raises `INVALID_ARGUMENT`; config is
+  recorded in traces.
+- The plugin doesn't need a key of its own: `Anthropic()` with no
+  `ANTHROPIC_API_KEY` serves every call that brings a key in
+  `context.secrets`, and a call without one fails with `FAILED_PRECONDITION`.
+- A client whose credential can't be swapped refuses a tenant key with
+  `FAILED_PRECONDITION` rather than billing its own account: an
+  `Anthropic(auth_token=...)` client, one whose `default_headers` pin
+  `x-api-key` or `Authorization`, and Claude on Vertex AI Model Garden, which
+  authenticates with Google Cloud credentials.
+
 ## Disclaimer
 
 Use of Anthropic's API is subject to

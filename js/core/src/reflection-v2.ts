@@ -19,6 +19,7 @@ import { StatusCodes, statusNameToCode, type Status } from './action.js';
 import { Channel } from './async.js';
 import { GENKIT_REFLECTION_API_SPEC_VERSION, GENKIT_VERSION } from './index.js';
 import { logger } from './logging.js';
+import { REFLECTION_AUTH_ERROR_CODE } from './reflection-config.js';
 import {
   ReflectionCancelActionParamsSchema,
   ReflectionConfigureParamsSchema,
@@ -62,6 +63,8 @@ export interface ReflectionServerV2Options {
   configuredEnvs?: string[];
   name?: string;
   url: string;
+  /** Presented in `register`. The CLI rejects the connection when it mismatches. */
+  secret?: string;
 }
 
 export class ReflectionServerV2 {
@@ -271,6 +274,7 @@ export class ReflectionServerV2 {
       genkitVersion: `nodejs/${GENKIT_VERSION}`,
       reflectionApiSpecVersion: GENKIT_REFLECTION_API_SPEC_VERSION,
       envs: this.options.configuredEnvs,
+      secret: this.options.secret,
     };
     try {
       const response = await this.sendRequest('register', params);
@@ -283,6 +287,22 @@ export class ReflectionServerV2 {
         }
       }
     } catch (err) {
+      // Auth failures are terminal: the secret will not change, so retrying
+      // just reconnects in a loop against a CLI that keeps refusing.
+      if (
+        err &&
+        typeof err === 'object' &&
+        'code' in err &&
+        err.code === REFLECTION_AUTH_ERROR_CODE
+      ) {
+        const message = 'message' in err ? err.message : 'unauthorized';
+        logger.error(
+          `Reflection API rejected this runtime: ${message} ` +
+            'Not reconnecting.'
+        );
+        await this.stop();
+        return;
+      }
       logger.error(`Failed to register with CLI: ${err}`);
     }
   }

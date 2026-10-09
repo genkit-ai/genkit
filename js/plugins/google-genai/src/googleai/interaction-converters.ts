@@ -14,8 +14,21 @@
  * limitations under the License.
  */
 
-import { GenerateResponseData, MessageData, Operation, Part, z } from 'genkit';
+import {
+  GenerateResponseData,
+  GenerationUsage,
+  GenkitError,
+  MessageData,
+  Operation,
+  Part,
+  z,
+} from 'genkit';
 import { ToolDefinition } from 'genkit/model';
+import {
+  extractMimeType,
+  interactionErrorCodeToGenkitStatus,
+  isInteractionContentBlockCode,
+} from '../common/utils.js';
 import {
   AudioContent,
   CodeExecutionCallStep,
@@ -23,19 +36,37 @@ import {
   Content,
   DocumentContent,
   FunctionCallContent,
+  FunctionCallStep,
   FunctionResultContent,
+  FunctionResultStep,
   GeminiInteraction,
   GoogleSearchCallStep,
   GoogleSearchResultStep,
   ImageContent,
+  InteractionFileSearchTool,
   InteractionFunctionTool,
+  InteractionGoogleSearchTool,
   InteractionTool,
+  ModelGenerationConfig,
+  ResponseModality,
+  SpeechAnnotation,
+  SpeechConfig,
   Step,
+  StepDeltaData,
+  TextAnnotationSchema,
   TextContent,
   ThoughtContent,
+  ThoughtStep,
+  Usage,
   VideoContent,
 } from './interaction-types.js';
-import { cleanSchema } from './utils.js';
+import {
+  camelToSnakeCase,
+  cleanSchema,
+  convertObjectKeysToSnakeCase,
+  isObject,
+  toSnakeCaseObj,
+} from './utils.js';
 
 /**
  * Ensures that all tool requests and responses in a list of messages have unique reference IDs.
@@ -106,6 +137,360 @@ export function toInteractionTool(tool: ToolDefinition): InteractionTool {
   return func;
 }
 
+export function toInteractionConfigTool(toolRaw: unknown): InteractionTool {
+  if (!isObject(toolRaw)) {
+    throw new Error(
+      `Invalid tool configuration: Expected an object, got ${typeof toolRaw}`
+    );
+  }
+  const tool = toolRaw;
+
+  if ('googleSearch' in tool || 'google_search' in tool) {
+    return toInteractionGoogleSearch(tool.googleSearch || tool.google_search);
+  }
+  if ('codeExecution' in tool || 'code_execution' in tool) {
+    const config = tool.codeExecution || tool.code_execution;
+    if (config === true || config === undefined) {
+      return { type: 'code_execution' };
+    }
+    if (!isObject(config)) {
+      throw new Error(
+        `Invalid configuration for codeExecution tool: Expected object or true, got ${typeof config}`
+      );
+    }
+    return {
+      type: 'code_execution',
+      ...toSnakeCaseObj(config),
+    };
+  }
+  if ('fileSearch' in tool || 'file_search' in tool) {
+    const config = tool.fileSearch || tool.file_search;
+    if (config === true || config === undefined) {
+      return { type: 'file_search' };
+    }
+    if (!isObject(config)) {
+      throw new Error(
+        `Invalid configuration for fileSearch tool: Expected object, got ${typeof config}`
+      );
+    }
+    const result: InteractionFileSearchTool = { type: 'file_search' };
+
+    const fileSearchStoreNames =
+      config.fileSearchStoreNames || config.file_search_store_names;
+    const restFileSearch = { ...config };
+    delete restFileSearch.fileSearchStoreNames;
+    delete restFileSearch.file_search_store_names;
+
+    if (fileSearchStoreNames !== undefined) {
+      if (
+        !Array.isArray(fileSearchStoreNames) ||
+        !fileSearchStoreNames.every((n) => typeof n === 'string')
+      ) {
+        throw new Error('fileSearchStoreNames must be an array of strings.');
+      }
+      result.file_search_store_names = fileSearchStoreNames;
+    }
+    return {
+      ...result,
+      ...toSnakeCaseObj(restFileSearch),
+    };
+  }
+  if ('urlContext' in tool) {
+    const config = tool.urlContext;
+    if (config === true || config === undefined) {
+      return { type: 'url_context' };
+    }
+    if (!isObject(config)) {
+      throw new Error(
+        `Invalid configuration for urlContext tool: Expected object or true, got ${typeof config}`
+      );
+    }
+    return {
+      type: 'url_context',
+      ...toSnakeCaseObj(config),
+    };
+  }
+  if ('googleMaps' in tool) {
+    const config = tool.googleMaps;
+    if (config === true || config === undefined) {
+      return { type: 'google_maps' };
+    }
+    if (!isObject(config)) {
+      throw new Error(
+        `Invalid configuration for googleMaps tool: Expected object or true, got ${typeof config}`
+      );
+    }
+    return {
+      type: 'google_maps',
+      ...toSnakeCaseObj(config),
+    };
+  }
+  if ('computerUse' in tool) {
+    const config = tool.computerUse;
+    if (config === true || config === undefined) {
+      return { type: 'computer_use' };
+    }
+    if (!isObject(config)) {
+      throw new Error(
+        `Invalid configuration for computerUse tool: Expected object or true, got ${typeof config}`
+      );
+    }
+    return {
+      type: 'computer_use',
+      ...toSnakeCaseObj(config),
+    };
+  }
+  if ('retrieval' in tool) {
+    const config = tool.retrieval;
+    if (config === true || config === undefined) {
+      return { type: 'retrieval' };
+    }
+    if (!isObject(config)) {
+      throw new Error(
+        `Invalid configuration for retrieval tool: Expected object or true, got ${typeof config}`
+      );
+    }
+    return {
+      type: 'retrieval',
+      ...toSnakeCaseObj(config),
+    };
+  }
+  if ('mcpServer' in tool) {
+    const config = tool.mcpServer;
+    if (config === true || config === undefined) {
+      return { type: 'mcp_server' };
+    }
+    if (!isObject(config)) {
+      throw new Error(
+        `Invalid configuration for mcpServer tool: Expected object or true, got ${typeof config}`
+      );
+    }
+    const snakeConfig = toSnakeCaseObj(config);
+    if (
+      Array.isArray(snakeConfig.allowed_tools) &&
+      snakeConfig.allowed_tools.length > 0 &&
+      typeof snakeConfig.allowed_tools[0] === 'string'
+    ) {
+      snakeConfig.allowed_tools = [{ tools: snakeConfig.allowed_tools }];
+    }
+    return {
+      type: 'mcp_server',
+      ...snakeConfig,
+    };
+  }
+
+  // Pass through any other tool that names its own `type`, in snake_case.
+  const { type, ...rest } = toSnakeCaseObj(tool);
+  if (typeof type !== 'string') {
+    throw new Error(
+      `Unsupported tool configuration: ${JSON.stringify(tool)}. ` +
+        'Use a built-in tool key (e.g. googleSearch, codeExecution) or set `type`.'
+    );
+  }
+  return { type, ...rest };
+}
+
+export function toInteractionGoogleSearch(
+  gs: boolean | unknown
+): InteractionGoogleSearchTool {
+  const result: InteractionGoogleSearchTool = { type: 'google_search' };
+
+  if (gs === true || gs === undefined) {
+    return result;
+  }
+
+  if (!isObject(gs)) {
+    throw new Error(
+      `Invalid configuration for googleSearch tool: Expected object or true, got ${typeof gs}`
+    );
+  }
+
+  const searchTypesObj = gs.searchTypes || gs.search_types;
+  if (searchTypesObj !== undefined) {
+    const searchTypes = new Set<string>();
+
+    if (Array.isArray(searchTypesObj)) {
+      for (const type of searchTypesObj) {
+        if (typeof type === 'string') {
+          if (type === 'webSearch' || type === 'web_search') {
+            searchTypes.add('web_search');
+          } else if (type === 'imageSearch' || type === 'image_search') {
+            searchTypes.add('image_search');
+          } else if (
+            type === 'enterpriseWebSearch' ||
+            type === 'enterprise_web_search'
+          ) {
+            searchTypes.add('enterprise_web_search');
+          } else {
+            // Passthrough for any unknown string elements
+            searchTypes.add(camelToSnakeCase(type));
+          }
+        } else {
+          throw new Error(
+            `Invalid search type: Expected string, got ${typeof type}`
+          );
+        }
+      }
+    } else if (isObject(searchTypesObj)) {
+      for (const [key, value] of Object.entries(searchTypesObj)) {
+        if (value) {
+          if (key === 'webSearch' || key === 'web_search') {
+            searchTypes.add('web_search');
+          } else if (key === 'imageSearch' || key === 'image_search') {
+            searchTypes.add('image_search');
+          } else if (
+            key === 'enterpriseWebSearch' ||
+            key === 'enterprise_web_search'
+          ) {
+            searchTypes.add('enterprise_web_search');
+          } else {
+            // Passthrough for any unknown properties
+            searchTypes.add(camelToSnakeCase(key));
+          }
+        }
+      }
+    } else {
+      throw new Error(
+        `Invalid searchTypes configuration: Expected array or object, got ${typeof searchTypesObj}`
+      );
+    }
+
+    if (searchTypes.size > 0) {
+      result.search_types = Array.from(searchTypes);
+    }
+  }
+
+  // Handle any other properties on gs (passthrough)
+  const restConfig = { ...gs };
+  delete restConfig.searchTypes;
+  delete restConfig.search_types;
+
+  Object.assign(result, toSnakeCaseObj(restConfig));
+
+  return result;
+}
+
+export function toInteractionResponseModalities(
+  modalities: string[]
+): ResponseModality[] {
+  return modalities.map((m) => m.toLowerCase());
+}
+
+/**
+ * Converts a Genkit/generateContent-style `speechConfig` to the Interactions
+ * API `speech_config`.
+ *
+ * - `voiceConfig.prebuiltVoiceConfig.voiceName` becomes `[{ voice }]`.
+ * - `multiSpeakerVoiceConfig.speakerVoiceConfigs[]` becomes
+ *   `{ speakers: [{ speaker, voice }, ...] }`. Each text part must then name
+ *   its speaker via `metadata.speechMetadata.speaker`.
+ * - A top-level `languageCode` is applied to every entry as `language`.
+ *
+ * Returns `undefined` if no voice or language is set.
+ */
+export function toInteractionSpeechConfig(
+  speechConfig: unknown
+): ModelGenerationConfig['speech_config'] {
+  if (!isObject(speechConfig)) {
+    return undefined;
+  }
+
+  const language =
+    typeof speechConfig.languageCode === 'string'
+      ? speechConfig.languageCode
+      : undefined;
+  const voiceNameOf = (voiceConfig: unknown): string | undefined => {
+    if (!isObject(voiceConfig) || !isObject(voiceConfig.prebuiltVoiceConfig)) {
+      return undefined;
+    }
+    const voiceName = voiceConfig.prebuiltVoiceConfig.voiceName;
+    return typeof voiceName === 'string' ? voiceName : undefined;
+  };
+  const entry = (voice?: string, speaker?: string): SpeechConfig => ({
+    ...(voice ? { voice } : {}),
+    ...(language ? { language } : {}),
+    ...(speaker ? { speaker } : {}),
+  });
+
+  const multi = speechConfig.multiSpeakerVoiceConfig;
+  if (isObject(multi) && Array.isArray(multi.speakerVoiceConfigs)) {
+    return {
+      speakers: multi.speakerVoiceConfigs
+        .filter(isObject)
+        .map((s) =>
+          entry(
+            voiceNameOf(s.voiceConfig),
+            typeof s.speaker === 'string' ? s.speaker : undefined
+          )
+        ),
+    };
+  }
+
+  const voice = voiceNameOf(speechConfig.voiceConfig);
+  if (voice || language) {
+    return [entry(voice)];
+  }
+  return undefined;
+}
+
+/**
+ * Converts the remaining request config into the Interactions
+ * `generation_config`.
+ *
+ * The API rejects unknown `generation_config` fields with a 400, so config
+ * fields this plugin defines are mapped explicitly:
+ *  - `speechConfig` is converted to `speech_config`;
+ *  - `thinkingConfig.thinkingLevel` / `includeThoughts` become
+ *    `thinking_level` / `thinking_summaries`. There is no `thinking_config`,
+ *    so other thinking fields (e.g. `thinkingBudget`) are dropped;
+ *  - `contextCache` (not implemented by this plugin) is dropped.
+ * Everything else, including keys the user passes through that aren't in the
+ * schema, is forwarded in snake_case.
+ *
+ * @param config The request config, without fields handled elsewhere.
+ * @param onDropped Called with the name of each config field that was dropped.
+ */
+export function toInteractionGenerationConfig(
+  config: Record<string, unknown>,
+  onDropped?: (field: string) => void
+): ModelGenerationConfig {
+  const {
+    speechConfig,
+    thinkingConfig,
+    thinking_config,
+    contextCache,
+    context_cache,
+    ...rest
+  } = config;
+  const result = convertObjectKeysToSnakeCase(rest);
+
+  const interactionSpeechConfig = toInteractionSpeechConfig(speechConfig);
+  if (interactionSpeechConfig) {
+    result.speech_config = interactionSpeechConfig;
+  }
+
+  const thinking = thinkingConfig ?? thinking_config;
+  if (isObject(thinking)) {
+    for (const [key, value] of Object.entries(thinking)) {
+      if (key === 'thinkingLevel' || key === 'thinking_level') {
+        result.thinking_level =
+          typeof value === 'string' ? value.toLowerCase() : value;
+      } else if (key === 'includeThoughts' || key === 'include_thoughts') {
+        result.thinking_summaries =
+          typeof value === 'boolean' ? (value ? 'auto' : 'none') : value;
+      } else {
+        onDropped?.(`thinkingConfig.${key}`);
+      }
+    }
+  }
+
+  if (contextCache !== undefined || context_cache !== undefined) {
+    onDropped?.('contextCache');
+  }
+
+  return result;
+}
+
 /**
  * Converts a Genkit Part to an Interaction Content object.
  *
@@ -118,7 +503,14 @@ export function toInteractionTool(tool: ToolDefinition): InteractionTool {
  */
 export function toInteractionContent(part: Part): Content | undefined {
   if (part.text !== undefined) {
-    return { type: 'text', text: part.text };
+    const speechMetadata = toSpeechMetadataAnnotation(
+      part.metadata?.speechMetadata
+    );
+    return {
+      type: 'text',
+      text: part.text,
+      ...(speechMetadata ? { annotations: [speechMetadata] } : {}),
+    };
   }
   if (part.media) {
     return toInteractionMedia(part);
@@ -129,39 +521,78 @@ export function toInteractionContent(part: Part): Content | undefined {
   return undefined;
 }
 
+/**
+ * Converts a text part's `metadata.speechMetadata` (`{ speaker?, style? }`)
+ * into an Interactions `speech_metadata` annotation, used by TTS models to
+ * assign each turn to a speaker and set its delivery style.
+ */
+function toSpeechMetadataAnnotation(
+  speechMetadata: unknown
+): SpeechAnnotation | undefined {
+  if (!isObject(speechMetadata)) {
+    return undefined;
+  }
+  const speaker =
+    typeof speechMetadata.speaker === 'string'
+      ? speechMetadata.speaker
+      : undefined;
+  const style =
+    typeof speechMetadata.style === 'string' ? speechMetadata.style : undefined;
+  if (!speaker && !style) {
+    return undefined;
+  }
+  return {
+    type: 'speech_metadata',
+    ...(speaker ? { speaker } : {}),
+    ...(style ? { style } : {}),
+  };
+}
+
+/** Reports whether a URL points at a YouTube video. */
+function isYouTubeUrl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.replace(/^(www\.|m\.)/, '');
+    return host === 'youtube.com' || host === 'youtu.be';
+  } catch {
+    return false;
+  }
+}
+
 function toInteractionMedia(part: Part): Content {
   if (!part.media) throw new Error('Media part missing media');
-  const { url, contentType } = part.media;
-  if (!contentType) throw new Error('Media part missing contentType');
+  const { url } = part.media;
+  const contentType = part.media.contentType || extractMimeType(url);
 
-  let data: string | undefined;
-  let uri: string | undefined;
-
-  if (url.startsWith('data:')) {
-    data = url.substring(url.indexOf(',') + 1);
-  } else {
-    uri = url;
+  if (!contentType) {
+    if (url.startsWith('data:')) {
+      throw new Error('Media part missing contentType');
+    }
+    // A URI whose type can't be determined (e.g. a YouTube link or a Files
+    // API URI). The server works out the type itself, so send it without a
+    // mime_type, as the generateContent path does. YouTube links are video;
+    // anything else is sent as a document (verified live: the server still
+    // treats a YouTube link sent as a document as video).
+    return { type: isYouTubeUrl(url) ? 'video' : 'document', uri: url };
   }
 
-  const out: Partial<Content> = { mime_type: contentType };
-  if (data) out.data = data;
-  if (uri) out.uri = uri;
+  // Inline data URLs are sent as `data`, everything else as a `uri`.
+  const source = url.startsWith('data:')
+    ? { data: url.substring(url.indexOf(',') + 1) }
+    : { uri: url };
+  const fields = { mime_type: contentType, ...source };
 
   if (contentType.startsWith('image/')) {
-    out.type = 'image';
-    return out as ImageContent;
+    return { type: 'image', ...fields };
   }
   if (contentType.startsWith('audio/')) {
-    out.type = 'audio';
-    return out as AudioContent;
+    return { type: 'audio', ...fields };
   }
   if (contentType.startsWith('video/')) {
-    out.type = 'video';
-    return out as VideoContent;
+    return { type: 'video', ...fields };
   }
-  if (contentType === 'application/pdf') {
-    out.type = 'document';
-    return out as DocumentContent;
+  // The Interactions API accepts PDF and CSV documents.
+  if (contentType === 'application/pdf' || contentType === 'text/csv') {
+    return { type: 'document', ...fields };
   }
 
   throw new Error(`Unsupported media type: ${contentType}`);
@@ -197,7 +628,33 @@ export function toInteractionRole(role: MessageData['role']): string {
 
 const GoogleSearchArgsSchema = z.object({ queries: z.array(z.string()) });
 const RecordUnknownSchema = z.record(z.unknown());
-const RecordUnknownOrStringSchema = z.union([RecordUnknownSchema, z.string()]);
+
+const MediaResolutionSchema = z.enum(['low', 'medium', 'high', 'ultra_high']);
+
+const TextContentSchema = z.object({
+  type: z.literal('text'),
+  text: z.string().optional(),
+  annotations: z.array(TextAnnotationSchema).optional(),
+});
+
+const ImageContentSchema = z.object({
+  type: z.literal('image'),
+  data: z.string().optional(),
+  uri: z.string().optional(),
+  mime_type: z.string().optional(),
+  resolution: MediaResolutionSchema.optional(),
+});
+
+const FunctionResultArraySchema = z.array(
+  z.union([ImageContentSchema, TextContentSchema])
+);
+
+const RecordUnknownOrStringOrArraySchema = z.union([
+  RecordUnknownSchema,
+  z.string(),
+  FunctionResultArraySchema,
+]);
+
 const OptionalStringSchema = z.string().optional();
 
 const GoogleSearchCallSchema = z.object({
@@ -205,9 +662,13 @@ const GoogleSearchCallSchema = z.object({
   arguments: GoogleSearchArgsSchema,
 });
 
+// The API returns `result` as an array of items (e.g.
+// `[{ search_suggestions }]`), and it must be sent back the same way when the
+// history is resent (e.g. on the second turn of a tool loop). An object is
+// still accepted for parts saved before this was fixed.
 const GoogleSearchResultSchema = z.object({
   callId: z.string(),
-  result: RecordUnknownSchema,
+  result: z.union([z.array(RecordUnknownSchema), RecordUnknownSchema]),
 });
 
 const ExecutableCodeSchema = z.object({
@@ -231,6 +692,9 @@ export function toInteractionSteps(messages: MessageData[]): Step[] {
 
     for (const part of message.content) {
       if (part.toolRequest) {
+        const signature = OptionalStringSchema.parse(
+          part.metadata?.thoughtSignature
+        );
         steps.push({
           type: 'function_call',
           name: part.toolRequest.name,
@@ -238,20 +702,48 @@ export function toInteractionSteps(messages: MessageData[]): Step[] {
             part.toolRequest.input
           ),
           id: part.toolRequest.ref || '',
+          ...(signature ? { signature } : {}),
         });
       } else if (part.toolResponse) {
-        let output = part.toolResponse.output;
-        if (
-          typeof output !== 'object' &&
-          typeof output !== 'string' &&
-          output !== undefined
+        let result: unknown = part.toolResponse.output;
+
+        if (part.toolResponse.content && part.toolResponse.content.length > 0) {
+          const contentParts: Content[] = [];
+          if (result !== undefined) {
+            const outputText =
+              typeof result === 'string' ? result : JSON.stringify(result);
+            contentParts.push({ type: 'text', text: outputText });
+          }
+          for (const p of part.toolResponse.content) {
+            const mapped = toInteractionContent(p);
+            if (mapped) {
+              contentParts.push(mapped);
+            }
+          }
+          result = contentParts;
+        } else if (
+          (typeof result !== 'object' && typeof result !== 'string') ||
+          Array.isArray(result)
         ) {
-          output = { result: output };
+          result = { result: result };
+        }
+
+        let parsedResult:
+          | Record<string, unknown>
+          | string
+          | (ImageContent | TextContent)[];
+        try {
+          parsedResult = RecordUnknownOrStringOrArraySchema.parse(result ?? {});
+        } catch {
+          throw new GenkitError({
+            status: 'INVALID_ARGUMENT',
+            message: `Tool output for ${part.toolResponse.name} may only contain text or image content.`,
+          });
         }
         steps.push({
           type: 'function_result',
           name: part.toolResponse.name,
-          result: RecordUnknownOrStringSchema.optional().parse(output),
+          result: parsedResult,
           call_id: part.toolResponse.ref || '',
         });
       } else if (part.custom?.googleSearchCall) {
@@ -303,14 +795,30 @@ export function toInteractionSteps(messages: MessageData[]): Step[] {
             part.metadata?.thoughtSignature
           ),
         });
-      } else if (part.reasoning) {
-        steps.push({
+      } else if (
+        part.reasoning !== undefined ||
+        Boolean(part.custom?.thought)
+      ) {
+        const signature =
+          part.metadata?.thoughtSignature ?? part.custom?.thought?.signature;
+        const parsedSignature = OptionalStringSchema.parse(signature);
+
+        let summary: (TextContent | ImageContent)[] | undefined = undefined;
+        if (
+          Array.isArray(part.custom?.thought?.summary) &&
+          part.custom.thought.summary.length > 0
+        ) {
+          summary = part.custom.thought.summary;
+        } else if (part.reasoning) {
+          summary = [{ type: 'text', text: part.reasoning }];
+        }
+
+        const thoughtStep: ThoughtStep = {
           type: 'thought',
-          summary: [{ type: 'text', text: part.reasoning }],
-          signature: OptionalStringSchema.parse(
-            part.metadata?.thoughtSignature
-          ),
-        });
+          ...(summary ? { summary } : {}),
+          ...(parsedSignature ? { signature: parsedSignature } : {}),
+        };
+        steps.push(thoughtStep);
       } else {
         const content = toInteractionContent(part);
         if (content) {
@@ -338,13 +846,151 @@ export function toInteractionSteps(messages: MessageData[]): Step[] {
 }
 
 /**
+ * Converts a streamed step delta into Genkit Parts for a stream chunk.
+ *
+ * @param delta - The `delta` of a `step.delta` SSE event.
+ * @returns The corresponding Genkit Parts (empty for deltas with nothing to
+ *   emit, such as partial function call arguments).
+ */
+export function fromInteractionDelta(delta: StepDeltaData): Part[] {
+  switch (delta.type) {
+    case 'text':
+      return [{ text: delta.text }];
+    case 'image':
+    case 'audio':
+    case 'document':
+    case 'video': {
+      let url = delta.uri;
+      if (delta.data && delta.mime_type) {
+        url = `data:${delta.mime_type};base64,${delta.data}`;
+      }
+      const part: Part = {
+        media: {
+          url: url || '',
+          contentType: delta.mime_type,
+        },
+      };
+      if (
+        (delta.type === 'image' || delta.type === 'video') &&
+        delta.resolution !== undefined
+      ) {
+        part.metadata = { resolution: delta.resolution };
+      }
+      return [part];
+    }
+    case 'thought_summary':
+      if (!delta.content) return [];
+      if (delta.content.type === 'text') {
+        return [
+          {
+            reasoning: delta.content.text || '',
+            ...(delta.content.annotations
+              ? { metadata: { annotations: delta.content.annotations } }
+              : {}),
+          },
+        ];
+      }
+      // Non-text thought content (e.g. a draft image) is part of the
+      // reasoning, not the answer. Use the same placeholder as the final
+      // response so streaming clients don't receive it as a regular part.
+      return [{ reasoning: thoughtContentPlaceholder(delta.content) }];
+    case 'thought_signature':
+      return [{ metadata: { thoughtSignature: delta.signature } }];
+    case 'function_call':
+      return [
+        {
+          toolRequest: {
+            name: delta.name,
+            ref: delta.id,
+            input: delta.arguments || {},
+            partial: true,
+          },
+        },
+      ];
+    case 'arguments_delta':
+      return [];
+    case 'code_execution_call': {
+      const part: Part = {
+        custom: {
+          executableCode: {
+            code: delta.arguments.code || '',
+            language: delta.arguments.language || 'PYTHON',
+          },
+        },
+      };
+      if (delta.signature) {
+        part.metadata = { thoughtSignature: delta.signature };
+      }
+      return [part];
+    }
+    case 'code_execution_result': {
+      const part: Part = {
+        custom: {
+          codeExecutionResult: {
+            output: delta.result,
+            outcome: delta.is_error ? 'OUTCOME_FAILED' : 'OUTCOME_OK',
+          },
+        },
+      };
+      if (delta.signature) {
+        part.metadata = { thoughtSignature: delta.signature };
+      }
+      return [part];
+    }
+    case 'google_search_call': {
+      const part: Part = {
+        custom: {
+          googleSearchCall: {
+            id: '',
+            arguments: delta.arguments,
+          },
+        },
+      };
+      if (delta.signature) {
+        part.metadata = { thoughtSignature: delta.signature };
+      }
+      return [part];
+    }
+    case 'google_search_result': {
+      const part: Part = {
+        custom: {
+          googleSearchResult: {
+            callId: '',
+            result: delta.result || [],
+          },
+        },
+      };
+      if (delta.signature) {
+        part.metadata = { thoughtSignature: delta.signature };
+      }
+      return [part];
+    }
+    case 'function_result':
+      return [
+        {
+          custom: {
+            serverFunctionResult: {
+              callId: delta.call_id,
+              name: delta.name || '',
+              result: delta.result,
+              isError: delta.is_error,
+            },
+          },
+        },
+      ];
+    default:
+      return [];
+  }
+}
+
+/**
  * Converts an Interaction Content object back into a Genkit Part.
  *
- * Supports text, image, thought, function calls, and function results.
+ * Supports text, image, audio, document, video, thought, function calls, and
+ * function results. Unknown content types are returned as a custom part.
  *
  * @param content - The Interaction Content object.
  * @returns The corresponding Genkit Part.
- * @throws Error if the content type is unsupported.
  */
 export function fromInteractionContent(content: Content): Part {
   switch (content.type) {
@@ -437,8 +1083,24 @@ export function fromCodeExecutionResult(step: CodeExecutionResultStep): Part {
   return maybeAddGeminiThoughtSignature(step, part);
 }
 
-export function fromServerFunctionCall(step: FunctionCallContent): Part {
-  return {
+export function fromPendingFunctionCall(
+  step: FunctionCallContent | FunctionCallStep
+): Part {
+  // Keep the signature so it can be sent back with the function call when the
+  // history is resent (stateless, the default).
+  return maybeAddGeminiThoughtSignature(step, {
+    toolRequest: {
+      name: step.name,
+      ref: step.id,
+      input: step.arguments,
+    },
+  });
+}
+
+export function fromServerFunctionCall(
+  step: FunctionCallContent | FunctionCallStep
+): Part {
+  return maybeAddGeminiThoughtSignature(step, {
     custom: {
       serverFunctionCall: {
         id: step.id,
@@ -446,15 +1108,17 @@ export function fromServerFunctionCall(step: FunctionCallContent): Part {
         arguments: step.arguments,
       },
     },
-  };
+  });
 }
 
-export function fromServerFunctionResult(step: FunctionResultContent): Part {
+export function fromServerFunctionResult(
+  step: FunctionResultContent | FunctionResultStep
+): Part {
   return {
     custom: {
       serverFunctionResult: {
         callId: step.call_id,
-        name: step.name,
+        name: step.name || '',
         result: step.result,
         isError: step.is_error,
       },
@@ -462,7 +1126,7 @@ export function fromServerFunctionResult(step: FunctionResultContent): Part {
   };
 }
 
-export function fromInteractionStep(step: Step): Part[] {
+export function fromInteractionStep(step: Step, isPending?: boolean): Part[] {
   switch (step.type) {
     case 'model_output':
       return step.content.map(fromInteractionContent);
@@ -479,12 +1143,41 @@ export function fromInteractionStep(step: Step): Part[] {
     case 'thought':
       return [fromThoughtContent(step)];
     case 'function_call':
-      return [fromServerFunctionCall(step)];
+      return isPending
+        ? [fromPendingFunctionCall(step)]
+        : [fromServerFunctionCall(step)];
     case 'function_result':
       return [fromServerFunctionResult(step)];
   }
 
   return [{ custom: { unknownStep: step } }];
+}
+
+function getPendingFunctionCallIds(
+  steps: Step[],
+  status?: string
+): Set<string> {
+  const pendingIds = new Set<string>();
+  if (status !== 'requires_action') {
+    return pendingIds;
+  }
+
+  const resultSet = new Set<string>();
+  for (const step of steps) {
+    if (step.type === 'function_result' && step.call_id) {
+      resultSet.add(step.call_id);
+    }
+  }
+
+  for (const step of steps) {
+    if (step.type === 'function_call' && step.id) {
+      if (!resultSet.has(step.id)) {
+        pendingIds.add(step.id);
+      }
+    }
+  }
+
+  return pendingIds;
 }
 
 function fromMediaContent(
@@ -527,13 +1220,32 @@ function fromVideoContent(content: VideoContent): Part {
   return part;
 }
 
+/**
+ * Placeholder text for non-text content inside a thought summary, e.g.
+ * `[Image]`, `[Audio]` or `[Function call]`.
+ *
+ * Thoughts are returned as reasoning text, so non-text items (such as a draft
+ * image the model reviews before its final output) are shown as a label
+ * instead of being dropped or returned as regular media parts. The label is
+ * derived from the content type, so any type the server adds in the future
+ * still shows up in the reasoning.
+ */
+function thoughtContentPlaceholder(content: Content): string {
+  const label = content.type.replace(/_/g, ' ');
+  return `[${label.charAt(0).toUpperCase()}${label.slice(1)}]`;
+}
+
 function fromThoughtContent(content: ThoughtContent): Part {
   let reasoning = '';
   if (content.summary) {
+    // Separate summary blocks with a newline so distinct thought sections
+    // don't run together. Each summary block is a whole section, both in
+    // non-streamed responses and in streamed `thought_summary` deltas (one
+    // delta per section, confirmed live), so this doesn't split sentences.
     reasoning = content.summary
       .map((c) => {
         if (c.type === 'text') return c.text;
-        return '[Image]';
+        return thoughtContentPlaceholder(c);
       })
       .join('\n');
   }
@@ -559,7 +1271,24 @@ function fromFunctionCallContent(content: FunctionCallContent): Part {
   };
 }
 
+function isContentArray(val: unknown): val is Content[] {
+  return (
+    Array.isArray(val) &&
+    val.length > 0 &&
+    val.every((item) => isObject(item) && typeof item.type === 'string')
+  );
+}
+
 function fromFunctionResultContent(content: FunctionResultContent): Part {
+  if (isContentArray(content.result)) {
+    return {
+      toolResponse: {
+        name: content.name,
+        content: content.result.map((c) => fromInteractionContent(c)),
+        ref: content.call_id,
+      },
+    };
+  }
   return {
     toolResponse: {
       name: content.name,
@@ -569,11 +1298,115 @@ function fromFunctionResultContent(content: FunctionResultContent): Part {
   };
 }
 
+/** Converts Interactions API token usage to Genkit usage. */
+function fromInteractionUsage(usage: Usage): GenerationUsage {
+  const result: GenerationUsage = {
+    inputTokens: usage.total_input_tokens,
+    outputTokens: usage.total_output_tokens,
+    totalTokens: usage.total_tokens,
+    cachedContentTokens: usage.total_cached_tokens,
+    thoughtsTokens: usage.total_thought_tokens,
+  };
+  for (const modalityToken of usage.input_tokens_by_modality ?? []) {
+    switch (modalityToken.modality) {
+      case 'text':
+        result.inputCharacters = modalityToken.tokens;
+        break;
+      case 'image':
+        result.inputImages = modalityToken.tokens;
+        break;
+      case 'audio':
+        result.inputAudioFiles = modalityToken.tokens;
+        break;
+    }
+  }
+  for (const modalityToken of usage.output_tokens_by_modality ?? []) {
+    switch (modalityToken.modality) {
+      case 'text':
+        result.outputCharacters = modalityToken.tokens;
+        break;
+      case 'image':
+        result.outputImages = modalityToken.tokens;
+        break;
+      case 'audio':
+        result.outputAudioFiles = modalityToken.tokens;
+        break;
+    }
+  }
+  return result;
+}
+
+const INTERACTION_FAILED_MESSAGE = 'Interaction failed';
+const INTERACTION_INCOMPLETE_MESSAGE =
+  'Interaction incomplete (truncated output)';
+
+/** Builds a human-readable message from a failed interaction's errors. */
+function interactionFailureMessage(interaction: GeminiInteraction): string {
+  const details = (interaction.errors ?? [])
+    .map((e) => [e.code ? `[${e.code}]` : '', e.message ?? ''].join(' ').trim())
+    .filter(Boolean)
+    .join('; ');
+  return details
+    ? `${INTERACTION_FAILED_MESSAGE}: ${details}`
+    : INTERACTION_FAILED_MESSAGE;
+}
+
+/**
+ * Converts a `status: 'failed'` interaction into a Genkit outcome:
+ *  - content-policy blocks (safety, recitation, ...) return a response with
+ *    `finishReason: 'blocked'`, matching the generateContent path;
+ *  - everything else throws a `GenkitError` with the status mapped from the
+ *    error code (`UNKNOWN` if unrecognized, which is not retried).
+ */
+function fromFailedInteraction(
+  interaction: GeminiInteraction
+): GenerateResponseData {
+  const firstError = interaction.errors?.[0];
+  if (isInteractionContentBlockCode(firstError?.code)) {
+    return {
+      finishReason: 'blocked',
+      finishMessage:
+        firstError?.message || interactionFailureMessage(interaction),
+      message: {
+        role: 'model',
+        content: [],
+        ...interactionMessageMetadata(interaction),
+      },
+      custom: interaction,
+      raw: interaction,
+      ...(interaction.usage
+        ? { usage: fromInteractionUsage(interaction.usage) }
+        : {}),
+    };
+  }
+  throw new GenkitError({
+    status: interactionErrorCodeToGenkitStatus(firstError?.code) ?? 'UNKNOWN',
+    message: interactionFailureMessage(interaction),
+    detail: interaction,
+  });
+}
+
+/** Message metadata carrying the interaction and environment IDs, if any. */
+function interactionMessageMetadata(
+  interaction: GeminiInteraction
+): Pick<MessageData, 'metadata'> {
+  return interaction.id || interaction.environment_id
+    ? {
+        metadata: {
+          ...(interaction.id ? { interactionId: interaction.id } : {}),
+          ...(interaction.environment_id
+            ? { environmentId: interaction.environment_id }
+            : {}),
+        },
+      }
+    : {};
+}
+
 export function fromInteractionSync(
   interaction: GeminiInteraction
 ): GenerateResponseData {
   if (interaction.status === 'failed') {
-    throw new Error('Interaction failed');
+    return fromFailedInteraction(interaction);
   }
 
   const response: GenerateResponseData = {
@@ -594,6 +1427,9 @@ export function fromInteractionSync(
     },
     custom: interaction,
     raw: interaction,
+    ...(interaction.usage
+      ? { usage: fromInteractionUsage(interaction.usage) }
+      : {}),
   };
 
   if (interaction.status === 'cancelled') {
@@ -603,53 +1439,25 @@ export function fromInteractionSync(
     return response;
   }
 
+  if (interaction.status === 'incomplete') {
+    // Token/step limit reached (MAX_TOKENS); partial content may be present.
+    response.finishReason = 'length';
+    response.finishMessage = INTERACTION_INCOMPLETE_MESSAGE;
+  }
+
   const steps = interaction.steps;
   if (steps?.length) {
-    response.message!.content = steps
-      .flatMap(fromInteractionStep)
-      .filter((p) => p && Object.keys(p).length > 0);
+    const pendingIds = getPendingFunctionCallIds(steps, interaction.status);
 
-    if (interaction.usage) {
-      response.usage = {
-        inputTokens: interaction.usage.total_input_tokens,
-        outputTokens: interaction.usage.total_output_tokens,
-        totalTokens: interaction.usage.total_tokens,
-        cachedContentTokens: interaction.usage.total_cached_tokens,
-        thoughtsTokens: interaction.usage.total_thought_tokens,
-      };
-      if (interaction.usage.input_tokens_by_modality) {
-        for (const modalityToken of interaction.usage
-          .input_tokens_by_modality) {
-          switch (modalityToken.modality) {
-            case 'text':
-              response.usage.inputCharacters = modalityToken.tokens;
-              break;
-            case 'image':
-              response.usage.inputImages = modalityToken.tokens;
-              break;
-            case 'audio':
-              response.usage.inputAudioFiles = modalityToken.tokens;
-              break;
-          }
-        }
-      }
-      if (interaction.usage.output_tokens_by_modality) {
-        for (const modalityToken of interaction.usage
-          .output_tokens_by_modality) {
-          switch (modalityToken.modality) {
-            case 'text':
-              response.usage.outputCharacters = modalityToken.tokens;
-              break;
-            case 'image':
-              response.usage.outputImages = modalityToken.tokens;
-              break;
-            case 'audio':
-              response.usage.outputAudioFiles = modalityToken.tokens;
-              break;
-          }
-        }
-      }
-    }
+    response.message!.content = steps
+      .flatMap((step) => {
+        const isPending =
+          step.type === 'function_call' && step.id
+            ? pendingIds.has(step.id)
+            : false;
+        return fromInteractionStep(step, isPending);
+      })
+      .filter((p) => p && Object.keys(p).length > 0);
   }
   return response;
 }
@@ -658,11 +1466,29 @@ export function fromInteraction(
   interaction: GeminiInteraction
 ): Operation<GenerateResponseData> {
   const op = { id: interaction.id } as Operation<GenerateResponseData>;
-  if (interaction.status === 'in_progress') {
+  if (interaction.status === 'in_progress' || interaction.status === 'queued') {
+    // Still running, or waiting for capacity (e.g. flex/deferred tiers).
     op.done = false;
+  } else if (interaction.status === 'failed') {
+    // Always finish the operation on failure; leaving `done` unset would make
+    // callers poll forever.
+    op.done = true;
+    if (isInteractionContentBlockCode(interaction.errors?.[0]?.code)) {
+      op.output = fromFailedInteraction(interaction);
+    } else {
+      op.error = {
+        message: interactionFailureMessage(interaction),
+        ...(interaction.errors?.[0]?.code
+          ? { code: interaction.errors[0].code }
+          : {}),
+      };
+    }
   } else if (interaction.status === 'cancelled') {
     op.done = true;
     op.output = {
+      ...(interaction.usage
+        ? { usage: fromInteractionUsage(interaction.usage) }
+        : {}),
       finishReason: 'aborted',
       finishMessage: 'Operation cancelled',
       message: {
@@ -680,15 +1506,38 @@ export function fromInteraction(
           : {}),
       },
     };
-  } else if (interaction.status === 'completed') {
+  } else if (
+    interaction.status === 'completed' ||
+    interaction.status === 'incomplete' ||
+    interaction.status === 'requires_action'
+  ) {
+    // `requires_action` is a deliberate pause, not a failure: e.g. a
+    // collaborative-planning plan awaiting approval, a client-side function
+    // call, or an elicitation. The turn is over, so finish the operation and
+    // surface what was produced; the caller continues with
+    // `previousInteractionId`. Pending client function calls become
+    // `toolRequest` parts.
     op.done = true;
     const steps = interaction.steps;
     if (steps?.length) {
+      const pendingIds = getPendingFunctionCallIds(steps, interaction.status);
       const content = steps
-        .flatMap(fromInteractionStep)
+        .flatMap((step) =>
+          fromInteractionStep(
+            step,
+            step.type === 'function_call' && step.id
+              ? pendingIds.has(step.id)
+              : false
+          )
+        )
         .filter((p) => p && Object.keys(p).length > 0);
       op.output = {
-        finishReason: 'stop',
+        ...(interaction.status === 'incomplete'
+          ? {
+              finishReason: 'length' as const,
+              finishMessage: INTERACTION_INCOMPLETE_MESSAGE,
+            }
+          : { finishReason: 'stop' as const }),
         message: {
           role: 'model',
           content,
@@ -699,55 +1548,27 @@ export function fromInteraction(
                   ...(interaction.environment_id
                     ? { environmentId: interaction.environment_id }
                     : {}),
+                  ...(interaction.status === 'requires_action'
+                    ? { interactionStatus: interaction.status }
+                    : {}),
                 },
               }
             : {}),
         },
         custom: interaction,
         raw: interaction,
+        ...(interaction.usage
+          ? { usage: fromInteractionUsage(interaction.usage) }
+          : {}),
       };
-      if (interaction.usage) {
-        op.output.usage = {
-          inputTokens: interaction.usage.total_input_tokens,
-          outputTokens: interaction.usage.total_output_tokens,
-          totalTokens: interaction.usage.total_tokens,
-          cachedContentTokens: interaction.usage.total_cached_tokens,
-          thoughtsTokens: interaction.usage.total_thought_tokens,
-        };
-        if (interaction.usage.input_tokens_by_modality) {
-          for (const modalityToken of interaction.usage
-            .input_tokens_by_modality) {
-            switch (modalityToken.modality) {
-              case 'text':
-                op.output.usage.inputCharacters = modalityToken.tokens;
-                break;
-              case 'image':
-                op.output.usage.inputImages = modalityToken.tokens;
-                break;
-              case 'audio':
-                op.output.usage.inputAudioFiles = modalityToken.tokens;
-                break;
-            }
-          }
-        }
-        if (interaction.usage.output_tokens_by_modality) {
-          for (const modalityToken of interaction.usage
-            .output_tokens_by_modality) {
-            switch (modalityToken.modality) {
-              case 'text':
-                op.output.usage.outputCharacters = modalityToken.tokens;
-                break;
-              case 'image':
-                op.output.usage.outputImages = modalityToken.tokens;
-                break;
-              case 'audio':
-                op.output.usage.outputAudioFiles = modalityToken.tokens;
-                break;
-            }
-          }
-        }
-      }
     }
+  } else if (interaction.status) {
+    // A status this plugin doesn't know. Finish the operation rather than
+    // leaving `done` unset, which would make callers poll forever.
+    op.done = true;
+    op.error = {
+      message: `Unknown interaction status: ${interaction.status}`,
+    };
   }
   return op;
 }

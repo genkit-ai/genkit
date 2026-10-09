@@ -42,7 +42,8 @@ class BedrockConfig(ModelConfig):
     Unknown keys are rejected: only the declared fields reach the Converse
     API, so a tolerated typo (``maxTokens`` for ``maxOutputTokens``) would run
     the call with the knob silently unset. Model-specific options travel
-    through ``additional_model_request_fields``.
+    through ``additional_model_request_fields``; ``extra`` is merged into the
+    same field, after it, since Converse has no open top-level body.
     """
 
     model_config = ConfigDict(

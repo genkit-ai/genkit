@@ -42,7 +42,7 @@ import websockets
 from pydantic import BaseModel, JsonValue, ValidationError
 from websockets.exceptions import ConnectionClosed
 
-from genkit._core._action import Action, BidiAction
+from genkit._core._action import Action, BidiAction, input_from_json
 from genkit._core._channel import CloseableQueue
 from genkit._core._constants import GENKIT_VERSION
 from genkit._core._error import ReflectionError, ReflectionErrorDetails, StatusCodes, get_reflection_json
@@ -50,6 +50,7 @@ from genkit._core._logger import get_logger
 from genkit._core._middleware import GenerateMiddleware
 from genkit._core._model import AgentInput, ModelRef
 from genkit._core._reflection import as_agent_input_dict, resolve_agent_init
+from genkit._core._reflection_config import REFLECTION_AUTH_ERROR_CODE
 from genkit._core._registry import Registry
 from genkit._core._telemetry._http import connect_developer_ui_collector
 from genkit._core._telemetry._instrumentation import flush_instrumentations
@@ -126,10 +127,13 @@ class ReflectionServerV2:
         ws_url: str,
         *,
         app_name: str | None = None,
+        secret: str | None = None,
     ) -> None:
         self.registry = registry
         self.ws_url = ws_url
         self.app_name = app_name
+        #: Presented in register. The CLI rejects the connection on a mismatch.
+        self.secret = secret
         self.ws: Any = None
         self.write_lock = asyncio.Lock()
         self.pending: dict[str, asyncio.Future[JsonValue]] = {}
@@ -198,8 +202,16 @@ class ReflectionServerV2:
             logger.debug('reflection V2: reconnect scheduled', delay_s=delay, attempt=attempt)
             await asyncio.sleep(delay)
 
-    def stop(self) -> None:
+    async def stop(self) -> None:
+        """Stop for good: no reconnect, and close the live socket so read_loop returns.
+
+        Setting the flag alone is not enough: read_loop blocks on the socket,
+        so run_forever would not see it until the peer hung up.
+        """
         self.stopped = True
+        ws = self.ws
+        if ws is not None:
+            await ws.close(1000, 'stopped')
 
     def spawn(self, coro: Coroutine[Any, Any, Any]) -> None:
         """Run a fire-and-forget coroutine while keeping a reference to its task."""
@@ -267,12 +279,21 @@ class ReflectionServerV2:
             genkit_version='py/' + GENKIT_VERSION,
             reflection_api_spec_version=float(GENKIT_REFLECTION_API_SPEC_VERSION),
             envs=['dev'],
+            secret=self.secret,
         ).model_dump(by_alias=True, exclude_none=True)
         try:
             result = await self.send_request('register', params)
             if isinstance(result, dict) and (telemetry_url := result.get('telemetryServerUrl')):
                 self.apply_handshake_telemetry(str(telemetry_url))
         except JsonRpcCallError as e:
+            # Auth failures are terminal: the secret will not change, so
+            # retrying just loops against a CLI that keeps refusing.
+            if e.code == REFLECTION_AUTH_ERROR_CODE:
+                logger.error('reflection API rejected this runtime; not reconnecting', message=e.message)
+                # Closing ends read_loop, and run_forever's cleanup then cancels
+                # this task (it is a background task). Fine: nothing follows.
+                await self.stop()
+                return
             logger.error('reflection V2: register failed', code=e.code, message=e.message)
         except Exception as e:
             logger.error('reflection V2: register failed', err=e)
@@ -551,7 +572,7 @@ class ReflectionServerV2:
 
         try:
             output = await action.run(
-                input=p.input,
+                input=input_from_json(p.input),
                 on_chunk=on_chunk,
                 context=ctx or None,
                 on_trace_start=on_trace_start,

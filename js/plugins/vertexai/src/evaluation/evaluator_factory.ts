@@ -70,21 +70,21 @@ export class EvaluatorFactory {
     responseSchema: ResponseType
   ): Promise<z.infer<ResponseType>> {
     const locationName = `projects/${this.projectId}/locations/${this.location}`;
+    const request: protos.google.cloud.aiplatform.v1.IEvaluateInstancesRequest =
+      {
+        location: locationName,
+        ...partialRequest,
+      };
     return await runInNewSpan(
       ai,
       {
         metadata: {
           name: 'EvaluationService#evaluateInstances',
+          // Seed input up front so the realtime "pending" span export carries it.
+          input: request,
         },
       },
       async (metadata, _otSpan) => {
-        const request: protos.google.cloud.aiplatform.v1.IEvaluateInstancesRequest =
-          {
-            location: locationName,
-            ...partialRequest,
-          };
-
-        metadata.input = request;
         const client = await this.auth.getClient();
         const url = `https://${this.location}-aiplatform.googleapis.com/v1beta1/${locationName}:evaluateInstances`;
         const response = await client.request({

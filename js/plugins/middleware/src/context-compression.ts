@@ -33,7 +33,8 @@ import type { ModelAction } from 'genkit/model';
 
 export const ToolResponsesOptionsSchema = z.object({
   /**
-   * Maximum character length for each tool response content.
+   * Maximum character length for each older tool response (covers `output` and
+   * `content` together, folding text `content` into `output` when truncated).
    * Responses exceeding this will be truncated with a `[Truncated N characters]` marker.
    */
   maxChars: z
@@ -41,7 +42,7 @@ export const ToolResponsesOptionsSchema = z.object({
     .int()
     .positive()
     .describe(
-      'Max chars per tool response. Responses beyond this are truncated.'
+      'Max chars per tool response (covers output and content together). Responses beyond this are truncated.'
     ),
 
   /**
@@ -112,7 +113,11 @@ export const SummarizeOptionsSchema = z.object({
 
   /**
    * Number of most recent non-system messages to keep un-summarized.
-   * Everything before this window is replaced with a summary. Minimum: 1.
+   * Everything before this window is replaced with a summary. When the
+   * prompt exceeds `maxInputTokens` and the non-system history fits within
+   * the effective keep window (after any `maxMessages` cap), falls back to
+   * top-level `preserveRecent` (if smaller) so older turns can still be
+   * summarized. Minimum: 1.
    * @default 6
    */
   preserveRecent: z
@@ -146,9 +151,9 @@ export const ContextCompressionOptionsSchema = z.object({
 
   /**
    * Number of most recent non-system messages to preserve untouched when
-   * compacting older messages (used as the default window for summarization
-   * or message truncation, and dynamically reduced on severe budget overshoot).
-   * Minimum: 1.
+   * compacting older messages (used as the default/fallback window for
+   * summarization and message truncation, and dynamically reduced on
+   * severe budget overshoot). Minimum: 1.
    * @default 4
    */
   preserveRecent: z
@@ -170,16 +175,17 @@ export const ContextCompressionOptionsSchema = z.object({
     .describe('Always keep system messages. Default: true.'),
 
   /**
-   * Hard cap on individual tool response size in characters.
+   * Hard cap on individual tool response size in characters (covers `output`
+   * and `content` together).
    * Applied regardless of other toolResponses config as a safety net.
-   * Set to a negative number (or `Infinity`) to disable.
+   * Set to `<= 0` (or `Infinity`) to disable.
    * @default 400000
    */
   maxToolResponseChars: z
     .number()
     .optional()
     .describe(
-      'Hard cap on any single tool response size. Set negative to disable. Default: 400000 chars.'
+      'Hard cap on any single tool response size. Set <= 0 or Infinity to disable. Default: 400000 chars.'
     ),
 
   /**
@@ -464,42 +470,23 @@ function materializeToolPart(part: Part): Part {
     };
   }
 
-  if (ccMeta.truncated && typeof ccMeta.maxChars === 'number') {
-    const limit = ccMeta.maxChars;
-    const outputStr = stringifyOutput(part.toolResponse.output);
-    if (outputStr.length <= limit) {
+  if (
+    (ccMeta.truncated || ccMeta.capped) &&
+    typeof ccMeta.maxChars === 'number'
+  ) {
+    const mode = ccMeta.truncated ? 'truncated' : 'capped';
+    const updatedToolResponse = truncateToolResponse(
+      part.toolResponse,
+      ccMeta.maxChars,
+      mode
+    );
+    if (!updatedToolResponse) {
       return { ...part, metadata: withoutRawOutputFlag(part) };
     }
-    const sliced = sliceCodePointSafe(outputStr, limit);
-    const omitted = outputStr.length - sliced.length;
-    const marker = `\n\n[Truncated ${omitted} characters]`;
     return {
       ...part,
       metadata: withoutRawOutputFlag(part),
-      toolResponse: {
-        ...part.toolResponse,
-        output: sliced + marker,
-      },
-    };
-  }
-
-  if (ccMeta.capped && typeof ccMeta.maxChars === 'number') {
-    const limit = ccMeta.maxChars;
-    const outputStr = stringifyOutput(part.toolResponse.output);
-    if (outputStr.length <= limit) {
-      return { ...part, metadata: withoutRawOutputFlag(part) };
-    }
-    const sliced = sliceCodePointSafe(outputStr, limit);
-    const marker =
-      `\n\n---\n\n[TRUNCATED: Response was ${outputStr.length} chars ` +
-      `but only first ${limit} are shown.]`;
-    return {
-      ...part,
-      metadata: withoutRawOutputFlag(part),
-      toolResponse: {
-        ...part.toolResponse,
-        output: sliced + marker,
-      },
+      toolResponse: updatedToolResponse,
     };
   }
 
@@ -696,6 +683,222 @@ function sliceCodePointSafe(str: string, limit: number): string {
   return str.slice(0, limit);
 }
 
+function formatMediaDescriptor(
+  media: NonNullable<Part['media']>,
+  compact = false
+): string {
+  const isDataUri = media.url.startsWith('data:');
+  const sepIdx = isDataUri ? media.url.search(/[;,]/) : -1;
+  const inferredType =
+    isDataUri && sepIdx > 5 ? media.url.slice(5, sepIdx).trim() : undefined;
+  const contentType = media.contentType || inferredType;
+  if (isDataUri || compact) {
+    return `[media: ${contentType || (isDataUri ? 'data' : 'media')}]`;
+  }
+  return contentType
+    ? `[media: ${contentType} (${media.url})]`
+    : `[media: ${media.url}]`;
+}
+
+function stringifyToolContentPart(part: Part): string {
+  if (typeof part.text === 'string') return part.text;
+  if (typeof part.reasoning === 'string') return part.reasoning;
+  if ('data' in part && part.data !== undefined) {
+    return stringifyOutput(part.data);
+  }
+  if ('custom' in part && part.custom !== undefined) {
+    return stringifyOutput(part.custom);
+  }
+  if (part.resource) return stringifyOutput(part.resource);
+  if (part.media) return formatMediaDescriptor(part.media);
+  return stringifyOutput(part);
+}
+
+function estimatePartChars(p: Part): number {
+  if (typeof p.text === 'string') return p.text.length;
+  if (typeof p.reasoning === 'string') return p.reasoning.length;
+  if ('data' in p && p.data !== undefined) {
+    return stringifyOutput(p.data).length;
+  }
+  if ('custom' in p && p.custom !== undefined) {
+    return stringifyOutput(p.custom).length;
+  }
+  if (p.resource) return stringifyOutput(p.resource).length;
+  if (p.media?.url) {
+    // Use a fixed character approximation for inline base64 data URIs
+    // to reflect fixed image token billing rather than raw string length.
+    return p.media.url.startsWith('data:')
+      ? DATA_URI_APPROX_CHARS
+      : p.media.url.length;
+  }
+  if (p.toolRequest) return stringifyOutput(p.toolRequest).length;
+  if (p.toolResponse) {
+    if (!p.toolResponse.content?.length) {
+      return stringifyOutput(p.toolResponse).length;
+    }
+    const { content, ...restToolResponse } = p.toolResponse;
+    return (
+      stringifyOutput(restToolResponse).length +
+      content.reduce((cSum, cPart) => cSum + estimatePartChars(cPart), 0)
+    );
+  }
+  return 0;
+}
+
+function getRawToolContentPartCharLength(part: Part): number {
+  if (part.media?.url) {
+    return part.media.url.length;
+  }
+  return estimatePartChars(part);
+}
+
+function getToolResponseCharLength(
+  toolResponse: NonNullable<Part['toolResponse']>
+): number {
+  if (!toolResponse.content?.length) {
+    return stringifyOutput(toolResponse.output).length;
+  }
+  const outputLen =
+    toolResponse.output !== undefined
+      ? stringifyOutput(toolResponse.output).length
+      : 0;
+  return (
+    outputLen +
+    toolResponse.content.reduce(
+      (sum, cPart) => sum + estimatePartChars(cPart),
+      0
+    )
+  );
+}
+
+function formatToolTruncationMarker(
+  mode: 'truncated' | 'capped',
+  totalChars: number,
+  keptChars: number,
+  limit: number
+): string {
+  if (mode === 'truncated') {
+    const omitted = totalChars - keptChars;
+    return `\n\n[Truncated ${omitted} characters]`;
+  }
+  return (
+    `\n\n---\n\n[TRUNCATED: Response was ${totalChars} chars ` +
+    `but only first ${limit} are shown.]`
+  );
+}
+
+function truncateToolResponse(
+  toolResponse: NonNullable<Part['toolResponse']>,
+  limit: number,
+  mode: 'truncated' | 'capped'
+): NonNullable<Part['toolResponse']> | null {
+  if (!toolResponse.content?.length) {
+    const outputStr = stringifyOutput(toolResponse.output);
+    if (outputStr.length <= limit) return null;
+    const sliced = sliceCodePointSafe(outputStr, limit);
+    return {
+      ...toolResponse,
+      output:
+        sliced +
+        formatToolTruncationMarker(
+          mode,
+          outputStr.length,
+          sliced.length,
+          limit
+        ),
+    };
+  }
+
+  const hasOutput = toolResponse.output !== undefined;
+  const outputStr = hasOutput ? stringifyOutput(toolResponse.output) : '';
+  const contentLengths = toolResponse.content.map(estimatePartChars);
+  const contentTotalLen = contentLengths.reduce((sum, len) => sum + len, 0);
+  const totalChars = outputStr.length + contentTotalLen;
+
+  if (totalChars <= limit) return null;
+
+  const rawPartLengths = toolResponse.content.map(
+    getRawToolContentPartCharLength
+  );
+  const rawTotalChars =
+    outputStr.length + rawPartLengths.reduce((sum, len) => sum + len, 0);
+
+  const { content, ...restToolResponse } = toolResponse;
+  if (hasOutput && (outputStr.length > limit || contentTotalLen === 0)) {
+    const sliced = sliceCodePointSafe(outputStr, limit);
+    return {
+      ...restToolResponse,
+      output:
+        sliced +
+        formatToolTruncationMarker(mode, rawTotalChars, sliced.length, limit),
+    };
+  }
+
+  let remaining = limit - outputStr.length;
+  let keptChars = outputStr.length;
+  const outputSegments: string[] = outputStr ? [outputStr] : [];
+  const keptContent: Part[] = [];
+
+  for (let i = 0; i < content.length; i++) {
+    const cPart = content[i];
+    const partLen = contentLengths[i];
+    const rawPartLen = rawPartLengths[i];
+    const isTextOrReasoning =
+      typeof cPart.text === 'string' || typeof cPart.reasoning === 'string';
+    const textVal = isTextOrReasoning
+      ? typeof cPart.text === 'string'
+        ? cPart.text
+        : cPart.reasoning!
+      : undefined;
+    const sepCost = textVal && outputSegments.length > 0 ? 2 : 0;
+
+    if (partLen + sepCost <= remaining) {
+      if (isTextOrReasoning) {
+        if (textVal) {
+          outputSegments.push(textVal);
+          remaining -= partLen + sepCost;
+        }
+      } else {
+        keptContent.push(cPart);
+        remaining -= partLen;
+      }
+      keptChars += rawPartLen;
+      continue;
+    }
+
+    const overflowSepCost = outputSegments.length > 0 ? 2 : 0;
+    if (cPart.media?.url) {
+      const descriptor = formatMediaDescriptor(cPart.media, true);
+      if (overflowSepCost + descriptor.length <= remaining) {
+        outputSegments.push(descriptor);
+        keptChars += descriptor.length;
+      }
+      break;
+    }
+
+    const sliceBudget = Math.max(0, remaining - overflowSepCost);
+    const sliced = sliceCodePointSafe(
+      stringifyToolContentPart(cPart),
+      sliceBudget
+    );
+    keptChars += sliced.length;
+    if (sliced) outputSegments.push(sliced);
+    break;
+  }
+
+  const marker = formatToolTruncationMarker(
+    mode,
+    rawTotalChars,
+    keptChars,
+    limit
+  );
+  return {
+    ...restToolResponse,
+    output: outputSegments.join('\n\n') + marker,
+    ...(keptContent.length > 0 ? { content: keptContent } : {}),
+  };
+}
+
 /**
  * Cap the rendered conversation handed to the summarizer model so an
  * over-budget context does not overflow the summarizer's own context window.
@@ -765,19 +968,7 @@ function withCompressionMetadata(
 function renderPart(p: Part): string {
   if (p.text) return p.text;
   if (p.reasoning) return `[Reasoning: ${p.reasoning}]`;
-  if (p.media) {
-    const isDataUri = p.media.url.startsWith('data:');
-    const sepIdx = isDataUri ? p.media.url.search(/[;,]/) : -1;
-    const inferredType =
-      isDataUri && sepIdx > 5 ? p.media.url.slice(5, sepIdx).trim() : undefined;
-    const contentType = p.media.contentType || inferredType;
-    if (isDataUri) {
-      return `[media: ${contentType || 'data'}]`;
-    }
-    return contentType
-      ? `[media: ${contentType} (${p.media.url})]`
-      : `[media: ${p.media.url}]`;
-  }
+  if (p.media) return formatMediaDescriptor(p.media);
   if (p.toolRequest) {
     return `[Tool call: ${p.toolRequest.name}(${stringifyOutput(p.toolRequest.input)})]`;
   }
@@ -992,33 +1183,11 @@ function adjustForOvershoot(
  * Estimate the total character count across all message content.
  */
 function estimateMessageChars(messages: MessageData[]): number {
-  return messages.reduce((sum, m) => {
-    return (
-      sum +
-      m.content.reduce((pSum, p) => {
-        if (p.text) return pSum + p.text.length;
-        if (p.reasoning) return pSum + p.reasoning.length;
-        if ('data' in p && p.data !== undefined) {
-          return pSum + stringifyOutput(p.data).length;
-        }
-        if ('custom' in p && p.custom) {
-          return pSum + stringifyOutput(p.custom).length;
-        }
-        if (p.media?.url) {
-          // Use a fixed character approximation for inline base64 data URIs
-          // to reflect fixed image token billing rather than raw string length.
-          const urlLen = p.media.url.startsWith('data:')
-            ? DATA_URI_APPROX_CHARS
-            : p.media.url.length;
-          return pSum + urlLen;
-        }
-        if (p.toolRequest) return pSum + stringifyOutput(p.toolRequest).length;
-        if (p.toolResponse)
-          return pSum + stringifyOutput(p.toolResponse).length;
-        return pSum;
-      }, 0)
-    );
-  }, 0);
+  return messages.reduce(
+    (sum, m) =>
+      sum + m.content.reduce((pSum, p) => pSum + estimatePartChars(p), 0),
+    0
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -1094,56 +1263,123 @@ export const contextCompression: GenerateMiddleware<
     } {
       if (!dedupConfig) return { messages, deduplicated: 0 };
 
-      // Map tool call IDs to tool request input across model messages
+      const matchByInput = dedupMatchBy === 'name-and-input';
       const toolInputByRef = new Map<string, unknown>();
-      for (const msg of messages) {
-        if (msg.role === 'model') {
-          for (const part of msg.content) {
-            if (part.toolRequest?.ref) {
-              toolInputByRef.set(part.toolRequest.ref, part.toolRequest.input);
-            }
-          }
-        }
-      }
-
       const groups = new Map<string, { msgIdx: number; partIdx: number }[]>();
+      let prevToolRequests: NonNullable<Part['toolRequest']>[] = [];
+      let consumedReqIndices = new Set<number>();
+      const matchedReqByPart = new Map<
+        string,
+        NonNullable<Part['toolRequest']>
+      >();
+      let toolResponseOrdinal = 0;
+
       for (let i = 0; i < messages.length; i++) {
         const msg = messages[i];
-        if (msg.role !== 'tool') continue;
+        if (msg.role === 'model') {
+          if (matchByInput) {
+            prevToolRequests = msg.content
+              .filter((p) => p.toolRequest !== undefined)
+              .map((p) => p.toolRequest!);
+            for (const req of prevToolRequests) {
+              if (req.ref) {
+                toolInputByRef.set(req.ref, req.input);
+              }
+            }
+            consumedReqIndices = new Set<number>();
+            matchedReqByPart.clear();
+            toolResponseOrdinal = 0;
+
+            // Pre-claim ref matches across consecutive tool messages in this turn
+            // so positional fallback never steals a ref-bearing request.
+            for (
+              let k = i + 1;
+              k < messages.length && messages[k].role === 'tool';
+              k++
+            ) {
+              for (let pIdx = 0; pIdx < messages[k].content.length; pIdx++) {
+                const respRef = messages[k].content[pIdx].toolResponse?.ref;
+                if (!respRef) continue;
+                const refIdx = prevToolRequests.findIndex(
+                  (req, idx) =>
+                    !consumedReqIndices.has(idx) && req.ref === respRef
+                );
+                if (refIdx >= 0) {
+                  consumedReqIndices.add(refIdx);
+                  matchedReqByPart.set(
+                    `${k}-${pIdx}`,
+                    prevToolRequests[refIdx]
+                  );
+                }
+              }
+            }
+          }
+          continue;
+        }
+        if (msg.role !== 'tool') {
+          if (matchByInput) {
+            prevToolRequests = [];
+            consumedReqIndices = new Set<number>();
+            matchedReqByPart.clear();
+            toolResponseOrdinal = 0;
+          }
+          continue;
+        }
 
         for (let j = 0; j < msg.content.length; j++) {
           const part = msg.content[j];
           if (!part.toolResponse) continue;
 
-          let toolInput = part.toolResponse.ref
-            ? toolInputByRef.get(part.toolResponse.ref)
-            : undefined;
+          if (!matchByInput) {
+            const key = part.toolResponse.name;
+            if (!groups.has(key)) groups.set(key, []);
+            groups.get(key)!.push({ msgIdx: i, partIdx: j });
+            continue;
+          }
 
-          // If no ref was matched, check if preceding model message had a matching toolRequest with input
-          if (
-            toolInput === undefined &&
-            i > 0 &&
-            messages[i - 1]?.role === 'model'
+          const currentOrdinal = toolResponseOrdinal++;
+          let hasMatchedInput = false;
+          let toolInput: unknown;
+
+          const turnMatchedReq = matchedReqByPart.get(`${i}-${j}`);
+          if (turnMatchedReq !== undefined) {
+            hasMatchedInput = true;
+            toolInput = turnMatchedReq.input;
+          } else if (
+            part.toolResponse.ref &&
+            toolInputByRef.has(part.toolResponse.ref)
           ) {
-            const prevParts = messages[i - 1].content;
-            const positionalPart =
-              prevParts[j]?.toolRequest?.name === part.toolResponse.name
-                ? prevParts[j]
-                : prevParts.find(
-                    (p) => p.toolRequest?.name === part.toolResponse?.name
-                  );
-            if (positionalPart?.toolRequest) {
-              toolInput = positionalPart.toolRequest.input;
+            hasMatchedInput = true;
+            toolInput = toolInputByRef.get(part.toolResponse.ref);
+          } else if (prevToolRequests.length > 0) {
+            let matchedIdx = -1;
+            if (
+              !consumedReqIndices.has(currentOrdinal) &&
+              prevToolRequests[currentOrdinal]?.name === part.toolResponse.name
+            ) {
+              matchedIdx = currentOrdinal;
+            } else {
+              matchedIdx = prevToolRequests.findIndex(
+                (req, idx) =>
+                  !consumedReqIndices.has(idx) &&
+                  req.name === part.toolResponse?.name
+              );
+            }
+            if (matchedIdx >= 0) {
+              consumedReqIndices.add(matchedIdx);
+              hasMatchedInput = true;
+              toolInput = prevToolRequests[matchedIdx].input;
             }
           }
 
-          const key =
-            dedupMatchBy === 'name-only'
-              ? part.toolResponse.name
-              : JSON.stringify({
-                  name: part.toolResponse.name,
-                  input: toolInput,
-                });
+          if (!hasMatchedInput) {
+            continue;
+          }
+
+          const key = JSON.stringify({
+            name: part.toolResponse.name,
+            input: toolInput,
+          });
           if (!groups.has(key)) groups.set(key, []);
           groups.get(key)!.push({ msgIdx: i, partIdx: j });
         }
@@ -1260,47 +1496,31 @@ export const contextCompression: GenerateMiddleware<
             return part;
           }
 
-          const outputStr = stringifyOutput(part.toolResponse.output);
-          if (outputStr.length <= limit) return part;
-
-          const sliced = sliceCodePointSafe(outputStr, limit);
-          const omitted = outputStr.length - sliced.length;
-
           // If truncatable and clamped to toolMaxChars, it's context-compression truncation.
           // Otherwise, it was clamped by maxToolResponseChars (the hard safety cap).
-          if (isTruncatableMsg && limit === toolMaxChars) {
-            const marker = `\n\n[Truncated ${omitted} characters]`;
-            changed = true;
+          const mode =
+            isTruncatableMsg && limit === toolMaxChars ? 'truncated' : 'capped';
+          const updatedToolResponse = truncateToolResponse(
+            part.toolResponse,
+            limit,
+            mode
+          );
+          if (!updatedToolResponse) return part;
+
+          changed = true;
+          if (mode === 'truncated') {
             truncated++;
-            return {
-              ...part,
-              metadata: withCompressionMetadata(part, {
-                truncated: true,
-                maxChars: limit,
-              }),
-              toolResponse: {
-                ...part.toolResponse,
-                output: sliced + marker,
-              },
-            };
           } else {
-            const marker =
-              `\n\n---\n\n[TRUNCATED: Response was ${outputStr.length} chars ` +
-              `but only first ${limit} are shown.]`;
-            changed = true;
             capped++;
-            return {
-              ...part,
-              metadata: withCompressionMetadata(part, {
-                capped: true,
-                maxChars: limit,
-              }),
-              toolResponse: {
-                ...part.toolResponse,
-                output: sliced + marker,
-              },
-            };
           }
+          return {
+            ...part,
+            metadata: withCompressionMetadata(part, {
+              [mode]: true,
+              maxChars: limit,
+            }),
+            toolResponse: updatedToolResponse,
+          };
         });
 
         if (!changed) return msg;
@@ -1489,7 +1709,8 @@ export const contextCompression: GenerateMiddleware<
       messages: MessageData[],
       effectiveSummaryPreserveRecent?: number,
       ctx?: { abortSignal?: AbortSignal; context?: ActionContext },
-      maxMessagesCap?: number
+      maxMessagesCap?: number,
+      fallbackPreserveRecent?: number
     ): Promise<{
       messages: MessageData[];
       summarized: boolean;
@@ -1530,6 +1751,18 @@ export const contextCompression: GenerateMiddleware<
           };
         }
         targetKeep = Math.min(summaryPreserveRecent, maxKeepForCap);
+      }
+
+      // When nonSystemMessages fits within targetKeep (e.g. 5–6 messages with
+      // default summarize.preserveRecent = 6), fall back to the general
+      // preserveRecent window (default 4) so over-budget histories are
+      // summarized rather than skipped.
+      if (
+        nonSystemMessages.length <= targetKeep &&
+        fallbackPreserveRecent !== undefined &&
+        fallbackPreserveRecent < targetKeep
+      ) {
+        targetKeep = fallbackPreserveRecent;
       }
 
       if (nonSystemMessages.length <= targetKeep) {
@@ -1639,8 +1872,14 @@ export const contextCompression: GenerateMiddleware<
           tailMessages: toKeep,
         };
       } catch (e: unknown) {
+        if (
+          ctx?.abortSignal?.aborted ||
+          (e instanceof Error && e.name === 'AbortError')
+        ) {
+          throw e;
+        }
         logger.warn(
-          `Summarization failed, proceeding without compression: ${
+          `Summarization failed, falling back to message truncation if over message limit: ${
             e instanceof Error ? e.message : String(e)
           }`,
           { 'genkit.middleware.name': 'contextCompression' },
@@ -1667,16 +1906,42 @@ export const contextCompression: GenerateMiddleware<
             ? { ...req, messages: resolvedMessages }
             : req;
 
-        const result = await next(modifiedReq, ctx);
+        let result = await next(modifiedReq, ctx);
         if (result.usage?.inputTokens !== undefined) {
           lastInputTokens = result.usage.inputTokens;
-          if (result.message && result.usage.inputTokens > 0) {
-            result.message = {
-              ...result.message,
-              metadata: withCompressionMetadata(result.message, {
-                inputTokens: result.usage.inputTokens,
-              }),
-            };
+          if (result.usage.inputTokens > 0) {
+            // The model hook receives the raw model action output, which may
+            // report the generated message either as `message` or (for
+            // plugins such as @genkit-ai/google-genai) as
+            // `candidates[0].message`. Normalization into `message` only
+            // happens after the middleware stack returns, so stamp whichever
+            // location is populated.
+            const stamped = { inputTokens: result.usage.inputTokens };
+            if (result.message) {
+              result = {
+                ...result,
+                message: {
+                  ...result.message,
+                  metadata: withCompressionMetadata(result.message, stamped),
+                },
+              };
+            } else if (result.candidates?.[0]?.message) {
+              // Only candidates[0] is surfaced as `response.message`.
+              const [first, ...rest] = result.candidates;
+              result = {
+                ...result,
+                candidates: [
+                  {
+                    ...first,
+                    message: {
+                      ...first.message,
+                      metadata: withCompressionMetadata(first.message, stamped),
+                    },
+                  },
+                  ...rest,
+                ],
+              };
+            }
           }
         }
         return result;
@@ -1750,7 +2015,7 @@ export const contextCompression: GenerateMiddleware<
                   p.toolResponse &&
                   !hasCompressionFlag(p, 'capped') &&
                   !hasCompressionFlag(p, 'truncated') &&
-                  stringifyOutput(p.toolResponse.output).length >
+                  getToolResponseCharLength(p.toolResponse) >
                     maxToolResponseChars
               )
           );
@@ -1853,26 +2118,34 @@ export const contextCompression: GenerateMiddleware<
             }
 
             if (shouldCompress) {
-              // 3. Check if cheap strategies saved enough to skip summarization
+              // 3. Check if cheap strategies brought the prompt under budget
+              let cheapUnderBudget = false;
               let shouldSkipSummarization = false;
-              if (
-                summaryModelRef &&
-                skipSummarizationThreshold !== undefined &&
-                skipSummarizationThreshold > 0 &&
-                skipSummarizationThreshold <= 1
-              ) {
+              if (deduplicated > 0 || truncated > 0) {
                 const charsBefore = getActiveChars();
                 const charsAfterCheap = estimateMessageChars(messages);
                 const charsSaved = charsBefore - charsAfterCheap;
                 const savingsRatio =
                   charsBefore > 0 ? charsSaved / charsBefore : 0;
-                const tokensAfterCheap = Math.ceil(
-                  charsAfterCheap / CHARS_PER_TOKEN_ESTIMATE
+                const scaledTokensAfterCheap =
+                  charsBefore > 0
+                    ? Math.ceil(
+                        effectiveTokens * (charsAfterCheap / charsBefore)
+                      )
+                    : 0;
+                const tokensAfterCheap = Math.max(
+                  Math.ceil(charsAfterCheap / CHARS_PER_TOKEN_ESTIMATE),
+                  scaledTokensAfterCheap
                 );
+                cheapUnderBudget = tokensAfterCheap <= maxInputTokens;
 
                 shouldSkipSummarization =
+                  Boolean(summaryModelRef) &&
+                  skipSummarizationThreshold !== undefined &&
+                  skipSummarizationThreshold > 0 &&
+                  skipSummarizationThreshold <= 1 &&
                   savingsRatio >= skipSummarizationThreshold &&
-                  tokensAfterCheap <= maxInputTokens;
+                  cheapUnderBudget;
               }
 
               // 4. Summarization
@@ -1884,7 +2157,10 @@ export const contextCompression: GenerateMiddleware<
                     messages,
                     adjustedSummaryPreserveRecent,
                     ctx,
-                    maxMessages
+                    maxMessages,
+                    effectiveTokens > maxInputTokens
+                      ? adjustedPreserveRecent
+                      : undefined
                   );
                   messages = sumResult.messages;
                   isSummarized = sumResult.summarized;
@@ -1912,13 +2188,19 @@ export const contextCompression: GenerateMiddleware<
                   insertTruncationNotice && systemMessages.length === 0 ? 1 : 0;
                 const fixedSlots = systemMessages.length + noticeSlot;
 
+                const cheapSatisfiedBudget = summaryModelRef
+                  ? skippedSummary
+                  : cheapUnderBudget;
                 const needsTokenFallbackTruncation =
                   effectiveTokens > maxInputTokens &&
                   ((!dedupConfig && !toolResponseConfig && !summaryModelRef) ||
                     (Boolean(summaryModelRef) && !skippedSummary));
 
                 let effectiveMaxMessages: number | undefined;
-                if (hasExplicitPreserveRecent || needsTokenFallbackTruncation) {
+                if (
+                  (hasExplicitPreserveRecent && !cheapSatisfiedBudget) ||
+                  needsTokenFallbackTruncation
+                ) {
                   const preserveCap = fixedSlots + adjustedPreserveRecent;
                   effectiveMaxMessages =
                     maxMessages !== undefined && maxMessages > 0

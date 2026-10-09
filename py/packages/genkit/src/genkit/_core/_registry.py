@@ -24,7 +24,7 @@ import weakref
 from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
-from dotpromptz.dotprompt import Dotprompt
+from dotpromptz import Dotprompt
 from pydantic import BaseModel
 from typing_extensions import Never, TypeVar
 
@@ -300,6 +300,7 @@ class Registry:
         description: str | None = None,
         metadata: dict[str, object] | None = None,
         span_metadata: dict[str, SpanAttributeValue] | None = None,
+        _strict_io: bool = False,
     ) -> Action[InputT, OutputT, ChunkT]:
         """Register a new action with the registry.
 
@@ -315,6 +316,7 @@ class Registry:
             description: Optional human-readable description of the action.
             metadata: Optional dictionary of metadata about the action.
             span_metadata: Optional dictionary of tracing span metadata.
+            _strict_io: Treat None as a value and validate the return.
 
         Returns:
             The newly created and registered Action instance.
@@ -327,6 +329,7 @@ class Registry:
             description=description,
             metadata=metadata,
             span_metadata=span_metadata,
+            _strict_io=_strict_io,
         )
         action_typed = cast(Action[InputT, OutputT, ChunkT], action)
         with self._lock:

@@ -21,7 +21,7 @@ from collections.abc import Callable
 from typing import Any, cast
 
 import structlog
-from openai import APIStatusError, AsyncOpenAI
+from openai import APIError, AsyncOpenAI
 from openai.lib._pydantic import _ensure_strict_json_schema
 from openai.types import CompletionUsage
 from openai.types.completion_usage import CompletionTokensDetails, PromptTokensDetails
@@ -32,6 +32,7 @@ from genkit_openai._models._utils import (
     DictMessageAdapter,
     MessageAdapter,
     MessageConverter,
+    check_extra_body,
     extract_response_metadata,
     reraise_openai_error,
     strip_markdown_fences,
@@ -41,8 +42,24 @@ from genkit_openai._typing import OpenAIConfig
 logger = structlog.get_logger(__name__)
 
 # Genkit common fields that are not chat.completions.create() kwargs.
-# version becomes the wire model id; stop_sequences becomes stop.
-_GENKIT_ONLY = frozenset({'api_key', 'top_k', 'version', 'max_output_tokens', 'stop_sequences'})
+# version becomes the wire model id; stop_sequences becomes stop; extra
+# becomes extra_body; max_output_tokens becomes the max_tokens cap.
+_GENKIT_ONLY = frozenset({'top_k', 'version', 'max_output_tokens', 'stop_sequences', 'extra'})
+
+# Body fields Genkit builds from the request. `extra` can't set them: the
+# schema can't see inside the passthrough, and overwriting them silently would
+# replace the model the action resolved (pin one with `version`), the
+# conversation, or break response parsing.
+_MANAGED_BODY_FIELDS = (
+    'model',
+    'messages',
+    'tools',
+    'tool_choice',
+    'functions',
+    'function_call',
+    'response_format',
+    'stream',
+)
 
 
 def _uses_max_completion_tokens(model: str | None) -> bool:
@@ -65,35 +82,35 @@ def _openai_create_kwargs(*, config: OpenAIConfig, model: str | None = None) -> 
 
     Peel Genkit-only keys. ``stop_sequences`` becomes ``stop`` when ``stop``
     was not set. ``version`` is peeled here and applied as ``model`` by the
-    caller when ``OpenAIConfig.model`` is unset. Everything else, including
-    extras, goes out under the Python field name. ``max_output_tokens`` is
-    not mapped to ``max_tokens`` — that knob is ``max_tokens`` / ``maxTokens``.
-    For reasoning models, ``max_tokens`` is emitted as ``max_completion_tokens``
-    because the OpenAI API rejects the deprecated field.
+    caller when ``OpenAIConfig.model`` is unset. Declared fields go out under
+    the Python field name. ``extra`` goes out as ``extra_body``, which the SDK
+    merges over the JSON body, so a colliding key wins. The reply cap is
+    ``max_completion_tokens``, else ``max_tokens``, else Genkit's
+    ``max_output_tokens``. For reasoning models, the cap is emitted as
+    ``max_completion_tokens`` because the OpenAI API rejects the deprecated
+    ``max_tokens`` field.
     """
     body: dict[str, Any] = {}
     for name in type(config).model_fields:
-        if name in _GENKIT_ONLY:
+        if name in _GENKIT_ONLY or name == 'max_tokens':
             continue
         value = getattr(config, name)
         if value is not None:
-            if name == 'max_tokens':
-                # OpenAI reasoning models reject the deprecated max_tokens
-                # field. Keep the explicit max_completion_tokens value when
-                # both knobs are supplied so the request remains valid.
-                if config.max_completion_tokens is not None:
-                    continue
-                if _uses_max_completion_tokens(model) or config.reasoning_effort is not None:
-                    body['max_completion_tokens'] = value
-                    continue
             body[name] = value
-    extras = config.model_extra
-    if extras:
-        for name, value in extras.items():
-            if value is not None:
-                body[name] = value
+    cap = config.max_tokens
+    if cap is None and config.max_output_tokens is not None:
+        cap = int(config.max_output_tokens)
+    # Keep an explicit max_completion_tokens when both are supplied so the
+    # request stays valid; reasoning models reject the deprecated max_tokens.
+    if cap is not None and config.max_completion_tokens is None:
+        if _uses_max_completion_tokens(model) or config.reasoning_effort is not None:
+            body['max_completion_tokens'] = cap
+        else:
+            body['max_tokens'] = cap
     if 'stop' not in body and config.stop_sequences is not None:
         body['stop'] = config.stop_sequences
+    if config.extra:
+        body['extra_body'] = check_extra_body(config.extra, managed=_MANAGED_BODY_FIELDS, label='openai')
     return body
 
 
@@ -641,7 +658,7 @@ class OpenAIModel:
                 logger.debug('OpenAI generate request', model=self._model, streaming=True)
                 return await self._generate_stream(request, ctx.send_chunk)
             return await self._generate(request)
-        except (APIStatusError, ValueError) as e:
+        except (APIError, ValueError) as e:
             reraise_openai_error(e)
 
     @staticmethod
@@ -657,6 +674,7 @@ class OpenAIModel:
                 max_tokens=int(config.max_output_tokens) if config.max_output_tokens is not None else None,
                 top_p=config.top_p,
                 stop=config.stop_sequences,
+                extra=config.extra,
             )
 
         if isinstance(config, dict):

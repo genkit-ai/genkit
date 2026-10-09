@@ -27,7 +27,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 from genkit_google_genai import GoogleAI, VertexAI
-from genkit_google_genai._google import _inject_attribution_headers, googleai_name, vertexai_name
+from genkit_google_genai._google import _inject_attribution_headers, _plugin_client, googleai_name, vertexai_name
 from genkit_google_genai._models._embedder import VERTEX_KNOWN_EMBEDDERS
 from genkit_google_genai._models._gemini import (
     DEFAULT_SUPPORTS_MODEL,
@@ -37,9 +37,12 @@ from genkit_google_genai._models._gemini import (
 )
 from google import genai
 from google.auth.credentials import Credentials
+from google.auth.exceptions import DefaultCredentialsError
 from google.genai.types import HttpOptions
+from pydantic import ValidationError
 
-from genkit import Genkit, Message, Part, Role
+from genkit import Document, Genkit, GenkitError, Message, Part, Role
+from genkit.embedder import EmbedRequest
 from genkit.model import ModelInfo, ModelRequest
 from genkit.plugin_api import GENKIT_CLIENT_HEADER, ActionKind
 
@@ -861,17 +864,44 @@ async def test_vertexai_resolve_evaluator(vertexai_plugin_instance: VertexAI) ->
     assert action.name == vertexai_name('fluency')
 
 
-def test_config_schema_extra_fields() -> None:
-    """Test that config schema accepts extra fields (dynamic config)."""
-    # Validation should succeed with unknown field by using model_validate for dynamic fields
-    # to avoid static type checker errors on constructor
-    config_data = {'temperature': 0.5, 'new_experimental_param': 'test'}
-    config = GeminiConfig.model_validate(config_data)
+@pytest.mark.asyncio
+async def test_vertexai_listed_evaluator_metadata_matches_resolved(vertexai_plugin_instance: VertexAI) -> None:
+    """The Dev UI shows the same evaluator name and definition before and after resolve."""
+    plugin = vertexai_plugin_instance
+    mock_client = MagicMock()
+    _set_async_model_list(mock_client, [])
+    plugin._runtime_client = lambda: mock_client
+
+    listed = {a.name: a for a in await plugin.list_actions() if a.action_type == ActionKind.EVALUATOR}
+
+    assert len(listed) == 8
+    for name, meta in listed.items():
+        action = await plugin.resolve(action_type=ActionKind.EVALUATOR, name=name.removeprefix('vertexai/'))
+        assert action is not None
+        assert meta.metadata is not None
+        assert meta.metadata['evaluator'] == action.metadata['evaluator']
+    assert listed[vertexai_name('fluency')].metadata == {
+        'evaluator': {
+            'evaluatorDefinition': 'Assesses the language mastery of an output',
+            'evaluatorDisplayName': 'Fluency',
+            'evaluatorIsBilled': True,
+            'label': vertexai_name('fluency'),
+        }
+    }
+
+
+def test_config_schema_rejects_unknown_fields() -> None:
+    """An undeclared top-level key raises; it has to go in `extra`."""
+    with pytest.raises(ValidationError, match='new_experimental_param'):
+        GeminiConfig.model_validate({'temperature': 0.5, 'new_experimental_param': 'test'})
+
+
+def test_config_schema_extra_holds_undeclared_fields() -> None:
+    """`extra` holds provider fields the schema doesn't declare, unchecked."""
+    config = GeminiConfig.model_validate({'temperature': 0.5, 'extra': {'new_experimental_param': 'test'}})
 
     assert config.temperature == 0.5
-    # Access dynamic fields via getattr or __dict__ to make type checker happy
-    assert config.new_experimental_param == 'test'  # type: ignore
-    assert config.model_dump()['new_experimental_param'] == 'test'
+    assert config.extra == {'new_experimental_param': 'test'}
 
 
 @pytest.mark.asyncio
@@ -895,3 +925,31 @@ async def test_system_prompt_handling() -> None:
     assert cfg.system_instruction.parts is not None  # type: ignore
     assert len(cfg.system_instruction.parts) == 1  # type: ignore
     assert cfg.system_instruction.parts[0].text == 'You are a helpful assistant'  # type: ignore
+
+
+@pytest.mark.asyncio
+@patch.dict(os.environ, {'GCLOUD_PROJECT': 'menu-prod'}, clear=True)
+async def test_lazy_client_credential_failure_is_unauthenticated_in_action_body() -> None:
+    """The plugin client is built on first use inside the action; missing ADC there is UNAUTHENTICATED."""
+    no_adc = DefaultCredentialsError('Your default credentials were not found.')
+    with patch('google.genai.client.Client', side_effect=no_adc):
+        plugin = VertexAI()
+        embedder_action = await plugin.resolve(ActionKind.EMBEDDER, vertexai_name('text-embedding-005'))
+        assert embedder_action is not None
+
+        with pytest.raises(GenkitError) as raised:
+            await embedder_action.run(EmbedRequest(input=[Document.from_text('Smoked salmon tartine')]))
+
+    assert raised.value.status == 'UNAUTHENTICATED'
+    assert raised.value.cause is no_adc
+
+
+@pytest.mark.asyncio
+async def test_lazy_client_unknown_failure_stays_raw() -> None:
+    """An SDK failure that is not a credential problem keeps its own type."""
+    boom = RuntimeError('SDK bug')
+    with patch('google.genai.client.Client', side_effect=boom):
+        with pytest.raises(RuntimeError) as raised:
+            _plugin_client({'vertexai': False, 'api_key': 'k'})
+
+    assert raised.value is boom

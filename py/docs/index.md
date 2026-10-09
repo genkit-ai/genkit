@@ -31,10 +31,6 @@
 
 ::: genkit.Embedding
 
-::: genkit.BaseDataPoint
-
-::: genkit.EvalResponse
-
 ::: genkit.Operation
 
 ::: genkit.tool
@@ -48,8 +44,6 @@
 ::: genkit.response
 
 ::: genkit.MultipartToolResponse
-
-::: genkit.Flow
 
 ::: genkit.ActionRunContext
 
@@ -145,13 +139,11 @@
 
 ::: genkit.plugin_api.to_json_schema
 
-::: genkit.plugin_api.get_cached_client
-
-::: genkit.plugin_api.get_callable_json
-
 ::: genkit.plugin_api.is_dev_environment
 
 ## genkit.evaluator
+
+::: genkit.evaluator.BaseDataPoint
 
 ::: genkit.evaluator.EvalRequest
 

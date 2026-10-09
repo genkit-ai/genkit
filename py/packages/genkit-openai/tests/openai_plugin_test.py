@@ -29,7 +29,7 @@ from genkit_openai._models import OpenAIModelHandler
 from genkit_openai._models._audio import SUPPORTED_STT_MODELS, SUPPORTED_TTS_MODELS
 from genkit_openai._models._image import SUPPORTED_IMAGE_MODELS
 from genkit_openai._models._model_info import SUPPORTED_OPENAI_MODELS
-from genkit_openai._openai_plugin import OpenAI, openai_model
+from genkit_openai._openai_plugin import OpenAI
 from openai import APIStatusError, APITimeoutError
 from openai.types import Model
 from openai.types.chat import ChatCompletion
@@ -220,7 +220,7 @@ async def test_openai_plugin_list_actions() -> None:
 async def test_openai_runtime_clients_are_loop_local() -> None:
     """Runtime OpenAI clients are cached per event loop."""
     plugin = OpenAI(api_key='test-key')
-    plugin._runtime_client = loop_local_client(lambda: object())
+    plugin._runtime_client = loop_local_client(lambda: cast(Any, object()))
 
     first = plugin._runtime_client()
     second = plugin._runtime_client()
@@ -261,11 +261,6 @@ async def test_openai_plugin_resolve_action_not_found(kind: ActionKind, name: st
     # Should still return an action even for unknown models
     assert action is not None
     assert action.name == f'openai/{name}'
-
-
-def test_openai_model_function() -> None:
-    """Test openai_model function."""
-    assert openai_model('gpt-4') == 'openai/gpt-4'
 
 
 _ERROR_MESSAGE = 'OpenAI request failed'
