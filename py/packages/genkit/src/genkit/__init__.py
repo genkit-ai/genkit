@@ -61,7 +61,6 @@ from genkit._core._model import (
 )
 from genkit._core._tool import Tool
 from genkit._core._typing import (
-    BaseDataPoint,
     Embedding,
     FinishReason,
     Media,
@@ -87,7 +86,6 @@ __all__ = [
     'FinishReason',
     # Embed, evaluate, and background jobs
     'Embedding',
-    'BaseDataPoint',
     'Operation',
     # Tools and HITL
     'tool',

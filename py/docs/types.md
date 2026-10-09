@@ -30,8 +30,6 @@ Types exported from genkit, genkit.model, genkit.embedder, genkit.plugin_api, ge
 
 ::: genkit.Embedding
 
-::: genkit.BaseDataPoint
-
 ::: genkit.Operation
 
 ::: genkit.tool
@@ -125,6 +123,8 @@ Types exported from genkit, genkit.model, genkit.embedder, genkit.plugin_api, ge
 ::: genkit.plugin_api.StatusName
 
 ## genkit.evaluator
+
+::: genkit.evaluator.BaseDataPoint
 
 ::: genkit.evaluator.EvalRequest
 

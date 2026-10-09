@@ -30,7 +30,8 @@ from genkit_google_genai._evaluators._evaluation import (
 )
 from google.auth.exceptions import DefaultCredentialsError, RefreshError
 
-from genkit import BaseDataPoint, Genkit, GenkitError
+from genkit import Genkit, GenkitError
+from genkit.evaluator import BaseDataPoint
 
 
 def test_vertex_ai_evaluation_metric_type_values() -> None:

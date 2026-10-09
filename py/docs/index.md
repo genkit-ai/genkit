@@ -31,8 +31,6 @@
 
 ::: genkit.Embedding
 
-::: genkit.BaseDataPoint
-
 ::: genkit.Operation
 
 ::: genkit.tool
@@ -147,6 +145,8 @@
 
 ## genkit.evaluator
 
+::: genkit.evaluator.BaseDataPoint
+
 ::: genkit.evaluator.EvalRequest
 
 ::: genkit.evaluator.EvalFnResponse
@@ -156,6 +156,8 @@
 ::: genkit.evaluator.Details
 
 ::: genkit.evaluator.EvalStatusEnum
+
+::: genkit.evaluator.evaluator_action_metadata
 
 ::: genkit.evaluator.evaluator_ref
 
