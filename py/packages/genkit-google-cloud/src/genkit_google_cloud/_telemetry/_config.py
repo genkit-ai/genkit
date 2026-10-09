@@ -154,27 +154,27 @@ def _hang_exporter_on_process_logger(*, exporter: LogRecordExporter) -> None:
     provider.add_log_record_processor(processor)
 
 
-def resolve_project_id(
-    project_id: str | None = None,
+def resolve_project(
+    project: str | None = None,
     credentials: dict[str, Any] | None = None,
 ) -> str | None:
     """Resolve the GCP project ID from multiple sources.
 
     Resolution order:
-    1. Explicit project_id parameter
+    1. Explicit project parameter
     2. GOOGLE_CLOUD_PROJECT environment variable
     3. GCLOUD_PROJECT environment variable
     4. Project ID from credentials
 
     Args:
-        project_id: Explicitly provided project ID.
-        credentials: Optional credentials dict with project_id.
+        project: Explicitly provided project ID.
+        credentials: Optional service-account credentials dict; its ``project_id`` key is read.
 
     Returns:
         The resolved project ID or None.
     """
-    if project_id:
-        return project_id
+    if project:
+        return project
 
     # Check environment variables in order of priority
     for env_var in PROJECT_ID_ENV_VARS:
@@ -207,13 +207,13 @@ class GcpTelemetry:
     """Central manager for GCP Telemetry configuration.
 
     Encapsulates configuration and manages the lifecycle of Tracing, Metrics,
-    and Logging setup, ensuring consistent state (like project_id) across all
+    and Logging setup, ensuring consistent state (like project) across all
     telemetry components.
     """
 
     def __init__(
         self,
-        project_id: str | None = None,
+        project: str | None = None,
         credentials: dict[str, Any] | None = None,
         sampler: Sampler | None = None,
         force_dev_export: bool = False,
@@ -225,7 +225,7 @@ class GcpTelemetry:
         """Initialize the GCP Telemetry manager.
 
         Args:
-            project_id: GCP project ID.
+            project: GCP project ID.
             credentials: Optional credentials dict.
             sampler: Trace sampler.
             force_dev_export: Check to force export in dev environment.
@@ -241,14 +241,14 @@ class GcpTelemetry:
         self.disable_traces = disable_traces
 
         # Resolve project ID immediately
-        self.project_id = resolve_project_id(project_id, credentials)
+        self.project = resolve_project(project, credentials)
         firebase_project_id = os.environ.get('FIREBASE_PROJECT_ID')
-        if firebase_project_id and firebase_project_id != self.project_id:
+        if firebase_project_id and firebase_project_id != self.project:
             # Go's Firebase plugin still reads this, so a ported app may expect it to pick the project.
             logger.warning(
-                'FIREBASE_PROJECT_ID is not used for telemetry; set project_id= or GOOGLE_CLOUD_PROJECT',
+                'FIREBASE_PROJECT_ID is not used for telemetry; set project= or GOOGLE_CLOUD_PROJECT',
                 firebase_project_id=firebase_project_id,
-                project_id=self.project_id,
+                project=self.project,
             )
 
         # Determine metric export settings
@@ -267,14 +267,14 @@ class GcpTelemetry:
         self.metric_export_timeout_ms = metric_export_timeout_ms or self.metric_export_interval_ms
 
     def _build_exporter_kwargs(self) -> dict[str, Any]:
-        """Build kwargs dict for exporters with project_id and credentials.
+        """Build kwargs for the OTel Cloud exporters, which take ``project_id``.
 
         Returns:
             A dict with project_id and/or credentials if available, empty dict otherwise.
         """
         kwargs: dict[str, Any] = {}
-        if self.project_id:
-            kwargs['project_id'] = self.project_id
+        if self.project:
+            kwargs['project_id'] = self.project
         if self.credentials:
             kwargs['credentials'] = self.credentials
         return kwargs
@@ -289,9 +289,9 @@ class GcpTelemetry:
         is_dev = is_dev_environment()
         should_export = self.force_dev_export or not is_dev
 
-        if should_export and not self.project_id:
+        if should_export and not self.project:
             # Only when exporting: an ADC lookup can probe the metadata server.
-            self.project_id = _adc_project_id()
+            self.project = _adc_project_id()
 
         self._configure_logging()
 
@@ -302,7 +302,7 @@ class GcpTelemetry:
             self._configure_otel_logs()
             logger.info(
                 'Telemetry fully initialized',
-                project_id=self.project_id,
+                project=self.project,
                 export_enabled=True,
                 environment='dev' if is_dev else 'prod',
                 force_dev_export=self.force_dev_export,
@@ -362,7 +362,7 @@ class GcpTelemetry:
     def _configure_otel_logs(self) -> None:
         try:
             exporter = CloudLoggingExporter(  # ty: ignore[deprecated]
-                project_id=self.project_id,
+                project_id=self.project,
                 default_log_name='genkit',
             )
             _hang_exporter_on_process_logger(exporter=exporter)
@@ -429,8 +429,8 @@ class GcpTelemetry:
         if not ctx.is_valid:
             return event_dict
 
-        if self.project_id:
-            event_dict['logging.googleapis.com/trace'] = f'projects/{self.project_id}/traces/{ctx.trace_id:032x}'
+        if self.project:
+            event_dict['logging.googleapis.com/trace'] = f'projects/{self.project}/traces/{ctx.trace_id:032x}'
 
         event_dict['logging.googleapis.com/spanId'] = f'{ctx.span_id:016x}'
         event_dict['logging.googleapis.com/trace_sampled'] = '1' if ctx.trace_flags.sampled else '0'
