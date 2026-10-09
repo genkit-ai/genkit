@@ -40,7 +40,7 @@ class AnthropicModelGarden:
         self,
         model: str,
         location: str,
-        project_id: str,
+        project: str,
     ) -> None:
         """Initializes the AnthropicModelGarden instance.
 
@@ -49,11 +49,11 @@ class AnthropicModelGarden:
                 in the way <publisher>/<model> (e.g., 'anthropic/claude-3-5-sonnet-v2@20241022').
             location: The Google Cloud region where the Model Garden service
                 is hosted (e.g., 'us-central1').
-            project_id: The Google Cloud project ID where the Model Garden
+            project: The Google Cloud project ID where the Model Garden
                 model is deployed.
         """
         self.name = model
-        self._runtime_client = loop_local_client(lambda: AsyncAnthropicVertex(region=location, project_id=project_id))
+        self._runtime_client = loop_local_client(lambda: AsyncAnthropicVertex(region=location, project_id=project))
         # Strip 'anthropic/' prefix for the model passed to Anthropic SDK
         clean_model_name = model.removeprefix('anthropic/')
         self._model_name = clean_model_name

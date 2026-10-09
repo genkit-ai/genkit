@@ -534,7 +534,7 @@ async def test_model_action_does_not_wrap_media_fetch_error() -> None:
         ]
     )
 
-    with patch('genkit_ollama.models.get_cached_client', return_value=image_client):
+    with patch('genkit_ollama.models._image_fetch_client', return_value=image_client):
         # The raw httpx.ConnectError propagates; it is not wrapped as OllamaConnectionError.
         with pytest.raises(httpx.ConnectError):
             await action._fn(request, None)

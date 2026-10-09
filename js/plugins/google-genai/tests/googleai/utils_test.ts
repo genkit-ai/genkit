@@ -22,10 +22,11 @@ import {
   MISSING_API_KEY_ERROR,
   calculateApiKey,
   checkApiKey,
+  convertObjectKeysToSnakeCase,
   extractVeoImage,
   extractVeoVideo,
   getApiKeyFromEnvVar,
-} from '../../src/googleai/utils.js'; // Assuming the file is named utils.ts
+} from '../../src/googleai/utils.js';
 
 describe('Media Utils', () => {
   describe('extractVeoImage', () => {
@@ -296,6 +297,53 @@ describe('API Key Utils', () => {
     it('returns env var if apiKey1 is empty and apiKey2 is undefined', () => {
       process.env.GOOGLE_API_KEY = 'env_key';
       assert.strictEqual(calculateApiKey('', undefined), 'env_key');
+    });
+  });
+
+  describe('convertObjectKeysToSnakeCase', () => {
+    it('converts basic camelCase to snake_case', () => {
+      const input = {
+        myProp: 1,
+        anotherPropTest: 'string',
+      };
+      assert.deepStrictEqual(convertObjectKeysToSnakeCase(input), {
+        my_prop: 1,
+        another_prop_test: 'string',
+      });
+    });
+
+    it('handles nested objects', () => {
+      const input = {
+        parentProp: {
+          childPropA: true,
+          childPropB: {
+            deepProp: 123,
+          },
+        },
+      };
+      assert.deepStrictEqual(convertObjectKeysToSnakeCase(input), {
+        parent_prop: {
+          child_prop_a: true,
+          child_prop_b: {
+            deep_prop: 123,
+          },
+        },
+      });
+    });
+
+    it('handles arrays of objects correctly instead of turning them into plain objects', () => {
+      const input = {
+        arrayProp: [{ innerProp: 1 }, { innerProp: 2 }, 'stringItem'],
+      };
+      assert.deepStrictEqual(convertObjectKeysToSnakeCase(input), {
+        array_prop: [{ inner_prop: 1 }, { inner_prop: 2 }, 'stringItem'],
+      });
+    });
+
+    it('passes through nulls and non-objects untouched', () => {
+      assert.strictEqual(convertObjectKeysToSnakeCase(null), null);
+      assert.strictEqual(convertObjectKeysToSnakeCase('string'), 'string');
+      assert.strictEqual(convertObjectKeysToSnakeCase(123), 123);
     });
   });
 });

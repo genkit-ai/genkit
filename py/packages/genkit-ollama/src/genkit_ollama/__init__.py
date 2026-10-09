@@ -57,16 +57,6 @@ from genkit_ollama.plugin_api import (
     RequestHeaders,
 )
 
-
-def package_name() -> str:
-    """Get the package name for the Ollama plugin.
-
-    Returns:
-        The fully qualified package name as a string.
-    """
-    return 'genkit_ollama'
-
-
 __all__ = [
     'EmbeddingDefinition',
     'ModelDefinition',
@@ -77,5 +67,4 @@ __all__ = [
     'RequestHeaderFunction',
     'RequestHeaderParams',
     'RequestHeaders',
-    'package_name',
 ]

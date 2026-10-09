@@ -17,7 +17,6 @@
 import * as assert from 'assert';
 import { describe, it } from 'node:test';
 import {
-  REFLECTION_PORT_AUTO,
   advertisedReflectionHost,
   isLoopbackHost,
   resolveReflectionConfig,
@@ -191,7 +190,7 @@ describe('resolveReflectionConfig', () => {
   });
 
   it('rejects an invalid programmatic port even when the server is off', () => {
-    for (const port of [-2, 1.5, 70000, NaN]) {
+    for (const port of [-1, 1.5, 70000, NaN]) {
       assert.throws(
         () => resolveReflectionConfig({}, { port }),
         /reflectionPort/,
@@ -243,9 +242,6 @@ describe('resolveReflectionPort', () => {
     assert.deepStrictEqual(resolveReflectionPort(undefined, undefined), {
       kind: 'probe',
     });
-    assert.deepStrictEqual(resolveReflectionPort(undefined, 0), {
-      kind: 'probe',
-    });
   });
 
   it('pins a programmatic port exactly', () => {
@@ -255,12 +251,12 @@ describe('resolveReflectionPort', () => {
     });
   });
 
-  it('maps -1 to an OS-assigned port, same as GENKIT_REFLECTION_PORT=0', () => {
+  it('maps 0 to an OS-assigned port, same as GENKIT_REFLECTION_PORT=0', () => {
     assert.deepStrictEqual(
-      resolveReflectionPort(undefined, REFLECTION_PORT_AUTO),
+      resolveReflectionPort(undefined, 0),
       resolveReflectionPort(0, undefined)
     );
-    assert.deepStrictEqual(resolveReflectionPort(undefined, -1), {
+    assert.deepStrictEqual(resolveReflectionPort(undefined, 0), {
       kind: 'pinned',
       port: 0,
     });
@@ -301,13 +297,29 @@ describe('isLoopbackHost', () => {
       'localhost',
       '::1',
       '[::1]',
+      '0:0:0:0:0:0:0:1',
+      // Abbreviated and hex forms that listen() resolves to 127.0.0.1.
+      '127.1',
+      '0x7f.1',
     ]) {
       assert.strictEqual(isLoopbackHost(host), true, host);
     }
   });
 
   it('rejects routable addresses', () => {
-    for (const host of ['0.0.0.0', '192.168.1.5', '10.0.0.1', 'example.com']) {
+    for (const host of [
+      '0.0.0.0',
+      '::',
+      '192.168.1.5',
+      '10.0.0.1',
+      'example.com',
+      // Hostnames that merely start with "127." may resolve anywhere.
+      '127.internal.example',
+      '127.0.0.1.nip.io',
+      '127.a.b.c',
+      // Not a valid IP literal; listen() cannot bind it either.
+      '127.300.400.500',
+    ]) {
       assert.strictEqual(isLoopbackHost(host), false, host);
     }
   });

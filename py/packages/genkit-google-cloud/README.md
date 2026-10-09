@@ -25,7 +25,7 @@ from genkit import Genkit
 from genkit_google_cloud import enable_google_cloud_telemetry
 from genkit_google_genai import GoogleAI
 
-enable_google_cloud_telemetry(project_id='my-project')
+enable_google_cloud_telemetry(project='my-project')
 
 ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
 ```
@@ -43,7 +43,7 @@ otherwise). To export a fraction, pass `sampler=`.
 from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
 
 enable_google_cloud_telemetry(
-    project_id='my-project',
+    project='my-project',
     sampler=ParentBased(TraceIdRatioBased(0.1)),
 )
 # => about 1 in 10 new traces reach Cloud Trace
@@ -58,7 +58,7 @@ from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 
 trace.set_tracer_provider(TracerProvider(sampler=ParentBased(TraceIdRatioBased(0.1))))
-enable_google_cloud_telemetry(project_id='my-project')
+enable_google_cloud_telemetry(project='my-project')
 # => Cloud Trace joins your provider and uses its sampler
 ```
 

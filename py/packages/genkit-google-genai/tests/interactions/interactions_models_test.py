@@ -31,14 +31,13 @@ from genkit_google_genai._models._deep_research import (
     DeepResearchConfig,
     create_deep_research_background_action,
     deep_research_model,
-    response_format_from_request,
 )
 from genkit_google_genai._models._interactions_lyria import LyriaConfig, create_lyria_action
 from genkit_google_genai._models._interactions_registry import deep_research_model_info, lyria_model_info
 from google.genai.interactions import Interaction
 
 from genkit import Genkit, GenkitError, Message, Operation, Part, Role
-from genkit.model import ModelRequest
+from genkit.model import ModelRequest, ToolDefinition
 from genkit.plugin_api import ActionKind
 
 
@@ -447,6 +446,39 @@ async def test_deep_research_rejects_empty_messages() -> None:
     assert create_calls == []
 
 
+@pytest.mark.parametrize(
+    'version',
+    ['deep-research-pro-preview-12-2025', 'deep-research-preview-04-2026', 'deep-research-max-preview-04-2026'],
+)
+def test_deep_research_info_declares_no_function_tools(version: str) -> None:
+    supports = deep_research_model_info(version).supports
+    assert supports is not None
+    assert supports.tools is False
+
+
+@pytest.mark.asyncio
+async def test_deep_research_rejects_function_tools() -> None:
+    patcher, create_calls, _, _ = patch_interactions(
+        'genkit_google_genai._models._deep_research',
+        create_result={'id': 'dr-tools', 'status': 'in_progress'},
+    )
+    action = create_deep_research_background_action(
+        'deep-research-preview-04-2026',
+        plugin_api_key='plugin-key',
+        client_options=ClientOptions(),
+    )
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part.from_text('compare allergen policies')])],
+        tools=[ToolDefinition(name='lookup_menu', description='Look up a menu item.', input_schema={})],
+        config={'google_search': True},
+    )
+    with patcher:
+        with pytest.raises(GenkitError, match='does not support function tools') as exc_info:
+            await action.start(request)
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert create_calls == []
+
+
 @pytest.mark.asyncio
 async def test_antigravity_generate_folds_system_and_uses_agent() -> None:
     patcher, create_calls, _, _ = patch_interactions(
@@ -791,19 +823,6 @@ async def test_deep_research_file_search_and_mcp_dump_snake_case() -> None:
     } in tools
     assert 'fileSearchStoreNames' not in tools[0]
     assert 'allowedTools' not in tools[1]
-
-
-def test_response_format_from_request_keeps_caller_schema() -> None:
-    schema = {'type': 'object', 'properties': {'title': {'type': 'string'}}}
-    request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part.from_text('q')])],
-        output={'format': 'json', 'schema': schema},
-    )
-    assert response_format_from_request(request) == {
-        'type': 'text',
-        'mime_type': 'application/json',
-        'schema': schema,
-    }
 
 
 def test_deep_research_accepts_uppercase_choice_labels() -> None:

@@ -45,9 +45,11 @@ Note:
     can be used with generate_operation().
 """
 
+from typing import Any
+
 import pytest
 
-from genkit import Genkit, Message, ModelResponse, Part
+from genkit import Document, Genkit, Message, ModelResponse, Part
 from genkit._core._action import ActionRunContext
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import ModelRequest
@@ -235,3 +237,60 @@ async def test_generate_operation_passes_all_options(ai: Genkit) -> None:
         assert getattr(config, 'temperature', None) == 0.7
     assert any(m.role == Role.SYSTEM and 'test assistant' in m.text.lower() for m in captured_request.messages)
     assert any(m.role == Role.USER and 'Test prompt' in m.text for m in captured_request.messages)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'arg',
+    [
+        'tools',
+        'tool_choice',
+        'return_tool_requests',
+        'max_turns',
+        'output_schema',
+        'output_format',
+        'output_content_type',
+        'output_instructions',
+        'output_constrained',
+    ],
+)
+async def test_generate_operation_rejects_tool_loop_and_output_args(ai: Genkit, arg: str) -> None:
+    """A background start runs no tool loop and check_operation parses no output, so these are not parameters."""
+
+    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+        return Operation(id='op', done=False)
+
+    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+        return op
+
+    ai.define_background_model(name='veo-like', start=start, check=check)
+
+    kwargs: dict[str, Any] = {arg: None}
+    with pytest.raises(TypeError, match=arg):
+        await ai.generate_operation(model='veo-like', prompt='A flower blooming.', **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_generate_operation_forwards_docs(ai: Genkit) -> None:
+    """Docs reach a background start as context on the request."""
+    captured: ModelRequest | None = None
+
+    async def start(request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+        nonlocal captured
+        captured = request
+        return Operation(id='op-docs', done=False)
+
+    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+        return op
+
+    ai.define_background_model(name='research-like', start=start, check=check)
+
+    await ai.generate_operation(
+        model='research-like',
+        prompt='Summarize the allergy policy.',
+        docs=[Document.from_text('Peanuts are prepared on shared equipment.')],
+    )
+
+    assert captured is not None
+    assert captured.docs is not None
+    assert 'shared equipment' in ''.join(m.text for m in captured.messages)

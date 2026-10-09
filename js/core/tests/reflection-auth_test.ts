@@ -168,9 +168,9 @@ describe('ReflectionServer auth', () => {
     }
   });
 
-  it('lets the OS pick with port -1', async () => {
+  it('lets the OS pick with port 0', async () => {
     process.env.GENKIT_ENV = 'dev';
-    server = new ReflectionServer(new Registry(), { port: -1 });
+    server = new ReflectionServer(new Registry(), { port: 0 });
     await server.start();
     const bound = (server as any).server.address().port;
     assert.ok(bound > 0, `bound to ${bound}`);
