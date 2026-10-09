@@ -23,7 +23,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, field_validator
 from pydantic.alias_generators import to_camel
 
-from genkit import ActionRunContext, Operation
+from genkit import ActionRunContext, GenkitError, Operation
 from genkit.model import BackgroundAction, ModelRef, ModelRequest, model_ref
 from genkit.plugin_api import Action, ActionKind, to_json_schema
 from genkit_google_genai._interactions._client import (
@@ -34,7 +34,6 @@ from genkit_google_genai._interactions._client import (
 from genkit_google_genai._interactions._converters import (
     clean_schema,
     from_interaction,
-    to_interaction_tool,
 )
 from genkit_google_genai._interactions._options import ClientOptions
 from genkit_google_genai._models._interactions_registry import deep_research_model_info
@@ -132,11 +131,20 @@ def deep_research_model(version: str) -> ModelRef:
 
 
 def build_tools(request: ModelRequest[DeepResearchConfig], config: DeepResearchConfig) -> list[dict[str, Any]]:
-    """Build Interactions API tool configurations for Deep Research."""
-    tools: list[dict[str, Any]] = []
-    if request.tools:
-        tools.extend(dict(to_interaction_tool(tool_def)) for tool_def in request.tools)
+    """Build Interactions API tool configurations for Deep Research.
 
+    Only the agent's built-in tools and remote MCP servers are sent. Deep
+    Research does not accept function tools, so ``request.tools`` is rejected.
+    """
+    if request.tools:
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=(
+                'Deep Research does not support function tools. '
+                'Use config google_search, url_context, code_execution, file_search, or mcp_servers.'
+            ),
+        )
+    tools: list[dict[str, Any]] = []
     for tool_type in ('google_search', 'url_context', 'code_execution'):
         if getattr(config, tool_type, None):
             tools.append({'type': tool_type})
