@@ -64,6 +64,15 @@ const REGISTER_TIMEOUT_MS = 10_000;
 /** WebSocket close code for policy violations (RFC 6455). */
 const WS_POLICY_VIOLATION = 1008;
 
+/** True when a browser `Origin` header names a loopback host. */
+function isLoopbackOrigin(origin: string): boolean {
+  try {
+    return isLoopbackHost(new URL(origin).hostname);
+  } catch {
+    return false;
+  }
+}
+
 const SKIP_CHECK_HINT = `To skip this check, restart the CLI without --experimental-auth and with ${REFLECTION_SECRET_ENV} unset.`;
 
 /**
@@ -248,7 +257,18 @@ export class RuntimeManagerV2 extends BaseRuntimeManager {
     this._port = port;
     logger.info(`Starting reflection server: ${reflectionV2Url(host, port)}`);
 
-    this.wss.on('connection', (ws) => {
+    this.wss.on('connection', (ws, req) => {
+      // Loopback keeps the port off the network, not away from a browser on
+      // this machine: a page the developer visits (cross-origin, or a
+      // DNS-rebinding page that resolves to 127.0.0.1) can open this socket
+      // and register. Browsers always send Origin and the runtime never does,
+      // so a non-loopback Origin is refused before it can register.
+      const origin = req.headers.origin;
+      if (origin !== undefined && !isLoopbackOrigin(origin)) {
+        logger.debug(`Closing reflection connection from origin ${origin}.`);
+        ws.close(WS_POLICY_VIOLATION, 'cross-origin');
+        return;
+      }
       ws.on('error', (err) => logger.error(`WebSocket error: ${err}`));
 
       this.unregistered.set(

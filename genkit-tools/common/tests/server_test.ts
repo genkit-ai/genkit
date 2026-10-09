@@ -554,4 +554,65 @@ describe('Tools Server', () => {
       );
     });
   });
+
+  describe('state-changing procedures', () => {
+    beforeEach(() => {
+      mockManager.processManager = {
+        restart: jest.fn(async () => {}),
+        kill: jest.fn(async () => {}),
+      };
+    });
+
+    it('should honor a same-origin restart from the Dev UI', async () => {
+      const response = await axios.get(
+        `http://localhost:${port}/api/restartAppProcess`,
+        { headers: { 'sec-fetch-site': 'same-origin' } }
+      );
+
+      expect(response.status).toBe(200);
+      expect(mockManager.processManager.restart).toHaveBeenCalledTimes(1);
+    });
+
+    it('should honor a non-browser restart with no fetch metadata', async () => {
+      const response = await axios.get(
+        `http://127.0.0.1:${port}/api/restartAppProcess`
+      );
+
+      expect(response.status).toBe(200);
+      expect(mockManager.processManager.restart).toHaveBeenCalledTimes(1);
+    });
+
+    it('should refuse a cross-site restart', async () => {
+      await expect(
+        axios.get(`http://localhost:${port}/api/restartAppProcess`, {
+          headers: { 'sec-fetch-site': 'cross-site' },
+        })
+      ).rejects.toMatchObject({ response: { status: 403 } });
+
+      expect(mockManager.processManager.restart).not.toHaveBeenCalled();
+    });
+
+    it('should refuse a cross-site kill', async () => {
+      await expect(
+        axios.get(`http://localhost:${port}/api/killAppProcess`, {
+          headers: { 'sec-fetch-site': 'cross-site' },
+        })
+      ).rejects.toMatchObject({ response: { status: 403 } });
+
+      expect(mockManager.processManager.kill).not.toHaveBeenCalled();
+    });
+
+    it('should refuse a rebinding request carrying a foreign Host', async () => {
+      await expect(
+        axios.get(`http://127.0.0.1:${port}/api/killAppProcess`, {
+          headers: {
+            Host: `evil.test:${port}`,
+            'sec-fetch-site': 'same-origin',
+          },
+        })
+      ).rejects.toMatchObject({ response: { status: 403 } });
+
+      expect(mockManager.processManager.kill).not.toHaveBeenCalled();
+    });
+  });
 });

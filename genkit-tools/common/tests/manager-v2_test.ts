@@ -694,4 +694,54 @@ describe('RuntimeManagerV2 reflection auth', () => {
     expect(closeCode).toBe(1008);
     expect(manager.listRuntimes()).toEqual([]);
   });
+
+  /** Opens a socket with the given browser Origin and resolves on close. */
+  function connectWithOrigin(port: number, origin: string) {
+    return new Promise<{ closeCode: number | undefined; registered: boolean }>(
+      (resolve) => {
+        const client = new WebSocket(`ws://127.0.0.1:${port}`, {
+          headers: { Origin: origin },
+        });
+        wsClient = client;
+        let registered = false;
+        client.on('open', () => {
+          client.send(
+            JSON.stringify({
+              jsonrpc: '2.0',
+              method: 'register',
+              params: { id: `origin-${origin}`, pid: 5 },
+              id: '1',
+            })
+          );
+        });
+        client.on('message', (data) => {
+          const message = JSON.parse(data.toString());
+          if (message.id === '1' && message.result !== undefined) {
+            registered = true;
+          }
+        });
+        client.on('error', () => {});
+        client.on('close', (code) => resolve({ closeCode: code, registered }));
+        setTimeout(() => resolve({ closeCode: undefined, registered }), 300);
+      }
+    );
+  }
+
+  it('refuses a socket opened by a page on another origin', async () => {
+    manager = await RuntimeManagerV2.create({ projectRoot: './' });
+    const result = await connectWithOrigin(manager.port!, 'http://evil.test');
+    expect(result.closeCode).toBe(1008);
+    expect(result.registered).toBe(false);
+    expect(manager.listRuntimes()).toEqual([]);
+  });
+
+  it('keeps a socket opened by a loopback origin', async () => {
+    manager = await RuntimeManagerV2.create({ projectRoot: './' });
+    const result = await connectWithOrigin(
+      manager.port!,
+      'http://localhost:4000'
+    );
+    expect(result.closeCode).toBeUndefined();
+    expect(result.registered).toBe(true);
+  });
 });

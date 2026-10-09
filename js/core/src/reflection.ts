@@ -286,10 +286,10 @@ export class ReflectionServer {
       response.status(200).send('OK');
     });
 
-    // Dev only: it kills the server and answers GET, so any page that can
-    // cause a request to it could take the process down.
+    // Dev only, and POST only: it kills the server, so a page the developer
+    // visits must not be able to take the process down with a bare GET.
     if (isDevEnv()) {
-      server.get('/api/__quitquitquit', async (_, response) => {
+      server.post('/api/__quitquitquit', async (_, response) => {
         logger.debug('Received quitquitquit');
         response.status(200).send('OK');
         await this.stop();
