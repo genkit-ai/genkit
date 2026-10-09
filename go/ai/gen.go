@@ -381,7 +381,15 @@ type ModelResponse struct {
 	Raw any `json:"raw,omitempty"`
 	// Request is the ModelRequest struct used to trigger this response.
 	Request *ModelRequest `json:"request,omitempty"`
-	// Usage describes how many resources were used by this generation request.
+	// TotalUsage is the usage of every model call made under one generate run,
+	// summed field by field ([GenerationUsage.Custom] key by key): the tool loop's
+	// calls and the calls its tools and hooks make, such as a nested generate or
+	// a fallback model. Generate sets it; a model never does. Usage reports only
+	// the call that produced the response. A subagent's calls count in its own
+	// session instead, and a resumed run counts only its own calls.
+	TotalUsage *GenerationUsage `json:"totalUsage,omitempty"`
+	// Usage describes how many resources the model call that produced this
+	// response used.
 	Usage         *GenerationUsage `json:"usage,omitempty"`
 	formatHandler StreamingFormatHandler
 }

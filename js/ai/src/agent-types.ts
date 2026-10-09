@@ -34,9 +34,11 @@
 
 import { z } from '@genkit-ai/core';
 import {
+  GenerationUsageSchema,
   MessageSchema,
   ModelResponseChunkSchema,
   PartSchema,
+  type GenerationUsage,
   type MessageData,
 } from './model-types.js';
 import { ToolRequestPartSchema, ToolResponsePartSchema } from './parts.js';
@@ -140,6 +142,13 @@ export const SessionStateSchema = z.object({
   messages: z.array(MessageSchema).optional(),
   custom: z.any().optional(),
   artifacts: z.array(ArtifactSchema).optional(),
+  /**
+   * Usage of the agent's own model calls across the session, summed field
+   * by field. Framework-owned. It is a ledger and never rolls back: a failed
+   * turn's spend stays even when its messages do not. Excludes subagents,
+   * which report usage in their own sessions.
+   */
+  usage: GenerationUsageSchema.optional(),
 });
 
 /**
@@ -153,6 +162,13 @@ export interface SessionState<S = unknown> {
   messages?: MessageData[];
   custom?: S;
   artifacts?: Artifact[];
+  /**
+   * Usage of the agent's own model calls across the session, summed field
+   * by field. Framework-owned. It is a ledger and never rolls back: a failed
+   * turn's spend stays even when its messages do not. Excludes subagents,
+   * which report usage in their own sessions.
+   */
+  usage?: GenerationUsage;
 }
 
 /**
@@ -242,6 +258,12 @@ export const AgentOutputSchema = z.object({
    * the state the failed turn started with.
    */
   error: RuntimeErrorSchema.optional(),
+  /**
+   * Usage of the agent's own model calls during this invocation, summed
+   * field by field, failed turns included. Excludes subagents. Omitted when
+   * `finishReason` is `detached`, since the work continues.
+   */
+  usage: GenerationUsageSchema.optional(),
 });
 
 /**
@@ -262,6 +284,12 @@ export interface AgentOutput<S = unknown> {
    * details (RuntimeError shape); `state`/`snapshotId` hold the last-good state.
    */
   error?: RuntimeError;
+  /**
+   * Usage of the agent's own model calls during this invocation, summed
+   * field by field, failed turns included. Excludes subagents. Omitted when
+   * `finishReason` is `detached`, since the work continues.
+   */
+  usage?: GenerationUsage;
 }
 
 /**
@@ -271,6 +299,11 @@ export const TurnEndSchema = z.object({
   snapshotId: z.string().optional(),
   /** The reason this turn finished (e.g. `stop`, `interrupted`). */
   finishReason: AgentFinishReasonSchema.optional(),
+  /**
+   * Usage of the agent's own model calls during this turn, summed field by
+   * field, whether the turn succeeded or failed. Excludes subagents.
+   */
+  usage: GenerationUsageSchema.optional(),
 });
 
 /**
