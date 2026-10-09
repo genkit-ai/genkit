@@ -78,10 +78,10 @@ def test_stringify_number_input() -> None:
 def test_evaluator_factory_initialization() -> None:
     """Test EvaluatorFactory can be initialized."""
     factory = EvaluatorFactory(
-        project_id='test-project',
+        project='test-project',
         location='us-central1',
     )
-    assert factory.project_id == 'test-project'
+    assert factory.project == 'test-project'
     assert factory.location == 'us-central1'
 
 
@@ -89,7 +89,7 @@ def test_evaluator_factory_initialization() -> None:
 async def test_evaluator_factory_evaluate_instances_structure() -> None:
     """Test that evaluate_instances makes correct API call structure."""
     factory = EvaluatorFactory(
-        project_id='test-project',
+        project='test-project',
         location='us-central1',
     )
 
@@ -125,7 +125,7 @@ async def test_evaluator_factory_evaluate_instances_structure() -> None:
 async def test_evaluator_factory_evaluate_instances_error_handling() -> None:
     """Test that evaluate_instances raises GenkitError on API failure."""
     factory = EvaluatorFactory(
-        project_id='test-project',
+        project='test-project',
         location='us-central1',
     )
 
@@ -163,7 +163,7 @@ def test_create_vertex_evaluators_with_metric_types() -> None:
     create_vertex_evaluators(
         registry=mock_registry,
         metrics=metrics,
-        project_id='test-project',
+        project='test-project',
         location='us-central1',
     )
 
@@ -178,7 +178,7 @@ async def test_evaluator_request_sends_empty_metric_spec() -> None:
     create_vertex_evaluators(
         registry=mock_registry,
         metrics=[VertexAIEvaluationMetricType.FLUENCY],
-        project_id='test-project',
+        project='test-project',
         location='us-central1',
     )
     evaluator_fn = mock_registry.define_evaluator.call_args.kwargs['fn']
@@ -219,7 +219,7 @@ def test_create_vertex_evaluators_names_format() -> None:
     create_vertex_evaluators(
         registry=mock_registry,
         metrics=metrics,
-        project_id='test-project',
+        project='test-project',
         location='us-central1',
     )
 
@@ -235,7 +235,7 @@ def test_create_vertex_evaluators_empty_metrics() -> None:
     create_vertex_evaluators(
         registry=mock_registry,
         metrics=[],
-        project_id='test-project',
+        project='test-project',
         location='us-central1',
     )
 
@@ -252,7 +252,7 @@ def test_all_metric_types_supported() -> None:
     create_vertex_evaluators(
         registry=mock_registry,
         metrics=all_metrics,
-        project_id='test-project',
+        project='test-project',
         location='us-central1',
     )
 
@@ -263,9 +263,7 @@ def test_all_metric_types_supported() -> None:
 async def test_vertexai_evaluator_row_evaluation_is_a_list() -> None:
     """ai.evaluate with vertexai/fluency returns a list of rows read as results[0].evaluation[0].score."""
     ai = Genkit()
-    create_vertex_evaluators(
-        ai, [VertexAIEvaluationMetricType.FLUENCY], project_id='test-project', location='us-central1'
-    )
+    create_vertex_evaluators(ai, [VertexAIEvaluationMetricType.FLUENCY], project='test-project', location='us-central1')
 
     with patch.object(
         EvaluatorFactory,
@@ -283,7 +281,7 @@ async def test_vertexai_evaluator_row_evaluation_is_a_list() -> None:
 
 
 def _factory() -> EvaluatorFactory:
-    return EvaluatorFactory(project_id='menu-prod', location='us-central1')
+    return EvaluatorFactory(project='menu-prod', location='us-central1')
 
 
 def _http_client(response: httpx.Response | Exception) -> AsyncMock:
