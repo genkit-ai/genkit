@@ -60,7 +60,8 @@ class GenkitModel(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(
         alias_generator=to_camel,
         extra='forbid',
-        populate_by_name=True,
+        validate_by_name=True,
+        validate_by_alias=True,
     )
 
     def model_dump(self, **kwargs: Any) -> dict[str, Any]:

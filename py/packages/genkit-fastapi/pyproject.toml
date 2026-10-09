@@ -36,7 +36,7 @@ classifiers = [
   "Typing :: Typed",
   "License :: OSI Approved :: Apache Software License",
 ]
-dependencies = ["genkit", "pydantic>=2.10.5", "fastapi>=0.100.0"]
+dependencies = ["genkit", "pydantic>=2.11", "fastapi>=0.100.0"]
 description = "Hang flows and agents on the FastAPI app you already have"
 keywords = [
   "genkit",

@@ -24,6 +24,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+from pydantic.alias_generators import to_camel
 
 from genkit import FinishReason, Message, ModelResponse, ModelResponseChunk, Part, Role
 from genkit._core._model import ABNORMAL_FINISH_REASONS
@@ -48,14 +49,18 @@ SKIP_REWRITE_FINISH_REASONS = ABNORMAL_FINISH_REASONS | {FinishReason.UNKNOWN}
 class SurfacesConfig(BaseModel):
     """Options for :class:`Surfaces`."""
 
-    model_config = ConfigDict(extra='forbid', populate_by_name=True)
+    model_config = ConfigDict(extra='forbid', validate_by_name=True, validate_by_alias=True, alias_generator=to_camel)
 
     instructions: Literal['system', 'none'] = 'system'
     # 'off' passes envelopes through unchecked, 'warn' logs and drops the
     # offending block, 'strict' kills the turn. Default is 'warn' because a
     # single hallucinated component should not cost the whole answer.
-    validation: ValidateMode = Field(default='warn', alias='validate')
-    surface_id: str | None = Field(default=None, alias='surfaceId')
+    #
+    # The JSON key is 'validate' (matches JS), but a field by that name would
+    # shadow BaseModel.validate. The Python kwarg is validation=; runtime
+    # also accepts validate=.
+    validation: ValidateMode = Field(default='warn', validation_alias='validate', serialization_alias='validate')
+    surface_id: str | None = None
     # Registry id from load_catalog. The Developer UI lists those same ids.
     catalog: str | None = None
     # A typo here would stamp envelopes the renderer cannot paint.
@@ -70,7 +75,7 @@ class Surfaces(BaseMiddleware[SurfacesConfig]):
     aborted / failed / unknown / other) is left alone — the stop is the result,
     not a salvaged card.
 
-    Under `validate='strict'` a bad fence fails the turn: generate returns a
+    Under `validation='strict'` a bad fence fails the turn: generate returns a
     response with `finish_reason` failed, no `message`, and the reason on
     `error`. `messages` ends at the user turn, so a retry does not feed the
     hallucinated surface back to the model.

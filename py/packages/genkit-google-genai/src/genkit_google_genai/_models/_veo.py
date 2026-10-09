@@ -27,6 +27,7 @@ from google import genai
 from google.genai import types as genai_types
 from google.genai.errors import APIError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic.alias_generators import to_camel
 
 from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, Operation, Part, Role
 from genkit.model import ModelInfo, ModelRequest, OperationError, Supports
@@ -71,19 +72,19 @@ def is_veo_model(name: str) -> bool:
 class VeoConfig(BaseModel):
     """Veo Config Schema."""
 
-    model_config = ConfigDict(extra='forbid', populate_by_name=True)
-    number_of_videos: int | None = Field(default=None, alias='numberOfVideos')
-    generate_audio: bool | None = Field(default=None, alias='generateAudio')
+    model_config = ConfigDict(extra='forbid', validate_by_name=True, validate_by_alias=True, alias_generator=to_camel)
+    number_of_videos: int | None = Field(default=None)
+    generate_audio: bool | None = Field(default=None)
     fps: int | None = Field(default=None)
-    output_gcs_uri: str | None = Field(default=None, alias='outputGcsUri')
-    pubsub_topic: str | None = Field(default=None, alias='pubsubTopic')
-    compression_quality: genai_types.VideoCompressionQuality | None = Field(default=None, alias='compressionQuality')
-    resize_mode: genai_types.ImageResizeMode | None = Field(default=None, alias='resizeMode')
+    output_gcs_uri: str | None = Field(default=None)
+    pubsub_topic: str | None = Field(default=None)
+    compression_quality: genai_types.VideoCompressionQuality | None = Field(default=None)
+    resize_mode: genai_types.ImageResizeMode | None = Field(default=None)
     labels: dict[str, str] | None = Field(default=None)
-    last_frame: dict[str, Any] | None = Field(default=None, alias='lastFrame')
-    reference_images: list[dict[str, Any]] | None = Field(default=None, alias='referenceImages')
+    last_frame: dict[str, Any] | None = Field(default=None)
+    reference_images: list[dict[str, Any]] | None = Field(default=None)
     mask: dict[str, Any] | None = Field(default=None)
-    webhook_config: dict[str, Any] | None = Field(default=None, alias='webhookConfig')
+    webhook_config: dict[str, Any] | None = Field(default=None)
     extra: dict[str, Any] | None = Field(
         default=None,
         description=(
@@ -92,23 +93,17 @@ class VeoConfig(BaseModel):
             'by key. Not checked; do not put API keys here.'
         ),
     )
-    negative_prompt: str | None = Field(
-        default=None, alias='negativePrompt', description='Negative prompt for video generation.'
-    )
+    negative_prompt: str | None = Field(default=None, description='Negative prompt for video generation.')
     aspect_ratio: str | None = Field(
-        default=None, alias='aspectRatio', description='Desired aspect ratio of the output video (e.g. "16:9").'
+        default=None, description='Desired aspect ratio of the output video (e.g. "16:9").'
     )
-    person_generation: str | None = Field(default=None, alias='personGeneration', description='Person generation mode.')
-    duration_seconds: int | None = Field(
-        default=None, alias='durationSeconds', description='Length of video in seconds.'
-    )
+    person_generation: str | None = Field(default=None, description='Person generation mode.')
+    duration_seconds: int | None = Field(default=None, description='Length of video in seconds.')
     resolution: str | None = Field(default=None, description='Desired output resolution (e.g. "720p").')
     seed: int | None = Field(default=None, description='Random seed for deterministic generation.')
-    enhance_prompt: bool | None = Field(default=None, alias='enhancePrompt', description='Enable prompt enhancement.')
-    base_url: str | None = Field(default=None, alias='baseUrl', description='Override the API endpoint for this call.')
-    api_version: str | None = Field(
-        default=None, alias='apiVersion', description='Override the API version for this call.'
-    )
+    enhance_prompt: bool | None = Field(default=None, description='Enable prompt enhancement.')
+    base_url: str | None = Field(default=None, description='Override the API endpoint for this call.')
+    api_version: str | None = Field(default=None, description='Override the API version for this call.')
     location: str | None = Field(default=None, description='Override the Vertex AI location for this call.')
 
     @model_validator(mode='before')

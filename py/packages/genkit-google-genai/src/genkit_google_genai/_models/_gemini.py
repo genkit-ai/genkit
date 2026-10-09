@@ -38,6 +38,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from pydantic.alias_generators import to_camel
 
 from genkit import (
     ActionRunContext,
@@ -166,12 +167,17 @@ class HarmBlockThreshold(StrEnum):
 # Each strict nested class below declares every field of the google.genai type
 # it is sent as (named in its docstring), so a key the SDK accepts never fails
 # the unknown-key check. googlegenai_gemini_test.py pins the field sets.
+#
+# No field passes alias=. The camelCase wire name comes from alias_generator,
+# so type checkers see the snake_case field name as the constructor kwarg and
+# runtime still accepts both spellings.
+_NESTED_CONFIG = ConfigDict(extra='forbid', validate_by_name=True, validate_by_alias=True, alias_generator=to_camel)
 
 
 class SafetySettingsSchema(BaseModel):
     """Safety settings schema. Sent as ``genai_types.SafetySetting``."""
 
-    model_config = ConfigDict(extra='forbid', populate_by_name=True)
+    model_config = _NESTED_CONFIG
     category: HarmCategory
     threshold: HarmBlockThreshold
     method: genai_types.HarmBlockMethod | None = None
@@ -180,8 +186,8 @@ class SafetySettingsSchema(BaseModel):
 class PrebuiltVoiceConfig(BaseModel):
     """Prebuilt voice config. Sent as ``genai_types.PrebuiltVoiceConfig``."""
 
-    model_config = ConfigDict(extra='forbid', populate_by_name=True)
-    voice_name: str | None = Field(None, alias='voiceName')
+    model_config = _NESTED_CONFIG
+    voice_name: str | None = Field(default=None)
 
 
 class FunctionCallingMode(StrEnum):
@@ -196,10 +202,10 @@ class FunctionCallingMode(StrEnum):
 class FunctionCallingConfig(BaseModel):
     """Function calling config. Sent as ``genai_types.FunctionCallingConfig``."""
 
-    model_config = ConfigDict(extra='forbid', populate_by_name=True)
+    model_config = _NESTED_CONFIG
     mode: FunctionCallingMode | None = None
-    allowed_function_names: list[str] | None = Field(None, alias='allowedFunctionNames')
-    stream_function_call_arguments: bool | None = Field(None, alias='streamFunctionCallArguments')
+    allowed_function_names: list[str] | None = Field(default=None)
+    stream_function_call_arguments: bool | None = Field(default=None)
 
 
 class ThinkingLevel(StrEnum):
@@ -214,19 +220,19 @@ class ThinkingLevel(StrEnum):
 class ThinkingConfig(BaseModel):
     """Thinking config. Sent as ``genai_types.ThinkingConfig``."""
 
-    model_config = ConfigDict(extra='forbid', populate_by_name=True)
-    include_thoughts: bool | None = Field(None, alias='includeThoughts')
-    thinking_budget: int | None = Field(None, alias='thinkingBudget')
-    thinking_level: ThinkingLevel | None = Field(None, alias='thinkingLevel')
+    model_config = _NESTED_CONFIG
+    include_thoughts: bool | None = Field(default=None)
+    thinking_budget: int | None = Field(default=None)
+    thinking_level: ThinkingLevel | None = Field(default=None)
 
 
 class FileSearchConfig(BaseModel):
     """File search config. Sent as ``genai_types.FileSearch``."""
 
-    model_config = ConfigDict(extra='forbid', populate_by_name=True)
-    file_search_store_names: list[str] | None = Field(None, alias='fileSearchStoreNames')
-    metadata_filter: str | None = Field(None, alias='metadataFilter')
-    top_k: int | None = Field(None, alias='topK')
+    model_config = _NESTED_CONFIG
+    file_search_store_names: list[str] | None = Field(default=None)
+    metadata_filter: str | None = Field(default=None)
+    top_k: int | None = Field(default=None)
 
 
 class ImageAspectRatio(StrEnum):
@@ -255,22 +261,22 @@ class ImageSize(StrEnum):
 class ImageConfig(BaseModel):
     """Image config. Sent as ``genai_types.ImageConfig``."""
 
-    model_config = ConfigDict(extra='forbid', populate_by_name=True)
-    aspect_ratio: ImageAspectRatio | None = Field(None, alias='aspectRatio')
-    image_size: ImageSize | None = Field(None, alias='imageSize')
-    output_mime_type: str | None = Field(None, alias='outputMimeType')
-    output_compression_quality: int | None = Field(None, alias='outputCompressionQuality')
-    person_generation: str | None = Field(None, alias='personGeneration')
-    prominent_people: genai_types.ProminentPeople | None = Field(None, alias='prominentPeople')
-    image_output_options: genai_types.ImageConfigImageOutputOptions | None = Field(None, alias='imageOutputOptions')
+    model_config = _NESTED_CONFIG
+    aspect_ratio: ImageAspectRatio | None = Field(default=None)
+    image_size: ImageSize | None = Field(default=None)
+    output_mime_type: str | None = Field(default=None)
+    output_compression_quality: int | None = Field(default=None)
+    person_generation: str | None = Field(default=None)
+    prominent_people: genai_types.ProminentPeople | None = Field(default=None)
+    image_output_options: genai_types.ImageConfigImageOutputOptions | None = Field(default=None)
 
 
 class VoiceConfig(BaseModel):
     """Voice config. Sent as ``genai_types.VoiceConfig``."""
 
-    model_config = ConfigDict(extra='forbid', populate_by_name=True)
-    prebuilt_voice_config: PrebuiltVoiceConfig | None = Field(None, alias='prebuiltVoiceConfig')
-    replicated_voice_config: genai_types.ReplicatedVoiceConfig | None = Field(None, alias='replicatedVoiceConfig')
+    model_config = _NESTED_CONFIG
+    prebuilt_voice_config: PrebuiltVoiceConfig | None = Field(default=None)
+    replicated_voice_config: genai_types.ReplicatedVoiceConfig | None = Field(default=None)
 
 
 # The google.genai tool type a dict under each tool toggle is validated as.
@@ -288,16 +294,18 @@ class GeminiConfig(ModelConfig):
     ``extra`` under its wire name and is merged into the request body.
     """
 
-    model_config = ConfigDict(extra='forbid', populate_by_name=True)
+    # alias_generator=to_camel is inherited from ModelConfig; don't pass alias=
+    # on fields here or type checkers stop accepting the snake_case kwarg.
+    model_config = ConfigDict(extra='forbid', validate_by_name=True, validate_by_alias=True)
 
     base_url: str | None = Field(
-        None, description='Overrides the plugin-configured or default baseUrl, if specified.', alias='baseUrl'
+        default=None, description='Overrides the plugin-configured or default baseUrl, if specified.'
     )
     api_version: str | None = Field(
-        None, description='Overrides the plugin-configured or default apiVersion, if specified.', alias='apiVersion'
+        default=None, description='Overrides the plugin-configured or default apiVersion, if specified.'
     )
     location: str | None = Field(
-        None,
+        default=None,
         description=(
             'Overrides the plugin-configured location/region for this request '
             "(Vertex AI only). Accepts regions (e.g. 'us-central1'), "
@@ -325,22 +333,19 @@ class GeminiConfig(ModelConfig):
             ),
         }),
     ] = Field(
-        None,
-        alias='safetySettings',
+        default=None,
     )
 
     code_execution: bool | genai_types.ToolCodeExecution | None = Field(
-        None,
+        default=None,
         description='Enables the model to generate and run code. True attaches the tool; a dict is the tool options.',
-        alias='codeExecution',
     )
 
     context_cache: bool | None = Field(
-        None,
+        default=None,
         description=(
             'Context caching allows you to save and reuse precomputed input tokens that you wish to use repeatedly.'
         ),
-        alias='contextCache',
     )
 
     function_calling_config: Annotated[
@@ -362,23 +367,20 @@ class GeminiConfig(ModelConfig):
             'additionalProperties': False,
         }),
     ] = Field(
-        None,
-        alias='functionCallingConfig',
+        default=None,
     )
 
     response_modalities: list[str] | None = Field(
-        None,
+        default=None,
         description='The modalities to be used in the response.',
-        alias='responseModalities',
     )
 
     google_search: bool | genai_types.GoogleSearch | None = Field(
-        None,
+        default=None,
         description=(
             'Ground the response in public web data with the Google Search tool. '
             'True attaches it; a dict is the tool options (excludeDomains, timeRangeFilter, ...).'
         ),
-        alias='googleSearch',
     )
 
     @model_validator(mode='before')
@@ -435,10 +437,10 @@ class GeminiConfig(ModelConfig):
             },
             'additionalProperties': False,
         }),
-    ] = Field(None, alias='fileSearch')
+    ] = Field(default=None)
 
     url_context: bool | genai_types.UrlContext | None = Field(
-        None, description='Return grounding metadata from links included in the query', alias='urlContext'
+        default=None, description='Return grounding metadata from links included in the query'
     )
 
     # inherited from ModelConfig:
@@ -473,13 +475,11 @@ class GeminiConfig(ModelConfig):
         }),
     ] = Field(
         default=None,
-        alias='topP',
         ge=0.0,
         le=1.0,
     )
     top_k: int | None = Field(  # pyrefly: ignore[bad-override]
         default=None,
-        alias='topK',
         description=('The maximum number of tokens to consider when sampling.'),
     )
 
@@ -516,28 +516,24 @@ class GeminiConfig(ModelConfig):
             },
             'additionalProperties': False,
         }),
-    ] = Field(None, alias='thinkingConfig')
+    ] = Field(default=None)
 
     max_output_tokens: int | None = Field(  # pyrefly: ignore[bad-override]
-        default=None, alias='maxOutputTokens', description='Maximum number of tokens to generate.'
+        default=None, description='Maximum number of tokens to generate.'
     )
-    stop_sequences: list[str] | None = Field(default=None, alias='stopSequences', description='Stop sequences.')
+    stop_sequences: list[str] | None = Field(default=None, description='Stop sequences.')
 
     # Sampling knobs GenerateContentConfig types. Declared so they stay flat
     # and SDK-validated now that unknown keys raise.
     seed: int | None = Field(default=None, description='Seed for decoding; repeats the same output for the same input.')
     presence_penalty: float | None = Field(
-        default=None, alias='presencePenalty', description='Penalizes tokens that already appear in the output.'
+        default=None, description='Penalizes tokens that already appear in the output.'
     )
     frequency_penalty: float | None = Field(
-        default=None, alias='frequencyPenalty', description='Penalizes tokens by how often they appear in the output.'
+        default=None, description='Penalizes tokens by how often they appear in the output.'
     )
-    candidate_count: int | None = Field(
-        default=None, alias='candidateCount', description='Number of response candidates to generate.'
-    )
-    response_logprobs: bool | None = Field(
-        default=None, alias='responseLogprobs', description='Return log probabilities of the output tokens.'
-    )
+    candidate_count: int | None = Field(default=None, description='Number of response candidates to generate.')
+    response_logprobs: bool | None = Field(default=None, description='Return log probabilities of the output tokens.')
     logprobs: int | None = Field(
         default=None, description='Number of top candidate tokens to return log probabilities for.'
     )
@@ -546,25 +542,25 @@ class GeminiConfig(ModelConfig):
 class SpeakerVoiceConfig(BaseModel):
     """Speaker voice config. Sent as ``genai_types.SpeakerVoiceConfig``."""
 
-    model_config = ConfigDict(extra='forbid', populate_by_name=True)
+    model_config = _NESTED_CONFIG
     speaker: str | None = None
-    voice_config: VoiceConfig | None = Field(None, alias='voiceConfig')
+    voice_config: VoiceConfig | None = Field(default=None)
 
 
 class MultiSpeakerVoiceConfig(BaseModel):
     """Multi-speaker voice config. Sent as ``genai_types.MultiSpeakerVoiceConfig``."""
 
-    model_config = ConfigDict(extra='forbid', populate_by_name=True)
-    speaker_voice_configs: list[SpeakerVoiceConfig] | None = Field(None, alias='speakerVoiceConfigs')
+    model_config = _NESTED_CONFIG
+    speaker_voice_configs: list[SpeakerVoiceConfig] | None = Field(default=None)
 
 
 class SpeechConfig(BaseModel):
     """Speech config. Sent as ``genai_types.SpeechConfig``."""
 
-    model_config = ConfigDict(extra='forbid', populate_by_name=True)
-    voice_config: VoiceConfig | None = Field(None, alias='voiceConfig')
-    language_code: str | None = Field(None, alias='languageCode')
-    multi_speaker_voice_config: MultiSpeakerVoiceConfig | None = Field(None, alias='multiSpeakerVoiceConfig')
+    model_config = _NESTED_CONFIG
+    voice_config: VoiceConfig | None = Field(default=None)
+    language_code: str | None = Field(default=None)
+    multi_speaker_voice_config: MultiSpeakerVoiceConfig | None = Field(default=None)
 
 
 DEFAULT_TTS_VOICE_NAME = 'Kore'
@@ -578,8 +574,7 @@ class GeminiTtsConfig(GeminiConfig):
     """Gemini TTS Config."""
 
     speech_config: SpeechConfig | None = Field(
-        None,
-        alias='speechConfig',
+        default=None,
         description=(
             'Speech synthesis settings. Without a voice config or a multi-speaker voice config, '
             f'models that reject a request without a voice get the {DEFAULT_TTS_VOICE_NAME} prebuilt voice.'
@@ -609,7 +604,7 @@ class GeminiImageConfig(GeminiConfig):
             },
             'additionalProperties': False,
         }),
-    ] = Field(None, alias='imageConfig')
+    ] = Field(default=None)
 
 
 class GemmaConfig(GeminiConfig):

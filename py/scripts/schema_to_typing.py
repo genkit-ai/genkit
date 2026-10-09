@@ -310,7 +310,8 @@ def _emit_model(
         req = req - omit - {_camel_to_snake(k) for k in omit}
     ext = ', protected_namespaces=()' if any(_camel_to_snake(k) in ('schema', 'schema_') for k in props) else ''
     frz = ', frozen=True' if name == 'PathMetadata' else ''
-    cfg = f"ConfigDict(alias_generator=to_camel, extra='{'allow' if name in allow else 'forbid'}', populate_by_name=True{ext}{frz})"
+    extra = 'allow' if name in allow else 'forbid'
+    cfg = f"ConfigDict(alias_generator=to_camel, extra='{extra}', validate_by_name=True, validate_by_alias=True{ext}{frz})"
     lines = [
         f'class {name}(GenkitModel):',
         f'    """Model for {name.lower().replace("_", " ")} data."""',

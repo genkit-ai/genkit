@@ -68,7 +68,7 @@ CREATE_OPTION_KEYS = (
 class McpServerConfig(BaseModel):
     """MCP server configuration for Deep Research."""
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True, alias_generator=to_camel)
+    model_config = ConfigDict(extra='allow', validate_by_name=True, validate_by_alias=True, alias_generator=to_camel)
     name: str | None = None
     url: str | None = None
     headers: dict[str, str] | None = None
@@ -78,14 +78,14 @@ class McpServerConfig(BaseModel):
 class FileSearchConfig(BaseModel):
     """File search store configuration for Deep Research."""
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True, alias_generator=to_camel)
+    model_config = ConfigDict(extra='allow', validate_by_name=True, validate_by_alias=True, alias_generator=to_camel)
     file_search_store_names: list[str]
 
 
 class DeepResearchConfig(BaseModel):
     """Deep Research model configuration."""
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True, alias_generator=to_camel)
+    model_config = ConfigDict(extra='allow', validate_by_name=True, validate_by_alias=True, alias_generator=to_camel)
     base_url: str | None = None
     api_version: str | None = None
     # Milliseconds — applied to the HTTP call, not the create body.

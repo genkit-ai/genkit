@@ -46,7 +46,7 @@ classifiers = [
 ]
 dependencies = [
   "genkit",
-  "pydantic>=2.10.5",
+  "pydantic>=2.11",
   "flask>=3.1.3",
 ]
 description = "Hang a Genkit flow on the Flask app you already have"
