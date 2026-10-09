@@ -457,11 +457,11 @@ class OpenAIModel:
         }
         if request.tools:
             openai_config['tools'] = await self._get_tools_definition(request.tools)
-        if any(msg.role == Role.TOOL for msg in request.messages):
-            # After a tool response, stop forcing additional tool calls.
-            openai_config['tool_choice'] = 'none'
-        elif request.tool_choice:
-            openai_config['tool_choice'] = request.tool_choice
+            # Genkit's auto/required/none are OpenAI's values. OpenAI rejects
+            # tool_choice without tools, so it rides only with them. Core's
+            # max_turns bounds a 'required' run that never answers.
+            if request.tool_choice:
+                openai_config['tool_choice'] = request.tool_choice
         if request.output_format:
             response_format = self._get_response_format(request)
             if response_format:

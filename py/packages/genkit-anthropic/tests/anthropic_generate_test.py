@@ -127,6 +127,20 @@ async def test_generate_claude_extra_is_sent_as_extra_body() -> None:
     assert 'extra' not in body
 
 
+@pytest.mark.asyncio
+async def test_generate_claude_sends_integer_top_k() -> None:
+    """`top_k=40` is sent as 40, not the 40.0 the float-typed ModelConfig field dumps."""
+    api = FakeClaudeApi()
+    ai = _genkit(api)
+
+    await ai.generate(model=MODEL, prompt='hi', config={'top_k': 40, 'max_output_tokens': 500})
+
+    body = api.body()
+    assert body['top_k'] == 40
+    assert type(body['top_k']) is int
+    assert type(body['max_tokens']) is int
+
+
 @pytest.mark.parametrize(
     ('config', 'field', 'sent'),
     [
