@@ -1966,10 +1966,101 @@ def test_eval_response_string_evaluation_raises() -> None:
         EvalFnResponse.model_validate({'testCaseId': 'case1', 'evaluation': 'nope'})
 
 
-def test_eval_response_bare_score_in_code_raises_validation_error() -> None:
-    """Building EvalFnResponse(evaluation=Score(...)) in code raises; wrap it in a list."""
-    with pytest.raises(ValidationError):
-        EvalFnResponse(test_case_id='case1', evaluation=Score(id='accuracy', score=0.9))  # type: ignore[arg-type]
+def test_eval_response_one_score_in_code_becomes_one_item_list() -> None:
+    """Building EvalFnResponse(evaluation=Score(...)) in code gives evaluation as a one-item list."""
+    row = EvalFnResponse(test_case_id='case1', evaluation=Score(id='accuracy', score=0.9))  # type: ignore[arg-type]
+
+    assert row.evaluation == [Score(id='accuracy', score=0.9)]
+
+
+@pytest.mark.asyncio
+async def test_evaluator_returning_one_score_reads_back_as_one_item_list(setup_test: SetupFixture) -> None:
+    """An evaluator that returns evaluation=Score(...) gives each row a one-item score list."""
+    ai, *_ = setup_test
+
+    async def eval_fn(datapoint: BaseDataPoint, options: object | None) -> EvalFnResponse:
+        return EvalFnResponse(
+            test_case_id=datapoint.test_case_id or '',
+            evaluation=Score(id='accuracy', score=0.9),  # type: ignore[arg-type]
+        )
+
+    ai.define_evaluator(name='one_eval', display_name='one_eval', definition='one score', fn=eval_fn)
+
+    results = await ai.evaluate(evaluator='one_eval', dataset=_two_rows())
+
+    assert [row.test_case_id for row in results] == ['case1', 'case2']
+    assert results[0].evaluation == [Score(id='accuracy', score=0.9)]
+    assert results[1].evaluation == [Score(id='accuracy', score=0.9)]
+
+
+@pytest.mark.asyncio
+async def test_evaluator_returning_empty_list_reads_back_empty(setup_test: SetupFixture) -> None:
+    """An evaluator that returns evaluation=[] gives the row an empty score list."""
+    ai, *_ = setup_test
+    _define_scoring_evaluator(ai, 'empty_eval', [])
+
+    results = await ai.evaluate(evaluator='empty_eval', dataset=_one_row())
+
+    assert [row.test_case_id for row in results] == ['case1']
+    assert results[0].evaluation == []
+
+
+@pytest.mark.asyncio
+async def test_mixed_rows_both_read_back_as_lists(setup_test: SetupFixture) -> None:
+    """One row returning a Score and the next returning a list both read back as score lists."""
+    ai, *_ = setup_test
+
+    async def eval_fn(datapoint: BaseDataPoint, options: object | None) -> EvalFnResponse:
+        if datapoint.test_case_id == 'case1':
+            return EvalFnResponse(test_case_id='case1', evaluation=Score(id='accuracy', score=0.9))  # type: ignore[arg-type]
+        return EvalFnResponse(
+            test_case_id=datapoint.test_case_id or '',
+            evaluation=[Score(id='accuracy', score=0.7), Score(id='fluency', score=0.8)],
+        )
+
+    ai.define_evaluator(name='mixed_eval', display_name='mixed_eval', definition='mixed', fn=eval_fn)
+
+    results = await ai.evaluate(evaluator='mixed_eval', dataset=_two_rows())
+
+    assert results[0].evaluation == [Score(id='accuracy', score=0.9)]
+    assert results[1].evaluation == [Score(id='accuracy', score=0.7), Score(id='fluency', score=0.8)]
+
+
+@pytest.mark.asyncio
+async def test_batch_evaluator_row_with_one_score_reads_back_as_list(setup_test: SetupFixture) -> None:
+    """A batch evaluator whose rows each hold one Score gives each row a one-item score list."""
+    ai, *_ = setup_test
+
+    async def batch_fn(req: EvalRequest) -> list[EvalFnResponse]:
+        return [
+            EvalFnResponse(test_case_id=row.test_case_id or '', evaluation=Score(score=True))  # type: ignore[arg-type]
+            for row in req.dataset
+        ]
+
+    ai.define_batch_evaluator(name='batch_one', display_name='batch_one', definition='one score', fn=batch_fn)
+
+    results = await ai.evaluate(evaluator='batch_one', dataset=_two_rows())
+
+    assert [row.test_case_id for row in results] == ['case1', 'case2']
+    assert [row.evaluation for row in results] == [[Score(score=True)], [Score(score=True)]]
+
+
+@pytest.mark.asyncio
+async def test_evaluator_returning_string_fails_row_naming_score_or_list(setup_test: SetupFixture) -> None:
+    """An evaluator that returns a string as evaluation gets a FAIL row saying to return a Score or a list of Score."""
+    ai, *_ = setup_test
+
+    async def eval_fn(datapoint: BaseDataPoint, options: object | None) -> EvalFnResponse:
+        return EvalFnResponse(test_case_id=datapoint.test_case_id or '', evaluation='great')  # type: ignore[arg-type]
+
+    ai.define_evaluator(name='str_eval', display_name='str_eval', definition='bad shape', fn=eval_fn)
+
+    results = await ai.evaluate(evaluator='str_eval', dataset=_one_row())
+
+    assert len(results[0].evaluation) == 1
+    failed = results[0].evaluation[0]
+    assert failed.status == EvalStatusEnum.FAIL
+    assert failed.error is not None and 'evaluation must be a Score or a list of Score' in failed.error
 
 
 def _define_recording_evaluator(ai: Genkit, name: str) -> list[object]:

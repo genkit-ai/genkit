@@ -314,10 +314,14 @@ class EvalFnResponse(GenkitModel):
 
     @field_validator('evaluation', mode='before')
     @classmethod
-    def _wrap_single_score_object(cls, value: Any) -> Any:  # noqa: ANN401
-        # saved runs may store one score object. wrap that dict;
-        # a Score built in code must already be a list.
-        return [value] if isinstance(value, dict) else value
+    def _wrap_single_score(cls, value: Any) -> Any:  # noqa: ANN401
+        # most evaluators score a row once, and saved runs may store that one
+        # score as an object. wrap it so whoever reads results always gets a list.
+        if isinstance(value, (dict, Score)):
+            return [value]
+        if not isinstance(value, list):
+            raise ValueError('evaluation must be a Score or a list of Score')
+        return value
 
 
 class EvalRequest(GenkitModel):
