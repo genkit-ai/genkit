@@ -864,6 +864,32 @@ async def test_vertexai_resolve_evaluator(vertexai_plugin_instance: VertexAI) ->
     assert action.name == vertexai_name('fluency')
 
 
+@pytest.mark.asyncio
+async def test_vertexai_listed_evaluator_metadata_matches_resolved(vertexai_plugin_instance: VertexAI) -> None:
+    """The Dev UI shows the same evaluator name and definition before and after resolve."""
+    plugin = vertexai_plugin_instance
+    mock_client = MagicMock()
+    _set_async_model_list(mock_client, [])
+    plugin._runtime_client = lambda: mock_client
+
+    listed = {a.name: a for a in await plugin.list_actions() if a.action_type == ActionKind.EVALUATOR}
+
+    assert len(listed) == 8
+    for name, meta in listed.items():
+        action = await plugin.resolve(action_type=ActionKind.EVALUATOR, name=name.removeprefix('vertexai/'))
+        assert action is not None
+        assert meta.metadata is not None
+        assert meta.metadata['evaluator'] == action.metadata['evaluator']
+    assert listed[vertexai_name('fluency')].metadata == {
+        'evaluator': {
+            'evaluatorDefinition': 'Assesses the language mastery of an output',
+            'evaluatorDisplayName': 'Fluency',
+            'evaluatorIsBilled': True,
+            'label': vertexai_name('fluency'),
+        }
+    }
+
+
 def test_config_schema_rejects_unknown_fields() -> None:
     """An undeclared top-level key raises; it has to go in `extra`."""
     with pytest.raises(ValidationError, match='new_experimental_param'):

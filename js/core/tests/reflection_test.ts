@@ -40,9 +40,9 @@ describe('ReflectionServer API', () => {
 
   beforeEach(async () => {
     registry = new Registry();
-    // -1: OS-assigned. A port from getPort() would now be bound exactly and
+    // 0: OS-assigned. A port from getPort() would now be bound exactly and
     // could race other test files running in parallel.
-    server = new ReflectionServer(registry, { port: -1 });
+    server = new ReflectionServer(registry, { port: 0 });
     await server.start();
     port = (server as any).server.address().port;
   });

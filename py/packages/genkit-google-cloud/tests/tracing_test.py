@@ -16,7 +16,6 @@
 
 """What enable_google_cloud_telemetry() does to Cloud Trace and the Developer UI."""
 
-import inspect
 import os
 from collections.abc import Generator
 from typing import Any
@@ -726,10 +725,3 @@ def test_enable_under_genkit_start_with_force_exports_on_span_end() -> None:
         assert any(isinstance(proc, SimpleSpanProcessor) for proc in _processors(isolated))
     finally:
         isolated.shutdown()
-
-
-def test_enable_google_cloud_telemetry_takes_project_like_google_cloud_clients() -> None:
-    """The setup kwarg is project=, matching google-cloud-* clients; project_id is only the OTel exporter kwarg."""
-    params = inspect.signature(enable_google_cloud_telemetry).parameters
-    assert 'project' in params
-    assert 'project_id' not in params

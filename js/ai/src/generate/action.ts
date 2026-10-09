@@ -143,6 +143,8 @@ export async function generateHelper(
     {
       metadata: {
         name: options.rawRequest.stepName || 'generate',
+        // Seed input up front so the realtime "pending" span export carries it.
+        input: options.rawRequest,
       },
       labels: {
         [SPAN_TYPE_ATTR]: 'util',
@@ -150,7 +152,6 @@ export async function generateHelper(
     },
     async (metadata) => {
       metadata.name = options.rawRequest.stepName || 'generate';
-      metadata.input = options.rawRequest;
       const output = await generateActionImpl(registry, {
         rawRequest: options.rawRequest,
         middleware: options.middleware,

@@ -24,6 +24,7 @@ from types import ModuleType
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
+import httpx
 import pytest
 from anthropic import AsyncAnthropicVertex
 from genkit_anthropic import AnthropicConfig
@@ -32,6 +33,7 @@ from genkit_vertexai.model_garden import ModelGarden
 from genkit_vertexai.model_garden._model_info import DEFAULT_SUPPORTS, SUPPORTED_OPENAI_COMPAT_MODELS
 from genkit_vertexai.model_garden.anthropic import AnthropicModelGarden
 from genkit_vertexai.model_garden.model_garden import ModelGardenModel
+from google.auth.exceptions import DefaultCredentialsError
 from openai.types.chat import ChatCompletion
 
 from genkit import ActionRunContext, Genkit, GenkitError, Message, Part, Role
@@ -40,6 +42,7 @@ from genkit.model import ModelRequest, OutputConfig
 from genkit.plugin_api import ActionKind
 
 CLAUDE = 'modelgarden/anthropic/claude-sonnet-4@20250514'
+_ADC = 'genkit_vertexai.model_garden.model_garden.google_auth_default'
 LLAMA = 'modelgarden/meta/llama-3.1-405b-instruct-maas'
 MISTRAL = 'modelgarden/mistralai/mistral-small-2503'
 
@@ -153,12 +156,22 @@ def test_anthropic_model_garden_does_not_advertise_api_key() -> None:
 @pytest.mark.parametrize(
     'model_name', ['modelgarden/meta/llama-3.2-90b-vision-instruct-maas', 'modelgarden/anthropic/claude-sonnet-4']
 )
-async def test_resolve_without_project_is_failed_precondition(model_name: str) -> None:
-    """No project configured is a local setup problem, not a bad request."""
+@pytest.mark.parametrize(
+    'adc',
+    [
+        pytest.param({'return_value': (MagicMock(), None)}, id='adc-without-project'),
+        pytest.param({'side_effect': DefaultCredentialsError('no ADC')}, id='no-adc'),
+    ],
+)
+async def test_resolve_without_project_is_failed_precondition(model_name: str, adc: dict[str, Any]) -> None:
+    """No project passed, in the environment, or in ADC is a local setup problem, not a bad request."""
     with patch.dict('os.environ', {}, clear=True):
         plugin = ModelGarden(location='us-central1')
 
-    with pytest.raises(GenkitError, match='project must be provided') as raised:
+    with (
+        patch(_ADC, **adc),
+        pytest.raises(GenkitError, match=r'ModelGarden\(project=\.\.\.\) or set GOOGLE_CLOUD_PROJECT') as raised,
+    ):
         await plugin.resolve(ActionKind.MODEL, model_name)
 
     assert raised.value.status == 'FAILED_PRECONDITION'
@@ -456,43 +469,64 @@ async def test_resolve_uncataloged_openai_compat_model_advertises_default_suppor
     assert info['supports'] == DEFAULT_SUPPORTS.model_dump(by_alias=True, exclude_none=True)
 
 
-def test_model_garden_takes_project_like_google_cloud_clients() -> None:
-    """ModelGarden(project=...) matches genai.Client(project=...); project_id= is a TypeError."""
-    assert ModelGarden(project='acme-prod', location='us-east5').project == 'acme-prod'
-    with pytest.raises(TypeError, match='project_id'):
-        ModelGarden(project_id='acme-prod')  # type: ignore[call-arg]
+def _project_in(request: httpx.Request) -> str:
+    """The project segment of a Vertex rawPredict URL."""
+    parts = request.url.path.split('/')
+    return parts[parts.index('projects') + 1]
 
 
-async def _project_sent_to_vertex(plugin: ModelGarden) -> object:
-    """Run one Model Garden Claude generate and return the project its Vertex client was built for."""
-    reply = MagicMock()
-    reply.content = [MagicMock(type='text', text='hello')]
-    reply.usage = MagicMock(input_tokens=1, output_tokens=1)
-    reply.stop_reason = 'end_turn'
-    client = MagicMock(spec=AsyncAnthropicVertex)
-    client.messages = MagicMock()
-    client.beta = MagicMock()
-    client.messages.create = AsyncMock(return_value=reply)
-    client.beta.messages.create = AsyncMock(return_value=reply)
-    with patch('genkit_vertexai.model_garden.anthropic.AsyncAnthropicVertex', return_value=client) as vertex:
-        ai = Genkit(plugins=[plugin])
-        response = await ai.generate(model='modelgarden/anthropic/claude-sonnet-4-5', prompt='hi')
-    assert response.text == 'hello'
-    return vertex.call_args.kwargs['project_id']
+async def _generate_claude(plugin: ModelGarden) -> None:
+    ai = Genkit(plugins=[plugin])
+    response = await ai.generate(model='modelgarden/anthropic/claude-sonnet-4-5', prompt='hi')
+    assert response.text == 'ok'
 
 
 @pytest.mark.asyncio
-async def test_model_garden_project_reaches_vertex_over_environment() -> None:
+async def test_model_garden_project_reaches_vertex_over_environment(vertex_requests: list[httpx.Request]) -> None:
     """ModelGarden(project='p') sends generate calls to p even when GCLOUD_PROJECT is set."""
     with patch.dict('os.environ', {'GCLOUD_PROJECT': 'env-proj', 'GOOGLE_CLOUD_PROJECT': 'env-proj'}):
-        assert await _project_sent_to_vertex(ModelGarden(project='p', location='us-central1')) == 'p'
+        await _generate_claude(ModelGarden(project='p', location='us-central1'))
+
+    assert [_project_in(r) for r in vertex_requests] == ['p']
 
 
 @pytest.mark.asyncio
-async def test_model_garden_without_project_uses_environment() -> None:
+async def test_model_garden_without_project_uses_environment(vertex_requests: list[httpx.Request]) -> None:
     """ModelGarden() with no project sends generate calls to GCLOUD_PROJECT."""
     with patch.dict('os.environ', {'GCLOUD_PROJECT': 'env-proj', 'GOOGLE_CLOUD_PROJECT': ''}):
-        assert await _project_sent_to_vertex(ModelGarden(location='us-central1')) == 'env-proj'
+        await _generate_claude(ModelGarden(location='us-central1'))
+
+    assert [_project_in(r) for r in vertex_requests] == ['env-proj']
+
+
+@pytest.mark.asyncio
+async def test_model_garden_without_project_or_environment_uses_adc_project(
+    vertex_requests: list[httpx.Request],
+) -> None:
+    """On Cloud Run (no project env var) ModelGarden() sends generate calls to the ADC project, probing ADC once."""
+    with (
+        patch.dict('os.environ', {'GCLOUD_PROJECT': '', 'GOOGLE_CLOUD_PROJECT': ''}),
+        patch(_ADC, return_value=(MagicMock(), 'adc-proj')) as adc,
+    ):
+        ai = Genkit(plugins=[ModelGarden(location='us-central1')])
+        await ai.generate(model='modelgarden/anthropic/claude-sonnet-4-5', prompt='hi')
+        await ai.generate(model='modelgarden/anthropic/claude-sonnet-4-6', prompt='hi')
+
+    assert [_project_in(r) for r in vertex_requests] == ['adc-proj', 'adc-proj']
+    adc.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_model_garden_environment_project_skips_adc(vertex_requests: list[httpx.Request]) -> None:
+    """A project from GCLOUD_PROJECT means ADC is never probed, so nothing waits on the metadata server."""
+    with (
+        patch.dict('os.environ', {'GCLOUD_PROJECT': 'env-proj', 'GOOGLE_CLOUD_PROJECT': ''}),
+        patch(_ADC) as adc,
+    ):
+        await _generate_claude(ModelGarden(location='us-central1'))
+
+    adc.assert_not_called()
+    assert [_project_in(r) for r in vertex_requests] == ['env-proj']
 
 
 def test_model_garden_positional_project_raises_type_error() -> None:

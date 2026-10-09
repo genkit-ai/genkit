@@ -14,28 +14,12 @@
  * limitations under the License.
  */
 
-import {
-  BatchLogRecordProcessor,
-  SimpleLogRecordProcessor,
-  type LogRecordProcessor,
-} from '@opentelemetry/sdk-logs';
 import { NodeSDK } from '@opentelemetry/sdk-node';
-import {
-  BatchSpanProcessor,
-  SimpleSpanProcessor,
-  type SpanProcessor,
-} from '@opentelemetry/sdk-trace-base';
+import { type SpanProcessor } from '@opentelemetry/sdk-trace-base';
 import { logger } from '../logging.js';
 import type { TelemetryConfig } from '../telemetryTypes.js';
 import { setTelemetryProvider } from '../tracing.js';
-import { isDevEnv } from '../utils.js';
-import {
-  LogServerExporter,
-  TraceServerExporter,
-  setTelemetryServerUrl,
-  telemetryServerUrl,
-} from './exporter.js';
-import { RealtimeSpanProcessor } from './realtime-span-processor.js';
+import { setTelemetryServerUrl } from './exporter.js';
 
 let telemetrySDK: NodeSDK | null = null;
 let nodeOtelConfig: TelemetryConfig | null = null;
@@ -49,6 +33,12 @@ export function initNodeTelemetryProvider() {
 
 /**
  * Enables tracing and metrics open telemetry configuration.
+ *
+ * This is the collection side: export to the exporters the caller (or a plugin
+ * such as GCP / Firebase) configured. It no longer auto-wires the telemetry
+ * server exporter or a default log processor to feed the Developer UI; that is
+ * now the instrumentation side's job (`DirectTelemetryInstrumentation`). Only
+ * user-supplied span/log processors and metric readers are honored here.
  */
 async function enableTelemetry(
   telemetryConfig: TelemetryConfig | Promise<TelemetryConfig>
@@ -64,7 +54,7 @@ async function enableTelemetry(
 
   nodeOtelConfig = telemetryConfig || {};
 
-  const processors: SpanProcessor[] = [createTelemetryServerProcessor()];
+  const processors: SpanProcessor[] = [];
   if (nodeOtelConfig.traceExporter) {
     throw new Error('Please specify spanProcessors instead.');
   }
@@ -76,27 +66,6 @@ async function enableTelemetry(
     delete nodeOtelConfig.spanProcessor;
   }
   nodeOtelConfig.spanProcessors = processors;
-
-  // Add LogRecordProcessors
-  const enableRealTimeTelemetry =
-    process.env.GENKIT_ENABLE_REALTIME_TELEMETRY === 'true';
-  const logExporter = new LogServerExporter();
-  // Export eagerly when a Dev UI may be watching (the Dev UI wants logs as
-  // they happen). Dev alone must count: in attach mode the URL arrives later
-  // via /api/notify, after this processor is chosen.
-  const defaultLogProcessor: LogRecordProcessor =
-    isDevEnv() || telemetryServerUrl || enableRealTimeTelemetry
-      ? new SimpleLogRecordProcessor(logExporter)
-      : new BatchLogRecordProcessor(logExporter);
-
-  if (nodeOtelConfig.logRecordProcessor) {
-    nodeOtelConfig.logRecordProcessor = new MultiLogRecordProcessor([
-      nodeOtelConfig.logRecordProcessor,
-      defaultLogProcessor,
-    ]);
-  } else {
-    nodeOtelConfig.logRecordProcessor = defaultLogProcessor;
-  }
 
   telemetrySDK = new NodeSDK(nodeOtelConfig);
   telemetrySDK.start();
@@ -115,31 +84,6 @@ async function cleanUpTracing(): Promise<void> {
   await telemetrySDK.shutdown();
   logger.debug('OpenTelemetry SDK shut down.');
   telemetrySDK = null;
-}
-
-/**
- * Creates a new SpanProcessor for exporting data to the telemetry server.
- */
-function createTelemetryServerProcessor(): SpanProcessor {
-  const exporter = new TraceServerExporter();
-  // A Dev UI may be watching in dev (the URL can arrive later via
-  // /api/notify) or whenever a telemetry server is already known, e.g. a
-  // non-dev reflection runtime given GENKIT_TELEMETRY_SERVER.
-  //
-  // Outside dev, only a URL known at init counts. A URL learned later
-  // (/api/notify, v2 handshake) is still used by the exporter, but the
-  // processor stays batched and realtime stays off. Reflection runs flush on
-  // completion, so the Dev UI still sees them. Set GENKIT_TELEMETRY_SERVER
-  // for eager export. The log processor in enableTelemetry follows suit.
-  const devUiMayBeWatching = isDevEnv() || !!telemetryServerUrl;
-  const enableRealTimeTelemetry =
-    process.env.GENKIT_ENABLE_REALTIME_TELEMETRY === 'true';
-  if (devUiMayBeWatching && enableRealTimeTelemetry) {
-    return new RealtimeSpanProcessor(exporter);
-  } else if (devUiMayBeWatching) {
-    return new SimpleSpanProcessor(exporter);
-  }
-  return new BatchSpanProcessor(exporter);
 }
 
 /** Flush metrics if present. */
@@ -162,22 +106,4 @@ async function flushTracing() {
     promises.push(nodeOtelConfig.logRecordProcessor.forceFlush());
   }
   await Promise.all(promises);
-}
-
-class MultiLogRecordProcessor implements LogRecordProcessor {
-  constructor(private readonly processors: LogRecordProcessor[]) {}
-
-  async forceFlush(): Promise<void> {
-    await Promise.all(this.processors.map((p) => p.forceFlush()));
-  }
-
-  onEmit(logRecord: any, context?: any): void {
-    for (const processor of this.processors) {
-      processor.onEmit(logRecord, context);
-    }
-  }
-
-  async shutdown(): Promise<void> {
-    await Promise.all(this.processors.map((p) => p.shutdown()));
-  }
 }

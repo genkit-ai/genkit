@@ -36,13 +36,13 @@ import httpx
 from google.auth import default as google_auth_default
 from google.auth.transport.requests import Request
 
-from genkit import BaseDataPoint, GenkitError
+from genkit import GenkitError
 from genkit._core._compat import StrEnum
-from genkit.evaluator import Details, EvalFnResponse, Score
+from genkit.evaluator import BaseDataPoint, Details, EvalFnResponse, Score
 from genkit.plugin_api import (
     GENKIT_CLIENT_HEADER,
     Action,
-    get_cached_client,
+    loop_local_client,
     mark_provider_error,
     wrap_http_error,
 )
@@ -51,6 +51,11 @@ from genkit_google_genai._constants import GLOBAL_LOCATION, is_multi_regional_lo
 
 if TYPE_CHECKING:
     from genkit import Genkit as GenkitRegistry
+
+
+@loop_local_client
+def _evaluator_client() -> httpx.AsyncClient:
+    return httpx.AsyncClient(timeout=httpx.Timeout(60.0))
 
 
 class VertexAIEvaluationMetricType(StrEnum):
@@ -68,6 +73,43 @@ class VertexAIEvaluationMetricType(StrEnum):
     SUMMARIZATION_QUALITY = 'SUMMARIZATION_QUALITY'
     SUMMARIZATION_HELPFULNESS = 'SUMMARIZATION_HELPFULNESS'
     SUMMARIZATION_VERBOSITY = 'SUMMARIZATION_VERBOSITY'
+
+
+# Display name and definition per metric. list_actions and define_evaluator both read this.
+METRIC_INFO: dict[VertexAIEvaluationMetricType, tuple[str, str]] = {
+    VertexAIEvaluationMetricType.BLEU: (
+        'BLEU',
+        'Computes the BLEU score by comparing the output against the ground truth',
+    ),
+    VertexAIEvaluationMetricType.ROUGE: (
+        'ROUGE',
+        'Computes the ROUGE score by comparing the output against the ground truth',
+    ),
+    VertexAIEvaluationMetricType.FLUENCY: (
+        'Fluency',
+        'Assesses the language mastery of an output',
+    ),
+    VertexAIEvaluationMetricType.SAFETY: (
+        'Safety',
+        'Assesses the level of safety of an output',
+    ),
+    VertexAIEvaluationMetricType.GROUNDEDNESS: (
+        'Groundedness',
+        'Assesses the ability to provide or reference information included only in the context',
+    ),
+    VertexAIEvaluationMetricType.SUMMARIZATION_QUALITY: (
+        'Summarization quality',
+        'Assesses the overall ability to summarize text',
+    ),
+    VertexAIEvaluationMetricType.SUMMARIZATION_HELPFULNESS: (
+        'Summarization helpfulness',
+        'Assesses ability to provide a summarization with details to substitute the original',
+    ),
+    VertexAIEvaluationMetricType.SUMMARIZATION_VERBOSITY: (
+        'Summarization verbosity',
+        'Assesses the ability to provide a succinct summarization',
+    ),
+}
 
 
 def _create_list_based_score_handler(results_key: str, values_key: str) -> Callable[[dict[str, Any]], Score]:
@@ -170,12 +212,8 @@ class EvaluatorFactory:
             **request_body,
         }
 
-        # Use cached client for better connection reuse.
-        # Note: Auth headers are passed per-request since tokens may expire.
-        client = get_cached_client(
-            cache_key='vertex-ai-evaluator',
-            timeout=60.0,
-        )
+        # Auth headers go on each request since tokens expire.
+        client = _evaluator_client()
 
         # Transport failures (refused connection, timeout) have no known
         # status and propagate as is.
@@ -307,8 +345,6 @@ def _create_evaluator_for_metric(
     """
     evaluator_configs = {
         VertexAIEvaluationMetricType.BLEU: {
-            'display_name': 'BLEU',
-            'definition': 'Computes the BLEU score by comparing the output against the ground truth',
             'to_request': lambda dp: {
                 'bleuInput': {
                     'metricSpec': {},
@@ -323,8 +359,6 @@ def _create_evaluator_for_metric(
             'response_handler': _create_list_based_score_handler('bleuResults', 'bleuMetricValues'),
         },
         VertexAIEvaluationMetricType.ROUGE: {
-            'display_name': 'ROUGE',
-            'definition': 'Computes the ROUGE score by comparing the output against the ground truth',
             'to_request': lambda dp: {
                 'rougeInput': {
                     'metricSpec': {},
@@ -339,8 +373,6 @@ def _create_evaluator_for_metric(
             'response_handler': _create_list_based_score_handler('rougeResults', 'rougeMetricValues'),
         },
         VertexAIEvaluationMetricType.FLUENCY: {
-            'display_name': 'Fluency',
-            'definition': 'Assesses the language mastery of an output',
             'to_request': lambda dp: {
                 'fluencyInput': {
                     'metricSpec': {},
@@ -355,8 +387,6 @@ def _create_evaluator_for_metric(
             ),
         },
         VertexAIEvaluationMetricType.SAFETY: {
-            'display_name': 'Safety',
-            'definition': 'Assesses the level of safety of an output',
             'to_request': lambda dp: {
                 'safetyInput': {
                     'metricSpec': {},
@@ -371,8 +401,6 @@ def _create_evaluator_for_metric(
             ),
         },
         VertexAIEvaluationMetricType.GROUNDEDNESS: {
-            'display_name': 'Groundedness',
-            'definition': 'Assesses the ability to provide or reference information included only in the context',
             'to_request': lambda dp: {
                 'groundednessInput': {
                     'metricSpec': {},
@@ -388,8 +416,6 @@ def _create_evaluator_for_metric(
             ),
         },
         VertexAIEvaluationMetricType.SUMMARIZATION_QUALITY: {
-            'display_name': 'Summarization quality',
-            'definition': 'Assesses the overall ability to summarize text',
             'to_request': lambda dp: {
                 'summarizationQualityInput': {
                     'metricSpec': {},
@@ -406,8 +432,6 @@ def _create_evaluator_for_metric(
             ),
         },
         VertexAIEvaluationMetricType.SUMMARIZATION_HELPFULNESS: {
-            'display_name': 'Summarization helpfulness',
-            'definition': 'Assesses ability to provide a summarization with details to substitute the original',
             'to_request': lambda dp: {
                 'summarizationHelpfulnessInput': {
                     'metricSpec': {},
@@ -424,8 +448,6 @@ def _create_evaluator_for_metric(
             ),
         },
         VertexAIEvaluationMetricType.SUMMARIZATION_VERBOSITY: {
-            'display_name': 'Summarization verbosity',
-            'definition': 'Assesses the ability to provide a succinct summarization',
             'to_request': lambda dp: {
                 'summarizationVerbosityInput': {
                     'metricSpec': {},
@@ -448,8 +470,7 @@ def _create_evaluator_for_metric(
         return None
 
     evaluator_name = f'vertexai/{metric_type.lower()}'
-    display_name: str = config['display_name']  # type: ignore[assignment]
-    definition: str = config['definition']  # type: ignore[assignment]
+    display_name, definition = METRIC_INFO[metric_type]
     evaluator_fn = factory.create_evaluator_fn(
         metric_type,
         config['to_request'],

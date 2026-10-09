@@ -148,7 +148,7 @@ async def _run_client_lifecycle(
 
 
 async def _stop_client(client: ReflectionServerV2, task: asyncio.Task[None]) -> None:
-    client.stop()
+    await client.stop()
     task.cancel()
     try:
         await task

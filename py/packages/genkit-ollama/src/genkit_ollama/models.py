@@ -55,7 +55,7 @@ The ``_resolve_image()`` method handles three cases:
 - **Data URIs** (``data:image/jpeg;base64,...``): Strips the prefix and
   returns the raw base64 string, matching the JS canonical Ollama plugin.
 - **HTTP/HTTPS URLs**: Downloads the image using the shared
-  ``get_cached_client()`` utility and returns raw bytes.
+  loop-local ``httpx`` client and returns raw bytes.
 - **Other strings** (local file paths, raw base64): Passed through
   unchanged for the ``Image`` type to handle.
 
@@ -96,7 +96,7 @@ from pydantic.alias_generators import to_camel, to_snake
 
 from genkit import ActionRunContext, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
 from genkit.model import ModelConfig, ModelRequest, ModelUsage, ToolRequest, get_basic_usage_stats
-from genkit.plugin_api import get_cached_client, wrap_http_error
+from genkit.plugin_api import loop_local_client, wrap_http_error
 from genkit_ollama._errors import wrap_connection_errors
 from genkit_ollama.constants import (
     DEFAULT_OLLAMA_SERVER_URL,
@@ -104,6 +104,18 @@ from genkit_ollama.constants import (
 )
 
 logger = structlog.get_logger(__name__)
+
+
+# Some image hosts (Wikimedia, for one) answer 403 to requests without a real
+# User-Agent, so the image fetch client always sends one.
+@loop_local_client
+def _image_fetch_client() -> httpx.AsyncClient:
+    return httpx.AsyncClient(
+        timeout=httpx.Timeout(60.0),
+        headers={'User-Agent': 'Genkit/1.0 (https://github.com/genkit-ai/genkit; genkit@google.com)'},
+        follow_redirects=True,
+    )
+
 
 # Matches <think>/<thinking> blocks case-insensitively (``i``) across newlines
 # (``s``), non-greedy (``.*?``) so multiple blocks in one response are captured
@@ -820,17 +832,7 @@ class OllamaModel:
 
         if url.startswith(('http://', 'https://')):
             # TODO(#4360): Replace with downloadRequestMedia middleware (G15 parity).
-            # Some servers (e.g., Wikipedia/Wikimedia) block requests
-            # without a proper User-Agent, returning HTTP 403 Forbidden.
-            client = get_cached_client(
-                cache_key='ollama/image-fetch',
-                timeout=60.0,
-                headers={
-                    'User-Agent': 'Genkit/1.0 (https://github.com/genkit-ai/genkit; genkit@google.com)',
-                },
-                follow_redirects=True,
-            )
-            response = await client.get(url)
+            response = await _image_fetch_client().get(url)
             try:
                 response.raise_for_status()
             except httpx.HTTPStatusError as e:
