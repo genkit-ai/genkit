@@ -18,11 +18,12 @@
 """Tests for the Gemini model implementation."""
 
 import base64
+from enum import Enum
 from typing import Any, cast, get_args
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from genkit_google_genai._models import _gemini
+from genkit_google_genai._models import _gemini, _veo
 from genkit_google_genai._models._gemini import (
     DEFAULT_SUPPORTS_MODEL,
     GeminiConfig,
@@ -1646,7 +1647,7 @@ async def test_generate_adds_no_voice_to_a_multi_speaker_config(mocker: MockerFi
 
 # Each strict nested Gemini setting and the google.genai type it is sent as.
 _NESTED_SDK_MIRRORS: list[tuple[type[BaseModel], type[BaseModel]]] = [
-    (_gemini.SafetySettingsSchema, genai_types.SafetySetting),
+    (_gemini.SafetySetting, genai_types.SafetySetting),
     (_gemini.PrebuiltVoiceConfig, genai_types.PrebuiltVoiceConfig),
     (_gemini.FunctionCallingConfig, genai_types.FunctionCallingConfig),
     (_gemini.ThinkingConfig, genai_types.ThinkingConfig),
@@ -1656,6 +1657,16 @@ _NESTED_SDK_MIRRORS: list[tuple[type[BaseModel], type[BaseModel]]] = [
     (_gemini.SpeakerVoiceConfig, genai_types.SpeakerVoiceConfig),
     (_gemini.MultiSpeakerVoiceConfig, genai_types.MultiSpeakerVoiceConfig),
     (_gemini.SpeechConfig, genai_types.SpeechConfig),
+    (_gemini.ImageOutputOptions, genai_types.ImageConfigImageOutputOptions),
+    (_gemini.ReplicatedVoiceConfig, genai_types.ReplicatedVoiceConfig),
+    (_gemini.VoiceConsentSignature, genai_types.VoiceConsentSignature),
+    (_gemini.CodeExecution, genai_types.ToolCodeExecution),
+    (_gemini.UrlContext, genai_types.UrlContext),
+    (_gemini.GoogleSearch, genai_types.GoogleSearch),
+    (_gemini.SearchTypes, genai_types.SearchTypes),
+    (_gemini.WebSearch, genai_types.WebSearch),
+    (_gemini.ImageSearch, genai_types.ImageSearch),
+    (_gemini.Interval, genai_types.Interval),
 ]
 
 
@@ -1666,9 +1677,80 @@ def test_nested_gemini_setting_declares_exactly_the_sdk_fields(ours: type[BaseMo
 
 
 @pytest.mark.parametrize(
+    ('ours', 'sdk'),
+    [(o, s) for o, s in _NESTED_SDK_MIRRORS if not any(f.is_required() for f in o.model_fields.values())],
+    ids=lambda c: c.__name__,
+)
+def test_nested_gemini_setting_accepts_the_sdk_object(ours: type[BaseModel], sdk: type[BaseModel]) -> None:
+    """Code written against the google-genai types still validates: the SDK object coerces into its mirror."""
+    assert isinstance(ours.model_validate(sdk()), ours)
+
+
+# SDK placeholder values Genkit doesn't offer. Selecting one means "use the
+# server default", which leaving the field unset already does.
+_OMITTED_UNSPECIFIED = {'HARM_BLOCK_THRESHOLD_UNSPECIFIED', 'THINKING_LEVEL_UNSPECIFIED'}
+
+
+@pytest.mark.parametrize(
+    ('ours', 'sdk'),
+    [
+        (_gemini.HarmCategory, genai_types.HarmCategory),
+        (_gemini.HarmBlockThreshold, genai_types.HarmBlockThreshold),
+        (_gemini.HarmBlockMethod, genai_types.HarmBlockMethod),
+        (_gemini.FunctionCallingMode, genai_types.FunctionCallingConfigMode),
+        (_gemini.ThinkingLevel, genai_types.ThinkingLevel),
+        (_gemini.ProminentPeople, genai_types.ProminentPeople),
+        (_gemini.PhishBlockThreshold, genai_types.PhishBlockThreshold),
+        (_veo.VideoCompressionQuality, genai_types.VideoCompressionQuality),
+        (_veo.ImageResizeMode, genai_types.ImageResizeMode),
+    ],
+    ids=[
+        'HarmCategory',
+        'HarmBlockThreshold',
+        'HarmBlockMethod',
+        'FunctionCallingMode',
+        'ThinkingLevel',
+        'ProminentPeople',
+        'PhishBlockThreshold',
+        'VideoCompressionQuality',
+        'ImageResizeMode',
+    ],
+)
+def test_choice_literal_matches_the_sdk_enum(ours: object, sdk: type[Enum]) -> None:
+    """Each choice Literal lists exactly its google-genai enum, so an SDK bump that adds a value fails here."""
+    assert set(get_args(ours)) == {e.value for e in sdk} - _OMITTED_UNSPECIFIED
+
+
+def test_image_choice_literals_match_the_docs() -> None:
+    """genai_types.ImageConfig types aspect_ratio and image_size as str, so these pin the documented lists.
+
+    https://ai.google.dev/gemini-api/docs/image-generation#aspect_ratios_and_image_size
+    """
+    assert genai_types.ImageConfig.model_fields['aspect_ratio'].annotation == str | None
+    assert genai_types.ImageConfig.model_fields['image_size'].annotation == str | None
+    assert get_args(_gemini.ImageAspectRatio) == (
+        '1:1',
+        '1:4',
+        '1:8',
+        '2:3',
+        '3:2',
+        '3:4',
+        '4:1',
+        '4:3',
+        '4:5',
+        '5:4',
+        '8:1',
+        '9:16',
+        '16:9',
+        '21:9',
+    )
+    assert get_args(_gemini.ImageSize) == ('1K', '2K', '4K')
+
+
+@pytest.mark.parametrize(
     ('config_class', 'field', 'nested'),
     [
-        (GeminiConfig, 'safetySettings', _gemini.SafetySettingsSchema),
+        (GeminiConfig, 'safetySettings', _gemini.SafetySetting),
         (GeminiConfig, 'functionCallingConfig', _gemini.FunctionCallingConfig),
         (GeminiConfig, 'thinkingConfig', _gemini.ThinkingConfig),
         (GeminiConfig, 'fileSearch', _gemini.FileSearchConfig),

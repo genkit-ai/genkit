@@ -20,7 +20,7 @@ import asyncio
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from functools import cached_property
-from typing import Annotated, Any, Any as JsonAny, Literal, TypeAlias, cast
+from typing import Annotated, Any, Any as JsonAny, Literal, TypeAlias, cast, get_args
 
 from google import genai
 from google.auth import default as google_auth_default
@@ -50,7 +50,6 @@ from genkit import (
     Part,
     Role,
 )
-from genkit._core._compat import StrEnum
 from genkit.model import (
     Candidate,
     Constrained,
@@ -144,24 +143,52 @@ from genkit_google_genai._models._utils import (  # noqa: E402
     ToolWire,
 )
 
-
-class HarmCategory(StrEnum):
-    """Harm categories."""
-
-    HARM_CATEGORY_UNSPECIFIED = 'HARM_CATEGORY_UNSPECIFIED'
-    HARM_CATEGORY_HATE_SPEECH = 'HARM_CATEGORY_HATE_SPEECH'
-    HARM_CATEGORY_SEXUALLY_EXPLICIT = 'HARM_CATEGORY_SEXUALLY_EXPLICIT'
-    HARM_CATEGORY_HARASSMENT = 'HARM_CATEGORY_HARASSMENT'
-    HARM_CATEGORY_DANGEROUS_CONTENT = 'HARM_CATEGORY_DANGEROUS_CONTENT'
-
-
-class HarmBlockThreshold(StrEnum):
-    """Harm block thresholds."""
-
-    BLOCK_LOW_AND_ABOVE = 'BLOCK_LOW_AND_ABOVE'
-    BLOCK_MEDIUM_AND_ABOVE = 'BLOCK_MEDIUM_AND_ABOVE'
-    BLOCK_ONLY_HIGH = 'BLOCK_ONLY_HIGH'
-    BLOCK_NONE = 'BLOCK_NONE'
+# Input-only choice sets. Literals rather than enums so callers pass plain
+# strings (thinking_level='HIGH') without importing anything, and type
+# checkers still reject a value outside the set. The Dev UI schemas below
+# read the same sets with get_args.
+#
+# googlegenai_gemini_test.py pins each set to its google-genai enum, so an
+# SDK bump that adds a value fails until it is added here. The SDK's
+# *_UNSPECIFIED placeholders are listed only where Genkit already offered
+# them (HarmCategory, HarmBlockMethod, FunctionCallingMode, ProminentPeople,
+# PhishBlockThreshold).
+HarmCategory: TypeAlias = Literal[
+    'HARM_CATEGORY_UNSPECIFIED',
+    'HARM_CATEGORY_HATE_SPEECH',
+    'HARM_CATEGORY_SEXUALLY_EXPLICIT',
+    'HARM_CATEGORY_HARASSMENT',
+    'HARM_CATEGORY_DANGEROUS_CONTENT',
+    'HARM_CATEGORY_CIVIC_INTEGRITY',
+    'HARM_CATEGORY_JAILBREAK',
+    'HARM_CATEGORY_IMAGE_HATE',
+    'HARM_CATEGORY_IMAGE_DANGEROUS_CONTENT',
+    'HARM_CATEGORY_IMAGE_HARASSMENT',
+    'HARM_CATEGORY_IMAGE_SEXUALLY_EXPLICIT',
+]
+HarmBlockThreshold: TypeAlias = Literal[
+    'BLOCK_LOW_AND_ABOVE', 'BLOCK_MEDIUM_AND_ABOVE', 'BLOCK_ONLY_HIGH', 'BLOCK_NONE', 'OFF'
+]
+HarmBlockMethod: TypeAlias = Literal['HARM_BLOCK_METHOD_UNSPECIFIED', 'SEVERITY', 'PROBABILITY']
+FunctionCallingMode: TypeAlias = Literal['MODE_UNSPECIFIED', 'AUTO', 'ANY', 'NONE', 'VALIDATED']
+ThinkingLevel: TypeAlias = Literal['MINIMAL', 'LOW', 'MEDIUM', 'HIGH']
+# genai_types.ImageConfig types aspect_ratio and image_size as str. These
+# follow the Gemini image generation docs, union across image models:
+# https://ai.google.dev/gemini-api/docs/image-generation#aspect_ratios_and_image_size
+ImageAspectRatio: TypeAlias = Literal[
+    '1:1', '1:4', '1:8', '2:3', '3:2', '3:4', '4:1', '4:3', '4:5', '5:4', '8:1', '9:16', '16:9', '21:9'
+]
+ImageSize: TypeAlias = Literal['1K', '2K', '4K']
+ProminentPeople: TypeAlias = Literal['PROMINENT_PEOPLE_UNSPECIFIED', 'ALLOW_PROMINENT_PEOPLE', 'BLOCK_PROMINENT_PEOPLE']
+PhishBlockThreshold: TypeAlias = Literal[
+    'PHISH_BLOCK_THRESHOLD_UNSPECIFIED',
+    'BLOCK_LOW_AND_ABOVE',
+    'BLOCK_MEDIUM_AND_ABOVE',
+    'BLOCK_HIGH_AND_ABOVE',
+    'BLOCK_HIGHER_AND_ABOVE',
+    'BLOCK_VERY_HIGH_AND_ABOVE',
+    'BLOCK_ONLY_EXTREMELY_HIGH',
+]
 
 
 # Each strict nested class below declares every field of the google.genai type
@@ -171,16 +198,21 @@ class HarmBlockThreshold(StrEnum):
 # No field passes alias=. The camelCase wire name comes from alias_generator,
 # so type checkers see the snake_case field name as the constructor kwarg and
 # runtime still accepts both spellings.
-_NESTED_CONFIG = ConfigDict(extra='forbid', validate_by_name=True, validate_by_alias=True, alias_generator=to_camel)
+#
+# from_attributes=True lets a google.genai object passed at runtime validate
+# into its mirror, so code written against the SDK types keeps working.
+_NESTED_CONFIG = ConfigDict(
+    extra='forbid', validate_by_name=True, validate_by_alias=True, alias_generator=to_camel, from_attributes=True
+)
 
 
-class SafetySettingsSchema(BaseModel):
-    """Safety settings schema. Sent as ``genai_types.SafetySetting``."""
+class SafetySetting(BaseModel):
+    """Safety setting. Sent as ``genai_types.SafetySetting``."""
 
     model_config = _NESTED_CONFIG
     category: HarmCategory
     threshold: HarmBlockThreshold
-    method: genai_types.HarmBlockMethod | None = None
+    method: HarmBlockMethod | None = None
 
 
 class PrebuiltVoiceConfig(BaseModel):
@@ -188,15 +220,6 @@ class PrebuiltVoiceConfig(BaseModel):
 
     model_config = _NESTED_CONFIG
     voice_name: str | None = Field(default=None)
-
-
-class FunctionCallingMode(StrEnum):
-    """Function calling mode."""
-
-    MODE_UNSPECIFIED = 'MODE_UNSPECIFIED'
-    AUTO = 'AUTO'
-    ANY = 'ANY'
-    NONE = 'NONE'
 
 
 class FunctionCallingConfig(BaseModel):
@@ -208,15 +231,6 @@ class FunctionCallingConfig(BaseModel):
     stream_function_call_arguments: bool | None = Field(default=None)
 
 
-class ThinkingLevel(StrEnum):
-    """Thinking level."""
-
-    MINIMAL = 'MINIMAL'
-    LOW = 'LOW'
-    MEDIUM = 'MEDIUM'
-    HIGH = 'HIGH'
-
-
 class ThinkingConfig(BaseModel):
     """Thinking config. Sent as ``genai_types.ThinkingConfig``."""
 
@@ -226,6 +240,8 @@ class ThinkingConfig(BaseModel):
     thinking_level: ThinkingLevel | None = Field(default=None)
 
 
+# Deep Research sends this same class as the Interactions file_search tool,
+# which takes the same three fields.
 class FileSearchConfig(BaseModel):
     """File search config. Sent as ``genai_types.FileSearch``."""
 
@@ -235,27 +251,12 @@ class FileSearchConfig(BaseModel):
     top_k: int | None = Field(default=None)
 
 
-class ImageAspectRatio(StrEnum):
-    """Image aspect ratio."""
+class ImageOutputOptions(BaseModel):
+    """Image output options. Sent as ``genai_types.ImageConfigImageOutputOptions``."""
 
-    RATIO_1_1 = '1:1'
-    RATIO_2_3 = '2:3'
-    RATIO_3_2 = '3:2'
-    RATIO_3_4 = '3:4'
-    RATIO_4_3 = '4:3'
-    RATIO_4_5 = '4:5'
-    RATIO_5_4 = '5:4'
-    RATIO_9_16 = '9:16'
-    RATIO_16_9 = '16:9'
-    RATIO_21_9 = '21:9'
-
-
-class ImageSize(StrEnum):
-    """Image size."""
-
-    SIZE_1K = '1K'
-    SIZE_2K = '2K'
-    SIZE_4K = '4K'
+    model_config = _NESTED_CONFIG
+    mime_type: str | None = None
+    compression_quality: int | None = None
 
 
 class ImageConfig(BaseModel):
@@ -267,8 +268,34 @@ class ImageConfig(BaseModel):
     output_mime_type: str | None = Field(default=None)
     output_compression_quality: int | None = Field(default=None)
     person_generation: str | None = Field(default=None)
-    prominent_people: genai_types.ProminentPeople | None = Field(default=None)
-    image_output_options: genai_types.ImageConfigImageOutputOptions | None = Field(default=None)
+    prominent_people: ProminentPeople | None = Field(default=None)
+    image_output_options: ImageOutputOptions | None = Field(default=None)
+
+
+class VoiceConsentSignature(BaseModel):
+    """Voice consent signature. Sent as ``genai_types.VoiceConsentSignature``."""
+
+    model_config = _NESTED_CONFIG
+    signature: str | None = None
+
+
+class ReplicatedVoiceConfig(BaseModel):
+    """Replicated (custom) voice. Sent as ``genai_types.ReplicatedVoiceConfig``."""
+
+    # Audio is base64 in JSON, as in the SDK type.
+    model_config = ConfigDict(
+        extra='forbid',
+        validate_by_name=True,
+        validate_by_alias=True,
+        alias_generator=to_camel,
+        from_attributes=True,
+        ser_json_bytes='base64',
+        val_json_bytes='base64',
+    )
+    mime_type: str | None = None
+    voice_sample_audio: bytes | None = None
+    consent_audio: bytes | None = None
+    voice_consent_signature: VoiceConsentSignature | None = None
 
 
 class VoiceConfig(BaseModel):
@@ -276,14 +303,72 @@ class VoiceConfig(BaseModel):
 
     model_config = _NESTED_CONFIG
     prebuilt_voice_config: PrebuiltVoiceConfig | None = Field(default=None)
-    replicated_voice_config: genai_types.ReplicatedVoiceConfig | None = Field(default=None)
+    replicated_voice_config: ReplicatedVoiceConfig | None = Field(default=None)
 
 
-# The google.genai tool type a dict under each tool toggle is validated as.
+class CodeExecution(BaseModel):
+    """Code execution tool options. Sent as ``genai_types.ToolCodeExecution``."""
+
+    model_config = _NESTED_CONFIG
+
+
+class UrlContext(BaseModel):
+    """URL context tool options. Sent as ``genai_types.UrlContext``."""
+
+    model_config = _NESTED_CONFIG
+
+
+class WebSearch(BaseModel):
+    """Web search. Sent as ``genai_types.WebSearch``."""
+
+    model_config = _NESTED_CONFIG
+
+
+class ImageSearch(BaseModel):
+    """Image search. Sent as ``genai_types.ImageSearch``."""
+
+    model_config = _NESTED_CONFIG
+
+
+class SearchTypes(BaseModel):
+    """Search types to enable. Sent as ``genai_types.SearchTypes``."""
+
+    model_config = _NESTED_CONFIG
+    web_search: WebSearch | None = Field(default=None, description='Enables web search. Returns text results.')
+    image_search: ImageSearch | None = Field(default=None, description='Enables image search. Returns image bytes.')
+
+
+class Interval(BaseModel):
+    """Time interval, start inclusive, end exclusive. Sent as ``genai_types.Interval``."""
+
+    model_config = _NESTED_CONFIG
+    start_time: datetime | None = Field(default=None, description='Inclusive start of the interval.')
+    end_time: datetime | None = Field(default=None, description='Exclusive end of the interval.')
+
+
+class GoogleSearch(BaseModel):
+    """Google Search tool options. Sent as ``genai_types.GoogleSearch``."""
+
+    model_config = _NESTED_CONFIG
+    search_types: SearchTypes | None = Field(
+        default=None, description='The search types to enable. Web search when unset.'
+    )
+    blocking_confidence: PhishBlockThreshold | None = Field(
+        default=None, description='Block results at or above this phishing confidence. Vertex AI only.'
+    )
+    exclude_domains: list[str] | None = Field(
+        default=None, description='Domains to exclude from results, e.g. ["amazon.com"]. Vertex AI only.'
+    )
+    time_range_filter: Interval | None = Field(
+        default=None, description='Only return results in this time range. Gemini API only.'
+    )
+
+
+# The Genkit options type a value under each tool toggle is validated as.
 _TOOL_OPTION_TYPES: dict[str, type[BaseModel]] = {
-    'code_execution': genai_types.ToolCodeExecution,
-    'google_search': genai_types.GoogleSearch,
-    'url_context': genai_types.UrlContext,
+    'code_execution': CodeExecution,
+    'google_search': GoogleSearch,
+    'url_context': UrlContext,
 }
 
 
@@ -314,15 +399,15 @@ class GeminiConfig(ModelConfig):
     )
 
     safety_settings: Annotated[
-        list[SafetySettingsSchema] | None,
+        list[SafetySetting] | None,
         WithJsonSchema({
             'type': 'array',
             'items': {
                 'type': 'object',
                 'properties': {
-                    'category': {'type': 'string', 'enum': [e.value for e in HarmCategory]},
-                    'threshold': {'type': 'string', 'enum': [e.value for e in HarmBlockThreshold]},
-                    'method': {'type': 'string', 'enum': [e.value for e in genai_types.HarmBlockMethod]},
+                    'category': {'type': 'string', 'enum': list(get_args(HarmCategory))},
+                    'threshold': {'type': 'string', 'enum': list(get_args(HarmBlockThreshold))},
+                    'method': {'type': 'string', 'enum': list(get_args(HarmBlockMethod))},
                 },
                 'required': ['category', 'threshold'],
                 'additionalProperties': False,
@@ -336,7 +421,7 @@ class GeminiConfig(ModelConfig):
         default=None,
     )
 
-    code_execution: bool | genai_types.ToolCodeExecution | None = Field(
+    code_execution: bool | CodeExecution | None = Field(
         default=None,
         description='Enables the model to generate and run code. True attaches the tool; a dict is the tool options.',
     )
@@ -353,7 +438,7 @@ class GeminiConfig(ModelConfig):
         WithJsonSchema({
             'type': 'object',
             'properties': {
-                'mode': {'type': 'string', 'enum': [e.value for e in FunctionCallingMode]},
+                'mode': {'type': 'string', 'enum': list(get_args(FunctionCallingMode))},
                 'allowedFunctionNames': {'type': 'array', 'items': {'type': 'string'}},
                 'streamFunctionCallArguments': {'type': 'boolean'},
             },
@@ -375,7 +460,7 @@ class GeminiConfig(ModelConfig):
         description='The modalities to be used in the response.',
     )
 
-    google_search: bool | genai_types.GoogleSearch | None = Field(
+    google_search: bool | GoogleSearch | None = Field(
         default=None,
         description=(
             'Ground the response in public web data with the Google Search tool. '
@@ -398,13 +483,13 @@ class GeminiConfig(ModelConfig):
 
     @field_validator('code_execution', 'google_search', 'url_context', mode='wrap')
     @classmethod
-    def _tool_options_against_sdk_type(
+    def _tool_options(
         cls,
         value: Any,  # noqa: ANN401
         handler: ValidatorFunctionWrapHandler,
         info: ValidationInfo,
     ) -> Any:  # noqa: ANN401
-        """True/False toggles the tool; anything else validates as the SDK tool type alone.
+        """True/False toggles the tool; anything else validates as the tool options type alone.
 
         Skipping the ``bool | Tool`` union keeps the error path to the bad key
         (``google_search.exclude_domainz``) instead of one error per union arm.
@@ -439,7 +524,7 @@ class GeminiConfig(ModelConfig):
         }),
     ] = Field(default=None)
 
-    url_context: bool | genai_types.UrlContext | None = Field(
+    url_context: bool | UrlContext | None = Field(
         default=None, description='Return grounding metadata from links included in the query'
     )
 
@@ -507,7 +592,7 @@ class GeminiConfig(ModelConfig):
                 },
                 'thinkingLevel': {
                     'type': 'string',
-                    'enum': [e.value for e in ThinkingLevel],
+                    'enum': list(get_args(ThinkingLevel)),
                     'description': (
                         'For Gemini 3.0 - Indicates the thinking level. A higher level is associated with more '
                         'detailed thinking, which is needed for solving more complex tasks.'
@@ -590,12 +675,12 @@ class GeminiImageConfig(GeminiConfig):
         WithJsonSchema({
             'type': 'object',
             'properties': {
-                'aspectRatio': {'type': 'string', 'enum': [e.value for e in ImageAspectRatio]},
-                'imageSize': {'type': 'string', 'enum': [e.value for e in ImageSize]},
+                'aspectRatio': {'type': 'string', 'enum': list(get_args(ImageAspectRatio))},
+                'imageSize': {'type': 'string', 'enum': list(get_args(ImageSize))},
                 'outputMimeType': {'type': 'string'},
                 'outputCompressionQuality': {'type': 'integer'},
                 'personGeneration': {'type': 'string'},
-                'prominentPeople': {'type': 'string', 'enum': [e.value for e in genai_types.ProminentPeople]},
+                'prominentPeople': {'type': 'string', 'enum': list(get_args(ProminentPeople))},
                 'imageOutputOptions': {
                     'type': 'object',
                     'properties': {'mimeType': {'type': 'string'}, 'compressionQuality': {'type': 'integer'}},
@@ -2065,7 +2150,7 @@ class GeminiModel:
         # Safety settings — filter out unspecified categories
         if 'safety_settings' in config:
             config['safety_settings'] = [
-                s for s in config['safety_settings'] if s['category'] != HarmCategory.HARM_CATEGORY_UNSPECIFIED
+                s for s in config['safety_settings'] if s['category'] != 'HARM_CATEGORY_UNSPECIFIED'
             ]
 
         val = config.pop('google_search', None)
