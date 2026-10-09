@@ -148,8 +148,14 @@ func generateCases() []liveCase {
 					opts = append(opts, ai.WithStreaming(func(context.Context, *ai.ModelResponseChunk) error { return nil }))
 				}
 				u := r.gen(t, r.s.Model, opts...).Usage
-				if u == nil || u.InputTokens == 0 || u.OutputTokens == 0 || u.TotalTokens == 0 {
-					t.Errorf("Usage (streaming %v) = %+v, want input, output and total token counts", streaming, u)
+				if u == nil || u.InputTokens == 0 || u.OutputTokens == 0 {
+					t.Errorf("Usage (streaming %v) = %+v, want input and output token counts", streaming, u)
+					continue
+				}
+				// The total adds up the parts, by the [ai.GenerationUsage]
+				// convention.
+				if sum := u.InputTokens + u.OutputTokens + u.ThoughtsTokens; u.TotalTokens != sum {
+					t.Errorf("Usage (streaming %v): TotalTokens = %d, want input + output + thoughts = %d", streaming, u.TotalTokens, sum)
 				}
 			}
 		}},
