@@ -7473,14 +7473,11 @@ func TestPromptAgent_ForwardsInterruptedFinishReason(t *testing.T) {
 }
 
 // TestPromptAgent_RestartInterruptsAgain_CommitsAsInterrupted pins the second
-// interrupt to the same landing as the first. [ai.Generate] reports a
-// restarted tool that interrupts again with a FAILED_PRECONDITION, because its
-// caller asked for a completed generation, and taking that at face value would
-// write a failed row whose documented recovery cannot work: the tip it holds
-// ends on a model message carrying an unanswered tool request, which is not a
-// turn seam, so re-attempting the turn sends the model a conversation no
-// provider accepts. Only Resume answers this row, exactly as for the first
-// interrupt.
+// interrupt to the same landing as the first: an interrupted turn with no
+// error, not a failed row. The tip ends on a model message carrying an
+// unanswered tool request, which is not a turn seam, so re-attempting the turn
+// would send the model a conversation no provider accepts. Only Resume answers
+// this row, exactly as for the first interrupt.
 func TestPromptAgent_RestartInterruptsAgain_CommitsAsInterrupted(t *testing.T) {
 	ctx := context.Background()
 	reg := registry.New()

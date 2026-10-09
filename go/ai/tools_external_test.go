@@ -772,11 +772,11 @@ func TestRestart_AnswersTheStageThatInterrupted(t *testing.T) {
 			}
 
 			// Answering the hook releases the call: the tool runs afresh,
-			// with no resume, and asks its own question, which the loop
-			// reports as a re-interrupt next to the partial response.
+			// with no resume, and asks its own question, which pauses the
+			// resume.
 			resp2, err := resume(resp.History(), restartWith(t, transfer, held, map[string]any{"ok": true}))
-			if !errors.Is(err, status.ErrFailedPrecondition) || resp2 == nil {
-				t.Fatalf("resume = (%v, %v), want the tool's own interrupt under FAILED_PRECONDITION", resp2, err)
+			if err != nil || resp2 == nil {
+				t.Fatalf("resume = (%v, %v), want the tool's own interrupt", resp2, err)
 			}
 			if res := saw(); res != nil {
 				t.Fatalf("tool saw resume = %+v, want none: the answer to the hook must not reach it", *res)
@@ -835,7 +835,7 @@ func TestRestart_TwoGatesAnswerInTurn(t *testing.T) {
 	}
 
 	resp2, err := generate(ai.WithMessages(resp.History()...), answer(t, heldA))
-	if !errors.Is(err, status.ErrFailedPrecondition) || resp2 == nil {
+	if err != nil || resp2 == nil {
 		t.Fatalf("answering the first hook = (%v, %v), want the second hook's hold", resp2, err)
 	}
 	heldB := singleInterrupt(t, resp2)
@@ -844,7 +844,7 @@ func TestRestart_TwoGatesAnswerInTurn(t *testing.T) {
 	}
 
 	resp3, err := generate(ai.WithMessages(resp2.History()...), answer(t, heldB))
-	if !errors.Is(err, status.ErrFailedPrecondition) || resp3 == nil {
+	if err != nil || resp3 == nil {
 		t.Fatalf("answering the second hook = (%v, %v), want the tool's own interrupt", resp3, err)
 	}
 	asked := singleInterrupt(t, resp3)
@@ -897,7 +897,7 @@ func TestRestart_ReleasesOnlyTheHooksThatLetTheCallThrough(t *testing.T) {
 		}
 		restart := restartWith(t, transfer, singleInterrupt(t, resp), map[string]any{"ok": true})
 		resp, err = generate(ai.WithMessages(resp.History()...), ai.WithToolRestarts(restart))
-		if !errors.Is(err, status.ErrFailedPrecondition) || resp == nil {
+		if err != nil || resp == nil {
 			t.Fatalf("answering the gate = (%v, %v), want the tool's own interrupt", resp, err)
 		}
 		asked := singleInterrupt(t, resp)
@@ -911,12 +911,12 @@ func TestRestart_ReleasesOnlyTheHooksThatLetTheCallThrough(t *testing.T) {
 		reg, transfer, a, _, resp, asked := setup(t)
 		var logB []string
 		b := gate(&logB)
-		_, err := ai.Generate(context.Background(), reg,
+		out, err := ai.Generate(context.Background(), reg,
 			ai.WithModelName("test/model"), ai.WithMessages(viaJSON(t, resp.History())...),
 			ai.WithTools(transfer), ai.WithUse(a, b),
 			ai.WithToolRestarts(restartWith(t, transfer, asked, map[string]any{"approved": true})))
-		if !errors.Is(err, status.ErrFailedPrecondition) {
-			t.Fatalf("resume = %v, want the new gate's hold", err)
+		if err != nil || out.FinishReason != ai.FinishReasonInterrupted {
+			t.Fatalf("resume = (%v, %v), want the new gate's hold", out, err)
 		}
 		if diff := cmp.Diff([]string{"held"}, logB); diff != "" {
 			t.Errorf("new gate saw (-want +got):\n%s", diff)
@@ -925,13 +925,13 @@ func TestRestart_ReleasesOnlyTheHooksThatLetTheCallThrough(t *testing.T) {
 
 	t.Run("a replaced input faces the gate again", func(t *testing.T) {
 		reg, transfer, a, log, resp, asked := setup(t)
-		_, err := ai.Generate(context.Background(), reg,
+		out, err := ai.Generate(context.Background(), reg,
 			ai.WithModelName("test/model"), ai.WithMessages(resp.History()...),
 			ai.WithTools(transfer), ai.WithUse(a),
 			ai.WithToolRestarts(restartWith(t, transfer, asked, map[string]any{"approved": true},
 				ai.WithNewInput(transferIn{Amount: 5000}))))
-		if !errors.Is(err, status.ErrFailedPrecondition) {
-			t.Fatalf("resume = %v, want the gate's hold on the new input", err)
+		if err != nil || out.FinishReason != ai.FinishReasonInterrupted {
+			t.Fatalf("resume = (%v, %v), want the gate's hold on the new input", out, err)
 		}
 		if got := (*log)[len(*log)-1]; got != "held" {
 			t.Errorf("gate's last decision = %q, want held; log %v", got, *log)
@@ -1304,7 +1304,7 @@ func TestResumableTool_RestartWithInputAmendsHistory(t *testing.T) {
 
 	restart := claim(t, transfer, singleInterrupt(t, resp)).RestartWithInput(transferIn{Amount: 50}, note{})
 	resp, err = generate(ai.WithMessages(original...), ai.WithResume(restart))
-	if !errors.Is(err, status.ErrFailedPrecondition) || resp == nil {
+	if err != nil || resp == nil {
 		t.Fatalf("resume = (%v, %v), want the tool to interrupt again", resp, err)
 	}
 	again := claim(t, transfer, singleInterrupt(t, resp))
@@ -1421,13 +1421,13 @@ func TestResumableTool_QuestionPattern(t *testing.T) {
 		t.Errorf("final text after respond = %q, want %q", got, "done")
 	}
 
-	_, err := ai.Generate(context.Background(), reg,
+	out, err := ai.Generate(context.Background(), reg,
 		ai.WithModelName("test/model"),
 		ai.WithMessages(resp.History()...),
 		ai.WithTools(askUser),
 		ai.WithResume(call.Restart(struct{}{})))
-	if !errors.Is(err, status.ErrFailedPrecondition) {
-		t.Errorf("restarting a question tool: err = %v, want FAILED_PRECONDITION for the repeated interrupt", err)
+	if err != nil || out.FinishReason != ai.FinishReasonInterrupted {
+		t.Errorf("restarting a question tool = (%v, %v), want the repeated interrupt", out, err)
 	}
 }
 

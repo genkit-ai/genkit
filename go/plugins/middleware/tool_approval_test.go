@@ -31,7 +31,6 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/ai/tool"
 	"github.com/firebase/genkit/go/core/api"
-	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/internal/registry"
@@ -511,8 +510,8 @@ func TestToolApprovalReleasesTheToolsOwnInterrupt(t *testing.T) {
 	}
 
 	resp2, err := generate(ai.WithMessages(resp.History()...), restart(held[0], map[string]any{"toolApproved": true}))
-	if !errors.Is(err, status.ErrFailedPrecondition) || resp2 == nil {
-		t.Fatalf("approval = (%v, %v), want the tool's own interrupt under FAILED_PRECONDITION", resp2, err)
+	if err != nil || resp2 == nil {
+		t.Fatalf("approval = (%v, %v), want the tool's own interrupt", resp2, err)
 	}
 	if len(resumes) != 1 || resumes[0] != nil {
 		t.Fatalf("tool saw resumes %v, want one fresh call: the approval must not reach it", resumes)

@@ -720,10 +720,11 @@ func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 				return partial, err
 			}
 
+			// A restarted call may interrupt again: a later hook holds it,
+			// or the tool asks its own question once a hook lets it
+			// through. That is a pause like any other, answered the same
+			// way, so it returns no error.
 			if ir := resumeOutput.interruptedResponse; ir != nil {
-				err := status.Errorf(status.ErrFailedPrecondition,
-					"One or more tools triggered an interrupt during a restarted execution.")
-				ir.Error = responseError(err)
 				// ir.Message is the conversation's revised last message, so
 				// the request carries the messages before it and History()
 				// reproduces the full conversation. Copied from the turn's
@@ -731,7 +732,7 @@ func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 				irReq := *req
 				irReq.Messages = opts.Messages[:len(opts.Messages)-1]
 				ir.Request = &irReq
-				return ir, err
+				return ir, nil
 			}
 
 			opts = resumeOutput.revisedRequest
@@ -1287,12 +1288,15 @@ func recordToolShortCircuit(ctx context.Context, name string, input any, resp *M
 // tool request nothing answered is one no provider accepts. Text streamed
 // before the failure still reached the callback.
 //
-// Two errors are not loop failures and keep their response's message: a
+// One error is not a loop failure and keeps its response's message: a
 // response the model completed but post-processing rejected (structured
 // output that does not match the schema), which keeps the model's own finish
-// reason, and a resume whose restarted tool interrupted again, which keeps
-// FinishReason interrupted under its FAILED_PRECONDITION error and is
-// answered with [WithResume] rather than re-sent.
+// reason.
+//
+// A resume whose restarted call interrupts again, because a later middleware
+// hook holds it or the tool asks its own question, returns no error: like any
+// pause, it reports FinishReason interrupted and is answered with
+// [WithResume]. The model is not called.
 //
 // A resume whose restarted tool failed also keeps the resumed message, with
 // the failed request as it was and its siblings' outcomes recorded on their
