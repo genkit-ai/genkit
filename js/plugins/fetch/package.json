@@ -16,7 +16,7 @@
     "bun",
     "deno"
   ],
-  "version": "0.6.0-rc.0",
+  "version": "0.6.0-rc.1",
   "type": "commonjs",
   "scripts": {
     "check": "tsc",
