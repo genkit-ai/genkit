@@ -17,15 +17,73 @@
 """Per-event-loop caching for long-lived async clients."""
 
 import asyncio
+import functools
 import threading
 import weakref
 from collections.abc import Callable
-from typing import TypeVar
+from typing import Any, Generic, TypeVar, cast, overload
+
+from typing_extensions import Self
 
 T = TypeVar('T')
+S = TypeVar('S')
 
 
-def loop_local_client(factory: Callable[[], T]) -> Callable[[], T]:
+class _LoopLocal(Generic[S, T]):
+    """One cached instance per event loop; on a class, one per (object, loop).
+
+    Called directly it is the module-level getter. Read as a class attribute it
+    binds to the instance like ``functools.cached_property``: the bound getter
+    is stored in the instance ``__dict__`` under the method name. Assigning the
+    attribute (e.g. a test stub) replaces it for that instance.
+    """
+
+    def __init__(self, factory: Callable[..., T]) -> None:
+        self._factory = factory
+        self._by_loop: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, T] = weakref.WeakKeyDictionary()
+        self._lock = threading.Lock()
+        self._name: str | None = None
+        functools.update_wrapper(self, factory, updated=())  # pyright: ignore[reportArgumentType]
+
+    def __call__(self) -> T:
+        loop = asyncio.get_running_loop()
+        with self._lock:
+            existing = self._by_loop.get(loop)
+            if existing is not None:
+                return existing
+            created = self._factory()
+            self._by_loop[loop] = created
+            return created
+
+    def __set_name__(self, owner: type, name: str) -> None:
+        self._name = name
+
+    @overload
+    def __get__(self, instance: None, owner: type | None = None) -> Self: ...
+    @overload
+    def __get__(self, instance: S, owner: type | None = None) -> Callable[[], T]: ...
+    def __get__(self, instance: object, owner: type | None = None) -> Any:  # noqa: ANN401
+        if instance is None or self._name is None:
+            return self
+        cached = instance.__dict__.get(self._name)
+        if cached is not None:
+            return cached
+        bound: _LoopLocal[Any, T] = _LoopLocal(functools.partial(self._factory, instance))
+        with self._lock:
+            return instance.__dict__.setdefault(self._name, bound)
+
+    def __set__(self, instance: S, value: Callable[[], T]) -> None:
+        # Lets tests stub the client: plugin._client = lambda: fake_client
+        if self._name is None:
+            raise AttributeError('loop_local_client method has no name')
+        instance.__dict__[self._name] = value  # pyright: ignore[reportAttributeAccessIssue]
+
+
+@overload
+def loop_local_client(factory: Callable[[], T]) -> Callable[[], T]: ...
+@overload
+def loop_local_client(factory: Callable[[S], T]) -> _LoopLocal[S, T]: ...
+def loop_local_client(factory: Callable[..., T]) -> Any:  # noqa: ANN401
     """Cache a long-lived client per event loop. Use it as a decorator on a factory.
 
     Use it for a client you reuse across calls that code on different event
@@ -63,8 +121,8 @@ def loop_local_client(factory: Callable[[], T]) -> Callable[[], T]:
       and the API key, URL, headers, and timeout go on each request. Every
       plugin instance shares one connection pool per loop.
     - **On the plugin instance**: the client is built from plugin settings, as
-      with SDK clients that take ``api_key`` or ``base_url``. Wrap a factory in
-      ``__init__`` and call the getter where you need the client:
+      with SDK clients that take ``api_key`` or ``base_url``. Decorate a method;
+      each plugin instance gets its own client per loop:
 
     ```python
     from openai import AsyncOpenAI
@@ -72,7 +130,11 @@ def loop_local_client(factory: Callable[[], T]) -> Callable[[], T]:
 
     class Bistro(Plugin):
         def __init__(self, api_key: str) -> None:
-            self._client = loop_local_client(lambda: AsyncOpenAI(api_key=api_key))
+            self._api_key = api_key
+
+        @loop_local_client
+        def _client(self) -> AsyncOpenAI:
+            return AsyncOpenAI(api_key=self._api_key)
 
         async def _generate(self, request: ModelRequest) -> ModelResponse:
             completion = await self._client().chat.completions.create(...)
@@ -80,17 +142,4 @@ def loop_local_client(factory: Callable[[], T]) -> Callable[[], T]:
 
     Plain callables work too, e.g. ``loop_local_client(asyncio.Lock)``.
     """
-    by_loop: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, T] = weakref.WeakKeyDictionary()
-    lock = threading.Lock()
-
-    def _get() -> T:
-        loop = asyncio.get_running_loop()
-        with lock:
-            existing = by_loop.get(loop)
-            if existing is not None:
-                return existing
-            created = factory()
-            by_loop[loop] = created
-            return created
-
-    return _get
+    return cast(Any, _LoopLocal(factory))

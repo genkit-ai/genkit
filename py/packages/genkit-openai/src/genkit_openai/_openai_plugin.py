@@ -320,15 +320,21 @@ class OpenAI(Plugin):
                            other configuration settings required by OpenAI's API.
         """
         self._openai_params = openai_params
-        self._runtime_client = loop_local_client(lambda: AsyncOpenAI(**self._openai_params))
-        # Only used when the plugin has no key of its own. Its placeholder key is
-        # never sent: every call through it swaps in the caller's key first.
-        tenant_only_params: dict[str, Any] = {**openai_params, 'api_key': 'unset'}
-        self._tenant_only_client = loop_local_client(lambda: AsyncOpenAI(**tenant_only_params))
         plugin_headers: dict[str, str] = dict(openai_params.get('default_headers') or {})
         self._tenant_headers = {k: v for k, v in plugin_headers.items() if k.lower() not in _PLUGIN_ACCOUNT_HEADERS}
         self._pins_authorization = any(k.lower() == 'authorization' for k in plugin_headers)
         self._list_actions_cache: list[ActionMetadata] | None = None
+
+    @loop_local_client
+    def _runtime_client(self) -> AsyncOpenAI:
+        return AsyncOpenAI(**self._openai_params)
+
+    @loop_local_client
+    def _tenant_only_client(self) -> AsyncOpenAI:
+        # Only used when the plugin has no key of its own. Its placeholder key is
+        # never sent: every call through it swaps in the caller's key first.
+        params: dict[str, Any] = {**self._openai_params, 'api_key': 'unset'}
+        return AsyncOpenAI(**params)
 
     def _has_plugin_key(self) -> bool:
         return bool(self._openai_params.get('api_key') or os.environ.get('OPENAI_API_KEY'))

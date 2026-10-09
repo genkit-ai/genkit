@@ -184,7 +184,11 @@ class Ollama(Plugin):
         # Static dicts are baked into the cached client; callables resolve per request.
         self.request_headers = dict(request_headers) if isinstance(request_headers, dict) else {}
         self.timeout = timeout
-        self.client = loop_local_client(self._make_client)
+
+    @loop_local_client
+    def client(self) -> ollama_api.AsyncClient:
+        """The per-event-loop client built with the static headers and timeout."""
+        return self._make_client()
 
     def _make_client(self, headers: dict[str, str] | None = None) -> ollama_api.AsyncClient:
         """Build an Ollama AsyncClient with the given (or static) headers and timeout.

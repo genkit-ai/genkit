@@ -652,9 +652,12 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
             'http_options': _inject_attribution_headers(http_options, base_url, api_version),
         }
         self._base_url_pinned = bool(self._client_kwargs['http_options'].base_url)
-        # Single loop-local client accessor used everywhere in plugin runtime paths.
-        self._runtime_client = loop_local_client(lambda: _plugin_client(self._client_kwargs))
         self._list_actions_cache: list[ActionMetadata] | None = None
+
+    @loop_local_client
+    def _runtime_client(self) -> genai.Client:
+        # One client per event loop, used everywhere in plugin runtime paths.
+        return _plugin_client(self._client_kwargs)
 
     def _interactions_client_options(self) -> ClientOptions:
         """Plugin-level transport knobs for Interactions models.
@@ -1054,9 +1057,12 @@ class VertexAI(GoogleFamilyRefs, Plugin):
             'debug_config': debug_config,
             'http_options': opts,
         }
-        # Single loop-local client accessor used everywhere in plugin runtime paths.
-        self._runtime_client = loop_local_client(lambda: _plugin_client(self._client_kwargs))
         self._list_actions_cache: list[ActionMetadata] | None = None
+
+    @loop_local_client
+    def _runtime_client(self) -> genai.Client:
+        # One client per event loop, used everywhere in plugin runtime paths.
+        return _plugin_client(self._client_kwargs)
 
     async def init(self) -> list[Action]:
         """Initialize the plugin.
