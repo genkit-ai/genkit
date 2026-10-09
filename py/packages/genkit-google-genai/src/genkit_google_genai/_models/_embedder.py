@@ -155,7 +155,7 @@ class Embedder:
 
     def _embed_model(self, request: EmbedRequest) -> str:
         """API model id: options.version overlays the action's registered id."""
-        overlay = (request.options or {}).get('version')
+        overlay = request.options.get('version')
         if overlay:
             return strip_ref_prefixes(str(overlay))
         return str(self._version)
@@ -200,10 +200,9 @@ class Embedder:
         instances = [self._build_multimodal_instance(doc) for doc in request.input]
 
         payload: dict[str, Any] = {'instances': instances}
-        if request.options:
-            dimension = request.options.get('output_dimensionality')
-            if dimension is not None:
-                payload['parameters'] = {'dimension': dimension}
+        dimension = request.options.get('output_dimensionality')
+        if dimension is not None:
+            payload['parameters'] = {'dimension': dimension}
 
         # google-genai exposes no typed multimodal-embedding method, so reuse the
         # client's authenticated low-level transport to POST to :predict. For

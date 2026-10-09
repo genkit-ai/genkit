@@ -496,10 +496,10 @@ async def test_embed_many_config_reaches_embedder_as_options(
 
 
 @pytest.mark.asyncio
-async def test_embed_with_no_config_sends_none_options(
+async def test_embed_with_no_config_sends_empty_dict_options(
     mock_genkit_instance: tuple[Genkit, MockGenkitRegistry],
 ) -> None:
-    """With no ref config, no version, and no config=, the embedder gets options=None like a Dev UI run."""
+    """With no ref config, no version, and no config=, the embedder gets options={}."""
     genkit_instance, registry = mock_genkit_instance
 
     async def fake_embedder_fn(request: EmbedRequest) -> EmbedResponse:
@@ -517,7 +517,76 @@ async def test_embed_with_no_config_sends_none_options(
     await genkit_instance.embed_many(embedder='bare-embedder', content=['hi'])
 
     embed_action = await registry.resolve_action('embedder', 'bare-embedder')
-    assert [call.args[0].options for call in embed_action.run.call_args_list] == [None, None]
+    assert [call.args[0].options for call in embed_action.run.call_args_list] == [{}, {}]
+
+
+def test_embed_request_options_none_or_missing_becomes_empty_dict() -> None:
+    """EmbedRequest built in code or parsed from the wire (Dev UI sends options: null) always carries a dict."""
+    docs = [Document.from_text('hi')]
+
+    assert EmbedRequest(input=docs).options == {}
+    assert EmbedRequest(input=docs, options=None).options == {}  # type: ignore[arg-type] - wire null
+    assert EmbedRequest.model_validate({'input': [{'content': [{'text': 'hi'}]}], 'options': None}).options == {}
+
+
+@pytest.mark.parametrize('bad_options', [[], [('dimensions', 256)], 'x'], ids=['empty_list', 'pairs', 'str'])
+def test_embed_request_non_mapping_options_raises(bad_options: object) -> None:
+    """EmbedRequest.options must be a mapping, same as ModelRequest.config; a list or str fails validation."""
+    with pytest.raises(ValidationError, match='options must be a mapping'):
+        EmbedRequest(input=[Document.from_text('hi')], options=bad_options)  # type: ignore[arg-type] - bad wire value
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('bad_config', [[], [('dimensions', 256)], 'x'], ids=['empty_list', 'pairs', 'str'])
+async def test_embed_with_non_mapping_config_raises_invalid_argument(
+    mock_genkit_instance: tuple[Genkit, MockGenkitRegistry], bad_config: object
+) -> None:
+    """ai.embed config= must be a dict or a BaseModel, same as generate; a list or str raises."""
+    genkit_instance, registry = mock_genkit_instance
+
+    async def fake_embedder_fn(request: EmbedRequest) -> EmbedResponse:
+        return EmbedResponse(embeddings=[Embedding(embedding=[0.0])])
+
+    registry.register_action(
+        name='strict-embedder',
+        kind='embedder',
+        fn=fake_embedder_fn,
+        metadata=embedder_action_metadata('strict-embedder').metadata,
+        description='A fake embedder for testing',
+    )
+
+    with pytest.raises(GenkitError) as exc_info:
+        await genkit_instance.embed(embedder='strict-embedder', content='hi', config=bad_config)  # type: ignore[arg-type]
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+
+
+@pytest.mark.asyncio
+async def test_embed_with_basemodel_config_sends_dict_options(
+    mock_genkit_instance: tuple[Genkit, MockGenkitRegistry],
+) -> None:
+    """A BaseModel config= is dumped, so the untyped embedder still gets a dict."""
+
+    class CrmEmbedConfig(BaseModel):
+        dimensions: int = 768
+
+    genkit_instance, registry = mock_genkit_instance
+
+    async def fake_embedder_fn(request: EmbedRequest) -> EmbedResponse:
+        return EmbedResponse(embeddings=[Embedding(embedding=[0.0])])
+
+    registry.register_action(
+        name='crm-embedder',
+        kind='embedder',
+        fn=fake_embedder_fn,
+        metadata=embedder_action_metadata('crm-embedder').metadata,
+        description='A fake embedder for testing',
+    )
+
+    await genkit_instance.embed(embedder='crm-embedder', content='hi', config=CrmEmbedConfig(dimensions=256))  # type: ignore[arg-type]
+
+    embed_action = await registry.resolve_action('embedder', 'crm-embedder')
+    assert embed_action.run.call_args.args[0].options == {'dimensions': 256}
 
 
 @pytest.mark.asyncio
@@ -574,3 +643,64 @@ def test_resolve_embedder_name_with_invalid_type_raises_error() -> None:
     genkit_instance = Genkit()
     with pytest.raises(ValueError, match='Embedder must be specified as a string name or an EmbedderRef.'):
         genkit_instance._resolve_embedder_name(123)  # type: ignore[arg-type]
+
+
+class _CrmEmbedConfig(BaseModel):
+    dimensions: int = 768
+    task_type: str = 'RETRIEVAL_DOCUMENT'
+
+
+def _recording_embedder(ai: Genkit, seen: list[dict[str, Any]]) -> None:
+    async def crm_embedder(request: EmbedRequest) -> EmbedResponse:
+        seen.append(request.options)
+        return EmbedResponse(embeddings=[Embedding(embedding=[0.0]) for _ in request.input])
+
+    ai.define_embedder(name='crm-embedder', fn=crm_embedder)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('config', 'expected'),
+    [
+        (_CrmEmbedConfig(), {}),
+        (_CrmEmbedConfig(task_type='QUESTION_ANSWERING'), {'task_type': 'QUESTION_ANSWERING'}),
+    ],
+)
+async def test_embed_with_basemodel_config_sends_only_set_fields(
+    config: _CrmEmbedConfig, expected: dict[str, object]
+) -> None:
+    """An untyped embedder gets the fields the caller set, same as an untyped model fn's config."""
+    ai = Genkit()
+    seen: list[dict[str, Any]] = []
+    _recording_embedder(ai, seen)
+
+    await ai.embed(embedder='crm-embedder', content='hi', config=config)  # type: ignore[arg-type]
+
+    assert seen == [expected]
+
+
+@pytest.mark.asyncio
+async def test_embed_ref_config_survives_unset_basemodel_field() -> None:
+    """ref < call per field: a BaseModel call config doesn't clobber ref keys it left unset."""
+    ai = Genkit()
+    seen: list[dict[str, Any]] = []
+    _recording_embedder(ai, seen)
+    ref = create_embedder_ref('crm-embedder', config={'dimensions': 256})
+
+    await ai.embed(embedder=ref, content='hi', config=_CrmEmbedConfig(task_type='QUESTION_ANSWERING'))  # type: ignore[arg-type]
+
+    assert seen == [{'dimensions': 256, 'task_type': 'QUESTION_ANSWERING'}]
+
+
+def test_embed_request_basemodel_options_becomes_dict_of_set_fields() -> None:
+    """EmbedRequest takes a BaseModel the same way ai.embed(config=...) does."""
+    request = EmbedRequest(input=[], options=_CrmEmbedConfig(dimensions=256))  # type: ignore[arg-type]
+
+    assert request.options == {'dimensions': 256}
+
+
+def test_embed_request_options_schema_is_an_object() -> None:
+    """The embedder input schema says options is an object, not Any."""
+    schema = to_json_schema(EmbedRequest)
+
+    assert schema['properties']['options']['type'] == 'object'

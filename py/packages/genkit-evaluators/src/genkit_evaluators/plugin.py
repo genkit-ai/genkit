@@ -41,7 +41,7 @@ def genkit_eval_name(local: str) -> str:
     return f'{PROVIDER}/{local}'
 
 
-async def _regex_impl(datapoint: BaseDataPoint, _options: object | None = None) -> EvalFnResponse:
+async def _regex_impl(datapoint: BaseDataPoint, _options: dict[str, Any]) -> EvalFnResponse:
     """Regex evaluator: reference must be a regex string; output tested against it."""
     if datapoint.output is None:
         raise ValueError('output was not provided')
@@ -58,7 +58,7 @@ async def _regex_impl(datapoint: BaseDataPoint, _options: object | None = None) 
     )
 
 
-async def _deep_equal_impl(datapoint: BaseDataPoint, _options: object | None = None) -> EvalFnResponse:
+async def _deep_equal_impl(datapoint: BaseDataPoint, _options: dict[str, Any]) -> EvalFnResponse:
     """Deep equal evaluator: output must equal reference."""
     if datapoint.output is None:
         raise ValueError('output was not provided')
@@ -72,7 +72,7 @@ async def _deep_equal_impl(datapoint: BaseDataPoint, _options: object | None = N
     )
 
 
-async def _jsonata_impl(datapoint: BaseDataPoint, _options: object | None = None) -> EvalFnResponse:
+async def _jsonata_impl(datapoint: BaseDataPoint, _options: dict[str, Any]) -> EvalFnResponse:
     """JSONata evaluator: reference is a JSONata expression; evaluated against output."""
     if datapoint.output is None:
         raise ValueError('output was not provided')

@@ -306,7 +306,7 @@ def _embedding_client(embedding: list[float] | None = None) -> MagicMock:
 async def _run_embedder(client: MagicMock, options: dict[str, Any] | None = None) -> EmbedResponse:
     """Run the embedder action function against a stub client."""
     action = _plugin_with(client)._create_embedder_action('text-embedding-3-small')
-    return await action._fn(EmbedRequest(input=[Document.from_text('hello')], options=options))
+    return await action._fn(EmbedRequest(input=[Document.from_text('hello')], options=options or {}))
 
 
 @pytest.mark.asyncio

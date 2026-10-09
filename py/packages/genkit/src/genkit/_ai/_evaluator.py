@@ -27,6 +27,7 @@ from pydantic.alias_generators import to_camel
 
 from genkit._core._action import Action, ActionKind, ActionRunContext
 from genkit._core._logger import get_logger
+from genkit._core._model import EvalRequest
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
 from genkit._core._telemetry._attrs import metadata_key
@@ -35,7 +36,6 @@ from genkit._core._typing import (
     ActionMetadata,
     BaseDataPoint,
     EvalFnResponse,
-    EvalRequest,
     EvalResponse,
     EvalStatusEnum,
     Score,
