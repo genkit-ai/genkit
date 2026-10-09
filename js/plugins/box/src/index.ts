@@ -75,6 +75,11 @@ export {
   type PodmanRunnerOptions,
 } from './runners/podman-runner.js';
 export {
+  RemoteRunner,
+  remoteRunner,
+  type RemoteRunnerOptions,
+} from './runners/remote-runner.js';
+export {
   BASE_ENV,
   abortable,
   childEnv,
