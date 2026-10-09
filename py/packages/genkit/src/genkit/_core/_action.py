@@ -48,6 +48,7 @@ from genkit._core._compat import StrEnum
 from genkit._core._error import GenkitError, Interrupt, RuntimeErrorReason, mark_request_error
 from genkit._core._model import (
     EmbedRequest,
+    EvalRequest,
     ModelRequest,
     ModelResponse,
     config_type_path,
@@ -61,7 +62,7 @@ from genkit._core._telemetry._instrumentation import (
     run_in_new_span,
     to_json_attr,
 )
-from genkit._core._typing import EmbedResponse, Operation
+from genkit._core._typing import BaseDataPoint, EmbedResponse, EvalFnResponse, EvalResponse, Operation
 
 # =============================================================================
 # Span attribute types and tracing helpers
@@ -406,7 +407,55 @@ def known_annotation_names(kind: ActionKind) -> dict[str, object]:
         return {'Operation': Operation}
     if kind == ActionKind.EMBEDDER:
         return {'EmbedRequest': EmbedRequest, 'EmbedResponse': EmbedResponse}
+    if kind == ActionKind.EVALUATOR:
+        return {
+            'EvalRequest': EvalRequest,
+            'EvalResponse': EvalResponse,
+            'EvalFnResponse': EvalFnResponse,
+            'BaseDataPoint': BaseDataPoint,
+        }
     return {}
+
+
+def config_field(kind: ActionKind) -> str | None:
+    """The request field that carries this kind's config, or None if it has none."""
+    if kind in (ActionKind.MODEL, ActionKind.BACKGROUND_MODEL):
+        return 'config'
+    if kind in (ActionKind.EMBEDDER, ActionKind.EVALUATOR):
+        return 'options'
+    return None
+
+
+def with_request_annotation(
+    fn: Callable[..., Awaitable[_CallT]], request_type: type, *, kind: ActionKind
+) -> Callable[..., Awaitable[_CallT]]:
+    """``fn``, or a forwarder whose unannotated input parameter is ``request_type``.
+
+    An unannotated input gives the action nothing to validate against, so a
+    Dev UI or CLI run would hand the fn the raw JSON dict. The forwarder
+    keeps ``fn``'s parameter names, so Genkit still passes input and context
+    by name.
+    """
+    hints = resolve_type_hints(fn, known_annotation_names(kind))
+    sig = signature_of(fn)
+    inputs = [
+        p
+        for p in sig.parameters.values()
+        if p.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+        and not _is_context_annotation(hints.get(p.name, p.annotation))
+    ]
+    if len(inputs) != 1 or hints.get(inputs[0].name, inputs[0].annotation) is not inspect.Parameter.empty:
+        return fn
+    target = inputs[0].name
+
+    async def forward(*args: Any, **kwargs: Any) -> _CallT:  # noqa: ANN401
+        return await fn(*args, **kwargs)
+
+    forward.__doc__ = fn.__doc__
+    forward.__annotations__ = {**hints, target: request_type}
+    parameters = [p.replace(annotation=request_type) if p.name == target else p for p in sig.parameters.values()]
+    setattr(forward, '__signature__', sig.replace(parameters=parameters))  # noqa: B010
+    return forward
 
 
 def json_schema_for(
@@ -811,7 +860,35 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         self._fn: Callable[..., Awaitable[OutputT]] = fn
         self._fn_is_wrapper: bool = metadata_fn is not None
         self._initialize_io_schemas(hints)
+        self._config_schema = self._resolve_config_class(self._config_schema)
         self._initialize_init_schema(init_schema)
+
+    def _resolve_config_class(self, declared: type[BaseModel] | None) -> type[BaseModel] | None:
+        """The one config class this action takes, from ``config_schema=`` and/or the fn annotation.
+
+        Both must name the same class. With a subclass, a dict would validate
+        into the annotated class and drop the other class's fields, so only
+        the identical class is accepted.
+        """
+        field = config_field(self._kind)
+        annotated = declared_config_type(self._input_class) if field and self._input_class is not None else None
+        if annotated is None:
+            return declared
+        if declared is not None and declared is not annotated:
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=(
+                    f'{describe_action(self._kind, self._name)}: config_schema is {config_type_path(declared)}, '
+                    f'but the function takes {field} as {config_type_path(annotated)}. '
+                    'Pass the same class to both, or only one of them.'
+                ),
+            )
+        return annotated
+
+    @property
+    def config_schema(self) -> type[BaseModel] | None:
+        """The config class set at definition time, from ``config_schema=`` or the fn annotation."""
+        return self._config_schema
 
     @property
     def params(self) -> ActionParams:
@@ -1092,7 +1169,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             try:
                 return self._input_type.validate_python(input)
             except ValidationError:
-                config = getattr(input, 'config', None)
+                config = getattr(input, config_field(self._kind) or 'config', None)
                 if isinstance(config, BaseModel):
                     expected = declared_config_type(self._input_class) if self._input_class is not None else None
                     want = config_type_path(expected) if isinstance(expected, type) else 'the plugin config class'
@@ -1100,7 +1177,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
                         error=GenkitError(
                             message=(
                                 f"Invalid input for {self._kind_label} '{self.name}': "
-                                f'config must be {want} or a mapping, '
+                                f'{config_field(self._kind) or "config"} must be {want} or a mapping, '
                                 f'got {config_type_path(type(config))}'
                             ),
                             status='INVALID_ARGUMENT',

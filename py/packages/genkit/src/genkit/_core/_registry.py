@@ -300,6 +300,7 @@ class Registry:
         description: str | None = None,
         metadata: dict[str, object] | None = None,
         span_metadata: dict[str, SpanAttributeValue] | None = None,
+        config_schema: type[BaseModel] | dict[str, object] | None = None,
         _strict_io: bool = False,
     ) -> Action[InputT, OutputT, ChunkT]:
         """Register a new action with the registry.
@@ -316,6 +317,7 @@ class Registry:
             description: Optional human-readable description of the action.
             metadata: Optional dictionary of metadata about the action.
             span_metadata: Optional dictionary of tracing span metadata.
+            config_schema: Optional config class (or JSON schema) the action takes.
             _strict_io: Treat None as a value and validate the return.
 
         Returns:
@@ -329,6 +331,7 @@ class Registry:
             description=description,
             metadata=metadata,
             span_metadata=span_metadata,
+            config_schema=config_schema,
             _strict_io=_strict_io,
         )
         action_typed = cast(Action[InputT, OutputT, ChunkT], action)

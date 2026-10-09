@@ -345,6 +345,9 @@ def background_model(
         description=description or f'Background model: {label}',
         config_schema=config_schema,
     )
+    # Annotation only: the Dev UI form comes from ModelRequest[Cfg].
+    if 'customOptions' not in model_options and start_action.config_schema is not None:
+        model_options['customOptions'] = to_json_schema(start_action.config_schema)
 
     check_action = _operation_action(
         kind=ActionKind.CHECK_OPERATION,

@@ -23,7 +23,7 @@ from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
 from typing_extensions import Never
 
-from genkit._core._action import Action, ActionKind, get_func_description
+from genkit._core._action import Action, ActionKind, get_func_description, with_request_annotation
 from genkit._core._model import Document, EmbedRequest
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
@@ -79,7 +79,7 @@ class Embedder:
         ).response
 
 
-EmbedderFn = Callable[[EmbedRequest], Awaitable[EmbedResponse]]
+EmbedderFn = Callable[[EmbedRequest[Any]], Awaitable[EmbedResponse]]
 
 
 def embedder_action_metadata(
@@ -126,10 +126,15 @@ def embedder(
     metadata: dict[str, object] | None = None,
     info: EmbedderInfo | None = None,
     description: str | None = None,
+    config_schema: type[BaseModel] | dict[str, object] | None = None,
 ) -> Action:
     """Build an embedder action without registering it.
 
     Plugin ``init`` / ``resolve`` return this. ``define_embedder`` registers it.
+
+    The options class comes from ``config_schema`` or the fn's
+    ``EmbedRequest[Cfg]`` annotation; given both, they must be the same class.
+    An unannotated fn still gets an ``EmbedRequest``.
     """
     embedder_info: dict[str, object] = {}
 
@@ -152,16 +157,24 @@ def embedder(
     if 'label' not in embedder_info or not embedder_info['label']:
         embedder_info['label'] = name
 
+    if embedder_info.get('customOptions') is None and isinstance(config_schema, dict):
+        embedder_info['customOptions'] = config_schema
+
     embedder_meta: dict[str, object] = metadata.copy() if metadata else {}
     embedder_meta['embedder'] = embedder_info
 
-    return Action(
+    action = Action(
         kind=ActionKind.EMBEDDER,
         name=name,
-        fn=fn,
+        fn=with_request_annotation(fn, EmbedRequest, kind=ActionKind.EMBEDDER),
         metadata=embedder_meta,
         description=get_func_description(fn, description),
+        config_schema=config_schema,
     )
+    # EmbedderInfo.config_schema is an explicit Dev UI override; else the class.
+    if embedder_info.get('customOptions') is None and action.config_schema is not None:
+        embedder_info['customOptions'] = to_json_schema(action.config_schema)
+    return action
 
 
 def define_embedder(
@@ -171,6 +184,8 @@ def define_embedder(
     info: EmbedderInfo | None = None,
     metadata: dict[str, object] | None = None,
     description: str | None = None,
+    *,
+    config_schema: type[BaseModel] | dict[str, object] | None = None,
 ) -> Action:
     """Register a custom embedder action."""
     action = embedder(
@@ -179,6 +194,7 @@ def define_embedder(
         metadata=metadata,
         info=info,
         description=description,
+        config_schema=config_schema,
     )
     registry.register_action_from_instance(action)
     return action

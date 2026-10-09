@@ -5,13 +5,15 @@
 
 """What a plugin handler sees after ai.generate: typed config, extras, errors, output."""
 
+from typing import Any, cast
+
 import pytest
 from genkit_openai import OpenAIConfig
 from pydantic import BaseModel
 
-from genkit import Document, Genkit, Part
+from genkit import Document, Genkit, GenkitError, Part
 from genkit._core._action import ActionRunContext
-from genkit._core._model import FinishReason, Message, ModelConfig, ModelRequest, ModelResponse
+from genkit._core._model import Message, ModelConfig, ModelRequest, ModelResponse
 from genkit._core._typing import Role
 
 
@@ -140,56 +142,53 @@ async def test_unknown_keys_reach_plugin_via_model_extra(ai_and_seen: tuple[Genk
 
 
 @pytest.mark.asyncio
-async def test_invalid_config_value_is_still_resendable(ai_and_seen: tuple[Genkit, dict]) -> None:
-    """A bad value on a declared field is a failed response, not a raw ValidationError."""
-    ai, _ = ai_and_seen
-    response = await ai.generate(model='conforming', prompt='hi', config={'temperature': 'high'})
-    assert response.finish_reason == FinishReason.FAILED
-    assert response.finish_message is not None
-    assert "Invalid input for model 'conforming'" in response.finish_message
-    assert response.error is not None
-    assert response.message is None
-    assert [m.role for m in response.messages] == [Role.USER]
-
-
-@pytest.mark.asyncio
-async def test_invalid_config_with_docs_is_still_resendable(ai_and_seen: tuple[Genkit, dict]) -> None:
-    """ai.generate(docs=..., config={'temperature': 'high'}) is a failed response, not AttributeError."""
-    ai, _ = ai_and_seen
-    response = await ai.generate(
-        model='conforming',
-        prompt='hi',
-        docs=[Document.from_text('ctx')],
-        config={'temperature': 'high'},
-    )
-    assert response.finish_reason == FinishReason.FAILED
-    assert response.finish_message is not None
-    assert "Invalid input for model 'conforming'" in response.finish_message
-    assert response.error is not None
-    assert response.message is None
-    assert [m.role for m in response.messages] == [Role.USER]
-
-
-@pytest.mark.asyncio
-async def test_strict_config_rejects_unknown_keys_as_failed_response(ai_and_seen: tuple[Genkit, dict]) -> None:
-    """extra='forbid' rejects unknown keys on the response — the plugin opted in."""
-    ai, _ = ai_and_seen
-    response = await ai.generate(model='strict', prompt='hi', config={'thinking': True})
-    assert response.finish_reason == FinishReason.FAILED
-    assert response.finish_message is not None
-    assert "Invalid input for model 'strict'" in response.finish_message
-    assert response.error is not None
-    assert response.message is None
-    assert [m.role for m in response.messages] == [Role.USER]
-
-
-@pytest.mark.asyncio
-async def test_foreign_config_class_normalizes_to_conforming(ai_and_seen: tuple[Genkit, dict]) -> None:
-    """ai.generate(config=OpenAIConfig(...)) normalizes through veneer to the target plugin's config."""
+async def test_invalid_config_value_raises_before_the_model_runs(ai_and_seen: tuple[Genkit, dict]) -> None:
+    """ModelRequest[Cfg] alone sets the model's config class, so generate checks the call config."""
     ai, seen = ai_and_seen
-    await ai.generate(model='conforming', prompt='hi', config=OpenAIConfig(temperature=0.7))
-    assert type(seen['config']) is ConformingCfg
-    assert seen['config'].temperature == 0.7
+    with pytest.raises(GenkitError, match=r"conforming: config 'temperature'") as excinfo:
+        await ai.generate(model='conforming', prompt='hi', config={'temperature': 'high'})
+    assert excinfo.value.status == 'INVALID_ARGUMENT'
+    assert 'config' not in seen
+
+
+@pytest.mark.asyncio
+async def test_invalid_config_with_docs_raises_before_the_model_runs(ai_and_seen: tuple[Genkit, dict]) -> None:
+    """ai.generate(docs=..., config={'temperature': 'high'}) is the same call-time error."""
+    ai, _ = ai_and_seen
+    with pytest.raises(GenkitError, match=r"conforming: config 'temperature'"):
+        await ai.generate(
+            model='conforming',
+            prompt='hi',
+            docs=[Document.from_text('ctx')],
+            config={'temperature': 'high'},
+        )
+
+
+@pytest.mark.asyncio
+async def test_strict_config_rejects_unknown_keys_at_call_time(ai_and_seen: tuple[Genkit, dict]) -> None:
+    """extra='forbid' on the annotated class rejects unknown keys before the model runs."""
+    ai, _ = ai_and_seen
+    with pytest.raises(GenkitError, match=r"strict: unknown config key 'thinking'"):
+        await ai.generate(model='strict', prompt='hi', config={'thinking': True})
+
+
+@pytest.mark.asyncio
+async def test_invalid_config_from_a_raw_run_raises_at_the_boundary(ai_and_seen: tuple[Genkit, dict]) -> None:
+    """A Dev UI-shaped run skips generate's check; the action boundary still names the model."""
+    ai, _ = ai_and_seen
+    action = await ai.registry.resolve_model('strict')
+    assert action is not None
+    with pytest.raises(GenkitError, match="Invalid input for model 'strict'"):
+        await action.run(cast(Any, {'messages': [], 'config': {'thinking': True}}))
+
+
+@pytest.mark.asyncio
+async def test_foreign_config_class_raises(ai_and_seen: tuple[Genkit, dict]) -> None:
+    """ai.generate(config=OpenAIConfig(...)) on a ModelRequest[ConformingCfg] model is a caller mistake."""
+    ai, seen = ai_and_seen
+    with pytest.raises(GenkitError, match=r'config must be .*ConformingCfg or a mapping, got .*OpenAIConfig'):
+        await ai.generate(model='conforming', prompt='hi', config=OpenAIConfig(temperature=0.7))
+    assert 'config' not in seen
 
 
 @pytest.mark.asyncio
