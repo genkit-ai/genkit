@@ -1859,7 +1859,7 @@ class Genkit:
     async def generate_operation(
         self,
         *,
-        model: ModelRef[ModelRefConfigT] | BackgroundAction[Any] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | BackgroundAction | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1873,7 +1873,7 @@ class Genkit:
     async def generate_operation(
         self,
         *,
-        model: ModelRef[ModelRefConfigT] | BackgroundAction[Any] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | BackgroundAction | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1886,7 +1886,7 @@ class Genkit:
     async def generate_operation(
         self,
         *,
-        model: ModelRef[ModelRefConfigT] | BackgroundAction[Any] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | BackgroundAction | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
