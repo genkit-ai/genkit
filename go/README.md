@@ -126,7 +126,7 @@ Multi-turn conversations with snapshots you can resume, branch, and run in the b
 **[Features](#features)**
 
 **Generating**
-[Stream Responses](#stream-responses) &middot;
+[Generate and Stream](#generate-and-stream) &middot;
 [Structured Output](#structured-output)
 
 **Tools**
@@ -173,15 +173,17 @@ Constructors live in `genkit/exp` (`genkitx`) and types and options in `ai/exp` 
 A prompt-backed agent with an inline prompt and a session store:
 
 ```go
+// *aix.Agent[ChatState]: the State type comes from the session store.
 chatAgent := genkitx.DefineAgent(g, "chat",
     aix.InlinePrompt{
         ai.WithModelName("googleai/gemini-flash-latest"),
         ai.WithSystem("You are a sarcastic pirate. Keep responses concise."),
     },
-    aix.WithSessionStore(localstore.NewInMemorySessionStore[any]()),
+    aix.WithSessionStore(localstore.NewInMemorySessionStore[ChatState]()),
 )
 
-out, _ := chatAgent.RunText(ctx, "What's the best way to learn Go?")
+// *aix.AgentOutput[ChatState]
+out, err := chatAgent.RunText(ctx, "What's the best way to learn Go?")
 fmt.Println(out.Message.Text())
 ```
 
@@ -192,13 +194,10 @@ fmt.Println(out.Message.Text())
 `Connect` opens a streaming session. Send a message, read chunks until `TurnEnd`, then send the next one:
 
 ```go
-conn, _ := chatAgent.Connect(ctx)
+conn, err := chatAgent.Connect(ctx)
 
 conn.SendText("What is Go's concurrency model?")
 for chunk, err := range conn.Receive() {
-    if err != nil {
-        log.Fatal(err)
-    }
     if chunk.ModelChunk != nil {
         fmt.Print(chunk.ModelChunk.Text())
     }
@@ -210,7 +209,7 @@ for chunk, err := range conn.Receive() {
 conn.SendText("Show me an example with goroutines.")
 // ...
 
-out, _ := conn.Output()
+out, err := conn.Output()
 fmt.Println(out.Message.Text())
 ```
 
@@ -221,15 +220,16 @@ fmt.Println(out.Message.Text())
 Every turn writes a snapshot: the conversation and its state at that point. Continue a session from its latest snapshot in any process, or branch from any earlier one:
 
 ```go
-plan, _ := chatAgent.RunText(ctx, "Plan a day in Kyoto.")
+plan, err := chatAgent.RunText(ctx, "Plan a day in Kyoto.")
 
-// Continue the session, in this process or another.
-chatAgent.RunText(ctx, "Add a tea ceremony.",
-    aix.WithSessionID[any](plan.SessionID))
+// Continue the session, in this process or another. Options are typed to the
+// agent's State, so an option for a different State type does not compile.
+next, err := chatAgent.RunText(ctx, "Add a tea ceremony.",
+    aix.WithSessionID[ChatState](plan.SessionID))
 
 // Branch from the first plan. The tea ceremony is not in this timeline.
-rainy, _ := chatAgent.RunText(ctx, "Assume it rains.",
-    aix.WithSnapshotID[any](plan.SnapshotID))
+rainy, err := chatAgent.RunText(ctx, "Assume it rains.",
+    aix.WithSnapshotID[ChatState](plan.SnapshotID))
 fmt.Println(rainy.Message.Text())
 ```
 
@@ -242,13 +242,13 @@ Failed and stopped runs land as snapshots too, keeping the work they finished, s
 `Detach` hands the work to the server and returns a snapshot ID right away. Check on it with `GetSnapshot`, wait with `WaitForSnapshot`, or stop it with `Abort`:
 
 ```go
-conn, _ := chatAgent.Connect(ctx)
+conn, err := chatAgent.Connect(ctx)
 conn.SendText("Draft a detailed two-week Japan itinerary.")
 conn.Detach()
-out, _ := conn.Output()
+out, err := conn.Output()
 
-// Later, from anywhere:
-snap, _ := chatAgent.WaitForSnapshot(ctx, out.SnapshotID)
+// Later, from anywhere. snap is *aix.SessionSnapshot[ChatState].
+snap, err := chatAgent.WaitForSnapshot(ctx, out.SnapshotID)
 ```
 
 [Docs](https://genkit.dev/docs/go/agents/background/) &middot; [Example](samples/basic-agents)
@@ -307,6 +307,7 @@ chatAgent := genkitx.DefinePromptAgent(g, "chat",
 `DefineCustomAgent` hands you the turn body. Session state, snapshots, and background runs still come for free:
 
 ```go
+// *aix.Agent[any]: the State type comes from the SessionRunner in the signature.
 chatAgent := genkitx.DefineCustomAgent(g, "chat",
     func(ctx context.Context, resp aix.Responder, sess *aix.SessionRunner[any]) (*aix.AgentResult, error) {
         err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) (*aix.TurnResult, error) {
@@ -343,6 +344,8 @@ With a typed `State`, `sess.UpdateCustom` changes your own state and streams the
 `WithStateTransform` rewrites session state before it leaves the server. Stored snapshots stay raw:
 
 ```go
+// The store and the transform both set State to ChatState.
+// If they disagree, the code does not compile.
 chatAgent := genkitx.DefineAgent(g, "chat",
     aix.InlinePrompt{ai.WithModelName("googleai/gemini-flash-latest")},
     aix.WithSessionStore(store),
@@ -380,28 +383,26 @@ log.Fatal(server.Start(ctx, "127.0.0.1:8080", mux))
 
 Genkit Go gives you everything you need to build AI applications with confidence.
 
-### Stream Responses
+### Generate and Stream
 
-Stream text as it's generated for responsive user experiences:
+`Generate` returns the whole response. `GenerateStream` takes the same options and yields the response chunk by chunk:
 
 ```go
-stream := genkit.GenerateStream(ctx, g,
+resp, err := genkit.Generate(ctx, g,
     ai.WithModelName("googleai/gemini-flash-latest"),
     ai.WithPrompt("Write a short story about a robot learning to paint."),
 )
+fmt.Println(resp.Text())
 
-for result, err := range stream {
-    if err != nil {
-        log.Fatal(err)
-    }
+for result, err := range genkit.GenerateStream(ctx, g, /* same options */) {
     if result.Done {
-        break
+        break // result.Response holds the same *ai.ModelResponse as Generate
     }
     fmt.Print(result.Chunk.Text())
 }
 ```
 
-For the whole answer at once, call `genkit.GenerateText` as in the [Quick Start](#quick-start). For a callback instead of a loop, pass `ai.WithStreaming`.
+`genkit.GenerateText` returns only the string, as in the [Quick Start](#quick-start). To stream to a callback instead of a loop, pass `ai.WithStreaming(cb)` to any of them.
 
 [Docs](https://genkit.dev/docs/go/models/#streaming) &middot; [Example](samples/basic-tools/main.go)
 
@@ -413,17 +414,24 @@ Get type-safe JSON output that maps directly to your Go structs:
 type Recipe struct {
     Title       string   `json:"title"`
     Ingredients []string `json:"ingredients"`
-    Steps       []string `json:"steps"`
 }
 
-recipe, _, _ := genkit.GenerateData[Recipe](ctx, g,
+// The output schema is inferred from Recipe, and the reply is decoded into a *Recipe.
+recipe, resp, err := genkit.GenerateData[Recipe](ctx, g,
     ai.WithModelName("googleai/gemini-flash-latest"),
     ai.WithPrompt("Create a recipe for chocolate chip cookies."),
 )
 fmt.Println(recipe.Title)
+
+for result, err := range genkit.GenerateDataStream[Recipe](ctx, g, /* same options */) {
+    if result.Done {
+        break // result.Output is the final Recipe
+    }
+    fmt.Println(len(result.Chunk.Ingredients)) // result.Chunk is the Recipe so far
+}
 ```
 
-`genkit.GenerateDataStream` streams partial `Recipe` values as they arrive. `ai.WithOutputFormat(ai.OutputFormatJSONL)` streams list items one at a time, and `ai.WithOutputEnums` limits the answer to one label.
+`ai.WithOutputFormat(ai.OutputFormatJSONL)` streams list items one at a time, and `ai.WithOutputEnums` limits the answer to one label.
 
 [Docs](https://genkit.dev/docs/go/models/#structured-output) &middot; [Example](samples/basic-structured/main.go) &middot; [Formats example](samples/basic-formats/main.go)
 
@@ -436,6 +444,8 @@ type WeatherInput struct {
     Location string `json:"location"`
 }
 
+// *ai.ToolAction[WeatherInput, string].
+// The model sees a JSON schema inferred from WeatherInput.
 weatherTool := genkit.DefineTool(g, "getWeather",
     "Gets the current weather for a location",
     func(ctx *ai.ToolContext, input WeatherInput) (string, error) {
@@ -443,12 +453,12 @@ weatherTool := genkit.DefineTool(g, "getWeather",
     },
 )
 
-response, _ := genkit.Generate(ctx, g,
+resp, err := genkit.Generate(ctx, g,
     ai.WithModelName("googleai/gemini-flash-latest"),
     ai.WithPrompt("What's the weather like in San Francisco?"),
     ai.WithTools(weatherTool),
 )
-fmt.Println(response.Text())
+fmt.Println(resp.Text())
 ```
 
 Return `tool.Fail` (package `ai/tool`) to send an error back to the model so it can try again:
@@ -470,6 +480,8 @@ return pop, err // any other error stops the generation
 Pause a tool for a person's approval, then resume with their answer:
 
 ```go
+// *ai.ResumableToolAction[TransferInput, string, Approval].
+// The third type is the answer that the tool resumes with.
 transfer := genkit.DefineResumableTool(g, "transfer", "Transfers money.",
     func(ctx context.Context, input TransferInput, approval *Approval) (string, error) {
         if approval == nil {
@@ -482,7 +494,7 @@ transfer := genkit.DefineResumableTool(g, "transfer", "Transfers money.",
     },
 )
 
-resp, _ := genkit.Generate(ctx, g,
+resp, err := genkit.Generate(ctx, g,
     ai.WithModelName("googleai/gemini-flash-latest"),
     ai.WithPrompt("Transfer $5000 to account ABC123"),
     ai.WithTools(transfer),
@@ -491,11 +503,13 @@ resp, _ := genkit.Generate(ctx, g,
 var answers []*ai.Part
 for _, part := range resp.Interrupts() {
     if call, ok := transfer.Interrupted(part); ok {
-        answers = append(answers, call.Restart(Approval{Approved: askHuman(call.Input)}))
+        // call.Input is a TransferInput, and Restart accepts only an Approval.
+        approved := askHuman(call.Input)
+        answers = append(answers, call.Restart(Approval{Approved: approved}))
     }
 }
 
-resp, _ = genkit.Generate(ctx, g,
+resp, err = genkit.Generate(ctx, g,
     ai.WithMessages(resp.History()...),
     ai.WithTools(transfer),
     ai.WithResume(answers...),
@@ -516,7 +530,7 @@ g := genkit.Init(ctx, genkit.WithPlugins(
     &middleware.Middleware{},
 ))
 
-response, _ := genkit.Generate(ctx, g,
+resp, err := genkit.Generate(ctx, g,
     ai.WithModelName("googleai/gemini-flash-latest"),
     ai.WithPrompt("Explain quantum computing."),
     ai.WithUse(
@@ -549,7 +563,7 @@ jokePrompt := genkit.DefineDataPrompt[JokeRequest, Joke](g, "joke",
     ai.WithPrompt("Tell a joke about {{topic}}."),
 )
 
-joke, _, _ := jokePrompt.Execute(ctx, JokeRequest{Topic: "cats"})
+joke, resp, err := jokePrompt.Execute(ctx, JokeRequest{Topic: "cats"})
 fmt.Println(joke.Punchline)
 ```
 
@@ -610,7 +624,11 @@ g := genkit.Init(ctx,
 genkit.DefineSchemasFor(g, RecipeRequest{}, Recipe{})
 
 recipePrompt := genkit.LookupDataPrompt[RecipeRequest, *Recipe](g, "recipe")
-recipe, _, _ := recipePrompt.Execute(ctx, RecipeRequest{Dish: "tacos", Cuisine: "Mexican", ServingSize: 4})
+recipe, resp, err := recipePrompt.Execute(ctx, RecipeRequest{
+    Dish:        "tacos",
+    Cuisine:     "Mexican",
+    ServingSize: 4,
+})
 fmt.Println(recipe.Title)
 ```
 
@@ -623,6 +641,8 @@ Without `genkit.WithPromptFS`, prompts load from the `prompts` directory on disk
 A flow is a typed, traced function that you can test in the Dev UI and serve as an HTTP endpoint with one line:
 
 ```go
+// *core.Flow[string, string, string].
+// The input, output, and stream types come from the function.
 storyFlow := genkit.DefineStreamingFlow(g, "story",
     func(ctx context.Context, topic string, send core.StreamCallback[string]) (string, error) {
         return genkit.GenerateText(ctx, g,
@@ -657,7 +677,8 @@ genkit.DefineFlow(g, "summarize",
     func(ctx context.Context, doc string) (string, error) {
         logger.Info(ctx, "summarizing", "bytes", len(doc))
 
-        clean, _ := genkit.Run(ctx, "clean", func() (string, error) {
+        // A traced step. Its output type comes from the function, so clean is a string.
+        clean, err := genkit.Run(ctx, "clean", func() (string, error) {
             return strings.TrimSpace(doc), nil
         })
         return genkit.GenerateText(ctx, g,
@@ -677,7 +698,7 @@ Set `GENKIT_LOG_LEVEL=debug` to see Genkit's own model and tool detail in the te
 Genkit classifies its failures with sentinels, so you branch with `errors.Is` instead of matching message text:
 
 ```go
-_, err := genkit.GenerateText(ctx, g,
+text, err := genkit.GenerateText(ctx, g,
     ai.WithModelName("googleai/gemini-flash-latest"),
     ai.WithPrompt("Summarize this."),
 )
@@ -741,7 +762,7 @@ g := genkit.Init(ctx, genkit.WithPlugins(
 Use `ai.WithModelName` for simple cases, or pair a model with provider-specific config using `ModelRef`:
 
 ```go
-response, _ := genkit.Generate(ctx, g,
+resp, err := genkit.Generate(ctx, g,
     ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
         Temperature:     genai.Ptr(float32(0.7)),
         MaxOutputTokens: 1000,
