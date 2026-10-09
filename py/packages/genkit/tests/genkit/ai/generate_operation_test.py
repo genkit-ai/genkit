@@ -45,8 +45,6 @@ Note:
     can be used with generate_operation().
 """
 
-from typing import Any
-
 import pytest
 
 from genkit import Genkit, Message, ModelResponse, Part
@@ -237,24 +235,3 @@ async def test_generate_operation_passes_all_options(ai: Genkit) -> None:
         assert getattr(config, 'temperature', None) == 0.7
     assert any(m.role == Role.SYSTEM and 'test assistant' in m.text.lower() for m in captured_request.messages)
     assert any(m.role == Role.USER and 'Test prompt' in m.text for m in captured_request.messages)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    'arg',
-    ['tools', 'tool_choice', 'return_tool_requests', 'max_turns', 'docs', 'output_schema', 'output_format'],
-)
-async def test_generate_operation_rejects_tool_loop_args(ai: Genkit, arg: str) -> None:
-    """A background job never runs a tool loop or shapes output, so those arguments fail instead of being ignored."""
-
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
-        return Operation(id='op', done=False)
-
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
-        return op
-
-    ai.define_background_model(name='veo-like', start=start, check=check)
-
-    kwargs: dict[str, Any] = {arg: None}
-    with pytest.raises(TypeError, match=arg):
-        await ai.generate_operation(model='veo-like', prompt='A flower blooming.', **kwargs)

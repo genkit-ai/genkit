@@ -24,6 +24,7 @@ import json
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
 from typing import Any
 
+import httpx
 from pydantic import BaseModel
 from typing_extensions import TypeVar as TypeVarExt
 
@@ -38,7 +39,7 @@ from genkit._ai._agents._snapshot import parse_snapshot_lookup_kw
 from genkit._ai._agents._types import StateManagement
 from genkit._core._channel import CloseableQueue
 from genkit._core._error import GenkitError
-from genkit._core._http_client import get_cached_client
+from genkit._core._loop_cache import loop_local_client
 from genkit._core._model import AgentInit, AgentInput, AgentOutput, AgentStreamChunk, SessionSnapshot
 from genkit._core._typing import (
     AgentAbortResponse,
@@ -50,6 +51,10 @@ StateT = TypeVarExt('StateT', bound=BaseModel, default=Any)
 # Auth usually rides on HTTP headers, not the agent envelope. Static dict for a
 # fixed key; callable when a token needs refreshing between requests.
 HeadersProvider = dict[str, str] | Callable[[], dict[str, str] | Awaitable[dict[str, str]]]
+
+# One client per event loop. Same timeout the transport had before: 60s between
+# reads, 10s to connect.
+_agent_client = loop_local_client(lambda: httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0)))
 
 
 def parse_stream_line(line: str) -> dict[str, Any] | None:
@@ -128,7 +133,7 @@ class HttpAgentTransport(AgentTransport[StateT]):
 
     async def _post_json(self, *, url: str, input_val: dict[str, Any]) -> Any:  # noqa: ANN401
         """POST JSON to a one-shot action endpoint and return the parsed body."""
-        client = get_cached_client('agent_transport')
+        client = _agent_client()
         # Same callable/flow envelope as run_turn: handlers expect {"data": ...}.
         response = await client.post(
             url,
@@ -168,7 +173,7 @@ class HttpAgentTransport(AgentTransport[StateT]):
         init: AgentInit,
     ) -> tuple[AsyncIterable[AgentStreamChunk], Awaitable[AgentOutput]]:
         """Runs a single turn over HTTP using a streaming POST request."""
-        client = get_cached_client('agent_transport')
+        client = _agent_client()
 
         # Callable/flow envelope used by expressHandler and FastAPI/Flask/Django
         # handlers: {"data": <AgentInput>, "init": <AgentInit>}. Streaming is

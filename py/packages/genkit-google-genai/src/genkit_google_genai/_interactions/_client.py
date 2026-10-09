@@ -40,8 +40,8 @@ from genkit.plugin_api import (
 DEFAULT_API_VERSION = 'v1beta'
 DEFAULT_BASE_URL = 'https://generativelanguage.googleapis.com'
 API_REVISION = '2026-05-20'
-# Creates can run far longer than the shared client's 60s default. No read
-# timeout, but keep a connect budget so a hung handshake doesn't sit forever.
+# Creates can run for many minutes. No read timeout, but keep a connect
+# budget so a hung handshake doesn't sit forever.
 NO_TIMEOUT = httpx.Timeout(None, connect=10.0)
 _http_client = loop_local_client(lambda: httpx.AsyncClient(timeout=NO_TIMEOUT))
 RESERVED_HEADERS = ('x-goog-api-key', 'x-goog-api-client')

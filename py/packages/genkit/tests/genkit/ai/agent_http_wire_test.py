@@ -84,7 +84,7 @@ async def test_run_turn_posts_data_init_envelope_with_accept_header() -> None:
     client = FakeClient()
     transport = HttpAgentTransport(url=URL, state_management='server')
     with mock.patch(
-        'genkit._ai._agents._transports._http.get_cached_client',
+        'genkit._ai._agents._transports._http._agent_client',
         return_value=client,
     ):
         await _run_turn(transport)
@@ -101,7 +101,7 @@ async def test_get_snapshot_posts_data_envelope() -> None:
     client = FakeClient()
     transport = HttpAgentTransport(url=URL, state_management='server')
     with mock.patch(
-        'genkit._ai._agents._transports._http.get_cached_client',
+        'genkit._ai._agents._transports._http._agent_client',
         return_value=client,
     ):
         await transport.get_snapshot(snapshot_id='snap-1')
@@ -118,7 +118,7 @@ async def test_static_headers_on_turn_and_snapshot() -> None:
         headers={'Authorization': 'Bearer static'},
     )
     with mock.patch(
-        'genkit._ai._agents._transports._http.get_cached_client',
+        'genkit._ai._agents._transports._http._agent_client',
         return_value=client,
     ):
         await _run_turn(transport)
@@ -142,7 +142,7 @@ async def test_sync_callable_headers_resolved_per_request() -> None:
         headers=lambda: {'Authorization': f'Bearer {next(tokens)}'},
     )
     with mock.patch(
-        'genkit._ai._agents._transports._http.get_cached_client',
+        'genkit._ai._agents._transports._http._agent_client',
         return_value=client,
     ):
         await _run_turn(transport)
@@ -167,7 +167,7 @@ async def test_async_callable_headers_resolved_per_request() -> None:
         headers=refresh,
     )
     with mock.patch(
-        'genkit._ai._agents._transports._http.get_cached_client',
+        'genkit._ai._agents._transports._http._agent_client',
         return_value=client,
     ):
         await _run_turn(transport)

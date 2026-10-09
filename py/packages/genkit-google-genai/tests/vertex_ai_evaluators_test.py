@@ -115,7 +115,6 @@ async def test_evaluator_factory_evaluate_instances_structure() -> None:
         mock_response.status_code = 200
         mock_response.json.return_value = mock_response_data
         mock_client.post = AsyncMock(return_value=mock_response)
-        mock_client.is_closed = False
 
         with patch('genkit_google_genai._evaluators._evaluation._evaluator_client', return_value=mock_client):
             result = await factory.evaluate_instances({'fluencyInput': {'prediction': 'Test'}})
@@ -145,7 +144,6 @@ async def test_evaluator_factory_evaluate_instances_error_handling() -> None:
         mock_response.status_code = 500
         mock_response.text = 'Internal Server Error'
         mock_client.post = AsyncMock(return_value=mock_response)
-        mock_client.is_closed = False
 
         with patch('genkit_google_genai._evaluators._evaluation._evaluator_client', return_value=mock_client):
             with pytest.raises(GenkitError) as exc_info:

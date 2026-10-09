@@ -25,8 +25,22 @@ from typing import TypeVar
 T = TypeVar('T')
 
 
+def _is_closed(obj: object) -> bool:
+    closed = getattr(obj, 'is_closed', None)
+    # httpx exposes a property; the OpenAI and Anthropic SDKs a method. Only a
+    # real True counts, so mocks and unrelated attributes never force a rebuild.
+    if callable(closed):
+        closed = closed()
+    return closed is True
+
+
 def loop_local_client(factory: Callable[[], T]) -> Callable[[], T]:
-    """Return a getter that caches one resource instance per event loop."""
+    """Return a getter that caches one resource instance per event loop.
+
+    A cached object whose ``is_closed`` is true (httpx and the OpenAI and
+    Anthropic SDK clients expose it) is rebuilt, so closing a client by hand
+    doesn't leave a dead one in the cache.
+    """
     by_loop: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, T] = weakref.WeakKeyDictionary()
     lock = threading.Lock()
 
@@ -34,7 +48,7 @@ def loop_local_client(factory: Callable[[], T]) -> Callable[[], T]:
         loop = asyncio.get_running_loop()
         with lock:
             existing = by_loop.get(loop)
-            if existing is not None:
+            if existing is not None and not _is_closed(existing):
                 return existing
             created = factory()
             by_loop[loop] = created
