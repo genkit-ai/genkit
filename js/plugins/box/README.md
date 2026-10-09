@@ -336,6 +336,9 @@ This is the first option with real containment:
   the box unless you pass it explicitly via `env:`.
 - **`docker` works too**, via `engine: 'docker'`.
 
+Containers have 30 seconds to answer their health check; raise
+`readyTimeoutMs` for big images or slow cold starts.
+
 ### Why v1 here, and not v2
 
 Everywhere else box uses reflection v2, where the runtime dials *out* to a

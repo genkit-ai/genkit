@@ -91,6 +91,11 @@ export interface PodmanRunnerOptions {
   /** Extra raw `podman run` args, e.g. `['--memory=512m']`. */
   extraArgs?: string[];
   /**
+   * How long to wait for a new container to answer its health check.
+   * Defaults to 30s; raise it for big images or slow cold starts.
+   */
+  readyTimeoutMs?: number;
+  /**
    * Container engine binary: `podman` (default), `docker` (CLI-compatible for
    * what we use), or a path to either.
    */
@@ -348,7 +353,10 @@ export class PodmanRunner implements BoxRunner {
     const stopWaiting = new AbortController();
     try {
       await untilReady(
-        client.waitForReady(30_000, stopWaiting.signal),
+        client.waitForReady(
+          this.options.readyTimeoutMs ?? 30_000,
+          stopWaiting.signal
+        ),
         child,
         `Box container ${name}`,
         signal

@@ -17,8 +17,16 @@
 import * as assert from 'assert';
 import { realpathSync } from 'node:fs';
 import * as os from 'node:os';
+import path from 'node:path';
 import { describe, it } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { podmanRunner } from '../src/runners/podman-runner.js';
+
+const hungEngine = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  'fixtures',
+  'hung-engine.sh'
+);
 
 /** Reads the value following a repeated flag (e.g. every `-e`). */
 function valuesFor(args: string[], flag: string): string[] {
@@ -222,6 +230,20 @@ describe('podmanRunner', () => {
     const started = Date.now();
     await assert.rejects(runner.acquire('k'), /exited before it was ready/);
     assert.ok(Date.now() - started < 5_000, 'no readiness timeout');
+    await runner.close();
+  });
+
+  it('honors readyTimeoutMs', async () => {
+    const runner = podmanRunner({
+      image: 'node:22-slim',
+      cmd: 'node boxed.js',
+      network: 'bridge',
+      engine: hungEngine,
+      readyTimeoutMs: 300,
+    });
+    const started = Date.now();
+    await assert.rejects(runner.acquire('k'), /Timed out/);
+    assert.ok(Date.now() - started < 5_000, 'used the short timeout');
     await runner.close();
   });
 
