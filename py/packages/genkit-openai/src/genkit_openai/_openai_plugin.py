@@ -306,7 +306,7 @@ class OpenAI(Plugin):
                 status='INVALID_ARGUMENT',
                 message=(
                     f"OpenAI.gpt_model: '{local}' is {kind}; it does not take "
-                    f'OpenAIConfig. Pass it as a string (openai_model({local!r})).'
+                    f"OpenAIConfig. Pass it as a string ('openai/{local}')."
                 ),
             )
         return model_ref(local, config_schema=OpenAIConfig, namespace='openai', config=config)
@@ -690,16 +690,4 @@ class OpenAI(Plugin):
         return actions
 
 
-def openai_model(name: str) -> str:
-    """Returns a string representing the OpenAI model name to use with Genkit.
-
-    Args:
-        name: The name of the OpenAI model to use.
-
-    Returns:
-        A string representing the OpenAI model name to use with Genkit.
-    """
-    return f'openai/{name}'
-
-
-__all__ = ['OpenAI', 'openai_model']
+__all__ = ['OpenAI']
