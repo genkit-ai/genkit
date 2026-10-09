@@ -21,8 +21,8 @@ from typing import Any, cast
 import pytest
 from pydantic import BaseModel
 
-from genkit import BaseDataPoint, Genkit, GenkitError
-from genkit.evaluator import EvalFnResponse, EvalRequest, Score, evaluator, evaluator_action_metadata
+from genkit import Genkit, GenkitError
+from genkit.evaluator import BaseDataPoint, EvalFnResponse, EvalRequest, Score, evaluator, evaluator_action_metadata
 from genkit.plugin_api import Action, ActionKind, ActionMetadata, Plugin
 
 
