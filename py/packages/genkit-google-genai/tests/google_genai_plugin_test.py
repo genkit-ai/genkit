@@ -44,7 +44,8 @@ from genkit_google_genai._google import (
 from genkit_google_genai._models._veo import VeoConfig, VeoModel
 from google.genai import types as genai_types
 
-from genkit import BaseDataPoint, Genkit, GenkitError, Message, Operation, Part, Role
+from genkit import Genkit, GenkitError, Message, Operation, Part, Role
+from genkit.evaluator import BaseDataPoint
 from genkit.model import ModelRequest
 from genkit.plugin_api import Action, ActionKind, to_json_schema
 

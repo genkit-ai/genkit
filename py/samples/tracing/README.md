@@ -20,5 +20,5 @@ To send the same spans to Cloud Trace later:
 ```python
 from genkit_google_cloud import enable_google_cloud_telemetry
 
-enable_google_cloud_telemetry(project_id='my-project')
+enable_google_cloud_telemetry(project='my-project')
 ```
