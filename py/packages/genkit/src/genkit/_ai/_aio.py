@@ -574,9 +574,15 @@ class Genkit:
         info: EmbedderInfo | None = None,
         metadata: dict[str, object] | None = None,
         description: str | None = None,
+        *,
+        config_schema: type[BaseModel] | dict[str, object] | None = None,
     ) -> Action:
-        """Register a custom embedder action."""
-        return define_embedder(self.registry, name, fn, info, metadata, description)
+        """Register a custom embedder action.
+
+        The options class comes from ``config_schema`` or the fn's
+        ``EmbedRequest[Cfg]`` annotation; given both, they must be the same class.
+        """
+        return define_embedder(self.registry, name, fn, info, metadata, description, config_schema=config_schema)
 
     def define_format(self, format: FormatDef) -> None:
         """Register a custom output format."""

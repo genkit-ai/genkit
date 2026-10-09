@@ -20,12 +20,20 @@ import inspect
 import traceback
 import uuid
 from collections.abc import Callable, Coroutine
-from typing import Any, ClassVar, TypeVar
+from typing import Any, ClassVar, TypeVar, cast, get_origin
 
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
 
-from genkit._core._action import Action, ActionKind, ActionRunContext
+from genkit._core._action import (
+    Action,
+    ActionKind,
+    ActionRunContext,
+    known_annotation_names,
+    resolve_type_hints,
+    signature_of,
+    with_request_annotation,
+)
 from genkit._core._logger import get_logger
 from genkit._core._model import EvalRequest
 from genkit._core._registry import Registry
@@ -74,6 +82,31 @@ def evaluator_ref(name: str, *, config: dict[str, object] | None = None) -> Eval
     cannot be stored as config.
     """
     return EvaluatorRef(name=name, config=config)
+
+
+def _options_class(fn: Callable[..., Any]) -> type[BaseModel] | None:
+    """The class on a per-row evaluator's second parameter, e.g. ``options: JudgeConfig``.
+
+    None for ``dict``, ``Any``, a union, or no annotation: the fn takes a dict.
+    """
+    params = [
+        p
+        for p in signature_of(fn).parameters.values()
+        if p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    ]
+    if len(params) < 2:
+        return None
+    annotation = resolve_type_hints(fn, known_annotation_names(ActionKind.EVALUATOR)).get(params[1].name)
+    if isinstance(annotation, type) and get_origin(annotation) is None and issubclass(annotation, BaseModel):
+        return annotation
+    return None
+
+
+def _set_custom_options(evaluator_meta: dict[str, object], action: Action) -> None:
+    """Annotation only: the Dev UI form comes from the options class."""
+    info = evaluator_meta.get('evaluator')
+    if isinstance(info, dict) and 'customOptions' not in info and action.config_schema is not None:
+        cast(dict[str, object], info)['customOptions'] = to_json_schema(action.config_schema)
 
 
 def _evaluator_metadata(
@@ -142,7 +175,12 @@ def define_evaluator(
     metadata: dict[str, object] | None = None,
     description: str | None = None,
 ) -> Action:
-    """Register an evaluator that runs the callback on each dataset sample."""
+    """Register an evaluator that runs the callback on each dataset sample.
+
+    ``fn(datapoint, options)``. Annotate ``options`` with a BaseModel class
+    to get it validated, with defaults; otherwise it is a dict. Given both
+    that annotation and ``config_schema``, they must be the same class.
+    """
     evaluator_meta = _evaluator_metadata(name, display_name, definition, is_billed, config_schema, metadata)
 
     evaluator_description = _get_func_description(fn, description)
@@ -193,13 +231,21 @@ def define_evaluator(
                 continue
         return EvalResponse(eval_responses)
 
-    return registry.register_action(
+    # The stepper is the action, so it carries the per-row fn's options class.
+    options_cls = _options_class(fn)
+    if options_cls is not None:
+        eval_stepper_fn.__annotations__['req'] = cast(Any, EvalRequest)[options_cls]
+
+    action = registry.register_action(
         name=name,
         kind=ActionKind.EVALUATOR,
         fn=eval_stepper_fn,
         metadata=evaluator_meta,
         description=evaluator_description,
+        config_schema=config_schema,
     )
+    _set_custom_options(evaluator_meta, action)
+    return action
 
 
 def define_batch_evaluator(
@@ -236,8 +282,11 @@ def define_batch_evaluator(
         name=name,
         kind=ActionKind.EVALUATOR,
         fn=batch_fn,
-        metadata_fn=fn,
+        # An unannotated fn still gets an EvalRequest, not the raw JSON dict.
+        metadata_fn=with_request_annotation(fn, EvalRequest, kind=ActionKind.EVALUATOR),
         metadata=evaluator_meta,
         description=evaluator_description,
+        config_schema=config_schema,
     )
+    _set_custom_options(evaluator_meta, action)
     return action
