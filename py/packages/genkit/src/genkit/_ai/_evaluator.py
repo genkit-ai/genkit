@@ -19,11 +19,12 @@
 import inspect
 import traceback
 import uuid
-from collections.abc import Callable, Coroutine
-from typing import Any, ClassVar, TypeVar, cast, get_origin
+from collections.abc import Callable, Coroutine, Mapping
+from dataclasses import dataclass
+from typing import Any, Generic, cast, get_origin
 
-from pydantic import BaseModel, ConfigDict
-from pydantic.alias_generators import to_camel
+from pydantic import BaseModel
+from typing_extensions import TypeVar
 
 from genkit._core._action import (
     Action,
@@ -35,7 +36,7 @@ from genkit._core._action import (
     with_request_annotation,
 )
 from genkit._core._logger import get_logger
-from genkit._core._model import EvalRequest
+from genkit._core._model import EvalRequest, check_ref_config
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
 from genkit._core._telemetry._attrs import metadata_key
@@ -66,22 +67,42 @@ EvaluatorFn = Callable[[BaseDataPoint, T], Coroutine[Any, Any, EvalFnResponse]]
 BatchEvaluatorFn = Callable[[EvalRequest[Any]], Coroutine[Any, Any, list[EvalFnResponse] | EvalResponse]]
 
 
-class EvaluatorRef(BaseModel):
-    """Reference to an evaluator."""
+# Covariant so EvaluatorRef[JudgeConfig] is assignable to EvaluatorRef[BaseModel].
+EvaluatorRefConfigT = TypeVar('EvaluatorRefConfigT', bound=BaseModel, covariant=True, default=BaseModel)
 
-    model_config: ClassVar[ConfigDict] = ConfigDict(extra='forbid', populate_by_name=True, alias_generator=to_camel)
+
+@dataclass(frozen=True, kw_only=True)
+class EvaluatorRef(Generic[EvaluatorRefConfigT]):
+    """Handle for an evaluator, shaped like ModelRef (no info, no version).
+
+    ``config_schema`` is optional. Without it, ``config`` is a plain mapping.
+    With it, ``config`` must be an instance, and ``ai.evaluate`` requires the
+    evaluator to declare the same class. config is copied at construction.
+    """
 
     name: str
-    config: dict[str, object] | None = None
+    config_schema: type[EvaluatorRefConfigT] | None = None
+    config: EvaluatorRefConfigT | Mapping[str, Any] | None = None
+
+    __hash__ = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        config = check_ref_config(name=self.name, schema=self.config_schema, config=self.config, schema_required=False)
+        object.__setattr__(self, 'config', config)
 
 
-def evaluator_ref(name: str, *, config: dict[str, object] | None = None) -> EvaluatorRef:
+def evaluator_ref(
+    name: str,
+    *,
+    config: EvaluatorRefConfigT | Mapping[str, Any] | None = None,
+    config_schema: type[EvaluatorRefConfigT] | None = None,
+) -> EvaluatorRef[EvaluatorRefConfigT]:
     """Create an EvaluatorRef whose config is merged under ai.evaluate's config=.
 
     Settings are named. A value in the second position is a TypeError so it
     cannot be stored as config.
     """
-    return EvaluatorRef(name=name, config=config)
+    return EvaluatorRef[EvaluatorRefConfigT](name=name, config_schema=config_schema, config=config)
 
 
 def _options_class(fn: Callable[..., Any]) -> type[BaseModel] | None:

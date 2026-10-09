@@ -1766,7 +1766,7 @@ class Genkit:
                     print(row.test_case_id, score.score)
         """
         evaluator_name: str = ''
-        ref_config: dict[str, object] | None = None
+        ref_config: object = None
 
         if isinstance(evaluator, EvaluatorRef):
             evaluator_name = evaluator.name

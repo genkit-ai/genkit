@@ -325,6 +325,60 @@ def config_type_path(cls: type) -> str:
     return impl
 
 
+def check_ref_config(*, name: str, schema: object, config: object, schema_required: bool) -> object:
+    """Check a ref's config against its config_schema and return a deep copy.
+
+    Shared by ModelRef, EmbedderRef and EvaluatorRef. With a schema, config
+    must be an instance of it. Without one (embedder and evaluator refs
+    only), config is a plain mapping. The copy keeps later mutations of the
+    caller's object from changing the ref's layer.
+    """
+    if schema is not None or schema_required:
+        if not _is_model_class(schema):
+            got = (
+                f'{schema.__module__}.{schema.__name__}'
+                if isinstance(schema, type)
+                else f'{type(schema).__module__}.{type(schema).__name__}'
+            )
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=f'{name}: config_schema must be a BaseModel subclass, got {got}',
+            )
+        if config is not None and not isinstance(config, schema):
+            expected = config_type_path(schema)
+            actual = config_type_path(type(config))
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=f'{name}: config must be an instance of {expected}, got {actual}',
+            )
+    elif config is not None and (isinstance(config, BaseModel) or not isinstance(config, Mapping)):
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=(
+                f'{name}: config must be a mapping when config_schema is not set, got {type(config).__name__}. '
+                'Pass config_schema= to use a config class.'
+            ),
+        )
+    if isinstance(config, BaseModel):
+        return config.model_copy(deep=True)
+    if isinstance(config, Mapping):
+        return deepcopy(dict(cast(Mapping[str, Any], config)))
+    return config
+
+
+def check_ref_info(*, name: str, info: object, info_type: type[BaseModel]) -> object:
+    """Check a ref's info is ``info_type`` and return a deep copy."""
+    if info is None:
+        return None
+    if not isinstance(info, info_type):
+        actual = f'{type(info).__module__}.{type(info).__name__}'
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f'{name}: info must be an instance of {info_type.__module__}.{info_type.__name__}, got {actual}',
+        )
+    return info.model_copy(deep=True)
+
+
 @dataclass(frozen=True, kw_only=True)
 class ModelRef(Generic[ModelRefConfigT]):
     """Handle for a model tied to a config schema.
@@ -345,38 +399,12 @@ class ModelRef(Generic[ModelRefConfigT]):
     __hash__ = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
-        # If config_schema is not a BaseModel subclass, raise an error.
-        schema = self.config_schema
-        if not isinstance(schema, type) or not issubclass(schema, BaseModel):
-            got = (
-                f'{schema.__module__}.{schema.__name__}'
-                if isinstance(schema, type)
-                else f'{type(schema).__module__}.{type(schema).__name__}'
-            )
-            raise GenkitError(
-                status='INVALID_ARGUMENT',
-                message=f'{self.name}: config_schema must be a BaseModel subclass, got {got}',
-            )
-        if self.config is not None and not isinstance(self.config, schema):
-            expected = config_type_path(schema)
-            actual = config_type_path(type(self.config))
-            raise GenkitError(
-                status='INVALID_ARGUMENT',
-                message=f'{self.name}: config must be an instance of {expected}, got {actual}',
-            )
-        # If info is present, validate that it is a ModelInfo and raise an error if not.
-        if self.info is not None and not isinstance(self.info, ModelInfo):
-            actual = f'{type(self.info).__module__}.{type(self.info).__name__}'
-            raise GenkitError(
-                status='INVALID_ARGUMENT',
-                message=(f'{self.name}: info must be an instance of {ModelInfo.__module__}.ModelInfo, got {actual}'),
-            )
-        # Callers often keep the config/info they passed in. Copy so later
-        # mutations of those objects don't change the ref's defaults.
-        if self.config is not None:
-            object.__setattr__(self, 'config', self.config.model_copy(deep=True))
-        if self.info is not None:
-            object.__setattr__(self, 'info', self.info.model_copy(deep=True))
+        # Callers often keep the config/info they passed in. The checks copy
+        # them so later mutations of those objects don't change the ref's defaults.
+        config = check_ref_config(name=self.name, schema=self.config_schema, config=self.config, schema_required=True)
+        object.__setattr__(self, 'config', config)
+        info = check_ref_info(name=self.name, info=self.info, info_type=ModelInfo)
+        object.__setattr__(self, 'info', info)
 
 
 def config_field_names(schema: type[BaseModel]) -> dict[str, str]:

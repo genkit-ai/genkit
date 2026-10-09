@@ -16,15 +16,16 @@
 
 """Embedding types and utilities for Genkit."""
 
-from collections.abc import Awaitable, Callable
-from typing import Any, ClassVar, cast
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
+from typing import Any, ClassVar, Generic, cast
 
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
-from typing_extensions import Never
+from typing_extensions import Never, TypeVar
 
 from genkit._core._action import Action, ActionKind, get_func_description, with_request_annotation
-from genkit._core._model import Document, EmbedRequest
+from genkit._core._model import Document, EmbedRequest, check_ref_config, check_ref_info
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
 from genkit._core._typing import ActionMetadata, EmbedResponse
@@ -50,14 +51,36 @@ class EmbedderInfo(BaseModel):
     dimensions: int | None = None
 
 
-class EmbedderRef(BaseModel):
-    """Reference to an embedder with configuration."""
+# Covariant so EmbedderRef[CrmEmbedConfig] is assignable to EmbedderRef[BaseModel].
+EmbedderRefConfigT = TypeVar('EmbedderRefConfigT', bound=BaseModel, covariant=True, default=BaseModel)
 
-    model_config: ClassVar[ConfigDict] = ConfigDict(extra='forbid', populate_by_name=True)
+
+@dataclass(frozen=True, kw_only=True)
+class EmbedderRef(Generic[EmbedderRefConfigT]):
+    """Handle for an embedder, shaped like ModelRef.
+
+    ``config_schema`` is optional: embedders have no generic base config the
+    way models have ModelConfig. Without it, ``config`` is a plain mapping
+    and the call is not checked against a class. With it, ``config`` must be
+    an instance, and ``ai.embed`` requires the embedder to declare the same
+    class. ``version`` is the lowest caller layer, below ``config`` and the
+    call's config, the same as ModelRef.version.
+
+    Fields cannot be rebound. config and info are copied at construction.
+    """
 
     name: str
-    config: dict[str, Any] | None = None
+    config_schema: type[EmbedderRefConfigT] | None = None
+    info: EmbedderInfo | None = None
     version: str | None = None
+    config: EmbedderRefConfigT | Mapping[str, Any] | None = None
+
+    __hash__ = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        config = check_ref_config(name=self.name, schema=self.config_schema, config=self.config, schema_required=False)
+        object.__setattr__(self, 'config', config)
+        object.__setattr__(self, 'info', check_ref_info(name=self.name, info=self.info, info_type=EmbedderInfo))
 
 
 class Embedder:
@@ -110,13 +133,22 @@ def embedder_action_metadata(
     )
 
 
-def create_embedder_ref(name: str, *, config: dict[str, Any] | None = None, version: str | None = None) -> EmbedderRef:
+def create_embedder_ref(
+    name: str,
+    *,
+    config: EmbedderRefConfigT | Mapping[str, Any] | None = None,
+    version: str | None = None,
+    config_schema: type[EmbedderRefConfigT] | None = None,
+    info: EmbedderInfo | None = None,
+) -> EmbedderRef[EmbedderRefConfigT]:
     """Create an EmbedderRef. Settings and version are named.
 
     A version string in the second position used to be stored as config and
     silently dropped. Pass config= and version=.
     """
-    return EmbedderRef(name=name, config=config, version=version)
+    return EmbedderRef[EmbedderRefConfigT](
+        name=name, config_schema=config_schema, info=info, version=version, config=config
+    )
 
 
 def embedder(

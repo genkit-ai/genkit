@@ -173,9 +173,9 @@ def test_create_embedder_ref_with_positional_version_raises_type_error() -> None
     ],
     ids=['create_embedder_ref', 'EmbedderRef'],
 )
-def test_embedder_ref_with_non_dict_config_raises_validation_error(build: Callable[[], EmbedderRef]) -> None:
+def test_embedder_ref_with_non_dict_config_raises(build: Callable[[], EmbedderRef]) -> None:
     """A non-dict config raises instead of being silently dropped by ai.embed."""
-    with pytest.raises(ValidationError):
+    with pytest.raises(GenkitError, match='config must be a mapping when config_schema is not set, got str'):
         build()
 
 

@@ -21,12 +21,15 @@ its defaults. Callers layer on the values they set. The fn sees the same
 input from ai.*, a ref, or a Dev UI-shaped Action.run.
 """
 
+import dataclasses
 from typing import Any, cast
 
 import pytest
 from pydantic import BaseModel
 
 from genkit import Genkit, GenkitError
+from genkit._ai._embedding import EmbedderRef, create_embedder_ref
+from genkit._ai._evaluator import EvaluatorRef, evaluator_ref
 from genkit._core._action import ActionRunContext
 from genkit._core._model import EmbedRequest, EvalRequest, Message, ModelRequest, ModelResponse, Part
 from genkit._core._typing import (
@@ -397,3 +400,42 @@ async def test_typed_fns_see_the_class_with_defaults() -> None:
     assert seen['model'] == TableConfig()
     await ai.evaluate(evaluator='row', dataset=ROWS)
     assert seen['per_row'] == AllergyJudgeConfig()
+
+
+# -----------------------------------------------------------------------------
+# Refs: EmbedderRef and EvaluatorRef have ModelRef's shape
+# -----------------------------------------------------------------------------
+
+
+def test_typed_embedder_ref_checks_and_copies_config() -> None:
+    config = CrmEmbedConfig(task_type='query')
+    ref = create_embedder_ref('crm', config_schema=CrmEmbedConfig, config=config, version='v2')
+    config.task_type = 'document'
+
+    assert ref.config == CrmEmbedConfig(task_type='query')
+    assert ref.version == 'v2'
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        ref.name = 'other'  # type: ignore[misc]
+    with pytest.raises(GenkitError, match=r'crm: config must be an instance of .*CrmEmbedConfig, got .*MenuOnlyConfig'):
+        EmbedderRef(name='crm', config_schema=CrmEmbedConfig, config=cast(Any, MenuOnlyConfig()))
+
+
+def test_untyped_refs_take_a_mapping_and_copy_it() -> None:
+    options: dict[str, Any] = {'allergens': ['peanut']}
+    embedder = EmbedderRef(name='crm', config=options)
+    evaluator = evaluator_ref('allergy', config=options)
+    options['allergens'].append('shellfish')
+
+    assert embedder.config == {'allergens': ['peanut']}
+    assert evaluator.config == {'allergens': ['peanut']}
+    with pytest.raises(GenkitError, match='config must be a mapping when config_schema is not set'):
+        EvaluatorRef(name='allergy', config=AllergyJudgeConfig())
+
+
+def test_typed_evaluator_ref_checks_config() -> None:
+    ref = evaluator_ref('allergy', config_schema=AllergyJudgeConfig, config=AllergyJudgeConfig(strict=False))
+
+    assert ref.config == AllergyJudgeConfig(strict=False)
+    assert ref.config_schema is AllergyJudgeConfig
+    with pytest.raises(GenkitError, match='config must be an instance of'):
+        evaluator_ref('allergy', config_schema=AllergyJudgeConfig, config=cast(Any, {'strict': False}))

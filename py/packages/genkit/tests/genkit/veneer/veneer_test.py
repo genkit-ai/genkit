@@ -2151,10 +2151,10 @@ def test_evaluator_ref_with_positional_config_raises_type_error() -> None:
         evaluator_ref('local/x', {'judge': 'j1'})  # type: ignore[misc]
 
 
-def test_evaluator_ref_model_with_config_schema_field_raises_validation_error() -> None:
+def test_evaluator_ref_with_a_dict_config_schema_raises() -> None:
     """EvaluatorRef(name=..., config_schema={...}) raises instead of silently dropping the settings."""
-    with pytest.raises(ValidationError, match='config_schema'):
-        EvaluatorRef(name='ref_eval', config_schema={'judge': 'j1'})  # type: ignore[call-arg]
+    with pytest.raises(GenkitError, match='config_schema must be a BaseModel subclass, got builtins.dict'):
+        EvaluatorRef(name='ref_eval', config_schema=cast(Any, {'judge': 'j1'}))
 
 
 @pytest.mark.asyncio
