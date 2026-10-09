@@ -16,6 +16,9 @@ Then, in the Dev UI:
 
 - Call the `runInBox` flow with `{ "cmd": "echo $$" }`. The pid it prints is
   the box process, not the main one.
+- Call it with `{ "cmd": "echo key=$GEMINI_API_KEY demo=$BOX_DEMO" }`. The key
+  is empty: the box is started with `inheritEnv: false` and only gets the
+  `env` the host passes in.
 - Chat with the `codingAgent` agent; when it uses `runShell`, that call executes
   inside the box.
 - Open a trace: the `runShell` span is marked as boxed, and `box:traceId` links

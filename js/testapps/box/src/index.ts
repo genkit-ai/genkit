@@ -34,8 +34,20 @@ const run = promisify(exec);
 
 const ai = genkit({ plugins: [googleAI(), retry.plugin()] });
 
-// Run the boxed side as *this same program*, in a child process.
-const myBox = box(ai, { runner: execRunner({ self: true }) });
+// Run the boxed side as *this same program*, in a child process. The box
+// inherits none of this process's env beyond the basics, so GEMINI_API_KEY
+// (and any other secret) stays out; the model runs here, not in the box.
+const myBox = box(ai, {
+  runner: execRunner({
+    self: true,
+    inheritEnv: false,
+    env: { BOX_DEMO: 'set by the host' },
+  }),
+});
+
+// Start the box now rather than on the first tool call. In the box's own
+// runtime (this same file, re-run) this is a no-op.
+myBox.warm().catch((e: unknown) => console.error('box failed to start:', e));
 
 // The real tool implementation. This body executes inside the box.
 const runShell = ai.defineTool(
