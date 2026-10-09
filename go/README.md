@@ -111,52 +111,38 @@ Each sample runs with `go run .`. Start with the `basic-*` set: together they co
 
 **[Agents](#agents)** *(preview)*
 
-Multi-turn conversations that own their own loop and state.
+Multi-turn conversations with snapshots you can resume, branch, and run in the background.
 
 [Define an Agent](#define-an-agent) &middot;
 [Multi-Turn Conversations](#multi-turn-conversations) &middot;
-[Load the Prompt from a File](#load-the-prompt-from-a-file) &middot;
-[Custom Turn Loops](#custom-turn-loops) &middot;
-[Persist and Resume](#persist-and-resume) &middot;
-[Redact on the Way Out](#redact-on-the-way-out) &middot;
+[Snapshots](#snapshots) &middot;
 [Background Agents](#background-agents) &middot;
 [Delegate to Sub-Agents](#delegate-to-sub-agents) &middot;
+[Load the Prompt from a File](#load-the-prompt-from-a-file) &middot;
+[Custom Turn Loops](#custom-turn-loops) &middot;
+[Redact on the Way Out](#redact-on-the-way-out) &middot;
 [Serve Agents over HTTP](#serve-agents-over-http)
 
 **[Features](#features)**
 
 **Generating**
-[Generate Text](#generate-text) &middot;
-[Generate Structured Data](#generate-structured-data) &middot;
 [Stream Responses](#stream-responses) &middot;
-[Stream Structured Data](#stream-structured-data)
+[Structured Output](#structured-output)
 
 **Tools**
 [Define Tools](#define-tools) &middot;
-[Tool Interrupts](#tool-interrupts)
-
-**Middleware**
-[Middleware](#middleware) &middot;
-[Custom Middleware](#custom-middleware)
-
-**Flows**
-[Define Flows](#define-flows) &middot;
-[Streaming Flows](#streaming-flows) &middot;
-[Traced Sub-steps](#traced-sub-steps) &middot;
-[Logging](#logging)
+[Tool Interrupts](#tool-interrupts) &middot;
+[Middleware](#middleware)
 
 **Prompts**
 [Define Prompts](#define-prompts) &middot;
-[Type-Safe Data Prompts](#type-safe-data-prompts) &middot;
 [Build Prompts from Your Data](#build-prompts-from-your-data) &middot;
-[Load Prompts from Files](#load-prompts-from-files) &middot;
-[Embed Prompts in Your Binary](#embed-prompts-in-your-binary)
+[Prompt Files](#prompt-files)
 
-**Serving**
-[Expose Flows as HTTP Endpoints](#expose-flows-as-http-endpoints) &middot;
-[Works with Any HTTP Framework](#works-with-any-http-framework) &middot;
-[Error Handling](#error-handling) &middot;
-[Durable Streaming](#durable-streaming) *(preview)*
+**Flows**
+[Flows](#flows) &middot;
+[Traces and Logs](#traces-and-logs) &middot;
+[Error Handling](#error-handling)
 
 **[Model Providers](#model-providers)**
 
@@ -173,7 +159,7 @@ Gemini, Claude, GPT, Grok, DeepSeek, Qwen, Kimi, GLM, Llama, Mistral, local mode
 
 ## Agents
 
-Agents run multi-turn conversations. Each one owns its turn loop and session state, so your code sends messages and reads results. Snapshots let a conversation resume later, keep running in the background, or move to another server.
+Agents run multi-turn conversations. Each one owns its turn loop and session state, so your code sends messages and reads results. Every turn writes a snapshot, so a conversation can resume in any process, branch from an earlier turn, recover from a failure, or keep running in the background.
 
 > [!WARNING]
 > This API is in preview and may experience breaking changes in minor releases.
@@ -229,6 +215,70 @@ fmt.Println(out.Message.Text())
 ```
 
 [Docs](https://genkit.dev/docs/go/agents/run/) &middot; [Example](samples/basic-agents)
+
+### Snapshots
+
+Every turn writes a snapshot: the conversation and its state at that point. Continue a session from its latest snapshot in any process, or branch from any earlier one:
+
+```go
+plan, _ := chatAgent.RunText(ctx, "Plan a day in Kyoto.")
+
+// Continue the session, in this process or another.
+chatAgent.RunText(ctx, "Add a tea ceremony.",
+    aix.WithSessionID[any](plan.SessionID))
+
+// Branch from the first plan. The tea ceremony is not in this timeline.
+rainy, _ := chatAgent.RunText(ctx, "Assume it rains.",
+    aix.WithSnapshotID[any](plan.SnapshotID))
+fmt.Println(rainy.Message.Text())
+```
+
+Failed and stopped runs land as snapshots too, keeping the work they finished, so you resume them instead of starting over. Background runs, sub-agent tasks, and HTTP clients all address work by snapshot ID. Stores ship for memory, files, and Firestore.
+
+[Docs](https://genkit.dev/docs/go/agents/state/) &middot; [Stores](https://genkit.dev/docs/go/agents/session-stores/) &middot; [Failures](https://genkit.dev/docs/go/agents/errors/#resume-after-a-failure-or-a-stop) &middot; [Example](samples/basic-agents)
+
+### Background Agents
+
+`Detach` hands the work to the server and returns a snapshot ID right away. Check on it with `GetSnapshot`, wait with `WaitForSnapshot`, or stop it with `Abort`:
+
+```go
+conn, _ := chatAgent.Connect(ctx)
+conn.SendText("Draft a detailed two-week Japan itinerary.")
+conn.Detach()
+out, _ := conn.Output()
+
+// Later, from anywhere:
+snap, _ := chatAgent.WaitForSnapshot(ctx, out.SnapshotID)
+```
+
+[Docs](https://genkit.dev/docs/go/agents/background/) &middot; [Example](samples/basic-agents)
+
+### Delegate to Sub-Agents
+
+The `Agents` middleware (`plugins/middleware/exp`) gives an agent one `delegate_to_<name>` tool per sub-agent:
+
+```go
+researcher := genkitx.DefineAgent(g, "researcher",
+    aix.InlinePrompt{
+        ai.WithModelName("googleai/gemini-flash-latest"),
+        ai.WithSystem("Research the topic and summarize well-sourced findings."),
+    },
+    aix.WithDescription[any]("Researches a topic."),
+)
+
+orchestrator := genkitx.DefineAgent(g, "orchestrator",
+    aix.InlinePrompt{
+        ai.WithModelName("googleai/gemini-flash-latest"),
+        ai.WithSystem("Delegate research, then write the final answer."),
+        ai.WithUse(&middlewarex.Agents{Agents: []aix.AgentRef{researcher.Ref()}}),
+    },
+    aix.WithSessionStore(localstore.NewInMemorySessionStore[any]()),
+)
+```
+
+Set `Async: true` to run sub-agents in the background, with tools to check, wait for, abort, and continue them.
+
+[Docs](https://genkit.dev/docs/go/agents/multi-agent/) &middot; [Example](samples/basic-agents/orchestrator.go) &middot; [Async example](samples/basic-agents/commander.go)
 
 ### Load the Prompt from a File
 
@@ -288,23 +338,6 @@ With a typed `State`, `sess.UpdateCustom` changes your own state and streams the
 
 [Docs](https://genkit.dev/docs/go/agents/custom-orchestration/) &middot; [Example](samples/basic-agents/coder.go)
 
-### Persist and Resume
-
-With a session store, every turn saves a snapshot. Pass the `SessionID` to pick the conversation back up:
-
-```go
-first, _ := chatAgent.RunText(ctx, "My name is Alex.")
-
-// Later, in another request or process:
-second, _ := chatAgent.RunText(ctx, "What is my name?",
-    aix.WithSessionID[any](first.SessionID))
-fmt.Println(second.Message.Text()) // "Your name is Alex."
-```
-
-Failed and stopped runs keep their finished turns and resume the same way. `aix.WithSnapshotID` resumes from a specific point, and `aix.WithState` skips the server store.
-
-[Docs](https://genkit.dev/docs/go/agents/state/) &middot; [Failures and stops](https://genkit.dev/docs/go/agents/errors/#resume-after-a-failure-or-a-stop) &middot; [Example](samples/basic-agents)
-
 ### Redact on the Way Out
 
 `WithStateTransform` rewrites session state before it leaves the server. Stored snapshots stay raw:
@@ -322,49 +355,6 @@ chatAgent := genkitx.DefineAgent(g, "chat",
 `WithStreamTransform` does the same for streamed chunks.
 
 [Docs](https://genkit.dev/docs/go/agents/state/#state-and-stream-transforms)
-
-### Background Agents
-
-`Detach` hands the work to the server and returns a snapshot ID right away. Check on it with `GetSnapshot`, wait with `WaitForSnapshot`, or stop it with `Abort`:
-
-```go
-conn, _ := chatAgent.Connect(ctx)
-conn.SendText("Draft a detailed two-week Japan itinerary.")
-conn.Detach()
-out, _ := conn.Output()
-
-// Later, from anywhere:
-snap, _ := chatAgent.WaitForSnapshot(ctx, out.SnapshotID)
-```
-
-[Docs](https://genkit.dev/docs/go/agents/background/) &middot; [Example](samples/basic-agents)
-
-### Delegate to Sub-Agents
-
-The `Agents` middleware (`plugins/middleware/exp`) gives an agent one `delegate_to_<name>` tool per sub-agent:
-
-```go
-researcher := genkitx.DefineAgent(g, "researcher",
-    aix.InlinePrompt{
-        ai.WithModelName("googleai/gemini-flash-latest"),
-        ai.WithSystem("Research the topic and summarize well-sourced findings."),
-    },
-    aix.WithDescription[any]("Researches a topic."),
-)
-
-orchestrator := genkitx.DefineAgent(g, "orchestrator",
-    aix.InlinePrompt{
-        ai.WithModelName("googleai/gemini-flash-latest"),
-        ai.WithSystem("Delegate research, then write the final answer."),
-        ai.WithUse(&middlewarex.Agents{Agents: []aix.AgentRef{researcher.Ref()}}),
-    },
-    aix.WithSessionStore(localstore.NewInMemorySessionStore[any]()),
-)
-```
-
-Set `Async: true` to run sub-agents in the background, with tools to check, wait for, abort, and continue them.
-
-[Docs](https://genkit.dev/docs/go/agents/multi-agent/) &middot; [Example](samples/basic-agents/orchestrator.go) &middot; [Async example](samples/basic-agents/commander.go)
 
 ### Serve Agents over HTTP
 
@@ -390,40 +380,6 @@ log.Fatal(server.Start(ctx, "127.0.0.1:8080", mux))
 
 Genkit Go gives you everything you need to build AI applications with confidence.
 
-### Generate Text
-
-Call any model with a simple, unified API:
-
-```go
-text, _ := genkit.GenerateText(ctx, g,
-    ai.WithModelName("googleai/gemini-flash-latest"),
-    ai.WithPrompt("Explain quantum computing in simple terms."),
-)
-fmt.Println(text)
-```
-
-[Docs](https://genkit.dev/docs/go/models/) &middot; [Example](samples/basic/main.go)
-
-### Generate Structured Data
-
-Get type-safe JSON output that maps directly to your Go structs:
-
-```go
-type Recipe struct {
-    Title       string   `json:"title"`
-    Ingredients []string `json:"ingredients"`
-    Steps       []string `json:"steps"`
-}
-
-recipe, _ := genkit.GenerateData[Recipe](ctx, g,
-    ai.WithModelName("googleai/gemini-flash-latest"),
-    ai.WithPrompt("Create a recipe for chocolate chip cookies."),
-)
-fmt.Printf("Recipe: %s\n", recipe.Title)
-```
-
-[Docs](https://genkit.dev/docs/go/models/#structured-output) &middot; [Example](samples/basic-structured/main.go)
-
 ### Stream Responses
 
 Stream text as it's generated for responsive user experiences:
@@ -445,35 +401,31 @@ for result, err := range stream {
 }
 ```
 
-To use a callback instead of a loop, pass `ai.WithStreaming`.
+For the whole answer at once, call `genkit.GenerateText` as in the [Quick Start](#quick-start). For a callback instead of a loop, pass `ai.WithStreaming`.
 
 [Docs](https://genkit.dev/docs/go/models/#streaming) &middot; [Example](samples/basic-tools/main.go)
 
-### Stream Structured Data
+### Structured Output
 
-Stream typed JSON objects as they're being generated:
+Get type-safe JSON output that maps directly to your Go structs:
 
 ```go
-stream := genkit.GenerateDataStream[Recipe](ctx, g,
-    ai.WithModelName("googleai/gemini-flash-latest"),
-    ai.WithPrompt("Create a recipe for spaghetti carbonara."),
-)
-
-for result, err := range stream {
-    if err != nil {
-        log.Fatal(err)
-    }
-    if result.Done {
-        fmt.Println("Done:", result.Output.Title)
-        break
-    }
-    fmt.Printf("%d ingredients so far\n", len(result.Chunk.Ingredients))
+type Recipe struct {
+    Title       string   `json:"title"`
+    Ingredients []string `json:"ingredients"`
+    Steps       []string `json:"steps"`
 }
+
+recipe, _, _ := genkit.GenerateData[Recipe](ctx, g,
+    ai.WithModelName("googleai/gemini-flash-latest"),
+    ai.WithPrompt("Create a recipe for chocolate chip cookies."),
+)
+fmt.Println(recipe.Title)
 ```
 
-`ai.WithOutputFormat(ai.OutputFormatJSONL)` streams list items one at a time, and `ai.WithOutputEnums` limits the answer to one label.
+`genkit.GenerateDataStream` streams partial `Recipe` values as they arrive. `ai.WithOutputFormat(ai.OutputFormatJSONL)` streams list items one at a time, and `ai.WithOutputEnums` limits the answer to one label.
 
-[Docs](https://genkit.dev/docs/go/models/#output-formats) &middot; [Example](samples/basic-structured/main.go) &middot; [Formats example](samples/basic-formats/main.go)
+[Docs](https://genkit.dev/docs/go/models/#structured-output) &middot; [Example](samples/basic-structured/main.go) &middot; [Formats example](samples/basic-formats/main.go)
 
 ### Define Tools
 
@@ -583,151 +535,13 @@ Also built in:
 - [`Filesystem`](samples/basic-middleware/filesystem): gives the model file tools confined to one directory.
 - [`Skills`](samples/basic-middleware/skills): loads [Agent Skills](https://agentskills.io) `SKILL.md` files on demand.
 
+To build your own, implement [`ai.Middleware`](https://genkit.dev/docs/go/middleware/#building-your-own-custom-middleware) or wrap a function with `ai.MiddlewareFunc`.
+
 [Docs](https://genkit.dev/docs/go/middleware/) &middot; [Example](samples/basic-middleware/retry-fallback/main.go)
-
-### Custom Middleware
-
-Implement `ai.Middleware` to build your own. All four hooks (`Tools`, `WrapGenerate`, `WrapModel`, `WrapTool`) are optional:
-
-```go
-type Logger struct {
-    Prefix string `json:"prefix,omitempty"`
-}
-
-func (l *Logger) Name() string { return "mine/logger" }
-
-func (l *Logger) New(ctx context.Context) (*ai.Hooks, error) {
-    return &ai.Hooks{
-        WrapModel: func(ctx context.Context, params *ai.ModelParams, next ai.ModelNext) (*ai.ModelResponse, error) {
-            start := time.Now()
-            resp, err := next(ctx, params)
-            log.Printf("%s model call took %s", l.Prefix, time.Since(start))
-            return resp, err
-        },
-    }, nil
-}
-
-ai.WithUse(&Logger{Prefix: "[trace]"})
-```
-
-For inline middleware that the Dev UI does not need to show, use `ai.MiddlewareFunc`.
-
-[Docs](https://genkit.dev/docs/go/middleware/#building-your-own-custom-middleware)
-
-### Define Flows
-
-Wrap your AI logic in flows for better observability, testing, and deployment:
-
-```go
-jokeFlow := genkit.DefineFlow(g, "tellJoke",
-    func(ctx context.Context, topic string) (string, error) {
-        return genkit.GenerateText(ctx, g,
-            ai.WithModelName("googleai/gemini-flash-latest"),
-            ai.WithPrompt("Tell me a joke about %s", topic),
-        )
-    },
-)
-
-joke, _ := jokeFlow.Run(ctx, "programming")
-fmt.Println(joke)
-```
-
-[Docs](https://genkit.dev/docs/go/flows/) &middot; [Example](samples/basic/main.go)
-
-### Streaming Flows
-
-Stream data from your flows using Server-Sent Events (SSE):
-
-```go
-genkit.DefineStreamingFlow(g, "streamStory",
-    func(ctx context.Context, topic string, send core.StreamCallback[string]) (string, error) {
-        return genkit.GenerateText(ctx, g,
-            ai.WithModelName("googleai/gemini-flash-latest"),
-            ai.WithPrompt("Write a story about %s", topic),
-            ai.WithStreaming(func(ctx context.Context, chunk *ai.ModelResponseChunk) error {
-                return send(ctx, chunk.Text())
-            }),
-        )
-    },
-)
-```
-
-[Docs](https://genkit.dev/docs/go/flows/#streaming-flows) &middot; [Example](samples/basic/main.go)
-
-### Traced Sub-steps
-
-Add observability to complex flows by breaking them into traced operations:
-
-```go
-genkit.DefineFlow(g, "processDocument",
-    func(ctx context.Context, doc string) (string, error) {
-        // Each Run call creates a traced step visible in the Dev UI
-        summary, _ := genkit.Run(ctx, "summarize", func() (string, error) {
-            return genkit.GenerateText(ctx, g,
-                ai.WithModelName("googleai/gemini-flash-latest"),
-                ai.WithPrompt("Summarize: %s", doc),
-            )
-        })
-
-        keywords, _ := genkit.Run(ctx, "extractKeywords", func() ([]string, error) {
-            return genkit.GenerateData[[]string](ctx, g,
-                ai.WithModelName("googleai/gemini-flash-latest"),
-                ai.WithPrompt("Extract keywords from: %s", summary),
-            )
-        })
-
-        return fmt.Sprintf("Summary: %s\nKeywords: %v", summary, keywords), nil
-    },
-)
-```
-
-[Docs](https://genkit.dev/docs/go/flows/#flow-steps) &middot; [Example](samples/basic/main.go)
-
-### Logging
-
-Log with `core/logger`. Records go to the terminal and, during development, to the Dev UI on the trace span that wrote them:
-
-```go
-genkit.DefineFlow(g, "importDocuments",
-    func(ctx context.Context, source string) (int, error) {
-        logger.Info(ctx, "starting import", "source", source)
-
-        count, err := importAll(ctx, source)
-        if err != nil {
-            logger.Error(ctx, "import failed", "source", source, "error", err)
-            return 0, err
-        }
-        return count, nil
-    },
-)
-```
-
-Set `GENKIT_LOG_LEVEL=debug` to see Genkit's own model and tool detail in the terminal.
-
-[Docs](https://genkit.dev/docs/go/local-observability/#log-and-export-events)
 
 ### Define Prompts
 
-Create reusable prompts with Handlebars templating:
-
-```go
-greetingPrompt := genkit.DefinePrompt(g, "greeting",
-    ai.WithModelName("googleai/gemini-flash-latest"),
-    ai.WithPrompt("Write a {{style}} greeting for {{name}}."),
-)
-
-response, _ := greetingPrompt.Execute(ctx, ai.WithInput(map[string]any{
-    "name":  "Alice",
-    "style": "formal",
-}))
-fmt.Println(response.Text())
-```
-
-[Docs](https://genkit.dev/docs/go/dotprompt/#defining-prompts-in-code) &middot; [Example](samples/basic-prompts)
-
-### Type-Safe Data Prompts
-
-Get compile-time type safety for your prompt inputs and outputs:
+Create reusable prompts with Handlebars templates and typed input and output:
 
 ```go
 jokePrompt := genkit.DefineDataPrompt[JokeRequest, Joke](g, "joke",
@@ -739,7 +553,7 @@ joke, _, _ := jokePrompt.Execute(ctx, JokeRequest{Topic: "cats"})
 fmt.Println(joke.Punchline)
 ```
 
-`ExecuteStream` streams typed chunks of the output.
+`ExecuteStream` streams typed chunks of the output. `genkit.DefinePrompt` is the untyped form.
 
 [Docs](https://genkit.dev/docs/go/dotprompt/#defining-prompts-in-code) &middot; [Example](samples/basic-prompts)
 
@@ -764,9 +578,9 @@ Every slot has a function form: `WithSystemFn`, `WithPromptFn`, `WithMessagesFn`
 
 [Docs](https://genkit.dev/docs/go/dotprompt/#defining-prompts-in-code) &middot; [Example](samples/basic-prompt-content/main.go)
 
-### Load Prompts from Files
+### Prompt Files
 
-Keep prompts separate from code using `.prompt` files with YAML frontmatter:
+Keep prompts in `.prompt` files with YAML frontmatter, and embed them in your binary:
 
 ```yaml
 # prompts/recipe.prompt
@@ -786,93 +600,77 @@ Create a {{cuisine}} {{dish}} recipe for {{servingSize}} people.
 ```
 
 ```go
+//go:embed prompts
+var prompts embed.FS
+
+g := genkit.Init(ctx,
+    genkit.WithPlugins(&googlegenai.GoogleAI{}),
+    genkit.WithPromptFS(prompts),
+)
 genkit.DefineSchemasFor(g, RecipeRequest{}, Recipe{})
 
 recipePrompt := genkit.LookupDataPrompt[RecipeRequest, *Recipe](g, "recipe")
-recipe, _, _ := recipePrompt.Execute(ctx, RecipeRequest{
-    Dish:        "tacos",
-    Cuisine:     "Mexican",
-    ServingSize: 4,
-})
+recipe, _, _ := recipePrompt.Execute(ctx, RecipeRequest{Dish: "tacos", Cuisine: "Mexican", ServingSize: 4})
 fmt.Println(recipe.Title)
 ```
 
-`genkit.DefinePartial` and `genkit.DefineHelper` add partials and helpers that every prompt shares.
+Without `genkit.WithPromptFS`, prompts load from the `prompts` directory on disk. `genkit.DefinePartial` and `genkit.DefineHelper` add partials and helpers that every prompt shares.
 
 [Docs](https://genkit.dev/docs/go/dotprompt/) &middot; [Example](samples/basic-prompts)
 
-### Embed Prompts in Your Binary
+### Flows
 
-Ship a single binary with prompts compiled in using Go's embed package:
-
-```go
-//go:embed prompts/*
-var promptsFS embed.FS
-
-func main() {
-    ctx := context.Background()
-    g := genkit.Init(ctx,
-        genkit.WithPlugins(&googlegenai.GoogleAI{}),
-        genkit.WithPromptFS(promptsFS),
-    )
-
-    prompt := genkit.LookupPrompt(g, "joke")
-    response, _ := prompt.Execute(ctx)
-    fmt.Println(response.Text())
-}
-```
-
-[Docs](https://genkit.dev/docs/go/dotprompt/#embedding-prompts-in-the-binary) &middot; [Example](samples/basic-prompts)
-
-### Expose Flows as HTTP Endpoints
-
-Serve your flows over HTTP with automatic JSON serialization:
+A flow is a typed, traced function that you can test in the Dev UI and serve as an HTTP endpoint with one line:
 
 ```go
+storyFlow := genkit.DefineStreamingFlow(g, "story",
+    func(ctx context.Context, topic string, send core.StreamCallback[string]) (string, error) {
+        return genkit.GenerateText(ctx, g,
+            ai.WithModelName("googleai/gemini-flash-latest"),
+            ai.WithPrompt("Write a story about %s", topic),
+            ai.WithStreaming(func(ctx context.Context, chunk *ai.ModelResponseChunk) error {
+                return send(ctx, chunk.Text())
+            }),
+        )
+    },
+)
+
 mux := http.NewServeMux()
-for _, flow := range genkit.ListFlows(g) {
-    mux.HandleFunc("POST /"+flow.Name(), genkit.Handler(flow))
-}
+mux.HandleFunc("POST /story", genkit.Handler(storyFlow))
 log.Fatal(http.ListenAndServe(":8080", mux))
 ```
 
 ```bash
-curl -X POST http://localhost:8080/tellJoke \
-  -H "Content-Type: application/json" \
-  -d '{"data": "programming"}'
+curl -N "http://localhost:8080/story?stream=true" -d '{"data": "a robot who paints"}'
 ```
 
-[Docs](https://genkit.dev/docs/go/flows/#deploying-flows) &middot; [Example](samples/basic/main.go)
+`genkit.Handler` returns a standard `http.HandlerFunc`, so it works with Gin, Echo, Chi, or any router. [`genkit.WithStreamManager`](https://genkit.dev/docs/go/durable-streaming/) lets clients reconnect to a stream *(preview)*.
 
-### Works with Any HTTP Framework
+[Docs](https://genkit.dev/docs/go/flows/) &middot; [Example](samples/basic/main.go) &middot; [Durable streaming example](samples/basic-durable-streaming-exp/main.go)
 
-`genkit.Handler` returns a standard `http.HandlerFunc`, so it works with any Go HTTP framework:
+### Traces and Logs
+
+Every flow, model call, and tool call is traced. `genkit.Run` adds your own steps, and `core/logger` attaches logs to the span that wrote them:
 
 ```go
-// net/http (standard library)
-mux := http.NewServeMux()
-mux.HandleFunc("POST /joke", genkit.Handler(jokeFlow))
-log.Fatal(http.ListenAndServe(":8080", mux))
+genkit.DefineFlow(g, "summarize",
+    func(ctx context.Context, doc string) (string, error) {
+        logger.Info(ctx, "summarizing", "bytes", len(doc))
 
-// Gin
-r := gin.Default()
-r.POST("/joke", gin.WrapF(genkit.Handler(jokeFlow)))
-r.Run(":8080")
-
-// Echo
-e := echo.New()
-e.POST("/joke", echo.WrapHandler(genkit.Handler(jokeFlow)))
-e.Start(":8080")
-
-// Chi
-r := chi.NewRouter()
-r.Post("/joke", genkit.Handler(jokeFlow))
-http.ListenAndServe(":8080", r)
+        clean, _ := genkit.Run(ctx, "clean", func() (string, error) {
+            return strings.TrimSpace(doc), nil
+        })
+        return genkit.GenerateText(ctx, g,
+            ai.WithModelName("googleai/gemini-flash-latest"),
+            ai.WithPrompt("Summarize: %s", clean),
+        )
+    },
+)
 ```
 
-For frameworks that handle errors centrally, `genkit.HandlerFunc` returns `func(http.ResponseWriter, *http.Request) error` instead.
+Set `GENKIT_LOG_LEVEL=debug` to see Genkit's own model and tool detail in the terminal.
 
-[Docs](https://genkit.dev/docs/go/backend-frameworks/overview/)
+[Docs](https://genkit.dev/docs/go/local-observability/) &middot; [Steps](https://genkit.dev/docs/go/flows/#flow-steps)
 
 ### Error Handling
 
@@ -904,25 +702,6 @@ return "", status.PublicErrorf(ErrRecipeNotFound, "no recipe for %q", dish)
 ```
 
 [Docs](https://genkit.dev/docs/go/error-types/) &middot; [Example](samples/basic-errors/main.go)
-
-### Durable Streaming
-
-> [!WARNING]
-> This API is in preview and may experience breaking changes in minor releases.
-
-Let clients reconnect to an in-progress or completed stream and replay what they missed:
-
-```go
-mux.HandleFunc("POST /myFlow", genkit.Handler(myStreamingFlow,
-    genkit.WithStreamManager(streaming.NewInMemoryStreamManager(
-        streaming.WithTTL(10*time.Minute),
-    )),
-))
-```
-
-Clients get a stream ID in the `X-Genkit-Stream-Id` header and send it back to reconnect.
-
-[Docs](https://genkit.dev/docs/go/durable-streaming/) &middot; [Example](samples/basic-durable-streaming-exp/main.go)
 
 ---
 
