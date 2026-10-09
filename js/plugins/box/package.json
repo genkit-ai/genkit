@@ -9,7 +9,7 @@
     "genai",
     "generative-ai"
   ],
-  "version": "0.0.1-dev.1",
+  "version": "0.0.1-dev.2",
   "description": "Run Genkit actions (tools, flows, agents) in a box: a sandbox, container, or remote runtime, called as if they were local.",
   "main": "./lib/index.js",
   "types": "./lib/index.d.ts",
