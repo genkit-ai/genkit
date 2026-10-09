@@ -21,6 +21,7 @@ The publisher SDKs are extras, so this module imports them only when a model
 from that publisher is resolved or called.
 """
 
+import asyncio
 import os
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
@@ -32,6 +33,8 @@ from genkit_vertexai.model_garden._model_info import (
     SUPPORTED_OPENAI_COMPAT_MODELS,
     get_default_model_info,
 )
+from google.auth import default as google_auth_default
+from google.auth.exceptions import DefaultCredentialsError
 
 from genkit import ActionRunContext, GenkitError, ModelResponse
 from genkit.model import ModelInfo, ModelRequest, model as create_model, model_action_metadata
@@ -120,7 +123,7 @@ class ModelGardenModel:
         self,
         model: str,
         location: str,
-        project_id: str,
+        project: str,
     ) -> None:
         """Initialize the ModelGardenModel instance.
 
@@ -132,19 +135,19 @@ class ModelGardenModel:
                 in the way <publisher>/<model> (e.g., 'meta/llama3.2-pro-max').
             location: The Google Cloud region where the Model Garden service
                 is hosted (e.g., 'us-central1').
-            project_id: The Google Cloud project ID where the Model Garden
+            project: The Google Cloud project ID where the Model Garden
                 model is deployed.
         """
         self.name = model
         self._location = location
-        self._project_id = project_id
+        self._project = project
 
     @loop_local_client
     def _runtime_client(self) -> 'CachedOpenAI':
         # client.py imports openai, which is an extra; load it on first generate.
         from genkit_vertexai.model_garden.client import CachedOpenAI
 
-        return CachedOpenAI(location=self._location, project_id=self._project_id)
+        return CachedOpenAI(location=self._location, project=self._project)
 
     async def create_client(self) -> 'AsyncOpenAI':
         """Return the per-loop AsyncOpenAI client, refreshing the token only when expired.
@@ -213,7 +216,7 @@ class ModelGarden(Plugin):
 
     def __init__(
         self,
-        project_id: str | None = None,
+        project: str | None = None,
         location: str | None = None,
         models: list[str] | None = None,
         model_locations: dict[str, str] | None = None,
@@ -224,8 +227,9 @@ class ModelGarden(Plugin):
         location, and a list of models to be used.
 
         Args:
-            project_id: The Google Cloud project ID to use. If not provided, it attempts
-                to load from the `GCLOUD_PROJECT` environment variable.
+            project: The Google Cloud project ID to use. If not provided, it reads
+                `GCLOUD_PROJECT`, then `GOOGLE_CLOUD_PROJECT`, then the project of
+                the application default credentials (looked up on first use).
             location: The Google Cloud region to use for services. If not provided,
                 it defaults to `DEFAULT_REGION`.
             models: An optional list of model names to register with the plugin.
@@ -233,10 +237,8 @@ class ModelGarden(Plugin):
                 Google Cloud regions. This overrides the default `location` for the
                 specified models.
         """
-        self.project_id = (
-            project_id
-            if project_id is not None
-            else os.getenv(const.GCLOUD_PROJECT) or os.getenv('GOOGLE_CLOUD_PROJECT')
+        self.project = (
+            project if project is not None else os.getenv(const.GCLOUD_PROJECT) or os.getenv('GOOGLE_CLOUD_PROJECT')
         )
 
         self.location = (
@@ -245,6 +247,7 @@ class ModelGarden(Plugin):
 
         self.models = models
         self.model_locations = model_locations or {}
+        self._adc_probed = False
 
     async def init(self) -> list[Action]:
         """Initialize plugin.
@@ -269,18 +272,32 @@ class ModelGarden(Plugin):
 
         return await self._create_model_action(name)
 
-    def _location_and_project(self, name: str) -> tuple[str, str]:
+    async def _location_and_project(self, name: str) -> tuple[str, str]:
         """Region and project the model ``name`` runs in.
 
+        With no project passed or in the environment, the project comes from
+        application default credentials, as on Cloud Run. ADC lookup can hit
+        the metadata server, so it runs in a thread, once per plugin.
+
         Raises:
-            GenkitError: FAILED_PRECONDITION when no project ID was passed or found in the environment.
+            GenkitError: FAILED_PRECONDITION when no project was passed, set in
+                the environment, or found in the credentials.
         """
-        if not self.project_id:
+        if not self.project and not self._adc_probed:
+            try:
+                _, self.project = await asyncio.to_thread(google_auth_default)
+            except DefaultCredentialsError:
+                self.project = None
+            self._adc_probed = True
+        if not self.project:
             raise GenkitError(
                 status='FAILED_PRECONDITION',
-                message='project_id must be provided',
+                message=(
+                    'ModelGarden needs a Google Cloud project: pass ModelGarden(project=...) '
+                    'or set GOOGLE_CLOUD_PROJECT'
+                ),
             )
-        return self.model_locations.get(name, self.location), self.project_id
+        return self.model_locations.get(name, self.location), self.project
 
     async def _create_model_action(self, name: str) -> Action:
         """Create an Action object for a Model Garden Vertex AI model.
@@ -301,8 +318,8 @@ class ModelGarden(Plugin):
             with _requires_extra(_ANTHROPIC_EXTRA):
                 from .anthropic import AnthropicModelGarden
 
-            location, project_id = self._location_and_project(name)
-            claude = AnthropicModelGarden(model=name, location=location, project_id=project_id)
+            location, project = await self._location_and_project(name)
+            claude = AnthropicModelGarden(model=name, location=location, project=project)
             return create_model(
                 full_name,
                 claude.get_handler(),
@@ -313,8 +330,8 @@ class ModelGarden(Plugin):
         with _requires_extra(_OPENAI_EXTRA):
             from genkit_openai import OpenAIConfig
 
-        location, project_id = self._location_and_project(name)
-        openai_compat = ModelGardenModel(model=name, location=location, project_id=project_id)
+        location, project = await self._location_and_project(name)
+        openai_compat = ModelGardenModel(model=name, location=location, project=project)
         return create_model(
             full_name,
             openai_compat.to_openai_compatible_model(),
