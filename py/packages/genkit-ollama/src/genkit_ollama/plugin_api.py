@@ -45,6 +45,7 @@ from genkit.plugin_api import (
     wrap_http_error,
 )
 from genkit_ollama._errors import wrap_connection_errors
+from genkit_ollama._secrets import context_api_key, reject_config_api_key
 from genkit_ollama.constants import (
     DEFAULT_OLLAMA_SERVER_URL,
     OllamaAPITypes,
@@ -212,6 +213,7 @@ class Ollama(Plugin):
         model: ModelDefinition | EmbeddingDefinition | None = None,
         model_request: ModelRequest | None = None,
         embed_request: EmbedRequest | None = None,
+        api_key: str | None = None,
     ) -> AsyncIterator[ollama_api.AsyncClient]:
         """Yield the Ollama client to use for a single request.
 
@@ -219,35 +221,48 @@ class Ollama(Plugin):
         is shared across requests and left open. A header *callable* is resolved on
         every call — receiving the server address plus any model/request context —
         and applied to a *fresh* client, so expiring auth tokens or
-        request-specific headers take effect. Because the Ollama SDK bakes headers in
-        at construction (it has no per-request header hook), that fresh client owns
-        its own httpx connection pool; it is closed on exit so long-running callers
+        request-specific headers take effect. A per-request key also forces a
+        fresh client: hosted Ollama bills whoever's bearer token is on the
+        request, so that key replaces any ``Authorization`` header the plugin
+        was given. Because the Ollama SDK bakes headers in at construction
+        (it has no per-request header hook), that fresh client owns its own
+        httpx connection pool; it is closed on exit so long-running callers
         don't accumulate pools.
 
         Args:
             model: The model/embedder definition this request targets, if any.
             model_request: The generate request, when resolving for a model action.
             embed_request: The embed request, when resolving for an embedder action.
+            api_key: A per-request key, sent as ``Authorization: Bearer <key>`` in
+                place of any ``Authorization`` header the plugin was configured with.
 
         Yields:
             The Ollama client for this request.
         """
         source = self._request_headers_source
-        if not callable(source):
+        if not callable(source) and api_key is None:
             # Shared per-event-loop cached client — reused across requests, not closed.
             yield self.client()
             return
 
-        params = RequestHeaderParams(
-            server_address=self.server_address,
-            model=model,
-            model_request=model_request,
-            embed_request=embed_request,
-        )
-        result = source(params)
-        if inspect.isawaitable(result):
-            result = await result
-        headers = dict(cast(dict[str, str], result)) if result else {}
+        if callable(source):
+            params = RequestHeaderParams(
+                server_address=self.server_address,
+                model=model,
+                model_request=model_request,
+                embed_request=embed_request,
+            )
+            result = source(params)
+            if inspect.isawaitable(result):
+                result = await result
+            headers = dict(cast(dict[str, str], result)) if result else {}
+        else:
+            headers = dict(self.request_headers)
+        if api_key is not None:
+            # The caller's key is the one that gets billed, so the plugin's own
+            # Authorization header is dropped whatever casing it was set with.
+            headers = {k: v for k, v in headers.items() if k.lower() != 'authorization'}
+            headers['Authorization'] = f'Bearer {api_key}'
         client = self._make_client(headers=headers)
         try:
             yield client
@@ -337,11 +352,12 @@ class Ollama(Plugin):
         )
 
         async def _run(request: ModelRequest, ctx: ActionRunContext | None = None) -> ModelResponse:
-            # Resolve per-request headers (no-op for static headers), passing the model
-            # and request context to a header callable (JS parity). OllamaModel wraps
-            # connection errors at the SDK boundary, so a failed media-URL fetch isn't
-            # misreported as an Ollama server outage.
-            async with self._client_for_request(model=model_ref, model_request=request) as client:
+            # A key on config would be dropped and the call would run on the
+            # plugin's header. The per-request key, when there is one, replaces
+            # that header for this call only.
+            reject_config_api_key(request.config)
+            api_key = context_api_key(ctx.context) if ctx is not None else None
+            async with self._client_for_request(model=model_ref, model_request=request, api_key=api_key) as client:
                 return await model.generate(request, ctx, client=client)
 
         action = create_model(

@@ -22,9 +22,9 @@ from pydantic import ValidationError
 
 
 def test_unknown_key_raises() -> None:
-    """`{'repeatPenalty': 1.1}` is no longer a silent passthrough; it raises."""
-    with pytest.raises(ValidationError, match='repeatPenalty'):
-        OllamaConfig.model_validate({'repeatPenalty': 1.1})
+    """`{'temprature': 0.2}` raises before the request is sent."""
+    with pytest.raises(ValidationError, match='temprature'):
+        OllamaConfig.model_validate({'temprature': 0.2})
 
 
 def test_extra_merges_into_options_verbatim() -> None:
