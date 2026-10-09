@@ -127,7 +127,8 @@ Multi-turn conversations with snapshots you can resume, branch, and run in the b
 
 **Generating**
 [Generate and Stream](#generate-and-stream) &middot;
-[Structured Output](#structured-output)
+[Structured Output](#structured-output) &middot;
+[Output Formats](#output-formats)
 
 **Tools**
 [Define Tools](#define-tools) &middot;
@@ -431,9 +432,44 @@ for result, err := range genkit.GenerateDataStream[Recipe](ctx, g, /* same optio
 }
 ```
 
-`ai.WithOutputFormat(ai.OutputFormatJSONL)` streams list items one at a time, and `ai.WithOutputEnums` limits the answer to one label.
+[Docs](https://genkit.dev/docs/go/models/#structured-output) &middot; [Example](samples/basic-structured/main.go)
 
-[Docs](https://genkit.dev/docs/go/models/#structured-output) &middot; [Example](samples/basic-structured/main.go) &middot; [Formats example](samples/basic-formats/main.go)
+### Output Formats
+
+A format decides how the model's text is parsed and what each streamed chunk holds. With `jsonl`, every item arrives once, as soon as it is complete:
+
+```go
+for result, err := range genkit.GenerateDataStream[[]Character](ctx, g,
+    ai.WithModelName("googleai/gemini-flash-latest"),
+    ai.WithPrompt("Invent four characters for a heist movie."),
+    ai.WithOutputFormat(ai.OutputFormatJSONL),
+) {
+    for _, c := range result.Chunk { // only the characters finished since the last chunk
+        fmt.Println(c.Name)
+    }
+}
+
+// WithOutputEnums selects the enum format and limits the answer to these labels.
+rating, resp, err := genkit.GenerateData[Rating](ctx, g,
+    ai.WithModelName("googleai/gemini-flash-latest"),
+    ai.WithPrompt("Which audience is this story for? %s", story),
+    ai.WithOutputEnums(RatingAllAges, RatingYoungAdult, RatingAdult),
+)
+```
+
+Built in: `json` (the default for typed output, where each chunk is the whole value so far), `jsonl` and `array` for lists, `enum`, and `text`. To add your own, implement `ai.Formatter`, which gives each request an `ai.FormatHandler` that writes the model instructions and parses the output:
+
+```go
+genkit.DefineFormats(g, csvFormatter{})
+
+resp, err := genkit.Generate(ctx, g,
+    ai.WithModelName("googleai/gemini-flash-latest"),
+    ai.WithPrompt("List three colors."),
+    ai.WithOutputFormat("csv"), // the name that csvFormatter.Name returns
+)
+```
+
+[Docs](https://genkit.dev/docs/go/models/#output-formats) &middot; [Custom formats](https://genkit.dev/docs/go/models/#custom-formats) &middot; [Example](samples/basic-formats/main.go)
 
 ### Define Tools
 
