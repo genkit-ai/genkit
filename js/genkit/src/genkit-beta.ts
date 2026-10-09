@@ -15,6 +15,7 @@
  */
 
 import {
+  CommittedTurnError,
   GenerateOptions,
   GenerateResponseData,
   GenerationCommonConfigSchema,
@@ -37,6 +38,7 @@ import {
   type ResourceFn,
   type ResourceOptions,
   type ToolAction,
+  type TurnResult,
 } from '@genkit-ai/ai';
 
 import { defineFormat } from '@genkit-ai/ai/formats';
@@ -61,6 +63,7 @@ import { Genkit, type GenkitOptions } from './genkit.js';
 
 export type { JsonPatch, JsonPatchOperation } from '@genkit-ai/ai/json-patch';
 export {
+  CommittedTurnError,
   FileSessionStore,
   InMemorySessionStore,
   SessionRunner,
@@ -81,6 +84,7 @@ export type {
   SessionStore,
   SessionStoreOptions,
   SnapshotMutator,
+  TurnResult,
 };
 
 /**

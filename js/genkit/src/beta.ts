@@ -67,6 +67,7 @@ export {
 export { AsyncTaskQueue, lazy } from '@genkit-ai/core/async';
 export * from './common.js';
 export {
+  CommittedTurnError,
   FileSessionStore,
   GenkitBeta,
   InMemorySessionStore,
@@ -88,4 +89,5 @@ export {
   type SessionStore,
   type SessionStoreOptions,
   type SnapshotMutator,
+  type TurnResult,
 } from './genkit-beta.js';

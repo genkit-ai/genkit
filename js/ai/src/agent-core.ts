@@ -33,6 +33,7 @@ import type {
   AgentInput,
   AgentOutput,
   AgentStreamChunk,
+  TurnEnd,
 } from './agent.js';
 import { applyPatch, type JsonPatch } from './json-patch.js';
 import type { MessageData } from './model-types.js';
@@ -122,6 +123,12 @@ export interface AgentChat<State = unknown, Opts extends object = never> {
    * Runs a single turn and resolves with the completed {@link AgentResponse}.
    * The non-streaming analog of {@link generate}; for incremental chunks use
    * {@link sendStream}.
+   *
+   * A failed turn rejects with an {@link AgentError} naming the resume point,
+   * which the chat has already adopted. An input with neither a message nor
+   * `resume` (`send({})`) runs the turn again on the conversation as it
+   * stands, which re-attempts a failed turn without repeating the tool calls
+   * it completed; a new message continues from that point like any other.
    */
   send(
     input: string | AgentInput,
@@ -270,8 +277,11 @@ export interface DetachedTask<State = unknown, Opts extends object = never> {
 }
 
 /**
- * Thrown when a turn fails. Carries the last-good state so the session is
- * recoverable.
+ * Thrown when a turn fails. Carries the resume point (`snapshotId` when
+ * server-managed, `state` when client-managed): the failed turn's own snapshot
+ * or state when the turn committed what it had done, otherwise the last
+ * committed turn's. Whether the failure is worth another attempt is the
+ * caller's decision, taken from `status`.
  */
 export class AgentError<State = unknown> extends Error {
   readonly status: string;
@@ -385,6 +395,50 @@ const TERMINAL_STATUSES = new Set([
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * The queue a turn's stream reads from. `sendStream` drains the transport's
+ * stream into it eagerly, so what the stream carried is known independently
+ * of whether the caller reads it.
+ */
+class ChunkQueue<T> implements AsyncIterable<T> {
+  private buffer: T[] = [];
+  private closed = false;
+  private failed = false;
+  private error: unknown;
+  private wake?: () => void;
+
+  push(value: T): void {
+    this.buffer.push(value);
+    this.wake?.();
+  }
+
+  close(): void {
+    this.closed = true;
+    this.wake?.();
+  }
+
+  fail(error: unknown): void {
+    this.failed = true;
+    this.error = error;
+    this.wake?.();
+  }
+
+  async *[Symbol.asyncIterator](): AsyncIterator<T> {
+    while (true) {
+      if (this.buffer.length) {
+        yield this.buffer.shift()!;
+        continue;
+      }
+      if (this.failed) throw this.error;
+      if (this.closed) return;
+      await new Promise<void>((resolve) => {
+        this.wake = resolve;
+      });
+      this.wake = undefined;
+    }
+  }
 }
 
 function toAgentInput(input: string | AgentInput): AgentInput {
@@ -850,7 +904,9 @@ export class AgentChatImpl<State = unknown, Opts extends object = never>
   private buildResponse(
     output: Promise<AgentOutput>,
     isAborted: () => boolean,
-    messageCountBeforeTurn: number
+    messageCountBeforeTurn: number,
+    snapshotIdBeforeTurn: string | undefined,
+    turnEnd: Promise<TurnEnd | undefined>
   ): Promise<AgentResponse<State>> {
     return (async (): Promise<AgentResponse<State>> => {
       let raw: AgentOutput<State>;
@@ -865,13 +921,30 @@ export class AgentChatImpl<State = unknown, Opts extends object = never>
       }
       // A failed/aborted turn that returns no authoritative messages leaves the
       // eagerly-pushed user message (see `sendStream`) orphaned in `this.messages`
-      // with no reply. Roll it back so it isn't re-sent on the next turn. When the
-      // turn returns authoritative `state.messages`, `applyOutput` replaces the
-      // array wholesale, so this rollback is a no-op for the success path.
+      // with no reply. Roll it back so it isn't re-sent on the next turn, unless
+      // the turn committed: a server-managed turn that advanced the snapshot
+      // persisted the message as part of its resume point, and the next turn
+      // continues from it. When the turn returns authoritative `state.messages`,
+      // `applyOutput` replaces the array wholesale, so this rollback is a no-op.
+      const terminal =
+        raw.finishReason === 'failed' || raw.finishReason === 'aborted';
+      let committed =
+        raw.snapshotId !== undefined && raw.snapshotId !== snapshotIdBeforeTurn;
+      if (terminal && committed && snapshotIdBeforeTurn === undefined) {
+        // The resume point is a row this chat had no baseline for (a chat
+        // opened on a `sessionId`), so it may be the previous turn's row
+        // rather than this one's. The turn-end chunk settles it: a committed
+        // turn names its snapshot there and a rolled-back one names none.
+        const end = await turnEnd;
+        if (end) {
+          committed = end.snapshotId !== undefined;
+        }
+      }
       if (
-        (raw.finishReason === 'failed' || raw.finishReason === 'aborted') &&
+        terminal &&
         raw.state?.messages === undefined &&
-        !raw.message
+        !raw.message &&
+        !committed
       ) {
         this.messages.length = messageCountBeforeTurn;
       }
@@ -952,6 +1025,7 @@ export class AgentChatImpl<State = unknown, Opts extends object = never>
     // does not guard against overlapping `send`/`sendStream` calls on the same
     // chat (they would race on `messages`/`snapshotId`/`clientState`).
     const messageCountBeforeTurn = this.messages.length;
+    const snapshotIdBeforeTurn = this.snapshotId;
     if (agentInput.message) {
       this.messages.push(agentInput.message);
     }
@@ -971,10 +1045,32 @@ export class AgentChatImpl<State = unknown, Opts extends object = never>
       turnOpts
     );
 
+    // The transport's stream is drained eagerly into the queue the turn's
+    // stream reads from, so what it carried is known whether or not the
+    // caller reads it: `buildResponse` may need the turn-end chunk to tell a
+    // committed failed turn from a rolled-back one. `turnEnd` resolves with
+    // the last one the stream carried once it has been drained.
+    const queue = new ChunkQueue<AgentStreamChunk>();
+    const turnEnd = (async () => {
+      let end: TurnEnd | undefined;
+      try {
+        for await (const raw of rawStream) {
+          if (raw.turnEnd) end = raw.turnEnd;
+          queue.push(raw);
+        }
+        queue.close();
+      } catch (e) {
+        queue.fail(e);
+      }
+      return end;
+    })();
+
     const responsePromise = this.buildResponse(
       output,
       isAborted,
-      messageCountBeforeTurn
+      messageCountBeforeTurn,
+      snapshotIdBeforeTurn,
+      turnEnd
     );
     // Avoid unhandled-rejection warnings when only the stream is consumed.
     responsePromise.catch(() => {});
@@ -983,7 +1079,7 @@ export class AgentChatImpl<State = unknown, Opts extends object = never>
     const stream = (async function* (): AsyncIterable<AgentChunk<State>> {
       let previousText = '';
       try {
-        for await (const raw of rawStream) {
+        for await (const raw of queue) {
           const chunk = new AgentChunkImpl<State>(raw, previousText);
           previousText = chunk.accumulatedText;
           // Keep the locally tracked custom state live mid-stream by applying
