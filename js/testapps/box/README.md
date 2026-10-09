@@ -56,12 +56,13 @@ pnpm genkit:dev:agent
 
 - Chat with `notesAgent` and tell it something to remember. The reply
   mentions the pid of the box that ran `takeNote`.
-- Start a new session: a different pid, because the route
-  (`sessionIdOf(req)`) gives each session its own box.
-- Keep chatting in the first session: same pid, and the notes (custom state,
-  shown in the Dev UI) keep growing.
-- The `chatWithNotes` flow drives the same agent in-process:
-  `{ "sessionId": "alice", "message": "buy milk" }`.
+- The `chatWithNotes` flow drives the same agent in-process. Run it with
+  `{ "sessionId": "alice", "message": "buy milk" }`, then with `"bob"`: a
+  different pid, because `route: sessionRoute` gives each session its own box.
+  Run `"alice"` again: alice's pid, and her notes (custom state) keep growing.
+- The boxed agent keeps sessions in a file store (`.genkit/box-sessions`)
+  that every box shares, so a turn that lands on another box (e.g. after an
+  idle box is reclaimed) still continues the conversation.
 
 ## Container variant (`src/index-podman.ts`)
 

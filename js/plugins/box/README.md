@@ -102,25 +102,11 @@ trace per turn.
 For an unregistered handle, `myBox.agent({ name, context })` returns just the
 `AgentAPI`.
 
-### One box per session
-
-Route agent calls by session with `sessionIdOf`. It reads the session from the
-agent's init (what the Dev UI and `chat({ sessionId })` send) and from
-snapshot lookups:
-
-```ts
-import { box, execRunner, sessionIdOf } from '@genkit-ai/box';
-
-const agentBox = box(ai, {
-  runner: execRunner({ cmd: 'tsx src/boxed-agent.ts' }),
-  route: (req, ctx) => String(ctx?.sessionId ?? sessionIdOf(req) ?? 'new'),
-  retention: { idle: 10 * 60_000 },
-});
-```
-
-Calls that only carry a `snapshotId` (a resume, a snapshot read, an abort)
-still land on the session's box: a registered agent remembers which session
-each snapshot it returned belongs to.
+To give each conversation its own box, use `route: sessionRoute` (see
+[One box per session](#one-box-per-session)). A registered agent has no
+per-proxy context, so it routes by the session in the agent's init
+(`chat({ sessionId })`, the Dev UI); give the boxed agent a durable store so
+turns that carry only a `snapshotId` can resume on the shared box.
 
 ## Lifecycle: route + retention
 

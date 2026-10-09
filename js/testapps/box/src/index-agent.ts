@@ -24,7 +24,7 @@
 // then chat with `notesAgent` in the Dev UI. Start a second session and note
 // that takeNote reports a different pid.
 
-import { box, execRunner, sessionIdOf } from '@genkit-ai/box';
+import { box, execRunner, sessionRoute } from '@genkit-ai/box';
 import { z } from 'genkit';
 import { genkit } from 'genkit/beta';
 import { NotesStateSchema } from './boxed-agent.js';
@@ -33,11 +33,12 @@ const ai = genkit({});
 
 const agentBox = box(ai, {
   runner: execRunner({ cmd: 'tsx src/boxed-agent.ts' }),
-  // One box per chat session. The Dev UI sends the session in the agent's
-  // init, which `sessionIdOf` reads; a first turn without one lands on
-  // 'new' and the agent mints the id.
-  route: (req, ctx) => String(ctx?.sessionId ?? sessionIdOf(req) ?? 'new'),
-  // Reclaim a session's box after 10 idle minutes.
+  // One box per chat session, keyed by the session the call names (in the
+  // agent's init: the Dev UI and `chat({ sessionId })` send it). Calls that
+  // name none, like a later Dev UI turn resuming by snapshot alone, go to a
+  // shared box; the file store lets that box pick the conversation up.
+  route: sessionRoute,
+  // Reclaim a session's box after 10 idle minutes (default: 5).
   retention: { idle: 10 * 60_000 },
 });
 
@@ -60,8 +61,9 @@ export const chatWithNotes = ai.defineFlow(
     outputSchema: z.object({ text: z.string(), notes: z.array(z.string()) }),
   },
   async ({ sessionId, message }) => {
-    // `sessionId` resumes the session's latest turn, or starts it under that
-    // id. Either way the route sends it to the session's box.
+    // A fresh chat per request: `sessionId` (picked by the caller) resumes the
+    // session's latest turn, or starts it under that id. It is in every
+    // request's init, so the route always sends it to the session's box.
     const res = await notesAgent.chat({ sessionId }).send(message);
     return { text: res.text, notes: res.state?.notes ?? [] };
   }

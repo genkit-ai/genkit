@@ -63,11 +63,6 @@ function field(value: unknown, key: string): unknown {
     : undefined;
 }
 
-function stringField(value: unknown, key: string): string | undefined {
-  const v = field(value, key);
-  return typeof v === 'string' && v !== '' ? v : undefined;
-}
-
 /** Reads `metadata.agent` off a real agent, so the proxy advertises the same. */
 export function capabilitiesOf(agent: {
   __action: { metadata?: Record<string, unknown> };
@@ -147,41 +142,6 @@ interface AgentRunOptions {
 }
 
 /**
- * Remembers which session each snapshot belongs to, from the outputs it sees,
- * and stamps that onto calls that only carry a `snapshotId` (resumes, snapshot
- * reads, aborts). Routes keyed on `sessionIdOf(req)` then keep those calls on
- * the session's box. The hint is routing-only; runners never send it.
- */
-class SessionTracker {
-  private readonly bySnapshot = new Map<string, string>();
-
-  remember(output: AgentOutput): void {
-    if (!output.snapshotId || !output.sessionId) return;
-    this.bySnapshot.set(output.snapshotId, output.sessionId);
-    // Only recent snapshots get resumed; keep the map bounded.
-    if (this.bySnapshot.size > 1000) {
-      const oldest = this.bySnapshot.keys().next().value;
-      if (oldest !== undefined) this.bySnapshot.delete(oldest);
-    }
-  }
-
-  wrap(dispatcher: ProxyDispatcher): ProxyDispatcher {
-    return {
-      boxId: dispatcher.boxId,
-      acquire: (req, signal) => {
-        const snapshotId =
-          stringField(req.init, 'snapshotId') ??
-          stringField(req.input, 'snapshotId');
-        const sessionId =
-          req.sessionId ??
-          (snapshotId ? this.bySnapshot.get(snapshotId) : undefined);
-        return dispatcher.acquire({ ...req, sessionId }, signal);
-      },
-    };
-  }
-}
-
-/**
  * Runs one agent invocation against the box. Reflection v1 has no input
  * streaming, so an invocation is run turn by turn: each input becomes one
  * boxed call, with the init threaded from the previous output. A single input
@@ -191,7 +151,6 @@ class SessionTracker {
  */
 async function runInvocation(
   dispatcher: ProxyDispatcher,
-  tracker: SessionTracker,
   opts: DefineBoxedAgentOptions,
   inputs: AsyncIterable<AgentInput>,
   run: AgentRunOptions
@@ -214,7 +173,6 @@ async function runInvocation(
     );
     if (!trace.traceId) trace = { traceId, spanId };
     output = res.result ?? {};
-    tracker.remember(output);
     if (endsInvocation(output)) break;
     init = nextInit(init, output, opts.capabilities.stateManagement);
   }
@@ -233,14 +191,12 @@ async function* once<T>(value: T): AsyncIterable<T> {
  */
 function agentProxyAction(
   dispatcher: ProxyDispatcher,
-  tracker: SessionTracker,
   opts: DefineBoxedAgentOptions
 ) {
   const run = async (input: AgentInput | undefined, o?: AgentRunOptions) => {
     const inputs = o?.inputStream ?? once(input ?? {});
     const { output, traceId, spanId } = await runInvocation(
       dispatcher,
-      tracker,
       opts,
       inputs,
       o ?? {}
@@ -374,15 +330,12 @@ export function defineBoxedAgent<State>(
   dispatcher: ProxyDispatcher,
   opts: DefineBoxedAgentOptions
 ): Agent<State> {
-  const tracker = new SessionTracker();
-  const routed = tracker.wrap(dispatcher);
-
-  const agent = agentProxyAction(routed, tracker, opts);
+  const agent = agentProxyAction(dispatcher, opts);
   const snapshotAction = companionAction<
     typeof SnapshotLookupSchema,
     SessionSnapshot<State>
   >(
-    routed,
+    dispatcher,
     'agent-snapshot',
     opts,
     `Gets snapshot data for ${opts.name} by snapshotId or sessionId`,
@@ -392,7 +345,7 @@ export function defineBoxedAgent<State>(
     typeof AbortRequestSchema,
     { snapshotId: string; status?: SessionSnapshot['status'] }
   >(
-    routed,
+    dispatcher,
     'agent-abort',
     opts,
     `Aborts ${opts.name} agent by snapshotId.`,

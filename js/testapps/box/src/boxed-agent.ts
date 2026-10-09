@@ -20,7 +20,7 @@
 
 import { googleAI } from '@genkit-ai/google-genai';
 import { z } from 'genkit';
-import { genkit, InMemorySessionStore } from 'genkit/beta';
+import { FileSessionStore, genkit } from 'genkit/beta';
 
 const ai = genkit({ plugins: [googleAI()] });
 
@@ -53,7 +53,10 @@ ai.defineAgent({
     'call takeNote. Keep answers short, and mention the pid takeNote returns.',
   model: googleAI.model('gemini-flash-latest'),
   tools: [takeNote],
-  store: new InMemorySessionStore(),
+  // Shared by every box process, so any box can resume any session: a box
+  // reclaimed after idling (or a call routed elsewhere) loses nothing. With
+  // an in-memory store the conversation would die with its box.
+  store: new FileSessionStore('.genkit/box-sessions'),
 });
 
 // Keep the process alive serving reflection requests.

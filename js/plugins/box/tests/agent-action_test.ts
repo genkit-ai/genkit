@@ -25,7 +25,7 @@ import {
 import { createServer } from 'node:net';
 import { describe, it } from 'node:test';
 import { box } from '../src/box.js';
-import { sessionIdOf } from '../src/route.js';
+import { SHARED_KEY, sessionRoute } from '../src/route.js';
 import type { RunActionRequest } from '../src/types.js';
 import { FakeRunner } from './fake-runner.js';
 
@@ -223,23 +223,21 @@ describe('defineAgent', () => {
     );
   });
 
-  it('routes a session to one box, including snapshot-only resumes', async () => {
+  it('routes by the session in the init, statelessly', async () => {
     const runner = new FakeRunner(fakeAgent());
-    const coder = box(genkit({}), {
-      runner,
-      route: (req, ctx) =>
-        String(ctx?.sessionId ?? sessionIdOf(req) ?? 'default'),
-    }).defineAgent({ name: 'coder', stateManagement: 'server' });
+    const coder = box(genkit({}), { runner, route: sessionRoute }).defineAgent({
+      name: 'coder',
+      stateManagement: 'server',
+    });
 
-    // What the Dev UI sends: init only, no context.
+    // What the Dev UI and `chat({ sessionId })` send: init only, no context.
     await coder.run(user('a'), { init: { sessionId: 's-7' } });
-    // A later resume by snapshot alone still lands on the session's box.
+    await coder.getSnapshotData({ sessionId: 's-7' });
+    // A resume by snapshot alone names no session: the shared box.
     await coder.run(user('b'), { init: { snapshotId: 'snap-1' } });
-    await coder.getSnapshot('snap-2');
 
-    assert.deepStrictEqual(runner.acquired, ['s-7', 's-7', 's-7']);
-    // The routing hint stays on the host side.
-    assert.deepStrictEqual(runner.calls[1].req.init, { snapshotId: 'snap-1' });
+    assert.deepStrictEqual(runner.acquired, ['s-7', 's-7', SHARED_KEY]);
+    assert.deepStrictEqual(runner.calls[2].req.init, { snapshotId: 'snap-1' });
   });
 
   it('defineFromAgent copies metadata and calls the original in the box', async () => {
@@ -306,27 +304,5 @@ describe('defineAgent over the reflection API (Dev UI path)', () => {
     } finally {
       await server.stop();
     }
-  });
-});
-
-describe('sessionIdOf', () => {
-  it('reads the session from turns, lookups and hints', () => {
-    assert.strictEqual(
-      sessionIdOf({ key: '/agent/a', init: { sessionId: 's1' } }),
-      's1'
-    );
-    assert.strictEqual(
-      sessionIdOf({ key: '/agent/a', init: { state: { sessionId: 's2' } } }),
-      's2'
-    );
-    assert.strictEqual(
-      sessionIdOf({ key: '/agent-snapshot/a', input: { sessionId: 's3' } }),
-      's3'
-    );
-    assert.strictEqual(
-      sessionIdOf({ key: '/agent/a', init: {}, sessionId: 's4' }),
-      's4'
-    );
-    assert.strictEqual(sessionIdOf({ key: '/tool/t', input: {} }), undefined);
   });
 });
