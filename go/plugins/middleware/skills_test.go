@@ -27,6 +27,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/ai/tool"
 	"github.com/firebase/genkit/go/internal/registry"
 )
 
@@ -340,8 +341,8 @@ func TestSkillsToolInterruptsPropagate(t *testing.T) {
 	_, err := h.WrapTool(ctx, &ai.ToolParams{
 		Tool:    h.Tools[0],
 		Request: &ai.ToolRequest{Name: SkillToolName},
-	}, func(context.Context, *ai.ToolParams) (*ai.MultipartToolResponse, error) {
-		return nil, ai.NewToolInterruptError(map[string]any{"reason": "approval"})
+	}, func(ctx context.Context, _ *ai.ToolParams) (*ai.MultipartToolResponse, error) {
+		return nil, tool.Interrupt(ctx, map[string]any{"reason": "approval"})
 	})
 	if isInterrupt, _ := ai.IsToolInterruptError(err); !isInterrupt {
 		t.Errorf("interrupt was swallowed: err=%v", err)

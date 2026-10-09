@@ -112,7 +112,7 @@ async def test_listed_model_embedder_evaluator_send_request_schema() -> None:
     """Rows from the model/embedder/evaluator metadata helpers carry their request schema to /api/actions."""
     model_row = model_action_metadata(name='acme/m')
     embedder_row = embedder_action_metadata(name='acme/e')
-    evaluator_row = evaluator_action_metadata(name='acme/ev')
+    evaluator_row = evaluator_action_metadata(name='acme/ev', display_name='Acme', definition='Scores acme rows.')
 
     listed = await api_actions(Genkit(plugins=[ListingPlugin([model_row, embedder_row, evaluator_row])]))
 

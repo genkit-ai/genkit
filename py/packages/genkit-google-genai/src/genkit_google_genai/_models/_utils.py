@@ -54,13 +54,26 @@ from dataclasses import dataclass
 from typing import Any, cast
 from urllib.parse import urlparse
 
+import httpx
 from google import genai
 
-from genkit import Part
+from genkit import GenkitError, Part
 from genkit.model import ToolRequest, ToolResponse
-from genkit.plugin_api import get_cached_client
+from genkit.plugin_api import loop_local_client
 
 logger = logging.getLogger(__name__)
+
+
+# TODO(#4360): Replace with downloadRequestMedia middleware.
+# Some media hosts (Wikipedia, for one) answer 403 to requests without a real
+# User-Agent.
+@loop_local_client
+def _media_client() -> httpx.AsyncClient:
+    return httpx.AsyncClient(
+        headers={'User-Agent': 'Genkit/1.0 (https://github.com/genkit-ai/genkit; genkit@google.com)'},
+        follow_redirects=True,
+    )
+
 
 # The field a non-object tool input rides under on the wire.
 TOOL_INPUT_FIELD = 'input'
@@ -455,13 +468,6 @@ class PartConverter:
             return {'thoughtSignature': base64.b64encode(thought_signature).decode('utf-8')}
         return None
 
-    # TODO(#4360): Replace with downloadRequestMedia middleware (JS parity).
-    # User-Agent is required because many servers (e.g. Wikipedia) return
-    # 403 Forbidden for the default httpx user-agent string.
-    _DOWNLOAD_HEADERS: dict[str, str] = {
-        'User-Agent': 'Genkit/1.0 (https://github.com/genkit-ai/genkit; genkit@google.com)',
-    }
-
     @classmethod
     def _is_gemini_native_url(cls, url: str) -> bool:
         """Returns True if the Gemini API can natively resolve this URL.
@@ -494,13 +500,22 @@ class PartConverter:
             A tuple containing the content (bytes) and its MIME type (str or None).
 
         Raises:
-            httpx.HTTPStatusError: If the server returns an error status code.
+            GenkitError: INVALID_ARGUMENT when the media host answers with a
+                4xx other than 408/429: the caller's URL is wrong or not
+                public, and another model would fail on it too.
+            httpx.HTTPError: A 5xx, 408, 429, timeout, or transport failure,
+                left unclassified because it may pass on retry.
         """
-        client = get_cached_client(
-            cache_key='google_genai_media',
-            headers=cls._DOWNLOAD_HEADERS,
-            follow_redirects=True,
-        )
-        response = await client.get(url, timeout=60.0)
-        response.raise_for_status()
+        response = await _media_client().get(url, timeout=60.0)
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            code = e.response.status_code
+            if 400 <= code < 500 and code not in (408, 429):
+                raise GenkitError(
+                    status='INVALID_ARGUMENT',
+                    message=f'Could not download request media (HTTP {code})',
+                    cause=e,
+                ) from e
+            raise
         return response.content, response.headers.get('content-type')

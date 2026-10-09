@@ -56,7 +56,7 @@ class EmbedderRef(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(extra='forbid', populate_by_name=True)
 
     name: str
-    config: Any | None = None
+    config: dict[str, Any] | None = None
     version: str | None = None
 
 
@@ -110,8 +110,12 @@ def embedder_action_metadata(
     )
 
 
-def create_embedder_ref(name: str, config: dict[str, Any] | None = None, version: str | None = None) -> EmbedderRef:
-    """Creates an EmbedderRef instance."""
+def create_embedder_ref(name: str, *, config: dict[str, Any] | None = None, version: str | None = None) -> EmbedderRef:
+    """Create an EmbedderRef. Settings and version are named.
+
+    A version string in the second position used to be stored as config and
+    silently dropped. Pass config= and version=.
+    """
     return EmbedderRef(name=name, config=config, version=version)
 
 

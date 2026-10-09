@@ -27,16 +27,12 @@ from collections.abc import Awaitable, Callable
 from pydantic import BaseModel, Field
 
 from genkit import GenkitError
+from genkit._ai._generate import StreamingCallbackError
 from genkit._core._model import ModelResponse
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
+from genkit_middleware._statuses import TRANSIENT_STATUSES
 
-_DEFAULT_RETRY_STATUSES: list[str] = [
-    'UNAVAILABLE',
-    'DEADLINE_EXCEEDED',
-    'RESOURCE_EXHAUSTED',
-    'ABORTED',
-    'INTERNAL',
-]
+_DEFAULT_RETRY_STATUSES: list[str] = list(TRANSIENT_STATUSES)
 
 
 async def sleep_unless_stopped(seconds: float, abort_signal: asyncio.Event) -> None:
@@ -74,6 +70,11 @@ class Retry(BaseMiddleware[RetryConfig]):
                 if attempt == self.config.max_retries:
                     raise
 
+                # The caller's own on_chunk failure is not retried. A
+                # GenkitError is retried only when its status is listed. Any
+                # other exception is retried.
+                if isinstance(e, StreamingCallbackError):
+                    raise
                 if isinstance(e, GenkitError) and e.status not in self.config.statuses:
                     raise
 

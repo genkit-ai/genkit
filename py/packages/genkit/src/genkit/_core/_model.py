@@ -27,7 +27,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from functools import cached_property
 from importlib import import_module
-from typing import Any, ClassVar, Generic, Literal, cast
+from typing import Any, ClassVar, Generic, Literal, TypeGuard, cast, get_args
 
 from pydantic import (
     BaseModel,
@@ -75,10 +75,36 @@ from genkit._core._typing import (
     TurnEnd,
 )
 
-# Runtime schema for common generate knobs. ModelConfigDict is the
-# hand-copied autocomplete list — keep the keys matching so a new knob
-# shows up in the IDE the same day it becomes legal.
-ModelConfig = GenerationCommonConfig
+
+# ModelConfigDict is the hand-copied autocomplete list for this class — keep
+# the keys matching so a new knob shows up in the IDE the same day it becomes legal.
+class ModelConfig(GenerationCommonConfig):
+    """Settings every model understands, plus ``extra`` for provider-only ones.
+
+    Unknown keyword arguments raise, so ``ModelConfig(temprature=0.2)`` fails
+    where it was typed instead of being sent or silently dropped. A
+    per-request API key goes in ``context={'secrets': {'api_key': ...}}``, not
+    here.
+    """
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra='forbid')
+
+    extra: dict[str, Any] | None = None
+    """Provider settings the model's config class doesn't declare, sent as-is.
+
+    Keys are the provider's wire names. The plugin merges them into its
+    request after the declared fields, so a colliding key wins. Fields Genkit
+    builds from the request (messages, tools) are rejected rather than
+    overwritten. Where the map lands depends on the provider: the request
+    body for Gemini, OpenAI and Anthropic, ``options`` for Ollama, and
+    ``additionalModelRequestFields`` for Bedrock.
+
+    Keys aren't validated, except that an API key here raises like one at the
+    top level: config travels with the request into traces. Don't put other
+    secrets here either.
+    """
+
+
 ModelUsage = GenerationUsage  # public name for GenerationUsage
 
 # what callers pass as tool_choice; they type the string, not an enum.
@@ -109,11 +135,12 @@ logger = get_logger(__name__)
 class ModelConfigDict(TypedDict, extra_items=Any, total=False):
     """Common knobs for dict-literal autocomplete on ``config={...}``.
 
-    ``None`` clears a ModelRef default. Extra keys (provider-specific) stay
-    in the bag and are forwarded.
+    ``None`` clears a ModelRef default. Other keys have to be declared by the
+    model's own config class, or the call raises before the model runs;
+    provider settings the class doesn't declare go in ``extra``.
 
-    Keys match ``GenerationCommonConfig`` / ``ModelConfig``. If a common
-    knob is added there and not here, autocomplete quietly drops it.
+    Keys match ``ModelConfig``. If a common knob is added there and not here,
+    autocomplete quietly drops it.
     """
 
     version: str | None
@@ -122,7 +149,63 @@ class ModelConfigDict(TypedDict, extra_items=Any, total=False):
     top_k: float | None
     top_p: float | None
     stop_sequences: Sequence[str] | None
-    api_key: str | None
+    extra: dict[str, Any] | None
+
+
+SECRETS_HINT = "Pass the key as context={'secrets': {'api_key': ...}}."
+_KEY_SLOTS = ('api_key', 'apiKey')
+
+
+def misplaced_api_key_error() -> GenkitError:
+    """The ``INVALID_ARGUMENT`` error for an API key found in config."""
+    return GenkitError(
+        status='INVALID_ARGUMENT',
+        message=f'API key belongs in context.secrets, not config. {SECRETS_HINT}',
+        reason=RuntimeErrorReason.INVALID_INPUT,
+    )
+
+
+def _has_key(bag: Mapping[str, object]) -> bool:
+    return any(bag.get(slot) is not None for slot in _KEY_SLOTS)
+
+
+def reject_config_api_key(config: object) -> None:
+    """Raise when a request config carries an API key.
+
+    Core calls this in generate, in the ``/util/generate`` action, and on every
+    model and background-model action run, so plugins don't need to. Checks
+    ``api_key`` / ``apiKey`` on a config dict or model, on a model's undeclared
+    fields, and inside ``extra``. A key in any of those would be
+    traced, and a key in ``extra`` would also go to the provider as a body
+    field while the call authenticates with the plugin's key.
+
+    Example:
+        ```python
+        reject_config_api_key({'temperature': 0.2})
+        # => None
+        reject_config_api_key({'extra': {'api_key': 'sk-tenant'}})
+        # => GenkitError INVALID_ARGUMENT: API key belongs in context.secrets, not config. ...
+        ```
+
+    Args:
+        config: The request config, as a dict or a config object.
+
+    Raises:
+        GenkitError: ``INVALID_ARGUMENT`` when a key is present.
+    """
+    if config is None:
+        return
+    bags: list[object]
+    if isinstance(config, Mapping):
+        top = cast(Mapping[str, object], config)
+        bags = [top, top.get('extra')]
+    else:
+        if any(getattr(config, slot, None) is not None for slot in _KEY_SLOTS):
+            raise misplaced_api_key_error()
+        bags = [getattr(config, 'model_extra', None), getattr(config, 'extra', None)]
+    for bag in bags:
+        if isinstance(bag, Mapping) and _has_key(cast(Mapping[str, object], bag)):
+            raise misplaced_api_key_error()
 
 
 # TypeVars for generic types
@@ -131,15 +214,16 @@ ConfigT = TypeVar('ConfigT', bound=ModelConfig, default=ModelConfig)
 # Bound to BaseModel so ModelRef is always parameterized with a concrete Pydantic config schema.
 # Covariant so ModelRef[GeminiConfig] is assignable to ModelRef[BaseModel] or ModelRef[Any].
 ModelRefConfigT = TypeVar('ModelRefConfigT', bound=BaseModel, covariant=True)
-# Unbounded so ModelRequest can carry plugin config schemas, plain dicts, or
-# ModelConfig subclasses without forcing everything through GenerationCommonConfig.
+# ModelRequest[X] takes a pydantic model class; __class_getitem__ rejects the
+# rest. Not bound to BaseModel: type checkers would then reject the common
+# bare ModelRequest(config={...}), where the config is solved as a dict.
 # Invariant: config is writable, so ModelRequest[GeminiConfig] is not a
 # ModelRequest[ModelConfig] you can assign a ModelConfig into.
 ModelRequestConfigT = TypeVar('ModelRequestConfigT')
 
 
-def declared_config_type(cls: type) -> type | None:
-    """The config class on ``ModelRequest[ThatClass]``, or None if unparametrized."""
+def declared_config_type(cls: type) -> type[BaseModel] | None:
+    """The config class on ``ModelRequest[ThatClass]``, or None if unparametrized or ``Any``."""
     meta = getattr(cls, '__pydantic_generic_metadata__', None)
     if not meta:
         return None
@@ -147,9 +231,15 @@ def declared_config_type(cls: type) -> type | None:
     if not args:
         return None
     arg = args[0]
-    if isinstance(arg, TypeVar) or arg is Any:
-        return None
-    return arg
+    return arg if _is_model_class(arg) else None
+
+
+def _is_model_class(value: object) -> TypeGuard[type[BaseModel]]:
+    """True for a pydantic model class; False for TypedDicts, dict, unions, Any, and TypeVars."""
+    try:
+        return isinstance(value, type) and issubclass(value, BaseModel)
+    except TypeError:  # dict[str, Any] passes isinstance(_, type) on 3.10
+        return False
 
 
 def config_type_path(cls: type) -> str:
@@ -1034,6 +1124,25 @@ class ModelRequest(GenkitModel, Generic[ModelRequestConfigT]):
     # Wire-shaped output storage; flat access via the properties below.
     output: OutputConfig = Field(default_factory=OutputConfig)
 
+    def __class_getitem__(cls, typevar_values: type[Any] | tuple[type[Any], ...]) -> Any:  # noqa: ANN401
+        """``ModelRequest[Cfg]``, where ``Cfg`` must be a pydantic model class.
+
+        Checked here, where the annotation is evaluated, so a TypedDict or
+        dict config fails when the model function is defined, with the same
+        error on every Python version.
+        """
+        arg = typevar_values[0] if isinstance(typevar_values, tuple) and typevar_values else typevar_values
+        if not (arg is Any or isinstance(arg, TypeVar) or _is_model_class(arg)):
+            label = arg.__name__ if isinstance(arg, type) and not get_args(arg) else repr(arg)
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=(
+                    f'ModelRequest[{label}]: the config type must be a pydantic '
+                    'BaseModel subclass, e.g. a ModelConfig subclass. Use bare ModelRequest to take config as a dict.'
+                ),
+            )
+        return super().__class_getitem__(typevar_values)
+
     @field_validator('config', mode='before')
     @classmethod
     def _check_config_type(cls, v: object) -> object:
@@ -1048,12 +1157,10 @@ class ModelRequest(GenkitModel, Generic[ModelRequestConfigT]):
             return v
         if isinstance(v, BaseModel):
             expected = declared_config_type(cls)
-            if isinstance(expected, type) and issubclass(expected, BaseModel) and not isinstance(v, expected):
+            if expected is not None and not isinstance(v, expected):
                 raise ValueError(
                     f'config must be {config_type_path(expected)} or a mapping, got {config_type_path(type(v))}'
                 )
-            if expected is dict:
-                raise ValueError(f'config must be a mapping, got {type(v).__name__}')
             return v
         raise ValueError(f'config must be a BaseModel or mapping, got {type(v).__name__}')
 

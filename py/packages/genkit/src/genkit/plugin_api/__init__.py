@@ -24,12 +24,11 @@ from genkit._core._error import (
     ErrorResponseMetadata,
     StatusName,
     from_http_code,
-    get_callable_json,
+    mark_provider_error,
     parse_retry_after_ms,
     wrap_http_error,
 )
-from genkit._core._http_client import get_cached_client
-from genkit._core._loop_cache import _loop_local_client as loop_local_client
+from genkit._core._loop_cache import loop_local_client
 from genkit._core._middleware import new_middleware
 from genkit._core._plugin import MiddlewarePlugin, Plugin
 from genkit._core._schema import to_json_schema
@@ -46,6 +45,7 @@ __all__ = [
     'ErrorResponseMetadata',
     'StatusName',
     'from_http_code',
+    'mark_provider_error',
     'parse_retry_after_ms',
     'wrap_http_error',
     # HTTP / version stamping
@@ -56,8 +56,4 @@ __all__ = [
     'is_dev_environment',
     # Schema utilities
     'to_json_schema',
-    # HTTP client
-    'get_cached_client',
-    # Error serialization
-    'get_callable_json',
 ]

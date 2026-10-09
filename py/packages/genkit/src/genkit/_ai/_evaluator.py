@@ -16,15 +16,16 @@
 
 """Evaluator type definitions for the Genkit framework."""
 
+import inspect
 import traceback
 import uuid
 from collections.abc import Callable, Coroutine
-from typing import Any, ClassVar, TypeVar, cast
+from typing import Any, ClassVar, TypeVar
 
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
 
-from genkit._core._action import Action, ActionKind
+from genkit._core._action import Action, ActionKind, ActionRunContext
 from genkit._core._logger import get_logger
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
@@ -52,8 +53,9 @@ T = TypeVar('T')
 # Must be async (coroutine function).
 EvaluatorFn = Callable[[BaseDataPoint, T], Coroutine[Any, Any, EvalFnResponse]]
 
-# User-provided batch evaluator: one EvalRequest.
-BatchEvaluatorFn = Callable[[EvalRequest], Coroutine[Any, Any, list[EvalFnResponse]]]
+# User-provided batch evaluator: one EvalRequest. Returns the rows as a list
+# or as an EvalResponse.
+BatchEvaluatorFn = Callable[[EvalRequest], Coroutine[Any, Any, list[EvalFnResponse] | EvalResponse]]
 
 
 class EvaluatorRef(BaseModel):
@@ -62,25 +64,61 @@ class EvaluatorRef(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(extra='forbid', populate_by_name=True, alias_generator=to_camel)
 
     name: str
-    config_schema: dict[str, object] | None = None
+    config: dict[str, object] | None = None
 
 
-def evaluator_ref(name: str, config_schema: dict[str, object] | None = None) -> EvaluatorRef:
-    """Create an EvaluatorRef."""
-    return EvaluatorRef(name=name, config_schema=config_schema)
+def evaluator_ref(name: str, *, config: dict[str, object] | None = None) -> EvaluatorRef:
+    """Create an EvaluatorRef whose config is merged under ai.evaluate's config=.
+
+    Settings are named. A value in the second position is a TypeError so it
+    cannot be stored as config.
+    """
+    return EvaluatorRef(name=name, config=config)
+
+
+def _evaluator_metadata(
+    name: str,
+    display_name: str,
+    definition: str,
+    is_billed: bool,
+    config_schema: type[BaseModel] | dict[str, object] | None,
+    metadata: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Build the action metadata that the Dev UI and `genkit eval:run` read."""
+    evaluator_meta: dict[str, object] = dict(metadata) if metadata else {}
+    existing = evaluator_meta.get('evaluator')
+    info: dict[str, object] = {str(k): v for k, v in existing.items()} if isinstance(existing, dict) else {}
+    evaluator_meta['evaluator'] = info
+    info[EVALUATOR_METADATA_KEY_DEFINITION] = definition
+    info[EVALUATOR_METADATA_KEY_DISPLAY_NAME] = display_name
+    info[EVALUATOR_METADATA_KEY_IS_BILLED] = is_billed
+    label = info.get('label')
+    if not isinstance(label, str) or not label:
+        info['label'] = name
+    if config_schema:
+        info['customOptions'] = to_json_schema(config_schema)
+    return evaluator_meta
 
 
 def evaluator_action_metadata(
     name: str,
-    config_schema: type | dict[str, Any] | None = None,
+    *,
+    display_name: str,
+    definition: str,
+    is_billed: bool = False,
+    config_schema: type[BaseModel] | dict[str, object] | None = None,
 ) -> ActionMetadata:
-    """Create ActionMetadata for an evaluator action."""
+    """Describe an evaluator in a plugin's list_actions.
+
+    The metadata matches what define_evaluator registers, so the Dev UI shows
+    the same display name and definition before and after the action resolves.
+    """
     return ActionMetadata(
         action_type=ActionKind.EVALUATOR,
         name=name,
         input_schema=to_json_schema(EvalRequest),
         output_schema=to_json_schema(list[EvalFnResponse]),
-        metadata={'evaluator': {'customOptions': to_json_schema(config_schema) if config_schema else None}},
+        metadata=_evaluator_metadata(name, display_name, definition, is_billed, config_schema),
     )
 
 
@@ -105,22 +143,7 @@ def define_evaluator(
     description: str | None = None,
 ) -> Action:
     """Register an evaluator that runs the callback on each dataset sample."""
-    evaluator_meta: dict[str, object] = dict(metadata) if metadata else {}
-    evaluator_info: dict[str, object]
-    existing_evaluator = evaluator_meta.get('evaluator')
-    if isinstance(existing_evaluator, dict):
-        evaluator_info = {str(key): value for key, value in existing_evaluator.items()}
-    else:
-        evaluator_info = {}
-    evaluator_meta['evaluator'] = evaluator_info
-    evaluator_info[EVALUATOR_METADATA_KEY_DEFINITION] = definition
-    evaluator_info[EVALUATOR_METADATA_KEY_DISPLAY_NAME] = display_name
-    evaluator_info[EVALUATOR_METADATA_KEY_IS_BILLED] = is_billed
-    label_value = evaluator_info.get('label')
-    if not isinstance(label_value, str) or not label_value:
-        evaluator_info['label'] = name
-    if config_schema:
-        evaluator_info['customOptions'] = to_json_schema(config_schema)
+    evaluator_meta = _evaluator_metadata(name, display_name, definition, is_billed, config_schema, metadata)
 
     evaluator_description = _get_func_description(fn, description)
 
@@ -152,7 +175,7 @@ def define_evaluator(
                                 span_id=span.span_id,
                                 trace_id=span.trace_id,
                                 test_case_id=test_case_id,
-                                evaluation=evaluation,
+                                evaluation=[evaluation],
                             )
                         )
                         raise e
@@ -190,26 +213,31 @@ def define_batch_evaluator(
     metadata: dict[str, object] | None = None,
     description: str | None = None,
 ) -> Action:
-    """Register a batch evaluator. ``fn`` is the action: one ``EvalRequest``."""
-    evaluator_meta: dict[str, object] = metadata.copy() if metadata else {}
-    if 'evaluator' not in evaluator_meta:
-        evaluator_meta['evaluator'] = {}
-    # Cast to dict for nested operations - pyrefly doesn't narrow nested dict types
-    evaluator_dict = cast(dict[str, object], evaluator_meta['evaluator'])
-    evaluator_dict[EVALUATOR_METADATA_KEY_DEFINITION] = definition
-    evaluator_dict[EVALUATOR_METADATA_KEY_DISPLAY_NAME] = display_name
-    evaluator_dict[EVALUATOR_METADATA_KEY_IS_BILLED] = is_billed
-    if 'label' not in evaluator_dict or not evaluator_dict['label']:
-        evaluator_dict['label'] = name
-    if config_schema:
-        evaluator_dict['customOptions'] = to_json_schema(config_schema)
+    """Register a batch evaluator that runs ``fn`` once on the whole ``EvalRequest``.
+
+    ``fn`` returns the rows as a list or an ``EvalResponse``. The action wraps
+    them so ``action.run(...).response`` is always an ``EvalResponse``.
+    """
+    evaluator_meta = _evaluator_metadata(name, display_name, definition, is_billed, config_schema, metadata)
 
     evaluator_description = _get_func_description(fn, description)
 
-    return registry.register_action(
+    if not inspect.iscoroutinefunction(fn):
+        raise TypeError(f"Action handlers must be async functions. Got sync function for '{name}'.")
+
+    # the action hands back the rows as one model so the Dev UI and
+    # `genkit eval:run` get a JSON array, the same as a per-row evaluator.
+    # fn stays the metadata_fn, so its signature is still checked when defined.
+    # model_validate takes a list or an EvalResponse; the constructor rejects the latter.
+    async def batch_fn(req: EvalRequest, ctx: ActionRunContext) -> EvalResponse:
+        return EvalResponse.model_validate(await action.params.call(fn, req, ctx))
+
+    action = registry.register_action(
         name=name,
         kind=ActionKind.EVALUATOR,
-        fn=fn,
+        fn=batch_fn,
+        metadata_fn=fn,
         metadata=evaluator_meta,
         description=evaluator_description,
     )
+    return action

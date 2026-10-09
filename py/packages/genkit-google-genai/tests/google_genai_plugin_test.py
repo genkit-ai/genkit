@@ -26,7 +26,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from genkit_google_genai import (
-    EmbeddingTaskType,
     GeminiConfig,
     GeminiImageConfig,
     GeminiTtsConfig,
@@ -46,6 +45,7 @@ from genkit_google_genai._models._veo import VeoConfig, VeoModel
 from google.genai import types as genai_types
 
 from genkit import Genkit, GenkitError, Message, Operation, Part, Role
+from genkit.evaluator import BaseDataPoint
 from genkit.model import ModelRequest
 from genkit.plugin_api import Action, ActionKind, to_json_schema
 
@@ -128,6 +128,73 @@ def test_vertexai_initialization_from_env() -> None:
         with patch('genkit_google_genai._google.genai.client.Client'):
             plugin = VertexAI()
             assert plugin.name == 'vertexai'
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+async def test_vertexai_with_api_key_and_no_project_init_skips_evaluators(
+    mock_list_models: MagicMock, mock_client: MagicMock
+) -> None:
+    """VertexAI(api_key=...) with no project: init() returns no evaluator actions."""
+    mock_list_models.return_value = GenaiModels()
+    with patch.dict(os.environ, {'GCLOUD_PROJECT': '', 'GOOGLE_CLOUD_PROJECT': ''}):
+        actions = await VertexAI(api_key='k').init()
+    assert not [a for a in actions if a.kind == ActionKind.EVALUATOR]
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+async def test_vertexai_with_api_key_and_no_project_evaluate_says_project_needed(
+    mock_list_models: MagicMock, mock_client: MagicMock
+) -> None:
+    """ai.evaluate('vertexai/fluency') with no project raises FAILED_PRECONDITION naming the fix."""
+    mock_list_models.return_value = GenaiModels()
+    with patch.dict(os.environ, {'GCLOUD_PROJECT': '', 'GOOGLE_CLOUD_PROJECT': ''}):
+        ai = Genkit(plugins=[VertexAI(api_key='k')])
+        with pytest.raises(GenkitError) as exc_info:
+            await ai.evaluate(
+                evaluator='vertexai/fluency',
+                dataset=[BaseDataPoint(input='hi', output='hello')],
+            )
+    assert exc_info.value.status == 'FAILED_PRECONDITION'
+    assert 'VertexAI(project=...)' in str(exc_info.value)
+    assert 'GOOGLE_CLOUD_PROJECT' in str(exc_info.value)
+    assert 'Application Default Credentials' in str(exc_info.value)
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+async def test_vertexai_with_api_key_and_no_project_evaluate_unknown_name_says_not_found(
+    mock_list_models: MagicMock, mock_client: MagicMock
+) -> None:
+    """ai.evaluate('vertexai/not-a-metric') with no project still says not found."""
+    mock_list_models.return_value = GenaiModels()
+    with patch.dict(os.environ, {'GCLOUD_PROJECT': '', 'GOOGLE_CLOUD_PROJECT': ''}):
+        ai = Genkit(plugins=[VertexAI(api_key='k')])
+        with pytest.raises(GenkitError) as exc_info:
+            await ai.evaluate(
+                evaluator='vertexai/not-a-metric',
+                dataset=[BaseDataPoint(input='hi', output='hello')],
+            )
+        assert exc_info.value.status == 'NOT_FOUND'
+        assert 'vertexai/not-a-metric' in str(exc_info.value)
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+async def test_vertexai_with_api_key_and_no_project_lists_no_evaluators(
+    mock_list_models: MagicMock, mock_client: MagicMock
+) -> None:
+    """The Dev UI action list for VertexAI(api_key=...) with no project has no evaluators."""
+    mock_list_models.return_value = GenaiModels()
+    with patch.dict(os.environ, {'GCLOUD_PROJECT': '', 'GOOGLE_CLOUD_PROJECT': ''}):
+        plugin = VertexAI(api_key='k')
+        actions = await plugin.list_actions()
+    assert not [a for a in actions if a.action_type == ActionKind.EVALUATOR]
 
 
 @patch('genkit_google_genai._google.genai.client.Client')
@@ -333,7 +400,7 @@ async def test_veo_start_types_family_config(mock_list_models: MagicMock, mock_c
 @patch('genkit_google_genai._google._list_genai_models')
 @pytest.mark.asyncio
 async def test_veo_action_run_dumps_leftover_and_stamps(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
-    """Action.run camelCase + leftover reaches generate_videos; start stamps the action key."""
+    """Action.run camelCase + extra reaches generate_videos; start stamps the action key."""
     mock_list_models.return_value = GenaiModels()
     op = MagicMock()
     op.name = 'operations/1'
@@ -346,7 +413,7 @@ async def test_veo_action_run_dumps_leftover_and_stamps(mock_list_models: MagicM
 
     started = await action.run({
         'messages': [{'role': 'user', 'content': [{'text': 'a cat walking'}]}],
-        'config': {'aspectRatio': '16:9', 'durationSeconds': 5, 'fooBar': 1},
+        'config': {'aspectRatio': '16:9', 'durationSeconds': 5, 'extra': {'parameters': {'fooBar': 1}}},
     })
 
     called = mock_client.return_value.aio.models.generate_videos.await_args
@@ -824,18 +891,22 @@ async def test_vertexai_resolve_embedder(mock_list_models: MagicMock, mock_clien
     assert action.name == 'vertexai/gemini-embedding-001'
 
 
-def test_embedding_task_types() -> None:
-    """Test EmbeddingTaskType enum values."""
-    assert EmbeddingTaskType.RETRIEVAL_QUERY is not None
-    assert EmbeddingTaskType.RETRIEVAL_DOCUMENT is not None
-    assert EmbeddingTaskType.SEMANTIC_SIMILARITY is not None
-    assert EmbeddingTaskType.CLASSIFICATION is not None
-    assert EmbeddingTaskType.CLUSTERING is not None
+def test_importing_embedding_task_type_raises() -> None:
+    """from genkit_google_genai import EmbeddingTaskType raises ImportError."""
+    with pytest.raises(ImportError):
+        from genkit_google_genai import EmbeddingTaskType  # type: ignore[attr-defined]  # noqa: F401
+
+
+def test_importing_vertex_ai_evaluation_metric_type_raises() -> None:
+    """from genkit_google_genai import VertexAIEvaluationMetricType raises ImportError."""
+    with pytest.raises(ImportError):
+        from genkit_google_genai import VertexAIEvaluationMetricType  # type: ignore[attr-defined]  # noqa: F401
 
 
 def test_gemini_config() -> None:
     """Test GeminiConfig can be instantiated."""
-    config = GeminiConfig(temperature=0.7, max_output_tokens=1000)
+    # populate_by_name accepts the field name; pyrefly only knows the explicit alias.
+    config = GeminiConfig(temperature=0.7, max_output_tokens=1000)  # pyrefly: ignore[unexpected-keyword]
     assert config.temperature == 0.7
     assert config.max_output_tokens == 1000
 

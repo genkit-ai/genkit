@@ -149,7 +149,7 @@ async def _run_client_lifecycle(
 
 
 async def _stop_client(client: ReflectionServerV2, task: asyncio.Task[None]) -> None:
-    client.stop()
+    await client.stop()
     task.cancel()
     try:
         await task
@@ -962,3 +962,117 @@ async def test_empty_trace_id_does_not_notify_run_action_state() -> None:
     await cb('', 'span')
     assert '' not in server.active_actions
     assert notified == []
+
+
+async def _read_run_action_reply(fm: FakeReflectionManager) -> dict[str, Any]:
+    while True:
+        msg = await fm.read_rpc()
+        if msg.get('method') not in ('runActionState', 'streamChunk'):
+            return msg
+
+
+@pytest.mark.asyncio
+async def test_reflection_server_v2_run_action_context_reaches_flow_and_subflow(
+    fake_manager: FakeReflectionManager,
+) -> None:
+    """runAction `context` reaches the flow, and a subflow called without `context=` sees the same dict."""
+    ai = Genkit()
+    caller = {'auth': {'uid': 'u_42', 'tier': 'gold'}, 'locale': 'en-US'}
+
+    @ai.flow()
+    async def allergy_check(dish: str, ctx: ActionRunContext) -> dict[str, Any]:
+        return dict(ctx.context)
+
+    @ai.flow()
+    async def order_dish(dish: str, ctx: ActionRunContext) -> dict[str, Any]:
+        return {'flow': dict(ctx.context), 'subflow': await allergy_check(dish)}
+
+    client, task = await _run_client_lifecycle(ai.registry, fake_manager)
+    try:
+        await ack_register(fake_manager)
+        await fake_manager.write_rpc({
+            'jsonrpc': '2.0',
+            'method': 'runAction',
+            'params': {'key': '/flow/order_dish', 'input': 'Smoked Salmon Tartine', 'context': caller},
+            'id': 'ctx-1',
+        })
+        resp = await _read_run_action_reply(fake_manager)
+        assert resp.get('id') == 'ctx-1'
+        assert resp.get('error') is None
+        assert resp['result']['result'] == {'flow': caller, 'subflow': caller}
+    finally:
+        await _stop_client(client, task)
+
+
+@pytest.mark.asyncio
+async def test_reflection_server_v2_run_action_rejects_non_object_context(
+    fake_manager: FakeReflectionManager,
+) -> None:
+    """runAction with `context: "gold"` fails with invalid params and never runs the flow."""
+    ai = Genkit()
+    calls = 0
+
+    @ai.flow()
+    async def order_dish(dish: str) -> str:
+        nonlocal calls
+        calls += 1
+        return dish
+
+    client, task = await _run_client_lifecycle(ai.registry, fake_manager)
+    try:
+        await ack_register(fake_manager)
+        await fake_manager.write_rpc({
+            'jsonrpc': '2.0',
+            'method': 'runAction',
+            'params': {'key': '/flow/order_dish', 'input': 'Tartine', 'context': 'gold'},
+            'id': 'ctx-2',
+        })
+        resp = await _read_run_action_reply(fake_manager)
+        assert resp.get('id') == 'ctx-2'
+        err = resp.get('error')
+        assert isinstance(err, dict)
+        assert err.get('code') == JSON_RPC_INVALID_PARAMS
+        assert calls == 0
+    finally:
+        await _stop_client(client, task)
+
+
+@pytest.mark.asyncio
+async def test_reflection_server_v2_run_bidi_action_context_reaches_agent(
+    fake_manager: FakeReflectionManager,
+) -> None:
+    """A bidi (agent) runAction with `context` runs the agent with that context."""
+    registry = Registry()
+    caller = {'auth': {'uid': 'u_42', 'tier': 'gold'}, 'locale': 'en-US'}
+
+    async def concierge_agent(_init: Any, input_stream: Any, send_chunk: Any) -> dict[str, Any]:
+        async for _inp in input_stream:
+            pass
+        return {'context': Genkit.current_context()}
+
+    registry.register_action_from_instance(
+        BidiAction(
+            ActionKind.AGENT,
+            'test/concierge',
+            concierge_agent,
+            metadata={'agent': {'stateManagement': 'client'}},
+            init_schema=AgentInit,
+            input_schema=AgentInput,
+        )
+    )
+
+    client, task = await _run_client_lifecycle(registry, fake_manager)
+    try:
+        await ack_register(fake_manager)
+        await fake_manager.write_rpc({
+            'jsonrpc': '2.0',
+            'method': 'runAction',
+            'params': {'key': '/agent/test/concierge', 'input': {}, 'context': caller},
+            'id': 'bidi-ctx',
+        })
+        resp = await _read_run_action_reply(fake_manager)
+        assert resp.get('id') == 'bidi-ctx'
+        assert resp.get('error') is None
+        assert resp['result']['result'] == {'context': caller}
+    finally:
+        await _stop_client(client, task)
