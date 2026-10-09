@@ -65,9 +65,9 @@ func newCCFixture(t *testing.T, reply replyFunc) *ccFixture {
 // defineModel defines a model that appends each request to *requests.
 func (f *ccFixture) defineModel(name string, reply replyFunc, requests *[]*ai.ModelRequest) ai.Model {
 	var mu sync.Mutex
-	return genkit.DefineModel(f.g, name, &ai.ModelOptions{
+	return genkit.DefineModelAction(f.g, name, &ai.ModelOptions{
 		Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true, Tools: true, Media: true},
-	}, func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	}, func(ctx context.Context, req *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		mu.Lock()
 		*requests = append(*requests, req)
 		call := len(*requests)
@@ -1444,7 +1444,7 @@ func TestContextCompressionSummarizerCall(t *testing.T) {
 	f.defineModel("test/summarizer", func(_ int, req *ai.ModelRequest) *ai.ModelResponse {
 		return &ai.ModelResponse{Message: modelMsg("Valid summary"), FinishReason: ai.FinishReasonStop}
 	}, &requests)
-	genkit.DefineModel(f.g, "test/authSummarizer", nil, func(ctx context.Context, req *ai.ModelRequest, _ ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	genkit.DefineModelAction(f.g, "test/authSummarizer", nil, func(ctx context.Context, req *ai.ModelRequest, _ any, _ ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		gotAuth = core.FromContext(ctx)["auth"]
 		return &ai.ModelResponse{Message: modelMsg("Valid summary"), FinishReason: ai.FinishReasonStop}, nil
 	})
@@ -1512,7 +1512,7 @@ func TestContextCompressionPropagatesCancellation(t *testing.T) {
 	f := newCCFixture(t, textReply("done", 10))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	genkit.DefineModel(f.g, "test/cancellingSummarizer", nil, func(ctx context.Context, _ *ai.ModelRequest, _ ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	genkit.DefineModelAction(f.g, "test/cancellingSummarizer", nil, func(ctx context.Context, _ *ai.ModelRequest, _ any, _ ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		cancel()
 		return nil, ctx.Err()
 	})
@@ -1712,6 +1712,67 @@ func TestContextCompressionMultipartToolResponses(t *testing.T) {
 			t.Errorf("sent %q with content %v, want the data part kept", got.Output, got.Content)
 		}
 	})
+}
+
+func TestContextCompressionToleratesNilParts(t *testing.T) {
+	// A part decoded from a JSON null is a nil pointer. Every strategy passes
+	// over it, and the model's input validation reports it.
+	big := strings.Repeat("x", 600)
+	call := func(ref string) *ai.Message {
+		m := toolCallMsg(&ai.ToolRequest{Name: "search", Ref: ref, Input: map[string]any{"q": "same"}})
+		m.Content = append([]*ai.Part{nil}, m.Content...)
+		return m
+	}
+	result := func(ref string) *ai.Message {
+		m := toolResultMsg(&ai.ToolResponse{Name: "search", Ref: ref, Output: big, Content: []*ai.Part{nil, ai.NewTextPart(big)}})
+		m.Content = append(m.Content, nil)
+		return m
+	}
+	history := []*ai.Message{
+		systemMsg("sys"), userMsg("go"),
+		call("1"), result("1"),
+		call("2"), result("2"),
+		call("3"), result("3"),
+	}
+
+	f := newCCFixture(t, textReply("done", 50))
+	rec := &viewRecorder{}
+	_, err := genkit.Generate(context.Background(), f.g, ai.WithModel(f.model), ai.WithMessages(history...), ai.WithUse(&ContextCompression{
+		MaxMessages:           6,
+		MaxToolResponseChars:  1000,
+		DedupeToolResponses:   &CompressionDedupe{},
+		TruncateToolResponses: &CompressionToolTruncation{MaxChars: 50, PreserveRecent: 1},
+	}, rec.middleware()))
+	if !errors.Is(err, status.ErrInvalidArgument) {
+		t.Errorf("Generate error = %v, want the model's input validation error", err)
+	}
+	if len(rec.views) != 1 {
+		t.Fatalf("the model was called %d times, want 1", len(rec.views))
+	}
+	view := rec.views[0]
+	tools := toolMessages(view)
+	if len(view) != 6 || len(tools) != 2 {
+		t.Fatalf("view = %s, want 6 messages and the 2 newest tool turns", renderMessages(view))
+	}
+	if got := tools[0].Content[0].ToolResponse.Output; got != defaultDedupeNotice {
+		t.Errorf("older response = %q, want the dedupe notice", got)
+	}
+	if got := tools[1].Content[0].ToolResponse.Output.(string); !strings.Contains(got, "[TRUNCATED: Response was 1200 chars") {
+		t.Errorf("newest response = %.40q..., want it capped", got)
+	}
+
+	// A stamped history resolves past the nil parts and messages.
+	stamped := slicesClone(history)
+	stamped[3] = &ai.Message{Role: ai.RoleTool, Content: []*ai.Part{nil, {
+		Kind:         ai.PartToolResponse,
+		ToolResponse: &ai.ToolResponse{Name: "search", Ref: "1", Output: big},
+		Metadata:     map[string]any{compressionKey: map[string]any{ccTruncated: true, ccMaxChars: 10, ccRawOutput: true}},
+	}}}
+	stamped = append(stamped, nil)
+	got := ResolveCompressedHistory(stamped)
+	if want := "xxxxxxxxxx\n\n[Truncated 590 characters]"; got[3].Content[1].ToolResponse.Output != want {
+		t.Errorf("resolved output = %q, want %q", got[3].Content[1].ToolResponse.Output, want)
+	}
 }
 
 func TestContextCompressionStats(t *testing.T) {
@@ -1924,8 +1985,8 @@ func TestContextCompressionRestoresHistoryUnderRetry(t *testing.T) {
 	long := strings.Repeat("Z", 500)
 	failures := 1
 	f := &ccFixture{g: genkit.Init(context.Background())}
-	f.model = genkit.DefineModel(f.g, "test/flaky", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true, Tools: true}},
-		func(ctx context.Context, req *ai.ModelRequest, _ ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	f.model = genkit.DefineModelAction(f.g, "test/flaky", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true, Tools: true}},
+		func(ctx context.Context, req *ai.ModelRequest, _ any, _ ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 			f.requests = append(f.requests, req)
 			if failures > 0 {
 				failures--
@@ -2078,7 +2139,7 @@ func TestContextCompressionValidation(t *testing.T) {
 func genkitContext(t *testing.T, g *genkit.Genkit) context.Context {
 	t.Helper()
 	var seeded context.Context
-	m := genkit.DefineModel(g, "test/seed", nil, func(ctx context.Context, req *ai.ModelRequest, _ ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+	m := genkit.DefineModelAction(g, "test/seed", nil, func(ctx context.Context, req *ai.ModelRequest, _ any, _ ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 		seeded = ctx
 		return &ai.ModelResponse{Message: modelMsg("ok")}, nil
 	})
