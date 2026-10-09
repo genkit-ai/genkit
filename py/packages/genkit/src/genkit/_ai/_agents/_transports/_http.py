@@ -53,10 +53,14 @@ StateT = TypeVarExt('StateT', bound=BaseModel, default=Any)
 HeadersProvider = dict[str, str] | Callable[[], dict[str, str] | Awaitable[dict[str, str]]]
 
 
+DEFAULT_AGENT_TIMEOUT_SECONDS = 60.0
+_CONNECT_TIMEOUT_SECONDS = 10.0
+
+
 @loop_local_client
 def _agent_client() -> httpx.AsyncClient:
-    # Same timeout the transport had before: 60s between reads, 10s to connect.
-    return httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0))
+    # A plain transport; each request carries its transport's timeout.
+    return httpx.AsyncClient()
 
 
 def parse_stream_line(line: str) -> dict[str, Any] | None:
@@ -105,6 +109,7 @@ class HttpAgentTransport(AgentTransport[StateT]):
         abort_url: str | None = None,
         headers: HeadersProvider | None = None,
         state_management: StateManagement,
+        timeout: float | None = DEFAULT_AGENT_TIMEOUT_SECONDS,
     ) -> None:
         """Initializes the HTTP transport.
 
@@ -114,12 +119,17 @@ class HttpAgentTransport(AgentTransport[StateT]):
             abort_url: ``abort`` route. Defaults to ``{url}/abort``.
             headers: Static headers, or a function called per request (sync or async).
             state_management: Declares server- vs client-managed state.
+            timeout: Seconds to wait for the next bytes from the server. On a
+                streamed turn this is the longest allowed gap between chunks,
+                not a cap on the whole turn. ``None`` waits indefinitely.
+                Connecting always gets 10 seconds.
         """
         self.url = url
         self.get_snapshot_url = get_snapshot_url or f'{url}/getSnapshot'
         self.abort_url = abort_url or f'{url}/abort'
         self.headers = headers
         self.state_management: StateManagement = state_management
+        self._timeout = httpx.Timeout(timeout, connect=_CONNECT_TIMEOUT_SECONDS)
         self._background_tasks: set[asyncio.Task[Any]] = set()
 
     async def _resolve_headers(self) -> dict[str, str]:
@@ -141,6 +151,7 @@ class HttpAgentTransport(AgentTransport[StateT]):
             url,
             json={'data': input_val},
             headers=await self._resolve_headers(),
+            timeout=self._timeout,
         )
         if response.status_code == 404:
             return None
@@ -201,6 +212,7 @@ class HttpAgentTransport(AgentTransport[StateT]):
                     self.url,
                     json=payload,
                     headers=headers,
+                    timeout=self._timeout,
                 ) as response:
                     if response.status_code != 200:
                         body = (await response.aread()).decode(errors='ignore')
@@ -287,13 +299,15 @@ def remote_agent(
     headers: HeadersProvider | None = None,
     state_management: StateManagement,
     state_schema: type[StateT] | None = None,
+    timeout: float | None = DEFAULT_AGENT_TIMEOUT_SECONDS,
 ) -> AgentClient[StateT]:
-    """Create a remote agent client over HTTP."""
+    """Create a remote agent client over HTTP. ``timeout`` is as on :class:`HttpAgentTransport`."""
     transport: HttpAgentTransport[StateT] = HttpAgentTransport(
         url=url,
         get_snapshot_url=get_snapshot_url,
         abort_url=abort_url,
         headers=headers,
         state_management=state_management,
+        timeout=timeout,
     )
     return AgentClient(transport, state_schema=state_schema)
