@@ -1315,7 +1315,22 @@ async def resolve_door(
             ),
             reason=RuntimeErrorReason.INVALID_RESUME,
         )
+    raw_instructions = options.output.instructions if options.output else None
     options, formatter = apply_format(options=options, format_def=format_def)
+    model_info = (turn_model.metadata or {}).get('model', {})
+    supports = model_info.get('supports', {}) if isinstance(model_info, dict) else {}
+    constrained = supports.get('constrained') if isinstance(supports, dict) else None
+    if (
+        formatter is not None
+        and options.output is not None
+        and options.output.constrained
+        and options.output.json_schema is not None
+        and (constrained == 'none' or (constrained == 'no-tools' and turn_tools))
+    ):
+        # Keep the schema for parsing, but simulate constraints in the prompt.
+        if raw_instructions is None and formatter.instructions:
+            options.messages = inject_instructions(options.messages or [], formatter.instructions)
+        options.output.constrained = False
     assert_valid_tool_names(turn_tools)
     return options, ResolvedTurn(model=turn_model, tools=turn_tools, formatter=formatter)
 
