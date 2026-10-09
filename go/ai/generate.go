@@ -625,7 +625,7 @@ func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 	ctx = base.WithUsageSink(ctx, func(v any) {
 		if u, ok := v.(*GenerationUsage); ok {
 			usageMu.Lock()
-			totalUsage = addUsage(totalUsage, u)
+			totalUsage = SumUsage(totalUsage, u)
 			usageMu.Unlock()
 		}
 		if outerSink != nil {
@@ -937,17 +937,18 @@ func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 	return resp, err
 }
 
-// addUsage returns the field-by-field sum of a and b, adding
-// [GenerationUsage.Custom] key by key. Either may be nil. It never mutates
-// its arguments, since a model or hook may retain the usage it returned.
-func addUsage(a, b *GenerationUsage) *GenerationUsage {
-	if a == nil && b == nil {
-		return nil
-	}
-	var sum GenerationUsage
-	for _, u := range []*GenerationUsage{a, b} {
+// SumUsage returns the field-by-field sum of usages, adding
+// [GenerationUsage.Custom] key by key. Nil entries are skipped; the result is
+// nil when every entry is. It never mutates its arguments, so it is safe on
+// usage a model or hook still holds.
+func SumUsage(usages ...*GenerationUsage) *GenerationUsage {
+	var sum *GenerationUsage
+	for _, u := range usages {
 		if u == nil {
 			continue
+		}
+		if sum == nil {
+			sum = &GenerationUsage{}
 		}
 		sum.InputTokens += u.InputTokens
 		sum.OutputTokens += u.OutputTokens
@@ -970,7 +971,7 @@ func addUsage(a, b *GenerationUsage) *GenerationUsage {
 			sum.Custom[k] += v
 		}
 	}
-	return &sum
+	return sum
 }
 
 // turnOptions returns a per-turn copy of opts for the WrapGenerate hooks and
