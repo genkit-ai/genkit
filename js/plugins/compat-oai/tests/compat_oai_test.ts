@@ -241,6 +241,37 @@ describe('toOpenAiMessages', () => {
       ],
     },
     {
+      should: 'keep assistant text alongside tool requests',
+      inputMessages: [
+        {
+          role: 'model',
+          content: [
+            { text: 'Let me look that up.' },
+            {
+              toolRequest: {
+                ref: 'call_1',
+                name: 'lookup',
+                input: {},
+              },
+            },
+          ],
+        },
+      ],
+      expectedOutput: [
+        {
+          role: 'assistant',
+          content: 'Let me look that up.',
+          tool_calls: [
+            {
+              id: 'call_1',
+              type: 'function',
+              function: { name: 'lookup', arguments: '{}' },
+            },
+          ],
+        },
+      ],
+    },
+    {
       should: 'transform tool response text content correctly',
       inputMessages: [
         {
@@ -489,6 +520,7 @@ describe('fromOpenAiChoice', () => {
         message: {
           role: 'model',
           content: [
+            { text: 'Tool call' },
             {
               toolRequest: {
                 name: 'exampleTool',
