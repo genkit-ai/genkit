@@ -286,6 +286,32 @@ describe('execRunner (integration)', () => {
     });
   });
 
+  it('concurrent first acquires for a key share one box', async () => {
+    const runner = track(execRunner({ cmd: `${TSX} ${boxedEntry}` }));
+    const ids = await Promise.all(
+      [1, 2, 3].map(async () => {
+        const seen = await readEnv(runner, ['GENKIT_RUNTIME_ID']);
+        return seen.GENKIT_RUNTIME_ID;
+      })
+    );
+    assert.strictEqual(new Set(ids).size, 1, `one runtime, got ${ids}`);
+  });
+
+  it('one caller aborting does not fail the others sharing a startup', async () => {
+    const runner = track(execRunner({ cmd: `${TSX} ${boxedEntry}` }));
+    const quitter = new AbortController();
+    const first = runner.acquire('k', quitter.signal);
+    const second = runner.acquire('k');
+    quitter.abort();
+    await assert.rejects(first, /Aborted before box became ready/);
+    const conn = await second;
+    const res = await conn.runAction<{ out: string }>({
+      key: '/tool/shout',
+      input: { text: 'still here' },
+    });
+    assert.strictEqual(res.result?.out, 'STILL HERE');
+  });
+
   it('honors readyTimeoutMs', async () => {
     // A process that stays up but never connects.
     const runner = track(

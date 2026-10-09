@@ -61,6 +61,7 @@ export {
 } from './runners/exec-runner.js';
 export {
   BASE_ENV,
+  abortable,
   childEnv,
   commandArgv,
   untilReady,

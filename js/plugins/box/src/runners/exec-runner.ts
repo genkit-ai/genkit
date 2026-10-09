@@ -32,7 +32,13 @@ import type {
   RunActionResult,
   RunOptions,
 } from '../types.js';
-import { childEnv, commandArgv, untilReady, type InheritEnv } from './util.js';
+import {
+  abortable,
+  childEnv,
+  commandArgv,
+  untilReady,
+  type InheritEnv,
+} from './util.js';
 
 /** Options for {@link execRunner}. */
 export interface ExecRunnerOptions {
@@ -146,6 +152,12 @@ export class ExecRunner implements BoxRunner {
   private hostStarted?: Promise<void>;
   private provider: SandboxProvider;
   private instances = new Map<string, BoxInstance>();
+  /**
+   * Startups in flight, by key, resolving to the runtime id. Concurrent first
+   * calls for one key share a startup instead of each spawning a child (the
+   * extra children would leak: only the last one stays in `instances`).
+   */
+  private starting = new Map<string, Promise<string>>();
   private closed = false;
   /** Id of the owning box, passed to runtimes as {@link BOX_SELF_ID_ENV}. */
   private boxId?: string;
@@ -189,12 +201,24 @@ export class ExecRunner implements BoxRunner {
     if (this.closed) throw new Error('execRunner is closed.');
     await this.ensureHost();
 
-    const existing = this.instances.get(key);
-    if (existing && this.host.hasRuntime(existing.runtimeId)) {
-      existing.lastUsed = Date.now();
-      return this.connectionFor(existing.runtimeId, key);
+    let pending = this.starting.get(key);
+    if (!pending) {
+      const existing = this.instances.get(key);
+      if (existing && this.host.hasRuntime(existing.runtimeId)) {
+        existing.lastUsed = Date.now();
+        return this.connectionFor(existing.runtimeId, key);
+      }
+      pending = this.start(key).finally(() => this.starting.delete(key));
+      this.starting.set(key, pending);
     }
+    // A caller that gives up stops waiting, but the shared startup goes on
+    // for the others. If nobody uses the box, the core releases it per
+    // retention like any other.
+    return this.connectionFor(await abortable(pending, signal), key);
+  }
 
+  /** Spawns the box for `key` and resolves to its runtime id once ready. */
+  private async start(key: string): Promise<string> {
     const runtimeId = `box-${randomUUID()}`;
     const base = this.baseSpawn();
     const prepared = this.provider.prepare(
@@ -255,16 +279,17 @@ export class ExecRunner implements BoxRunner {
           stopWaiting.signal
         ),
         child,
-        `Box runtime (${prepared.cmd})`,
-        signal
+        `Box runtime (${prepared.cmd})`
       );
     } catch (e) {
       stopWaiting.abort();
-      this.instances.delete(key);
+      if (this.instances.get(key)?.runtimeId === runtimeId) {
+        this.instances.delete(key);
+      }
       await handle.kill().catch(() => {});
       throw e;
     }
-    return this.connectionFor(runtimeId, key);
+    return runtimeId;
   }
 
   private connectionFor(runtimeId: string, key: string): BoxConnection {

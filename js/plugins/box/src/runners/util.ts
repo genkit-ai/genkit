@@ -78,6 +78,29 @@ export function commandArgv(cmd: string | string[]): string[] {
 }
 
 /**
+ * Waits for `p` on behalf of one caller: resolves or rejects with it, or
+ * rejects as soon as `signal` aborts. `p` itself keeps running, so a startup
+ * shared by several callers (concurrent first calls for one key) is not
+ * cancelled by any single caller giving up.
+ */
+export function abortable<T>(p: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return p;
+  const aborted = () => new Error('Aborted before box became ready.');
+  if (signal.aborted) {
+    // Still subscribe, so a later rejection of `p` is never unhandled.
+    p.catch(() => {});
+    return Promise.reject(aborted());
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(aborted());
+    signal.addEventListener('abort', onAbort, { once: true });
+    p.then(resolve, reject).finally(() =>
+      signal.removeEventListener('abort', onAbort)
+    );
+  });
+}
+
+/**
  * Waits for `ready`, failing fast instead when the child can't be spawned,
  * exits first, or `signal` aborts. Without this a bad command or a crashing
  * entry point only surfaces as the readiness timeout, and a missing binary
