@@ -23,7 +23,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Annotated, Any, TypeAlias, cast, get_args, get_origin, get_type_hints
 
-from pydantic import AliasChoices, BaseModel, ValidationError
+from pydantic import BaseModel, ValidationError
 
 from genkit._core._action import (
     Action,
@@ -43,8 +43,12 @@ from genkit._core._model import (
     ModelRequest,
     ModelResponse,
     ModelResponseChunk,
+    config_field_names as config_field_names,
     config_type_path,
+    fold_config_aliases as fold_config_aliases,
     get_basic_usage_stats,
+    normalize_config as normalize_config,
+    overlay_config as overlay_config,
     reject_config_api_key,
     text_from_content,
     text_from_message,
@@ -83,66 +87,6 @@ def python_config_schema(schema: object) -> type[BaseModel] | None:
 def ref_defers_to_registered_class(schema: type[BaseModel] | None) -> bool:
     """True when the ref named plain ModelConfig, so the model's class is used."""
     return schema is ModelConfig or schema is GenerationCommonConfig
-
-
-def config_field_names(schema: type[BaseModel]) -> dict[str, str]:
-    """Map each field name and alias to the Python field name."""
-    names: dict[str, str] = {}
-    for name, field in schema.model_fields.items():
-        names[name] = name
-        if field.alias:
-            names[field.alias] = name
-        accepted = field.validation_alias
-        if isinstance(accepted, str):
-            names[accepted] = name
-        elif isinstance(accepted, AliasChoices):
-            for choice in accepted.choices:
-                if isinstance(choice, str):
-                    names[choice] = name
-    return names
-
-
-def fold_config_aliases(*, config: dict[str, Any], schema: type[BaseModel]) -> dict[str, Any]:
-    """Rewrite schema aliases to field names. Unknown keys stay as written."""
-    names = config_field_names(schema)
-    return {names.get(key, key): value for key, value in config.items()}
-
-
-def overlay_config(*, layers: list[dict[str, Any]], schema: type[BaseModel]) -> dict[str, Any]:
-    """Fold each layer, last layer wins, drop ``None``.
-
-    ``maxOutputTokens`` and ``max_output_tokens`` are the same slot. Keys
-    the schema does not know pass through.
-    """
-    merged: dict[str, Any] = {}
-    for layer in layers:
-        merged.update(fold_config_aliases(config=layer, schema=schema))
-    return {key: value for key, value in merged.items() if value is not None}
-
-
-def normalize_config(*, config: object) -> dict[str, Any]:
-    """Dump a config object or dict. Does not fold or merge.
-
-    Pydantic dumps the Python field names, including explicit ``None``.
-    Dict keys stay as written. Fields marked ``exclude=True`` are copied back.
-    """
-    if config is None:
-        return {}
-    if isinstance(config, BaseModel):
-        dumped = config.model_dump(exclude_unset=True, exclude_none=False, by_alias=False)
-        # a plugin can keep a client-only setting out of JSON with exclude=True;
-        # copy it back so the setting the caller passed still reaches the plugin.
-        for name in config.model_fields_set:
-            if name not in dumped:
-                dumped[name] = getattr(config, name)
-        return dumped
-    if isinstance(config, Mapping):
-        return dict(cast(Mapping[str, Any], config))
-    raise GenkitError(
-        status='INVALID_ARGUMENT',
-        message=f'config is {type(config).__name__}, expected Mapping or BaseModel.',
-        reason=RuntimeErrorReason.INVALID_INPUT,
-    )
 
 
 def _name_or_ref(model: object) -> str | ModelRef[BaseModel] | None:

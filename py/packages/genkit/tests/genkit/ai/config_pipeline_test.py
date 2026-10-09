@@ -258,3 +258,142 @@ async def test_typed_per_row_evaluator_gets_its_options_class() -> None:
     await action.run({'dataset': [{'input': 'satay'}], 'evalRunId': 'run-1', 'options': {'strict': False}})
 
     assert seen['options'] == AllergyJudgeConfig(strict=False, allergens=['peanut'])
+
+
+# -----------------------------------------------------------------------------
+# Action boundary: the definition's non-None defaults
+# -----------------------------------------------------------------------------
+
+
+class NotSetConfig(BaseModel):
+    """Every field defaults to None, like every built-in plugin config."""
+
+    temperature: float | None = None
+    voice: str | None = None
+
+
+def _pipeline_app(config_schema: type[BaseModel] = TableConfig) -> tuple[Genkit, dict[str, Any]]:
+    """Untyped model, embedder, per-row and batch evaluator, all with config_schema."""
+    ai = Genkit()
+    seen: dict[str, Any] = {}
+
+    async def bistro(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        seen['model'] = request.config
+        return _ok()
+
+    async def crm_search(request: EmbedRequest) -> EmbedResponse:
+        seen['embedder'] = request.options
+        return _embedding()
+
+    async def allergy_check(datapoint: BaseDataPoint, options: dict[str, Any]) -> EvalFnResponse:
+        seen['per_row'] = options
+        return _score()
+
+    async def allergy_batch(request: EvalRequest) -> list[EvalFnResponse]:
+        seen['batch'] = request.options
+        return [_score()]
+
+    ai.define_model(name='bistro', fn=bistro, config_schema=config_schema)
+    ai.define_embedder('crm', crm_search, config_schema=config_schema)
+    ai.define_evaluator(name='row', display_name='Row', definition='d', fn=allergy_check, config_schema=config_schema)
+    ai.define_batch_evaluator(
+        name='batch', display_name='Batch', definition='d', fn=allergy_batch, config_schema=config_schema
+    )
+    return ai, seen
+
+
+TABLE_DEFAULTS = {'temperature': 0.7, 'allergens': ['peanut']}
+
+
+@pytest.mark.asyncio
+async def test_untyped_fns_see_schema_defaults_from_ai_calls() -> None:
+    ai, seen = _pipeline_app()
+
+    await ai.generate(model='bistro', prompt='a table for two')
+    await ai.embed(embedder='crm', content='acme corp')
+    await ai.evaluate(evaluator='row', dataset=ROWS)
+    await ai.evaluate(evaluator='batch', dataset=ROWS)
+
+    assert seen == {
+        'model': TABLE_DEFAULTS,
+        'embedder': TABLE_DEFAULTS,
+        'per_row': TABLE_DEFAULTS,
+        'batch': TABLE_DEFAULTS,
+    }
+
+
+@pytest.mark.asyncio
+async def test_untyped_fns_see_schema_defaults_from_a_dev_ui_run() -> None:
+    ai, seen = _pipeline_app()
+    eval_payload = {'dataset': [{'input': 'satay', 'testCaseId': 'row-1'}], 'evalRunId': 'run-1', 'options': None}
+
+    for kind, name, payload in [
+        ('model', 'bistro', {'messages': [], 'config': None}),
+        ('embedder', 'crm', {'input': [], 'options': None}),
+        ('evaluator', 'row', eval_payload),
+        ('evaluator', 'batch', eval_payload),
+    ]:
+        action = await ai.registry.resolve_action_by_key(f'/{kind}/{name}')
+        assert action is not None
+        await action.run(payload)
+
+    assert seen == {
+        'model': TABLE_DEFAULTS,
+        'embedder': TABLE_DEFAULTS,
+        'per_row': TABLE_DEFAULTS,
+        'batch': TABLE_DEFAULTS,
+    }
+
+
+@pytest.mark.asyncio
+async def test_dev_ui_run_overlays_set_fields_and_drops_none() -> None:
+    """An explicit None falls back to the definition's default, the same as through ai.*."""
+    ai, seen = _pipeline_app()
+    action = await ai.registry.resolve_action_by_key('/model/bistro')
+    assert action is not None
+
+    await action.run({'messages': [], 'config': {'allergens': ['shellfish'], 'temperature': None, 'seat': 'patio'}})
+
+    assert seen['model'] == {'temperature': 0.7, 'allergens': ['shellfish'], 'seat': 'patio'}
+
+
+@pytest.mark.asyncio
+async def test_none_defaults_are_not_injected() -> None:
+    ai, seen = _pipeline_app(config_schema=NotSetConfig)
+    action = await ai.registry.resolve_action_by_key('/model/bistro')
+    assert action is not None
+
+    await action.run({'messages': [], 'config': None})
+    await ai.embed(embedder='crm', content='acme corp')
+
+    assert seen['model'] is None
+    assert seen['embedder'] == {}
+
+
+@pytest.mark.asyncio
+async def test_typed_fns_see_the_class_with_defaults() -> None:
+    ai = Genkit()
+    seen: dict[str, Any] = {}
+
+    async def bistro(request: ModelRequest[TableConfig], ctx: ActionRunContext) -> ModelResponse:
+        seen['model'] = request.config
+        return _ok()
+
+    async def allergy_check(datapoint: BaseDataPoint, options: AllergyJudgeConfig) -> EvalFnResponse:
+        seen['per_row'] = options
+        return _score()
+
+    ai.define_model(name='bistro', fn=bistro)
+    ai.define_evaluator(name='row', display_name='Row', definition='d', fn=allergy_check)
+    model = await ai.registry.resolve_action_by_key('/model/bistro')
+    assert model is not None
+
+    await model.run({'messages': [], 'config': None})
+    assert seen['model'] == TableConfig()
+    await model.run({'messages': [], 'config': {'temperature': None, 'allergens': ['shellfish']}})
+    assert seen['model'] == TableConfig(allergens=['shellfish'])
+    assert seen['model'].model_fields_set == {'allergens'}
+    await ai.generate(model='bistro', prompt='a table for two')
+    assert seen['model'] == TableConfig()
+    await ai.evaluate(evaluator='row', dataset=ROWS)
+    assert seen['per_row'] == AllergyJudgeConfig()

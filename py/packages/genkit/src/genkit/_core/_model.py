@@ -30,6 +30,7 @@ from importlib import import_module
 from typing import Any, ClassVar, Generic, Literal, TypeGuard, cast, get_args
 
 from pydantic import (
+    AliasChoices,
     BaseModel,
     ConfigDict,
     Field,
@@ -376,6 +377,83 @@ class ModelRef(Generic[ModelRefConfigT]):
             object.__setattr__(self, 'config', self.config.model_copy(deep=True))
         if self.info is not None:
             object.__setattr__(self, 'info', self.info.model_copy(deep=True))
+
+
+def config_field_names(schema: type[BaseModel]) -> dict[str, str]:
+    """Map each field name and alias to the Python field name."""
+    names: dict[str, str] = {}
+    for name, field in schema.model_fields.items():
+        names[name] = name
+        if field.alias:
+            names[field.alias] = name
+        accepted = field.validation_alias
+        if isinstance(accepted, str):
+            names[accepted] = name
+        elif isinstance(accepted, AliasChoices):
+            for choice in accepted.choices:
+                if isinstance(choice, str):
+                    names[choice] = name
+    return names
+
+
+def fold_config_aliases(*, config: dict[str, Any], schema: type[BaseModel]) -> dict[str, Any]:
+    """Rewrite schema aliases to field names. Unknown keys stay as written."""
+    names = config_field_names(schema)
+    return {names.get(key, key): value for key, value in config.items()}
+
+
+def overlay_config(*, layers: list[dict[str, Any]], schema: type[BaseModel]) -> dict[str, Any]:
+    """Fold each layer, last layer wins, drop ``None``.
+
+    ``maxOutputTokens`` and ``max_output_tokens`` are the same slot. Keys
+    the schema does not know pass through.
+    """
+    merged: dict[str, Any] = {}
+    for layer in layers:
+        merged.update(fold_config_aliases(config=layer, schema=schema))
+    return {key: value for key, value in merged.items() if value is not None}
+
+
+def config_defaults(schema: type[BaseModel]) -> dict[str, Any]:
+    """The non-None defaults a config class declares, keyed by field name.
+
+    Required fields have no default. A ``None`` default means "not set" on
+    every built-in plugin config, so it is skipped: injecting it would put
+    ``null`` on the wire, or trip ``extra='forbid'`` next to an aliased key.
+    """
+    defaults: dict[str, Any] = {}
+    for name, field in schema.model_fields.items():
+        if field.is_required() or field.default_factory_takes_validated_data:
+            continue
+        value = field.get_default(call_default_factory=True)
+        if value is not None:
+            defaults[name] = value
+    return defaults
+
+
+def normalize_config(*, config: object) -> dict[str, Any]:
+    """Dump a config object or dict. Does not fold or merge.
+
+    Pydantic dumps the Python field names, including explicit ``None``.
+    Dict keys stay as written. Fields marked ``exclude=True`` are copied back.
+    """
+    if config is None:
+        return {}
+    if isinstance(config, BaseModel):
+        dumped = config.model_dump(exclude_unset=True, exclude_none=False, by_alias=False)
+        # a plugin can keep a client-only setting out of JSON with exclude=True;
+        # copy it back so the setting the caller passed still reaches the plugin.
+        for name in config.model_fields_set:
+            if name not in dumped:
+                dumped[name] = getattr(config, name)
+        return dumped
+    if isinstance(config, Mapping):
+        return dict(cast(Mapping[str, Any], config))
+    raise GenkitError(
+        status='INVALID_ARGUMENT',
+        message=f'config is {type(config).__name__}, expected Mapping or BaseModel.',
+        reason=RuntimeErrorReason.INVALID_INPUT,
+    )
 
 
 # Exclusive kinds. camelCase and snake_case are the same kind so a merged

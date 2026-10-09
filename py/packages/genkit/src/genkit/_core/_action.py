@@ -51,8 +51,11 @@ from genkit._core._model import (
     EvalRequest,
     ModelRequest,
     ModelResponse,
+    config_defaults,
     config_type_path,
     declared_config_type,
+    normalize_config,
+    overlay_config,
     reject_config_api_key,
 )
 from genkit._core._schema import to_json_schema
@@ -1001,6 +1004,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             # including ones that never went through generate.
             if self._kind in (ActionKind.MODEL, ActionKind.BACKGROUND_MODEL):
                 reject_config_api_key(_request_config(input))
+            input = self._layer_config_defaults(input)
             input = self._validate_input(input)
         init = self._validate_init(init)
 
@@ -1148,6 +1152,57 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
                     reason=RuntimeErrorReason.INVALID_INPUT,
                 )
             ) from e
+
+    def _layer_config_defaults(self, input: InputT | None) -> InputT | None:
+        """Put the config class's non-None defaults under the request's config.
+
+        Every caller (ai.*, a ref, the Dev UI, the CLI) reaches the fn
+        through here, so the definition's defaults can't be skipped. Defaults
+        come only from the definition-time class, never from a ref.
+
+        - Untyped fn: defaults < the request's config, aliases folded to field
+          names, handed over as a dict.
+        - Typed fn: validation fills defaults; only a missing model config
+          needs the class built.
+
+        Explicit None is dropped from the incoming config, so the definition's
+        default applies, the same as when ai.* drops it while layering refs.
+
+        A class with no non-None defaults leaves the input untouched.
+        """
+        field = config_field(self._kind)
+        schema = self._config_schema
+        if field is None or schema is None:
+            return input
+        defaults = config_defaults(schema)
+        if not defaults:
+            return input
+        if isinstance(input, Mapping):
+            current = cast(Mapping[str, Any], input).get(field)
+        elif isinstance(input, BaseModel):
+            current = getattr(input, field, None)
+        else:
+            return input
+        is_mapping = isinstance(current, Mapping) and not isinstance(current, BaseModel)
+        value: object
+        if self._input_class is not None and declared_config_type(self._input_class) is not None:
+            if is_mapping:
+                value = {k: v for k, v in cast(Mapping[str, Any], current).items() if v is not None}
+            elif current is None:
+                try:
+                    value = schema.model_validate({})
+                except ValidationError:
+                    return input  # required fields: validation reports what is missing
+            else:
+                return input
+        elif current is None or is_mapping or isinstance(current, schema):
+            layer = {k: v for k, v in normalize_config(config=current).items() if v is not None}
+            value = overlay_config(layers=[defaults, layer], schema=schema)
+        else:
+            return input  # a foreign class or a non-mapping: leave it for validation to report
+        if isinstance(input, Mapping):
+            return cast(InputT, {**cast(Mapping[str, Any], input), field: value})
+        return cast(InputT, cast(BaseModel, input).model_copy(update={field: value}))
 
     def _validate_input(self, input: InputT | None) -> InputT | None:
         """Validate caller input against the action schema when one is registered."""
