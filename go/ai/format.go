@@ -128,6 +128,14 @@ func resolveFormat(reg api.Registry, schema map[string]any, format string) (Form
 	return nil, status.Errorf(status.ErrInvalidArgument, "output format %q is invalid", format)
 }
 
+// partPurposeKey is the part metadata key that records why the framework
+// added a part; partPurposeOutput marks injected output instructions (see
+// [Part.IsOutputInstructions]).
+const (
+	partPurposeKey    = "purpose"
+	partPurposeOutput = "output"
+)
+
 // injectInstructions looks through the messages and injects formatting directives
 func injectInstructions(messages []*Message, instructions string) []*Message {
 	if instructions == "" {
@@ -136,15 +144,13 @@ func injectInstructions(messages []*Message, instructions string) []*Message {
 
 	// bail out if an output part is already present
 	for _, m := range messages {
-		for _, p := range m.Content {
-			if p.Metadata != nil && p.Metadata[base.PartPurposeKey] == base.PartPurposeOutput {
-				return messages
-			}
+		if slices.ContainsFunc(m.Content, (*Part).IsOutputInstructions) {
+			return messages
 		}
 	}
 
 	part := NewTextPart(instructions)
-	part.Metadata = map[string]any{base.PartPurposeKey: base.PartPurposeOutput}
+	part.Metadata = map[string]any{partPurposeKey: partPurposeOutput}
 
 	targetIndex := -1
 

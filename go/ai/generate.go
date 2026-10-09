@@ -2092,7 +2092,9 @@ func (mr *ModelResponse) Text() string {
 }
 
 // History returns messages from the request combined with the response message
-// to represent the conversation history. The result is always freshly
+// to represent the conversation history. The request is the one the model
+// recorded on the response, so a [Hooks.WrapModel] middleware that changes
+// the messages decides what History returns. The result is always freshly
 // allocated, so callers may retain or append to it without disturbing
 // Request.Messages.
 func (mr *ModelResponse) History() []*Message {

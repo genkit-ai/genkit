@@ -32,7 +32,6 @@ import (
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/internal/base"
 	"github.com/google/go-cmp/cmp"
 )
 
@@ -1859,12 +1858,12 @@ func TestContextCompressionStats(t *testing.T) {
 
 func TestContextCompressionProtectedMessages(t *testing.T) {
 	scaffold := func(m *ai.Message) *ai.Message {
-		m.Metadata = map[string]any{base.PromptMessageKey: true}
+		m.Metadata = map[string]any{"_genkit_prompt": true}
 		return m
 	}
 	withInstructions := func(m *ai.Message) *ai.Message {
 		p := ai.NewTextPart("Output JSON matching the schema.")
-		p.Metadata = map[string]any{base.PartPurposeKey: base.PartPurposeOutput}
+		p.Metadata = map[string]any{"purpose": "output"}
 		m.Content = append(m.Content, p)
 		return m
 	}

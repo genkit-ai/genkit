@@ -39,9 +39,18 @@ type Hooks struct {
 	// WrapGenerate wraps each iteration of the tool loop. It sees the
 	// accumulated request, the iteration index, and the streaming callback.
 	// A single Generate() with N tool-call turns invokes this hook N+1 times.
+	// Tool request parts in the response that next returns carry a Ref, even
+	// when the model sent none, so the next iteration can match each tool
+	// response to its request by Ref.
 	WrapGenerate func(ctx context.Context, params *GenerateParams, next GenerateNext) (*ModelResponse, error)
 	// WrapModel wraps each model API call. Retry, fallback, and caching
 	// middleware typically hook here.
+	//
+	// Models record the request they ran on in the response's Request, and
+	// [ModelResponse.History] reads the conversation from it. A hook that
+	// sends the model different messages than it received must put the
+	// original messages back on the response's Request. If it does not, the
+	// caller's history becomes the messages the model saw.
 	WrapModel func(ctx context.Context, params *ModelParams, next ModelNext) (*ModelResponse, error)
 	// WrapTool wraps each tool execution. It may be called concurrently when
 	// multiple tools execute in parallel for the same Generate() call; any

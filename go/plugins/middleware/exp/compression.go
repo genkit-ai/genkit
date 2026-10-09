@@ -31,10 +31,10 @@ import (
 	"unicode/utf8"
 
 	"github.com/firebase/genkit/go/ai"
+	aix "github.com/firebase/genkit/go/ai/exp"
 	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/internal/base"
 )
 
 // CompressionDedupeMatch selects how [CompressionDedupe] identifies duplicate
@@ -1859,14 +1859,7 @@ func isPinned(m *ai.Message) bool {
 	if m == nil {
 		return false
 	}
-	// Session history drops prompt scaffolding, so a stamp on it would be
-	// lost.
-	if tagged, _ := m.Metadata[base.PromptMessageKey].(bool); tagged {
-		return true
-	}
-	return slices.ContainsFunc(m.Content, func(p *ai.Part) bool {
-		return p != nil && p.Metadata[base.PartPurposeKey] == base.PartPurposeOutput
-	})
+	return aix.IsPromptMessage(m) || slices.ContainsFunc(m.Content, (*ai.Part).IsOutputInstructions)
 }
 
 // renderMessages renders msgs as text for the summarizer.
