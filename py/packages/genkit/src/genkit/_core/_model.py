@@ -40,6 +40,7 @@ from pydantic import (
     model_validator,
 )
 from pydantic.alias_generators import to_camel
+from pydantic.config import JsonDict
 from typing_extensions import TypedDict, TypeVar
 
 from genkit._core import _typing as typing_mod
@@ -215,16 +216,26 @@ ConfigT = TypeVar('ConfigT', bound=ModelConfig, default=ModelConfig)
 # Bound to BaseModel so ModelRef is always parameterized with a concrete Pydantic config schema.
 # Covariant so ModelRef[GeminiConfig] is assignable to ModelRef[BaseModel] or ModelRef[Any].
 ModelRefConfigT = TypeVar('ModelRefConfigT', bound=BaseModel, covariant=True)
-# ModelRequest[X] takes a pydantic model class; __class_getitem__ rejects the
-# rest. Not bound to BaseModel: type checkers would then reject the common
-# bare ModelRequest(config={...}), where the config is solved as a dict.
-# Invariant: config is writable, so ModelRequest[GeminiConfig] is not a
-# ModelRequest[ModelConfig] you can assign a ModelConfig into.
-ModelRequestConfigT = TypeVar('ModelRequestConfigT')
+# ModelRequest[X], EmbedRequest[X] and EvalRequest[X] take a pydantic model
+# class; __class_getitem__ rejects the rest. Not bound to BaseModel: type
+# checkers would then reject the common bare ModelRequest(config={...}), where
+# the config is solved as a dict. Invariant: config is writable, so
+# ModelRequest[GeminiConfig] is not a ModelRequest[ModelConfig] you can assign
+# a ModelConfig into. Defaults to Any so bare ModelRequest means
+# ModelRequest[Any], and Callable[[ModelRequest], ...] accepts a fn typed
+# ModelRequest[GeminiConfig].
+ModelRequestConfigT = TypeVar('ModelRequestConfigT', default=Any)
+# Bare EmbedRequest / EvalRequest options are always a dict at runtime, so the
+# default says so. Fn aliases take EmbedRequest[Any] / EvalRequest[Any] so a fn
+# typed EmbedRequest[CrmEmbedConfig] still fits them.
+RequestOptionsT = TypeVar('RequestOptionsT', default=dict[str, Any])
 
 
 def declared_config_type(cls: type) -> type[BaseModel] | None:
-    """The config class on ``ModelRequest[ThatClass]``, or None if unparametrized or ``Any``."""
+    """The config class on ``ModelRequest[ThatClass]`` (or Embed/EvalRequest), else None.
+
+    None when unparametrized or ``Any``.
+    """
     meta = getattr(cls, '__pydantic_generic_metadata__', None)
     if not meta:
         return None
@@ -233,6 +244,48 @@ def declared_config_type(cls: type) -> type[BaseModel] | None:
         return None
     arg = args[0]
     return arg if _is_model_class(arg) else None
+
+
+def check_config_type_arg(*, request: str, field: str, typevar_values: object) -> None:
+    """Reject ``ModelRequest[X]`` / ``EmbedRequest[X]`` / ``EvalRequest[X]`` unless X is a model class.
+
+    Runs where the annotation is evaluated, so a TypedDict or dict config
+    fails when the fn is defined, with the same error on every Python version.
+    """
+    arg = typevar_values[0] if isinstance(typevar_values, tuple) and typevar_values else typevar_values
+    if arg is Any or isinstance(arg, TypeVar) or _is_model_class(arg):
+        return
+    label = arg.__name__ if isinstance(arg, type) and not get_args(arg) else repr(arg)
+    example = ', e.g. a ModelConfig subclass' if field == 'config' else ''
+    raise GenkitError(
+        status='INVALID_ARGUMENT',
+        message=(
+            f'{request}[{label}]: the {field} type must be a pydantic BaseModel subclass{example}. '
+            f'Use bare {request} to take {field} as a dict.'
+        ),
+    )
+
+
+def check_config_value(cls: type, value: object, *, field: str) -> object:
+    """The before-validator for ``config`` / ``options`` on the request types.
+
+    A mapping is the bag the declared class coerces. A Pydantic instance is
+    only legal if it is that class: OpenAIConfig on a Gemini request is a
+    caller mistake, so pass a mapping instead. None and an untyped request
+    are left to the caller (see EmbedRequest for the options dict).
+    """
+    if value is None:
+        return value
+    if isinstance(value, Mapping) and not isinstance(value, BaseModel):
+        return value
+    if isinstance(value, BaseModel):
+        expected = declared_config_type(cls)
+        if expected is not None and not isinstance(value, expected):
+            raise ValueError(
+                f'{field} must be {config_type_path(expected)} or a mapping, got {config_type_path(type(value))}'
+            )
+        return value
+    raise ValueError(f'{field} must be a BaseModel or mapping, got {type(value).__name__}')
 
 
 def _is_model_class(value: object) -> TypeGuard[type[BaseModel]]:
@@ -932,11 +985,43 @@ def options_dict(value: object) -> dict[str, Any]:
     raise ValueError(f'options must be a mapping or BaseModel, got {type(value).__name__}')
 
 
-class EmbedRequest(GenkitModel):
-    """Embed request whose documents are the public Document type."""
+def check_options_value(cls: type, value: object) -> object:
+    """The before-validator for ``options`` on EmbedRequest and EvalRequest.
 
+    Untyped, options is always a dict (see options_dict). Typed, it follows
+    ModelRequest's config rule, and ``None`` is ``{}`` so the fn gets the
+    class with its defaults rather than None.
+    """
+    if declared_config_type(cls) is None:
+        return options_dict(value)
+    if value is None:
+        return {}
+    return check_config_value(cls, value, field='options')
+
+
+def _untyped_options_schema(schema: JsonDict, cls: type) -> None:
+    """Bare options validate to a dict, so the schema says object instead of any."""
+    if declared_config_type(cls) is None:
+        properties = cast(dict[str, Any], schema['properties'])
+        properties['options'] = {'additionalProperties': True, 'title': 'Options', 'type': 'object'}
+
+
+class EmbedRequest(GenkitModel, Generic[RequestOptionsT]):
+    """Embed request whose documents are the public Document type.
+
+    Bare ``EmbedRequest`` gives the fn ``options`` as a dict.
+    ``EmbedRequest[CrmEmbedConfig]`` gives it a validated ``CrmEmbedConfig``.
+    """
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(json_schema_extra=_untyped_options_schema)
     input: list[Document]
-    options: dict[str, Any] = Field(default_factory=dict)
+    # validate_default so EmbedRequest[Cfg]() builds Cfg() instead of keeping {}.
+    options: RequestOptionsT = Field(default_factory=dict, validate_default=True)
+
+    def __class_getitem__(cls, typevar_values: type[Any] | tuple[type[Any], ...]) -> Any:  # noqa: ANN401
+        """``EmbedRequest[Cfg]``, where ``Cfg`` must be a pydantic model class."""
+        check_config_type_arg(request='EmbedRequest', field='options', typevar_values=typevar_values)
+        return super().__class_getitem__(typevar_values)
 
     @field_validator('input', mode='before')
     @classmethod
@@ -947,25 +1032,33 @@ class EmbedRequest(GenkitModel):
 
     @field_validator('options', mode='before')
     @classmethod
-    def _wrap_options(cls, v: object) -> dict[str, Any]:
-        return options_dict(v)
+    def _check_options_type(cls, v: object) -> object:
+        return check_options_value(cls, v)
 
 
-class EvalRequest(GenkitModel):
-    """Evaluator request whose options are always a dict.
+class EvalRequest(GenkitModel, Generic[RequestOptionsT]):
+    """Evaluator request whose options are a dict or the evaluator's options class.
 
-    Same fields as the wire ``EvalRequest``; ``options`` is ``dict[str, Any]``
-    instead of ``Any | None`` so evaluators read it without a None guard.
+    Same fields as the wire ``EvalRequest``. Bare ``EvalRequest`` has
+    ``options`` as ``dict[str, Any]`` instead of ``Any | None`` so evaluators
+    read it without a None guard. ``EvalRequest[JudgeConfig]`` validates it
+    into ``JudgeConfig``.
     """
 
+    model_config: ClassVar[ConfigDict] = ConfigDict(json_schema_extra=_untyped_options_schema)
     dataset: list[BaseDataPoint]
     eval_run_id: str
-    options: dict[str, Any] = Field(default_factory=dict)
+    options: RequestOptionsT = Field(default_factory=dict, validate_default=True)
+
+    def __class_getitem__(cls, typevar_values: type[Any] | tuple[type[Any], ...]) -> Any:  # noqa: ANN401
+        """``EvalRequest[Cfg]``, where ``Cfg`` must be a pydantic model class."""
+        check_config_type_arg(request='EvalRequest', field='options', typevar_values=typevar_values)
+        return super().__class_getitem__(typevar_values)
 
     @field_validator('options', mode='before')
     @classmethod
-    def _wrap_options(cls, v: object) -> dict[str, Any]:
-        return options_dict(v)
+    def _check_options_type(cls, v: object) -> object:
+        return check_options_value(cls, v)
 
 
 class SessionState(GenkitModel):
@@ -1176,16 +1269,7 @@ class ModelRequest(GenkitModel, Generic[ModelRequestConfigT]):
         dict config fails when the model function is defined, with the same
         error on every Python version.
         """
-        arg = typevar_values[0] if isinstance(typevar_values, tuple) and typevar_values else typevar_values
-        if not (arg is Any or isinstance(arg, TypeVar) or _is_model_class(arg)):
-            label = arg.__name__ if isinstance(arg, type) and not get_args(arg) else repr(arg)
-            raise GenkitError(
-                status='INVALID_ARGUMENT',
-                message=(
-                    f'ModelRequest[{label}]: the config type must be a pydantic '
-                    'BaseModel subclass, e.g. a ModelConfig subclass. Use bare ModelRequest to take config as a dict.'
-                ),
-            )
+        check_config_type_arg(request='ModelRequest', field='config', typevar_values=typevar_values)
         return super().__class_getitem__(typevar_values)
 
     @field_validator('config', mode='before')
@@ -1196,18 +1280,7 @@ class ModelRequest(GenkitModel, Generic[ModelRequestConfigT]):
         A Pydantic instance is only legal if it is that schema. OpenAIConfig
         on a Gemini request is a caller mistake — pass a mapping instead.
         """
-        if v is None:
-            return v
-        if isinstance(v, Mapping) and not isinstance(v, BaseModel):
-            return v
-        if isinstance(v, BaseModel):
-            expected = declared_config_type(cls)
-            if expected is not None and not isinstance(v, expected):
-                raise ValueError(
-                    f'config must be {config_type_path(expected)} or a mapping, got {config_type_path(type(v))}'
-                )
-            return v
-        raise ValueError(f'config must be a BaseModel or mapping, got {type(v).__name__}')
+        return check_config_value(cls, v, field='config')
 
     @field_validator('messages', mode='before')
     @classmethod

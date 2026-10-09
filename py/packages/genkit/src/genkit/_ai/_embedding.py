@@ -79,7 +79,7 @@ class Embedder:
         ).response
 
 
-EmbedderFn = Callable[[EmbedRequest], Awaitable[EmbedResponse]]
+EmbedderFn = Callable[[EmbedRequest[Any]], Awaitable[EmbedResponse]]
 
 
 def embedder_action_metadata(

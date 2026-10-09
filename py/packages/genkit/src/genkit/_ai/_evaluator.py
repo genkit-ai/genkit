@@ -55,7 +55,7 @@ EvaluatorFn = Callable[[BaseDataPoint, T], Coroutine[Any, Any, EvalFnResponse]]
 
 # User-provided batch evaluator: one EvalRequest. Returns the rows as a list
 # or as an EvalResponse.
-BatchEvaluatorFn = Callable[[EvalRequest], Coroutine[Any, Any, list[EvalFnResponse] | EvalResponse]]
+BatchEvaluatorFn = Callable[[EvalRequest[Any]], Coroutine[Any, Any, list[EvalFnResponse] | EvalResponse]]
 
 
 class EvaluatorRef(BaseModel):
