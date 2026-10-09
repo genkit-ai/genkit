@@ -1527,13 +1527,29 @@ class Genkit:
         ending at the last complete turn, so it's safe to send back. The
         chunks you already received are the record of what was shown.
 
+        Leaving the ``async for`` early (``break``, an exception, or cancelling
+        the task that's reading) stops the model call: the model sees
+        ``ctx.abort_signal`` set and is cancelled even if it doesn't check. The
+        final response then has ``finish_reason == ABORTED`` and ``messages``
+        ending at the last complete turn. After a plain ``break`` that lands a
+        loop tick or two later, when Python closes the abandoned iterator; wrap
+        it in ``contextlib.aclosing(...)`` to stop right as the block exits.
+
         Example:
             stream = ai.generate_stream(prompt='Write a haiku about rain.')
             async for chunk in stream.stream:
                 print(chunk.text)
             final = await stream.response
+
+            stream = ai.generate_stream(prompt='Count to a million.')
+            async with contextlib.aclosing(stream.stream) as chunks:
+                async for chunk in chunks:
+                    if '42' in chunk.text:
+                        break
+            stopped = await stream.response  # finish_reason == ABORTED
         """
         channel: Channel[ModelResponseChunk, ModelResponse[Any]] = Channel()
+        abort_signal = asyncio.Event()
 
         async def _run_generate() -> ModelResponse[Any]:
             return await self._generate(
@@ -1558,12 +1574,13 @@ class Genkit:
                 use=use,
                 docs=docs,
                 on_chunk=lambda c: channel.send(c),
+                abort_signal=abort_signal,
             )
 
         response_future: asyncio.Future[ModelResponse[Any]] = asyncio.create_task(_run_generate())
         channel.set_close_future(response_future)
 
-        return ModelStreamResponse[Any](channel=channel, response_future=response_future)
+        return ModelStreamResponse[Any](channel=channel, response_future=response_future, abort_signal=abort_signal)
 
     async def _generate(
         self,
@@ -1589,6 +1606,7 @@ class Genkit:
         use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
         docs: list[Document] | None = None,
         on_chunk: Callable[[ModelResponseChunk], None] | None = None,
+        abort_signal: asyncio.Event | None = None,
     ) -> ModelResponse[Any]:
         """Fold ``ai.generate`` kwargs into engine ``options`` and run generate_action.
 
@@ -1642,6 +1660,7 @@ class Genkit:
             options,
             on_chunk=on_chunk,
             context=context,
+            abort_signal=abort_signal,
         )
 
     async def embed(
