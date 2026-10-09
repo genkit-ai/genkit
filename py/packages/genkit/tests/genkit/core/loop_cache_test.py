@@ -17,7 +17,6 @@
 """Tests for the per-event-loop client cache."""
 
 import asyncio
-from unittest.mock import MagicMock
 
 import httpx
 import pytest
@@ -42,27 +41,6 @@ def test_each_loop_gets_its_own_client() -> None:
     a = asyncio.run(grab())
     b = asyncio.run(grab())
     assert a is not b
-
-
-@pytest.mark.asyncio
-async def test_closed_httpx_client_is_rebuilt() -> None:
-    get = loop_local_client(httpx.AsyncClient)
-    first = get()
-    await first.aclose()
-
-    second = get()
-    assert second is not first
-    assert not second.is_closed
-    assert get() is second
-    await second.aclose()
-
-
-@pytest.mark.asyncio
-async def test_non_httpx_objects_are_never_rebuilt() -> None:
-    """A mock answers every attribute, including is_closed; only real httpx clients are checked."""
-    get = loop_local_client(MagicMock)
-    first = get()
-    assert get() is first
 
 
 @pytest.mark.asyncio

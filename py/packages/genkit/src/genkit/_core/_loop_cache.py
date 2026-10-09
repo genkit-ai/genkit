@@ -14,7 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Per-event-loop caching for async clients and other loop-bound objects."""
+"""Per-event-loop caching for long-lived async clients."""
 
 import asyncio
 import threading
@@ -22,18 +22,21 @@ import weakref
 from collections.abc import Callable
 from typing import TypeVar
 
-import httpx
-
 T = TypeVar('T')
 
 
 def loop_local_client(factory: Callable[[], T]) -> Callable[[], T]:
-    """Cache one instance per event loop. Use it as a decorator on a factory.
+    """Cache a long-lived client per event loop. Use it as a decorator on a factory.
 
-    Async clients (httpx, the OpenAI and Anthropic SDKs) are bound to the event
-    loop that created them, so one module-level client breaks when Genkit runs
-    on a second loop. The decorated function builds the client on first call
-    in each loop and returns that same client on every later call there.
+    Use it for a client you reuse across calls that code on different event
+    loops may call. Async clients (httpx, the OpenAI and Anthropic SDKs) are
+    bound to the loop they first run on, so one shared client breaks when Genkit
+    runs on a second loop. Each loop gets its own client, built on first use
+    there and returned on every later call there.
+
+    The client is shared, so don't close it; it lives as long as its loop. For a
+    client scoped to one call, skip the cache and use
+    ``async with httpx.AsyncClient() as client:`` inside the call.
 
     ```python
     import httpx
@@ -75,8 +78,6 @@ def loop_local_client(factory: Callable[[], T]) -> Callable[[], T]:
             completion = await self._client().chat.completions.create(...)
     ```
 
-    A cached ``httpx.AsyncClient`` that has been closed is rebuilt, so closing
-    one by hand doesn't leave a dead client in the cache.
     Plain callables work too, e.g. ``loop_local_client(asyncio.Lock)``.
     """
     by_loop: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, T] = weakref.WeakKeyDictionary()
@@ -86,8 +87,7 @@ def loop_local_client(factory: Callable[[], T]) -> Callable[[], T]:
         loop = asyncio.get_running_loop()
         with lock:
             existing = by_loop.get(loop)
-            # A closed httpx client fails every request; build a new one.
-            if existing is not None and not (isinstance(existing, httpx.AsyncClient) and existing.is_closed):
+            if existing is not None:
                 return existing
             created = factory()
             by_loop[loop] = created
