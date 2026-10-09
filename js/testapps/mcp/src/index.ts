@@ -44,7 +44,7 @@ export const PERMISSIVE_SAFETY_SETTINGS: any = {
 };
 
 export const ai = genkit({
-  plugins: [googleAI()],
+  plugins: [googleAI({ experimental_debugTraces: true })],
   model: googleAI.model('gemini-flash-latest'),
 });
 
@@ -52,6 +52,30 @@ logger.setLogLevel('debug'); // Set the logging level to debug for detailed outp
 
 export const mcpHost = defineMcpHost(ai, {
   name: 'test-mcp-manager',
+  mcpServers: {
+    'git-client': {
+      command: 'uvx',
+      args: ['mcp-server-git'],
+    },
+    fs: {
+      command: 'npx',
+      args: [
+        '-y',
+        '@modelcontextprotocol/server-filesystem',
+        `${process.cwd()}/test-workspace`,
+      ],
+    },
+    everything: {
+      command: 'npx',
+      args: ['-y', '@modelcontextprotocol/server-everything'],
+    },
+  },
+});
+
+// Same setup as mcpHost but with a different name to test
+// multiple mcpHosts with duplicate tools/resources.
+export const mcpHost2 = defineMcpHost(ai, {
+  name: 'test-mcp-manager2',
   mcpServers: {
     'git-client': {
       command: 'uvx',
@@ -101,7 +125,7 @@ ai.defineFlow('get-file', async (q) => {
 
 ai.defineFlow('dynamic-get-file', async (q) => {
   const { text } = await ai.generate({
-    prompt: `summarize contexts of hello-world.txt (in '${process.cwd()}/test-workspace')`,
+    prompt: `summarize contents of hello-world.txt (in '${process.cwd()}/test-workspace')`,
     tools: ['test-mcp-manager:tool/fs/read_file'], // Just this one tool
   });
 
@@ -206,6 +230,59 @@ ai.defineFlow('update-file', async (q) => {
   });
 
   return text;
+});
+
+ai.defineTool(
+  {
+    name: 'getTime',
+    description: 'Get the current time',
+    inputSchema: z.object({
+      city: z.string().min(16),
+      state: z.string().optional(),
+      hours: z.number().multipleOf(12).min(12).max(24),
+      timezone: z.string().default('EST'),
+    }),
+    outputSchema: z.object({ time: z.number() }),
+  },
+  async () => {
+    return { time: Date.now() };
+  }
+);
+
+ai.definePrompt({
+  name: 'fileSummaryPrompt',
+  model: googleAI.model('gemini-flash-latest'),
+  output: {
+    format: 'text',
+  },
+  config: {
+    maxOutputTokens: 2048,
+    temperature: 0.6,
+    topK: 16,
+    topP: 0.95,
+  },
+    tools: ['test-mcp-manager:tool/fs/read_file'], // Just this one tool
+  messages: `
+  {{role "user"}}
+  Summarize the contents of hello-world.txt (in '/Users/padamata/Documents/git/du4/genkit/js/testapps/mcp/test-workspace')`,
+});
+
+ai.definePrompt({
+  name: 'dapPrefixFileSummaryPrompt',
+  model: googleAI.model('gemini-flash-latest'),
+  output: {
+    format: 'text',
+  },
+  config: {
+    maxOutputTokens: 2048,
+    temperature: 0.6,
+    topK: 16,
+    topP: 0.95,
+  },
+    tools: ['/dynamic-action-provider/test-mcp-manager:tool/fs/read_file'], // Just this one tool
+  messages: `
+  {{role "user"}}
+  Summarize the contents of hello-world.txt (in '/Users/padamata/Documents/git/du4/genkit/js/testapps/mcp/test-workspace')`,
 });
 
 // MCP Controls
