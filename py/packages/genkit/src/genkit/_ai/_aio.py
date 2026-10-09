@@ -35,7 +35,6 @@ import anyio.to_thread
 import uvicorn
 from pydantic import BaseModel
 
-from genkit._ai._agents._session import get_current_session
 from genkit._ai._embedding import EmbedderFn, EmbedderInfo, EmbedderRef, define_embedder
 from genkit._ai._evaluator import (
     BatchEvaluatorFn,
@@ -107,7 +106,6 @@ from genkit._core._model import (
     ToolChoice,
 )
 from genkit._core._plugin import Plugin
-from genkit._core._protocols import SessionLike
 from genkit._core._reflection import ReflectionServer, ServerSpec, create_reflection_asgi_app
 from genkit._core._reflection_config import (
     ReflectionConfig,
@@ -145,6 +143,10 @@ ChunkT = TypeVar('ChunkT')
 R = TypeVar('R')
 T = TypeVar('T')
 MiddlewareT = TypeVar('MiddlewareT', bound=BaseMiddleware)
+
+_DOCUMENT_METADATA_CONFLICT = (
+    'metadata= applies to string content only. A Document carries its own metadata; set it on the Document instead.'
+)
 
 
 def init_keyword_example(value: object) -> str:
@@ -372,8 +374,8 @@ class Genkit:
     def tool(
         self,
         name: str | None = None,
-        description: str | None = None,
         *,
+        description: str | None = None,
         input_schema: type[BaseModel] | dict[str, object] | None = None,
     ) -> Callable[[Callable[..., Any]], Tool]:
         """Decorator to register a function as a tool.
@@ -532,6 +534,7 @@ class Genkit:
         self,
         name: str,
         fn: ModelFn,
+        *,
         config_schema: type[BaseModel] | dict[str, object] | None = None,
         metadata: dict[str, object] | None = None,
         info: ModelInfo | None = None,
@@ -543,10 +546,10 @@ class Genkit:
     def define_background_model(
         self,
         name: str,
+        *,
         start: StartModelOpFn,
         check: CheckModelOpFn,
         cancel: CancelModelOpFn | None = None,
-        label: str | None = None,
         info: ModelInfo | None = None,
         config_schema: type[BaseModel] | dict[str, object] | None = None,
         metadata: dict[str, object] | None = None,
@@ -559,7 +562,6 @@ class Genkit:
             start=start,
             check=check,
             cancel=cancel,
-            label=label,
             info=info,
             config_schema=config_schema,
             metadata=metadata,
@@ -570,6 +572,7 @@ class Genkit:
         self,
         name: str,
         fn: EmbedderFn,
+        *,
         info: EmbedderInfo | None = None,
         metadata: dict[str, object] | None = None,
         description: str | None = None,
@@ -1095,20 +1098,23 @@ class Genkit:
             for desc in plugin.list_middleware():
                 self.registry.register_value('middleware', desc.name, desc)
 
-    def run_main(self, coro: Coroutine[Any, Any, T]) -> T | None:
+    def run_main(self, coro: Coroutine[Any, Any, T]) -> T:
         """Run the user's main coroutine, blocking while the reflection server runs.
 
         Blocks whenever reflection is on, not only under GENKIT_ENV=dev: the
         server lives on a daemon thread, so returning here would kill it.
         Returns once the reflection server stops on its own (for example the
         CLI rejected this runtime's secret), rather than blocking with nothing
-        serving.
+        serving. A failing coroutine doesn't take the reflection server down
+        with it: the error is logged, the server stays up, and the error is
+        raised once it stops.
         """
         if not self._reflection_config.enabled:
             return run_loop(coro)
 
-        async def reflection_runner() -> T | None:
+        async def reflection_runner() -> T:
             user_result: T | None = None
+            user_error: Exception | None = None
             try:
                 user_result = await coro
                 logger.debug('User coroutine completed successfully.')
@@ -1117,6 +1123,7 @@ class Genkit:
                 # so keep a headline + a debug traceback.
                 logger.error('Startup failed: %s: %s', type(e).__name__, e)
                 logger.debug('Startup failure details', exc_info=True)
+                user_error = e
 
             # Block until Ctrl+C (SIGINT handled by anyio) or SIGTERM, keeping
             # the daemon reflection thread alive.
@@ -1144,7 +1151,9 @@ class Genkit:
                 pass
 
             logger.debug('Reflection server stopped.')
-            return user_result
+            if user_error is not None:
+                raise user_error
+            return cast(T, user_result)
 
         return anyio.run(reflection_runner)
 
@@ -1163,19 +1172,14 @@ class Genkit:
     # Genkit-specific methods (generation, embedding, retrieval, etc.)
     # -------------------------------------------------------------------------
 
-    def _resolve_embedder_name(self, embedder: str | EmbedderRef | None) -> str:
+    def _resolve_embedder_name(self, embedder: str | EmbedderRef) -> str:
         """Resolve embedder name from string or EmbedderRef."""
-        if isinstance(embedder, EmbedderRef):
-            return embedder.name
-        elif isinstance(embedder, str):
-            return embedder
-        else:
-            raise ValueError('Embedder must be specified as a string name or an EmbedderRef.')
+        return embedder.name if isinstance(embedder, EmbedderRef) else embedder
 
     def _embedder_options(
         self,
         *,
-        embedder: str | EmbedderRef | None,
+        embedder: str | EmbedderRef,
         config: dict[str, object] | None,
     ) -> dict[str, object] | None:
         """Copy ref config plus version, then overlay call-site config.
@@ -1647,8 +1651,8 @@ class Genkit:
     async def embed(
         self,
         *,
-        embedder: str | EmbedderRef | None = None,
-        content: str | Document | None = None,
+        embedder: str | EmbedderRef,
+        content: str | Document,
         metadata: dict[str, object] | None = None,
         config: dict[str, object] | None = None,
     ) -> list[Embedding]:
@@ -1657,6 +1661,9 @@ class Genkit:
         ``config`` is merged over the ``EmbedderRef``'s config (the call wins
         per key) and reaches the embedder as ``request.options``. An embedder
         name that isn't registered raises ``GenkitError`` with ``NOT_FOUND``.
+
+        ``metadata`` is attached to a string ``content``. A ``Document``
+        already carries its own metadata, so passing both raises ``TypeError``.
 
         Example:
             from genkit_google_genai import GoogleAI
@@ -1667,6 +1674,9 @@ class Genkit:
             )
             vector = embeddings[0].embedding
         """
+        if metadata is not None and isinstance(content, Document):
+            raise TypeError(_DOCUMENT_METADATA_CONFLICT)
+
         embedder_name = self._resolve_embedder_name(embedder)
         final_options = self._embedder_options(embedder=embedder, config=config)
 
@@ -1677,9 +1687,6 @@ class Genkit:
                 message=f"Embedder '{embedder_name}' not found.",
                 reason=RuntimeErrorReason.ACTION_NOT_FOUND,
             )
-
-        if content is None:
-            raise ValueError('Content must be specified for embedding.')
 
         documents = [Document.from_text(content, metadata)] if isinstance(content, str) else [content]
 
@@ -1696,17 +1703,17 @@ class Genkit:
     async def embed_many(
         self,
         *,
-        embedder: str | EmbedderRef | None = None,
-        content: list[str] | list[Document] | None = None,
+        embedder: str | EmbedderRef,
+        content: list[str] | list[Document],
         metadata: dict[str, object] | None = None,
         config: dict[str, object] | None = None,
     ) -> list[Embedding]:
         """Generate vector embeddings for multiple documents in a single batch call.
 
-        ``config`` works the same as on ``embed``.
+        ``config`` and ``metadata`` work the same as on ``embed``.
         """
-        if content is None:
-            raise ValueError('Content must be specified for embedding.')
+        if metadata is not None and any(isinstance(item, Document) for item in content):
+            raise TypeError(_DOCUMENT_METADATA_CONFLICT)
 
         # Convert strings to Documents if needed
         documents: list[Document] = [
@@ -1732,8 +1739,8 @@ class Genkit:
     async def evaluate(
         self,
         *,
-        evaluator: str | EvaluatorRef | None = None,
-        dataset: list[BaseDataPoint] | None = None,
+        evaluator: str | EvaluatorRef,
+        dataset: list[BaseDataPoint],
         config: dict[str, object] | None = None,
         eval_run_id: str | None = None,
     ) -> list[EvalFnResponse]:
@@ -1760,16 +1767,12 @@ class Genkit:
                 for score in row.evaluation:
                     print(row.test_case_id, score.score)
         """
-        evaluator_name: str = ''
-        ref_config: dict[str, object] | None = None
-
         if isinstance(evaluator, EvaluatorRef):
             evaluator_name = evaluator.name
             ref_config = evaluator.config
-        elif isinstance(evaluator, str):
-            evaluator_name = evaluator
         else:
-            raise ValueError('Evaluator must be specified as a string name or an EvaluatorRef.')
+            evaluator_name = evaluator
+            ref_config = None
 
         # same rule as _embedder_options: None when nothing was set, matching
         # what the CLI / Dev UI send, so `options is None` is the one check.
@@ -1788,9 +1791,6 @@ class Genkit:
         if not eval_run_id:
             eval_run_id = str(uuid.uuid4())
 
-        if dataset is None:
-            raise ValueError('Dataset must be specified for evaluation.')
-
         response = await eval_action.run(
             EvalRequest(
                 dataset=dataset,
@@ -1804,11 +1804,6 @@ class Genkit:
     def current_context() -> dict[str, Any] | None:
         """Get the current execution context, or None if not in an action."""
         return get_current_context()
-
-    @staticmethod
-    def current_session() -> SessionLike | None:
-        """Return the active agent session, or None if not inside a session."""
-        return get_current_session()
 
     async def run(
         self,

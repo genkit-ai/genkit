@@ -5,6 +5,8 @@
 
 """Tests for the Genkit extra API methods."""
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock
 
@@ -22,6 +24,55 @@ from genkit.telemetry import (
     configure_instrumentation,
     reset_instrumentation,
 )
+
+
+class _NoWaitTaskGroup:
+    """Stands in for the Ctrl+C wait so the Dev UI block ends right away."""
+
+    async def __aenter__(self) -> '_NoWaitTaskGroup':
+        return self
+
+    async def __aexit__(self, *exc: object) -> bool:
+        return False
+
+    def start_soon(self, *args: object) -> None:
+        pass
+
+
+async def _return_now() -> None:
+    return None
+
+
+@contextmanager
+def _dev_ui_stops_immediately() -> Iterator[None]:
+    with (
+        mock.patch('genkit._ai._aio.is_dev_environment', return_value=True),
+        mock.patch('genkit._ai._aio.anyio.create_task_group', _NoWaitTaskGroup),
+        mock.patch('genkit._ai._aio.anyio.sleep_forever', _return_now),
+    ):
+        yield
+
+
+def test_run_main_in_dev_returns_the_coroutine_result() -> None:
+    """ai.run_main(coro) in dev hands back what the coroutine returned once the Dev UI stops."""
+    ai = Genkit()
+
+    async def main() -> str:
+        return 'done'
+
+    with _dev_ui_stops_immediately():
+        assert ai.run_main(main()) == 'done'
+
+
+def test_run_main_in_dev_raises_the_coroutine_error_once_dev_ui_stops() -> None:
+    """A failing main keeps the Dev UI up, then the error surfaces instead of run_main returning None."""
+    ai = Genkit()
+
+    async def main() -> str:
+        raise ValueError('boom')
+
+    with _dev_ui_stops_immediately(), pytest.raises(ValueError, match='boom'):
+        ai.run_main(main())
 
 
 @pytest.mark.asyncio
