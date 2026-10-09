@@ -53,6 +53,17 @@ export const codingAgent = ai.defineAgent({
 Flows work the same way (`myBox.flow(spec)`, `myBox.fromFlow(action)`), and
 streamed chunks flow back through the proxy.
 
+A spec can carry JSON Schema instead of zod, e.g. when all you have is config
+or the box's `listActions` metadata:
+
+```ts
+const boxedSummarize = myBox.defineFlow({
+  name: 'summarize',
+  inputJsonSchema: { type: 'object', properties: { url: { type: 'string' } } },
+  outputJsonSchema: { type: 'string' },
+});
+```
+
 `.tool()`/`.flow()`/`.fromTool()`/`.fromFlow()` return unregistered proxies.
 The `define*` variants (`defineTool(spec)`, `defineFromTool(action, { name })`,
 ...) also register the proxy so it shows up in the Dev UI. `defineFrom*`
@@ -74,22 +85,83 @@ const res = await agent.chat({ sessionId }).send('fix the failing test');
 box lives. Presets ship as functions:
 
 ```ts
-import { box, perRequest } from '@genkit-ai/box';
+import { box, perRequest, sessionRoute } from '@genkit-ai/box';
 
 box(ai, { runner }); // singleton (default): one box, never reclaimed
 box(ai, { runner, route: perRequest }); // fresh box per call, reclaimed after
 
-// Session-scoped: you supply the key. Custom routes default to a 5 minute
-// idle window.
+box(ai, { runner, route: sessionRoute }); // one box per session (below)
+
+// Custom: you supply the key. Custom routes default to a 5 minute idle window.
 box(ai, {
   runner,
-  route: (req, ctx) => String(ctx?.sessionId ?? 'default'),
+  route: (req, ctx) => `tenant:${ctx?.auth?.tenantId ?? 'anon'}`,
   retention: { idle: 10 * 60_000 },
 });
 ```
 
 A route sees the request about to be dispatched (`req.key`, `req.input`,
 `req.init`) as well as the caller's context.
+
+### One box per session
+
+`sessionRoute` gives each session its own box: it keys calls by
+`ctx.sessionId`, else the session the payload names, else one shared box.
+Idle session boxes are reclaimed after 5 minutes by default.
+
+```ts
+import { box, sessionRoute } from '@genkit-ai/box';
+
+const agentBox = box(ai, { runner, route: sessionRoute });
+
+// Per conversation (proxies are cheap). The context goes with every call,
+// snapshot reads and aborts included; picking the session id up front means
+// the first turn has it too.
+const agent = agentBox.agent({ name: 'concierge', context: { sessionId } });
+await agent.chat({ sessionId }).send('hi');
+```
+
+The box itself keeps no session state: routing is whatever the route returns.
+Without a context, a call is routed by its payload alone, and calls that only
+carry a `snapshotId` (a server-managed chat's later turns, `abort`) go to the
+shared box.
+
+Routes own any mapping they need, and may be async. A route that places
+sessions on long-lived sandboxes can keep that mapping in a shared store, so it
+survives restarts and is the same on every instance:
+
+```ts
+box(ai, {
+  runner,
+  route: async (req, ctx) => {
+    const sessionId = String(ctx?.sessionId ?? sessionIdOf(req) ?? '');
+    return sessionId ? await placements.lookupOrAssign(sessionId) : 'shared';
+  },
+});
+```
+
+Routing decides where a call runs, not whether a conversation survives. A box
+that is reclaimed (or an instance that is replaced) takes an in-memory session
+store with it; give the boxed agent a durable store and any box can resume any
+session. With `execRunner` on a multi-instance deployment, each instance has
+its own boxes, so use the load balancer's session affinity for warm hits.
+
+### Warming up
+
+Boxes start lazily on the first call. To start one ahead of time (fail fast on
+a broken build, avoid a cold first message):
+
+```ts
+await myBox.warm(); // the singleton box
+await sessionBox.warm('session-1'); // a specific routing key
+```
+
+A warmed box follows retention like any other: under an idle window it is
+reclaimed if nothing uses it in time.
+
+`myBox.listActions(key?)` returns what a box serves. It needs a running box,
+so with a non-singleton route it may start one just to answer; prefer knowing
+what the box exposes on hot paths.
 
 ## Runners
 

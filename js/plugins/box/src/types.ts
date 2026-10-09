@@ -90,11 +90,15 @@ export interface BoxRunner {
  *
  * `req` is the call about to be dispatched, so routes can key off the payload
  * as well as the caller's context (e.g. an agent's `init.sessionId`).
+ *
+ * The route owns any key mapping; the box keeps none. A route may be stateful
+ * and async, e.g. to look a session's box up in a shared store so the mapping
+ * survives restarts and spans instances.
  */
 export type RouteFn = (
   req: RunActionRequest,
   ctx: ActionContext | undefined
-) => string;
+) => string | Promise<string>;
 
 /** Controls how long a box lives. */
 export interface Retention {

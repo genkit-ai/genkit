@@ -42,6 +42,8 @@ export class FakeRunner implements BoxRunner {
   readonly calls: RecordedCall[] = [];
   readonly acquired: string[] = [];
   readonly released: string[] = [];
+  /** Routing keys whose box answered `listActions`. */
+  readonly listed: string[] = [];
   attachedTo?: string;
   closed = false;
 
@@ -59,7 +61,10 @@ export class FakeRunner implements BoxRunner {
         const result = (await this.handler(req, opts)) as O;
         return { result, telemetry: { traceId: `box-trace-${routeKey}` } };
       },
-      listActions: async () => ({}),
+      listActions: async () => {
+        this.listed.push(routeKey);
+        return {};
+      },
     };
   }
 

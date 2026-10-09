@@ -15,12 +15,20 @@
  */
 
 import * as assert from 'assert';
-import { z } from 'genkit';
+import { z, type JSONSchema7 } from 'genkit';
 import { genkit } from 'genkit/beta';
 import { afterEach, describe, it } from 'node:test';
 import { box } from '../src/box.js';
 import { BOX_SELF_ID_ENV } from '../src/env.js';
-import { SINGLETON_KEY, perRequest } from '../src/route.js';
+import {
+  DEFAULT_SESSION_IDLE_MS,
+  SHARED_KEY,
+  SINGLETON_KEY,
+  perRequest,
+  resolveRetention,
+  sessionIdOf,
+  sessionRoute,
+} from '../src/route.js';
 import { FakeRunner } from './fake-runner.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -102,6 +110,222 @@ describe('box routing', () => {
     );
     // The boxed agent sees the same context.
     assert.deepStrictEqual(runner.calls[0].req.context, { sessionId: 's-1' });
+  });
+});
+
+/** A boxed server-managed agent: echoes the session, a new snapshot per turn. */
+function sessionAgent() {
+  let turns = 0;
+  return new FakeRunner((req) => {
+    if (req.key.startsWith('/agent/')) {
+      turns++;
+      const init = (req.init ?? {}) as { sessionId?: string };
+      return {
+        sessionId: init.sessionId ?? `minted-${turns}`,
+        snapshotId: `snap-${turns}`,
+        message: { role: 'model', content: [{ text: 'ok' }] },
+      };
+    }
+    if (req.key.startsWith('/agent-snapshot/')) {
+      return { snapshotId: 'snap-1', status: 'done' };
+    }
+    return 'flow-result';
+  });
+}
+
+describe('sessionRoute', () => {
+  it('routes a whole conversation by the context session', async () => {
+    const runner = sessionAgent();
+    const myBox = box(genkit({}), { runner, route: sessionRoute });
+    const agent = myBox.agent({
+      name: 'a',
+      context: { sessionId: 'thread-1' },
+    });
+
+    const chat = agent.chat({ sessionId: 'thread-1' });
+    await chat.send('hi');
+    await chat.send('again'); // resumes by snapshotId alone
+    await agent.getSnapshot('snap-2');
+    await agent.abort('snap-2');
+
+    assert.deepStrictEqual(
+      runner.calls.map((c) => c.routeKey),
+      ['thread-1', 'thread-1', 'thread-1', 'thread-1']
+    );
+  });
+
+  it('routes a client-picked session id on the first turn', async () => {
+    const runner = sessionAgent();
+    const agent = box(genkit({}), { runner, route: sessionRoute }).agent({
+      name: 'a',
+    });
+    await agent.chat({ sessionId: 's-1' }).send('hi');
+    await agent.chat({ sessionId: 's-2' }).send('hi');
+    await agent.getSnapshot({ sessionId: 's-1' });
+    assert.deepStrictEqual(
+      runner.calls.map((c) => c.routeKey),
+      ['s-1', 's-2', 's-1']
+    );
+  });
+
+  it('sends calls without a session to one shared box', async () => {
+    const runner = sessionAgent();
+    const myBox = box(genkit({}), { runner, route: sessionRoute });
+    await myBox.flow({ name: 'summarize' })('a');
+    await myBox.agent({ name: 'a' }).chat().send('hi');
+    await myBox.agent({ name: 'a' }).getSnapshot('snap-9');
+    assert.deepStrictEqual(runner.acquired, [
+      SHARED_KEY,
+      SHARED_KEY,
+      SHARED_KEY,
+    ]);
+  });
+
+  it('is stateless: the box keeps no session memory', async () => {
+    const runner = sessionAgent();
+    const myBox = box(genkit({}), { runner, route: sessionRoute });
+    const chat = myBox.agent({ name: 'a' }).chat({ sessionId: 's-1' });
+    await chat.send('hi');
+    // Without a context the second turn carries only a snapshotId; nothing
+    // learned from the first turn routes it back.
+    await chat.send('again');
+    assert.deepStrictEqual(
+      runner.calls.map((c) => c.routeKey),
+      ['s-1', SHARED_KEY]
+    );
+  });
+
+  it('reclaims idle session boxes by default', () => {
+    assert.deepStrictEqual(resolveRetention(sessionRoute), {
+      idle: DEFAULT_SESSION_IDLE_MS,
+    });
+  });
+});
+
+describe('custom routes', () => {
+  it('may be async (e.g. a lookup in a shared store)', async () => {
+    const runner = sessionAgent();
+    const placements = new Map([['s-1', 'sandbox-42']]);
+    const myBox = box(genkit({}), {
+      runner,
+      route: async (req, ctx) => {
+        await sleep(1);
+        const sid = String(ctx?.sessionId ?? sessionIdOf(req) ?? '');
+        return placements.get(sid) ?? 'shared';
+      },
+    });
+    await myBox
+      .agent({ name: 'a', context: { sessionId: 's-1' } })
+      .chat()
+      .send('hi');
+    await myBox.flow({ name: 'summarize' })('x');
+    assert.deepStrictEqual(runner.acquired, ['sandbox-42', 'shared']);
+  });
+
+  it('a rejected route fails the call without opening a lease', async () => {
+    const runner = new FakeRunner();
+    const shout = box(genkit({}), {
+      runner,
+      route: async () => {
+        throw new Error('store unavailable');
+      },
+    }).tool({ name: 'shout' });
+    await assert.rejects(() => shout('a'), /store unavailable/);
+    assert.deepStrictEqual(runner.acquired, []);
+  });
+});
+
+describe('sessionIdOf', () => {
+  it('reads the session from turns and lookups', () => {
+    assert.strictEqual(
+      sessionIdOf({ key: '/agent/a', init: { sessionId: 's1' } }),
+      's1'
+    );
+    assert.strictEqual(
+      sessionIdOf({ key: '/agent/a', init: { state: { sessionId: 's2' } } }),
+      's2'
+    );
+    assert.strictEqual(
+      sessionIdOf({ key: '/agent-snapshot/a', input: { sessionId: 's3' } }),
+      's3'
+    );
+    assert.strictEqual(
+      sessionIdOf({ key: '/agent/a', init: { snapshotId: 'p1' } }),
+      undefined
+    );
+    assert.strictEqual(sessionIdOf({ key: '/tool/t', input: {} }), undefined);
+  });
+});
+
+describe('warm and listActions', () => {
+  it('warm() starts the singleton box without running anything', async () => {
+    const runner = new FakeRunner();
+    await box(genkit({}), { runner }).warm();
+    assert.deepStrictEqual(runner.acquired, [SINGLETON_KEY]);
+    assert.deepStrictEqual(runner.calls, []);
+    assert.deepStrictEqual(runner.released, []);
+  });
+
+  it('a warmed box is reclaimed after the idle window if unused', async () => {
+    const runner = new FakeRunner();
+    const myBox = box(genkit({}), {
+      runner,
+      route: () => 'k',
+      retention: { idle: 20 },
+    });
+    await myBox.warm('session-1');
+    assert.deepStrictEqual(runner.acquired, ['session-1']);
+    await sleep(40);
+    assert.deepStrictEqual(runner.released, ['session-1']);
+  });
+
+  it('inside its own runtime, warm() is a no-op and listActions() refuses', async () => {
+    process.env[BOX_SELF_ID_ENV] = 'self';
+    try {
+      const runner = new FakeRunner();
+      const myBox = box(genkit({}), { runner, name: 'self' });
+      await myBox.warm();
+      await assert.rejects(myBox.listActions(), /own runtime/);
+      assert.deepStrictEqual(runner.acquired, []);
+    } finally {
+      delete process.env[BOX_SELF_ID_ENV];
+    }
+  });
+
+  it('listActions() asks the box for a key and ends its lease', async () => {
+    const runner = new FakeRunner();
+    const myBox = box(genkit({}), { runner, retention: { idle: 0 } });
+    await myBox.listActions();
+    await myBox.listActions('k');
+    assert.deepStrictEqual(runner.listed, [SINGLETON_KEY, 'k']);
+    assert.deepStrictEqual(runner.released, [SINGLETON_KEY, 'k']);
+  });
+});
+
+describe('proxy specs', () => {
+  it('accepts JSON Schema when there is no zod schema', () => {
+    const input: JSONSchema7 = {
+      type: 'object',
+      properties: { q: { type: 'string' } },
+    };
+    const output: JSONSchema7 = { type: 'string' };
+    const search = box(genkit({}), { runner: new FakeRunner() }).tool({
+      name: 'search',
+      inputJsonSchema: input,
+      outputJsonSchema: output,
+    });
+    assert.deepStrictEqual(search.__action.inputJsonSchema, input);
+    assert.deepStrictEqual(search.__action.outputJsonSchema, output);
+  });
+
+  it('prefers the zod schema when both are given', () => {
+    const flow = box(genkit({}), { runner: new FakeRunner() }).flow({
+      name: 'f',
+      inputSchema: z.string(),
+      inputJsonSchema: { type: 'number' },
+    });
+    assert.ok(flow.__action.inputSchema);
+    assert.strictEqual(flow.__action.inputJsonSchema, undefined);
   });
 });
 

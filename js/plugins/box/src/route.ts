@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 
+import type { ActionContext } from 'genkit';
 import { randomUUID } from 'node:crypto';
-import type { Retention, RouteFn } from './types.js';
+import type { Retention, RouteFn, RunActionRequest } from './types.js';
 
 /**
  * Route functions may advertise a sensible default retention via this symbol.
@@ -48,6 +49,72 @@ export const singleton: PresetRouteFn = Object.assign(
 export const perRequest: PresetRouteFn = Object.assign(
   (): string => randomUUID(),
   { [RETENTION]: { idle: 0 } satisfies Retention }
+);
+
+function stringField(value: unknown, field: string): string | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const v: unknown = Reflect.get(value, field);
+  return typeof v === 'string' && v !== '' ? v : undefined;
+}
+
+/**
+ * The agent session a request's payload names: a turn's `init.sessionId`
+ * (server-managed) or `init.state.sessionId` (client-managed), or a snapshot
+ * lookup's `sessionId`. Undefined for everything else, including calls that
+ * only carry a `snapshotId` and a first turn that lets the box mint the id.
+ *
+ * ```ts
+ * box(ai, {
+ *   runner,
+ *   route: (req, ctx) => String(ctx?.tenant ?? sessionIdOf(req) ?? 'default'),
+ * });
+ * ```
+ */
+export function sessionIdOf(req: RunActionRequest): string | undefined {
+  if (req.key.startsWith('/agent/')) {
+    return (
+      stringField(req.init, 'sessionId') ??
+      stringField(
+        typeof req.init === 'object' && req.init !== null
+          ? Reflect.get(req.init, 'state')
+          : undefined,
+        'sessionId'
+      )
+    );
+  }
+  if (req.key.startsWith('/agent-snapshot/')) {
+    return stringField(req.input, 'sessionId');
+  }
+  return undefined;
+}
+
+/** Routing key {@link sessionRoute} uses for calls without a session. */
+export const SHARED_KEY = '__shared__';
+
+/**
+ * One box per session, keyed by `ctx.sessionId`, else the session the payload
+ * names ({@link sessionIdOf}), else one shared box. Stateless: every instance
+ * of a deployment computes the same key for the same call. Defaults to a 5
+ * minute idle window.
+ *
+ * Pass the session in the context so every call of a conversation carries it,
+ * snapshot reads and aborts included, and pick the session id up front so the
+ * first turn has it too:
+ *
+ * ```ts
+ * const agentBox = box(ai, { runner, route: sessionRoute });
+ * const agent = agentBox.agent({ name: 'concierge', context: { sessionId } });
+ * await agent.chat({ sessionId }).send('hi');
+ * ```
+ */
+export const sessionRoute: PresetRouteFn = Object.assign(
+  (req: RunActionRequest, ctx: ActionContext | undefined): string => {
+    const fromCtx = ctx?.sessionId;
+    return typeof fromCtx === 'string' && fromCtx !== ''
+      ? fromCtx
+      : (sessionIdOf(req) ?? SHARED_KEY);
+  },
+  { [RETENTION]: { idle: DEFAULT_SESSION_IDLE_MS } satisfies Retention }
 );
 
 /** Resolves the effective retention for a box from its options + route. */

@@ -25,9 +25,12 @@ export {
   type ProxyKind,
 } from './proxy.js';
 export {
+  SHARED_KEY,
   SINGLETON_KEY,
   perRequest,
   resolveRetention,
+  sessionIdOf,
+  sessionRoute,
   singleton,
 } from './route.js';
 export type {

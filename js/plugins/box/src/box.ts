@@ -20,6 +20,7 @@ import type {
   ActionMetadata,
   Flow,
   Genkit,
+  JSONSchema7,
   ToolAction,
   z,
 } from 'genkit';
@@ -31,13 +32,15 @@ import {
   createProxyAction,
   type ProxyDispatcher,
 } from './proxy.js';
-import { resolveRetention, singleton } from './route.js';
+import { SINGLETON_KEY, resolveRetention, singleton } from './route.js';
 import type {
   BoxConnection,
   BoxOptions,
   BoxRunner,
   Retention,
   RouteFn,
+  RunActionRequest,
+  RunOptions,
 } from './types.js';
 
 /** Ordinal counter for auto-naming boxes when no `name` is given. */
@@ -47,6 +50,11 @@ let boxOrdinal = 0;
 interface Lease {
   inflight: number;
   idleTimer?: NodeJS.Timeout;
+}
+
+/** A connection backing one call; `release` ends it without running one. */
+interface LeasedConnection extends BoxConnection {
+  release(): void;
 }
 
 /** Options for creating a box, with the self-nesting `name` override. */
@@ -71,6 +79,29 @@ export interface ProxySpec<
   outputSchema?: O;
   /** Stream chunk schema, for flows that stream. */
   streamSchema?: S;
+  /**
+   * JSON Schema alternatives, for callers that only have the box's
+   * `listActions` metadata or config (no zod). Used for the Dev UI and tool
+   * definitions; ignored when the matching zod schema is set.
+   */
+  inputJsonSchema?: JSONSchema7;
+  outputJsonSchema?: JSONSchema7;
+}
+
+/** The schema part of a {@link ProxySpec}, as proxy metadata. */
+function metaFromSpec<
+  I extends z.ZodTypeAny,
+  O extends z.ZodTypeAny,
+  S extends z.ZodTypeAny,
+>(spec: ProxySpec<I, O, S>): Partial<ActionMetadata<I, O, S>> {
+  return {
+    description: spec.description,
+    inputSchema: spec.inputSchema,
+    outputSchema: spec.outputSchema,
+    streamSchema: spec.streamSchema,
+    inputJsonSchema: spec.inputSchema ? undefined : spec.inputJsonSchema,
+    outputJsonSchema: spec.outputSchema ? undefined : spec.outputJsonSchema,
+  };
 }
 
 function metaFromAction<
@@ -126,24 +157,81 @@ export class Box {
     return {
       boxId: this.id,
       acquire: async (req, signal) => {
-        if (this.isSelfRuntime) {
-          throw new Error(
-            `Box '${this.id}': called a boxed proxy from within the box's own ` +
-              `runtime. Use the real (local) action here, or run the box from ` +
-              `a separate entry point.`
-          );
-        }
-        const key = this.route(req, req.context);
-        const lease = this.openLease(key);
-        try {
-          const conn = await this.runner.acquire(key, signal);
-          return this.leasedConnection(conn, key, lease);
-        } catch (e) {
-          this.closeLease(key, lease);
-          throw e;
-        }
+        this.assertNotSelfRuntime('called a boxed proxy');
+        // The route owns any key mapping (and may be async); the box keeps none.
+        const key = await this.route(req, req.context);
+        return this.acquireKey(key, signal);
       },
     };
+  }
+
+  /**
+   * In self mode the box's runtime re-runs the caller's entry point; reaching
+   * the box from there would spawn a box from inside itself.
+   */
+  private assertNotSelfRuntime(what: string): void {
+    if (!this.isSelfRuntime) return;
+    throw new Error(
+      `Box '${this.id}': ${what} from within the box's own runtime. Use the ` +
+        `real (local) action here, or run the box from a separate entry point.`
+    );
+  }
+
+  /** Acquires the box for `key` under a lease for exactly one call. */
+  private async acquireKey(
+    key: string,
+    signal?: AbortSignal
+  ): Promise<LeasedConnection> {
+    const lease = this.openLease(key);
+    try {
+      const conn = await this.runner.acquire(key, signal);
+      return this.leasedConnection(conn, key, lease);
+    } catch (e) {
+      this.closeLease(key, lease);
+      throw e;
+    }
+  }
+
+  /**
+   * Starts (or reuses) the box for a routing key and waits until it is ready,
+   * e.g. at startup to fail fast on a broken build and avoid a cold first
+   * call. Defaults to the singleton key. The key is used as is (the route is
+   * not consulted), and the box is subject to retention like any other: under
+   * an idle window it is reclaimed if nothing uses it in time, so warming is
+   * pointless under `perRequest` (`idle: 0`).
+   *
+   * A no-op inside the box's own runtime (self mode), so a shared entry file
+   * can warm at startup without the box spawning itself.
+   *
+   * ```ts
+   * await myBox.warm();
+   * await sessionBox.warm('session-1');
+   * ```
+   */
+  async warm(key: string = SINGLETON_KEY, signal?: AbortSignal): Promise<void> {
+    if (this.isSelfRuntime) return;
+    const conn = await this.acquireKey(key, signal);
+    // Warming is the "call"; end its lease without running anything.
+    conn.release();
+  }
+
+  /**
+   * Lists the actions the box for `key` serves (default: the singleton key).
+   * This needs a running box: with a non-singleton route it may start a box
+   * just to answer, which is then reclaimed per retention. Prefer knowing
+   * what the box exposes (config, specs) on hot paths.
+   */
+  async listActions(
+    key: string = SINGLETON_KEY,
+    signal?: AbortSignal
+  ): Promise<Record<string, ActionMetadata>> {
+    this.assertNotSelfRuntime('listed actions');
+    const conn = await this.acquireKey(key, signal);
+    try {
+      return await conn.listActions();
+    } finally {
+      conn.release();
+    }
   }
 
   private openLease(key: string): Lease {
@@ -182,26 +270,33 @@ export class Box {
 
   /**
    * Wraps a connection so its single dispatched call closes the lease when it
-   * settles. Each dispatcher `acquire` backs exactly one `runAction`.
+   * settles. Each dispatcher `acquire` backs exactly one `runAction`; callers
+   * that don't run anything (`warm`, `listActions`) call `release` instead.
    */
   private leasedConnection(
     conn: BoxConnection,
     key: string,
     lease: Lease
-  ): BoxConnection {
+  ): LeasedConnection {
     let closed = false;
+    const release = () => {
+      if (closed) return;
+      closed = true;
+      this.closeLease(key, lease);
+    };
     return {
       listActions: () => conn.listActions(),
-      runAction: async (req, opts) => {
+      runAction: async <O = unknown>(
+        req: RunActionRequest,
+        opts?: RunOptions
+      ) => {
         try {
-          return await conn.runAction(req, opts);
+          return await conn.runAction<O>(req, opts);
         } finally {
-          if (!closed) {
-            closed = true;
-            this.closeLease(key, lease);
-          }
+          release();
         }
       },
+      release,
     };
   }
 
@@ -210,11 +305,12 @@ export class Box {
     I extends z.ZodTypeAny = z.ZodTypeAny,
     O extends z.ZodTypeAny = z.ZodTypeAny,
   >(spec: ProxySpec<I, O>): ToolAction<I, O> {
-    return createProxyAction<I, O>(this.dispatcher(), 'tool', spec.name, {
-      description: spec.description,
-      inputSchema: spec.inputSchema,
-      outputSchema: spec.outputSchema,
-    }) as ToolAction<I, O>;
+    return createProxyAction<I, O>(
+      this.dispatcher(),
+      'tool',
+      spec.name,
+      metaFromSpec(spec)
+    ) as ToolAction<I, O>;
   }
 
   /** Unregistered tool proxy from a real action (same-language sugar). */
@@ -279,12 +375,7 @@ export class Box {
       this.dispatcher(),
       'flow',
       spec.name,
-      {
-        description: spec.description,
-        inputSchema: spec.inputSchema,
-        outputSchema: spec.outputSchema,
-        streamSchema: spec.streamSchema,
-      }
+      metaFromSpec(spec)
     ) as Flow<I, O, S, Init>;
   }
 
@@ -348,8 +439,9 @@ export class Box {
    * tool/flow behavior.
    *
    * `spec.context` is passed to `route` (and on to the boxed agent) for every
-   * call through this proxy. Proxies are cheap, so to route per session build
-   * one per call: `box.agent({ name, context: { sessionId } })`.
+   * call through this proxy, snapshot reads and aborts included. With
+   * {@link sessionRoute}, `context: { sessionId }` routes the whole
+   * conversation to its session's box.
    */
   agent<State = unknown>(spec: {
     name: string;
