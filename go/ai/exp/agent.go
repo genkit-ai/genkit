@@ -213,6 +213,14 @@ func (s *SessionRunner[State]) recordUsage(v any) {
 	}
 }
 
+// sessionUsage returns the session state's usage so far, for
+// [SessionUsageFromContext].
+func (s *SessionRunner[State]) sessionUsage() *ai.GenerationUsage {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.state.Usage
+}
+
 // totalUsage returns the invocation's usage so far.
 func (s *SessionRunner[State]) totalUsage() *ai.GenerationUsage {
 	s.usageMu.Lock()
@@ -1490,9 +1498,18 @@ func (rt *agentRuntime[State]) run(
 ) (*AgentOutput[State], error) {
 	workCtx, cancelWork := context.WithCancel(context.WithoutCancel(clientCtx))
 	workCtx = NewSessionContext(workCtx, rt.session)
-	// Count the model calls made under this invocation. The sink replaces
-	// any a calling agent installed, so a subagent's usage stays its own.
+	// Count the model calls made under this invocation, and expose the
+	// session's total (see [SessionUsageFromContext]). Both replace what a
+	// calling agent installed, so a subagent's usage stays its own. Only a
+	// store makes the total trustworthy: client-managed state comes back from
+	// the caller, who could drop its usage, so the getter is cleared rather
+	// than left pointing at a calling agent's session.
 	workCtx = base.WithUsageSink(workCtx, rt.sess.recordUsage)
+	var sessionUsage func() *ai.GenerationUsage
+	if rt.cfg.store != nil {
+		sessionUsage = rt.sess.sessionUsage
+	}
+	workCtx = sessionUsageKey.NewContext(workCtx, sessionUsage)
 
 	// Wire custom-state streaming now that the work context exists: every
 	// UpdateCustom mutation during the invocation emits a customPatch chunk

@@ -230,6 +230,46 @@ func TestSetInstrumentation_MultipleProviders(t *testing.T) {
 	}
 }
 
+// TestWithInstrumentation pins the scoped providers: they see the spans
+// started under their context, nested scopes keep the enclosing ones, they
+// run after the process-wide providers and end before them, and a span
+// started without the context reaches none of them.
+func TestWithInstrumentation(t *testing.T) {
+	var events []string
+	global := &fakeInstrumentation{name: "global", events: &events}
+	useInstrumentation(t, global)
+	outer := &fakeInstrumentation{name: "outer", events: &events}
+	inner := &fakeInstrumentation{name: "inner", events: &events}
+
+	ctx := WithInstrumentation(context.Background(), outer)
+	_, err := RunInNewSpan(ctx, &SpanMetadata{Name: "root"}, "in",
+		func(ctx context.Context, _ string) (string, error) {
+			return RunInNewSpan(WithInstrumentation(ctx, inner), &SpanMetadata{Name: "child"}, "in",
+				func(ctx context.Context, _ string) (string, error) { return "out", nil })
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"start global", "start outer",
+		"start global", "start outer", "start inner",
+		"end inner", "end outer", "end global",
+		"end outer", "end global",
+	}
+	if diff := cmp.Diff(want, events); diff != "" {
+		t.Errorf("events (-want +got):\n%s", diff)
+	}
+
+	events = nil
+	if _, err := RunInNewSpan(context.Background(), &SpanMetadata{Name: "other"}, "in",
+		func(ctx context.Context, _ string) (string, error) { return "out", nil }); err != nil {
+		t.Fatal(err)
+	}
+	if diff := cmp.Diff([]string{"start global", "end global"}, events); diff != "" {
+		t.Errorf("events outside the scope (-want +got):\n%s", diff)
+	}
+}
+
 func TestRunInNewSpan_ExposesCompositeTraceInfo(t *testing.T) {
 	fake := &fakeInstrumentation{traceID: "trace-123", spanID: "span-456"}
 	useInstrumentation(t, fake)
