@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -624,5 +625,58 @@ func TestNewSnapshotActions_WaitAction(t *testing.T) {
 	// A client-managed agent keeps no snapshots, so it gets no wait action.
 	if _, clientWait, _ := newSnapshotActions[any]("clientManaged", nil, nil); clientWait != nil {
 		t.Error("newSnapshotActions returned a wait action for a store-less agent")
+	}
+}
+
+// TestSessionUsageFromContext pins what middleware reads for a session-wide
+// limit: the server-managed session's usage so far, and nothing for a
+// client-managed session, whose usage the caller could drop, or outside an
+// agent.
+func TestSessionUsageFromContext(t *testing.T) {
+	if _, ok := SessionUsageFromContext(t.Context()); ok {
+		t.Error("SessionUsageFromContext outside an agent = ok, want false")
+	}
+	for _, tc := range []struct {
+		name   string
+		opts   []AgentOption[testState]
+		want   []int
+		wantOK bool
+	}{
+		{"server-managed", []AgentOption[testState]{WithSessionStore[testState](newTestInMemStore[testState]())}, []int{0, 10}, true},
+		{"client-managed", nil, []int{0, 0}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reg := newTestRegistry(t)
+			ai.ConfigureFormats(reg)
+			defineTestModel(reg, "test/usage", nil, func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+				return &ai.ModelResponse{Message: ai.NewModelTextMessage("ok"), Usage: &ai.GenerationUsage{InputTokens: 10}}, nil
+			})
+			var seen []int
+			af := DefineCustomAgent(reg, "session",
+				func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+					return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+						u, ok := SessionUsageFromContext(ctx)
+						if ok != tc.wantOK {
+							t.Errorf("SessionUsageFromContext ok = %v, want %v", ok, tc.wantOK)
+						}
+						if u != nil {
+							seen = append(seen, u.InputTokens)
+						} else {
+							seen = append(seen, 0)
+						}
+						_, err := ai.Generate(ctx, reg, ai.WithModelName("test/usage"), ai.WithPrompt("go"))
+						return nil, err
+					})
+				}, tc.opts...)
+			conn, err := af.Connect(t.Context())
+			if err != nil {
+				t.Fatalf("Connect: %v", err)
+			}
+			sendTurn(t, conn, "one")
+			sendTurn(t, conn, "two")
+			if !slices.Equal(seen, tc.want) {
+				t.Errorf("usage seen at each turn = %v, want %v", seen, tc.want)
+			}
+		})
 	}
 }

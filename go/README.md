@@ -895,6 +895,23 @@ ai.WithUse(&Logger{Prefix: "[trace]"})
 
 `Name()` must be unique and stable since it's the key used to register the middleware and reference it from the Dev UI and across runtimes. `New()` is called once per `Generate` invocation, so per-call state (counters, caches, message queues) can be allocated inside it and closed over by the hooks — just guard anything mutable, since `WrapTool` may run concurrently when tools execute in parallel. For ad-hoc, inline middleware that doesn't need to surface in the Dev UI, wrap a factory closure with `ai.MiddlewareFunc`.
 
+### Observe Every Model Call
+
+A `WrapModel` hook sees the model calls of the one `Generate` it is attached to. To watch every model call made under a context, including calls from nested generates, subagents, judges, and fallback models, add an `aix.Observer` (experimental) to the context with `tracing.WithInstrumentation`:
+
+```go
+ctx = tracing.WithInstrumentation(ctx, aix.Observer{
+    ModelDone: func(ctx context.Context, call *aix.ModelCall) {
+        if u := call.Response.Usage; u != nil {
+            meter.Add(tenant, call.Model, u) // price by model
+        }
+    },
+})
+out, err := supportAgent.RunText(ctx, msg)
+```
+
+An observer is a `tracing.Instrumentation` scoped to one context: `tracing.SetInstrumentation` configures telemetry for the whole process, while `WithInstrumentation` lets code react to what runs under one context. Observers only watch: they cannot change or block a call, and a nested scope cannot remove an outer one. Any other action type, such as tools, is reachable the same way with a `tracing.Instrumentation` of your own. `ModelDone` also reports failed calls, with `Err` set. Middleware that observes its own `Generate` adds the observer in `WrapGenerate` when `Iteration` is 0, since every later iteration runs under that context. To limit what an agent session spends, read `aix.SessionUsageFromContext(ctx)` when a run starts and add what the observer reports.
+
 ### Define Flows
 
 Wrap your AI logic in flows for better observability, testing, and deployment:

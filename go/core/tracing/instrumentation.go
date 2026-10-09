@@ -20,9 +20,11 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"slices"
 	"sync"
 	"sync/atomic"
 
+	"github.com/firebase/genkit/go/internal/base"
 	"github.com/firebase/genkit/go/internal/tracingbridge"
 )
 
@@ -292,6 +294,47 @@ func resetInstrumentation() {
 // every span.
 func activeInstrumentations() []Instrumentation {
 	return *activeChain.Load()
+}
+
+// scopedKey holds the providers [WithInstrumentation] added to a context, in
+// the order they were added.
+var scopedKey = base.NewContextKey[[]Instrumentation]()
+
+// WithInstrumentation returns ctx carrying providers in addition to any it
+// already carries. Every span started under the returned context is reported
+// to them, after the process-wide providers (see [SetInstrumentation]): they
+// start after those and end before them, the most recently added first. A
+// scoped provider cannot be removed, so an enclosing one sees every span
+// started under it, nested runs and subagents included. Nil providers are
+// ignored.
+//
+// [SetInstrumentation] configures telemetry for the process. WithInstrumentation
+// is for code that reacts to what runs under one context, such as middleware
+// that counts the model calls of its run, and adds its provider itself, so
+// it needs no setup by the application.
+func WithInstrumentation(ctx context.Context, providers ...Instrumentation) context.Context {
+	prev := scopedKey.FromContext(ctx)
+	next := slices.Clip(prev)
+	for _, p := range providers {
+		if p != nil {
+			next = append(next, p)
+		}
+	}
+	if len(next) == len(prev) {
+		return ctx
+	}
+	return scopedKey.NewContext(ctx, next)
+}
+
+// spanChain returns the chain for a span started under ctx: the process-wide
+// providers, then the providers ctx carries.
+func spanChain(ctx context.Context) []Instrumentation {
+	chain := activeInstrumentations()
+	scoped := scopedKey.FromContext(ctx)
+	if len(scoped) == 0 {
+		return chain
+	}
+	return append(slices.Clip(chain), scoped...)
 }
 
 // rebuildChainLocked publishes the chain for the current registry state.
