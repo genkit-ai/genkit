@@ -683,9 +683,9 @@ class OllamaModel:
         ``chat``/``generate`` calls — not sampler ``options``. The framework
         dumps a ``BaseModel`` config to a dict before the model fn sees it, so
         this reads them from any :class:`ModelConfig` instance *or* a dumped
-        dict. A ModelConfig dump already uses field names; a dict can carry
-        wire camelCase, so its keys are snake-cased. Only set values are
-        returned.
+        dict. Both paths snake-case the keys: a wire dict is camelCase, and
+        undeclared extras on a loose ModelConfig subclass keep the caller's
+        spelling. Only set values are returned.
 
         Args:
             config: The configuration to extract request kwargs from.
@@ -694,7 +694,7 @@ class OllamaModel:
             A dict with ``think``/``keep_alive`` entries that are not ``None``.
         """
         if isinstance(config, ModelConfig):
-            snake = config.model_dump(exclude_none=True)
+            snake = {to_snake(k): v for k, v in config.model_dump(exclude_none=True).items()}
             think: Any = snake.get('think')
             keep_alive: Any = snake.get('keep_alive')
         elif isinstance(config, dict):
