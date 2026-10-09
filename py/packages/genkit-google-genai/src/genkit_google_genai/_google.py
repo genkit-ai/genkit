@@ -1092,7 +1092,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
                 create_vertex_evaluators(
                     registry,
                     list(VertexAIEvaluationMetricType),
-                    project_id=self._project,
+                    project=self._project,
                     location=self._location,
                 )
             )
@@ -1187,7 +1187,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
         actions = create_vertex_evaluators(
             registry,
             [metric_type],
-            project_id=self._project,
+            project=self._project,
             location=self._location,
         )
         return actions[0] if actions else None
