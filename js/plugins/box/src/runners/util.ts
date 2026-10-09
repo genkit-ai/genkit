@@ -17,6 +17,57 @@
 import type { ChildProcess } from 'node:child_process';
 
 /**
+ * Inherited vars a box keeps even with `inheritEnv: false`: what a runtime
+ * needs to start (PATH to find `node`/`tsx`, locale, temp dirs, CA certs),
+ * plus the caller's run mode (`GENKIT_ENV`) and, under `genkit start`, where
+ * to export traces (`GENKIT_TELEMETRY_SERVER`). The box's own reflection vars
+ * are set by the runner, not inherited.
+ */
+export const BASE_ENV: readonly RegExp[] = [
+  /^(PATH|HOME|USER|LOGNAME|SHELL|TMPDIR|TMP|TEMP|LANG|TZ|TERM)$/,
+  /^LC_/,
+  /^NODE_/,
+  /^(SSL_CERT_FILE|SSL_CERT_DIR)$/,
+  /^GENKIT_(ENV|TELEMETRY_SERVER)$/,
+  // Windows: process creation and temp/home resolution. Names there are
+  // case-insensitive (`Path`, `SystemRoot`), hence `i`.
+  /^(PATH|PATHEXT|SYSTEMROOT|COMSPEC|USERPROFILE|APPDATA|LOCALAPPDATA)$/i,
+];
+
+/**
+ * Which of the parent's env vars a box inherits: all of them (`true`), only
+ * {@link BASE_ENV} (`false`), or {@link BASE_ENV} plus the named vars.
+ */
+export type InheritEnv = boolean | readonly string[];
+
+/**
+ * The env a box child is spawned with, lowest precedence first: the inherited
+ * (filtered) parent env, then `env`, then `overrides` (the runner's own vars,
+ * which must win so a user value can't break the link to the host).
+ */
+export function childEnv(
+  parent: NodeJS.ProcessEnv,
+  inherit: InheritEnv,
+  env: Record<string, string> | undefined,
+  overrides: Record<string, string>
+): Record<string, string> {
+  const allow =
+    typeof inherit === 'boolean' ? undefined : new Set<string>(inherit);
+  const inherited: Record<string, string> = {};
+  for (const [name, value] of Object.entries(parent)) {
+    if (value === undefined) continue;
+    if (
+      inherit === true ||
+      allow?.has(name) ||
+      BASE_ENV.some((re) => re.test(name))
+    ) {
+      inherited[name] = value;
+    }
+  }
+  return { ...inherited, ...env, ...overrides };
+}
+
+/**
  * Tokenizes a runner `cmd`. A string is split on whitespace (convenient, but
  * no quoting); pass an array when an argument contains spaces.
  */

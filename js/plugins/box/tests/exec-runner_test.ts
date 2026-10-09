@@ -23,11 +23,53 @@ import { after, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { box } from '../src/box.js';
 import { execRunner } from '../src/runners/exec-runner.js';
+import { childEnv } from '../src/runners/util.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const boxedEntry = path.join(here, 'fixtures', 'boxed-entry.ts');
 const nestedEntry = path.join(here, 'fixtures', 'nested-entry.ts');
 const TSX = path.join(here, '..', 'node_modules', '.bin', 'tsx');
+
+describe('childEnv', () => {
+  const parent = {
+    PATH: '/bin',
+    HOME: '/home/me',
+    GENKIT_ENV: 'dev',
+    GENKIT_FOO_TOKEN: 'secret-ish',
+    DISCORD_TOKEN: 'secret',
+    GEMINI_API_KEY: 'key',
+  };
+
+  it('inherits everything by default', () => {
+    assert.deepStrictEqual(childEnv(parent, true, undefined, {}), parent);
+  });
+
+  it('keeps only the basics with inheritEnv: false', () => {
+    assert.deepStrictEqual(childEnv(parent, false, undefined, {}), {
+      PATH: '/bin',
+      HOME: '/home/me',
+      GENKIT_ENV: 'dev',
+    });
+  });
+
+  it('adds named vars to the basics', () => {
+    assert.deepStrictEqual(
+      Object.keys(childEnv(parent, ['GEMINI_API_KEY'], undefined, {})).sort(),
+      ['GEMINI_API_KEY', 'GENKIT_ENV', 'HOME', 'PATH']
+    );
+  });
+
+  it('layers env over inherited vars and overrides over both', () => {
+    const env = childEnv(
+      parent,
+      true,
+      { GEMINI_API_KEY: 'other', GENKIT_RUNTIME_ID: 'mine' },
+      { GENKIT_RUNTIME_ID: 'box-1' }
+    );
+    assert.strictEqual(env.GEMINI_API_KEY, 'other');
+    assert.strictEqual(env.GENKIT_RUNTIME_ID, 'box-1');
+  });
+});
 
 describe('execRunner (integration)', () => {
   const runners: Array<{ close(): Promise<void> }> = [];
@@ -168,6 +210,93 @@ describe('execRunner (integration)', () => {
         delete process.env.GENKIT_REFLECTION_SECRET_TOKEN;
       else process.env.GENKIT_REFLECTION_SECRET_TOKEN = saved;
     }
+  });
+
+  /** Runs `fn` with `vars` set in this process's env, then restores it. */
+  async function withEnv<T>(
+    vars: Record<string, string>,
+    fn: () => Promise<T>
+  ): Promise<T> {
+    const saved = Object.fromEntries(
+      Object.keys(vars).map((k) => [k, process.env[k]])
+    );
+    Object.assign(process.env, vars);
+    try {
+      return await fn();
+    } finally {
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
+  }
+
+  async function readEnv(
+    runner: ReturnType<typeof execRunner>,
+    names: string[]
+  ): Promise<Record<string, string>> {
+    const conn = await runner.acquire('singleton');
+    const res = await conn.runAction<Record<string, string>>({
+      key: '/tool/readEnv',
+      input: { names },
+    });
+    return res.result ?? {};
+  }
+
+  it('inheritEnv: false keeps secrets out of the box but sets env', async () => {
+    await withEnv({ BOX_TEST_SECRET: 'hunter2' }, async () => {
+      const runner = track(
+        execRunner({
+          cmd: `${TSX} ${boxedEntry}`,
+          inheritEnv: false,
+          env: { BOX_TEST_GIVEN: 'given' },
+        })
+      );
+      const seen = await readEnv(runner, [
+        'BOX_TEST_SECRET',
+        'BOX_TEST_GIVEN',
+        'PATH',
+        'GENKIT_RUNTIME_ID',
+      ]);
+      assert.strictEqual(seen.BOX_TEST_SECRET, undefined);
+      assert.strictEqual(seen.BOX_TEST_GIVEN, 'given');
+      assert.ok(seen.PATH, 'basics are kept');
+      assert.ok(seen.GENKIT_RUNTIME_ID, 'box vars are set');
+    });
+  });
+
+  it('inheritEnv as a list inherits only the named vars', async () => {
+    await withEnv({ BOX_TEST_A: 'a', BOX_TEST_B: 'b' }, async () => {
+      const runner = track(
+        execRunner({ cmd: `${TSX} ${boxedEntry}`, inheritEnv: ['BOX_TEST_A'] })
+      );
+      assert.deepStrictEqual(
+        await readEnv(runner, ['BOX_TEST_A', 'BOX_TEST_B']),
+        { BOX_TEST_A: 'a' }
+      );
+    });
+  });
+
+  it('inherits everything by default', async () => {
+    await withEnv({ BOX_TEST_SECRET: 'hunter2' }, async () => {
+      const runner = track(execRunner({ cmd: `${TSX} ${boxedEntry}` }));
+      assert.deepStrictEqual(await readEnv(runner, ['BOX_TEST_SECRET']), {
+        BOX_TEST_SECRET: 'hunter2',
+      });
+    });
+  });
+
+  it('honors readyTimeoutMs', async () => {
+    // A process that stays up but never connects.
+    const runner = track(
+      execRunner({
+        cmd: [process.execPath, '-e', 'setInterval(() => {}, 1000)'],
+        readyTimeoutMs: 200,
+      })
+    );
+    const started = Date.now();
+    await assert.rejects(runner.acquire('k'), /Timed out after 200ms/);
+    assert.ok(Date.now() - started < 5_000);
   });
 
   it('enables reflection in the box even when the caller disabled its own', async () => {

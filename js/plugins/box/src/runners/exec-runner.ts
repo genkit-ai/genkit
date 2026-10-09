@@ -32,7 +32,7 @@ import type {
   RunActionResult,
   RunOptions,
 } from '../types.js';
-import { commandArgv, untilReady } from './util.js';
+import { childEnv, commandArgv, untilReady, type InheritEnv } from './util.js';
 
 /** Options for {@link execRunner}. */
 export interface ExecRunnerOptions {
@@ -51,6 +51,20 @@ export interface ExecRunnerOptions {
   isolate?: SandboxProvider;
   /** Working directory for spawned boxes. Defaults to the current cwd. */
   cwd?: string;
+  /**
+   * Which of this process's env vars the box inherits. `true` (default): all
+   * of them, API keys included. `false`: only the basics a runtime needs to
+   * start (`PATH`, `HOME`, locale, temp dirs, `NODE_*`, `GENKIT_ENV`, ...).
+   * An array: the basics plus the named vars.
+   */
+  inheritEnv?: InheritEnv;
+  /**
+   * Env vars to set in the box, on top of what it inherits. The box's own
+   * reflection vars (`GENKIT_REFLECTION_*`, `GENKIT_RUNTIME_ID`) always win.
+   */
+  env?: Record<string, string>;
+  /** How long to wait for a new box to connect. Defaults to 30s. */
+  readyTimeoutMs?: number;
 }
 
 interface BoxInstance {
@@ -201,21 +215,25 @@ export class ExecRunner implements BoxRunner {
       `Box spawning runtime ${runtimeId} via ${this.provider.name}: ` +
         `${prepared.cmd} ${prepared.args.join(' ')}`
     );
-    // The child inherits this process's env (API keys, PATH, GENKIT_ENV), so
-    // it runs in the same mode as its caller. Reflection settings are the
-    // exception and must be overridden after the spread: under `genkit start`
-    // we inherit the CLI's secret and v2 URL, which belong to the CLI, not to
+    // By default the child inherits this process's env (API keys, PATH,
+    // GENKIT_ENV), so it runs in the same mode as its caller; `inheritEnv`
+    // narrows that. Reflection settings always win: under `genkit start` we
+    // inherit the CLI's secret and v2 URL, which belong to the CLI, not to
     // our host. Reflection is forced on for the same reason: a caller running
     // without dev mode, or with its own reflection turned off, still needs
     // working boxes. No GENKIT_ENV=dev is needed.
     const child = spawn(prepared.cmd, prepared.args, {
-      env: {
-        ...process.env,
-        ...prepared.env,
-        [REFLECTION_ENABLED_ENV]: 'true',
-        GENKIT_REFLECTION_V2_SERVER: prepared.reflectUrl,
-        [REFLECTION_SECRET_ENV]: this.host.secret ?? '',
-      },
+      env: childEnv(
+        process.env,
+        this.options.inheritEnv ?? true,
+        this.options.env,
+        {
+          ...prepared.env,
+          [REFLECTION_ENABLED_ENV]: 'true',
+          GENKIT_REFLECTION_V2_SERVER: prepared.reflectUrl,
+          [REFLECTION_SECRET_ENV]: this.host.secret ?? '',
+        }
+      ),
       cwd: prepared.cwd,
       stdio: ['ignore', 'inherit', 'inherit'],
     });
@@ -231,7 +249,11 @@ export class ExecRunner implements BoxRunner {
     const stopWaiting = new AbortController();
     try {
       await untilReady(
-        this.host.waitForRuntime(runtimeId, 30_000, stopWaiting.signal),
+        this.host.waitForRuntime(
+          runtimeId,
+          this.options.readyTimeoutMs ?? 30_000,
+          stopWaiting.signal
+        ),
         child,
         `Box runtime (${prepared.cmd})`,
         signal

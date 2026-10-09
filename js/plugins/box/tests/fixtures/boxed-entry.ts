@@ -51,6 +51,23 @@ ai.defineTool(
   async ({ text }) => ({ out: text.toUpperCase() })
 );
 
+// Reports env vars as the box sees them (absent ones are omitted).
+ai.defineTool(
+  {
+    name: 'readEnv',
+    description: 'Returns the named env vars.',
+    inputSchema: z.object({ names: z.array(z.string()) }),
+    outputSchema: z.record(z.string()),
+  },
+  async ({ names }) =>
+    Object.fromEntries(
+      names.flatMap((n) => {
+        const v = process.env[n];
+        return v === undefined ? [] : [[n, v]];
+      })
+    )
+);
+
 ai.defineFlow(
   {
     name: 'countTo',

@@ -59,6 +59,13 @@ export {
   execRunner,
   type ExecRunnerOptions,
 } from './runners/exec-runner.js';
+export {
+  BASE_ENV,
+  childEnv,
+  commandArgv,
+  untilReady,
+  type InheritEnv,
+} from './runners/util.js';
 export type {
   BoxConnection,
   BoxOptions,

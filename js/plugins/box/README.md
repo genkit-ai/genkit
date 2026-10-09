@@ -217,10 +217,30 @@ box(ai, { runner: execRunner({ cmd: ['tsx', 'src/my box.ts'] }) });
 A box that can't start (missing binary, crash on boot) fails `acquire` right
 away rather than at the readiness timeout.
 
-The child inherits your environment (API keys included), so a plain subprocess
-is for trusted code and relocation, not containment. Boxes nest: a boxed agent
-can itself box a tool, each level in its own process. Call `box.close()` when
-you are done; it stops every child the runner started.
+Boxes nest: a boxed agent can itself box a tool, each level in its own
+process. Call `box.close()` when you are done; it stops every child the runner
+started.
+
+### Environment
+
+By default the child inherits your environment, API keys and other secrets
+included. To hand it only what it needs:
+
+```ts
+execRunner({
+  cmd: 'node lib/boxed.js',
+  inheritEnv: false, // or ['GEMINI_API_KEY'] to inherit just those
+  env: { GEMINI_API_KEY: process.env.GEMINI_API_KEY! },
+});
+```
+
+With `inheritEnv: false` the child still gets the basics a runtime needs to
+start (`PATH`, `HOME`, locale, temp dirs, `NODE_*`, `GENKIT_ENV`, and
+`GENKIT_TELEMETRY_SERVER` so its traces reach the Dev UI). `env` is set on top
+of whatever is inherited, and the box's own reflection vars always win.
+
+New boxes have 30 seconds to connect; raise `readyTimeoutMs` for slow starts
+(e.g. many plugins on a cold container).
 
 ## Tracing
 
