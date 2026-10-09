@@ -107,7 +107,6 @@ Open the Dev UI in your browser to interact with registered flows and agents dir
 ### Documentation & Maintenance
 - **API Reference:** For complete class and method signatures, see [docs/index.md](docs/index.md).
 - **Contributing & Standards:** For coding conventions, commit guidelines, and type-checking rules, see [CONTRIBUTING.md](../CONTRIBUTING.md).
-- **Plugin Conventions:** Naming rules for plugin arguments (e.g. `project=` for Google Cloud), see [docs/plugin_conventions.md](docs/plugin_conventions.md).
 - **Release Playbook:** For maintainer release procedures, see [docs/release_playbook.md](docs/release_playbook.md).
 
 ## License

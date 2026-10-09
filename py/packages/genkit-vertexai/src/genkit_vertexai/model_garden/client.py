@@ -125,36 +125,3 @@ class CachedOpenAI:
         if self._client is None:
             raise RuntimeError('Model Garden OpenAI client was not built after credential refresh.')
         return self._client
-
-
-class OpenAIClient:
-    """Factory for AsyncOpenAI clients authenticated via Google Cloud.
-
-    Use the async ``create()`` classmethod instead of direct instantiation
-    to avoid blocking the event loop during credential refresh.
-    """
-
-    @classmethod
-    async def create(cls, **openai_params: object) -> _AsyncOpenAI:
-        """Create an AsyncOpenAI client with refreshed Google credentials.
-
-        Runs the blocking ``credentials.refresh()`` call in a thread so
-        the event loop is never blocked.
-
-        Args:
-            **openai_params: Must include ``location`` and optionally
-                ``project``.
-
-        Returns:
-            A configured AsyncOpenAI client.
-        """
-        location = str(openai_params.get('location') or '')
-        project_str = str(val) if (val := openai_params.get('project')) is not None else None
-
-        # Offload blocking credential refresh to a thread.
-        credentials, resolved_project = await asyncio.to_thread(_refresh_credentials, project_str)
-
-        return _AsyncOpenAI(
-            api_key=credentials.token,
-            base_url=_openai_base_url(location=location, project=resolved_project),
-        )
