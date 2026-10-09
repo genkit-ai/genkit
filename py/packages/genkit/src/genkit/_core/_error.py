@@ -16,8 +16,6 @@
 
 """Error classes and utilities for the Genkit framework."""
 
-import json
-import logging
 import math
 import reprlib
 import time
@@ -479,12 +477,12 @@ class GenkitError(Exception):
         return runtime_error_reason(self.details)
 
     def to_callable_serializable(self) -> HttpErrorWireFormat:
-        """Served-flow wire body; same redaction as ``get_callable_json``.
+        """Served-flow wire body; same redaction as ``error_body``.
 
         Only a PublicError keeps its message and details. In-process code
         that needs the real error reads ``original_message`` and ``details``.
         """
-        body = get_callable_json(self)
+        body = error_body(self)
         return HttpErrorWireFormat(
             details=body.get('details'),
             status=body['status'],
@@ -621,12 +619,12 @@ def _client_details(details: Any) -> Any:  # noqa: ANN401
     return dumped
 
 
-def get_http_status(error: object) -> int:
-    """HTTP status for a served-flow error.
+def error_status(error: object) -> int:
+    """HTTP status to send back when a served flow fails; pairs with ``error_body``.
 
-    A PublicError keeps its own status (NOT_FOUND is a 404). Any other
-    GenkitError, a provider-sourced error, a plain exception, or anything
-    else is a 500.
+    A PublicError keeps its own status (NOT_FOUND is a 404), and a bad
+    request to the flow itself keeps its 4xx. Any other GenkitError, a
+    provider error, a plain exception, or anything else is a 500.
     """
     facing = _client_facing_error(error)
     if facing is not None:
@@ -663,13 +661,24 @@ def get_reflection_json(error: object, *, trace_id: str | None = None) -> Reflec
     return ref.model_copy(update={'details': details})
 
 
-def get_callable_json(error: object) -> dict[str, Any]:
-    """JSON body for a served-flow HTTP or SSE error.
+def error_body(error: object) -> dict[str, Any]:
+    """JSON body to send back when a served flow fails.
 
     Only a PublicError's message, details, and status go on the wire; it's
-    the one error whose author said the text is safe for callers. Any other
-    GenkitError, a provider-sourced error, and anything else become
-    ``{"message": "Internal Error", "status": "INTERNAL"}``.
+    the one error whose author said the text is safe for callers. A bad
+    request to the flow itself keeps its 4xx status with a generic sentence
+    such as ``"Invalid argument"``. Any other GenkitError, a provider error,
+    and anything else become ``{"message": "Internal Error", "status": "INTERNAL"}``.
+
+    Example:
+        ```python
+        from genkit.web import error_body, error_status
+
+        try:
+            response = await my_flow.run(input=data)
+        except Exception as e:
+            return JSONResponse(error_body(e), status_code=error_status(e))
+        ```
     """
     facing = _client_facing_error(error)
     if facing is None:
@@ -684,27 +693,6 @@ def get_callable_json(error: object) -> dict[str, Any]:
         if details is not None:
             body['details'] = details
     return body
-
-
-_JSON_SEPARATORS = (',', ':')
-
-
-def served_error_json(*, error: object) -> tuple[int, str]:
-    """HTTP status and compact JSON body for a served-flow failure."""
-    return get_http_status(error), json.dumps(get_callable_json(error), separators=_JSON_SEPARATORS)
-
-
-def served_stream_error_event(*, error: object) -> str:
-    """SSE ``data: {"error": ...}`` event for a served-flow failure."""
-    return f'data: {json.dumps({"error": get_callable_json(error)}, separators=_JSON_SEPARATORS)}\n\n'
-
-
-def log_served_failure(*, adapter_logger: logging.Logger, error: Exception, where: str) -> None:
-    """Log a served-flow failure; 5xx includes the traceback."""
-    if get_http_status(error) >= 500:
-        adapter_logger.exception('served flow %s failed', where)
-    else:
-        adapter_logger.warning('served flow %s failed: %s', where, error)
 
 
 def get_error_stack(error: object) -> str | None:

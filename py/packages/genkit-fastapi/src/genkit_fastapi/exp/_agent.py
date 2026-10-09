@@ -27,6 +27,7 @@ from pydantic import BaseModel
 from genkit import PublicError
 from genkit.exp.agent import Agent, SessionSnapshot
 from genkit.plugin_api import Action, ActionKind
+from genkit.web import read_body
 
 from .._handler import _mount_action
 
@@ -35,16 +36,14 @@ StateT = TypeVar('StateT', bound=BaseModel)
 
 def extract_agent_input(body: dict[str, Any]) -> object:
     """Read the agent wire shapes: ``message``, top-level snapshot/session ids, or ``data``/``input``."""
-    if 'data' in body:
-        return body['data']
+    if 'data' in body or not body:
+        return read_body(body)
     if 'input' in body:
-        return body['input']
+        return read_body({'data': body['input']})
     if 'message' in body:
         return {'message': {'role': 'user', 'content': [{'text': str(body['message'])}]}}
     if 'snapshotId' in body or 'sessionId' in body:
         return body
-    if not body:
-        return None
     raise PublicError(
         'INVALID_ARGUMENT',
         'Action request must be wrapped in {"data": ...} object',

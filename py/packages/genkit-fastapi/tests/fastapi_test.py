@@ -73,12 +73,23 @@ def create_app() -> FastAPI:
     return app
 
 
-def test_void_flow_accepts_empty_body() -> None:
-    """runFlow() with no input sends {}; void flows should still run."""
+def test_empty_body_runs_no_input_flow_on_every_adapter() -> None:
+    """POST {} to a served flow that takes no input returns its result."""
     client = TestClient(create_app())
     response = client.post('/void_flow', json={})
     assert response.status_code == 200
-    assert response.json()['result'] == {'ok': 'true'}
+    assert response.json() == {'result': {'ok': 'true'}}
+
+
+def test_input_key_body_is_400_on_every_adapter() -> None:
+    """POST {"input": 1} to a served flow is a 400 telling the caller to wrap in data."""
+    client = TestClient(create_app())
+    response = client.post('/void_flow', json={'input': 1})
+    assert response.status_code == 400
+    assert (
+        response.content
+        == b'{"message":"Flow request must be wrapped in {\\"data\\": ...}","status":"INVALID_ARGUMENT"}'
+    )
 
 
 def test_void_flow_accepts_explicit_null_data() -> None:
@@ -119,7 +130,7 @@ def test_unknown_body_shape_still_returns_400() -> None:
     response = client.post('/chat', json={'foo': 'bar'})
     assert response.status_code == 400
     assert response.json() == {
-        'message': 'Action request must be wrapped in {"data": ...} object',
+        'message': 'Flow request must be wrapped in {"data": ...}',
         'status': 'INVALID_ARGUMENT',
     }
 
@@ -146,8 +157,6 @@ def test_serve_flow_message_body_is_rejected_as_bad_request() -> None:
 
 def test_500_flow_exception_returns_valid_json() -> None:
     """500 (flow exception) must return valid JSON (not TypeError).
-
-    get_callable_json now returns a dict, so json.dumps works directly.
 
     Uses real code snippet (SQL injection pattern) to exercise error path realistically.
     """
@@ -217,6 +226,28 @@ def test_fastapi_flow_raising_public_error_returns_its_status_and_message() -> N
     assert response.json() == {'message': 'no order 99', 'status': 'NOT_FOUND'}
 
 
+def test_fastapi_flow_error_response_is_redacted_body_and_status() -> None:
+    """A flow raising GenkitError('secret') is a compact 500 Internal Error; a bad input stays a compact 400."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def save(_: str) -> None:
+        raise GenkitError(status='INVALID_ARGUMENT', message='secret')
+
+    app = FastAPI()
+    app.include_router(serve_flow(save, base_path='/save'))
+    client = TestClient(app)
+
+    crashed = client.post('/save', json={'data': 'x'})
+    assert crashed.status_code == 500
+    assert crashed.content == b'{"message":"Internal Error","status":"INTERNAL"}'
+    assert crashed.headers['content-type'] == 'application/json'
+
+    bad_input = client.post('/save', json={'data': {'ssn': '123-45-6789'}})
+    assert bad_input.status_code == 400
+    assert bad_input.content == b'{"message":"Invalid argument","status":"INVALID_ARGUMENT"}'
+
+
 def test_fastapi_flow_raising_value_error_returns_500_internal_error_without_stack() -> None:
     """FastAPI POST to a flow that raises ValueError returns a generic 500."""
     ai = Genkit()
@@ -256,8 +287,8 @@ def test_fastapi_stream_flow_raising_not_found_sends_sse_internal_error() -> Non
     assert 'alice@example.com' not in response.text
 
 
-def test_fastapi_stream_flow_raising_public_error_sends_its_status_and_message() -> None:
-    """FastAPI SSE to a flow that raises PublicError ends with an error event carrying its message."""
+def test_streamed_flow_failure_ends_with_same_error_frame() -> None:
+    """A streamed flow raising PublicError('NOT_FOUND', 'no order 99') ends with that exact error frame."""
     ai = Genkit()
 
     @ai.flow()
@@ -272,7 +303,7 @@ def test_fastapi_stream_flow_raising_public_error_sends_its_status_and_message()
         headers={'Accept': 'text/event-stream'},
     )
 
-    assert sse_error_event(response.text) == {'message': 'no order 99', 'status': 'NOT_FOUND'}
+    assert response.content.endswith(b'data: {"error":{"message":"no order 99","status":"NOT_FOUND"}}\n\n')
 
 
 def test_fastapi_stream_flow_raising_value_error_sends_sse_internal_error_without_stack() -> None:

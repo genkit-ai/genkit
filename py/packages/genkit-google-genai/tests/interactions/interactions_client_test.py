@@ -38,8 +38,8 @@ from genkit_google_genai._interactions._options import ClientOptions
 from google.genai.interactions import Interaction
 
 from genkit import GenkitError
-from genkit._core._error import get_callable_json, get_http_status
 from genkit.plugin_api import GENKIT_CLIENT_HEADER
+from genkit.web import error_body, error_status
 
 
 def test_google_ai_url_defaults() -> None:
@@ -322,6 +322,6 @@ async def test_interactions_http_error_is_served_as_internal_error(http_client: 
 
     error = exc_info.value
     assert error.status == 'UNAUTHENTICATED'
-    assert get_callable_json(error) == {'message': 'Internal Error', 'status': 'INTERNAL'}
-    assert get_http_status(error) == 500
-    assert 'API key not valid' not in str(get_callable_json(error))
+    assert error_body(error) == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert error_status(error) == 500
+    assert 'API key not valid' not in str(error_body(error))
