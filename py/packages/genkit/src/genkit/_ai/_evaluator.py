@@ -158,6 +158,9 @@ def evaluator(
 
     Plugin ``init`` / ``resolve`` return this. ``define_evaluator`` registers it.
     """
+    if not inspect.iscoroutinefunction(fn):
+        raise TypeError(f"Action handlers must be async functions. Got sync function for '{name}'.")
+
     evaluator_meta = build_evaluator_metadata(
         name=name,
         display_name=display_name,

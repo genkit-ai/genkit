@@ -16,6 +16,8 @@
 
 """Plugin authors build evaluators with genkit.evaluator.evaluator and list them with evaluator_action_metadata."""
 
+from typing import Any, cast
+
 import pytest
 from pydantic import BaseModel
 
@@ -84,6 +86,16 @@ async def test_evaluator_action_runs_fn_per_datapoint() -> None:
     assert [row.test_case_id for row in rows] == ['case1', 'case2']
     assert [score.score for score in rows[0].evaluation] == [True]
     assert [score.score for score in rows[1].evaluation] == [False]
+
+
+def test_evaluator_sync_fn_raises_type_error() -> None:
+    """evaluator(...) rejects a sync fn when built, instead of failing every row at run time."""
+
+    def sync_match(datapoint: BaseDataPoint, options: object | None) -> EvalFnResponse:
+        return EvalFnResponse(test_case_id=datapoint.test_case_id or '', evaluation=[Score(score=True)])
+
+    with pytest.raises(TypeError, match="Got sync function for 't/e'"):
+        evaluator('t/e', cast(Any, sync_match), display_name='Exact match', definition='output equals reference')
 
 
 def test_evaluator_action_metadata_carries_display_name_definition_billed() -> None:
