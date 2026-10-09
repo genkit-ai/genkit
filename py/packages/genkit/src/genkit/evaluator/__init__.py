@@ -16,14 +16,34 @@
 
 """Evaluator namespace module for Genkit.
 
-This module provides evaluator-related types and utilities for plugin authors
-and advanced users who need access to the evaluator protocol types.
+Everything needed to call or write an evaluator lives here.
 
 Example:
-    from genkit.evaluator import (
-        EvalRequest,
-        evaluator_action_metadata,
+    ```python
+    from genkit import Genkit
+    from genkit.evaluator import BaseDataPoint, EvalFnResponse, Score
+
+    ai = Genkit()
+
+
+    # 1. Score one datapoint
+    async def allergen_check(datapoint: BaseDataPoint, _options: object | None = None) -> EvalFnResponse:
+        ok = 'peanut' not in str(datapoint.output).lower()
+        return EvalFnResponse(test_case_id=datapoint.test_case_id or '', evaluation=[Score(score=ok)])
+
+
+    ai.define_evaluator(
+        name='allergen_check', display_name='Allergen check', definition='Flags peanuts.', fn=allergen_check
     )
+
+    # 2. Run it over a dataset
+    results = await ai.evaluate(
+        evaluator='allergen_check',
+        dataset=[BaseDataPoint(input='Suggest a dish.', output='Peanut noodles')],
+    )
+    print(results[0].evaluation[0].score)
+    # => False
+    ```
 """
 
 from genkit._ai._evaluator import (
@@ -51,9 +71,10 @@ __all__ = [
     'ScoreDetails',
     # Status
     'ScoreStatus',
-    # Factory functions and metadata
-    'evaluator_action_metadata',
+    # Factory functions
     'evaluator_ref',
     # Reference types
     'EvaluatorRef',
+    # Plugin list_actions
+    'evaluator_action_metadata',
 ]

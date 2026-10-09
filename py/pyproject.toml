@@ -17,7 +17,6 @@
 [project]
 authors = [{ name = "Google" }]
 dependencies = [
-  "dotpromptz==0.1.5",
   "genkit",
   "genkit-amazon-bedrock",
   "genkit-anthropic",
@@ -352,7 +351,7 @@ aiohappyeyeballs      = "2.6.1"    # Python Software Foundation (transitive dep 
 aiohttp               = "3.13.3"   # Apache-2.0 AND MIT (transitive dep of xai-sdk)
 certifi               = "2026.1.4" # TODO: Verify.
 dependencies          = true
-dotpromptz-handlebars = "0.1.8"    # Apache-2.0 "https://github.com/google/dotprompt/blob/main/LICENSE"
+dotpromptz-handlebars = "0.2.0"    # Apache-2.0 "https://github.com/google/dotprompt/blob/main/LICENSE"
 google-crc32c         = "1.8.0"    # Apache-2.0
 mistralai             = ">=1.9.11" # Apache-2.0 "https://github.com/mistralai/client-python/blob/main/LICENSE"
 multidict             = "6.7.0"    # Apache-2.0

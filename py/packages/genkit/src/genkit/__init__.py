@@ -46,7 +46,7 @@ from genkit._ai._tools import (
     tool,
     tool_response,
 )
-from genkit._core._action import Action as Flow, ActionRunContext, StreamResponse
+from genkit._core._action import ActionRunContext, StreamResponse
 from genkit._core._context import ContextProvider, RequestData
 from genkit._core._dap import DynamicActionProvider
 from genkit._core._error import GenkitError, GenkitRuntimeError, Interrupt, PublicError, RuntimeErrorReason
@@ -62,7 +62,6 @@ from genkit._core._model import (
 from genkit._core._tool import Tool
 from genkit._core._typing import (
     Embedding,
-    EvalFnResponse,
     FinishReason,
     Media,
     Operation,
@@ -87,7 +86,6 @@ __all__ = [
     'FinishReason',
     # Embed, evaluate, and background jobs
     'Embedding',
-    'EvalFnResponse',
     'Operation',
     # Tools and HITL
     'tool',
@@ -97,7 +95,6 @@ __all__ = [
     'tool_response',
     'MultipartToolResponse',
     # Flows, prompts, errors
-    'Flow',
     'ActionRunContext',
     'Prompt',
     'GenkitError',

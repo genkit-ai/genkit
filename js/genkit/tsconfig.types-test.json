@@ -1,0 +1,5 @@
+{
+  // Type-checks the type-level assertions in `tests/types` (never executed).
+  "extends": "./tsconfig.json",
+  "include": ["src", "tests/types"]
+}

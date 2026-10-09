@@ -118,12 +118,14 @@ def _register_atexit_cleanup_handler(path_to_remove: Path | None) -> None:
     _ = atexit.register(sync_cleanup)
 
 
-def _create_and_write_runtime_file(runtime_dir: Path, spec: ServerSpec) -> Path:
+def _create_and_write_runtime_file(runtime_dir: Path, spec: ServerSpec, secret: str | None = None) -> Path:
     """Calculates metadata, creates filename, and writes the runtime file.
 
     Args:
         runtime_dir: The directory to write the file into.
         spec: The ServerSpec containing reflection server details.
+        secret: Reflection secret to advertise, so a CLI process that did not
+            spawn this runtime can still authenticate to it.
 
     Returns:
         The Path object of the created file.
@@ -147,10 +149,14 @@ def _create_and_write_runtime_file(runtime_dir: Path, spec: ServerSpec) -> Path:
         'genkitVersion': 'py/' + GENKIT_VERSION,
         'reflectionServerUrl': spec.url,
         'timestamp': current_datetime.isoformat(),
+        **({'reflectionSecret': secret} if secret else {}),
     })
 
     logger.debug(f'Writing runtime file: {runtime_file_path}')
-    with Path(runtime_file_path).open('w', encoding='utf-8') as f:
+    # 0600: the file carries the reflection secret.
+    with os.fdopen(
+        os.open(runtime_file_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), 'w', encoding='utf-8'
+    ) as f:
         _ = f.write(metadata)
 
     logger.debug(f'Initialized runtime file: {runtime_file_path}')
@@ -191,6 +197,7 @@ class RuntimeManager:
         spec: ServerSpec,
         runtime_dir: str | Path | None = None,
         lazy_write: bool = False,
+        secret: str | None = None,
     ) -> None:
         """Initialize the RuntimeManager.
 
@@ -201,8 +208,10 @@ class RuntimeManager:
             lazy_write: If True, the runtime file will not be written immediately
                         on context entry. It must be written manually by calling
                         write_runtime_file().
+            secret: Reflection secret to advertise in the runtime file.
         """
         self.spec: ServerSpec = spec
+        self._secret: str | None = secret
         if runtime_dir is None:
             self._runtime_dir: Path = Path(Path.cwd()) / DEFAULT_RUNTIME_DIR_NAME
         else:
@@ -287,7 +296,7 @@ class RuntimeManager:
         if self._runtime_file_path:
             return self._runtime_file_path
 
-        self._runtime_file_path = _create_and_write_runtime_file(self._runtime_dir, self.spec)
+        self._runtime_file_path = _create_and_write_runtime_file(self._runtime_dir, self.spec, self._secret)
         _register_atexit_cleanup_handler(self._runtime_file_path)
         with ACTIVE_CLEANUPS_LOCK:
             ACTIVE_CLEANUPS.append(self.cleanup)
