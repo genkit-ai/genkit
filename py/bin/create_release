@@ -245,21 +245,21 @@ if [ "$USE_PR_NOTES" = true ]; then
     TAG_MSG="Genkit Python SDK v${VERSION}
 
 Release highlights:
-- See py/CHANGELOG.md for full release notes
+- Release notes: https://github.com/genkit-ai/genkit/releases/tag/${TAG_NAME}
 - Based on PR #${PR_NUMBER}
 
 Published packages:
 - genkit (core)
-- genkit-* (12 plugins)"
+- genkit-* plugins"
 else
     TAG_MSG="Genkit Python SDK v${VERSION}
 
 Release highlights:
-- See py/CHANGELOG.md for full release notes
+- Release notes: https://github.com/genkit-ai/genkit/releases/tag/${TAG_NAME}
 
 Published packages:
 - genkit (core)
-- genkit-* (12 plugins)"
+- genkit-* plugins"
 fi
 git tag -a "$TAG_NAME" -m "$TAG_MSG"
 

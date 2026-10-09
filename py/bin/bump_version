@@ -199,7 +199,7 @@ else
   echo -e "${GREEN}╚════════════════════════════════════════════════════════════════╝${NC}"
   echo ""
   echo -e "Next steps:"
-  echo -e "  1. Update CHANGELOG.md with release notes"
+  echo -e "  1. Write the release notes in the PR body (create_release publishes them as the GitHub release)"
   echo -e "  2. Open a PR to main (CI verifies build, tests, and consistency)"
   echo -e "  3. Once merged, run: ${CYAN}py/bin/create_release $NEW_VERSION${NC}"
 fi
