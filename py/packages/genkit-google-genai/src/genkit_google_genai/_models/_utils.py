@@ -52,7 +52,7 @@ import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, cast
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit, urlunsplit
 
 import httpx
 from google import genai
@@ -493,6 +493,9 @@ class PartConverter:
     async def _download_image(cls, url: str) -> tuple[bytes, str | None]:
         """Downloads media content from a URL and returns raw bytes with MIME type.
 
+        Redirects are followed and private or loopback addresses are not
+        blocked, so apps that pass end-user URLs here should vet them first.
+
         Args:
             url: The URL to download.
 
@@ -500,22 +503,43 @@ class PartConverter:
             A tuple containing the content (bytes) and its MIME type (str or None).
 
         Raises:
-            GenkitError: INVALID_ARGUMENT when the media host answers with a
-                4xx other than 408/429: the caller's URL is wrong or not
-                public, and another model would fail on it too.
+            GenkitError: INVALID_ARGUMENT if the body is larger than 20MB, or
+                when the media host answers with a 4xx other than 408/429:
+                the caller's URL is wrong or not public, and another model
+                would fail on it too.
             httpx.HTTPError: A 5xx, 408, 429, timeout, or transport failure,
                 left unclassified because it may pass on retry.
         """
-        response = await _media_client().get(url, timeout=60.0)
-        try:
-            response.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            code = e.response.status_code
-            if 400 <= code < 500 and code not in (408, 429):
-                raise GenkitError(
-                    status='INVALID_ARGUMENT',
-                    message=f'Could not download request media (HTTP {code})',
-                    cause=e,
-                ) from e
-            raise
-        return response.content, response.headers.get('content-type')
+        async with _media_client().stream('GET', url, timeout=60.0) as response:
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                code = e.response.status_code
+                if 400 <= code < 500 and code not in (408, 429):
+                    raise GenkitError(
+                        status='INVALID_ARGUMENT',
+                        message=f'Could not download request media (HTTP {code})',
+                        cause=e,
+                    ) from e
+                raise
+            declared = response.headers.get('content-length', '')
+            if declared.isdigit() and int(declared) > _MAX_MEDIA_DOWNLOAD_BYTES:
+                raise _media_too_large(url)
+            body = bytearray()
+            async for chunk in response.aiter_bytes():
+                body.extend(chunk)
+                if len(body) > _MAX_MEDIA_DOWNLOAD_BYTES:
+                    raise _media_too_large(url)
+            return bytes(body), response.headers.get('content-type')
+
+
+# A truncated image or video is a corrupt file, so a URL over the cap fails
+# instead of sending the first 20MB.
+_MAX_MEDIA_DOWNLOAD_BYTES = 20 * 1024 * 1024
+
+
+def _media_too_large(url: str) -> GenkitError:
+    # Signed URLs carry credentials in the query string, so the message only names host and path.
+    parts = urlsplit(url)
+    where = urlunsplit((parts.scheme, parts.netloc.rpartition('@')[2], parts.path, '', ''))
+    return GenkitError(status='INVALID_ARGUMENT', message=f'media at {where} is larger than 20MB')

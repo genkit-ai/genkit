@@ -50,14 +50,15 @@ This means we must resolve media URLs client-side before passing to Ollama::
     image_bytes = await fetch(url)
     ollama.Image(value=image_bytes)  # ✅ Works
 
-The ``_resolve_image()`` method handles three cases:
+The ``_resolve_image()`` method always hands ``Image`` bytes, so a media
+string is never read as a file on the server:
 
-- **Data URIs** (``data:image/jpeg;base64,...``): Strips the prefix and
-  returns the raw base64 string, matching the JS canonical Ollama plugin.
-- **HTTP/HTTPS URLs**: Downloads the image using the shared
-  loop-local ``httpx`` client and returns raw bytes.
-- **Other strings** (local file paths, raw base64): Passed through
-  unchanged for the ``Image`` type to handle.
+- **Data URIs** (``data:image/jpeg;base64,...``): The payload is decoded.
+- **HTTP/HTTPS URLs**: Downloaded using the shared loop-local ``httpx``
+  client; a body over 20MB raises ``INVALID_ARGUMENT``.
+- **Bare base64 strings**: Decoded strictly.
+- **Anything else** (local file paths, ``file://`` URLs): Raises
+  ``INVALID_ARGUMENT``.
 
 **User-Agent Header Requirement**
 
@@ -82,11 +83,14 @@ that rejects URLs, so we must download images explicitly. This is the only
 behavioral divergence from the JS plugin.
 """
 
+import base64
+import binascii
 import json
 import mimetypes
 import re
 from collections.abc import Callable
 from typing import Any, Literal, cast
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 import ollama as ollama_api
@@ -115,6 +119,51 @@ def _image_fetch_client() -> httpx.AsyncClient:
         headers={'User-Agent': 'Genkit/1.0 (https://github.com/genkit-ai/genkit; genkit@google.com)'},
         follow_redirects=True,
     )
+
+
+# A truncated image is a corrupt file, so a URL over the cap fails instead of
+# sending the first 20MB.
+_MAX_MEDIA_DOWNLOAD_BYTES = 20 * 1024 * 1024
+
+
+async def _download_media(url: str) -> bytes:
+    """Download an http(s) image, failing with INVALID_ARGUMENT past 20MB.
+
+    Redirects are followed and private or loopback addresses are not
+    blocked, so apps that pass end-user URLs here should vet them first.
+    """
+    async with _image_fetch_client().stream('GET', url) as response:
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            status = e.response.status_code
+            # A 4xx means the caller's URL is bad (missing, forbidden,
+            # gone). Not NOT_FOUND: Fallback would switch models over a URL
+            # no model can fetch. 408/429 and 5xx stay raw so Retry can try
+            # the image host again.
+            if isinstance(status, int) and 400 <= status < 500 and status not in (408, 429):
+                raise GenkitError(
+                    status='INVALID_ARGUMENT',
+                    message=f'ollama: could not fetch media URL (HTTP {status})',
+                    cause=e,
+                ) from e
+            raise
+        declared = response.headers.get('content-length', '')
+        if declared.isdigit() and int(declared) > _MAX_MEDIA_DOWNLOAD_BYTES:
+            raise _media_too_large(url)
+        body = bytearray()
+        async for chunk in response.aiter_bytes():
+            body.extend(chunk)
+            if len(body) > _MAX_MEDIA_DOWNLOAD_BYTES:
+                raise _media_too_large(url)
+        return bytes(body)
+
+
+def _media_too_large(url: str) -> GenkitError:
+    # Signed URLs carry credentials in the query string, so the message only names host and path.
+    parts = urlsplit(url)
+    where = urlunsplit((parts.scheme, parts.netloc.rpartition('@')[2], parts.path, '', ''))
+    return GenkitError(status='INVALID_ARGUMENT', message=f'media at {where} is larger than 20MB')
 
 
 # Matches <think>/<thinking> blocks case-insensitively (``i``) across newlines
@@ -769,15 +818,9 @@ class OllamaModel:
     async def build_chat_messages(cls, request: ModelRequest) -> list[ollama_api.Message]:
         """Build the messages for the chat API.
 
-        Handles MediaPart by converting image URLs to the format expected
-        by the Ollama Python client's ``Image`` type, which only accepts
-        base64 strings, raw bytes, or local file paths — not HTTP URLs
-        or full data URIs.
-
-        For HTTP/HTTPS URLs, the image is downloaded and passed as raw
-        bytes. For data URIs, the ``data:...;base64,`` prefix is stripped
-        to extract the base64 payload. This matches the JS canonical
-        Ollama plugin's ``toOllamaRequest()`` behavior.
+        Each MediaPart becomes image bytes via ``_resolve_image``: data
+        URIs and bare base64 are decoded, HTTP/HTTPS URLs are downloaded,
+        and anything else raises ``INVALID_ARGUMENT``.
 
         Args:
             request: The request to build the messages for.
@@ -804,54 +847,51 @@ class OllamaModel:
         return messages
 
     @staticmethod
-    async def _resolve_image(url: str) -> str | bytes:
-        """Convert a media URL to a value the Ollama Image type accepts.
+    async def _resolve_image(url: str) -> bytes:
+        """Convert a media URL to bytes the Ollama Image type accepts.
 
-        The Ollama Python client's ``Image`` type only accepts base64
-        strings, raw bytes, or local file paths. This method handles:
+        The Ollama client's ``Image`` reads any string that happens to be
+        an existing path off the server's disk, so this always returns
+        bytes:
 
-        - **Data URIs**: Strips the ``data:...;base64,`` prefix and
-          returns the raw base64 string.
-        - **HTTP/HTTPS URLs**: Downloads the image and returns the raw
-          bytes.
-        - **Other strings** (e.g. local file paths or raw base64):
-          Passed through unchanged.
+        - **Data URIs**: Decodes the base64 payload.
+        - **HTTP/HTTPS URLs**: Downloads the image (up to 20MB).
+        - **Bare base64 strings**: Decoded strictly.
+
+        Anything else, including a local file path, raises.
 
         Args:
             url: The media URL from a ``MediaPart``.
 
         Returns:
-            A value suitable for ``ollama.Image(value=...)``.
+            Image bytes for ``ollama.Image(value=...)``.
+
+        Raises:
+            GenkitError: INVALID_ARGUMENT for a malformed data URI, a 4xx
+                (other than 408/429) from the image host, a download over
+                20MB, or a string that is none of the above.
         """
         if url.startswith('data:'):
-            # Strip data URI prefix → raw base64: "data:image/jpeg;base64,ABC" → "ABC"
-            comma_idx = url.find(',')
-            if comma_idx == -1:
-                raise ValueError(f'Malformed data URI (missing comma separator): {url!r}')
-            return url[comma_idx + 1 :]
+            _, comma, payload = url.partition(',')
+            if not comma:
+                raise GenkitError(status='INVALID_ARGUMENT', message='Malformed data: URL (missing comma separator).')
+            try:
+                return base64.b64decode(payload, validate=True)
+            except binascii.Error as e:
+                raise GenkitError(
+                    status='INVALID_ARGUMENT', message='Malformed data: URL (payload is not valid base64).'
+                ) from e
 
         if url.startswith(('http://', 'https://')):
-            # TODO(#4360): Replace with downloadRequestMedia middleware (G15 parity).
-            response = await _image_fetch_client().get(url)
-            try:
-                response.raise_for_status()
-            except httpx.HTTPStatusError as e:
-                status = e.response.status_code
-                # A 4xx means the caller's URL is bad (missing, forbidden,
-                # gone). Not NOT_FOUND: Fallback would switch models over a URL
-                # no model can fetch. 408/429 and 5xx stay raw so Retry can try
-                # the image host again.
-                if isinstance(status, int) and 400 <= status < 500 and status not in (408, 429):
-                    raise GenkitError(
-                        status='INVALID_ARGUMENT',
-                        message=f'ollama: could not fetch media URL (HTTP {status})',
-                        cause=e,
-                    ) from e
-                raise
-            return response.content
+            return await _download_media(url)
 
-        # Local file path or raw base64 — pass through to Image.
-        return url
+        try:
+            return base64.b64decode(url, validate=True)
+        except binascii.Error as e:
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message='Ollama media must be a data: URL, an http(s) URL, or base64 image data.',
+            ) from e
 
     @staticmethod
     def _from_ollama_role(role: str | None) -> Role:
