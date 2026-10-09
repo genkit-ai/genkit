@@ -52,7 +52,10 @@ from genkit_google_genai._constants import GLOBAL_LOCATION, is_multi_regional_lo
 if TYPE_CHECKING:
     from genkit import Genkit as GenkitRegistry
 
-_evaluator_client = loop_local_client(lambda: httpx.AsyncClient(timeout=httpx.Timeout(60.0)))
+
+@loop_local_client
+def _evaluator_client() -> httpx.AsyncClient:
+    return httpx.AsyncClient(timeout=httpx.Timeout(60.0))
 
 
 class VertexAIEvaluationMetricType(StrEnum):

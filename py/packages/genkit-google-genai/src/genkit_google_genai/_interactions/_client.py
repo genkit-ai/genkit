@@ -43,8 +43,12 @@ API_REVISION = '2026-05-20'
 # Creates can run for many minutes. No read timeout, but keep a connect
 # budget so a hung handshake doesn't sit forever.
 NO_TIMEOUT = httpx.Timeout(None, connect=10.0)
-_http_client = loop_local_client(lambda: httpx.AsyncClient(timeout=NO_TIMEOUT))
 RESERVED_HEADERS = ('x-goog-api-key', 'x-goog-api-client')
+
+
+@loop_local_client
+def _http_client() -> httpx.AsyncClient:
+    return httpx.AsyncClient(timeout=NO_TIMEOUT)
 
 
 def google_ai_url(

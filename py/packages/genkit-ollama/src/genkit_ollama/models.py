@@ -105,15 +105,17 @@ from genkit_ollama.constants import (
 
 logger = structlog.get_logger(__name__)
 
+
 # Some image hosts (Wikimedia, for one) answer 403 to requests without a real
 # User-Agent, so the image fetch client always sends one.
-_image_fetch_client = loop_local_client(
-    lambda: httpx.AsyncClient(
+@loop_local_client
+def _image_fetch_client() -> httpx.AsyncClient:
+    return httpx.AsyncClient(
         timeout=httpx.Timeout(60.0),
         headers={'User-Agent': 'Genkit/1.0 (https://github.com/genkit-ai/genkit; genkit@google.com)'},
         follow_redirects=True,
     )
-)
+
 
 # Matches <think>/<thinking> blocks case-insensitively (``i``) across newlines
 # (``s``), non-greedy (``.*?``) so multiple blocks in one response are captured

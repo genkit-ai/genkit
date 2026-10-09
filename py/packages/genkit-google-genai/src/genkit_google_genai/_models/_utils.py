@@ -63,15 +63,17 @@ from genkit.plugin_api import loop_local_client
 
 logger = logging.getLogger(__name__)
 
+
 # TODO(#4360): Replace with downloadRequestMedia middleware.
 # Some media hosts (Wikipedia, for one) answer 403 to requests without a real
 # User-Agent.
-_media_client = loop_local_client(
-    lambda: httpx.AsyncClient(
+@loop_local_client
+def _media_client() -> httpx.AsyncClient:
+    return httpx.AsyncClient(
         headers={'User-Agent': 'Genkit/1.0 (https://github.com/genkit-ai/genkit; genkit@google.com)'},
         follow_redirects=True,
     )
-)
+
 
 # The field a non-object tool input rides under on the wire.
 TOOL_INPUT_FIELD = 'input'

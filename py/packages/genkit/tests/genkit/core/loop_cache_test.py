@@ -79,3 +79,14 @@ async def test_mock_is_closed_does_not_force_rebuild() -> None:
     get = loop_local_client(MagicMock)
     first = get()
     assert get() is first
+
+
+@pytest.mark.asyncio
+async def test_decorator_form_caches_the_factory_result() -> None:
+    @loop_local_client
+    def http_client() -> httpx.AsyncClient:
+        return httpx.AsyncClient(timeout=60.0)
+
+    first = http_client()
+    assert http_client() is first
+    await first.aclose()

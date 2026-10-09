@@ -14,7 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Per-event-loop resource caching for async HTTP clients."""
+"""Per-event-loop caching for async clients and other loop-bound objects."""
 
 import asyncio
 import threading
@@ -35,11 +35,35 @@ def _is_closed(obj: object) -> bool:
 
 
 def loop_local_client(factory: Callable[[], T]) -> Callable[[], T]:
-    """Return a getter that caches one resource instance per event loop.
+    """Cache one instance per event loop. Use it as a decorator on a factory.
 
-    A cached object whose ``is_closed`` is true (httpx and the OpenAI and
-    Anthropic SDK clients expose it) is rebuilt, so closing a client by hand
-    doesn't leave a dead one in the cache.
+    Async clients (httpx, the OpenAI and Anthropic SDKs) are bound to the event
+    loop that created them, so one module-level client breaks when Genkit runs
+    on a second loop. The decorated function builds the client on first call
+    in each loop and returns that same client on every later call there.
+
+    ```python
+    import httpx
+    from genkit.plugin_api import loop_local_client
+
+
+    # 1. Decorate a factory
+    @loop_local_client
+    def http_client() -> httpx.AsyncClient:
+        return httpx.AsyncClient(timeout=60.0)
+
+
+    # 2. Call it wherever you need the client
+    response = await http_client().get('https://example.com/menu.json')
+
+    # 3. Same loop, same client
+    print(http_client() is http_client())
+    # => True
+    ```
+
+    A cached object whose ``is_closed`` is true (httpx property, SDK method) is
+    rebuilt, so closing a client by hand doesn't leave a dead one in the cache.
+    Plain callables work too, e.g. ``loop_local_client(asyncio.Lock)``.
     """
     by_loop: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, T] = weakref.WeakKeyDictionary()
     lock = threading.Lock()

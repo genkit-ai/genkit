@@ -52,9 +52,11 @@ StateT = TypeVarExt('StateT', bound=BaseModel, default=Any)
 # fixed key; callable when a token needs refreshing between requests.
 HeadersProvider = dict[str, str] | Callable[[], dict[str, str] | Awaitable[dict[str, str]]]
 
-# One client per event loop. Same timeout the transport had before: 60s between
-# reads, 10s to connect.
-_agent_client = loop_local_client(lambda: httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0)))
+
+@loop_local_client
+def _agent_client() -> httpx.AsyncClient:
+    # Same timeout the transport had before: 60s between reads, 10s to connect.
+    return httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0))
 
 
 def parse_stream_line(line: str) -> dict[str, Any] | None:
