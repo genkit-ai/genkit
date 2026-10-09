@@ -141,7 +141,7 @@ class ModelGardenModel:
         self.name = model
 
         def _new_cached_client() -> 'CachedOpenAI':
-            # client.py imports openai, which is an extra; load it on first generate.
+            # _client.py imports openai, which is an extra; load it on first generate.
             from genkit_vertexai._model_garden._client import CachedOpenAI
 
             return CachedOpenAI(location=location, project=project)
