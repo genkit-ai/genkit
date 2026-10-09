@@ -21,6 +21,7 @@ from __future__ import annotations
 from typing import Any
 from unittest import mock
 
+import httpx
 import pytest
 
 from genkit import Part
@@ -35,8 +36,10 @@ class FakeClient:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
 
-    def stream(self, method: str, url: str, *, json: dict[str, Any], headers: dict[str, str]) -> Any:
-        self.calls.append({'url': url, 'json': json, 'headers': headers})
+    def stream(
+        self, method: str, url: str, *, json: dict[str, Any], headers: dict[str, str], timeout: Any = None
+    ) -> Any:
+        self.calls.append({'url': url, 'json': json, 'headers': headers, 'timeout': timeout})
 
         class Resp:
             status_code = 200
@@ -55,8 +58,10 @@ class FakeClient:
 
         return Resp()
 
-    async def post(self, url: str, *, json: dict[str, Any], headers: dict[str, str] | None = None) -> Any:
-        self.calls.append({'url': url, 'json': json, 'headers': headers or {}})
+    async def post(
+        self, url: str, *, json: dict[str, Any], headers: dict[str, str] | None = None, timeout: Any = None
+    ) -> Any:
+        self.calls.append({'url': url, 'json': json, 'headers': headers or {}, 'timeout': timeout})
 
         class Resp:
             status_code = 200
@@ -84,7 +89,7 @@ async def test_run_turn_posts_data_init_envelope_with_accept_header() -> None:
     client = FakeClient()
     transport = HttpAgentTransport(url=URL, state_management='server')
     with mock.patch(
-        'genkit._ai._agents._transports._http.get_cached_client',
+        'genkit._ai._agents._transports._http._agent_client',
         return_value=client,
     ):
         await _run_turn(transport)
@@ -101,7 +106,7 @@ async def test_get_snapshot_posts_data_envelope() -> None:
     client = FakeClient()
     transport = HttpAgentTransport(url=URL, state_management='server')
     with mock.patch(
-        'genkit._ai._agents._transports._http.get_cached_client',
+        'genkit._ai._agents._transports._http._agent_client',
         return_value=client,
     ):
         await transport.get_snapshot(snapshot_id='snap-1')
@@ -118,7 +123,7 @@ async def test_static_headers_on_turn_and_snapshot() -> None:
         headers={'Authorization': 'Bearer static'},
     )
     with mock.patch(
-        'genkit._ai._agents._transports._http.get_cached_client',
+        'genkit._ai._agents._transports._http._agent_client',
         return_value=client,
     ):
         await _run_turn(transport)
@@ -142,7 +147,7 @@ async def test_sync_callable_headers_resolved_per_request() -> None:
         headers=lambda: {'Authorization': f'Bearer {next(tokens)}'},
     )
     with mock.patch(
-        'genkit._ai._agents._transports._http.get_cached_client',
+        'genkit._ai._agents._transports._http._agent_client',
         return_value=client,
     ):
         await _run_turn(transport)
@@ -167,7 +172,7 @@ async def test_async_callable_headers_resolved_per_request() -> None:
         headers=refresh,
     )
     with mock.patch(
-        'genkit._ai._agents._transports._http.get_cached_client',
+        'genkit._ai._agents._transports._http._agent_client',
         return_value=client,
     ):
         await _run_turn(transport)
@@ -175,3 +180,37 @@ async def test_async_callable_headers_resolved_per_request() -> None:
 
     assert client.calls[0]['headers']['Authorization'] == 'Bearer async-1'
     assert client.calls[1]['headers']['Authorization'] == 'Bearer async-2'
+
+
+@pytest.mark.asyncio
+async def test_timeout_defaults_to_60s_reads_and_10s_connect() -> None:
+    client = FakeClient()
+    transport = HttpAgentTransport(url=URL, state_management='server')
+    with mock.patch('genkit._ai._agents._transports._http._agent_client', return_value=client):
+        await _run_turn(transport)
+        await transport.get_snapshot(snapshot_id='snap-1')
+
+    for call in client.calls:
+        assert call['timeout'] == httpx.Timeout(60.0, connect=10.0)
+
+
+@pytest.mark.asyncio
+async def test_timeout_reaches_turn_and_one_shot_requests() -> None:
+    """A long research turn can go quiet for minutes between chunks."""
+    client = FakeClient()
+    transport = HttpAgentTransport(url=URL, state_management='server', timeout=600.0)
+    with mock.patch('genkit._ai._agents._transports._http._agent_client', return_value=client):
+        await _run_turn(transport)
+        await transport.abort_snapshot('snap-1')
+
+    assert [call['timeout'] for call in client.calls] == [httpx.Timeout(600.0, connect=10.0)] * 2
+
+
+@pytest.mark.asyncio
+async def test_timeout_none_waits_indefinitely_but_still_bounds_connect() -> None:
+    client = FakeClient()
+    transport = HttpAgentTransport(url=URL, state_management='server', timeout=None)
+    with mock.patch('genkit._ai._agents._transports._http._agent_client', return_value=client):
+        await _run_turn(transport)
+
+    assert client.calls[0]['timeout'] == httpx.Timeout(None, connect=10.0)

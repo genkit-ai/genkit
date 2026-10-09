@@ -30,7 +30,7 @@ CLAUDE_MODEL = 'modelgarden/anthropic/claude-sonnet-4-5@20250929'
 
 
 def model_garden_app() -> Genkit:
-    return Genkit(plugins=[ModelGarden(project_id='my-project', location='us-east5')])
+    return Genkit(plugins=[ModelGarden(project='my-project', location='us-east5')])
 
 
 @pytest.mark.asyncio
@@ -50,7 +50,7 @@ async def test_generate_model_garden_claude_secrets_api_key_fails_invalid_argume
 
 def openai_compatible_handler() -> Callable[[ModelRequest, ActionRunContext], Awaitable[ModelResponse]]:
     return ModelGardenModel(
-        model='meta/llama-3.1-405b-instruct-maas', location='us-east5', project_id='my-project'
+        model='meta/llama-3.1-405b-instruct-maas', location='us-east5', project='my-project'
     ).to_openai_compatible_model()
 
 

@@ -27,7 +27,8 @@ uv add genkit-evaluators
 ## Usage
 
 ```python
-from genkit import BaseDataPoint, Genkit
+from genkit import Genkit
+from genkit.evaluator import BaseDataPoint
 from genkit_evaluators import register_genkit_evaluators
 
 ai = Genkit()

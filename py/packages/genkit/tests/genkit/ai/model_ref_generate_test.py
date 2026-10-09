@@ -43,12 +43,6 @@ class AllowExtraConfig(ModelConfig):
     model_config = ConfigDict(extra='allow')
 
 
-class AllowExtraConfig(ModelConfig):
-    """A plugin class that still lets unknown keys through, so overlay pins see them."""
-
-    model_config = ConfigDict(extra='allow')
-
-
 class OtherFamilyConfig(BaseModel):
     """A second family's knobs, used to pin leftover keys across a hop."""
 

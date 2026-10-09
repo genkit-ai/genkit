@@ -22,12 +22,6 @@ from genkit_django.handler import RequestData
 class TestDjangoModuleExports:
     """Tests for Django plugin module-level exports."""
 
-    def test_handler_module_importable(self) -> None:
-        """Test Handler module importable."""
-        from genkit_django import handler
-
-        assert hasattr(handler, 'genkit_django_handler')
-
     def test_genkit_django_handler_signature(self) -> None:
         """Test Genkit django handler signature."""
         import inspect
@@ -38,12 +32,6 @@ class TestDjangoModuleExports:
         params = list(sig.parameters.keys())
         assert 'ai' in params
         assert 'context_provider' in params
-
-    def test_package_name(self) -> None:
-        """Package exports its fully qualified module name."""
-        from genkit_django import package_name
-
-        assert package_name() == 'genkit_django'
 
 
 class TestRequestDataBase:

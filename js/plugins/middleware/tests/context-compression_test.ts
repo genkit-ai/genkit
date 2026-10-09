@@ -1310,6 +1310,88 @@ describe('contextCompression middleware', () => {
     );
   });
 
+  it('stamps inputTokens when the model returns candidates[0].message instead of message', async () => {
+    const ai = genkit({});
+    let capturedRequest: GenerateRequest | undefined;
+
+    // Mirrors @genkit-ai/google-genai, which returns `candidates` rather than
+    // a top-level `message` from the raw model action.
+    const rawCandidateResponse = {
+      candidates: [
+        {
+          index: 0,
+          finishReason: 'stop' as const,
+          message: {
+            role: 'model' as const,
+            content: [{ text: 'reply' }],
+            metadata: { existing: true },
+          },
+        },
+      ],
+      usage: { inputTokens: 800 },
+    };
+    const originalFirstCandidate = rawCandidateResponse.candidates[0];
+    const pm = ai.defineModel({ name: 'candidatesModel' }, async (req) => {
+      capturedRequest = req;
+      return rawCandidateResponse;
+    });
+
+    const mw = contextCompression({
+      maxInputTokens: 500,
+      toolResponses: { maxChars: 20, preserveRecent: 0 },
+    });
+
+    const res1 = await ai.generate({
+      model: pm,
+      messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+      use: [mw],
+    });
+
+    const stampedModelMsg = res1.message!.toJSON();
+    assert.strictEqual(
+      (stampedModelMsg.metadata?.contextCompression as any)?.inputTokens,
+      800
+    );
+    // Pre-existing message metadata must be preserved alongside the stamp, and
+    // the raw response object returned by the model must not be mutated in place.
+    assert.strictEqual(stampedModelMsg.metadata?.existing, true);
+    assert.strictEqual(
+      rawCandidateResponse.candidates[0],
+      originalFirstCandidate
+    );
+
+    // Turn 0 of a separate generate call should read the stamp (not the
+    // character heuristic) and trigger compression.
+    const res2 = (await ai.generate({
+      model: pm,
+      messages: [
+        { role: 'user', content: [{ text: 'hi' }] },
+        {
+          role: 'tool',
+          content: [
+            {
+              toolResponse: {
+                name: 'search',
+                output: 'Short text exceeding 20 chars for truncation test',
+              },
+            },
+          ],
+        },
+        stampedModelMsg,
+        { role: 'user', content: [{ text: 'follow up' }] },
+      ],
+      use: [mw],
+    })) as any;
+
+    assert.strictEqual(res2.custom?.contextCompression?.triggered, true);
+    assert.strictEqual(res2.custom?.contextCompression?.inputTokensBefore, 800);
+    const toolMsg = capturedRequest!.messages.find((m) => m.role === 'tool');
+    assert.match(
+      String(toolMsg!.content[0].toolResponse?.output),
+      /\[Truncated \d+ characters\]/
+    );
+  });
+
   it('does not split UTF-16 surrogate pairs when slicing at maxChars boundary', async () => {
     const ai = genkit({});
     let capturedRequest: GenerateRequest | undefined;
@@ -1697,6 +1779,298 @@ describe('contextCompression middleware', () => {
       String(toolMessages[1].content[0].toolResponse?.output).startsWith(
         'Shared output 3 '
       )
+    );
+  });
+
+  it('does not falsely deduplicate distinct parallel tool calls without ref when model message has leading reasoning or text parts', async () => {
+    const ai = genkit({});
+    let capturedRequest: GenerateRequest | undefined;
+
+    const pm = ai.defineModel(
+      { name: 'parallelReasoningDedupModel' },
+      async (req) => {
+        capturedRequest = req;
+        return {
+          message: { role: 'model', content: [{ text: 'done' }] },
+          usage: { inputTokens: 50 },
+        };
+      }
+    );
+
+    await ai.generate({
+      model: pm,
+      messages: [
+        { role: 'user', content: [{ text: 'fetch both reports' }] },
+        {
+          role: 'model',
+          content: [
+            { reasoning: 'Thinking...' },
+            {
+              toolRequest: {
+                name: 'fetchReport',
+                input: { reportId: 'report-101' },
+              },
+            },
+            {
+              toolRequest: {
+                name: 'fetchReport',
+                input: { reportId: 'report-102' },
+              },
+            },
+          ],
+        },
+        {
+          role: 'tool',
+          content: [
+            {
+              toolResponse: {
+                name: 'fetchReport',
+                output: 'Report 101 content',
+              },
+            },
+            {
+              toolResponse: {
+                name: 'fetchReport',
+                output: 'Report 102 content',
+              },
+            },
+          ],
+        },
+      ],
+      use: [
+        contextCompression({
+          maxMessages: 2,
+          deduplicateToolResponses: {
+            matchBy: 'name-and-input',
+            keepRecent: 1,
+          },
+        }),
+      ],
+    });
+
+    const toolMsg = capturedRequest!.messages.find((m) => m.role === 'tool');
+    assert.ok(toolMsg);
+    assert.strictEqual(toolMsg.content.length, 2);
+    assert.strictEqual(
+      toolMsg.content[0].toolResponse?.output,
+      'Report 101 content'
+    );
+    assert.strictEqual(
+      toolMsg.content[1].toolResponse?.output,
+      'Report 102 content'
+    );
+  });
+
+  it('accurately deduplicates repeated inputs across turns without ref when model messages have leading reasoning parts', async () => {
+    const ai = genkit({});
+    let capturedRequest: GenerateRequest | undefined;
+
+    const pm = ai.defineModel(
+      { name: 'crossTurnReasoningDedupModel' },
+      async (req) => {
+        capturedRequest = req;
+        return {
+          message: { role: 'model', content: [{ text: 'done' }] },
+          usage: { inputTokens: 50 },
+        };
+      }
+    );
+
+    await ai.generate({
+      model: pm,
+      messages: [
+        { role: 'user', content: [{ text: 'fetch reports' }] },
+        {
+          role: 'model',
+          content: [
+            { reasoning: 'First turn reasoning' },
+            { text: 'Fetching 101 and 102' },
+            {
+              toolRequest: {
+                name: 'fetchReport',
+                input: { reportId: 'report-101' },
+              },
+            },
+            {
+              toolRequest: {
+                name: 'fetchReport',
+                input: { reportId: 'report-102' },
+              },
+            },
+          ],
+        },
+        {
+          role: 'tool',
+          content: [
+            {
+              toolResponse: {
+                name: 'fetchReport',
+                output: 'Report 101 v1 ' + 'X'.repeat(100),
+              },
+            },
+            {
+              toolResponse: {
+                name: 'fetchReport',
+                output: 'Report 102 v1 ' + 'Y'.repeat(100),
+              },
+            },
+          ],
+        },
+        {
+          role: 'model',
+          content: [
+            { reasoning: 'Second turn reasoning' },
+            {
+              toolRequest: {
+                name: 'fetchReport',
+                input: { reportId: 'report-102' },
+              },
+            },
+          ],
+        },
+        {
+          role: 'tool',
+          content: [
+            {
+              toolResponse: {
+                name: 'fetchReport',
+                output: 'Report 102 v2 ' + 'Z'.repeat(100),
+              },
+            },
+          ],
+        },
+      ],
+      use: [
+        contextCompression({
+          maxInputTokens: 50,
+          deduplicateToolResponses: {
+            matchBy: 'name-and-input',
+            keepRecent: 1,
+          },
+        }),
+      ],
+    });
+
+    const toolMessages = capturedRequest!.messages.filter(
+      (m) => m.role === 'tool'
+    );
+    assert.strictEqual(toolMessages.length, 2);
+    // Turn 1: report-101 is unique so preserved; report-102 is repeated in turn 2 so deduplicated
+    assert.ok(
+      String(toolMessages[0].content[0].toolResponse?.output).startsWith(
+        'Report 101 v1 '
+      )
+    );
+    assert.match(
+      String(toolMessages[0].content[1].toolResponse?.output),
+      /Deduplicated/
+    );
+    // Turn 2: newest occurrence of report-102 is preserved
+    assert.ok(
+      String(toolMessages[1].content[0].toolResponse?.output).startsWith(
+        'Report 102 v2 '
+      )
+    );
+
+    // Reused per-turn ref ("0" in both turns with different inputs), mixed [no-ref, ref] ordering,
+    // and unmatched tool responses must not falsely deduplicate under name-and-input
+    await ai.generate({
+      model: pm,
+      messages: [
+        { role: 'user', content: [{ text: 'run' }] },
+        {
+          role: 'tool',
+          content: [
+            { toolResponse: { name: 'orphan', output: 'Orphan 1' } },
+            { toolResponse: { name: 'orphan', output: 'Orphan 2' } },
+          ],
+        },
+        {
+          role: 'model',
+          content: [
+            {
+              toolRequest: {
+                name: 'fetchReport',
+                ref: '0',
+                input: { id: 'a' },
+              },
+            },
+            {
+              toolRequest: {
+                name: 'fetchReport',
+                input: { id: 'b' },
+              },
+            },
+          ],
+        },
+        {
+          role: 'tool',
+          content: [
+            { toolResponse: { name: 'fetchReport', output: 'Out B' } },
+            {
+              toolResponse: {
+                name: 'fetchReport',
+                ref: '0',
+                output: 'Out A',
+              },
+            },
+          ],
+        },
+        {
+          role: 'model',
+          content: [
+            {
+              toolRequest: {
+                name: 'fetchReport',
+                ref: '0',
+                input: { id: 'c' },
+              },
+            },
+          ],
+        },
+        {
+          role: 'tool',
+          content: [
+            {
+              toolResponse: {
+                name: 'fetchReport',
+                ref: '0',
+                output: 'Out C ' + 'X'.repeat(200),
+              },
+            },
+          ],
+        },
+      ],
+      use: [
+        contextCompression({
+          maxInputTokens: 20,
+          deduplicateToolResponses: {
+            matchBy: 'name-and-input',
+            keepRecent: 1,
+          },
+        }),
+      ],
+    });
+
+    const edgeToolMsgs = capturedRequest!.messages.filter(
+      (m) => m.role === 'tool'
+    );
+    assert.strictEqual(edgeToolMsgs.length, 3);
+    assert.strictEqual(
+      edgeToolMsgs[0].content[0].toolResponse?.output,
+      'Orphan 1'
+    );
+    assert.strictEqual(
+      edgeToolMsgs[0].content[1].toolResponse?.output,
+      'Orphan 2'
+    );
+    assert.strictEqual(
+      edgeToolMsgs[1].content[0].toolResponse?.output,
+      'Out B'
+    );
+    assert.strictEqual(
+      edgeToolMsgs[1].content[1].toolResponse?.output,
+      'Out A'
     );
   });
 
@@ -3559,5 +3933,413 @@ describe('contextCompression middleware', () => {
     assert.strictEqual(msgs[0].content[0].text, 'u3');
     assert.strictEqual(msgs[1].content[0].text, 'm3');
     assert.strictEqual(msgs[2].content[0].text, 'u4');
+  });
+
+  it('enforces char limits, media approximation, and exact boundaries on multipart toolResponse.content', async () => {
+    const ai = genkit({});
+    let capturedRequest: GenerateRequest | undefined;
+    const pm = ai.defineModel({ name: 'multipartModel' }, async (req) => {
+      capturedRequest = req;
+      return {
+        message: { role: 'model', content: [{ text: 'done' }] },
+        usage: { inputTokens: 50 },
+      };
+    });
+
+    const runWithTool = (
+      output: unknown,
+      content: Part[],
+      opts: Parameters<typeof contextCompression>[0]
+    ) =>
+      ai.generate({
+        model: pm,
+        messages: [
+          { role: 'user', content: [{ text: 'run' }] },
+          {
+            role: 'model',
+            content: [{ toolRequest: { name: 't', ref: '1', input: {} } }],
+          },
+          {
+            role: 'tool',
+            content: [
+              { toolResponse: { name: 't', ref: '1', output, content } },
+            ],
+          },
+        ],
+        use: [contextCompression(opts)],
+      });
+    const sentToolResp = () =>
+      capturedRequest!.messages.find((m) => m.role === 'tool')!.content[0]
+        .toolResponse!;
+    const getCc = (res: { custom?: unknown }) =>
+      (res.custom as Record<string, unknown> | undefined)
+        ?.contextCompression as Record<string, unknown> | undefined;
+
+    // 1. Truncates content via toolResponses.maxChars into output, omits text content, and materializes via resolveCompressedHistory
+    const largeText = 'X'.repeat(200_000);
+    const truncRes = await runWithTool('ok', [{ text: largeText }], {
+      maxInputTokens: 1000,
+      maxToolResponseChars: 500,
+      toolResponses: { maxChars: 100, preserveRecent: 0 },
+    });
+    assert.strictEqual(getCc(truncRes)?.toolResponsesTruncated, 1);
+    assert.strictEqual(getCc(truncRes)?.toolResponsesSafetyCapped, 0);
+    const expectedTrunc = `ok\n\n${'X'.repeat(96)}\n\n[Truncated 199904 characters]`;
+    assert.strictEqual(sentToolResp().output, expectedTrunc);
+    assert.strictEqual('content' in sentToolResp(), false);
+    assert.strictEqual(
+      truncRes.messages.find((m) => m.role === 'tool')!.content[0].toolResponse
+        ?.content?.[0].text,
+      largeText
+    );
+    const resolvedResp = resolveCompressedHistory(truncRes.messages).find(
+      (m) => m.role === 'tool'
+    )!.content[0].toolResponse!;
+    assert.strictEqual(resolvedResp.output, expectedTrunc);
+    assert.strictEqual('content' in resolvedResp, false);
+
+    // 2. Enforces maxToolResponseChars safety cap even under maxInputTokens
+    const capRes = await runWithTool(
+      'ok',
+      [
+        { text: 'A'.repeat(100) },
+        { text: 'B'.repeat(1000) },
+        { text: 'C'.repeat(500) },
+      ],
+      { maxInputTokens: 100_000, maxToolResponseChars: 500 }
+    );
+    assert.strictEqual(getCc(capRes)?.toolResponsesSafetyCapped, 1);
+    assert.strictEqual(
+      sentToolResp().output,
+      `ok\n\n${'A'.repeat(100)}\n\n${'B'.repeat(394)}\n\n---\n\n[TRUNCATED: Response was 1602 chars but only first 500 are shown.]`
+    );
+    assert.strictEqual('content' in sentToolResp(), false);
+
+    // 3. Strips content when output alone exhausts the limit
+    await runWithTool('O'.repeat(200), [{ text: 'C'.repeat(300) }], {
+      maxInputTokens: 50,
+      maxToolResponseChars: 500,
+      toolResponses: { maxChars: 100, preserveRecent: 0 },
+    });
+    assert.strictEqual(
+      sentToolResp().output,
+      `${'O'.repeat(100)}\n\n[Truncated 400 characters]`
+    );
+    assert.strictEqual('content' in sentToolResp(), false);
+
+    // 4. Uses DATA_URI_APPROX_CHARS for inline data: media and folds compact descriptor into output when truncated
+    const dataUrl = `data:image/png;base64,${'A'.repeat(500_000)}`;
+    const mediaPart: Part = {
+      media: { url: dataUrl, contentType: 'image/png' },
+    };
+    const mediaOkRes = await runWithTool('ok', [mediaPart], {
+      maxInputTokens: 2000,
+    });
+    assert.strictEqual(getCc(mediaOkRes), undefined);
+    assert.strictEqual(sentToolResp().content?.[0].media?.url, dataUrl);
+
+    const mediaTruncRes = await runWithTool('ok', [mediaPart], {
+      maxInputTokens: 100,
+      toolResponses: { maxChars: 100, preserveRecent: 0 },
+    });
+    assert.strictEqual(getCc(mediaTruncRes)?.toolResponsesTruncated, 1);
+    const expectedOmittedMediaChars =
+      dataUrl.length - '[media: image/png]'.length;
+    assert.strictEqual(
+      sentToolResp().output,
+      `ok\n\n[media: image/png]\n\n[Truncated ${expectedOmittedMediaChars} characters]`
+    );
+    assert.strictEqual('content' in sentToolResp(), false);
+
+    // Non-data media URLs emit a complete compact descriptor (never sliced mid-URL) or omit it if budget is too tight
+    const remoteUrl = `https://example.com/assets/${'img'.repeat(100)}.jpg`;
+    const remoteMediaPart: Part = {
+      media: { url: remoteUrl, contentType: 'image/jpeg' },
+    };
+    await runWithTool('ok', [remoteMediaPart], {
+      maxInputTokens: 20,
+      toolResponses: { maxChars: 50, preserveRecent: 0 },
+    });
+    assert.strictEqual(
+      sentToolResp().output,
+      `ok\n\n[media: image/jpeg]\n\n[Truncated ${remoteUrl.length - '[media: image/jpeg]'.length} characters]`
+    );
+    assert.strictEqual('content' in sentToolResp(), false);
+
+    await runWithTool('ok', [remoteMediaPart], {
+      maxInputTokens: 20,
+      toolResponses: { maxChars: 10, preserveRecent: 0 },
+    });
+    assert.strictEqual(
+      sentToolResp().output,
+      `ok\n\n[Truncated ${remoteUrl.length} characters]`
+    );
+
+    // 5. Preserves structured non-text part in content when it fits exactly within remaining budget (2 + 18 === 20)
+    await runWithTool(
+      'ok',
+      [{ data: { status: 'ready' } }, { text: 'X'.repeat(200) }],
+      {
+        maxInputTokens: 20,
+        toolResponses: { maxChars: 20, preserveRecent: 0 },
+      }
+    );
+    assert.strictEqual(
+      sentToolResp().output,
+      'ok\n\n[Truncated 200 characters]'
+    );
+    assert.deepStrictEqual(sentToolResp().content, [
+      { data: { status: 'ready' } },
+    ]);
+  });
+
+  it('does not drop older messages when explicit preserveRecent is set and skipSummarizationThreshold skips summarization', async () => {
+    const ai = genkit({});
+    let capturedRequest: GenerateRequest | undefined;
+    let summaryCalled = false;
+
+    const summaryModel = ai.defineModel(
+      { name: 'skipPreserveRecentSummarizer' },
+      async () => {
+        summaryCalled = true;
+        return {
+          message: { role: 'model', content: [{ text: 'Summary' }] },
+          finishReason: 'stop',
+        };
+      }
+    );
+
+    const pm = ai.defineModel(
+      { name: 'skipPreserveRecentMain' },
+      async (req) => {
+        capturedRequest = req;
+        return {
+          message: { role: 'model', content: [{ text: 'done' }] },
+          usage: { inputTokens: 50 },
+        };
+      }
+    );
+
+    const historyWithLargeToolOutput: MessageData[] = [
+      { role: 'user', content: [{ text: 'u1' }] },
+      {
+        role: 'model',
+        content: [{ toolRequest: { name: 'bigTool', ref: 't1', input: {} } }],
+      },
+      {
+        role: 'tool',
+        content: [
+          {
+            toolResponse: {
+              name: 'bigTool',
+              ref: 't1',
+              output: 'X'.repeat(3000),
+            },
+          },
+        ],
+      },
+      { role: 'model', content: [{ text: 'm1' }] },
+      { role: 'user', content: [{ text: 'u2' }] },
+      { role: 'model', content: [{ text: 'm2' }] },
+      { role: 'user', content: [{ text: 'u3' }] },
+    ];
+
+    const res = await ai.generate({
+      model: pm,
+      messages: historyWithLargeToolOutput,
+      use: [
+        contextCompression({
+          maxInputTokens: 500,
+          preserveRecent: 2,
+          toolResponses: { maxChars: 50, preserveRecent: 0 },
+          summarize: { model: summaryModel },
+          skipSummarizationThreshold: 0.3,
+        }),
+      ],
+    });
+
+    assert.strictEqual(summaryCalled, false);
+    const cc = (res.custom as Record<string, unknown>)?.contextCompression as
+      | Record<string, unknown>
+      | undefined;
+    assert.ok(cc);
+    assert.strictEqual(cc.summarizationSkipped, true);
+    assert.strictEqual(cc.toolResponsesTruncated, 1);
+    assert.strictEqual(cc.messagesAfter, 7);
+    assert.strictEqual(cc.truncationNoticeInserted, false);
+    assert.strictEqual(capturedRequest!.messages.length, 7);
+
+    // Without summarize configured, cheap tool truncation that brings the prompt
+    // under maxInputTokens also prevents Step 5 from dropping messages to preserveRecent
+    const resWithoutSummarize = await ai.generate({
+      model: pm,
+      messages: historyWithLargeToolOutput,
+      use: [
+        contextCompression({
+          maxInputTokens: 500,
+          preserveRecent: 2,
+          toolResponses: { maxChars: 50, preserveRecent: 0 },
+        }),
+      ],
+    });
+    const ccNoSum = (resWithoutSummarize.custom as Record<string, unknown>)
+      ?.contextCompression as Record<string, unknown> | undefined;
+    assert.strictEqual(ccNoSum?.toolResponsesTruncated, 1);
+    assert.strictEqual(ccNoSum?.messagesAfter, 7);
+    assert.strictEqual(capturedRequest!.messages.length, 7);
+
+    // When compression is triggered by a high stamped inputTokens whose scaled
+    // post-cheap token count remains over maxInputTokens (even though chars / 3.5 <= maxInputTokens),
+    // summarization is not falsely skipped.
+    const stampedHistory: MessageData[] = [
+      { role: 'user', content: [{ text: 'u1' }] },
+      {
+        role: 'model',
+        content: [{ toolRequest: { name: 'bigTool', ref: 't1', input: {} } }],
+      },
+      {
+        role: 'tool',
+        content: [
+          {
+            toolResponse: {
+              name: 'bigTool',
+              ref: 't1',
+              output: 'X'.repeat(300),
+            },
+          },
+        ],
+      },
+      {
+        role: 'model',
+        content: [{ text: 'Y'.repeat(300) }],
+      },
+      { role: 'user', content: [{ text: 'u2' }] },
+      {
+        role: 'model',
+        metadata: { contextCompression: { inputTokens: 1000 } },
+        content: [{ text: 'm2' }],
+      },
+      { role: 'user', content: [{ text: 'u3' }] },
+    ];
+
+    await ai.generate({
+      model: pm,
+      messages: stampedHistory,
+      use: [
+        contextCompression({
+          maxInputTokens: 500,
+          preserveRecent: 2,
+          toolResponses: { maxChars: 50, preserveRecent: 0 },
+          summarize: { model: summaryModel, preserveRecent: 2 },
+          skipSummarizationThreshold: 0.3,
+        }),
+      ],
+    });
+    assert.strictEqual(summaryCalled, true);
+  });
+
+  it('summarizes 5-6 message histories with default preserveRecent options instead of dropping Turn 1 via fallback truncation', async () => {
+    const ai = genkit({});
+    let capturedRequest: GenerateRequest | undefined;
+    let summaryCalled = 0;
+
+    const summaryModel = ai.defineModel(
+      { name: 'defaultPreserveRecentSummarizer' },
+      async () => {
+        summaryCalled++;
+        return {
+          message: {
+            role: 'model',
+            content: [{ text: 'Summary of turn 1' }],
+          },
+          finishReason: 'stop',
+        };
+      }
+    );
+
+    const pm = ai.defineModel(
+      { name: 'defaultPreserveRecentMain' },
+      async (req) => {
+        capturedRequest = req;
+        return {
+          message: { role: 'model', content: [{ text: 'done' }] },
+          usage: { inputTokens: 50 },
+        };
+      }
+    );
+
+    // 5 messages totaling ~875 chars (~250 tokens), maxInputTokens = 200 -> overshootRatio = 1.25 (< 1.5)
+    const fiveMessageHistory: MessageData[] = [
+      { role: 'user', content: [{ text: 'u1 ' + 'A'.repeat(170) }] },
+      { role: 'model', content: [{ text: 'm1 ' + 'B'.repeat(170) }] },
+      { role: 'user', content: [{ text: 'u2 ' + 'C'.repeat(170) }] },
+      { role: 'model', content: [{ text: 'm2 ' + 'D'.repeat(170) }] },
+      { role: 'user', content: [{ text: 'u3 ' + 'E'.repeat(170) }] },
+    ];
+
+    const res = await ai.generate({
+      model: pm,
+      messages: fiveMessageHistory,
+      use: [
+        contextCompression({
+          maxInputTokens: 200,
+          summarize: { model: summaryModel },
+        }),
+      ],
+    });
+
+    assert.strictEqual(summaryCalled, 1);
+    const cc = (res.custom as Record<string, unknown>)?.contextCompression as
+      | Record<string, unknown>
+      | undefined;
+    assert.ok(cc);
+    assert.strictEqual(cc.summarized, true);
+    assert.strictEqual(cc.truncationNoticeInserted, false);
+    assert.ok(
+      capturedRequest!.messages[0].content[0].text?.includes(
+        'Summary of turn 1'
+      )
+    );
+
+    // Verify cross-turn resolution and re-entry on next turn
+    const resolved = resolveCompressedHistory(res.messages);
+    assert.ok(resolved[0].content[0].text?.includes('Summary of turn 1'));
+
+    // Verify user aborts during summarization propagate rather than falling back to the main model
+    let mainCalledAfterAbort = false;
+    const abortMain = ai.defineModel({ name: 'abortMain' }, async () => {
+      mainCalledAfterAbort = true;
+      return {
+        message: { role: 'model', content: [{ text: 'done' }] },
+        usage: { inputTokens: 10 },
+      };
+    });
+    const abortController = new AbortController();
+    const abortSummarizer = ai.defineModel(
+      { name: 'abortSummarizer' },
+      async () => {
+        abortController.abort(new Error('user aborted summarization'));
+        const abortErr = new Error('The operation was aborted');
+        abortErr.name = 'AbortError';
+        throw abortErr;
+      }
+    );
+
+    await assert.rejects(
+      () =>
+        ai.generate({
+          model: abortMain,
+          abortSignal: abortController.signal,
+          messages: fiveMessageHistory,
+          use: [
+            contextCompression({
+              maxInputTokens: 200,
+              summarize: { model: abortSummarizer },
+            }),
+          ],
+        }),
+      (err: Error) => err.name === 'AbortError'
+    );
+    assert.strictEqual(mainCalledAfterAbort, false);
   });
 });
