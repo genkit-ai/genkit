@@ -267,6 +267,7 @@ func NewModelAction[Config any](
 		simulateSystemPrompt(&o, nil),
 		augmentWithContext(&o, nil),
 		validateSupport(name, &o),
+		reportUsage(),
 		addAutomaticTelemetry(),
 	)(typedFn)
 
@@ -378,7 +379,8 @@ func responseError(cause error) *status.Error {
 
 // callerStopped reports whether the loop ended because the caller stopped it
 // rather than because something inside it broke: it cancelled the context, its
-// deadline expired, or the loop reached a limit it set ([ErrMaxTurnsExceeded]).
+// deadline expired, or the loop reached a limit it set ([ErrMaxTurnsExceeded],
+// [ErrBudgetExceeded]).
 // Those report [FinishReasonAborted]; everything else reports
 // [FinishReasonFailed].
 //
@@ -391,7 +393,8 @@ func callerStopped(ctx context.Context, cause error) bool {
 	return ctx.Err() != nil ||
 		errors.Is(cause, context.Canceled) ||
 		errors.Is(cause, context.DeadlineExceeded) ||
-		errors.Is(cause, ErrMaxTurnsExceeded)
+		errors.Is(cause, ErrMaxTurnsExceeded) ||
+		errors.Is(cause, ErrBudgetExceeded)
 }
 
 // failurePartial builds the partial [ModelResponse] that accompanies the
@@ -607,6 +610,28 @@ func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 	} else {
 		fn = m.Generate
 	}
+
+	// The run's total counts every model action call made under it: model
+	// actions report their usage to the context's sink (see
+	// [reportUsage]), so a call a hook makes to another model (a fallback, a
+	// judge) counts as well as a retry, and so does a nested generate, whose
+	// own sink forwards here. A response a cache serves never reaches a model
+	// action and does not count. Calls can be concurrent, hence the lock.
+	var (
+		usageMu    sync.Mutex
+		totalUsage *GenerationUsage
+	)
+	outerSink := base.UsageSinkFromContext(ctx)
+	ctx = base.WithUsageSink(ctx, func(v any) {
+		if u, ok := v.(*GenerationUsage); ok {
+			usageMu.Lock()
+			totalUsage = addUsage(totalUsage, u)
+			usageMu.Unlock()
+		}
+		if outerSink != nil {
+			outerSink(v)
+		}
+	})
 
 	// Build the full hook chains once: wrapping the model function with
 	// WrapModel hooks from middleware, and wrapping the generate iteration
@@ -904,7 +929,48 @@ func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 			resp = failurePartial(ctx, nil, lastReq, err)
 		}
 	}
+	if resp != nil {
+		usageMu.Lock()
+		resp.TotalUsage = totalUsage
+		usageMu.Unlock()
+	}
 	return resp, err
+}
+
+// addUsage returns the field-by-field sum of a and b, adding
+// [GenerationUsage.Custom] key by key. Either may be nil. It never mutates
+// its arguments, since a model or hook may retain the usage it returned.
+func addUsage(a, b *GenerationUsage) *GenerationUsage {
+	if a == nil && b == nil {
+		return nil
+	}
+	var sum GenerationUsage
+	for _, u := range []*GenerationUsage{a, b} {
+		if u == nil {
+			continue
+		}
+		sum.InputTokens += u.InputTokens
+		sum.OutputTokens += u.OutputTokens
+		sum.TotalTokens += u.TotalTokens
+		sum.InputCharacters += u.InputCharacters
+		sum.OutputCharacters += u.OutputCharacters
+		sum.InputImages += u.InputImages
+		sum.OutputImages += u.OutputImages
+		sum.InputVideos += u.InputVideos
+		sum.OutputVideos += u.OutputVideos
+		sum.InputAudioFiles += u.InputAudioFiles
+		sum.OutputAudioFiles += u.OutputAudioFiles
+		sum.ThoughtsTokens += u.ThoughtsTokens
+		sum.CachedContentTokens += u.CachedContentTokens
+		sum.CacheWriteTokens += u.CacheWriteTokens
+		for k, v := range u.Custom {
+			if sum.Custom == nil {
+				sum.Custom = make(map[string]float64, len(u.Custom))
+			}
+			sum.Custom[k] += v
+		}
+	}
+	return &sum
 }
 
 // turnOptions returns a per-turn copy of opts for the WrapGenerate hooks and
