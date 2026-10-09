@@ -55,6 +55,30 @@ config = AnthropicConfig(
 res = await ai.generate(model='anthropic/claude-sonnet-4-6', prompt='Plan a tasting menu.', config=config)
 ```
 
+## Tool choice
+
+Tool choice is Genkit's `tool_choice` option, not a config field. The plugin
+sends it as Anthropic's `tool_choice` object: `'auto'` → `{'type': 'auto'}`,
+`'required'` → `{'type': 'any'}`, `'none'` → `{'type': 'none'}`. Anthropic
+carries `disable_parallel_tool_use` inside that object, so the config takes it
+as a flat flag:
+
+```python
+# 1. Require one tool call, and only one
+res = await ai.generate(
+    model='anthropic/claude-sonnet-4-6',
+    prompt='Is the pho in stock?',
+    tools=['lookup_menu'],
+    tool_choice='required',
+    config=AnthropicConfig(disable_parallel_tool_use=True),
+)
+# Sent as: tool_choice={'type': 'any', 'disable_parallel_tool_use': True}
+```
+
+To pin one named tool, send Anthropic's object as
+`extra={'tool_choice': {'type': 'tool', 'name': 'lookup_menu'}}`; it replaces
+the translated value.
+
 ## Per-request API key
 
 To bill a call to someone else's Anthropic account, pass their key in

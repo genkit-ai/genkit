@@ -388,7 +388,7 @@ _ANTHROPIC_CONFIG_KEYS = {
     'apiVersion',
     'betas',
     'maxOutputTokens',
-    'tool_choice',
+    'disableParallelToolUse',
     'metadata',
     'thinking',
     'output_config',

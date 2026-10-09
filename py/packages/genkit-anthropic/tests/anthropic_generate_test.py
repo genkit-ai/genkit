@@ -22,11 +22,11 @@ the request body and headers the API would have received.
 
 import json
 from collections.abc import Callable
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import httpx
 import pytest
-from genkit_anthropic import Anthropic
+from genkit_anthropic import Anthropic, AnthropicConfig
 
 from genkit import FinishReason, Genkit, GenkitError
 from genkit.middleware import BaseMiddleware
@@ -348,18 +348,38 @@ async def test_generate_claude_secrets_key_on_client_that_cannot_swap_key_fails(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    'tool_choice',
+    ('tool_choice', 'disable_parallel', 'sent'),
     [
-        {'type': 'auto', 'disable_parallel_tool_use': True},
-        {'type': 'any', 'disable_parallel_tool_use': True},
-        {'type': 'tool', 'name': 'lookup_menu', 'disable_parallel_tool_use': True},
+        ('auto', False, {'type': 'auto'}),
+        ('auto', True, {'type': 'auto', 'disable_parallel_tool_use': True}),
+        ('required', False, {'type': 'any'}),
+        ('required', True, {'type': 'any', 'disable_parallel_tool_use': True}),
+        # 'none' used to be dropped, leaving Claude free to call the tools.
+        ('none', False, {'type': 'none'}),
+        # Anthropic's none variant has no disable_parallel_tool_use field.
+        ('none', True, {'type': 'none'}),
+        (None, False, None),
+        # The flag only travels inside tool_choice; auto is the API default with tools.
+        (None, True, {'type': 'auto', 'disable_parallel_tool_use': True}),
     ],
-    ids=['auto', 'any', 'tool'],
+    ids=[
+        'auto',
+        'auto-single',
+        'required',
+        'required-single',
+        'none',
+        'none-single',
+        'unset',
+        'unset-single',
+    ],
 )
-async def test_generate_claude_tool_choice_disable_parallel_tool_use_reaches_request(
-    tool_choice: dict[str, Any],
+async def test_generate_claude_tool_choice_request_body(
+    tool_choice: Literal['auto', 'required', 'none'] | None,
+    disable_parallel: bool,
+    sent: dict[str, Any] | None,
 ) -> None:
-    """`tool_choice.disable_parallel_tool_use` is a Claude field, so it validates and goes out as written."""
+    """Genkit's tool_choice goes out as Anthropic's tool_choice object."""
+    # 1. A Claude call with one tool attached
     api = FakeClaudeApi()
     ai = _genkit(api)
 
@@ -367,10 +387,61 @@ async def test_generate_claude_tool_choice_disable_parallel_tool_use_reaches_req
     async def lookup_menu(dish: str) -> str:
         return 'ramen'
 
-    response = await ai.generate(model=MODEL, prompt='hi', tools=['lookup_menu'], config={'tool_choice': tool_choice})
+    # 2. Generate with the tool choice and the single-call flag
+    config = AnthropicConfig(disable_parallel_tool_use=True) if disable_parallel else None
+    response = await ai.generate(
+        model=MODEL, prompt='hi', tools=['lookup_menu'], tool_choice=tool_choice, config=config
+    )
 
+    # 3. The body carries the translated object, or nothing for unset
     assert response.text == 'ok'
-    assert api.body()['tool_choice'] == tool_choice
+    assert api.body().get('tool_choice') == sent
+
+
+@pytest.mark.asyncio
+async def test_generate_claude_tool_choice_dropped_without_tools() -> None:
+    """The API rejects tool_choice on a request with no tools, so neither the option nor the flag is sent."""
+    api = FakeClaudeApi()
+    ai = _genkit(api)
+
+    await ai.generate(
+        model=MODEL, prompt='hi', tool_choice='required', config=AnthropicConfig(disable_parallel_tool_use=True)
+    )
+
+    assert 'tool_choice' not in api.body()
+
+
+@pytest.mark.asyncio
+async def test_generate_claude_extra_tool_choice_overrides() -> None:
+    """extra={'tool_choice': {...}} sends Anthropic's object as written, over the translated option."""
+    api = FakeClaudeApi()
+    ai = _genkit(api)
+
+    @ai.tool(name='lookup_menu')
+    async def lookup_menu(dish: str) -> str:
+        return 'ramen'
+
+    await ai.generate(
+        model=MODEL,
+        prompt='hi',
+        tools=['lookup_menu'],
+        tool_choice='auto',
+        config=AnthropicConfig(extra={'tool_choice': {'type': 'tool', 'name': 'lookup_menu'}}),
+    )
+
+    assert api.body()['tool_choice'] == {'type': 'tool', 'name': 'lookup_menu'}
+
+
+@pytest.mark.asyncio
+async def test_generate_claude_config_tool_choice_points_to_generate_option() -> None:
+    """The removed config key fails before the call, naming ai.generate(tool_choice=...)."""
+    api = FakeClaudeApi()
+    ai = _genkit(api)
+
+    with pytest.raises(GenkitError, match=r'ai\.generate\(tool_choice='):
+        await ai.generate(model=MODEL, prompt='hi', config={'tool_choice': {'type': 'any'}})
+
+    assert api.requests == []
 
 
 # --- middleware edits ---------------------------------------------------------

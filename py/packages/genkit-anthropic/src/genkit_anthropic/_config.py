@@ -27,6 +27,7 @@ accept their usual camelCase aliases, while Anthropic-specific nested keys
 match the Anthropic plugin shape field-by-field.
 """
 
+from collections.abc import Mapping
 from typing import Annotated, ClassVar, Literal, cast
 
 from anthropic.types.beta.message_create_params import MessageCreateParamsBase as BetaMessageCreateParamsBase
@@ -35,6 +36,7 @@ from pydantic import BaseModel, ConfigDict, Field, WithJsonSchema, model_validat
 from pydantic.alias_generators import to_camel
 from pydantic.config import JsonDict
 
+from genkit import GenkitError
 from genkit.model import ModelConfig
 
 BETA_ONLY_KEYS = frozenset(BetaMessageCreateParamsBase.__annotations__) - frozenset(
@@ -76,31 +78,6 @@ _OUTPUT_CONFIG_SCHEMA = {
     },
     'additionalProperties': False,
     'description': 'Configuration for output generation, such as setting the effort parameter and task budgets.',
-}
-
-_TOOL_CHOICE_SCHEMA = {
-    'type': 'object',
-    'properties': {
-        'type': {
-            'type': 'string',
-            'enum': ['auto', 'any', 'tool', 'none'],
-            'description': 'Tool choice mode.',
-        },
-        'name': {
-            'type': 'string',
-            'description': 'Tool name to require when type is tool.',
-        },
-        'disable_parallel_tool_use': {
-            'type': 'boolean',
-            'description': 'Allow at most one tool call in the reply. Not valid with type none.',
-        },
-    },
-    'required': ['type'],
-    'additionalProperties': False,
-    'description': (
-        'The tool choice to use for the request. This can be used to specify the tool to '
-        'use for the request. If not specified, the model will choose the tool to use.'
-    ),
 }
 
 _METADATA_SCHEMA = {
@@ -167,6 +144,11 @@ def _anthropic_config_schema_extra(schema: JsonDict) -> None:
                         'Anthropic beta feature headers to enable for this request. '
                         'An empty list suppresses the defaults.'
                     ),
+                },
+                'disableParallelToolUse': {
+                    'type': 'boolean',
+                    'title': 'Disable parallel tool use',
+                    'description': 'Allow at most one tool call per reply.',
                 },
             },
         )
@@ -235,47 +217,6 @@ class OutputConfig(BaseModel):
     task_budget: TaskBudget | None = Field(default=None, alias='task_budget')
 
 
-class AutoToolChoice(BaseModel):
-    """Let the model decide whether to call a tool."""
-
-    model_config = _NESTED_CONFIG
-    type: Literal['auto']
-    disable_parallel_tool_use: bool | None = None
-    """Allow at most one tool call in the reply."""
-
-
-class AnyToolChoice(BaseModel):
-    """Require the model to call some tool."""
-
-    model_config = _NESTED_CONFIG
-    type: Literal['any']
-    disable_parallel_tool_use: bool | None = None
-    """Allow at most one tool call in the reply."""
-
-
-class SpecificToolChoice(BaseModel):
-    """Require the model to call the named tool."""
-
-    model_config = _NESTED_CONFIG
-    type: Literal['tool']
-    name: str
-    disable_parallel_tool_use: bool | None = None
-    """Allow at most one tool call in the reply."""
-
-
-class ToolChoiceNone(BaseModel):
-    """Prevent the model from calling a tool."""
-
-    model_config = _NESTED_CONFIG
-    type: Literal['none']
-
-
-ToolChoice = Annotated[
-    AutoToolChoice | AnyToolChoice | SpecificToolChoice | ToolChoiceNone,
-    Field(discriminator='type'),
-]
-
-
 class RequestMetadata(BaseModel):
     """Metadata to include in the request.
 
@@ -291,8 +232,11 @@ class AnthropicConfig(ModelConfig):
     """Typed configuration for Anthropic (Claude) models.
 
     Extends the shared :class:`ModelConfig` with Anthropic-specific options.
-    JSON keys stay snake_case for ``tool_choice`` and ``output_config`` and
-    camelCase elsewhere (``apiVersion``, inherited ``maxOutputTokens``).
+    JSON keys stay snake_case for ``output_config`` and camelCase elsewhere
+    (``apiVersion``, inherited ``maxOutputTokens``).
+
+    Tool choice is Genkit's ``ai.generate(tool_choice=...)``; the plugin sends
+    it as Anthropic's ``tool_choice`` object.
 
     Claude requires a length cap, so an omitted ``max_output_tokens`` is sent
     as 4096; a reply cut off there ends with finish reason ``length``.
@@ -323,13 +267,33 @@ class AnthropicConfig(ModelConfig):
         default=None,
         alias='output_config',
     )
-    tool_choice: Annotated[ToolChoice | None, WithJsonSchema(_TOOL_CHOICE_SCHEMA)] = Field(
+    disable_parallel_tool_use: bool | None = Field(
         default=None,
-        alias='tool_choice',
+        description=(
+            'Allow at most one tool call per reply. Sent inside tool_choice; ignored when tool_choice is none.'
+        ),
     )
     metadata: Annotated[RequestMetadata | None, WithJsonSchema(_METADATA_SCHEMA)] = Field(
         default=None,
     )
+
+    @model_validator(mode='before')
+    @classmethod
+    def _tool_choice_moved_to_generate(cls, data: object) -> object:
+        """Name the replacement for the removed tool_choice key instead of the generic unknown-key error."""
+        if isinstance(data, Mapping):
+            for old in ('tool_choice', 'toolChoice'):
+                if old in data:
+                    raise GenkitError(
+                        status='INVALID_ARGUMENT',
+                        message=(
+                            f"anthropic: {old} is no longer a config field; pass ai.generate(tool_choice='auto' | "
+                            "'required' | 'none'), set disable_parallel_tool_use=True for one tool call per reply, "
+                            "or send Anthropic's object as extra={'tool_choice': {...}}"
+                        ),
+                    )
+        return data
+
     api_version: Literal['stable', 'beta'] | None = Field(
         default=None,
         description='Selects the Anthropic API surface for this request.',
