@@ -953,7 +953,7 @@ def check_prompt_input(
             parse_schema(data=json_form(checked), json_schema=schema)
         except GenkitError as error:
             raise GenkitError(
-                message=f"Invalid input for action '{name}': {error.original_message}",
+                message=f"Invalid input for action '{name}': {error.message}",
                 status='INVALID_ARGUMENT',
                 cause=error,
                 reason=RuntimeErrorReason.INVALID_INPUT,

@@ -444,7 +444,7 @@ class GenkitError(Exception):
         else:
             cause_suffix = f': {cause}' if cause else ''
         super().__init__(f'{source_prefix}{self.status}: {message}{cause_suffix}')
-        self.original_message: str = message
+        self.message: str = message
 
         if not details:
             details = {}
@@ -482,7 +482,7 @@ class GenkitError(Exception):
         """Served-flow wire body; same redaction as ``get_callable_json``.
 
         Only a PublicError keeps its message and details. In-process code
-        that needs the real error reads ``original_message`` and ``details``.
+        that needs the real error reads ``message`` and ``details``.
         """
         body = get_callable_json(self)
         return HttpErrorWireFormat(
@@ -500,7 +500,7 @@ class GenkitError(Exception):
         return ReflectionError(
             details=ReflectionErrorDetails(**self.details) if self.details else None,
             code=StatusCodes[self.status].value,
-            message=f'{self.original_message}: {repr(self.cause)}' if self.cause else self.original_message,
+            message=f'{self.message}: {repr(self.cause)}' if self.cause else self.message,
         )
 
 
@@ -674,7 +674,7 @@ def get_callable_json(error: object) -> dict[str, Any]:
     facing = _client_facing_error(error)
     if facing is None:
         return dict(_INTERNAL_CLIENT_BODY)
-    message = facing.original_message if isinstance(facing, PublicError) else _generic_client_message(facing.status)
+    message = facing.message if isinstance(facing, PublicError) else _generic_client_message(facing.status)
     body: dict[str, Any] = {
         'message': message,
         'status': facing.status,

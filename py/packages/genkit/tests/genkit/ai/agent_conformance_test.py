@@ -688,7 +688,7 @@ async def _close_quietly(*, conn: Any) -> None:  # noqa: ANN401
 def _thrown_message(*, thrown: BaseException) -> str:
     """``STATUS: text`` for a GenkitError — the status prefix, not a cause suffix."""
     if isinstance(thrown, GenkitError):
-        return f'{thrown.status}: {thrown.original_message}'
+        return f'{thrown.status}: {thrown.message}'
     return str(thrown)
 
 

@@ -390,7 +390,7 @@ def to_agent_error(
     if isinstance(e, AgentError):
         return e
     if isinstance(e, GenkitError):
-        message = e.original_message
+        message = e.message
         status = e.status
         details = e.details
     else:

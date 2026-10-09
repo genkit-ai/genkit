@@ -853,7 +853,7 @@ def test_pending_content_reports_the_kind_rule() -> None:
     """A bad pending part names the kind rule, not just 'must be a part'."""
     with pytest.raises(GenkitError, match='exactly one') as ei:
         normalize_pending_content([{}], tool_name='screenshot')
-    assert 'pendingContent[0]' in ei.value.original_message
+    assert 'pendingContent[0]' in ei.value.message
 
 
 def test_veneer_has_every_generated_field() -> None:

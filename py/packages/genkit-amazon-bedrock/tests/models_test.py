@@ -202,7 +202,7 @@ async def test_botocore_errors_map_to_genkit_statuses(error: BotoCoreError, expe
         await model.generate(text_request())
 
     assert excinfo.value.status == expected_status
-    assert 'bedrock converse failed' in excinfo.value.original_message
+    assert 'bedrock converse failed' in excinfo.value.message
     assert excinfo.value.__cause__ is error
 
 
@@ -294,7 +294,7 @@ async def test_client_errors_map_to_genkit_statuses(code: str, expected_status: 
         await model.generate(text_request())
 
     assert excinfo.value.status == expected_status
-    assert 'bedrock converse failed' in excinfo.value.original_message
+    assert 'bedrock converse failed' in excinfo.value.message
     assert excinfo.value.__cause__ is error
 
 
@@ -417,7 +417,7 @@ async def test_mid_stream_errors_map_to_genkit_statuses(code: str, expected_stat
         await model.generate(text_request(), ActionRunContext(streaming_callback=chunks.append))
 
     assert excinfo.value.status == expected_status
-    assert 'bedrock converse stream failed' in excinfo.value.original_message
+    assert 'bedrock converse stream failed' in excinfo.value.message
     assert excinfo.value.__cause__ is error
     # Chunks already delivered stand; the stream is closed on the way out.
     assert len(chunks) == 1
@@ -458,7 +458,7 @@ async def test_stream_botocore_errors_map_to_genkit_statuses() -> None:
         await model.generate(text_request(), ActionRunContext(streaming_callback=lambda _chunk: None))
 
     assert excinfo.value.status == 'DEADLINE_EXCEEDED'
-    assert 'bedrock converse stream failed' in excinfo.value.original_message
+    assert 'bedrock converse stream failed' in excinfo.value.message
     assert transport.stream_closed
 
 

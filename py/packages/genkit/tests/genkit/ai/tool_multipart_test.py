@@ -64,8 +64,8 @@ def test_response_rejects_hollow_parts() -> None:
         response({'ok': True}, parts=[Part.from_media('')])
     assert ei.value.status == 'INVALID_ARGUMENT'
     assert ei.value.reason is RuntimeErrorReason.INVALID_PART
-    assert 'no live payload' in ei.value.original_message
-    assert 'INVALID_PART' not in ei.value.original_message
+    assert 'no live payload' in ei.value.message
+    assert 'INVALID_PART' not in ei.value.message
 
 
 def test_response_builds_the_envelope() -> None:
@@ -94,8 +94,8 @@ def test_response_rejects_bare_part() -> None:
         response({'ok': True}, parts=_png())  # type: ignore[arg-type]
     assert ei.value.status == 'INVALID_ARGUMENT'
     assert ei.value.reason is RuntimeErrorReason.INVALID_PART
-    assert 'parts' in ei.value.original_message
-    assert 'INVALID_PART' not in ei.value.original_message
+    assert 'parts' in ei.value.message
+    assert 'INVALID_PART' not in ei.value.message
 
 
 def test_response_rejects_non_part_parts() -> None:
@@ -103,8 +103,8 @@ def test_response_rejects_non_part_parts() -> None:
         response({'ok': True}, parts='not-a-part')  # type: ignore[arg-type]
     assert ei.value.status == 'INVALID_ARGUMENT'
     assert ei.value.reason is RuntimeErrorReason.INVALID_PART
-    assert 'parts' in ei.value.original_message
-    assert 'INVALID_PART' not in ei.value.original_message
+    assert 'parts' in ei.value.message
+    assert 'INVALID_PART' not in ei.value.message
 
 
 def test_response_rejects_non_dict_metadata() -> None:
@@ -112,8 +112,8 @@ def test_response_rejects_non_dict_metadata() -> None:
         response(1, metadata='nope')  # type: ignore[arg-type]
     assert ei.value.status == 'INVALID_ARGUMENT'
     assert ei.value.reason is RuntimeErrorReason.INVALID_INPUT
-    assert 'metadata' in ei.value.original_message
-    assert 'INVALID_INPUT' not in ei.value.original_message
+    assert 'metadata' in ei.value.message
+    assert 'INVALID_INPUT' not in ei.value.message
 
 
 class CamelOut(BaseModel):
@@ -130,8 +130,8 @@ def test_unserializable_part_data_is_invalid_argument() -> None:
     with pytest.raises(GenkitError) as ei:
         response({'ok': True}, parts=[Part.from_data({'cam': Camera()})])
     assert ei.value.status == 'INVALID_ARGUMENT'
-    assert 'response()' in ei.value.original_message
-    assert 'content' in ei.value.original_message
+    assert 'response()' in ei.value.message
+    assert 'content' in ei.value.message
 
 
 def test_define_tool_stamps_envelope_and_declared_schema() -> None:
@@ -240,8 +240,8 @@ async def test_unserializable_metadata_is_invalid_argument() -> None:
     with pytest.raises(GenkitError) as ei:
         await shot()
     assert ei.value.status == 'INVALID_ARGUMENT'
-    assert 'shot' in ei.value.original_message
-    assert 'metadata' in ei.value.original_message
+    assert 'shot' in ei.value.message
+    assert 'metadata' in ei.value.message
 
 
 async def _tools_sent_to_model(ai: Genkit, tool_name: str, *, tool_input: dict | None = None) -> list:

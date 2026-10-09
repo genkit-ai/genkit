@@ -1908,7 +1908,7 @@ async def test_middleware_tool_already_on_the_request_raises() -> None:
         await ai.generate(prompt='hi', tools=['ping'], use=[AlsoPing()])
     assert raised.value.status == 'INVALID_ARGUMENT'
     assert raised.value.reason is RuntimeErrorReason.INVALID_INPUT
-    assert 'INVALID_INPUT' not in raised.value.original_message
+    assert 'INVALID_INPUT' not in raised.value.message
 
 
 @pytest.mark.asyncio
@@ -2918,7 +2918,7 @@ async def test_generate_rejects_negative_max_turns() -> None:
         await ai.generate(prompt='hi', max_turns=-1)
     assert raised.value.status == 'INVALID_ARGUMENT'
     assert raised.value.reason is RuntimeErrorReason.INVALID_INPUT
-    assert 'INVALID_INPUT' not in raised.value.original_message
+    assert 'INVALID_INPUT' not in raised.value.message
 
 
 @pytest.mark.asyncio
@@ -8127,7 +8127,7 @@ async def test_generate_unknown_format_is_invalid_argument() -> None:
         await ai.generate(prompt='hi', output_format='no-such-format')
     assert raised.value.status == 'INVALID_ARGUMENT'
     assert raised.value.reason is RuntimeErrorReason.INVALID_INPUT
-    assert 'ACTION_NOT_FOUND' not in raised.value.original_message
+    assert 'ACTION_NOT_FOUND' not in raised.value.message
 
 
 @pytest.mark.asyncio
@@ -8141,8 +8141,8 @@ async def test_unknown_middleware_raises_with_invalid_input() -> None:
     error = raised.value
     assert error.status == 'NOT_FOUND'
     assert error.reason is RuntimeErrorReason.INVALID_INPUT
-    assert 'ghost' in error.original_message
-    assert 'ACTION_NOT_FOUND' not in error.original_message
+    assert 'ghost' in error.message
+    assert 'ACTION_NOT_FOUND' not in error.message
 
 
 @pytest.mark.asyncio
@@ -8155,8 +8155,8 @@ async def test_unknown_model_raises_with_model_not_found() -> None:
     error = raised.value
     assert error.status == 'NOT_FOUND'
     assert error.reason is RuntimeErrorReason.MODEL_NOT_FOUND
-    assert "Failed to resolve model 'nope/ghost'" in error.original_message
-    assert 'MODEL_NOT_FOUND' not in error.original_message
+    assert "Failed to resolve model 'nope/ghost'" in error.message
+    assert 'MODEL_NOT_FOUND' not in error.message
 
 
 @pytest.mark.asyncio
@@ -8170,8 +8170,8 @@ async def test_unknown_tool_on_request_raises_with_tool_not_found() -> None:
     error = raised.value
     assert error.status == 'NOT_FOUND'
     assert error.reason is RuntimeErrorReason.TOOL_NOT_FOUND
-    assert 'Unable to resolve tool ghost' in error.original_message
-    assert 'TOOL_NOT_FOUND' not in error.original_message
+    assert 'Unable to resolve tool ghost' in error.message
+    assert 'TOOL_NOT_FOUND' not in error.message
 
 
 @pytest.mark.asyncio
@@ -8184,8 +8184,8 @@ async def test_generate_without_model_or_default_raises_model_not_found() -> Non
     error = raised.value
     assert error.status == 'INVALID_ARGUMENT'
     assert error.reason is RuntimeErrorReason.MODEL_NOT_FOUND
-    assert 'No model configured' in error.original_message
-    assert 'MODEL_NOT_FOUND' not in error.original_message
+    assert 'No model configured' in error.message
+    assert 'MODEL_NOT_FOUND' not in error.message
 
 
 @pytest.mark.asyncio
@@ -8199,8 +8199,8 @@ async def test_generate_jsonl_with_object_schema_raises_invalid_schema() -> None
     error = raised.value
     assert error.status == 'INVALID_ARGUMENT'
     assert error.reason is RuntimeErrorReason.INVALID_SCHEMA
-    assert 'jsonl' in error.original_message
-    assert 'INVALID_SCHEMA' not in error.original_message
+    assert 'jsonl' in error.message
+    assert 'INVALID_SCHEMA' not in error.message
 
 
 @pytest.mark.asyncio
@@ -8214,8 +8214,8 @@ async def test_generate_enum_with_object_schema_raises_invalid_schema() -> None:
     error = raised.value
     assert error.status == 'INVALID_ARGUMENT'
     assert error.reason is RuntimeErrorReason.INVALID_SCHEMA
-    assert 'enum' in error.original_message
-    assert 'INVALID_SCHEMA' not in error.original_message
+    assert 'enum' in error.message
+    assert 'INVALID_SCHEMA' not in error.message
 
 
 @pytest.mark.asyncio
@@ -8229,8 +8229,8 @@ async def test_generate_array_with_object_schema_raises_invalid_schema() -> None
     error = raised.value
     assert error.status == 'INVALID_ARGUMENT'
     assert error.reason is RuntimeErrorReason.INVALID_SCHEMA
-    assert 'array' in error.original_message
-    assert 'INVALID_SCHEMA' not in error.original_message
+    assert 'array' in error.message
+    assert 'INVALID_SCHEMA' not in error.message
 
 
 @pytest.mark.asyncio

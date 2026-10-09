@@ -392,7 +392,7 @@ async def test_generate_model_garden_model_without_its_extra_raises_install_comm
         await ai.generate(model=model, prompt='hi')
 
     assert exc_info.value.status == 'FAILED_PRECONDITION'
-    assert exc_info.value.original_message == message
+    assert exc_info.value.message == message
 
 
 @pytest.mark.asyncio
