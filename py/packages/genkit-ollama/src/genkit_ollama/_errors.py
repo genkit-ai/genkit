@@ -37,7 +37,7 @@ class OllamaConnectionError(ConnectionError):
 
 
 @asynccontextmanager
-async def wrap_connection_errors(server_address: str) -> AsyncIterator[None]:
+async def wrap_connection_errors(base_url: str) -> AsyncIterator[None]:
     """Translate transport failures into an actionable OllamaConnectionError.
 
     Catches two flavours of unreachable-server failure:
@@ -52,7 +52,7 @@ async def wrap_connection_errors(server_address: str) -> AsyncIterator[None]:
     a raw ``HTTPStatusError`` is not a ``TransportError`` either.
 
     Args:
-        server_address: The Ollama server URL, surfaced in the error message.
+        base_url: The Ollama server URL, surfaced in the error message.
 
     Yields:
         None. Wraps the enclosed ``async with`` block.
@@ -66,9 +66,9 @@ async def wrap_connection_errors(server_address: str) -> AsyncIterator[None]:
         # Already actionable (e.g. nested wrap); don't re-wrap.
         raise
     except httpx.TimeoutException as exc:
-        raise OllamaConnectionError(f'Request to Ollama server at {server_address} timed out.') from exc
+        raise OllamaConnectionError(f'Request to Ollama server at {base_url} timed out.') from exc
     except (httpx.TransportError, ConnectionError) as exc:
         raise OllamaConnectionError(
-            f'Cannot reach the Ollama server at {server_address}. '
-            f'Start it with `ollama serve` (or set server_address to a reachable host).'
+            f'Cannot reach the Ollama server at {base_url}. '
+            f'Start it with `ollama serve` (or set base_url to a reachable host).'
         ) from exc

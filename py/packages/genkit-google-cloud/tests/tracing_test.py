@@ -134,6 +134,12 @@ def test_enable_google_cloud_telemetry_with_project() -> None:
         assert mock_gcp_exporter.call_args.kwargs.get('project_id') == 'my-test-project'
 
 
+def test_enable_google_cloud_telemetry_positional_project_raises_type_error() -> None:
+    """enable_google_cloud_telemetry('my-project') raises TypeError; the project is passed as project=."""
+    with pytest.raises(TypeError):
+        enable_google_cloud_telemetry('my-project')  # type: ignore[misc]
+
+
 def test_enable_google_cloud_telemetry_skips_in_dev_without_force() -> None:
     """Under genkit start, enable does nothing unless they pass force_dev_export."""
     with (

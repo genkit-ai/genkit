@@ -953,3 +953,15 @@ async def test_lazy_client_unknown_failure_stays_raw() -> None:
             _plugin_client({'vertexai': False, 'api_key': 'k'})
 
     assert raised.value is boom
+
+
+def test_googleai_positional_api_key_raises_type_error() -> None:
+    """GoogleAI('my-key') raises TypeError; the key is passed as api_key=."""
+    with pytest.raises(TypeError):
+        GoogleAI('my-key')  # type: ignore[misc]
+
+
+def test_vertexai_positional_project_raises_type_error() -> None:
+    """VertexAI('my-project') raises TypeError instead of treating the project as credentials."""
+    with pytest.raises(TypeError):
+        VertexAI('my-project')  # type: ignore[misc]

@@ -190,7 +190,7 @@ class OllamaModel:
         self,
         client: Callable,
         model_definition: ModelDefinition,
-        server_address: str = DEFAULT_OLLAMA_SERVER_URL,
+        base_url: str = DEFAULT_OLLAMA_SERVER_URL,
     ) -> None:
         """Initializes the OllamaModel.
 
@@ -205,11 +205,11 @@ class OllamaModel:
             client: A callable that returns an asynchronous Ollama client instance.
             model_definition: The definition describing the specific Ollama model
                 to be used (e.g., its name, API type, supported features).
-            server_address: The Ollama server URL, surfaced in connectivity errors.
+            base_url: The Ollama server URL, surfaced in connectivity errors.
         """
         self._client_factory = client
         self.model_definition = model_definition
-        self._server_address = server_address
+        self._base_url = base_url
 
     def _get_client(self) -> ollama_api.AsyncClient:
         """Creates a fresh async client bound to the current event loop.
@@ -388,7 +388,7 @@ class OllamaModel:
         # connection failure can first surface) is wrapped, so transport errors are
         # attributed to the Ollama server rather than to media-URL fetches above.
         if streaming_request:
-            async with wrap_connection_errors(self._server_address):
+            async with wrap_connection_errors(self._base_url):
                 # Streaming call with literal stream=True for proper overload resolution
                 chat_response = await client.chat(  # type: ignore[no-matching-overload]
                     model=self.model_definition.name,
@@ -427,7 +427,7 @@ class OllamaModel:
                 return last_chunk
             return None
         else:
-            async with wrap_connection_errors(self._server_address):
+            async with wrap_connection_errors(self._base_url):
                 # Non-streaming call with literal stream=False for proper overload resolution
                 chat_response = await client.chat(  # type: ignore[no-matching-overload]
                     model=self.model_definition.name,
@@ -471,7 +471,7 @@ class OllamaModel:
         # Wrap only the Ollama SDK call (and its streamed iteration) so transport
         # errors are attributed to the Ollama server, matching the chat path.
         if streaming_request:
-            async with wrap_connection_errors(self._server_address):
+            async with wrap_connection_errors(self._base_url):
                 # Streaming call with literal stream=True for proper overload resolution
                 generate_response = await client.generate(
                     model=self.model_definition.name,
@@ -503,7 +503,7 @@ class OllamaModel:
                 return last_chunk
             return None
         else:
-            async with wrap_connection_errors(self._server_address):
+            async with wrap_connection_errors(self._base_url):
                 # Non-streaming call with literal stream=False for proper overload resolution
                 generate_response = await client.generate(
                     model=self.model_definition.name,

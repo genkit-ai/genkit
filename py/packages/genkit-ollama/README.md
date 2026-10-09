@@ -140,7 +140,7 @@ response = await ai.generate(
 ### Remote server, headers, and timeouts
 
 ```python
-Ollama(server_address='http://ollama.example.com:11434')
+Ollama(base_url='http://ollama.example.com:11434')
 
 # Static headers
 Ollama(request_headers={'Authorization': 'Bearer <token>'})
@@ -150,7 +150,7 @@ from genkit_ollama import RequestHeaderParams
 
 
 async def auth_headers(params: RequestHeaderParams) -> dict[str, str]:
-    return {'Authorization': f'Bearer {await mint_token(params.server_address)}'}
+    return {'Authorization': f'Bearer {await mint_token(params.base_url)}'}
 
 
 Ollama(request_headers=auth_headers, timeout=60.0)
@@ -174,7 +174,7 @@ underlying model does not actually have.
 
 If the plugin can't reach the server it raises `OllamaConnectionError`
 with the URL it tried. Start the daemon (`ollama serve`) or set
-`server_address` to a reachable host.
+`base_url` to a reachable host.
 
 ## Sample
 

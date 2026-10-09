@@ -527,3 +527,32 @@ async def test_model_garden_environment_project_skips_adc(vertex_requests: list[
 
     adc.assert_not_called()
     assert [_project_in(r) for r in vertex_requests] == ['env-proj']
+
+
+def test_model_garden_positional_project_raises_type_error() -> None:
+    """ModelGarden('my-project') raises TypeError; the project is passed as project=."""
+    with pytest.raises(TypeError):
+        ModelGarden('my-project')  # type: ignore[misc]
+
+
+def test_model_garden_models_argument_raises_type_error() -> None:
+    """ModelGarden(models=[...]) raises TypeError; models resolve by name without a list."""
+    with pytest.raises(TypeError, match='models'):
+        ModelGarden(project='p', models=['meta/llama-3.1-405b-instruct-maas'])  # type: ignore[call-arg]
+
+
+@pytest.mark.asyncio
+async def test_model_garden_without_models_still_resolves_any_model() -> None:
+    """ai.generate(model='modelgarden/mistralai/mistral-small-2503') works with no models list configured."""
+    client = MagicMock()
+    client.chat.completions.create = AsyncMock(return_value=_chat_completion('hello from mistral'))
+
+    with patch(
+        'genkit_vertexai.model_garden.model_garden.ModelGardenModel.create_client',
+        new=AsyncMock(return_value=client),
+    ):
+        ai = Genkit(plugins=[ModelGarden(project='p', location='us-central1')])
+        response = await ai.generate(model=MISTRAL, prompt='hi')
+
+    assert response.text == 'hello from mistral'
+    assert client.chat.completions.create.call_args.kwargs['model'] == 'mistralai/mistral-small-2503'

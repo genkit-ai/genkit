@@ -57,19 +57,19 @@ class TestOllamaInit(unittest.TestCase):
         """Test correct propagation of other options param."""
         model_ref = ModelDefinition(name='test_model')
         embedder_ref = EmbeddingDefinition(name='test_embedder')
-        server_address = 'new.server.address'
+        base_url = 'new.server.address'
         headers = {'Content-Type': 'json'}
 
         plugin = Ollama(
             models=[model_ref],
             embedders=[embedder_ref],
-            server_address=server_address,
+            base_url=base_url,
             request_headers=headers,
         )
 
         assert plugin.embedders[0] == embedder_ref
         assert plugin.models[0] == model_ref
-        assert plugin.server_address == server_address
+        assert plugin.base_url == base_url
         assert plugin.request_headers == headers
 
 
@@ -240,7 +240,7 @@ def test_timeout_stored() -> None:
 def test_make_client_forwards_host_headers_and_timeout() -> None:
     """_make_client forwards host, headers, and a non-None timeout to AsyncClient."""
     plugin = Ollama(
-        server_address='http://example:11434',
+        base_url='http://example:11434',
         request_headers={'Authorization': 'Bearer x'},
         timeout=30.0,
     )
@@ -257,7 +257,7 @@ def test_make_client_forwards_host_headers_and_timeout() -> None:
 
 def test_make_client_omits_timeout_when_none() -> None:
     """With the default timeout (None) the timeout kwarg is omitted entirely."""
-    plugin = Ollama(server_address='http://example:11434')
+    plugin = Ollama(base_url='http://example:11434')
 
     with patch('ollama.AsyncClient') as async_client:
         plugin._make_client()
@@ -331,7 +331,7 @@ async def test_async_callable_headers_resolved_per_request() -> None:
 
 @pytest.mark.asyncio
 async def test_model_action_passes_request_context_to_header_callable() -> None:
-    """A model header callable receives the server address, model, and model request."""
+    """A model header callable receives the base_url, model, and model request."""
     captured: dict[str, Any] = {}
 
     def make_headers(params: RequestHeaderParams) -> dict[str, str]:
@@ -339,7 +339,7 @@ async def test_model_action_passes_request_context_to_header_callable() -> None:
         return {'Authorization': 'Bearer tok'}
 
     model_def = ModelDefinition(name='m', api_type=OllamaAPITypes.CHAT)
-    plugin = Ollama(models=[model_def], server_address='http://example:11434', request_headers=make_headers)
+    plugin = Ollama(models=[model_def], base_url='http://example:11434', request_headers=make_headers)
 
     sdk_client = AsyncMock()
     sdk_client.chat.return_value = ollama_api.ChatResponse(message=ollama_api.Message(role='assistant', content='hi'))
@@ -352,7 +352,7 @@ async def test_model_action_passes_request_context_to_header_callable() -> None:
         await action._fn(request, None)
 
     params = cast(RequestHeaderParams, captured['params'])
-    assert params.server_address == 'http://example:11434'
+    assert params.base_url == 'http://example:11434'
     assert params.model is model_def
     assert params.model_request is request
     assert params.embed_request is None
@@ -364,7 +364,7 @@ async def test_model_action_passes_request_context_to_header_callable() -> None:
 
 @pytest.mark.asyncio
 async def test_embedder_action_passes_request_context_to_header_callable() -> None:
-    """An embedder header callable receives the server address, embedder, and embed request."""
+    """An embedder header callable receives the base_url, embedder, and embed request."""
     captured: dict[str, Any] = {}
 
     def make_headers(params: RequestHeaderParams) -> dict[str, str]:
@@ -373,7 +373,7 @@ async def test_embedder_action_passes_request_context_to_header_callable() -> No
 
     plugin = Ollama(
         embedders=[EmbeddingDefinition(name='e')],
-        server_address='http://example:11434',
+        base_url='http://example:11434',
         request_headers=make_headers,
     )
 
@@ -388,7 +388,7 @@ async def test_embedder_action_passes_request_context_to_header_callable() -> No
         await action._fn(request)
 
     params = cast(RequestHeaderParams, captured['params'])
-    assert params.server_address == 'http://example:11434'
+    assert params.base_url == 'http://example:11434'
     assert params.model is not None and params.model.name == 'e'
     assert params.embed_request is request
     assert params.model_request is None
@@ -643,3 +643,86 @@ async def test_generate_ollama_id_with_ollama_segment_sends_id_unchanged(monkeyp
 
     assert response.text == 'ok'
     assert seen == ['ollama/llama3']
+
+
+def _chat_client(*, side_effect: BaseException | None = None) -> AsyncMock:
+    sdk_client = AsyncMock()
+    if side_effect is not None:
+        sdk_client.chat.side_effect = side_effect
+    else:
+        sdk_client.chat.return_value = ollama_api.ChatResponse(
+            message=ollama_api.Message(role='assistant', content='hi')
+        )
+    sdk_client._client.aclose = AsyncMock()
+    return sdk_client
+
+
+def test_ollama_positional_argument_raises_type_error() -> None:
+    """Ollama([ModelDefinition(...)]) raises TypeError; every option is passed by name."""
+    with pytest.raises(TypeError):
+        Ollama([ModelDefinition(name='m')])  # type: ignore[misc]
+
+
+def test_ollama_server_address_raises_type_error() -> None:
+    """Ollama(server_address=...) raises TypeError; the server is set with base_url=."""
+    with pytest.raises(TypeError, match='server_address'):
+        Ollama(server_address='http://example:11434')  # type: ignore[call-arg]
+
+
+@pytest.mark.asyncio
+async def test_ollama_base_url_sends_requests_to_that_server() -> None:
+    """Ollama(base_url='http://example:11434') sends ai.generate to that host."""
+    sdk_client = _chat_client()
+    with patch('ollama.AsyncClient', return_value=sdk_client) as async_client:
+        ai = Genkit(plugins=[Ollama(base_url='http://example:11434')])
+        response = await ai.generate(model='ollama/m', prompt='hi')
+
+    assert response.text == 'hi'
+    assert async_client.call_args.kwargs['host'] == 'http://example:11434'
+
+
+@pytest.mark.asyncio
+async def test_ollama_without_base_url_uses_local_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ollama() with no base_url sends ai.generate to http://127.0.0.1:11434."""
+    monkeypatch.delenv('OLLAMA_HOST', raising=False)
+    sdk_client = _chat_client()
+    with patch('ollama.AsyncClient', return_value=sdk_client) as async_client:
+        ai = Genkit(plugins=[Ollama()])
+        await ai.generate(model='ollama/m', prompt='hi')
+
+    assert async_client.call_args.kwargs['host'] == 'http://127.0.0.1:11434'
+
+
+@pytest.mark.asyncio
+async def test_ollama_unreachable_base_url_error_names_base_url() -> None:
+    """Running the ollama/m model against a down base_url raises OllamaConnectionError naming the URL and base_url."""
+    sdk_client = _chat_client(side_effect=ConnectionError('Failed to connect to Ollama.'))
+    request = ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('hi')])])
+    with patch('ollama.AsyncClient', return_value=sdk_client):
+        action = await Ollama(base_url='http://down.example:11434').resolve(ActionKind.MODEL, 'm')
+        assert action is not None
+        with pytest.raises(OllamaConnectionError) as exc_info:
+            await action.run(request)
+
+    message = str(exc_info.value)
+    assert 'http://down.example:11434' in message
+    assert 'base_url' in message
+    assert 'server_address' not in message
+
+
+@pytest.mark.asyncio
+async def test_ollama_request_header_callback_reads_base_url() -> None:
+    """A request_headers callback reads params.base_url and its headers ride on ai.generate."""
+    seen: list[str] = []
+
+    def headers(params: RequestHeaderParams) -> dict[str, str]:
+        seen.append(params.base_url)
+        return {'Authorization': f'Bearer for {params.base_url}'}
+
+    sdk_client = _chat_client()
+    with patch('ollama.AsyncClient', return_value=sdk_client) as async_client:
+        ai = Genkit(plugins=[Ollama(base_url='http://example:11434', request_headers=headers)])
+        await ai.generate(model='ollama/m', prompt='hi')
+
+    assert seen == ['http://example:11434']
+    assert async_client.call_args.kwargs['headers'] == {'Authorization': 'Bearer for http://example:11434'}

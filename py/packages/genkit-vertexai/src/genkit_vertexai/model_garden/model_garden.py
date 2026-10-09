@@ -215,15 +215,14 @@ class ModelGarden(Plugin):
 
     def __init__(
         self,
+        *,
         project: str | None = None,
         location: str | None = None,
-        models: list[str] | None = None,
         model_locations: dict[str, str] | None = None,
     ) -> None:
         """Initializes the plugin and sets up its configuration.
 
-        This constructor prepares the plugin by assigning the Google Cloud project ID,
-        location, and a list of models to be used.
+        Models resolve on demand by name, so there is no list to register up front.
 
         Args:
             project: The Google Cloud project ID to use. If not provided, it reads
@@ -231,7 +230,6 @@ class ModelGarden(Plugin):
                 the application default credentials (looked up on first use).
             location: The Google Cloud region to use for services. If not provided,
                 it defaults to `DEFAULT_REGION`.
-            models: An optional list of model names to register with the plugin.
             model_locations: An optional dictionary mapping model names to their specific
                 Google Cloud regions. This overrides the default `location` for the
                 specified models.
@@ -244,7 +242,6 @@ class ModelGarden(Plugin):
             location or os.getenv('GOOGLE_CLOUD_LOCATION') or os.getenv('GOOGLE_CLOUD_REGION') or const.DEFAULT_REGION
         )
 
-        self.models = models
         self.model_locations = model_locations or {}
         self._adc_probed = False
 
