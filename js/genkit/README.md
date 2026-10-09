@@ -112,6 +112,27 @@ const { text } = await ai.generate({
 });
 ```
 
+A failed generation throws by default: a tool's own error, the model's, or a `GenerationResponseError` when the response was blocked or the `maxTurns` limit was reached. Pass `throwOnError: false` to get the failure on the response instead. When the loop failed (`finishReason` `failed`) or was stopped (`aborted`), `res.messages` is the conversation up to the last finished tool round, so you can send it again:
+
+```ts
+const opts = {
+  model: googleAI.model('gemini-flash-latest'),
+  tools: [getWeather],
+  throwOnError: false,
+};
+let res = await ai.generate({
+  ...opts,
+  prompt: 'What should I wear in Tokyo today?',
+});
+if (res.finishReason === 'failed' || res.finishReason === 'aborted') {
+  // res.error says what broke. res.messages already includes the prompt;
+  // retry from the last completed tool round.
+  res = await ai.generate({ ...opts, messages: res.messages });
+}
+```
+
+Other failures are not for sending again as they are: a blocked response and structured output that does not match the schema keep the model's own reply beside `res.error`, and a restarted tool that interrupts again reports `interrupted`, which you answer with `resume`. An unknown model or tool, invalid options, and a middleware hook that fails before the first turn still throw with `throwOnError: false`, since there is no response to return.
+
 ### Interrupts (Human-in-the-Loop)
 
 > **Beta feature:** Interrupts require importing from `genkit/beta` instead of `genkit`:

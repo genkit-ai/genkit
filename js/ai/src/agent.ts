@@ -207,12 +207,34 @@ function toErrorDetails(e: any): AgentErrorDetails {
   return {
     status: e?.status || 'INTERNAL',
     message: e?.message || 'Internal failure',
-    // Only surface explicitly-provided structured details. Never fall back to
-    // the raw thrown value: it is serialized over the wire (AgentOutput.error)
-    // and persisted into snapshots, so leaking it could expose stack traces /
-    // internal state, or break JSON.stringify on circular error objects.
-    details: e?.detail ?? e?.details,
+    details: toErrorDetailsPayload(e?.detail ?? e?.details),
   };
+}
+
+/**
+ * The structured details an error carries onto the wire and into a snapshot.
+ * Only explicitly-provided structured details are surfaced, never the raw
+ * thrown value: it is serialized over the wire (AgentOutput.error) and
+ * persisted into snapshots, so leaking it could expose stack traces or
+ * internal state, or break JSON.stringify on circular error objects. A
+ * generation error's partial response (`detail.response`) is dropped for the
+ * same reason: it carries the request's whole conversation, which a failed
+ * turn commits to the session on its own terms, and the classified error the
+ * response reports stands in for it.
+ */
+function toErrorDetailsPayload(detail: unknown): unknown {
+  if (!detail || typeof detail !== 'object' || Array.isArray(detail)) {
+    return detail;
+  }
+  const {
+    response,
+    request: _request,
+    ...rest
+  } = detail as Record<string, any>;
+  if (response === undefined) return detail;
+  const inner = response?.error?.details;
+  if (inner !== undefined) return inner;
+  return Object.keys(rest).length > 0 ? rest : undefined;
 }
 
 /**
