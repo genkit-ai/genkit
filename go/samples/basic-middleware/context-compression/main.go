@@ -53,6 +53,7 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
+	"github.com/firebase/genkit/go/plugins/middleware"
 	middlewarex "github.com/firebase/genkit/go/plugins/middleware/exp"
 	"github.com/firebase/genkit/go/plugins/server"
 )
@@ -141,7 +142,7 @@ func main() {
 				&middlewarex.ContextCompression{
 					// Small on purpose, so compression starts partway through the
 					// loop. A real budget sits well below the model's window.
-					MaxInputTokens:      1500,
+					MaxInputTokens:      1000,
 					DedupeToolResponses: &middlewarex.CompressionDedupe{},
 					TruncateToolResponses: &middlewarex.CompressionToolTruncation{
 						MaxChars:       300,
@@ -154,6 +155,9 @@ func main() {
 					SkipSummarizationThreshold: 0.3,
 				},
 				recordView,
+				// Listed after ContextCompression, Retry resends the compressed
+				// view when the model is briefly unavailable.
+				&middleware.Retry{},
 			),
 		)
 		if err != nil {
