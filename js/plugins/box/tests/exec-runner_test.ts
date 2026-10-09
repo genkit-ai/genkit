@@ -22,6 +22,7 @@ import path from 'node:path';
 import { after, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { box } from '../src/box.js';
+import { sandboxExec } from '../src/providers/sandbox-exec.js';
 import { execRunner } from '../src/runners/exec-runner.js';
 import { childEnv } from '../src/runners/util.js';
 
@@ -351,6 +352,27 @@ describe('execRunner (integration)', () => {
         else process.env[key] = value;
       }
     }
+  });
+
+  it('filters env inside a local sandbox too', async (t) => {
+    if (process.platform !== 'darwin') {
+      t.skip('sandbox-exec is macOS only; bubblewrap is covered in providers');
+      return;
+    }
+    await withEnv({ BOX_TEST_SECRET: 'hunter2' }, async () => {
+      const runner = track(
+        execRunner({
+          cmd: `${TSX} ${boxedEntry}`,
+          isolate: sandboxExec(),
+          inheritEnv: false,
+          env: { BOX_TEST_GIVEN: 'given' },
+        })
+      );
+      assert.deepStrictEqual(
+        await readEnv(runner, ['BOX_TEST_SECRET', 'BOX_TEST_GIVEN']),
+        { BOX_TEST_GIVEN: 'given' }
+      );
+    });
   });
 
   it('nests self-mode boxes (agent-box -> tool-box)', async () => {

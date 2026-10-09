@@ -95,6 +95,22 @@ describe('providers', () => {
     assert.deepStrictEqual(withRepo, [...defaults, '/work/repo']);
   });
 
+  it('sandboxes pass the spawn env through, so execRunner filtering applies', () => {
+    // execRunner filters the inherited env (`inheritEnv`) before spawning the
+    // sandbox wrapper; the wrapper must neither drop the runner's vars nor
+    // re-add anything from the host.
+    const provider =
+      process.platform === 'darwin'
+        ? sandboxExec()
+        : process.platform === 'linux'
+          ? bubblewrap()
+          : undefined;
+    if (!provider) return;
+    const p = provider.prepare(SPEC, REFLECT);
+    assert.deepStrictEqual(p.env, SPEC.env);
+    assert.ok(!p.args.includes('--clearenv'), 'bwrap keeps the spawn env');
+  });
+
   it('localSandbox picks per-OS or hard-errors', () => {
     if (process.platform === 'darwin') {
       assert.strictEqual(localSandbox().name, 'sandbox-exec');
