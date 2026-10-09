@@ -31,10 +31,7 @@ from genkit_google_genai._interactions._client import (
     create_interaction,
     get_interaction,
 )
-from genkit_google_genai._interactions._converters import (
-    clean_schema,
-    from_interaction,
-)
+from genkit_google_genai._interactions._converters import from_interaction
 from genkit_google_genai._interactions._options import ClientOptions
 from genkit_google_genai._models._interactions_registry import deep_research_model_info
 from genkit_google_genai._models._interactions_utils import (
@@ -158,20 +155,6 @@ def build_tools(request: ModelRequest[DeepResearchConfig], config: DeepResearchC
     return tools
 
 
-def response_format_from_request(
-    request: ModelRequest[DeepResearchConfig],
-) -> dict[str, Any] | None:
-    """Build response_format when the caller asked for JSON output."""
-    if request.output_format != 'json' and request.output_content_type != 'application/json':
-        return None
-    response_format: dict[str, Any] = {'type': 'text', 'mime_type': 'application/json'}
-    if request.output_schema:
-        # output_schema is already a JSON Schema dict. Dumping a model
-        # by alias here would rename properties the constraint expects.
-        response_format['schema'] = clean_schema(request.output_schema)
-    return response_format
-
-
 def create_deep_research_background_action(
     target: str | ModelRef,
     *,
@@ -205,7 +188,6 @@ def create_deep_research_background_action(
         agent_config: dict[str, Any] = {'type': 'deep-research', **agent_fields}
 
         tools = build_tools(request, config)
-        response_format = response_format_from_request(request)
         create_kwargs: dict[str, Any] = {
             'agent': version,
             'input': steps_with_folded_system_instruction(request.messages),
@@ -216,8 +198,6 @@ def create_deep_research_background_action(
         }
         if tools:
             create_kwargs['tools'] = tools
-        if response_format is not None:
-            create_kwargs['response_format'] = response_format
 
         interaction = await create_interaction(api_key, create_kwargs, options)
         return persist(from_interaction(interaction))

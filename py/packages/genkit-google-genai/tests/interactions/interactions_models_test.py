@@ -31,7 +31,6 @@ from genkit_google_genai._models._deep_research import (
     DeepResearchConfig,
     create_deep_research_background_action,
     deep_research_model,
-    response_format_from_request,
 )
 from genkit_google_genai._models._interactions_lyria import LyriaConfig, create_lyria_action
 from genkit_google_genai._models._interactions_registry import deep_research_model_info, lyria_model_info
@@ -824,19 +823,6 @@ async def test_deep_research_file_search_and_mcp_dump_snake_case() -> None:
     } in tools
     assert 'fileSearchStoreNames' not in tools[0]
     assert 'allowedTools' not in tools[1]
-
-
-def test_response_format_from_request_keeps_caller_schema() -> None:
-    schema = {'type': 'object', 'properties': {'title': {'type': 'string'}}}
-    request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part.from_text('q')])],
-        output={'format': 'json', 'schema': schema},
-    )
-    assert response_format_from_request(request) == {
-        'type': 'text',
-        'mime_type': 'application/json',
-        'schema': schema,
-    }
 
 
 def test_deep_research_accepts_uppercase_choice_labels() -> None:
