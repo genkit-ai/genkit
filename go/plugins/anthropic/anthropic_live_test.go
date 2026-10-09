@@ -350,9 +350,25 @@ func TestAnthropicLive(t *testing.T) {
 		if final.Reasoning() != reasoningStream {
 			t.Fatalf("mismatch reasoning, got: %s, want: %s", reasoningStream, final.Reasoning())
 		}
-		if final.Usage.InputTokens == 0 || final.Usage.OutputTokens == 0 {
-			t.Fatalf("empty usage stats: %#v", *final.Usage)
+		checkThinkingUsage(t, final.Usage)
+	})
+	t.Run("usage with thinking", func(t *testing.T) {
+		resp, err := genkit.Generate(ctx, g,
+			ai.WithPrompt("A bat and a ball cost 1.10 in total. The bat costs 1.00 more than the ball. How much is the ball?"),
+			ai.WithConfig(&anthropic.MessageNewParams{
+				Thinking: anthropic.ThinkingConfigParamUnion{
+					OfEnabled: &anthropic.ThinkingConfigEnabledParam{
+						BudgetTokens: 1024,
+					},
+				},
+				MaxTokens: 2048,
+			}),
+			ai.WithModel(anthropicPlugin.Model(g, "claude-haiku-4-5-20251001")),
+		)
+		if err != nil {
+			t.Fatal(err)
 		}
+		checkThinkingUsage(t, resp.Usage)
 	})
 	t.Run("tools streaming", func(t *testing.T) {
 		m := anthropicPlugin.Model(g, "claude-haiku-4-5-20251001")
@@ -521,4 +537,17 @@ func requireEnv(key string) (string, bool) {
 	}
 
 	return value, true
+}
+
+// checkThinkingUsage asserts that a response that thought reports its usage
+// by the [ai.GenerationUsage] convention: thinking counted apart from the
+// output, and a total that adds up.
+func checkThinkingUsage(t *testing.T, u *ai.GenerationUsage) {
+	t.Helper()
+	if u == nil || u.InputTokens == 0 || u.OutputTokens == 0 || u.ThoughtsTokens == 0 {
+		t.Fatalf("Usage = %+v, want input, output, and thoughts tokens", u)
+	}
+	if sum := u.InputTokens + u.OutputTokens + u.ThoughtsTokens; u.TotalTokens != sum {
+		t.Errorf("TotalTokens = %d, want input + output + thoughts = %d", u.TotalTokens, sum)
+	}
 }

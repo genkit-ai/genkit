@@ -500,6 +500,7 @@ class GenerationUsage(GenkitModel):
     custom: Custom | None = None
     thoughts_tokens: float | None = None
     cached_content_tokens: float | None = None
+    cache_write_tokens: float | None = None
 
 
 class MediaPart(GenkitModel):

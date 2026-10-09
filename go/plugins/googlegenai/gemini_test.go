@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -1692,6 +1693,53 @@ func streamInput() *ai.ModelRequest {
 		Messages: []*ai.Message{
 			{Role: ai.RoleUser, Content: []*ai.Part{ai.NewTextPart("hi")}},
 		},
+	}
+}
+
+// TestTranslateResponseUsage pins how Gemini's usage maps onto the
+// [ai.GenerationUsage] convention. Gemini counts thinking apart from the
+// candidates, as the convention does, but it also counts tool results fed
+// back to the model apart from the prompt, which left InputTokens short of
+// the input Gemini bills. Gemini's own total stands, so a bucket the mapping
+// does not cover still reaches TotalTokens.
+func TestTranslateResponseUsage(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		total int32
+		want  int
+	}{
+		{name: "gemini total", total: 160, want: 160},
+		{name: "no total", total: 0, want: 155},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, err := translateResponse(&genai.GenerateContentResponse{
+				Candidates: []*genai.Candidate{{
+					Content:      genai.NewContentFromText("4", genai.RoleModel),
+					FinishReason: genai.FinishReasonStop,
+				}},
+				UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
+					PromptTokenCount:        100,
+					CachedContentTokenCount: 60,
+					ToolUsePromptTokenCount: 20,
+					CandidatesTokenCount:    5,
+					ThoughtsTokenCount:      30,
+					TotalTokenCount:         tc.total,
+				},
+			})
+			if err != nil {
+				t.Fatalf("translateResponse() error = %v", err)
+			}
+			want := ai.GenerationUsage{
+				InputTokens:         120,
+				CachedContentTokens: 60,
+				OutputTokens:        5,
+				ThoughtsTokens:      30,
+				TotalTokens:         tc.want,
+			}
+			if got := *r.Usage; !reflect.DeepEqual(got, want) {
+				t.Errorf("Usage = %+v, want %+v", got, want)
+			}
+		})
 	}
 }
 

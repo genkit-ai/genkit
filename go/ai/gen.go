@@ -176,8 +176,20 @@ type GenerationCommonConfig struct {
 }
 
 // GenerationUsage provides information about resource consumption during generation.
+//
+// Token counts follow one convention whatever the provider reports:
+// InputTokens is the whole prompt, cached tokens included, and
+// CachedContentTokens and CacheWriteTokens are parts of it. OutputTokens and
+// ThoughtsTokens do not overlap: together they are every token the model
+// generated. TotalTokens is the provider's own total when it reports one, and
+// otherwise InputTokens + OutputTokens + ThoughtsTokens.
 type GenerationUsage struct {
-	// CachedContentTokens counts tokens that were served from cache.
+	// CacheWriteTokens counts the input tokens written to the provider's cache,
+	// which some providers bill above the base input rate. They are part of
+	// InputTokens.
+	CacheWriteTokens int `json:"cacheWriteTokens,omitempty"`
+	// CachedContentTokens counts the input tokens served from the provider's cache.
+	// They are part of InputTokens.
 	CachedContentTokens int `json:"cachedContentTokens,omitempty"`
 	// Custom contains additional usage metrics specific to the model provider.
 	Custom map[string]float64 `json:"custom,omitempty"`
@@ -187,7 +199,9 @@ type GenerationUsage struct {
 	InputCharacters int `json:"inputCharacters,omitempty"`
 	// InputImages is the number of images in the input.
 	InputImages int `json:"inputImages,omitempty"`
-	// InputTokens is the number of tokens in the input prompt.
+	// InputTokens is the number of tokens in the input prompt. It includes the
+	// tokens served from cache (CachedContentTokens) and the tokens written to
+	// cache (CacheWriteTokens).
 	InputTokens int `json:"inputTokens,omitempty"`
 	// InputVideos is the number of videos in the input.
 	InputVideos int `json:"inputVideos,omitempty"`
@@ -197,13 +211,20 @@ type GenerationUsage struct {
 	OutputCharacters int `json:"outputCharacters,omitempty"`
 	// OutputImages is the number of images generated in the output.
 	OutputImages int `json:"outputImages,omitempty"`
-	// OutputTokens is the number of tokens generated in the response.
+	// OutputTokens is the number of tokens generated in the response, not
+	// counting ThoughtsTokens. A provider that does not report reasoning apart
+	// from the answer counts its reasoning here.
 	OutputTokens int `json:"outputTokens,omitempty"`
 	// OutputVideos is the number of videos generated in the output.
 	OutputVideos int `json:"outputVideos,omitempty"`
-	// ThoughtsTokens counts tokens used in reasoning or thinking processes.
+	// ThoughtsTokens counts the reasoning or thinking tokens that the provider
+	// reports apart from the answer. They are not part of OutputTokens. Zero means
+	// that the provider reported no reasoning count, not that the model did not
+	// reason.
 	ThoughtsTokens int `json:"thoughtsTokens,omitempty"`
-	// TotalTokens is the sum of input and output tokens.
+	// TotalTokens is the provider's own total when it reports one, so a billed
+	// bucket the other counts leave out is not lost, and otherwise InputTokens +
+	// OutputTokens + ThoughtsTokens.
 	TotalTokens int `json:"totalTokens,omitempty"`
 }
 

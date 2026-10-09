@@ -101,6 +101,34 @@ func TestPluginConfigPrecedence(t *testing.T) {
 	}
 }
 
+// TestPluginCountsReasoningApart pins that the plugin declares xAI's usage
+// convention, in which completion_tokens leaves the reasoning out. Without the
+// declaration, a response with no total_tokens has the reasoning subtracted
+// from a completion count that never held it.
+func TestPluginCountsReasoningApart(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{
+			"id":"c1","object":"chat.completion","created":1,"model":"grok-4.5",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"0.05"},"finish_reason":"stop"}],
+			"usage":{"prompt_tokens":40,"completion_tokens":250,"completion_tokens_details":{"reasoning_tokens":200}}
+		}`)
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	plugin := &xai.XAI{APIKey: "test-key", Opts: []option.RequestOption{option.WithBaseURL(server.URL + "/v1")}}
+	g := genkit.Init(ctx, genkit.WithPlugins(plugin), genkit.WithDefaultModel("xai/grok-4.5"))
+
+	resp, err := genkit.Generate(ctx, g, ai.WithPrompt("hi"))
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if got := resp.Usage; got.OutputTokens != 250 || got.ThoughtsTokens != 200 || got.TotalTokens != 490 {
+		t.Errorf("Usage = %+v, want OutputTokens 250, ThoughtsTokens 200, TotalTokens 490", got)
+	}
+}
+
 func TestPluginRegistersModelsAndHandlesReasoning(t *testing.T) {
 	var mu sync.Mutex
 	var requests int
