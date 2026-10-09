@@ -61,6 +61,27 @@ def loop_local_client(factory: Callable[[], T]) -> Callable[[], T]:
     # => True
     ```
 
+    Where the client lives depends on whether it carries plugin settings:
+
+    - **Module level** (the decorator above): the client is a plain transport
+      and the API key, URL, headers, and timeout go on each request. Every
+      plugin instance shares one connection pool per loop.
+    - **On the plugin instance**: the client is built from plugin settings, as
+      with SDK clients that take ``api_key`` or ``base_url``. Wrap a factory in
+      ``__init__`` and call the getter where you need the client:
+
+    ```python
+    from openai import AsyncOpenAI
+
+
+    class Bistro(Plugin):
+        def __init__(self, api_key: str) -> None:
+            self._client = loop_local_client(lambda: AsyncOpenAI(api_key=api_key))
+
+        async def _generate(self, request: ModelRequest) -> ModelResponse:
+            completion = await self._client().chat.completions.create(...)
+    ```
+
     A cached object whose ``is_closed`` is true (httpx property, SDK method) is
     rebuilt, so closing a client by hand doesn't leave a dead one in the cache.
     Plain callables work too, e.g. ``loop_local_client(asyncio.Lock)``.
