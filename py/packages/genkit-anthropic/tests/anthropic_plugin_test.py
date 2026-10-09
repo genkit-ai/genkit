@@ -29,8 +29,9 @@ from genkit_anthropic._model_info import (
     SUPPORTED_ANTHROPIC_MODELS as SUPPORTED_MODELS,
     get_model_info,
 )
+from genkit_anthropic._models import AnthropicModel
 
-from genkit import Message, Part, Role
+from genkit import Genkit, Message, ModelResponse, Part, Role
 from genkit.model import Constrained, ModelRequest, ToolDefinition
 from genkit.plugin_api import ActionKind
 
@@ -118,7 +119,7 @@ async def test_plugin_beta_default_routes_action_run_to_beta_surface(mock_client
     mock_client_ctor.return_value = mock_client
 
     plugin = Anthropic(api_key='test-key', api_version='beta')
-    action = plugin._create_model_action('anthropic/claude-sonnet-4')
+    action = plugin._create_model_action('claude-sonnet-4')
 
     await action.run(_create_sample_request())
 
@@ -142,7 +143,7 @@ async def test_resolve_action_model() -> None:
     plugin = Anthropic(api_key='test-key')
 
     # Test resolving with unprefixed name
-    action = await plugin.resolve(ActionKind.MODEL, 'anthropic/claude-sonnet-4')
+    action = await plugin.resolve(ActionKind.MODEL, 'claude-sonnet-4')
 
     assert action is not None
     assert action.name == 'anthropic/claude-sonnet-4'
@@ -384,7 +385,6 @@ async def test_list_actions_empty_api_response_returns_and_caches_statics() -> N
 
 
 _ANTHROPIC_CONFIG_KEYS = {
-    'apiKey',
     'apiVersion',
     'betas',
     'maxOutputTokens',
@@ -406,7 +406,7 @@ async def test_resolve_advertises_anthropic_config() -> None:
     """resolve() metadata customOptions reflects the typed AnthropicConfig."""
     plugin = Anthropic(api_key='test-key')
 
-    action = await plugin.resolve(ActionKind.MODEL, 'anthropic/claude-sonnet-4')
+    action = await plugin.resolve(ActionKind.MODEL, 'claude-sonnet-4')
 
     assert action is not None
     custom_options = _custom_options(action.metadata)
@@ -429,6 +429,47 @@ async def test_list_actions_advertises_anthropic_config() -> None:
         custom_options = _custom_options(action.metadata)
         properties = set(custom_options['properties'].keys())
         assert _ANTHROPIC_CONFIG_KEYS <= properties
+
+
+@pytest.mark.asyncio
+async def test_generate_anthropic_resolved_model_sends_id_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`anthropic/claude-unlisted-test` sends `claude-unlisted-test` and is named with the plugin prefix."""
+    seen: list[str] = []
+
+    async def fake_generate(self: AnthropicModel, request: object, ctx: object) -> ModelResponse:
+        seen.append(self.model_name)
+        return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))
+
+    monkeypatch.setattr(AnthropicModel, 'generate', fake_generate)
+    ai = Genkit(plugins=[Anthropic(api_key='test-key')])
+
+    response = await ai.generate(model='anthropic/claude-unlisted-test', prompt='hi')
+    action = await ai.registry.resolve_action(ActionKind.MODEL, 'anthropic/claude-unlisted-test')
+
+    assert response.text == 'ok'
+    assert seen == ['claude-unlisted-test']
+    assert action is not None
+    assert action.name == 'anthropic/claude-unlisted-test'
+
+
+@pytest.mark.asyncio
+async def test_generate_anthropic_double_prefixed_id_sends_prefixed_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`anthropic/anthropic/claude-x` sends `anthropic/claude-x`; only one `anthropic/` is removed."""
+    seen: list[str] = []
+
+    async def fake_generate(self: AnthropicModel, request: object, ctx: object) -> ModelResponse:
+        seen.append(self.model_name)
+        return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))
+
+    monkeypatch.setattr(AnthropicModel, 'generate', fake_generate)
+    ai = Genkit(plugins=[Anthropic(api_key='test-key')])
+
+    await ai.generate(model='anthropic/anthropic/claude-x', prompt='hi')
+    action = await ai.registry.resolve_action(ActionKind.MODEL, 'anthropic/anthropic/claude-x')
+
+    assert seen == ['anthropic/claude-x']
+    assert action is not None
+    assert action.name == 'anthropic/anthropic/claude-x'
 
 
 def _create_sample_request() -> ModelRequest:

@@ -31,14 +31,13 @@ from genkit_google_genai._models._deep_research import (
     DeepResearchConfig,
     create_deep_research_background_action,
     deep_research_model,
-    response_format_from_request,
 )
 from genkit_google_genai._models._interactions_lyria import LyriaConfig, create_lyria_action
 from genkit_google_genai._models._interactions_registry import deep_research_model_info, lyria_model_info
 from google.genai.interactions import Interaction
 
 from genkit import Genkit, GenkitError, Message, Operation, Part, Role
-from genkit.model import ModelRequest
+from genkit.model import ModelRequest, ToolDefinition
 from genkit.plugin_api import ActionKind
 
 
@@ -447,6 +446,39 @@ async def test_deep_research_rejects_empty_messages() -> None:
     assert create_calls == []
 
 
+@pytest.mark.parametrize(
+    'version',
+    ['deep-research-pro-preview-12-2025', 'deep-research-preview-04-2026', 'deep-research-max-preview-04-2026'],
+)
+def test_deep_research_info_declares_no_function_tools(version: str) -> None:
+    supports = deep_research_model_info(version).supports
+    assert supports is not None
+    assert supports.tools is False
+
+
+@pytest.mark.asyncio
+async def test_deep_research_rejects_function_tools() -> None:
+    patcher, create_calls, _, _ = patch_interactions(
+        'genkit_google_genai._models._deep_research',
+        create_result={'id': 'dr-tools', 'status': 'in_progress'},
+    )
+    action = create_deep_research_background_action(
+        'deep-research-preview-04-2026',
+        plugin_api_key='plugin-key',
+        client_options=ClientOptions(),
+    )
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part.from_text('compare allergen policies')])],
+        tools=[ToolDefinition(name='lookup_menu', description='Look up a menu item.', input_schema={})],
+        config={'google_search': True},
+    )
+    with patcher:
+        with pytest.raises(GenkitError, match='does not support function tools') as exc_info:
+            await action.start(request)
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert create_calls == []
+
+
 @pytest.mark.asyncio
 async def test_antigravity_generate_folds_system_and_uses_agent() -> None:
     patcher, create_calls, _, _ = patch_interactions(
@@ -664,7 +696,7 @@ async def test_googleai_resolve_model_skips_deep_research_foreground() -> None:
     with patch('genkit_google_genai._google.genai.client.Client', return_value=mock_client):
         plugin = GoogleAI(api_key='test-key')
 
-    dr_name = googleai_name('deep-research-preview-04-2026')
+    dr_name = 'deep-research-preview-04-2026'
     assert await plugin.resolve(ActionKind.MODEL, dr_name) is None
     bg = await plugin.resolve(ActionKind.BACKGROUND_MODEL, dr_name)
     assert bg is not None
@@ -700,7 +732,7 @@ async def test_googleai_resolve_routes_interactions_models() -> None:
     with patch('genkit_google_genai._google.genai.client.Client', return_value=mock_client):
         plugin = GoogleAI(api_key='test-key')
 
-    dr_name = googleai_name('deep-research-pro-preview-12-2025')
+    dr_name = 'deep-research-pro-preview-12-2025'
     bg = await plugin.resolve(ActionKind.BACKGROUND_MODEL, dr_name)
     assert bg is not None
     assert bg.kind == ActionKind.BACKGROUND_MODEL
@@ -711,16 +743,16 @@ async def test_googleai_resolve_routes_interactions_models() -> None:
     cancel = await plugin.resolve(ActionKind.CANCEL_OPERATION, f'{dr_name}/cancel')
     assert cancel is not None
 
-    ag = await plugin.resolve(ActionKind.MODEL, googleai_name('antigravity-preview-05-2026'))
+    ag = await plugin.resolve(ActionKind.MODEL, 'antigravity-preview-05-2026')
     assert ag is not None
     assert ag.kind == ActionKind.MODEL
 
-    ly = await plugin.resolve(ActionKind.MODEL, googleai_name('lyria-3-pro-preview'))
+    ly = await plugin.resolve(ActionKind.MODEL, 'lyria-3-pro-preview')
     assert ly is not None
 
     # Unknown lyria-* ids still resolve here so a version we have not
     # catalogued is not minted as Gemini.
-    ly_passthrough = await plugin.resolve(ActionKind.MODEL, googleai_name('lyria-002'))
+    ly_passthrough = await plugin.resolve(ActionKind.MODEL, 'lyria-002')
     assert ly_passthrough is not None
     model_meta = (ly_passthrough.metadata or {}).get('model')
     assert isinstance(model_meta, dict)
@@ -753,11 +785,11 @@ async def test_vertex_keeps_interactions_families_fail_closed() -> None:
     with patch('genkit_google_genai._google.genai.client.Client', return_value=mock_client):
         plugin = VertexAI(project='p', location='us-central1')
 
-    assert await plugin.resolve(ActionKind.MODEL, 'vertexai/deep-research-preview-04-2026') is None
-    assert await plugin.resolve(ActionKind.BACKGROUND_MODEL, 'vertexai/deep-research-preview-04-2026') is None
-    assert await plugin.resolve(ActionKind.MODEL, 'vertexai/antigravity-preview-05-2026') is None
-    assert await plugin.resolve(ActionKind.MODEL, 'vertexai/lyria-3-clip-preview') is None
-    assert await plugin.resolve(ActionKind.MODEL, 'vertexai/lyria-002') is None
+    assert await plugin.resolve(ActionKind.MODEL, 'deep-research-preview-04-2026') is None
+    assert await plugin.resolve(ActionKind.BACKGROUND_MODEL, 'deep-research-preview-04-2026') is None
+    assert await plugin.resolve(ActionKind.MODEL, 'antigravity-preview-05-2026') is None
+    assert await plugin.resolve(ActionKind.MODEL, 'lyria-3-clip-preview') is None
+    assert await plugin.resolve(ActionKind.MODEL, 'lyria-002') is None
 
 
 @pytest.mark.asyncio
@@ -791,19 +823,6 @@ async def test_deep_research_file_search_and_mcp_dump_snake_case() -> None:
     } in tools
     assert 'fileSearchStoreNames' not in tools[0]
     assert 'allowedTools' not in tools[1]
-
-
-def test_response_format_from_request_keeps_caller_schema() -> None:
-    schema = {'type': 'object', 'properties': {'title': {'type': 'string'}}}
-    request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part.from_text('q')])],
-        output={'format': 'json', 'schema': schema},
-    )
-    assert response_format_from_request(request) == {
-        'type': 'text',
-        'mime_type': 'application/json',
-        'schema': schema,
-    }
 
 
 def test_deep_research_accepts_uppercase_choice_labels() -> None:
@@ -1169,3 +1188,53 @@ async def test_ai_generate_lyria_002_hits_interactions_with_tenant_key(
         custom_headers={'x-request-id': 'lyria'},
     )
     assert create_calls[0]['model'] == 'lyria-002'
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+async def test_generate_operation_deep_research_handle_has_one_prefix(
+    mock_list_models: MagicMock, mock_client: MagicMock
+) -> None:
+    """A Deep Research job's handle is `/background-model/googleai/deep-research-…` after start, check, and cancel."""
+    mock_list_models.return_value = GenaiModels()
+    patcher, _, get_calls, cancel_calls = patch_interactions(
+        'genkit_google_genai._models._deep_research',
+        create_result={'id': 'dr-1', 'status': 'in_progress'},
+        get_result={'id': 'dr-1', 'status': 'in_progress'},
+        cancel_result={'id': 'dr-1', 'status': 'cancelled'},
+    )
+    ai = Genkit(plugins=[GoogleAI(api_key='plugin-key')])
+    key = '/background-model/googleai/deep-research-preview-04-2026'
+    with patcher:
+        operation = await ai.generate_operation(model='googleai/deep-research-preview-04-2026', prompt='research')
+        checked = await ai.check_operation(operation)
+        cancelled = await ai.cancel_operation(operation)
+
+    assert operation.action == key
+    assert checked.action == key
+    assert cancelled.action == key
+    assert get_calls == ['dr-1']
+    assert cancel_calls == ['dr-1']
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+async def test_check_operation_saved_deep_research_handle_checks_on_a_fresh_app(
+    mock_list_models: MagicMock, mock_client: MagicMock
+) -> None:
+    """A saved Deep Research handle checks by its stored `operation.action` on a new `Genkit`."""
+    mock_list_models.return_value = GenaiModels()
+    patcher, _, get_calls, _ = patch_interactions(
+        'genkit_google_genai._models._deep_research',
+        get_result={'id': 'dr-saved', 'status': 'completed', 'steps': []},
+    )
+    saved = Operation(id='dr-saved', done=False, action='/background-model/googleai/deep-research-preview-04-2026')
+    ai = Genkit(plugins=[GoogleAI(api_key='plugin-key')])
+    with patcher:
+        checked = await ai.check_operation(saved)
+
+    assert get_calls == ['dr-saved']
+    assert checked.done is True
+    assert checked.action == '/background-model/googleai/deep-research-preview-04-2026'

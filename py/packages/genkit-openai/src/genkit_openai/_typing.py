@@ -162,10 +162,9 @@ class OpenAIConfig(ModelConfig):
         seed: Random seed for deterministic sampling (beta).
             See: https://platform.openai.com/docs/api-reference/chat/create#chat-create-seed
 
-        user: End-user identifier (deprecated, use safety_identifier).
-            See: https://platform.openai.com/docs/api-reference/chat/create#chat-create-user
-
         safety_identifier: Stable identifier for detecting policy violations.
+            OpenAI's ``user`` field is not declared; send it with
+            ``extra={'user': ...}`` for a server that reads it.
             See: https://platform.openai.com/docs/api-reference/chat/create#chat-create-safety_identifier
 
         prompt_cache_key: Identifier for caching optimization.
@@ -209,15 +208,29 @@ class OpenAIConfig(ModelConfig):
 
         web_search_options: Web search tool configuration.
             See: https://platform.openai.com/docs/api-reference/chat/create#chat-create-web_search_options
+
+        max_output_tokens: Genkit's cross-model reply cap (``maxOutputTokens``
+            in the Dev UI). Sent as ``max_tokens``, or ``max_completion_tokens``
+            on reasoning models. ``max_tokens`` and ``max_completion_tokens``
+            win when set.
+
+        extra: Request body fields this class doesn't declare, such as a
+            field a newer API version or an OpenAI-compatible server added.
+            Sent as the OpenAI SDK's ``extra_body``, which replaces a
+            top-level field of the same name, so ``extra={'temperature': 0.9}``
+            wins over ``temperature``. Nothing inside it is checked.
+
+    Any other key raises, so a typo like ``temprature`` fails by name instead
+    of reaching OpenAI.
     """
 
     # Dev UI and reflection send camelCase. frequencyPenalty binds and goes
-    # out as frequency_penalty. maxOutputTokens binds on the schema; it is
-    # not a create() kwarg (use max_tokens / maxTokens for a token cap).
+    # out as frequency_penalty; maxOutputTokens goes out as the token cap.
     # populate_by_name keeps the snake_case Python fields working too.
+    # Unknown keys raise (inherited from ModelConfig); a create() param this
+    # class doesn't declare goes in ``extra`` and is sent as ``extra_body``.
     model_config: ClassVar[ConfigDict] = ConfigDict(
         alias_generator=to_camel,
-        extra='allow',
         populate_by_name=True,
     )
 
@@ -267,11 +280,6 @@ class OpenAIConfig(ModelConfig):
     # Determinism (beta feature)
     # https://platform.openai.com/docs/api-reference/chat/create#chat-create-seed
     seed: int | None = None
-
-    # User identification
-    # https://platform.openai.com/docs/api-reference/chat/create#chat-create-user
-    # Deprecated: use safety_identifier and prompt_cache_key instead
-    user: str | None = None
 
     # https://platform.openai.com/docs/api-reference/chat/create#chat-create-safety_identifier
     safety_identifier: str | None = None
@@ -333,11 +341,3 @@ class OpenAIConfig(ModelConfig):
     # https://platform.openai.com/docs/api-reference/chat/create#chat-create-web_search_options
     # https://platform.openai.com/docs/guides/tools-web-search
     web_search_options: dict[str, Any] | None = None
-
-
-class SupportedOutputFormat(StrEnum):
-    """Model Output Formats."""
-
-    JSON_MODE = 'json_mode'
-    STRUCTURED_OUTPUTS = 'structured_outputs'
-    TEXT = 'text'

@@ -59,7 +59,7 @@ from genkit._ai._agents._types import (
 
 # Imports from other genkit subsystems
 from genkit._ai._prompt import (
-    ExecutablePrompt,
+    Prompt,
     PromptGenerateOptions,
     lookup_prompt,
     prepare_prompt,
@@ -342,7 +342,7 @@ def define_agent(
     registry: Registry,
     name: str,
     *,
-    model: ModelRef[ModelRefConfigT] | str | None = None,
+    model: ModelRef[ModelRefConfigT] | Action | str | None = None,
     system: str | list[Part] | None = None,
     tools: Sequence[str | Tool] | None = None,
     use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
@@ -366,7 +366,7 @@ def define_agent(
     read and write via the session — the chat's ``state``, ``response.state``,
     and streamed ``chunk.custom`` come back as that model instead of a dict.
     """
-    executable_prompt = ExecutablePrompt(
+    executable_prompt = Prompt(
         registry,
         name=name,
         model=model,
@@ -430,16 +430,17 @@ def define_prompt_agent(
                 'resume_metadata': resume_metadata,
                 'context': ctx.context,
             }
-            call_registry, options = await prepare_prompt(prompt=executable, input={}, opts=call_opts)
-            rendered_messages = list(options.messages or [])
-            options = options.model_copy(
+            # A prompt agent has no input to pass, so a required field renders empty.
+            prepared = await prepare_prompt(prompt=executable, input={}, opts=call_opts, validate_input=False)
+            rendered_messages = list(prepared.options.messages or [])
+            options = prepared.options.model_copy(
                 update={'messages': apply_preamble_tags(rendered_messages)},
             )
 
             return await generate_prompt_agent_turn(
                 session_runner=session_runner,
                 ctx=ctx,
-                registry=call_registry,
+                registry=prepared.registry,
                 options=options,
                 history=history,
             )

@@ -36,9 +36,11 @@ EXCLUDED = frozenset({
 })
 PRIM = {'string': 'str', 'number': 'float', 'integer': 'int', 'boolean': 'bool'}
 # Schema type transformations: rename and/or omit fields before emission.
-# Keys: schema type name. Values: {'output_name': str} and/or {'suffix': str, 'omit': [str]}.
+# Keys: schema type name. Values: {'output_name': str}, {'omit': [str]}, and/or {'suffix': str}.
 # - output_name: emit and reference as this name (e.g. Message -> MessageData)
-# - suffix: emit as {name}{suffix}, omit listed fields (hand-written subclass adds them back)
+# - omit: drop the listed fields from the emitted class
+# - suffix: emit as {name}{suffix}; a hand-written subclass adds the omitted fields back.
+#   Without a suffix, omitted fields are gone from Python for good.
 TRANSFORMATIONS = {
     'Message': {'output_name': 'MessageData'},
     'Part': {'output_name': 'PartData'},
@@ -50,6 +52,12 @@ TRANSFORMATIONS = {
     # Documents take the same Part as messages. The schema names a
     # text|media subset; we do not emit a second type for that.
     'DocumentPart': {'output_name': 'PartData'},
+    # config is recorded in traces, so a per-request key goes in
+    # context.secrets instead and model config has no slot for one.
+    'GenerationCommonConfig': {'omit': ['apiKey']},
+    # docs= always goes into the prompt and nothing in Python reads
+    # supports.context, so the field isn't emitted.
+    'Supports': {'omit': ['context']},
 }
 
 
@@ -93,7 +101,7 @@ from __future__ import annotations
 
 from typing import Any, ClassVar, Literal
 
-from pydantic import ConfigDict, Field, RootModel
+from pydantic import ConfigDict, Field, RootModel, field_validator
 from pydantic.alias_generators import to_camel
 
 from genkit._core._base import GenkitModel
@@ -343,6 +351,11 @@ def _emit_model(
             py_type_str = 'Role | str'
         desc = v.get('description')
         desc_extra = f', description={repr(desc)}' if desc else ''
+        if name == 'EvalFnResponse' and field_name == 'evaluation':
+            # Callers read row.evaluation as a list. Saved JSON that stored one
+            # score object is wrapped; a Score built in code must already be
+            # a list so the type checker and runtime agree.
+            py_type_str = 'list[Score]'
         if k in req:
             lines.append(f'    {field_name}: {py_type_str} = Field(...{desc_extra}{alias_extra})')
         else:
@@ -356,6 +369,16 @@ def _emit_model(
         lines.extend([
             '    # Store Pydantic type for runtime validation (excluded from JSON)',
             '    schema_type: Any = Field(default=None, exclude=True)',
+        ])
+    if name == 'EvalFnResponse':
+        lines.extend([
+            '',
+            "    @field_validator('evaluation', mode='before')",
+            '    @classmethod',
+            '    def _wrap_single_score_object(cls, value: Any) -> Any:  # noqa: ANN401',
+            '        # saved runs may store one score object. wrap that dict;',
+            '        # a Score built in code must already be a list.',
+            '        return [value] if isinstance(value, dict) else value',
         ])
     return lines + ['']
 

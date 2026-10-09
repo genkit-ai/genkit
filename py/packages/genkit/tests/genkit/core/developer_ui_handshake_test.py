@@ -24,23 +24,25 @@ from genkit._core._environment import GENKIT_ENV
 from genkit._core._reflection import create_reflection_asgi_app
 from genkit._core._reflection_v2 import ReflectionServerV2
 from genkit._core._registry import Registry
-from genkit._core._telemetry import http as http_telemetry
-from genkit._core._telemetry._instrumentation import (
-    flush_instrumentations,
-    instrumentations,
-    is_instrumented_by,
-    parent_path_context,
-    reset_instrumentation,
-)
-from genkit._core._telemetry._log_exporter import reset_log_export
-from genkit._core._telemetry.http import (
+from genkit._core._telemetry import _http as http_telemetry
+from genkit._core._telemetry._http import (
     ActiveSpan,
     CollectorHttpSink,
-    GenkitBuiltinInstrumentation,
+    DevUIInstrumentation,
+    DirectHttpInstrumentation,
     direct_http_for_collector,
 )
+from genkit._core._telemetry._instrumentation import (
+    flush_instrumentations,
+    parent_path_context,
+)
+from genkit._core._telemetry._log_exporter import reset_log_export
 from genkit.plugin_api import ActionKind
-from genkit.telemetry import configure_instrumentation
+from genkit.telemetry import (
+    configure_instrumentation,
+    is_instrumented_by,
+    reset_instrumentation,
+)
 
 
 def _hex_id(value: str, length: int) -> bool:
@@ -108,14 +110,14 @@ async def test_handshake_url_in_dev_turns_tracing_on(
     url = f'http://127.0.0.1:{server.server_address[1]}'
     try:
         Genkit()
-        assert not is_instrumented_by(GenkitBuiltinInstrumentation)
+        assert not is_instrumented_by(DirectHttpInstrumentation)
 
         _handshake_server().apply_handshake_telemetry(url)
         action = Action(name='joke', kind=ActionKind.FLOW, fn=_joke)
         result = await action.run()
         _force_flush()
 
-        assert is_instrumented_by(GenkitBuiltinInstrumentation)
+        assert is_instrumented_by(DirectHttpInstrumentation)
         assert _hex_id(result.trace_id, 32)
         assert _hex_id(result.span_id, 16)
         assert posts
@@ -141,7 +143,7 @@ async def test_leftover_collector_env_does_not_block_todays_handshake_url(
         result = await action.run()
         _force_flush()
 
-        assert is_instrumented_by(GenkitBuiltinInstrumentation)
+        assert is_instrumented_by(DirectHttpInstrumentation)
         assert _hex_id(result.trace_id, 32)
         assert live_posts
         assert not stale_posts
@@ -156,14 +158,27 @@ async def test_handshake_is_noop_when_genkit_start_already_wired_the_collector(
 ) -> None:
     """genkit start -- python: Genkit() already wired the collector; handshake is a no-op."""
     monkeypatch.setenv(GENKIT_ENV, 'dev')
-    monkeypatch.setenv('GENKIT_TELEMETRY_SERVER', 'http://127.0.0.1:4033')
+    first = _start_collector()
+    second = _start_collector()
+    first_server, first_posts = first
+    second_server, second_posts = second
+    try:
+        monkeypatch.setenv('GENKIT_TELEMETRY_SERVER', f'http://127.0.0.1:{first_server.server_address[1]}')
+        Genkit()
+        assert is_instrumented_by(DevUIInstrumentation)
+        _handshake_server().apply_handshake_telemetry(f'http://127.0.0.1:{second_server.server_address[1]}')
 
-    Genkit()
-    before = list(instrumentations)
-    _handshake_server().apply_handshake_telemetry('http://127.0.0.1:4041')
+        action = Action(name='joke', kind=ActionKind.FLOW, fn=_joke)
+        result = await action.run()
+        _force_flush()
 
-    assert is_instrumented_by(GenkitBuiltinInstrumentation)
-    assert instrumentations == before
+        assert is_instrumented_by(DevUIInstrumentation)
+        assert _hex_id(result.trace_id, 32)
+        assert first_posts
+        assert not second_posts
+    finally:
+        first_server.shutdown()
+        second_server.shutdown()
 
 
 @pytest.mark.asyncio
@@ -179,7 +194,7 @@ async def test_notify_url_in_dev_turns_tracing_on(monkeypatch: pytest.MonkeyPatc
     action = Action(name='joke', kind=ActionKind.FLOW, fn=_joke)
     result = await action.run()
 
-    assert is_instrumented_by(GenkitBuiltinInstrumentation)
+    assert is_instrumented_by(DirectHttpInstrumentation)
     assert _hex_id(result.trace_id, 32)
 
 
@@ -203,7 +218,7 @@ async def test_handshake_still_fills_the_traces_tab_when_another_backend_is_on(
         result = await action.run()
         _force_flush()
 
-        assert is_instrumented_by(GenkitBuiltinInstrumentation)
+        assert is_instrumented_by(DirectHttpInstrumentation)
         assert _hex_id(result.trace_id, 32)
         assert posts
     finally:
@@ -219,7 +234,7 @@ async def test_empty_handshake_url_leaves_trace_ids_empty() -> None:
 
     assert result.trace_id == ''
     assert result.span_id == ''
-    assert not is_instrumented_by(GenkitBuiltinInstrumentation)
+    assert not is_instrumented_by(DirectHttpInstrumentation)
 
 
 @pytest.mark.asyncio
@@ -239,8 +254,7 @@ async def test_second_handshake_does_not_add_another_collector(
         result = await action.run()
         _force_flush()
 
-        builtins = [i for i in instrumentations if isinstance(i, GenkitBuiltinInstrumentation)]
-        assert len(builtins) == 1
+        assert is_instrumented_by(DevUIInstrumentation)
         assert _hex_id(result.trace_id, 32)
         assert first_posts
         assert not second_posts

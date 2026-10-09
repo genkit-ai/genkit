@@ -30,10 +30,6 @@ Types exported from genkit, genkit.model, genkit.embedder, genkit.plugin_api, ge
 
 ::: genkit.Embedding
 
-::: genkit.BaseDataPoint
-
-::: genkit.EvalResponse
-
 ::: genkit.Operation
 
 ::: genkit.tool
@@ -44,21 +40,13 @@ Types exported from genkit, genkit.model, genkit.embedder, genkit.plugin_api, ge
 
 ::: genkit.Interrupt
 
-::: genkit.respond_to_interrupt
-
-::: genkit.restart_tool
-
 ::: genkit.response
 
 ::: genkit.MultipartToolResponse
 
-::: genkit.Flow
-
 ::: genkit.ActionRunContext
 
-::: genkit.ExecutablePrompt
-
-::: genkit.PromptGenerateOptions
+::: genkit.Prompt
 
 ::: genkit.GenkitError
 
@@ -135,6 +123,8 @@ Types exported from genkit, genkit.model, genkit.embedder, genkit.plugin_api, ge
 ::: genkit.plugin_api.StatusName
 
 ## genkit.evaluator
+
+::: genkit.evaluator.BaseDataPoint
 
 ::: genkit.evaluator.EvalRequest
 

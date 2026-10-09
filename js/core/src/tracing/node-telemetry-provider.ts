@@ -14,27 +14,12 @@
  * limitations under the License.
  */
 
-import {
-  BatchLogRecordProcessor,
-  SimpleLogRecordProcessor,
-  type LogRecordProcessor,
-} from '@opentelemetry/sdk-logs';
 import { NodeSDK } from '@opentelemetry/sdk-node';
-import {
-  BatchSpanProcessor,
-  SimpleSpanProcessor,
-  type SpanProcessor,
-} from '@opentelemetry/sdk-trace-base';
+import { type SpanProcessor } from '@opentelemetry/sdk-trace-base';
 import { logger } from '../logging.js';
 import type { TelemetryConfig } from '../telemetryTypes.js';
 import { setTelemetryProvider } from '../tracing.js';
-import { isDevEnv } from '../utils.js';
-import {
-  LogServerExporter,
-  TraceServerExporter,
-  setTelemetryServerUrl,
-} from './exporter.js';
-import { RealtimeSpanProcessor } from './realtime-span-processor.js';
+import { setTelemetryServerUrl } from './exporter.js';
 
 let telemetrySDK: NodeSDK | null = null;
 let nodeOtelConfig: TelemetryConfig | null = null;
@@ -48,6 +33,12 @@ export function initNodeTelemetryProvider() {
 
 /**
  * Enables tracing and metrics open telemetry configuration.
+ *
+ * This is the collection side: export to the exporters the caller (or a plugin
+ * such as GCP / Firebase) configured. It no longer auto-wires the telemetry
+ * server exporter or a default log processor to feed the Developer UI; that is
+ * now the instrumentation side's job (`DirectTelemetryInstrumentation`). Only
+ * user-supplied span/log processors and metric readers are honored here.
  */
 async function enableTelemetry(
   telemetryConfig: TelemetryConfig | Promise<TelemetryConfig>
@@ -63,7 +54,7 @@ async function enableTelemetry(
 
   nodeOtelConfig = telemetryConfig || {};
 
-  const processors: SpanProcessor[] = [createTelemetryServerProcessor()];
+  const processors: SpanProcessor[] = [];
   if (nodeOtelConfig.traceExporter) {
     throw new Error('Please specify spanProcessors instead.');
   }
@@ -75,24 +66,6 @@ async function enableTelemetry(
     delete nodeOtelConfig.spanProcessor;
   }
   nodeOtelConfig.spanProcessors = processors;
-
-  // Add LogRecordProcessors
-  const enableRealTimeTelemetry =
-    process.env.GENKIT_ENABLE_REALTIME_TELEMETRY === 'true';
-  const logExporter = new LogServerExporter();
-  const defaultLogProcessor: LogRecordProcessor =
-    isDevEnv() || enableRealTimeTelemetry
-      ? new SimpleLogRecordProcessor(logExporter)
-      : new BatchLogRecordProcessor(logExporter);
-
-  if (nodeOtelConfig.logRecordProcessor) {
-    nodeOtelConfig.logRecordProcessor = new MultiLogRecordProcessor([
-      nodeOtelConfig.logRecordProcessor,
-      defaultLogProcessor,
-    ]);
-  } else {
-    nodeOtelConfig.logRecordProcessor = defaultLogProcessor;
-  }
 
   telemetrySDK = new NodeSDK(nodeOtelConfig);
   telemetrySDK.start();
@@ -111,22 +84,6 @@ async function cleanUpTracing(): Promise<void> {
   await telemetrySDK.shutdown();
   logger.debug('OpenTelemetry SDK shut down.');
   telemetrySDK = null;
-}
-
-/**
- * Creates a new SpanProcessor for exporting data to the telemetry server.
- */
-function createTelemetryServerProcessor(): SpanProcessor {
-  const exporter = new TraceServerExporter();
-  // Use RealtimeSpanProcessor in dev environment (unless disabled), or when explicitly enabled
-  const enableRealTimeTelemetry =
-    process.env.GENKIT_ENABLE_REALTIME_TELEMETRY === 'true';
-  if (isDevEnv() && enableRealTimeTelemetry) {
-    return new RealtimeSpanProcessor(exporter);
-  } else if (isDevEnv()) {
-    return new SimpleSpanProcessor(exporter);
-  }
-  return new BatchSpanProcessor(exporter);
 }
 
 /** Flush metrics if present. */
@@ -149,22 +106,4 @@ async function flushTracing() {
     promises.push(nodeOtelConfig.logRecordProcessor.forceFlush());
   }
   await Promise.all(promises);
-}
-
-class MultiLogRecordProcessor implements LogRecordProcessor {
-  constructor(private readonly processors: LogRecordProcessor[]) {}
-
-  async forceFlush(): Promise<void> {
-    await Promise.all(this.processors.map((p) => p.forceFlush()));
-  }
-
-  onEmit(logRecord: any, context?: any): void {
-    for (const processor of this.processors) {
-      processor.onEmit(logRecord, context);
-    }
-  }
-
-  async shutdown(): Promise<void> {
-    await Promise.all(this.processors.map((p) => p.shutdown()));
-  }
 }

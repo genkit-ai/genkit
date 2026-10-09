@@ -338,9 +338,6 @@ func (s *SessionRunner[State]) Run(ctx context.Context, fn func(ctx context.Cont
 			Name: fmt.Sprintf("runTurn-%d", s.turnIndex+1),
 			Type: "flowStep",
 		}
-		// The result of a turn that errored, captured on the way out of the
-		// span so the failure arm below can read it: non-nil commits.
-		var failedResult *TurnResult
 		_, err := tracing.RunInNewSpan(ctx, spanMeta, input,
 			func(ctx context.Context, input *AgentInput) (any, error) {
 				// Carry the reserved turn context on the per-turn fn's context
@@ -353,7 +350,27 @@ func (s *SessionRunner[State]) Run(ctx context.Context, fn func(ctx context.Cont
 				}
 				tr, err := fn(ctx, input)
 				if err != nil {
-					failedResult = tr
+					reason := AgentFinishReasonFailed
+					if tr != nil && tr.FinishReason != "" {
+						reason = tr.FinishReason
+					}
+					// The caller stopping the run wins over whatever the turn
+					// reported. The detached finalize settles its race on the
+					// same rule (see finalizePendingSnapshot).
+					if callerStopped(ctx.Err(), err) {
+						reason = AgentFinishReasonAborted
+					}
+					// End the turn inside its span, as a successful one does,
+					// so a committed failure tags this span with its snapshot.
+					// A TurnResult beside the error is what commits it.
+					committed := tr != nil
+					s.endTurn(ctx, reason, err, committed)
+					if committed {
+						// A committed failure records the state its snapshot
+						// saved, as a success does; RunInNewSpan keeps an
+						// output returned beside the error.
+						return turnSpanOutput[State]{State: s.State()}, err
+					}
 					return nil, err
 				}
 				// A returned TurnResult sets the reason, nil reports none.
@@ -368,17 +385,6 @@ func (s *SessionRunner[State]) Run(ctx context.Context, fn func(ctx context.Cont
 			},
 		)
 		if err != nil {
-			reason := AgentFinishReasonFailed
-			if failedResult != nil && failedResult.FinishReason != "" {
-				reason = failedResult.FinishReason
-			}
-			// The caller stopping the run wins over whatever the turn
-			// reported. The detached finalize settles its race on the same
-			// rule (see finalizePendingSnapshot).
-			if callerStopped(ctx.Err(), err) {
-				reason = AgentFinishReasonAborted
-			}
-			s.endTurn(ctx, reason, err, failedResult != nil)
 			return err
 		}
 	}
@@ -400,7 +406,8 @@ func (s *SessionRunner[State]) reserveTurnSnapshotID() string {
 // endTurn records how the turn ended and runs the shared turn-end tail:
 // the turn-end emit, the last-good capture, and the turn advance. cause is
 // the turn's error, nil on success; committed says whether its state is a
-// resume point (always so on success).
+// resume point (always so on success). ctx must be the turn span's context:
+// the emit tags that span with the turn's snapshot.
 func (s *SessionRunner[State]) endTurn(ctx context.Context, reason AgentFinishReason, cause error, committed bool) {
 	s.lastTurnFinishReason = reason
 	s.lastTurnErr = cause
@@ -1384,10 +1391,10 @@ func (rt *agentRuntime[State]) emitTurnEnd(ctx context.Context) {
 		snapshotID = rt.sess.snapshotTurnEnd(ctx, reason, rt.sess.lastTurnErr)
 	}
 	// Tag the turn span with the snapshot it persisted, so a server-managed
-	// turn's trace links to its snapshot. ctx is the turn span's context (this
-	// runs inside the runTurn-N span via onEndTurn). The ID is empty, and the
-	// attribute omitted, when client-managed, when the turn failed without
-	// committing, or when a detach suspended snapshots.
+	// turn's trace links to its snapshot. ctx is the turn span's context: Run
+	// ends every turn, a failed one included, inside its runTurn-N span. The
+	// ID is empty, and the attribute omitted, when client-managed, when the
+	// turn failed without committing, or when a detach suspended snapshots.
 	if snapshotID != "" {
 		trace.SpanFromContext(ctx).SetAttributes(
 			attribute.String(snapshotIDSpanAttrKey, snapshotID))
@@ -3023,10 +3030,13 @@ func ValidateResumeAgainstHistory(resume *ToolResume, history []*ai.Message) err
 			field, name, toolRefSuffix(ref))
 	}
 
-	// Restart entries: name + ref must be pending and the input must match
-	// the original request exactly. IsToolRequest only checks the part kind,
-	// so guard the pointer too: a hand-built NewToolRequestPart(nil) is kind
-	// PartToolRequest with a nil ToolRequest.
+	// Restart entries: name + ref must be pending and the input the restart is
+	// accountable for must match the original request exactly. A restart that
+	// revised the input (ai.InterruptedCall.RestartWithInput) preserves the
+	// original it replaced, and that original is what must match; the revised
+	// input is what the tool re-executes with. IsToolRequest only checks the
+	// part kind, so guard the pointer too: a hand-built NewToolRequestPart(nil)
+	// is kind PartToolRequest with a nil ToolRequest.
 	for _, p := range resume.Restart {
 		if !p.IsToolRequest() || p.ToolRequest == nil {
 			continue
@@ -3036,9 +3046,9 @@ func ValidateResumeAgainstHistory(resume *ToolResume, history []*ai.Message) err
 		if match == nil {
 			return unresolved("restart", req.Name, req.Ref)
 		}
-		if !jsonEqual(normalizeJSON(req.Input), normalizeJSON(match.Input)) {
+		if !jsonEqual(normalizeJSON(restartOriginalInput(p)), normalizeJSON(match.Input)) {
 			return status.Errorf(status.ErrInvalidArgument,
-				"resume.restart for tool %q%s has modified inputs that do not match the original tool request in session history; restart inputs must exactly match the interrupted tool request",
+				"resume.restart for tool %q%s has modified inputs that do not match the original tool request in session history; restart inputs must exactly match the interrupted tool request, or a restart that replaces the input must preserve the original it replaced",
 				req.Name, toolRefSuffix(req.Ref))
 		}
 	}
@@ -3055,6 +3065,20 @@ func ValidateResumeAgainstHistory(resume *ToolResume, history []*ai.Message) err
 	}
 
 	return nil
+}
+
+// restartOriginalInput returns the input a restart part is accountable for
+// against history: the original a replaced-input restart preserves, on the
+// typed state or under the wire key a peer runtime writes, else the request's
+// own input.
+func restartOriginalInput(p *ai.Part) any {
+	if p.Restart != nil && p.Restart.OriginalInput != nil {
+		return p.Restart.OriginalInput
+	}
+	if v, ok := p.Metadata["replacedInput"]; ok && v != nil {
+		return v
+	}
+	return p.ToolRequest.Input
 }
 
 // toolRefSuffix renders a " (ref: X)" clause for resume validation errors, or
@@ -3353,8 +3377,9 @@ func (c *AgentConnection[State]) SendText(text string) error {
 }
 
 // SendResume sends a resume payload to continue an interrupted generation.
-// Construct the payload with [ai.ToolAction.RestartWith] or
-// [ai.ToolAction.RespondWith] parts.
+// Construct the payload from [ai.InterruptedCall.Restart] and
+// [ai.InterruptedCall.Respond] parts, or [ai.Part.ToToolRestart] and
+// [ai.Part.ToToolResponse].
 func (c *AgentConnection[State]) SendResume(resume *ToolResume) error {
 	return c.conn.Send(&AgentInput{Resume: resume})
 }

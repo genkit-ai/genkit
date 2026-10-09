@@ -28,7 +28,7 @@ import json
 from typing import Any, Literal, Protocol, cast
 
 import structlog
-from anthropic import APIError, AsyncAnthropic
+from anthropic import APIError, APIResponseValidationError, AsyncAnthropic
 from anthropic.types import Message as AnthropicMessage
 
 from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
@@ -37,10 +37,12 @@ from genkit.plugin_api import (
     ErrorResponseMetadata,
     StatusName,
     from_http_code,
+    mark_provider_error,
     parse_retry_after_ms,
 )
-from genkit_anthropic._config import BETA_KWARG_KEYS, STABLE_KWARG_KEYS, AnthropicConfig
+from genkit_anthropic._config import AnthropicConfig
 from genkit_anthropic._model_info import get_model_info
+from genkit_anthropic._secrets import context_api_key
 from genkit_anthropic._utils import (
     build_cache_usage,
     get_cache_control,
@@ -70,16 +72,69 @@ class _ModelDumpable(Protocol):
         ...
 
 
+# Error types Anthropic reports in an error body. A stream that already
+# returned 200 reports a later failure only this way, as an SSE `error` event.
+# See https://docs.anthropic.com/en/api/errors
+_ERROR_TYPE_TO_STATUS: dict[str, StatusName] = {
+    'invalid_request_error': 'INVALID_ARGUMENT',
+    'request_too_large': 'INVALID_ARGUMENT',
+    'authentication_error': 'UNAUTHENTICATED',
+    'permission_error': 'PERMISSION_DENIED',
+    'not_found_error': 'NOT_FOUND',
+    'rate_limit_error': 'RESOURCE_EXHAUSTED',
+    # HTTP 402, which has no canonical status. Same as OpenAI's
+    # insufficient_quota: Fallback can switch providers.
+    'billing_error': 'RESOURCE_EXHAUSTED',
+    'timeout_error': 'DEADLINE_EXCEEDED',
+    'api_error': 'INTERNAL',
+    'overloaded_error': 'UNAVAILABLE',
+}
+
+
+def _error_body_detail(body: object) -> tuple[str | None, str | None]:
+    """Read ``(type, message)`` from ``{'type': 'error', 'error': {'type': ..., 'message': ...}}``."""
+    if not isinstance(body, dict):
+        return None, None
+    detail = cast(dict[str, object], body).get('error')
+    if not isinstance(detail, dict):
+        return None, None
+    detail = cast(dict[str, object], detail)
+    error_type = detail.get('type')
+    message = detail.get('message')
+    return (
+        error_type if isinstance(error_type, str) else None,
+        message if isinstance(message, str) and message else None,
+    )
+
+
 def _from_anthropic_error(error: APIError) -> GenkitError:
-    """Convert an Anthropic SDK error to its Genkit equivalent."""
+    """Convert an Anthropic SDK error to its Genkit equivalent.
+
+    The status comes from a failing HTTP status (>= 400) or, when that is
+    missing, below 400, or unmapped, from the error type in the body. An
+    unreadable 2xx response is INTERNAL. Anything else, such as a connection
+    failure or timeout, is re-raised unchanged so it stays unclassified.
+    """
+    if isinstance(error, APIResponseValidationError):
+        return mark_provider_error(error=GenkitError(status='INTERNAL', message=error.message, cause=error))
+
     status_code = getattr(error, 'status_code', None)
-    if not isinstance(status_code, int):
-        status: StatusName = 'UNKNOWN'
-    elif status_code == 529:
-        # Anthropic-specific: 529 is overloaded (service unavailable).
-        status = 'UNAVAILABLE'
-    else:
-        status = from_http_code(status_code)
+    failing_code = status_code if isinstance(status_code, int) and status_code >= 400 else None
+    status: StatusName | None = None
+    if failing_code is not None:
+        # 529 is Anthropic's overloaded status.
+        status = 'UNAVAILABLE' if failing_code == 529 else from_http_code(failing_code)
+
+    message = error.message
+    if status is None or status == 'UNKNOWN':
+        error_type, body_message = _error_body_detail(error.body)
+        body_status = _ERROR_TYPE_TO_STATUS.get(error_type) if error_type else None
+        if body_status is None:
+            raise error
+        status = body_status
+        # The SDK sets the message of an SSE error event to the repr of its body.
+        if failing_code is None:
+            message = body_message or message
 
     response = getattr(error, 'response', None)
     retry_after_header = response.headers.get('retry-after') if response is not None else None
@@ -88,10 +143,13 @@ def _from_anthropic_error(error: APIError) -> GenkitError:
     if retry_after_ms is not None:
         response_metadata = {'retry_after_ms': retry_after_ms}
 
-    return GenkitError(
-        status=status,
-        message=error.message,
-        response_metadata=response_metadata,
+    return mark_provider_error(
+        error=GenkitError(
+            status=status,
+            message=message,
+            cause=error,
+            response_metadata=response_metadata,
+        )
     )
 
 
@@ -154,7 +212,7 @@ def _to_anthropic_thinking_config(thinking: dict[str, Any] | None) -> dict[str, 
     enabled = thinking.get('enabled') is True or thinking_type == 'enabled'
     disabled = thinking.get('enabled') is False or thinking_type == 'disabled'
 
-    # Keys that are not mode toggles (display, and any forward-compatible field) pass through unchanged.
+    # Keys that are not mode toggles (display) pass through unchanged.
     result: dict[str, Any] = {key: value for key, value in thinking.items() if key not in _THINKING_MODE_KEYS}
 
     if adaptive:
@@ -174,31 +232,66 @@ def _to_anthropic_thinking_config(thinking: dict[str, Any] | None) -> dict[str, 
         result['type'] = 'disabled'
         return result
 
-    if thinking_type is not None:
-        result['type'] = thinking_type
-    if 'type' not in result:
-        return None
-    return result
+    # No mode set: there's no SDK type to send.
+    return None
 
 
-def _move_unknown_params_to_extra_body(params: dict[str, Any], use_beta: bool) -> None:
-    """Route passthrough body params through the SDK's ``extra_body`` escape hatch."""
-    allowed = BETA_KWARG_KEYS if use_beta else STABLE_KWARG_KEYS
-    unknown_keys = [key for key in params if key not in allowed]
-    if not unknown_keys:
+# Body fields Genkit builds from the request. `extra` can't set them: the
+# schema can't see inside the passthrough, and overwriting them silently would
+# replace the model the action resolved (pin one with `version`), the
+# conversation, the streaming mode, or the structured-output format Genkit
+# merges into output_config (the declared field still works). `betas` is
+# the header Genkit sends from the declared setting, not a body field.
+_MANAGED_BODY_FIELDS = ('model', 'messages', 'system', 'tools', 'tool_choice', 'stream', 'output_config', 'betas')
+_CLIENT_SETTING_FIELDS = ('timeout', 'extra_headers', 'extra_query', 'extra_body')
+
+
+def _merge_config_extra(params: dict[str, Any], extra: dict[str, Any] | None) -> None:
+    """Send ``config.extra`` verbatim through ``extra_body``, after every declared field.
+
+    The SDK merges ``extra_body`` over the JSON body, so a key in ``extra``
+    wins over the same key built from a declared field.
+    """
+    if not extra:
         return
+    for field in _CLIENT_SETTING_FIELDS:
+        if field in extra:
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=(
+                    f'anthropic: {field!r} is a client setting, not a request field; '
+                    'pass it to Anthropic(timeout=..., default_headers=...)'
+                ),
+            )
+    for field in _MANAGED_BODY_FIELDS:
+        if field in extra:
+            if field == 'betas':
+                message = "anthropic: extra field 'betas' cannot be set from extra; use the declared betas setting"
+            elif field == 'model':
+                message = (
+                    "anthropic: extra field 'model' is built by Genkit from the action "
+                    'and cannot be set from config; pin a model with version'
+                )
+            else:
+                message = (
+                    f'anthropic: extra field {field!r} is built by Genkit from the request '
+                    'and cannot be set from config'
+                )
+            raise GenkitError(status='INVALID_ARGUMENT', message=message)
+    params['extra_body'] = dict(extra)
 
-    extra_body = params.get('extra_body')
-    if extra_body is None:
-        body: dict[str, Any] = {}
-    elif isinstance(extra_body, dict):
-        body = dict(extra_body)
-    else:
-        body = {'extra_body': extra_body}
 
-    for key in unknown_keys:
-        body[key] = params.pop(key)
-    params['extra_body'] = body
+def pinned_credential_header(client: AsyncAnthropic) -> str | None:
+    """The credential header ``client`` pins in ``default_headers``, if any.
+
+    ``copy(api_key=...)`` keeps custom headers, so a pinned ``x-api-key`` or
+    ``Authorization`` would still go out next to a tenant key and could
+    authenticate the call.
+    """
+    for name in client._custom_headers:  # noqa: SLF001
+        if name.lower() in ('x-api-key', 'authorization'):
+            return name
+    return None
 
 
 class AnthropicModel:
@@ -247,10 +340,17 @@ class AnthropicModel:
         Returns:
             Generated response.
         """
-        config = _normalize_config(request.config)
-        use_beta = self._uses_beta_api(config)
-        client = self._client_for_config(config)
-        params = self._build_params(request, config=config, use_beta=use_beta)
+        context = ctx.context if ctx is not None and isinstance(ctx.context, dict) else None
+        client = self._client_for_key(context_api_key(context))
+        # A config that fails validation, a bad thinking budget, or a malformed
+        # data URI is caller input, so retry skips it. Pydantic's
+        # ValidationError is a ValueError.
+        try:
+            config = _normalize_config(request.config)
+            use_beta = self._uses_beta_api(config)
+            params = self._build_params(request, config=config, use_beta=use_beta)
+        except ValueError as e:
+            raise GenkitError(status='INVALID_ARGUMENT', message=str(e), cause=e) from e
         streaming = ctx and ctx.is_streaming
 
         logger.debug('Anthropic generate request', model=self.model_name, streaming=bool(streaming))
@@ -324,26 +424,32 @@ class AnthropicModel:
             cache_read_input_tokens=getattr(response.usage, 'cache_read_input_tokens', None) or 0,
         )
 
-    def _client_for_config(self, config: AnthropicConfig) -> object:
-        """Return the request client, applying a per-request API key when supported."""
-        if not config.api_key:
+    def _client_for_key(self, api_key: str | None) -> object:
+        """Return the request client, re-credentialed with the caller's key when one was given.
+
+        A client that can't swap its credential raises rather than sending the
+        call on the plugin's own key, because whoever passed a key expects
+        that account to be billed.
+        """
+        if api_key is None:
             return self.client
 
+        reason = None
         if not isinstance(self.client, AsyncAnthropic):
-            logger.warning('Ignored per-request Anthropic apiKey because the configured client does not support it')
-            return self.client
-
+            reason = 'this client uses its own cloud credentials, not an Anthropic API key'
         # copy() cannot unset these, so the override would leave the base credential authenticating the request.
-        if self.client.auth_token is not None:
-            logger.warning('Ignored per-request Anthropic apiKey because the client authenticates with an auth token')
-            return self.client
-
-        if any(name.lower() == 'x-api-key' for name in self.client._custom_headers):  # noqa: SLF001
-            logger.warning('Ignored per-request Anthropic apiKey because the client pins an x-api-key header')
-            return self.client
+        elif self.client.auth_token is not None:
+            reason = 'the plugin client authenticates with an auth token'
+        elif (header := pinned_credential_header(self.client)) is not None:
+            reason = f'the plugin client sets its own {header} header'
+        if reason is not None:
+            raise GenkitError(
+                status='FAILED_PRECONDITION',
+                message=f'A per-request API key from context.secrets cannot be used: {reason}.',
+            )
 
         # copy() keeps every other client setting and shares the pooled HTTP transport.
-        return self.client.copy(api_key=config.api_key)
+        return self.client.copy(api_key=api_key)
 
     def _uses_beta_api(self, config: AnthropicConfig) -> bool:
         """Whether this request should use the Anthropic beta API surface.
@@ -370,11 +476,10 @@ class AnthropicModel:
         if use_beta is None:
             use_beta = self._uses_beta_api(config)
         params = config.model_dump(exclude_none=True, by_alias=False)
+        extra = params.pop('extra', None)
 
         # Handle mapped parameters
-        max_tokens = params.pop('max_output_tokens', None)
-        if max_tokens is None:
-            max_tokens = params.pop('max_tokens', DEFAULT_MAX_OUTPUT_TOKENS)
+        max_tokens = params.pop('max_output_tokens', DEFAULT_MAX_OUTPUT_TOKENS)
 
         thinking = params.pop('thinking', None)
         metadata = params.pop('metadata', None)
@@ -385,12 +490,9 @@ class AnthropicModel:
         params['messages'] = self._to_anthropic_messages(request.messages)
         params['max_tokens'] = int(max_tokens)
 
-        # api_version and api_key select the API surface and client; they are not create() kwargs.
+        # Not create() kwargs; see AnthropicConfig.SDK_UNSUPPORTED_KEYS.
         for key in AnthropicConfig.SDK_UNSUPPORTED_KEYS:
             params.pop(key, None)
-
-        # Genkit selects the streaming surface from the request context.
-        params.pop('stream', None)
 
         if use_beta:
             # Resold surfaces (Vertex, Bedrock) do not offer every default beta, so only the direct API gets them.
@@ -462,7 +564,7 @@ class AnthropicModel:
         if not params.get('tools'):
             params.pop('tool_choice', None)
 
-        _move_unknown_params_to_extra_body(params, use_beta)
+        _merge_config_extra(params, extra)
         return params
 
     def _supports_constrained(self, has_tools: bool) -> bool:

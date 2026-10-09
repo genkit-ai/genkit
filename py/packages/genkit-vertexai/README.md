@@ -14,9 +14,16 @@ Integrate Genkit with Google Cloud Vertex AI Model Garden.
 
 ## Installation
 
+Install the extra for the Model Garden publishers you call:
+
 ```bash
-uv add genkit-vertexai
+uv add 'genkit-vertexai[anthropic]'          # Claude
+uv add 'genkit-vertexai[openai]'             # Llama, Mistral, and other OpenAI-compatible models
+uv add 'genkit-vertexai[anthropic,openai]'   # both
 ```
+
+The package without an extra serves no models. Calling a model without its
+extra raises an error naming the command to run.
 
 ## Usage
 
@@ -25,7 +32,7 @@ from genkit import Genkit
 from genkit_vertexai.model_garden import ModelGarden
 
 ai = Genkit(
-    plugins=[ModelGarden(project_id='my-project', location='us-central1')],
+    plugins=[ModelGarden(project='my-project', location='us-central1')],
 )
 
 res = await ai.generate(

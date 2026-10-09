@@ -33,6 +33,7 @@ from genkit_google_genai._models._gemini import GeminiConfig, GeminiModel
 from google import genai
 from google.genai import types as genai_types
 from google.genai.types import HttpOptions
+from pydantic import ValidationError
 
 from genkit import GenkitError, Message, Part, Role
 from genkit.model import ModelRequest
@@ -43,7 +44,10 @@ EU_REP_URL = 'https://aiplatform.eu.rep.googleapis.com'
 
 def _text_request(config: GeminiConfig | dict[str, Any] | None = None) -> ModelRequest[Any]:
     if isinstance(config, dict):
-        config = GeminiConfig.model_validate(config)
+        try:
+            config = GeminiConfig.model_validate(config)
+        except ValidationError:
+            pass
     return ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
         config=config,
@@ -325,18 +329,18 @@ class TestEvaluatorApiHost:
 
     def test_regional_host(self) -> None:
         """Regional locations use the {location}-aiplatform pattern."""
-        factory = EvaluatorFactory(project_id='p', location='us-central1')
+        factory = EvaluatorFactory(project='p', location='us-central1')
         assert factory._api_host() == 'us-central1-aiplatform.googleapis.com'
 
     def test_global_rejected(self) -> None:
         """The evaluation service is regional; 'global' is rejected."""
-        factory = EvaluatorFactory(project_id='p', location='global')
+        factory = EvaluatorFactory(project='p', location='global')
         with pytest.raises(GenkitError, match='does not support'):
             factory._api_host()
 
     def test_multi_region_rejected(self) -> None:
         """The evaluation service is regional; multi-regions are rejected."""
-        factory = EvaluatorFactory(project_id='p', location='eu')
+        factory = EvaluatorFactory(project='p', location='eu')
         with pytest.raises(GenkitError, match='does not support'):
             factory._api_host()
 
@@ -805,7 +809,7 @@ class TestPluginModelWiring:
     async def test_vertexai_action_passes_client_kwargs(self) -> None:
         """The model action constructs GeminiModel with the plugin's kwargs."""
         plugin = _vertex_plugin(location='us')
-        action = plugin._resolve_model('vertexai/gemini-2.5-flash')
+        action = plugin._resolve_model('gemini-2.5-flash')
         assert action is not None
         with patch('genkit_google_genai._google.GeminiModel') as mock_model:
             mock_model.return_value.generate = AsyncMock(return_value=MagicMock())
@@ -821,7 +825,7 @@ class TestPluginModelWiring:
 
         with patch('genkit_google_genai._google.genai.client.Client'):
             plugin = GoogleAI(api_key='k')
-        action = plugin._resolve_model('googleai/gemini-2.5-flash')
+        action = plugin._resolve_model('gemini-2.5-flash')
         assert action is not None
         with patch('genkit_google_genai._google.GeminiModel') as mock_model:
             mock_model.return_value.generate = AsyncMock(return_value=MagicMock())
