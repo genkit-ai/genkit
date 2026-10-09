@@ -26,7 +26,13 @@ import httpx
 import ollama as ollama_api
 import pytest
 from genkit_ollama.constants import OllamaAPITypes
-from genkit_ollama.models import ModelDefinition, OllamaConfig, OllamaModel, _convert_parameters
+from genkit_ollama.models import (
+    ModelDefinition,
+    OllamaConfig,
+    OllamaModel,
+    _convert_parameters,
+    _image_fetch_client,
+)
 from pydantic import ConfigDict, ValidationError
 
 from genkit import ActionRunContext, GenkitError, Message, ModelResponseChunk, Part, Role
@@ -1457,7 +1463,7 @@ class TestResolveImage(unittest.IsolatedAsyncioTestCase):
         result = await OllamaModel._resolve_image(path)
         assert result == path
 
-    @patch('genkit_ollama.models.get_cached_client')
+    @patch('genkit_ollama.models._image_fetch_client')
     async def test_http_url_downloads_image(self, mock_get_client: MagicMock) -> None:
         """HTTP URLs should be downloaded and returned as bytes."""
         mock_response = MagicMock()
@@ -1471,18 +1477,20 @@ class TestResolveImage(unittest.IsolatedAsyncioTestCase):
         result = await OllamaModel._resolve_image('https://example.com/cat.jpg')
 
         assert result == b'\x89PNG\r\n\x1a\n'
-        mock_get_client.assert_called_once_with(
-            cache_key='ollama/image-fetch',
-            timeout=60.0,
-            headers={
-                'User-Agent': 'Genkit/1.0 (https://github.com/genkit-ai/genkit; genkit@google.com)',
-            },
-            follow_redirects=True,
-        )
         mock_client.get.assert_awaited_once_with('https://example.com/cat.jpg')
         mock_response.raise_for_status.assert_called_once()
 
-    @patch('genkit_ollama.models.get_cached_client')
+    async def test_image_fetch_sends_user_agent_and_follows_redirects(self) -> None:
+        """Image hosts that 403 bare requests still serve Ollama's image fetch."""
+        client = _image_fetch_client()
+        try:
+            assert client.headers['User-Agent'].startswith('Genkit/')
+            assert client.follow_redirects is True
+            assert client.timeout == httpx.Timeout(60.0)
+        finally:
+            await client.aclose()
+
+    @patch('genkit_ollama.models._image_fetch_client')
     async def test_http_url_client_error_is_invalid_argument(self, mock_get_client: MagicMock) -> None:
         """A 4xx from the image host means the caller's URL is bad.
 
@@ -1502,7 +1510,7 @@ class TestResolveImage(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(raised.exception.status, 'INVALID_ARGUMENT')
                 self.assertIsInstance(raised.exception.__cause__, httpx.HTTPStatusError)
 
-    @patch('genkit_ollama.models.get_cached_client')
+    @patch('genkit_ollama.models._image_fetch_client')
     async def test_http_url_transient_error_stays_raw(self, mock_get_client: MagicMock) -> None:
         """408/429/5xx from the image host stay unclassified so Retry can try again."""
         for status in (408, 429, 500, 503):

@@ -32,7 +32,7 @@ from genkit.plugin_api import (
     GENKIT_CLIENT_HEADER,
     ErrorResponseMetadata,
     from_http_code,
-    get_cached_client,
+    loop_local_client,
     mark_provider_error,
     parse_retry_after_ms,
 )
@@ -40,11 +40,15 @@ from genkit.plugin_api import (
 DEFAULT_API_VERSION = 'v1beta'
 DEFAULT_BASE_URL = 'https://generativelanguage.googleapis.com'
 API_REVISION = '2026-05-20'
-# Creates can run far longer than the shared client's 60s default. No read
-# timeout, but keep a connect budget so a hung handshake doesn't sit forever.
-CACHE_KEY = 'googleai-interactions'
+# Creates can run for many minutes. No read timeout, but keep a connect
+# budget so a hung handshake doesn't sit forever.
 NO_TIMEOUT = httpx.Timeout(None, connect=10.0)
 RESERVED_HEADERS = ('x-goog-api-key', 'x-goog-api-client')
+
+
+@loop_local_client
+def _http_client() -> httpx.AsyncClient:
+    return httpx.AsyncClient(timeout=NO_TIMEOUT)
 
 
 def google_ai_url(
@@ -153,7 +157,7 @@ async def request(
 ) -> Interaction | None:
     """Issue one Interactions HTTP call and parse the Interaction body."""
     # Auth/key headers are per-request; the loop-local client is just the transport.
-    client = get_cached_client(cache_key=CACHE_KEY, timeout=NO_TIMEOUT)
+    client = _http_client()
     request_headers = headers(api_key=api_key, client_options=client_options)
     timeout = timeout_seconds(client_options)
 

@@ -19,8 +19,8 @@
 import pytest
 from genkit_evaluators import register_genkit_evaluators
 
-from genkit import BaseDataPoint, Genkit
-from genkit.evaluator import EvalRequest, Score
+from genkit import Genkit
+from genkit.evaluator import BaseDataPoint, EvalRequest, Score
 
 
 def _only_score(evaluation: list[Score]) -> Score:

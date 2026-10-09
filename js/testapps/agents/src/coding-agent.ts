@@ -62,6 +62,11 @@ const store = new FileSessionStore<{}>('./.snapshots-coding');
 const WORKSPACE_DIR = path.resolve(__dirname, '..', 'workspace');
 const SKILLS_DIR = path.resolve(__dirname, '..', 'skills');
 
+// Ensure the workspace exists. Neither the filesystem middleware nor exec()
+// creates it, and exec() with a missing cwd fails with a misleading
+// "spawn /bin/sh ENOENT".
+fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
+
 // ---------------------------------------------------------------------------
 // ask_user interrupt — lets the model ask the user a question with options
 // ---------------------------------------------------------------------------
@@ -174,7 +179,9 @@ Respond with JSON.`,
       return {
         stdout: err.stdout || '',
         stderr: err.stderr || err.message || 'Command failed',
-        exitCode: err.code ?? 1,
+        // err.code is the numeric exit code when the process ran, but a string
+        // (e.g. 'ENOENT') when it failed to spawn.
+        exitCode: typeof err.code === 'number' ? err.code : 1,
       };
     }
   }

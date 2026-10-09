@@ -87,6 +87,11 @@ export interface GoogleAIPluginOptions {
   /** Use `responseSchema` field instead of `responseJsonSchema`. */
   legacyResponseSchema?: boolean;
   /**
+   * Whether to store conversations on the server when using the Interactions API.
+   * Defaults to false (stateless).
+   */
+  store?: boolean;
+  /**
    * Additional headers to send along with the request.
    */
   customHeaders?: Record<string, string>;

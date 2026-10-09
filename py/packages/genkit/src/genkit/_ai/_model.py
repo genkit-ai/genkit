@@ -191,7 +191,7 @@ def _model_action_name(*, model: object, registry: Registry) -> str | None:
     return _registered_action_name(action=model, kind=ActionKind.MODEL, registry=registry)
 
 
-def background_model_name(*, model: BackgroundAction[Any], registry: Registry) -> str:
+def background_model_name(*, model: BackgroundAction, registry: Registry) -> str:
     """Name of a define_background_model result registered on this registry."""
     return _registered_action_name(action=model.start_action, kind=ActionKind.BACKGROUND_MODEL, registry=registry)
 

@@ -7,11 +7,11 @@
     "genai",
     "generative-ai"
   ],
-  "version": "1.43.0-rc.0",
+  "version": "1.43.0-rc.1",
   "type": "commonjs",
   "main": "./lib/cjs/index.js",
   "scripts": {
-    "check": "tsc",
+    "check": "tsc && tsc -p tsconfig.types-test.json",
     "compile": "tsup-node",
     "build:clean": "rimraf ./lib",
     "build": "npm-run-all build:clean check compile",

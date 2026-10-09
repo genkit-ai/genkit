@@ -24,7 +24,7 @@ import weakref
 from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
-from dotpromptz.dotprompt import Dotprompt
+from dotpromptz import Dotprompt
 from pydantic import BaseModel
 from typing_extensions import Never, TypeVar
 

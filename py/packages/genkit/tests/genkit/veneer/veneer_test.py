@@ -43,7 +43,7 @@ from genkit._core._typing import (
     ToolRequest,
     ToolResponse,
 )
-from genkit.evaluator import EvaluatorRef, evaluator_ref
+from genkit.evaluator import EvaluatorRef, evaluator_action_metadata, evaluator_ref
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, MiddlewareRef, ModelHookParams
 from genkit.testing import (
     EchoModel,
@@ -1665,6 +1665,15 @@ def test_define_evaluator_custom_config(setup_test: SetupFixture) -> None:
             'type': 'object',
         },
     }
+
+    listed = evaluator_action_metadata(
+        'my_eval',
+        display_name='Test evaluator',
+        definition='Test evaluator that always returns True',
+        config_schema=CustomOption,
+    )
+    assert listed.action_type == ActionKind.EVALUATOR
+    assert listed.metadata == {'evaluator': action.metadata['evaluator']}
 
 
 def test_define_batch_evaluator(setup_test: SetupFixture) -> None:
