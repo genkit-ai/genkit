@@ -57,6 +57,7 @@ from genkit._core._model import (
     config_defaults,
     config_type_path,
     declared_config_type,
+    fold_config_aliases,
     normalize_config,
     overlay_config,
     reject_config_api_key,
@@ -1205,9 +1206,13 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
     def _normalized_config(self, current: object, *, schema: type[BaseModel], field: str) -> object:
         """The config value _layer_config_defaults puts on the request (``current`` when unchanged)."""
         if self._input_class is not None and declared_config_type(self._input_class) is not None:
-            if current is not None:
-                return current
-            return validate_config_dict(config={}, schema=schema, label=self.name)
+            if current is None:
+                return validate_config_dict(config={}, schema=schema, label=self.name)
+            if isinstance(current, Mapping) and not isinstance(current, BaseModel):
+                # Fold to the keys the class accepts, as ai.* does, so an
+                # alias-only class with extra='forbid' takes field names here too.
+                return fold_config_aliases(config=dict(cast(Mapping[str, Any], current)), schema=schema)
+            return current
         if isinstance(current, BaseModel) and not isinstance(current, schema):
             raise GenkitError(
                 status='INVALID_ARGUMENT',

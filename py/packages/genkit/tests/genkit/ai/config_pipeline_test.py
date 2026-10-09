@@ -23,6 +23,8 @@ input from ai.*, a ref, or a Dev UI-shaped Action.run.
 
 import copy
 import dataclasses
+import enum
+import threading
 from typing import Any, cast
 
 import pytest
@@ -42,7 +44,6 @@ from genkit._core._typing import (
     EmbedResponse,
     EvalFnResponse,
     EvalResponse,
-    FinishReason,
     Operation,
     Role,
     Score,
@@ -442,8 +443,8 @@ async def test_typed_class_that_cannot_build_from_defaults_raises() -> None:
     with pytest.raises(GenkitError, match=r"booking: config 'party_size': Field required") as err:
         await action.run(cast(Any, {'messages': [], 'config': None}))
     assert err.value.status == 'INVALID_ARGUMENT'
-    response = await ai.generate(model='booking', prompt='a table for two')
-    assert response.finish_reason == FinishReason.FAILED
+    with pytest.raises(GenkitError, match=r"booking: config 'party_size': Field required"):
+        await ai.generate(model='booking', prompt='a table for two')
     assert seen == {}
 
 
@@ -940,3 +941,109 @@ async def test_middleware_sees_config_before_the_boundary() -> None:
 
     assert seen['untyped'] == [{}, TABLE_DEFAULTS]
     assert seen['typed'] == [TableConfig(), TableConfig()]
+
+
+class AliasForbidConfig(BaseModel):
+    """Alias-only and extra='forbid': an unfolded field name would be an unknown key."""
+
+    model_config = ConfigDict(alias_generator=to_camel, extra='forbid')
+
+    task_type: str | None = None
+
+
+@pytest.mark.asyncio
+async def test_alias_forbid_class_takes_field_names_on_every_path() -> None:
+    ai = Genkit()
+    seen: dict[str, Any] = {}
+
+    async def typed(request: ModelRequest[AliasForbidConfig], ctx: ActionRunContext) -> ModelResponse:
+        seen['typed'] = request.config
+        return _ok()
+
+    async def untyped(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        seen['untyped'] = request.config
+        return _ok()
+
+    ai.define_model(name='typed', fn=typed)
+    ai.define_model(name='untyped', fn=untyped, config_schema=AliasForbidConfig)
+
+    for name in ('typed', 'untyped'):
+        await ai.generate(model=name, prompt='hi', config={'task_type': 'QUERY'})
+        by_name = seen[name]
+        action = await ai.registry.resolve_action_by_key(f'/model/{name}')
+        assert action is not None
+        await action.run({'messages': [], 'config': {'task_type': 'QUERY'}})
+        assert seen[name] == by_name
+
+    assert seen['typed'] == AliasForbidConfig.model_validate({'taskType': 'QUERY'})
+    assert seen['untyped'] == {'taskType': 'QUERY'}
+
+
+@pytest.mark.asyncio
+async def test_missing_required_field_raises_the_same_error_typed_or_untyped() -> None:
+    ai = Genkit()
+
+    async def typed(request: ModelRequest[ReservationConfig], ctx: ActionRunContext) -> ModelResponse:
+        return _ok()
+
+    async def untyped(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        return _ok()
+
+    ai.define_model(name='booking', fn=typed)
+    ai.define_model(name='walk_in', fn=untyped, config_schema=ReservationConfig)
+
+    for name in ('booking', 'walk_in'):
+        with pytest.raises(GenkitError, match=rf"^INVALID_ARGUMENT: {name}: config 'party_size': Field required"):
+            await ai.generate(model=name, prompt='a table for two')
+        action = await ai.registry.resolve_action_by_key(f'/model/{name}')
+        assert action is not None
+        with pytest.raises(GenkitError, match=rf"{name}: config 'party_size': Field required"):
+            await action.run({'messages': [], 'config': None})
+
+
+@pytest.mark.asyncio
+async def test_config_with_an_uncopyable_leaf_still_runs() -> None:
+    """Containers are copied per call; leaf objects such as a client lock are passed as they are."""
+    ai = Genkit()
+    seen: list[dict[str, Any]] = []
+    pos_lock = threading.Lock()
+
+    async def crm_search(request: EmbedRequest) -> EmbedResponse:
+        seen.append(request.options)
+        request.options['regions'].append('apac')
+        return _embedding()
+
+    ai.define_embedder('crm', crm_search)
+    ref = create_embedder_ref('crm', config={'client': pos_lock, 'regions': ['emea']})
+
+    await ai.embed(embedder=ref, content='acme corp')
+    await ai.embed(embedder=ref, content='acme corp', config={'lock': pos_lock})
+
+    assert seen[0]['client'] is pos_lock
+    assert seen[1]['lock'] is pos_lock
+    assert seen[1]['regions'] == ['emea', 'apac']
+    ref_config = cast(dict[str, Any], ref.config)
+    assert ref_config['regions'] == ['emea']
+
+
+class Spice(enum.Enum):
+    """A default the Dev UI would send as its value."""
+
+    MILD = 'mild'
+    HOT = 'hot'
+
+
+class SpiceConfig(BaseModel):
+    """An Enum default."""
+
+    spice: Spice = Spice.MILD
+    extras: list[Spice] = [Spice.HOT]
+
+
+@pytest.mark.asyncio
+async def test_untyped_fn_gets_enum_defaults_as_their_values() -> None:
+    ai, seen = _pipeline_app(config_schema=SpiceConfig)
+
+    await ai.embed(embedder='crm', content='acme corp')
+
+    assert seen['embedder'] == {'spice': 'mild', 'extras': ['hot']}

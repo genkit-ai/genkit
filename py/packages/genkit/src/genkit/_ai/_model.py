@@ -53,6 +53,7 @@ from genkit._core._model import (
     reject_config_api_key,
     text_from_content,
     text_from_message,
+    validate_config_dict,
 )
 from genkit._core._registry import Registry
 from genkit._core._schema import custom_options_schema, to_json_schema
@@ -286,12 +287,13 @@ def resolve_call_config(
 ) -> tuple[type[BaseModel] | None, dict[str, Any]]:
     """The class a call checks against and its layered config, for embed and evaluate.
 
-    call_config_class, then check_call_config on the call's config, then
-    layer_call_config: the same steps resolve_for_generate takes.
+    call_config_class, check_call_config on the call's config,
+    layer_call_config, then check_merged_config: the same steps generate takes.
     """
     schema = call_config_class(name=name, kind=kind, ref_schema=ref_schema, action_schema=action_schema)
     check_call_config(config=call, schema=schema, model=name)
     config = layer_call_config(call=call, version=version, ref_config=ref_config, schema=schema)
+    check_merged_config(config=config, schema=schema, model=name)
     return schema, config
 
 
@@ -552,6 +554,17 @@ def check_call_config(*, config: object, schema: type[BaseModel] | None, model: 
     """Call-time config check: a typed object's class and a dict's keys and values."""
     assert_correct_config_class(config=config, schema=schema, model=model)
     check_config_dict(config=config, schema=schema, model=model)
+
+
+def check_merged_config(*, config: Mapping[str, Any], schema: type[BaseModel] | None, model: str) -> None:
+    """The caller's layers together have to fit the class, class defaults filling the rest.
+
+    Runs before the action, so a missing required field raises
+    INVALID_ARGUMENT here, with the same message the action boundary uses,
+    instead of a failed response from inside generate.
+    """
+    if schema is not None:
+        validate_config_dict(config=config, schema=schema, label=model)
 
 
 def _config_values(config: BaseModel) -> dict[str, Any]:

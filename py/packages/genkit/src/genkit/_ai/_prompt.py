@@ -51,6 +51,7 @@ from genkit._ai._model import (
     assert_correct_config_class,
     check_call_config,
     check_config_dict,
+    check_merged_config,
     config_field_names,
     config_schema_at_define,
     fold_config_aliases,
@@ -426,6 +427,7 @@ class Prompt(Generic[InputT, OutputT]):
             schema=resolved.config_schema,
             model=resolved.name,
         )
+        check_merged_config(config=resolved.config, schema=resolved.config_schema, model=resolved.name)
         return call.model_copy(update={'model': resolved.name, 'config': resolved.config})
 
     async def __call__(

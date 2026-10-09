@@ -20,7 +20,7 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
 from genkit import Genkit, Message, ModelResponse, Part
 from genkit._core._action import ActionKind, ActionRunContext
 from genkit._core._error import GenkitError
-from genkit._core._model import FinishReason, ModelRef, ModelRequest
+from genkit._core._model import ModelRef, ModelRequest
 from genkit._core._typing import GenerationCommonConfig, Operation, Role
 from genkit.model import ModelConfig, model_ref
 
@@ -605,16 +605,14 @@ async def test_generate_incomplete_nested_setting_raises_naming_the_missing_fiel
 
 
 @pytest.mark.asyncio
-async def test_generate_missing_required_top_level_field_fails_at_the_model() -> None:
-    """The call check lets a missing required field through; the model's boundary does not."""
+async def test_generate_missing_required_top_level_field_raises_before_the_model() -> None:
+    """A required field no layer supplies raises INVALID_ARGUMENT before the model runs."""
     ai, fn = _ai_with_model(config_schema=RequiredTopConfig, name='needs')
 
-    response = await ai.generate(model='needs', prompt='hi', config={'temperature': 0.2})
+    with pytest.raises(GenkitError) as err:
+        await ai.generate(model='needs', prompt='hi', config={'temperature': 0.2})
 
-    assert response.finish_reason == FinishReason.FAILED
-    assert response.finish_message is not None
-    assert "needs: config 'must': Field required" in response.finish_message
-    assert fn.requests == []
+    _assert_rejected(err, fn, "needs: config 'must': Field required")
 
 
 @pytest.mark.asyncio
