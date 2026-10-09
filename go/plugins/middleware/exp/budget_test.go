@@ -313,6 +313,20 @@ func TestBudgetInterruptPausesTheRun(t *testing.T) {
 		t.Errorf("refused resume = %+v after %d more model calls, want aborted after none", refused, calls.Load()-before)
 	}
 
+	// A response stands in for the held call and decides nothing, so the
+	// run stops before the model call it leads to.
+	before = calls.Load()
+	_, err = genkit.Generate(ctx, g,
+		ai.WithModel(m),
+		ai.WithMessages(resp.History()...),
+		ai.WithTools(step),
+		ai.WithResume(call.Respond("stepped")),
+		ai.WithUse(budget),
+	)
+	if !errors.Is(err, ai.ErrBudgetExceeded) || calls.Load() != before {
+		t.Errorf("responded resume = %v after %d more model calls, want ErrBudgetExceeded after none", err, calls.Load()-before)
+	}
+
 	// Approving the budget's own hold renews the limit.
 	resp, err = resume(BudgetDecision{Approved: true})
 	if err != nil {
