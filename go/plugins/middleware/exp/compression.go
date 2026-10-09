@@ -904,34 +904,38 @@ func (r *compressionRun) summarizeMessages(ctx context.Context, msgs []*ai.Messa
 		return unchanged, nil
 	}
 
-	// Move the split back past tool messages, so a tool response is never
-	// kept without the request before it.
-	split := len(rest) - targetKeep
-	for split > 0 && roleOf(rest[split]) == ai.RoleTool {
-		split--
-	}
-	if split <= 0 || roleOf(rest[split]) == ai.RoleTool {
-		return unchanged, nil
-	}
-	// Pinned messages just before the split stay in place after the summary.
-	// The others the summary would cover move ahead of it.
-	for split > 0 && isPinned(rest[split-1]) {
-		split--
-	}
-	var toSummarize, lifted []*ai.Message
-	for _, m := range rest[:split] {
-		if isPinned(m) {
-			lifted = append(lifted, m)
-		} else {
-			toSummarize = append(toSummarize, m)
+	var toSummarize, lifted, toKeep []*ai.Message
+	for {
+		split, ok := summarySplit(rest, targetKeep)
+		if !ok {
+			return unchanged, nil
 		}
-	}
-	toKeep := rest[split:]
-	if len(toSummarize) == 0 {
-		return unchanged, nil
-	}
-	if maxMessagesCap > 0 && len(system)+len(lifted)+1+len(toKeep) > maxMessagesCap {
-		return unchanged, nil
+		// The pinned messages the summary would cover move ahead of it.
+		toSummarize, lifted = nil, nil
+		for _, m := range rest[:split] {
+			if isPinned(m) {
+				lifted = append(lifted, m)
+			} else {
+				toSummarize = append(toSummarize, m)
+			}
+		}
+		toKeep = rest[split:]
+		if len(toSummarize) == 0 {
+			return unchanged, nil
+		}
+		if maxMessagesCap <= 0 || len(system)+len(lifted)+1+len(toKeep) <= maxMessagesCap {
+			break
+		}
+		// The lifted messages take slots under the cap, so fewer recent
+		// messages are kept. A tail over the cap on its own leaves the
+		// messages as they are.
+		if len(system)+1+len(toKeep) > maxMessagesCap {
+			return unchanged, nil
+		}
+		targetKeep -= len(system) + len(lifted) + 1 + len(toKeep) - maxMessagesCap
+		if targetKeep < 1 {
+			return unchanged, nil
+		}
 	}
 
 	text, err := r.writeSummary(ctx, toSummarize)
@@ -950,6 +954,24 @@ func (r *compressionRun) summarizeMessages(ctx context.Context, msgs []*ai.Messa
 	out = append(out, summaryMessage(text))
 	out = append(out, toKeep...)
 	return summarization{messages: out, summarized: true, text: text, tail: toKeep}, nil
+}
+
+// summarySplit returns the index in rest where the messages a summary keeps
+// start, for a window of targetKeep. The split moves back past tool messages,
+// so a tool response is never kept without the request before it, and past
+// the pinned messages just before it, which stay in place after the summary.
+func summarySplit(rest []*ai.Message, targetKeep int) (int, bool) {
+	split := len(rest) - targetKeep
+	for split > 0 && roleOf(rest[split]) == ai.RoleTool {
+		split--
+	}
+	if split <= 0 || roleOf(rest[split]) == ai.RoleTool {
+		return 0, false
+	}
+	for split > 0 && isPinned(rest[split-1]) {
+		split--
+	}
+	return split, true
 }
 
 // writeSummary asks the summarizer model for a summary of msgs.

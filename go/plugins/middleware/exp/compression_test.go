@@ -1833,6 +1833,30 @@ func TestContextCompressionProtectedMessages(t *testing.T) {
 		}
 	})
 
+	t.Run("summarization makes room under the cap", func(t *testing.T) {
+		// The lifted message takes a slot, so the summary keeps fewer recent
+		// messages instead of giving way to truncation.
+		f := newCCFixture(t, textReply("done", 50))
+		summarizer, _ := f.defineSummarizer("test/summarizer", "SUMMARY")
+		f.generate(t, &ContextCompression{
+			MaxMessages: 6,
+			Summarize:   &CompressionSummarizer{Model: summarizer},
+		}, []*ai.Message{
+			systemMsg("Sys"),
+			scaffold(userMsg("Task")),
+			toolCallMsg(&ai.ToolRequest{Name: "t1", Input: map[string]any{}}),
+			toolResultMsg(&ai.ToolResponse{Name: "t1", Output: "r1"}),
+			toolCallMsg(&ai.ToolRequest{Name: "t2", Input: map[string]any{}}),
+			toolResultMsg(&ai.ToolResponse{Name: "t2", Output: "r2"}),
+			toolCallMsg(&ai.ToolRequest{Name: "t3", Input: map[string]any{}}),
+			toolResultMsg(&ai.ToolResponse{Name: "t3", Output: "r3"}),
+		})
+		want := []string{"system:Sys", "user:Task", "user:" + summaryPrefix + "\nSUMMARY", "model:call t3", "tool:result t3"}
+		if diff := cmp.Diff(want, texts(f.sent(t))); diff != "" {
+			t.Errorf("model received (-want +got):\n%s", diff)
+		}
+	})
+
 	t.Run("truncation keeps prompt scaffolding and counts it", func(t *testing.T) {
 		f := newCCFixture(t, textReply("done", 50))
 		f.generate(t, &ContextCompression{MaxMessages: 5}, []*ai.Message{
