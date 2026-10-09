@@ -83,3 +83,30 @@ class GenkitModel(BaseModel):
         else:
             kwargs.pop('fallback', None)
         return super().model_dump_json(**kwargs)
+
+
+class PluginConfig(BaseModel):
+    """Base for user-facing config: model, plugin, and middleware options.
+
+    The wire shape (Developer UI form, ``.prompt`` files, traces, the JS SDK)
+    is camelCase. Python callers and provider SDKs use field names.
+
+    - ``alias_generator=to_camel``: each field's wire name, and the JSON
+      schema's property names.
+    - ``validate_by_name`` / ``validate_by_alias``: accept both spellings on
+      input, and let pyright, pyrefly and ty all take the snake_case kwarg.
+    - ``extra='forbid'``: a typo raises instead of being dropped.
+
+    Unlike :class:`GenkitModel`, ``model_dump()`` is not overridden. The
+    default dump returns field names, ready for a provider SDK; pass
+    ``by_alias=True`` for the wire shape. Nested in a ``GenkitModel`` such as
+    ``ModelRequest``, the parent's dump settings apply, so wire JSON is
+    unchanged.
+    """
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        alias_generator=to_camel,
+        extra='forbid',
+        validate_by_name=True,
+        validate_by_alias=True,
+    )

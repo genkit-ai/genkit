@@ -22,6 +22,7 @@ from collections.abc import Callable
 
 import httpx
 import pytest
+from genkit_openai._models._audio import OpenAISttConfig, OpenAITtsConfig
 from genkit_openai._models._utils import (
     DictMessageAdapter,
     MessageAdapter,
@@ -195,6 +196,19 @@ class TestExtractConfigDict:
         """Return empty dict when config is an empty dict."""
         request = self._make_request(config={})
         assert extract_config_dict(request) == {}
+
+    def test_typed_tts_config_keeps_sdk_field_names(self) -> None:
+        """A typed TTS config reaches the SDK as response_format, not responseFormat."""
+        request = self._make_request(config=OpenAITtsConfig(response_format='wav', speed=1.5))
+        assert extract_config_dict(request) == {'response_format': 'wav', 'speed': 1.5}
+
+    def test_typed_stt_config_keeps_sdk_field_names(self) -> None:
+        """A typed STT config reaches the SDK as timestamp_granularities, not timestampGranularities."""
+        config = OpenAISttConfig(response_format='verbose_json', timestamp_granularities=['word'])
+        assert extract_config_dict(self._make_request(config=config)) == {
+            'response_format': 'verbose_json',
+            'timestamp_granularities': ['word'],
+        }
 
 
 class TestFindText:

@@ -19,6 +19,9 @@
 import pytest
 from pydantic import ValidationError
 
+from genkit._core._base import GenkitModel
+from genkit._core._typing import GenerationCommonConfig
+from genkit.model import ModelConfig, ModelRequest
 from genkit.plugin_api import PluginConfig
 
 
@@ -71,3 +74,33 @@ def test_plugin_config_forbids_extra_kwargs() -> None:
 
     with pytest.raises(ValidationError):
         SampleConfig.model_validate({'sampleRate': 0.5, 'unknownField': 'bad'})
+
+
+def test_model_config_is_plugin_config_not_genkit_model() -> None:
+    """Model configs follow the upstream dump contract, not GenkitModel's camelCase default."""
+    assert issubclass(ModelConfig, PluginConfig)
+    assert not issubclass(ModelConfig, GenkitModel)
+
+
+def test_model_config_mirrors_generated_common_fields() -> None:
+    """ModelConfig declares every GenerationCommonConfig field with the same type.
+
+    GenerationCommonConfig is generated from the shared JSON schema. If it
+    gains a knob, this fails until ModelConfig (and ModelConfigDict) add it.
+    """
+    for name, field in GenerationCommonConfig.model_fields.items():
+        assert name in ModelConfig.model_fields, name
+        assert ModelConfig.model_fields[name].annotation == field.annotation, name
+
+
+def test_model_config_default_dump_is_sdk_shape() -> None:
+    """The default dump returns field names, ready for a provider SDK."""
+    config = ModelConfig(max_output_tokens=512, stop_sequences=['END'])
+    assert config.model_dump(exclude_none=True) == {'max_output_tokens': 512, 'stop_sequences': ['END']}
+    assert config.model_dump(by_alias=True, exclude_none=True) == {'maxOutputTokens': 512, 'stopSequences': ['END']}
+
+
+def test_model_config_nested_in_request_keeps_wire_shape() -> None:
+    """Inside a GenkitModel parent, the parent's dump settings apply: camelCase, no nulls."""
+    request = ModelRequest(messages=[], config=ModelConfig(max_output_tokens=512))
+    assert request.model_dump()['config'] == {'maxOutputTokens': 512}

@@ -47,7 +47,7 @@ def dump_family_config(
         return None
     if not isinstance(config, expected_type):
         raise unexpected_config_error(action_name=action_name)
-    dumped = config.model_dump(exclude_none=True, by_alias=False)
+    dumped = config.model_dump(exclude_none=True)
     return dumped or None
 
 

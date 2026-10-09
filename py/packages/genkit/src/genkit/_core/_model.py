@@ -43,7 +43,7 @@ from pydantic.alias_generators import to_camel
 from typing_extensions import TypedDict, TypeVar
 
 from genkit._core import _typing as typing_mod
-from genkit._core._base import GenkitModel, dump_keeping_unknown
+from genkit._core._base import GenkitModel, PluginConfig, dump_keeping_unknown
 from genkit._core._error import GenkitError, GenkitRuntimeError, RuntimeErrorReason
 from genkit._core._extract_json import extract_json, extract_partial_json
 from genkit._core._logger import get_logger
@@ -55,7 +55,6 @@ from genkit._core._typing import (
     DocumentData,
     FinishReason,
     GenerateActionOutputConfig,
-    GenerationCommonConfig,
     GenerationUsage,
     JsonPatch,
     Media,
@@ -78,7 +77,11 @@ from genkit._core._typing import (
 
 # ModelConfigDict is the hand-copied autocomplete list for this class — keep
 # the keys matching so a new knob shows up in the IDE the same day it becomes legal.
-class ModelConfig(GenerationCommonConfig):
+#
+# The common fields mirror the generated GenerationCommonConfig (pinned by a
+# test). The class is a PluginConfig, not that GenkitModel, so model_dump()
+# returns field names for provider SDKs and the wire shape is by_alias=True.
+class ModelConfig(PluginConfig):
     """Settings every model understands, plus ``extra`` for provider-only ones.
 
     Unknown keyword arguments raise, so ``ModelConfig(temprature=0.2)`` fails
@@ -87,7 +90,12 @@ class ModelConfig(GenerationCommonConfig):
     here.
     """
 
-    model_config: ClassVar[ConfigDict] = ConfigDict(extra='forbid')
+    version: str | None = None
+    temperature: float | None = None
+    max_output_tokens: float | None = None
+    top_k: float | None = None
+    top_p: float | None = None
+    stop_sequences: list[str] | None = None
 
     extra: dict[str, Any] | None = None
     """Provider settings the model's config class doesn't declare, sent as-is.
