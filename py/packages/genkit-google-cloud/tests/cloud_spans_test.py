@@ -44,8 +44,19 @@ from opentelemetry.trace import (
 )
 from opentelemetry.util._once import Once
 
-from genkit import Genkit, GenkitError
+from genkit import (
+    ActionRunContext,
+    FinishReason,
+    Genkit,
+    GenkitError,
+    Message,
+    ModelResponse,
+    ModelResponseChunk,
+    Part,
+    Role,
+)
 from genkit._core._action import Action
+from genkit.model import ModelRequest, ModelUsage
 from genkit.plugin_api import ActionKind
 from genkit.telemetry import (
     DirectHttpInstrumentation,
@@ -101,6 +112,84 @@ def _cloud_enable(**kwargs: Any) -> Generator[InMemorySpanExporter, None, None]:
     ):
         enable_google_cloud_telemetry(**kwargs)
         yield cloud
+
+
+@contextmanager
+def _cloud_trace(**kwargs: Any) -> Generator[InMemorySpanExporter, None, None]:
+    """enable_google_cloud_telemetry() with the real Cloud exporter over an in-memory client."""
+    _reset_google_cloud_telemetry()
+    cloud = InMemorySpanExporter()
+    with (
+        patch('genkit_google_cloud.telemetry.config.GenkitGCPExporter', return_value=cloud),
+        patch('genkit_google_cloud.telemetry.config.GoogleCloudResourceDetector'),
+        patch('genkit_google_cloud.telemetry.config.CloudMonitoringMetricsExporter'),
+        patch('genkit_google_cloud.telemetry.config.GenkitMetricExporter'),
+        patch('genkit_google_cloud.telemetry.config.PeriodicExportingMetricReader'),
+        patch('genkit_google_cloud.telemetry.config.metrics'),
+        patch('genkit_google_cloud.telemetry.config.CloudLoggingExporter'),
+    ):
+        enable_google_cloud_telemetry(project_id='p', **kwargs)
+        yield cloud
+
+
+_CAPTURE_ENV = 'OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT'
+_PROMPT = 'ssn-999 do not leak'
+_REPLY = 'reply-secret-42'
+_SYSTEM = 'do not store this system line'
+_TOOL_RESULT = 'classified-result-42'
+_MODEL = 'echo'
+_INPUT_TOKENS = 12
+_OUTPUT_TOKENS = 4
+_CONTENT_KEYS = (
+    'gen_ai.input.messages',
+    'gen_ai.output.messages',
+    'gen_ai.system_instructions',
+    'genkit.input',
+    'genkit.output',
+    'genkit/input',
+    'genkit/output',
+    'gen_ai.tool.call.arguments',
+    'gen_ai.tool.call.result',
+)
+
+
+def _attrs(span: object) -> dict[str, Any]:
+    attributes = getattr(span, 'attributes', None)
+    return dict(attributes) if attributes else {}
+
+
+def _spans_named(exporter: InMemorySpanExporter, name: str) -> list[Any]:
+    return [span for span in exporter.get_finished_spans() if span.name == name]
+
+
+def _one_span(exporter: InMemorySpanExporter, name: str) -> Any:
+    matches = _spans_named(exporter, name)
+    assert len(matches) == 1, [span.name for span in exporter.get_finished_spans()]
+    return matches[0]
+
+
+def _assert_model_and_tokens(attrs: dict[str, Any]) -> None:
+    assert attrs['gen_ai.request.model'] == _MODEL
+    assert attrs['gen_ai.usage.input_tokens'] == _INPUT_TOKENS
+
+
+def _echo_response() -> ModelResponse:
+    return ModelResponse(
+        finish_reason=FinishReason.STOP,
+        message=Message(role=Role.MODEL, content=[Part.from_text(_REPLY)]),
+        usage=ModelUsage(input_tokens=_INPUT_TOKENS, output_tokens=_OUTPUT_TOKENS),
+    )
+
+
+def _echo_app() -> Genkit:
+    ai = Genkit()
+
+    async def echo_model(_request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, content=[Part.from_text(_REPLY)]))
+        return _echo_response()
+
+    ai.define_model(_MODEL, echo_model)
+    return ai
 
 
 def _reset_otel_globals() -> None:
@@ -169,6 +258,7 @@ def _isolate_telemetry(
     _reset_google_cloud_telemetry()
     monkeypatch.delenv('GENKIT_ENV', raising=False)
     monkeypatch.delenv('GENKIT_TELEMETRY_SERVER', raising=False)
+    monkeypatch.delenv('OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT', raising=False)
     monkeypatch.setattr(Genkit, '_start_reflection_background', lambda self: None)
     if 'real_otel_globals' in request.fixturenames:
         _reset_otel_globals()
@@ -561,3 +651,245 @@ def test_import_survives_otel_moving_the_logger_proxy() -> None:
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == 'imported'
+
+
+def _chat_attrs(exporter: InMemorySpanExporter) -> dict[str, Any]:
+    return _attrs(_one_span(exporter, f'chat {_MODEL}'))
+
+
+@pytest.mark.asyncio
+async def test_generate_with_span_only_env_shows_redacted_prompt_and_reply_in_cloud_trace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With the env var at SPAN_ONLY, Cloud Trace shows <redacted> for both message keys."""
+    monkeypatch.setenv(_CAPTURE_ENV, 'SPAN_ONLY')
+    with _cloud_trace() as cloud:
+        await _echo_app().generate(prompt=_PROMPT, model=_MODEL)
+        _force_flush()
+
+    attrs = _chat_attrs(cloud)
+    _assert_model_and_tokens(attrs)
+    assert attrs['gen_ai.input.messages'] == '<redacted>'
+    assert attrs['gen_ai.output.messages'] == '<redacted>'
+    assert _PROMPT not in attrs['gen_ai.input.messages']
+    assert _REPLY not in attrs['gen_ai.output.messages']
+
+
+@pytest.mark.asyncio
+async def test_generate_with_span_and_event_env_shows_redacted_prompt_in_cloud_trace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SPAN_AND_EVENT redacts the same two message keys on the Cloud span."""
+    monkeypatch.setenv(_CAPTURE_ENV, 'SPAN_AND_EVENT')
+    with _cloud_trace() as cloud:
+        await _echo_app().generate(prompt=_PROMPT, model=_MODEL)
+        _force_flush()
+
+    attrs = _chat_attrs(cloud)
+    _assert_model_and_tokens(attrs)
+    assert attrs['gen_ai.input.messages'] == '<redacted>'
+    assert attrs['gen_ai.output.messages'] == '<redacted>'
+
+
+@pytest.mark.asyncio
+async def test_generate_with_system_prompt_and_span_only_env_shows_redacted_system_instructions_in_cloud_trace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With system= set, Cloud Trace shows gen_ai.system_instructions as <redacted>."""
+    monkeypatch.setenv(_CAPTURE_ENV, 'SPAN_ONLY')
+    with _cloud_trace() as cloud:
+        await _echo_app().generate(prompt=_PROMPT, system=_SYSTEM, model=_MODEL)
+        _force_flush()
+
+    attrs = _chat_attrs(cloud)
+    _assert_model_and_tokens(attrs)
+    assert attrs['gen_ai.system_instructions'] == '<redacted>'
+    assert _SYSTEM not in ' '.join(str(value) for value in attrs.values())
+
+
+@pytest.mark.asyncio
+async def test_generate_with_span_only_set_in_code_shows_redacted_prompt_in_cloud_trace() -> None:
+    """Registering content_capturing_mode='SPAN_ONLY' in code still redacts Cloud Trace."""
+    configure_instrumentation(GenAiInstrumentation(content_capturing_mode='SPAN_ONLY'))
+    with _cloud_trace() as cloud:
+        await _echo_app().generate(prompt=_PROMPT, model=_MODEL)
+        _force_flush()
+
+    attrs = _chat_attrs(cloud)
+    _assert_model_and_tokens(attrs)
+    assert attrs['gen_ai.input.messages'] == '<redacted>'
+    assert attrs['gen_ai.output.messages'] == '<redacted>'
+
+
+@pytest.mark.asyncio
+async def test_generate_with_capture_action_io_shows_redacted_genkit_input_and_output_in_cloud_trace() -> None:
+    """capture_action_io=True writes genkit.input and genkit.output; Cloud Trace shows both as <redacted>."""
+    configure_instrumentation(GenAiInstrumentation(capture_action_io=True))
+    with _cloud_trace() as cloud:
+        await _echo_app().generate(prompt=_PROMPT, model=_MODEL)
+        _force_flush()
+
+    attrs = _chat_attrs(cloud)
+    _assert_model_and_tokens(attrs)
+    assert attrs['genkit.input'] == '<redacted>'
+    assert attrs['genkit.output'] == '<redacted>'
+    assert 'gen_ai.input.messages' not in attrs
+    assert _PROMPT not in ' '.join(str(value) for value in attrs.values())
+
+
+@pytest.mark.asyncio
+async def test_flow_with_capture_action_io_shows_redacted_flow_input_in_cloud_trace() -> None:
+    """A flow's own span has genkit.input / genkit.output redacted."""
+    configure_instrumentation(GenAiInstrumentation(capture_action_io=True))
+    with _cloud_trace() as cloud:
+        ai = Genkit()
+
+        @ai.flow()
+        async def payroll(secret: str) -> str:
+            return 'paid ' + secret
+
+        await payroll(_PROMPT)
+        _force_flush()
+
+    attrs = _attrs(_one_span(cloud, 'payroll'))
+    assert attrs['genkit.input'] == '<redacted>'
+    assert attrs['genkit.output'] == '<redacted>'
+    assert _PROMPT not in ' '.join(str(value) for value in attrs.values())
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_with_span_only_env_shows_redacted_reply_in_cloud_trace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A streamed reply is redacted the same way as a non-streamed one."""
+    monkeypatch.setenv(_CAPTURE_ENV, 'SPAN_ONLY')
+    with _cloud_trace() as cloud:
+        stream = _echo_app().generate_stream(prompt=_PROMPT, model=_MODEL)
+        chunks = [chunk.text async for chunk in stream]
+        await stream.response
+        _force_flush()
+
+    assert _REPLY in ''.join(chunks)
+    attrs = _chat_attrs(cloud)
+    _assert_model_and_tokens(attrs)
+    assert attrs['gen_ai.output.messages'] == '<redacted>'
+    assert _REPLY not in attrs['gen_ai.output.messages']
+
+
+@pytest.mark.asyncio
+async def test_generate_with_tool_spans_and_span_only_env_shows_redacted_tool_arguments_and_result_in_cloud_trace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Tool arguments and the tool result are <redacted> on the Cloud tool span."""
+    monkeypatch.setenv(_CAPTURE_ENV, 'SPAN_ONLY')
+    configure_instrumentation(GenAiInstrumentation(emit_tool_spans=True))
+    ai = Genkit()
+
+    @ai.tool(name='lookup')
+    async def lookup(query: str) -> str:
+        """Look up a record."""
+        return _TOOL_RESULT
+
+    async def tool_model(request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+        if any(message.role == Role.TOOL for message in request.messages):
+            return _echo_response()
+        return ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(
+                role=Role.MODEL,
+                content=[Part.from_tool_request(name='lookup', input=_PROMPT, ref='r1')],
+            ),
+            usage=ModelUsage(input_tokens=_INPUT_TOKENS, output_tokens=_OUTPUT_TOKENS),
+        )
+
+    ai.define_model(_MODEL, tool_model)
+    with _cloud_trace() as cloud:
+        await ai.generate(prompt=_PROMPT, model=_MODEL, tools=['lookup'])
+        _force_flush()
+
+    tool_attrs = _attrs(_one_span(cloud, 'execute_tool lookup'))
+    assert tool_attrs['gen_ai.tool.call.arguments'] == '<redacted>'
+    assert tool_attrs['gen_ai.tool.call.result'] == '<redacted>'
+    assert _PROMPT not in tool_attrs['gen_ai.tool.call.arguments']
+    assert _TOOL_RESULT not in tool_attrs['gen_ai.tool.call.result']
+    for span in _spans_named(cloud, f'chat {_MODEL}'):
+        attrs = _attrs(span)
+        _assert_model_and_tokens(attrs)
+        assert attrs['gen_ai.input.messages'] == '<redacted>'
+
+
+@pytest.mark.asyncio
+async def test_generate_with_span_only_env_still_sends_prompt_text_to_their_own_exporter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An exporter the app added to the same provider gets the raw prompt while Cloud gets <redacted>."""
+    monkeypatch.setenv(_CAPTURE_ENV, 'SPAN_ONLY')
+    with _cloud_trace() as cloud:
+        own = InMemorySpanExporter()
+        provider = trace_api.get_tracer_provider()
+        assert isinstance(provider, TracerProvider)
+        provider.add_span_processor(SimpleSpanProcessor(own))
+        await _echo_app().generate(prompt=_PROMPT, model=_MODEL)
+        _force_flush()
+
+    cloud_attrs = _chat_attrs(cloud)
+    _assert_model_and_tokens(cloud_attrs)
+    assert cloud_attrs['gen_ai.input.messages'] == '<redacted>'
+    own_attrs = _attrs(_one_span(own, f'chat {_MODEL}'))
+    assert _PROMPT in str(own_attrs['gen_ai.input.messages'])
+    assert _REPLY in str(own_attrs['gen_ai.output.messages'])
+    _assert_model_and_tokens(own_attrs)
+
+
+@pytest.mark.asyncio
+async def test_generate_with_no_capture_has_no_message_keys_in_cloud_trace() -> None:
+    """By default the content keys are absent from the Cloud span, not set to <redacted>."""
+    with _cloud_trace() as cloud:
+        await _echo_app().generate(prompt=_PROMPT, model=_MODEL)
+        _force_flush()
+
+    attrs = _chat_attrs(cloud)
+    _assert_model_and_tokens(attrs)
+    for key in _CONTENT_KEYS:
+        assert key not in attrs
+
+
+@pytest.mark.asyncio
+async def test_generate_with_span_only_env_keeps_token_counts_and_model_in_cloud_trace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Redaction leaves gen_ai.request.model and the usage counts as they were."""
+    monkeypatch.setenv(_CAPTURE_ENV, 'SPAN_ONLY')
+    with _cloud_trace() as cloud:
+        await _echo_app().generate(prompt=_PROMPT, model=_MODEL)
+        _force_flush()
+
+    attrs = _chat_attrs(cloud)
+    _assert_model_and_tokens(attrs)
+    assert attrs['gen_ai.usage.output_tokens'] == _OUTPUT_TOKENS
+    assert attrs['gen_ai.input.messages'] == '<redacted>'
+    assert attrs['gen_ai.output.messages'] == '<redacted>'
+
+
+@pytest.mark.asyncio
+async def test_generate_that_raises_with_span_only_env_has_no_prompt_in_cloud_trace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the model raises, the Cloud span has no prompt text in any content key."""
+    monkeypatch.setenv(_CAPTURE_ENV, 'SPAN_ONLY')
+    ai = Genkit()
+
+    async def boom(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+        raise RuntimeError('model exploded')
+
+    ai.define_model(_MODEL, boom)
+    with _cloud_trace() as cloud:
+        response = await ai.generate(prompt=_PROMPT, model=_MODEL)
+        _force_flush()
+
+    assert response.finish_reason == FinishReason.FAILED
+    attrs = _chat_attrs(cloud)
+    assert attrs['gen_ai.request.model'] == _MODEL
+    for key in _CONTENT_KEYS:
+        assert key not in attrs
+    assert _PROMPT not in ' '.join(str(value) for value in attrs.values())

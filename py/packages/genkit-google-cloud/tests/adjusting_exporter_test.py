@@ -79,8 +79,8 @@ def get_attrs(span: ReadableSpan) -> dict[str, Any]:
     return dict(cast(Mapping[str, Any], attrs))
 
 
-def test_redacts_colon_input_and_output() -> None:
-    """genkit:input and genkit:output export as <redacted>."""
+def test_cloud_trace_export_redacts_colon_input_and_output() -> None:
+    """A span written with genkit:input / genkit:output exports as genkit/input = <redacted>."""
     exporter = MockSpanExporter()
     adjusting = AdjustingTraceExporter(exporter)
 
@@ -100,6 +100,43 @@ def test_redacts_colon_input_and_output() -> None:
     assert attrs['genkit/input'] == '<redacted>'
     assert attrs['genkit/output'] == '<redacted>'
     assert attrs['other'] == 'preserved'
+
+
+def test_cloud_trace_export_redacts_slash_input_and_output() -> None:
+    """A span that already wrote genkit/input / genkit/output still exports <redacted>."""
+    exporter = MockSpanExporter()
+    adjusting = AdjustingTraceExporter(exporter)
+
+    span = create_mock_span(
+        attributes={
+            'genkit/input': 'Allergic to peanuts, table 4',
+            'genkit/output': 'Smoked Salmon Tartine, no nuts',
+        }
+    )
+
+    adjusting.export([span])
+
+    attrs = get_attrs(exporter.exported_spans[0])
+    assert attrs['genkit/input'] == '<redacted>'
+    assert attrs['genkit/output'] == '<redacted>'
+
+
+def test_cloud_trace_export_redacts_when_span_has_both_spellings() -> None:
+    """genkit:input and genkit/input fold into one key on export; neither raw value survives."""
+    exporter = MockSpanExporter()
+    adjusting = AdjustingTraceExporter(exporter)
+
+    span = create_mock_span(
+        attributes={
+            'genkit:input': 'colon prompt',
+            'genkit/input': 'slash prompt',
+        }
+    )
+
+    adjusting.export([span])
+
+    attrs = get_attrs(exporter.exported_spans[0])
+    assert attrs == {'genkit/input': '<redacted>'}
 
 
 def test_adjusting_exporter_rejects_log_input_and_output() -> None:

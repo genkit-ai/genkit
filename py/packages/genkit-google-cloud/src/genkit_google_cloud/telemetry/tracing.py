@@ -85,13 +85,14 @@ def enable_google_cloud_telemetry(
     ``FAILED_PRECONDITION``. The same check applies to the process logger.
 
     Cloud exporters are skipped when ``GENKIT_ENV=dev`` and
-    ``force_dev_export=False``. ``disable_traces=True`` skips Cloud Trace
-    only; GenAI still turns on. Prompt and reply text are not written
-    on GenAI spans. To put raw action I/O on the span, register
-    ``GenAiInstrumentation(capture_action_io=True)`` before ``Genkit()``.
-    Log records the instrumentation emits (content-capture log events)
-    go to Cloud Logging. Sampler and provider checks still run under
-    ``GENKIT_ENV=dev``.
+    ``force_dev_export=False``. ``disable_traces=True`` skips the Cloud
+    Trace exporter only: ``GenAiInstrumentation`` is still installed, so
+    model-call metrics still reach Cloud Monitoring and ``gen_ai.*`` spans
+    still reach any exporter you added. Cloud Trace never stores prompt or reply
+    text. Content capture and ``capture_action_io`` only reach exporters
+    you add yourself. With ``EVENT_ONLY`` or ``SPAN_AND_EVENT``, prompt
+    text does go to Cloud Logging. Sampler and provider checks still run
+    under ``GENKIT_ENV=dev``.
 
     Args:
         project: Google Cloud project ID. Wins over ``GOOGLE_CLOUD_PROJECT``,
@@ -114,10 +115,11 @@ def enable_google_cloud_telemetry(
             also raises.
         force_dev_export: If True, export Cloud telemetry even when
             ``GENKIT_ENV=dev``. Defaults to False.
-        disable_metrics: If True, Cloud Monitoring is not hung. Traces and
-            logs may still be exported. Defaults to False.
-        disable_traces: If True, Cloud Trace is not hung. GenAI still
-            turns on. Metrics and logs may still be exported. Defaults to False.
+        disable_metrics: If True, skip the Cloud Monitoring exporter. Traces
+            and logs may still be exported. Defaults to False.
+        disable_traces: If True, skip the Cloud Trace exporter.
+            ``GenAiInstrumentation`` is still installed. Metrics and logs may
+            still be exported. Defaults to False.
         metric_export_interval_ms: Metrics export interval in milliseconds.
             GCP requires a minimum of 5000ms. Defaults to 60000ms.
         metric_export_timeout_ms: Timeout for metrics export in milliseconds.

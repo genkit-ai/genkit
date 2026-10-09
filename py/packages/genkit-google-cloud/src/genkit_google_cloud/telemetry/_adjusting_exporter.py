@@ -30,6 +30,24 @@ from typing_extensions import override
 # Cloud Trace and the Dev UI read these exact wire keys.
 INPUT = 'genkit:input'
 OUTPUT = 'genkit:output'
+# Anyone with the Cloud project can open the trace, so prompt text,
+# replies, system instructions, and tool arguments never leave this
+# exporter. A key the span never wrote stays absent.
+# Genkit writes genkit:input; _normalize_labels renames it to genkit/input
+# after redaction. List the slash form too, in case a span sets it directly.
+TRACE_CONTENT_KEYS = frozenset({
+    INPUT,
+    OUTPUT,
+    'genkit.input',
+    'genkit.output',
+    'genkit/input',
+    'genkit/output',
+    'gen_ai.input.messages',
+    'gen_ai.output.messages',
+    'gen_ai.system_instructions',
+    'gen_ai.tool.call.arguments',
+    'gen_ai.tool.call.result',
+})
 NAME = 'genkit:name'
 PATH = 'genkit:path'
 IS_ROOT = 'genkit:isRoot'
@@ -111,7 +129,7 @@ class AdjustingTraceExporter(SpanExporter):
 
     def _redact_pii(self, span: ReadableSpan) -> ReadableSpan:
         attrs = _copy_attrs(span)
-        keys_to_redact = [k for k in (INPUT, OUTPUT) if k in attrs]
+        keys_to_redact = [key for key in attrs if key in TRACE_CONTENT_KEYS]
         if not keys_to_redact:
             return span
         for key in keys_to_redact:
