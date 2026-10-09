@@ -391,6 +391,11 @@ root = [
 
 # Pyright type checking configuration.
 [tool.pyright]
+# Typing contracts live in packages/*/tests/typecheck/: snake_case kwargs and
+# typed values that pyright, pyrefly and ty must all accept with no
+# suppressions. pyrefly project_includes and the ty override below list the
+# same directory, so a new contract file is checked by all three.
+include = ["packages/**/src", "packages/**/tests/typecheck"]
 exclude = [
   "**/__pycache__",
   ".git",
@@ -443,6 +448,8 @@ project_excludes = [
 project_includes = [
   # Core package
   "packages/genkit/src/**/*.py",
+  # Typing contracts (see [tool.pyright])
+  "packages/*/tests/typecheck/**/*.py",
 ]
 
 # Search path for first-party code import resolution.
@@ -481,6 +488,14 @@ include = ["**/tests/**", "**/*_test.py", "samples/**", "tools/**"]
 [tool.ty.overrides.rules]
 invalid-argument-type = "ignore"
 no-matching-overload = "ignore"
+
+# Typing contracts are the exception: they exist to fail on exactly these
+# rules. Later overrides win, so this re-enables them under tests/typecheck/.
+[[tool.ty.overrides]]
+include = ["**/tests/typecheck/**"]
+[tool.ty.overrides.rules]
+invalid-argument-type = "error"
+no-matching-overload = "error"
 
 # Vertex AI model_garden has relative imports ty struggles to resolve (PEP 420 / namespace).
 [[tool.ty.overrides]]
