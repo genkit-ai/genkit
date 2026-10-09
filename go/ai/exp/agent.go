@@ -2924,7 +2924,7 @@ func (i *detachIntake) stopAndWait() {
 // promptMessageKey is the metadata key used to tag base messages from the
 // agent config (system prompt, prompt template output, etc.) so they can be
 // excluded from session history after generation.
-const promptMessageKey = "_genkit_prompt"
+const promptMessageKey = base.PromptMessageKey
 
 // sessionMessageKey marks the session's own messages on their way into the
 // prompt render. The prompt decides where they land, so afterwards this is the

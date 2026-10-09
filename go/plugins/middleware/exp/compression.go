@@ -34,6 +34,7 @@ import (
 	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/internal/base"
 )
 
 // CompressionDedupeMatch selects how [CompressionDedupe] identifies duplicate
@@ -279,19 +280,6 @@ const (
 // model's view.
 var boundaryKeys = []string{ccSummary, ccStats, ccAnchorUser, ccTruncationNotice, ccPreserveSystem}
 
-// Keys of the messages that are never compacted (see [isPinned]).
-const (
-	// promptScaffoldKey tags the messages an agent's prompt renders on every
-	// turn (promptMessageKey in go/ai/exp). They are dropped from session
-	// history, so a stamp on one would be lost.
-	promptScaffoldKey = "_genkit_prompt"
-	// partPurposeKey and partPurposeOutput tag the output-format
-	// instructions the generate loop injects into a message
-	// (injectInstructions in go/ai/format.go).
-	partPurposeKey    = "purpose"
-	partPurposeOutput = "output"
-)
-
 // Defaults and estimates, equal to the JS runtime's.
 const (
 	defaultMaxToolResponseChars       = 400_000
@@ -463,6 +451,10 @@ type compressionRun struct {
 	cumulativeDeduplicated int
 	cumulativeTruncated    int
 
+	// noticeInserted and summarized report whether any of the call's
+	// compressions inserted the truncation notice or summarized.
+	noticeInserted, summarized bool
+
 	// latest is the stats of the call's newest compression, or nil.
 	latest map[string]any
 
@@ -509,7 +501,7 @@ func (r *compressionRun) wrapGenerate(ctx context.Context, params *ai.GeneratePa
 	overBudget := r.maxInputTokens > 0 && effectiveTokens > r.maxInputTokens
 
 	shouldCompress := overBudget || (r.maxMessages > 0 && len(active) > r.maxMessages)
-	hasOversizedToolResponse := r.maxToolResponseChars != noLimit && slices.ContainsFunc(active, func(m *ai.Message) bool {
+	hasOversizedToolResponse := !shouldCompress && r.maxToolResponseChars != noLimit && slices.ContainsFunc(active, func(m *ai.Message) bool {
 		return roleOf(m) == ai.RoleTool && slices.ContainsFunc(m.Content, func(p *ai.Part) bool {
 			return p.IsToolResponse() && p.ToolResponse != nil &&
 				!hasCompressionFlag(p.Metadata, ccCapped) &&
@@ -538,7 +530,8 @@ func (r *compressionRun) wrapGenerate(ctx context.Context, params *ai.GeneratePa
 	if r.maxInputTokens > 0 {
 		overshootRatio = float64(effectiveTokens) / float64(r.maxInputTokens)
 	}
-	adjustedPreserveRecent, adjustedSummaryPreserveRecent := adjustForOvershoot(overshootRatio, r.preserveRecent, r.summaryPreserveRecent)
+	adjustedPreserveRecent := shrinkForOvershoot(overshootRatio, r.preserveRecent)
+	adjustedSummaryPreserveRecent := shrinkForOvershoot(overshootRatio, r.summaryPreserveRecent)
 
 	messages := slices.Clone(active)
 	var (
@@ -649,7 +642,7 @@ func (r *compressionRun) wrapGenerate(ctx context.Context, params *ai.GeneratePa
 					effectiveMaxMessages = min(r.maxMessages, effectiveMaxMessages)
 				}
 			case r.maxMessages > 0 && overshootRatio >= 1.5:
-				adjustedCapKeep, _ := adjustForOvershoot(overshootRatio, max(1, r.maxMessages-fixedSlots), 1)
+				adjustedCapKeep := shrinkForOvershoot(overshootRatio, max(1, r.maxMessages-fixedSlots))
 				effectiveMaxMessages = min(r.maxMessages, fixedSlots+adjustedCapKeep)
 			case r.maxMessages > 0:
 				effectiveMaxMessages = r.maxMessages
@@ -677,11 +670,8 @@ func (r *compressionRun) wrapGenerate(ctx context.Context, params *ai.GeneratePa
 		r.cumulativeCapped += capped
 		r.cumulativeDeduplicated += deduplicated
 		r.cumulativeTruncated += truncated
-		prevNotice, prevSummarized := false, false
-		if r.latest != nil {
-			prevNotice, _ = r.latest["truncationNoticeInserted"].(bool)
-			prevSummarized, _ = r.latest["summarized"].(bool)
-		}
+		r.noticeInserted = r.noticeInserted || noticeInserted
+		r.summarized = r.summarized || summarized
 		turnStats = map[string]any{
 			"triggered":                 true,
 			"inputTokensBefore":         inputTokensBefore,
@@ -690,8 +680,8 @@ func (r *compressionRun) wrapGenerate(ctx context.Context, params *ai.GeneratePa
 			"toolResponsesSafetyCapped": r.cumulativeCapped,
 			"toolResponsesDeduplicated": r.cumulativeDeduplicated,
 			"toolResponsesTruncated":    r.cumulativeTruncated,
-			"truncationNoticeInserted":  noticeInserted || prevNotice,
-			"summarized":                summarized || prevSummarized,
+			"truncationNoticeInserted":  r.noticeInserted,
+			"summarized":                r.summarized,
 			"summarizationSkipped":      summarizationSkipped,
 		}
 		r.latest = turnStats
@@ -733,7 +723,7 @@ func (r *compressionRun) wrapGenerate(ctx context.Context, params *ai.GeneratePa
 		outgoing = make([]*ai.Message, len(raw))
 		for idx, m := range raw {
 			updated := m
-			if edited := updatedToolMessagesByRawIdx[idx]; edited != nil && roleOf(m) == ai.RoleTool {
+			if edited := updatedToolMessagesByRawIdx[idx]; edited != nil {
 				updated = recordToolEdits(m, edited)
 			}
 			if hasCompactionBoundary && idx == cutIndex {
@@ -1191,21 +1181,17 @@ func appendNotice(m *ai.Message, text string) *ai.Message {
 // standaloneNotice returns a system message carrying the truncation notice,
 // for a conversation without a system message.
 func standaloneNotice(text string) *ai.Message {
-	return &ai.Message{
-		Role:     ai.RoleSystem,
-		Metadata: withCompressionMetadata(nil, map[string]any{ccNotice: true, ccStandaloneNotice: true}),
-		Content:  []*ai.Part{ai.NewTextPart(text)},
-	}
+	return ai.NewMessage(ai.RoleSystem,
+		withCompressionMetadata(nil, map[string]any{ccNotice: true, ccStandaloneNotice: true}),
+		ai.NewTextPart(text))
 }
 
 // summaryMessage returns the user message that carries a summary into the
 // model's view.
 func summaryMessage(text string) *ai.Message {
-	return &ai.Message{
-		Role:     ai.RoleUser,
-		Metadata: withCompressionMetadata(nil, map[string]any{ccSummaryMessage: true}),
-		Content:  []*ai.Part{ai.NewTextPart(summaryPrefix + "\n" + text)},
-	}
+	return ai.NewMessage(ai.RoleUser,
+		withCompressionMetadata(nil, map[string]any{ccSummaryMessage: true}),
+		ai.NewTextPart(summaryPrefix+"\n"+text))
 }
 
 // dedupeToolResponses replaces all but the newest dedupeKeepRecent responses
@@ -1241,8 +1227,7 @@ func (c *compressor) dedupeToolResponses(msgs []*ai.Message) ([]*ai.Message, int
 					}
 				}
 			}
-			consumed = map[int]bool{}
-			clear(matchedByPart)
+			clear(consumed)
 			ordinal = 0
 			// Claim the ref matches across the turn's tool messages first, so
 			// the positional fallback never takes a request a ref names.
@@ -1263,12 +1248,9 @@ func (c *compressor) dedupeToolResponses(msgs []*ai.Message) ([]*ai.Message, int
 			continue
 		case ai.RoleTool:
 		default:
-			if c.dedupeMatchByInput {
-				prevRequests = nil
-				consumed = map[int]bool{}
-				clear(matchedByPart)
-				ordinal = 0
-			}
+			// A response after another message answers no request of the
+			// turn before it.
+			prevRequests = nil
 			continue
 		}
 
@@ -1346,12 +1328,9 @@ func (c *compressor) dedupeToolResponses(msgs []*ai.Message) ([]*ai.Message, int
 				content = slices.Clone(m.Content)
 			}
 			deduplicated++
-			resp := *p.ToolResponse
-			resp.Content = nil
-			resp.Output = c.dedupeNotice
 			part := *p
 			part.Metadata = withCompressionMetadata(p.Metadata, map[string]any{ccDeduplicated: true, ccNotice: c.dedupeNotice})
-			part.ToolResponse = &resp
+			part.ToolResponse = dedupedResponse(p.ToolResponse, c.dedupeNotice)
 			content[j] = &part
 		}
 		if content != nil {
@@ -1375,17 +1354,13 @@ func (c *compressor) applyToolLimits(msgs []*ai.Message, includeTruncation bool)
 			toolMsgIndices = append(toolMsgIndices, i)
 		}
 	}
-	numPreserved := min(c.toolPreserveRecent, len(toolMsgIndices))
-	truncatable := map[int]bool{}
-	for _, i := range toolMsgIndices[:len(toolMsgIndices)-numPreserved] {
-		truncatable[i] = true
-	}
+	numTruncatable := len(toolMsgIndices) - min(c.toolPreserveRecent, len(toolMsgIndices))
 
 	capped, truncated := 0, 0
 	var out []*ai.Message
-	for _, i := range toolMsgIndices {
+	for n, i := range toolMsgIndices {
 		m := msgs[i]
-		isTruncatable := includeTruncation && c.truncate && truncatable[i]
+		isTruncatable := includeTruncation && c.truncate && n < numTruncatable
 		var content []*ai.Part
 		for j, p := range m.Content {
 			if !p.IsToolResponse() || p.ToolResponse == nil ||
@@ -1463,13 +1438,20 @@ func truncateToolResponse(tr *ai.ToolResponse, limit int, mode string) *ai.ToolR
 		output = stringifyOutput(tr.Output)
 	}
 	outputLen := charLen(output)
+	// rawLengths count media at the length of its URL, for reporting how
+	// much of the response was cut.
 	contentLengths := make([]int, len(tr.Content))
+	rawLengths := make([]int, len(tr.Content))
 	contentTotal := 0
 	rawTotal := outputLen
 	for i, p := range tr.Content {
 		contentLengths[i] = estimatePartChars(p)
+		rawLengths[i] = contentLengths[i]
+		if p.IsMedia() && p.Text != "" {
+			rawLengths[i] = charLen(p.Text)
+		}
 		contentTotal += contentLengths[i]
-		rawTotal += rawContentPartChars(p)
+		rawTotal += rawLengths[i]
 	}
 	if outputLen+contentTotal <= limit {
 		return nil
@@ -1505,7 +1487,7 @@ func truncateToolResponse(tr *ai.ToolResponse, limit int, mode string) *ai.ToolR
 				segments = append(segments, p.Text)
 				remaining -= partLen + sepCost
 			}
-			keptChars += rawContentPartChars(p)
+			keptChars += rawLengths[i]
 			continue
 		}
 
@@ -1607,29 +1589,19 @@ func resolveWithIndices(msgs []*ai.Message, trusted map[*ai.Message]bool) resolu
 	var out []*ai.Message
 	leadingSystemEnd := 0
 	if preserveSystem {
-		for leadingSystemEnd < len(msgs) && roleOf(msgs[leadingSystemEnd]) == ai.RoleSystem {
-			leadingSystemEnd++
-		}
-		leading := msgs[:leadingSystemEnd]
+		leading, _ := partitionMessages(msgs)
+		leadingSystemEnd = len(leading)
 		switch {
-		case !insertNotice:
-			for i, m := range leading {
-				origIndex[m] = i
-				out = append(out, m)
-			}
-		case len(leading) > 0:
-			alreadyHasNotice := slices.ContainsFunc(leading, func(m *ai.Message) bool { return hasMessageFlag(m, ccNotice) })
-			for i, m := range leading {
-				if i == 0 && !alreadyHasNotice {
-					m = appendNotice(m, noticeText)
-				}
-				origIndex[m] = i
-				out = append(out, m)
-			}
-		default:
+		case insertNotice && len(leading) > 0:
+			leading = withNotice(leading, noticeText)
+		case insertNotice:
 			notice := standaloneNotice(noticeText)
 			origIndex[notice] = -1
 			out = append(out, notice)
+		}
+		for i, m := range leading {
+			origIndex[m] = i
+			out = append(out, m)
 		}
 	}
 
@@ -1714,12 +1686,9 @@ func materializeToolPart(p *ai.Part) *ai.Part {
 		if !ok {
 			notice = defaultDedupeNotice
 		}
-		resp := *p.ToolResponse
-		resp.Content = nil
-		resp.Output = notice
 		part := *p
-		part.Metadata = withoutRawOutputFlag(p.Metadata)
-		part.ToolResponse = &resp
+		part.Metadata = withCompressionMetadata(p.Metadata, map[string]any{ccRawOutput: nil})
+		part.ToolResponse = dedupedResponse(p.ToolResponse, notice)
 		return &part
 	}
 
@@ -1729,7 +1698,7 @@ func materializeToolPart(p *ai.Part) *ai.Part {
 			mode = ccTruncated
 		}
 		part := *p
-		part.Metadata = withoutRawOutputFlag(p.Metadata)
+		part.Metadata = withCompressionMetadata(p.Metadata, map[string]any{ccRawOutput: nil})
 		if updated := truncateToolResponse(p.ToolResponse, int(maxChars), mode); updated != nil {
 			part.ToolResponse = updated
 		}
@@ -1738,17 +1707,13 @@ func materializeToolPart(p *ai.Part) *ai.Part {
 	return p
 }
 
-// withoutRawOutputFlag returns md without the rawOutput flag.
-func withoutRawOutputFlag(md map[string]any) map[string]any {
-	cc := compressionMeta(md)
-	if _, ok := cc[ccRawOutput]; !ok {
-		return md
-	}
-	cc = maps.Clone(cc)
-	delete(cc, ccRawOutput)
-	out := maps.Clone(md)
-	out[compressionKey] = cc
-	return out
+// dedupedResponse returns a copy of tr with the notice as its output and no
+// content.
+func dedupedResponse(tr *ai.ToolResponse, notice string) *ai.ToolResponse {
+	resp := *tr
+	resp.Content = nil
+	resp.Output = notice
+	return &resp
 }
 
 // sanitizeUntrustedUserMessages strips the boundary fields, and the legacy
@@ -1873,17 +1838,17 @@ func lastReportedInputTokens(msgs []*ai.Message) (int, bool) {
 	return 0, false
 }
 
-// adjustForOvershoot shrinks the preserve windows when the context is far
-// over budget: halved, but not below 2, beyond 1.5 times; at most 2 beyond
-// twice.
-func adjustForOvershoot(overshootRatio float64, preserveRecent, summaryPreserveRecent int) (int, int) {
+// shrinkForOvershoot shrinks a preserve window of n messages when the context
+// is far over budget: halved, but not below 2, beyond 1.5 times; at most 2
+// beyond twice.
+func shrinkForOvershoot(overshootRatio float64, n int) int {
 	switch {
 	case overshootRatio >= 2:
-		return min(preserveRecent, 2), min(summaryPreserveRecent, 2)
+		return min(n, 2)
 	case overshootRatio >= 1.5:
-		return min(preserveRecent, max(2, preserveRecent/2)), min(summaryPreserveRecent, max(2, summaryPreserveRecent/2))
+		return min(n, max(2, n/2))
 	default:
-		return preserveRecent, summaryPreserveRecent
+		return n
 	}
 }
 
@@ -1894,11 +1859,13 @@ func isPinned(m *ai.Message) bool {
 	if m == nil {
 		return false
 	}
-	if tagged, _ := m.Metadata[promptScaffoldKey].(bool); tagged {
+	// Session history drops prompt scaffolding, so a stamp on it would be
+	// lost.
+	if tagged, _ := m.Metadata[base.PromptMessageKey].(bool); tagged {
 		return true
 	}
 	return slices.ContainsFunc(m.Content, func(p *ai.Part) bool {
-		return p != nil && p.Metadata[partPurposeKey] == partPurposeOutput
+		return p != nil && p.Metadata[base.PartPurposeKey] == base.PartPurposeOutput
 	})
 }
 
@@ -2072,15 +2039,6 @@ func estimatePartChars(p *ai.Part) int {
 	default:
 		return 0
 	}
-}
-
-// rawContentPartChars is [estimatePartChars] with media at the length of its
-// URL, for reporting how much of a response was cut.
-func rawContentPartChars(p *ai.Part) int {
-	if p.IsMedia() && p.Text != "" {
-		return charLen(p.Text)
-	}
-	return estimatePartChars(p)
 }
 
 // toolResponseCharLength returns the characters of a tool response's output

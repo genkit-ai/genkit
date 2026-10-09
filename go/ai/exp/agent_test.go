@@ -9336,13 +9336,3 @@ func TestAgent_Usage(t *testing.T) {
 		}
 	})
 }
-
-// TestPromptMessageKeyIsStable pins the prompt-scaffold tag value. The
-// ContextCompression middleware (plugins/middleware/exp) hardcodes it to keep
-// prompt-rendered messages out of compaction; renaming the key here without
-// updating that copy would silently let compaction fold scaffold messages.
-func TestPromptMessageKeyIsStable(t *testing.T) {
-	if promptMessageKey != "_genkit_prompt" {
-		t.Fatalf("promptMessageKey = %q; update promptScaffoldKey in plugins/middleware/exp/compression.go to match", promptMessageKey)
-	}
-}

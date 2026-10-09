@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -31,6 +32,7 @@ import (
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/internal/base"
 	"github.com/google/go-cmp/cmp"
 )
 
@@ -1306,7 +1308,7 @@ func TestContextCompressionBoundaryNeverMovesBack(t *testing.T) {
 		toolCallMsg(&ai.ToolRequest{Name: "step3", Input: map[string]any{}}),
 		toolResultMsg(&ai.ToolResponse{Name: "step3", Output: "STEP_3_ON_TURN_1"}),
 	})
-	second := f.generate(t, mw, append(slicesClone(first.Request.Messages),
+	second := f.generate(t, mw, append(slices.Clone(first.Request.Messages),
 		toolCallMsg(&ai.ToolRequest{Name: "step4", Input: map[string]any{}}),
 		toolResultMsg(&ai.ToolResponse{Name: "step4", Output: "LATEST_STEP_4"}),
 	))
@@ -1762,7 +1764,7 @@ func TestContextCompressionToleratesNilParts(t *testing.T) {
 	}
 
 	// A stamped history resolves past the nil parts and messages.
-	stamped := slicesClone(history)
+	stamped := slices.Clone(history)
 	stamped[3] = &ai.Message{Role: ai.RoleTool, Content: []*ai.Part{nil, {
 		Kind:         ai.PartToolResponse,
 		ToolResponse: &ai.ToolResponse{Name: "search", Ref: "1", Output: big},
@@ -1857,12 +1859,12 @@ func TestContextCompressionStats(t *testing.T) {
 
 func TestContextCompressionProtectedMessages(t *testing.T) {
 	scaffold := func(m *ai.Message) *ai.Message {
-		m.Metadata = map[string]any{promptScaffoldKey: true}
+		m.Metadata = map[string]any{base.PromptMessageKey: true}
 		return m
 	}
 	withInstructions := func(m *ai.Message) *ai.Message {
 		p := ai.NewTextPart("Output JSON matching the schema.")
-		p.Metadata = map[string]any{partPurposeKey: partPurposeOutput}
+		p.Metadata = map[string]any{base.PartPurposeKey: base.PartPurposeOutput}
 		m.Content = append(m.Content, p)
 		return m
 	}
@@ -2147,9 +2149,4 @@ func genkitContext(t *testing.T, g *genkit.Genkit) context.Context {
 		t.Fatal(err)
 	}
 	return seeded
-}
-
-// slicesClone copies msgs so appending to the copy leaves msgs alone.
-func slicesClone(msgs []*ai.Message) []*ai.Message {
-	return append([]*ai.Message(nil), msgs...)
 }

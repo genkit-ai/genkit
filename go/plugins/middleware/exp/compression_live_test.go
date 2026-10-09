@@ -60,6 +60,46 @@ func (v *viewRecorder) middleware() ai.Middleware {
 	})
 }
 
+// researchSystem is the system prompt of the research loops. Without the
+// last sentence, models read a shortened result as a failed fetch and fetch
+// the report again.
+const researchSystem = "You are a research assistant. Search for reports first, then fetch every report, " +
+	"one fetchReport call per turn, then write a short summary of all of them. " +
+	"Older tool results are shortened to save space, which is expected: never fetch a report twice."
+
+// checkFullReports reports a fetchReport response in history without its
+// full output, and returns how many it found.
+func checkFullReports(t *testing.T, history []*ai.Message) int {
+	t.Helper()
+	fetched := 0
+	for _, m := range toolMessages(history) {
+		for _, p := range m.Content {
+			if p.ToolResponse.Name != "fetchReport" {
+				continue
+			}
+			fetched++
+			out, _ := p.ToolResponse.Output.(map[string]any)
+			if id, _ := out["id"].(string); out["details"] != reportDetails(id) {
+				t.Errorf("history lost the full output of %v", out["id"])
+			}
+		}
+	}
+	return fetched
+}
+
+// checkLastViewResolves reports a difference between the view of the last
+// model call and what the history before its response resolves to, and
+// returns that view.
+func checkLastViewResolves(t *testing.T, rec *viewRecorder, history []*ai.Message) []*ai.Message {
+	t.Helper()
+	last := rec.views[len(rec.views)-1]
+	t.Logf("last view: %q", texts(last))
+	if diff := gocmp.Diff(texts(last), texts(ResolveCompressedHistory(history[:len(history)-1]))); diff != "" {
+		t.Errorf("resolved history differs from the last view (-view +resolved):\n%s", diff)
+	}
+	return last
+}
+
 // reportDetails returns a long, distinct body for a report.
 func reportDetails(id string) string {
 	var sb strings.Builder
@@ -94,7 +134,7 @@ func TestContextCompressionLive(t *testing.T) {
 		rec := &viewRecorder{}
 		resp, err := genkit.Generate(ctx, g,
 			ai.WithModelName(liveModel),
-			ai.WithSystem("You are a research assistant. Search for reports first, then fetch every report, one fetchReport call per turn, then write a short summary of all of them. Older tool results are shortened to save space, which is expected: never fetch a report twice."),
+			ai.WithSystem(researchSystem),
 			ai.WithPrompt("Investigate Project Alpha."),
 			ai.WithTools(searchReports, fetchReport),
 			ai.WithMaxTurns(10),
@@ -122,20 +162,7 @@ func TestContextCompressionLive(t *testing.T) {
 		}
 
 		history := resp.History()
-		fetched := 0
-		for _, m := range toolMessages(history) {
-			for _, p := range m.Content {
-				if p.ToolResponse.Name != "fetchReport" {
-					continue
-				}
-				fetched++
-				out, _ := p.ToolResponse.Output.(map[string]any)
-				if id, _ := out["id"].(string); out["details"] != reportDetails(id) {
-					t.Errorf("history lost the full output of %v", out["id"])
-				}
-			}
-		}
-		if fetched == 0 {
+		if checkFullReports(t, history) == 0 {
 			t.Fatal("the model fetched no report")
 		}
 		for i, m := range history[:len(history)-1] {
@@ -144,12 +171,7 @@ func TestContextCompressionLive(t *testing.T) {
 			}
 		}
 
-		// The last call's view is what the history resolves to.
-		last := rec.views[len(rec.views)-1]
-		t.Logf("last view: %q", texts(last))
-		if diff := gocmp.Diff(texts(last), texts(ResolveCompressedHistory(history[:len(history)-1]))); diff != "" {
-			t.Errorf("resolved history differs from the last view (-view +resolved):\n%s", diff)
-		}
+		last := checkLastViewResolves(t, rec, history)
 		if len(last) >= len(history)-1 && s["summarized"] == true {
 			t.Errorf("last view holds %d messages of %d, want fewer after a summary", len(last), len(history)-1)
 		}
@@ -160,7 +182,7 @@ func TestContextCompressionLive(t *testing.T) {
 		chunks := 0
 		resp, err := genkit.Generate(ctx, g,
 			ai.WithModelName(liveModel),
-			ai.WithSystem("You are a research assistant. Search for reports first, then fetch every report, one fetchReport call per turn, then write a short summary of all of them. Older tool results are shortened to save space, which is expected: never fetch a report twice."),
+			ai.WithSystem(researchSystem),
 			ai.WithPrompt("Investigate Project Alpha."),
 			ai.WithTools(searchReports, fetchReport),
 			ai.WithMaxTurns(10),
@@ -186,17 +208,8 @@ func TestContextCompressionLive(t *testing.T) {
 			t.Fatalf("stats = %v, want truncated responses", s)
 		}
 		history := resp.History()
-		for _, m := range toolMessages(history) {
-			for _, p := range m.Content {
-				if out, _ := p.ToolResponse.Output.(map[string]any); p.ToolResponse.Name == "fetchReport" && out["details"] != reportDetails(out["id"].(string)) {
-					t.Errorf("history lost the full output of %v", out["id"])
-				}
-			}
-		}
-		last := rec.views[len(rec.views)-1]
-		if diff := gocmp.Diff(texts(last), texts(ResolveCompressedHistory(history[:len(history)-1]))); diff != "" {
-			t.Errorf("resolved history differs from the last view (-view +resolved):\n%s", diff)
-		}
+		checkFullReports(t, history)
+		checkLastViewResolves(t, rec, history)
 	})
 
 	t.Run("resume after an interrupt keeps tool pairs", func(t *testing.T) {
