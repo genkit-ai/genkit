@@ -26,7 +26,11 @@ import (
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
+	aix "github.com/firebase/genkit/go/ai/exp"
+	"github.com/firebase/genkit/go/ai/exp/localstore"
+	"github.com/firebase/genkit/go/ai/tool"
 	"github.com/firebase/genkit/go/genkit"
+	genkitx "github.com/firebase/genkit/go/genkit/exp"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 	gocmp "github.com/google/go-cmp/cmp"
 )
@@ -90,7 +94,7 @@ func TestContextCompressionLive(t *testing.T) {
 		rec := &viewRecorder{}
 		resp, err := genkit.Generate(ctx, g,
 			ai.WithModelName(liveModel),
-			ai.WithSystem("You are a research assistant. Search for reports first, then fetch every report, one fetchReport call per turn, then write a short summary of all of them."),
+			ai.WithSystem("You are a research assistant. Search for reports first, then fetch every report, one fetchReport call per turn, then write a short summary of all of them. Older tool results are shortened to save space, which is expected: never fetch a report twice."),
 			ai.WithPrompt("Investigate Project Alpha."),
 			ai.WithTools(searchReports, fetchReport),
 			ai.WithMaxTurns(10),
@@ -151,6 +155,174 @@ func TestContextCompressionLive(t *testing.T) {
 		}
 	})
 
+	t.Run("streaming tool loop keeps the history", func(t *testing.T) {
+		rec := &viewRecorder{}
+		chunks := 0
+		resp, err := genkit.Generate(ctx, g,
+			ai.WithModelName(liveModel),
+			ai.WithSystem("You are a research assistant. Search for reports first, then fetch every report, one fetchReport call per turn, then write a short summary of all of them. Older tool results are shortened to save space, which is expected: never fetch a report twice."),
+			ai.WithPrompt("Investigate Project Alpha."),
+			ai.WithTools(searchReports, fetchReport),
+			ai.WithMaxTurns(10),
+			ai.WithStreaming(func(ctx context.Context, c *ai.ModelResponseChunk) error {
+				chunks++
+				return nil
+			}),
+			ai.WithUse(
+				&ContextCompression{
+					MaxInputTokens:        900,
+					TruncateToolResponses: &CompressionToolTruncation{MaxChars: 200, PreserveRecent: 1},
+				},
+				rec.middleware(),
+			),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if chunks == 0 {
+			t.Error("no chunks streamed")
+		}
+		if s := stats(resp); s["toolResponsesTruncated"] == nil || s["toolResponsesTruncated"] == 0 {
+			t.Fatalf("stats = %v, want truncated responses", s)
+		}
+		history := resp.History()
+		for _, m := range toolMessages(history) {
+			for _, p := range m.Content {
+				if out, _ := p.ToolResponse.Output.(map[string]any); p.ToolResponse.Name == "fetchReport" && out["details"] != reportDetails(out["id"].(string)) {
+					t.Errorf("history lost the full output of %v", out["id"])
+				}
+			}
+		}
+		last := rec.views[len(rec.views)-1]
+		if diff := gocmp.Diff(texts(last), texts(ResolveCompressedHistory(history[:len(history)-1]))); diff != "" {
+			t.Errorf("resolved history differs from the last view (-view +resolved):\n%s", diff)
+		}
+	})
+
+	t.Run("resume after an interrupt keeps tool pairs", func(t *testing.T) {
+		type approval struct {
+			Approved bool `json:"approved"`
+		}
+		publish := genkit.DefineResumableTool(g, "publish", "Publishes a one-line summary of the reports. Needs approval.",
+			func(ctx context.Context, in struct {
+				Summary string `json:"summary"`
+			}, ok *approval) (string, error) {
+				if ok == nil {
+					return "", tool.Interrupt(ctx, map[string]any{"reason": "needs approval"})
+				}
+				return "published", nil
+			})
+		mw := &ContextCompression{
+			MaxInputTokens:        700,
+			TruncateToolResponses: &CompressionToolTruncation{MaxChars: 150, PreserveRecent: 1},
+		}
+		rec := &viewRecorder{}
+		opts := []ai.GenerateOption{ai.WithModelName(liveModel), ai.WithTools(fetchReport, publish), ai.WithMaxTurns(10), ai.WithUse(mw, rec.middleware())}
+		resp, err := genkit.Generate(ctx, g, append(opts,
+			ai.WithSystem("Fetch report-101, report-102 and report-103 with fetchReport, one call per turn. Then call publish once with a one-line summary, and reply with one word when it is published."),
+			ai.WithPrompt("Go."))...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		interrupts := resp.Interrupts()
+		if len(interrupts) != 1 {
+			t.Fatalf("got %d interrupts (finish %q, text %q), want 1", len(interrupts), resp.FinishReason, resp.Text())
+		}
+		call, ok := publish.Interrupted(interrupts[0])
+		if !ok {
+			t.Fatalf("interrupt %v is not a publish call", interrupts[0].ToolRequest.Name)
+		}
+		paused := len(rec.views)
+		resp, err = genkit.Generate(ctx, g, append(opts, ai.WithMessages(resp.History()...), ai.WithResume(call.Restart(approval{Approved: true})))...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("answer: %q, stats: %v", resp.Text(), stats(resp))
+		if len(rec.views) == paused {
+			t.Fatal("the resumed call never reached the model")
+		}
+		for i, view := range rec.views {
+			for j, m := range view {
+				if m.Role == ai.RoleTool && (j == 0 || view[j-1].Role != ai.RoleModel && view[j-1].Role != ai.RoleTool) {
+					t.Errorf("call %d view = %v, want every tool message after its request", i, texts(view))
+				}
+			}
+		}
+		published := false
+		for _, m := range toolMessages(resp.History()) {
+			for _, p := range m.Content {
+				published = published || p.ToolResponse.Name == "publish" && p.ToolResponse.Output == "published"
+			}
+		}
+		if !published {
+			t.Error("history holds no published response")
+		}
+	})
+
+	t.Run("agent turns compress across the session", func(t *testing.T) {
+		// An inline middleware cannot ride in a prompt, whose rendered options
+		// must encode as JSON, so the session's messages show the compression.
+		ag := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{APIKey: apiKey}), genkit.WithExperimental())
+		agent := genkitx.DefineAgent(ag, "notes",
+			aix.InlinePrompt{
+				ai.WithModelName(liveModel),
+				ai.WithSystem("You are a concise assistant. Acknowledge notes in one short sentence."),
+				ai.WithUse(&ContextCompression{
+					MaxInputTokens: 500,
+					Summarize:      &CompressionSummarizer{Model: ai.NewModelRef(liveSummarizer, nil), PreserveRecent: 2},
+				}),
+			},
+			aix.WithSessionStore(localstore.NewInMemorySessionStore[any]()),
+		)
+		turns := []string{"Remember this for later: my project codename is BLUE-HERON-7."}
+		for i := range 3 {
+			turns = append(turns, fmt.Sprintf("Background note %d: %s", i, reportDetails(fmt.Sprintf("note-%d", i))))
+		}
+		turns = append(turns, "What is my project codename? Answer with the codename only.")
+		var sessionID string
+		var out *aix.AgentOutput[any]
+		for i, text := range turns {
+			var opts []aix.InvocationOption[any]
+			if sessionID != "" {
+				opts = append(opts, aix.WithSessionID[any](sessionID))
+			}
+			var err error
+			out, err = agent.RunText(ctx, text, opts...)
+			if err != nil {
+				t.Fatalf("turn %d: %v", i, err)
+			}
+			if out.Error != nil {
+				t.Fatalf("turn %d failed: %v", i, out.Error)
+			}
+			sessionID = out.SessionID
+		}
+		answer := out.Message.Text()
+		t.Logf("answer: %q", answer)
+		if !strings.Contains(answer, "BLUE-HERON-7") {
+			t.Errorf("answer = %q, want the codename", answer)
+		}
+		snap, err := agent.GetLatestSnapshot(ctx, sessionID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		boundaries := 0
+		for _, m := range snap.State.Messages {
+			if _, ok := compressionMeta(m.Metadata)[ccSummary]; ok {
+				boundaries++
+			}
+			if isPinned(m) {
+				t.Errorf("session holds prompt scaffolding %v", texts([]*ai.Message{m}))
+			}
+		}
+		if boundaries == 0 {
+			t.Errorf("session messages carry no boundary, want the compression recorded")
+		}
+		msgs := snap.State.Messages
+		if view := ResolveCompressedHistory(msgs[:len(msgs)-1]); !hasMessageFlag(view[0], ccSummaryMessage) {
+			t.Errorf("resolved session = %v, want it to start with the summary", texts(view))
+		}
+	})
+
 	t.Run("summary carries facts into later calls", func(t *testing.T) {
 		mw := &ContextCompression{
 			MaxInputTokens: 400,
@@ -197,23 +369,25 @@ func TestContextCompressionLive(t *testing.T) {
 	})
 
 	// A hard message cap drops the turns that recorded progress, so the tool
-	// reports progress itself, as a paged reader does.
-	readPage := genkit.DefineTool(g, "readPage", "Reads one page of the Project Alpha audit. Pass the cursor the previous page returned, starting at 0.",
+	// tracks progress itself and serves the next page whatever cursor the
+	// model passes.
+	var pagesRead int
+	readPage := genkit.DefineTool(g, "readPage", "Reads the next page of the Project Alpha audit.",
 		func(ctx *ai.ToolContext, in struct {
 			Cursor int `json:"cursor"`
 		}) (map[string]any, error) {
-			next := in.Cursor + 1
-			if next == 4 {
-				next = -1
+			if pagesRead == 4 {
+				return map[string]any{"done": true, "text": "No more pages. Reply now."}, nil
 			}
-			return map[string]any{"page": in.Cursor + 1, "text": reportDetails(fmt.Sprintf("page-%d", in.Cursor)), "nextCursor": next}, nil
+			pagesRead++
+			return map[string]any{"page": pagesRead, "of": 4, "text": reportDetails(fmt.Sprintf("page-%d", pagesRead))}, nil
 		})
 
 	t.Run("message cap keeps a valid tool conversation", func(t *testing.T) {
 		rec := &viewRecorder{}
 		resp, err := genkit.Generate(ctx, g,
 			ai.WithModelName(liveModel),
-			ai.WithSystem("Read the audit with readPage, one call per turn, passing the nextCursor each page returns, until nextCursor is -1. Then reply with one sentence about the audit."),
+			ai.WithSystem("Read the audit with readPage, one call per turn, until it reports no more pages. Then reply with one sentence about the audit."),
 			ai.WithPrompt("Read the Project Alpha audit."),
 			ai.WithTools(readPage),
 			ai.WithMaxTurns(10),
