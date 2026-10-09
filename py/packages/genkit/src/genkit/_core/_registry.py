@@ -45,6 +45,7 @@ from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._logger import get_logger
 from genkit._core._model import (
     EmbedRequest,
+    EvalRequest,
     ModelRequest,
     ModelResponse,
     ModelResponseChunk,
@@ -53,7 +54,6 @@ from genkit._core._plugin import Plugin, resolved_action_name
 from genkit._core._typing import (
     ActionMetadata,
     EmbedResponse,
-    EvalRequest,
     EvalResponse,
     Operation,
 )

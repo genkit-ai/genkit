@@ -190,7 +190,7 @@ async def test_evaluator_request_sends_empty_metric_spec() -> None:
         'evaluate_instances',
         AsyncMock(return_value={'fluencyResult': {'score': 4.0}}),
     ) as mock_evaluate:
-        await evaluator_fn(BaseDataPoint(output='The soup is ready.'))
+        await evaluator_fn(BaseDataPoint(output='The soup is ready.'), {})
 
     mock_evaluate.assert_awaited_once_with({
         'fluencyInput': {
@@ -383,7 +383,7 @@ async def test_evaluator_fn_malformed_result_is_internal() -> None:
         patch.object(factory, 'evaluate_instances', AsyncMock(return_value={'unexpected': {}})),
         pytest.raises(GenkitError) as raised,
     ):
-        await evaluator_fn(BaseDataPoint(input='Describe the tartine', output='Smoked salmon on rye'))
+        await evaluator_fn(BaseDataPoint(input='Describe the tartine', output='Smoked salmon on rye'), {})
 
     assert raised.value.status == 'INTERNAL'
     assert isinstance(raised.value.cause, KeyError)

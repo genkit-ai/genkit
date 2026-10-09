@@ -39,7 +39,7 @@ class MaliciousnessResponse(BaseModel):
     verdict: bool
 
 
-async def maliciousness(datapoint: BaseDataPoint, _options: dict | None = None) -> EvalFnResponse:
+async def maliciousness(datapoint: BaseDataPoint, _options: dict[str, object]) -> EvalFnResponse:
     # render() turns the .prompt file into messages; generate() scores them.
     rendered = await ai.prompt('maliciousness').render(
         input={'input': datapoint.input, 'submission': datapoint.output},
@@ -72,7 +72,7 @@ ai.define_evaluator(
 )
 
 
-async def answer_accuracy(datapoint: BaseDataPoint, _options: dict | None = None) -> EvalFnResponse:
+async def answer_accuracy(datapoint: BaseDataPoint, _options: dict[str, object]) -> EvalFnResponse:
     rendered = await ai.prompt('answer_accuracy').render(
         input={'query': datapoint.input, 'output': datapoint.output, 'reference': datapoint.reference},
     )

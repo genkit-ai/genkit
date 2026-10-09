@@ -525,7 +525,7 @@ def test_embed_request_options_none_or_missing_becomes_empty_dict() -> None:
     docs = [Document.from_text('hi')]
 
     assert EmbedRequest(input=docs).options == {}
-    assert EmbedRequest(input=docs, options=None).options == {}
+    assert EmbedRequest(input=docs, options=None).options == {}  # type: ignore[arg-type] - wire null
     assert EmbedRequest.model_validate({'input': [{'content': [{'text': 'hi'}]}], 'options': None}).options == {}
 
 
@@ -533,7 +533,7 @@ def test_embed_request_options_none_or_missing_becomes_empty_dict() -> None:
 def test_embed_request_non_mapping_options_raises(bad_options: object) -> None:
     """EmbedRequest.options must be a mapping, same as ModelRequest.config; a list or str fails validation."""
     with pytest.raises(ValidationError, match='options must be a mapping'):
-        EmbedRequest(input=[Document.from_text('hi')], options=bad_options)
+        EmbedRequest(input=[Document.from_text('hi')], options=bad_options)  # type: ignore[arg-type] - bad wire value
 
 
 @pytest.mark.asyncio
@@ -643,3 +643,64 @@ def test_resolve_embedder_name_with_invalid_type_raises_error() -> None:
     genkit_instance = Genkit()
     with pytest.raises(ValueError, match='Embedder must be specified as a string name or an EmbedderRef.'):
         genkit_instance._resolve_embedder_name(123)  # type: ignore[arg-type]
+
+
+class _CrmEmbedConfig(BaseModel):
+    dimensions: int = 768
+    task_type: str = 'RETRIEVAL_DOCUMENT'
+
+
+def _recording_embedder(ai: Genkit, seen: list[dict[str, Any]]) -> None:
+    async def crm_embedder(request: EmbedRequest) -> EmbedResponse:
+        seen.append(request.options)
+        return EmbedResponse(embeddings=[Embedding(embedding=[0.0]) for _ in request.input])
+
+    ai.define_embedder(name='crm-embedder', fn=crm_embedder)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('config', 'expected'),
+    [
+        (_CrmEmbedConfig(), {}),
+        (_CrmEmbedConfig(task_type='QUESTION_ANSWERING'), {'task_type': 'QUESTION_ANSWERING'}),
+    ],
+)
+async def test_embed_with_basemodel_config_sends_only_set_fields(
+    config: _CrmEmbedConfig, expected: dict[str, object]
+) -> None:
+    """An untyped embedder gets the fields the caller set, same as an untyped model fn's config."""
+    ai = Genkit()
+    seen: list[dict[str, Any]] = []
+    _recording_embedder(ai, seen)
+
+    await ai.embed(embedder='crm-embedder', content='hi', config=config)  # type: ignore[arg-type]
+
+    assert seen == [expected]
+
+
+@pytest.mark.asyncio
+async def test_embed_ref_config_survives_unset_basemodel_field() -> None:
+    """ref < call per field: a BaseModel call config doesn't clobber ref keys it left unset."""
+    ai = Genkit()
+    seen: list[dict[str, Any]] = []
+    _recording_embedder(ai, seen)
+    ref = create_embedder_ref('crm-embedder', config={'dimensions': 256})
+
+    await ai.embed(embedder=ref, content='hi', config=_CrmEmbedConfig(task_type='QUESTION_ANSWERING'))  # type: ignore[arg-type]
+
+    assert seen == [{'dimensions': 256, 'task_type': 'QUESTION_ANSWERING'}]
+
+
+def test_embed_request_basemodel_options_becomes_dict_of_set_fields() -> None:
+    """EmbedRequest takes a BaseModel the same way ai.embed(config=...) does."""
+    request = EmbedRequest(input=[], options=_CrmEmbedConfig(dimensions=256))  # type: ignore[arg-type]
+
+    assert request.options == {'dimensions': 256}
+
+
+def test_embed_request_options_schema_is_an_object() -> None:
+    """The embedder input schema says options is an object, not Any."""
+    schema = to_json_schema(EmbedRequest)
+
+    assert schema['properties']['options']['type'] == 'object'

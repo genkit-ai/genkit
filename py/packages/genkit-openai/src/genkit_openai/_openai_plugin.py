@@ -569,20 +569,19 @@ class OpenAI(Plugin):
             # Get optional parameters (omit when None; OpenAI create() uses Omit, not None)
             dimensions: int | None = None
             encoding_format: Literal['float'] | None = None
-            if request.options:
-                dim_val = request.options.get('dimensions')
-                if dim_val is not None:
-                    # bool is an int subclass, so True would otherwise pass as 1.
-                    if not isinstance(dim_val, int) or isinstance(dim_val, bool):
-                        raise GenkitError(
-                            status='INVALID_ARGUMENT',
-                            message=f'dimensions must be an int, got {dim_val!r}',
-                        )
-                    dimensions = dim_val
-                # 'base64' is deliberately not forwarded: the SDK sends base64 either
-                # way and only decodes the response when it was not asked explicitly.
-                if request.options.get('encodingFormat') == 'float':
-                    encoding_format = 'float'
+            dim_val = request.options.get('dimensions')
+            if dim_val is not None:
+                # bool is an int subclass, so True would otherwise pass as 1.
+                if not isinstance(dim_val, int) or isinstance(dim_val, bool):
+                    raise GenkitError(
+                        status='INVALID_ARGUMENT',
+                        message=f'dimensions must be an int, got {dim_val!r}',
+                    )
+                dimensions = dim_val
+            # 'base64' is deliberately not forwarded: the SDK sends base64 either
+            # way and only decodes the response when it was not asked explicitly.
+            if request.options.get('encodingFormat') == 'float':
+                encoding_format = 'float'
 
             # Call with only non-None optional params to satisfy strict typings
             client = self._embed_client()

@@ -51,11 +51,11 @@ from genkit._ai._evaluator import (
     evaluator_action_metadata,
     evaluator_ref,
 )
+from genkit._core._model import EvalRequest
 from genkit._core._typing import (
     BaseDataPoint,
     Details,
     EvalFnResponse,
-    EvalRequest,
     EvalStatusEnum,
     Score,
 )

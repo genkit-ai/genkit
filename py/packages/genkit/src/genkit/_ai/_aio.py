@@ -101,6 +101,7 @@ from genkit._core._middleware import (
 from genkit._core._model import (
     Document,
     EmbedRequest,
+    EvalRequest,
     ModelConfigDict,
     ModelRef,
     ModelRefConfigT,
@@ -126,7 +127,6 @@ from genkit._core._typing import (
     BaseDataPoint,
     Embedding,
     EvalFnResponse,
-    EvalRequest,
     MiddlewareRef,
     ModelInfo,
     Operation,
@@ -1183,10 +1183,10 @@ class Genkit:
 
         Returns an empty dict when neither the ref nor the call sets anything,
         so the embedder always receives request.options as a dict. ``config``
-        goes through the same check as ``generate``: a dict or a BaseModel
-        (dumped to a dict), anything else raises INVALID_ARGUMENT. The caller's
-        EmbedderRef.config dict is left unchanged so they can reuse the same
-        ref on later calls.
+        goes through the same check as ``generate``: a dict, or a BaseModel
+        dumped to the fields it set; anything else raises INVALID_ARGUMENT. The
+        caller's EmbedderRef.config dict is left unchanged so they can reuse the
+        same ref on later calls.
         """
         ref_config = embedder.config if isinstance(embedder, EmbedderRef) else None
         version = embedder.version if isinstance(embedder, EmbedderRef) else None

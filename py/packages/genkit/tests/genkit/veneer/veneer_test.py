@@ -26,11 +26,11 @@ from genkit._ai._formats._types import FormatDef, Formatter, FormatterConfig
 from genkit._ai._model import text_from_message
 from genkit._core._action import ActionKind, ActionRunContext
 from genkit._core._model import ModelRequest, OutputConfig
+from genkit._core._schema import to_json_schema
 from genkit._core._typing import (
     BaseDataPoint,
     Details,
     EvalFnResponse,
-    EvalRequest,
     EvalResponse,
     EvalStatusEnum,
     FinishReason,
@@ -43,7 +43,7 @@ from genkit._core._typing import (
     ToolRequest,
     ToolResponse,
 )
-from genkit.evaluator import EvaluatorRef, evaluator_action_metadata, evaluator_ref
+from genkit.evaluator import EvalRequest, EvaluatorRef, evaluator_action_metadata, evaluator_ref
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, MiddlewareRef, ModelHookParams
 from genkit.testing import (
     EchoModel,
@@ -2078,7 +2078,7 @@ async def test_evaluator_action_run_with_none_options_passes_empty_dict(setup_te
     action = await ai.registry.resolve_evaluator('wire_none_eval')
     assert action is not None
 
-    await action.run(EvalRequest(dataset=_one_row(), eval_run_id='run1', options=None))
+    await action.run(EvalRequest(dataset=_one_row(), eval_run_id='run1', options=None))  # type: ignore[arg-type] - wire null
 
     assert seen == [{}]
 
@@ -2126,8 +2126,9 @@ async def test_evaluator_action_run_with_non_mapping_options_raises_invalid_argu
     action = await ai.registry.resolve_evaluator('wire_bad_eval')
     assert action is not None
 
+    wire = {'dataset': [row.model_dump(by_alias=True) for row in _one_row()], 'evalRunId': 'run1', 'options': []}
     with pytest.raises(GenkitError) as exc_info:
-        await action.run(EvalRequest(dataset=_one_row(), eval_run_id='run1', options=[]))
+        await action.run(wire)  # type: ignore[arg-type]
 
     assert exc_info.value.status == 'INVALID_ARGUMENT'
     assert seen == []
@@ -2691,3 +2692,46 @@ async def test_generate_resolved_sibling_survives_repeated_interrupts(
     tool_msg = next(m for m in response.messages if m.role == Role.TOOL)
     outputs = {p.tool_response.name: p.tool_response.output for p in tool_msg.content if p.tool_response}
     assert outputs == {'charge_card': 'charged#1', 'approve': 'approved'}
+
+
+class _AllergyCheckConfig(BaseModel):
+    strict: bool = False
+    allergens: list[str] = Field(default_factory=lambda: ['peanut'])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('batch', [False, True], ids=['per_row', 'batch'])
+async def test_evaluate_with_basemodel_config_passes_only_set_fields(setup_test: SetupFixture, batch: bool) -> None:
+    """An untyped evaluator gets the fields the caller set, same as an untyped model fn's config."""
+    ai, *_ = setup_test
+    define = _define_recording_batch_evaluator if batch else _define_recording_evaluator
+    seen = define(ai, 'set_fields_eval')
+
+    await ai.evaluate(evaluator='set_fields_eval', dataset=_one_row(), config=_AllergyCheckConfig(strict=True))  # type: ignore[arg-type]
+
+    assert seen == [{'strict': True}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('batch', [False, True], ids=['per_row', 'batch'])
+async def test_evaluator_action_run_with_basemodel_options_matches_ai_evaluate(
+    setup_test: SetupFixture, batch: bool
+) -> None:
+    """EvalRequest(options=Cfg(...)) on the action gives the evaluator what ai.evaluate(config=Cfg(...)) does."""
+    ai, *_ = setup_test
+    define = _define_recording_batch_evaluator if batch else _define_recording_evaluator
+    seen = define(ai, 'action_cfg_eval')
+    action = await ai.registry.resolve_evaluator('action_cfg_eval')
+    assert action is not None
+
+    await action.run(EvalRequest(dataset=_one_row(), eval_run_id='run1', options=_AllergyCheckConfig(strict=True)))  # type: ignore[arg-type]
+
+    assert seen == [{'strict': True}]
+
+
+def test_eval_request_options_is_typed_dict() -> None:
+    """options is dict[str, Any]: .get needs no None guard, and the schema says object."""
+    request = EvalRequest(dataset=_one_row(), eval_run_id='run1')
+
+    assert request.options.get('strict', False) is False
+    assert to_json_schema(EvalRequest)['properties']['options']['type'] == 'object'

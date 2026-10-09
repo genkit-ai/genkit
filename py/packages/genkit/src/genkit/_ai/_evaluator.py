@@ -19,15 +19,15 @@
 import inspect
 import traceback
 import uuid
-from collections.abc import Callable, Coroutine, Mapping
-from typing import Any, ClassVar, TypeVar, cast
+from collections.abc import Callable, Coroutine
+from typing import Any, ClassVar, TypeVar
 
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
 
 from genkit._core._action import Action, ActionKind, ActionRunContext
-from genkit._core._error import GenkitError
 from genkit._core._logger import get_logger
+from genkit._core._model import EvalRequest
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
 from genkit._core._telemetry._attrs import metadata_key
@@ -36,7 +36,6 @@ from genkit._core._typing import (
     ActionMetadata,
     BaseDataPoint,
     EvalFnResponse,
-    EvalRequest,
     EvalResponse,
     EvalStatusEnum,
     Score,
@@ -132,22 +131,6 @@ def _get_func_description(func: Callable[..., Any], description: str | None = No
     return ''
 
 
-def _options_dict(options: object) -> Mapping[str, object]:
-    """None becomes {}; anything else must be a mapping, same as ModelRequest.config.
-
-    Runs before the evaluator fn so a Dev UI / CLI request with ``options: null``
-    and an ``ai.evaluate`` call with no config look the same to the plugin.
-    """
-    if options is None:
-        return {}
-    if isinstance(options, Mapping) and not isinstance(options, BaseModel):
-        return cast(Mapping[str, object], options)
-    raise GenkitError(
-        status='INVALID_ARGUMENT',
-        message=f'evaluator options must be a mapping, got {type(options).__name__}',
-    )
-
-
 def define_evaluator(
     registry: Registry,
     name: str,
@@ -165,9 +148,6 @@ def define_evaluator(
     evaluator_description = _get_func_description(fn, description)
 
     async def eval_stepper_fn(req: EvalRequest) -> EvalResponse:
-        # checked once up front: inside the loop the per-row try would turn a
-        # bad request into one failed score per datapoint.
-        options = _options_dict(req.options)
         eval_responses: list[EvalFnResponse] = []
         for index in range(len(req.dataset)):
             datapoint = req.dataset[index]
@@ -179,7 +159,7 @@ def define_evaluator(
                     span: SpanContext, point: BaseDataPoint = datapoint, test_case_id: str = case_id
                 ) -> EvalFnResponse:
                     try:
-                        test_case_output = await fn(point, options)
+                        test_case_output = await fn(point, req.options)
                         test_case_output.span_id = span.span_id
                         test_case_output.trace_id = span.trace_id
                         return test_case_output
@@ -250,7 +230,6 @@ def define_batch_evaluator(
     # fn stays the metadata_fn, so its signature is still checked when defined.
     # model_validate takes a list or an EvalResponse; the constructor rejects the latter.
     async def batch_fn(req: EvalRequest, ctx: ActionRunContext) -> EvalResponse:
-        req.options = _options_dict(req.options)
         return EvalResponse.model_validate(await action.params.call(fn, req, ctx))
 
     action = registry.register_action(
