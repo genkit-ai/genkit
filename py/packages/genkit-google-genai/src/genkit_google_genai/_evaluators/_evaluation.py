@@ -42,7 +42,7 @@ from genkit.evaluator import BaseDataPoint, Details, EvalFnResponse, Score
 from genkit.plugin_api import (
     GENKIT_CLIENT_HEADER,
     Action,
-    get_cached_client,
+    loop_local_client,
     mark_provider_error,
     wrap_http_error,
 )
@@ -51,6 +51,11 @@ from genkit_google_genai._constants import GLOBAL_LOCATION, is_multi_regional_lo
 
 if TYPE_CHECKING:
     from genkit import Genkit as GenkitRegistry
+
+
+@loop_local_client
+def _evaluator_client() -> httpx.AsyncClient:
+    return httpx.AsyncClient(timeout=httpx.Timeout(60.0))
 
 
 class VertexAIEvaluationMetricType(StrEnum):
@@ -207,12 +212,8 @@ class EvaluatorFactory:
             **request_body,
         }
 
-        # Use cached client for better connection reuse.
-        # Note: Auth headers are passed per-request since tokens may expire.
-        client = get_cached_client(
-            cache_key='vertex-ai-evaluator',
-            timeout=60.0,
-        )
+        # Auth headers go on each request since tokens expire.
+        client = _evaluator_client()
 
         # Transport failures (refused connection, timeout) have no known
         # status and propagate as is.
