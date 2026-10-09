@@ -26,7 +26,7 @@ import {
 } from '../reflection-auth.js';
 import { ReflectionClientV1 } from '../reflection-client-v1.js';
 import type { BoxConnection, BoxRunner } from '../types.js';
-import { commandArgv, untilReady } from './util.js';
+import { abortable, commandArgv, untilReady } from './util.js';
 
 /**
  * The port the box's reflection server listens on *inside* the container,
@@ -164,6 +164,11 @@ interface ContainerInstance {
 export class PodmanRunner implements BoxRunner {
   readonly name = 'podman';
   private instances = new Map<string, ContainerInstance>();
+  /**
+   * Startups in flight, by key. A concurrent acquire for a key that is still
+   * starting waits for it rather than getting a client that isn't ready yet.
+   */
+  private starting = new Map<string, Promise<ReflectionClientV1>>();
   private readonly engine: string;
   private readonly projectDir: string;
   private networkReady?: Promise<void>;
@@ -320,11 +325,20 @@ export class PodmanRunner implements BoxRunner {
   async acquire(key: string, signal?: AbortSignal): Promise<BoxConnection> {
     if (this.closed) throw new Error('podmanRunner is closed.');
 
-    const existing = this.instances.get(key);
-    if (existing) {
-      return existing.client;
+    let pending = this.starting.get(key);
+    if (!pending) {
+      const existing = this.instances.get(key);
+      if (existing) return existing.client;
+      pending = this.start(key).finally(() => this.starting.delete(key));
+      this.starting.set(key, pending);
     }
+    // A caller that gives up stops waiting; the shared startup goes on for
+    // the others.
+    return abortable(pending, signal);
+  }
 
+  /** Starts the container for `key` and resolves once it is ready. */
+  private async start(key: string): Promise<ReflectionClientV1> {
     await this.ensureNetwork();
     const hostPort = await freePort();
     // close() may have run while we awaited; don't start a container nobody
@@ -358,8 +372,7 @@ export class PodmanRunner implements BoxRunner {
           stopWaiting.signal
         ),
         child,
-        `Box container ${name}`,
-        signal
+        `Box container ${name}`
       );
     } catch (e) {
       stopWaiting.abort();

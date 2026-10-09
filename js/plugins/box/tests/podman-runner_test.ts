@@ -15,7 +15,7 @@
  */
 
 import * as assert from 'assert';
-import { realpathSync } from 'node:fs';
+import { mkdtempSync, readFileSync, realpathSync } from 'node:fs';
 import * as os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
@@ -245,6 +245,35 @@ describe('podmanRunner', () => {
     await assert.rejects(runner.acquire('k'), /Timed out/);
     assert.ok(Date.now() - started < 5_000, 'used the short timeout');
     await runner.close();
+  });
+
+  it('concurrent first acquires share one container start', async () => {
+    const log = path.join(
+      mkdtempSync(path.join(os.tmpdir(), 'hung-engine-')),
+      'runs'
+    );
+    process.env.HUNG_ENGINE_LOG = log;
+    try {
+      const runner = podmanRunner({
+        image: 'node:22-slim',
+        cmd: 'node boxed.js',
+        network: 'bridge',
+        engine: hungEngine,
+        readyTimeoutMs: 400,
+      });
+      const quitter = new AbortController();
+      const first = runner.acquire('k', quitter.signal);
+      const second = runner.acquire('k');
+      quitter.abort();
+      await assert.rejects(first, /Aborted before box became ready/);
+      // The second caller waits for the shared startup (here: its timeout)
+      // instead of getting the not-yet-ready client right away.
+      await assert.rejects(second, /Timed out/);
+      assert.strictEqual(readFileSync(log, 'utf8').trim(), 'run');
+      await runner.close();
+    } finally {
+      delete process.env.HUNG_ENGINE_LOG;
+    }
   });
 
   it('puts image and command last, in that order', () => {
