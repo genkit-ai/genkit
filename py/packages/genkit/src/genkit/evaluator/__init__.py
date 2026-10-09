@@ -48,6 +48,7 @@ Example:
 
 from genkit._ai._evaluator import (
     EvaluatorRef,
+    evaluator,
     evaluator_action_metadata,
     evaluator_ref,
 )
@@ -75,6 +76,7 @@ __all__ = [
     'evaluator_ref',
     # Reference types
     'EvaluatorRef',
-    # Plugin list_actions
+    # Plugins: build in init/resolve, describe in list_actions
+    'evaluator',
     'evaluator_action_metadata',
 ]

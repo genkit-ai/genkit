@@ -64,7 +64,6 @@ from pydantic import BaseModel
 import genkit_google_genai._constants as const
 from genkit import ActionRunContext, GenkitError, ModelResponse, Operation
 from genkit.embedder import EmbedderRef, embedder, embedder_action_metadata
-from genkit.evaluator import evaluator_action_metadata
 from genkit.model import (
     BackgroundAction,
     ModelInfo,
@@ -88,7 +87,7 @@ from genkit_google_genai._evaluators import (
     VertexAIEvaluationMetricType,
     create_vertex_evaluators,
 )
-from genkit_google_genai._evaluators._evaluation import METRIC_INFO
+from genkit_google_genai._evaluators._evaluation import vertex_evaluator_action_metadata
 from genkit_google_genai._interactions._options import ClientOptions
 from genkit_google_genai._models._antigravity import AntigravityConfig, create_antigravity_action
 from genkit_google_genai._models._deep_research import (
@@ -1084,13 +1083,8 @@ class VertexAI(GoogleFamilyRefs, Plugin):
         if not self._project:
             logger.debug('VertexAI has no project; skipping Vertex evaluator registration')
         else:
-            # Deferred import to avoid circular dependency
-            from genkit import Genkit
-
-            registry = Genkit()
             actions.extend(
                 create_vertex_evaluators(
-                    registry,
                     list(VertexAIEvaluationMetricType),
                     project=self._project,
                     location=self._location,
@@ -1180,12 +1174,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
                 status='FAILED_PRECONDITION',
             )
 
-        from genkit import Genkit
-
-        registry = Genkit()
-
         actions = create_vertex_evaluators(
-            registry,
             [metric_type],
             project=self._project,
             location=self._location,
@@ -1304,15 +1293,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
 
         if self._project:
             for metric in VertexAIEvaluationMetricType:
-                display_name, definition = METRIC_INFO[metric]
-                actions_list.append(
-                    evaluator_action_metadata(
-                        vertexai_name(metric.lower()),
-                        display_name=display_name,
-                        definition=definition,
-                        is_billed=True,
-                    )
-                )
+                actions_list.append(vertex_evaluator_action_metadata(metric))
 
         self._list_actions_cache = actions_list
         return actions_list
