@@ -22,16 +22,9 @@ import weakref
 from collections.abc import Callable
 from typing import TypeVar
 
+import httpx
+
 T = TypeVar('T')
-
-
-def _is_closed(obj: object) -> bool:
-    closed = getattr(obj, 'is_closed', None)
-    # httpx exposes a property; the OpenAI and Anthropic SDKs a method. Only a
-    # real True counts, so mocks and unrelated attributes never force a rebuild.
-    if callable(closed):
-        closed = closed()
-    return closed is True
 
 
 def loop_local_client(factory: Callable[[], T]) -> Callable[[], T]:
@@ -82,8 +75,8 @@ def loop_local_client(factory: Callable[[], T]) -> Callable[[], T]:
             completion = await self._client().chat.completions.create(...)
     ```
 
-    A cached object whose ``is_closed`` is true (httpx property, SDK method) is
-    rebuilt, so closing a client by hand doesn't leave a dead one in the cache.
+    A cached ``httpx.AsyncClient`` that has been closed is rebuilt, so closing
+    one by hand doesn't leave a dead client in the cache.
     Plain callables work too, e.g. ``loop_local_client(asyncio.Lock)``.
     """
     by_loop: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, T] = weakref.WeakKeyDictionary()
@@ -93,7 +86,8 @@ def loop_local_client(factory: Callable[[], T]) -> Callable[[], T]:
         loop = asyncio.get_running_loop()
         with lock:
             existing = by_loop.get(loop)
-            if existing is not None and not _is_closed(existing):
+            # A closed httpx client fails every request; build a new one.
+            if existing is not None and not (isinstance(existing, httpx.AsyncClient) and existing.is_closed):
                 return existing
             created = factory()
             by_loop[loop] = created

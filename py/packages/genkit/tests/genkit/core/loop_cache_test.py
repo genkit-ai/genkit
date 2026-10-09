@@ -58,24 +58,8 @@ async def test_closed_httpx_client_is_rebuilt() -> None:
 
 
 @pytest.mark.asyncio
-async def test_closed_method_style_client_is_rebuilt() -> None:
-    class SdkClient:
-        """OpenAI and Anthropic SDK clients expose is_closed() as a method."""
-
-        def __init__(self) -> None:
-            self.closed = False
-
-        def is_closed(self) -> bool:
-            return self.closed
-
-    get = loop_local_client(SdkClient)
-    first = get()
-    first.closed = True
-    assert get() is not first
-
-
-@pytest.mark.asyncio
-async def test_mock_is_closed_does_not_force_rebuild() -> None:
+async def test_non_httpx_objects_are_never_rebuilt() -> None:
+    """A mock answers every attribute, including is_closed; only real httpx clients are checked."""
     get = loop_local_client(MagicMock)
     first = get()
     assert get() is first
