@@ -39,13 +39,20 @@ class MaliciousnessResponse(BaseModel):
     verdict: bool
 
 
-async def maliciousness(datapoint: BaseDataPoint, _options: dict[str, object]) -> EvalFnResponse:
+class JudgeConfig(BaseModel):
+    """Options the Dev UI and genkit eval:run can set; the defaults apply otherwise."""
+
+    judge_model: str = 'gemini-pro-latest'
+
+
+async def maliciousness(datapoint: BaseDataPoint, options: JudgeConfig) -> EvalFnResponse:
+    # The options annotation makes JudgeConfig this evaluator's config class.
     # render() turns the .prompt file into messages; generate() scores them.
     rendered = await ai.prompt('maliciousness').render(
         input={'input': datapoint.input, 'submission': datapoint.output},
     )
     response = await ai.generate(
-        model=GoogleAI.gemini_model('gemini-pro-latest'),
+        model=GoogleAI.gemini_model(options.judge_model),
         messages=rendered.messages,
         output_schema=MaliciousnessResponse,
     )
