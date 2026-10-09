@@ -35,7 +35,7 @@ from genkit.plugin_api import mark_provider_error
 
 
 def _refresh_credentials(
-    project_id: str | None,
+    project: str | None,
 ) -> tuple[google.auth.credentials.Credentials, str]:
     """Resolve and refresh Google Cloud credentials (blocking I/O).
 
@@ -43,10 +43,10 @@ def _refresh_credentials(
     ``asyncio.to_thread`` so the event loop is never blocked.
 
     Args:
-        project_id: Explicit project ID, or None to auto-detect.
+        project: Explicit project ID, or None to auto-detect.
 
     Returns:
-        A (credentials, project_id) tuple with a refreshed token.
+        A (credentials, project) tuple with a refreshed token.
 
     Raises:
         GenkitError: UNAUTHENTICATED when ADC is missing or the refresh is
@@ -56,12 +56,12 @@ def _refresh_credentials(
             TransportError propagate unchanged.
     """
     credentials: google.auth.credentials.Credentials
-    resolved_project_id: str | None = project_id
+    resolved_project: str | None = project
     try:
-        if project_id:
+        if project:
             credentials, _ = auth.default()
         else:
-            credentials, resolved_project_id = auth.default()
+            credentials, resolved_project = auth.default()
 
         credentials.refresh(google.auth.transport.requests.Request())
     except (DefaultCredentialsError, RefreshError) as e:
@@ -75,19 +75,19 @@ def _refresh_credentials(
             )
         ) from e
 
-    if not resolved_project_id:
+    if not resolved_project:
         raise GenkitError(
             status='FAILED_PRECONDITION',
-            message='Could not determine project_id from credentials or arguments.',
+            message='Could not determine project from credentials or arguments.',
         )
 
-    return credentials, resolved_project_id
+    return credentials, resolved_project
 
 
-def _openai_base_url(*, location: str, project_id: str) -> str:
+def _openai_base_url(*, location: str, project: str) -> str:
     return (
         f'https://{location}-aiplatform.googleapis.com/v1beta1'
-        f'/projects/{project_id}/locations/{location}/endpoints/openapi'
+        f'/projects/{project}/locations/{location}/endpoints/openapi'
     )
 
 
@@ -98,65 +98,30 @@ class CachedOpenAI:
     server keeps one HTTP pool and doesn't 401 after the token dies.
     """
 
-    def __init__(self, *, location: str, project_id: str | None) -> None:
+    def __init__(self, *, location: str, project: str | None) -> None:
         """Hold location and project until the first generate builds the client."""
         self._location = location
-        self._project_id = project_id
+        self._project = project
         self._credentials: google.auth.credentials.Credentials | None = None
-        self._resolved_project_id: str | None = None
+        self._resolved_project: str | None = None
         self._client: _AsyncOpenAI | None = None
 
     async def get(self) -> _AsyncOpenAI:
         """Return the cached client, refreshing the token only when it has expired."""
         if self._credentials is None or not self._credentials.valid:
-            self._credentials, self._resolved_project_id = await asyncio.to_thread(
-                _refresh_credentials, self._project_id
-            )
+            self._credentials, self._resolved_project = await asyncio.to_thread(_refresh_credentials, self._project)
             token = self._credentials.token
             if not token:
                 raise ValueError('Google credentials did not return an access token.')
-            if self._resolved_project_id is None:
-                raise ValueError('Could not determine project_id from credentials or arguments.')
+            if self._resolved_project is None:
+                raise ValueError('Could not determine project from credentials or arguments.')
             if self._client is None:
                 self._client = _AsyncOpenAI(
                     api_key=token,
-                    base_url=_openai_base_url(location=self._location, project_id=self._resolved_project_id),
+                    base_url=_openai_base_url(location=self._location, project=self._resolved_project),
                 )
             else:
                 self._client.api_key = token
         if self._client is None:
             raise RuntimeError('Model Garden OpenAI client was not built after credential refresh.')
         return self._client
-
-
-class OpenAIClient:
-    """Factory for AsyncOpenAI clients authenticated via Google Cloud.
-
-    Use the async ``create()`` classmethod instead of direct instantiation
-    to avoid blocking the event loop during credential refresh.
-    """
-
-    @classmethod
-    async def create(cls, **openai_params: object) -> _AsyncOpenAI:
-        """Create an AsyncOpenAI client with refreshed Google credentials.
-
-        Runs the blocking ``credentials.refresh()`` call in a thread so
-        the event loop is never blocked.
-
-        Args:
-            **openai_params: Must include ``location`` and optionally
-                ``project_id``.
-
-        Returns:
-            A configured AsyncOpenAI client.
-        """
-        location = str(openai_params.get('location') or '')
-        project_id_str = str(val) if (val := openai_params.get('project_id')) is not None else None
-
-        # Offload blocking credential refresh to a thread.
-        credentials, resolved_project_id = await asyncio.to_thread(_refresh_credentials, project_id_str)
-
-        return _AsyncOpenAI(
-            api_key=credentials.token,
-            base_url=_openai_base_url(location=location, project_id=resolved_project_id),
-        )
