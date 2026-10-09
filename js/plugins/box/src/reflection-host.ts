@@ -34,6 +34,37 @@ export interface ConnectedRuntimeInfo {
 export enum HostEvent {
   RUNTIME_CONNECT = 'runtimeConnect',
   RUNTIME_DISCONNECT = 'runtimeDisconnect',
+  /** A runtime's `register` was refused (missing or invalid secret). */
+  RUNTIME_REJECTED = 'runtimeRejected',
+}
+
+/** A runtime whose `register` was refused, and why. */
+export interface RejectedRuntimeInfo extends ConnectedRuntimeInfo {
+  reason: 'missing-secret' | 'invalid-secret';
+}
+
+/**
+ * The minimum Genkit version whose runtimes present a reflection secret. Older
+ * runtimes connect without one and are rejected.
+ */
+const MIN_SECRET_GENKIT_VERSION = '1.43';
+
+function rejectionMessage(info: RejectedRuntimeInfo): string {
+  const who =
+    `Box runtime ${info.id} (pid ${info.pid ?? '?'}` +
+    `${info.genkitVersion ? `, genkit ${info.genkitVersion}` : ''})`;
+  return info.reason === 'missing-secret'
+    ? `${who} was rejected: it did not present a reflection secret. Boxed ` +
+        `runtimes need genkit >= ${MIN_SECRET_GENKIT_VERSION}.`
+    : `${who} was rejected: invalid reflection secret.`;
+}
+
+function timeoutMessage(timeoutMs: number): string {
+  return (
+    `Timed out after ${timeoutMs}ms waiting for box runtime to connect. ` +
+    `Check that it starts, initializes Genkit, and supports reflection v2 ` +
+    `(genkit >= ${MIN_SECRET_GENKIT_VERSION}).`
+  );
 }
 
 interface JsonRpcRequest {
@@ -161,8 +192,16 @@ export class ReflectionHost {
 
   /** Subscribe to a host lifecycle event. Returns an unsubscribe function. */
   on(
-    event: HostEvent,
+    event: HostEvent.RUNTIME_REJECTED,
+    listener: (info: RejectedRuntimeInfo) => void
+  ): () => void;
+  on(
+    event: HostEvent.RUNTIME_CONNECT | HostEvent.RUNTIME_DISCONNECT,
     listener: (info: ConnectedRuntimeInfo) => void
+  ): () => void;
+  on(
+    event: HostEvent,
+    listener: (info: RejectedRuntimeInfo) => void
   ): () => void {
     this.emitter.on(event, listener);
     return () => this.emitter.off(event, listener);
@@ -178,7 +217,8 @@ export class ReflectionHost {
 
   /**
    * Waits until a runtime with the given id connects (or any runtime, when no
-   * id is provided). Rejects on timeout.
+   * id is provided). Rejects on timeout, or as soon as that runtime is
+   * rejected (e.g. it presented no secret).
    */
   waitForRuntime(
     id?: string,
@@ -188,15 +228,28 @@ export class ReflectionHost {
       return Promise.resolve(this.runtimes.get(id)!.info);
     }
     return new Promise((resolve, reject) => {
+      const done = () => {
+        clearTimeout(timer);
+        unsubConnect();
+        unsubReject();
+      };
       const timer = setTimeout(() => {
-        unsub();
-        reject(new Error('Timed out waiting for box runtime to connect'));
+        done();
+        reject(new Error(timeoutMessage(timeoutMs)));
       }, timeoutMs);
-      const unsub = this.on(HostEvent.RUNTIME_CONNECT, (info) => {
+      const unsubConnect = this.on(HostEvent.RUNTIME_CONNECT, (info) => {
         if (!id || info.id === id) {
-          clearTimeout(timer);
-          unsub();
+          done();
           resolve(info);
+        }
+      });
+      // A rejected runtime never connects; fail now rather than at the
+      // timeout. Only for a specific id: with none, a stray rejected runtime
+      // says nothing about the one being waited for.
+      const unsubReject = this.on(HostEvent.RUNTIME_REJECTED, (info) => {
+        if (id && info.id === id) {
+          done();
+          reject(new Error(rejectionMessage(info)));
         }
       });
     });
@@ -250,10 +303,15 @@ export class ReflectionHost {
       this.secret !== undefined &&
       (!params.secret || !secretsEqual(params.secret, this.secret))
     ) {
-      logger.warn(
-        `Box runtime ${params.id} (pid ${params.pid}) rejected: ` +
-          `${params.secret ? 'invalid' : 'missing'} reflection secret.`
-      );
+      const rejected: RejectedRuntimeInfo = {
+        id: params.id,
+        pid: params.pid,
+        name: params.name,
+        genkitVersion: params.genkitVersion,
+        reason: params.secret ? 'invalid-secret' : 'missing-secret',
+      };
+      logger.warn(rejectionMessage(rejected));
+      this.emitter.emit(HostEvent.RUNTIME_REJECTED, rejected);
       const close = () => ws.close(WS_POLICY_VIOLATION, 'unauthorized');
       if (request.id) {
         // The auth error code tells the runtime not to reconnect. Close only

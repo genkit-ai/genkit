@@ -331,6 +331,37 @@ describe('ReflectionHost auth', () => {
     });
   }
 
+  it('fails waitForRuntime right away when the runtime is rejected', async () => {
+    host = new ReflectionHost({ secret: 's3cret' });
+    await host.start();
+    const started = Date.now();
+    const waiting = host.waitForRuntime('old', 10_000);
+    const rt = new FakeRuntime(host, 'old', {}, { secret: undefined });
+    await assert.rejects(waiting, /did not present a reflection secret/);
+    assert.ok(Date.now() - started < 5_000, 'did not wait for the timeout');
+    await rt.ready.catch(() => {});
+  });
+
+  it('a rejected runtime does not fail a wait for a different one', async () => {
+    host = new ReflectionHost({ secret: 's3cret' });
+    await host.start();
+    const waiting = host.waitForRuntime('good', 10_000);
+    const bad = new FakeRuntime(host, 'bad', {}, { secret: 'nope' });
+    await bad.ready.catch(() => {});
+    const good = new FakeRuntime(host, 'good');
+    assert.strictEqual((await waiting).id, 'good');
+    good.close();
+  });
+
+  it('names the likely causes on timeout', async () => {
+    host = new ReflectionHost();
+    await host.start();
+    await assert.rejects(
+      host.waitForRuntime('never', 10),
+      /Timed out after 10ms .*reflection v2/
+    );
+  });
+
   it('accepts any runtime when auth is off', async () => {
     host = new ReflectionHost({ secret: false });
     await host.start();

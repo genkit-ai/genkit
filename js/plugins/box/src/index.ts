@@ -35,6 +35,7 @@ export {
   ReflectionHost,
   type ConnectedRuntimeInfo,
   type ReflectionHostOptions,
+  type RejectedRuntimeInfo,
 } from './reflection-host.js';
 export {
   SHARED_KEY,
