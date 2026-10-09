@@ -9,7 +9,7 @@ from collections.abc import Awaitable, Callable
 
 import pytest
 
-from genkit import FinishReason, Genkit, Message, ModelResponse, Part, Role
+from genkit import ActionRunContext, FinishReason, Genkit, Message, ModelResponse, Part, Role
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
 from genkit.model import ModelRequest, model
 from genkit.plugin_api import Action, ActionKind, ActionMetadata, Plugin
@@ -25,7 +25,7 @@ def _answer(text: str) -> ModelResponse:
 
 
 def _define_answering_model(ai: Genkit, name: str, text: str) -> None:
-    async def fn(request: ModelRequest) -> ModelResponse:
+    async def fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
         return _answer(text)
 
     ai.define_model(name=name, fn=fn)
@@ -43,7 +43,7 @@ class LazyPlugin(Plugin):
         if action_type != ActionKind.MODEL or name != 'fast':
             return None
 
-        async def fn(request: ModelRequest) -> ModelResponse:
+        async def fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
             return _answer('from lazy fast')
 
         return model(name, fn)
