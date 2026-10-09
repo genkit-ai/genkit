@@ -99,7 +99,7 @@ Every sample below runs on its own with `go run .`, and its package comment expl
 | [basic‑agents](samples/basic-agents) | Multi-turn agents (inline, prompt-file, and custom-loop) with snapshots and background detach |
 | [basic‑agents‑server](samples/basic-agents-server/main.go) | Serving store-backed and stateless agents over HTTP |
 | [basic‑tool‑interrupts](samples/basic-tool-interrupts/main.go) | Human in the loop (HITL): a tool that pauses for approval and resumes with the answer |
-| [basic‑middleware](samples/basic-middleware) | Model middleware, one program each: [retry-fallback](samples/basic-middleware/retry-fallback/main.go) composes `Retry` and `Fallback` into a cascade that survives a dead model, [filesystem](samples/basic-middleware/filesystem) gives the model file access scoped to a single directory, and [skills](samples/basic-middleware/skills) loads `SKILL.md` personas on demand |
+| [basic‑middleware](samples/basic-middleware) | Model middleware, one program each: [retry-fallback](samples/basic-middleware/retry-fallback/main.go) composes `Retry` and `Fallback` into a cascade that survives a dead model, [filesystem](samples/basic-middleware/filesystem) gives the model file access scoped to a single directory, [skills](samples/basic-middleware/skills) loads `SKILL.md` personas on demand, and [budget](samples/basic-middleware/budget/main.go) caps what a tool loop spends, then stops it or pauses it for approval |
 | [basic‑errors](samples/basic-errors/main.go) | Classifying failures with sentinels and recovering with `errors.Is` |
 | [basic‑durable‑streaming‑exp](samples/basic-durable-streaming-exp/main.go) | Reconnectable streams with replay, on the in-preview `core/x/streaming` API |
 
@@ -866,6 +866,8 @@ The `middleware` plugin also ships with:
 - [`Skills`](samples/basic-middleware/skills) — exposes a library of `SKILL.md` files following the [Agent Skills](https://agentskills.io) specification, so a skill written for any compliant agent works here. Scans `.agents/skills` and `skills` by default, on disk or inside `SkillFS`, so skills can ship in the binary through `//go:embed`. The model sees each skill's name and description, loads one on demand through `use_skill`, and reads the files a skill bundles through `read_skill_file` when `AllowResourceAccess` is set. `Preload` injects a skill up front when the application, rather than the model, decides it applies.
 
 [See the retry + fallback sample](samples/basic-middleware/retry-fallback/main.go) for a full composition.
+
+The experimental [`Budget`](plugins/middleware/exp/budget.go) middleware (in `plugins/middleware/exp`) caps what a generate run or an agent session may spend, in any `ai.GenerationUsage` field (tokens, media, or a provider-reported cost), then stops the run with `ai.ErrBudgetExceeded` or, for a run with `Interrupt` set, pauses its tool calls until the caller approves them: `middlewarex.BudgetInterrupted(part)` claims each held call, `call.Restart(middlewarex.BudgetDecision{Approved: true})` approves another full limit, and any other restart stops the run. A run counts across its resumes, so answering another middleware's interrupt does not renew it. [See the budget sample](samples/basic-middleware/budget/main.go) for both.
 
 ### Custom Middleware
 
