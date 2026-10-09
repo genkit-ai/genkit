@@ -43,3 +43,4 @@ def test_surfaces_config_accepts_wire_names() -> None:
     assert SurfacesConfig.model_validate({'validate': 'off', 'surfaceId': 'order-card'}) == typed
     assert Surfaces(validation='off', surface_id='order-card').config == typed
     assert Surfaces(config=typed).config.validation == 'off'
+    assert Surfaces(validate='strict').config.validation == 'strict'

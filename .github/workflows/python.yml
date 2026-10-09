@@ -121,7 +121,7 @@ jobs:
 
       - name: Type check with Pyright
         if: matrix.checker == 'pyright'
-        run: cd py && uv run pyright packages/*/src
+        run: cd py && uv run pyright packages/*/src packages/*/tests/config_typing_test.py
 
   # =============================================================================
   # Security and compliance checks

@@ -26,12 +26,11 @@ from typing import Any, Literal, TypeAlias
 from google import genai
 from google.genai import types as genai_types
 from google.genai.errors import APIError
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
-from pydantic.alias_generators import to_camel
+from pydantic import Field, ValidationError, model_validator
 
 from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, Operation, Part, Role
 from genkit.model import ModelInfo, ModelRequest, OperationError, Supports
-from genkit.plugin_api import wrap_http_error
+from genkit.plugin_api import PluginConfig, wrap_http_error
 from genkit_google_genai._auth import GOOGLE_AUTH_ERRORS, raise_auth_error
 from genkit_google_genai._constants import is_multi_regional_location, multi_regional_base_url
 from genkit_google_genai._models._sdk_config import (
@@ -69,10 +68,9 @@ def is_veo_model(name: str) -> bool:
     return name.split('/')[-1].lower().startswith('veo-')
 
 
-class VeoConfig(BaseModel):
+class VeoConfig(PluginConfig):
     """Veo Config Schema."""
 
-    model_config = ConfigDict(extra='forbid', validate_by_name=True, validate_by_alias=True, alias_generator=to_camel)
     number_of_videos: int | None = Field(default=None)
     generate_audio: bool | None = Field(default=None)
     fps: int | None = Field(default=None)

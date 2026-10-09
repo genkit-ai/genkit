@@ -21,9 +21,27 @@ from __future__ import annotations
 import abc
 from typing import ClassVar
 
+from pydantic import BaseModel, ConfigDict
+from pydantic.alias_generators import to_camel
+
 from genkit._core._action import Action, ActionKind, set_action_name
 from genkit._core._middleware import GenerateMiddleware
 from genkit._core._typing import ActionMetadata
+
+
+class PluginConfig(BaseModel):
+    """Base configuration model for plugins, middleware, and nested options.
+
+    Accepts snake_case kwargs in Python code and camelCase from serialized JSON/wire.
+    Rejects unrecognized extra kwargs to prevent typos in configuration.
+    """
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        alias_generator=to_camel,
+        extra='forbid',
+        validate_by_name=True,
+        validate_by_alias=True,
+    )
 
 
 def resolved_action_name(*, plugin: str, requested_id: str) -> str:

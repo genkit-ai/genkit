@@ -38,7 +38,6 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from pydantic.alias_generators import to_camel
 
 from genkit import (
     ActionRunContext,
@@ -62,7 +61,7 @@ from genkit.model import (
     ToolDefinition,
     get_basic_usage_stats,
 )
-from genkit.plugin_api import wrap_http_error
+from genkit.plugin_api import PluginConfig, wrap_http_error
 from genkit_google_genai._auth import GOOGLE_AUTH_ERRORS, raise_auth_error
 from genkit_google_genai._constants import is_multi_regional_location, multi_regional_base_url
 from genkit_google_genai._models._context_caching._constants import DEFAULT_TTL
@@ -168,25 +167,22 @@ class HarmBlockThreshold(StrEnum):
 # it is sent as (named in its docstring), so a key the SDK accepts never fails
 # the unknown-key check. googlegenai_gemini_test.py pins the field sets.
 #
-# No field passes alias=. The camelCase wire name comes from alias_generator,
-# so type checkers see the snake_case field name as the constructor kwarg and
-# runtime still accepts both spellings.
-_NESTED_CONFIG = ConfigDict(extra='forbid', validate_by_name=True, validate_by_alias=True, alias_generator=to_camel)
+# Each strict nested class below declares every field of the google.genai type
+# it is sent as (named in its docstring), so a key the SDK accepts never fails
+# the unknown-key check. googlegenai_gemini_test.py pins the field sets.
 
 
-class SafetySettingsSchema(BaseModel):
+class SafetySettingsSchema(PluginConfig):
     """Safety settings schema. Sent as ``genai_types.SafetySetting``."""
 
-    model_config = _NESTED_CONFIG
     category: HarmCategory
     threshold: HarmBlockThreshold
     method: genai_types.HarmBlockMethod | None = None
 
 
-class PrebuiltVoiceConfig(BaseModel):
+class PrebuiltVoiceConfig(PluginConfig):
     """Prebuilt voice config. Sent as ``genai_types.PrebuiltVoiceConfig``."""
 
-    model_config = _NESTED_CONFIG
     voice_name: str | None = Field(default=None)
 
 
@@ -199,10 +195,9 @@ class FunctionCallingMode(StrEnum):
     NONE = 'NONE'
 
 
-class FunctionCallingConfig(BaseModel):
+class FunctionCallingConfig(PluginConfig):
     """Function calling config. Sent as ``genai_types.FunctionCallingConfig``."""
 
-    model_config = _NESTED_CONFIG
     mode: FunctionCallingMode | None = None
     allowed_function_names: list[str] | None = Field(default=None)
     stream_function_call_arguments: bool | None = Field(default=None)
@@ -217,19 +212,17 @@ class ThinkingLevel(StrEnum):
     HIGH = 'HIGH'
 
 
-class ThinkingConfig(BaseModel):
+class ThinkingConfig(PluginConfig):
     """Thinking config. Sent as ``genai_types.ThinkingConfig``."""
 
-    model_config = _NESTED_CONFIG
     include_thoughts: bool | None = Field(default=None)
     thinking_budget: int | None = Field(default=None)
     thinking_level: ThinkingLevel | None = Field(default=None)
 
 
-class FileSearchConfig(BaseModel):
+class FileSearchConfig(PluginConfig):
     """File search config. Sent as ``genai_types.FileSearch``."""
 
-    model_config = _NESTED_CONFIG
     file_search_store_names: list[str] | None = Field(default=None)
     metadata_filter: str | None = Field(default=None)
     top_k: int | None = Field(default=None)
@@ -258,10 +251,9 @@ class ImageSize(StrEnum):
     SIZE_4K = '4K'
 
 
-class ImageConfig(BaseModel):
+class ImageConfig(PluginConfig):
     """Image config. Sent as ``genai_types.ImageConfig``."""
 
-    model_config = _NESTED_CONFIG
     aspect_ratio: ImageAspectRatio | None = Field(default=None)
     image_size: ImageSize | None = Field(default=None)
     output_mime_type: str | None = Field(default=None)
@@ -271,10 +263,9 @@ class ImageConfig(BaseModel):
     image_output_options: genai_types.ImageConfigImageOutputOptions | None = Field(default=None)
 
 
-class VoiceConfig(BaseModel):
+class VoiceConfig(PluginConfig):
     """Voice config. Sent as ``genai_types.VoiceConfig``."""
 
-    model_config = _NESTED_CONFIG
     prebuilt_voice_config: PrebuiltVoiceConfig | None = Field(default=None)
     replicated_voice_config: genai_types.ReplicatedVoiceConfig | None = Field(default=None)
 
@@ -539,25 +530,22 @@ class GeminiConfig(ModelConfig):
     )
 
 
-class SpeakerVoiceConfig(BaseModel):
+class SpeakerVoiceConfig(PluginConfig):
     """Speaker voice config. Sent as ``genai_types.SpeakerVoiceConfig``."""
 
-    model_config = _NESTED_CONFIG
     speaker: str | None = None
     voice_config: VoiceConfig | None = Field(default=None)
 
 
-class MultiSpeakerVoiceConfig(BaseModel):
+class MultiSpeakerVoiceConfig(PluginConfig):
     """Multi-speaker voice config. Sent as ``genai_types.MultiSpeakerVoiceConfig``."""
 
-    model_config = _NESTED_CONFIG
     speaker_voice_configs: list[SpeakerVoiceConfig] | None = Field(default=None)
 
 
-class SpeechConfig(BaseModel):
+class SpeechConfig(PluginConfig):
     """Speech config. Sent as ``genai_types.SpeechConfig``."""
 
-    model_config = _NESTED_CONFIG
     voice_config: VoiceConfig | None = Field(default=None)
     language_code: str | None = Field(default=None)
     multi_speaker_voice_config: MultiSpeakerVoiceConfig | None = Field(default=None)

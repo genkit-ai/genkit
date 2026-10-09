@@ -23,13 +23,13 @@ import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
-from pydantic.alias_generators import to_camel
+from pydantic import Field
 
 from genkit import FinishReason, Message, ModelResponse, ModelResponseChunk, Part, Role
 from genkit._core._model import ABNORMAL_FINISH_REASONS
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
 from genkit.model import ModelRequest
+from genkit.plugin_api import PluginConfig
 
 from ._catalog import A2uiCatalog, render_catalog_instructions
 from ._loader import resolve_catalog
@@ -46,10 +46,8 @@ from ._types import DEFAULT_VERSION, SURFACE_KEYS, Envelope, SupportedVersion, V
 SKIP_REWRITE_FINISH_REASONS = ABNORMAL_FINISH_REASONS | {FinishReason.UNKNOWN}
 
 
-class SurfacesConfig(BaseModel):
+class SurfacesConfig(PluginConfig):
     """Options for :class:`Surfaces`."""
-
-    model_config = ConfigDict(extra='forbid', validate_by_name=True, validate_by_alias=True, alias_generator=to_camel)
 
     instructions: Literal['system', 'none'] = 'system'
     # 'off' passes envelopes through unchecked, 'warn' logs and drops the
