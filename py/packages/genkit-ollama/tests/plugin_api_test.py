@@ -33,7 +33,7 @@ from pydantic import BaseModel
 from genkit import Document, Genkit, GenkitError, Message, ModelResponse, Part, Role
 from genkit.embedder import EmbedRequest
 from genkit.model import ModelRequest
-from genkit.plugin_api import ActionKind, to_json_schema
+from genkit.plugin_api import ActionKind, custom_options_schema
 
 
 class TestOllamaInit(unittest.TestCase):
@@ -173,7 +173,7 @@ async def test_create_model_action_custom_options_is_ollama_config() -> None:
     action = plugin._create_model_action('m')
 
     model_meta = cast(dict[str, Any], cast(dict[str, Any], action.metadata)['model'])
-    assert model_meta['customOptions'] == to_json_schema(OllamaConfig)
+    assert model_meta['customOptions'] == custom_options_schema(OllamaConfig)
     props = cast(dict[str, Any], model_meta['customOptions']['properties'])
     assert 'think' in props
     assert 'keepAlive' in props

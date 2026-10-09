@@ -61,11 +61,10 @@ from genkit._ai._model import (
     ModelResponse,
     ModelResponseChunk,
     background_model_name,
-    call_config_class,
     check_call_config,
     define_model,
-    layer_call_config,
     python_config_schema,
+    resolve_call_config,
     resolve_for_generate,
 )
 from genkit._ai._prompt import (
@@ -1205,19 +1204,14 @@ class Genkit:
                 reason=RuntimeErrorReason.ACTION_NOT_FOUND,
             )
         ref = embedder if isinstance(embedder, EmbedderRef) else None
-        schema = call_config_class(
+        _, options = resolve_call_config(
             name=name,
             kind='embedder',
-            ref_schema=ref.config_schema if ref else None,
             action_schema=python_config_schema(action.config_schema),
-        )
-        check_call_config(config=config, schema=schema, model=name)
-        options = layer_call_config(
             call=config,
+            ref_schema=ref.config_schema if ref else None,
             version=ref.version if ref else None,
             ref_config=ref.config if ref else None,
-            has_ref=ref is not None,
-            schema=schema,
         )
         return action, options
 
@@ -1784,15 +1778,13 @@ class Genkit:
                 message=f"Evaluator '{evaluator_name}' not found.",
                 reason=RuntimeErrorReason.ACTION_NOT_FOUND,
             )
-        schema = call_config_class(
+        _, final_options = resolve_call_config(
             name=evaluator_name,
             kind='evaluator',
-            ref_schema=ref.config_schema if ref else None,
             action_schema=python_config_schema(eval_action.config_schema),
-        )
-        check_call_config(config=config, schema=schema, model=evaluator_name)
-        final_options = layer_call_config(
-            call=config, ref_config=ref.config if ref else None, has_ref=ref is not None, schema=schema
+            call=config,
+            ref_schema=ref.config_schema if ref else None,
+            ref_config=ref.config if ref else None,
         )
 
         if not eval_run_id:

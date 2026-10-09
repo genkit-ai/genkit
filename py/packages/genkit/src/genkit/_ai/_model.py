@@ -43,6 +43,7 @@ from genkit._core._model import (
     ModelRequest,
     ModelResponse,
     ModelResponseChunk,
+    check_config_dict as check_config_dict,
     config_field_names as config_field_names,
     config_type_path,
     fold_config_aliases as fold_config_aliases,
@@ -54,7 +55,7 @@ from genkit._core._model import (
     text_from_message,
 )
 from genkit._core._registry import Registry
-from genkit._core._schema import to_json_schema
+from genkit._core._schema import custom_options_schema, to_json_schema
 from genkit._core._typing import ActionMetadata, GenerationCommonConfig, ModelInfo
 
 # Type alias for model functions (must be async)
@@ -213,14 +214,14 @@ def resolve_call_model(
     default ref's version and config. The merged bag is a dict so overlay
     can happen; ModelRequest is what turns it back into an object.
 
-    The outgoing bag has no ``None`` values — name or ref — so the plugin
-    sees a missing key rather than null. ``schema`` is the class aliases fold
-    to (see call_config_class); a ref's own class when omitted.
+    An explicit ``None`` is a value and reaches the model. ``schema`` is the
+    class aliases fold to (see call_config_class); a ref's own class when
+    omitted.
     """
     resolved = resolve_model_arg(model=model, registry=registry, message=message)
     if isinstance(resolved, ModelRef):
         return resolve_model_ref(model=resolved, config=normalize_config(config=config), schema=schema)
-    return ResolvedModel(name=resolved, config=layer_call_config(call=config))
+    return ResolvedModel(name=resolved, config=layer_call_config(call=config, schema=schema))
 
 
 def layer_call_config(
@@ -228,18 +229,14 @@ def layer_call_config(
     call: object,
     version: str | None = None,
     ref_config: object = None,
-    has_ref: bool = False,
     schema: type[BaseModel] | None = None,
 ) -> dict[str, Any]:
     """``ref.version < ref.config < call``: the merge generate, embed and evaluate share.
 
-    Each layer is the fields it set (normalize_config). With a ref, layers
-    overlay with aliases folded to ``schema``'s field names. Explicit
-    ``None`` clears the layer below and never reaches the fn. With no ref
-    the call's keys stay as written.
+    Each layer is the fields it set (normalize_config, deep-copied), folded
+    to the keys ``schema`` accepts. An explicit ``None`` is a value: it wins
+    over lower layers and goes to validation.
     """
-    if not has_ref:
-        return {key: value for key, value in normalize_config(config=call).items() if value is not None}
     layers: list[dict[str, Any]] = []
     if version is not None:
         layers.append({'version': version})
@@ -275,6 +272,27 @@ def call_config_class(
         ),
         reason=RuntimeErrorReason.INVALID_INPUT,
     )
+
+
+def resolve_call_config(
+    *,
+    name: str,
+    kind: str,
+    action_schema: type[BaseModel] | None,
+    call: object,
+    ref_schema: type[BaseModel] | None = None,
+    version: str | None = None,
+    ref_config: object = None,
+) -> tuple[type[BaseModel] | None, dict[str, Any]]:
+    """The class a call checks against and its layered config, for embed and evaluate.
+
+    call_config_class, then check_call_config on the call's config, then
+    layer_call_config: the same steps resolve_for_generate takes.
+    """
+    schema = call_config_class(name=name, kind=kind, ref_schema=ref_schema, action_schema=action_schema)
+    check_call_config(config=call, schema=schema, model=name)
+    config = layer_call_config(call=call, version=version, ref_config=ref_config, schema=schema)
+    return schema, config
 
 
 async def resolve_for_generate(
@@ -319,8 +337,7 @@ def config_schema_at_define(*, model: object | None, registry: Registry) -> tupl
     if isinstance(resolved, ModelRef):
         return resolved.name, python_config_schema(resolved.config_schema)
     action = registry.registered_action(ActionKind.MODEL, resolved)
-    raw = getattr(action, '_config_schema', None) if action is not None else None
-    return resolved, python_config_schema(raw)
+    return resolved, python_config_schema(action.config_schema) if action is not None else None
 
 
 def resolve_model_ref(
@@ -338,7 +355,6 @@ def resolve_model_ref(
             call=config,
             version=model.version,
             ref_config=model.config,
-            has_ref=True,
             schema=schema or model.config_schema,
         ),
         config_schema=python_config_schema(model.config_schema),
@@ -357,7 +373,7 @@ def model_action_metadata(
         name=name,
         input_json_schema=to_json_schema(ModelRequest),
         output_json_schema=to_json_schema(ModelResponse),
-        metadata={'model': {**info, 'customOptions': to_json_schema(config_schema) if config_schema else None}},
+        metadata={'model': {**info, 'customOptions': custom_options_schema(config_schema) if config_schema else None}},
     )
 
 
@@ -467,7 +483,7 @@ def model(
         )
 
     if config_schema:
-        model_options['customOptions'] = to_json_schema(config_schema)
+        model_options['customOptions'] = custom_options_schema(config_schema)
 
     model_meta: dict[str, object] = metadata.copy() if metadata else {}
     model_meta['model'] = model_options
@@ -482,7 +498,7 @@ def model(
     )
     # Annotation only: the Dev UI form comes from ModelRequest[Cfg].
     if 'customOptions' not in model_options and action.config_schema is not None:
-        model_options['customOptions'] = to_json_schema(action.config_schema)
+        model_options['customOptions'] = custom_options_schema(action.config_schema)
     return action
 
 
@@ -530,71 +546,6 @@ def assert_correct_config_class(
         message=f'{model}: {body}' if model else body,
         reason=RuntimeErrorReason.INVALID_INPUT,
     )
-
-
-def check_config_dict(*, config: object, schema: type[BaseModel] | None, model: str) -> None:
-    """A dict config has to fit the model's class before anything is sent.
-
-    Layers merge by top-level key, so a missing top-level field is fine
-    here — another layer may supply it. A nested object is sent whole, so
-    a missing field inside one raises. ``None`` means "clear the default"
-    and isn't checked.
-    """
-    if schema is None or not isinstance(config, Mapping):
-        return
-    layer = {key: value for key, value in cast(Mapping[str, Any], config).items() if value is not None}
-    try:
-        schema.model_validate(layer)
-    except ValidationError as e:
-        problems = [err for err in e.errors() if not (err['type'] == 'missing' and len(err['loc']) == 1)]
-        if not problems:
-            return
-        raise GenkitError(
-            status='INVALID_ARGUMENT',
-            message=f'{model}: {_describe_config_problems(problems, layer=layer, schema=schema)}',
-            reason=RuntimeErrorReason.INVALID_INPUT,
-            cause=e,
-        ) from e
-
-
-def _describe_config_problems(
-    problems: Sequence[Mapping[str, Any]], *, layer: Mapping[str, Any], schema: type[BaseModel]
-) -> str:
-    # pydantic binds one spelling of a setting and calls the other unknown;
-    # the caller didn't misspell anything, they wrote the setting twice.
-    names = config_field_names(schema)
-    repeated: dict[str, list[str]] = {}
-    unknown: list[str] = []
-    for err in problems:
-        if err['type'] != 'extra_forbidden':
-            continue
-        key = _config_path(err['loc'])
-        field = names.get(key) if len(err['loc']) == 1 else None
-        spellings = [k for k in layer if field and names.get(k) == field]
-        if field and len(spellings) > 1:
-            repeated[field] = sorted(spellings, key=lambda k: k != field)
-        else:
-            unknown.append(key)
-    parts = [f'{_join_words(spellings)} are the same setting; pass one' for spellings in repeated.values()]
-    if unknown:
-        keys = ', '.join(repr(key) for key in unknown)
-        noun = 'key' if len(unknown) == 1 else 'keys'
-        parts.append(f"unknown config {noun} {keys}; put provider-only settings in config['extra']")
-    parts.extend(
-        f'config {_config_path(err["loc"])!r}: {err["msg"]}' for err in problems if err['type'] != 'extra_forbidden'
-    )
-    return '; '.join(parts)
-
-
-def _join_words(words: list[str]) -> str:
-    """`a and b`, or `a, b, and c` for three or more."""
-    if len(words) <= 2:
-        return ' and '.join(words)
-    return f'{", ".join(words[:-1])}, and {words[-1]}'
-
-
-def _config_path(loc: tuple[int | str, ...]) -> str:
-    return '.'.join(str(part) for part in loc)
 
 
 def check_call_config(*, config: object, schema: type[BaseModel] | None, model: str) -> None:

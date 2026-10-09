@@ -35,7 +35,7 @@ from genkit.plugin_api import (
     ActionKind,
     ActionMetadata,
     Plugin,
-    to_json_schema,
+    custom_options_schema,
 )
 from genkit_amazon_bedrock.config import (
     DEFAULT_TOTAL_TIMEOUT,
@@ -227,7 +227,7 @@ class Bedrock(Plugin):
                     'supports': (
                         model_info.supports.model_dump(by_alias=True, exclude_none=True) if model_info.supports else {}
                     ),
-                    'customOptions': to_json_schema(BedrockImageConfig if is_image else BedrockConfig),
+                    'customOptions': custom_options_schema(BedrockImageConfig if is_image else BedrockConfig),
                 },
             },
         )

@@ -80,6 +80,7 @@ from genkit.plugin_api import (
     ActionKind,
     ActionMetadata,
     Plugin,
+    custom_options_schema,
     loop_local_client,
     to_json_schema,
 )
@@ -507,7 +508,7 @@ def _veo_background_action_metadata(name: str) -> ActionMetadata:
         metadata={
             'model': {
                 **veo_model_info(local).model_dump(by_alias=True),
-                'customOptions': to_json_schema(VeoConfig),
+                'customOptions': custom_options_schema(VeoConfig),
             },
             'type': 'background-model',
         },
@@ -886,7 +887,7 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
                     metadata={
                         'model': {
                             **deep_research_model_info(name).model_dump(by_alias=True),
-                            'customOptions': to_json_schema(DeepResearchConfig),
+                            'customOptions': custom_options_schema(DeepResearchConfig),
                         },
                         'type': 'background-model',
                     },

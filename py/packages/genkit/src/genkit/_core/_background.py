@@ -28,7 +28,7 @@ from genkit._core._action import Action, ActionKind, ActionRunContext, get_curre
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import ModelRequest, ModelResponse
 from genkit._core._registry import Registry
-from genkit._core._schema import to_json_schema
+from genkit._core._schema import custom_options_schema, to_json_schema
 from genkit._core._typing import (
     ModelInfo,
     Operation,
@@ -329,7 +329,7 @@ def background_model(
     model_options['label'] = label
 
     if config_schema:
-        model_options['customOptions'] = to_json_schema(config_schema)
+        model_options['customOptions'] = custom_options_schema(config_schema)
 
     model_meta['model'] = model_options
 
@@ -347,7 +347,7 @@ def background_model(
     )
     # Annotation only: the Dev UI form comes from ModelRequest[Cfg].
     if 'customOptions' not in model_options and start_action.config_schema is not None:
-        model_options['customOptions'] = to_json_schema(start_action.config_schema)
+        model_options['customOptions'] = custom_options_schema(start_action.config_schema)
 
     check_action = _operation_action(
         kind=ActionKind.CHECK_OPERATION,

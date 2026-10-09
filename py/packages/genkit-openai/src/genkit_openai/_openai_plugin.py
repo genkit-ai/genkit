@@ -48,8 +48,8 @@ from genkit.plugin_api import (
     ActionKind,
     ActionMetadata,
     Plugin,
+    custom_options_schema,
     loop_local_client,
-    to_json_schema,
 )
 from genkit_openai._models import (
     SUPPORTED_EMBEDDING_MODELS,
@@ -502,7 +502,7 @@ class OpenAI(Plugin):
             metadata={
                 'model': {
                     **model_info,
-                    'customOptions': to_json_schema(OpenAIConfig),
+                    'customOptions': custom_options_schema(OpenAIConfig),
                 },
             },
         )

@@ -172,8 +172,12 @@ def build_stability_image_body(prompt: str, config: dict[str, Any]) -> dict[str,
 
 
 def _image_config_dict(config: dict[str, Any]) -> dict[str, Any]:
-    """Copies a config dict, dropping Genkit's generic generation knobs."""
-    return {key: value for key, value in config.items() if key not in _GENKIT_CONFIG_KEYS}
+    """Copies a config dict, dropping Genkit's generic generation knobs.
+
+    A key set to None is dropped too, the same as a dumped model config, so
+    it falls back to the body default instead of sending null.
+    """
+    return {key: value for key, value in config.items() if key not in _GENKIT_CONFIG_KEYS and value is not None}
 
 
 def _normalize_image_config(config: Any) -> dict[str, Any]:  # noqa: ANN401

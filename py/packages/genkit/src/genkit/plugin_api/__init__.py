@@ -31,7 +31,7 @@ from genkit._core._error import (
 from genkit._core._loop_cache import loop_local_client
 from genkit._core._middleware import new_middleware
 from genkit._core._plugin import MiddlewarePlugin, Plugin
-from genkit._core._schema import to_json_schema
+from genkit._core._schema import custom_options_schema, to_json_schema
 from genkit._core._typing import ActionMetadata
 
 __all__ = [
@@ -55,5 +55,6 @@ __all__ = [
     # Environment detection
     'is_dev_environment',
     # Schema utilities
+    'custom_options_schema',
     'to_json_schema',
 ]

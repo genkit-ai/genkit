@@ -27,7 +27,7 @@ from typing_extensions import Never, TypeVar
 from genkit._core._action import Action, ActionKind, get_func_description, with_request_annotation
 from genkit._core._model import Document, EmbedRequest, check_ref_config, check_ref_info
 from genkit._core._registry import Registry
-from genkit._core._schema import to_json_schema
+from genkit._core._schema import custom_options_schema, to_json_schema
 from genkit._core._typing import ActionMetadata, EmbedResponse
 
 
@@ -205,7 +205,7 @@ def embedder(
     )
     # EmbedderInfo.config_schema is an explicit Dev UI override; else the class.
     if embedder_info.get('customOptions') is None and action.config_schema is not None:
-        embedder_info['customOptions'] = to_json_schema(action.config_schema)
+        embedder_info['customOptions'] = custom_options_schema(action.config_schema)
     return action
 
 

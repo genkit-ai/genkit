@@ -264,11 +264,13 @@ def extract_config_dict(request: ModelRequest) -> dict[str, Any]:
 
     Returns:
         A mutable copy of the config as a dictionary, or an empty dict.
+        A key set to None is left out, the same as a dumped Pydantic config,
+        so callers' ``pop(key, default)`` falls back to the plugin default.
     """
     if not request.config:
         return {}
     if isinstance(request.config, dict):
-        return request.config.copy()
+        return {key: value for key, value in request.config.items() if value is not None}
     if hasattr(request.config, 'model_dump'):
         return request.config.model_dump(exclude_none=True)
     return {}

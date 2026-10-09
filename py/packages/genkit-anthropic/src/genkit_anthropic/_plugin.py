@@ -28,8 +28,8 @@ from genkit.plugin_api import (
     ActionKind,
     ActionMetadata,
     Plugin,
+    custom_options_schema,
     loop_local_client,
-    to_json_schema,
 )
 from genkit_anthropic._config import AnthropicConfig
 from genkit_anthropic._model_info import SUPPORTED_ANTHROPIC_MODELS, KnownClaude, get_model_info
@@ -202,7 +202,7 @@ class Anthropic(Plugin):
                     'supports': (
                         model_info.supports.model_dump(by_alias=True, exclude_none=True) if model_info.supports else {}
                     ),
-                    'customOptions': to_json_schema(AnthropicConfig),
+                    'customOptions': custom_options_schema(AnthropicConfig),
                 },
             },
         )

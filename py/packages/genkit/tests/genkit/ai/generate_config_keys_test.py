@@ -20,7 +20,7 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
 from genkit import Genkit, Message, ModelResponse, Part
 from genkit._core._action import ActionKind, ActionRunContext
 from genkit._core._error import GenkitError
-from genkit._core._model import ModelRef, ModelRequest
+from genkit._core._model import FinishReason, ModelRef, ModelRequest
 from genkit._core._typing import GenerationCommonConfig, Operation, Role
 from genkit.model import ModelConfig, model_ref
 
@@ -188,12 +188,12 @@ async def test_generate_wrong_type_config_value_raises_invalid_argument() -> Non
 
 @pytest.mark.asyncio
 async def test_generate_camel_case_key_alone_reaches_model() -> None:
-    """`{'maxOutputTokens': 5}` is the same declared setting, so it's accepted and reaches the model."""
+    """`{'maxOutputTokens': 5}` is the same declared setting; it reaches the model under the key the class accepts."""
     ai, fn = _ai_with_model()
 
     await ai.generate(model='strict', prompt='hi', config={'maxOutputTokens': 5})
 
-    assert _config_value(fn.requests[-1].config, 'maxOutputTokens') == 5
+    assert fn.requests[-1].config == {'max_output_tokens': 5}
 
 
 @pytest.mark.asyncio
@@ -519,13 +519,14 @@ async def test_generate_three_spellings_of_one_setting_lists_all_three() -> None
 
 
 @pytest.mark.asyncio
-async def test_generate_none_on_one_spelling_is_not_a_second_spelling() -> None:
-    """`{'maxOutputTokens': 5, 'max_output_tokens': None}` runs: None is unset, so only one spelling is set."""
+async def test_generate_none_on_one_spelling_is_still_a_second_spelling() -> None:
+    """`{'maxOutputTokens': 5, 'max_output_tokens': None}` raises: an explicit None is a value."""
     ai, fn = _ai_with_model()
 
-    await ai.generate(model='strict', prompt='hi', config={'maxOutputTokens': 5, 'max_output_tokens': None})
+    with pytest.raises(GenkitError) as err:
+        await ai.generate(model='strict', prompt='hi', config={'maxOutputTokens': 5, 'max_output_tokens': None})
 
-    assert fn.requests[-1].config == {'maxOutputTokens': 5}
+    _assert_rejected(err, fn, 'max_output_tokens and maxOutputTokens are the same setting')
 
 
 @pytest.mark.asyncio
@@ -549,8 +550,8 @@ async def test_generate_both_spellings_typo_and_bad_value_all_in_one_error() -> 
 
 
 @pytest.mark.asyncio
-async def test_prompt_call_other_model_clearing_prompt_key_with_none_runs() -> None:
-    """A Gemini prompt called with `model='other', config={'thinkingConfig': None}` runs and sends no thinkingConfig."""
+async def test_prompt_call_other_model_with_none_for_a_prompt_only_key_raises() -> None:
+    """`model='other', config={'thinkingConfig': None}` raises: None is a value, and other has no thinkingConfig."""
     ai = Genkit()
     gem = _Model()
     other = _Model()
@@ -563,12 +564,10 @@ async def test_prompt_call_other_model_clearing_prompt_key_with_none_runs() -> N
         config={'thinkingConfig': {'thinkingBudget': 0}},
     )
 
-    response = await prompt(model='other', config={'thinkingConfig': None})
+    with pytest.raises(GenkitError) as err:
+        await prompt(model='other', config={'thinkingConfig': None})
 
-    assert response.text == 'ok'
-    assert other.requests
-    assert _config_value(other.requests[-1].config, 'thinkingConfig') is None
-    assert _config_value(other.requests[-1].config, 'thinking_config') is None
+    _assert_rejected(err, other, "unknown config key 'thinkingConfig'")
     assert gem.requests == []
 
 
@@ -606,14 +605,16 @@ async def test_generate_incomplete_nested_setting_raises_naming_the_missing_fiel
 
 
 @pytest.mark.asyncio
-async def test_generate_missing_required_top_level_field_in_one_layer_still_runs() -> None:
-    """A required top-level field missing from the call dict still runs; another layer may supply it."""
+async def test_generate_missing_required_top_level_field_fails_at_the_model() -> None:
+    """The call check lets a missing required field through; the model's boundary does not."""
     ai, fn = _ai_with_model(config_schema=RequiredTopConfig, name='needs')
 
     response = await ai.generate(model='needs', prompt='hi', config={'temperature': 0.2})
 
-    assert response.text == 'ok'
-    assert _config_value(fn.requests[-1].config, 'temperature') == 0.2
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.finish_message is not None
+    assert "needs: config 'must': Field required" in response.finish_message
+    assert fn.requests == []
 
 
 @pytest.mark.asyncio

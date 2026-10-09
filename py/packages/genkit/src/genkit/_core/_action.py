@@ -17,6 +17,7 @@
 """Action module for defining and managing remotely callable functions."""
 
 import asyncio
+import functools
 import inspect
 import json
 import re
@@ -41,6 +42,7 @@ from typing import (
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from pydantic.alias_generators import to_camel
 from pydantic.errors import PydanticInvalidForJsonSchema, PydanticSchemaGenerationError, PydanticUserError
+from pydantic.fields import FieldInfo
 from typing_extensions import TypeVar
 
 from genkit._core._channel import Channel, CloseableQueue
@@ -51,12 +53,14 @@ from genkit._core._model import (
     EvalRequest,
     ModelRequest,
     ModelResponse,
+    config_default_fields,
     config_defaults,
     config_type_path,
     declared_config_type,
     normalize_config,
     overlay_config,
     reject_config_api_key,
+    validate_config_dict,
 )
 from genkit._core._schema import to_json_schema
 from genkit._core._telemetry._attrs import Attr, metadata_key
@@ -451,10 +455,10 @@ def with_request_annotation(
         return fn
     target = inputs[0].name
 
+    @functools.wraps(fn)
     async def forward(*args: Any, **kwargs: Any) -> _CallT:  # noqa: ANN401
         return await fn(*args, **kwargs)
 
-    forward.__doc__ = fn.__doc__
     forward.__annotations__ = {**hints, target: request_type}
     parameters = [p.replace(annotation=request_type) if p.name == target else p for p in sig.parameters.values()]
     setattr(forward, '__signature__', sig.replace(parameters=parameters))  # noqa: B010
@@ -864,6 +868,10 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         self._fn_is_wrapper: bool = metadata_fn is not None
         self._initialize_io_schemas(hints)
         self._config_schema = self._resolve_config_class(self._config_schema)
+        # Which fields can contribute a default; the values are copied per run.
+        self._config_default_fields: list[tuple[str, FieldInfo]] = (
+            config_default_fields(self._config_schema) if self._config_schema is not None else []
+        )
         self._initialize_init_schema(init_schema)
 
     def _resolve_config_class(self, declared: type[BaseModel] | None) -> type[BaseModel] | None:
@@ -1154,28 +1162,29 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             ) from e
 
     def _layer_config_defaults(self, input: InputT | None) -> InputT | None:
-        """Put the config class's non-None defaults under the request's config.
+        """Normalize the request's config against the definition-time class.
 
-        Every caller (ai.*, a ref, the Dev UI, the CLI) reaches the fn
-        through here, so the definition's defaults can't be skipped. Defaults
-        come only from the definition-time class, never from a ref.
+        Every caller (ai.* by name or ref, the Dev UI, the CLI) reaches the fn
+        through here, so they all see the same values. Only actions with a
+        config class are touched, and defaults come only from that class.
 
-        - Untyped fn: defaults < the request's config, aliases folded to field
-          names, handed over as a dict.
-        - Typed fn: validation fills defaults; only a missing model config
-          needs the class built.
+        - Typed fn: a missing config (``config=None``) becomes the class
+          built from its defaults, so the fn always gets an instance. A class
+          that can't build from defaults raises INVALID_ARGUMENT. Otherwise
+          request validation fills defaults and checks values.
+        - Untyped fn: non-None defaults < the request's config, folded to the
+          keys the class accepts and validated against the class, so a bad
+          value raises INVALID_ARGUMENT the same as through ai.*. The fn gets
+          the merged dict as written, not pydantic's coerced values:
+          ModelConfig declares ``max_output_tokens`` as a float, and an
+          untyped plugin should still send the caller's ``5``, not ``5.0``.
 
-        Explicit None is dropped from the incoming config, so the definition's
-        default applies, the same as when ai.* drops it while layering refs.
-
-        A class with no non-None defaults leaves the input untouched.
+        An explicit None in the config is a value: it wins over the default
+        and goes to validation.
         """
         field = config_field(self._kind)
         schema = self._config_schema
         if field is None or schema is None:
-            return input
-        defaults = config_defaults(schema)
-        if not defaults:
             return input
         if isinstance(input, Mapping):
             current = cast(Mapping[str, Any], input).get(field)
@@ -1183,26 +1192,37 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             current = getattr(input, field, None)
         else:
             return input
-        is_mapping = isinstance(current, Mapping) and not isinstance(current, BaseModel)
-        value: object
-        if self._input_class is not None and declared_config_type(self._input_class) is not None:
-            if is_mapping:
-                value = {k: v for k, v in cast(Mapping[str, Any], current).items() if v is not None}
-            elif current is None:
-                try:
-                    value = schema.model_validate({})
-                except ValidationError:
-                    return input  # required fields: validation reports what is missing
-            else:
-                return input
-        elif current is None or is_mapping or isinstance(current, schema):
-            layer = {k: v for k, v in normalize_config(config=current).items() if v is not None}
-            value = overlay_config(layers=[defaults, layer], schema=schema)
-        else:
-            return input  # a foreign class or a non-mapping: leave it for validation to report
+        try:
+            value = self._normalized_config(current, schema=schema, field=field)
+        except GenkitError as e:
+            raise mark_request_error(error=e)  # noqa: B904 - same error, marked as the caller's
+        if value is current:
+            return input
         if isinstance(input, Mapping):
             return cast(InputT, {**cast(Mapping[str, Any], input), field: value})
         return cast(InputT, cast(BaseModel, input).model_copy(update={field: value}))
+
+    def _normalized_config(self, current: object, *, schema: type[BaseModel], field: str) -> object:
+        """The config value _layer_config_defaults puts on the request (``current`` when unchanged)."""
+        if self._input_class is not None and declared_config_type(self._input_class) is not None:
+            if current is not None:
+                return current
+            return validate_config_dict(config={}, schema=schema, label=self.name)
+        if isinstance(current, BaseModel) and not isinstance(current, schema):
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=(
+                    f'{self.name}: {field} must be {config_type_path(schema)} or a mapping, '
+                    f'got {config_type_path(type(current))}'
+                ),
+                reason=RuntimeErrorReason.INVALID_INPUT,
+            )
+        if current is not None and not isinstance(current, (Mapping, BaseModel)):
+            return current  # request validation reports the wrong type
+        defaults = config_defaults(schema, self._config_default_fields)
+        merged = overlay_config(layers=[defaults, normalize_config(config=current)], schema=schema)
+        validate_config_dict(config=merged, schema=schema, label=self.name)
+        return merged
 
     def _validate_input(self, input: InputT | None) -> InputT | None:
         """Validate caller input against the action schema when one is registered."""

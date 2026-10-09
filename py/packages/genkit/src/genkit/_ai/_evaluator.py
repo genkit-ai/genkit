@@ -38,7 +38,7 @@ from genkit._core._action import (
 from genkit._core._logger import get_logger
 from genkit._core._model import EvalRequest, check_ref_config
 from genkit._core._registry import Registry
-from genkit._core._schema import to_json_schema
+from genkit._core._schema import custom_options_schema, to_json_schema
 from genkit._core._telemetry._attrs import metadata_key
 from genkit._core._telemetry._instrumentation import SpanContext, run_in_new_span
 from genkit._core._typing import (
@@ -127,7 +127,7 @@ def _set_custom_options(evaluator_meta: dict[str, object], action: Action) -> No
     """Annotation only: the Dev UI form comes from the options class."""
     info = evaluator_meta.get('evaluator')
     if isinstance(info, dict) and 'customOptions' not in info and action.config_schema is not None:
-        cast(dict[str, object], info)['customOptions'] = to_json_schema(action.config_schema)
+        cast(dict[str, object], info)['customOptions'] = custom_options_schema(action.config_schema)
 
 
 def _evaluator_metadata(
@@ -150,7 +150,7 @@ def _evaluator_metadata(
     if not isinstance(label, str) or not label:
         info['label'] = name
     if config_schema:
-        info['customOptions'] = to_json_schema(config_schema)
+        info['customOptions'] = custom_options_schema(config_schema)
     return evaluator_meta
 
 
