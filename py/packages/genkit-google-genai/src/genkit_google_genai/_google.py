@@ -144,6 +144,7 @@ from genkit_google_genai._models._routing import (
     is_unsupported_image_model_name,
     strip_ref_prefixes,
 )
+from genkit_google_genai._models._sdk_config import copy_http_options
 from genkit_google_genai._models._veo import (
     KnownVeo,
     VeoConfig,
@@ -1328,10 +1329,11 @@ def _inject_attribution_headers(
         opts = HttpOptions()
     elif isinstance(http_options, HttpOptions):
         # Copy so plugin-derived settings never mutate the caller's object
-        # (which may be shared across plugin instances).
-        opts = http_options.model_copy(deep=True)
+        # (which may be shared across plugin instances). User httpx/aiohttp
+        # clients stay shared; they can't be deep-copied.
+        opts = copy_http_options(http_options)
     else:
-        opts = HttpOptions.model_validate(http_options)
+        opts = copy_http_options(HttpOptions.model_validate(http_options))
 
     if base_url:
         opts.base_url = base_url
