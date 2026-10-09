@@ -23,8 +23,6 @@ import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Literal
 
-from pydantic import Field
-
 from genkit import FinishReason, Message, ModelResponse, ModelResponseChunk, Part, Role
 from genkit._core._model import ABNORMAL_FINISH_REASONS
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
@@ -54,10 +52,10 @@ class SurfacesConfig(PluginConfig):
     # offending block, 'strict' kills the turn. Default is 'warn' because a
     # single hallucinated component should not cost the whole answer.
     #
-    # The JSON key is 'validate' (matches JS), but a field by that name would
-    # shadow BaseModel.validate. The Python kwarg is validation=; runtime
-    # also accepts validate=.
-    validation: ValidateMode = Field(default='warn', validation_alias='validate', serialization_alias='validate')
+    # Named validation, not validate (JS's option name), because a field
+    # called validate would shadow BaseModel.validate. This is in-process
+    # middleware config, not a cross-SDK wire format, so the names can differ.
+    validation: ValidateMode = 'warn'
     surface_id: str | None = None
     # Registry id from load_catalog. The Developer UI lists those same ids.
     catalog: str | None = None
