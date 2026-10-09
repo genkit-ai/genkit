@@ -533,6 +533,23 @@ async def test_list_actions_never_advertise_imagen(mock_client: MagicMock, backe
 @patch('genkit_google_genai._google.genai.client.Client')
 @patch('genkit_google_genai._google._list_genai_models')
 @pytest.mark.asyncio
+async def test_vertexai_veo_listing_has_input_schema(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
+    """A listed Veo model carries ModelRequest[VeoConfig] as input_schema and Operation as output_schema."""
+    catalog = GenaiModels()
+    catalog.veo = ['veo-3.0-generate-001']
+    mock_list_models.return_value = catalog
+
+    listed = await VertexAI(project='test-project').list_actions()
+
+    [veo] = [a for a in listed if a.name == 'vertexai/veo-3.0-generate-001']
+    assert veo.action_type == ActionKind.BACKGROUND_MODEL
+    assert veo.input_schema == to_json_schema(ModelRequest[VeoConfig])
+    assert veo.output_schema == to_json_schema(Operation)
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
 async def test_googleai_resolve_embedder(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
     """Test GoogleAI plugin resolves embedder actions."""
     mock_list_models.return_value = GenaiModels()

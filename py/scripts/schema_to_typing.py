@@ -58,6 +58,17 @@ TRANSFORMATIONS = {
     # docs= always goes into the prompt and nothing in Python reads
     # supports.context, so the field isn't emitted.
     'Supports': {'omit': ['context']},
+    # The Dev UI gets one inputSchema / outputSchema per action. A second
+    # field would let a plugin set a schema that never reaches it.
+    'ActionMetadata': {'omit': ['inputJsonSchema', 'outputJsonSchema']},
+}
+
+# Per-field Python types that are stricter than the shared schema.
+FIELD_TYPE_OVERRIDES = {
+    # These are what the Dev UI renders as the action's input and output
+    # forms, so they have to be JSON schemas, not model classes.
+    ('ActionMetadata', 'inputSchema'): 'dict[str, Any]',
+    ('ActionMetadata', 'outputSchema'): 'dict[str, Any]',
 }
 
 
@@ -349,6 +360,7 @@ def _emit_model(
             py_type_str = 'dict[str, Any]'
         if name == 'MessageData' and k == 'role':
             py_type_str = 'Role | str'
+        py_type_str = FIELD_TYPE_OVERRIDES.get((name, k), py_type_str)
         desc = v.get('description')
         desc_extra = f', description={repr(desc)}' if desc else ''
         if name == 'EvalFnResponse' and field_name == 'evaluation':

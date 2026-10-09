@@ -57,6 +57,7 @@ from genkit._core._reflection_v2 import (
 from genkit._core._registry import Registry
 from genkit._core._typing import ReflectionRunActionParams
 from genkit.model import model_ref
+from genkit.plugin_api import ActionMetadata, Plugin
 
 
 @pytest.fixture(autouse=True)
@@ -231,6 +232,46 @@ async def test_reflection_server_v2_list_actions(fake_manager: FakeReflectionMan
                 },
             }
         }
+    finally:
+        await _stop_client(client, task)
+
+
+class ListingPlugin(Plugin):
+    """Lists one model row with a request and response schema."""
+
+    name = 'acme'
+
+    async def init(self) -> list[Action]:
+        return []
+
+    async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
+        return None
+
+    async def list_actions(self) -> list[ActionMetadata]:
+        return [
+            ActionMetadata(
+                action_type=ActionKind.MODEL,
+                name='acme/m',
+                input_schema={'type': 'object', 'properties': {'prompt': {'type': 'string'}}},
+                output_schema={'type': 'object', 'properties': {'text': {'type': 'string'}}},
+            )
+        ]
+
+
+@pytest.mark.asyncio
+async def test_reflection_v2_list_actions_uses_input_schema(fake_manager: FakeReflectionManager) -> None:
+    """A plugin row's input_schema and output_schema reach listActions as inputSchema and outputSchema."""
+    ai = Genkit(plugins=[ListingPlugin()])
+
+    client, task = await _run_client_lifecycle(ai.registry, fake_manager)
+    try:
+        await ack_register(fake_manager)
+        await fake_manager.write_rpc({'jsonrpc': '2.0', 'method': 'listActions', 'id': '1'})
+        resp = await fake_manager.read_rpc()
+        assert resp.get('id') == '1'
+        listed = resp['result']['actions']['/model/acme/m']
+        assert listed['inputSchema'] == {'type': 'object', 'properties': {'prompt': {'type': 'string'}}}
+        assert listed['outputSchema'] == {'type': 'object', 'properties': {'text': {'type': 'string'}}}
     finally:
         await _stop_client(client, task)
 

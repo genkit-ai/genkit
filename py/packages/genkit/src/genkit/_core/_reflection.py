@@ -256,8 +256,8 @@ def create_reflection_asgi_app(
                 'name': action.name,
                 'description': action.description,
                 'metadata': action.metadata,
-                'inputSchema': action.input_schema or action.input_json_schema,
-                'outputSchema': action.output_schema or action.output_json_schema,
+                'inputSchema': action.input_schema or None,
+                'outputSchema': action.output_schema or None,
             })
 
         return JSONResponse(response, headers={'x-genkit-version': version})

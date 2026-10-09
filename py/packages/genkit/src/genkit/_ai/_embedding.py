@@ -104,8 +104,8 @@ def embedder_action_metadata(
     return ActionMetadata(
         action_type=ActionKind.EMBEDDER,
         name=name,
-        input_json_schema=to_json_schema(EmbedRequest),
-        output_json_schema=to_json_schema(EmbedResponse),
+        input_schema=to_json_schema(EmbedRequest),
+        output_schema=to_json_schema(EmbedResponse),
         metadata=embedder_metadata_dict,
     )
 

@@ -230,6 +230,22 @@ async def test_list_actions(ollama_plugin_instance: Ollama) -> None:
     assert has_embedder
 
 
+@pytest.mark.asyncio
+async def test_ollama_listed_model_keeps_input_schema(ollama_plugin_instance: Ollama) -> None:
+    """A model from list_actions carries the ModelRequest schema, and resolving it keeps that schema."""
+    client_mock = MagicMock()
+    client_mock.list = AsyncMock(return_value=MagicMock(models=[MagicMock(model='llama3')]))
+    ollama_plugin_instance.client = lambda: client_mock
+
+    [listed] = await ollama_plugin_instance.list_actions()
+    action = await ollama_plugin_instance.resolve(ActionKind.MODEL, ollama_name('llama3'))
+
+    assert listed.name == ollama_name('llama3')
+    assert listed.input_schema == to_json_schema(ModelRequest)
+    assert action is not None
+    assert action.input_schema == to_json_schema(ModelRequest)
+
+
 def test_timeout_stored() -> None:
     """A timeout kwarg is stored on the plugin."""
     plugin = Ollama(timeout=30.0)

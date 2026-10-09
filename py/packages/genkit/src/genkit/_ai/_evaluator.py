@@ -116,8 +116,8 @@ def evaluator_action_metadata(
     return ActionMetadata(
         action_type=ActionKind.EVALUATOR,
         name=name,
-        input_json_schema=to_json_schema(EvalRequest),
-        output_json_schema=to_json_schema(list[EvalFnResponse]),
+        input_schema=to_json_schema(EvalRequest),
+        output_schema=to_json_schema(list[EvalFnResponse]),
         metadata=_evaluator_metadata(name, display_name, definition, is_billed, config_schema),
     )
 
