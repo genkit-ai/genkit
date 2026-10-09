@@ -72,22 +72,22 @@ const (
 // With Interrupt set, a run-scoped budget pauses instead: the tool calls
 // that would lead to the next turn are held, for the caller to decide whether
 // to continue. [BudgetInterrupted] claims each held call, [BudgetExceeded] is
-// what it carries, and a restart continues the run with the full limit again:
+// what it carries, and a restart with a [BudgetDecision] decides it:
 //
 //	for _, part := range resp.Interrupts() {
 //		if call, ok := middlewarex.BudgetInterrupted(part); ok {
-//			parts = append(parts, call.Restart(nil))
+//			parts = append(parts, call.Restart(middlewarex.BudgetDecision{Approved: true}))
 //		}
 //	}
 //
-// To stop instead, do not resume. A session-scoped budget cannot pause, since
+// A session-scoped budget cannot pause, since
 // a later turn would start over its limit with nothing to pause on; New
 // rejects the combination.
 //
 // A run-scoped budget counts one run across its resumes. The run's final
 // message records what it spent, and a resume of that conversation continues
 // from there, so answering another middleware's interrupt, such as a
-// ToolApproval hold, does not renew the limit; only answering the budget's own
+// ToolApproval hold, does not renew the limit; only approving the budget's own
 // hold does. A conversation the caller sends back without that record, which
 // a client-managed history can do, starts the count over.
 type Budget struct {
@@ -112,12 +112,26 @@ type BudgetExceeded struct {
 	Limit map[string]float64 `json:"limit"`
 }
 
+// BudgetDecision is the answer to a [Budget] hold, sent with
+// [ai.InterruptedCall.Restart] on the call [BudgetInterrupted] claims. The
+// holds of one run share one decision: the run continues only if no restart
+// of them refuses.
+type BudgetDecision struct {
+	// Approved decides the run: true continues it with the full limit
+	// again, and false, the zero value, stops it with [ai.ErrBudgetExceeded]
+	// before it runs the held calls.
+	Approved bool `json:"budgetApproved"`
+	// Reason, when Approved is false, is added to the error the run stops
+	// with.
+	Reason string `json:"reason,omitempty"`
+}
+
 // BudgetInterrupted claims part for [Budget]: it reports whether part is a
-// call a budget held and, when it is, returns the call. Restart it with nil to
-// continue the run. Every Budget in a chain claims the same holds. See
+// call a budget held and, when it is, returns the call, to be answered with a
+// [BudgetDecision]. Every Budget in a chain claims the same holds. See
 // [ai.MiddlewareInterrupted].
-func BudgetInterrupted(part *ai.Part) (*ai.InterruptedCall[any, any, map[string]any], bool) {
-	return ai.MiddlewareInterrupted[map[string]any](Budget{}.Name(), part)
+func BudgetInterrupted(part *ai.Part) (*ai.InterruptedCall[any, any, BudgetDecision], bool) {
+	return ai.MiddlewareInterrupted[BudgetDecision](Budget{}.Name(), part)
 }
 
 // budgetRecord is what a run-scoped budget writes on the run's final message,
@@ -198,6 +212,8 @@ type budgetState struct {
 	// session is the agent session's usage when the run started; nil for
 	// run scope.
 	session *ai.GenerationUsage
+	// refusal is set when the resume refuses one of the budget's holds.
+	refusal *BudgetDecision
 
 	mu sync.Mutex
 	// tree counts every model call under the run, subagents included.
@@ -215,6 +231,14 @@ func (s *budgetState) wrapGenerate(ctx context.Context, params *ai.GenerateParam
 		ctx = tracing.WithInstrumentation(ctx, aix.Observer{ModelDone: s.count})
 		if s.session == nil {
 			s.resume(params)
+		}
+		if s.refusal != nil {
+			logger.Debug(ctx, "run stopped by budget: continuing was refused", "reason", s.refusal.Reason)
+			msg := "continuing past the limit was refused"
+			if s.refusal.Reason != "" {
+				msg += ": " + s.refusal.Reason
+			}
+			return nil, status.Errorf(ai.ErrBudgetExceeded, "budget: %s", msg)
 		}
 	}
 	// A resume's first turn runs the restarted calls before any model call,
@@ -243,8 +267,10 @@ func (s *budgetState) wrapGenerate(ctx context.Context, params *ai.GenerateParam
 }
 
 // resume continues the count of the run params resumes, from the record on
-// its last message, unless the resume answers one of the budget's holds,
-// which renews the limit. A call that is not a resume starts from zero.
+// its last message, unless the resume restarts one of the budget's holds,
+// which decides the run: approved, the limit is renewed; refused, the run
+// stops. A response directive for a hold decides nothing. A call that is not
+// a resume starts from zero.
 func (s *budgetState) resume(params *ai.GenerateParams) {
 	opts, msgs := params.Options, params.Request.Messages
 	if opts == nil || opts.Resume == nil || len(msgs) == 0 {
@@ -254,11 +280,24 @@ func (s *budgetState) resume(params *ai.GenerateParams) {
 	if last.Role != ai.RoleModel {
 		return
 	}
-	answers := slices.Concat(opts.Resume.Restart, opts.Resume.Respond)
+	approved := false
 	for _, p := range last.Content {
-		if _, ok := BudgetInterrupted(p); ok && slices.ContainsFunc(answers, func(a *ai.Part) bool { return answersRequest(a, p.ToolRequest) }) {
-			return
+		if _, ok := BudgetInterrupted(p); !ok {
+			continue
 		}
+		for _, a := range opts.Resume.Restart {
+			if !answersRequest(a, p.ToolRequest) {
+				continue
+			}
+			if d := budgetDecision(a); d.Approved {
+				approved = true
+			} else if s.refusal == nil {
+				s.refusal = &d
+			}
+		}
+	}
+	if approved || s.refusal != nil {
+		return
 	}
 	rec, ok := base.ConvertTo[budgetRecord](last.Metadata[Budget{}.Name()])
 	if !ok || rec.Spent == nil {
@@ -267,6 +306,19 @@ func (s *budgetState) resume(params *ai.GenerateParams) {
 	s.mu.Lock()
 	s.tree = ai.SumUsage(s.tree, rec.Spent)
 	s.mu.Unlock()
+}
+
+// budgetDecision reads the decision restart carries. A bare restart, or one
+// whose payload does not decode, refuses.
+func budgetDecision(restart *ai.Part) BudgetDecision {
+	if restart.Restart == nil {
+		return BudgetDecision{}
+	}
+	if d, ok := restart.Restart.Resume.(BudgetDecision); ok {
+		return d
+	}
+	d, _ := base.ConvertTo[BudgetDecision](restart.Restart.Resume)
+	return d
 }
 
 // answersRequest reports whether a, a restart or a response directive,

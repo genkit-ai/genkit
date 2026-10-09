@@ -262,8 +262,8 @@ func TestBudgetRejectsAnUnenforceableSessionBudget(t *testing.T) {
 }
 
 // With Interrupt, a run that reaches its limit pauses at its tool calls and
-// says what it spent against which limit; restarting them continues with a
-// fresh count.
+// says what it spent against which limit. A restart that does not approve
+// stops the run; an approval continues it with a fresh count.
 func TestBudgetInterruptPausesTheRun(t *testing.T) {
 	g := newTestGenkit(t)
 	var calls atomic.Int32
@@ -292,14 +292,29 @@ func TestBudgetInterruptPausesTheRun(t *testing.T) {
 		t.Errorf("hold = %v spent of %v, want 20 of 15", data.Spent, data.Limit)
 	}
 
-	// Answering the budget's own hold renews the limit.
-	resp, err = genkit.Generate(ctx, g,
-		ai.WithModel(m),
-		ai.WithMessages(resp.History()...),
-		ai.WithTools(step),
-		ai.WithResume(call.Restart(nil)),
-		ai.WithUse(budget),
-	)
+	resume := func(decision BudgetDecision) (*ai.ModelResponse, error) {
+		return genkit.Generate(ctx, g,
+			ai.WithModel(m),
+			ai.WithMessages(resp.History()...),
+			ai.WithTools(step),
+			ai.WithResume(call.Restart(decision)),
+			ai.WithUse(budget),
+		)
+	}
+
+	// A restart that does not approve stops the run before the held call
+	// runs, with the caller's reason.
+	before := calls.Load()
+	refused, err := resume(BudgetDecision{Reason: "too costly"})
+	if !errors.Is(err, ai.ErrBudgetExceeded) || !strings.Contains(err.Error(), "too costly") {
+		t.Fatalf("refused resume = %v, want ErrBudgetExceeded with the reason", err)
+	}
+	if refused == nil || refused.FinishReason != ai.FinishReasonAborted || calls.Load() != before {
+		t.Errorf("refused resume = %+v after %d more model calls, want aborted after none", refused, calls.Load()-before)
+	}
+
+	// Approving the budget's own hold renews the limit.
+	resp, err = resume(BudgetDecision{Approved: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -357,9 +372,11 @@ func TestBudgetCountsARunAcrossResumes(t *testing.T) {
 		t.Fatalf("model called %d times, want 1: the approval must not buy another turn", n)
 	}
 
-	// Answering the budget renews it, and the run finishes.
+	// Approving the budget renews it, and the run finishes. The approval
+	// crosses the wire too, so the budget reads it by its JSON shape.
 	cont, _ := BudgetInterrupted(held)
-	resp, err = generate(ai.WithMessages(overWire(resp.History())...), ai.WithResume(cont.Restart(nil)))
+	approved := overWire([]*ai.Message{ai.NewModelMessage(cont.Restart(BudgetDecision{Approved: true}))})[0].Content[0]
+	resp, err = generate(ai.WithMessages(overWire(resp.History())...), ai.WithResume(approved))
 	if err != nil {
 		t.Fatal(err)
 	}

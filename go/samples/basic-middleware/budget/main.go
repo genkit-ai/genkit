@@ -119,13 +119,13 @@ func main() {
 				break
 			}
 			// The budget held the tool calls that would lead to the next
-			// turn. Restarting them approves another maxTokens.
+			// turn. Approving them grants another maxTokens.
 			var approvals []*ai.Part
 			for _, part := range resp.Interrupts() {
 				if call, ok := middlewarex.BudgetInterrupted(part); ok {
 					hold, _ := ai.InterruptAs[middlewarex.BudgetExceeded](call.Part)
 					log.Printf("%s, approving more", hold.Message)
-					approvals = append(approvals, call.Restart(nil))
+					approvals = append(approvals, call.Restart(middlewarex.BudgetDecision{Approved: true}))
 				}
 			}
 			resp, err = genkit.Generate(ctx, g,

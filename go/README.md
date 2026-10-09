@@ -867,7 +867,7 @@ The `middleware` plugin also ships with:
 
 [See the retry + fallback sample](samples/basic-middleware/retry-fallback/main.go) for a full composition.
 
-The experimental [`Budget`](plugins/middleware/exp/budget.go) middleware (in `plugins/middleware/exp`) caps what a generate run or an agent session may spend, in any `ai.GenerationUsage` field (tokens, media, or a provider-reported cost), then stops the run with `ai.ErrBudgetExceeded` or, for a run with `Interrupt` set, pauses its tool calls until the caller approves them: `middlewarex.BudgetInterrupted(part)` claims each held call and `call.Restart(nil)` approves another full limit. A run counts across its resumes, so answering another middleware's interrupt does not renew it. [See the budget sample](samples/basic-middleware/budget/main.go) for both.
+The experimental [`Budget`](plugins/middleware/exp/budget.go) middleware (in `plugins/middleware/exp`) caps what a generate run or an agent session may spend, in any `ai.GenerationUsage` field (tokens, media, or a provider-reported cost), then stops the run with `ai.ErrBudgetExceeded` or, for a run with `Interrupt` set, pauses its tool calls until the caller approves them: `middlewarex.BudgetInterrupted(part)` claims each held call, `call.Restart(middlewarex.BudgetDecision{Approved: true})` approves another full limit, and any other restart stops the run. A run counts across its resumes, so answering another middleware's interrupt does not renew it. [See the budget sample](samples/basic-middleware/budget/main.go) for both.
 
 ### Custom Middleware
 
