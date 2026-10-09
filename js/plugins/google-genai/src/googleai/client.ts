@@ -653,7 +653,7 @@ async function makeRequest(
     }
     return response;
   } catch (e: unknown) {
-    logger.error(e);
+    logger.debug(e);
     if (e instanceof GenkitError) {
       throw e;
     }
