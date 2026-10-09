@@ -27,35 +27,10 @@ from genkit_anthropic import AnthropicConfig
 # genkit-vertexai release in lockstep, so Model Garden reuses the Claude
 # model class instead of copying it.
 from genkit_anthropic._models import AnthropicModel
-from pydantic import ConfigDict
-from pydantic.config import JsonDict
 
 from genkit import ActionRunContext, ModelResponse
 from genkit.model import ModelConfig, ModelInfo, ModelRequest, Supports
 from genkit.plugin_api import loop_local_client
-
-
-def _vertex_anthropic_config_schema_extra(schema: JsonDict) -> None:
-    """Drop options Vertex Model Garden cannot honor from the advertised schema."""
-    base_extra = AnthropicConfig.model_config.get('json_schema_extra')
-    if callable(base_extra):
-        cast(Callable[[JsonDict], None], base_extra)(schema)
-    properties = schema.get('properties')
-    if isinstance(properties, dict):
-        properties.pop('apiKey', None)
-
-
-class VertexAnthropicConfig(AnthropicConfig):
-    """Anthropic config for Vertex Model Garden.
-
-    ``apiKey`` is omitted because :class:`AsyncAnthropicVertex` authenticates
-    with ambient Google credentials and ignores a per-request Anthropic key.
-    """
-
-    model_config = ConfigDict(**{
-        **AnthropicConfig.model_config,
-        'json_schema_extra': _vertex_anthropic_config_schema_extra,
-    })
 
 
 class AnthropicModelGarden:
@@ -65,7 +40,7 @@ class AnthropicModelGarden:
         self,
         model: str,
         location: str,
-        project_id: str,
+        project: str,
     ) -> None:
         """Initializes the AnthropicModelGarden instance.
 
@@ -74,11 +49,11 @@ class AnthropicModelGarden:
                 in the way <publisher>/<model> (e.g., 'anthropic/claude-3-5-sonnet-v2@20241022').
             location: The Google Cloud region where the Model Garden service
                 is hosted (e.g., 'us-central1').
-            project_id: The Google Cloud project ID where the Model Garden
+            project: The Google Cloud project ID where the Model Garden
                 model is deployed.
         """
         self.name = model
-        self._runtime_client = loop_local_client(lambda: AsyncAnthropicVertex(region=location, project_id=project_id))
+        self._runtime_client = loop_local_client(lambda: AsyncAnthropicVertex(region=location, project_id=project))
         # Strip 'anthropic/' prefix for the model passed to Anthropic SDK
         clean_model_name = model.removeprefix('anthropic/')
         self._model_name = clean_model_name
@@ -119,4 +94,4 @@ class AnthropicModelGarden:
     @staticmethod
     def get_config_schema() -> type[ModelConfig]:
         """Returns the config schema for this model type."""
-        return VertexAnthropicConfig
+        return AnthropicConfig

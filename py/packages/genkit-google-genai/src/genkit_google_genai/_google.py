@@ -48,6 +48,7 @@ Example:
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Callable
 from typing import Any, NoReturn
@@ -63,7 +64,7 @@ from pydantic import BaseModel
 import genkit_google_genai._constants as const
 from genkit import ActionRunContext, GenkitError, ModelResponse, Operation
 from genkit.embedder import EmbedderRef, embedder, embedder_action_metadata
-from genkit.evaluator import EvalFnResponse, EvalRequest
+from genkit.evaluator import evaluator_action_metadata
 from genkit.model import (
     BackgroundAction,
     ModelInfo,
@@ -82,10 +83,12 @@ from genkit.plugin_api import (
     loop_local_client,
     to_json_schema,
 )
+from genkit_google_genai._auth import GOOGLE_AUTH_ERRORS, raise_auth_error
 from genkit_google_genai._evaluators import (
     VertexAIEvaluationMetricType,
     create_vertex_evaluators,
 )
+from genkit_google_genai._evaluators._evaluation import METRIC_INFO
 from genkit_google_genai._interactions._options import ClientOptions
 from genkit_google_genai._models._antigravity import AntigravityConfig, create_antigravity_action
 from genkit_google_genai._models._deep_research import (
@@ -148,6 +151,8 @@ from genkit_google_genai._models._veo import (
     is_veo_model,
     veo_model_info,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class GenaiModels:
@@ -239,6 +244,19 @@ PLUGIN_DISPLAY_NAME: dict[str, str] = {
     GOOGLEAI_PLUGIN_NAME: 'Google AI',
     VERTEXAI_PLUGIN_NAME: 'Vertex AI',
 }
+
+
+def _plugin_client(client_kwargs: dict[str, Any]) -> genai.Client:
+    """Build the plugin's client on first use in a loop.
+
+    Construction is lazy, so it runs inside the first action body. Vertex with
+    no project resolves ADC here; a missing or rejected credential becomes
+    UNAUTHENTICATED instead of a bare google.auth error.
+    """
+    try:
+        return genai.client.Client(**client_kwargs)
+    except GOOGLE_AUTH_ERRORS as e:
+        raise_auth_error(e)
 
 
 def _new_gemini(plugin: GoogleAI | VertexAI, clean_name: str) -> GeminiModel:
@@ -635,7 +653,7 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
         }
         self._base_url_pinned = bool(self._client_kwargs['http_options'].base_url)
         # Single loop-local client accessor used everywhere in plugin runtime paths.
-        self._runtime_client = loop_local_client(lambda: genai.client.Client(**self._client_kwargs))
+        self._runtime_client = loop_local_client(lambda: _plugin_client(self._client_kwargs))
         self._list_actions_cache: list[ActionMetadata] | None = None
 
     def _interactions_client_options(self) -> ClientOptions:
@@ -1037,7 +1055,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
             'http_options': opts,
         }
         # Single loop-local client accessor used everywhere in plugin runtime paths.
-        self._runtime_client = loop_local_client(lambda: genai.client.Client(**self._client_kwargs))
+        self._runtime_client = loop_local_client(lambda: _plugin_client(self._client_kwargs))
         self._list_actions_cache: list[ActionMetadata] | None = None
 
     async def init(self) -> list[Action]:
@@ -1060,24 +1078,24 @@ class VertexAI(GoogleFamilyRefs, Plugin):
         for name in VERTEX_KNOWN_EMBEDDERS:
             actions.append(self._resolve_embedder(name))
 
-        # Register Vertex AI evaluators
-        # Deferred import to avoid circular dependency
-        from genkit import Genkit
-
+        # Vertex evaluators talk to a project-scoped Evaluation API. Express
+        # mode (api_key, no project) can still start the app; those evaluators
+        # simply are not registered.
         if not self._project:
-            raise ValueError(
-                'VertexAI plugin requires a project ID to use evaluators. '
-                'Set the project parameter or GOOGLE_CLOUD_PROJECT environment variable.'
+            logger.debug('VertexAI has no project; skipping Vertex evaluator registration')
+        else:
+            # Deferred import to avoid circular dependency
+            from genkit import Genkit
+
+            registry = Genkit()
+            actions.extend(
+                create_vertex_evaluators(
+                    registry,
+                    list(VertexAIEvaluationMetricType),
+                    project=self._project,
+                    location=self._location,
+                )
             )
-        registry = Genkit()
-        actions.extend(
-            create_vertex_evaluators(
-                registry,
-                list(VertexAIEvaluationMetricType),
-                project_id=self._project,
-                location=self._location,
-            )
-        )
 
         return actions
 
@@ -1148,19 +1166,28 @@ class VertexAI(GoogleFamilyRefs, Plugin):
         except ValueError:
             return None
 
+        # The name is a real Vertex metric, so "not found" would send people
+        # hunting for a typo. Say what's actually missing instead. The
+        # evaluators authenticate with ADC only (api_key and credentials are
+        # not used), so name both requirements.
+        if not self._project:
+            raise GenkitError(
+                message=(
+                    'Vertex evaluators need a project and Application Default Credentials; '
+                    'pass VertexAI(project=...) or set GOOGLE_CLOUD_PROJECT, '
+                    'and run `gcloud auth application-default login`'
+                ),
+                status='FAILED_PRECONDITION',
+            )
+
         from genkit import Genkit
 
         registry = Genkit()
-        if not self._project:
-            raise ValueError(
-                'VertexAI plugin requires a project ID to use evaluators. '
-                'Set the project parameter or GOOGLE_CLOUD_PROJECT environment variable.'
-            )
 
         actions = create_vertex_evaluators(
             registry,
             [metric_type],
-            project_id=self._project,
+            project=self._project,
             location=self._location,
         )
         return actions[0] if actions else None
@@ -1275,18 +1302,17 @@ class VertexAI(GoogleFamilyRefs, Plugin):
                 )
             )
 
-        for metric in VertexAIEvaluationMetricType:
-            # create_vertex_evaluators handles namespacing but we only need metadata here.
-            evaluator_name = vertexai_name(metric.lower())
-            actions_list.append(
-                ActionMetadata(
-                    name=evaluator_name,
-                    action_type=ActionKind.EVALUATOR,
-                    input_json_schema=to_json_schema(EvalRequest),
-                    output_json_schema=to_json_schema(list[EvalFnResponse]),
-                    metadata={'type': 'evaluator'},
+        if self._project:
+            for metric in VertexAIEvaluationMetricType:
+                display_name, definition = METRIC_INFO[metric]
+                actions_list.append(
+                    evaluator_action_metadata(
+                        vertexai_name(metric.lower()),
+                        display_name=display_name,
+                        definition=definition,
+                        is_billed=True,
+                    )
                 )
-            )
 
         self._list_actions_cache = actions_list
         return actions_list

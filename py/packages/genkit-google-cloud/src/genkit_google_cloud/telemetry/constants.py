@@ -26,9 +26,7 @@ DEFAULT_METRIC_EXPORT_INTERVAL_MS = 300000
 DEV_METRIC_EXPORT_INTERVAL_MS = 5000
 
 # Project ID environment variables (resolution order)
-# Project ID env fallbacks. FIREBASE_PROJECT_ID is still honored for existing deployments.
 PROJECT_ID_ENV_VARS = (
-    'FIREBASE_PROJECT_ID',
     'GOOGLE_CLOUD_PROJECT',
     'GCLOUD_PROJECT',
 )

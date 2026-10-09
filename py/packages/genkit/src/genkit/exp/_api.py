@@ -33,7 +33,7 @@ from genkit._ai._agents._runtime import AgentFn
 from genkit._ai._agents._session import SessionStore, StateT, get_current_session
 from genkit._ai._agents._types import ChunkTransform, StateTransform
 from genkit._ai._aio import Genkit as StableGenkit
-from genkit._core._action import ActionKind
+from genkit._core._action import Action, ActionKind
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._middleware import BaseMiddleware
 from genkit._core._model import ModelConfigDict, ModelRef, ModelRefConfigT, Part
@@ -108,7 +108,7 @@ class Genkit(StableGenkit):
         self,
         name: str,
         *,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         system: str | list[Part] | None = None,
         tools: Sequence[str | Tool] | None = None,
         use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
@@ -127,7 +127,7 @@ class Genkit(StableGenkit):
         self,
         name: str,
         *,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         system: str | list[Part] | None = None,
         tools: Sequence[str | Tool] | None = None,
         use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
@@ -145,7 +145,7 @@ class Genkit(StableGenkit):
         self,
         name: str,
         *,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         system: str | list[Part] | None = None,
         tools: Sequence[str | Tool] | None = None,
         use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,

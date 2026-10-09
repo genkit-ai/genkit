@@ -26,7 +26,7 @@ Example:
     from genkit_google_genai import GoogleAI
     from genkit_google_cloud import enable_google_cloud_telemetry
 
-    enable_google_cloud_telemetry(project_id='my-project')
+    enable_google_cloud_telemetry(project='my-project')
 
     ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
     await ai.generate(prompt='Hello, world!')

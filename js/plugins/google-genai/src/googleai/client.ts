@@ -21,9 +21,15 @@ import {
   buildTraceMetadataInput,
   extractErrMsg,
   getGenkitClientHeader,
+  httpStatusToGenkitStatus,
+  interactionErrorCodeToGenkitStatus,
+  interactionProcessStream,
   parseRetryAfterMs,
   processStream,
 } from '../common/utils.js';
+import { InteractionStreamResult } from './interaction-types.js';
+import { isObject } from './utils.js';
+
 import {
   ClientOptions,
   CreateInteractionRequest,
@@ -72,6 +78,34 @@ export async function createInteraction(
   return maybeTraceRequest<GeminiInteraction>(url, fetchOptions, {
     request: createInteractionRequest,
     clientOptions,
+  });
+}
+
+export async function createInteractionStream(
+  apiKey: string | undefined,
+  createInteractionRequest: CreateInteractionRequest,
+  clientOptions?: ClientOptions
+): Promise<InteractionStreamResult> {
+  const url = getGoogleAIUrl({
+    resourcePath: 'interactions',
+    clientOptions,
+  });
+
+  const fetchOptions = getFetchOptions({
+    method: 'POST',
+    apiKey,
+    clientOptions,
+    body: JSON.stringify(createInteractionRequest),
+    isInteraction: true,
+  });
+
+  return maybeTraceRequest<InteractionStreamResult>(url, fetchOptions, {
+    request: createInteractionRequest,
+    streaming: true,
+    clientOptions,
+    processFn: async (response) => {
+      return interactionProcessStream(response);
+    },
   });
 }
 
@@ -504,13 +538,14 @@ async function maybeTraceRequest<T>(
 
   if (traceOptions.clientOptions?.experimental_debugTraces) {
     return tracingHooks.runInNewSpan(
-      { metadata: { name: 'httpRequest' } },
+      {
+        metadata: {
+          name: 'httpRequest',
+          // Seed input up front so the realtime "pending" span export carries it.
+          input: buildTraceMetadataInput(url, fetchOptions, traceOptions),
+        },
+      },
       async (metadata) => {
-        metadata.input = buildTraceMetadataInput(
-          url,
-          fetchOptions,
-          traceOptions
-        );
         const processedResponse = await call();
 
         if (traceOptions.streaming) {
@@ -587,6 +622,20 @@ async function makeRequest(
           status = 'UNAVAILABLE';
           break;
       }
+      // Interactions API errors carry a specific `error.code` (e.g. `safety`,
+      // `model_not_found`, `quota_exceeded`) that is more precise than the
+      // HTTP status, so prefer it when recognized.
+      if (isInteractionUrl(url)) {
+        const apiError = isObject(errorDetail) ? errorDetail.error : undefined;
+        const codeStatus = interactionErrorCodeToGenkitStatus(
+          isObject(apiError) ? apiError.code : undefined
+        );
+        if (codeStatus) {
+          status = codeStatus;
+        } else if (status === 'UNKNOWN') {
+          status = httpStatusToGenkitStatus(response.status);
+        }
+      }
       // Capture Retry-After header for retry middleware to use
       const retryAfterHeader = response.headers.get('retry-after');
       const retryAfterMs = retryAfterHeader
@@ -612,10 +661,25 @@ async function makeRequest(
   }
 }
 
+/**
+ * Reports whether a URL targets the Interactions API, i.e. its resource path
+ * (see `getGoogleAIUrl`) contains an `interactions` path segment.
+ */
+function isInteractionUrl(url: string): boolean {
+  let pathname: string;
+  try {
+    pathname = new URL(url).pathname;
+  } catch {
+    pathname = url.split('?')[0];
+  }
+  return pathname.split('/').includes('interactions');
+}
+
 export const TEST_ONLY = {
   getFetchOptions,
   getAbortSignal,
   getHeaders,
+  isInteractionUrl,
   makeRequest,
   tracingHooks,
 };

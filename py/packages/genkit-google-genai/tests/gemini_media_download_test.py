@@ -26,6 +26,7 @@ import httpx
 import pytest
 from genkit_google_genai import GoogleAI
 from genkit_google_genai._google import GenaiModels
+from genkit_google_genai._models._utils import _media_client
 from google import genai
 
 from genkit import FinishReason, Genkit, Message, Part, Role
@@ -58,16 +59,22 @@ def gemini() -> Iterator[tuple[Genkit, MagicMock]]:
 
 
 def _serve(handler: Callable[[httpx.Request], httpx.Response]) -> Any:  # noqa: ANN401
-    """Route the plugin's media downloads to `handler` instead of the network."""
+    """Route the plugin's media downloads to `handler` instead of the network.
 
-    def make_client(*, cache_key: str, **kwargs: Any) -> httpx.AsyncClient:  # noqa: ANN401
-        return httpx.AsyncClient(transport=httpx.MockTransport(handler), **kwargs)
-
-    return patch('genkit_google_genai._models._utils.get_cached_client', side_effect=make_client)
+    The stand-in keeps the real client's headers, redirect policy, and timeout.
+    """
+    real = _media_client()
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        headers=real.headers,
+        follow_redirects=real.follow_redirects,
+        timeout=real.timeout,
+    )
+    return patch('genkit_google_genai._models._utils._media_client', return_value=client)
 
 
 def _no_download() -> Any:  # noqa: ANN401
-    return patch('genkit_google_genai._models._utils.get_cached_client', side_effect=AssertionError('downloaded'))
+    return patch('genkit_google_genai._models._utils._media_client', side_effect=AssertionError('downloaded'))
 
 
 async def _chunks(total: int, consumed: list[int] | None = None) -> AsyncIterator[bytes]:

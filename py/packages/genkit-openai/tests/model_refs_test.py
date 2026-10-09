@@ -20,18 +20,12 @@ from typing import get_args, get_type_hints
 from unittest.mock import MagicMock
 
 import pytest
-from genkit_openai import OpenAI, OpenAIConfig, openai_model
+from genkit_openai import OpenAI, OpenAIConfig
 from genkit_openai._models._model import OpenAIModel
 from genkit_openai._models._model_info import SUPPORTED_OPENAI_MODELS, KnownGpt
 
 from genkit import GenkitError
 from genkit.model import ModelRef
-
-
-def test_openai_model_still_returns_str() -> None:
-    """openai_model stays a string helper, not a ModelRef."""
-    assert openai_model('gpt-4o') == 'openai/gpt-4o'
-    assert isinstance(openai_model('gpt-4o'), str)
 
 
 def test_gpt_model_returns_model_ref() -> None:
@@ -92,7 +86,7 @@ def test_gpt_model_reject_names_the_string_path() -> None:
     assert exc_info.value.status == 'INVALID_ARGUMENT'
     message = str(exc_info.value)
     assert 'an image model' in message
-    assert "openai_model('dall-e-3')" in message
+    assert "'openai/dall-e-3'" in message
 
 
 def test_gpt_model_requires_a_name() -> None:
@@ -144,7 +138,6 @@ async def test_create_model_action_camel_case_lands_on_the_wire() -> None:
                 'maxOutputTokens': 256,
                 'stopSequences': ['END'],
                 'topP': 0.9,
-                'apiKey': 'should-not-leak',
             },
         }
     )
@@ -153,6 +146,7 @@ async def test_create_model_action_camel_case_lands_on_the_wire() -> None:
     assert body['frequency_penalty'] == 0.5
     assert body['top_p'] == 0.9
     assert body['stop'] == ['END']
+    assert body['max_tokens'] == 256
     assert 'max_output_tokens' not in body
     assert 'maxOutputTokens' not in body
     assert 'frequencyPenalty' not in body

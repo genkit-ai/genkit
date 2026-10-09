@@ -27,7 +27,7 @@ import ollama as ollama_api
 import pytest
 from genkit_ollama import Ollama
 from genkit_ollama.constants import OllamaAPITypes
-from genkit_ollama.models import ModelDefinition, OllamaSupports
+from genkit_ollama.models import ModelDefinition, OllamaSupports, _image_fetch_client
 
 from genkit import FinishReason, Genkit, Message, Part, Role
 
@@ -52,12 +52,18 @@ def ollama() -> tuple[Genkit, MagicMock]:
 
 
 def _serve(handler: Callable[[httpx.Request], httpx.Response]) -> Any:  # noqa: ANN401
-    """Route the plugin's image downloads to `handler` instead of the network."""
+    """Route the plugin's image downloads to `handler` instead of the network.
 
-    def make_client(*, cache_key: str, **kwargs: Any) -> httpx.AsyncClient:  # noqa: ANN401
-        return httpx.AsyncClient(transport=httpx.MockTransport(handler), **kwargs)
-
-    return patch('genkit_ollama.models.get_cached_client', side_effect=make_client)
+    The stand-in keeps the real client's headers, redirect policy, and timeout.
+    """
+    real = _image_fetch_client()
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        headers=real.headers,
+        follow_redirects=real.follow_redirects,
+        timeout=real.timeout,
+    )
+    return patch('genkit_ollama.models._image_fetch_client', return_value=client)
 
 
 async def _describe(ai: Genkit, url: str) -> Any:  # noqa: ANN401

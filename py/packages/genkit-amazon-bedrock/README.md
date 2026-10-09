@@ -346,8 +346,8 @@ and `BedrockConfig` describes Converse parameters, so it would reject every
 family-specific key here.
 
 Genkit's generic generation options (`temperature`, `topP`, `maxOutputTokens`,
-`apiKey`, and the rest of the common config) are not forwarded to image models,
-since Bedrock's image APIs do not accept them.
+and the rest of the common config) are not forwarded to image models, since
+Bedrock's image APIs do not accept them.
 
 Text-to-image and image-editing models are not interchangeable: a model
 offered in a region may only inpaint or upscale. Check the Bedrock
