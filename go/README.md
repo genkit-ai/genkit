@@ -225,6 +225,7 @@ conn.SendText("Show me an example with goroutines.")
 // ...
 
 out, _ := conn.Output()
+fmt.Println(out.Message.Text())
 ```
 
 [Docs](https://genkit.dev/docs/go/agents/run/) &middot; [Example](samples/basic-agents)
@@ -297,6 +298,7 @@ first, _ := chatAgent.RunText(ctx, "My name is Alex.")
 // Later, in another request or process:
 second, _ := chatAgent.RunText(ctx, "What is my name?",
     aix.WithSessionID[any](first.SessionID))
+fmt.Println(second.Message.Text()) // "Your name is Alex."
 ```
 
 Failed and stopped runs keep their finished turns and resume the same way. `aix.WithSnapshotID` resumes from a specific point, and `aix.WithState` skips the server store.
@@ -494,6 +496,7 @@ response, _ := genkit.Generate(ctx, g,
     ai.WithPrompt("What's the weather like in San Francisco?"),
     ai.WithTools(weatherTool),
 )
+fmt.Println(response.Text())
 ```
 
 Return `tool.Fail` (package `ai/tool`) to send an error back to the model so it can try again:
@@ -791,6 +794,7 @@ recipe, _, _ := recipePrompt.Execute(ctx, RecipeRequest{
     Cuisine:     "Mexican",
     ServingSize: 4,
 })
+fmt.Println(recipe.Title)
 ```
 
 `genkit.DefinePartial` and `genkit.DefineHelper` add partials and helpers that every prompt shares.
