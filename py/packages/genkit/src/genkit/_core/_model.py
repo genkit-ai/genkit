@@ -436,13 +436,18 @@ class Part(GenkitModel):
             return self
         raise ValueError(EXACTLY_ONE_KIND)
 
-    def model_dump(self, **kwargs: Any) -> dict[str, Any]:  # noqa: ANN401
-        dumped = super().model_dump(**kwargs)
-        # Default dump drops nulls. Keep data: null so replay still sees a
-        # data part instead of an empty one.
-        if 'data' in self.model_fields_set and self.data is None:
-            dumped['data'] = None
-        return dumped
+    def _drop_none_fields(self, dumped: dict[str, Any]) -> dict[str, Any]:
+        kept = super()._drop_none_fields(dumped)
+        # Keep data: null when it's the part's only payload so replay still
+        # sees a data part instead of an empty one.
+        if self._is_null_data_part():
+            kept['data'] = None
+        return kept
+
+    def _is_null_data_part(self) -> bool:
+        if 'data' not in self.model_fields_set or self.custom is not None:
+            return False
+        return all(getattr(self, name) is None for name in PART_KIND_FIELDS)
 
     @classmethod
     def from_text(cls, text: str, metadata: dict[str, Any] | None = None) -> Part:

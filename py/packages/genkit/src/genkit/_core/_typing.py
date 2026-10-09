@@ -480,6 +480,8 @@ class GenerationCommonConfig(GenkitModel):
     top_k: float | None = None
     top_p: float | None = None
     stop_sequences: list[str] | None = None
+    # An explicit None clears a model ref default, so config dumps keep it.
+    _keep_none_fields: ClassVar[bool] = True
 
 
 class GenerationUsage(GenkitModel):
