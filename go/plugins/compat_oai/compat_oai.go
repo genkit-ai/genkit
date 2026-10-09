@@ -53,6 +53,15 @@ var (
 		Media:      true,
 		ToolChoice: true,
 	}
+
+	// ImageGeneration describes text-to-image model capabilities.
+	ImageGeneration = ai.ModelSupports{
+		Multiturn:  false,
+		Tools:      false,
+		SystemRole: false,
+		Media:      false,
+		Output:     []string{"media"},
+	}
 )
 
 // managedRequestFields are the request fields Genkit owns, stripped from the
@@ -330,6 +339,23 @@ func (o *OpenAICompatible) DefineModel(provider, id string, opts ai.ModelOptions
 			WithTools(input.Tools).
 			WithToolChoice(input.ToolChoice).
 			Generate(ctx, input, cb)
+	})
+}
+
+// DefineImageModel defines an OpenAI-compatible image generation model in the registry.
+func (o *OpenAICompatible) DefineImageModel(provider, id string, opts ai.ModelOptions) ai.Model {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if !o.initted {
+		panic("OpenAICompatible.Init not called")
+	}
+
+	return ai.NewModel(api.NewName(provider, id), &opts, func(
+		ctx context.Context,
+		input *ai.ModelRequest,
+		cb func(context.Context, *ai.ModelResponseChunk) error,
+	) (*ai.ModelResponse, error) {
+		return generateImage(ctx, o.client, id, input, cb)
 	})
 }
 
