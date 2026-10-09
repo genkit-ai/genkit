@@ -27,7 +27,17 @@ from google.auth import default as google_auth_default
 from google.auth.exceptions import DefaultCredentialsError
 from google.genai import types as genai_types
 from google.genai.errors import APIError
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, WithJsonSchema, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    ValidationInfo,
+    ValidatorFunctionWrapHandler,
+    WithJsonSchema,
+    field_validator,
+    model_validator,
+)
 
 from genkit import (
     ActionRunContext,
@@ -52,10 +62,13 @@ from genkit.model import (
     get_basic_usage_stats,
 )
 from genkit.plugin_api import wrap_http_error
+from genkit_google_genai._auth import GOOGLE_AUTH_ERRORS, raise_auth_error
 from genkit_google_genai._constants import is_multi_regional_location, multi_regional_base_url
 from genkit_google_genai._models._context_caching._constants import DEFAULT_TTL
 from genkit_google_genai._models._context_caching._utils import generate_cache_key, validate_context_cache_request
 from genkit_google_genai._models._sdk_config import (
+    GEMINI_MANAGED_BODY_FIELDS,
+    GEMINI_MANAGED_GENERATION_FIELDS,
     attach_config_extra,
     attach_leftovers,
     dump_family_config,
@@ -150,16 +163,22 @@ class HarmBlockThreshold(StrEnum):
     BLOCK_NONE = 'BLOCK_NONE'
 
 
+# Each strict nested class below declares every field of the google.genai type
+# it is sent as (named in its docstring), so a key the SDK accepts never fails
+# the unknown-key check. googlegenai_gemini_test.py pins the field sets.
+
+
 class SafetySettingsSchema(BaseModel):
-    """Safety settings schema."""
+    """Safety settings schema. Sent as ``genai_types.SafetySetting``."""
 
     model_config = ConfigDict(extra='forbid', populate_by_name=True)
     category: HarmCategory
     threshold: HarmBlockThreshold
+    method: genai_types.HarmBlockMethod | None = None
 
 
 class PrebuiltVoiceConfig(BaseModel):
-    """Prebuilt voice config."""
+    """Prebuilt voice config. Sent as ``genai_types.PrebuiltVoiceConfig``."""
 
     model_config = ConfigDict(extra='forbid', populate_by_name=True)
     voice_name: str | None = Field(None, alias='voiceName')
@@ -175,11 +194,12 @@ class FunctionCallingMode(StrEnum):
 
 
 class FunctionCallingConfig(BaseModel):
-    """Function calling config."""
+    """Function calling config. Sent as ``genai_types.FunctionCallingConfig``."""
 
     model_config = ConfigDict(extra='forbid', populate_by_name=True)
     mode: FunctionCallingMode | None = None
     allowed_function_names: list[str] | None = Field(None, alias='allowedFunctionNames')
+    stream_function_call_arguments: bool | None = Field(None, alias='streamFunctionCallArguments')
 
 
 class ThinkingLevel(StrEnum):
@@ -191,8 +211,8 @@ class ThinkingLevel(StrEnum):
     HIGH = 'HIGH'
 
 
-class ThinkingConfigSchema(BaseModel):
-    """Thinking config schema."""
+class ThinkingConfig(BaseModel):
+    """Thinking config. Sent as ``genai_types.ThinkingConfig``."""
 
     model_config = ConfigDict(extra='forbid', populate_by_name=True)
     include_thoughts: bool | None = Field(None, alias='includeThoughts')
@@ -200,8 +220,8 @@ class ThinkingConfigSchema(BaseModel):
     thinking_level: ThinkingLevel | None = Field(None, alias='thinkingLevel')
 
 
-class FileSearchConfigSchema(BaseModel):
-    """File search config schema."""
+class FileSearchConfig(BaseModel):
+    """File search config. Sent as ``genai_types.FileSearch``."""
 
     model_config = ConfigDict(extra='forbid', populate_by_name=True)
     file_search_store_names: list[str] | None = Field(None, alias='fileSearchStoreNames')
@@ -232,19 +252,33 @@ class ImageSize(StrEnum):
     SIZE_4K = '4K'
 
 
-class ImageConfigSchema(BaseModel):
-    """Image config schema."""
+class ImageConfig(BaseModel):
+    """Image config. Sent as ``genai_types.ImageConfig``."""
 
     model_config = ConfigDict(extra='forbid', populate_by_name=True)
     aspect_ratio: ImageAspectRatio | None = Field(None, alias='aspectRatio')
     image_size: ImageSize | None = Field(None, alias='imageSize')
+    output_mime_type: str | None = Field(None, alias='outputMimeType')
+    output_compression_quality: int | None = Field(None, alias='outputCompressionQuality')
+    person_generation: str | None = Field(None, alias='personGeneration')
+    prominent_people: genai_types.ProminentPeople | None = Field(None, alias='prominentPeople')
+    image_output_options: genai_types.ImageConfigImageOutputOptions | None = Field(None, alias='imageOutputOptions')
 
 
-class VoiceConfigSchema(BaseModel):
-    """Voice config schema."""
+class VoiceConfig(BaseModel):
+    """Voice config. Sent as ``genai_types.VoiceConfig``."""
 
     model_config = ConfigDict(extra='forbid', populate_by_name=True)
     prebuilt_voice_config: PrebuiltVoiceConfig | None = Field(None, alias='prebuiltVoiceConfig')
+    replicated_voice_config: genai_types.ReplicatedVoiceConfig | None = Field(None, alias='replicatedVoiceConfig')
+
+
+# The google.genai tool type a dict under each tool toggle is validated as.
+_TOOL_OPTION_TYPES: dict[str, type[BaseModel]] = {
+    'code_execution': genai_types.ToolCodeExecution,
+    'google_search': genai_types.GoogleSearch,
+    'url_context': genai_types.UrlContext,
+}
 
 
 class GeminiConfig(ModelConfig):
@@ -280,6 +314,7 @@ class GeminiConfig(ModelConfig):
                 'properties': {
                     'category': {'type': 'string', 'enum': [e.value for e in HarmCategory]},
                     'threshold': {'type': 'string', 'enum': [e.value for e in HarmBlockThreshold]},
+                    'method': {'type': 'string', 'enum': [e.value for e in genai_types.HarmBlockMethod]},
                 },
                 'required': ['category', 'threshold'],
                 'additionalProperties': False,
@@ -294,8 +329,10 @@ class GeminiConfig(ModelConfig):
         alias='safetySettings',
     )
 
-    code_execution: bool | dict[str, Any] | None = Field(
-        None, description='Enables the model to generate and run code.', alias='codeExecution'
+    code_execution: bool | genai_types.ToolCodeExecution | None = Field(
+        None,
+        description='Enables the model to generate and run code. True attaches the tool; a dict is the tool options.',
+        alias='codeExecution',
     )
 
     context_cache: bool | None = Field(
@@ -313,6 +350,7 @@ class GeminiConfig(ModelConfig):
             'properties': {
                 'mode': {'type': 'string', 'enum': [e.value for e in FunctionCallingMode]},
                 'allowedFunctionNames': {'type': 'array', 'items': {'type': 'string'}},
+                'streamFunctionCallArguments': {'type': 'boolean'},
             },
             'description': (
                 'Controls how the model uses the provided tools (function declarations). With AUTO (Default) '
@@ -334,11 +372,11 @@ class GeminiConfig(ModelConfig):
         alias='responseModalities',
     )
 
-    google_search: bool | dict[str, Any] | None = Field(
+    google_search: bool | genai_types.GoogleSearch | None = Field(
         None,
         description=(
             'Ground the response in public web data with the Google Search tool. '
-            'True attaches it; a dict is passed through as the tool options.'
+            'True attaches it; a dict is the tool options (excludeDomains, timeRangeFilter, ...).'
         ),
         alias='googleSearch',
     )
@@ -356,8 +394,25 @@ class GeminiConfig(ModelConfig):
                     )
         return data
 
+    @field_validator('code_execution', 'google_search', 'url_context', mode='wrap')
+    @classmethod
+    def _tool_options_against_sdk_type(
+        cls,
+        value: Any,  # noqa: ANN401
+        handler: ValidatorFunctionWrapHandler,
+        info: ValidationInfo,
+    ) -> Any:  # noqa: ANN401
+        """True/False toggles the tool; anything else validates as the SDK tool type alone.
+
+        Skipping the ``bool | Tool`` union keeps the error path to the bad key
+        (``google_search.exclude_domainz``) instead of one error per union arm.
+        """
+        if value is None or isinstance(value, bool):
+            return value
+        return _TOOL_OPTION_TYPES[info.field_name or ''].model_validate(value)
+
     file_search: Annotated[
-        FileSearchConfigSchema | None,
+        FileSearchConfig | None,
         WithJsonSchema({
             'type': 'object',
             'properties': {
@@ -382,7 +437,7 @@ class GeminiConfig(ModelConfig):
         }),
     ] = Field(None, alias='fileSearch')
 
-    url_context: bool | dict[str, Any] | None = Field(
+    url_context: bool | genai_types.UrlContext | None = Field(
         None, description='Return grounding metadata from links included in the query', alias='urlContext'
     )
 
@@ -429,7 +484,7 @@ class GeminiConfig(ModelConfig):
     )
 
     thinking_config: Annotated[
-        ThinkingConfigSchema | None,
+        ThinkingConfig | None,
         WithJsonSchema({
             'type': 'object',
             'properties': {
@@ -488,34 +543,28 @@ class GeminiConfig(ModelConfig):
     )
 
 
-class SpeakerVoiceConfigSchema(BaseModel):
-    """Speaker voice config schema."""
+class SpeakerVoiceConfig(BaseModel):
+    """Speaker voice config. Sent as ``genai_types.SpeakerVoiceConfig``."""
 
     model_config = ConfigDict(extra='forbid', populate_by_name=True)
     speaker: str | None = None
-    voice_config: VoiceConfigSchema | None = Field(None, alias='voiceConfig')
+    voice_config: VoiceConfig | None = Field(None, alias='voiceConfig')
 
 
-class MultiSpeakerVoiceConfigSchema(BaseModel):
-    """Multi-speaker voice config schema."""
-
-    model_config = ConfigDict(extra='forbid', populate_by_name=True)
-    speaker_voice_configs: list[SpeakerVoiceConfigSchema] | None = Field(None, alias='speakerVoiceConfigs')
-
-
-class SpeechConfigSchema(BaseModel):
-    """Speech config schema."""
+class MultiSpeakerVoiceConfig(BaseModel):
+    """Multi-speaker voice config. Sent as ``genai_types.MultiSpeakerVoiceConfig``."""
 
     model_config = ConfigDict(extra='forbid', populate_by_name=True)
-    voice_config: VoiceConfigSchema | None = Field(None, alias='voiceConfig')
+    speaker_voice_configs: list[SpeakerVoiceConfig] | None = Field(None, alias='speakerVoiceConfigs')
+
+
+class SpeechConfig(BaseModel):
+    """Speech config. Sent as ``genai_types.SpeechConfig``."""
+
+    model_config = ConfigDict(extra='forbid', populate_by_name=True)
+    voice_config: VoiceConfig | None = Field(None, alias='voiceConfig')
     language_code: str | None = Field(None, alias='languageCode')
-    multi_speaker_voice_config: MultiSpeakerVoiceConfigSchema | None = Field(None, alias='multiSpeakerVoiceConfig')
-
-    http_options: Any | None = Field(None, exclude=True)
-    tools: Any | None = Field(None, exclude=True)
-    tool_config: Any | None = Field(None, exclude=True)
-    response_schema: Any | None = Field(None, exclude=True)
-    response_json_schema: Any | None = Field(None, exclude=True)
+    multi_speaker_voice_config: MultiSpeakerVoiceConfig | None = Field(None, alias='multiSpeakerVoiceConfig')
 
 
 DEFAULT_TTS_VOICE_NAME = 'Kore'
@@ -528,7 +577,7 @@ _GEMINI_API_TTS_MODELS_NEEDING_VOICE = frozenset({'gemini-3.1-flash-tts-preview'
 class GeminiTtsConfig(GeminiConfig):
     """Gemini TTS Config."""
 
-    speech_config: SpeechConfigSchema | None = Field(
+    speech_config: SpeechConfig | None = Field(
         None,
         alias='speechConfig',
         description=(
@@ -542,12 +591,21 @@ class GeminiImageConfig(GeminiConfig):
     """Gemini Image Config."""
 
     image_config: Annotated[
-        ImageConfigSchema | None,
+        ImageConfig | None,
         WithJsonSchema({
             'type': 'object',
             'properties': {
                 'aspectRatio': {'type': 'string', 'enum': [e.value for e in ImageAspectRatio]},
                 'imageSize': {'type': 'string', 'enum': [e.value for e in ImageSize]},
+                'outputMimeType': {'type': 'string'},
+                'outputCompressionQuality': {'type': 'integer'},
+                'personGeneration': {'type': 'string'},
+                'prominentPeople': {'type': 'string', 'enum': [e.value for e in genai_types.ProminentPeople]},
+                'imageOutputOptions': {
+                    'type': 'object',
+                    'properties': {'mimeType': {'type': 'string'}, 'compressionQuality': {'type': 'integer'}},
+                    'additionalProperties': False,
+                },
             },
             'additionalProperties': False,
         }),
@@ -1392,26 +1450,33 @@ class GeminiModel:
 
         iterator_config = genai_types.ListCachedContentsConfig()
         cache = None
-        pages = await cache_client.aio.caches.list(config=iterator_config)
+        # These calls run before generate, so a provider or credential failure
+        # here is classified the same way a generate failure is.
+        try:
+            pages = await cache_client.aio.caches.list(config=iterator_config)
 
-        async for item in pages:
-            if item.display_name == cache_key:
-                cache = item
-                break
-        if cache and cache.name:
-            updated_expiration_time = datetime.now(timezone.utc) + timedelta(seconds=ttl)
-            cache = await cache_client.aio.caches.update(
-                name=cache.name, config=genai_types.UpdateCachedContentConfig(expire_time=updated_expiration_time)
-            )
-        else:
-            cache = await cache_client.aio.caches.create(
-                model=model_name,
-                config=genai_types.CreateCachedContentConfig(
-                    contents=cast(genai_types.ContentListUnion, contents),
-                    display_name=cache_key,
-                    ttl=f'{ttl}s',
-                ),
-            )
+            async for item in pages:
+                if item.display_name == cache_key:
+                    cache = item
+                    break
+            if cache and cache.name:
+                updated_expiration_time = datetime.now(timezone.utc) + timedelta(seconds=ttl)
+                cache = await cache_client.aio.caches.update(
+                    name=cache.name, config=genai_types.UpdateCachedContentConfig(expire_time=updated_expiration_time)
+                )
+            else:
+                cache = await cache_client.aio.caches.create(
+                    model=model_name,
+                    config=genai_types.CreateCachedContentConfig(
+                        contents=cast(genai_types.ContentListUnion, contents),
+                        display_name=cache_key,
+                        ttl=f'{ttl}s',
+                    ),
+                )
+        except APIError as e:
+            raise wrap_http_error(e, status_code=e.code, message=e.message or str(e)) from e
+        except GOOGLE_AUTH_ERRORS as e:
+            raise_auth_error(e)
         return cache
 
     async def generate(self, request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
@@ -1608,11 +1673,15 @@ class GeminiModel:
 
         try:
             return genai.Client(**kwargs)
-        except Exception as e:
-            # If client creation fails (e.g., invalid API key format), raise a clear error
+        except GOOGLE_AUTH_ERRORS as e:
+            # A Vertex override with no key or explicit credentials makes the SDK look up ADC.
+            raise_auth_error(e)
+        except (ValueError, TypeError) as e:
+            # The SDK rejects bad override combinations (api_key with project, say).
             raise GenkitError(
                 status='INVALID_ARGUMENT',
-                message=f'Failed to create google-genai client: {str(e)}',
+                message='Failed to create google-genai client',
+                cause=e,
             ) from e
 
     async def _generate(
@@ -1644,17 +1713,10 @@ class GeminiModel:
             )
         except APIError as e:
             raise wrap_http_error(e, status_code=e.code, message=e.message or str(e)) from e
-        except Exception as e:
-            # Auth and other SDK failures are not APIError — still fail the
-            # generate so the caller is not left with a partial reply.
-            import logging
-
-            logger = logging.getLogger(__name__)
-            logger.error(f'Unexpected error during generate_content: {type(e).__name__}: {str(e)}')
-            raise GenkitError(
-                status='INTERNAL',
-                message=f'Unexpected error during generation: {type(e).__name__}: {str(e)}',
-            ) from e
+        except GOOGLE_AUTH_ERRORS as e:
+            # The SDK resolves and refreshes credentials on the request, not at construction.
+            raise_auth_error(e)
+        # Anything else (a dropped connection, say) has no known status and propagates as is.
 
         content = await self._contents_from_response(response, tools=tools)
 
@@ -1764,6 +1826,8 @@ class GeminiModel:
             )
         except APIError as e:
             raise wrap_http_error(e, status_code=e.code, message=e.message or str(e)) from e
+        except GOOGLE_AUTH_ERRORS as e:
+            raise_auth_error(e)
 
     @cached_property
     def metadata(self) -> dict:
@@ -1956,7 +2020,13 @@ class GeminiModel:
 
             cfg.system_instruction = genai_types.Content(parts=system_instruction) if system_instruction else None
             cfg = attach_leftovers(cfg, leftovers, nest='generationConfig')
-            cfg = attach_config_extra(cfg, extra, action_name=self._version)
+            cfg = attach_config_extra(
+                cfg,
+                extra,
+                action_name=self._version,
+                managed_body_fields=GEMINI_MANAGED_BODY_FIELDS,
+                managed_generation_fields=GEMINI_MANAGED_GENERATION_FIELDS,
+            )
             return keep_client_extra_body(cfg, (self._client_kwargs or {}).get('http_options'))
 
         return None
@@ -1990,9 +2060,12 @@ class GeminiModel:
 
         Mutates *config* by popping consumed keys and appends to *tools*.
         """
-        # Code execution
-        if config.pop('code_execution', None):
-            tools.append(genai_types.Tool(code_execution=genai_types.ToolCodeExecution()))
+        # Code execution, Google Search, URL context: True or an options dict
+        # (already checked against the SDK type) attaches the tool; False
+        # or None doesn't.
+        val = config.pop('code_execution', None)
+        if val is not None and val is not False:
+            tools.append(genai_types.Tool(code_execution=genai_types.ToolCodeExecution(**({} if val is True else val))))
 
         # Safety settings — filter out unspecified categories
         if 'safety_settings' in config:
@@ -2000,11 +2073,9 @@ class GeminiModel:
                 s for s in config['safety_settings'] if s['category'] != HarmCategory.HARM_CATEGORY_UNSPECIFIED
             ]
 
-        # Google Search
         val = config.pop('google_search', None)
         if val is not None and val is not False:
-            val = {} if val is True else val
-            tools.append(genai_types.Tool(google_search=genai_types.GoogleSearch(**val)))
+            tools.append(genai_types.Tool(google_search=genai_types.GoogleSearch(**({} if val is True else val))))
 
         # File Search
         val = config.pop('file_search', None)
@@ -2014,11 +2085,9 @@ class GeminiModel:
                 val['file_search_store_names'] = valid_stores
                 tools.append(genai_types.Tool(file_search=genai_types.FileSearch(**val)))
 
-        # URL Context
         val = config.pop('url_context', None)
-        if val is not None:
-            val = {} if val is True else val
-            tools.append(genai_types.Tool(url_context=genai_types.UrlContext(**val)))
+        if val is not None and val is not False:
+            tools.append(genai_types.Tool(url_context=genai_types.UrlContext(**({} if val is True else val))))
 
         # Function Calling Config → ToolConfig
         fcc = config.pop('function_calling_config', None)

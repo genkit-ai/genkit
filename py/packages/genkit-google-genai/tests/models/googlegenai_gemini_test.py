@@ -18,10 +18,11 @@
 """Tests for the Gemini model implementation."""
 
 import base64
-from typing import Any, get_args
+from typing import Any, cast, get_args
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from genkit_google_genai._models import _gemini
 from genkit_google_genai._models._gemini import (
     DEFAULT_SUPPORTS_MODEL,
     GeminiConfig,
@@ -33,7 +34,7 @@ from genkit_google_genai._models._gemini import (
     KnownGeminiImage,
     KnownGeminiTts,
     KnownGemma,
-    SpeechConfigSchema,
+    SpeechConfig,
     _to_finish_reason,
     get_model_config_schema,
     google_model_info,
@@ -42,6 +43,7 @@ from genkit_google_genai._models._gemini import (
 )
 from genkit_google_genai._models._utils import ToolWire
 from google import genai
+from google.auth.exceptions import DefaultCredentialsError, RefreshError, TransportError
 from google.genai import types as genai_types
 from google.genai.errors import APIError
 from pydantic import BaseModel, Field, ValidationError
@@ -1396,9 +1398,9 @@ def tts_model_instance() -> GeminiModel:
     )
 
 
-def test_speech_config_schema_declares_sdk_fields() -> None:
+def test_speech_config_declares_sdk_fields() -> None:
     """Language code and multi-speaker voice config validate as typed fields, by name or alias."""
-    config = SpeechConfigSchema.model_validate({
+    config = SpeechConfig.model_validate({
         'language_code': 'en-US',
         'multiSpeakerVoiceConfig': {
             'speakerVoiceConfigs': [
@@ -1420,14 +1422,14 @@ def test_speech_config_schema_declares_sdk_fields() -> None:
 def test_tts_config_json_schema_exposes_speech_config_fields() -> None:
     """The Dev UI schema lists every speech config field the SDK accepts."""
     schema = GeminiTtsConfig.model_json_schema(by_alias=True)
-    speech = schema['$defs']['SpeechConfigSchema']['properties']
+    speech = schema['$defs']['SpeechConfig']['properties']
 
     assert {'voiceConfig', 'languageCode', 'multiSpeakerVoiceConfig'} <= set(speech)
 
 
-def test_speech_config_schema_populates_by_field_name() -> None:
+def test_speech_config_populates_by_field_name() -> None:
     """The speech config validates from snake_case field names, not only aliases."""
-    config = SpeechConfigSchema.model_validate({'voice_config': {'prebuilt_voice_config': {'voice_name': 'Kore'}}})
+    config = SpeechConfig.model_validate({'voice_config': {'prebuilt_voice_config': {'voice_name': 'Kore'}}})
 
     assert config.voice_config is not None
     assert config.voice_config.prebuilt_voice_config is not None
@@ -1640,3 +1642,276 @@ async def test_generate_adds_no_voice_to_a_multi_speaker_config(mocker: MockerFi
     assert isinstance(sent_config.speech_config, genai_types.SpeechConfig)
     assert sent_config.speech_config.voice_config is None
     assert sent_config.speech_config.multi_speaker_voice_config is not None
+
+
+# Each strict nested Gemini setting and the google.genai type it is sent as.
+_NESTED_SDK_MIRRORS: list[tuple[type[BaseModel], type[BaseModel]]] = [
+    (_gemini.SafetySettingsSchema, genai_types.SafetySetting),
+    (_gemini.PrebuiltVoiceConfig, genai_types.PrebuiltVoiceConfig),
+    (_gemini.FunctionCallingConfig, genai_types.FunctionCallingConfig),
+    (_gemini.ThinkingConfig, genai_types.ThinkingConfig),
+    (_gemini.FileSearchConfig, genai_types.FileSearch),
+    (_gemini.ImageConfig, genai_types.ImageConfig),
+    (_gemini.VoiceConfig, genai_types.VoiceConfig),
+    (_gemini.SpeakerVoiceConfig, genai_types.SpeakerVoiceConfig),
+    (_gemini.MultiSpeakerVoiceConfig, genai_types.MultiSpeakerVoiceConfig),
+    (_gemini.SpeechConfig, genai_types.SpeechConfig),
+]
+
+
+@pytest.mark.parametrize(('ours', 'sdk'), _NESTED_SDK_MIRRORS, ids=lambda c: c.__name__)
+def test_nested_gemini_setting_declares_exactly_the_sdk_fields(ours: type[BaseModel], sdk: type[BaseModel]) -> None:
+    """A strict nested setting accepts every key its google-genai type accepts, and no other."""
+    assert set(ours.model_fields) == set(sdk.model_fields)
+
+
+@pytest.mark.parametrize(
+    ('config_class', 'field', 'nested'),
+    [
+        (GeminiConfig, 'safetySettings', _gemini.SafetySettingsSchema),
+        (GeminiConfig, 'functionCallingConfig', _gemini.FunctionCallingConfig),
+        (GeminiConfig, 'thinkingConfig', _gemini.ThinkingConfig),
+        (GeminiConfig, 'fileSearch', _gemini.FileSearchConfig),
+        (GeminiImageConfig, 'imageConfig', _gemini.ImageConfig),
+    ],
+)
+def test_gemini_config_form_lists_every_nested_field(
+    config_class: type[BaseModel], field: str, nested: type[BaseModel]
+) -> None:
+    """The hand-written Dev UI schema for a nested setting lists every field the class accepts."""
+    schema = config_class.model_json_schema(by_alias=True)['properties'][field]
+    properties = schema.get('items', schema)['properties']
+
+    assert set(properties) == {f.alias or name for name, f in nested.model_fields.items()}
+
+
+@pytest.mark.asyncio
+async def test_gemini_model__tool_toggle_false_attaches_no_tool(gemini_model_instance: GeminiModel) -> None:
+    """`code_execution`, `google_search`, and `url_context` set to False add no tool."""
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
+        config=GeminiConfig.model_validate({'code_execution': False, 'google_search': False, 'url_context': False}),
+    )
+
+    cfg = await gemini_model_instance._genkit_to_googleai_cfg(request)
+
+    assert cfg is None or not cfg.tools
+
+
+@pytest.mark.asyncio
+async def test_gemini_model__tool_toggle_empty_options_attaches_tool(gemini_model_instance: GeminiModel) -> None:
+    """An empty options dict attaches the tool, same as True."""
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
+        config=GeminiConfig.model_validate({'code_execution': {}, 'google_search': {}, 'url_context': {}}),
+    )
+
+    cfg = await gemini_model_instance._genkit_to_googleai_cfg(request)
+
+    assert cfg is not None
+    tools = cast(list[genai_types.Tool], cfg.tools)
+    assert [t.code_execution is not None for t in tools] == [True, False, False]
+    assert [t.google_search is not None for t in tools] == [False, True, False]
+    assert [t.url_context is not None for t in tools] == [False, False, True]
+
+
+# ---------------------------------------------------------------------------
+# Error classification: credential failures, cache calls, unknown exceptions
+# ---------------------------------------------------------------------------
+
+
+def _hi_request() -> ModelRequest:
+    return ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('Is the salmon tartine nut-free?')])])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'auth_error',
+    [
+        DefaultCredentialsError('Your default credentials were not found.'),
+        RefreshError('invalid_grant: Token has been expired or revoked.'),
+    ],
+)
+async def test_generate_credential_failure_is_unauthenticated(mocker: MockerFixture, auth_error: Exception) -> None:
+    """The SDK resolves ADC on the request; a missing or revoked credential is UNAUTHENTICATED, not INTERNAL."""
+    client_mock = mocker.AsyncMock()
+    client_mock.aio.models.generate_content.side_effect = auth_error
+    gemini = GeminiModel('gemini-2.5-flash', client_mock)
+
+    with pytest.raises(GenkitError) as raised:
+        await gemini.generate(_hi_request(), ActionRunContext())
+
+    assert raised.value.status == 'UNAUTHENTICATED'
+    assert raised.value.cause is auth_error
+
+
+@pytest.mark.asyncio
+async def test_streaming_generate_credential_failure_is_unauthenticated(mocker: MockerFixture) -> None:
+    """Streaming classifies a revoked token the same way non-streaming does."""
+    revoked = RefreshError('invalid_grant: Token has been expired or revoked.')
+    client_mock = mocker.AsyncMock()
+    client_mock.aio.models.generate_content_stream.side_effect = revoked
+    gemini = GeminiModel('gemini-2.5-flash', client_mock)
+    ctx = ActionRunContext(streaming_callback=mocker.MagicMock())
+
+    with pytest.raises(GenkitError) as raised:
+        await gemini.generate(_hi_request(), ctx)
+
+    assert raised.value.status == 'UNAUTHENTICATED'
+    assert raised.value.cause is revoked
+
+
+@pytest.mark.asyncio
+async def test_generate_metadata_server_refresh_error_stays_raw(mocker: MockerFixture) -> None:
+    """On Cloud Run or GKE a metadata-server blip is RefreshError from TransportError, retryable=False; still raw."""
+    try:
+        try:
+            raise TransportError('metadata server unreachable')
+        except TransportError as e:
+            raise RefreshError(e) from e
+    except RefreshError as error:
+        blip = error
+    client_mock = mocker.AsyncMock()
+    client_mock.aio.models.generate_content.side_effect = blip
+    gemini = GeminiModel('gemini-2.5-flash', client_mock)
+
+    with pytest.raises(RefreshError) as raised:
+        await gemini.generate(_hi_request(), ActionRunContext())
+
+    assert raised.value is blip
+
+
+@pytest.mark.asyncio
+async def test_generate_retryable_refresh_error_stays_raw(mocker: MockerFixture) -> None:
+    """google.auth marked the refresh retryable (token endpoint 503), so retry must still see it."""
+    flaky = RefreshError('token endpoint returned 503', retryable=True)
+    client_mock = mocker.AsyncMock()
+    client_mock.aio.models.generate_content.side_effect = flaky
+    gemini = GeminiModel('gemini-2.5-flash', client_mock)
+
+    with pytest.raises(RefreshError) as raised:
+        await gemini.generate(_hi_request(), ActionRunContext())
+
+    assert raised.value is flaky
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('streaming', [False, True])
+async def test_generate_unknown_exception_stays_raw(mocker: MockerFixture, streaming: bool) -> None:
+    """A dropped connection has no known status; it reaches the caller unchanged, not as INTERNAL."""
+    dropped = ConnectionResetError('Connection reset by peer')
+    client_mock = mocker.AsyncMock()
+    client_mock.aio.models.generate_content.side_effect = dropped
+    client_mock.aio.models.generate_content_stream.side_effect = dropped
+    gemini = GeminiModel('gemini-2.5-flash', client_mock)
+    ctx = ActionRunContext(streaming_callback=mocker.MagicMock()) if streaming else ActionRunContext()
+
+    with pytest.raises(ConnectionResetError) as raised:
+        await gemini.generate(_hi_request(), ctx)
+
+    assert raised.value is dropped
+
+
+@pytest.mark.asyncio
+@patch('genkit_google_genai._models._gemini.validate_context_cache_request', new_callable=MagicMock)
+@pytest.mark.parametrize(
+    ('failing_call', 'code', 'status'),
+    [
+        ('list', 429, 'RESOURCE_EXHAUSTED'),
+        ('create', 400, 'INVALID_ARGUMENT'),
+        ('create', 503, 'UNAVAILABLE'),
+    ],
+)
+async def test_retrieve_cached_content_classifies_api_error(
+    _validate: MagicMock, failing_call: str, code: int, status: str
+) -> None:
+    """Cache calls run before generate, so their provider errors need a status too."""
+    pages = AsyncMock()
+    pages.__aiter__.return_value = []
+    client_mock = MagicMock()
+    client_mock.aio.caches.list = AsyncMock(return_value=pages)
+    client_mock.aio.caches.create = AsyncMock(return_value=genai_types.CachedContent())
+    api_error = APIError(code, {'error': {'message': 'cache call failed'}})
+    getattr(client_mock.aio.caches, failing_call).side_effect = api_error
+    gemini = GeminiModel('gemini-2.5-flash', client_mock)
+
+    with pytest.raises(GenkitError) as raised:
+        await gemini._retrieve_cached_content(
+            request=_hi_request(), model_name='gemini-2.5-flash', cache_config={}, contents=[]
+        )
+
+    assert raised.value.status == status
+    assert raised.value.cause is api_error
+
+
+@pytest.mark.asyncio
+@patch('genkit_google_genai._models._gemini.validate_context_cache_request', new_callable=MagicMock)
+async def test_retrieve_cached_content_credential_failure_is_unauthenticated(_validate: MagicMock) -> None:
+    """Missing ADC on the cache lookup is UNAUTHENTICATED."""
+    client_mock = MagicMock()
+    client_mock.aio.caches.list = AsyncMock(side_effect=DefaultCredentialsError('no ADC'))
+    gemini = GeminiModel('gemini-2.5-flash', client_mock)
+
+    with pytest.raises(GenkitError) as raised:
+        await gemini._retrieve_cached_content(
+            request=_hi_request(), model_name='gemini-2.5-flash', cache_config={}, contents=[]
+        )
+
+    assert raised.value.status == 'UNAUTHENTICATED'
+
+
+@pytest.mark.asyncio
+async def test_request_client_credential_failure_is_unauthenticated() -> None:
+    """A Vertex location override with no ADC configured is a credential problem, not a bad argument."""
+    client = MagicMock()
+    client.vertexai = True
+    gemini = GeminiModel(
+        'gemini-2.5-flash',
+        client,
+        client_kwargs={'vertexai': True, 'project': 'menu-prod', 'location': 'us-central1'},
+    )
+    no_adc = DefaultCredentialsError('Your default credentials were not found.')
+
+    with patch('genkit_google_genai._models._gemini.genai.Client', side_effect=no_adc):
+        with pytest.raises(GenkitError) as raised:
+            await gemini._resolve_request_client(
+                ModelRequest(messages=_hi_request().messages, config={'location': 'europe-west4'})
+            )
+
+    assert raised.value.status == 'UNAUTHENTICATED'
+    assert raised.value.cause is no_adc
+
+
+@pytest.mark.asyncio
+async def test_request_client_bad_override_is_invalid_argument() -> None:
+    """The SDK rejecting an override combination is the caller's input."""
+    client = MagicMock()
+    client.vertexai = False
+    gemini = GeminiModel('gemini-2.5-flash', client, client_kwargs={'vertexai': False, 'api_key': 'k'})
+    rejected = ValueError('Project/location and API key are mutually exclusive')
+
+    with patch('genkit_google_genai._models._gemini.genai.Client', side_effect=rejected):
+        with pytest.raises(GenkitError, match='mutually exclusive') as raised:
+            await gemini._resolve_request_client(
+                ModelRequest(messages=_hi_request().messages, config={'api_version': 'v1alpha'})
+            )
+
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    assert raised.value.cause is rejected
+
+
+@pytest.mark.asyncio
+async def test_request_client_unknown_failure_stays_raw() -> None:
+    """Any other client construction failure keeps its own type."""
+    client = MagicMock()
+    client.vertexai = False
+    gemini = GeminiModel('gemini-2.5-flash', client, client_kwargs={'vertexai': False, 'api_key': 'k'})
+    boom = RuntimeError('SDK bug')
+
+    with patch('genkit_google_genai._models._gemini.genai.Client', side_effect=boom):
+        with pytest.raises(RuntimeError) as raised:
+            await gemini._resolve_request_client(
+                ModelRequest(messages=_hi_request().messages, config={'api_version': 'v1alpha'})
+            )
+
+    assert raised.value is boom

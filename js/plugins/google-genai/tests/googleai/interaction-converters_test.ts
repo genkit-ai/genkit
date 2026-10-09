@@ -15,16 +15,22 @@
  */
 
 import * as assert from 'assert';
-import { MessageData, Part } from 'genkit';
+import { GenkitError, MessageData, Part } from 'genkit';
 import { ToolDefinition } from 'genkit/model';
 import { describe, it } from 'node:test';
 import {
   ensureToolIds,
   fromInteraction,
   fromInteractionContent,
+  fromInteractionDelta,
   fromInteractionStep,
+  fromInteractionSync,
+  toInteractionConfigTool,
   toInteractionContent,
+  toInteractionGenerationConfig,
+  toInteractionGoogleSearch,
   toInteractionRole,
+  toInteractionSpeechConfig,
   toInteractionSteps,
   toInteractionTool,
 } from '../../src/googleai/interaction-converters.js';
@@ -32,6 +38,7 @@ import {
   Content,
   GeminiInteraction,
   Step,
+  StepDeltaData,
 } from '../../src/googleai/interaction-types.js';
 
 describe('Interaction Converters', () => {
@@ -151,6 +158,368 @@ describe('Interaction Converters', () => {
     });
   });
 
+  describe('toInteractionGenerationConfig', () => {
+    it('should flatten thinkingConfig and map casing', () => {
+      const config = {
+        thinkingConfig: {
+          thinkingLevel: 'HIGH',
+          includeThoughts: true,
+        },
+      };
+      const result = toInteractionGenerationConfig(config);
+      assert.deepStrictEqual(result, {
+        thinking_level: 'high',
+        thinking_summaries: 'auto',
+      });
+    });
+
+    it('should drop other thinkingConfig fields (no thinking_config) and report them', () => {
+      const dropped: string[] = [];
+      const result = toInteractionGenerationConfig(
+        {
+          thinkingConfig: {
+            thinkingLevel: 'LOW',
+            includeThoughts: false,
+            thinkingBudget: 1024,
+            unknownProp: 'test',
+          },
+        },
+        (field) => dropped.push(field)
+      );
+      assert.deepStrictEqual(result, {
+        thinking_level: 'low',
+        thinking_summaries: 'none',
+      });
+      assert.deepStrictEqual(dropped, [
+        'thinkingConfig.thinkingBudget',
+        'thinkingConfig.unknownProp',
+      ]);
+    });
+
+    it('should handle already snake_cased thinking_config', () => {
+      const dropped: string[] = [];
+      const result = toInteractionGenerationConfig(
+        {
+          thinking_config: {
+            thinking_level: 'MEDIUM',
+            include_thoughts: true,
+            thinking_budget: 2048,
+          },
+        },
+        (field) => dropped.push(field)
+      );
+      assert.deepStrictEqual(result, {
+        thinking_level: 'medium',
+        thinking_summaries: 'auto',
+      });
+      assert.deepStrictEqual(dropped, ['thinkingConfig.thinking_budget']);
+    });
+
+    it('should drop contextCache and report it', () => {
+      const dropped: string[] = [];
+      const result = toInteractionGenerationConfig(
+        { contextCache: true, temperature: 0.5 },
+        (field) => dropped.push(field)
+      );
+      assert.deepStrictEqual(result, { temperature: 0.5 });
+      assert.deepStrictEqual(dropped, ['contextCache']);
+    });
+
+    it('should forward unknown passthrough keys in snake_case', () => {
+      const result = toInteractionGenerationConfig({ someNewField: 1 });
+      assert.deepStrictEqual(result, { some_new_field: 1 });
+    });
+  });
+
+  describe('toInteractionSpeechConfig', () => {
+    it('maps a single prebuilt voice', () => {
+      assert.deepStrictEqual(
+        toInteractionSpeechConfig({
+          voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } },
+        }),
+        [{ voice: 'Puck' }]
+      );
+    });
+
+    it('maps multi-speaker voices', () => {
+      assert.deepStrictEqual(
+        toInteractionSpeechConfig({
+          multiSpeakerVoiceConfig: {
+            speakerVoiceConfigs: [
+              {
+                speaker: 'Joe',
+                voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } },
+              },
+              {
+                speaker: 'Jane',
+                voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } },
+              },
+            ],
+          },
+        }),
+        {
+          speakers: [
+            { voice: 'Kore', speaker: 'Joe' },
+            { voice: 'Puck', speaker: 'Jane' },
+          ],
+        }
+      );
+    });
+
+    it('applies languageCode to every entry', () => {
+      assert.deepStrictEqual(
+        toInteractionSpeechConfig({
+          languageCode: 'fr-FR',
+          voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } },
+        }),
+        [{ voice: 'Puck', language: 'fr-FR' }]
+      );
+    });
+
+    it('returns undefined when no voice or language is set', () => {
+      assert.strictEqual(toInteractionSpeechConfig(undefined), undefined);
+      assert.strictEqual(toInteractionSpeechConfig({}), undefined);
+      assert.strictEqual(
+        toInteractionSpeechConfig({ voiceConfig: {} }),
+        undefined
+      );
+    });
+
+    it('is applied by toInteractionGenerationConfig', () => {
+      assert.deepStrictEqual(
+        toInteractionGenerationConfig({
+          maxOutputTokens: 100,
+          speechConfig: {
+            voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } },
+          },
+        }),
+        {
+          max_output_tokens: 100,
+          speech_config: [{ voice: 'Puck' }],
+        }
+      );
+    });
+  });
+
+  describe('speech_metadata annotations on text parts', () => {
+    it('adds a speech_metadata annotation from metadata.speechMetadata', () => {
+      assert.deepStrictEqual(
+        toInteractionContent({
+          text: "How's it going today Jane?",
+          metadata: { speechMetadata: { speaker: 'Joe', style: 'cheerful' } },
+        }),
+        {
+          type: 'text',
+          text: "How's it going today Jane?",
+          annotations: [
+            { type: 'speech_metadata', speaker: 'Joe', style: 'cheerful' },
+          ],
+        }
+      );
+    });
+
+    it('supports style alone (single-speaker)', () => {
+      assert.deepStrictEqual(
+        toInteractionContent({
+          text: 'Have a wonderful day!',
+          metadata: { speechMetadata: { style: 'cheerful and friendly' } },
+        }),
+        {
+          type: 'text',
+          text: 'Have a wonderful day!',
+          annotations: [
+            { type: 'speech_metadata', style: 'cheerful and friendly' },
+          ],
+        }
+      );
+    });
+
+    it('adds no annotations for plain text or empty speechMetadata', () => {
+      assert.deepStrictEqual(toInteractionContent({ text: 'Hi' }), {
+        type: 'text',
+        text: 'Hi',
+      });
+      assert.deepStrictEqual(
+        toInteractionContent({ text: 'Hi', metadata: { speechMetadata: {} } }),
+        { type: 'text', text: 'Hi' }
+      );
+    });
+  });
+
+  describe('toInteractionGoogleSearch', () => {
+    it('should handle boolean true config', () => {
+      const result = toInteractionGoogleSearch(true);
+      assert.deepStrictEqual(result, { type: 'google_search' });
+    });
+
+    it('should handle array format in snake_case', () => {
+      const result = toInteractionGoogleSearch({
+        search_types: ['web_search', 'image_search'],
+      });
+      assert.deepStrictEqual(result, {
+        type: 'google_search',
+        search_types: ['web_search', 'image_search'],
+      });
+    });
+
+    it('should handle object format in camelCase', () => {
+      const result = toInteractionGoogleSearch({
+        searchTypes: { webSearch: {}, enterpriseWebSearch: {} },
+      });
+      assert.deepStrictEqual(result, {
+        type: 'google_search',
+        search_types: ['web_search', 'enterprise_web_search'],
+      });
+    });
+
+    it('should handle empty config object', () => {
+      const result = toInteractionGoogleSearch({});
+      assert.deepStrictEqual(result, { type: 'google_search' });
+    });
+
+    it('should pass through unrecognized fields from search types array', () => {
+      const result = toInteractionGoogleSearch({
+        searchTypes: ['web_search', 'my_custom_search'],
+      });
+      assert.deepStrictEqual(result, {
+        type: 'google_search',
+        search_types: ['web_search', 'my_custom_search'],
+      });
+    });
+
+    it('should pass through unrecognized fields from search types object', () => {
+      const result = toInteractionGoogleSearch({
+        searchTypes: { webSearch: {}, customSearchPlugin: {} },
+      });
+      assert.deepStrictEqual(result, {
+        type: 'google_search',
+        search_types: ['web_search', 'custom_search_plugin'],
+      });
+    });
+
+    it('should throw an error for invalid top-level config', () => {
+      assert.throws(
+        () => toInteractionGoogleSearch('invalid'),
+        /Invalid configuration for googleSearch tool/
+      );
+    });
+
+    it('should throw an error for invalid searchTypes format', () => {
+      assert.throws(
+        () => toInteractionGoogleSearch({ searchTypes: 'invalid' }),
+        /Invalid searchTypes configuration/
+      );
+    });
+
+    it('should throw an error for invalid search type in array', () => {
+      assert.throws(
+        () => toInteractionGoogleSearch({ searchTypes: [123] }),
+        /Invalid search type/
+      );
+    });
+  });
+
+  describe('toInteractionConfigTool', () => {
+    it('should throw an error if toolRaw is not an object', () => {
+      assert.throws(
+        () => toInteractionConfigTool('not-an-object'),
+        /Invalid tool configuration/
+      );
+      assert.throws(
+        () => toInteractionConfigTool(['not-an-object']),
+        /Invalid tool configuration/
+      );
+      assert.throws(
+        () => toInteractionConfigTool(null),
+        /Invalid tool configuration/
+      );
+    });
+
+    it('should handle built-in tool format with valid inputs', () => {
+      const tool = { codeExecution: { someProp: 123 } };
+      const result = toInteractionConfigTool(tool);
+      assert.deepStrictEqual(result, {
+        type: 'code_execution',
+        some_prop: 123,
+      });
+    });
+
+    it('should handle built-in tool format with boolean true', () => {
+      const tool = { codeExecution: true };
+      const result = toInteractionConfigTool(tool);
+      assert.deepStrictEqual(result, {
+        type: 'code_execution',
+      });
+    });
+
+    it('should throw an error if built-in tool config is invalid type', () => {
+      const tool = { codeExecution: 'invalid' };
+      assert.throws(
+        () => toInteractionConfigTool(tool),
+        /Invalid configuration for codeExecution tool/
+      );
+    });
+
+    it('should handle fileSearch configurations and validate array', () => {
+      const tool = { fileSearch: { fileSearchStoreNames: ['store1'] } };
+      const result = toInteractionConfigTool(tool);
+      assert.deepStrictEqual(result, {
+        type: 'file_search',
+        file_search_store_names: ['store1'],
+      });
+
+      const invalidTool = { fileSearch: { fileSearchStoreNames: 'store1' } };
+      assert.throws(
+        () => toInteractionConfigTool(invalidTool),
+        /fileSearchStoreNames must be an array of strings/
+      );
+    });
+
+    it('should pass through arbitrary custom tools un-nested', () => {
+      const tool = {
+        type: 'function',
+        name: 'myFunction',
+        parameters: { type: 'object' },
+      };
+      const result = toInteractionConfigTool(tool);
+      assert.deepStrictEqual(result, {
+        type: 'function',
+        name: 'myFunction',
+        parameters: { type: 'object' },
+      });
+    });
+
+    it('should pass through unrecognized fields from tool configurations', () => {
+      const tool = {
+        urlContext: {
+          myUrlParam: 1,
+        },
+      };
+      const result = toInteractionConfigTool(tool);
+      assert.deepStrictEqual(result, {
+        type: 'url_context',
+        my_url_param: 1,
+      });
+    });
+
+    it('should handle mcpServer tool configuration and normalize string array allowed_tools to objects', () => {
+      const tool = {
+        mcpServer: {
+          name: 'my-server',
+          url: 'https://mcp.example.com',
+          allowedTools: ['search', 'read_doc'],
+        },
+      };
+      const result = toInteractionConfigTool(tool);
+      assert.deepStrictEqual(result, {
+        type: 'mcp_server',
+        name: 'my-server',
+        url: 'https://mcp.example.com',
+        allowed_tools: [{ tools: ['search', 'read_doc'] }],
+      });
+    });
+  });
+
   describe('toInteractionContent', () => {
     it('should convert TextPart', () => {
       const part: Part = { text: 'Hello' };
@@ -217,6 +586,55 @@ describe('Interaction Converters', () => {
         mime_type: 'application/pdf',
       });
     });
+
+    it('should convert a CSV MediaPart to a document', () => {
+      const result = toInteractionContent({
+        media: { url: 'data:text/csv;base64,DATA', contentType: 'text/csv' },
+      });
+      assert.deepStrictEqual(result, {
+        type: 'document',
+        data: 'DATA',
+        mime_type: 'text/csv',
+      });
+    });
+
+    it('should send a YouTube URL without contentType as video without mime_type', () => {
+      const url = 'https://www.youtube.com/watch?v=abc123';
+      assert.deepStrictEqual(toInteractionContent({ media: { url } }), {
+        type: 'video',
+        uri: url,
+      });
+      assert.deepStrictEqual(
+        toInteractionContent({ media: { url: 'https://youtu.be/abc123' } }),
+        { type: 'video', uri: 'https://youtu.be/abc123' }
+      );
+    });
+
+    it('should send other URIs without a known contentType as documents without mime_type', () => {
+      const url =
+        'https://generativelanguage.googleapis.com/v1beta/files/abc123';
+      assert.deepStrictEqual(toInteractionContent({ media: { url } }), {
+        type: 'document',
+        uri: url,
+      });
+    });
+
+    it('should still throw for a data URL without a contentType', () => {
+      assert.throws(
+        () => toInteractionContent({ media: { url: 'data:;base64,DATA' } }),
+        /Media part missing contentType/
+      );
+    });
+
+    it('should throw for an unsupported contentType', () => {
+      assert.throws(
+        () =>
+          toInteractionContent({
+            media: { url: 'gs://bucket/notes.txt', contentType: 'text/plain' },
+          }),
+        /Unsupported media type: text\/plain/
+      );
+    });
   });
 
   describe('toInteractionSteps', () => {
@@ -242,6 +660,29 @@ describe('Interaction Converters', () => {
           name: 'func',
           arguments: { a: 1 },
           id: 'ref1',
+        },
+      ]);
+    });
+
+    it('should send a ToolRequestPart thoughtSignature back as the function_call signature', () => {
+      const messages: MessageData[] = [
+        {
+          role: 'model',
+          content: [
+            {
+              toolRequest: { name: 'func', input: { a: 1 }, ref: 'ref1' },
+              metadata: { thoughtSignature: 'sig-call' },
+            },
+          ],
+        },
+      ];
+      assert.deepStrictEqual(toInteractionSteps(messages), [
+        {
+          type: 'function_call',
+          name: 'func',
+          arguments: { a: 1 },
+          id: 'ref1',
+          signature: 'sig-call',
         },
       ]);
     });
@@ -347,6 +788,29 @@ describe('Interaction Converters', () => {
       ]);
     });
 
+    it('should round-trip a google_search_result with an array result (tool loop history)', () => {
+      // Shape returned live by gemini-3.6-flash. Resending it in the history
+      // (second turn of a tool loop) used to fail Zod validation.
+      const step: Step = {
+        type: 'google_search_result',
+        call_id: 'call_1',
+        result: [{ search_suggestions: '<div>...</div>' }],
+        signature: 'sig-result',
+      };
+      const parts = fromInteractionStep(step);
+      assert.deepStrictEqual(
+        toInteractionSteps([{ role: 'model', content: parts }]),
+        [
+          {
+            type: 'google_search_result',
+            call_id: 'call_1',
+            result: [{ search_suggestions: '<div>...</div>' }],
+            signature: 'sig-result',
+          },
+        ]
+      );
+    });
+
     it('should convert custom executableCode to code_execution_call step', () => {
       const messages: MessageData[] = [
         {
@@ -396,6 +860,194 @@ describe('Interaction Converters', () => {
         },
       ]);
     });
+
+    it('throws GenkitError when tool output contains non-text/image content', () => {
+      const messages: MessageData[] = [
+        {
+          role: 'tool',
+          content: [
+            {
+              toolResponse: {
+                name: 'pdfTool',
+                ref: 'call-1',
+                output: undefined,
+                content: [
+                  {
+                    media: {
+                      url: 'data:application/pdf;base64,ABC',
+                      contentType: 'application/pdf',
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ];
+      assert.throws(
+        () => toInteractionSteps(messages),
+        (err: any) => {
+          assert.strictEqual(err.status, 'INVALID_ARGUMENT');
+          assert.strictEqual(
+            err.originalMessage,
+            'Tool output for pdfTool may only contain text or image content.'
+          );
+          return true;
+        }
+      );
+    });
+
+    it('wraps plain array tool output in result object', () => {
+      const messages: MessageData[] = [
+        {
+          role: 'tool',
+          content: [
+            {
+              toolResponse: {
+                name: 'listTool',
+                ref: 'call-1',
+                output: [1, 2, 3],
+              },
+            },
+          ],
+        },
+      ];
+      const result = toInteractionSteps(messages);
+      assert.deepStrictEqual(result, [
+        {
+          type: 'function_result',
+          name: 'listTool',
+          call_id: 'call-1',
+          result: { result: [1, 2, 3] },
+        },
+      ]);
+    });
+
+    it('should convert empty reasoning part with thoughtSignature to thought step without summary', () => {
+      const messages: MessageData[] = [
+        {
+          role: 'model',
+          content: [
+            {
+              reasoning: '',
+              metadata: {
+                thoughtSignature: 'sig-123',
+              },
+              custom: {
+                thought: {
+                  type: 'thought',
+                  summary: [],
+                  signature: 'sig-123',
+                },
+              },
+            },
+            {
+              toolRequest: {
+                name: 'getWeather',
+                ref: 'call-1',
+                input: { location: 'London' },
+              },
+            },
+          ],
+        },
+      ];
+      const result = toInteractionSteps(messages);
+      assert.deepStrictEqual(result, [
+        {
+          type: 'thought',
+          signature: 'sig-123',
+        },
+        {
+          type: 'function_call',
+          name: 'getWeather',
+          id: 'call-1',
+          arguments: { location: 'London' },
+        },
+      ]);
+    });
+
+    it('should convert non-empty reasoning part to thought step with summary and signature', () => {
+      const messages: MessageData[] = [
+        {
+          role: 'model',
+          content: [
+            {
+              reasoning: 'Looking up weather data',
+              metadata: {
+                thoughtSignature: 'sig-456',
+              },
+            },
+            {
+              text: 'The weather is sunny.',
+            },
+          ],
+        },
+      ];
+      const result = toInteractionSteps(messages);
+      assert.deepStrictEqual(result, [
+        {
+          type: 'thought',
+          summary: [{ type: 'text', text: 'Looking up weather data' }],
+          signature: 'sig-456',
+        },
+        {
+          type: 'model_output',
+          content: [{ type: 'text', text: 'The weather is sunny.' }],
+        },
+      ]);
+    });
+
+    it('should preserve rich summary from custom.thought when available', () => {
+      const messages: MessageData[] = [
+        {
+          role: 'model',
+          content: [
+            {
+              reasoning: 'Plan',
+              custom: {
+                thought: {
+                  type: 'thought',
+                  summary: [
+                    {
+                      type: 'text',
+                      text: 'Plan',
+                      annotations: [
+                        {
+                          type: 'url_citation',
+                          title: 'Doc',
+                          url: 'https://example.com',
+                        },
+                      ],
+                    },
+                  ],
+                  signature: 'custom-sig-789',
+                },
+              },
+            },
+          ],
+        },
+      ];
+      const result = toInteractionSteps(messages);
+      assert.deepStrictEqual(result, [
+        {
+          type: 'thought',
+          summary: [
+            {
+              type: 'text',
+              text: 'Plan',
+              annotations: [
+                {
+                  type: 'url_citation',
+                  title: 'Doc',
+                  url: 'https://example.com',
+                },
+              ],
+            },
+          ],
+          signature: 'custom-sig-789',
+        },
+      ]);
+    });
   });
 
   describe('fromInteractionContent', () => {
@@ -403,13 +1055,27 @@ describe('Interaction Converters', () => {
       const content: Content = {
         type: 'text',
         text: 'Hello world',
-        annotations: [{ start_index: 0, end_index: 5, source: 'source' }],
+        annotations: [
+          {
+            type: 'file_citation',
+            start_index: 0,
+            end_index: 5,
+            source: 'source',
+          },
+        ],
       };
       const result = fromInteractionContent(content);
       assert.deepStrictEqual(result, {
         text: 'Hello world',
         metadata: {
-          annotations: [{ start_index: 0, end_index: 5, source: 'source' }],
+          annotations: [
+            {
+              type: 'file_citation',
+              start_index: 0,
+              end_index: 5,
+              source: 'source',
+            },
+          ],
         },
       });
     });
@@ -530,6 +1196,51 @@ describe('Interaction Converters', () => {
         toolResponse: {
           name: 'get_weather',
           output: { temperature: 20 },
+          ref: 'call_123',
+        },
+      });
+    });
+
+    it('should convert FunctionResultContent with plain array result into tool output', () => {
+      const content: Content = {
+        type: 'function_result',
+        name: 'list_items',
+        result: [1, 2, 3] as any,
+        call_id: 'call_123',
+      };
+      const result = fromInteractionContent(content);
+      assert.deepStrictEqual(result, {
+        toolResponse: {
+          name: 'list_items',
+          output: [1, 2, 3],
+          ref: 'call_123',
+        },
+      });
+    });
+
+    it('should convert FunctionResultContent with multimodal Content array into tool content', () => {
+      const content: Content = {
+        type: 'function_result',
+        name: 'multimodal_tool',
+        result: [
+          { type: 'text', text: 'description' },
+          { type: 'image', uri: 'https://example.com/img.png' },
+        ] as any,
+        call_id: 'call_123',
+      };
+      const result = fromInteractionContent(content);
+      assert.deepStrictEqual(result, {
+        toolResponse: {
+          name: 'multimodal_tool',
+          content: [
+            { text: 'description', metadata: { annotations: undefined } },
+            {
+              media: {
+                url: 'https://example.com/img.png',
+                contentType: undefined,
+              },
+            },
+          ],
           ref: 'call_123',
         },
       });
@@ -655,6 +1366,95 @@ describe('Interaction Converters', () => {
     });
   });
 
+  describe('fromInteractionDelta', () => {
+    it('should convert text delta', () => {
+      const delta: StepDeltaData = { type: 'text', text: 'hello' };
+      const result = fromInteractionDelta(delta);
+      assert.deepStrictEqual(result, [{ text: 'hello' }]);
+    });
+
+    it('should convert image delta', () => {
+      const delta: StepDeltaData = {
+        type: 'image',
+        data: 'XYZ',
+        mime_type: 'image/png',
+      };
+      const result = fromInteractionDelta(delta);
+      assert.deepStrictEqual(result, [
+        {
+          media: { url: 'data:image/png;base64,XYZ', contentType: 'image/png' },
+        },
+      ]);
+    });
+
+    it('should convert function_call delta', () => {
+      const delta: StepDeltaData = {
+        type: 'function_call',
+        name: 'myTool',
+        id: 'ref1',
+        arguments: { a: 1 },
+      };
+      const result = fromInteractionDelta(delta);
+      assert.deepStrictEqual(result, [
+        {
+          toolRequest: {
+            name: 'myTool',
+            ref: 'ref1',
+            input: { a: 1 },
+            partial: true,
+          },
+        },
+      ]);
+    });
+
+    it('should ignore arguments_delta', () => {
+      const delta: StepDeltaData = {
+        type: 'arguments_delta',
+        arguments: '{"a":',
+      };
+      const result = fromInteractionDelta(delta);
+      assert.deepStrictEqual(result, []);
+    });
+
+    it('should convert thought_summary delta to reasoning', () => {
+      const delta: StepDeltaData = {
+        type: 'thought_summary',
+        content: { type: 'text', text: 'thinking process' },
+      };
+      const result = fromInteractionDelta(delta);
+      assert.deepStrictEqual(result, [{ reasoning: 'thinking process' }]);
+    });
+
+    it('should convert a thought_summary image delta to an [Image] reasoning placeholder', () => {
+      const delta: StepDeltaData = {
+        type: 'thought_summary',
+        content: { type: 'image', data: 'base64data', mime_type: 'image/jpeg' },
+      };
+      const result = fromInteractionDelta(delta);
+      // The draft image is part of the thought, so it must not be streamed as
+      // a media part (the final response only shows `[Image]` in reasoning).
+      assert.deepStrictEqual(result, [{ reasoning: '[Image]' }]);
+    });
+
+    it('should convert other non-text thought_summary deltas to a type placeholder', () => {
+      const audio: StepDeltaData = {
+        type: 'thought_summary',
+        content: { type: 'audio', data: 'base64data', mime_type: 'audio/wav' },
+      };
+      assert.deepStrictEqual(fromInteractionDelta(audio), [
+        { reasoning: '[Audio]' },
+      ]);
+
+      const functionCall: StepDeltaData = {
+        type: 'thought_summary',
+        content: { type: 'function_call', name: 'myFunc', id: 'call_1' },
+      };
+      assert.deepStrictEqual(fromInteractionDelta(functionCall), [
+        { reasoning: '[Function call]' },
+      ]);
+    });
+  });
+
   describe('fromInteraction', () => {
     it('should convert cancelled interaction', () => {
       const interaction: GeminiInteraction = {
@@ -668,6 +1468,389 @@ describe('Interaction Converters', () => {
       assert.deepStrictEqual(result.output?.message?.content, [
         { text: 'Operation cancelled.' },
       ]);
+    });
+
+    it('should finish a failed operation with an error (no infinite polling)', () => {
+      const result = fromInteraction({
+        id: '123',
+        status: 'failed',
+        errors: [{ code: 'api_error', message: 'boom' }],
+      });
+      assert.strictEqual(result.done, true);
+      assert.strictEqual(result.output, undefined);
+      assert.ok(result.error?.message.includes('[api_error] boom'));
+      assert.strictEqual(result.error?.code, 'api_error');
+    });
+
+    it('should finish a failed operation without errors[] with a generic error', () => {
+      const result = fromInteraction({ id: '123', status: 'failed' });
+      assert.strictEqual(result.done, true);
+      assert.strictEqual(result.error?.message, 'Interaction failed');
+    });
+
+    it('should convert a content-blocked failed operation to finishReason blocked', () => {
+      const result = fromInteraction({
+        id: '123',
+        status: 'failed',
+        errors: [{ code: 'recitation', message: 'Recitation blocked.' }],
+        usage: { total_input_tokens: 7, total_tokens: 7 },
+      });
+      assert.strictEqual(result.done, true);
+      assert.strictEqual(result.error, undefined);
+      assert.strictEqual(result.output?.finishReason, 'blocked');
+      assert.strictEqual(result.output?.finishMessage, 'Recitation blocked.');
+      assert.strictEqual(result.output?.usage?.inputTokens, 7);
+    });
+
+    it('should carry usage on a cancelled operation', () => {
+      const result = fromInteraction({
+        id: '123',
+        status: 'cancelled',
+        usage: { total_input_tokens: 3, total_tokens: 3 },
+      });
+      assert.strictEqual(result.output?.usage?.inputTokens, 3);
+    });
+
+    it('should finish a requires_action operation (collaborative planning) and surface the plan', () => {
+      const result = fromInteraction({
+        id: '123',
+        status: 'requires_action',
+        steps: [
+          {
+            type: 'model_output',
+            content: [
+              {
+                type: 'text',
+                text: "Here is the research plan I've prepared: 1. ...",
+              },
+            ],
+          },
+        ],
+      });
+      assert.strictEqual(result.done, true);
+      assert.strictEqual(result.error, undefined);
+      assert.strictEqual(result.output?.finishReason, 'stop');
+      assert.deepStrictEqual(
+        result.output?.message?.content.map((p) => p.text),
+        ["Here is the research plan I've prepared: 1. ..."]
+      );
+      assert.strictEqual(
+        result.output?.message?.metadata?.interactionStatus,
+        'requires_action'
+      );
+      assert.strictEqual(
+        result.output?.message?.metadata?.interactionId,
+        '123'
+      );
+    });
+
+    it('should surface pending client function calls as toolRequests on requires_action', () => {
+      const result = fromInteraction({
+        id: '123',
+        status: 'requires_action',
+        steps: [
+          {
+            type: 'function_call',
+            id: 'call-1',
+            name: 'lookup',
+            arguments: { q: 'x' },
+          },
+        ],
+      });
+      assert.strictEqual(result.done, true);
+      assert.deepStrictEqual(result.output?.message?.content, [
+        { toolRequest: { name: 'lookup', ref: 'call-1', input: { q: 'x' } } },
+      ]);
+    });
+
+    it('should keep the function_call signature and round-trip it in the next request', () => {
+      // Shape observed live (gemini-flash-latest, store: false): the
+      // function_call step carries its own signature.
+      const result = fromInteraction({
+        id: 'v1_abc123',
+        status: 'requires_action',
+        steps: [
+          {
+            type: 'function_call',
+            id: 'call-1',
+            name: 'lookup',
+            arguments: { q: 'x' },
+            signature: 'sig-call',
+          },
+        ],
+      });
+      const content = result.output?.message?.content ?? [];
+      assert.deepStrictEqual(content, [
+        {
+          toolRequest: { name: 'lookup', ref: 'call-1', input: { q: 'x' } },
+          metadata: { thoughtSignature: 'sig-call' },
+        },
+      ]);
+
+      // Resending the history (stateless) includes the signature again.
+      assert.deepStrictEqual(toInteractionSteps([{ role: 'model', content }]), [
+        {
+          type: 'function_call',
+          name: 'lookup',
+          arguments: { q: 'x' },
+          id: 'call-1',
+          signature: 'sig-call',
+        },
+      ]);
+    });
+
+    it('should keep the signature on completed (server-side) function calls', () => {
+      const result = fromInteractionSync({
+        status: 'completed',
+        steps: [
+          {
+            type: 'function_call',
+            id: 'call-1',
+            name: 'lookup',
+            arguments: { q: 'x' },
+            signature: 'sig-call',
+          },
+          {
+            type: 'function_result',
+            call_id: 'call-1',
+            name: 'lookup',
+            result: { a: 1 },
+          },
+        ],
+      });
+      assert.deepStrictEqual(result.message?.content[0], {
+        custom: {
+          serverFunctionCall: {
+            id: 'call-1',
+            name: 'lookup',
+            arguments: { q: 'x' },
+          },
+        },
+        metadata: { thoughtSignature: 'sig-call' },
+      });
+    });
+
+    it('should keep polling for in_progress', () => {
+      const result = fromInteraction({ id: '123', status: 'in_progress' });
+      assert.strictEqual(result.done, false);
+    });
+
+    it('should keep polling for queued (waiting for capacity)', () => {
+      const result = fromInteraction({ id: '123', status: 'queued' });
+      assert.strictEqual(result.done, false);
+      assert.strictEqual(result.error, undefined);
+    });
+
+    it('should finish with an error for an unknown status (no infinite polling)', () => {
+      const result = fromInteraction({
+        id: '123',
+        status: 'expired' as any,
+      });
+      assert.strictEqual(result.done, true);
+      assert.strictEqual(result.output, undefined);
+      assert.strictEqual(
+        result.error?.message,
+        'Unknown interaction status: expired'
+      );
+    });
+
+    it('should convert an incomplete operation to finishReason length', () => {
+      const result = fromInteraction({
+        id: '123',
+        status: 'incomplete',
+        steps: [
+          {
+            type: 'model_output',
+            content: [{ type: 'text', text: 'partial' }],
+          },
+        ],
+      });
+      assert.strictEqual(result.done, true);
+      assert.strictEqual(result.output?.finishReason, 'length');
+      assert.deepStrictEqual(
+        result.output?.message?.content.map((p) => p.text),
+        ['partial']
+      );
+    });
+  });
+
+  describe('fromInteractionSync', () => {
+    it('returns finishReason blocked for a post-execution safety block', () => {
+      const result = fromInteractionSync({
+        id: 'int-1',
+        status: 'failed',
+        errors: [
+          {
+            code: 'safety',
+            message: 'Response blocked due to safety violations.',
+          },
+        ],
+      });
+      assert.strictEqual(result.finishReason, 'blocked');
+      assert.strictEqual(
+        result.finishMessage,
+        'Response blocked due to safety violations.'
+      );
+      assert.deepStrictEqual(result.message?.content, []);
+      assert.strictEqual(result.message?.metadata?.interactionId, 'int-1');
+    });
+
+    it('returns finishReason blocked for every content-block code', () => {
+      for (const code of [
+        'safety',
+        'recitation',
+        'language',
+        'prohibited_content',
+        'spii',
+        'blocklist',
+        'image_safety',
+        'image_prohibited_content',
+        'image_recitation',
+        'image_other',
+        'content_blocked',
+        'jailbreak',
+        'model_armor',
+      ]) {
+        const result = fromInteractionSync({
+          status: 'failed',
+          errors: [{ code, message: 'blocked' }],
+        });
+        assert.strictEqual(result.finishReason, 'blocked', `code "${code}"`);
+      }
+    });
+
+    it('throws a retryable ABORTED GenkitError for malformed_function_call', () => {
+      const advice =
+        'Model generated invalid JSON syntax and the output could not be parsed. Please retry the request.';
+      assert.throws(
+        () =>
+          fromInteractionSync({
+            status: 'failed',
+            errors: [{ code: 'malformed_function_call', message: advice }],
+          }),
+        (err: any) => {
+          assert.ok(err instanceof GenkitError);
+          assert.strictEqual(err.status, 'ABORTED');
+          assert.ok(err.message.includes('[malformed_function_call]'));
+          assert.ok(err.message.includes(advice));
+          return true;
+        }
+      );
+    });
+
+    it('throws ABORTED for unexpected_tool_call and no_image', () => {
+      for (const code of ['unexpected_tool_call', 'no_image']) {
+        assert.throws(
+          () =>
+            fromInteractionSync({
+              status: 'failed',
+              errors: [{ code, message: 'retry' }],
+            }),
+          (err: any) => err instanceof GenkitError && err.status === 'ABORTED',
+          `code "${code}"`
+        );
+      }
+    });
+
+    it('throws a non-retryable UNKNOWN GenkitError for a failure without errors[]', () => {
+      assert.throws(
+        () => fromInteractionSync({ status: 'failed' }),
+        (err: any) => {
+          assert.ok(err instanceof GenkitError);
+          assert.strictEqual(err.status, 'UNKNOWN');
+          assert.ok(err.message.includes('Interaction failed'));
+          return true;
+        }
+      );
+    });
+
+    it('throws a non-retryable UNKNOWN GenkitError for an unrecognized code', () => {
+      assert.throws(
+        () =>
+          fromInteractionSync({
+            status: 'failed',
+            errors: [{ code: 'something_new', message: 'huh' }],
+          }),
+        (err: any) =>
+          err instanceof GenkitError &&
+          err.status === 'UNKNOWN' &&
+          err.message.includes('[something_new] huh')
+      );
+    });
+
+    it('returns finishReason length with partial content for an incomplete interaction', () => {
+      const result = fromInteractionSync({
+        id: 'int-1',
+        status: 'incomplete',
+        steps: [
+          {
+            type: 'model_output',
+            content: [{ type: 'text', text: 'partial' }],
+          },
+        ],
+      });
+      assert.strictEqual(result.finishReason, 'length');
+      assert.strictEqual(
+        result.finishMessage,
+        'Interaction incomplete (truncated output)'
+      );
+      assert.deepStrictEqual(
+        result.message?.content.map((p) => p.text),
+        ['partial']
+      );
+    });
+
+    it('carries usage (including per-modality counts) on a blocked response', () => {
+      const result = fromInteractionSync({
+        status: 'failed',
+        errors: [{ code: 'safety', message: 'blocked' }],
+        usage: {
+          total_input_tokens: 10,
+          total_output_tokens: 0,
+          total_tokens: 10,
+          input_tokens_by_modality: [
+            { modality: 'text', tokens: 8 },
+            { modality: 'image', tokens: 2 },
+          ],
+        },
+      });
+      assert.strictEqual(result.finishReason, 'blocked');
+      assert.deepStrictEqual(result.usage, {
+        inputTokens: 10,
+        outputTokens: 0,
+        totalTokens: 10,
+        cachedContentTokens: undefined,
+        thoughtsTokens: undefined,
+        inputCharacters: 8,
+        inputImages: 2,
+      });
+    });
+
+    it('carries usage on a cancelled response', () => {
+      const result = fromInteractionSync({
+        status: 'cancelled',
+        usage: { total_input_tokens: 4, total_tokens: 4 },
+      });
+      assert.strictEqual(result.finishReason, 'aborted');
+      assert.strictEqual(result.usage?.inputTokens, 4);
+    });
+
+    it('carries usage even when the interaction has no steps', () => {
+      const result = fromInteractionSync({
+        status: 'completed',
+        usage: { total_input_tokens: 5, total_tokens: 5 },
+      });
+      assert.strictEqual(result.usage?.inputTokens, 5);
+    });
+
+    it('still returns finishReason stop for a completed interaction', () => {
+      const result = fromInteractionSync({
+        status: 'completed',
+        steps: [
+          { type: 'model_output', content: [{ type: 'text', text: 'done' }] },
+        ],
+      });
+      assert.strictEqual(result.finishReason, 'stop');
     });
   });
 });

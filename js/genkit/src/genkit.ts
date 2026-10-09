@@ -102,8 +102,8 @@ import {
   defineSchema,
   isAction,
   isBackgroundAction,
-  isDevEnv,
   registerBackgroundAction,
+  resolveReflectionConfig,
   setClientHeader,
   type Action,
   type ActionContext,
@@ -157,6 +157,15 @@ export interface GenkitOptions {
   name?: string;
   /** Additional attribution information to include in the x-goog-api-client header. */
   clientHeader?: string;
+  /**
+   * Exact port for the reflection API; startup fails if it is taken. `0`
+   * lets the OS pick. When unset, probes upward from 3100.
+   * `GENKIT_REFLECTION_PORT` overrides this.
+   *
+   * Does not turn the reflection API on: it runs under `GENKIT_ENV=dev` or
+   * with `GENKIT_REFLECTION_ENABLED=true`.
+   */
+  reflectionPort?: number;
 }
 
 /**
@@ -188,12 +197,30 @@ export class Genkit extends GenkitAI implements HasRegistry {
       this.registry.context = this.options.context;
     }
     this.configure();
-    if (isDevEnv() && !disableReflectionApi) {
+    // The reflection API runs under GENKIT_ENV=dev, or in any environment with
+    // GENKIT_REFLECTION_ENABLED=true. Resolving here (rather than only inside
+    // the server) keeps an invalid setting a constructor-time error.
+    const reflectionConfig = resolveReflectionConfig(process.env, {
+      port: this.options.reflectionPort,
+    });
+    const reflectionRequested =
+      reflectionConfig.kind === 'v1' || reflectionConfig.kind === 'v2';
+    if (reflectionRequested && !disableReflectionApi) {
       this.reflectionServer = new ReflectionServer(this.registry, {
         configuredEnvs: ['dev'],
         name: this.options.name,
+        port: this.options.reflectionPort,
       });
-      this.reflectionServer.start().catch((e) => logger.error);
+      this.reflectionServer.start().catch((e) => {
+        // Rethrown rather than logged: a reflection server that was asked for
+        // but cannot start must not degrade silently. start() is async, so
+        // this surfaces as an unhandled rejection, which the host app can
+        // observe and which crashes the process by default.
+        throw new GenkitError({
+          status: 'FAILED_PRECONDITION',
+          message: `Reflection server failed to start: ${e instanceof Error ? e.message : e}`,
+        });
+      });
     }
     if (options?.clientHeader) {
       setClientHeader(options?.clientHeader);

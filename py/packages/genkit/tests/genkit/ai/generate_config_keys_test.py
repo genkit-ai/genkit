@@ -6,21 +6,26 @@
 """A config key the model doesn't declare fails the call before the model runs.
 
 Every failing case asserts the same three things: the status, that the model
-was never called, and the message (model name plus the offending key).
+was never called, and the message (model name plus the offending key). A
+per-request API key in config fails the same way, with a message that points
+at ``context.secrets``.
 """
 
 from pathlib import Path
 from typing import Any
 
 import pytest
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
 
 from genkit import Genkit, Message, ModelResponse, Part
-from genkit._core._action import ActionRunContext
+from genkit._core._action import ActionKind, ActionRunContext
 from genkit._core._error import GenkitError
 from genkit._core._model import ModelRef, ModelRequest
 from genkit._core._typing import GenerationCommonConfig, Operation, Role
 from genkit.model import ModelConfig, model_ref
+
+KEY = 'sk-tenant'
+SECRETS_HINT = "context={'secrets': {'api_key': ...}}"
 
 
 class StrictConfig(ModelConfig):
@@ -66,6 +71,20 @@ class GeminiLikeConfig(ModelConfig):
     thinking_config: dict[str, Any] | None = Field(default=None, alias='thinkingConfig')
 
 
+class OwnStrictConfig(BaseModel):
+    """A plugin class that isn't built on ModelConfig and forbids unknown keys."""
+
+    model_config = ConfigDict(extra='forbid')
+
+    num_ctx: int | None = None
+
+
+class LegacyConfig(ModelConfig):
+    """A plugin class that still declares its own ``api_key`` setting."""
+
+    api_key: str | None = None
+
+
 def _config_value(config: Any, key: str) -> Any:  # noqa: ANN401
     if isinstance(config, dict):
         return config.get(key)
@@ -93,6 +112,15 @@ def _ai_with_model(
     model = _Model()
     model.define(ai, name=name, config_schema=config_schema)
     return ai, model
+
+
+def _assert_points_to_secrets(err: pytest.ExceptionInfo[GenkitError], fn: _Model) -> None:
+    assert err.value.status == 'INVALID_ARGUMENT'
+    assert fn.requests == []
+    assert SECRETS_HINT in str(err.value)
+    assert 'unknown config key' not in str(err.value)
+    assert KEY not in str(err.value)
+    assert KEY not in repr(err.value)
 
 
 def _assert_rejected(err: pytest.ExceptionInfo[GenkitError], fn: _Model, *needles: str) -> None:
@@ -361,13 +389,13 @@ async def test_prompt_call_config_typo_raises() -> None:
 
 @pytest.mark.asyncio
 async def test_prompt_camel_case_definition_with_snake_case_call_reaches_model() -> None:
-    """A prompt's `maxOutputTokens: 5` overridden at call time by `max_output_tokens: 7` runs with 7."""
+    """Prompt `maxOutputTokens: 5` called with `max_output_tokens: 7` sends only `max_output_tokens: 7`."""
     ai, fn = _ai_with_model()
     prompt = ai.define_prompt(name='spell', model='strict', prompt='hi', config={'maxOutputTokens': 5})
 
     await prompt(config={'max_output_tokens': 7})
 
-    assert _config_value(fn.requests[-1].config, 'max_output_tokens') == 7
+    assert fn.requests[-1].config == {'max_output_tokens': 7}
 
 
 @pytest.mark.asyncio
@@ -472,6 +500,22 @@ async def test_generate_both_spellings_of_plugin_declared_alias_raises_same_sett
 
     _assert_rejected(err, fn)
     assert err.value.original_message == 'gem: thinking_config and thinkingConfig are the same setting; pass one'
+
+
+@pytest.mark.asyncio
+async def test_generate_three_spellings_of_one_setting_lists_all_three() -> None:
+    """`AliasChoices('seed_value', 'seedValue', 'seed')` with all three set names all three in one list."""
+
+    class SeedConfig(ModelConfig):
+        seed_value: int | None = Field(default=None, validation_alias=AliasChoices('seed_value', 'seedValue', 'seed'))
+
+    ai, fn = _ai_with_model(config_schema=SeedConfig, name='seeded')
+
+    with pytest.raises(GenkitError) as err:
+        await ai.generate(model='seeded', prompt='hi', config={'seedValue': 1, 'seed': 1, 'seed_value': 1})
+
+    _assert_rejected(err, fn)
+    assert err.value.original_message == 'seeded: seed_value, seedValue, and seed are the same setting; pass one'
 
 
 @pytest.mark.asyncio
@@ -612,3 +656,237 @@ async def test_generate_ref_with_plugin_class_still_checks_against_that_class() 
         await ai.generate(model=ref, prompt='hi', config={'safety_settings': [{'category': 'HARM'}]})
 
     _assert_rejected(err, fn, 'safety_settings')
+
+
+# -- api key ------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    'config',
+    [{'api_key': KEY}, {'apiKey': KEY}, {'temperature': 0.2, 'api_key': KEY}],
+    ids=['snake_case', 'camelCase', 'next-to-valid-settings'],
+)
+@pytest.mark.asyncio
+async def test_generate_config_api_key_raises_pointing_to_secrets(config: dict[str, Any]) -> None:
+    """A key in config raises INVALID_ARGUMENT naming `context.secrets`, without echoing the key."""
+    ai, fn = _ai_with_model()
+
+    with pytest.raises(GenkitError) as err:
+        await ai.generate(model='strict', prompt='hi', config=config)
+
+    _assert_points_to_secrets(err, fn)
+
+
+def test_model_config_with_api_key_raises_validation_error() -> None:
+    """`ModelConfig(api_key=k)` fails where it's typed; there's no such setting."""
+    with pytest.raises(ValidationError, match='api_key'):
+        ModelConfig(api_key=KEY)  # type: ignore[call-arg]
+
+
+@pytest.mark.asyncio
+async def test_generate_config_api_key_on_model_without_config_class_raises() -> None:
+    """A model defined with no `config_schema` still rejects a key in config, though it takes any other key."""
+    ai, fn = _ai_with_model(config_schema=None, name='loose')
+
+    with pytest.raises(GenkitError) as err:
+        await ai.generate(model='loose', prompt='hi', config={'api_key': KEY})
+
+    _assert_points_to_secrets(err, fn)
+
+
+@pytest.mark.asyncio
+async def test_generate_config_api_key_on_plugin_class_not_built_on_model_config_raises() -> None:
+    """A plugin's own strict class (`extra='forbid'`, not a ModelConfig) gets the secrets message, not "unknown key"."""
+    ai, fn = _ai_with_model(config_schema=OwnStrictConfig, name='own')
+
+    with pytest.raises(GenkitError) as err:
+        await ai.generate(model='own', prompt='hi', config={'num_ctx': 2048, 'api_key': KEY})
+
+    _assert_points_to_secrets(err, fn)
+
+
+@pytest.mark.asyncio
+async def test_generate_plugin_class_that_declares_api_key_raises() -> None:
+    """`config=LegacyConfig(api_key=k)` on a plugin class with its own `api_key` field raises."""
+    ai, fn = _ai_with_model(config_schema=LegacyConfig, name='legacy')
+
+    with pytest.raises(GenkitError) as err:
+        await ai.generate(model='legacy', prompt='hi', config=LegacyConfig(api_key=KEY))
+
+    _assert_points_to_secrets(err, fn)
+
+
+@pytest.mark.asyncio
+async def test_generate_model_ref_with_api_key_in_its_config_raises() -> None:
+    """`model_ref('legacy', config=LegacyConfig(api_key=k))` raises when generate uses it, with no call-site config."""
+    ai, fn = _ai_with_model(config_schema=LegacyConfig, name='legacy')
+    ref = model_ref('legacy', config_schema=LegacyConfig, config=LegacyConfig(api_key=KEY))
+
+    with pytest.raises(GenkitError) as err:
+        await ai.generate(model=ref, prompt='hi')
+
+    _assert_points_to_secrets(err, fn)
+
+
+@pytest.mark.asyncio
+async def test_generate_config_api_key_none_is_accepted() -> None:
+    """`config={'api_key': None}` isn't a key, so the call runs."""
+    ai, fn = _ai_with_model(config_schema=None, name='loose')
+
+    await ai.generate(model='loose', prompt='hi', config={'api_key': None})
+
+    assert len(fn.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_generate_config_api_key_never_reaches_model_or_trace(exporter: Any) -> None:  # noqa: ANN401
+    """The model never runs and no recorded span contains the key."""
+    ai, fn = _ai_with_model()
+
+    with pytest.raises(GenkitError):
+        await ai.generate(model='strict', prompt='hi', config={'api_key': KEY})
+
+    assert fn.requests == []
+    for span in exporter.get_finished_spans():
+        for value in dict(span.attributes or {}).values():
+            assert KEY not in str(value)
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_config_api_key_raises() -> None:
+    """`generate_stream` raises the same error before any chunk."""
+    ai, fn = _ai_with_model()
+    chunks: list[Any] = []
+
+    stream = ai.generate_stream(model='strict', prompt='hi', config={'api_key': KEY})
+    with pytest.raises(GenkitError) as err:
+        async for chunk in stream.stream:
+            chunks.append(chunk)
+
+    _assert_points_to_secrets(err, fn)
+    assert chunks == []
+
+
+@pytest.mark.asyncio
+async def test_generate_operation_config_api_key_raises() -> None:
+    """`generate_operation` raises the same error and starts no job."""
+    ai = Genkit()
+    started: list[ModelRequest] = []
+
+    async def start(request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+        started.append(request)
+        return Operation(id='job-1', done=False)
+
+    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+        return op
+
+    ai.define_background_model(name='bg', start=start, check=check)
+
+    with pytest.raises(GenkitError) as err:
+        await ai.generate_operation(model='bg', prompt='hi', config={'api_key': KEY})
+
+    assert err.value.status == 'INVALID_ARGUMENT'
+    assert SECRETS_HINT in str(err.value)
+    assert KEY not in str(err.value)
+    assert started == []
+
+
+@pytest.mark.asyncio
+async def test_prompt_config_api_key_raises_when_called() -> None:
+    """`define_prompt(config={'api_key': k})` defines; calling the prompt raises the same error."""
+    ai, fn = _ai_with_model()
+    prompt = ai.define_prompt(name='p', model='strict', prompt='hi', config={'api_key': KEY})
+
+    with pytest.raises(GenkitError) as err:
+        await prompt()
+
+    _assert_points_to_secrets(err, fn)
+
+
+@pytest.mark.asyncio
+async def test_prompt_call_config_api_key_raises() -> None:
+    """`prompt(config={'apiKey': k})` on a prompt with no key of its own raises the same error."""
+    ai, fn = _ai_with_model()
+    prompt = ai.define_prompt(name='p', model='strict', prompt='hi', config={'temperature': 0.2})
+
+    with pytest.raises(GenkitError) as err:
+        await prompt(config={'apiKey': KEY})
+
+    _assert_points_to_secrets(err, fn)
+
+
+@pytest.mark.parametrize('name', ['strict', 'loose'])
+@pytest.mark.asyncio
+async def test_util_generate_action_config_api_key_raises(name: str) -> None:
+    """The registered `/util/generate` action (Dev UI, reflection) raises the same error; the model never runs."""
+    ai, fn = _ai_with_model(config_schema=StrictConfig if name == 'strict' else None, name=name)
+    action = await ai.registry.resolve_action(ActionKind.UTIL, 'generate')
+    assert action is not None
+
+    with pytest.raises(GenkitError) as err:
+        await action.run({
+            'model': name,
+            'messages': [{'role': 'user', 'content': [{'text': 'hi'}]}],
+            'config': {'apiKey': KEY},
+        })
+
+    _assert_points_to_secrets(err, fn)
+
+
+@pytest.mark.parametrize(
+    'request_input',
+    [
+        {'messages': [], 'config': {'api_key': KEY}},
+        ModelRequest(messages=[], config={'apiKey': KEY}),
+        ModelRequest(messages=[], config=LegacyConfig(api_key=KEY)),
+    ],
+    ids=['dict', 'request-with-dict-config', 'request-with-config-object'],
+)
+@pytest.mark.asyncio
+async def test_model_action_run_directly_with_config_api_key_raises(request_input: object) -> None:
+    """Running the model action itself, outside generate, raises the same error; the model fn never runs."""
+    ai, fn = _ai_with_model(config_schema=None, name='loose')
+    action = await ai.registry.resolve_action(ActionKind.MODEL, 'loose')
+    assert action is not None
+
+    with pytest.raises(GenkitError) as err:
+        await action.run(request_input)
+
+    _assert_points_to_secrets(err, fn)
+
+
+@pytest.mark.asyncio
+async def test_background_model_action_run_directly_with_config_api_key_raises() -> None:
+    """Running a background model's action outside generate_operation raises the same error and starts no job."""
+    ai = Genkit()
+    started: list[ModelRequest] = []
+
+    async def start(request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+        started.append(request)
+        return Operation(id='job-1', done=False)
+
+    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+        return op
+
+    ai.define_background_model(name='bg', start=start, check=check)
+    action = await ai.registry.resolve_action(ActionKind.BACKGROUND_MODEL, 'bg')
+    assert action is not None
+
+    with pytest.raises(GenkitError) as err:
+        await action.run({'messages': [], 'config': {'api_key': KEY}})
+
+    assert err.value.status == 'INVALID_ARGUMENT'
+    assert SECRETS_HINT in str(err.value)
+    assert started == []
+
+
+@pytest.mark.parametrize('spelling', ['api_key', 'apiKey'])
+@pytest.mark.asyncio
+async def test_generate_extra_api_key_raises_pointing_to_secrets(spelling: str) -> None:
+    """`config={'extra': {'api_key': k}}` raises the same error; `extra` goes on the wire and into traces."""
+    ai, fn = _ai_with_model()
+
+    with pytest.raises(GenkitError) as err:
+        await ai.generate(model='strict', prompt='hi', config={'extra': {spelling: KEY}})
+
+    _assert_points_to_secrets(err, fn)

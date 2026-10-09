@@ -408,8 +408,7 @@ async def test_image_config_survives_the_action_boundary() -> None:
 @pytest.mark.asyncio
 async def test_genkit_generic_config_never_reaches_the_image_body() -> None:
     # The framework coerces a raw mapping into ModelConfig, so its own knobs
-    # arrive as declared fields; only this path proves they are dropped, and an
-    # api_key on an InvokeModel body would be a credential on the wire.
+    # arrive as declared fields; only this path proves they are dropped.
     plugin = Bedrock(
         region='us-east-1',
         models=[ModelDefinition(name='stability.sd3-5-large-v1:0', type='image')],
@@ -421,13 +420,40 @@ async def test_genkit_generic_config_never_reaches_the_image_body() -> None:
 
     request = ModelRequest.model_validate({
         'messages': [{'role': 'user', 'content': [{'text': 'a coral reef'}]}],
-        'config': {'aspect_ratio': '16:9', 'temperature': 0.9, 'api_key': 'SECRET-VALUE'},
+        'config': {'aspect_ratio': '16:9', 'temperature': 0.9},
     })
     await action.run(request)
 
-    body = transport.calls[0]['body']
-    assert json.loads(body) == {'prompt': 'a coral reef', 'output_format': 'png', 'aspect_ratio': '16:9'}
-    assert 'SECRET-VALUE' not in body
+    assert json.loads(transport.calls[0]['body']) == {
+        'prompt': 'a coral reef',
+        'output_format': 'png',
+        'aspect_ratio': '16:9',
+    }
+
+
+@pytest.mark.parametrize('spelling', ['api_key', 'apiKey'])
+@pytest.mark.asyncio
+async def test_image_action_config_api_key_raises_and_sends_nothing(spelling: str) -> None:
+    """A key in image config raises INVALID_ARGUMENT naming context.secrets, like every other model."""
+    plugin = Bedrock(
+        region='us-east-1',
+        models=[ModelDefinition(name='stability.sd3-5-large-v1:0', type='image')],
+    )
+    transport = FakeImageTransport()
+    plugin._transport = cast(BedrockTransport, transport)  # noqa: SLF001
+    action = await plugin.resolve(ActionKind.MODEL, 'stability.sd3-5-large-v1:0')
+    assert action is not None
+
+    with pytest.raises(GenkitError) as err:
+        await action.run({
+            'messages': [{'role': 'user', 'content': [{'text': 'a coral reef'}]}],
+            'config': {'aspect_ratio': '16:9', spelling: 'SECRET-VALUE'},
+        })
+
+    assert err.value.status == 'INVALID_ARGUMENT'
+    assert "context={'secrets': {'api_key': ...}}" in str(err.value)
+    assert 'SECRET-VALUE' not in str(err.value)
+    assert transport.calls == []
 
 
 class FakeConverseTransport:

@@ -25,10 +25,11 @@ import pytest
 from genkit_middleware import Retry
 from pydantic import ValidationError
 
-from genkit import ModelResponse
+from genkit import ActionRunContext, FinishReason, Genkit, Message, ModelResponse, ModelResponseChunk, Part, Role
 from genkit._core._error import GenkitError
 from genkit.middleware import GenerateMiddlewareContext, ModelHookParams
 from genkit.model import ModelRequest
+from genkit.testing import define_scripted_model
 
 
 def _make_params() -> ModelHookParams:
@@ -315,6 +316,89 @@ async def test_retry_does_not_retry_unauthenticated_error(ctx: GenerateMiddlewar
 
     assert call_count == 1
     sleep.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_generate_with_failing_model_and_retry_retries_connection_error() -> None:
+    """With `Retry(max_retries=2)`, a model raising ConnectionError once is called again and its answer comes back."""
+    ai = Genkit()
+    calls = 0
+
+    async def flaky(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise ConnectionError('connection reset')
+        return ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('second try')]),
+        )
+
+    ai.define_model(name='flaky', fn=flaky)
+
+    response = await ai.generate(
+        model='flaky',
+        prompt='hi',
+        use=[Retry(max_retries=2, initial_delay_ms=0, no_jitter=True)],
+    )
+
+    assert response.finish_reason == FinishReason.STOP
+    assert response.text == 'second try'
+    assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_generate_with_failing_model_and_retry_retries_unclassified_error_regardless_of_statuses() -> None:
+    """`statuses=['UNAVAILABLE']` still retries a raw ConnectionError; it fails after 1 + max_retries calls."""
+    ai = Genkit()
+    calls = 0
+
+    async def down(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        nonlocal calls
+        calls += 1
+        raise ConnectionError('connection refused')
+
+    ai.define_model(name='down', fn=down)
+
+    response = await ai.generate(
+        model='down',
+        prompt='hi',
+        use=[Retry(max_retries=2, statuses=['UNAVAILABLE'], initial_delay_ms=0, no_jitter=True)],
+    )
+
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.finish_message == 'internal error'
+    assert response.error is not None
+    assert response.error.status == 'INTERNAL'
+    assert response.message is None
+    assert calls == 3
+
+
+@pytest.mark.asyncio
+async def test_prompt_with_failing_on_chunk_and_retry_calls_model_once() -> None:
+    """`await prompt(on_chunk=raises, use=[Retry()])` calls the model once and returns the callback's message."""
+    ai = Genkit()
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('done')]),
+        )
+    ]
+    pm.chunks = [[ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('partial')])]]
+    prompt = ai.define_prompt(model='scriptedModel', prompt='hi')
+
+    def on_chunk(_: object) -> None:
+        raise RuntimeError('model sink closed')
+
+    response = await prompt(
+        on_chunk=on_chunk,
+        use=[Retry(max_retries=2, initial_delay_ms=0, no_jitter=True)],
+    )
+
+    assert pm.request_count == 1
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.finish_message == 'model sink closed'
 
 
 @pytest.mark.asyncio

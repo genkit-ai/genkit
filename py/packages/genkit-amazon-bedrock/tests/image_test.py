@@ -369,19 +369,6 @@ async def test_stability_drops_genkit_generic_config_keys() -> None:
     assert transport.bodies() == [{'prompt': 'a reef', 'output_format': 'png', 'aspect_ratio': '16:9'}]
 
 
-@pytest.mark.parametrize('spelling', ['api_key', 'apiKey'])
-@pytest.mark.asyncio
-async def test_an_api_key_never_reaches_the_wire(spelling: str) -> None:
-    transport = FakeInvokeTransport(stability_response('modern-image', finish_reasons=['SUCCESS']))
-    await generate(SD3, transport, image_request(config={spelling: 'SECRET-VALUE'}))
-
-    body = transport.bodies()[0]
-    assert 'api_key' not in body
-    assert 'apiKey' not in body
-    # The credential must not survive under any key at all.
-    assert 'SECRET-VALUE' not in transport.calls[0]['body']
-
-
 @pytest.mark.asyncio
 async def test_stability_mime_follows_the_requested_output_format() -> None:
     transport = FakeInvokeTransport(stability_response('modern-image', finish_reasons=['SUCCESS']))

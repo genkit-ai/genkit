@@ -34,7 +34,11 @@ import {
   toInteractionSteps,
   toInteractionTool,
 } from './interaction-converters.js';
-import { InteractionTool, ResponseModality } from './interaction-types.js';
+import {
+  InteractionAllowedTools,
+  InteractionTool,
+  ResponseModality,
+} from './interaction-types.js';
 import {
   ClientOptions,
   CreateInteractionRequest,
@@ -47,6 +51,7 @@ import {
   checkApiKey,
   checkModelName,
   extractVersion,
+  isStringArray,
   modelName,
 } from './utils.js';
 
@@ -129,7 +134,19 @@ export const DeepResearchConfigSchema = z
             name: z.string().optional(),
             url: z.string().optional(),
             headers: z.record(z.string()).optional(),
-            allowedTools: z.array(z.string()).optional(),
+            allowedTools: z
+              .union([
+                z.array(z.string()),
+                z.array(
+                  z.object({
+                    mode: z
+                      .enum(['auto', 'any', 'none', 'validated'])
+                      .optional(),
+                    tools: z.array(z.string()).optional(),
+                  })
+                ),
+              ])
+              .optional(),
           })
           .passthrough()
       )
@@ -334,11 +351,19 @@ export function defineModel(
       if (mcpServers) {
         for (const mcpServer of mcpServers) {
           const { allowedTools, ...restMcp } = mcpServer;
+          let allowed_tools: InteractionAllowedTools[] | undefined = undefined;
+          if (allowedTools && allowedTools.length > 0) {
+            // A plain list of tool names is shorthand for one entry with no
+            // mode.
+            allowed_tools = isStringArray(allowedTools)
+              ? [{ tools: allowedTools }]
+              : allowedTools;
+          }
           tools.push({
             type: 'mcp_server',
             ...restMcp,
-            ...(allowedTools ? { allowed_tools: allowedTools } : {}),
-          } as InteractionTool);
+            ...(allowed_tools ? { allowed_tools } : {}),
+          });
         }
       }
 

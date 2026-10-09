@@ -22,12 +22,6 @@ from genkit_flask.handler import RequestData
 class TestFlaskModuleExports:
     """Tests for Flask plugin module-level exports."""
 
-    def test_handler_module_importable(self) -> None:
-        """Test Handler module importable."""
-        from genkit_flask import handler
-
-        assert hasattr(handler, 'genkit_flask_handler')
-
     def test_flask_route_return_type_alias(self) -> None:
         """Test Flask route return type alias."""
         from genkit_flask.handler import FlaskRouteReturn

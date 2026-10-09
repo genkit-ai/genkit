@@ -21,9 +21,9 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
-import os
 import signal
 import socket
+import sys
 import threading
 import uuid
 from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar, cast, overload
 
 import anyio
+import anyio.to_thread
 import uvicorn
 from pydantic import BaseModel
 
@@ -57,6 +58,7 @@ from genkit._ai._model import (
     ModelFn,
     ModelResponse,
     ModelResponseChunk,
+    background_model_name,
     check_call_config,
     define_model,
     resolve_for_generate,
@@ -107,6 +109,12 @@ from genkit._core._model import (
 from genkit._core._plugin import Plugin
 from genkit._core._protocols import SessionLike
 from genkit._core._reflection import ReflectionServer, ServerSpec, create_reflection_asgi_app
+from genkit._core._reflection_config import (
+    ReflectionConfig,
+    advertised_reflection_host,
+    is_loopback_host,
+    resolve_reflection_config,
+)
 from genkit._core._reflection_v2 import ReflectionServerV2
 from genkit._core._registry import Registry, define_dynamic_action_provider as define_dap_block
 from genkit._core._telemetry._attrs import metadata_key
@@ -116,8 +124,8 @@ from genkit._core._tool import Tool
 from genkit._core._typing import (
     BaseDataPoint,
     Embedding,
+    EvalFnResponse,
     EvalRequest,
-    EvalResponse,
     MiddlewareRef,
     ModelInfo,
     Operation,
@@ -177,7 +185,10 @@ class Genkit:
 
     registry: Registry
     _reflection_server_spec: ServerSpec | None
+    _reflection_config: ReflectionConfig
     _reflection_ready: threading.Event
+    _reflection_stopped: threading.Event
+    _reflection_bound_addr: str | None
 
     if TYPE_CHECKING:
 
@@ -211,16 +222,29 @@ class Genkit:
             configure_logging()
             self.registry = Registry()
             self._reflection_server_spec = reflection_server_spec
+            # The reflection API runs under GENKIT_ENV=dev, or in any environment
+            # with GENKIT_REFLECTION_ENABLED=true. Resolving here keeps an invalid
+            # setting a constructor-time error.
+            self._reflection_config = resolve_reflection_config(
+                port=reflection_server_spec.port if reflection_server_spec else None,
+                host=reflection_server_spec.host if reflection_server_spec else None,
+            )
             self._reflection_ready = threading.Event()
+            # Set when the reflection thread exits for any reason (v2 auth
+            # rejection, server crash), so run_main stops waiting on nothing.
+            self._reflection_stopped = threading.Event()
+            # host:port the v1 socket is bound to, set in the constructor so
+            # run_main can log it without waiting on the server thread.
+            self._reflection_bound_addr = None
             self._initialize_registry(model, plugins)
             # Ensure the default generate action is registered for async usage.
             define_generate_action(self.registry)
             self._register_plugin_middleware(plugins)
             maybe_inject_dev_instrumentation()
-            # In dev mode, start the reflection server immediately in a background
+            # When reflection is on, start the server immediately in a background
             # daemon thread so it's available regardless of which web framework (or
             # none) the user chooses.
-            if is_dev_environment():
+            if self._reflection_config.enabled:
                 # SIGINT (Ctrl+C) always hits handle_signal. SIGTERM inside the
                 # run_main wait loop is stolen by anyio (clean exit → atexit);
                 # elsewhere SIGTERM also goes through handle_signal. Both paths
@@ -564,7 +588,7 @@ class Genkit:
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         config: ModelConfigDict,
         description: str | None = None,
         system: str | list[Part] | None = None,
@@ -591,7 +615,7 @@ class Genkit:
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         config: ModelRefConfigT | Mapping[str, Any] | None = None,
         description: str | None = None,
         system: str | list[Part] | None = None,
@@ -619,7 +643,7 @@ class Genkit:
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         config: ModelConfigDict,
         description: str | None = None,
         system: str | list[Part] | None = None,
@@ -646,7 +670,7 @@ class Genkit:
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         config: ModelRefConfigT | Mapping[str, Any] | None = None,
         description: str | None = None,
         system: str | list[Part] | None = None,
@@ -674,7 +698,7 @@ class Genkit:
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         config: ModelConfigDict,
         description: str | None = None,
         system: str | list[Part] | None = None,
@@ -701,7 +725,7 @@ class Genkit:
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         config: ModelRefConfigT | Mapping[str, Any] | None = None,
         description: str | None = None,
         system: str | list[Part] | None = None,
@@ -729,7 +753,7 @@ class Genkit:
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         config: ModelConfigDict,
         description: str | None = None,
         system: str | list[Part] | None = None,
@@ -756,7 +780,7 @@ class Genkit:
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         config: ModelRefConfigT | Mapping[str, Any] | None = None,
         description: str | None = None,
         system: str | list[Part] | None = None,
@@ -782,7 +806,7 @@ class Genkit:
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: str | ModelRef[BaseModel] | None = None,
+        model: str | ModelRef[BaseModel] | Action | None = None,
         config: Mapping[str, Any] | BaseModel | ModelConfigDict | None = None,
         description: str | None = None,
         system: str | list[Part] | None = None,
@@ -902,36 +926,93 @@ class Genkit:
     # Server infrastructure methods
     # -------------------------------------------------------------------------
 
+    @staticmethod
+    def _bind_reflection_socket(host: str, port: int, *, pinned: bool) -> socket.socket:
+        """Bind and listen on the v1 reflection socket.
+
+        A pinned port is bound exactly. Otherwise the next free port at or above
+        ``port`` is used. The address family follows ``host``, so IPv6 hosts
+        such as ``::1`` work.
+
+        Raises:
+            OSError: If the pinned port is taken, or no port in the probe range
+                is free.
+        """
+        candidates = [port] if pinned else range(port, min(port + 100, 65536))
+        last: OSError | None = None
+        for candidate in candidates:
+            # Resolve per candidate: bind needs the family-specific sockaddr (an
+            # IPv6 one is a 4-tuple). Prefer IPv4 when the host has both, so
+            # 'localhost' keeps binding 127.0.0.1 rather than ::1.
+            infos = socket.getaddrinfo(host, candidate, type=socket.SOCK_STREAM, flags=socket.AI_PASSIVE)
+            family, socktype, proto, _, sockaddr = next((info for info in infos if info[0] == socket.AF_INET), infos[0])
+            sock = socket.socket(family, socktype, proto)
+            # POSIX: SO_REUSEADDR only allows rebinding a port in TIME_WAIT
+            # (fast restarts). Windows: it allows binding a port that is
+            # already in use, which would break probing and pinned-port
+            # failure, so claim the port exclusively instead.
+            if sys.platform == 'win32':
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            else:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                sock.bind(sockaddr)
+            except OSError as e:
+                sock.close()
+                last = e
+                continue
+            sock.listen(2048)
+            return sock
+        raise last or OSError(f'no available port in range {port}-{port + 99}')
+
     def _start_reflection_background(self) -> None:
         """Start the Dev UI reflection server in a background daemon thread.
 
         If GENKIT_REFLECTION_V2_SERVER is set (the CLI launches the runtime in
         v2 mode and provides a WebSocket URL), run the v2 JSON-RPC client.
         Otherwise start the v1 HTTP server.
+
+        Raises:
+            OSError: If the v1 socket cannot be bound. It is bound here, on the
+                calling thread, so a busy pinned port fails ``Genkit()`` rather
+                than a background thread nobody is watching.
         """
+        config = self._reflection_config
+
+        sock: socket.socket | None = None
+        if config.mode == 'v1':
+            sock = self._bind_reflection_socket(config.host, config.port, pinned=config.pinned)
+            bound_host, bound_port = sock.getsockname()[:2]
+            if ':' in bound_host:
+                bound_host = f'[{bound_host}]'
+            self._reflection_bound_addr = f'{bound_host}:{bound_port}'
 
         async def _run_server() -> None:
-            v2_url = os.environ.get('GENKIT_REFLECTION_V2_SERVER')
-            if v2_url:
-                await logger.adebug(f'Genkit Dev UI reflection v2 client connecting to {v2_url}')
-                server_v2 = ReflectionServerV2(self.registry, v2_url)
+            if config.mode == 'v2':
+                assert config.v2_url is not None
+                await logger.adebug(f'Genkit Dev UI reflection v2 client connecting to {config.v2_url}')
+                server_v2 = ReflectionServerV2(self.registry, config.v2_url, secret=config.secret)
                 self._reflection_ready.set()
                 await server_v2.run_forever()
                 return
 
-            sockets: list[socket.socket] | None = None
-            spec = self._reflection_server_spec
-            if spec is None:
-                # Bind to port 0 to let OS choose available port, pass socket to uvicorn
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.bind(('127.0.0.1', 0))
-                sock.listen(2048)
-                host, port = sock.getsockname()
-                spec = ServerSpec(scheme='http', host=host, port=port)
-                self._reflection_server_spec = spec
-                sockets = [sock]
+            assert sock is not None
+            host, port = sock.getsockname()[:2]
+            # spec.url goes into the runtime file, so advertise a reachable,
+            # URL-safe host (wildcard binds as loopback, IPv6 bracketed).
+            spec = ServerSpec(scheme='http', host=advertised_reflection_host(host), port=port)
+            self._reflection_server_spec = spec
+            sockets = [sock]
 
-            app = create_reflection_asgi_app(registry=self.registry)
+            if not config.secret and not is_loopback_host(config.host):
+                logger.warning(
+                    'Reflection API is listening on %s without authentication. Anyone who can reach '
+                    'this port can run any registered action. Set GENKIT_REFLECTION_SECRET_TOKEN, '
+                    'or front it with your own auth.',
+                    config.host,
+                )
+
+            app = create_reflection_asgi_app(registry=self.registry, secret=config.secret)
             level = resolve_level()
             is_debug = level <= logging.DEBUG
             if level <= logging.DEBUG:
@@ -944,7 +1025,7 @@ class Genkit:
                 log_level = 'critical'
 
             # Pass log_level explicitly so uvicorn's internal server engine doesn't default to INFO on startup.
-            config = uvicorn.Config(
+            uvicorn_config = uvicorn.Config(
                 app,
                 host=spec.host,
                 port=spec.port,
@@ -952,8 +1033,21 @@ class Genkit:
                 access_log=is_debug,
                 log_level=log_level,
             )
-            server = ReflectionServer(config, ready=self._reflection_ready)
-            async with RuntimeManager(spec, lazy_write=True) as runtime_manager:
+            server = ReflectionServer(uvicorn_config, ready=self._reflection_ready)
+            # Dev only: the runtime file exists so a local CLI watching the
+            # same filesystem can discover this runtime. Nothing is watching in
+            # a container, and the working directory is frequently read-only.
+            if not is_dev_environment():
+                server_task = asyncio.create_task(server.serve(sockets=sockets))
+                await asyncio.to_thread(self._reflection_ready.wait)
+                if server.should_exit:
+                    logger.warning(f'Reflection server at {spec.url} failed to start.')
+                    return
+                await logger.adebug(f'Genkit reflection server running at {spec.url}')
+                await server_task
+                return
+
+            async with RuntimeManager(spec, lazy_write=True, secret=config.secret) as runtime_manager:
                 server_task = asyncio.create_task(server.serve(sockets=sockets))
                 await asyncio.to_thread(self._reflection_ready.wait)
 
@@ -965,8 +1059,14 @@ class Genkit:
                 await logger.adebug(f'Genkit Dev UI reflection server running at {spec.url}')
                 await server_task
 
+        def _thread_main() -> None:
+            try:
+                asyncio.run(_run_server())
+            finally:
+                self._reflection_stopped.set()
+
         threading.Thread(
-            target=lambda: asyncio.run(_run_server()),
+            target=_thread_main,
             daemon=True,
             name='genkit-reflection-server',
         ).start()
@@ -996,11 +1096,18 @@ class Genkit:
                 self.registry.register_value('middleware', desc.name, desc)
 
     def run_main(self, coro: Coroutine[Any, Any, T]) -> T | None:
-        """Run the user's main coroutine, blocking in dev mode for the reflection server."""
-        if not is_dev_environment():
+        """Run the user's main coroutine, blocking while the reflection server runs.
+
+        Blocks whenever reflection is on, not only under GENKIT_ENV=dev: the
+        server lives on a daemon thread, so returning here would kill it.
+        Returns once the reflection server stops on its own (for example the
+        CLI rejected this runtime's secret), rather than blocking with nothing
+        serving.
+        """
+        if not self._reflection_config.enabled:
             return run_loop(coro)
 
-        async def dev_runner() -> T | None:
+        async def reflection_runner() -> T | None:
             user_result: T | None = None
             try:
                 user_result = await coro
@@ -1013,7 +1120,7 @@ class Genkit:
 
             # Block until Ctrl+C (SIGINT handled by anyio) or SIGTERM, keeping
             # the daemon reflection thread alive.
-            logger.info('Dev UI ready. Press Ctrl+C to stop.')
+            logger.info(self._reflection_ready_message())
             try:
                 async with anyio.create_task_group() as tg:
 
@@ -1023,15 +1130,34 @@ class Genkit:
                                 tg_.cancel_scope.cancel()
                                 return
 
+                    async def _handle_reflection_stopped(tg_: anyio.abc.TaskGroup) -> None:  # type: ignore[name-defined]
+                        # abandon_on_cancel: Ctrl+C must not wait for a worker
+                        # thread still blocked in Event.wait.
+                        await anyio.to_thread.run_sync(self._reflection_stopped.wait, abandon_on_cancel=True)
+                        logger.warning('Reflection server stopped; returning from run_main.')
+                        tg_.cancel_scope.cancel()
+
                     tg.start_soon(_handle_sigterm, tg)
+                    tg.start_soon(_handle_reflection_stopped, tg)
                     await anyio.sleep_forever()
             except anyio.get_cancelled_exc_class():
                 pass
 
-            logger.debug('Dev UI server stopped.')
+            logger.debug('Reflection server stopped.')
             return user_result
 
-        return anyio.run(dev_runner)
+        return anyio.run(reflection_runner)
+
+    def _reflection_ready_message(self) -> str:
+        """The line run_main logs once it starts waiting on the reflection server."""
+        config = self._reflection_config
+        # Only dev writes the runtime file the Dev UI discovers, so only dev
+        # can promise the Dev UI will find this runtime.
+        if is_dev_environment():
+            return 'Dev UI ready. Press Ctrl+C to stop.'
+        if config.mode == 'v2':
+            return f'Reflection API connecting to {config.v2_url}. Press Ctrl+C to stop.'
+        return f'Reflection API listening on {self._reflection_bound_addr}. Press Ctrl+C to stop.'
 
     # -------------------------------------------------------------------------
     # Genkit-specific methods (generation, embedding, retrieval, etc.)
@@ -1050,22 +1176,25 @@ class Genkit:
         self,
         *,
         embedder: str | EmbedderRef | None,
-        options: dict[str, object] | None,
-    ) -> dict[str, object]:
-        """Copy ref config plus version, then overlay call-site options.
+        config: dict[str, object] | None,
+    ) -> dict[str, object] | None:
+        """Copy ref config plus version, then overlay call-site config.
 
-        The caller's EmbedderRef.config dict is left unchanged so they can
-        reuse the same ref on later embed / embed_many calls.
+        Returns None when neither the ref nor the call sets anything, the same
+        as a Dev UI run of the embedder. The caller's EmbedderRef.config dict is
+        left unchanged so they can reuse the same ref on later calls.
         """
+        ref_config = embedder.config if isinstance(embedder, EmbedderRef) else None
+        version = embedder.version if isinstance(embedder, EmbedderRef) else None
+        if ref_config is None and not version and config is None:
+            return None
         merged: dict[str, object] = {}
-        if isinstance(embedder, EmbedderRef):
-            config = embedder.config
-            if isinstance(config, dict):
-                merged.update(config)
-            if embedder.version:
-                merged['version'] = embedder.version
-        if options:
-            merged.update(options)
+        if ref_config:
+            merged.update(ref_config)
+        if version:
+            merged['version'] = version
+        if config:
+            merged.update(config)
         return merged
 
     # Overload: config=ModelConfigDict, output_schema=type[T] -> ModelResponse[T]
@@ -1073,7 +1202,7 @@ class Genkit:
     async def generate(
         self,
         *,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1100,7 +1229,7 @@ class Genkit:
     async def generate(
         self,
         *,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1127,7 +1256,7 @@ class Genkit:
     async def generate(
         self,
         *,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1154,7 +1283,7 @@ class Genkit:
     async def generate(
         self,
         *,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1179,7 +1308,7 @@ class Genkit:
     async def generate(
         self,
         *,
-        model: str | ModelRef[BaseModel] | None = None,
+        model: str | ModelRef[BaseModel] | Action | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1257,7 +1386,7 @@ class Genkit:
     def generate_stream(
         self,
         *,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1284,7 +1413,7 @@ class Genkit:
     def generate_stream(
         self,
         *,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1311,7 +1440,7 @@ class Genkit:
     def generate_stream(
         self,
         *,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1338,7 +1467,7 @@ class Genkit:
     def generate_stream(
         self,
         *,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1363,7 +1492,7 @@ class Genkit:
     def generate_stream(
         self,
         *,
-        model: str | ModelRef[BaseModel] | None = None,
+        model: str | ModelRef[BaseModel] | Action | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1439,7 +1568,7 @@ class Genkit:
     async def _generate(
         self,
         *,
-        model: str | ModelRef[BaseModel] | None = None,
+        model: str | ModelRef[BaseModel] | Action | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1521,9 +1650,13 @@ class Genkit:
         embedder: str | EmbedderRef | None = None,
         content: str | Document | None = None,
         metadata: dict[str, object] | None = None,
-        options: dict[str, object] | None = None,
+        config: dict[str, object] | None = None,
     ) -> list[Embedding]:
         """Generate vector embeddings for a single document or string.
+
+        ``config`` is merged over the ``EmbedderRef``'s config (the call wins
+        per key) and reaches the embedder as ``request.options``. An embedder
+        name that isn't registered raises ``GenkitError`` with ``NOT_FOUND``.
 
         Example:
             from genkit_google_genai import GoogleAI
@@ -1535,11 +1668,15 @@ class Genkit:
             vector = embeddings[0].embedding
         """
         embedder_name = self._resolve_embedder_name(embedder)
-        final_options = self._embedder_options(embedder=embedder, options=options)
+        final_options = self._embedder_options(embedder=embedder, config=config)
 
         embed_action = await self.registry.resolve_embedder(embedder_name)
         if embed_action is None:
-            raise ValueError(f'Embedder "{embedder_name}" not found')
+            raise GenkitError(
+                status='NOT_FOUND',
+                message=f"Embedder '{embedder_name}' not found.",
+                reason=RuntimeErrorReason.ACTION_NOT_FOUND,
+            )
 
         if content is None:
             raise ValueError('Content must be specified for embedding.')
@@ -1562,9 +1699,12 @@ class Genkit:
         embedder: str | EmbedderRef | None = None,
         content: list[str] | list[Document] | None = None,
         metadata: dict[str, object] | None = None,
-        options: dict[str, object] | None = None,
+        config: dict[str, object] | None = None,
     ) -> list[Embedding]:
-        """Generate vector embeddings for multiple documents in a single batch call."""
+        """Generate vector embeddings for multiple documents in a single batch call.
+
+        ``config`` works the same as on ``embed``.
+        """
         if content is None:
             raise ValueError('Content must be specified for embedding.')
 
@@ -1574,11 +1714,15 @@ class Genkit:
         ]
 
         embedder_name = self._resolve_embedder_name(embedder)
-        final_options = self._embedder_options(embedder=embedder, options=options)
+        final_options = self._embedder_options(embedder=embedder, config=config)
 
         embed_action = await self.registry.resolve_embedder(embedder_name)
         if embed_action is None:
-            raise ValueError(f'Embedder "{embedder_name}" not found')
+            raise GenkitError(
+                status='NOT_FOUND',
+                message=f"Embedder '{embedder_name}' not found.",
+                reason=RuntimeErrorReason.ACTION_NOT_FOUND,
+            )
 
         response = (
             await embed_action.run(EmbedRequest(input=documents, options=final_options))  # type: ignore[arg-type]
@@ -1587,38 +1731,59 @@ class Genkit:
 
     async def evaluate(
         self,
+        *,
         evaluator: str | EvaluatorRef | None = None,
         dataset: list[BaseDataPoint] | None = None,
-        options: dict[str, object] | None = None,
+        config: dict[str, object] | None = None,
         eval_run_id: str | None = None,
-    ) -> EvalResponse:
+    ) -> list[EvalFnResponse]:
         """Evaluate a dataset using the specified evaluator.
 
+        Returns a list of rows. A per-row evaluator gives one row per
+        datapoint, in dataset order. A batch evaluator gives the rows its
+        function returned, as returned. Each row's ``evaluation`` is a list of
+        scores.
+
+        ``config`` is merged over the ``EvaluatorRef``'s config (the call
+        wins per key) and handed to the evaluator as its second argument. When
+        neither sets anything, the evaluator gets ``None``. An evaluator name
+        that isn't registered raises ``GenkitError`` with ``NOT_FOUND``.
+
         Example:
-            from genkit import BaseDataPoint
+            from genkit.evaluator import BaseDataPoint
 
             results = await ai.evaluate(
                 evaluator='my_eval',
                 dataset=[BaseDataPoint(input='What is 2+2?', output='4')],
             )
-            print(results.root[0].evaluation.score)
+            for row in results:
+                for score in row.evaluation:
+                    print(row.test_case_id, score.score)
         """
         evaluator_name: str = ''
-        evaluator_config: dict[str, object] = {}
+        ref_config: dict[str, object] | None = None
 
         if isinstance(evaluator, EvaluatorRef):
             evaluator_name = evaluator.name
-            evaluator_config = evaluator.config_schema or {}
+            ref_config = evaluator.config
         elif isinstance(evaluator, str):
             evaluator_name = evaluator
         else:
             raise ValueError('Evaluator must be specified as a string name or an EvaluatorRef.')
 
-        final_options = {**(evaluator_config or {}), **(options or {})}
+        # same rule as _embedder_options: None when nothing was set, matching
+        # what the CLI / Dev UI send, so `options is None` is the one check.
+        final_options: dict[str, object] | None = None
+        if ref_config is not None or config is not None:
+            final_options = {**(ref_config or {}), **(config or {})}
 
         eval_action = await self.registry.resolve_evaluator(evaluator_name)
         if eval_action is None:
-            raise ValueError(f'Evaluator "{evaluator_name}" not found')
+            raise GenkitError(
+                status='NOT_FOUND',
+                message=f"Evaluator '{evaluator_name}' not found.",
+                reason=RuntimeErrorReason.ACTION_NOT_FOUND,
+            )
 
         if not eval_run_id:
             eval_run_id = str(uuid.uuid4())
@@ -1626,15 +1791,14 @@ class Genkit:
         if dataset is None:
             raise ValueError('Dataset must be specified for evaluation.')
 
-        return (
-            await eval_action.run(
-                EvalRequest(
-                    dataset=dataset,
-                    options=final_options,
-                    eval_run_id=eval_run_id,
-                ),
-            )
-        ).response
+        response = await eval_action.run(
+            EvalRequest(
+                dataset=dataset,
+                options=final_options,
+                eval_run_id=eval_run_id,
+            ),
+        )
+        return response.response.root
 
     @staticmethod
     def current_context() -> dict[str, Any] | None:
@@ -1695,21 +1859,12 @@ class Genkit:
     async def generate_operation(
         self,
         *,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | BackgroundAction | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
-        tools: Sequence[str | Tool] | None = None,
-        return_tool_requests: bool | None = None,
-        tool_choice: ToolChoice | None = None,
         config: ModelConfigDict,
-        max_turns: int | None = None,
         context: dict[str, object] | None = None,
-        output_schema: type | dict | None = None,
-        output_format: str | None = None,
-        output_content_type: str | None = None,
-        output_instructions: bool | str | None = None,
-        output_constrained: bool | None = None,
         use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
         docs: list[Document] | None = None,
     ) -> Operation: ...
@@ -1718,21 +1873,12 @@ class Genkit:
     async def generate_operation(
         self,
         *,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | BackgroundAction | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
-        tools: Sequence[str | Tool] | None = None,
-        return_tool_requests: bool | None = None,
-        tool_choice: ToolChoice | None = None,
         config: ModelRefConfigT | Mapping[str, Any] | None = None,
-        max_turns: int | None = None,
         context: dict[str, object] | None = None,
-        output_schema: type | dict | None = None,
-        output_format: str | None = None,
-        output_content_type: str | None = None,
-        output_instructions: bool | str | None = None,
-        output_constrained: bool | None = None,
         use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
         docs: list[Document] | None = None,
     ) -> Operation: ...
@@ -1740,25 +1886,20 @@ class Genkit:
     async def generate_operation(
         self,
         *,
-        model: ModelRef[ModelRefConfigT] | str | None = None,
+        model: ModelRef[ModelRefConfigT] | BackgroundAction | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
-        tools: Sequence[str | Tool] | None = None,
-        return_tool_requests: bool | None = None,
-        tool_choice: ToolChoice | None = None,
         config: BaseModel | ModelConfigDict | Mapping[str, Any] | None = None,
-        max_turns: int | None = None,
         context: dict[str, object] | None = None,
-        output_schema: type | dict | None = None,
-        output_format: str | None = None,
-        output_content_type: str | None = None,
-        output_instructions: bool | str | None = None,
-        output_constrained: bool | None = None,
         use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
         docs: list[Document] | None = None,
     ) -> Operation:
         """Generate content using a long-running model, returning an Operation to poll.
+
+        A background start is one request that returns a job handle. There is
+        no tool loop and no output parsing on ``check_operation``, so tools,
+        ``max_turns``, and the ``output_*`` options are not accepted here.
 
         Example:
             op = await ai.generate_operation(
@@ -1768,6 +1909,9 @@ class Genkit:
             while not op.done:
                 op = await ai.check_operation(op)
         """
+        if isinstance(model, BackgroundAction):
+            # Same as its name, once we know this registry holds that object.
+            model = background_model_name(model=model, registry=self.registry)
         resolved = await resolve_for_generate(
             model=model,
             config=config,
@@ -1797,17 +1941,8 @@ class Genkit:
             prompt=prompt,
             system=system,
             messages=messages,
-            tools=tools,
-            return_tool_requests=return_tool_requests,
-            tool_choice=tool_choice,
             config=resolved.config,
-            max_turns=max_turns,
             context=context,
-            output_schema=output_schema,
-            output_format=output_format,
-            output_content_type=output_content_type,
-            output_instructions=output_instructions,
-            output_constrained=output_constrained,
             use=use,
             docs=docs,
         )
