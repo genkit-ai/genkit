@@ -26,7 +26,7 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/base"
-	pluginjsonschema "github.com/firebase/genkit/go/plugins/internal/jsonschema"
+	"github.com/firebase/genkit/go/plugins/internal/schemautil"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/packages/param"
 	"github.com/openai/openai-go/shared"
@@ -357,7 +357,7 @@ func (g *ModelGenerator) WithTools(tools []*ai.ToolDefinition) *ModelGenerator {
 		}
 		var params openai.FunctionParameters
 		if strict {
-			params = openai.FunctionParameters(pluginjsonschema.EnforceStrict(tool.InputSchema))
+			params = openai.FunctionParameters(schemautil.EnforceStrict(tool.InputSchema))
 		} else {
 			params = openai.FunctionParameters(tool.InputSchema)
 		}
