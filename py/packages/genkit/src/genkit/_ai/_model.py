@@ -57,7 +57,7 @@ from genkit._core._model import (
 )
 from genkit._core._registry import Registry
 from genkit._core._schema import custom_options_schema, to_json_schema
-from genkit._core._typing import ActionMetadata, GenerationCommonConfig, ModelInfo
+from genkit._core._typing import ActionMetadata, GenerationCommonConfig, ModelInfo, Operation
 
 # Type alias for model functions (must be async)
 # Use ctx.send_chunk() for streaming
@@ -367,15 +367,33 @@ def model_action_metadata(
     name: str,
     info: dict[str, object] | None = None,
     config_schema: type | dict[str, Any] | None = None,
+    *,
+    background: bool = False,
 ) -> ActionMetadata:
-    """Create ActionMetadata for a model action."""
+    """Create ActionMetadata for a model action.
+
+    With ``background=True`` the metadata describes a background model's start
+    action: it takes a ``ModelRequest`` and returns an ``Operation`` to poll.
+    """
     info = info if info is not None else {}
+    model = {**info, 'customOptions': custom_options_schema(config_schema) if config_schema else None}
+    if not background:
+        return ActionMetadata(
+            action_type=ActionKind.MODEL,
+            name=name,
+            input_json_schema=to_json_schema(ModelRequest),
+            output_json_schema=to_json_schema(ModelResponse),
+            metadata={'model': model},
+        )
+    config_class = python_config_schema(config_schema)
+    # A runtime class, not a type expression: the schema is ModelRequest[ThatClass].
+    request = cast(Any, ModelRequest)[config_class] if config_class is not None else ModelRequest
     return ActionMetadata(
-        action_type=ActionKind.MODEL,
+        action_type=ActionKind.BACKGROUND_MODEL,
         name=name,
-        input_json_schema=to_json_schema(ModelRequest),
-        output_json_schema=to_json_schema(ModelResponse),
-        metadata={'model': {**info, 'customOptions': custom_options_schema(config_schema) if config_schema else None}},
+        input_json_schema=to_json_schema(request),
+        output_json_schema=to_json_schema(Operation),
+        metadata={'model': model, 'type': 'background-model'},
     )
 
 

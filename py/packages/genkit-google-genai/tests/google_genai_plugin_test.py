@@ -45,9 +45,10 @@ from genkit_google_genai._models._veo import VeoConfig, VeoModel
 from google.genai import types as genai_types
 
 from genkit import Genkit, GenkitError, Message, Operation, Part, Role
+from genkit._core._schema import custom_options_schema
 from genkit.evaluator import BaseDataPoint
 from genkit.model import ModelRequest
-from genkit.plugin_api import Action, ActionKind, custom_options_schema
+from genkit.plugin_api import Action, ActionKind
 
 
 def _custom_options(action: Action) -> object:

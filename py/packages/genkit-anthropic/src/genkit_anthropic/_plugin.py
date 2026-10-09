@@ -28,7 +28,6 @@ from genkit.plugin_api import (
     ActionKind,
     ActionMetadata,
     Plugin,
-    custom_options_schema,
     loop_local_client,
 )
 from genkit_anthropic._config import AnthropicConfig
@@ -177,7 +176,6 @@ class Anthropic(Plugin):
         Returns:
             Action object for the model.
         """
-        model_info = get_model_info(name)
 
         async def _generate(request: ModelRequest[AnthropicConfig], ctx: ActionRunContext) -> ModelResponse:
             # A key in config is the more specific error, so it wins over a missing plugin key.
@@ -197,14 +195,7 @@ class Anthropic(Plugin):
             anthropic_name(name),
             _generate,
             config_schema=AnthropicConfig,
-            metadata={
-                'model': {
-                    'supports': (
-                        model_info.supports.model_dump(by_alias=True, exclude_none=True) if model_info.supports else {}
-                    ),
-                    'customOptions': custom_options_schema(AnthropicConfig),
-                },
-            },
+            metadata=self._model_metadata(name).metadata,
         )
 
     def _model_metadata(self, model_id: str) -> ActionMetadata:

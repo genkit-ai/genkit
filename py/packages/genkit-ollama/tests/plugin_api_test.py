@@ -31,9 +31,10 @@ from genkit_ollama.models import ModelDefinition, OllamaConfig, OllamaModel, Oll
 from pydantic import BaseModel
 
 from genkit import Document, Genkit, GenkitError, Message, ModelResponse, Part, Role
+from genkit._core._schema import custom_options_schema
 from genkit.embedder import EmbedRequest
 from genkit.model import ModelRequest
-from genkit.plugin_api import ActionKind, custom_options_schema
+from genkit.plugin_api import ActionKind
 
 
 class TestOllamaInit(unittest.TestCase):

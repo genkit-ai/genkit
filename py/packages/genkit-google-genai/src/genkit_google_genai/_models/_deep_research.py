@@ -24,8 +24,8 @@ from pydantic import BaseModel, ConfigDict, field_validator
 from pydantic.alias_generators import to_camel
 
 from genkit import ActionRunContext, GenkitError, Operation
-from genkit.model import BackgroundAction, ModelRef, ModelRequest, model_ref
-from genkit.plugin_api import Action, ActionKind, custom_options_schema
+from genkit.model import BackgroundAction, ModelRef, ModelRequest, model_action_metadata, model_ref
+from genkit.plugin_api import Action, ActionKind
 from genkit_google_genai._interactions._client import (
     cancel_interaction,
     create_interaction,
@@ -221,10 +221,9 @@ def create_deep_research_background_action(
         kind=ActionKind.BACKGROUND_MODEL,
         name=full_name,
         fn=start,
-        metadata={
-            'model': {**info.model_dump(by_alias=True), 'customOptions': custom_options_schema(DeepResearchConfig)},
-            'type': 'background-model',
-        },
+        metadata=model_action_metadata(
+            full_name, info=info.model_dump(by_alias=True), config_schema=DeepResearchConfig, background=True
+        ).metadata,
     )
     check_action = Action(
         kind=ActionKind.CHECK_OPERATION,

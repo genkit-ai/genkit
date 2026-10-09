@@ -48,7 +48,6 @@ from genkit.plugin_api import (
     ActionKind,
     ActionMetadata,
     Plugin,
-    custom_options_schema,
     loop_local_client,
 )
 from genkit_openai._models import (
@@ -499,12 +498,11 @@ class OpenAI(Plugin):
             open_ai_name(name),
             _generate,
             config_schema=OpenAIConfig,
-            metadata={
-                'model': {
-                    **model_info,
-                    'customOptions': custom_options_schema(OpenAIConfig),
-                },
-            },
+            metadata=model_action_metadata(
+                name=open_ai_name(name),
+                info=model_info,
+                config_schema=OpenAIConfig,
+            ).metadata,
         )
 
     def _create_multimodal_action(
@@ -535,7 +533,7 @@ class OpenAI(Plugin):
             open_ai_name(name),
             _generate,
             config_schema=config_schema,
-            metadata={'model': info_dict},
+            metadata=_multimodal_action_metadata(name, supported_models, model_type).metadata,
         )
 
     def _create_embedder_action(self, name: str) -> Action:
