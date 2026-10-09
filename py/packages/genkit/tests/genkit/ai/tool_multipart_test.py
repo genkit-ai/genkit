@@ -3,7 +3,7 @@
 
 """``response()`` construction, schema stamping, registry keys, and wrap_tool.
 
-The peel leftover ``await tool()`` / ``ai.generate`` callers reuse is pinned in
+What ``await tool()`` and ``ai.generate`` hand back is pinned in
 ``tool_response_contract_test.py``.
 """
 
@@ -197,7 +197,7 @@ async def test_pydantic_return_dumps_json_aliases() -> None:
     async def shot() -> CamelOut:
         return CamelOut(content_type='image/png', taken_at=datetime(2026, 8, 25, 12, 0))
 
-    out = await shot()
+    out = (await shot.action().run()).response
     assert out.output == {'contentType': 'image/png', 'takenAt': '2026-08-25T12:00:00'}
 
 
@@ -209,7 +209,7 @@ async def test_response_metadata_datetime_is_json() -> None:
     async def shot() -> MultipartToolResponse:
         return response({'ok': True}, metadata={'when': datetime(2026, 8, 25, 12, 0)})
 
-    out = await shot()
+    out = (await shot.action().run()).response
     assert out.metadata == {'when': '2026-08-25T12:00:00'}
 
 
@@ -224,7 +224,7 @@ async def test_response_pydantic_output_plus_media() -> None:
             parts=[_png()],
         )
 
-    out = await shot()
+    out = (await shot.action().run()).response
     assert out.output == {'contentType': 'image/png', 'takenAt': '2026-08-25T12:00:00'}
     assert parts_to_wire(out.content) == [WIRE_PNG]
 

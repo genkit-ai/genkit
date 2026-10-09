@@ -18,10 +18,10 @@
 
 import base64
 import inspect
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from contextvars import ContextVar
 from types import UnionType
-from typing import Any, Union, cast, get_args, get_origin
+from typing import Any, NoReturn, TypeVar, Union, cast, get_args, get_origin, overload
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
@@ -33,12 +33,15 @@ from genkit._core._model import MultipartToolResponse, OutputT, Part, as_part, a
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
 from genkit._core._telemetry._instrumentation import set_custom_metadata_attributes
-from genkit._core._tool import Tool as _Tool
+from genkit._core._tool import Tool as _Tool, direct_call
 from genkit._core._typing import (
     Metadata,
     MultipartToolResponse as MultipartToolResponseData,
     ToolResponse,
 )
+
+ToolInputT = TypeVar('ToolInputT')
+ToolOutputT = TypeVar('ToolOutputT')
 
 
 def response(
@@ -493,7 +496,7 @@ def _define_tool(
     description: str | None = None,
     *,
     input_schema: type[BaseModel] | dict[str, object] | None = None,
-) -> _Tool:
+) -> _Tool[Any, Any]:
     """Register a function as a tool.
 
     The return annotation is what the model binds. ``input_schema=`` is for
@@ -516,8 +519,20 @@ def _define_tool(
 
         # A ctx annotated ActionRunContext gets the ToolRunContext too.
         tool_ctx = ToolRunContext(ctx, resumed_metadata=resumed_meta, original_input=_tool_original_input.get())
-        raw = await action.params.call(func, input, tool_ctx)
-        return as_multipart_tool_response(raw, tool_name=tool_name)
+        call = direct_call.get()
+        if call is not None and call.action is not action:
+            call = None
+        # Tools this function runs (directly or through generate) aren't the
+        # direct call we were awaited for.
+        token = direct_call.set(None)
+        try:
+            raw = await action.params.call(func, input, tool_ctx)
+        finally:
+            direct_call.reset(token)
+        envelope = as_multipart_tool_response(raw, tool_name=tool_name)
+        if call is not None:
+            call.returned.append(raw)
+        return envelope
 
     action = registry.register_action(
         name=tool_name,
@@ -538,6 +553,65 @@ def _define_tool(
     return _Tool(action, original_output_schema=original_output_schema)
 
 
+# Overload order matters: type checkers pick the first shape that fits. The
+# context-only shape comes before input-only because a ``ctx`` function also
+# fits ``[InputT]``. It returns ``Tool[Any, ...]`` because an ``input: Any``
+# function fits it too, and that tool still has to accept an input.
+@overload
+def define_tool(
+    registry: Registry,
+    func: Callable[[ToolInputT, ToolRunContext], Awaitable[ToolOutputT]],
+    name: str | None = None,
+    description: str | None = None,
+    *,
+    input_schema: type[BaseModel] | dict[str, object] | None = None,
+) -> _Tool[ToolInputT, ToolOutputT]: ...
+
+
+@overload
+def define_tool(
+    registry: Registry,
+    func: Callable[[ToolRunContext, ToolInputT], Awaitable[ToolOutputT]],
+    name: str | None = None,
+    description: str | None = None,
+    *,
+    input_schema: type[BaseModel] | dict[str, object] | None = None,
+) -> _Tool[ToolInputT, ToolOutputT]: ...
+
+
+@overload
+def define_tool(
+    registry: Registry,
+    func: Callable[[ToolRunContext], Awaitable[ToolOutputT]],
+    name: str | None = None,
+    description: str | None = None,
+    *,
+    input_schema: type[BaseModel] | dict[str, object] | None = None,
+) -> _Tool[Any, ToolOutputT]: ...
+
+
+@overload
+def define_tool(
+    registry: Registry,
+    func: Callable[[ToolInputT], Awaitable[ToolOutputT]],
+    name: str | None = None,
+    description: str | None = None,
+    *,
+    input_schema: type[BaseModel] | dict[str, object] | None = None,
+) -> _Tool[ToolInputT, ToolOutputT]: ...
+
+
+@overload
+def define_tool(
+    registry: Registry,
+    func: Callable[[], Awaitable[ToolOutputT]],
+    name: str | None = None,
+    description: str | None = None,
+    *,
+    input_schema: type[BaseModel] | dict[str, object] | None = None,
+) -> _Tool[None, ToolOutputT]: ...
+
+
 def define_tool(
     registry: Registry,
     func: Callable[..., Any],
@@ -545,7 +619,7 @@ def define_tool(
     description: str | None = None,
     *,
     input_schema: type[BaseModel] | dict[str, object] | None = None,
-) -> _Tool:
+) -> _Tool[Any, Any]:
     """Register a function as a tool.
 
     The model sees the handler's return annotation as ``outputSchema``.
@@ -570,13 +644,63 @@ def define_tool(
     return _define_tool(registry, func, name, description, input_schema=input_schema)
 
 
+@overload
+def tool(
+    func: Callable[[ToolInputT, ToolRunContext], Awaitable[ToolOutputT]],
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    input_schema: type[BaseModel] | dict[str, object] | None = None,
+) -> _Tool[ToolInputT, ToolOutputT]: ...
+
+
+@overload
+def tool(
+    func: Callable[[ToolRunContext, ToolInputT], Awaitable[ToolOutputT]],
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    input_schema: type[BaseModel] | dict[str, object] | None = None,
+) -> _Tool[ToolInputT, ToolOutputT]: ...
+
+
+@overload
+def tool(
+    func: Callable[[ToolRunContext], Awaitable[ToolOutputT]],
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    input_schema: type[BaseModel] | dict[str, object] | None = None,
+) -> _Tool[Any, ToolOutputT]: ...
+
+
+@overload
+def tool(
+    func: Callable[[ToolInputT], Awaitable[ToolOutputT]],
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    input_schema: type[BaseModel] | dict[str, object] | None = None,
+) -> _Tool[ToolInputT, ToolOutputT]: ...
+
+
+@overload
+def tool(
+    func: Callable[[], Awaitable[ToolOutputT]],
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    input_schema: type[BaseModel] | dict[str, object] | None = None,
+) -> _Tool[None, ToolOutputT]: ...
+
+
 def tool(
     func: Callable[..., Any],
     *,
     name: str | None = None,
     description: str | None = None,
     input_schema: type[BaseModel] | dict[str, object] | None = None,
-) -> _Tool:
+) -> _Tool[Any, Any]:
     """Define an ephemeral tool for a single ``generate`` call.
 
     Unlike ``@ai.tool()``, this does not register the tool on the app, so it
@@ -613,7 +737,7 @@ def define_interrupt(
     description: str | None = None,
     request_metadata: dict[str, Any] | Callable[[Any], dict[str, Any]] | None = None,  # noqa: ANN401
     input_schema: type[BaseModel] | dict[str, object] | None = None,
-) -> _Tool:
+) -> _Tool[Any, NoReturn]:
     """Register a tool that always interrupts execution.
 
     An interrupt tool is a special tool that always raises ``Interrupt`` with
@@ -630,7 +754,8 @@ def define_interrupt(
             interrupt handler is typed as ``Any``; pass this so the model sees a concrete shape.
 
     Returns:
-        The registered tool callable (same shape as ``define_tool``).
+        The registered tool. Awaiting it directly raises ``Interrupt``; it
+        never returns a value.
 
     Example:
         def get_meta(input: dict) -> dict:
@@ -653,10 +778,14 @@ def define_interrupt(
             meta = request_metadata
         raise Interrupt(meta)
 
-    return _define_tool(
-        registry,
-        interrupt_wrapper,
-        name=name,
-        description=description,
-        input_schema=input_schema,
+    # The handler stays annotated ``Any`` so the model is told it may return anything.
+    return cast(
+        _Tool[Any, NoReturn],
+        _define_tool(
+            registry,
+            interrupt_wrapper,
+            name=name,
+            description=description,
+            input_schema=input_schema,
+        ),
     )

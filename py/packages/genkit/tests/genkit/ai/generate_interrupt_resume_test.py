@@ -1599,3 +1599,13 @@ async def test_resume_respond_with_paused_part_is_invalid_argument() -> None:
         )
     assert exc.value.status == 'INVALID_ARGUMENT'
     assert pm.request_count == 1
+
+
+@pytest.mark.asyncio
+async def test_await_interrupt_tool_raises_interrupt() -> None:
+    """`await confirm({'action': 'delete'})` on an `ai.define_interrupt` tool raises Interrupt, never a value."""
+    ai = Genkit()
+    confirm = ai.define_interrupt('confirm', description='Ask before deleting')
+
+    with pytest.raises(Interrupt):
+        await confirm({'action': 'delete'})
