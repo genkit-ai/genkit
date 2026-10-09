@@ -215,7 +215,7 @@ func snapReply(snap *aix.SessionSnapshot[any]) string {
 }
 
 func agentCases() []liveCase {
-	return []liveCase{
+	cases := []liveCase{
 		{"multi-turn chat", always, func(t *testing.T, r *runner) {
 			s := r.newSession(t, r.s.Model)
 			s.askText(t, "My name is Zebulon Quixote and I live in Reykjavik. Reply with just OK.")
@@ -433,4 +433,9 @@ func agentCases() []liveCase {
 			s.askText(t, "What is my name, and which order number did we look up?", "ada", "1234")
 		}},
 	}
+	// Every agent case carries history from one turn to the next.
+	for i := range cases {
+		cases[i].needs = needAll(needMultiturn, cases[i].needs)
+	}
+	return cases
 }
