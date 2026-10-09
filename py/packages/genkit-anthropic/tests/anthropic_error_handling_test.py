@@ -408,7 +408,7 @@ async def test_generate_marks_invalid_thinking_budget_invalid_argument() -> None
     model, client = _model_never_called()
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('Plan a gluten-free menu.')])],
-        config={'thinking': {'enabled': True, 'budgetTokens': 2048.5}},
+        config={'thinking': 'enabled', 'thinkingBudget': 2048.5},
     )
 
     with pytest.raises(GenkitError) as exc_info:

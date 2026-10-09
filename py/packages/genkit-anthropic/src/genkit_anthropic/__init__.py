@@ -46,21 +46,14 @@ See Also:
     - Anthropic documentation: https://docs.anthropic.com/
 """
 
-from genkit_anthropic._config import (
-    AnthropicConfig,
-    OutputConfig,
-    RequestMetadata,
-    TaskBudget,
-    ThinkingConfig,
-)
+from genkit_anthropic._config import AnthropicConfig, Effort, ThinkingDisplay, ThinkingMode
 from genkit_anthropic._plugin import Anthropic, anthropic_name
 
 __all__ = [
     'Anthropic',
     'AnthropicConfig',
-    'OutputConfig',
-    'RequestMetadata',
-    'TaskBudget',
-    'ThinkingConfig',
+    'Effort',
+    'ThinkingDisplay',
+    'ThinkingMode',
     'anthropic_name',
 ]

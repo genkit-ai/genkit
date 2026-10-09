@@ -389,9 +389,12 @@ _ANTHROPIC_CONFIG_KEYS = {
     'betas',
     'maxOutputTokens',
     'disableParallelToolUse',
-    'metadata',
     'thinking',
-    'output_config',
+    'thinkingBudget',
+    'thinkingDisplay',
+    'effort',
+    'taskBudget',
+    'userId',
 }
 
 
