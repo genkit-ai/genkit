@@ -63,11 +63,11 @@ func RunEmbedder(t *testing.T, g *genkit.Genkit, s EmbedderSuite) {
 			if len(e.Embedding) != s.Dimensions {
 				t.Errorf("Embeddings[%d] has %d dimensions, want %d", i, len(e.Embedding), s.Dimensions)
 			}
-			// A zero vector would make the similarity checks below NaN,
-			// and every comparison with NaN is false.
+			// A zero, NaN, or infinite norm would make the similarity checks
+			// below NaN, and every comparison with NaN is false.
 			switch n := norm(e.Embedding); {
-			case n == 0:
-				t.Errorf("Embeddings[%d] is all zeros", i)
+			case n == 0, math.IsNaN(n), math.IsInf(n, 0):
+				t.Errorf("Embeddings[%d] has norm %v, want a finite nonzero norm", i, n)
 			case s.Normalized && math.Abs(n-1) > 0.01:
 				t.Errorf("Embeddings[%d] has norm %v, want unit length", i, n)
 			}
