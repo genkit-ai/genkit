@@ -376,10 +376,9 @@ def _model_never_called() -> tuple[AnthropicModel, MagicMock]:
 @pytest.mark.parametrize(
     ('part', 'message_fragment'),
     [
-        (Part.from_reasoning('The guest listed a peanut allergy.'), 'require a signature'),
         (Part.from_media(url='data:image/png;base64', content_type='image/png'), 'not enough values to unpack'),
     ],
-    ids=['unsigned-thinking', 'data-uri-without-payload'],
+    ids=['data-uri-without-payload'],
 )
 async def test_generate_marks_unsendable_history_invalid_argument(part: Part, message_fragment: str) -> None:
     """History the plugin cannot convert is caller input; retry must not resend it."""

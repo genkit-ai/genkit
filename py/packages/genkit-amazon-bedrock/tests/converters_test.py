@@ -737,16 +737,6 @@ def test_tool_input_float_truncates_for_integer_schema() -> None:
     assert tool_request.input == {'n': 7}
 
 
-def test_reasoning_text_block_becomes_reasoning_part_with_both_keys() -> None:
-    blocks = [{'reasoningContent': {'reasoningText': {'text': 'because', 'signature': 'sig'}}}]
-    parts = content_blocks_to_parts(blocks)
-    root = parts[0]
-    assert root.reasoning == 'because'
-    assert root.metadata is not None
-    assert root.metadata['signature'] == 'sig'
-    assert root.metadata[REASONING_SIGNATURE_METADATA_KEY] == 'sig'
-
-
 def test_redacted_content_block_becomes_reasoning_part() -> None:
     parts = content_blocks_to_parts([{'reasoningContent': {'redactedContent': b'blob'}}])
     root = parts[0]

@@ -145,6 +145,35 @@ def test_anthropic_model_garden_uses_anthropic_config_schema() -> None:
     assert AnthropicModelGarden.get_config_schema() is AnthropicConfig
 
 
+@pytest.mark.asyncio
+async def test_generate_model_garden_claude_drops_part_with_only_signature_key() -> None:
+    """A Model Garden Claude thinking part carrying only ``signature`` is left out of the request."""
+    ai = Genkit(plugins=[ModelGarden(project='project', location='us-east5')])
+    history = [
+        Message(role=Role.USER, content=[Part.from_text('what is 17 * 23?')]),
+        Message(
+            role=Role.MODEL,
+            content=[Part.from_reasoning('because', metadata={'signature': 'sig'}), Part.from_text('391')],
+        ),
+    ]
+    reply = MagicMock()
+    reply.content = [MagicMock(type='text', text='ok')]
+    reply.usage = MagicMock(input_tokens=1, output_tokens=1)
+    reply.stop_reason = 'end_turn'
+
+    with patch('genkit_vertexai.model_garden.anthropic.AsyncAnthropicVertex') as client_ctor:
+        client = client_ctor.return_value
+        client.messages.create = AsyncMock(return_value=reply)
+        client.beta.messages.create = AsyncMock(return_value=reply)
+        response = await ai.generate(
+            model='modelgarden/anthropic/claude-sonnet-4@20250514', messages=history, prompt='now add 100'
+        )
+
+    assert response.text == 'ok'
+    create = client.messages.create if client.messages.create.called else client.beta.messages.create
+    assert create.call_args.kwargs['messages'][1] == {'role': 'assistant', 'content': [{'type': 'text', 'text': '391'}]}
+
+
 def test_anthropic_model_garden_does_not_advertise_api_key() -> None:
     """The advertised schema has no apiKey; a per-request key goes in context.secrets."""
     properties = AnthropicModelGarden.get_config_schema().model_json_schema()['properties']

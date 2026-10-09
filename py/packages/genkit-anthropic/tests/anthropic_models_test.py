@@ -21,13 +21,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from anthropic import AsyncAnthropic, AsyncAnthropicVertex
-from genkit_anthropic import _models as anthropic_models
+from genkit_anthropic import Anthropic, _models as anthropic_models
 from genkit_anthropic._config import AnthropicConfig
 from genkit_anthropic._models import BETA_APIS, AnthropicModel, _to_anthropic_thinking_config
 from genkit_anthropic._utils import maybe_strip_fences, strip_markdown_fences
 from pydantic import ValidationError
 
-from genkit import FinishReason, GenkitError, Message, ModelResponseChunk, Part, Role
+from genkit import FinishReason, Genkit, GenkitError, Message, ModelResponseChunk, Part, Role
 from genkit.model import Constrained, ModelConfig, ModelInfo, ModelRequest, OutputConfig, Supports, ToolDefinition
 
 
@@ -1694,39 +1694,37 @@ def test_reasoning_part_encodes_as_thinking_block() -> None:
     }
 
 
-@pytest.mark.parametrize('signature', ['sig-go', b'sig-go'])
-def test_reasoning_part_accepts_go_style_signature_alias(signature: str | bytes) -> None:
-    """Test that metadata.signature is accepted as an outbound alias."""
-    mock_client = MagicMock()
-    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
-
-    messages = [
-        Message(
-            role=Role.MODEL,
-            content=[Part.from_reasoning('step', metadata={'signature': signature})],
-        ),
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'metadata',
+    [
+        None,
+        {'signature': 'sig'},
+        {'bedrockReasoningSignature': 'sig', 'signature': 'sig'},
+    ],
+    ids=['no_metadata', 'plain_signature', 'pre_1_0_bedrock_keys'],
+)
+async def test_generate_claude_drops_thinking_part_without_thought_signature(
+    metadata: dict[str, str] | None,
+) -> None:
+    """A thinking part without ``thoughtSignature`` is left out; the rest of the turn still goes to Claude."""
+    mock_client = _mock_client_for_generate()
+    # The plugin checks the client for a credential before each call.
+    mock_client.api_key = 'test-key'
+    plugin = Anthropic(api_key='test-key')
+    plugin._runtime_client = lambda: mock_client
+    ai = Genkit(plugins=[plugin])
+    history = [
+        Message(role=Role.USER, content=[Part.from_text('what is 17 * 23?')]),
+        Message(role=Role.MODEL, content=[Part.from_reasoning('because', metadata=metadata), Part.from_text('391')]),
     ]
 
-    anthropic_messages = model._to_anthropic_messages(messages)
-    block = anthropic_messages[0]['content'][0]
-    assert block['type'] == 'thinking'
-    assert block['signature'] == 'sig-go'
+    response = await ai.generate(model='anthropic/claude-sonnet-4', messages=history, prompt='now add 100')
 
-
-def test_reasoning_part_without_signature_raises() -> None:
-    """Test that non-empty reasoning cannot be sent back without a signature."""
-    mock_client = MagicMock()
-    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
-
-    messages = [
-        Message(
-            role=Role.MODEL,
-            content=[Part.from_reasoning('step')],
-        ),
-    ]
-
-    with pytest.raises(ValueError, match='require a signature'):
-        model._to_anthropic_messages(messages)
+    assert response.text == 'ok'
+    create = mock_client.messages.create if mock_client.messages.create.called else mock_client.beta.messages.create
+    sent = create.call_args.kwargs['messages']
+    assert sent[1] == {'role': 'assistant', 'content': [{'type': 'text', 'text': '391'}]}
 
 
 def test_empty_reasoning_part_is_skipped() -> None:

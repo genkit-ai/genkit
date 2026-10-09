@@ -148,9 +148,7 @@ def test_reasoning_replay_passes_validation() -> None:
             Message(
                 role=Role.MODEL,
                 content=[
-                    Part.from_reasoning(
-                        'step one', metadata={'bedrockReasoningSignature': 'sig-abc', 'signature': 'sig-abc'}
-                    ),
+                    Part.from_reasoning('step one', metadata={'thoughtSignature': 'sig-abc'}),
                     Part.from_text('done'),
                 ],
             ),
