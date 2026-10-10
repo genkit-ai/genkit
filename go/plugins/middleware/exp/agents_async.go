@@ -339,6 +339,8 @@ func (a *Agents) waitTool(name, description string, wait func(context.Context, w
 	if a.MaxWaitSeconds == 0 {
 		return plainTool(name, description, wait)
 	}
+	// SchemaMapFor builds a fresh map on every call, so this instance owns it
+	// and edits it in place.
 	schema := base.SchemaMapFor[waitBackgroundTasksInput]()
 	if props, ok := schema["properties"].(map[string]any); ok {
 		if timeout, ok := props["timeoutSeconds"].(map[string]any); ok {
@@ -354,7 +356,7 @@ func (a *Agents) waitTool(name, description string, wait func(context.Context, w
 			err = json.Unmarshal(b, &in)
 		}
 		if err != nil {
-			return backgroundTasksResult{}, status.Errorf(status.ErrInvalidArgument, "%s: decode input: %v", name, err)
+			return backgroundTasksResult{}, status.Errorf(status.ErrInvalidArgument, "%s: decode input: %w", name, err)
 		}
 		return wait(tc.Context, in)
 	}, ai.WithInputSchema(schema))
