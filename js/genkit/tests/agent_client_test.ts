@@ -507,6 +507,53 @@ describe('remoteAgent', () => {
     });
     await agent.chat().send('hi');
   });
+
+  it('layers bound and per-call headers over the static ones', async () => {
+    const seen: Array<Record<string, string>> = [];
+    // Only the headers this test sets; the client adds its own (Accept, ...).
+    const custom = (h: Record<string, string>) =>
+      Object.fromEntries(
+        Object.entries(h).filter(([k]) =>
+          ['x-static', 'authorization', 'x-request-id'].includes(
+            k.toLowerCase()
+          )
+        )
+      );
+    const respond = (req: RecordedRequest) => {
+      seen.push(custom(req.headers));
+      return req.url.endsWith('/getSnapshot')
+        ? jsonResponse({ result: undefined })
+        : req.url.endsWith('/abort')
+          ? jsonResponse({ result: { snapshotId: 's1', status: 'aborted' } })
+          : sseResponse([
+              turnEndResult({ finishReason: 'stop', snapshotId: 's1' }),
+            ]);
+    };
+    for (let i = 0; i < 5; i++) mock.onNext(respond);
+    const agent = remoteAgent({
+      url: '/api/a',
+      headers: { 'x-static': 's', Authorization: 'static' },
+    });
+    const chat = agent.chat({}, { headers: { Authorization: 'Bearer u1' } });
+    // Bound headers win over the static ones, key by key.
+    await chat.send('hi');
+    assert.deepEqual(seen[0], { 'x-static': 's', Authorization: 'Bearer u1' });
+    // Per-call headers replace the bound ones.
+    await chat.send('again', { headers: { 'x-request-id': 'r1' } });
+    assert.deepEqual(seen[1], {
+      'x-static': 's',
+      Authorization: 'static',
+      'x-request-id': 'r1',
+    });
+    // getSnapshot and abort take them too.
+    await agent.getSnapshot('s1', { headers: { 'x-request-id': 'r2' } });
+    assert.equal(seen[2]['x-request-id'], 'r2');
+    await agent.abort('s1', { headers: { 'x-request-id': 'r3' } });
+    assert.equal(seen[3]['x-request-id'], 'r3');
+    // Nothing set anywhere sends none of them.
+    await remoteAgent({ url: '/api/a' }).chat().send('hi');
+    assert.deepEqual(seen[4], {});
+  });
 });
 
 describe('custom transport', () => {
