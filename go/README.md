@@ -501,6 +501,8 @@ fmt.Println(resp.Text())
 
 Return `tool.Fail` (package `ai/tool`) to send an error back to the model so it can try again:
 
+`ai.NewDataPart` accepts any JSON value, including `nil`. A nil payload is encoded as `{"data":null}` and remains a data part when decoded.
+
 ```go
 pop, err := db.Population(ctx, input.City)
 if errors.Is(err, ErrNoSuchCity) {

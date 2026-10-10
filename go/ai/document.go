@@ -233,7 +233,7 @@ func NewMediaPart(mimeType, contents string) *Part {
 
 // NewDataPart returns a Part containing arbitrary structured data. The value is
 // serialized to the part's `data` field as-is, so it may be a string, a map, a
-// slice, or any other JSON-serializable value.
+// slice, nil (JSON null), or any other JSON-serializable value.
 func NewDataPart(data any) *Part {
 	return &Part{Kind: PartData, Data: data}
 }
@@ -769,7 +769,7 @@ type partSchema struct {
 }
 
 // unmarshalPartFromSchema updates Part p based on the schema s.
-func (p *Part) unmarshalPartFromSchema(s partSchema) {
+func (p *Part) unmarshalPartFromSchema(s partSchema, hasData bool) {
 	switch {
 	case s.Media != nil:
 		p.Kind = PartMedia
@@ -791,7 +791,7 @@ func (p *Part) unmarshalPartFromSchema(s partSchema) {
 		p.Kind = PartReasoning
 		p.Text = *s.Reasoning
 		p.ContentType = "plain/text"
-	case s.Data != nil:
+	case hasData:
 		p.Kind = PartData
 		p.Data = s.Data
 	default:
@@ -813,7 +813,15 @@ func (p *Part) UnmarshalJSON(b []byte) error {
 	if err := json.Unmarshal(b, &s); err != nil {
 		return err
 	}
-	p.unmarshalPartFromSchema(s)
+	// Inspect presence separately to preserve schema decoding, including errors
+	// in earlier duplicate values and JSON's case-insensitive field matching.
+	var presence struct {
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(b, &presence); err != nil {
+		return err
+	}
+	p.unmarshalPartFromSchema(s, presence.Data != nil)
 	return nil
 }
 
@@ -823,7 +831,12 @@ func (p *Part) UnmarshalYAML(unmarshal func(any) error) error {
 	if err := unmarshal(&s); err != nil {
 		return err
 	}
-	p.unmarshalPartFromSchema(s)
+	var fields map[string]any
+	if err := unmarshal(&fields); err != nil {
+		return err
+	}
+	_, hasData := fields["data"]
+	p.unmarshalPartFromSchema(s, hasData)
 	return nil
 }
 
