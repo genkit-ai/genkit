@@ -34,11 +34,11 @@ There is one path. `create_release` refuses to run unless every step below was f
 
 `create_release` runs every check before it changes anything and prints a fix for each failure:
 
-- `pr-merged`, `pr-base`: the PR is merged into main
-- `pr-title`: the title is exactly `chore(py): release Python SDK vX.Y.Z`
-- `pr-notes`: the description isn't empty
-- `versions`: every `py/packages/*/pyproject.toml` is at X.Y.Z in the merge commit
-- `tag-free`: tag `py/vX.Y.Z` doesn't exist yet
+- **Merged into main**: the PR is merged, and into main
+- **Title**: exactly `chore(py): release Python SDK vX.Y.Z`
+- **Release notes**: the description isn't empty
+- **Versions**: every `py/packages/*/pyproject.toml` is at X.Y.Z in the merge commit
+- **Tag**: `py/vX.Y.Z` doesn't exist yet
 
 It tags the PR's merge commit, not the tip of main, so anything merged later stays out of the release. Exit codes: `0` ok, `1` usage or environment, `2` a check failed and nothing changed.
 
