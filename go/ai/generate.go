@@ -24,6 +24,7 @@ import (
 	"iter"
 	"log/slog"
 	"maps"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"sync"
@@ -1200,7 +1201,7 @@ func buildToolRunner(mws []namedHooks) toolRunnerFunc {
 	stages := toolStages(mws)
 	if len(stages) == 0 {
 		return func(ctx context.Context, tool Tool, req *ToolRequest) (*MultipartToolResponse, error) {
-			resp, err := tool.RunRawMultipart(toolStageContext(ctx, tool.Name(), nil, 0), req.Input)
+			resp, err := runToolRecovered(toolStageContext(ctx, tool.Name(), nil, 0), tool, req.Input)
 			return answerToolError(ctx, tool.Name(), resp, err, true)
 		}
 	}
@@ -1209,7 +1210,7 @@ func buildToolRunner(mws []namedHooks) toolRunnerFunc {
 		if run != nil {
 			run.ran = true
 		}
-		resp, err := params.Tool.RunRawMultipart(toolStageContext(ctx, params.Tool.Name(), stages, len(stages)), params.Request.Input)
+		resp, err := runToolRecovered(toolStageContext(ctx, params.Tool.Name(), stages, len(stages)), params.Tool, params.Request.Input)
 		if run != nil {
 			run.err = err
 		}
@@ -1321,6 +1322,11 @@ func recordToolShortCircuit(ctx context.Context, name string, input any, resp *M
 // SoftToolErrors middleware (plugins/middleware) covers, answers the call
 // with a response for which [Part.IsToolError] is true, and the loop
 // continues.
+//
+// A tool that panics fails its call with [ErrToolFailed], as an error of its
+// own would, under the message "tool panicked": the panic value and its stack
+// go to the error log only, never to the model or the returned error. A
+// WrapTool hook that panics fails the call the same way, as its own error.
 //
 // Errors reported before a request is made (unknown model or tool, invalid
 // options) carry a nil response.
@@ -1771,6 +1777,31 @@ func toolFailureError(ctx context.Context, name string, cause error) error {
 	return status.Errorf(ErrToolFailed, "tool %q failed: %w", name, cause)
 }
 
+// errToolPanicked is the error of a tool call that panicked. Its message is
+// fixed: the error can reach the model as the call's answer, and the panic
+// value can hold anything the tool had in hand, secrets included, so the value
+// and its stack go only to the error log.
+var errToolPanicked = errors.New("tool panicked")
+
+// recoverToolPanic, deferred in a function that runs a call to the named
+// tool, turns a panic into errToolPanicked on *err and logs the panic value
+// and its stack.
+func recoverToolPanic(ctx context.Context, name string, err *error) {
+	if v := recover(); v != nil {
+		logger.Error(ctx, "tool call panicked", "tool", name, "panic", v, "stack", string(debug.Stack()))
+		*err = errToolPanicked
+	}
+}
+
+// runToolRecovered runs tool on input, and fails with errToolPanicked when
+// the tool panics, so the loop handles the panic as an error of the tool's
+// own: the WrapTool hooks see it, and SoftToolErrors can answer the call
+// with it.
+func runToolRecovered(ctx context.Context, tool Tool, input any) (resp *MultipartToolResponse, err error) {
+	defer recoverToolPanic(ctx, tool.Name(), &err)
+	return tool.RunRawMultipart(ctx, input)
+}
+
 // toolStreamer lets the tools of one round, which run concurrently, stream
 // model response chunks through cb with
 // [github.com/firebase/genkit/go/ai/tool.SendChunk]. cb, the wrapped stream
@@ -1953,6 +1984,17 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 
 		go func(idx int, p *Part) {
 			toolReq := p.ToolRequest
+			res := result[*MultipartToolResponse]{index: idx}
+			defer func() { resultChan <- res }()
+			// A panic outside the tool itself, in a WrapTool hook say, fails
+			// the call rather than the process.
+			var panicErr error
+			defer func() {
+				if panicErr != nil {
+					res.value, res.err = nil, toolFailureError(ctx, toolReq.Name, panicErr)
+				}
+			}()
+			defer recoverToolPanic(ctx, toolReq.Name, &panicErr)
 			respond := func(resp *MultipartToolResponse) {
 				// p is already private to this call (revisedMsg is a deep
 				// clone of the model message), and the stamp writes only its
@@ -1961,7 +2003,7 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 				stampPendingToolOutcome(newPart, resp)
 				revisedMsg.Content[idx] = newPart
 
-				resultChan <- result[*MultipartToolResponse]{index: idx, value: resp}
+				res.value = resp
 			}
 
 			tool := LookupTool(r, p.ToolRequest.Name)
@@ -1971,7 +2013,7 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 					respond(resp)
 					return
 				}
-				resultChan <- result[*MultipartToolResponse]{index: idx, err: err}
+				res.err = err
 				return
 			}
 
@@ -1993,14 +2035,14 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 					logger.Debug(ctx, "tool triggered an interrupt", "tool", toolReq.Name)
 					interrupt, ierr := interruptedPart(p, tie)
 					if ierr != nil {
-						resultChan <- result[*MultipartToolResponse]{index: idx, err: toolFailureError(ctx, toolReq.Name, ierr)}
+						res.err = toolFailureError(ctx, toolReq.Name, ierr)
 						return
 					}
 					revisedMsg.Content[idx] = interrupt
-					resultChan <- result[*MultipartToolResponse]{index: idx, err: tie}
+					res.err = tie
 					return
 				}
-				resultChan <- result[*MultipartToolResponse]{index: idx, err: toolFailureError(ctx, toolReq.Name, err)}
+				res.err = toolFailureError(ctx, toolReq.Name, err)
 				return
 			}
 			multipartResp = foldAttachedParts(multipartResp, sink)
@@ -2864,12 +2906,18 @@ func handleResumeOption(ctx context.Context, r api.Registry, genOpts *GenerateAc
 
 	for i, step := range steps {
 		go func(idx int, step *resumeStep) {
-			output, err := handleResumedToolRequest(ctx, step, runTool, stream)
-			resultChan <- result[*resumedToolRequestOutput]{
-				index: idx,
-				value: output,
-				err:   err,
-			}
+			res := result[*resumedToolRequestOutput]{index: idx}
+			defer func() { resultChan <- res }()
+			// A panic outside the tool itself, in a WrapTool hook say, fails
+			// the call rather than the process.
+			var panicErr error
+			defer func() {
+				if panicErr != nil {
+					res.value, res.err = nil, toolFailureError(ctx, step.request.ToolRequest.Name, panicErr)
+				}
+			}()
+			defer recoverToolPanic(ctx, step.request.ToolRequest.Name, &panicErr)
+			res.value, res.err = handleResumedToolRequest(ctx, step, runTool, stream)
 		}(i, step)
 	}
 
