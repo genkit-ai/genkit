@@ -658,6 +658,9 @@ type stored struct {
 	status    aix.SnapshotStatus
 	kind      string
 	state     []byte // the state as JSON; nil for none
+	// parentChain is the parent's chain back to its checkpoint, already read
+	// with the row's own when the row is a diff; nil otherwise.
+	parentChain []row
 }
 
 // storedOf captures the head row of chain, whose materialized snapshot is
@@ -670,13 +673,17 @@ func storedOf[State any](chain []row, current *aix.SessionSnapshot[State]) (*sto
 	if err != nil {
 		return nil, fmt.Errorf("encode state: %w", err)
 	}
-	return &stored{
+	st := &stored{
 		sessionID: current.SessionID,
 		parentID:  current.ParentID,
 		status:    current.Status,
 		kind:      chain[0].kind,
 		state:     state,
-	}, nil
+	}
+	if st.kind == kindDiff {
+		st.parentChain = chain[1:]
+	}
+	return st, nil
 }
 
 // write persists next over the row prev describes (nil for a new row). A write
@@ -710,7 +717,11 @@ func (s *PostgresSessionStore[State]) write(ctx context.Context, tx pgx.Tx, pref
 		}
 	}
 
-	p, err := s.plan(ctx, tx, prefix, next.SnapshotID, next.ParentID, stateJSON)
+	var parentChain []row
+	if prev != nil && prev.parentID == next.ParentID {
+		parentChain = prev.parentChain
+	}
+	p, err := s.plan(ctx, tx, prefix, next.SnapshotID, next.ParentID, stateJSON, parentChain)
 	if err != nil {
 		return err
 	}
@@ -758,8 +769,9 @@ type writePlan struct {
 // plan decides how to store a row whose state is stateJSON (nil for no state)
 // and whose parent is parentID. A row is a diff when its parent has a state, is
 // fewer than checkpointInterval diffs from its checkpoint, and the patch is at
-// most half the size of the state; any other row is a checkpoint.
-func (s *PostgresSessionStore[State]) plan(ctx context.Context, tx pgx.Tx, prefix, id, parentID string, stateJSON json.RawMessage) (writePlan, error) {
+// most half the size of the state; any other row is a checkpoint. parentChain
+// is the parent's chain when the save already read it, or nil.
+func (s *PostgresSessionStore[State]) plan(ctx context.Context, tx pgx.Tx, prefix, id, parentID string, stateJSON json.RawMessage, parentChain []row) (writePlan, error) {
 	checkpoint := writePlan{kind: kindCheckpoint, state: stateJSON}
 	if stateJSON == nil || parentID == "" || parentID == id {
 		return checkpoint, nil
@@ -780,9 +792,14 @@ func (s *PostgresSessionStore[State]) plan(ctx context.Context, tx pgx.Tx, prefi
 	if !parentHasState || parentDepth+1 >= s.checkpointInterval {
 		return checkpoint, nil
 	}
-	chain, err := s.readChain(ctx, tx, prefix, bySnapshotID, parentID)
-	if err != nil {
-		return writePlan{}, err
+	// A chain the save read before taking the lock is still the parent's:
+	// the parent's state cannot change while this row stores a diff against
+	// it.
+	chain := parentChain
+	if chain == nil {
+		if chain, err = s.readChain(ctx, tx, prefix, bySnapshotID, parentID); err != nil {
+			return writePlan{}, err
+		}
 	}
 	for _, r := range chain {
 		if r.snapshotID == id {
