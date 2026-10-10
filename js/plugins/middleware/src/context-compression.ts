@@ -210,7 +210,9 @@ export const ContextCompressionOptionsSchema = z.object({
    * dropped while preserving system messages. Any leading tool or model messages
    * at the truncation cutoff are also discarded to satisfy LLM API requirements
    * (ensuring history begins with a user turn and avoiding orphaned tool responses).
-   * The final message count will be at most `maxMessages`.
+   * The final message count will be at most `maxMessages`, except that the
+   * newest turn is always kept: when the system messages and the truncation
+   * notice fill the cap, the model still gets that turn.
    */
   maxMessages: z
     .number()
@@ -508,6 +510,8 @@ function resolveCompressedHistoryWithIndices(messages: MessageData[]): {
   messages: MessageData[];
   origIndexByMsg: WeakMap<MessageData, number>;
   boundaryIndex: number;
+  /** The anchor user message the boundary restored, if any. */
+  anchor?: MessageData;
 } {
   const origIndexByMsg = new WeakMap<MessageData, number>();
   const lastModelOrToolIdx = findLastModelOrToolIndex(messages);
@@ -617,11 +621,13 @@ function resolveCompressedHistoryWithIndices(messages: MessageData[]): {
     resolvedMessages.push(summaryMsg);
   }
 
+  let anchor: MessageData | undefined;
   if (ccMeta.anchorUser === true) {
     for (let i = boundaryIndex; i >= leadingSystemEnd; i--) {
       if (messages[i].role === 'user') {
-        origIndexByMsg.set(messages[i], i);
-        resolvedMessages.push(messages[i]);
+        anchor = messages[i];
+        origIndexByMsg.set(anchor, i);
+        resolvedMessages.push(anchor);
         break;
       }
     }
@@ -642,6 +648,7 @@ function resolveCompressedHistoryWithIndices(messages: MessageData[]): {
     messages: resolvedMessages,
     origIndexByMsg,
     boundaryIndex,
+    anchor,
   };
 }
 
@@ -733,13 +740,11 @@ function estimatePartChars(p: Part): number {
   }
   if (p.toolRequest) return stringifyOutput(p.toolRequest).length;
   if (p.toolResponse) {
-    if (!p.toolResponse.content?.length) {
-      return stringifyOutput(p.toolResponse).length;
-    }
-    const { content, ...restToolResponse } = p.toolResponse;
+    // Count the raw output, as the tool response caps do, not its JSON
+    // encoding, which counts each escaped quote and newline twice.
     return (
-      stringifyOutput(restToolResponse).length +
-      content.reduce((cSum, cPart) => cSum + estimatePartChars(cPart), 0)
+      (p.toolResponse.name?.length ?? 0) +
+      getToolResponseCharLength(p.toolResponse)
     );
   }
   return 0;
@@ -1562,8 +1567,10 @@ export const contextCompression: GenerateMiddleware<
 
       const noticeConsumesSlot =
         insertTruncationNotice && systemMessages.length === 0;
+      // The newest turn is kept even when the system messages and the notice
+      // fill the cap, since a model cannot answer a conversation without one.
       const keepCount = Math.max(
-        0,
+        1,
         cap - systemMessages.length - (noticeConsumesSlot ? 1 : 0)
       );
       let kept = keepCount === 0 ? [] : nonSystemMessages.slice(-keepCount);
@@ -1971,6 +1978,7 @@ export const contextCompression: GenerateMiddleware<
           );
         const resolved = resolveCompressedHistoryWithIndices(rawMessages);
         const prevBoundary = resolved.boundaryIndex;
+        const prevAnchor = resolved.anchor;
         const origIndexByMsg = resolved.origIndexByMsg;
         const {
           messages: activeMessages,
@@ -2166,6 +2174,12 @@ export const contextCompression: GenerateMiddleware<
                   isSummarized = sumResult.summarized;
                   if (isSummarized) {
                     sText = sumResult.summaryText;
+                    // The boundary search below skips the previous anchor,
+                    // which sits at or before prevBoundary, so restore it
+                    // when the tail still holds it.
+                    mUsedAnchorUser =
+                      prevAnchor !== undefined &&
+                      sumResult.tailMessages.includes(prevAnchor);
                     const firstKeptRawIdx = sumResult.tailMessages
                       .map((m) => origIndexByMsg.get(m) ?? -1)
                       .find((idx) => idx > prevBoundary);
@@ -2192,9 +2206,7 @@ export const contextCompression: GenerateMiddleware<
                   ? skippedSummary
                   : cheapUnderBudget;
                 const needsTokenFallbackTruncation =
-                  effectiveTokens > maxInputTokens &&
-                  ((!dedupConfig && !toolResponseConfig && !summaryModelRef) ||
-                    (Boolean(summaryModelRef) && !skippedSummary));
+                  effectiveTokens > maxInputTokens && !cheapSatisfiedBudget;
 
                 let effectiveMaxMessages: number | undefined;
                 if (
@@ -2239,7 +2251,10 @@ export const contextCompression: GenerateMiddleware<
                   noticeInserted = msgResult.noticeInserted;
                   if (msgResult.dropped > 0) {
                     msgTruncated = true;
-                    mUsedAnchorUser = msgResult.usedAnchorUser;
+                    mUsedAnchorUser =
+                      msgResult.usedAnchorUser ||
+                      (prevAnchor !== undefined &&
+                        msgResult.tailMessages.includes(prevAnchor));
                     const firstKeptRawIdx = msgResult.tailMessages
                       .map((m) => origIndexByMsg.get(m) ?? -1)
                       .find((idx) => idx > prevBoundary);
@@ -2377,6 +2392,10 @@ export const contextCompression: GenerateMiddleware<
 
             return updatedMsg;
           });
+        } else if (preserveOriginalMessages) {
+          // Nothing was compressed: the history stays as received, short of
+          // the sanitizing and reconciling above. The model hook resolves it.
+          outgoingMessages = rawMessages;
         } else {
           outgoingMessages =
             wasCompressed ||
@@ -2396,17 +2415,16 @@ export const contextCompression: GenerateMiddleware<
 
         const response = await next(modifiedEnvelope, ctx);
 
-        if (isTopLevel) {
-          const finalMeta = turnCompressionMeta ?? latestCompressionMeta;
-          if (finalMeta) {
-            return {
-              ...response,
-              custom: {
-                ...((response.custom as Record<string, unknown>) ?? {}),
-                contextCompression: finalMeta,
-              },
-            };
-          }
+        // Every iteration of the tool loop updates latestCompressionMeta, so
+        // by now it holds the newest compression, not this iteration's.
+        if (isTopLevel && latestCompressionMeta) {
+          return {
+            ...response,
+            custom: {
+              ...((response.custom as Record<string, unknown>) ?? {}),
+              contextCompression: latestCompressionMeta,
+            },
+          };
         }
 
         return response;

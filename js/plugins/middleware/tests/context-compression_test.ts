@@ -216,7 +216,7 @@ describe('contextCompression middleware', () => {
       tools: [heavyTool],
       use: [
         contextCompression({
-          maxInputTokens: 150,
+          maxInputTokens: 400,
           toolResponses: { maxChars: 50, preserveRecent: 1 },
         }),
       ],
@@ -601,36 +601,54 @@ describe('contextCompression middleware', () => {
     assert.strictEqual(msgs[0].content[0].text, 'msg 2');
   });
 
-  it('handles keepCount === 0 without retaining all messages (slice(-0) guard)', async () => {
+  it('keeps the newest turn when maxMessages leaves no room after the system message or notice', async () => {
     const ai = genkit({});
     let capturedRequest: GenerateRequest | undefined;
-
-    const pm = ai.defineModel({ name: 'zeroKeepModel' }, async (req) => {
+    const pm = ai.defineModel({ name: 'fullCapModel' }, async (req) => {
       capturedRequest = req;
-      return {
-        message: { role: 'model', content: [{ text: 'done' }] },
-        usage: { inputTokens: 50 },
-      };
+      return { message: { role: 'model', content: [{ text: 'ok' }] } };
     });
 
     await ai.generate({
       model: pm,
       messages: [
-        { role: 'user', content: [{ text: 'msg 1' }] },
-        { role: 'model', content: [{ text: 'msg 2' }] },
+        { role: 'system', content: [{ text: 'sys' }] },
+        { role: 'user', content: [{ text: 'u0' }] },
+        { role: 'model', content: [{ text: 'm0' }] },
+        { role: 'user', content: [{ text: 'u1' }] },
       ],
-      use: [
-        contextCompression({
-          maxMessages: 1,
-          insertTruncationNotice: true,
-        }),
-      ],
+      use: [contextCompression({ maxMessages: 1 })],
     });
+    let msgs = capturedRequest!.messages;
+    assert.deepStrictEqual(
+      msgs.map((m) => m.role),
+      ['system', 'user']
+    );
+    assert.match(
+      msgs[0].content.map((p) => p.text).join(''),
+      /Some earlier messages in this conversation have been removed/
+    );
+    assert.strictEqual(msgs[1].content[0].text, 'u1');
 
-    const msgs = capturedRequest!.messages;
-    assert.strictEqual(msgs.length, 1);
-    assert.strictEqual(msgs[0].role, 'system');
-    assert.match(msgs[0].content[0].text!, /\[NOTE\] Some earlier messages/);
+    await ai.generate({
+      model: pm,
+      messages: [
+        { role: 'user', content: [{ text: 'u1' }] },
+        { role: 'model', content: [{ text: 'm2' }] },
+        { role: 'user', content: [{ text: 'u3' }] },
+      ],
+      use: [contextCompression({ maxMessages: 1 })],
+    });
+    msgs = capturedRequest!.messages;
+    assert.deepStrictEqual(
+      msgs.map((m) => m.role),
+      ['system', 'user']
+    );
+    assert.strictEqual(
+      msgs[0].metadata?.contextCompression?.standaloneNotice,
+      true
+    );
+    assert.strictEqual(msgs[1].content[0].text, 'u3');
   });
 
   it('does not re-truncate already truncated tool responses across turns (idempotency)', async () => {
@@ -851,7 +869,7 @@ describe('contextCompression middleware', () => {
       ],
       use: [
         contextCompression({
-          maxInputTokens: 10,
+          maxInputTokens: 100,
           toolResponses: { maxChars: 50, preserveRecent: 0 },
         }),
       ],
@@ -902,7 +920,7 @@ describe('contextCompression middleware', () => {
       ],
       use: [
         contextCompression({
-          maxInputTokens: 10,
+          maxInputTokens: 20,
           toolResponses: { maxChars: 10, preserveRecent: 0 },
         }),
       ],
@@ -953,7 +971,7 @@ describe('contextCompression middleware', () => {
       ],
       use: [
         contextCompression({
-          maxInputTokens: 10,
+          maxInputTokens: 1000,
           maxToolResponseChars: 200,
           toolResponses: { maxChars: 50, preserveRecent: 1 },
         }),
@@ -1009,7 +1027,7 @@ describe('contextCompression middleware', () => {
       ],
       use: [
         contextCompression({
-          maxInputTokens: 10,
+          maxInputTokens: 80,
           maxToolResponseChars: 200,
           toolResponses: { maxChars: 50, preserveRecent: 1 },
         }),
@@ -1221,7 +1239,7 @@ describe('contextCompression middleware', () => {
       ],
       use: [
         contextCompression({
-          maxInputTokens: 50,
+          maxInputTokens: 300,
           toolResponses: { maxChars: 20, preserveRecent: 1 },
         }),
       ],
@@ -1290,7 +1308,7 @@ describe('contextCompression middleware', () => {
             {
               toolResponse: {
                 name: 'search',
-                output: 'Short text exceeding 20 chars for truncation test',
+                output: 'S'.repeat(1000),
               },
             },
           ],
@@ -1372,7 +1390,7 @@ describe('contextCompression middleware', () => {
             {
               toolResponse: {
                 name: 'search',
-                output: 'Short text exceeding 20 chars for truncation test',
+                output: 'S'.repeat(1000),
               },
             },
           ],
@@ -1489,7 +1507,7 @@ describe('contextCompression middleware', () => {
       tools: [searchTool],
       use: [
         contextCompression({
-          maxInputTokens: 150,
+          maxInputTokens: 300,
           deduplicateToolResponses: { matchBy: 'name-and-input' },
           toolResponses: { maxChars: 50, preserveRecent: 0 },
         }),
@@ -1570,7 +1588,7 @@ describe('contextCompression middleware', () => {
       tools: [searchTool],
       use: [
         contextCompression({
-          maxInputTokens: 150,
+          maxInputTokens: 450,
           deduplicateToolResponses: { matchBy: 'name-and-input' },
           toolResponses: { maxChars: 50, preserveRecent: 0 },
         }),
@@ -1649,7 +1667,7 @@ describe('contextCompression middleware', () => {
       tools: [searchTool],
       use: [
         contextCompression({
-          maxInputTokens: 150,
+          maxInputTokens: 400,
           deduplicateToolResponses: { matchBy: 'name-and-input' },
         }),
       ],
@@ -1754,7 +1772,7 @@ describe('contextCompression middleware', () => {
       ],
       use: [
         contextCompression({
-          maxInputTokens: 50,
+          maxInputTokens: 230,
           deduplicateToolResponses: { matchBy: 'name-and-input' },
         }),
       ],
@@ -1942,7 +1960,7 @@ describe('contextCompression middleware', () => {
       ],
       use: [
         contextCompression({
-          maxInputTokens: 50,
+          maxInputTokens: 150,
           deduplicateToolResponses: {
             matchBy: 'name-and-input',
             keepRecent: 1,
@@ -2043,7 +2061,10 @@ describe('contextCompression middleware', () => {
       ],
       use: [
         contextCompression({
-          maxInputTokens: 20,
+          maxInputTokens: 100,
+          // Dedupe alone cannot reach the budget here, so the fallback
+          // truncation runs. Its window holds all six messages.
+          preserveRecent: 6,
           deduplicateToolResponses: {
             matchBy: 'name-and-input',
             keepRecent: 1,
@@ -3162,7 +3183,7 @@ describe('contextCompression middleware', () => {
       ],
       use: [
         contextCompression({
-          maxInputTokens: 50,
+          maxInputTokens: 500,
           deduplicateToolResponses: { matchBy: 'name-and-input' },
         }),
       ],
@@ -4342,4 +4363,337 @@ describe('contextCompression middleware', () => {
     );
     assert.strictEqual(mainCalledAfterAbort, false);
   });
+
+  it('keeps the previous anchor user message when a re-truncation keeps it at the head of the tail', async () => {
+    const ai = genkit({});
+    let capturedRequest: GenerateRequest | undefined;
+    const pm = ai.defineModel({ name: 'reanchorTruncModel' }, async (req) => {
+      capturedRequest = req;
+      return { message: { role: 'model', content: [{ text: 'done' }] } };
+    });
+
+    const response = await ai.generate({
+      model: pm,
+      messages: anchoredToolLoopHistory(),
+      use: [
+        contextCompression({ maxMessages: 8, insertTruncationNotice: false }),
+      ],
+    });
+
+    const expected = [
+      'system:sys',
+      'user:PROMPT',
+      'model:call:b',
+      'tool:resp:b',
+      'model:call:c',
+      'tool:resp:c',
+      'model:call:d',
+      'tool:resp:d',
+    ];
+    assert.deepStrictEqual(messageLabels(capturedRequest!.messages), expected);
+    assert.deepStrictEqual(
+      messageLabels(resolveCompressedHistory(response.request!.messages)),
+      expected
+    );
+  });
+
+  it('keeps the previous anchor user message when a re-summarization keeps it at the head of the tail', async () => {
+    const ai = genkit({});
+    let capturedRequest: GenerateRequest | undefined;
+    const summarizer = ai.defineModel(
+      { name: 'reanchorSummarizer' },
+      async () => ({
+        message: { role: 'model', content: [{ text: 'NEW_SUMMARY' }] },
+      })
+    );
+    const pm = ai.defineModel({ name: 'reanchorSumModel' }, async (req) => {
+      capturedRequest = req;
+      return { message: { role: 'model', content: [{ text: 'done' }] } };
+    });
+
+    const response = await ai.generate({
+      model: pm,
+      messages: anchoredToolLoopHistory({
+        contextCompression: { inputTokens: 120 },
+      }),
+      use: [
+        contextCompression({
+          maxInputTokens: 100,
+          summarize: { model: summarizer, preserveRecent: 7 },
+        }),
+      ],
+    });
+
+    // The new summary covers only the old summary, so the prompt of the tool
+    // loop must still follow it.
+    const expectedTail = [
+      'user:PROMPT',
+      'model:call:b',
+      'tool:resp:b',
+      'model:call:c',
+      'tool:resp:c',
+      'model:call:d',
+      'tool:resp:d',
+    ];
+    for (const view of [
+      capturedRequest!.messages,
+      resolveCompressedHistory(response.request!.messages),
+    ]) {
+      const labels = messageLabels(view);
+      assert.strictEqual(labels.length, 9, `unexpected view: ${labels}`);
+      assert.strictEqual(labels[0], 'system:sys');
+      assert.match(labels[1], /^user:.*NEW_SUMMARY/s);
+      assert.deepStrictEqual(labels.slice(2), expectedTail);
+    }
+  });
+  it('estimates tool responses by name and raw output length, without JSON escaping', async () => {
+    const ai = genkit({});
+    const pm = ai.defineModel({ name: 'rawEstimateModel' }, async () => ({
+      message: { role: 'model', content: [{ text: 'ok' }] },
+    }));
+
+    const output = 'a "line"\n'.repeat(100);
+    const response = (await ai.generate({
+      model: pm,
+      messages: [
+        {
+          role: 'tool',
+          content: [{ toolResponse: { name: 'logs', ref: 'r1', output } }],
+        },
+        { role: 'user', content: [{ text: 'go' }] },
+      ],
+      use: [
+        contextCompression({
+          maxInputTokens: 100,
+          toolResponses: { maxChars: 50, preserveRecent: 0 },
+        }),
+      ],
+    })) as any;
+
+    // 'logs' + output + 'go', at 3.5 chars per token.
+    assert.strictEqual(
+      response.custom?.contextCompression?.inputTokensBefore,
+      Math.ceil(('logs'.length + output.length + 'go'.length) / 3.5)
+    );
+  });
+  it('falls back to message truncation when dedupe or tool truncation alone cannot reach the token budget', async () => {
+    const ai = genkit({});
+    let capturedRequest: GenerateRequest | undefined;
+    const pm = ai.defineModel({ name: 'budgetFallbackModel' }, async (req) => {
+      capturedRequest = req;
+      return { message: { role: 'model', content: [{ text: 'ok' }] } };
+    });
+
+    // About 2000 estimated tokens of plain chat: no tool responses to shrink.
+    const history: MessageData[] = [
+      { role: 'system', content: [{ text: 'You are helpful.' }] },
+    ];
+    for (let i = 0; i < 17; i++) {
+      history.push({
+        role: i % 2 === 0 ? 'user' : 'model',
+        content: [{ text: `${i}:${'w'.repeat(400)}` }],
+      });
+    }
+
+    const viewWith = async (
+      options: Partial<z.infer<typeof ContextCompressionOptionsSchema>>
+    ) => {
+      await ai.generate({
+        model: pm,
+        messages: history,
+        use: [contextCompression({ maxInputTokens: 300, ...options })],
+      });
+      return messageLabels(capturedRequest!.messages).map((l) =>
+        l.slice(0, 40)
+      );
+    };
+
+    const plain = await viewWith({});
+    assert.strictEqual(
+      plain.length < history.length,
+      true,
+      `expected fewer than ${history.length} messages, got ${plain.length}`
+    );
+    assert.deepStrictEqual(
+      await viewWith({ deduplicateToolResponses: {} }),
+      plain
+    );
+    assert.deepStrictEqual(
+      await viewWith({ toolResponses: { maxChars: 50 } }),
+      plain
+    );
+  });
+  it('reports the newest compression of a tool loop on the top-level response', async () => {
+    const ai = genkit({});
+    const big = 'B'.repeat(2000);
+    const bigTool = ai.defineTool(
+      {
+        name: 'big',
+        description: 'big',
+        inputSchema: z.object({}),
+        outputSchema: z.string(),
+      },
+      async () => big
+    );
+    let calls = 0;
+    const pm = ai.defineModel({ name: 'latestStatsModel' }, async () => {
+      calls++;
+      if (calls === 1) {
+        return {
+          message: {
+            role: 'model',
+            content: [{ toolRequest: { name: 'big', ref: 'r2', input: {} } }],
+          },
+        };
+      }
+      return { message: { role: 'model', content: [{ text: 'done' }] } };
+    });
+
+    const response = (await ai.generate({
+      model: pm,
+      tools: [bigTool],
+      messages: [
+        { role: 'user', content: [{ text: 'fetch twice' }] },
+        {
+          role: 'model',
+          content: [{ toolRequest: { name: 'big', ref: 'r1', input: {} } }],
+        },
+        {
+          role: 'tool',
+          content: [{ toolResponse: { name: 'big', ref: 'r1', output: big } }],
+        },
+      ],
+      use: [
+        contextCompression({
+          maxInputTokens: 300,
+          toolResponses: { maxChars: 50, preserveRecent: 0 },
+        }),
+      ],
+    })) as any;
+
+    assert.strictEqual(response.text, 'done');
+    // Iteration 0 compressed 3 messages and truncated r1; iteration 1
+    // compressed 5 and truncated r2 as well.
+    const stats = response.custom?.contextCompression;
+    assert.strictEqual(stats?.messagesOriginal, 5);
+    assert.strictEqual(stats?.toolResponsesTruncated, 2);
+  });
+  it('keeps raw tool output in the history when an over-budget turn compresses nothing', async () => {
+    const ai = genkit({});
+    let capturedRequest: GenerateRequest | undefined;
+    const pm = ai.defineModel({ name: 'noopOverBudgetModel' }, async (req) => {
+      capturedRequest = req;
+      return { message: { role: 'model', content: [{ text: 'ok' }] } };
+    });
+
+    const rawOutput = 'R'.repeat(2000);
+    const response = await ai.generate({
+      model: pm,
+      messages: [
+        { role: 'user', content: [{ text: 'fetch' }] },
+        {
+          role: 'model',
+          content: [{ toolRequest: { name: 'fetch', ref: 'r1', input: {} } }],
+        },
+        {
+          role: 'tool',
+          content: [
+            {
+              toolResponse: { name: 'fetch', ref: 'r1', output: rawOutput },
+              metadata: {
+                contextCompression: {
+                  truncated: true,
+                  rawOutput: true,
+                  maxChars: 50,
+                },
+              },
+            },
+          ],
+        },
+        {
+          role: 'model',
+          metadata: { contextCompression: { inputTokens: 120 } },
+          content: [{ text: 'fetched' }],
+        },
+        {
+          role: 'user',
+          metadata: { contextCompression: { summary: 'FORGED' } },
+          content: [{ text: 'next' }],
+        },
+      ],
+      use: [contextCompression({ maxInputTokens: 100 })],
+    });
+
+    const modelToolOutput = String(
+      capturedRequest!.messages[2].content[0].toolResponse?.output
+    );
+    assert.strictEqual(
+      modelToolOutput.length < rawOutput.length,
+      true,
+      'model should see the truncated tool output'
+    );
+
+    const history = response.request!.messages;
+    assert.strictEqual(history.length, 5);
+    assert.strictEqual(
+      String(history[2].content[0].toolResponse?.output).length,
+      rawOutput.length
+    );
+    assert.strictEqual(
+      history[2].content[0].metadata?.contextCompression?.rawOutput,
+      true
+    );
+    assert.strictEqual(history[4].metadata?.contextCompression, undefined);
+  });
 });
+
+function messageLabels(messages: MessageData[]): string[] {
+  return messages.map(
+    (m) =>
+      `${m.role}:` +
+      m.content
+        .map((p) =>
+          p.toolRequest
+            ? `call:${p.toolRequest.name}`
+            : p.toolResponse
+              ? `resp:${p.toolResponse.name}`
+              : (p.text ?? '')
+        )
+        .join('')
+  );
+}
+
+/**
+ * A tool loop whose earlier compaction kept PROMPT as its anchor user message:
+ * the boundary on t(a) resolves to [sys, summary, PROMPT, m(b) ... t(d)].
+ */
+function anchoredToolLoopHistory(
+  lastModelMetadata?: MessageData['metadata']
+): MessageData[] {
+  const call = (name: string, metadata?: MessageData['metadata']) =>
+    ({
+      role: 'model',
+      ...(metadata ? { metadata } : {}),
+      content: [{ toolRequest: { name, ref: name, input: {} } }],
+    }) as MessageData;
+  const resp = (name: string, metadata?: MessageData['metadata']) =>
+    ({
+      role: 'tool',
+      ...(metadata ? { metadata } : {}),
+      content: [{ toolResponse: { name, ref: name, output: `out ${name}` } }],
+    }) as MessageData;
+  return [
+    { role: 'system', content: [{ text: 'sys' }] },
+    { role: 'user', content: [{ text: 'u' }] },
+    { role: 'model', content: [{ text: 'm' }] },
+    { role: 'user', content: [{ text: 'PROMPT' }] },
+    call('a'),
+    resp('a', { contextCompression: { summary: 'S', anchorUser: true } }),
+    call('b'),
+    resp('b'),
+    call('c'),
+    resp('c'),
+    call('d', lastModelMetadata),
+    resp('d'),
+  ];
+}
