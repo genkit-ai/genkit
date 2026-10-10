@@ -18,15 +18,10 @@ package exp
 
 import (
 	"encoding/json"
-	"io"
-	"maps"
-	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
-	"slices"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -35,6 +30,7 @@ import (
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/internal/base"
 	"github.com/firebase/genkit/go/plugins/internal/systemone"
+	"github.com/firebase/genkit/go/plugins/internal/systemone/systemonetest"
 	systemonex "github.com/firebase/genkit/go/plugins/systemone/exp"
 )
 
@@ -64,70 +60,9 @@ type triage struct {
 	Frustration systemonex.Score[anger]   `json:"frustration" jsonschema_description:"How frustrated is the customer?"`
 }
 
-// fakeJev answers whatever questions it is sent, so the tests can check the
-// whole path from a Go type to the wire and back. A choice is answered with
-// its first option in sorted order, a score with 1.3, a noul with 0.93.
-type fakeJev struct {
-	recorder
-	models string // the GET /v1/models reply
-	status int    // when set, every call fails with it
-}
-
-func (f *fakeJev) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	if req.Method == http.MethodGet {
-		if f.models == "" {
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-		_, _ = io.WriteString(w, f.models)
-		return
-	}
-	_, body := f.record(req)
-	if f.status != 0 {
-		w.Header().Set("Retry-After", "0")
-		w.WriteHeader(f.status)
-		return
-	}
-
-	questions, _ := body["questions"].(map[string]any)
-	answers := map[string]any{}
-	for id, raw := range questions {
-		q := raw.(map[string]any)
-		switch q["type"] {
-		case systemone.KindChoice:
-			criteria := q["criteria"].(map[string]any)
-			keys := slices.Sorted(maps.Keys(criteria))
-			probabilities := map[string]float64{}
-			for i, k := range keys {
-				probabilities[k] = 0.1
-				if i == 0 {
-					probabilities[k] = 1 - 0.1*float64(len(keys)-1)
-				}
-			}
-			answers[id] = map[string]any{"type": systemone.KindChoice, "choice": keys[0], "probabilities": probabilities, "confidence": 0.6}
-		case systemone.KindScore:
-			levels := q["criteria"].([]any)
-			legend := map[string]any{}
-			for i, level := range levels {
-				legend[strconv.Itoa(i)] = level
-			}
-			answers[id] = map[string]any{"type": systemone.KindScore, "score": 1.3, "legend": legend, "probabilities": map[string]float64{"0": 0, "1": 0.7, "2": 0.3}, "confidence": 0.54}
-		case systemone.KindNoul:
-			answers[id] = map[string]any{"type": systemone.KindNoul, "noul": 0.93}
-		}
-	}
-	reply := map[string]any{
-		"model":   "jev-1.13.0",
-		"answers": answers,
-		"usage":   map[string]int{"input_tokens": 312, "output_tokens": 48},
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(reply)
-}
-
 // newGenkit starts a fake endpoint and a Genkit with the plugin pointed at
 // it. The endpoint defaults to the direct one.
-func newGenkit(t *testing.T, fake *fakeJev, ep *Endpoint) *genkit.Genkit {
+func newGenkit(t *testing.T, fake *systemonetest.Server, ep *Endpoint) *genkit.Genkit {
 	t.Helper()
 	srv := httptest.NewServer(fake)
 	t.Cleanup(srv.Close)
@@ -141,7 +76,7 @@ func newGenkit(t *testing.T, fake *fakeJev, ep *Endpoint) *genkit.Genkit {
 func TestGenerateData(t *testing.T) {
 	// The documented call: the model, the state, and the type. The
 	// questions ride on the output schema, so no format is named.
-	fake := &fakeJev{}
+	fake := &systemonetest.Server{}
 	g := newGenkit(t, fake, nil)
 	out, resp, err := genkit.GenerateData[triage](t.Context(), g,
 		ai.WithModelName("typesafe/jev-1.13.0"),
@@ -151,7 +86,7 @@ func TestGenerateData(t *testing.T) {
 	}
 
 	// What went over the wire.
-	_, body := fake.last(t)
+	_, body := fake.Last(t)
 	if body["model"] != "jev-1.13.0" {
 		t.Errorf("model = %v", body["model"])
 	}
@@ -204,7 +139,7 @@ func TestGenerateData(t *testing.T) {
 }
 
 func TestStateShapes(t *testing.T) {
-	fake := &fakeJev{}
+	fake := &systemonetest.Server{}
 	g := newGenkit(t, fake, nil)
 	const model = "typesafe/jev-latest"
 	decide := func(t *testing.T, opts ...ai.GenerateOption) any {
@@ -213,7 +148,7 @@ func TestStateShapes(t *testing.T) {
 		if _, err := genkit.Generate(t.Context(), g, opts...); err != nil {
 			t.Fatal(err)
 		}
-		_, body := fake.last(t)
+		_, body := fake.Last(t)
 		return body["state"]
 	}
 
@@ -259,7 +194,7 @@ func TestStateShapes(t *testing.T) {
 		if !reflect.DeepEqual(state, want) {
 			t.Errorf("state = %v, want the plumbing left out", state)
 		}
-		_, body := fake.last(t)
+		_, body := fake.Last(t)
 		if got := base.JSONString(body["questions"]); strings.Contains(got, "JSON format") {
 			t.Errorf("the plumbing reached the questions: %s", got)
 		}
@@ -301,7 +236,7 @@ func TestStateShapes(t *testing.T) {
 	})
 	t.Run("extra", func(t *testing.T) {
 		decide(t, ai.WithPrompt("hi"), ai.WithConfig(&Config{Extra: map[string]any{"session_id": "s-1"}}))
-		_, body := fake.last(t)
+		_, body := fake.Last(t)
 		if body["session_id"] != "s-1" {
 			t.Errorf("session_id = %v", body["session_id"])
 		}
@@ -309,7 +244,7 @@ func TestStateShapes(t *testing.T) {
 }
 
 func TestRefusals(t *testing.T) {
-	fake := &fakeJev{}
+	fake := &systemonetest.Server{}
 	g := newGenkit(t, fake, nil)
 	const model = "typesafe/jev-latest"
 
@@ -327,7 +262,7 @@ func TestRefusals(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "not a question") {
 			t.Errorf("error = %v", err)
 		}
-		if fake.calls() != 0 {
+		if fake.Calls() != 0 {
 			t.Error("the endpoint was called for a type that is not a question set")
 		}
 	})
@@ -348,7 +283,7 @@ func TestRefusals(t *testing.T) {
 }
 
 func TestEnumFormat(t *testing.T) {
-	fake := &fakeJev{}
+	fake := &systemonetest.Server{}
 	g := newGenkit(t, fake, nil)
 
 	// The enum option carries no description, so the question gets the
@@ -363,7 +298,7 @@ func TestEnumFormat(t *testing.T) {
 	if resp.Text() != "billing" {
 		t.Errorf("text = %q, want the chosen option", resp.Text())
 	}
-	_, body := fake.last(t)
+	_, body := fake.Last(t)
 	q := body["questions"].(map[string]any)[systemone.EnumQuestionID].(map[string]any)
 	if q["type"] != systemone.KindChoice || q["instructions"] == "" {
 		t.Errorf("enum question on the wire = %v", q)
@@ -377,7 +312,7 @@ func TestEnumFormat(t *testing.T) {
 		ai.WithPrompt("My card was charged twice.")); err != nil {
 		t.Fatal(err)
 	}
-	_, body = fake.last(t)
+	_, body = fake.Last(t)
 	q = body["questions"].(map[string]any)[systemone.EnumQuestionID].(map[string]any)
 	if q["instructions"] != "Which team should handle this?" {
 		t.Errorf("enum question on the wire = %v", q)
@@ -391,7 +326,7 @@ func TestEnumFormat(t *testing.T) {
 		ai.WithPrompt("My card was charged twice.")); err != nil {
 		t.Fatal(err)
 	}
-	_, body = fake.last(t)
+	_, body = fake.Last(t)
 	q = body["questions"].(map[string]any)[systemone.EnumQuestionID].(map[string]any)
 	if q["instructions"] != "Which team should handle this?" {
 		t.Errorf("enum question on the wire = %v", q)
@@ -402,7 +337,7 @@ func TestEnumFormat(t *testing.T) {
 }
 
 func TestSystemMessageIsInstructions(t *testing.T) {
-	fake := &fakeJev{}
+	fake := &systemonetest.Server{}
 	g := newGenkit(t, fake, nil)
 	const model = "typesafe/jev-latest"
 
@@ -413,7 +348,7 @@ func TestSystemMessageIsInstructions(t *testing.T) {
 			ai.WithPrompt("My card was charged twice.")); err != nil {
 			t.Fatal(err)
 		}
-		_, body := fake.last(t)
+		_, body := fake.Last(t)
 		if body["state"] != "My card was charged twice." {
 			t.Errorf("state = %v, want the prompt alone", body["state"])
 		}
@@ -447,7 +382,7 @@ func TestSystemMessageIsInstructions(t *testing.T) {
 func TestRuntimeQuestionsThroughGenerate(t *testing.T) {
 	// Options known only at run time: the schema is built from data, and
 	// the answers come back as a map of Answer.
-	fake := &fakeJev{}
+	fake := &systemonetest.Server{}
 	g := newGenkit(t, fake, nil)
 	tools := []struct{ name, description string }{
 		{"search", "Look something up on the web"},
@@ -471,7 +406,7 @@ func TestRuntimeQuestionsThroughGenerate(t *testing.T) {
 	if err := resp.Output(&answers); err != nil {
 		t.Fatal(err)
 	}
-	_, body := fake.last(t)
+	_, body := fake.Last(t)
 	tool, _ := body["questions"].(map[string]any)["tool"].(map[string]any)
 	if got := base.JSONString(tool["criteria"]); got != `{"calendar":"Read or change the user's calendar","search":"Look something up on the web"}` {
 		t.Errorf("tool criteria on the wire = %s", got)
@@ -486,7 +421,7 @@ func TestRuntimeQuestionsThroughGenerate(t *testing.T) {
 }
 
 func TestOpenRouterThroughGenerate(t *testing.T) {
-	fake := &fakeJev{}
+	fake := &systemonetest.Server{}
 	g := newGenkit(t, fake, OpenRouter())
 	out, _, err := genkit.GenerateData[triage](t.Context(), g,
 		ai.WithModelName("typesafe/jev-1.13"),
@@ -494,7 +429,7 @@ func TestOpenRouterThroughGenerate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req, body := fake.last(t)
+	req, body := fake.Last(t)
 	if req.URL.Path != "/api/alpha/decisions" || body["model"] != "typesafe/jev-1.13" {
 		t.Errorf("request = %s model=%v", req.URL.Path, body["model"])
 	}
@@ -505,7 +440,7 @@ func TestOpenRouterThroughGenerate(t *testing.T) {
 
 func TestListActions(t *testing.T) {
 	t.Run("listed by the API", func(t *testing.T) {
-		fake := &fakeJev{models: `{"models":[{"name":"jev-1.13.0","description":"Current"},{"name":"jev-1.14.0-preview"}]}`}
+		fake := &systemonetest.Server{Models: `{"models":[{"name":"jev-1.13.0","description":"Current"},{"name":"jev-1.14.0-preview"}]}`}
 		g := newGenkit(t, fake, nil)
 		plugin := genkit.LookupPlugin(g, provider).(*TypeSafe)
 		var names []string
@@ -520,7 +455,7 @@ func TestListActions(t *testing.T) {
 		}
 	})
 	t.Run("listing unavailable", func(t *testing.T) {
-		g := newGenkit(t, &fakeJev{}, nil)
+		g := newGenkit(t, &systemonetest.Server{}, nil)
 		plugin := genkit.LookupPlugin(g, provider).(*TypeSafe)
 		var names []string
 		for _, desc := range plugin.ListActions(t.Context()) {
@@ -531,14 +466,14 @@ func TestListActions(t *testing.T) {
 		}
 	})
 	t.Run("gateway", func(t *testing.T) {
-		g := newGenkit(t, &fakeJev{}, Cloudflare("acct"))
+		g := newGenkit(t, &systemonetest.Server{}, Cloudflare("acct"))
 		plugin := genkit.LookupPlugin(g, provider).(*TypeSafe)
 		if descs := plugin.ListActions(t.Context()); len(descs) != 1 || descs[0].Name != "typesafe/jev-latest" {
 			t.Errorf("listed %v", descs)
 		}
 	})
 	t.Run("resolves any id", func(t *testing.T) {
-		g := newGenkit(t, &fakeJev{}, nil)
+		g := newGenkit(t, &systemonetest.Server{}, nil)
 		if m := genkit.LookupModel(g, "typesafe/jev-9.9.9"); m == nil {
 			t.Error("an unlisted version did not resolve")
 		}
@@ -600,7 +535,7 @@ The state is a support ticket.
 	type ticketInput struct {
 		Ticket string `json:"ticket"`
 	}
-	fake := &fakeJev{}
+	fake := &systemonetest.Server{}
 	srv := httptest.NewServer(fake)
 	t.Cleanup(srv.Close)
 	g := genkit.Init(t.Context(),
@@ -623,7 +558,7 @@ The state is a support ticket.
 	if out.Department.Choice != "billing" || out.Frustration.Score != 1.3 {
 		t.Errorf("out = %+v", out)
 	}
-	_, body := fake.last(t)
+	_, body := fake.Last(t)
 	if !reflect.DeepEqual(body["state"], map[string]any{"ticket": "charged twice"}) {
 		t.Errorf("state = %v, want the rendered JSON as an object", body["state"])
 	}

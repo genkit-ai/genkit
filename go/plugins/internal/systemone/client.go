@@ -60,14 +60,19 @@ type Endpoint struct {
 	// is empty; see [Endpoint.WithAccount].
 	Account    string
 	AccountEnv string
-	// ModelID maps a registered model ID to the one the endpoint serves.
-	// When nil, the ID is sent as it is.
-	ModelID func(id string) (string, error)
-	// Body wraps the native request in the endpoint's envelope. When nil,
-	// the native body is sent.
-	Body func(model string, req *Request) any
+	// Route builds one model's request when it is not the native one. It
+	// gets the model ID and the native body, which it may change, and
+	// returns a suffix to the path, which is joined with a slash when it
+	// does not start with one, and the body to send. It is per model
+	// because one host can serve models on different routes, as Workers AI
+	// does, and it is where a model ID is translated to the host's own.
+	// When nil, the native body goes to Path with the model ID as given.
+	Route func(model string, body map[string]any) (suffix string, out any, err error)
 	// Unwrap extracts the native response from the endpoint's envelope.
-	// When nil, the response is the native body.
+	// When nil, the response is the native body. An error it returns is
+	// reported under Name, with its status kept, or as UNKNOWN when it has
+	// none: the server answered with a success code, so neither the request
+	// nor the server is known to be at fault.
 	Unwrap func(body []byte) ([]byte, error)
 }
 
@@ -100,13 +105,9 @@ type Request struct {
 	Extra map[string]any
 }
 
-// Body builds the JSON body. An empty model leaves the field out, for an
-// endpoint that names the model elsewhere.
+// Body builds the native JSON body.
 func (r *Request) Body(model string) map[string]any {
-	body := map[string]any{"state": r.State, "questions": r.Questions}
-	if model != "" {
-		body["model"] = model
-	}
+	body := map[string]any{"model": model, "state": r.State, "questions": r.Questions}
 	maps.Copy(body, r.Extra)
 	return body
 }
@@ -135,7 +136,8 @@ type Client struct {
 	HTTP *http.Client
 	// BaseURL is the origin the endpoint's paths are joined to.
 	BaseURL string
-	// APIKey is sent as a bearer token.
+	// APIKey is sent as a bearer token. A local server, such as Ollama,
+	// takes none, and no authorization header is sent without one.
 	APIKey string
 	// Headers are sent on every request, after the authorization header.
 	Headers  http.Header
@@ -158,24 +160,29 @@ const RequestTimeout = 30 * time.Second
 
 // Decide posts one request and decodes the answers.
 func (c *Client) Decide(ctx context.Context, model string, req *Request) (*Response, error) {
-	id := model
-	if c.Endpoint.ModelID != nil {
+	var suffix string
+	native := req.Body(model)
+	var body any = native
+	if c.Endpoint.Route != nil {
 		var err error
-		if id, err = c.Endpoint.ModelID(model); err != nil {
+		if suffix, body, err = c.Endpoint.Route(model, native); err != nil {
 			return nil, err
 		}
+		if suffix != "" && !strings.HasPrefix(suffix, "/") {
+			suffix = "/" + suffix
+		}
 	}
-	var body any = req.Body(id)
-	if c.Endpoint.Body != nil {
-		body = c.Endpoint.Body(id, req)
-	}
-	raw, err := c.do(ctx, http.MethodPost, c.BaseURL+c.Endpoint.URLPath(), body)
+	raw, err := c.do(ctx, http.MethodPost, c.BaseURL+c.Endpoint.URLPath()+suffix, body)
 	if err != nil {
 		return nil, err
 	}
 	if c.Endpoint.Unwrap != nil {
 		if raw, err = c.Endpoint.Unwrap(raw); err != nil {
-			return nil, err
+			sentinel := status.ErrUnknown
+			if name, ok := status.Classified(err); ok {
+				sentinel = status.Base(name)
+			}
+			return nil, status.Errorf(sentinel, "%s: %w", c.Endpoint.Name, err)
 		}
 	}
 	var resp Response
@@ -279,7 +286,9 @@ func (c *Client) once(ctx context.Context, method, url string, payload []byte) (
 		return nil, false, retryAfter, status.Errorf(status.ErrInvalidArgument, "%s: %w", c.Endpoint.Name, err)
 	}
 	maps.Copy(req.Header, c.Headers)
-	req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	if c.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	}
 	req.Header.Set("Accept", "application/json")
 	if payload != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -330,16 +339,16 @@ func httpError(endpoint string, code int, body []byte) error {
 			sentinel = status.ErrInvalidArgument
 		}
 	}
-	return status.Errorf(sentinel, "%s: HTTP %d: %s", endpoint, code, cmp.Or(errorMessage(body), http.StatusText(code), "empty response"))
+	return status.Errorf(sentinel, "%s: HTTP %d: %s", endpoint, code, cmp.Or(ErrorMessage(body), http.StatusText(code), "empty response"))
 }
 
-// errorMessage reads the message out of an error body. The endpoints use
-// three shapes: {error: {message}} or {error: "..."}, a {message}, and a
-// validation list, which TypeSafe's API sends under detail as {loc, msg}
-// records and OpenRouter sends as the bare array of {path, message}
-// records. A body in none of these shapes is quoted as it came, and an
-// empty one gives "".
-func errorMessage(body []byte) string {
+// ErrorMessage reads the message out of an error body. The endpoints use
+// four shapes: {error: {message}} or {error: "..."}, a {message}, a
+// Cloudflare {errors: [{code, message}]} envelope, and a validation list,
+// which TypeSafe's API sends under detail as {loc, msg} records and
+// OpenRouter sends as the bare array of {path, message} records. A body in
+// none of these shapes is quoted as it came, and an empty one gives "".
+func ErrorMessage(body []byte) string {
 	if msg := validationErrors(body); msg != "" {
 		return msg
 	}
@@ -347,6 +356,7 @@ func errorMessage(body []byte) string {
 		Error   json.RawMessage `json:"error"`
 		Message string          `json:"message"`
 		Detail  json.RawMessage `json:"detail"`
+		Errors  json.RawMessage `json:"errors"`
 	}
 	if err := json.Unmarshal(body, &envelope); err == nil {
 		if len(envelope.Error) > 0 {
@@ -363,6 +373,9 @@ func errorMessage(body []byte) string {
 		}
 		if envelope.Message != "" {
 			return envelope.Message
+		}
+		if msg := validationErrors(envelope.Errors); msg != "" {
+			return msg
 		}
 		if len(envelope.Detail) > 0 {
 			if msg := validationErrors(envelope.Detail); msg != "" {
