@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -547,7 +548,12 @@ func TestLaunchedHere(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			st := &agentsState{launched: tt.launched, launchTools: launchTools, conversation: tt.conversation}
+			// What the generate hook does with each request.
+			st := &agentsState{launched: map[string]struct{}{}, launchTools: launchTools}
+			maps.Copy(st.launched, tt.launched)
+			for _, seen := range launchedTaskIDs(tt.conversation, launchTools) {
+				st.launched[seen] = struct{}{}
+			}
 			if got := launchedHere(st, id); got != tt.want {
 				t.Errorf("launchedHere = %v, want %v", got, tt.want)
 			}

@@ -252,8 +252,9 @@ type agentsState struct {
 	// since edited). Pending, expired, and unresolvable reports are never
 	// cached; those can still change.
 	settledReports map[string]backgroundTaskReport
-	// launched holds the task IDs this generate call minted (the TaskID of
-	// every delegation and continue tool result), and launchTools names the
+	// launched holds the task IDs this conversation launched: the TaskID of
+	// every delegation and continue tool result this generate call returned,
+	// or that a request the generate hook saw carries. launchTools names the
 	// tools whose results carry them; see launchedHere.
 	launched    map[string]struct{}
 	launchTools map[string]bool
@@ -282,7 +283,7 @@ func (a Agents) New(ctx context.Context) (*ai.Hooks, error) {
 	}
 	if a.MaxWaitSeconds < 0 {
 		return nil, status.Errorf(status.ErrInvalidArgument,
-			"agents middleware: MaxWaitSeconds must be positive, got %d", a.MaxWaitSeconds)
+			"agents middleware: MaxWaitSeconds must not be negative, got %d", a.MaxWaitSeconds)
 	}
 
 	prefix := a.prefix()
@@ -372,8 +373,12 @@ func (a Agents) New(ctx context.Context) (*ai.Hooks, error) {
 		// delegation count is intentionally not reset here: this hook runs on
 		// every tool-loop turn, but the count must accumulate across the whole
 		// generate call (it starts at 0 when New allocates st).
+		ids := launchedTaskIDs(params.Request.Messages, st.launchTools)
 		st.mu.Lock()
 		st.conversation = params.Request.Messages
+		for _, id := range ids {
+			st.launched[id] = struct{}{}
+		}
 		st.mu.Unlock()
 
 		params.Request = injectSystemText(params.Request, agentsMarker, instructions)
@@ -402,33 +407,37 @@ func recordTaskID[In any](st *agentsState, fn func(context.Context, In) (delegat
 }
 
 // launchedHere reports whether this conversation launched the task: this
-// generate call minted it, or a delegation or continue tool's result in the
-// conversation the generate hook last saw carries it. The tools that act on a
-// handle accept only these, so text that reaches the model cannot steer them
-// at another conversation's task. A re-instantiated orchestrator still
-// reaches its tasks, since its history carries the launch results.
+// generate call minted it, or a delegation or continue tool's result in a
+// request the generate hook saw carries it. The tools that act on a handle
+// accept only these, so text that reaches the model cannot steer them at
+// another conversation's task. A re-instantiated orchestrator still reaches
+// its tasks, since its history carries the launch results.
 func launchedHere(st *agentsState, taskID string) bool {
 	st.mu.Lock()
+	defer st.mu.Unlock()
 	_, ok := st.launched[taskID]
-	conversation := st.conversation
-	st.mu.Unlock()
-	if ok {
-		return true
-	}
-	for _, m := range conversation {
+	return ok
+}
+
+// launchedTaskIDs returns the task IDs that the results of launchTools in
+// msgs carry. The generate hook collects them once per request, so a tool
+// that checks a handle does a map lookup rather than a scan of the history.
+func launchedTaskIDs(msgs []*ai.Message, launchTools map[string]bool) []string {
+	var ids []string
+	for _, m := range msgs {
 		if m == nil {
 			continue
 		}
 		for _, p := range m.Content {
-			if p == nil || !p.IsToolResponse() || p.ToolResponse == nil || !st.launchTools[p.ToolResponse.Name] {
+			if p == nil || !p.IsToolResponse() || p.ToolResponse == nil || !launchTools[p.ToolResponse.Name] {
 				continue
 			}
-			if taskIDOf(p.ToolResponse.Output) == taskID {
-				return true
+			if id := taskIDOf(p.ToolResponse.Output); id != "" {
+				ids = append(ids, id)
 			}
 		}
 	}
-	return false
+	return ids
 }
 
 // taskIDOf returns the taskId a delegation or continue tool result carries:
