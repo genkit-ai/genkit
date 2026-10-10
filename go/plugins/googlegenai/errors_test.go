@@ -116,6 +116,29 @@ func TestWrapAPIError_FallsBackToHTTPCode(t *testing.T) {
 	}
 }
 
+// The Gemini API answers a rejected key with INVALID_ARGUMENT and names the
+// cause only in an ErrorInfo detail. Retry and fallback treat both statuses
+// alike, but a caller checking for a bad key needs UNAUTHENTICATED.
+func TestWrapAPIError_InvalidAPIKey(t *testing.T) {
+	api := genai.APIError{
+		Code:    400,
+		Status:  "INVALID_ARGUMENT",
+		Message: "API key not valid. Please pass a valid API key.",
+		Details: []map[string]any{{
+			"@type":  "type.googleapis.com/google.rpc.ErrorInfo",
+			"domain": "googleapis.com",
+			"reason": "API_KEY_INVALID",
+		}},
+	}
+	if got := status.Of(wrapAPIError(api)); got != status.Unauthenticated {
+		t.Errorf("status = %q, want %q", got, status.Unauthenticated)
+	}
+	api.Details[0]["reason"] = "OTHER"
+	if got := status.Of(wrapAPIError(api)); got != status.InvalidArgument {
+		t.Errorf("status = %q, want %q for another reason", got, status.InvalidArgument)
+	}
+}
+
 func TestWrapAPIError_PreservesOriginalMessage(t *testing.T) {
 	api := genai.APIError{Code: 404, Status: "NOT_FOUND", Message: "models/foo not found"}
 	wrapped := wrapAPIError(api)

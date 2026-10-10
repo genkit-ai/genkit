@@ -28,7 +28,7 @@ from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from genkit import ActionRunContext, Genkit, GenkitError, PublicError, RequestData
-from genkit.plugin_api import wrap_http_error
+from genkit.plugin_api import provider_error
 
 
 def assert_is_error_response(parsed: dict) -> None:
@@ -486,7 +486,7 @@ def test_served_flow_wrong_server_key_is_500_internal_error() -> None:
 
     @ai.flow()
     async def ask(_: str) -> str:
-        raise wrap_http_error(RuntimeError('API key not valid'), status_code=401)
+        raise provider_error(RuntimeError('API key not valid'), http_status=401)
 
     app = FastAPI()
     app.include_router(serve_flow(ask, base_path='/ask'))
@@ -503,11 +503,11 @@ def test_served_flow_provider_failure_logs_traceback(caplog: pytest.LogCaptureFi
 
     @ai.flow()
     async def ask(_: str) -> str:
-        raise wrap_http_error(RuntimeError('API key not valid'), status_code=401)
+        raise provider_error(RuntimeError('API key not valid'), http_status=401)
 
     app = FastAPI()
     app.include_router(serve_flow(ask, base_path='/ask'))
-    with caplog.at_level(logging.ERROR, logger='genkit_fastapi.handler'):
+    with caplog.at_level(logging.ERROR, logger='genkit_fastapi._handler'):
         response = TestClient(app).post('/ask', json={'data': 'hi'})
 
     assert response.status_code == 500
@@ -524,10 +524,10 @@ def test_served_flow_client_error_logs_one_warning_without_traceback(caplog: pyt
 
     app = FastAPI()
     app.include_router(serve_flow(lookup_order, base_path='/orders'))
-    with caplog.at_level(logging.DEBUG, logger='genkit_fastapi.handler'):
+    with caplog.at_level(logging.DEBUG, logger='genkit_fastapi._handler'):
         response = TestClient(app).post('/orders', json={'data': 'A-1001'})
 
-    records = [record for record in caplog.records if record.name == 'genkit_fastapi.handler']
+    records = [record for record in caplog.records if record.name == 'genkit_fastapi._handler']
     assert response.status_code == 404
     assert [record.levelno for record in records] == [logging.WARNING]
     assert records[0].exc_info is None
@@ -539,7 +539,7 @@ def test_fastapi_stream_provider_401_sends_sse_internal_error() -> None:
 
     @ai.flow()
     async def ask(_: str) -> str:
-        raise wrap_http_error(RuntimeError('API key not valid'), status_code=401)
+        raise provider_error(RuntimeError('API key not valid'), http_status=401)
 
     app = FastAPI()
     app.include_router(serve_flow(ask, base_path='/ask'))

@@ -51,7 +51,7 @@ uvicorn main:app                           # production
 ```
 """
 
-from .handler import genkit_fastapi_handler, handle_genkit_request, serve_flow
+from ._handler import genkit_fastapi_handler, handle_genkit_request, serve_flow
 
 __all__ = [
     'genkit_fastapi_handler',

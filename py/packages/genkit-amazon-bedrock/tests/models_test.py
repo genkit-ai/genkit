@@ -44,7 +44,7 @@ from botocore.exceptions import (
     TokenRetrievalError,
     UnauthorizedSSOTokenError,
 )
-from genkit_amazon_bedrock.models import BedrockModel
+from genkit_amazon_bedrock._models import BedrockModel
 
 from genkit import ActionRunContext, FinishReason, GenkitError, Message, Part, Role
 from genkit._core._error import get_callable_json, get_http_status
@@ -172,9 +172,7 @@ ENDPOINT = 'https://bedrock-runtime.us-east-1.amazonaws.com'
         (NoRegionError(), 'FAILED_PRECONDITION'),
         (ProfileNotFound(profile='kitchen-prod'), 'FAILED_PRECONDITION'),
         (ConfigNotFound(path='~/.aws/kitchen-config'), 'FAILED_PRECONDITION'),
-        (ReadTimeoutError(endpoint_url=ENDPOINT), 'DEADLINE_EXCEEDED'),
-        (ConnectTimeoutError(endpoint_url=ENDPOINT), 'DEADLINE_EXCEEDED'),
-        (EndpointConnectionError(endpoint_url=ENDPOINT), 'UNAVAILABLE'),
+        (BotoCoreError(), 'UNKNOWN'),
     ],
     ids=[
         'param_validation',
@@ -188,9 +186,7 @@ ENDPOINT = 'https://bedrock-runtime.us-east-1.amazonaws.com'
         'no_region',
         'profile_not_found',
         'config_not_found',
-        'read_timeout',
-        'connect_timeout',
-        'endpoint_connection',
+        'unlisted',
     ],
 )
 @pytest.mark.asyncio
@@ -204,6 +200,22 @@ async def test_botocore_errors_map_to_genkit_statuses(error: BotoCoreError, expe
     assert excinfo.value.status == expected_status
     assert 'bedrock converse failed' in excinfo.value.original_message
     assert excinfo.value.__cause__ is error
+    assert excinfo.value.cause is error
+
+
+@pytest.mark.parametrize(
+    'error',
+    [ReadTimeoutError(endpoint_url=ENDPOINT), ConnectTimeoutError(endpoint_url=ENDPOINT)],
+    ids=['read_timeout', 'connect_timeout'],
+)
+@pytest.mark.asyncio
+async def test_timeout_is_deadline_exceeded(error: BotoCoreError) -> None:
+    """A botocore socket timeout raises a provider-sourced DEADLINE_EXCEEDED GenkitError that keeps the cause."""
+    genkit_error = await generate_error(error)
+
+    assert genkit_error.status == 'DEADLINE_EXCEEDED'
+    assert 'bedrock converse failed' in genkit_error.original_message
+    assert genkit_error.__cause__ is error
 
 
 def _container_endpoint_timeout() -> CredentialRetrievalError:
@@ -218,15 +230,14 @@ def _container_endpoint_timeout() -> CredentialRetrievalError:
 
 
 @pytest.mark.asyncio
-async def test_container_credential_endpoint_timeout_stays_raw() -> None:
-    """A credential-endpoint blip is a transport failure, so retry still sees it unclassified."""
+async def test_container_credential_endpoint_timeout_is_unavailable() -> None:
+    """A credential-endpoint blip raises UNAVAILABLE rather than UNAUTHENTICATED, so retry still tries again."""
     error = _container_endpoint_timeout()
-    model = BedrockModel(model_id='amazon.nova-lite-v1:0', transport=FakeTransport(error=error))
 
-    with pytest.raises(CredentialRetrievalError) as excinfo:
-        await model.generate(text_request())
+    genkit_error = await generate_error(error)
 
-    assert excinfo.value is error
+    assert genkit_error.status == 'UNAVAILABLE'
+    assert genkit_error.__cause__ is error
 
 
 @pytest.mark.asyncio
@@ -247,24 +258,22 @@ async def test_bedrock_credentials_error_is_served_as_internal_error() -> None:
 @pytest.mark.parametrize(
     'error',
     [
-        BotoCoreError(),
+        EndpointConnectionError(endpoint_url=ENDPOINT),
         ConnectionClosedError(endpoint_url=ENDPOINT),
         SSLError(endpoint_url=ENDPOINT, error=ConnectionResetError('handshake reset')),
         ProxyConnectionError(proxy_url='http://proxy.internal:3128', error='refused'),
         IncompleteReadError(actual_bytes=512, expected_bytes=2048),
     ],
-    ids=['bare', 'connection_closed', 'ssl', 'proxy', 'incomplete_read'],
+    ids=['endpoint_connection', 'connection_closed', 'ssl', 'proxy', 'incomplete_read'],
 )
 @pytest.mark.asyncio
-async def test_unlisted_botocore_errors_are_reraised_unclassified(error: BotoCoreError) -> None:
-    # No status is known for these, so the raw error reaches the caller and
-    # retry treats it as unclassified instead of skipping an UNKNOWN.
-    model = BedrockModel(model_id='amazon.nova-lite-v1:0', transport=FakeTransport(error=error))
+async def test_connection_refused_is_unavailable(error: BotoCoreError) -> None:
+    """A refused, reset, or dropped connection raises a provider-sourced UNAVAILABLE that keeps the cause."""
+    genkit_error = await generate_error(error)
 
-    with pytest.raises(BotoCoreError) as excinfo:
-        await model.generate(text_request())
-
-    assert excinfo.value is error
+    assert genkit_error.status == 'UNAVAILABLE'
+    assert 'bedrock converse failed' in genkit_error.original_message
+    assert genkit_error.__cause__ is error
 
 
 @pytest.mark.parametrize(
@@ -306,12 +315,13 @@ async def test_client_errors_map_to_genkit_statuses(code: str, expected_status: 
         ('SomeFutureException', 400, 'INVALID_ARGUMENT'),
         ('SomeFutureException', 503, 'UNAVAILABLE'),
         ('SomeFutureException', 599, 'INTERNAL'),
+        ('SomeFutureException', '503', 'UNAVAILABLE'),
         ('', 404, 'NOT_FOUND'),
     ],
 )
 @pytest.mark.asyncio
 async def test_unlisted_client_error_codes_fall_back_to_http_status(
-    code: str, http_status: int, expected_status: str
+    code: str, http_status: object, expected_status: str
 ) -> None:
     error = ClientError(
         cast(Any, {'Error': {'Code': code, 'Message': 'nope'}, 'ResponseMetadata': {'HTTPStatusCode': http_status}}),
@@ -324,33 +334,60 @@ async def test_unlisted_client_error_codes_fall_back_to_http_status(
     assert genkit_error.__cause__ is error
 
 
+@pytest.mark.parametrize('http_status', [413, 418, 422])
+@pytest.mark.asyncio
+async def test_unmapped_4xx_is_unknown_genkit_error(http_status: int) -> None:
+    """An unlisted code on a 4xx with no Genkit status raises a provider-sourced UNKNOWN keeping the AWS message."""
+    error = ClientError(
+        cast(
+            Any,
+            {
+                'Error': {'Code': 'SomeFutureException', 'Message': 'teapot'},
+                'ResponseMetadata': {'HTTPStatusCode': http_status},
+            },
+        ),
+        'Converse',
+    )
+
+    genkit_error = await generate_error(error)
+
+    assert genkit_error.status == 'UNKNOWN'
+    assert genkit_error.original_message == (
+        'bedrock converse failed: An error occurred (SomeFutureException) when calling the Converse operation: teapot'
+    )
+    assert str(genkit_error).count('teapot') == 1
+    assert genkit_error.__cause__ is error
+
+
 @pytest.mark.parametrize(
     'response',
     [
         {'Error': {'Code': 'SomeFutureException', 'Message': 'nope'}},
         {'Error': {'Code': '', 'Message': 'nope'}},
         {'Error': {'Code': 'SomeFutureException'}, 'ResponseMetadata': {'HTTPStatusCode': 200}},
-        # 418 has no canonical status; UNKNOWN would make retry skip it.
-        {'Error': {'Code': 'SomeFutureException'}, 'ResponseMetadata': {'HTTPStatusCode': 418}},
-        {'Error': {'Code': 'SomeFutureException'}, 'ResponseMetadata': {'HTTPStatusCode': '503'}},
     ],
-    ids=['no_metadata', 'no_code', 'ok_status', 'unmapped_4xx', 'non_int_status'],
+    ids=['no_metadata', 'no_code', 'ok_status'],
 )
 @pytest.mark.asyncio
-async def test_client_errors_without_a_usable_status_are_reraised_unclassified(response: dict[str, Any]) -> None:
+async def test_client_error_without_a_failure_status_is_unknown_genkit_error(response: dict[str, Any]) -> None:
+    """An unlisted error code with no 4xx/5xx status raises a provider-sourced UNKNOWN GenkitError."""
     error = ClientError(cast(Any, response), 'Converse')
-    model = BedrockModel(model_id='amazon.nova-lite-v1:0', transport=FakeTransport(error=error))
 
-    with pytest.raises(ClientError) as excinfo:
-        await model.generate(text_request())
+    genkit_error = await generate_error(error)
 
-    assert excinfo.value is error
+    assert genkit_error.status == 'UNKNOWN'
+    assert genkit_error.__cause__ is error
 
 
-def throttling_error(headers: dict[str, str] | None = None) -> ClientError:
+def throttling_error(headers: dict[str, str] | None = None, http_status: int | None = None) -> ClientError:
     response: dict[str, Any] = {'Error': {'Code': 'ThrottlingException', 'Message': 'slow down'}}
+    metadata: dict[str, Any] = {}
     if headers is not None:
-        response['ResponseMetadata'] = {'HTTPHeaders': headers}
+        metadata['HTTPHeaders'] = headers
+    if http_status is not None:
+        metadata['HTTPStatusCode'] = http_status
+    if metadata:
+        response['ResponseMetadata'] = metadata
     return ClientError(response, 'Converse')
 
 
@@ -361,21 +398,25 @@ async def generate_error(error: Exception) -> GenkitError:
     return excinfo.value
 
 
+@pytest.mark.parametrize('header', ['retry-after', 'Retry-After', 'RETRY-AFTER'])
 @pytest.mark.asyncio
-async def test_throttling_surfaces_retry_after_seconds() -> None:
-    genkit_error = await generate_error(throttling_error({'retry-after': '2'}))
+async def test_429_retry_after_header_sets_retry_delay(header: str) -> None:
+    """A throttled 429 with Retry-After in any casing raises RESOURCE_EXHAUSTED carrying that delay in milliseconds."""
+    error = throttling_error({header: '2'}, http_status=429)
+
+    genkit_error = await generate_error(error)
 
     assert genkit_error.status == 'RESOURCE_EXHAUSTED'
     assert genkit_error.response_metadata == {'retry_after_ms': 2000.0}
+    assert genkit_error.__cause__ is error
 
 
 @pytest.mark.asyncio
 async def test_retry_after_accepts_an_http_date() -> None:
     genkit_error = await generate_error(throttling_error({'Retry-After': 'Wed, 21 Oct 2015 07:28:00 GMT'}))
 
-    assert genkit_error.response_metadata is not None
     # The date is long past, so the wait clamps to zero rather than going negative.
-    assert genkit_error.response_metadata['retry_after_ms'] == 0.0
+    assert genkit_error.response_metadata == {'retry_after_ms': 0.0}
 
 
 @pytest.mark.parametrize(
@@ -401,6 +442,8 @@ async def test_missing_or_unparseable_retry_after_is_omitted(headers: dict[str, 
         ('internalServerException', 'INTERNAL'),
         ('serviceUnavailableException', 'UNAVAILABLE'),
         ('modelStreamErrorException', 'INTERNAL'),
+        # The event stream carries no HTTP status, so a new type has nothing to fall back on.
+        ('someFutureException', 'UNKNOWN'),
     ],
 )
 @pytest.mark.asyncio
@@ -424,27 +467,22 @@ async def test_mid_stream_errors_map_to_genkit_statuses(code: str, expected_stat
     assert transport.stream_closed
 
 
-@pytest.mark.parametrize(
-    'error',
-    [
-        # The event stream carries no HTTP status, so an unknown type has none.
-        EventStreamError({'Error': {'Code': 'someFutureException', 'Message': 'nope'}}, 'ConverseStream'),
-        ConnectionClosedError(endpoint_url=ENDPOINT),
-    ],
-    ids=['unknown_exception_type', 'connection_closed'],
-)
 @pytest.mark.asyncio
-async def test_unclassifiable_mid_stream_errors_are_reraised(error: Exception) -> None:
+async def test_mid_stream_connection_drop_is_unavailable() -> None:
+    """A connection dropped mid-stream raises a provider-sourced UNAVAILABLE and still closes the stream."""
+    error = ConnectionClosedError(endpoint_url=ENDPOINT)
     transport = FakeTransport(
         error=error,
         stream_events=[{'contentBlockDelta': {'contentBlockIndex': 0, 'delta': {'text': 'partial'}}}],
     )
     model = BedrockModel(model_id='amazon.nova-lite-v1:0', transport=transport)
 
-    with pytest.raises(type(error)) as excinfo:
+    with pytest.raises(GenkitError) as excinfo:
         await model.generate(text_request(), ActionRunContext(streaming_callback=lambda _chunk: None))
 
-    assert excinfo.value is error
+    assert excinfo.value.status == 'UNAVAILABLE'
+    assert 'bedrock converse stream failed' in excinfo.value.original_message
+    assert excinfo.value.__cause__ is error
     assert transport.stream_closed
 
 

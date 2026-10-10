@@ -19,16 +19,16 @@
 import json
 from typing import Any, cast
 
+from genkit_google_genai._auth import GOOGLE_AUTH_ERRORS, raise_auth_error
+from genkit_google_genai._models._routing import strip_ref_prefixes
+from genkit_google_genai._models._utils import PartConverter
+from genkit_google_genai._provider_errors import TRANSPORT_ERRORS, api_error, transport_error
 from google import genai
 from google.genai import types as genai_types
 from google.genai.errors import APIError
 
 from genkit import Document, Embedding, GenkitError, Part
 from genkit.embedder import EmbedderInfo, EmbedderSupports, EmbedRequest, EmbedResponse
-from genkit.plugin_api import wrap_http_error
-from genkit_google_genai._auth import GOOGLE_AUTH_ERRORS, raise_auth_error
-from genkit_google_genai._models._routing import strip_ref_prefixes
-from genkit_google_genai._models._utils import PartConverter
 
 # Static dimensions for known embedders. Keys are version-suffix free
 # (e.g. 'multimodalembedding', not 'multimodalembedding@001') because model
@@ -146,9 +146,11 @@ class Embedder:
                 config=config,
             )
         except APIError as e:
-            raise wrap_http_error(e, status_code=e.code, message=e.message or str(e)) from e
+            raise api_error(e) from e
         except GOOGLE_AUTH_ERRORS as e:
             raise_auth_error(e)
+        except TRANSPORT_ERRORS as e:
+            raise transport_error(e) from e
 
         embeddings = [Embedding(embedding=em.values or []) for em in (response.embeddings or [])]
         return EmbedResponse(embeddings=embeddings)
@@ -224,9 +226,11 @@ class Embedder:
                 request_dict=payload,
             )
         except APIError as e:
-            raise wrap_http_error(e, status_code=e.code, message=e.message or str(e)) from e
+            raise api_error(e) from e
         except GOOGLE_AUTH_ERRORS as e:
             raise_auth_error(e)
+        except TRANSPORT_ERRORS as e:
+            raise transport_error(e) from e
         try:
             body = json.loads(http_response.body) if http_response.body else {}
         except json.JSONDecodeError as e:

@@ -80,16 +80,6 @@ See Also:
     - Genkit documentation: https://genkit.dev/
 """
 
-from .handler import genkit_django_handler
+from ._handler import genkit_django_handler
 
-
-def package_name() -> str:
-    """Get the package name for the Django plugin.
-
-    Returns:
-        The fully qualified package name as a string.
-    """
-    return 'genkit_django'
-
-
-__all__ = ['package_name', genkit_django_handler.__name__]
+__all__ = ['genkit_django_handler']

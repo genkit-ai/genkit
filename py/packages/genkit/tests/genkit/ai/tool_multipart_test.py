@@ -1,7 +1,7 @@
 # Copyright 2025 Google LLC
 # SPDX-License-Identifier: Apache-2.0
 
-"""``response()`` construction, schema stamping, registry keys, and wrap_tool.
+"""``MultipartToolResponse`` construction, schema stamping, registry keys, and wrap_tool.
 
 The peel leftover ``await tool()`` / ``ai.generate`` callers reuse is pinned in
 ``tool_response_contract_test.py``.
@@ -21,9 +21,9 @@ from genkit._ai._generate import generate_action, to_tool_definition
 from genkit._ai._tools import (
     ORIGINAL_OUTPUT_SCHEMA_KEY,
     MultipartToolResponse,
+    as_multipart_tool_response,
     envelope_output_type,
     parts_to_wire,
-    response,
 )
 from genkit._core._action import Action, create_action_key, parse_action_key
 from genkit._core._error import GenkitError, RuntimeErrorReason
@@ -46,30 +46,32 @@ WIRE_PNG = {'media': {'contentType': 'image/png', 'url': 'data:image/png;base64,
 
 
 def test_response_text_part_is_live() -> None:
-    env = response({'ok': True}, parts=[Part.from_text('lab camera')])
+    env = MultipartToolResponse(output={'ok': True}, content=[Part.from_text('lab camera')])
     assert parts_to_wire(env.content) == [{'text': 'lab camera'}]
 
 
 def test_response_data_and_reasoning_parts_are_live() -> None:
-    data = response({'ok': True}, parts=[Part.from_data({'rows': [1]})])
+    data = MultipartToolResponse(output={'ok': True}, content=[Part.from_data({'rows': [1]})])
     assert parts_to_wire(data.content) == [{'data': {'rows': [1]}}]
-    thought = response({'ok': True}, parts=[Part.from_reasoning('checking the label')])
+    thought = MultipartToolResponse(output={'ok': True}, content=[Part.from_reasoning('checking the label')])
     assert parts_to_wire(thought.content) == [{'reasoning': 'checking the label'}]
-    res = response({'ok': True}, parts=[Part.model_validate({'resource': {'uri': 'file://shot.png'}})])
+    res = MultipartToolResponse(
+        output={'ok': True}, content=[Part.model_validate({'resource': {'uri': 'file://shot.png'}})]
+    )
     assert parts_to_wire(res.content) == [{'resource': {'uri': 'file://shot.png'}}]
 
 
-def test_response_rejects_hollow_parts() -> None:
+def test_returning_hollow_parts_is_invalid_part_naming_the_tool() -> None:
+    hollow = MultipartToolResponse(output={'ok': True}, content=[Part.from_media('')])
     with pytest.raises(GenkitError) as ei:
-        response({'ok': True}, parts=[Part.from_media('')])
+        as_multipart_tool_response(hollow, tool_name='shot')
     assert ei.value.status == 'INVALID_ARGUMENT'
     assert ei.value.reason is RuntimeErrorReason.INVALID_PART
-    assert 'no live payload' in ei.value.original_message
-    assert 'INVALID_PART' not in ei.value.original_message
+    assert ei.value.original_message == "Tool 'shot' content includes a part with no live payload."
 
 
 def test_response_builds_the_envelope() -> None:
-    env = response({'ok': True}, parts=[_png()], metadata={'src': 'test'})
+    env = MultipartToolResponse(output={'ok': True}, content=[_png()], metadata={'src': 'test'})
     assert isinstance(env, MultipartToolResponse)
     assert env.output == {'ok': True}
     assert env.content is not None
@@ -77,13 +79,13 @@ def test_response_builds_the_envelope() -> None:
 
 
 def test_response_without_parts_is_output_only() -> None:
-    env = response({'ok': True})
+    env = MultipartToolResponse(output={'ok': True})
     assert env.output == {'ok': True}
     assert env.content is None
 
 
 def test_response_wraps_a_bare_media_part() -> None:
-    env = response({'ok': True}, parts=[_png()])
+    env = MultipartToolResponse(output={'ok': True}, content=[_png()])
     assert env.content is not None
     assert len(env.content) == 1
     assert parts_to_wire(env.content) == [WIRE_PNG]
@@ -91,29 +93,20 @@ def test_response_wraps_a_bare_media_part() -> None:
 
 def test_response_rejects_bare_part() -> None:
     with pytest.raises(GenkitError) as ei:
-        response({'ok': True}, parts=_png())  # type: ignore[arg-type]
+        MultipartToolResponse(output={'ok': True}, content=_png())  # type: ignore[arg-type]
     assert ei.value.status == 'INVALID_ARGUMENT'
     assert ei.value.reason is RuntimeErrorReason.INVALID_PART
-    assert 'parts' in ei.value.original_message
+    assert ei.value.original_message == 'MultipartToolResponse content must be a list of Parts, got Part.'
     assert 'INVALID_PART' not in ei.value.original_message
 
 
 def test_response_rejects_non_part_parts() -> None:
     with pytest.raises(GenkitError) as ei:
-        response({'ok': True}, parts='not-a-part')  # type: ignore[arg-type]
+        MultipartToolResponse(output={'ok': True}, content='not-a-part')  # type: ignore[arg-type]
     assert ei.value.status == 'INVALID_ARGUMENT'
     assert ei.value.reason is RuntimeErrorReason.INVALID_PART
-    assert 'parts' in ei.value.original_message
+    assert ei.value.original_message == 'MultipartToolResponse content must be a list of Parts, got str.'
     assert 'INVALID_PART' not in ei.value.original_message
-
-
-def test_response_rejects_non_dict_metadata() -> None:
-    with pytest.raises(GenkitError) as ei:
-        response(1, metadata='nope')  # type: ignore[arg-type]
-    assert ei.value.status == 'INVALID_ARGUMENT'
-    assert ei.value.reason is RuntimeErrorReason.INVALID_INPUT
-    assert 'metadata' in ei.value.original_message
-    assert 'INVALID_INPUT' not in ei.value.original_message
 
 
 class CamelOut(BaseModel):
@@ -126,11 +119,12 @@ class Camera:
     pass
 
 
-def test_unserializable_part_data_is_invalid_argument() -> None:
+def test_returning_unserializable_part_data_is_invalid_argument_naming_the_tool() -> None:
+    bad = MultipartToolResponse(output={'ok': True}, content=[Part.from_data({'cam': Camera()})])
     with pytest.raises(GenkitError) as ei:
-        response({'ok': True}, parts=[Part.from_data({'cam': Camera()})])
+        as_multipart_tool_response(bad, tool_name='shot')
     assert ei.value.status == 'INVALID_ARGUMENT'
-    assert 'response()' in ei.value.original_message
+    assert ei.value.original_message == "Tool 'shot' content is not JSON-serializable."
     assert 'content' in ei.value.original_message
 
 
@@ -155,7 +149,7 @@ def test_bare_envelope_annotation_has_no_inner_schema() -> None:
 
     @ai.tool(name='shot')
     async def shot() -> MultipartToolResponse:
-        return response({'ok': True})
+        return MultipartToolResponse(output={'ok': True})
 
     action = shot.action()
     envelope = TypeAdapter(MultipartToolResponseData).json_schema()
@@ -177,7 +171,7 @@ def test_to_tool_definition_sends_original_schema_not_envelope() -> None:
 
     @ai.tool(name='shot')
     async def shot() -> MultipartToolResponse:
-        return response({'ok': True})
+        return MultipartToolResponse(output={'ok': True})
 
     assert to_tool_definition(shot.action()).output_schema is None
 
@@ -207,7 +201,7 @@ async def test_response_metadata_datetime_is_json() -> None:
 
     @ai.tool(name='shot')
     async def shot() -> MultipartToolResponse:
-        return response({'ok': True}, metadata={'when': datetime(2026, 8, 25, 12, 0)})
+        return MultipartToolResponse(output={'ok': True}, metadata={'when': datetime(2026, 8, 25, 12, 0)})
 
     out = await shot()
     assert out.metadata == {'when': '2026-08-25T12:00:00'}
@@ -219,9 +213,9 @@ async def test_response_pydantic_output_plus_media() -> None:
 
     @ai.tool(name='shot')
     async def shot() -> MultipartToolResponse:
-        return response(
-            CamelOut(content_type='image/png', taken_at=datetime(2026, 8, 25, 12, 0)),
-            parts=[_png()],
+        return MultipartToolResponse(
+            output=CamelOut(content_type='image/png', taken_at=datetime(2026, 8, 25, 12, 0)),
+            content=[_png()],
         )
 
     out = await shot()
@@ -235,7 +229,7 @@ async def test_unserializable_metadata_is_invalid_argument() -> None:
 
     @ai.tool(name='shot')
     async def shot() -> MultipartToolResponse:
-        return response({'ok': True}, metadata={'cam': Camera()})
+        return MultipartToolResponse(output={'ok': True}, metadata={'cam': Camera()})
 
     with pytest.raises(GenkitError) as ei:
         await shot()
@@ -377,7 +371,7 @@ async def test_wrap_tool_can_substitute_a_response() -> None:
             ctx: GenerateMiddlewareContext,
             next_fn: Callable[[ToolHookParams, GenerateMiddlewareContext], Awaitable[MultipartToolResponse]],
         ) -> MultipartToolResponse:
-            return response('denied')
+            return MultipartToolResponse(output='denied')
 
     @ai.tool(name='weather')
     async def weather(_: dict) -> str:  # noqa: ARG001

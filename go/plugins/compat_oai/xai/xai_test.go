@@ -28,6 +28,7 @@ import (
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/compat_oai"
 	"github.com/firebase/genkit/go/plugins/compat_oai/xai"
@@ -98,6 +99,34 @@ func TestPluginConfigPrecedence(t *testing.T) {
 	}
 	if gotAuth != "Bearer struct-key" {
 		t.Errorf("Authorization = %q, want %q", gotAuth, "Bearer struct-key")
+	}
+}
+
+// TestPluginCountsReasoningApart pins that the plugin declares xAI's usage
+// convention, in which completion_tokens leaves the reasoning out. Without the
+// declaration, a response with no total_tokens has the reasoning subtracted
+// from a completion count that never held it.
+func TestPluginCountsReasoningApart(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{
+			"id":"c1","object":"chat.completion","created":1,"model":"grok-4.5",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"0.05"},"finish_reason":"stop"}],
+			"usage":{"prompt_tokens":40,"completion_tokens":250,"completion_tokens_details":{"reasoning_tokens":200}}
+		}`)
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	plugin := &xai.XAI{APIKey: "test-key", Opts: []option.RequestOption{option.WithBaseURL(server.URL + "/v1")}}
+	g := genkit.Init(ctx, genkit.WithPlugins(plugin), genkit.WithDefaultModel("xai/grok-4.5"))
+
+	resp, err := genkit.Generate(ctx, g, ai.WithPrompt("hi"))
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if got := resp.Usage; got.OutputTokens != 250 || got.ThoughtsTokens != 200 || got.TotalTokens != 490 {
+		t.Errorf("Usage = %+v, want OutputTokens 250, ThoughtsTokens 200, TotalTokens 490", got)
 	}
 }
 
@@ -188,8 +217,8 @@ func TestPluginRegistersModelsAndHandlesReasoning(t *testing.T) {
 			}
 		}
 		output, _ := supports["output"].([]string)
-		if !slices.Equal(output, []string{"text", "json"}) {
-			t.Errorf("%s output = %v, want [text json]", modelID, output)
+		if !slices.Equal(output, []string{"text", "json", "array", "enum"}) {
+			t.Errorf("%s output = %v, want [text json array enum]", modelID, output)
 		}
 	}
 
@@ -772,5 +801,30 @@ func TestConstrainedSupport(t *testing.T) {
 	}
 	if got := constrained(resolved); got != ai.ConstrainedSupportNoTools {
 		t.Errorf("dynamic constrained = %q, want %q", got, ai.ConstrainedSupportNoTools)
+	}
+}
+
+// xAI answers a rejected key with 400 and a bare string in place of an error object. The plugin reports the status the cause calls for, and leaves any
+// other 400 as INVALID_ARGUMENT.
+func TestRejectedKeyIsUnauthenticated(t *testing.T) {
+	for body, want := range map[string]status.Name{
+		`{"code":"Client specified an invalid argument","error":"Incorrect API key provided. You can obtain an API key from https://console.x.ai."}`: status.Unauthenticated,
+		`{"code":"Client specified an invalid argument","error":"Invalid request content."}`:                                                         status.InvalidArgument,
+	} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, body)
+		}))
+		g := genkit.Init(context.Background(), genkit.WithPlugins(&xai.XAI{
+			APIKey: "test-key",
+			Opts:   []option.RequestOption{option.WithBaseURL(server.URL)},
+		}))
+		_, err := genkit.Generate(context.Background(), g,
+			ai.WithModelName("xai/no-such-model"), ai.WithPrompt("hi"))
+		server.Close()
+		if got := status.Of(err); got != want {
+			t.Errorf("body %s: status = %q, want %q: %v", body, got, want, err)
+		}
 	}
 }

@@ -171,11 +171,8 @@ class ActionKind(StrEnum):
     EVALUATOR = 'evaluator'
     EXECUTABLE_PROMPT = 'executable-prompt'
     FLOW = 'flow'
-    INDEXER = 'indexer'
     MODEL = 'model'
     PROMPT = 'prompt'
-    RERANKER = 'reranker'
-    RETRIEVER = 'retriever'
     # Catalog key for tools. Action.run / Dev UI see the multipart envelope.
     TOOL = 'tool.v2'
     UTIL = 'util'

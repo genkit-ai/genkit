@@ -1,0 +1,438 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""Configuration management for GCP telemetry.
+
+This module handles project ID resolution, telemetry configuration,
+and initialization of tracing, metrics, and logging.
+"""
+
+import logging
+import os
+import uuid
+from collections.abc import Mapping
+from typing import Any
+
+import structlog
+from genkit_otel import GenAiInstrumentation
+from google.auth import default as google_auth_default
+from google.auth.exceptions import DefaultCredentialsError
+from opentelemetry import _logs, metrics, trace as trace_api
+from opentelemetry.exporter.cloud_logging import CloudLoggingExporter  # ty: ignore[deprecated]
+from opentelemetry.exporter.cloud_monitoring import CloudMonitoringMetricsExporter
+from opentelemetry.resourcedetector.gcp_resource_detector import GoogleCloudResourceDetector
+from opentelemetry.sdk._logs import LoggerProvider
+from opentelemetry.sdk._logs.export import BatchLogRecordProcessor, LogRecordExporter, SimpleLogRecordProcessor
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+from opentelemetry.sdk.resources import SERVICE_INSTANCE_ID, SERVICE_NAME, Resource
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor, SpanExporter
+from opentelemetry.sdk.trace.sampling import Sampler
+from opentelemetry.trace import ProxyTracerProvider, get_current_span, span as trace_span
+
+from genkit import GenkitError
+from genkit.plugin_api import is_dev_environment
+from genkit.telemetry import configure_instrumentation, is_instrumented_by
+
+from ._constants import (
+    DEFAULT_METRIC_EXPORT_INTERVAL_MS,
+    DEV_METRIC_EXPORT_INTERVAL_MS,
+    MIN_METRIC_EXPORT_INTERVAL_MS,
+    PROJECT_ID_ENV_VARS,
+)
+from ._exporters import handle_logging_error, handle_metric_error, handle_tracing_error
+from ._metrics_exporter import GenkitMetricExporter
+from ._trace_exporter import GcpAdjustingTraceExporter, GenkitGCPExporter
+
+logger = structlog.get_logger(__name__)
+
+
+def _nothing_registered(provider: object) -> bool:
+    """True only for OTel's default proxy, which means the app registered nothing yet.
+
+    Exact type, not ``isinstance``: a registered subclass of the proxy is the
+    app's provider, and ``set_*_provider`` over it is a warned no-op, so a new
+    provider would export to nothing.
+
+    ``ProxyLoggerProvider`` is only importable from ``opentelemetry._logs._internal``,
+    so it is matched by name and module. If an OTel release moves it, enable()
+    raises ``FAILED_PRECONDITION`` instead of ``import genkit_google_cloud``
+    failing.
+    """
+    cls = type(provider)
+    if cls is ProxyTracerProvider:
+        return True
+    return cls.__name__ == 'ProxyLoggerProvider' and cls.__module__.startswith('opentelemetry._logs')
+
+
+def _reject_unusable_cloud_setup(*, sampler: Sampler | None, disable_traces: bool) -> None:
+    """Raise before anything is installed when sampler= or the process providers can't take Cloud.
+
+    The process tracer is only checked when Cloud Trace is on.
+    """
+    if sampler is not None and disable_traces:
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message='sampler= only applies when Cloud Trace is on',
+        )
+
+    if not disable_traces:
+        tracer = trace_api.get_tracer_provider()
+        if isinstance(tracer, TracerProvider):
+            if sampler is not None:
+                raise GenkitError(
+                    status='INVALID_ARGUMENT',
+                    message=(
+                        'a tracer provider is already set; pass TracerProvider(sampler=...) '
+                        'when you create it instead of sampler='
+                    ),
+                )
+        elif not _nothing_registered(tracer):
+            raise GenkitError(
+                status='FAILED_PRECONDITION',
+                message=(
+                    'the process tracer is not opentelemetry.sdk.trace.TracerProvider; '
+                    'register that class so Cloud Trace can be added'
+                ),
+            )
+
+    process_logger = _logs.get_logger_provider()
+    if not isinstance(process_logger, LoggerProvider) and not _nothing_registered(process_logger):
+        raise GenkitError(
+            status='FAILED_PRECONDITION',
+            message=(
+                'the process logger is not opentelemetry.sdk._logs.LoggerProvider; '
+                'register that class so Cloud Logging can be added'
+            ),
+        )
+
+
+def _hang_exporter_on_process_tracer(*, exporter: SpanExporter, sampler: Sampler | None = None) -> None:
+    """Attach Cloud Trace to the process tracer they already registered, if any.
+
+    This does not mint Genkit spans. ``configure_instrumentation`` does that.
+    Local export happens on span end so a short ``genkit start`` run still
+    shows up; prod batches. When nothing is installed yet, the helper creates
+    the tracer so ``sampler=`` has somewhere to go.
+    """
+    provider = trace_api.get_tracer_provider()
+    if not isinstance(provider, TracerProvider):
+        # _reject_unusable_cloud_setup already ruled out anything but OTel's default proxy.
+        provider = TracerProvider(sampler=sampler)
+        trace_api.set_tracer_provider(provider)
+    processor = SimpleSpanProcessor(exporter) if is_dev_environment() else BatchSpanProcessor(exporter)
+    provider.add_span_processor(processor)
+
+
+def _hang_exporter_on_process_logger(*, exporter: LogRecordExporter) -> None:
+    """Attach Cloud Logging to the process logger they already registered, if any.
+
+    ``GenAiInstrumentation`` emits on this logger when content capture is
+    ``EVENT_ONLY`` / ``SPAN_AND_EVENT``. Default enable() does not write
+    prompt text.
+    """
+    provider = _logs.get_logger_provider()
+    if not isinstance(provider, LoggerProvider):
+        # _reject_unusable_cloud_setup already ruled out anything but OTel's default proxy.
+        provider = LoggerProvider()
+        _logs.set_logger_provider(provider)
+    processor = SimpleLogRecordProcessor(exporter) if is_dev_environment() else BatchLogRecordProcessor(exporter)
+    provider.add_log_record_processor(processor)
+
+
+def resolve_project(
+    project: str | None = None,
+    credentials: dict[str, Any] | None = None,
+) -> str | None:
+    """Resolve the GCP project ID from multiple sources.
+
+    Resolution order:
+    1. Explicit project parameter
+    2. GOOGLE_CLOUD_PROJECT environment variable
+    3. GCLOUD_PROJECT environment variable
+    4. Project ID from credentials
+
+    Args:
+        project: Explicitly provided project ID.
+        credentials: Optional service-account credentials dict; its ``project_id`` key is read.
+
+    Returns:
+        The resolved project ID or None.
+    """
+    if project:
+        return project
+
+    # Check environment variables in order of priority
+    for env_var in PROJECT_ID_ENV_VARS:
+        env_value = os.environ.get(env_var)
+        if env_value:
+            return env_value
+
+    # Check credentials for project_id
+    if credentials and 'project_id' in credentials:
+        return credentials['project_id']
+
+    return None
+
+
+def _adc_project_id() -> str | None:
+    """Project on Application Default Credentials, or None when ADC has none.
+
+    Same last fallback as Go ``googlecloud``. The Cloud exporters already look
+    this up on their own; resolving it here also lets structlog stamp
+    ``logging.googleapis.com/trace``.
+    """
+    try:
+        _, project_id = google_auth_default()
+    except DefaultCredentialsError:
+        return None
+    return project_id or None
+
+
+class GcpTelemetry:
+    """Central manager for GCP Telemetry configuration.
+
+    Encapsulates configuration and manages the lifecycle of Tracing, Metrics,
+    and Logging setup, ensuring consistent state (like project) across all
+    telemetry components.
+    """
+
+    def __init__(
+        self,
+        project: str | None = None,
+        credentials: dict[str, Any] | None = None,
+        sampler: Sampler | None = None,
+        force_dev_export: bool = False,
+        disable_metrics: bool = False,
+        disable_traces: bool = False,
+        metric_export_interval_ms: int | None = None,
+        metric_export_timeout_ms: int | None = None,
+    ) -> None:
+        """Initialize the GCP Telemetry manager.
+
+        Args:
+            project: GCP project ID.
+            credentials: Optional credentials dict.
+            sampler: Trace sampler.
+            force_dev_export: Check to force export in dev environment.
+            disable_metrics: If True, metrics are not exported.
+            disable_traces: If True, traces are not exported.
+            metric_export_interval_ms: Export interval in ms.
+            metric_export_timeout_ms: Export timeout in ms.
+        """
+        self.credentials = credentials
+        self.sampler = sampler
+        self.force_dev_export = force_dev_export
+        self.disable_metrics = disable_metrics
+        self.disable_traces = disable_traces
+
+        # Resolve project ID immediately
+        self.project = resolve_project(project, credentials)
+        firebase_project_id = os.environ.get('FIREBASE_PROJECT_ID')
+        if firebase_project_id and firebase_project_id != self.project:
+            # Go's Firebase plugin still reads this, so a ported app may expect it to pick the project.
+            logger.warning(
+                'FIREBASE_PROJECT_ID is not used for telemetry; set project= or GOOGLE_CLOUD_PROJECT',
+                firebase_project_id=firebase_project_id,
+                project=self.project,
+            )
+
+        # Determine metric export settings
+        is_dev = is_dev_environment()
+
+        default_interval = DEV_METRIC_EXPORT_INTERVAL_MS if is_dev else DEFAULT_METRIC_EXPORT_INTERVAL_MS
+        self.metric_export_interval_ms = metric_export_interval_ms or default_interval
+
+        if self.metric_export_interval_ms < MIN_METRIC_EXPORT_INTERVAL_MS:
+            logger.warning(
+                f'metric_export_interval_ms ({self.metric_export_interval_ms}) is below minimum '
+                f'({MIN_METRIC_EXPORT_INTERVAL_MS}), using minimum'
+            )
+            self.metric_export_interval_ms = MIN_METRIC_EXPORT_INTERVAL_MS
+
+        self.metric_export_timeout_ms = metric_export_timeout_ms or self.metric_export_interval_ms
+
+    def _build_exporter_kwargs(self) -> dict[str, Any]:
+        """Build kwargs for the OTel Cloud exporters, which take ``project_id``.
+
+        Returns:
+            A dict with project_id and/or credentials if available, empty dict otherwise.
+        """
+        kwargs: dict[str, Any] = {}
+        if self.project:
+            kwargs['project_id'] = self.project
+        if self.credentials:
+            kwargs['credentials'] = self.credentials
+        return kwargs
+
+    def initialize(self) -> None:
+        """Actuates the telemetry configuration.
+
+        CRITICAL: This method MUST be called to initialize telemetry handlers
+        even in dev mode. The 'export' flag controls whether data is sent to
+        GCP, but initialization is ALWAYS required for proper operation.
+        """
+        is_dev = is_dev_environment()
+        should_export = self.force_dev_export or not is_dev
+
+        if should_export and not self.project:
+            # Only when exporting: an ADC lookup can probe the metadata server.
+            self.project = _adc_project_id()
+
+        self._configure_logging()
+
+        # Only configure tracing/metrics if exporting (performance optimization)
+        if should_export:
+            self._configure_tracing()
+            self._configure_metrics()
+            self._configure_otel_logs()
+            logger.info(
+                'Telemetry fully initialized',
+                project=self.project,
+                export_enabled=True,
+                environment='dev' if is_dev else 'prod',
+                force_dev_export=self.force_dev_export,
+            )
+        else:
+            logger.debug(
+                'Telemetry initialized in local-only mode',
+                export_enabled=False,
+                environment='dev',
+                note='Use force_dev_export=True to export Cloud Trace in dev',
+            )
+
+    def _configure_logging(self) -> None:
+        """Stamp Cloud Logging trace correlation fields on structlog events."""
+        try:
+            current_config = structlog.get_config()
+            processors = list(current_config.get('processors', []))
+
+            # Early return if already configured
+            if any(getattr(p, '__name__', '') == '_genkit_inject_trace_context' for p in processors):
+                return
+
+            # Define processor function that captures self
+            def _genkit_inject_trace_context(
+                logger_instance: logging.Logger,
+                method_name: str,
+                event_dict: dict[str, Any],
+            ) -> Mapping[str, Any]:
+                return self._inject_trace_context(logger_instance, method_name, event_dict)
+
+            # Append processor to chain
+            processors.append(_genkit_inject_trace_context)
+            structlog.configure(processors=processors)
+            logger.debug('Configured structlog for GCP trace correlation')
+
+        except Exception as e:
+            logger.warning('Failed to configure structlog for trace correlation', error=str(e))
+
+    def _configure_tracing(self) -> None:
+        try:
+            if not self.disable_traces:
+                exporter_kwargs = self._build_exporter_kwargs()
+                base_exporter = GenkitGCPExporter(**exporter_kwargs) if exporter_kwargs else GenkitGCPExporter()
+
+                trace_exporter = GcpAdjustingTraceExporter(
+                    exporter=base_exporter,
+                    error_handler=handle_tracing_error,
+                )
+
+                _hang_exporter_on_process_tracer(exporter=trace_exporter, sampler=self.sampler)
+            if is_instrumented_by(GenAiInstrumentation):
+                return
+            configure_instrumentation(GenAiInstrumentation())
+        except Exception as e:
+            handle_tracing_error(e)
+
+    def _configure_otel_logs(self) -> None:
+        try:
+            exporter = CloudLoggingExporter(  # ty: ignore[deprecated]
+                project_id=self.project,
+                default_log_name='genkit',
+            )
+            _hang_exporter_on_process_logger(exporter=exporter)
+        except Exception as e:
+            handle_logging_error(e)
+
+    def _configure_metrics(self) -> None:
+        if self.disable_metrics:
+            return
+
+        try:
+            resource = Resource.create({
+                SERVICE_NAME: 'genkit',
+                SERVICE_INSTANCE_ID: str(uuid.uuid4()),
+            })
+
+            # Suppress detector warnings during GCP resource detection
+            detector_logger = logging.getLogger('opentelemetry.resourcedetector.gcp_resource_detector')
+            original_level = detector_logger.level
+            detector_logger.setLevel(logging.ERROR)
+
+            try:
+                gcp_resource = GoogleCloudResourceDetector(raise_on_error=True).detect()
+                resource = resource.merge(gcp_resource)
+            except Exception as e:
+                # For detection failure log the exception and use the default resource
+                detector_logger.warning(f'Google Cloud resource detection failed: {e}')
+            finally:
+                detector_logger.setLevel(original_level)
+
+            exporter_kwargs = self._build_exporter_kwargs()
+            cloud_monitoring_exporter = CloudMonitoringMetricsExporter(**exporter_kwargs)
+
+            metrics_exporter = GenkitMetricExporter(
+                exporter=cloud_monitoring_exporter,
+                error_handler=handle_metric_error,
+            )
+
+            reader = PeriodicExportingMetricReader(
+                metrics_exporter,
+                export_interval_millis=self.metric_export_interval_ms,
+                export_timeout_millis=self.metric_export_timeout_ms,
+            )
+
+            provider = MeterProvider(metric_readers=[reader], resource=resource)
+            metrics.set_meter_provider(provider)
+
+        except Exception as e:
+            handle_metric_error(e)
+
+    def _inject_trace_context(
+        self, logger: logging.Logger, method_name: str, event_dict: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Structlog processor to inject GCP-compatible trace context."""
+        # Only inject if event_dict is a dict or mapping
+        if not isinstance(event_dict, dict) and not hasattr(event_dict, '__setitem__'):
+            return event_dict
+
+        span = get_current_span()
+        if span == trace_span.INVALID_SPAN:
+            return event_dict
+
+        ctx = span.get_span_context()
+        if not ctx.is_valid:
+            return event_dict
+
+        if self.project:
+            event_dict['logging.googleapis.com/trace'] = f'projects/{self.project}/traces/{ctx.trace_id:032x}'
+
+        event_dict['logging.googleapis.com/spanId'] = f'{ctx.span_id:016x}'
+        event_dict['logging.googleapis.com/trace_sampled'] = '1' if ctx.trace_flags.sampled else '0'
+
+        return event_dict

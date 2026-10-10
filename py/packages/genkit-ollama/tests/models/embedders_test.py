@@ -21,7 +21,7 @@ import unittest
 from unittest.mock import AsyncMock, MagicMock
 
 import ollama as ollama_api
-from genkit_ollama.embedders import EmbeddingDefinition, OllamaEmbedder
+from genkit_ollama._embedders import OllamaEmbedder
 from pydantic import ValidationError
 
 from genkit import Document, Embedding, GenkitError, Part
@@ -36,10 +36,7 @@ class TestOllamaEmbedderEmbed(unittest.IsolatedAsyncioTestCase):
         self.mock_ollama_client_instance = AsyncMock()
         self.mock_ollama_client_factory = MagicMock(return_value=self.mock_ollama_client_instance)
 
-        self.mock_embedding_definition = EmbeddingDefinition(name='test-embed-model', dimensions=1536)
-        self.ollama_embedder = OllamaEmbedder(
-            client=self.mock_ollama_client_factory, embedding_definition=self.mock_embedding_definition
-        )
+        self.ollama_embedder = OllamaEmbedder(client=self.mock_ollama_client_factory, model='test-embed-model')
 
     async def test_embed_single_document_single_content(self) -> None:
         """Test embed with a single document containing single text content."""
@@ -137,16 +134,18 @@ class TestOllamaEmbedderEmbed(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(raised.exception.status, status)
                 self.assertIs(raised.exception.__cause__, error)
 
-    async def test_embed_leaves_missing_http_status_unclassified(self) -> None:
-        """ResponseError with status_code -1 has no real status, so it stays raw."""
+    async def test_embed_error_without_http_status_is_unknown_genkit_error(self) -> None:
+        """An embed ResponseError with no HTTP status (-1) raises UNKNOWN, keeping the server's message."""
         request = EmbedRequest(input=[Document.from_text('Smoked salmon tartine')])
         error = ollama_api.ResponseError('unexpected end of stream')
         self.mock_ollama_client_instance.embed.side_effect = error
 
-        with self.assertRaises(ollama_api.ResponseError) as raised:
+        with self.assertRaises(GenkitError) as raised:
             await self.ollama_embedder.embed(request)
 
-        self.assertIs(raised.exception, error)
+        self.assertEqual(raised.exception.status, 'UNKNOWN')
+        self.assertIn('unexpected end of stream', str(raised.exception))
+        self.assertIs(raised.exception.__cause__, error)
 
     async def test_embed_marks_malformed_response_internal(self) -> None:
         """A non-JSON body or a payload that fails validation is the server's fault."""

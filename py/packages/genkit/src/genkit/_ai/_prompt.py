@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar, Generic, NamedTuple, TypedDict, TypeVar, cast
 
-from dotpromptz.typing import (
+from dotpromptz import (
     DataArgument,
     PromptFunction,
     PromptInputConfig,
@@ -1348,7 +1348,7 @@ def _use_to_wire_metadata(
     actually run with. The registered name is resolved off ``registry`` so a
     class can live under multiple names without us tying it to a single
     identity. Unregistered instances — subclasses passed inline without going
-    through ``@ai.middleware``, ``new_middleware``, or a middleware plugin —
+    through ``@ai.middleware``, ``GenerateMiddleware(...)``, or a middleware plugin —
     are dropped because the Dev UI has no name to address them by.
     """
     if use is None:

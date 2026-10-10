@@ -21,14 +21,8 @@ from collections.abc import Callable
 from typing import Any, cast
 
 import structlog
-from openai import APIError, AsyncOpenAI
-from openai.lib._pydantic import _ensure_strict_json_schema
-from openai.types import CompletionUsage
-from openai.types.completion_usage import CompletionTokensDetails, PromptTokensDetails
-
-from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
-from genkit.model import ModelConfig, ModelRequest, ModelUsage, Supports, ToolDefinition
 from genkit_openai._models._utils import (
+    OPENAI_CALL_ERRORS,
     DictMessageAdapter,
     MessageAdapter,
     MessageConverter,
@@ -38,6 +32,13 @@ from genkit_openai._models._utils import (
     strip_markdown_fences,
 )
 from genkit_openai._typing import OpenAIConfig
+from openai import AsyncOpenAI
+from openai.lib._pydantic import _ensure_strict_json_schema
+from openai.types import CompletionUsage
+from openai.types.completion_usage import CompletionTokensDetails, PromptTokensDetails
+
+from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
+from genkit.model import ModelConfig, ModelRequest, ModelUsage, Supports, ToolDefinition
 
 logger = structlog.get_logger(__name__)
 
@@ -658,7 +659,7 @@ class OpenAIModel:
                 logger.debug('OpenAI generate request', model=self._model, streaming=True)
                 return await self._generate_stream(request, ctx.send_chunk)
             return await self._generate(request)
-        except (APIError, ValueError) as e:
+        except OPENAI_CALL_ERRORS as e:
             reraise_openai_error(e)
 
     @staticmethod

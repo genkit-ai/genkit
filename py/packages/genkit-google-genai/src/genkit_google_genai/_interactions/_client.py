@@ -20,31 +20,28 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from typing import cast
 from urllib.parse import quote
 
 import httpx
 from genkit_google_genai._interactions._options import ClientOptions
+from genkit_google_genai._provider_errors import TRANSPORT_ERRORS, transport_error
 from google.genai.interactions import Interaction
 
 from genkit import GenkitError
-from genkit._core._error import ErrorResponseMetadata
-from genkit.plugin_api import (
-    GENKIT_CLIENT_HEADER,
-    from_http_code,
-    get_cached_client,
-    mark_provider_error,
-    parse_retry_after_ms,
-)
+from genkit.plugin_api import GENKIT_CLIENT_HEADER, loop_local_client, provider_error
 
 DEFAULT_API_VERSION = 'v1beta'
 DEFAULT_BASE_URL = 'https://generativelanguage.googleapis.com'
 API_REVISION = '2026-05-20'
-# Creates can run far longer than the shared client's 60s default. No read
-# timeout, but keep a connect budget so a hung handshake doesn't sit forever.
-CACHE_KEY = 'googleai-interactions'
+# Creates can run for many minutes. No read timeout, but keep a connect
+# budget so a hung handshake doesn't sit forever.
 NO_TIMEOUT = httpx.Timeout(None, connect=10.0)
 RESERVED_HEADERS = ('x-goog-api-key', 'x-goog-api-client')
+
+
+@loop_local_client
+def _http_client() -> httpx.AsyncClient:
+    return httpx.AsyncClient(timeout=NO_TIMEOUT)
 
 
 def google_ai_url(
@@ -153,7 +150,7 @@ async def request(
 ) -> Interaction | None:
     """Issue one Interactions HTTP call and parse the Interaction body."""
     # Auth/key headers are per-request; the loop-local client is just the transport.
-    client = get_cached_client(cache_key=CACHE_KEY, timeout=NO_TIMEOUT)
+    client = _http_client()
     request_headers = headers(api_key=api_key, client_options=client_options)
     timeout = timeout_seconds(client_options)
 
@@ -173,15 +170,8 @@ async def request(
                 headers=request_headers,
                 json=json_body,
             )
-    except httpx.TimeoutException as error:
-        raise mark_provider_error(
-            error=GenkitError(
-                status='DEADLINE_EXCEEDED',
-                message=f'Request to {url} exceeded the configured timeout: {error}',
-            )
-        ) from error
-    # A refused or dropped connection has no known status, so it propagates
-    # as is and retry treats it as unclassified.
+    except TRANSPORT_ERRORS as error:
+        raise transport_error(error) from error
 
     if response.is_success:
         if not response.content:
@@ -211,19 +201,9 @@ async def request(
     except json.JSONDecodeError:
         pass
 
-    retry_after_header = response.headers.get('retry-after')
-    retry_after_ms = parse_retry_after_ms(retry_after_header) if retry_after_header else None
-    response_metadata: ErrorResponseMetadata | None = None
-    if retry_after_ms is not None:
-        response_metadata = cast(ErrorResponseMetadata, {'retry_after_ms': retry_after_ms})
-
-    raise mark_provider_error(
-        error=GenkitError(
-            status=from_http_code(response.status_code),
-            message=(
-                f'Request to {url} failed with HTTP {response.status_code} {response.reason_phrase}: {error_message}'
-            ),
-            details=error_detail,
-            response_metadata=response_metadata,
-        )
-    )
+    message = f'Request to {url} failed with HTTP {response.status_code} {response.reason_phrase}: {error_message}'
+    cause = httpx.HTTPStatusError(message, request=httpx.Request(method, url), response=response)
+    error = provider_error(cause, http_status=response.status_code, headers=response.headers, message=message)
+    if isinstance(error_detail, Mapping):
+        error.details.update(error_detail)
+    raise error from cause

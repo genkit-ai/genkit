@@ -64,7 +64,7 @@ from pydantic import BaseModel
 import genkit_google_genai._constants as const
 from genkit import ActionRunContext, GenkitError, ModelResponse, Operation
 from genkit.embedder import EmbedderRef, embedder, embedder_action_metadata
-from genkit.evaluator import EvalFnResponse, EvalRequest
+from genkit.evaluator import evaluator_action_metadata
 from genkit.model import (
     BackgroundAction,
     ModelInfo,
@@ -84,7 +84,8 @@ from genkit.plugin_api import (
     to_json_schema,
 )
 from genkit_google_genai._auth import GOOGLE_AUTH_ERRORS, raise_auth_error
-from genkit_google_genai._evaluators import (
+from genkit_google_genai._evaluators._evaluation import (
+    METRIC_INFO,
     VertexAIEvaluationMetricType,
     create_vertex_evaluators,
 )
@@ -375,8 +376,8 @@ def _create_veo_background_action(
 
     return background_model(
         full_name,
-        _start,
-        _check,
+        start=_start,
+        check=_check,
         config_schema=VeoConfig,
         info=veo_model_info(name),
         metadata={'type': 'background-model'},
@@ -1091,7 +1092,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
                 create_vertex_evaluators(
                     registry,
                     list(VertexAIEvaluationMetricType),
-                    project_id=self._project,
+                    project=self._project,
                     location=self._location,
                 )
             )
@@ -1186,7 +1187,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
         actions = create_vertex_evaluators(
             registry,
             [metric_type],
-            project_id=self._project,
+            project=self._project,
             location=self._location,
         )
         return actions[0] if actions else None
@@ -1303,15 +1304,13 @@ class VertexAI(GoogleFamilyRefs, Plugin):
 
         if self._project:
             for metric in VertexAIEvaluationMetricType:
-                # create_vertex_evaluators handles namespacing but we only need metadata here.
-                evaluator_name = vertexai_name(metric.lower())
+                display_name, definition = METRIC_INFO[metric]
                 actions_list.append(
-                    ActionMetadata(
-                        name=evaluator_name,
-                        action_type=ActionKind.EVALUATOR,
-                        input_json_schema=to_json_schema(EvalRequest),
-                        output_json_schema=to_json_schema(list[EvalFnResponse]),
-                        metadata={'type': 'evaluator'},
+                    evaluator_action_metadata(
+                        vertexai_name(metric.lower()),
+                        display_name=display_name,
+                        definition=definition,
+                        is_billed=True,
                     )
                 )
 

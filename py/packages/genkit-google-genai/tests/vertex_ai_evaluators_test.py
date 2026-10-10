@@ -20,17 +20,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-from genkit_google_genai._evaluators import (
-    VertexAIEvaluationMetricType,
-    create_vertex_evaluators,
-)
 from genkit_google_genai._evaluators._evaluation import (
     EvaluatorFactory,
+    VertexAIEvaluationMetricType,
     _stringify,
+    create_vertex_evaluators,
 )
 from google.auth.exceptions import DefaultCredentialsError, RefreshError
 
-from genkit import BaseDataPoint, Genkit, GenkitError
+from genkit import Genkit, GenkitError
+from genkit.evaluator import BaseDataPoint
 
 
 def test_vertex_ai_evaluation_metric_type_values() -> None:
@@ -79,10 +78,10 @@ def test_stringify_number_input() -> None:
 def test_evaluator_factory_initialization() -> None:
     """Test EvaluatorFactory can be initialized."""
     factory = EvaluatorFactory(
-        project_id='test-project',
+        project='test-project',
         location='us-central1',
     )
-    assert factory.project_id == 'test-project'
+    assert factory.project == 'test-project'
     assert factory.location == 'us-central1'
 
 
@@ -90,7 +89,7 @@ def test_evaluator_factory_initialization() -> None:
 async def test_evaluator_factory_evaluate_instances_structure() -> None:
     """Test that evaluate_instances makes correct API call structure."""
     factory = EvaluatorFactory(
-        project_id='test-project',
+        project='test-project',
         location='us-central1',
     )
 
@@ -108,15 +107,14 @@ async def test_evaluator_factory_evaluate_instances_structure() -> None:
     with patch('genkit_google_genai._evaluators._evaluation.google_auth_default') as mock_auth:
         mock_auth.return_value = (mock_credentials, 'test-project')
 
-        # Mock get_cached_client to return a mock client
+        # Swap in a mock HTTP client
         mock_client = AsyncMock()
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = mock_response_data
         mock_client.post = AsyncMock(return_value=mock_response)
-        mock_client.is_closed = False
 
-        with patch('genkit_google_genai._evaluators._evaluation.get_cached_client', return_value=mock_client):
+        with patch('genkit_google_genai._evaluators._evaluation._evaluator_client', return_value=mock_client):
             result = await factory.evaluate_instances({'fluencyInput': {'prediction': 'Test'}})
 
             assert result == mock_response_data
@@ -127,7 +125,7 @@ async def test_evaluator_factory_evaluate_instances_structure() -> None:
 async def test_evaluator_factory_evaluate_instances_error_handling() -> None:
     """Test that evaluate_instances raises GenkitError on API failure."""
     factory = EvaluatorFactory(
-        project_id='test-project',
+        project='test-project',
         location='us-central1',
     )
 
@@ -138,15 +136,14 @@ async def test_evaluator_factory_evaluate_instances_error_handling() -> None:
     with patch('genkit_google_genai._evaluators._evaluation.google_auth_default') as mock_auth:
         mock_auth.return_value = (mock_credentials, 'test-project')
 
-        # Mock get_cached_client to return a mock client
+        # Swap in a mock HTTP client
         mock_client = AsyncMock()
         mock_response = MagicMock()
         mock_response.status_code = 500
         mock_response.text = 'Internal Server Error'
         mock_client.post = AsyncMock(return_value=mock_response)
-        mock_client.is_closed = False
 
-        with patch('genkit_google_genai._evaluators._evaluation.get_cached_client', return_value=mock_client):
+        with patch('genkit_google_genai._evaluators._evaluation._evaluator_client', return_value=mock_client):
             with pytest.raises(GenkitError) as exc_info:
                 await factory.evaluate_instances({'input': 'test'})
 
@@ -166,7 +163,7 @@ def test_create_vertex_evaluators_with_metric_types() -> None:
     create_vertex_evaluators(
         registry=mock_registry,
         metrics=metrics,
-        project_id='test-project',
+        project='test-project',
         location='us-central1',
     )
 
@@ -181,7 +178,7 @@ async def test_evaluator_request_sends_empty_metric_spec() -> None:
     create_vertex_evaluators(
         registry=mock_registry,
         metrics=[VertexAIEvaluationMetricType.FLUENCY],
-        project_id='test-project',
+        project='test-project',
         location='us-central1',
     )
     evaluator_fn = mock_registry.define_evaluator.call_args.kwargs['fn']
@@ -222,7 +219,7 @@ def test_create_vertex_evaluators_names_format() -> None:
     create_vertex_evaluators(
         registry=mock_registry,
         metrics=metrics,
-        project_id='test-project',
+        project='test-project',
         location='us-central1',
     )
 
@@ -238,7 +235,7 @@ def test_create_vertex_evaluators_empty_metrics() -> None:
     create_vertex_evaluators(
         registry=mock_registry,
         metrics=[],
-        project_id='test-project',
+        project='test-project',
         location='us-central1',
     )
 
@@ -255,7 +252,7 @@ def test_all_metric_types_supported() -> None:
     create_vertex_evaluators(
         registry=mock_registry,
         metrics=all_metrics,
-        project_id='test-project',
+        project='test-project',
         location='us-central1',
     )
 
@@ -266,9 +263,7 @@ def test_all_metric_types_supported() -> None:
 async def test_vertexai_evaluator_row_evaluation_is_a_list() -> None:
     """ai.evaluate with vertexai/fluency returns a list of rows read as results[0].evaluation[0].score."""
     ai = Genkit()
-    create_vertex_evaluators(
-        ai, [VertexAIEvaluationMetricType.FLUENCY], project_id='test-project', location='us-central1'
-    )
+    create_vertex_evaluators(ai, [VertexAIEvaluationMetricType.FLUENCY], project='test-project', location='us-central1')
 
     with patch.object(
         EvaluatorFactory,
@@ -286,7 +281,7 @@ async def test_vertexai_evaluator_row_evaluation_is_a_list() -> None:
 
 
 def _factory() -> EvaluatorFactory:
-    return EvaluatorFactory(project_id='menu-prod', location='us-central1')
+    return EvaluatorFactory(project='menu-prod', location='us-central1')
 
 
 def _http_client(response: httpx.Response | Exception) -> AsyncMock:
@@ -307,7 +302,13 @@ def _creds() -> MagicMock:
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ('code', 'status'),
-    [(400, 'INVALID_ARGUMENT'), (403, 'PERMISSION_DENIED'), (429, 'RESOURCE_EXHAUSTED'), (503, 'UNAVAILABLE')],
+    [
+        (400, 'INVALID_ARGUMENT'),
+        (403, 'PERMISSION_DENIED'),
+        (418, 'UNKNOWN'),
+        (429, 'RESOURCE_EXHAUSTED'),
+        (503, 'UNAVAILABLE'),
+    ],
 )
 async def test_evaluate_instances_http_status_is_classified(code: int, status: str) -> None:
     """A 429 from the eval service is retryable and a 400 is not."""
@@ -319,7 +320,7 @@ async def test_evaluate_instances_http_status_is_classified(code: int, status: s
     )
     with (
         patch('genkit_google_genai._evaluators._evaluation.google_auth_default', return_value=(_creds(), 'menu-prod')),
-        patch('genkit_google_genai._evaluators._evaluation.get_cached_client', return_value=_http_client(response)),
+        patch('genkit_google_genai._evaluators._evaluation._evaluator_client', return_value=_http_client(response)),
         pytest.raises(GenkitError, match='eval call failed') as raised,
     ):
         await _factory().evaluate_instances({'fluencyInput': {}})
@@ -329,17 +330,18 @@ async def test_evaluate_instances_http_status_is_classified(code: int, status: s
 
 
 @pytest.mark.asyncio
-async def test_evaluate_instances_transport_failure_stays_raw() -> None:
-    """A refused connection has no known status, so it reaches the caller unchanged."""
+async def test_evaluator_connection_refused_is_unavailable() -> None:
+    """A refused connection to the eval service is UNAVAILABLE so retry can try again."""
     refused = httpx.ConnectError('connection refused')
     with (
         patch('genkit_google_genai._evaluators._evaluation.google_auth_default', return_value=(_creds(), 'menu-prod')),
-        patch('genkit_google_genai._evaluators._evaluation.get_cached_client', return_value=_http_client(refused)),
-        pytest.raises(httpx.ConnectError) as raised,
+        patch('genkit_google_genai._evaluators._evaluation._evaluator_client', return_value=_http_client(refused)),
+        pytest.raises(GenkitError) as raised,
     ):
         await _factory().evaluate_instances({'fluencyInput': {}})
 
-    assert raised.value is refused
+    assert raised.value.status == 'UNAVAILABLE'
+    assert raised.value.cause is refused
 
 
 @pytest.mark.asyncio
@@ -347,7 +349,7 @@ async def test_evaluate_instances_non_json_success_is_internal() -> None:
     response = httpx.Response(200, text='<html>proxy page</html>')
     with (
         patch('genkit_google_genai._evaluators._evaluation.google_auth_default', return_value=(_creds(), 'menu-prod')),
-        patch('genkit_google_genai._evaluators._evaluation.get_cached_client', return_value=_http_client(response)),
+        patch('genkit_google_genai._evaluators._evaluation._evaluator_client', return_value=_http_client(response)),
         pytest.raises(GenkitError) as raised,
     ):
         await _factory().evaluate_instances({'fluencyInput': {}})

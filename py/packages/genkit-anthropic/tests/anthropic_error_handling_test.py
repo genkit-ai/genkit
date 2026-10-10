@@ -17,6 +17,7 @@
 """Tests for Anthropic API error handling."""
 
 import json
+from collections.abc import AsyncIterator
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -32,7 +33,7 @@ from anthropic import (
 )
 from genkit_anthropic._models import AnthropicModel
 
-from genkit import GenkitError, Message, Part, Role
+from genkit import ActionRunContext, GenkitError, Message, Part, Role
 from genkit._core._error import get_callable_json, get_http_status
 from genkit.model import ModelRequest
 from genkit.plugin_api import StatusName
@@ -113,25 +114,59 @@ async def test_anthropic_api_error_is_served_as_internal_error() -> None:
     assert _ERROR_MESSAGE not in str(get_callable_json(error))
 
 
+async def _generate_over_transport(handler: Any) -> GenkitError:  # noqa: ANN401
+    """Run a non-streaming generate through the real SDK with a fake transport; return the raised error."""
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = AsyncAnthropic(api_key='test-key', http_client=http_client, max_retries=0)
+    model = AnthropicModel(model_name='claude-sonnet-4-6', client=client)
+    try:
+        with pytest.raises(GenkitError) as exc_info:
+            await model.generate(_request())
+    finally:
+        await http_client.aclose()
+    return exc_info.value
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    'api_error',
-    [
-        APIError(_ERROR_MESSAGE, _http_request(), body=None),
-        APIConnectionError(message=_ERROR_MESSAGE, request=_http_request()),
-        APITimeoutError(request=_http_request()),
-    ],
-    ids=['base-api-error', 'connection-error', 'timeout'],
-)
-async def test_generate_leaves_errors_without_a_status_raw(api_error: APIError) -> None:
-    """A transport failure has no status to report, so it reaches the caller unchanged."""
-    model = _model_failing_with(api_error)
+async def test_connection_refused_is_unavailable() -> None:
+    """A refused connection is UNAVAILABLE so retry tries again."""
 
-    with pytest.raises(APIError) as exc_info:
-        await model.generate(_request())
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError('[Errno 61] Connection refused', request=request)
 
-    assert exc_info.value is api_error
-    assert not isinstance(exc_info.value, GenkitError)
+    error = await _generate_over_transport(handler)
+
+    assert error.status == 'UNAVAILABLE'
+    assert isinstance(error.cause, APIConnectionError)
+    assert error.__cause__ is error.cause
+    assert get_http_status(error) == 500
+
+
+@pytest.mark.asyncio
+async def test_timeout_is_deadline_exceeded() -> None:
+    """A request that times out is DEADLINE_EXCEEDED so retry tries again."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout('timed out', request=request)
+
+    error = await _generate_over_transport(handler)
+
+    assert error.status == 'DEADLINE_EXCEEDED'
+    assert isinstance(error.cause, APITimeoutError)
+    assert error.__cause__ is error.cause
+
+
+@pytest.mark.asyncio
+async def test_generate_marks_status_less_sdk_error_unknown() -> None:
+    """An SDK error with no status, type, or transport failure is an UNKNOWN GenkitError."""
+    api_error = APIError(_ERROR_MESSAGE, _http_request(), body=None)
+
+    with pytest.raises(GenkitError) as exc_info:
+        await _model_failing_with(api_error).generate(_request())
+
+    assert exc_info.value.status == 'UNKNOWN'
+    assert exc_info.value.original_message == _ERROR_MESSAGE
+    assert exc_info.value.cause is api_error
 
 
 @pytest.mark.asyncio
@@ -171,15 +206,18 @@ async def test_generate_maps_billing_error_to_resource_exhausted() -> None:
 
 
 @pytest.mark.asyncio
-async def test_generate_leaves_unmapped_status_without_known_type_raw() -> None:
-    """An unmapped 4xx with no known error type has no real status, so it stays raw."""
+async def test_unmapped_4xx_is_unknown_genkit_error() -> None:
+    """A 413 with no error type in the body is an UNKNOWN GenkitError that keeps the provider's message."""
     request = _http_request()
-    api_error = APIStatusError(_ERROR_MESSAGE, response=httpx.Response(418, request=request), body=None)
+    api_error = APIStatusError(_ERROR_MESSAGE, response=httpx.Response(413, request=request), body=None)
 
-    with pytest.raises(APIStatusError) as exc_info:
+    with pytest.raises(GenkitError) as exc_info:
         await _model_failing_with(api_error).generate(_request())
 
-    assert exc_info.value is api_error
+    assert exc_info.value.status == 'UNKNOWN'
+    assert exc_info.value.original_message == _ERROR_MESSAGE
+    assert exc_info.value.cause is api_error
+    assert exc_info.value.__cause__ is api_error
 
 
 @pytest.mark.asyncio
@@ -196,24 +234,18 @@ async def test_generate_marks_unreadable_response_internal() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ('status_code', 'expected_status'),
-    [
-        (429, 'RESOURCE_EXHAUSTED'),
-        (503, 'UNAVAILABLE'),
-        (529, 'UNAVAILABLE'),
-    ],
-)
-async def test_generate_attaches_retry_after_metadata(status_code: int, expected_status: StatusName) -> None:
-    """Attach parsed retry metadata for retryable Anthropic responses."""
-    api_error = _status_error(status_code, retry_after='2.5')
+async def test_429_retry_after_header_sets_retry_delay() -> None:
+    """A 429 with a Retry-After header puts the delay in response_metadata['retry_after_ms']."""
+    request = _http_request()
+    response = httpx.Response(429, request=request, headers={'Retry-After': '2.5'})
+    api_error = APIStatusError(_ERROR_MESSAGE, response=response, body={'type': 'error'})
     model = _model_failing_with(api_error)
 
     with pytest.raises(GenkitError) as exc_info:
         await model.generate(_request())
 
     error = exc_info.value
-    assert error.status == expected_status
+    assert error.status == 'RESOURCE_EXHAUSTED'
     assert error.response_metadata == {'retry_after_ms': 2500.0}
     assert error.cause is api_error
     assert error.__cause__ is api_error
@@ -358,12 +390,14 @@ async def test_streaming_in_band_error_event_maps_its_type(error_type: str, expe
 
 
 @pytest.mark.asyncio
-async def test_streaming_in_band_error_event_with_unknown_type_stays_raw() -> None:
-    """An error type the plugin does not know has no real status, so the SDK error escapes unchanged."""
+async def test_streaming_in_band_error_event_with_unknown_type_is_unknown() -> None:
+    """A mid-stream error type the plugin does not know is an UNKNOWN GenkitError with the event's message."""
     _, error = await _stream_generate(_stream_failing_after_first_token({'type': 'brand_new_error', 'message': 'x'}))
 
-    assert isinstance(error, APIStatusError)
-    assert not isinstance(error, GenkitError)
+    assert isinstance(error, GenkitError)
+    assert error.status == 'UNKNOWN'
+    assert error.original_message == 'x'
+    assert isinstance(error.cause, APIStatusError)
 
 
 def _model_never_called() -> tuple[AnthropicModel, MagicMock]:
@@ -417,3 +451,57 @@ async def test_generate_marks_invalid_thinking_budget_invalid_argument() -> None
     assert exc_info.value.status == 'INVALID_ARGUMENT'
     assert isinstance(exc_info.value.cause, ValueError)
     client.messages.create.assert_not_called()
+
+
+class _DroppingStream(httpx.AsyncByteStream):
+    """A response body that sends ``first`` and then fails, like a connection cut mid-stream."""
+
+    def __init__(self, first: bytes, error: Exception) -> None:
+        self._first = first
+        self._error = error
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        if self._first:
+            yield self._first
+        raise self._error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('drop', 'status'),
+    [
+        (httpx.RemoteProtocolError('peer closed connection without sending complete message body'), 'UNAVAILABLE'),
+        (httpx.ReadTimeout('timed out'), 'DEADLINE_EXCEEDED'),
+    ],
+)
+async def test_stream_cut_mid_read_is_classified(drop: Exception, status: str) -> None:
+    """The SDK wraps httpx errors only while sending; a stream cut after the 200 still maps for Fallback."""
+    start = {
+        'type': 'message_start',
+        'message': {
+            'id': 'msg_1',
+            'type': 'message',
+            'role': 'assistant',
+            'model': 'claude-sonnet-4-6',
+            'content': [],
+            'stop_reason': None,
+            'stop_sequence': None,
+            'usage': {'input_tokens': 5, 'output_tokens': 0},
+        },
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = f'event: message_start\ndata: {json.dumps(start)}\n\n'.encode()
+        return httpx.Response(200, headers={'content-type': 'text/event-stream'}, stream=_DroppingStream(body, drop))
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = AsyncAnthropic(api_key='test-key', http_client=http_client, max_retries=0)
+    model = AnthropicModel(model_name='claude-sonnet-4-6', client=client)
+    ctx = ActionRunContext(streaming_callback=MagicMock())
+
+    with pytest.raises(GenkitError) as exc_info:
+        await model.generate(_request(), ctx)
+    await http_client.aclose()
+
+    assert exc_info.value.status == status
+    assert exc_info.value.cause is drop

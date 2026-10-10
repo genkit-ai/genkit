@@ -110,15 +110,6 @@ def embedder_action_metadata(
     )
 
 
-def create_embedder_ref(name: str, *, config: dict[str, Any] | None = None, version: str | None = None) -> EmbedderRef:
-    """Create an EmbedderRef. Settings and version are named.
-
-    A version string in the second position used to be stored as config and
-    silently dropped. Pass config= and version=.
-    """
-    return EmbedderRef(name=name, config=config, version=version)
-
-
 def embedder(
     name: str,
     fn: EmbedderFn,

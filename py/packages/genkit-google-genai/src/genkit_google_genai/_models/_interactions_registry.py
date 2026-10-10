@@ -26,8 +26,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Literal, TypeAlias, get_args
 
-from genkit.model import ModelInfo, Supports
 from genkit_google_genai._models._interactions_utils import extract_version
+
+from genkit.model import ModelInfo, Supports
 
 
 def model_info(
@@ -141,7 +142,7 @@ ADVANCED_DEEP_RESEARCH_INFO = ModelInfo(
     supports=Supports(
         multiturn=True,
         media=True,
-        tools=True,
+        tools=False,
         tool_choice=False,
         system_role=False,
         output=['text', 'media'],

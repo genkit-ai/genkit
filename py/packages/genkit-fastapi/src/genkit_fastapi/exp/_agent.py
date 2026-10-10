@@ -28,7 +28,7 @@ from genkit import PublicError
 from genkit.exp.agent import Agent, SessionSnapshot
 from genkit.plugin_api import Action, ActionKind
 
-from ..handler import _mount_action
+from .._handler import _mount_action
 
 StateT = TypeVar('StateT', bound=BaseModel)
 
