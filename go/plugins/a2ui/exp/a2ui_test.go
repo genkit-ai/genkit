@@ -136,12 +136,12 @@ func TestMiddlewareRewritesFinalMessage(t *testing.T) {
 	}
 }
 
-// The aggregated final message is not guaranteed to coalesce adjacent text: the
-// Gemini plugin splits a turn into many text parts (fence, JSON body split many
-// ways, close fence, then a trailing empty-text part carrying the thought
-// signature). transformResponse must stitch a block spanning several parts into
-// a single a2ui data part rather than flushing per part and leaking the whole
-// surface back out as raw prose.
+// The aggregated final message is not guaranteed to coalesce adjacent text: a
+// plugin can store a streamed turn as many text parts (fence, JSON body split
+// many ways, close fence), and Gemini ends it with an empty-text part carrying
+// the thought signature. transformResponse must stitch a block spanning
+// several parts into a single a2ui data part rather than flushing per part and
+// leaking the whole surface back out as raw prose.
 func TestMiddlewareRewritesFinalMessageSplitAcrossParts(t *testing.T) {
 	r := newTestRegistry(t)
 	catalog := BasicCatalog()

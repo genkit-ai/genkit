@@ -776,9 +776,11 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 			Usage: usage.toGenkit(),
 		}
 		// Add all the merged content to the final response's candidate
+		var content []*ai.Part
 		for _, chunk := range chunks {
-			finalResponse.Message.Content = append(finalResponse.Message.Content, chunk.Content...)
+			content = append(content, chunk.Content...)
 		}
+		finalResponse.Message.Content = internal.MergeAdjacentText(content)
 		return finalResponse, nil // Return the final merged response
 
 	}

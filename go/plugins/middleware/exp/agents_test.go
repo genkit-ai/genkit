@@ -232,7 +232,11 @@ func TestAgentsDelegationRunsSubAgent(t *testing.T) {
 
 	genkitx.DefineAgent[any](g, "researcher",
 		aix.InlinePrompt{ai.WithModel(toolModel(t, g, "test/researcher", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
-			return textResp(req, "research complete"), nil
+			// A reply split across text parts (as Gemini sends them) reads
+			// back as its Message.Text, not with separators between parts.
+			return &ai.ModelResponse{Request: req, Message: ai.NewModelMessage(
+				ai.NewTextPart("research"), ai.NewTextPart(" complete"),
+			)}, nil
 		}))},
 	)
 
@@ -385,7 +389,7 @@ func TestAgentsForwardsHistory(t *testing.T) {
 
 	var joined strings.Builder
 	for _, m := range subMessages {
-		joined.WriteString(messageText(m))
+		joined.WriteString(m.Text())
 		joined.WriteByte('\n')
 	}
 	if !strings.Contains(joined.String(), "platypus") {

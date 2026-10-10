@@ -281,7 +281,8 @@ func generate(
 	// Fold the stream back into a single response: one candidate carrying the
 	// accumulated parts plus the metadata merged across chunks, and the last
 	// usage metadata and prompt feedback seen (neither arrives on every
-	// chunk).
+	// chunk). The message merges the text the stream split across chunks, so
+	// a reply is not stored as one part per delta.
 	resp := &genai.GenerateContentResponse{
 		UsageMetadata:  usage,
 		PromptFeedback: feedback,
@@ -298,7 +299,7 @@ func generate(
 	if err != nil {
 		return nil, err
 	}
-	r.Message.Content = chunks
+	r.Message.Content = plugininternal.MergeAdjacentText(chunks)
 	r.Request = input
 	if cache != nil {
 		r.Message.Metadata = cacheMetadata(r.Message.Metadata, cache)
@@ -640,7 +641,13 @@ func translateCandidate(cand *genai.Candidate) (*ai.ModelResponse, error) {
 		}
 
 		if len(emitted) == 0 {
-			continue
+			// A stream ends a text reply with an empty text part that carries
+			// the reply's thought signature. Keep it so the signature goes
+			// back to the model.
+			if len(part.ThoughtSignature) == 0 {
+				continue
+			}
+			emitted = append(emitted, ai.NewTextPart(""))
 		}
 
 		// Attach the thought signature to the first emitted part so that a

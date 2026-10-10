@@ -1187,6 +1187,11 @@ func TestGenerateReportsUsage(t *testing.T) {
 			if resp.Usage == nil || !reflect.DeepEqual(*resp.Usage, want) {
 				t.Errorf("Usage = %+v, want %+v", resp.Usage, want)
 			}
+			// A stream's text arrives one chunk at a time and must still
+			// come back as one part.
+			if c := resp.Message.Content; len(c) != 1 || c[0].Text != "Hi" {
+				t.Errorf("Message.Content = %+v, want one text part %q", c, "Hi")
+			}
 		})
 	}
 }

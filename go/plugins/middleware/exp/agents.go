@@ -567,7 +567,7 @@ func (a *Agents) foldDelegationOutput(ctx context.Context, ref aix.AgentRef, out
 	}
 
 	subArtifacts := namedArtifacts(out.Artifacts)
-	result.Response = messageText(out.Message)
+	result.Response = out.Message.Text()
 	if result.Response == "" {
 		result.Response = noFinalMessageResponse(len(subArtifacts))
 	}
@@ -695,7 +695,7 @@ func subAgentFailureMessage(reason aix.AgentFinishReason, err *status.Error, las
 		return "Unknown sub-agent failure."
 	}
 	msg := fmt.Sprintf("the turn ended as %q without completing the task", reason)
-	if text := messageText(last); text != "" {
+	if text := last.Text(); text != "" {
 		msg += "; the agent's last message was: " + text
 	}
 	return msg + "."
@@ -979,21 +979,4 @@ func namedArtifacts(arts []*aix.Artifact) []*aix.Artifact {
 		}
 	}
 	return out
-}
-
-// messageText joins a message's non-empty text parts with newlines.
-func messageText(m *ai.Message) string {
-	if m == nil {
-		return ""
-	}
-	var b strings.Builder
-	for _, p := range m.Content {
-		if p != nil && p.IsText() && p.Text != "" {
-			if b.Len() > 0 {
-				b.WriteByte('\n')
-			}
-			b.WriteString(p.Text)
-		}
-	}
-	return b.String()
 }
