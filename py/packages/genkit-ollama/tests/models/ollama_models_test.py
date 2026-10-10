@@ -25,7 +25,8 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 import httpx
 import ollama as ollama_api
 import pytest
-from genkit_ollama._models import ModelDefinition, OllamaConfig, OllamaModel, _convert_parameters, _image_fetch_client
+from genkit_ollama import ModelDefinition, OllamaConfig
+from genkit_ollama._models import OllamaModel, _convert_parameters, _image_fetch_client
 from pydantic import ConfigDict, ValidationError
 
 from genkit import ActionRunContext, GenkitError, Message, ModelResponseChunk, Part, Role

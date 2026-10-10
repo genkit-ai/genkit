@@ -30,6 +30,7 @@ import (
 
 	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/core/status"
+	"github.com/firebase/genkit/go/internal/base"
 )
 
 // AugmentWithContextOptions configures how a request is augmented with context.
@@ -101,6 +102,25 @@ func addAutomaticTelemetry() ModelMiddleware {
 			CalculateInputOutputUsage(req, resp)
 
 			return resp, nil
+		}
+	}
+}
+
+// reportUsage reports each response's usage to the context's usage sink (see
+// [base.WithUsageSink]), so every route to a model action counts: the
+// generate loop, a hook that calls another model directly, a nested generate.
+// It wraps the telemetry middleware so the usage it reports carries the
+// character and media counts.
+func reportUsage() ModelMiddleware {
+	return func(fn ModelFunc) ModelFunc {
+		return func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+			resp, err := fn(ctx, req, cb)
+			if resp != nil && resp.Usage != nil {
+				if sink := base.UsageSinkFromContext(ctx); sink != nil {
+					sink(resp.Usage)
+				}
+			}
+			return resp, err
 		}
 	}
 }

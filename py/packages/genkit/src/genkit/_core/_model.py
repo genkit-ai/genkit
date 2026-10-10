@@ -930,6 +930,7 @@ class SessionState(GenkitModel):
     messages: list[Message] | None = None
     custom: Any | None = Field(default=None)
     artifacts: list[Artifact] | None = None
+    usage: GenerationUsage | None = None
 
     @field_validator('messages', mode='before')
     @classmethod
@@ -953,6 +954,7 @@ def as_session_state(value: object) -> SessionState:
             messages=value.messages,
             custom=value.custom,
             artifacts=value.artifacts,
+            usage=value.usage,
         )
     return SessionState.model_validate(value)
 
@@ -1026,6 +1028,7 @@ class AgentOutput(GenkitModel):
     artifacts: list[Artifact] | None = None
     finish_reason: AgentFinishReason | None = None
     error: GenkitRuntimeError | None = None
+    usage: GenerationUsage | None = None
 
     @field_validator('message', mode='before')
     @classmethod
@@ -1260,6 +1263,7 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
     finish_message: str | None = None
     latency_ms: float | None = None
     usage: GenerationUsage | None = None
+    total_usage: GenerationUsage | None = None
     custom: dict[str, Any] | None = None
     raw: dict[str, Any] | None = None
     request: ModelRequest | None = None

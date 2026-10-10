@@ -118,7 +118,9 @@ func (c ChatConfig) ApplyToChatCompletion(params *openai.ChatCompletionNewParams
 // the compatible endpoint takes response_format in its json_schema form and
 // rejects every other form with a 400, so no set lists "json" among its
 // native output formats and a schema-less JSON request rides the injected
-// format instructions. See https://platform.claude.com/docs/en/api/openai-sdk.
+// format instructions. The schema may have an array or enum at its root, so
+// the constrained set lists those formats. See
+// https://platform.claude.com/docs/en/api/openai-sdk.
 var (
 	multimodal = ai.ModelSupports{
 		Multiturn:  true,
@@ -134,7 +136,7 @@ var (
 		ToolChoice:  true,
 		SystemRole:  true,
 		Media:       true,
-		Output:      []string{"text"},
+		Output:      []string{"text", "array", "enum"},
 		Constrained: ai.ConstrainedSupportAll,
 	}
 	multimodalNoSystemRole = ai.ModelSupports{

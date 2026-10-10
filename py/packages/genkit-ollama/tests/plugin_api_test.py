@@ -23,10 +23,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import ollama as ollama_api
 import pytest
-from genkit_ollama import Ollama, OllamaConnectionError, RequestHeaderParams, ollama_name
-from genkit_ollama._embedders import EmbeddingDefinition
+from genkit_ollama import (
+    EmbeddingDefinition,
+    ModelDefinition,
+    Ollama,
+    OllamaConfig,
+    OllamaConnectionError,
+    OllamaSupports,
+    RequestHeaderParams,
+)
 from genkit_ollama._errors import wrap_connection_errors
-from genkit_ollama._models import ModelDefinition, OllamaConfig, OllamaModel, OllamaSupports
+from genkit_ollama._models import OllamaModel
 from pydantic import BaseModel
 
 from genkit import Document, Genkit, GenkitError, Message, ModelResponse, Part, Role
@@ -106,7 +113,7 @@ async def test_resolve_action(kind: ActionKind, name: str, ollama_plugin_instanc
 
     assert action is not None
     assert action.kind == kind
-    assert action.name == ollama_name(name)
+    assert action.name == f'ollama/{name}'
     assert action.metadata is not None
     metadata = cast(dict[str, Any], action.metadata)
 

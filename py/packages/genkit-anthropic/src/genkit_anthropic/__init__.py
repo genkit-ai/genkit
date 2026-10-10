@@ -58,7 +58,7 @@ from genkit_anthropic._config import (
     ToolChoice,
     ToolChoiceNone,
 )
-from genkit_anthropic._plugin import Anthropic, anthropic_name
+from genkit_anthropic._plugin import Anthropic
 
 __all__ = [
     'Anthropic',
@@ -72,5 +72,4 @@ __all__ = [
     'ThinkingConfig',
     'ToolChoice',
     'ToolChoiceNone',
-    'anthropic_name',
 ]

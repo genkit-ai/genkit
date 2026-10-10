@@ -23,11 +23,9 @@ from unittest import mock
 from unittest.mock import MagicMock, patch
 
 import pytest
+from genkit_google_cloud import enable_google_cloud_telemetry
 from genkit_google_cloud._telemetry._config import GcpTelemetry, _adc_project_id
-from genkit_google_cloud._telemetry._tracing import (
-    _reset_google_cloud_telemetry,
-    enable_google_cloud_telemetry,
-)
+from genkit_google_cloud._telemetry._tracing import _reset_google_cloud_telemetry
 from genkit_otel import GenAiInstrumentation
 from google.auth.exceptions import DefaultCredentialsError
 from opentelemetry import _logs

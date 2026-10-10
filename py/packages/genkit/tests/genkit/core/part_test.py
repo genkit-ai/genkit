@@ -57,6 +57,11 @@ from genkit._core._model import (
     chunk_for_stream,
 )
 from genkit._core._typing import (
+    AgentInit as AgentInitData,
+    AgentInput as AgentInputData,
+    AgentOutput as AgentOutputData,
+    AgentResult as AgentResultData,
+    AgentStreamChunk as AgentStreamChunkData,
     Artifact as ArtifactData,
     Candidate as CandidateData,
     DocumentData,
@@ -68,6 +73,8 @@ from genkit._core._typing import (
     PartData,
     Resource,
     Resume as ResumeData,
+    SessionSnapshot as SessionSnapshotData,
+    SessionState as SessionStateData,
     TextPart,
 )
 from genkit.middleware import ToolHookParams
@@ -867,6 +874,13 @@ def test_veneer_has_every_generated_field() -> None:
         (ModelResponseChunk, ModelResponseChunkData),
         (Resume, ResumeData),
         (EmbedRequest, EmbedRequestData),
+        (SessionState, SessionStateData),
+        (SessionSnapshot, SessionSnapshotData),
+        (AgentInit, AgentInitData),
+        (AgentInput, AgentInputData),
+        (AgentOutput, AgentOutputData),
+        (AgentResult, AgentResultData),
+        (AgentStreamChunk, AgentStreamChunkData),
     )
     for veneer, wire in twins:
         missing = set(wire.model_fields) - set(veneer.model_fields)

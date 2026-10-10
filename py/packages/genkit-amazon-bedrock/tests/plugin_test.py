@@ -23,7 +23,6 @@ from typing import Any, cast
 import boto3.session
 import pytest
 from genkit_amazon_bedrock import Bedrock, BedrockConfig
-from genkit_amazon_bedrock._plugin import bedrock_name
 from genkit_amazon_bedrock._transport import BedrockTransport
 from pydantic import ValidationError
 
@@ -36,12 +35,6 @@ from genkit.plugin_api import ActionKind
 def test_plugin_name() -> None:
     plugin = Bedrock()
     assert plugin.name == 'bedrock'
-
-
-def test_bedrock_name_prefixes_model_id() -> None:
-    assert bedrock_name('anthropic.claude-sonnet-4-5-20250929-v1:0') == (
-        'bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0'
-    )
 
 
 def test_constructor_defaults() -> None:
