@@ -26,7 +26,8 @@ import {
 
 declare const signal: AbortSignal;
 
-// `remoteAgent` declares no call options: context is derived server-side.
+// `remoteAgent` call options carry request headers, but not `context`: it is
+// derived server-side.
 export function remoteAgentRejectsContext() {
   const agent = remoteAgent<{ count: number }>({ url: '/api/agent' });
   // @ts-expect-error `context` is not a remote option.
@@ -35,6 +36,18 @@ export function remoteAgentRejectsContext() {
   // @ts-expect-error `context` is not a remote option.
   void chat.send('hi', { context: {} });
   void chat.send('hi', { abortSignal: signal });
+}
+
+export async function remoteAgentAcceptsHeaders() {
+  const agent = remoteAgent<{ count: number }>({ url: '/api/agent' });
+  const chat = agent.chat({}, { headers: { Authorization: 'Bearer t' } });
+  await chat.send('hi', {
+    headers: { 'x-request-id': 'r' },
+    abortSignal: signal,
+  });
+  await agent.abort('id', { headers: { 'x-request-id': 'r' } });
+  // @ts-expect-error headers must be strings.
+  agent.chat({}, { headers: { n: 1 } });
 }
 
 // Custom transports get exactly the options they declare, plus `abortSignal`.

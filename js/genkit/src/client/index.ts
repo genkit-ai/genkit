@@ -55,6 +55,7 @@ export {
   type AgentTurnOptions,
   type DetachedTask,
   type JsonPatch,
+  type RemoteAgentCallOptions,
   type RemoteAgentOptions,
   type SnapshotLookup,
 } from './agent.js';
