@@ -773,15 +773,15 @@ func (s *PostgresSessionStore[State]) checkNoDiffChildren(ctx context.Context, t
 type writePlan struct {
 	kind  string
 	depth int
-	state []byte // checkpoint only; nil when the row has no state
-	patch []byte // diff only
+	state json.RawMessage // checkpoint only; nil when the row has no state
+	patch json.RawMessage // diff only
 }
 
 // plan decides how to store a row whose state is stateJSON (nil for no state)
 // and whose parent is parentID. A row is a diff when its parent has a state, is
 // fewer than checkpointInterval diffs from its checkpoint, and the patch is at
 // most half the size of the state; any other row is a checkpoint.
-func (s *PostgresSessionStore[State]) plan(ctx context.Context, tx pgx.Tx, prefix, id, parentID string, stateJSON []byte) (writePlan, error) {
+func (s *PostgresSessionStore[State]) plan(ctx context.Context, tx pgx.Tx, prefix, id, parentID string, stateJSON json.RawMessage) (writePlan, error) {
 	checkpoint := writePlan{kind: kindCheckpoint, state: stateJSON}
 	if stateJSON == nil || parentID == "" || parentID == id {
 		return checkpoint, nil
@@ -930,8 +930,11 @@ func hashKey(parts ...string) int64 {
 	return int64(h.Sum64())
 }
 
-// marshalNullable encodes v as JSON, or returns nil (SQL NULL) for a nil v.
-func marshalNullable[T any](v *T) ([]byte, error) {
+// marshalNullable encodes v as JSON, or returns nil (SQL NULL) for a nil v. It
+// returns a json.RawMessage, which pgx sends as JSON in every query mode: the
+// modes that infer a parameter's type from its Go type (exec and simple
+// protocol) send a []byte as bytea, which a json column rejects.
+func marshalNullable[T any](v *T) (json.RawMessage, error) {
 	if v == nil {
 		return nil, nil
 	}
