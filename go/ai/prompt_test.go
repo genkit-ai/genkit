@@ -736,6 +736,25 @@ func TestOptionsPatternExecute(t *testing.T) {
 
 		assertResponse(t, resp, `AI reply to "TestModelname"`)
 	})
+
+	t.Run("WithModel unregistered", func(t *testing.T) {
+		p := DefinePrompt(reg, "TestUnregisteredModel", WithInputType(InputOutput{}), WithPrompt("TestUnregisteredModel"))
+
+		resp, err := p.Execute(
+			context.Background(),
+			WithInput(InputOutput{
+				Text: "testing",
+			}),
+			WithModel(NewModelAction("options/unregistered", nil, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
+				return testGenerate(ctx, req, cb)
+			})),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		assertResponse(t, resp, `AI reply to "TestUnregisteredModel"`)
+	})
 }
 
 func TestDefaultsOverride(t *testing.T) {
