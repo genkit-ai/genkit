@@ -447,19 +447,19 @@ func toGeminiRequest(input *ai.ModelRequest, config *genai.GenerateContentConfig
 		return nil, status.Errorf(status.ErrInvalidArgument, "multiple candidates is not supported")
 	}
 	if gcc.SystemInstruction != nil {
-		return nil, status.Errorf(status.ErrInvalidArgument, "system instruction must be set using Genkit feature: ai.WithSystemPrompt()")
+		return nil, status.Errorf(status.ErrInvalidArgument, "system instruction must be set using Genkit feature: ai.WithSystem()")
 	}
 	if gcc.CachedContent != "" {
-		return nil, status.Errorf(status.ErrInvalidArgument, "cached content must be set using Genkit feature: ai.WithCacheTTL()")
+		return nil, status.Errorf(status.ErrInvalidArgument, "cached content must be set using Genkit feature: (*ai.Message).WithCacheTTL() or (*ai.Message).WithCacheName()")
 	}
 	if gcc.ResponseSchema != nil {
-		return nil, status.Errorf(status.ErrInvalidArgument, "response schema must be set using Genkit feature: ai.WithTools() or ai.WithOuputType()")
+		return nil, status.Errorf(status.ErrInvalidArgument, "response schema must be set using Genkit feature: ai.WithOutputType() or ai.WithOutputSchema()")
 	}
 	if gcc.ResponseMIMEType != "" {
-		return nil, status.Errorf(status.ErrInvalidArgument, "response MIME type must be set using Genkit feature: ai.WithOuputType(), ai.WithOutputSchema(), ai.WithOutputSchemaByName()")
+		return nil, status.Errorf(status.ErrInvalidArgument, "response MIME type must be set using Genkit feature: ai.WithOutputFormat(), ai.WithOutputType(), ai.WithOutputSchema(), or ai.WithOutputSchemaName()")
 	}
 	if gcc.ResponseJsonSchema != nil {
-		return nil, status.Errorf(status.ErrInvalidArgument, "response JSON schema must be set using Genkit feature: ai.WithOutputSchema()")
+		return nil, status.Errorf(status.ErrInvalidArgument, "response JSON schema must be set using Genkit feature: ai.WithOutputType() or ai.WithOutputSchema()")
 	}
 	for _, t := range gcc.Tools {
 		if t != nil && len(t.FunctionDeclarations) > 0 {
