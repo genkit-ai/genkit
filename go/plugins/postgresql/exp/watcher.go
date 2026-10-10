@@ -19,6 +19,7 @@ package exp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"maps"
 	"slices"
 	"sync"
@@ -199,15 +200,16 @@ func (w *watcher) deliverLocked(wt *watch, tick uint64, st aix.SnapshotStatus) {
 }
 
 // run LISTENs and delivers notifications until ctx is cancelled. After every
-// (re)connect it polls once, to deliver what changed while nothing listened,
-// and while it cannot LISTEN it polls between attempts.
+// reconnect it polls once, to deliver what changed while nothing listened, and
+// while it cannot LISTEN it polls between attempts. The first connect needs no
+// poll: each subscription reads its row once the first attempt finishes.
 func (w *watcher) run(ctx context.Context, ready chan struct{}) {
 	var once sync.Once
 	markReady := func() { once.Do(func() { close(ready) }) }
 	defer markReady()
 
 	delay := minRetryDelay
-	for ctx.Err() == nil {
+	for first := true; ctx.Err() == nil; first = false {
 		conn, err := w.listen(ctx)
 		markReady()
 		if err != nil {
@@ -217,14 +219,18 @@ func (w *watcher) run(ctx context.Context, ready chan struct{}) {
 			logger.Debug(ctx, "postgresql session store: cannot LISTEN for status changes; polling",
 				"channel", w.channel, "error", err)
 			w.pollAll(ctx)
-			if !sleep(ctx, delay) {
+			select {
+			case <-ctx.Done():
 				return
+			case <-time.After(delay):
 			}
 			delay = min(2*delay, maxRetryDelay)
 			continue
 		}
 		delay = minRetryDelay
-		w.pollAll(ctx)
+		if !first {
+			w.pollAll(ctx)
+		}
 		err = w.receive(ctx, conn)
 		conn.Close(context.Background())
 		if ctx.Err() != nil {
@@ -262,20 +268,18 @@ func (w *watcher) receive(ctx context.Context, conn *pgx.Conn) error {
 			waitCtx, cancel = context.WithDeadline(ctx, nextPoll)
 		}
 		n, err := conn.WaitForNotification(waitCtx)
-		// cancel sets waitCtx's error too, so read whether the deadline passed
-		// first.
-		pollDue := waitCtx.Err() != nil
 		cancel()
 		switch {
-		case err == nil && n == nil:
-			// The pool's OnNotification handler took the notification, so pgx
-			// returns no payload: read every watched row instead.
-			w.pollAll(ctx)
 		case err == nil:
-			w.dispatch(n.Payload)
+			// With no payload (the pool's OnNotification handler took the
+			// notification, or the payload was too large to send), read every
+			// watched row instead.
+			if n == nil || !w.dispatch(n.Payload) {
+				w.pollAll(ctx)
+			}
 		case ctx.Err() != nil:
 			return ctx.Err()
-		case pollDue:
+		case errors.Is(err, context.DeadlineExceeded):
 			// The poll interval elapsed. The deadline interrupted the wait
 			// without closing the connection.
 			w.pollAll(ctx)
@@ -286,11 +290,12 @@ func (w *watcher) receive(ctx context.Context, conn *pgx.Conn) error {
 	}
 }
 
-// dispatch delivers a notification to the subscribers of its row.
-func (w *watcher) dispatch(payload string) {
+// dispatch delivers a notification to the subscribers of its row, and reports
+// whether the payload named a row.
+func (w *watcher) dispatch(payload string) bool {
 	var n notification
 	if err := json.Unmarshal([]byte(payload), &n); err != nil {
-		return
+		return false
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -298,6 +303,7 @@ func (w *watcher) dispatch(payload string) {
 	if wt := w.watches[watchKey{prefix: n.Prefix, id: n.ID}]; wt != nil {
 		w.deliverLocked(wt, w.clock, n.Status)
 	}
+	return true
 }
 
 // pollAll re-reads every watched row; see refresh.
@@ -340,18 +346,6 @@ func (w *watcher) refresh(ctx context.Context, keys []watchKey) {
 				w.removeLocked(k, sub)
 			}
 		}
-	}
-}
-
-// sleep waits for d or until ctx is cancelled, and reports whether d elapsed.
-func sleep(ctx context.Context, d time.Duration) bool {
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case <-ctx.Done():
-		return false
-	case <-t.C:
-		return true
 	}
 }
 

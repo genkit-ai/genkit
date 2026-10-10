@@ -40,7 +40,7 @@ const (
 	defaultPollInterval = 5 * time.Second
 	// maxTableNameLength leaves room for the index-name suffixes within
 	// PostgreSQL's 63-byte identifier limit.
-	maxTableNameLength = 63 - len(sessionIndexSuffix)
+	maxTableNameLength = maxIdentifierLength - len(sessionIndexSuffix)
 	// maxIdentifierLength is PostgreSQL's identifier limit in bytes.
 	maxIdentifierLength = 63
 )
