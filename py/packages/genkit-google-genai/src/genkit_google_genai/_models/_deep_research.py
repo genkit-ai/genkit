@@ -20,12 +20,11 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, field_validator
-from pydantic.alias_generators import to_camel
+from pydantic import field_validator
 
 from genkit import ActionRunContext, Operation
 from genkit.model import BackgroundAction, ModelRef, ModelRequest, model_ref
-from genkit.plugin_api import Action, ActionKind, to_json_schema
+from genkit.plugin_api import Action, ActionKind, GenkitConfig, to_json_schema
 from genkit_google_genai._interactions._client import (
     cancel_interaction,
     create_interaction,
@@ -69,27 +68,24 @@ CREATE_OPTION_KEYS = (
 )
 
 
-class McpServerConfig(BaseModel):
+class McpServerConfig(GenkitConfig):
     """MCP server configuration for Deep Research."""
 
-    model_config = ConfigDict(extra='allow', validate_by_name=True, validate_by_alias=True, alias_generator=to_camel)
     name: str | None = None
     url: str | None = None
     headers: dict[str, str] | None = None
     allowed_tools: list[str] | None = None
 
 
-class FileSearchConfig(BaseModel):
+class FileSearchConfig(GenkitConfig):
     """File search store configuration for Deep Research."""
 
-    model_config = ConfigDict(extra='allow', validate_by_name=True, validate_by_alias=True, alias_generator=to_camel)
     file_search_store_names: list[str]
 
 
-class DeepResearchConfig(BaseModel):
+class DeepResearchConfig(GenkitConfig):
     """Deep Research model configuration."""
 
-    model_config = ConfigDict(extra='allow', validate_by_name=True, validate_by_alias=True, alias_generator=to_camel)
     base_url: str | None = None
     api_version: str | None = None
     # Milliseconds — applied to the HTTP call, not the create body.

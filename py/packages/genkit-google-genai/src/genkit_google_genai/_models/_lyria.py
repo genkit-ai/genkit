@@ -23,10 +23,10 @@ audio API.
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
-from pydantic.alias_generators import to_camel
+from pydantic import Field
 
 from genkit.model import ModelInfo, Supports
+from genkit.plugin_api import GenkitConfig
 
 # Known Lyria models
 KNOWN_LYRIA_MODELS: frozenset[str] = frozenset({'lyria-002'})
@@ -44,7 +44,7 @@ def is_lyria_model(name: str) -> bool:
     return name.split('/')[-1].lower().startswith('lyria-')
 
 
-class LyriaConfig(BaseModel):
+class LyriaConfig(GenkitConfig):
     """Configuration options for Lyria audio generation.
 
     Attributes:
@@ -58,8 +58,6 @@ class LyriaConfig(BaseModel):
     seed: int | None = Field(default=None)
     sample_count: int | None = Field(default=None, ge=1)
     location: str | None = Field(default=None)
-
-    model_config = ConfigDict(validate_by_name=True, validate_by_alias=True, alias_generator=to_camel)
 
 
 LYRIA_MODEL_INFO = ModelInfo(

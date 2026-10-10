@@ -556,7 +556,9 @@ async def test_lyria_defaults_audio_and_text_modalities() -> None:
 
 
 @pytest.mark.asyncio
-async def test_lyria_passes_through_unknown_config_fields() -> None:
+async def test_lyria_rejects_unknown_config_fields() -> None:
+    # The create body has no top-level temperature (it lives under
+    # generation_config), so passing it through only hid the mistake.
     patcher, create_calls, _, _ = patch_interactions(
         'genkit_google_genai._models._interactions_lyria',
         create_result={
@@ -570,7 +572,7 @@ async def test_lyria_passes_through_unknown_config_fields() -> None:
         plugin_api_key='key',
         client_options=ClientOptions(),
     )
-    with patcher:
+    with patcher, pytest.raises(GenkitError) as err:
         await action.run(
             ModelRequest(
                 messages=[Message(role=Role.USER, content=[Part.from_text('riff')])],
@@ -578,10 +580,9 @@ async def test_lyria_passes_through_unknown_config_fields() -> None:
             )
         )
 
-    body = create_calls[0]
-    assert body['temperature'] == 0.4
-    assert 'api_key' not in body
-    assert 'apiKey' not in body
+    assert err.value.status == 'INVALID_ARGUMENT'
+    assert 'temperature' in str(err.value)
+    assert create_calls == []
 
 
 def test_deep_research_model_ref_is_namespaced() -> None:

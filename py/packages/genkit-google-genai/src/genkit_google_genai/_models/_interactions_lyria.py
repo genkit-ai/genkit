@@ -20,13 +20,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, field_validator
-from pydantic.alias_generators import to_camel
+from pydantic import field_validator
 from typing_extensions import Never
 
 from genkit import ActionRunContext, ModelResponse
 from genkit.model import ModelRequest, model_action_metadata
-from genkit.plugin_api import Action, ActionKind
+from genkit.plugin_api import Action, ActionKind, GenkitConfig
 from genkit_google_genai._interactions._client import create_interaction
 from genkit_google_genai._interactions._converters import (
     ensure_tool_ids,
@@ -50,10 +49,9 @@ from genkit_google_genai._models._secrets import reject_request_config_api_key
 CREATE_OPTION_KEYS = ('response_modalities',)
 
 
-class LyriaConfig(BaseModel):
+class LyriaConfig(GenkitConfig):
     """Google AI Interactions Lyria model configuration."""
 
-    model_config = ConfigDict(extra='allow', validate_by_name=True, validate_by_alias=True, alias_generator=to_camel)
     base_url: str | None = None
     api_version: str | None = None
     # Milliseconds — applied to the HTTP call, not the create body.
