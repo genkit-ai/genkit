@@ -450,11 +450,10 @@ func transformResponse(resp *ai.ModelResponse, catalog *Catalog, validate Valida
 			// Push WITHOUT flushing between consecutive text parts so an a2ui
 			// block that spans several adjacent text parts is stitched back
 			// together. The model's final message is not guaranteed to coalesce
-			// adjacent text: the Gemini plugin, for instance, aggregates a turn
-			// into ~30 separate text parts (fence, JSON body split many ways,
-			// close fence, then a trailing empty-text part carrying the thought
-			// signature), so a per-part flush would reset the parser mid-block
-			// and leak the whole surface back out as raw prose. This mirrors the
+			// adjacent text: a plugin can store a streamed turn as one part per
+			// chunk (fence, JSON body split many ways, close fence), so a
+			// per-part flush would reset the parser mid-block and leak the
+			// whole surface back out as raw prose. This mirrors the
 			// streaming path, which shares one parser across all chunks and
 			// flushes only once at the end.
 			segments, err := parser.push(part.Text)

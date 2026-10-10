@@ -1816,6 +1816,46 @@ func TestGenerateStreamPreservesCandidateMetadata(t *testing.T) {
 	}
 }
 
+// A stream splits a reply mid-sentence and ends it with an empty text part
+// that carries the thought signature (the chunks below have the shape of a
+// live gemini-3.8-flash stream). The final message must merge the text and
+// keep the signature on its own part.
+func TestGenerateStreamMergesTextParts(t *testing.T) {
+	srv := httptest.NewServer(sseHandler(
+		`{"candidates":[{"content":{"role":"model","parts":[{"text":"plan","thought":true}]}}]}`,
+		`{"candidates":[{"content":{"role":"model","parts":[{"text":" more","thought":true}]}}]}`,
+		`{"candidates":[{"content":{"role":"model","parts":[{"text":"In Go"}]}}]}`,
+		`{"candidates":[{"content":{"role":"model","parts":[{"text":", type parameters use []."}]}}]}`,
+		`{"candidates":[{"content":{"role":"model","parts":[{"text":"","thoughtSignature":"c2lnMQ=="}]},"finishReason":"STOP"}]}`,
+	))
+	defer srv.Close()
+	client := newTestClient(t, srv.URL)
+
+	cb := func(ctx context.Context, c *ai.ModelResponseChunk) error { return nil }
+	r, err := generate(context.Background(), client, "gemini-flash-latest", streamInput(), &genai.GenerateContentConfig{}, cb)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+
+	type part struct {
+		Kind      ai.PartKind
+		Text      string
+		Signature string
+	}
+	var got []part
+	for _, p := range r.Message.Content {
+		got = append(got, part{p.Kind, p.Text, string(metadataSignature(p.Metadata))})
+	}
+	want := []part{
+		{ai.PartReasoning, "plan more", ""},
+		{ai.PartText, "In Go, type parameters use [].", ""},
+		{ai.PartText, "", "sig1"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Message.Content = %+v, want %+v", got, want)
+	}
+}
+
 func TestGenerateStreamEmptyStream(t *testing.T) {
 	srv := httptest.NewServer(sseHandler())
 	defer srv.Close()
