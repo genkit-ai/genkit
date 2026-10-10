@@ -24,9 +24,10 @@ from typing import Any, cast
 from pydantic import BaseModel, Field, field_validator
 
 from genkit import GenkitError, ModelResponse, ModelResponseChunk
-from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams, is_streaming_callback_error
+from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
 from genkit.model import ModelRef, ModelRequest
 from genkit.plugin_api import Action
+from genkit_middleware._errors import caused_by_caller_callback
 from genkit_middleware._statuses import TRANSIENT_STATUSES
 
 # Everything Retry would retry, plus failures another model may not have:
@@ -150,6 +151,6 @@ class Fallback(BaseMiddleware[FallbackConfig]):
         # The caller's own on_chunk failure never switches models. A raw
         # exception has no status, so it also stays on this model. Only a
         # listed GenkitError status sends the request on.
-        if is_streaming_callback_error(exc):
+        if caused_by_caller_callback(exc):
             return False
         return isinstance(exc, GenkitError) and exc.status in self.config.statuses

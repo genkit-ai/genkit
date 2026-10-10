@@ -126,7 +126,18 @@ HookWrap = Callable[
 
 
 class StreamingCallbackError(Exception):
-    """Carries a caller callback failure through generate's failure handling."""
+    """The caller's ``on_chunk`` raised while a model was streaming.
+
+    Generate wraps the caller's callback before handing it to the model, so a
+    failing client sink surfaces at ``ctx.send_chunk`` as this error, raised
+    from the original. ``cause`` holds the caller's exception.
+
+    It is the caller's failure, not the model's: a model that catches broad
+    exceptions around ``send_chunk`` should let it through, and middleware
+    should not retry or fall back on it. A plugin may still re-raise it as
+    another error ``from`` it, so check the ``__cause__`` chain, not only the
+    top exception.
+    """
 
     def __init__(self, cause: Exception) -> None:
         super().__init__(str(cause))
@@ -143,17 +154,6 @@ def streaming_callback_cause(*, exc: BaseException) -> Exception | None:
             return current.cause
         current = current.__cause__
     return None
-
-
-def is_streaming_callback_error(exc: BaseException) -> bool:
-    """True when ``exc`` is, or was raised from, the caller's streaming callback failing.
-
-    Walks ``__cause__`` like core does, so a model plugin that re-raises
-    ``GenkitError(status='UNAVAILABLE') from e`` around its stream loop still
-    counts. Retry and fallback middleware use this to leave the caller's own
-    failure alone.
-    """
-    return streaming_callback_cause(exc=exc) is not None
 
 
 class ModelContractError(GenkitError):
