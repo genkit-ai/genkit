@@ -189,7 +189,9 @@ type ContextCompression struct {
 	// MaxMessages triggers compression when the conversation holds more than
 	// this many messages, and caps the messages kept. Zero disables it.
 	// Without Summarize, a tight cap drops the turns that record a tool
-	// loop's progress, and the model may repeat calls it already made.
+	// loop's progress, and the model may repeat calls it already made. A cap
+	// that the system and protected messages fill still keeps the newest
+	// turn.
 	MaxMessages int `json:"maxMessages,omitzero" jsonschema_description:"Compress when the conversation holds more than this many messages, dropping the oldest non-system messages so the kept history starts with a user turn. Unset disables the message cap."`
 	// PreserveRecent is how many of the newest non-system messages a
 	// compaction keeps when it drops messages, and the default window for
@@ -235,7 +237,12 @@ func (c ContextCompression) New(ctx context.Context) (*ai.Hooks, error) {
 	if err != nil {
 		return nil, err
 	}
-	run := &compressionRun{compressor: cfg, trusted: map[*ai.Message]bool{}}
+	run := &compressionRun{
+		compressor:   cfg,
+		trusted:      map[*ai.Message]bool{},
+		sizes:        map[*ai.Part]partSize{},
+		materialized: map[*ai.Part]*ai.Part{},
+	}
 	return &ai.Hooks{WrapGenerate: run.wrapGenerate, WrapModel: run.wrapModel}, nil
 }
 
@@ -247,7 +254,7 @@ func (c ContextCompression) New(ctx context.Context) (*ai.Hooks, error) {
 // is ignored, since it may come from a client. A history without compression
 // metadata is returned as is.
 func ResolveCompressedHistory(msgs []*ai.Message) []*ai.Message {
-	return resolveWithIndices(msgs, nil).messages
+	return resolveWithIndices(msgs, nil, nil).messages
 }
 
 // Metadata keys of the "contextCompression" contract, shared with the JS
@@ -462,6 +469,48 @@ type compressionRun struct {
 	// user message after the last model or tool message is otherwise taken
 	// for client input and ignored.
 	trusted map[*ai.Message]bool
+
+	// sizes and materialized cache, by part, the measurements and the
+	// recorded edits that every iteration would otherwise repeat over the
+	// whole history. A part is not modified once it is in a request, so an
+	// entry holds for the whole call.
+	sizes        map[*ai.Part]partSize
+	materialized map[*ai.Part]*ai.Part
+}
+
+// partSize is what [compressionRun.sizeOf] measures of a part.
+type partSize struct {
+	// chars is the part's [estimatePartChars].
+	chars int
+	// responseChars is the [toolResponseCharLength] of a tool response.
+	responseChars int
+}
+
+// sizeOf measures p once per call.
+func (r *compressionRun) sizeOf(p *ai.Part) partSize {
+	if size, ok := r.sizes[p]; ok {
+		return size
+	}
+	size := partSize{chars: estimatePartChars(p)}
+	if p.IsToolResponse() && p.ToolResponse != nil {
+		size.responseChars = toolResponseCharLength(p.ToolResponse)
+	}
+	r.sizes[p] = size
+	return size
+}
+
+// messageChars estimates the characters of all the content of msgs.
+func (r *compressionRun) messageChars(msgs []*ai.Message) int {
+	total := 0
+	for _, m := range msgs {
+		if m == nil {
+			continue
+		}
+		for _, p := range m.Content {
+			total += r.sizeOf(p).chars
+		}
+	}
+	return total
 }
 
 // wrapGenerate compresses the conversation entering each tool-loop
@@ -473,8 +522,9 @@ func (r *compressionRun) wrapGenerate(ctx context.Context, params *ai.GeneratePa
 
 	sanitizedMsgs, sanitized := sanitizeUntrustedUserMessages(params.Request.Messages, r.trusted)
 	raw, reconciledRaw := reconcileStandaloneNotices(sanitizedMsgs, r.noticeText)
-	resolved := resolveWithIndices(raw, r.trusted)
+	resolved := resolveWithIndices(raw, r.trusted, r.materialized)
 	prevBoundary := resolved.boundary
+	prevAnchor := resolved.anchor
 	origIndex := resolved.origIndex
 	active, reconciledActive := reconcileStandaloneNotices(resolved.messages, r.noticeText)
 	reconciled := reconciledRaw || reconciledActive
@@ -489,7 +539,7 @@ func (r *compressionRun) wrapGenerate(ctx context.Context, params *ai.GeneratePa
 	activeChars := -1
 	getActiveChars := func() int {
 		if activeChars < 0 {
-			activeChars = estimateMessageChars(active)
+			activeChars = r.messageChars(active)
 		}
 		return activeChars
 	}
@@ -506,7 +556,7 @@ func (r *compressionRun) wrapGenerate(ctx context.Context, params *ai.GeneratePa
 			return p.IsToolResponse() && p.ToolResponse != nil &&
 				!hasCompressionFlag(p.Metadata, ccCapped) &&
 				!hasCompressionFlag(p.Metadata, ccTruncated) &&
-				toolResponseCharLength(p.ToolResponse) > r.maxToolResponseChars
+				r.sizeOf(p).responseChars > r.maxToolResponseChars
 		})
 	})
 
@@ -574,6 +624,12 @@ func (r *compressionRun) wrapGenerate(ctx context.Context, params *ai.GeneratePa
 		}
 		return lastNonSystemIndex(raw)
 	}
+	// keepsPrevAnchor reports whether a compaction keeps the anchor user
+	// message of the previous boundary. Its boundary then lands on the
+	// previous one, which must go on recording the anchor.
+	keepsPrevAnchor := func(tail []*ai.Message) bool {
+		return prevAnchor != nil && slices.Contains(tail, prevAnchor)
+	}
 
 	if shouldCompress {
 		// 3. Check whether the cheap strategies brought the context under
@@ -582,7 +638,7 @@ func (r *compressionRun) wrapGenerate(ctx context.Context, params *ai.GeneratePa
 		skipSummarization := false
 		if deduplicated > 0 || truncated > 0 {
 			charsBefore := getActiveChars()
-			charsAfterCheap := estimateMessageChars(messages)
+			charsAfterCheap := r.messageChars(messages)
 			savingsRatio, scaledTokensAfterCheap := 0.0, 0
 			if charsBefore > 0 {
 				savingsRatio = float64(charsBefore-charsAfterCheap) / float64(charsBefore)
@@ -614,6 +670,7 @@ func (r *compressionRun) wrapGenerate(ctx context.Context, params *ai.GeneratePa
 					summarized = true
 					summaryText = s.text
 					sumBoundary = boundaryFor(s.tail)
+					usedAnchorUser = keepsPrevAnchor(s.tail)
 				}
 			}
 		}
@@ -631,8 +688,9 @@ func (r *compressionRun) wrapGenerate(ctx context.Context, params *ai.GeneratePa
 			if r.summarize {
 				cheapSatisfiedBudget = summarizationSkipped
 			}
-			needsTokenFallbackTruncation := overBudget &&
-				((!r.dedupe && !r.truncate && !r.summarize) || (r.summarize && !summarizationSkipped))
+			// Over budget, messages are dropped whenever the other
+			// strategies did not bring the context under it.
+			needsTokenFallbackTruncation := overBudget && !cheapSatisfiedBudget
 
 			effectiveMaxMessages := 0
 			switch {
@@ -654,7 +712,7 @@ func (r *compressionRun) wrapGenerate(ctx context.Context, params *ai.GeneratePa
 				noticeInserted = t.noticeInserted
 				if t.dropped > 0 {
 					msgTruncated = true
-					usedAnchorUser = t.usedAnchorUser
+					usedAnchorUser = t.usedAnchorUser || keepsPrevAnchor(t.tail)
 					truncBoundary = boundaryFor(t.tail)
 				}
 			}
@@ -766,7 +824,7 @@ func (r *compressionRun) wrapGenerate(ctx context.Context, params *ai.GeneratePa
 // records the input tokens the model reported.
 func (r *compressionRun) wrapModel(ctx context.Context, params *ai.ModelParams, next ai.ModelNext) (*ai.ModelResponse, error) {
 	orig := params.Request
-	view, _ := reconcileStandaloneNotices(resolveWithIndices(orig.Messages, r.trusted).messages, r.noticeText)
+	view, _ := reconcileStandaloneNotices(resolveWithIndices(orig.Messages, r.trusted, r.materialized).messages, r.noticeText)
 	changed := !slices.Equal(view, orig.Messages)
 	if changed {
 		params.Request = requestWith(orig, view)
@@ -1032,7 +1090,9 @@ func (c *compressor) truncateMessages(msgs []*ai.Message, maxMessages int) trunc
 	if noticeConsumesSlot {
 		keepCount--
 	}
-	keepCount = max(0, keepCount)
+	// The newest turn is kept even when the system and pinned messages
+	// fill the cap, since a model cannot answer a conversation without one.
+	keepCount = max(1, keepCount)
 
 	// The messages from start on are kept. The ones before it are dropped,
 	// except pinned ones.
@@ -1535,6 +1595,9 @@ type resolution struct {
 	origIndex map[*ai.Message]int
 	// boundary is the raw index of the newest boundary, or -1.
 	boundary int
+	// anchor is the anchor user message the boundary records, or nil when
+	// it records none or the anchor is pinned.
+	anchor *ai.Message
 }
 
 // resolveWithIndices derives the model's view of msgs. Without a boundary it
@@ -1544,7 +1607,10 @@ type resolution struct {
 // anchor user message when recorded, and the messages after the boundary.
 // A boundary on a user message after the last model or tool message counts
 // only when trusted holds it.
-func resolveWithIndices(msgs []*ai.Message, trusted map[*ai.Message]bool) resolution {
+//
+// materialized, when not nil, caches the recorded edits applied to tool
+// response parts.
+func resolveWithIndices(msgs []*ai.Message, trusted map[*ai.Message]bool, materialized map[*ai.Part]*ai.Part) resolution {
 	origIndex := map[*ai.Message]int{}
 	lastModelOrTool := lastModelOrToolIndex(msgs)
 	boundary := -1
@@ -1561,7 +1627,7 @@ func resolveWithIndices(msgs []*ai.Message, trusted map[*ai.Message]bool) resolu
 	if boundary < 0 {
 		var out []*ai.Message
 		for i, m := range msgs {
-			updated := materializeToolMessage(m)
+			updated := materializeToolMessage(m, materialized)
 			origIndex[updated] = i
 			origIndex[m] = i
 			if updated != m && out == nil {
@@ -1578,6 +1644,7 @@ func resolveWithIndices(msgs []*ai.Message, trusted map[*ai.Message]bool) resolu
 	}
 
 	cc := compressionMeta(msgs[boundary].Metadata)
+	var anchor *ai.Message
 	preserveSystem := cc[ccPreserveSystem] != false
 	stats, _ := cc[ccStats].(map[string]any)
 	insertNotice := truthy(cc[ccTruncationNotice]) || truthy(stats["truncationNoticeInserted"])
@@ -1607,7 +1674,7 @@ func resolveWithIndices(msgs []*ai.Message, trusted map[*ai.Message]bool) resolu
 
 	for i := leadingSystemEnd; i <= boundary; i++ {
 		if isPinned(msgs[i]) {
-			updated := materializeToolMessage(msgs[i])
+			updated := materializeToolMessage(msgs[i], materialized)
 			origIndex[updated] = i
 			origIndex[msgs[i]] = i
 			out = append(out, updated)
@@ -1627,6 +1694,7 @@ func resolveWithIndices(msgs []*ai.Message, trusted map[*ai.Message]bool) resolu
 				if !isPinned(msgs[i]) {
 					origIndex[msgs[i]] = i
 					out = append(out, msgs[i])
+					anchor = msgs[i]
 				}
 				break
 			}
@@ -1637,23 +1705,30 @@ func resolveWithIndices(msgs []*ai.Message, trusted map[*ai.Message]bool) resolu
 		if !preserveSystem && hasMessageFlag(msgs[i], ccNotice) {
 			continue
 		}
-		updated := materializeToolMessage(msgs[i])
+		updated := materializeToolMessage(msgs[i], materialized)
 		origIndex[updated] = i
 		origIndex[msgs[i]] = i
 		out = append(out, updated)
 	}
-	return resolution{messages: out, origIndex: origIndex, boundary: boundary}
+	return resolution{messages: out, origIndex: origIndex, boundary: boundary, anchor: anchor}
 }
 
 // materializeToolMessage returns m with the recorded edits of its tool
-// response parts applied, or m itself when there are none.
-func materializeToolMessage(m *ai.Message) *ai.Message {
+// response parts applied, or m itself when there are none. cache, when not
+// nil, holds the parts already materialized.
+func materializeToolMessage(m *ai.Message, cache map[*ai.Part]*ai.Part) *ai.Message {
 	if roleOf(m) != ai.RoleTool {
 		return m
 	}
 	var content []*ai.Part
 	for i, p := range m.Content {
-		updated := materializeToolPart(p)
+		updated, ok := cache[p]
+		if !ok {
+			updated = materializeToolPart(p)
+			if cache != nil {
+				cache[p] = updated
+			}
+		}
 		if updated == p {
 			continue
 		}
@@ -1983,20 +2058,6 @@ func toolContentPartText(p *ai.Part) string {
 	}
 }
 
-// estimateMessageChars estimates the characters of all the content of msgs.
-func estimateMessageChars(msgs []*ai.Message) int {
-	total := 0
-	for _, m := range msgs {
-		if m == nil {
-			continue
-		}
-		for _, p := range m.Content {
-			total += estimatePartChars(p)
-		}
-	}
-	return total
-}
-
 // estimatePartChars estimates the characters of a part as a model counts
 // them, with inline media at a flat [dataURIApproxChars].
 func estimatePartChars(p *ai.Part) int {
@@ -2019,16 +2080,9 @@ func estimatePartChars(p *ai.Part) int {
 	case p.IsToolRequest() && p.ToolRequest != nil:
 		return charLen(stringifyOutput(p.ToolRequest))
 	case p.IsToolResponse() && p.ToolResponse != nil:
-		if len(p.ToolResponse.Content) == 0 {
-			return charLen(stringifyOutput(p.ToolResponse))
-		}
-		withoutContent := *p.ToolResponse
-		withoutContent.Content = nil
-		total := charLen(stringifyOutput(&withoutContent))
-		for _, c := range p.ToolResponse.Content {
-			total += estimatePartChars(c)
-		}
-		return total
+		// The output as the caps measure it: a string as is, not with the
+		// escaping it would take as part of an encoded response.
+		return charLen(p.ToolResponse.Name) + toolResponseCharLength(p.ToolResponse)
 	default:
 		return 0
 	}

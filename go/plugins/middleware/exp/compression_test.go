@@ -245,7 +245,7 @@ func TestContextCompressionTruncatesOlderToolResponsesInToolLoop(t *testing.T) {
 		})
 
 	resp := f.generate(t, &ContextCompression{
-		MaxInputTokens:        150,
+		MaxInputTokens:        400,
 		TruncateToolResponses: &CompressionToolTruncation{MaxChars: 50, PreserveRecent: 1},
 	}, []*ai.Message{userMsg("Run tool calls")}, ai.WithTools(heavy))
 
@@ -351,10 +351,26 @@ func TestContextCompressionMessageCap(t *testing.T) {
 			want: []string{"user:msg 2"},
 		},
 		{
-			name: "keeps nothing but the notice when it takes the only slot",
+			name: "keeps the newest turn when the notice takes the only slot",
 			mw:   &ContextCompression{MaxMessages: 1},
-			msgs: []*ai.Message{userMsg("msg 1"), modelMsg("msg 2")},
-			want: []string{"system:" + defaultTruncationNotice},
+			msgs: []*ai.Message{userMsg("msg 1"), modelMsg("msg 2"), userMsg("msg 3")},
+			want: []string{"system:" + defaultTruncationNotice, "user:msg 3"},
+		},
+		{
+			name: "keeps the newest turn when the system message fills the cap",
+			mw:   &ContextCompression{MaxMessages: 1},
+			msgs: []*ai.Message{systemMsg("Sys"), userMsg("u0"), modelMsg("m0"), userMsg("u1")},
+			want: []string{"system:Sys", "user:u1"},
+		},
+		{
+			name: "keeps the newest turn when pinned messages fill the cap",
+			mw:   &ContextCompression{MaxMessages: 2},
+			msgs: []*ai.Message{
+				systemMsg("Sys"),
+				ai.NewMessage(ai.RoleUser, map[string]any{"_genkit_prompt": true}, ai.NewTextPart("Prompt")),
+				userMsg("u0"), modelMsg("m0"), userMsg("u1"),
+			},
+			want: []string{"system:Sys", "user:Prompt", "user:u1"},
 		},
 		{
 			name: "counts the system message the notice merges into",
@@ -470,7 +486,7 @@ func TestContextCompressionStampsToolParts(t *testing.T) {
 		userMsg("next"),
 	}
 	resp := f.generate(t, &ContextCompression{
-		MaxInputTokens:        10,
+		MaxInputTokens:        50,
 		TruncateToolResponses: &CompressionToolTruncation{MaxChars: 50, PreserveRecent: -1},
 	}, history)
 
@@ -495,7 +511,7 @@ func TestContextCompressionStampsToolParts(t *testing.T) {
 
 func TestContextCompressionCappedPartBecomesTruncatable(t *testing.T) {
 	mw := &ContextCompression{
-		MaxInputTokens:        10,
+		MaxInputTokens:        140,
 		MaxToolResponseChars:  200,
 		TruncateToolResponses: &CompressionToolTruncation{MaxChars: 50, PreserveRecent: 1},
 	}
@@ -518,7 +534,7 @@ func TestContextCompressionCappedPartBecomesTruncatable(t *testing.T) {
 		capped,
 		userMsg("q2"),
 		toolCallMsg(&ai.ToolRequest{Name: "toolB", Input: map[string]any{}}),
-		toolResultMsg(&ai.ToolResponse{Name: "toolB", Output: "recent tool output"}),
+		toolResultMsg(&ai.ToolResponse{Name: "toolB", Output: "recent tool output " + strings.Repeat("Y", 170)}),
 		userMsg("q3"),
 	})
 	part := f.sent(t)[2].Content[0]
@@ -533,7 +549,7 @@ func TestContextCompressionCappedPartBecomesTruncatable(t *testing.T) {
 func TestContextCompressionPreservesNewestToolMessageWithParallelParts(t *testing.T) {
 	f := newCCFixture(t, textReply("done", 50))
 	f.generate(t, &ContextCompression{
-		MaxInputTokens:        50,
+		MaxInputTokens:        300,
 		TruncateToolResponses: &CompressionToolTruncation{MaxChars: 20, PreserveRecent: 1},
 	}, []*ai.Message{
 		userMsg("fetch reports"),
@@ -596,8 +612,10 @@ func TestContextCompressionInputTokensStampTriggersLaterCalls(t *testing.T) {
 	if s["triggered"] != true || s["inputTokensBefore"] != 800 {
 		t.Errorf("stats = %v, want triggered by 800 input tokens", s)
 	}
-	if out := output(t, toolMessages(f.sent(t))[0], 0); !truncatedMarker.MatchString(out) {
-		t.Errorf("tool output = %q, want truncated", out)
+	// Truncation leaves the context over budget, so the view drops the tool
+	// message; the history records the truncation.
+	if cc := compressionMeta(toolMessages(second.History())[0].Content[0].Metadata); cc[ccTruncated] != true {
+		t.Errorf("tool part stamp = %v, want truncated", cc)
 	}
 }
 
@@ -637,7 +655,7 @@ func TestContextCompressionDeduplication(t *testing.T) {
 					return "Result for " + in.Query + ": " + strings.Repeat("A", 500), nil
 				})
 			f.generate(t, &ContextCompression{
-				MaxInputTokens:        150,
+				MaxInputTokens:        300,
 				DedupeToolResponses:   &CompressionDedupe{MatchBy: CompressionDedupeNameAndInput},
 				TruncateToolResponses: &CompressionToolTruncation{MaxChars: 50, PreserveRecent: -1},
 			}, []*ai.Message{userMsg("Search multiple times")}, ai.WithTools(search))
@@ -676,7 +694,7 @@ func TestContextCompressionDeduplication(t *testing.T) {
 
 	t.Run("replaces only the duplicate among parallel parts", func(t *testing.T) {
 		f := newCCFixture(t, textReply("done", 50))
-		f.generate(t, &ContextCompression{MaxInputTokens: 50, DedupeToolResponses: &CompressionDedupe{}}, []*ai.Message{
+		f.generate(t, &ContextCompression{MaxInputTokens: 220, DedupeToolResponses: &CompressionDedupe{}}, []*ai.Message{
 			userMsg("run parallel tools"),
 			toolCallMsg(
 				&ai.ToolRequest{Name: "fetch", Ref: "call_1", Input: map[string]any{"id": "shared"}},
@@ -723,7 +741,7 @@ func TestContextCompressionDeduplication(t *testing.T) {
 
 	t.Run("matches refless responses across turns", func(t *testing.T) {
 		f := newCCFixture(t, textReply("done", 50))
-		f.generate(t, &ContextCompression{MaxInputTokens: 50, DedupeToolResponses: &CompressionDedupe{KeepRecent: 1}}, []*ai.Message{
+		f.generate(t, &ContextCompression{MaxInputTokens: 150, PreserveRecent: 10, DedupeToolResponses: &CompressionDedupe{KeepRecent: 1}}, []*ai.Message{
 			userMsg("fetch reports"),
 			{Role: ai.RoleModel, Content: []*ai.Part{
 				ai.NewReasoningPart("First turn reasoning", nil),
@@ -755,7 +773,7 @@ func TestContextCompressionDeduplication(t *testing.T) {
 
 	t.Run("does not match reused refs, mixed ordering, or orphans", func(t *testing.T) {
 		f := newCCFixture(t, textReply("done", 50))
-		f.generate(t, &ContextCompression{MaxInputTokens: 20, DedupeToolResponses: &CompressionDedupe{KeepRecent: 1}}, []*ai.Message{
+		f.generate(t, &ContextCompression{MaxInputTokens: 100, PreserveRecent: 10, DedupeToolResponses: &CompressionDedupe{KeepRecent: 1}}, []*ai.Message{
 			userMsg("run"),
 			toolResultMsg(&ai.ToolResponse{Name: "orphan", Output: "Orphan 1"}, &ai.ToolResponse{Name: "orphan", Output: "Orphan 2"}),
 			toolCallMsg(
@@ -783,7 +801,7 @@ func TestContextCompressionDeduplication(t *testing.T) {
 	t.Run("drops multipart content with the output", func(t *testing.T) {
 		f := newCCFixture(t, textReply("done", 50))
 		newMedia := ai.NewMediaPart("image/png", "data:image/png;base64,NEW_SCREENSHOT")
-		f.generate(t, &ContextCompression{MaxInputTokens: 50, DedupeToolResponses: &CompressionDedupe{}}, []*ai.Message{
+		f.generate(t, &ContextCompression{MaxInputTokens: 500, DedupeToolResponses: &CompressionDedupe{}}, []*ai.Message{
 			userMsg("take screenshots"),
 			toolCallMsg(&ai.ToolRequest{Name: "screenshot", Ref: "shot_1", Input: map[string]any{"page": "home"}}),
 			toolResultMsg(&ai.ToolResponse{
@@ -1337,6 +1355,59 @@ func TestContextCompressionBoundaryNeverMovesBack(t *testing.T) {
 	}
 }
 
+func TestContextCompressionKeepsPreviousAnchor(t *testing.T) {
+	// The boundary on result a records the summary S and anchors the view on
+	// Prompt, the user message that started the tool loop.
+	history := func(inputTokens int) []*ai.Message {
+		boundary := toolResultMsg(&ai.ToolResponse{Name: "a", Output: "result a"})
+		boundary.Metadata = map[string]any{compressionKey: map[string]any{ccSummary: "S", ccAnchorUser: true}}
+		callD := toolCallMsg(&ai.ToolRequest{Name: "d", Input: map[string]any{}})
+		callD.Metadata = map[string]any{compressionKey: map[string]any{ccInputTokens: inputTokens}}
+		return []*ai.Message{
+			systemMsg("Sys"), userMsg("u"), modelMsg("m"), userMsg("Prompt"),
+			toolCallMsg(&ai.ToolRequest{Name: "a", Input: map[string]any{}}), boundary,
+			toolCallMsg(&ai.ToolRequest{Name: "b", Input: map[string]any{}}), toolResultMsg(&ai.ToolResponse{Name: "b", Output: "result b"}),
+			toolCallMsg(&ai.ToolRequest{Name: "c", Input: map[string]any{}}), toolResultMsg(&ai.ToolResponse{Name: "c", Output: "result c"}),
+			callD, toolResultMsg(&ai.ToolResponse{Name: "d", Output: "result d"}),
+		}
+	}
+	tail := []string{"user:Prompt", "model:call b", "tool:result b", "model:call c", "tool:result c", "model:call d", "tool:result d"}
+
+	check := func(t *testing.T, f *ccFixture, resp *ai.ModelResponse) []*ai.Message {
+		t.Helper()
+		sent := f.sent(t)
+		if diff := cmp.Diff(texts(sent), texts(ResolveCompressedHistory(resp.Request.Messages))); diff != "" {
+			t.Errorf("resolved history differs from the view (-view +resolved):\n%s", diff)
+		}
+		return sent
+	}
+
+	t.Run("when truncation drops only the summary", func(t *testing.T) {
+		f := newCCFixture(t, textReply("done", 50))
+		resp := f.generate(t, &ContextCompression{MaxMessages: 8, NoTruncationNotice: true}, history(0))
+		sent := check(t, f, resp)
+		if diff := cmp.Diff(append([]string{"system:Sys"}, tail...), texts(sent)); diff != "" {
+			t.Errorf("model received (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("when the summary covers only the previous summary", func(t *testing.T) {
+		f := newCCFixture(t, textReply("done", 50))
+		summarizer, _ := f.defineSummarizer("test/summarizer", "S2")
+		resp := f.generate(t, &ContextCompression{
+			MaxInputTokens: 100,
+			Summarize:      &CompressionSummarizer{Model: summarizer, PreserveRecent: 7},
+		}, history(120))
+		sent := check(t, f, resp)
+		if len(sent) < 2 || !strings.Contains(sent[1].Text(), "S2") {
+			t.Fatalf("model received %v, want the new summary after the system message", texts(sent))
+		}
+		if diff := cmp.Diff(tail, texts(sent[2:])); diff != "" {
+			t.Errorf("model received after the summary (-want +got):\n%s", diff)
+		}
+	})
+}
+
 func TestContextCompressionSummarizerRendering(t *testing.T) {
 	payload := "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo="
 	f := newCCFixture(t, textReply("ok", 50))
@@ -1596,6 +1667,67 @@ func TestContextCompressionTruncatesToPreserveRecentWithoutOtherStrategies(t *te
 	})
 	if got := texts(f.sent(t)); !cmp.Equal(got, []string{"user:u3", "model:m3", "user:u4"}) {
 		t.Errorf("model received %v, want the 3 newest messages", got)
+	}
+}
+
+func TestContextCompressionDropsMessagesWhenStrategiesFreeTooLittle(t *testing.T) {
+	var history []*ai.Message
+	history = append(history, systemMsg("Sys"))
+	for i := range 17 {
+		text := fmt.Sprintf("Turn %d: %s", i, strings.Repeat("X", 400))
+		if i%2 == 0 {
+			history = append(history, userMsg(text))
+		} else {
+			history = append(history, modelMsg(text))
+		}
+	}
+	view := func(mw *ContextCompression) []string {
+		f := newCCFixture(t, textReply("done", 50))
+		f.generate(t, mw, history)
+		return texts(f.sent(t))
+	}
+
+	// Without tool responses, deduplication and truncation free nothing, so
+	// messages are dropped as when neither is configured.
+	want := view(&ContextCompression{MaxInputTokens: 300})
+	if len(want) >= len(history) {
+		t.Fatalf("model received all %d messages without strategies, want fewer", len(want))
+	}
+	for name, mw := range map[string]*ContextCompression{
+		"deduplication": {MaxInputTokens: 300, DedupeToolResponses: &CompressionDedupe{}},
+		"truncation":    {MaxInputTokens: 300, TruncateToolResponses: &CompressionToolTruncation{MaxChars: 50}},
+	} {
+		if diff := cmp.Diff(want, view(mw)); diff != "" {
+			t.Errorf("with %s, model received (-want +got):\n%s", name, diff)
+		}
+	}
+}
+
+func TestContextCompressionCountsResumedTurnOnce(t *testing.T) {
+	f := newCCFixture(t, textReply("done", 50))
+	approve := genkit.DefineTool(f.g, "approve", "Asks for approval.",
+		func(ctx *ai.ToolContext, in struct{}) (string, error) { return "", ctx.Interrupt(nil) })
+	pending := toolCallMsg(&ai.ToolRequest{Name: "approve", Ref: "r1", Input: map[string]any{}})
+	resp := f.generate(t, &ContextCompression{MaxToolResponseChars: 100}, []*ai.Message{
+		userMsg("go"),
+		toolCallMsg(&ai.ToolRequest{Name: "fetch", Input: map[string]any{}}),
+		toolResultMsg(&ai.ToolResponse{Name: "fetch", Output: strings.Repeat("x", 500)}),
+		pending,
+	}, ai.WithTools(approve), ai.WithResume(approve.Respond(pending.Content[0], "yes", nil)))
+
+	// The first turn caps the response and the resumed turn builds on its
+	// stamp, so the part is capped once.
+	if s := stats(resp); s["toolResponsesSafetyCapped"] != 1 {
+		t.Errorf("stats = %v, want one capped response", s)
+	}
+}
+
+func TestContextCompressionEstimatesToolOutputAsCapped(t *testing.T) {
+	// Escaped as JSON, every newline and quote would count twice.
+	out := strings.Repeat("a \"line\"\n", 100)
+	p := ai.NewToolResponsePart(&ai.ToolResponse{Name: "logs", Ref: "r1", Output: out})
+	if got, want := estimatePartChars(p), charLen("logs")+charLen(out); got != want {
+		t.Errorf("estimatePartChars = %d, want %d: the name and the output as is", got, want)
 	}
 }
 
