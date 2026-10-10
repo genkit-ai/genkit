@@ -28,7 +28,6 @@ from genkit_ollama._errors import wrap_connection_errors
 from genkit_ollama.constants import OllamaAPITypes
 from genkit_ollama.embedders import EmbeddingDefinition
 from genkit_ollama.models import ModelDefinition, OllamaConfig, OllamaModel, OllamaSupports
-from genkit_ollama.plugin_api import ollama_name
 from pydantic import BaseModel
 
 from genkit import Document, Genkit, GenkitError, Message, ModelResponse, Part, Role
@@ -108,7 +107,7 @@ async def test_resolve_action(kind: ActionKind, name: str, ollama_plugin_instanc
 
     assert action is not None
     assert action.kind == kind
-    assert action.name == ollama_name(name)
+    assert action.name == f'ollama/{name}'
     assert action.metadata is not None
     metadata = cast(dict[str, Any], action.metadata)
 
