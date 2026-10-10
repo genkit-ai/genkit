@@ -1984,13 +1984,14 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 
 		go func(idx int, p *Part) {
 			toolReq := p.ToolRequest
+			res := result[*MultipartToolResponse]{index: idx}
+			defer func() { resultChan <- res }()
 			// A panic outside the tool itself, in a WrapTool hook say, fails
-			// the call rather than the process. It cannot follow a send on
-			// resultChan, which is the last thing every path does.
+			// the call rather than the process.
 			var panicErr error
 			defer func() {
 				if panicErr != nil {
-					resultChan <- result[*MultipartToolResponse]{index: idx, err: toolFailureError(ctx, toolReq.Name, panicErr)}
+					res.value, res.err = nil, toolFailureError(ctx, toolReq.Name, panicErr)
 				}
 			}()
 			defer recoverToolPanic(ctx, toolReq.Name, &panicErr)
@@ -2002,7 +2003,7 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 				stampPendingToolOutcome(newPart, resp)
 				revisedMsg.Content[idx] = newPart
 
-				resultChan <- result[*MultipartToolResponse]{index: idx, value: resp}
+				res.value = resp
 			}
 
 			tool := LookupTool(r, p.ToolRequest.Name)
@@ -2012,7 +2013,7 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 					respond(resp)
 					return
 				}
-				resultChan <- result[*MultipartToolResponse]{index: idx, err: err}
+				res.err = err
 				return
 			}
 
@@ -2034,14 +2035,14 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 					logger.Debug(ctx, "tool triggered an interrupt", "tool", toolReq.Name)
 					interrupt, ierr := interruptedPart(p, tie)
 					if ierr != nil {
-						resultChan <- result[*MultipartToolResponse]{index: idx, err: toolFailureError(ctx, toolReq.Name, ierr)}
+						res.err = toolFailureError(ctx, toolReq.Name, ierr)
 						return
 					}
 					revisedMsg.Content[idx] = interrupt
-					resultChan <- result[*MultipartToolResponse]{index: idx, err: tie}
+					res.err = tie
 					return
 				}
-				resultChan <- result[*MultipartToolResponse]{index: idx, err: toolFailureError(ctx, toolReq.Name, err)}
+				res.err = toolFailureError(ctx, toolReq.Name, err)
 				return
 			}
 			multipartResp = foldAttachedParts(multipartResp, sink)
