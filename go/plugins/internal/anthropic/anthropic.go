@@ -227,8 +227,7 @@ func Generate(
 
 	req.Model = anthropic.Model(model)
 
-	// no streaming
-	if cb == nil {
+	if cb == nil && !mustStream(client, req) {
 		msg, err := client.Messages.New(ctx, *req)
 		if err != nil {
 			return nil, WrapAPIError(err)
@@ -241,72 +240,100 @@ func Generate(
 
 		r.Request = input
 		return r, nil
-	} else {
-		stream := client.Messages.NewStreaming(ctx, *req)
-		message := anthropic.Message{}
-		var thinking int64
-		for stream.Next() {
-			event := stream.Current()
-			err := message.Accumulate(event)
+	}
+	return generateStream(ctx, client, input, req, cb)
+}
+
+// mustStream reports whether the SDK would refuse req as a non-streaming
+// request. The SDK estimates a request's duration from max_tokens, at an hour
+// per 128,000 tokens, and refuses one it expects to run past ten minutes
+// (about 21,333 tokens) or whose max_tokens exceeds the model's non-streaming
+// cap, unless the client sets a request timeout. A large max_tokens is common
+// with extended thinking, so such a request streams instead, and the caller
+// still gets one response.
+func mustStream(client anthropic.Client, req *anthropic.MessageNewParams) bool {
+	_, err := anthropic.CalculateNonStreamingTimeout(int(req.MaxTokens), req.Model, client.Messages.Options)
+	return err != nil
+}
+
+// generateStream sends req as a streaming request and accumulates the events
+// into one response. cb receives each chunk as it arrives; nil streams only
+// to build the response.
+func generateStream(
+	ctx context.Context,
+	client anthropic.Client,
+	input *ai.ModelRequest,
+	req *anthropic.MessageNewParams,
+	cb func(context.Context, *ai.ModelResponseChunk) error,
+) (*ai.ModelResponse, error) {
+	stream := client.Messages.NewStreaming(ctx, *req)
+	message := anthropic.Message{}
+	var thinking int64
+	for stream.Next() {
+		event := stream.Current()
+		err := message.Accumulate(event)
+		if err != nil {
+			return nil, err
+		}
+
+		switch event := event.AsAny().(type) {
+		case anthropic.ContentBlockDeltaEvent:
+			if cb == nil {
+				continue
+			}
+			var content []*ai.Part
+			if event.Delta.Type == "thinking_delta" {
+				content = append(content, ai.NewReasoningPart(event.Delta.Thinking, []byte(event.Delta.Signature)))
+			} else {
+				content = append(content, ai.NewTextPart(event.Delta.Text))
+			}
+			err := cb(ctx, &ai.ModelResponseChunk{
+				Content: content,
+			})
 			if err != nil {
 				return nil, err
 			}
-
-			content := []*ai.Part{}
-			switch event := event.AsAny().(type) {
-			case anthropic.ContentBlockDeltaEvent:
-				if event.Delta.Type == "thinking_delta" {
-					content = append(content, ai.NewReasoningPart(event.Delta.Thinking, []byte(event.Delta.Signature)))
-				} else {
-					content = append(content, ai.NewTextPart(event.Delta.Text))
-				}
+		case anthropic.ContentBlockStopEvent:
+			if cb == nil || int(event.Index) >= len(message.Content) {
+				continue
+			}
+			block := message.Content[event.Index]
+			if toolBlock, ok := block.AsAny().(anthropic.ToolUseBlock); ok {
+				p := ai.NewToolRequestPart(&ai.ToolRequest{
+					Ref:   toolBlock.ID,
+					Input: toolBlock.Input,
+					Name:  toolBlock.Name,
+				})
 				err := cb(ctx, &ai.ModelResponseChunk{
-					Content: content,
+					Content: []*ai.Part{p},
 				})
 				if err != nil {
 					return nil, err
 				}
-			case anthropic.ContentBlockStopEvent:
-				if int(event.Index) < len(message.Content) {
-					block := message.Content[event.Index]
-					if toolBlock, ok := block.AsAny().(anthropic.ToolUseBlock); ok {
-						p := ai.NewToolRequestPart(&ai.ToolRequest{
-							Ref:   toolBlock.ID,
-							Input: toolBlock.Input,
-							Name:  toolBlock.Name,
-						})
-						err := cb(ctx, &ai.ModelResponseChunk{
-							Content: []*ai.Part{p},
-						})
-						if err != nil {
-							return nil, err
-						}
-					}
-				}
-			case anthropic.MessageDeltaEvent:
-				applyDeltaUsage(&message.Usage, event.Usage)
-				thinking = max(thinking, thinkingTokens(event.Usage.JSON.ExtraFields["output_tokens_details"]))
-			case anthropic.MessageStopEvent:
-				r, err := toGenkitResponse(&message, thinking)
-				if err != nil {
-					return nil, err
-				}
-				r.Request = input
-				return r, nil
 			}
+		case anthropic.MessageDeltaEvent:
+			applyDeltaUsage(&message.Usage, event.Usage)
+			thinking = max(thinking, thinkingTokens(event.Usage.JSON.ExtraFields["output_tokens_details"]))
+		case anthropic.MessageStopEvent:
+			r, err := toGenkitResponse(&message, thinking)
+			if err != nil {
+				return nil, err
+			}
+			r.Request = input
+			return r, nil
 		}
-		if err := stream.Err(); err != nil {
-			return nil, WrapAPIError(err)
-		}
-		// The loop only returns from the message_stop case. Falling out of it
-		// means the stream ended early without one, and the SDK reports no
-		// error for a body that simply stops, so say so rather than returning
-		// a nil response the caller would dereference.
-		// Internal, not InvalidArgument: a body that stops early is usually a
-		// truncated response rather than a bad request, so this stays in the
-		// set the retry middleware reissues.
-		return nil, status.Errorf(status.ErrInternal, "anthropic stream ended without a message_stop event")
 	}
+	if err := stream.Err(); err != nil {
+		return nil, WrapAPIError(err)
+	}
+	// The loop only returns from the message_stop case. Falling out of it
+	// means the stream ended early without one, and the SDK reports no
+	// error for a body that simply stops, so say so rather than returning
+	// a nil response the caller would dereference.
+	// Internal, not InvalidArgument: a body that stops early is usually a
+	// truncated response rather than a bad request, so this stays in the
+	// set the retry middleware reissues.
+	return nil, status.Errorf(status.ErrInternal, "anthropic stream ended without a message_stop event")
 }
 
 func toAnthropicRole(role ai.Role) (anthropic.MessageParamRole, error) {
