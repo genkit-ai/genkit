@@ -56,7 +56,10 @@ type Model interface {
 	Register(r api.Registry)
 }
 
-// ModelArg is the interface for model arguments. It can either be the retriever action itself or a reference to be looked up.
+// ModelArg is the interface for model arguments. It is either a model value
+// ([Model] or [BackgroundModel]), which generation calls directly whether or not
+// it is registered, or a reference such as [ModelRef] whose name is looked up
+// in the registry.
 type ModelArg interface {
 	Name() string
 }
@@ -205,7 +208,7 @@ func DefineGenerateAction(ctx context.Context, r api.Registry) *generateAction {
 			// The action's own span records the request and response, and
 			// stands in for the first turn's: opening one would nest a
 			// duplicate "generate" span directly inside it.
-			return generateWithRequest(ctx, r, actionOpts, nil, cb, false /* spanTurnZero */)
+			return generateWithRequest(ctx, r, actionOpts, nil, nil, cb, false /* spanTurnZero */)
 		})
 	a.Register(r)
 	return (*generateAction)(a)
@@ -444,7 +447,7 @@ func failurePartial(ctx context.Context, base *ModelResponse, req *ModelRequest,
 //
 // Failures follow the partial-response contract documented on [Generate].
 func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActionOptions, mmws []ModelMiddleware, cb ModelStreamCallback) (*ModelResponse, error) {
-	return generateWithRequest(ctx, r, opts, mmws, cb, true /* spanTurnZero */)
+	return generateWithRequest(ctx, r, opts, nil, mmws, cb, true /* spanTurnZero */)
 }
 
 // withoutToolCall returns ctx without the state of a tool call it may run
@@ -463,10 +466,11 @@ func withoutToolCall(ctx context.Context) context.Context {
 	return base.ToolChunkSenderKey.NewContext(ctx, nil)
 }
 
-// generateWithRequest runs the tool loop. spanTurnZero reports whether the
-// first turn opens its own "generate" span; the generate action passes false
-// because its own span already serves as that one.
-func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActionOptions, mmws []ModelMiddleware, cb ModelStreamCallback, spanTurnZero bool) (*ModelResponse, error) {
+// generateWithRequest runs the tool loop. model is the caller's model
+// argument, if any, named by opts.Model (see [resolveModel]). spanTurnZero
+// reports whether the first turn opens its own "generate" span; the generate
+// action passes false because its own span already serves as that one.
+func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActionOptions, model ModelArg, mmws []ModelMiddleware, cb ModelStreamCallback, spanTurnZero bool) (*ModelResponse, error) {
 	// Every path into the loop (genkit.Generate, Prompt.Execute, the generate
 	// action the Dev UI runs) puts the *genkit.Genkit backing r on the
 	// context, so middleware that resolves other actions through
@@ -490,8 +494,7 @@ func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 		}
 	}
 
-	m := LookupModel(r, opts.Model)
-	bm := LookupBackgroundModel(r, opts.Model)
+	m, bm := resolveModel(r, opts.Model, model)
 	if m == nil && bm == nil {
 		return nil, status.Errorf(ErrModelNotFound, "ai.GenerateWithRequest: model %q not found", opts.Model)
 	}
@@ -573,7 +576,7 @@ func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 		// Native constrained output is enabled only when the user has
 		// requested it, the model supports it, and there's a JSON schema.
 		outputCfg.Constrained = opts.Output.JsonSchema != nil &&
-			opts.Output.Constrained && outputCfg.Constrained && m != nil && m.(*ModelAction).supportsConstrained(len(toolDefs) > 0)
+			opts.Output.Constrained && outputCfg.Constrained && supportsConstrained(m, len(toolDefs) > 0)
 
 		// Add schema instructions to prompt when not using native constraints.
 		// Under a native constraint only the json format goes without its
@@ -1463,7 +1466,7 @@ func Generate(ctx context.Context, r api.Registry, opts ...GenerateOption) (*Mod
 	}
 	actionOpts.Messages = processedMessages
 
-	return GenerateWithRequest(ctx, r, actionOpts, genOpts.Middleware, genOpts.Stream)
+	return generateWithRequest(ctx, r, actionOpts, genOpts.Model, genOpts.Middleware, genOpts.Stream, true /* spanTurnZero */)
 }
 
 // GenerateText run generate request for this model. Returns generated text only.
@@ -1692,6 +1695,27 @@ func (m *ModelAction) Generate(ctx context.Context, req *ModelRequest, cb ModelS
 	}
 
 	return m.Run(ctx, req, cb)
+}
+
+// resolveModel returns the model or background model that serves name. arg is
+// used as is when it is a model value, so a model made with [NewModelAction]
+// runs without being registered, and in preference to a registered model of
+// the same name; any other arg (a [ModelRef], or none) is resolved by name.
+func resolveModel(r api.Registry, name string, arg ModelArg) (Model, BackgroundModel) {
+	switch v := arg.(type) {
+	case Model:
+		return v, nil
+	case BackgroundModel:
+		return nil, v
+	}
+	return LookupModel(r, name), LookupBackgroundModel(r, name)
+}
+
+// supportsConstrained reports whether m supports constrained output. A [Model]
+// that is not a [ModelAction] has no descriptor to say so, and is taken not to.
+func supportsConstrained(m Model, hasTools bool) bool {
+	ma, ok := m.(*ModelAction)
+	return ok && ma.supportsConstrained(hasTools)
 }
 
 // supportsConstrained returns whether the model supports constrained output.

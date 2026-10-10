@@ -980,6 +980,63 @@ func TestLookupModel(t *testing.T) {
 	})
 }
 
+func TestGenerateUnregisteredModel(t *testing.T) {
+	t.Parallel()
+
+	scripted := func(text string) *ModelAction {
+		return NewModelAction("test/scripted", nil, func(ctx context.Context, req *ModelRequest, _ any, cb ModelStreamCallback) (*ModelResponse, error) {
+			return &ModelResponse{
+				Request: req,
+				Message: NewModelTextMessage(text),
+				Usage:   &GenerationUsage{InputTokens: 2, OutputTokens: 3},
+			}, nil
+		})
+	}
+
+	t.Run("runs through middleware and reports usage", func(t *testing.T) {
+		r := newTestRegistry(t)
+		wrapped := false
+		mw := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
+			return &Hooks{
+				WrapModel: func(ctx context.Context, p *ModelParams, next ModelNext) (*ModelResponse, error) {
+					wrapped = true
+					return next(ctx, p)
+				},
+			}, nil
+		})
+
+		resp, err := Generate(testCtx, r, WithModel(scripted("scripted")), WithPrompt("hi"), WithUse(mw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := resp.Text(); got != "scripted" {
+			t.Errorf("Text() = %q, want %q", got, "scripted")
+		}
+		if !wrapped {
+			t.Error("WrapModel hook did not run")
+		}
+		if u := resp.TotalUsage; u == nil || u.InputTokens != 2 || u.OutputTokens != 3 {
+			t.Errorf("TotalUsage = %+v, want InputTokens 2, OutputTokens 3", u)
+		}
+		if LookupModel(r, "test/scripted") != nil {
+			t.Error("Generate registered the model")
+		}
+	})
+
+	t.Run("wins over a registered model of the same name", func(t *testing.T) {
+		r := newTestRegistry(t)
+		scripted("registered").Register(r)
+
+		resp, err := Generate(testCtx, r, WithModel(scripted("passed")), WithPrompt("hi"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := resp.Text(); got != "passed" {
+			t.Errorf("Text() = %q, want %q", got, "passed")
+		}
+	})
+}
+
 func JSONMarkdown(text string) string {
 	return "```json\n" + text + "\n```"
 }

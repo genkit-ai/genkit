@@ -284,7 +284,7 @@ func (p *prompt) Execute(ctx context.Context, opts ...PromptExecuteOption) (*Mod
 		actionOpts.Use = refs
 	}
 
-	return GenerateWithRequest(ctx, r, actionOpts, execOpts.Middleware, execOpts.Stream)
+	return generateWithRequest(ctx, r, actionOpts, execOpts.Model, execOpts.Middleware, execOpts.Stream, true /* spanTurnZero */)
 }
 
 // ExecuteStream executes the prompt with streaming and returns an iterator.
