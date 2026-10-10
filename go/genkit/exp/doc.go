@@ -25,6 +25,8 @@ can churn without touching genkit's stable namespace. It currently provides:
     over the per-turn loop), plus [ListAgents] for introspection. An agent is a
     stateful, multi-turn conversational action built on bidirectional streaming;
     serve one with [genkit.Handler] or the route builders below.
+    [DefineRemoteAgent] registers an agent that another Genkit app serves this
+    way, so it resolves by name like one defined here.
 
   - An HTTP route layout for serving agents and flows: the [Route] value and
     the [AgentRoutes] / [AllAgentRoutes] / [FlowRoutes] / [AllFlowRoutes]

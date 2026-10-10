@@ -37,7 +37,6 @@ package exp
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 
 	"github.com/firebase/genkit/go/ai"
@@ -138,7 +137,7 @@ func (a *Agents) continueFromStore(ctx context.Context, ref aix.AgentRef, st *ag
 		case s == status.NotFound:
 			return delegationResult{Response: fmt.Sprintf(
 				"Error: no record of task %q exists (%v). Delegate the task again if the work is still needed.", in.TaskID, err)}, nil
-		case deadEndRead(err):
+		case !aix.IsRetryableReadError(err):
 			return delegationResult{Response: fmt.Sprintf("Error continuing task %q: %v", in.TaskID, err)}, nil
 		default:
 			a.releaseDelegation(st)
@@ -243,7 +242,7 @@ func (a *Agents) continueExpired(ctx context.Context, ref aix.AgentRef, st *agen
 // is gone, an agent that cannot fence, a rejected request) fails identically
 // on retry and keeps it, so the cap can still bite.
 func (a *Agents) refuseRead(st *agentsState, err error, msg string) delegationResult {
-	if deadEndRead(err) {
+	if !aix.IsRetryableReadError(err) {
 		return delegationResult{Response: msg}
 	}
 	a.releaseDelegation(st)
@@ -337,7 +336,9 @@ func (a *Agents) runContinueFrom(ctx context.Context, ref aix.AgentRef, st *agen
 		aix.WithSnapshotID[json.RawMessage](snapshotID))
 	if err != nil {
 		logger.Warn(ctx, "sub-agent continuation failed", "agent", ref.Name, "taskId", in.TaskID, "error", err)
-		if errors.Is(err, status.ErrFailedPrecondition) {
+		// Matched by status name: an error from a remote agent carries no
+		// sentinel.
+		if s, ok := status.Classified(err); ok && s == status.FailedPrecondition {
 			// The runtime rejected the resume point itself (nothing behind
 			// it, or a still-live worker); its message says which.
 			return delegationResult{Response: fmt.Sprintf(
@@ -346,7 +347,7 @@ func (a *Agents) runContinueFrom(ctx context.Context, ref aix.AgentRef, st *agen
 		return delegationResult{Response: fmt.Sprintf("%s: %v", words.errPrefix, err)}, nil
 	}
 	if background {
-		return a.foldDetachOutcome(ctx, ref, st, agent, invocationNum, out, words), nil
+		return a.foldDetachOutcome(ctx, ref, st, invocationNum, out, words), nil
 	}
 	result := a.foldDelegationOutput(ctx, ref, out, invocationNum)
 	a.labelTask(st, &result, words.label)

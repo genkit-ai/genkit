@@ -201,6 +201,40 @@ func DefineCustomAgent[State any](
 	return aix.DefineCustomAgent(genkitbridge.RegistryOf(g), name, fn, opts...)
 }
 
+// DefineRemoteAgent registers an agent that a Genkit app serves over HTTP and
+// returns its [aix.AgentHandle]. It is [aix.NewRemoteAgent] followed by
+// [aix.AgentHandle.Register]: url is the agent's turn route in the
+// [AgentRoutes] layout (e.g. "https://billing.internal/agents/billing"), and
+// opts configure the HTTP client and headers and declare what the agent
+// supports.
+//
+// Once registered, the agent resolves by name like one defined in this
+// process: the agents middleware delegates to it with an [aix.AgentRef], and
+// the Dev UI can call it. [AllAgentRoutes] does not serve it, so this app does
+// not expose the other service's agent with its own credentials.
+//
+// Declare the agent's capabilities with [aix.WithAgentMetadata] and its
+// description with [aix.WithDescription]. Without metadata, callers treat its
+// capabilities as unknown: the agents middleware forwards it no history and
+// learns from the agent's refusal whether it can run in the background.
+//
+// Example:
+//
+//	billing := exp.DefineRemoteAgent(g, "billing", "https://billing.internal/agents/billing",
+//		aix.WithHTTPClient(idTokenClient),
+//		aix.WithDescription[any]("Answers billing questions."),
+//		aix.WithAgentMetadata(&aix.AgentMetadata{
+//			StateManagement: aix.AgentStateManagementServer,
+//			Abortable:       true,
+//		}),
+//	)
+func DefineRemoteAgent(g *genkit.Genkit, name, url string, opts ...aix.RemoteAgentOption) *aix.AgentHandle {
+	requireExperimental(g, "DefineRemoteAgent")
+	h := aix.NewRemoteAgent(name, url, opts...)
+	h.Register(genkitbridge.RegistryOf(g))
+	return h
+}
+
 // LookupAgent resolves an agent registered on g by name and returns its
 // [aix.AgentHandle]: the untyped caller-side view for code that does not hold
 // the typed [aix.Agent] value (orchestrators, middleware, tools). The handle

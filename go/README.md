@@ -99,6 +99,7 @@ Each sample runs with `go run .`. Start with the `basic-*` set: together they co
 | [basic‑tools](samples/basic-tools/main.go) | A tool that streams progress and attaches a chart |
 | [basic‑agents](samples/basic-agents) | Inline, prompt-file, and custom agents with snapshots, background runs, and delegation |
 | [basic‑agents‑server](samples/basic-agents-server/main.go) | Store-backed and stateless agents over HTTP |
+| [basic‑agents‑remote](samples/basic-agents-remote/main.go) | An orchestrator that delegates to an agent in a second process, both started by one `go run .` |
 | [basic‑tool‑interrupts](samples/basic-tool-interrupts/main.go) | Human in the loop: a tool that pauses for approval |
 | [basic‑middleware](samples/basic-middleware) | [Retry and fallback](samples/basic-middleware/retry-fallback/main.go), [filesystem](samples/basic-middleware/filesystem), [skills](samples/basic-middleware/skills), and [context compression](samples/basic-middleware/context-compression/main.go) middleware |
 | [basic‑errors](samples/basic-errors/main.go) | Error classification with sentinels and `errors.Is` |
@@ -121,7 +122,8 @@ Multi-turn conversations with snapshots you can resume, branch, and run in the b
 [Load the Prompt from a File](#load-the-prompt-from-a-file) &middot;
 [Custom Turn Loops](#custom-turn-loops) &middot;
 [Redact on the Way Out](#redact-on-the-way-out) &middot;
-[Serve Agents over HTTP](#serve-agents-over-http)
+[Serve Agents over HTTP](#serve-agents-over-http) &middot;
+[Call a Remote Agent](#call-a-remote-agent)
 
 **[Features](#features)**
 
@@ -379,6 +381,30 @@ if err := server.Start(ctx, "127.0.0.1:8080", mux); err != nil {
 ```
 
 [Docs](https://genkit.dev/docs/go/agents/http/) &middot; [Example](samples/basic-agents-server/main.go)
+
+### Call a Remote Agent
+
+`DefineRemoteAgent` registers an agent that another Genkit app serves, so it delegates, runs in the background, and reads snapshots like a local one:
+
+```go
+// *aix.AgentHandle
+researcher := genkitx.DefineRemoteAgent(g, "researcher", "https://research.internal/agents/researcher",
+    aix.WithHTTPClient(idTokenClient),
+    aix.WithAgentMetadata(&aix.AgentMetadata{StateManagement: aix.AgentStateManagementServer, Abortable: true}),
+)
+
+orchestrator := genkitx.DefineAgent(g, "orchestrator",
+    aix.InlinePrompt{
+        ai.WithModelName("googleai/gemini-flash-latest"),
+        ai.WithUse(&middlewarex.Agents{Agents: []aix.AgentRef{researcher.Ref()}, Async: true}),
+    },
+    aix.WithSessionStore(localstore.NewInMemorySessionStore[any]()),
+)
+```
+
+Call it directly with `researcher.RunText`, `RunDetached`, and `Task`, or build an unregistered handle with `aix.NewRemoteAgent`.
+
+[Docs](https://genkit.dev/docs/go/agents/http/#connect-a-client) &middot; [Example](samples/basic-agents-remote/main.go)
 
 ---
 

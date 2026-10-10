@@ -498,6 +498,118 @@ func TestAgentsBackgroundLaunchRejectedWithoutStore(t *testing.T) {
 	}
 }
 
+// answerAgent is an agent body that answers every turn with text.
+func answerAgent(text string) aix.AgentFunc[any] {
+	return func(ctx context.Context, resp aix.Responder, sess *aix.SessionRunner[any]) (*aix.AgentResult, error) {
+		if err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) (*aix.TurnResult, error) {
+			sess.AddMessages(ai.NewModelTextMessage(text))
+			return &aix.TurnResult{FinishReason: aix.AgentFinishReasonStop}, nil
+		}); err != nil {
+			return nil, err
+		}
+		return sess.Result(), nil
+	}
+}
+
+// TestAgentsBackgroundDelegationToRemoteAgent runs the background lifecycle
+// against an agent another Genkit instance serves over HTTP: the launch,
+// the task handle, and the wait all cross the wire.
+func TestAgentsBackgroundDelegationToRemoteAgent(t *testing.T) {
+	server := newTestGenkit(t)
+	genkitx.DefineCustomAgent(server, "researcher", answerAgent("research complete"),
+		aix.WithSessionStore[any](localstore.NewInMemorySessionStore[any]()))
+	base := serveAgents(t, server)
+
+	g := newTestGenkit(t)
+	genkitx.DefineRemoteAgent(g, "researcher", base+"/agents/researcher",
+		aix.WithAgentMetadata(&aix.AgentMetadata{StateManagement: aix.AgentStateManagementServer, Abortable: true}))
+
+	orch := toolModel(t, g, "test/orch-remote", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		launches := toolOutputs(req.Messages, "delegate_to_researcher")
+		waits := toolOutputs(req.Messages, waitBackgroundTasksToolName)
+		switch {
+		case len(launches) == 0:
+			return toolReqResp(req, &ai.ToolRequest{
+				Name:  "delegate_to_researcher",
+				Input: map[string]any{"task": "dig into X", "background": true},
+			}), nil
+		case len(waits) == 0:
+			return toolReqResp(req, &ai.ToolRequest{
+				Name:  waitBackgroundTasksToolName,
+				Input: map[string]any{"taskIds": []string{lenientDelegation(launches[0]).TaskID}},
+			}), nil
+		default:
+			return textResp(req, "done"), nil
+		}
+	})
+
+	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("research X"),
+		ai.WithUse(&Agents{Agents: []aix.AgentRef{{Name: "researcher"}}, Async: true}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	launches := delegationResponses(t, resp.History(), "delegate_to_researcher")
+	if len(launches) != 1 || launches[0].Status != "pending" || !strings.HasPrefix(launches[0].TaskID, "researcher:") {
+		t.Fatalf("launch = %+v, want one pending task handle", launches)
+	}
+	waits := toolOutputs(resp.History(), waitBackgroundTasksToolName)
+	if len(waits) != 1 {
+		t.Fatalf("expected 1 wait response, got %d", len(waits))
+	}
+	report := decodeToolOutput[backgroundTasksResult](t, waits[0])
+	if len(report.Tasks) != 1 || report.Tasks[0].Status != "completed" || report.Tasks[0].Response != "research complete" {
+		t.Errorf("wait report = %+v, want the remote agent's completed answer", report.Tasks)
+	}
+}
+
+// TestAgentsRemoteDetachRefusalRefundsSlot pins that a remote agent's refusal
+// to detach, which reaches the middleware only as a decoded wire error, still
+// returns its delegation slot: the reason the runtime attaches survives the
+// wire, so the synchronous retry the refusal points at is not turned away by
+// the cap. The agent's metadata is not declared, so no pre-flight refuses
+// the launch first.
+func TestAgentsRemoteDetachRefusalRefundsSlot(t *testing.T) {
+	server := newTestGenkit(t)
+	genkitx.DefineCustomAgent(server, "helper", answerAgent("helped")) // no store: cannot detach
+	base := serveAgents(t, server)
+
+	g := newTestGenkit(t)
+	genkitx.DefineRemoteAgent(g, "helper", base+"/agents/helper")
+
+	orch := toolModel(t, g, "test/orch-refund", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		switch len(toolOutputs(req.Messages, "delegate_to_helper")) {
+		case 0:
+			return toolReqResp(req, &ai.ToolRequest{
+				Name:  "delegate_to_helper",
+				Input: map[string]any{"task": "help", "background": true},
+			}), nil
+		case 1:
+			return toolReqResp(req, &ai.ToolRequest{
+				Name:  "delegate_to_helper",
+				Input: map[string]any{"task": "help"},
+			}), nil
+		default:
+			return textResp(req, "done"), nil
+		}
+	})
+
+	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("go"),
+		ai.WithUse(&Agents{Agents: []aix.AgentRef{{Name: "helper"}}, Async: true, MaxDelegations: 1}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := delegationResponses(t, resp.History(), "delegate_to_helper")
+	if len(got) != 2 {
+		t.Fatalf("expected 2 delegation responses, got %d", len(got))
+	}
+	if !strings.Contains(got[0].Response, "cannot run in the background") {
+		t.Errorf("background launch response = %q, want the detach refusal", got[0].Response)
+	}
+	if got[1].Response != "helped" {
+		t.Errorf("synchronous retry response = %q, want %q: the refusal kept its slot", got[1].Response, "helped")
+	}
+}
+
 // TestAgentsAsyncInstancesCoexistWithPrefixes pins that two Async middleware
 // instances with distinct explicit prefixes can share one generate call: the
 // background-task tools are namespaced per instance, so the request is not

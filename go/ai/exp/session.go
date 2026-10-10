@@ -400,7 +400,7 @@ const (
 	// snapshotWaitReadRetries is how many consecutive in-wait re-read failures
 	// a wait rides out, at its own re-read cadence, before surfacing the error.
 	// A wait runs for as long as the work does, so one store blip must not
-	// fail it; dead ends (see waitReadDeadEnd) are surfaced at once.
+	// fail it; dead ends (see IsRetryableReadError) are surfaced at once.
 	snapshotWaitReadRetries = 3
 	// defaultMaxSnapshotWait bounds one request to the waitForSnapshot
 	// companion action when the agent sets no limit of its own; see
@@ -410,25 +410,32 @@ const (
 	defaultMaxSnapshotWait = 25 * time.Second
 )
 
-// waitReadDeadEnd reports whether an in-wait re-read failure cannot be helped
-// by retrying: the row is gone or the request itself is rejected. Anything
-// else (a store blip, a read that hit snapshotWaitReadTimeout) is presumed
-// transient.
-func waitReadDeadEnd(err error) bool {
-	// One chain walk, and the set reads as the policy it is. Subtypes carry
-	// their base's status (ErrSnapshotNotFound is a NOT_FOUND), so they land
-	// here too; an unclassified failure is presumed transient.
-	if s, ok := status.Classified(err); ok {
-		return slices.Contains(waitReadDeadEndStatuses, s)
+// IsRetryableReadError reports whether a failed snapshot read, from a store
+// or through an [AgentHandle], may succeed if it is made again. A read fails
+// the same way every time when the snapshot is gone, the request is rejected,
+// the caller lacks the credentials or permission for it, or the agent does not
+// offer it. Anything else, such as a store or network blip or a read that
+// timed out, is presumed transient, unclassified failures included.
+//
+// It matches by status name, so it holds for an error that crossed a wire, and
+// a subtype counts as its base ([ErrSnapshotNotFound] is a NOT_FOUND). It is
+// the policy the runtime's own waits apply to their re-reads.
+func IsRetryableReadError(err error) bool {
+	if err == nil {
+		return false
 	}
-	return false
+	s, ok := status.Classified(err)
+	return !ok || !slices.Contains(finalReadStatuses, s)
 }
 
-// waitReadDeadEndStatuses are the read failures no retry can help.
-var waitReadDeadEndStatuses = []status.Name{
+// finalReadStatuses are the read failures no retry can help.
+var finalReadStatuses = []status.Name{
 	status.NotFound,
 	status.InvalidArgument,
 	status.FailedPrecondition,
+	status.Unauthenticated,
+	status.PermissionDenied,
+	status.Unimplemented,
 }
 
 // waitSnapshot resolves a snapshot exactly as [readSnapshot] does and then
@@ -475,7 +482,7 @@ func waitSnapshot[State any](
 	// to what counts as a dead end lands in one place.
 	readFailures := 0
 	retryRead := func(err error) error {
-		if waitReadDeadEnd(err) || readFailures >= snapshotWaitReadRetries {
+		if !IsRetryableReadError(err) || readFailures >= snapshotWaitReadRetries {
 			return err
 		}
 		readFailures++
@@ -658,8 +665,8 @@ func newSnapshotActions[State any](
 	waitKey := api.KeyFromName(api.ActionTypeAgentWait, agentName)
 	getSnapshotAction := core.NewActionOf(api.ActionTypeAgentSnapshot, agentName, nil,
 		func(ctx context.Context, req *GetSnapshotRequest) (*SessionSnapshot[State], error) {
-			if req == nil || (req.SnapshotID == "" && req.SessionID == "") {
-				return nil, status.Errorf(status.ErrInvalidArgument, "getSnapshot: snapshotId or sessionId is required")
+			if err := checkGetSnapshotRequest(req); err != nil {
+				return nil, err
 			}
 
 			snap, err := readSnapshot(ctx, store, transform, "getSnapshot", req.SnapshotID, req.SessionID, req.MetadataOnly)
@@ -676,8 +683,8 @@ func newSnapshotActions[State any](
 	// asks again.
 	waitAction := core.NewActionOf(api.ActionTypeAgentWait, agentName, nil,
 		func(ctx context.Context, req *GetSnapshotRequest) (*SessionSnapshot[State], error) {
-			if req == nil || req.SnapshotID == "" {
-				return nil, status.Errorf(status.ErrInvalidArgument, "waitForSnapshot: snapshotId is required")
+			if err := checkWaitRequest(req); err != nil {
+				return nil, err
 			}
 			snap, err := waitSnapshot(ctx, store, transform, "waitForSnapshot", req.SnapshotID, req.SessionID, maxWait)
 			return servedSnapshot(ctx, waitKey, snap), err
@@ -690,8 +697,8 @@ func newSnapshotActions[State any](
 	}
 	abortAction := core.NewActionOf(api.ActionTypeAgentAbort, agentName, nil,
 		func(ctx context.Context, req *AgentAbortRequest) (*AgentAbortResponse, error) {
-			if req == nil || req.SnapshotID == "" {
-				return nil, status.Errorf(status.ErrInvalidArgument, "abort: snapshotId is required")
+			if err := checkAbortRequest(req); err != nil {
+				return nil, err
 			}
 			// Aborting is an ordinary SaveSnapshot that flips a pending row to
 			// aborting; the store has no dedicated abort method.
@@ -705,6 +712,30 @@ func newSnapshotActions[State any](
 			return &AgentAbortResponse{SnapshotID: req.SnapshotID, Status: snapStatus}, nil
 		})
 	return getSnapshotAction, waitAction, abortAction
+}
+
+// checkGetSnapshotRequest, checkWaitRequest, and checkAbortRequest reject a
+// snapshot companion request that names no snapshot, for the companions an
+// agent defines and the ones [AgentHandle.Register] forwards alike.
+func checkGetSnapshotRequest(req *GetSnapshotRequest) error {
+	if req == nil || (req.SnapshotID == "" && req.SessionID == "") {
+		return status.Errorf(status.ErrInvalidArgument, "getSnapshot: snapshotId or sessionId is required")
+	}
+	return nil
+}
+
+func checkWaitRequest(req *GetSnapshotRequest) error {
+	if req == nil || req.SnapshotID == "" {
+		return status.Errorf(status.ErrInvalidArgument, "waitForSnapshot: snapshotId is required")
+	}
+	return nil
+}
+
+func checkAbortRequest(req *AgentAbortRequest) error {
+	if req == nil || req.SnapshotID == "" {
+		return status.Errorf(status.ErrInvalidArgument, "abort: snapshotId is required")
+	}
+	return nil
 }
 
 // servedSnapshot returns snap as the companion action keyed key returns it:
