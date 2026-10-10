@@ -386,14 +386,22 @@ class TestDownloadMediaErrors:
         assert isinstance(raised.value.cause, httpx.HTTPStatusError)
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize('code', [408, 429, 500, 503])
-    async def test_transient_status_stays_raw(self, code: int) -> None:
-        client = self._client(lambda request: httpx.Response(code))
+    @pytest.mark.parametrize(
+        ('code', 'status'),
+        [(408, 'DEADLINE_EXCEEDED'), (429, 'RESOURCE_EXHAUSTED'), (500, 'INTERNAL'), (503, 'UNAVAILABLE')],
+    )
+    async def test_transient_status_keeps_retry_after(self, code: int, status: str) -> None:
+        """A media host that answers 408, 429, or 5xx keeps a retryable status and its Retry-After."""
+        client = self._client(lambda request: httpx.Response(code, headers={'Retry-After': '4'}))
         part = Part.from_media('https://cdn.example.com/menu/tartine.jpg', content_type='image/jpeg')
 
         with patch('genkit_google_genai._models._utils._media_client', return_value=client):
-            with pytest.raises(httpx.HTTPStatusError):
+            with pytest.raises(GenkitError) as raised:
                 await PartConverter.to_gemini(part)
+
+        assert raised.value.status == status
+        assert raised.value.response_metadata == {'retry_after_ms': 4000.0}
+        assert isinstance(raised.value.cause, httpx.HTTPStatusError)
 
     @pytest.mark.asyncio
     async def test_connect_error_stays_raw(self) -> None:

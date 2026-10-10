@@ -134,16 +134,18 @@ class TestOllamaEmbedderEmbed(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(raised.exception.status, status)
                 self.assertIs(raised.exception.__cause__, error)
 
-    async def test_embed_leaves_missing_http_status_unclassified(self) -> None:
-        """ResponseError with status_code -1 has no real status, so it stays raw."""
+    async def test_embed_error_without_http_status_is_unknown_genkit_error(self) -> None:
+        """An embed ResponseError with no HTTP status (-1) raises UNKNOWN, keeping the server's message."""
         request = EmbedRequest(input=[Document.from_text('Smoked salmon tartine')])
         error = ollama_api.ResponseError('unexpected end of stream')
         self.mock_ollama_client_instance.embed.side_effect = error
 
-        with self.assertRaises(ollama_api.ResponseError) as raised:
+        with self.assertRaises(GenkitError) as raised:
             await self.ollama_embedder.embed(request)
 
-        self.assertIs(raised.exception, error)
+        self.assertEqual(raised.exception.status, 'UNKNOWN')
+        self.assertIn('unexpected end of stream', str(raised.exception))
+        self.assertIs(raised.exception.__cause__, error)
 
     async def test_embed_marks_malformed_response_internal(self) -> None:
         """A non-JSON body or a payload that fails validation is the server's fault."""

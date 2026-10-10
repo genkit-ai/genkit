@@ -25,8 +25,7 @@ from typing import NoReturn
 
 from google.auth.exceptions import DefaultCredentialsError, GoogleAuthError, RefreshError, TransportError
 
-from genkit import GenkitError
-from genkit.plugin_api import mark_provider_error
+from genkit.plugin_api import provider_error
 
 # TransportError is left out on purpose: it is a network failure reaching the
 # token endpoint, not a credential problem, so it stays unclassified.
@@ -51,10 +50,8 @@ def raise_auth_error(error: GoogleAuthError) -> NoReturn:
     """
     if error.retryable or isinstance(error.__cause__, TransportError):
         raise error
-    raise mark_provider_error(
-        error=GenkitError(
-            status='UNAUTHENTICATED',
-            message='Google Cloud credentials are missing or were rejected',
-            cause=error,
-        )
+    raise provider_error(
+        error,
+        status='UNAUTHENTICATED',
+        message='Google Cloud credentials are missing or were rejected',
     ) from error

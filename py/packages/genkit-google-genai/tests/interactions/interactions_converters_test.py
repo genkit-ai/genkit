@@ -951,8 +951,10 @@ class TestFromInteractionStatusMapping:
 
 class TestFromInteractionSync:
     def test_failed_raises(self) -> None:
-        with pytest.raises(ValueError, match='Interaction failed'):
+        with pytest.raises(GenkitError, match='Interaction failed') as raised:
             from_interaction_sync(Interaction.model_validate({'status': 'failed'}))
+        assert raised.value.status == 'UNKNOWN'
+        assert str(raised.value) == 'UNKNOWN: Interaction failed'
 
     @pytest.mark.parametrize(
         ('code', 'status'),
@@ -974,6 +976,7 @@ class TestFromInteractionSync:
         with pytest.raises(GenkitError, match='Quota exceeded for lyria') as raised:
             from_interaction_sync(interaction)
         assert raised.value.status == status
+        assert isinstance(raised.value.cause, ValueError)
 
     def test_failed_step_error_grpc_code_is_classified(self) -> None:
         interaction = Interaction.model_validate({
@@ -986,15 +989,17 @@ class TestFromInteractionSync:
         assert raised.value.status == 'RESOURCE_EXHAUSTED'
 
     @pytest.mark.parametrize('code', ['UNKNOWN', 'OK', '0', '2', '200', '999', 'SOMETHING_NEW', ''])
-    def test_failed_with_unusable_code_stays_unclassified(self, code: str) -> None:
-        """No real status from the server: raise a plain error rather than UNKNOWN or OK."""
+    def test_failed_with_unusable_code_is_unknown(self, code: str) -> None:
+        """No real status from the server: UNKNOWN, which default Retry and Fallback leave alone."""
         interaction = Interaction.model_validate({
             'id': 'ix-1',
             'status': 'failed',
             'errors': [{'code': code, 'message': 'model crashed'}],
         })
-        with pytest.raises(ValueError, match='model crashed'):
+        with pytest.raises(GenkitError) as raised:
             from_interaction_sync(interaction)
+        assert raised.value.status == 'UNKNOWN'
+        assert str(raised.value) == 'UNKNOWN: model crashed'
 
     @pytest.mark.parametrize('status', ['queued', 'requires_action'])
     def test_other_in_flight_statuses_are_failed_precondition(self, status: str) -> None:

@@ -35,6 +35,7 @@ from genkit import (
 )
 from genkit.middleware import GenerateMiddlewareContext, ModelHookParams
 from genkit.model import ModelConfig, ModelRequest, model_ref
+from genkit.plugin_api import provider_error
 from genkit.testing import define_scripted_model
 
 
@@ -239,12 +240,12 @@ async def test_fallback_backup_with_same_config_class_gets_that_class(entry: obj
 
 
 @pytest.mark.asyncio
-async def test_generate_with_unavailable_model_and_fallback_tries_next_model() -> None:
-    """With `Fallback(models=['backup'])`, a model raising UNAVAILABLE falls back to `backup`."""
+async def test_fallback_switches_model_when_primary_is_unreachable() -> None:
+    """With `Fallback(models=['backup'])`, an UNAVAILABLE provider_error on a dead connection gets backup's answer."""
     ai = Genkit()
 
     async def down(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
-        raise GenkitError(status='UNAVAILABLE', message='provider is down')
+        raise provider_error(ConnectionError('connection refused'), status='UNAVAILABLE')
 
     async def backup(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
         return ModelResponse(

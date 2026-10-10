@@ -264,12 +264,13 @@ async def test_client_errors_map_to_genkit_statuses(code: str, status: str) -> N
 
 
 @pytest.mark.asyncio
-async def test_unlisted_client_error_without_http_status_is_reraised() -> None:
+async def test_unlisted_client_error_without_http_status_is_unknown_genkit_error() -> None:
+    """An unlisted AWS error code with no HTTP status raises a provider-sourced UNKNOWN naming the document."""
     error = ClientError({'Error': {'Code': 'SomethingNewException', 'Message': 'boom'}}, 'InvokeModel')
     transport = FakeInvokeTransport(error=error)
-    with pytest.raises(ClientError) as excinfo:
+    with pytest.raises(GenkitError, match='document 0: invoke model failed: SomethingNewException') as excinfo:
         await embed(TITAN_TEXT, transport, [text_doc('hi')])
-    assert excinfo.value is error
+    assert excinfo.value.status == 'UNKNOWN'
 
 
 @pytest.mark.asyncio
@@ -299,6 +300,9 @@ async def test_throttled_batch_embed_keeps_retry_after() -> None:
 
     assert excinfo.value.status == 'RESOURCE_EXHAUSTED'
     assert excinfo.value.response_metadata == {'retry_after_ms': 3000.0}
+    document_error = excinfo.value.__cause__
+    assert document_error is not None
+    assert document_error.__cause__ is throttled
 
 
 @pytest.mark.asyncio

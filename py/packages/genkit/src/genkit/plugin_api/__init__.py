@@ -20,14 +20,7 @@
 from genkit._core._action import Action, ActionKind
 from genkit._core._constants import GENKIT_CLIENT_HEADER
 from genkit._core._environment import is_dev_environment
-from genkit._core._error import (
-    ErrorResponseMetadata,
-    StatusName,
-    from_http_code,
-    mark_provider_error,
-    parse_retry_after_ms,
-    wrap_http_error,
-)
+from genkit._core._error import StatusName, provider_error
 from genkit._core._loop_cache import loop_local_client
 from genkit._core._middleware import new_middleware
 from genkit._core._plugin import MiddlewarePlugin, Plugin
@@ -42,12 +35,9 @@ __all__ = [
     'Action',
     'ActionMetadata',
     'ActionKind',
-    'ErrorResponseMetadata',
     'StatusName',
-    'from_http_code',
-    'mark_provider_error',
-    'parse_retry_after_ms',
-    'wrap_http_error',
+    # Provider failures
+    'provider_error',
     # HTTP / version stamping
     'GENKIT_CLIENT_HEADER',
     # Loop-local caching

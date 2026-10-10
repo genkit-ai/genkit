@@ -17,7 +17,7 @@
 """Unit tests for Ollama Plugin."""
 
 import asyncio
-from collections.abc import Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import Any, cast
@@ -26,12 +26,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import ollama as ollama_api
 import pytest
-from genkit_ollama import Ollama, OllamaConnectionError, _plugin as plugin_module
+from genkit_ollama import Ollama, _plugin as plugin_module
 from genkit_ollama._errors import wrap_connection_errors
 from genkit_ollama._models import OllamaConfig, OllamaModel, _ResolvedModel
 from pydantic import BaseModel
 
-from genkit import Document, Genkit, GenkitError, Message, ModelResponse, Part, Role
+from genkit import ActionRunContext, Document, Genkit, GenkitError, Message, ModelResponse, Part, Role
 from genkit.embedder import EmbedRequest
 from genkit.model import ModelRequest
 from genkit.plugin_api import ActionKind, to_json_schema
@@ -357,17 +357,6 @@ async def test_the_client_is_cached_per_event_loop() -> None:
 
 
 @pytest.mark.asyncio
-async def test_list_actions_wraps_connection_error(ollama_plugin_instance: Ollama) -> None:
-    """list_actions surfaces transport failures as OllamaConnectionError."""
-    client_mock = MagicMock()
-    client_mock.list = AsyncMock(side_effect=httpx.ConnectError('refused'))
-    ollama_plugin_instance.client = lambda: client_mock
-
-    with pytest.raises(OllamaConnectionError):
-        await ollama_plugin_instance.list_actions()
-
-
-@pytest.mark.asyncio
 async def test_list_actions_does_not_wrap_http_status_error(ollama_plugin_instance: Ollama) -> None:
     """A genuine HTTP status response is not masked as a connection error."""
     request = httpx.Request('GET', 'http://localhost:11434/api/tags')
@@ -393,44 +382,6 @@ async def test_list_actions_classifies_response_error(ollama_plugin_instance: Ol
 
     assert exc_info.value.status == 'UNAUTHENTICATED'
     assert exc_info.value.__cause__ is error
-
-
-@pytest.mark.asyncio
-async def test_model_action_wraps_connection_error() -> None:
-    """The model action callable surfaces a down server as OllamaConnectionError.
-
-    The ollama SDK converts ``httpx.ConnectError`` into a builtin
-    ``ConnectionError`` before our wrapper sees it, so that is what we simulate.
-    """
-    plugin = Ollama()
-
-    client_mock = MagicMock()
-    client_mock.chat = AsyncMock(side_effect=ConnectionError('Failed to connect to Ollama.'))
-    # The model captures the client factory when the action is built, so swap it
-    # in before resolving the action.
-    plugin.client = lambda: client_mock
-
-    action = plugin._create_model_action(_ResolvedModel(name='m'))
-    request = ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('Hello')])])
-
-    with pytest.raises(OllamaConnectionError):
-        await action._fn(request, None)
-
-
-@pytest.mark.asyncio
-async def test_model_action_wraps_transport_timeout() -> None:
-    """Timeouts the SDK does not intercept (httpx.TransportError) are also wrapped."""
-    plugin = Ollama()
-
-    client_mock = MagicMock()
-    client_mock.chat = AsyncMock(side_effect=httpx.ReadTimeout('timed out'))
-    plugin.client = lambda: client_mock
-
-    action = plugin._create_model_action(_ResolvedModel(name='m'))
-    request = ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('Hello')])])
-
-    with pytest.raises(OllamaConnectionError):
-        await action._fn(request, None)
 
 
 @pytest.mark.asyncio
@@ -462,86 +413,124 @@ async def test_model_action_does_not_wrap_media_fetch_error() -> None:
     )
 
     with patch('genkit_ollama._models._image_fetch_client', return_value=image_client):
-        # The raw httpx.ConnectError propagates; it is not wrapped as OllamaConnectionError.
+        # The raw httpx.ConnectError propagates; it is not reported as UNAVAILABLE.
         with pytest.raises(httpx.ConnectError):
             await action._fn(request, None)
 
     client_mock.chat.assert_not_called()
 
 
-@pytest.mark.asyncio
-async def test_embedder_action_wraps_connection_error() -> None:
-    """The embedder action surfaces a down server as OllamaConnectionError.
+_SURFACES = ['chat', 'chat_stream', 'embed', 'list_actions']
 
-    Mirrors the model/list_actions paths so the embedder endpoint's connection
-    wrapping cannot silently regress.
-    """
-    plugin = Ollama()
 
+def _stream_raising(error: BaseException) -> AsyncIterator[Any]:
+    """A streamed Ollama response that fails while it is being read."""
+
+    async def _chunks() -> AsyncIterator[Any]:
+        # The empty loop makes this an async generator without an unreachable yield.
+        for chunk in ():
+            yield chunk
+        raise error
+
+    return _chunks()
+
+
+async def _call_ollama(plugin: Ollama, surface: str, error: BaseException) -> None:
+    """Make one public Ollama call whose SDK request fails with ``error``."""
+    streaming = surface.endswith('_stream')
+    sdk_call = AsyncMock(return_value=_stream_raising(error)) if streaming else AsyncMock(side_effect=error)
     client_mock = MagicMock()
-    client_mock.embed = AsyncMock(side_effect=ConnectionError('Failed to connect to Ollama.'))
+    sdk_method = {'embed': 'embed', 'list_actions': 'list'}.get(surface, surface.removesuffix('_stream'))
+    setattr(client_mock, sdk_method, sdk_call)
     plugin.client = lambda: client_mock
 
-    action = plugin._create_embedder_action('e')
-    request = EmbedRequest(input=[Document.from_text(text='hello')])
-
-    with pytest.raises(OllamaConnectionError):
-        await action._fn(request)
-
-
-@pytest.mark.asyncio
-async def test_wrap_connection_errors_translates_transport_error() -> None:
-    """wrap_connection_errors turns an httpx TransportError into OllamaConnectionError."""
-    with pytest.raises(OllamaConnectionError) as exc_info:
-        async with wrap_connection_errors('http://localhost:11434'):
-            raise httpx.ConnectError('refused')
-
-    assert 'http://localhost:11434' in str(exc_info.value)
+    if surface == 'list_actions':
+        await plugin.list_actions()
+    elif surface == 'embed':
+        await plugin._create_embedder_action('e')._fn(EmbedRequest(input=[Document.from_text(text='hello')]))
+    else:
+        action = plugin._create_model_action(_ResolvedModel(name='m'))
+        request = ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('Hello')])])
+        ctx = ActionRunContext(streaming_callback=MagicMock()) if streaming else None
+        await action._fn(request, ctx)
 
 
 @pytest.mark.asyncio
-async def test_wrap_connection_errors_timeout_has_distinct_message() -> None:
-    """A timeout gets its own 'timed out' message, not the generic unreachable one."""
-    with pytest.raises(OllamaConnectionError) as exc_info:
-        async with wrap_connection_errors('http://localhost:11434'):
-            raise httpx.ReadTimeout('slow')
+@pytest.mark.parametrize('surface', _SURFACES)
+async def test_ollama_not_running_is_unavailable_with_start_hint(surface: str) -> None:
+    """With no Ollama daemon, every call raises UNAVAILABLE naming the server and `ollama serve`."""
+    plugin = Ollama()
+    # The ollama SDK turns httpx.ConnectError into a builtin ConnectionError.
+    error = ConnectionError('Failed to connect to Ollama.')
 
-    message = str(exc_info.value)
-    assert 'timed out' in message
-    assert 'http://localhost:11434' in message
+    with pytest.raises(GenkitError) as exc_info:
+        await _call_ollama(plugin, surface, error)
 
-
-@pytest.mark.asyncio
-async def test_wrap_connection_errors_translates_builtin_connection_error() -> None:
-    """wrap_connection_errors turns the SDK's builtin ConnectionError into ours."""
-    with pytest.raises(OllamaConnectionError) as exc_info:
-        async with wrap_connection_errors('http://localhost:11434'):
-            raise ConnectionError('Failed to connect to Ollama.')
-
-    assert 'http://localhost:11434' in str(exc_info.value)
-
-
-def test_connection_error_is_unclassified() -> None:
-    """A down server has no reported status: Retry retries it, Fallback does not switch models.
-
-    Matches Go and the other plugins' raw transport errors.
-    """
-    error = OllamaConnectionError('Cannot reach the Ollama server.')
-
-    assert isinstance(error, ConnectionError)
-    assert not isinstance(error, GenkitError)
+    assert exc_info.value.status == 'UNAVAILABLE'
+    assert f'Cannot reach the Ollama server at {plugin.server_address}' in str(exc_info.value)
+    assert '`ollama serve`' in str(exc_info.value)
+    assert exc_info.value.__cause__ is error
 
 
 @pytest.mark.asyncio
-async def test_wrap_connection_errors_does_not_double_wrap() -> None:
-    """An already-actionable OllamaConnectionError passes through unchanged."""
-    original = OllamaConnectionError('already wrapped')
+@pytest.mark.parametrize('surface', _SURFACES)
+async def test_connection_refused_is_unavailable(surface: str) -> None:
+    """A refused connection that reaches us as a raw httpx error is UNAVAILABLE too."""
+    plugin = Ollama()
+    error = httpx.ConnectError('refused')
 
-    with pytest.raises(OllamaConnectionError) as exc_info:
-        async with wrap_connection_errors('http://localhost:11434'):
-            raise original
+    with pytest.raises(GenkitError) as exc_info:
+        await _call_ollama(plugin, surface, error)
 
-    assert exc_info.value is original
+    assert exc_info.value.status == 'UNAVAILABLE'
+    assert plugin.server_address in str(exc_info.value)
+    assert exc_info.value.__cause__ is error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('surface', _SURFACES)
+async def test_timeout_is_deadline_exceeded(surface: str) -> None:
+    """A request to Ollama that times out raises DEADLINE_EXCEEDED with a 'timed out' message."""
+    plugin = Ollama()
+    error = httpx.ReadTimeout('slow')
+
+    with pytest.raises(GenkitError) as exc_info:
+        await _call_ollama(plugin, surface, error)
+
+    assert exc_info.value.status == 'DEADLINE_EXCEEDED'
+    assert f'Request to Ollama server at {plugin.server_address} timed out.' in str(exc_info.value)
+    assert exc_info.value.__cause__ is error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('surface', ['chat', 'embed', 'list_actions'])
+async def test_unmapped_4xx_is_unknown_genkit_error(surface: str) -> None:
+    """An Ollama 4xx with no Genkit status (413) raises UNKNOWN, keeping the server's message."""
+    plugin = Ollama()
+    error = ollama_api.ResponseError('request entity too large', 413)
+
+    with pytest.raises(GenkitError) as exc_info:
+        await _call_ollama(plugin, surface, error)
+
+    assert exc_info.value.status == 'UNKNOWN'
+    assert 'request entity too large' in str(exc_info.value)
+    assert exc_info.value.__cause__ is error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('surface', ['chat_stream'])
+async def test_mid_stream_error_is_genkit_error(surface: str) -> None:
+    """An error chunk in the middle of a streamed reply raises UNKNOWN with the model's message."""
+    plugin = Ollama()
+    # The SDK reports an in-stream error with status_code -1: there's no HTTP status.
+    error = ollama_api.ResponseError('model failed')
+
+    with pytest.raises(GenkitError) as exc_info:
+        await _call_ollama(plugin, surface, error)
+
+    assert exc_info.value.status == 'UNKNOWN'
+    assert 'model failed' in str(exc_info.value)
+    assert exc_info.value.__cause__ is error
 
 
 @pytest.mark.asyncio

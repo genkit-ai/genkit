@@ -1804,13 +1804,15 @@ async def test_generate_classifies_known_mid_stream_error(sample_request: ModelR
 
 
 @pytest.mark.asyncio
-async def test_generate_leaves_unknown_mid_stream_error_raw(sample_request: ModelRequest) -> None:
-    """A mid-stream error the plugin does not know reaches the caller as the SDK raised it."""
+async def test_generate_unknown_mid_stream_error_is_unknown_genkit_error(sample_request: ModelRequest) -> None:
+    """A mid-stream error the plugin does not know reaches the caller as an UNKNOWN GenkitError with its message."""
     chunks, error = await _stream_through_sdk(
         _stream_failing_after_first_token({'message': 'Upstream reset', 'type': 'brand_new_error'}),
         sample_request,
     )
 
     assert chunks == ['Grilled']
-    assert type(error) is APIError
-    assert error.message == 'Upstream reset'
+    assert isinstance(error, GenkitError)
+    assert error.status == 'UNKNOWN'
+    assert error.original_message == 'Upstream reset'
+    assert type(error.cause) is APIError

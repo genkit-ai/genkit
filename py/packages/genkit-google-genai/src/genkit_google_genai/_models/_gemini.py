@@ -37,6 +37,7 @@ from genkit_google_genai._models._sdk_config import (
     split_sdk_fields,
 )
 from genkit_google_genai._models._secrets import context_api_key, reject_request_config_api_key
+from genkit_google_genai._provider_errors import TRANSPORT_ERRORS, api_error, transport_error
 from google import genai
 from google.auth import default as google_auth_default
 from google.auth.exceptions import DefaultCredentialsError
@@ -76,7 +77,6 @@ from genkit.model import (
     ToolDefinition,
     get_basic_usage_stats,
 )
-from genkit.plugin_api import wrap_http_error
 
 
 def _to_dict(obj: JsonAny) -> JsonAny:  # noqa: ANN401
@@ -1474,9 +1474,11 @@ class GeminiModel:
                     ),
                 )
         except APIError as e:
-            raise wrap_http_error(e, status_code=e.code, message=e.message or str(e)) from e
+            raise api_error(e) from e
         except GOOGLE_AUTH_ERRORS as e:
             raise_auth_error(e)
+        except TRANSPORT_ERRORS as e:
+            raise transport_error(e) from e
         return cache
 
     async def generate(self, request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
@@ -1712,11 +1714,12 @@ class GeminiModel:
                 config=request_cfg,
             )
         except APIError as e:
-            raise wrap_http_error(e, status_code=e.code, message=e.message or str(e)) from e
+            raise api_error(e) from e
         except GOOGLE_AUTH_ERRORS as e:
             # The SDK resolves and refreshes credentials on the request, not at construction.
             raise_auth_error(e)
-        # Anything else (a dropped connection, say) has no known status and propagates as is.
+        except TRANSPORT_ERRORS as e:
+            raise transport_error(e) from e
 
         content = await self._contents_from_response(response, tools=tools)
 
@@ -1825,9 +1828,11 @@ class GeminiModel:
                 usage=_usage_from_metadata(usage_metadata),
             )
         except APIError as e:
-            raise wrap_http_error(e, status_code=e.code, message=e.message or str(e)) from e
+            raise api_error(e) from e
         except GOOGLE_AUTH_ERRORS as e:
             raise_auth_error(e)
+        except TRANSPORT_ERRORS as e:
+            raise transport_error(e) from e
 
     @cached_property
     def metadata(self) -> dict:

@@ -30,7 +30,7 @@ from genkit_openai._models._handler import OpenAIModelHandler
 from genkit_openai._models._image import SUPPORTED_IMAGE_MODELS
 from genkit_openai._models._model_info import SUPPORTED_OPENAI_MODELS
 from genkit_openai._openai_plugin import OpenAI
-from openai import APIStatusError, APITimeoutError
+from openai import APIConnectionError, APIStatusError, APITimeoutError
 from openai.types import Model
 from openai.types.chat import ChatCompletion
 
@@ -356,8 +356,8 @@ async def test_embedder_forwards_float_encoding_format() -> None:
 
 
 @pytest.mark.asyncio
-async def test_embedder_carries_retry_after_metadata() -> None:
-    """A rate-limited embed reports RESOURCE_EXHAUSTED with the parsed delay."""
+async def test_429_retry_after_header_sets_retry_delay() -> None:
+    """A 429 with a Retry-After header is RESOURCE_EXHAUSTED and tells retry how long to wait."""
     api_error = _status_error(429, retry_after='2.5')
 
     with pytest.raises(GenkitError) as exc_info:
@@ -399,16 +399,33 @@ async def test_embedder_forwards_zero_dimensions() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ('error', 'expected_status'),
+    [
+        (APITimeoutError(request=_http_request()), 'DEADLINE_EXCEEDED'),
+        (APIConnectionError(request=_http_request()), 'UNAVAILABLE'),
+    ],
+    ids=['timeout', 'connection-error'],
+)
+async def test_embedder_maps_network_errors(error: Exception, expected_status: str) -> None:
+    """An embed that times out or cannot connect gets the same status as a model call."""
+    with pytest.raises(GenkitError) as exc_info:
+        await _run_embedder(_embedder_client(error))
+
+    assert exc_info.value.status == expected_status
+    assert exc_info.value.__cause__ is error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     'error',
     [
-        APITimeoutError(request=_http_request()),
         ValueError('No embedding data received'),
         RuntimeError('unexpected failure'),
     ],
-    ids=['timeout', 'sdk-value-error', 'runtime-error'],
+    ids=['sdk-value-error', 'runtime-error'],
 )
 async def test_embedder_propagates_unclassified_errors(error: Exception) -> None:
-    """An error without a failing HTTP status escapes the embedder unchanged.
+    """An error that is not from the OpenAI SDK escapes the embedder unchanged.
 
     A ValueError from the SDK is a provider-side failure, not caller input,
     so it must not be reported as INVALID_ARGUMENT."""
@@ -455,15 +472,15 @@ async def test_list_actions_error_is_not_cached() -> None:
 
 
 @pytest.mark.asyncio
-async def test_list_actions_propagates_unclassified_errors() -> None:
-    """An error without a failing HTTP status escapes list_actions unchanged."""
+async def test_list_actions_timeout_is_deadline_exceeded() -> None:
+    """A model listing that times out is DEADLINE_EXCEEDED."""
     error = APITimeoutError(request=_http_request())
 
-    with pytest.raises(APITimeoutError) as exc_info:
+    with pytest.raises(GenkitError) as exc_info:
         await _plugin_with(_list_client(error)).list_actions()
 
-    assert exc_info.value is error
-    assert not isinstance(exc_info.value, GenkitError)
+    assert exc_info.value.status == 'DEADLINE_EXCEEDED'
+    assert exc_info.value.__cause__ is error
 
 
 def _json_completion(content: str = '{"a": 1}') -> ChatCompletion:

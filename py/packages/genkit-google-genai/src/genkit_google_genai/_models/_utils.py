@@ -59,7 +59,7 @@ from google import genai
 
 from genkit import GenkitError, Part
 from genkit.model import ToolRequest, ToolResponse
-from genkit.plugin_api import loop_local_client
+from genkit.plugin_api import loop_local_client, provider_error
 
 logger = logging.getLogger(__name__)
 
@@ -502,9 +502,10 @@ class PartConverter:
         Raises:
             GenkitError: INVALID_ARGUMENT when the media host answers with a
                 4xx other than 408/429: the caller's URL is wrong or not
-                public, and another model would fail on it too.
-            httpx.HTTPError: A 5xx, 408, 429, timeout, or transport failure,
-                left unclassified because it may pass on retry.
+                public, and another model would fail on it too. A 5xx, 408,
+                or 429 keeps its retryable status and the host's Retry-After.
+            httpx.TransportError: A timeout or transport failure, left
+                unclassified because it may pass on retry.
         """
         response = await _media_client().get(url, timeout=60.0)
         try:
@@ -517,5 +518,5 @@ class PartConverter:
                     message=f'Could not download request media (HTTP {code})',
                     cause=e,
                 ) from e
-            raise
+            raise provider_error(e, http_status=code, headers=e.response.headers) from e
         return response.content, response.headers.get('content-type')
