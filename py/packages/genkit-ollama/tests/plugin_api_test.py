@@ -17,6 +17,8 @@
 """Unit tests for Ollama Plugin."""
 
 import asyncio
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -24,7 +26,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import ollama as ollama_api
 import pytest
-from genkit_ollama import Ollama, OllamaConnectionError, RequestHeaderParams, _plugin as plugin_module
+from genkit_ollama import Ollama, OllamaConnectionError, _plugin as plugin_module
 from genkit_ollama._errors import wrap_connection_errors
 from genkit_ollama._models import OllamaConfig, OllamaModel, _ResolvedModel
 from pydantic import BaseModel
@@ -226,146 +228,109 @@ def test_make_client_propagates_static_headers() -> None:
     assert kwargs['headers'] == headers
 
 
+def _fake_server(seen: list[httpx.Request], tags: list[str] | None = None) -> Callable[[httpx.Request], httpx.Response]:
+    """A minimal Ollama server: records each request and answers the endpoints the plugin calls."""
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        match request.url.path:
+            case '/api/show':
+                return httpx.Response(200, json={'capabilities': ['completion'], 'template': '', 'model_info': {}})
+            case '/api/tags':
+                return httpx.Response(200, json={'models': [{'model': name, 'name': name} for name in tags or []]})
+            case '/api/chat':
+                return httpx.Response(
+                    200, json={'model': 'm', 'message': {'role': 'assistant', 'content': 'Tartine'}, 'done': True}
+                )
+            case '/api/embed':
+                return httpx.Response(200, json={'model': 'e', 'embeddings': [[0.1, 0.2]]})
+        return httpx.Response(404)
+
+    return handle
+
+
+@contextmanager
+def _real_client_on(handler: Callable[[httpx.Request], httpx.Response]) -> Iterator[MagicMock]:
+    """Real ollama.AsyncClient (so httpx auth runs), with requests served by ``handler``."""
+    real = ollama_api.AsyncClient
+    with patch(
+        'ollama.AsyncClient', side_effect=lambda **kwargs: real(transport=httpx.MockTransport(handler), **kwargs)
+    ) as factory:
+        yield factory
+
+
+def _hello() -> ModelRequest:
+    return ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('Suggest a dish.')])])
+
+
+def test_make_client_routes_a_header_callable_through_httpx_auth() -> None:
+    """A callable becomes an httpx.Auth hook; nothing is baked into the static headers."""
+    plugin = Ollama(request_headers=lambda: {'Authorization': 'Bearer tok'})
+
+    with patch('ollama.AsyncClient') as async_client:
+        plugin._make_client()
+
+    kwargs = async_client.call_args.kwargs
+    assert kwargs['headers'] == {}
+    assert isinstance(kwargs['auth'], httpx.Auth)
+
+
 @pytest.mark.asyncio
-async def test_sync_callable_headers_resolved_per_request() -> None:
-    """A sync header callable is resolved on every request, not once at init()."""
-    tokens = iter(['t1', 't2'])
-    plugin = Ollama(request_headers=lambda params: {'Authorization': next(tokens)})
+async def test_a_sync_header_callable_runs_per_request_on_one_client() -> None:
+    """A rotating token reaches each request, and every request shares one pooled client."""
+    tokens = iter(['Bearer t1', 'Bearer t2'])
+    plugin = Ollama(request_headers=lambda: {'Authorization': next(tokens)})
+    seen: list[httpx.Request] = []
+    action = plugin._create_model_action(_ResolvedModel(name='m'))
 
-    # init() does not eagerly resolve a callable.
-    assert await plugin.init() == []
-    assert plugin.request_headers == {}
+    with _real_client_on(_fake_server(seen)) as factory:
+        await action._fn(_hello(), None)
+        await action._fn(_hello(), None)
 
-    client_mock = MagicMock()
-    client_mock._client.aclose = AsyncMock()
-    with patch('ollama.AsyncClient', return_value=client_mock) as async_client:
-        async with plugin._client_for_request():
-            pass
-        async with plugin._client_for_request():
-            pass
-
-    assert async_client.call_args_list[0].kwargs['headers'] == {'Authorization': 't1'}
-    assert async_client.call_args_list[1].kwargs['headers'] == {'Authorization': 't2'}
-    # Each fresh per-request client's connection pool is closed on exit.
-    assert client_mock._client.aclose.await_count == 2
+    assert [r.headers['authorization'] for r in seen] == ['Bearer t1', 'Bearer t2']
+    assert factory.call_count == 1
 
 
 @pytest.mark.asyncio
-async def test_async_callable_headers_resolved_per_request() -> None:
-    """An async header callable is awaited on every request, not once at init()."""
-    tokens = iter(['a1', 'a2'])
+async def test_an_async_header_callable_is_awaited_per_request() -> None:
+    """An async callable is awaited before each request, model and embedder alike."""
+    tokens = iter(['Bearer a1', 'Bearer a2'])
 
-    async def headers(params: RequestHeaderParams) -> dict[str, str]:
+    async def mint() -> dict[str, str]:
         return {'Authorization': next(tokens)}
 
-    plugin = Ollama(request_headers=headers)
+    plugin = Ollama(request_headers=mint)
+    seen: list[httpx.Request] = []
 
-    assert await plugin.init() == []
-    assert plugin.request_headers == {}
+    with _real_client_on(_fake_server(seen)):
+        await plugin._create_model_action(_ResolvedModel(name='m'))._fn(_hello(), None)
+        await plugin._create_embedder_action('e')._fn(EmbedRequest(input=[Document.from_text(text='menu')]))
 
-    client_mock = MagicMock()
-    client_mock._client.aclose = AsyncMock()
-    with patch('ollama.AsyncClient', return_value=client_mock) as async_client:
-        async with plugin._client_for_request():
-            pass
-        async with plugin._client_for_request():
-            pass
-
-    assert async_client.call_args_list[0].kwargs['headers'] == {'Authorization': 'a1'}
-    assert async_client.call_args_list[1].kwargs['headers'] == {'Authorization': 'a2'}
-    assert client_mock._client.aclose.await_count == 2
+    assert [(r.url.path, r.headers['authorization']) for r in seen] == [
+        ('/api/chat', 'Bearer a1'),
+        ('/api/embed', 'Bearer a2'),
+    ]
 
 
 @pytest.mark.asyncio
-async def test_model_action_passes_request_context_to_header_callable() -> None:
-    """A model header callable receives the server address, model, and model request."""
-    captured: dict[str, Any] = {}
-
-    def make_headers(params: RequestHeaderParams) -> dict[str, str]:
-        captured['params'] = params
-        return {'Authorization': 'Bearer tok'}
-
-    plugin = Ollama(server_address='http://example:11434', request_headers=make_headers)
-
-    sdk_client = AsyncMock()
-    sdk_client.chat.return_value = ollama_api.ChatResponse(message=ollama_api.Message(role='assistant', content='hi'))
-    sdk_client._client.aclose = AsyncMock()
-
-    action = plugin._create_model_action(_ResolvedModel(name='m'))
-    request = ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('Hello')])])
-
-    with patch('ollama.AsyncClient', return_value=sdk_client) as async_client:
-        await action._fn(request, None)
-
-    params = cast(RequestHeaderParams, captured['params'])
-    assert params.server_address == 'http://example:11434'
-    assert params.model == 'm'
-    assert params.model_request is request
-    assert params.embed_request is None
-    # The resolved header is applied to the freshly built per-request client.
-    assert async_client.call_args.kwargs['headers'] == {'Authorization': 'Bearer tok'}
-    # That fresh client's connection pool is closed once the request completes.
-    sdk_client._client.aclose.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_embedder_action_passes_request_context_to_header_callable() -> None:
-    """An embedder header callable receives the server address, embedder, and embed request."""
-    captured: dict[str, Any] = {}
-
-    def make_headers(params: RequestHeaderParams) -> dict[str, str]:
-        captured['params'] = params
-        return {'X-Token': 'abc'}
-
-    plugin = Ollama(server_address='http://example:11434', request_headers=make_headers)
-
-    sdk_client = AsyncMock()
-    sdk_client.embed.return_value = ollama_api.EmbedResponse(embeddings=[[0.1, 0.2]])
-    sdk_client._client.aclose = AsyncMock()
-
-    action = plugin._create_embedder_action('e')
-    request = EmbedRequest(input=[Document.from_text(text='hello')])
-
-    with patch('ollama.AsyncClient', return_value=sdk_client):
-        await action._fn(request)
-
-    params = cast(RequestHeaderParams, captured['params'])
-    assert params.server_address == 'http://example:11434'
-    assert params.model == 'e'
-    assert params.embed_request is request
-    assert params.model_request is None
-    sdk_client._client.aclose.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_static_headers_reuse_cached_client_and_keep_it_open() -> None:
-    """Static headers reuse the per-event-loop cached client and never close it."""
+async def test_static_headers_are_sent_without_an_auth_hook() -> None:
+    """A dict is baked into the shared client and sent on every request."""
     plugin = Ollama(request_headers={'X-Token': 'abc'})
+    seen: list[httpx.Request] = []
 
-    async with plugin._client_for_request() as first:
-        pass
-    async with plugin._client_for_request() as second:
-        pass
+    with _real_client_on(_fake_server(seen)) as factory:
+        await plugin._create_model_action(_ResolvedModel(name='m'))._fn(_hello(), None)
 
-    # Same shared instance both times, and it was not closed on context exit.
-    assert first is second
-    assert not first._client.is_closed
+    assert seen[0].headers['x-token'] == 'abc'
+    assert 'auth' not in factory.call_args.kwargs
 
 
 @pytest.mark.asyncio
-async def test_missing_inner_client_logs_instead_of_leaking() -> None:
-    """If a future SDK exposes no _client, cleanup warns rather than silently leaking."""
-    plugin = Ollama(request_headers=lambda params: {'X-Token': 't'})
+async def test_the_client_is_cached_per_event_loop() -> None:
+    """Repeated calls on one loop reuse the same client and its connection pool."""
+    plugin = Ollama(request_headers=lambda: {'X-Token': 't'})
 
-    sdk_client = MagicMock()
-    sdk_client._client = None  # simulate an SDK without the private httpx client to close
-
-    with patch('ollama.AsyncClient', return_value=sdk_client):
-        with patch('genkit_ollama._plugin.logger') as mock_logger:
-            async with plugin._client_for_request():
-                pass
-
-    cast(MagicMock, mock_logger.warning).assert_called_once()
+    assert plugin.client() is plugin.client()
 
 
 @pytest.mark.asyncio
@@ -735,7 +700,7 @@ async def test_a_slow_probe_times_out_to_the_fallback() -> None:
 async def test_a_raising_header_callable_does_not_break_resolve() -> None:
     """The probe resolves headers too; a failure there is just a failed probe."""
 
-    def headers(params: RequestHeaderParams) -> dict[str, str]:
+    def headers() -> dict[str, str]:
         raise RuntimeError('token service down')
 
     plugin = Ollama(request_headers=headers)
@@ -743,26 +708,6 @@ async def test_a_raising_header_callable_does_not_break_resolve() -> None:
     action = await plugin.resolve(ActionKind.MODEL, 'llava')
 
     assert action is not None
-
-
-@pytest.mark.asyncio
-async def test_the_probe_passes_the_model_name_to_the_header_callable() -> None:
-    """Header callables see the model name on the probe, with no request attached."""
-    captured: list[RequestHeaderParams] = []
-
-    def headers(params: RequestHeaderParams) -> dict[str, str]:
-        captured.append(params)
-        return {'Authorization': 'Bearer tok'}
-
-    plugin = Ollama(request_headers=headers)
-    sdk_client = AsyncMock()
-    sdk_client.show.return_value = _show(['completion'])
-    sdk_client._client.aclose = AsyncMock()
-
-    with patch('ollama.AsyncClient', return_value=sdk_client):
-        await plugin.resolve(ActionKind.MODEL, 'llama3.2')
-
-    assert [(p.model, p.model_request, p.embed_request) for p in captured] == [('llama3.2', None, None)]
 
 
 @pytest.mark.asyncio
@@ -918,34 +863,31 @@ async def test_concurrent_first_resolves_share_one_probe() -> None:
 
 
 @pytest.mark.asyncio
-async def test_list_actions_runs_the_header_callable_once() -> None:
-    """Probes reuse the listing's client: one header mint and one pool per Dev UI refresh."""
-    minted: list[RequestHeaderParams] = []
+async def test_list_actions_and_its_probes_share_one_client() -> None:
+    """A Dev UI refresh opens one pool; the header callable runs once per HTTP request."""
+    minted: list[int] = []
 
-    def headers(params: RequestHeaderParams) -> dict[str, str]:
-        minted.append(params)
+    def mint() -> dict[str, str]:
+        minted.append(1)
         return {'Authorization': 'Bearer tok'}
 
-    plugin = Ollama(request_headers=headers)
-    sdk_client = AsyncMock()
-    sdk_client.list.return_value = _Tags(models=[_Tag(model=f'menu-model-{i}') for i in range(3)])
-    sdk_client.show.return_value = _show(['completion'])
-    sdk_client._client.aclose = AsyncMock()
+    plugin = Ollama(request_headers=mint)
+    seen: list[httpx.Request] = []
 
-    with patch('ollama.AsyncClient', return_value=sdk_client) as async_client:
+    with _real_client_on(_fake_server(seen, tags=[f'menu-model-{i}' for i in range(3)])) as factory:
         actions = await plugin.list_actions()
 
     assert len(actions) == 3
-    assert sdk_client.show.await_count == 3
-    assert len(minted) == 1
-    assert async_client.call_count == 1
+    assert [r.url.path for r in seen].count('/api/show') == 3
+    assert len(minted) == len(seen) == 4
+    assert factory.call_count == 1
 
 
 @pytest.mark.asyncio
 async def test_the_probe_timeout_covers_a_slow_header_callable() -> None:
     """A header mint that hangs is cut off by the probe timeout, not just the HTTP call."""
 
-    async def headers(params: RequestHeaderParams) -> dict[str, str]:
+    async def headers() -> dict[str, str]:
         await asyncio.sleep(10)
         return {}
 

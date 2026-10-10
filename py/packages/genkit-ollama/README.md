@@ -141,19 +141,29 @@ Ollama(server_address='http://ollama.example.com:11434')
 # Static headers
 Ollama(request_headers={'Authorization': 'Bearer <token>'})
 
-# Async-resolved headers, re-evaluated per request (e.g. minting a short-lived token)
-from genkit_ollama import RequestHeaderParams
+# Headers computed per request: Ollama on Cloud Run behind IAM needs a fresh ID token
+import asyncio
+
+import google.auth.transport.requests
+from google.oauth2 import id_token
+
+OLLAMA_URL = 'https://ollama-gpu-abc123-uc.a.run.app'
+creds = id_token.fetch_id_token_credentials(OLLAMA_URL)
 
 
-async def auth_headers(params: RequestHeaderParams) -> dict[str, str]:
-    return {'Authorization': f'Bearer {await mint_token(params.server_address)}'}
+async def cloud_run_auth() -> dict[str, str]:
+    # Refresh only when the cached token has expired, off the event loop.
+    if not creds.valid:
+        await asyncio.to_thread(creds.refresh, google.auth.transport.requests.Request())
+    return {'Authorization': f'Bearer {creds.token}'}
 
 
-Ollama(request_headers=auth_headers, timeout=60.0)
+Ollama(server_address=OLLAMA_URL, request_headers=cloud_run_auth, timeout=60.0)
 ```
 
-Callable headers are re-evaluated on every request, so short-lived tokens refresh
-automatically. A static dict is applied once to a cached client.
+A dict is sent as-is. A callable takes no arguments, may be sync or async, and
+runs before every HTTP request on the plugin's shared connection pool, so it
+should cache its token and only refresh when it expires.
 
 ### Model capabilities
 
