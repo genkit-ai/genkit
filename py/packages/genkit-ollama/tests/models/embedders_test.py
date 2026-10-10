@@ -21,7 +21,8 @@ import unittest
 from unittest.mock import AsyncMock, MagicMock
 
 import ollama as ollama_api
-from genkit_ollama._embedders import EmbeddingDefinition, OllamaEmbedder
+from genkit_ollama import EmbeddingDefinition
+from genkit_ollama._embedders import OllamaEmbedder
 from pydantic import ValidationError
 
 from genkit import Document, Embedding, GenkitError, Part

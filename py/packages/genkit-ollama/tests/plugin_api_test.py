@@ -23,11 +23,19 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import ollama as ollama_api
 import pytest
-from genkit_ollama import Ollama, OllamaConnectionError, RequestHeaderParams, ollama_name
+from genkit_ollama import (
+    EmbeddingDefinition,
+    ModelDefinition,
+    Ollama,
+    OllamaConfig,
+    OllamaConnectionError,
+    OllamaSupports,
+    RequestHeaderParams,
+    ollama_name,
+)
 from genkit_ollama._constants import OllamaAPITypes
-from genkit_ollama._embedders import EmbeddingDefinition
 from genkit_ollama._errors import wrap_connection_errors
-from genkit_ollama._models import ModelDefinition, OllamaConfig, OllamaModel, OllamaSupports
+from genkit_ollama._models import OllamaModel
 from pydantic import BaseModel
 
 from genkit import Document, Genkit, GenkitError, Message, ModelResponse, Part, Role

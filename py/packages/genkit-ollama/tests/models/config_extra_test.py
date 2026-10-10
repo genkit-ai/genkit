@@ -17,7 +17,8 @@
 """`OllamaConfig` rejects typos; `extra` is merged into `options` as-is."""
 
 import pytest
-from genkit_ollama._models import OllamaConfig, OllamaModel
+from genkit_ollama import OllamaConfig
+from genkit_ollama._models import OllamaModel
 from pydantic import ValidationError
 
 

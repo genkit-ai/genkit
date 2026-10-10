@@ -17,7 +17,7 @@
 """Tests for Django handler decorator validation."""
 
 import pytest
-from genkit_django._handler import genkit_django_handler
+from genkit_django import genkit_django_handler
 
 from genkit._core._error import GenkitError
 

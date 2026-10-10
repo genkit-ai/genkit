@@ -31,8 +31,8 @@ import base64
 import botocore.session
 import pytest
 from botocore.validate import ParamValidator
-from genkit_amazon_bedrock._config import BedrockConfig
-from genkit_amazon_bedrock._converters import build_converse_request, cache_point_part
+from genkit_amazon_bedrock import BedrockConfig, cache_point_part
+from genkit_amazon_bedrock._converters import build_converse_request
 
 from genkit import Message, Part, Role
 from genkit.model import ModelRequest, ToolDefinition

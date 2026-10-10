@@ -21,7 +21,7 @@ from typing import Any
 
 import pytest
 from botocore.exceptions import ClientError, NoCredentialsError
-from genkit_amazon_bedrock._config import BedrockConfig, BedrockImageConfig
+from genkit_amazon_bedrock import BedrockConfig, BedrockImageConfig
 from genkit_amazon_bedrock._image import BedrockImageModel, build_amazon_image_body, is_image_model
 from pydantic import ConfigDict
 
