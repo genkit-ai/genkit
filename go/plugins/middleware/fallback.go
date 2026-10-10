@@ -131,7 +131,8 @@ func (r *fallbackRun) wrapModel(ctx context.Context, params *ai.ModelParams, nex
 	statuses := r.f.statuses()
 	// failedModel names the last model called in this turn that failed, and
 	// lastErr holds its error, or the first skipped model's error when no
-	// call has failed yet.
+	// call has failed yet. A skip leaves failedModel empty, so the reroute
+	// warning fires only on the turn that recorded the failure.
 	var failedModel string
 	var lastErr error
 	if err, ok := r.failed[r.primary]; ok {
