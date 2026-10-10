@@ -416,6 +416,12 @@ func toGeminiRequest(input *ai.ModelRequest, config *genai.GenerateContentConfig
 	if isTTS && len(gcc.ResponseModalities) == 0 {
 		gcc.ResponseModalities = []string{"AUDIO"}
 	}
+	// Image-output models only return an image when asked for one, so a bare
+	// prompt (e.g. from the dev UI) would otherwise get text only. Matches the
+	// JS plugin.
+	if len(modelName) > 0 && isImageModelName(modelName[0]) && len(gcc.ResponseModalities) == 0 {
+		gcc.ResponseModalities = []string{"TEXT", "IMAGE"}
+	}
 	// TTS generateContent requires a speechConfig with a voice; the API rejects
 	// audio requests without one. Supply a default voice so the dedicated TTS
 	// models are runnable from a bare prompt (e.g. the dev UI), while still
@@ -552,6 +558,13 @@ func hasSpeechVoiceConfig(sc *genai.SpeechConfig) bool {
 
 func isTTSModelName(name string) bool {
 	return strings.Contains(strings.TrimPrefix(name, "googleai/"), "-tts")
+}
+
+// isImageModelName reports whether name is a Gemini model that generates
+// images (e.g. gemini-3.1-flash-image), as opposed to Imagen.
+func isImageModelName(name string) bool {
+	name = name[strings.LastIndex(name, "/")+1:]
+	return strings.HasPrefix(name, "gemini-") && strings.Contains(name, "-image")
 }
 
 // translateCandidate translates from a genai.GenerateContentResponse to an ai.ModelResponse.

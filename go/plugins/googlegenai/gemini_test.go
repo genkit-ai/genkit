@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -2275,4 +2276,37 @@ func TestGenerateWithCacheNameOnly(t *testing.T) {
 			t.Errorf("inline contents = %q, want the whole request", got)
 		}
 	})
+}
+
+func TestImageModelDefaultsResponseModalities(t *testing.T) {
+	req := func(config any) *ai.ModelRequest {
+		return &ai.ModelRequest{
+			Config:   config,
+			Messages: []*ai.Message{ai.NewUserMessage(ai.NewTextPart("draw a cat"))},
+		}
+	}
+	tests := []struct {
+		name   string
+		model  string
+		config any
+		want   []string
+	}{
+		{"image model defaults", "googleai/gemini-3.1-flash-image", nil, []string{"TEXT", "IMAGE"}},
+		{"preview image model defaults", "googleai/gemini-3.1-flash-image-preview", nil, []string{"TEXT", "IMAGE"}},
+		{"vertex image model defaults", "vertexai/gemini-3-pro-image", nil, []string{"TEXT", "IMAGE"}},
+		{"caller modalities win", "googleai/gemini-2.5-flash-image", &genai.GenerateContentConfig{ResponseModalities: []string{"IMAGE"}}, []string{"IMAGE"}},
+		{"text model untouched", "googleai/gemini-2.5-flash", nil, nil},
+		{"tts model keeps audio", "googleai/gemini-2.5-flash-preview-tts", nil, []string{"AUDIO"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gcc, err := toGeminiRequestFromRaw(req(tt.config), nil, tt.model)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(gcc.ResponseModalities, tt.want) {
+				t.Errorf("ResponseModalities = %v, want %v", gcc.ResponseModalities, tt.want)
+			}
+		})
+	}
 }
