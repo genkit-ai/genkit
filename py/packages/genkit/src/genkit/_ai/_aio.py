@@ -1206,6 +1206,7 @@ class Genkit:
             raise user_error
         if stop_signal == signal.SIGINT:
             raise KeyboardInterrupt
+        # main returned normally (user_error is None), so result holds its value.
         return cast(T, result)
 
     def _reflection_ready_message(self) -> str:
