@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	aix "github.com/firebase/genkit/go/ai/exp"
@@ -40,21 +41,29 @@ const (
 )
 
 // watcher serves the status subscriptions of one store. It runs while the
-// store has subscribers: one connection LISTENs on the store's channel and
-// delivers each notification to the subscribers of its row, and a poll
-// re-reads every watched row as a fallback, after each (re)connect and then
-// every poll interval.
+// store has subscribers: one connection LISTENs on the store's channel, and a
+// notification makes it re-read the row it names; a poll re-reads every
+// watched row as a fallback, after each reconnect and then every poll
+// interval.
+//
+// Every status a subscriber receives comes from a read, and reads run one at
+// a time, each with its delivery, so each read sees the rows at least as new
+// as the one before it. A status therefore never goes back to an older one,
+// as it could if a notification, which can wait unread on the connection,
+// carried the status itself.
 type watcher struct {
 	pool    *pgxpool.Pool
 	channel string
 	poll    time.Duration
 	read    func(context.Context, []watchKey) (map[watchKey]aix.SnapshotStatus, error)
 
+	// reading holds a token while a read and its delivery run.
+	reading chan struct{}
+
 	mu      sync.Mutex
-	watches map[watchKey]*watch
-	// clock orders reads and notifications: each takes the next tick as it
-	// starts.
-	clock uint64
+	watches map[watchKey][]*subscriber
+	// reads counts the reads started so far.
+	reads uint64
 	// stop ends the running loop; nil while no loop runs.
 	stop context.CancelFunc
 	// ready is closed once the running loop's first LISTEN attempt finished.
@@ -64,35 +73,25 @@ type watcher struct {
 // watchKey identifies a watched row.
 type watchKey struct{ prefix, id string }
 
-// watch holds the subscribers of one row.
-type watch struct {
-	subs []*subscriber
-	// tick is the clock tick of the newest status delivered to the row's
-	// subscribers. A status from a read that started earlier may be older, so
-	// it is not delivered.
-	tick uint64
-}
-
 // subscriber is one subscription's channel and the status it last received.
 type subscriber struct {
 	ch   chan aix.SnapshotStatus
 	last aix.SnapshotStatus
 	seen bool
-	// since is the clock's tick when the subscription started. Only a read or
-	// notification that starts later resolves the subscription: it delivers
-	// a status, or, for a read that finds no row, closes the subscription if it
-	// has received nothing. What started earlier may be older than the status
-	// when the subscription started.
+	// since is the number of reads started when the subscription started. A
+	// read in progress then may be older than the row's status at that time,
+	// so only a later read resolves the subscription: it delivers the status,
+	// or, if it finds no row, closes a subscription that has received nothing.
 	since uint64
 	// stop releases the hook that ends the subscription with its context.
 	stop func() bool
 }
 
-// notification is the payload a save sends when it changes a row's status.
+// notification is the payload a save sends when it changes a row's status. It
+// names the row, and the watcher reads the status.
 type notification struct {
-	Prefix string             `json:"p"`
-	ID     string             `json:"id"`
-	Status aix.SnapshotStatus `json:"s"`
+	Prefix string `json:"p"`
+	ID     string `json:"id"`
 }
 
 func newWatcher(pool *pgxpool.Pool, channel string, poll time.Duration, read func(context.Context, []watchKey) (map[watchKey]aix.SnapshotStatus, error)) *watcher {
@@ -101,7 +100,8 @@ func newWatcher(pool *pgxpool.Pool, channel string, poll time.Duration, read fun
 		channel: channel,
 		poll:    poll,
 		read:    read,
-		watches: make(map[watchKey]*watch),
+		reading: make(chan struct{}, 1),
+		watches: make(map[watchKey][]*subscriber),
 	}
 }
 
@@ -111,13 +111,8 @@ func newWatcher(pool *pgxpool.Pool, channel string, poll time.Duration, read fun
 // the first read fails, by the first read that works.
 func (w *watcher) subscribe(ctx context.Context, key watchKey) <-chan aix.SnapshotStatus {
 	w.mu.Lock()
-	sub := &subscriber{ch: make(chan aix.SnapshotStatus, 1), since: w.clock}
-	wt := w.watches[key]
-	if wt == nil {
-		wt = &watch{}
-		w.watches[key] = wt
-	}
-	wt.subs = append(wt.subs, sub)
+	sub := &subscriber{ch: make(chan aix.SnapshotStatus, 1), since: w.reads}
+	w.watches[key] = append(w.watches[key], sub)
 	sub.stop = context.AfterFunc(ctx, func() { w.remove(key, sub) })
 	ready := w.startLocked()
 	w.mu.Unlock()
@@ -143,19 +138,17 @@ func (w *watcher) remove(key watchKey, sub *subscriber) {
 // removeLocked ends a subscription, closes its channel, and stops the loop
 // once nothing is watched. Removing a subscription twice is a no-op.
 func (w *watcher) removeLocked(key watchKey, sub *subscriber) {
-	wt := w.watches[key]
-	if wt == nil {
-		return
-	}
-	i := slices.Index(wt.subs, sub)
+	subs := w.watches[key]
+	i := slices.Index(subs, sub)
 	if i < 0 {
 		return
 	}
-	wt.subs = slices.Delete(wt.subs, i, i+1)
 	sub.stop()
 	close(sub.ch)
-	if len(wt.subs) == 0 {
+	if subs = slices.Delete(subs, i, i+1); len(subs) == 0 {
 		delete(w.watches, key)
+	} else {
+		w.watches[key] = subs
 	}
 	if len(w.watches) == 0 && w.stop != nil {
 		w.stop()
@@ -172,31 +165,6 @@ func (w *watcher) startLocked() chan struct{} {
 		go w.run(ctx, w.ready)
 	}
 	return w.ready
-}
-
-// nextTick advances the clock and returns its new tick.
-func (w *watcher) nextTick() uint64 {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.clock++
-	return w.clock
-}
-
-// deliverLocked hands st, from a read or notification that started at tick, to
-// every subscriber of wt that started earlier and does not hold it already,
-// unless a status from a later start was delivered first.
-func (w *watcher) deliverLocked(wt *watch, tick uint64, st aix.SnapshotStatus) {
-	if tick <= wt.tick {
-		return
-	}
-	wt.tick = tick
-	for _, sub := range wt.subs {
-		if tick <= sub.since || (sub.seen && sub.last == st) {
-			continue
-		}
-		sub.last, sub.seen = st, true
-		coalesceSend(sub.ch, st)
-	}
 }
 
 // run LISTENs and delivers notifications until ctx is cancelled. After every
@@ -271,12 +239,7 @@ func (w *watcher) receive(ctx context.Context, conn *pgx.Conn) error {
 		cancel()
 		switch {
 		case err == nil:
-			// With no payload (the pool's OnNotification handler took the
-			// notification, or the payload was too large to send), read every
-			// watched row instead.
-			if n == nil || !w.dispatch(n.Payload) {
-				w.pollAll(ctx)
-			}
+			w.notified(ctx, n)
 		case ctx.Err() != nil:
 			return ctx.Err()
 		case errors.Is(err, context.DeadlineExceeded):
@@ -290,20 +253,22 @@ func (w *watcher) receive(ctx context.Context, conn *pgx.Conn) error {
 	}
 }
 
-// dispatch delivers a notification to the subscribers of its row, and reports
-// whether the payload named a row.
-func (w *watcher) dispatch(payload string) bool {
-	var n notification
-	if err := json.Unmarshal([]byte(payload), &n); err != nil {
-		return false
+// notified re-reads the row a notification names, if it is watched. With no
+// usable payload (the pool's OnNotification handler took the notification, or
+// the payload was too large to send), it re-reads every watched row.
+func (w *watcher) notified(ctx context.Context, n *pgconn.Notification) {
+	var payload notification
+	if n == nil || json.Unmarshal([]byte(n.Payload), &payload) != nil {
+		w.pollAll(ctx)
+		return
 	}
+	key := watchKey{prefix: payload.Prefix, id: payload.ID}
 	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.clock++
-	if wt := w.watches[watchKey{prefix: n.Prefix, id: n.ID}]; wt != nil {
-		w.deliverLocked(wt, w.clock, n.Status)
+	_, watched := w.watches[key]
+	w.mu.Unlock()
+	if watched {
+		w.refresh(ctx, []watchKey{key})
 	}
-	return true
 }
 
 // pollAll re-reads every watched row; see refresh.
@@ -316,13 +281,24 @@ func (w *watcher) pollAll(ctx context.Context) {
 	}
 }
 
-// refresh reads the rows keys and delivers their statuses. A row that does not
-// exist closes the subscriptions to it that started before the read and have
-// received nothing, since the row was missing when they were established. A
-// subscription that received a status keeps waiting, as it would for a row
-// deleted between notifications. A failed read changes nothing.
+// refresh reads the rows keys, after any read in progress, and resolves the
+// subscriptions that started before it: each receives its row's status, and
+// one whose row does not exist closes if it has received nothing, since the
+// row was missing when it started. A subscription that received a status
+// keeps waiting, as it would for a row deleted between changes. A failed read
+// changes nothing.
 func (w *watcher) refresh(ctx context.Context, keys []watchKey) {
-	tick := w.nextTick()
+	select {
+	case w.reading <- struct{}{}:
+	case <-ctx.Done():
+		return
+	}
+	defer func() { <-w.reading }()
+	w.mu.Lock()
+	w.reads++
+	read := w.reads
+	w.mu.Unlock()
+
 	found, err := w.read(ctx, keys)
 	if err != nil {
 		if ctx.Err() == nil {
@@ -333,16 +309,17 @@ func (w *watcher) refresh(ctx context.Context, keys []watchKey) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	for _, k := range keys {
-		wt := w.watches[k]
-		if wt == nil {
-			continue
-		}
-		if st, ok := found[k]; ok {
-			w.deliverLocked(wt, tick, st)
-			continue
-		}
-		for _, sub := range slices.Clone(wt.subs) {
-			if !sub.seen && sub.since < tick {
+		st, ok := found[k]
+		for _, sub := range slices.Clone(w.watches[k]) {
+			switch {
+			case sub.since >= read:
+				// It started while this read ran; its own read follows.
+			case ok:
+				if !sub.seen || sub.last != st {
+					sub.last, sub.seen = st, true
+					coalesceSend(sub.ch, st)
+				}
+			case !sub.seen:
 				w.removeLocked(k, sub)
 			}
 		}

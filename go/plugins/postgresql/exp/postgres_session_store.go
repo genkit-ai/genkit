@@ -631,7 +631,7 @@ func (s *PostgresSessionStore[State]) SaveSnapshot(
 		// Nobody can watch a row before it exists, so only a status change of
 		// an existing row notifies.
 		if prev != nil && prev.status != next.Status {
-			if err := s.notify(ctx, tx, prefix, id, next.Status); err != nil {
+			if err := s.notify(ctx, tx, prefix, id); err != nil {
 				return err
 			}
 		}
@@ -801,11 +801,11 @@ func (s *PostgresSessionStore[State]) plan(ctx context.Context, tx pgx.Tx, prefi
 	return writePlan{kind: kindDiff, depth: parentDepth + 1, patch: patch}, nil
 }
 
-// notify queues a notification of id's new status for every store watching
-// it. PostgreSQL delivers it when the transaction commits, and drops it when
-// the transaction rolls back.
-func (s *PostgresSessionStore[State]) notify(ctx context.Context, tx pgx.Tx, prefix, id string, st aix.SnapshotStatus) error {
-	payload, err := json.Marshal(notification{Prefix: prefix, ID: id, Status: st})
+// notify queues a notification that id's status changed, for every store
+// watching it to re-read the row. PostgreSQL delivers it when the transaction
+// commits, and drops it when the transaction rolls back.
+func (s *PostgresSessionStore[State]) notify(ctx context.Context, tx pgx.Tx, prefix, id string) error {
+	payload, err := json.Marshal(notification{Prefix: prefix, ID: id})
 	if err != nil {
 		return err
 	}
