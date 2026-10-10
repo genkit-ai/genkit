@@ -44,7 +44,7 @@ from genkit._ai._evaluator import (
     define_batch_evaluator,
     define_evaluator,
 )
-from genkit._ai._formats import built_in_formats
+from genkit._ai._formats._builtin import built_in_formats
 from genkit._ai._formats._types import FormatDef
 from genkit._ai._generate import (
     define_generate_action,

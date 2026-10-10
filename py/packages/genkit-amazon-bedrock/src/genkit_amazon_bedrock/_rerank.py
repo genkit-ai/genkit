@@ -45,9 +45,9 @@ from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 from pydantic.alias_generators import to_camel
 
 from genkit import Document, GenkitError, Part
-from genkit_amazon_bedrock.embedders import InvokeModelTransport, document_text
-from genkit_amazon_bedrock.model_info import strip_inference_profile_prefix
-from genkit_amazon_bedrock.models import _from_botocore_error, _from_client_error
+from genkit_amazon_bedrock._embedders import InvokeModelTransport, document_text
+from genkit_amazon_bedrock._model_info import strip_inference_profile_prefix
+from genkit_amazon_bedrock._models import _from_botocore_error, _from_client_error
 
 logger = structlog.get_logger(__name__)
 

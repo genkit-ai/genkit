@@ -51,21 +51,28 @@ from genkit.plugin_api import (
     loop_local_client,
     to_json_schema,
 )
-from genkit_openai._models import (
-    SUPPORTED_EMBEDDING_MODELS,
-    SUPPORTED_IMAGE_MODELS,
-    SUPPORTED_OPENAI_MODELS,
+from genkit_openai._models._audio import (
     SUPPORTED_STT_MODELS,
     SUPPORTED_TTS_MODELS,
-    OpenAIImageModel,
-    OpenAIModel,
-    OpenAIModelHandler,
+    OpenAISttConfig,
     OpenAISTTModel,
+    OpenAITtsConfig,
     OpenAITTSModel,
 )
-from genkit_openai._models._audio import OpenAISttConfig, OpenAITtsConfig
-from genkit_openai._models._image import OpenAIDalleConfig, OpenAIGptImageConfig
-from genkit_openai._models._model_info import KnownGpt, get_default_openai_model_info
+from genkit_openai._models._handler import OpenAIModelHandler
+from genkit_openai._models._image import (
+    SUPPORTED_IMAGE_MODELS,
+    OpenAIDalleConfig,
+    OpenAIGptImageConfig,
+    OpenAIImageModel,
+)
+from genkit_openai._models._model import OpenAIModel
+from genkit_openai._models._model_info import (
+    SUPPORTED_EMBEDDING_MODELS,
+    SUPPORTED_OPENAI_MODELS,
+    KnownGpt,
+    get_default_openai_model_info,
+)
 from genkit_openai._models._utils import reraise_openai_error
 from genkit_openai._secrets import context_api_key
 from genkit_openai._typing import OpenAIConfig

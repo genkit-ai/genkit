@@ -37,29 +37,29 @@ from genkit.plugin_api import (
     Plugin,
     to_json_schema,
 )
-from genkit_amazon_bedrock.config import (
+from genkit_amazon_bedrock._config import (
     DEFAULT_TOTAL_TIMEOUT,
     BedrockConfig,
     BedrockImageConfig,
     ModelDefinition,
 )
-from genkit_amazon_bedrock.embedders import (
+from genkit_amazon_bedrock._embedders import (
     BedrockEmbedder,
     get_embedder_info,
     is_embedding_model,
     looks_like_embedding_model,
 )
-from genkit_amazon_bedrock.image import BedrockImageModel, is_image_model
-from genkit_amazon_bedrock.model_info import get_model_info
-from genkit_amazon_bedrock.models import BedrockModel
-from genkit_amazon_bedrock.rerank import (
+from genkit_amazon_bedrock._image import BedrockImageModel, is_image_model
+from genkit_amazon_bedrock._model_info import get_model_info
+from genkit_amazon_bedrock._models import BedrockModel
+from genkit_amazon_bedrock._rerank import (
     BedrockReranker,
     BedrockRerankOptions,
     RerankerRequest,
     RerankerResponse,
     is_rerank_model,
 )
-from genkit_amazon_bedrock.transport import BedrockTransport
+from genkit_amazon_bedrock._transport import BedrockTransport
 
 if TYPE_CHECKING:
     import boto3.session

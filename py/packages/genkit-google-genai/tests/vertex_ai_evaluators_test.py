@@ -20,13 +20,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-from genkit_google_genai._evaluators import (
-    VertexAIEvaluationMetricType,
-    create_vertex_evaluators,
-)
 from genkit_google_genai._evaluators._evaluation import (
     EvaluatorFactory,
+    VertexAIEvaluationMetricType,
     _stringify,
+    create_vertex_evaluators,
 )
 from google.auth.exceptions import DefaultCredentialsError, RefreshError
 

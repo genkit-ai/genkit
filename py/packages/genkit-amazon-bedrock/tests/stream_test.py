@@ -21,12 +21,12 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
-from genkit_amazon_bedrock.converters import (
+from genkit_amazon_bedrock._converters import (
     REASONING_SIGNATURE_METADATA_KEY,
     REDACTED_CONTENT_METADATA_KEY,
     to_model_response,
 )
-from genkit_amazon_bedrock.stream import consume_converse_stream
+from genkit_amazon_bedrock._stream import consume_converse_stream
 
 from genkit import ActionRunContext, FinishReason, GenkitError, Message, Part, Role
 from genkit.model import ModelRequest, ToolDefinition

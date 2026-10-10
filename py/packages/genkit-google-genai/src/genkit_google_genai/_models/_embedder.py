@@ -19,6 +19,9 @@
 import json
 from typing import Any, cast
 
+from genkit_google_genai._auth import GOOGLE_AUTH_ERRORS, raise_auth_error
+from genkit_google_genai._models._routing import strip_ref_prefixes
+from genkit_google_genai._models._utils import PartConverter
 from google import genai
 from google.genai import types as genai_types
 from google.genai.errors import APIError
@@ -26,9 +29,6 @@ from google.genai.errors import APIError
 from genkit import Document, Embedding, GenkitError, Part
 from genkit.embedder import EmbedderInfo, EmbedderSupports, EmbedRequest, EmbedResponse
 from genkit.plugin_api import wrap_http_error
-from genkit_google_genai._auth import GOOGLE_AUTH_ERRORS, raise_auth_error
-from genkit_google_genai._models._routing import strip_ref_prefixes
-from genkit_google_genai._models._utils import PartConverter
 
 # Static dimensions for known embedders. Keys are version-suffix free
 # (e.g. 'multimodalembedding', not 'multimodalembedding@001') because model

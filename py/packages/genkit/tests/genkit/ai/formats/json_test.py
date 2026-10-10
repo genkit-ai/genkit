@@ -8,7 +8,7 @@
 import pytest
 
 from genkit import Message, ModelResponseChunk, Part
-from genkit._ai._formats import JsonFormat
+from genkit._ai._formats._json import JsonFormat
 from genkit._core._model import chunk_for_stream
 
 

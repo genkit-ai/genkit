@@ -80,6 +80,6 @@ See Also:
     - Genkit documentation: https://genkit.dev/
 """
 
-from .handler import genkit_django_handler
+from ._handler import genkit_django_handler
 
 __all__ = ['genkit_django_handler']

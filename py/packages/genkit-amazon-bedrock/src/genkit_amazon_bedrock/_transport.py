@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING, Any
 import structlog
 
 from genkit import GenkitError
-from genkit_amazon_bedrock.config import (
+from genkit_amazon_bedrock._config import (
     DEFAULT_CONNECT_TIMEOUT,
     DEFAULT_MAX_POOL_CONNECTIONS,
     DEFAULT_MAX_RETRIES,

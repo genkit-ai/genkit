@@ -23,11 +23,18 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import ollama as ollama_api
 import pytest
-from genkit_ollama import Ollama, OllamaConnectionError, RequestHeaderParams, ollama_name
+from genkit_ollama import (
+    EmbeddingDefinition,
+    ModelDefinition,
+    Ollama,
+    OllamaConfig,
+    OllamaConnectionError,
+    OllamaSupports,
+    RequestHeaderParams,
+)
+from genkit_ollama._constants import OllamaAPITypes
 from genkit_ollama._errors import wrap_connection_errors
-from genkit_ollama.constants import OllamaAPITypes
-from genkit_ollama.embedders import EmbeddingDefinition
-from genkit_ollama.models import ModelDefinition, OllamaConfig, OllamaModel, OllamaSupports
+from genkit_ollama._models import OllamaModel
 from pydantic import BaseModel
 
 from genkit import Document, Genkit, GenkitError, Message, ModelResponse, Part, Role
@@ -107,7 +114,7 @@ async def test_resolve_action(kind: ActionKind, name: str, ollama_plugin_instanc
 
     assert action is not None
     assert action.kind == kind
-    assert action.name == ollama_name(name)
+    assert action.name == f'ollama/{name}'
     assert action.metadata is not None
     metadata = cast(dict[str, Any], action.metadata)
 
@@ -419,7 +426,7 @@ async def test_missing_inner_client_logs_instead_of_leaking() -> None:
     sdk_client._client = None  # simulate an SDK without the private httpx client to close
 
     with patch('ollama.AsyncClient', return_value=sdk_client):
-        with patch('genkit_ollama.plugin_api.logger') as mock_logger:
+        with patch('genkit_ollama._plugin.logger') as mock_logger:
             async with plugin._client_for_request():
                 pass
 
@@ -533,7 +540,7 @@ async def test_model_action_does_not_wrap_media_fetch_error() -> None:
         ]
     )
 
-    with patch('genkit_ollama.models._image_fetch_client', return_value=image_client):
+    with patch('genkit_ollama._models._image_fetch_client', return_value=image_client):
         # The raw httpx.ConnectError propagates; it is not wrapped as OllamaConnectionError.
         with pytest.raises(httpx.ConnectError):
             await action._fn(request, None)

@@ -18,7 +18,7 @@
 
 import httpx
 import pytest
-from genkit_vertexai.model_garden import ModelGarden
+from genkit_vertexai import ModelGarden
 
 from genkit import FinishReason, Genkit
 

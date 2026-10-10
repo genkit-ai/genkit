@@ -21,18 +21,15 @@ from typing import Any, cast
 
 import pytest
 from botocore.exceptions import ClientError, NoCredentialsError
-from genkit_amazon_bedrock import Bedrock
-from genkit_amazon_bedrock.rerank import (
+from genkit_amazon_bedrock import Bedrock, BedrockRerankOptions, RerankerRequest, RerankerResponse
+from genkit_amazon_bedrock._rerank import (
     BedrockReranker,
-    BedrockRerankOptions,
-    RerankerRequest,
-    RerankerResponse,
     build_rerank_body,
     build_rerank_response,
     coerce_rerank_options,
     is_rerank_model,
 )
-from genkit_amazon_bedrock.transport import BedrockTransport
+from genkit_amazon_bedrock._transport import BedrockTransport
 
 from genkit import Document, GenkitError, Part
 

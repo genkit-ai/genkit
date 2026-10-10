@@ -28,8 +28,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from genkit_vertexai import constants as const
-from genkit_vertexai.model_garden._model_info import (
+from genkit_vertexai import _constants as const
+from genkit_vertexai._model_garden._model_info import (
     SUPPORTED_OPENAI_COMPAT_MODELS,
     get_default_model_info,
 )
@@ -41,7 +41,7 @@ from genkit.model import ModelInfo, ModelRequest, model as create_model, model_a
 from genkit.plugin_api import Action, ActionKind, ActionMetadata, Plugin, loop_local_client
 
 if TYPE_CHECKING:
-    from genkit_vertexai.model_garden.client import CachedOpenAI
+    from genkit_vertexai._model_garden._client import CachedOpenAI
     from openai import AsyncOpenAI
 
 MODELGARDEN_PLUGIN_NAME = 'modelgarden'
@@ -144,8 +144,8 @@ class ModelGardenModel:
 
     @loop_local_client
     def _runtime_client(self) -> 'CachedOpenAI':
-        # client.py imports openai, which is an extra; load it on first generate.
-        from genkit_vertexai.model_garden.client import CachedOpenAI
+        # _client.py imports openai, which is an extra; load it on first generate.
+        from genkit_vertexai._model_garden._client import CachedOpenAI
 
         return CachedOpenAI(location=self._location, project=self._project)
 
@@ -193,7 +193,7 @@ class ModelGardenModel:
             # pins genkit-openai to this package's exact version, so Model
             # Garden reuses the OpenAI-compatible model class instead of
             # copying it.
-            from genkit_openai._models import OpenAIModel
+            from genkit_openai._models._model import OpenAIModel
 
             client = await self.create_client()
             info = _openai_compat_model_info(self.name)
@@ -316,7 +316,7 @@ class ModelGarden(Plugin):
 
         if name.startswith('anthropic/'):
             with _requires_extra(_ANTHROPIC_EXTRA):
-                from .anthropic import AnthropicModelGarden
+                from ._anthropic import AnthropicModelGarden
 
             location, project = await self._location_and_project(name)
             claude = AnthropicModelGarden(model=name, location=location, project=project)

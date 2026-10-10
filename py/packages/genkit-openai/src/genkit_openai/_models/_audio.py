@@ -28,12 +28,6 @@ from __future__ import annotations
 import base64
 from typing import Any
 
-from openai import APIError, AsyncOpenAI
-from openai._legacy_response import HttpxBinaryResponseContent
-from openai.types.audio import Transcription, Translation
-
-from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, Part, Role
-from genkit.model import ModelConfig, ModelInfo, ModelRequest, Supports
 from genkit_openai._models._utils import (
     _extract_media,
     _extract_text,
@@ -43,6 +37,12 @@ from genkit_openai._models._utils import (
     pop_extra_body,
     reraise_openai_error,
 )
+from openai import APIError, AsyncOpenAI
+from openai._legacy_response import HttpxBinaryResponseContent
+from openai.types.audio import Transcription, Translation
+
+from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, Part, Role
+from genkit.model import ModelConfig, ModelInfo, ModelRequest, Supports
 
 
 class OpenAITtsConfig(ModelConfig):

@@ -24,13 +24,13 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
+from genkit_openai._models._utils import _extract_text, extract_config_dict, pop_extra_body, reraise_openai_error
 from openai import APIError, AsyncOpenAI
 from openai.types.images_response import ImagesResponse
 from pydantic import Field
 
 from genkit import ActionRunContext, FinishReason, Message, ModelResponse, Part, Role
 from genkit.model import ModelConfig, ModelInfo, ModelRequest, Supports
-from genkit_openai._models._utils import _extract_text, extract_config_dict, pop_extra_body, reraise_openai_error
 
 
 class OpenAIDalleConfig(ModelConfig):
