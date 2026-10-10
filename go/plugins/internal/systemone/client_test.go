@@ -141,6 +141,11 @@ func TestDecide(t *testing.T) {
 	if body["model"] != "jev-1.13.0" || body["state"] != "hi" {
 		t.Errorf("body = %v", body)
 	}
+	for _, field := range []string{"images", "audio", "videos"} {
+		if _, ok := body[field]; ok {
+			t.Errorf("body = %v: %s was sent with none to send", body, field)
+		}
+	}
 	questions := body["questions"].(map[string]any)
 	if q := questions["department"].(map[string]any); q["type"] != "choice" || q["instructions"] != "Which team should handle this?" {
 		t.Errorf("department question on the wire = %v", q)

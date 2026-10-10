@@ -208,8 +208,38 @@ the messages.
 A prompt template renders text, so a template that renders JSON needs
 `stateJSON: true` in its config to produce an object state.
 
-Media parts are rejected, as are tools: the model takes text and JSON only, and
-never calls anything.
+Tools are rejected: the model never calls anything.
+
+### Media
+
+Media parts become the request's media, by kind: images go in `images`, audio
+in `audio`, and video in `videos`, each in the order its parts appear, messages
+first and documents after. The servers place them before the state, and the
+text of the same messages stays the state; a message of media alone is a turn
+with empty text. A request may carry media and no text, except to Ollama. Media
+goes out as a base64 data URL, or as raw base64 to Ollama; a part given as a URL
+is refused rather than fetched, so download it first, for example with the
+`ai.DownloadRequestMedia` middleware. Any other media type is refused.
+
+```go
+damage, _, err := genkit.GenerateData[Damage](ctx, g,
+	ai.WithModelName("liquid/d1"),
+	ai.WithMessages(ai.NewUserMessage(
+		ai.NewTextPart("Customer's note: arrived like this."),
+		ai.NewMediaPart("image/jpeg", photoDataURL))))
+```
+
+Media is an extension to the protocol, and a server that does not know a field
+can drop it and answer as if nothing had been sent. A plugin therefore refuses
+media before the request is sent, kind by kind, unless its `Images`, `Audio`, or
+`Video` is `systemonex.MediaSupported`. `Ollama()` sets `Images`, and so does a
+server of your own that takes images, such as Liquid's in
+[Any other server](#any-other-server). Then a model is sent that kind, and the
+server refuses it for a model that cannot read it, so a new model needs no
+setup. A model's `ModelSpec` overrides the plugin's setting, kind by kind,
+either way. Its zero value keeps the plugin's, so an entry that only sets a
+`Label` changes nothing else. How much media a request takes, and how large, is
+the server's to say.
 
 ## Prompt files
 
@@ -238,12 +268,14 @@ on the day it ships.
 
 | Constructor    | Models                                  | Key                  | Notes                                         |
 | -------------- | --------------------------------------- | -------------------- | --------------------------------------------- |
-| `TypeSafe()`   | `typesafe/jev-1.13.0`                   | `TYPESAFE_API_KEY`   | `TYPESAFE_BASE_URL` is read too; lists models |
-| `OpenRouter()` | `openrouter-decisions/liquid/d1`, `openrouter-decisions/typesafe/jev-1.13`, `openrouter-decisions/~typesafe/jev-latest` | `OPENROUTER_API_KEY` | alpha Decisions API; lists OpenRouter's decision models; cost in `resp.Usage.Custom["cost"]` |
+| `TypeSafe()`   | `typesafe/jev-1.13.0`                   | `TYPESAFE_API_KEY`   | `TYPESAFE_BASE_URL` is read too; lists models; text only |
+| `OpenRouter()` | `openrouter-decisions/liquid/d1`, `openrouter-decisions/typesafe/jev-1.13`, `openrouter-decisions/~typesafe/jev-latest` | `OPENROUTER_API_KEY` | alpha Decisions API; lists OpenRouter's decision models; cost in `resp.Usage.Custom["cost"]`; text only |
+| `Ollama()`     | `ollama-decisions/clef`                 | none                 | `http://localhost:11434` unless `BaseURL` is set; images as raw base64; a request needs text |
 
 A gateway serves several vendors' models under one key, so one plugin reaches
 all of them. OpenRouter's is named `openrouter-decisions` because the plugin for
-its chat models already has `openrouter`, and an app often uses both.
+its chat models already has `openrouter`, and an app often uses both; Ollama's
+is `ollama-decisions` for the same reason.
 
 A constructor returns a `*SystemOne` set up for its server, and its fields can
 still be changed before `genkit.Init`, such as to pass a key from a secret
@@ -282,6 +314,28 @@ if err != nil {
 cost := resp.Usage.Custom["cost"] // in OpenRouter credits
 ```
 
+The API is in alpha, and its models are text only here. It takes images inside
+the state, and can route them to a provider that drops them and answers anyway,
+so the plugin refuses media before the request is sent.
+
+### Ollama
+
+A local Ollama serves the decision models it has pulled, such as Clef, with no
+key, and they read images. The Dev UI lists Clef, and `Models` adds the other
+models pulled.
+
+```go
+ollama := systemonex.Ollama()
+ollama.BaseURL = "http://gpu-box:11434" // when not on localhost
+g := genkit.Init(ctx, genkit.WithPlugins(ollama))
+
+damage, _, err := genkit.GenerateData[Damage](ctx, g,
+	ai.WithModelName("ollama-decisions/clef"),
+	ai.WithMessages(ai.NewUserMessage(
+		ai.NewTextPart("Customer's note: arrived like this."), // Ollama needs text beside images
+		ai.NewMediaPart("image/jpeg", photoDataURL))))
+```
+
 ### Any other server
 
 Any other server that speaks the protocol takes a few fields. `Provider` names
@@ -297,13 +351,10 @@ liquid := &systemonex.SystemOne{
 	BaseURL:    "https://api.liquid.ai/decisions",
 	ModelsPath: "/v1/models",
 	APIKey:     os.Getenv("LIQUID_API_KEY"),
+	Images:     systemonex.MediaSupported, // d1 reads images
 }
 
-// Clef on a local Ollama, which takes no key.
-local := &systemonex.SystemOne{Provider: "local", BaseURL: "http://localhost:11434"}
-
-g := genkit.Init(ctx, genkit.WithPlugins(liquid, local))
-// liquid/d1, local/clef
+g := genkit.Init(ctx, genkit.WithPlugins(liquid)) // liquid/d1
 ```
 
 A proxy that forwards the native protocol, such as LiteLLM, is reached the same
@@ -358,7 +409,6 @@ data part.
 - The instructions of a field in a decision type are a string, since a
   field's description is a tag. Structured instructions need a runtime
   question.
-- Text only. Media parts are refused.
 - Each server sets its own limits on questions and tokens; jev takes up to 64k
   tokens of state and questions together, and up to 32k of state and its
   longest question.

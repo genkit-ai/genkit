@@ -56,6 +56,7 @@ const (
 //		BaseURL:    "https://api.liquid.ai/decisions",
 //		ModelsPath: "/v1/models",
 //		APIKey:     os.Getenv("LIQUID_API_KEY"),
+//		Images:     systemonex.MediaSupported,
 //	}
 //
 // The constructors, such as [TypeSafe], return one set up for a known
@@ -92,6 +93,16 @@ type SystemOne struct {
 	// too, as a model with no description.
 	Models map[string]ModelSpec
 
+	// Images, Audio, and Video say whether the models read each kind of
+	// media. The zero value refuses a request with media of that kind
+	// before it is sent, since media is an extension to the protocol, and
+	// a server that does not know a field can drop it and answer without
+	// the media, as OpenRouter's does for a model that reads none.
+	// [MediaSupported] sends it, for a server that takes it, and leaves a
+	// model that cannot read it to the server to refuse. A model's
+	// ModelSpec overrides each.
+	Images, Audio, Video MediaSupport
+
 	// HTTPClient sends the requests. It is the escape hatch to transport
 	// settings: timeouts, proxies, and client middleware. When nil, a
 	// client with a 30-second timeout is used.
@@ -119,8 +130,10 @@ type SystemOne struct {
 
 	mu     sync.Mutex
 	client *systemone.Client
-	// models is Models as Init read it, keyed by the server's ID.
+	// models is Models as Init read it, keyed by the server's ID, and
+	// media is Images, Audio, and Video as Init read them.
 	models map[string]ModelSpec
+	media  [3]MediaSupport
 
 	// listMu serializes model listings, so concurrent ones share a fetch;
 	// listed is the last list of actions, and listedUntil when it goes
@@ -135,7 +148,25 @@ type ModelSpec struct {
 	// Label names the model in the Dev UI. Empty means one built from the
 	// ID.
 	Label string
+
+	// Images, Audio, and Video override the plugin's for this model. The
+	// zero value keeps the plugin's, so an entry that only sets a Label
+	// changes nothing else.
+	Images, Audio, Video MediaSupport
 }
+
+// MediaSupport says whether models read one kind of media.
+type MediaSupport int
+
+const (
+	// MediaDefault keeps the setting it overrides: for a model, the
+	// plugin's; for the plugin, refusing the media.
+	MediaDefault MediaSupport = iota
+	// MediaSupported sends the media.
+	MediaSupported
+	// MediaUnsupported refuses a request with the media before it is sent.
+	MediaUnsupported
+)
 
 // preset is what a constructor sets for its server beyond the public
 // fields: where its key and base URL come from.
@@ -192,6 +223,7 @@ func (s *SystemOne) Init(ctx context.Context) []api.Action {
 	if path == "/" {
 		path = ""
 	}
+	s.media = [3]MediaSupport{s.Images, s.Audio, s.Video}
 	s.models = make(map[string]ModelSpec, len(s.Models))
 	for key, spec := range s.Models {
 		id := internal.TrimProvider(s.Provider, key)
@@ -324,15 +356,24 @@ func (s *SystemOne) initialized() *systemone.Client {
 
 // newModel builds the model action for one ID.
 func (s *SystemOne) newModel(c *systemone.Client, id string) *ai.ModelAction {
-	label := s.models[id].Label
+	spec := s.models[id]
+	label := spec.Label
 	if label == "" {
 		label = internal.ProviderLabel(cmp.Or(s.preset.label, c.Endpoint.Name), id)
 	}
-	return systemone.NewModel(c, api.NewName(c.Endpoint.Name, id), id, label)
+	reads := func(plugin, model MediaSupport) bool {
+		return cmp.Or(model, plugin) == MediaSupported
+	}
+	return systemone.NewModel(c, api.NewName(c.Endpoint.Name, id), id, systemone.Spec{Label: label, Reads: systemone.Reads{
+		Images: reads(s.media[0], spec.Images),
+		Audio:  reads(s.media[1], spec.Audio),
+		Video:  reads(s.media[2], spec.Video),
+	}})
 }
 
 // TypeSafe is TypeSafe AI's own API, which serves jev, the first System One
-// model. Its models are typesafe/<id>, such as typesafe/jev-1.13.0. The
+// model. Its models are typesafe/<id>, such as typesafe/jev-1.13.0, and
+// read text and JSON only. The
 // API key comes from TYPESAFE_API_KEY and the base URL from
 // TYPESAFE_BASE_URL, the variables TypeSafe's SDKs read. Pin a version in
 // production: confidence thresholds tuned against one release do not carry
@@ -359,6 +400,11 @@ func TypeSafe() *SystemOne {
 // API key comes from OPENROUTER_API_KEY. The Dev UI lists the models
 // OpenRouter lists as decision models, and the best known of them when the
 // listing fails, and a request's cost is reported in the response's usage.
+//
+// Its models are text only here. OpenRouter's Decisions API takes images
+// in the state, not in the images field, and it can route a request to a
+// model or a provider that drops them and answers without them, so a
+// request with media is refused before it is sent.
 func OpenRouter() *SystemOne {
 	return &SystemOne{
 		Provider:   "openrouter-decisions",

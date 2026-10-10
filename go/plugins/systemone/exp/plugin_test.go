@@ -590,7 +590,7 @@ func TestWireHooks(t *testing.T) {
 func TestExtraCannotReplaceTheRequest(t *testing.T) {
 	fake := &systemonetest.Server{}
 	g := newGenkit(t, fake)
-	for _, field := range []string{"model", "state", "questions", "images"} {
+	for _, field := range []string{"model", "state", "questions", "images", "audio", "videos"} {
 		_, _, err := genkit.GenerateData[triage](t.Context(), g,
 			ai.WithModelName("typesafe/jev-latest"),
 			ai.WithPrompt("hi"),
@@ -692,6 +692,19 @@ func TestOpenRouter(t *testing.T) {
 		}
 	}
 
+	// Its models are text only, so an image is refused before sending.
+	calls := fake.Calls()
+	for _, id := range []string{"cloudflare/clef-flash", "liquid/d1"} {
+		_, _, err := genkit.GenerateData[triage](t.Context(), g, ai.WithModelName("openrouter-decisions/"+id),
+			ai.WithMessages(ai.NewUserMessage(ai.NewTextPart("hi"), ai.NewMediaPart("image/png", "data:image/png;base64,iVBORw0KGgo="))))
+		if err == nil || !strings.Contains(err.Error(), "media") {
+			t.Errorf("%s: error = %v, want the image refused", id, err)
+		}
+	}
+	if fake.Calls() != calls {
+		t.Error("an image was sent to OpenRouter")
+	}
+
 	// The listing is OpenRouter's models filtered to decision models, by
 	// ID, with the known models beside them.
 	known := []string{
@@ -734,4 +747,71 @@ func TestOpenRouterRequiresAKey(t *testing.T) {
 		}
 	}()
 	OpenRouter().Init(t.Context())
+}
+
+func TestMedia(t *testing.T) {
+	fake := &systemonetest.Server{}
+	srv := httptest.NewServer(fake)
+	t.Cleanup(srv.Close)
+	g := genkit.Init(t.Context(), genkit.WithPlugins(&SystemOne{
+		Provider: "local",
+		BaseURL:  srv.URL,
+		Images:   MediaSupported,
+		Models: map[string]ModelSpec{
+			"text-model": {Images: MediaUnsupported},
+			"omni-model": {Audio: MediaSupported, Video: MediaSupported},
+		},
+	}, &SystemOne{
+		// A server not known to take images.
+		Provider: "proxy",
+		BaseURL:  srv.URL,
+		Models:   map[string]ModelSpec{"vision-model": {Images: MediaSupported}, "labeled": {Label: "Labeled"}},
+	}))
+	const png = "data:image/png;base64,iVBORw0KGgo="
+	photo := ai.WithMessages(ai.NewUserMessage(ai.NewTextPart("Is the parcel damaged?"), ai.NewMediaPart("image/png", png)))
+
+	// A model with no description on a plugin that takes images is sent
+	// the image, ahead of the state.
+	if _, _, err := genkit.GenerateData[triage](t.Context(), g, ai.WithModelName("local/vision-model"), photo); err != nil {
+		t.Fatal(err)
+	}
+	_, body := fake.Last(t)
+	if !reflect.DeepEqual(body["images"], []any{png}) || body["state"] != "Is the parcel damaged?" {
+		t.Errorf("body images = %v, state = %v, want the image apart from the text", body["images"], body["state"])
+	}
+
+	// A model described as text only refuses it before sending.
+	calls := fake.Calls()
+	if _, _, err := genkit.GenerateData[triage](t.Context(), g, ai.WithModelName("local/text-model"), photo); err == nil || !strings.Contains(err.Error(), "media") {
+		t.Errorf("text-only model: error = %v, want the image refused", err)
+	}
+	if fake.Calls() != calls {
+		t.Error("an image was sent to a text-only model")
+	}
+
+	// By default a plugin refuses images, for every model but the ones
+	// that opt in; an entry that only sets a label keeps the default.
+	for _, model := range []string{"proxy/new-model", "proxy/labeled"} {
+		if _, _, err := genkit.GenerateData[triage](t.Context(), g, ai.WithModelName(model), photo); err == nil || !strings.Contains(err.Error(), "media") {
+			t.Errorf("%s: error = %v, want the image refused", model, err)
+		}
+	}
+	if _, _, err := genkit.GenerateData[triage](t.Context(), g, ai.WithModelName("proxy/vision-model"), photo); err != nil {
+		t.Errorf("model that opts in: %v", err)
+	}
+
+	// Each kind is set apart: audio and video go to a model that reads
+	// them, in their own fields, and a model that reads images only
+	// refuses them.
+	const wav, mp4 = "data:audio/wav;base64,UklGRg==", "data:video/mp4;base64,AAAAIGZ0eXA="
+	clip := ai.WithMessages(ai.NewUserMessage(ai.NewTextPart("Is the fan running?"), ai.NewMediaPart("audio/wav", wav), ai.NewMediaPart("video/mp4", mp4)))
+	if _, _, err := genkit.GenerateData[triage](t.Context(), g, ai.WithModelName("local/omni-model"), clip); err != nil {
+		t.Fatal(err)
+	}
+	if _, body = fake.Last(t); !reflect.DeepEqual(body["audio"], []any{wav}) || !reflect.DeepEqual(body["videos"], []any{mp4}) || body["images"] != nil {
+		t.Errorf("body = %v, want the audio and the video in their own fields", body)
+	}
+	if _, _, err := genkit.GenerateData[triage](t.Context(), g, ai.WithModelName("local/vision-model"), clip); err == nil || !strings.Contains(err.Error(), "audio/wav media") {
+		t.Errorf("audio to a vision model: error = %v, want it refused", err)
+	}
 }
