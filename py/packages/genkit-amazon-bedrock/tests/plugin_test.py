@@ -154,6 +154,7 @@ async def test_list_and_resolve_route_a_model_id_the_same_way() -> None:
     # the Dev UI row must match the action it resolves to.
     plugin = Bedrock(region='us-east-1', models=['amazon.nova-lite-v1:0', 'amazon.nova-canvas-v1:0'])
     listed = await plugin.list_actions()
+    assert [m.name for m in listed] == ['bedrock/amazon.nova-lite-v1:0', 'bedrock/amazon.nova-canvas-v1:0']
 
     for metadata in listed:
         action = await plugin.resolve(ActionKind.MODEL, metadata.name.removeprefix('bedrock/'))
@@ -284,7 +285,7 @@ async def test_everything_listed_can_actually_resolve() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_listed_rerank_model_is_not_listed() -> None:
+async def test_a_rerank_id_in_models_is_not_listed() -> None:
     # The other side of the listed-can-resolve invariant: the plugin has no
     # rerank action, so a rerank ID has nothing to advertise.
     plugin = Bedrock(
@@ -293,6 +294,14 @@ async def test_a_listed_rerank_model_is_not_listed() -> None:
     )
     listed = await plugin.list_actions()
     assert [a.name for a in listed] == ['bedrock/amazon.nova-lite-v1:0']
+
+
+def test_a_bare_string_id_list_is_rejected() -> None:
+    # A missing bracket would iterate the string and list one model per character.
+    with pytest.raises(TypeError, match=r"models=\['amazon.nova-lite-v1:0'\]"):
+        Bedrock(region='us-east-1', models=cast(Any, 'amazon.nova-lite-v1:0'))
+    with pytest.raises(TypeError, match=r"embedders=\['amazon.titan-embed-text-v2:0'\]"):
+        Bedrock(region='us-east-1', embedders=cast(Any, 'amazon.titan-embed-text-v2:0'))
 
 
 @pytest.mark.asyncio
@@ -437,3 +446,15 @@ async def test_generate_bedrock_arn_model_keeps_full_path() -> None:
     action = await ai.registry.resolve_action(ActionKind.MODEL, f'bedrock/{arn}')
     assert action is not None
     assert action.name == f'bedrock/{arn}'
+
+
+@pytest.mark.asyncio
+async def test_generate_with_a_rerank_id_raises_not_found_and_sends_nothing() -> None:
+    """The plugin has no rerank action, so a rerank ID fails as a GenkitError before any AWS call."""
+    ai, transport = _genkit_with_fake_converse()
+
+    with pytest.raises(GenkitError) as err:
+        await ai.generate(model='bedrock/cohere.rerank-v3-5:0', prompt='hi')
+
+    assert err.value.status == 'NOT_FOUND'
+    assert transport.calls == []

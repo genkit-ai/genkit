@@ -203,8 +203,8 @@ def get_model_info(
     )
 
 
-# Rerank models have no Converse path. Bedrock serves them over InvokeModel,
-# which this plugin does not wrap, so they must never resolve as chat models.
+# Rerank models have no Converse path, and this plugin has no rerank action,
+# so they must never resolve as chat or image models.
 _RERANK_PATTERNS = ('cohere.rerank', 'amazon.rerank')
 
 

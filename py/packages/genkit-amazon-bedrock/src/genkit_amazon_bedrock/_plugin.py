@@ -60,16 +60,8 @@ logger = structlog.get_logger(__name__)
 BEDROCK_PLUGIN_NAME = 'bedrock'
 
 
-def bedrock_name(name: str) -> str:
-    """Fully qualified Genkit action name for a Bedrock model.
-
-    Args:
-        name: Bedrock model ID.
-
-    Returns:
-        The namespaced action name, e.g. ``bedrock/anthropic.claude-...``.
-    """
-    return f'{BEDROCK_PLUGIN_NAME}/{name}'
+def _action_name(model_id: str) -> str:
+    return f'{BEDROCK_PLUGIN_NAME}/{model_id}'
 
 
 def _model_type(model_id: str) -> Literal['chat', 'image']:
@@ -80,6 +72,19 @@ def _model_type(model_id: str) -> Literal['chat', 'image']:
     time. Embedders classify by ID the same way.
     """
     return 'image' if is_image_model(model_id) else 'chat'
+
+
+def _config_schema(model_type: Literal['chat', 'image']) -> type[BedrockConfig] | type[BedrockImageConfig]:
+    """The config schema for a route; resolve and list both read it so the Dev UI matches the action."""
+    return BedrockImageConfig if model_type == 'image' else BedrockConfig
+
+
+def _require_id_list(arg: str, value: list[str] | None) -> list[str]:
+    # A missing bracket (models='amazon.nova-lite-v1:0') would otherwise
+    # iterate the string and list one action per character.
+    if isinstance(value, str):
+        raise TypeError(f'{arg}= takes a list of Bedrock model IDs, got a str. Did you mean {arg}=[{value!r}]?')
+    return list(value or [])
 
 
 class Bedrock(Plugin):
@@ -137,8 +142,8 @@ class Bedrock(Plugin):
         self.max_pool_connections = max_pool_connections
         self.total_timeout = total_timeout
         self._session = session
-        self.models = models or []
-        self.embedders = embedders or []
+        self.models = _require_id_list('models', models)
+        self.embedders = _require_id_list('embedders', embedders)
         self._transport = BedrockTransport(
             region=region,
             max_retries=max_retries,
@@ -201,19 +206,19 @@ class Bedrock(Plugin):
 
     def _create_model_action(self, model_id: str, model_type: Literal['chat', 'image'] = 'chat') -> Action:
         model_info = get_model_info(model_id, model_type)
-        is_image = model_type == 'image'
+        config_schema = _config_schema(model_type)
 
         async def _generate(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
-            if is_image:
+            if model_type == 'image':
                 image_model = BedrockImageModel(model_id=model_id, transport=self._transport)
                 return await image_model.generate(request, ctx)
             model = BedrockModel(model_id=model_id, transport=self._transport)
             return await model.generate(request, ctx)
 
         return create_model(
-            bedrock_name(model_id),
+            _action_name(model_id),
             _generate,
-            config_schema=BedrockImageConfig if is_image else BedrockConfig,
+            config_schema=config_schema,
             metadata={
                 'model': {
                     'label': model_info.label,
@@ -221,7 +226,7 @@ class Bedrock(Plugin):
                     'supports': (
                         model_info.supports.model_dump(by_alias=True, exclude_none=True) if model_info.supports else {}
                     ),
-                    'customOptions': to_json_schema(BedrockImageConfig if is_image else BedrockConfig),
+                    'customOptions': to_json_schema(config_schema),
                 },
             },
         )
@@ -232,7 +237,7 @@ class Bedrock(Plugin):
             return await embedder.embed(request)
 
         return embedder(
-            bedrock_name(model_id),
+            _action_name(model_id),
             _embed,
             info=get_embedder_info(model_id),
         )
@@ -251,18 +256,21 @@ class Bedrock(Plugin):
         Returns:
             ActionMetadata for each configured model and embedder.
         """
-        actions: list[ActionMetadata] = [
-            model_action_metadata(
-                name=bedrock_name(model_id),
-                info=get_model_info(model_id, _model_type(model_id)).model_dump(by_alias=True, exclude_none=True),
-                config_schema=BedrockImageConfig if _model_type(model_id) == 'image' else BedrockConfig,
+        actions: list[ActionMetadata] = []
+        for model_id in self.models:
+            if looks_like_embedding_model(model_id) or is_rerank_model(model_id):
+                continue
+            model_type = _model_type(model_id)
+            actions.append(
+                model_action_metadata(
+                    name=_action_name(model_id),
+                    info=get_model_info(model_id, model_type).model_dump(by_alias=True, exclude_none=True),
+                    config_schema=_config_schema(model_type),
+                )
             )
-            for model_id in self.models
-            if not looks_like_embedding_model(model_id) and not is_rerank_model(model_id)
-        ]
         models = len(actions)
         actions.extend(
-            embedder_action_metadata(bedrock_name(model_id), get_embedder_info(model_id))
+            embedder_action_metadata(_action_name(model_id), get_embedder_info(model_id))
             for model_id in self.embedders
             if is_embedding_model(model_id)
         )
