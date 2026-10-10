@@ -1454,8 +1454,7 @@ tests:
           - modelChunk:
               role: tool
               content:
-                - toolResponse:
-                    { name: testTool, ref: r1, output: tool called }
+                - toolResponse: { name: testTool, ref: r1, output: tool called }
           # A failed turn still ends with a turnEnd, delivered before the
           # output resolves, carrying finishReason 'failed'.
           - turnEnd: { finishReason: failed }
