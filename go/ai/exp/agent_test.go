@@ -8777,6 +8777,35 @@ func TestPromptAgent_InlineMessages_ConcurrentInvocations(t *testing.T) {
 	}
 }
 
+func TestPromptAgent_InlineMiddlewareFunc(t *testing.T) {
+	ctx := context.Background()
+	reg := setupPromptTestRegistry(t)
+
+	// The agent's turn runs the prompt action, which encodes the rendered
+	// request (MiddlewareRef config included) for output validation.
+	var called bool
+	mw := ai.MiddlewareFunc(func(ctx context.Context) (*ai.Hooks, error) {
+		return &ai.Hooks{
+			WrapGenerate: func(ctx context.Context, p *ai.GenerateParams, next ai.GenerateNext) (*ai.ModelResponse, error) {
+				called = true
+				return next(ctx, p)
+			},
+		}, nil
+	})
+
+	af := DefineAgent[testState](reg, "inlineMiddlewarePrompt", InlinePrompt{
+		ai.WithModelName("test/echo"),
+		ai.WithUse(mw),
+	})
+
+	if _, err := af.RunText(ctx, "hello"); err != nil {
+		t.Fatalf("RunText failed: %v", err)
+	}
+	if !called {
+		t.Error("inline middleware hook not called")
+	}
+}
+
 func TestAgent_SendNilInput_Rejected(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)

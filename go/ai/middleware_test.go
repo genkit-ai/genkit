@@ -18,6 +18,7 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -449,6 +450,35 @@ func TestMiddlewareFunc(t *testing.T) {
 	assertNoError(t, err)
 	if !called {
 		t.Error("inline middleware hook not called")
+	}
+}
+
+func TestMiddlewareFuncSerializedRequest(t *testing.T) {
+	r := newTestRegistry(t)
+	m := defineFakeModel(t, r, fakeModelConfig{})
+
+	opts := &GenerateActionOptions{
+		Model:    m.Name(),
+		Messages: []*Message{NewUserTextMessage("hi")},
+		Use: []*MiddlewareRef{{
+			Name:   "inline",
+			Config: MiddlewareFunc(func(ctx context.Context) (*Hooks, error) { return &Hooks{}, nil }),
+		}},
+	}
+	// Trace spans record the request as JSON; a closure must not fail that.
+	b, err := json.Marshal(opts)
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+
+	// Replayed from that JSON, the ref has no closure behind it.
+	var replayed GenerateActionOptions
+	if err := json.Unmarshal(b, &replayed); err != nil {
+		t.Fatalf("unmarshal request: %v", err)
+	}
+	_, err = GenerateWithRequest(testCtx, r, &replayed, nil, nil)
+	if got := status.Of(err); got != status.FailedPrecondition {
+		t.Errorf("status = %v, want FAILED_PRECONDITION (err: %v)", got, err)
 	}
 }
 

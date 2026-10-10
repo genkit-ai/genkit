@@ -16,6 +16,7 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -1109,6 +1110,40 @@ func TestDefinePrompt_WithMiddlewareMetadata(t *testing.T) {
 
 	if diff := cmp.Diff(map[string]any{"foo": "bar"}, use[0].Config); diff != "" {
 		t.Errorf("Middleware config mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestDefinePrompt_WithMiddlewareFunc(t *testing.T) {
+	reg := newTestRegistry(t)
+	m := defineFakeModel(t, reg, fakeModelConfig{})
+
+	var called bool
+	mw := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
+		return &Hooks{
+			WrapGenerate: func(ctx context.Context, p *GenerateParams, next GenerateNext) (*ModelResponse, error) {
+				called = true
+				return next(ctx, p)
+			},
+		}, nil
+	})
+	p := DefinePrompt(reg, "test-mwfunc", WithModel(m), WithPrompt("hello"), WithUse(mw))
+
+	// The prompt action's output (the rendered request) is encoded for
+	// validation, so a closure in it must encode too.
+	if _, err := p.Execute(testCtx); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !called {
+		t.Error("inline middleware hook not called")
+	}
+
+	// The reflection API lists actions by encoding their metadata.
+	got, err := json.Marshal(p.(api.Action).Desc().Metadata["prompt"].(map[string]any)["use"])
+	if err != nil {
+		t.Fatalf("marshal prompt metadata use: %v", err)
+	}
+	if want := `[{"config":null,"name":"inline"}]`; string(got) != want {
+		t.Errorf("prompt metadata use = %s, want %s", got, want)
 	}
 }
 
