@@ -75,9 +75,10 @@ const (
 	sessionIndexSuffix = "_session_idx"
 	parentIndexSuffix  = "_parent_idx"
 	// maxChainHops bounds the walk from a row to its checkpoint. A chain the
-	// store writes never exceeds the checkpoint interval; the bound only stops
-	// a walk through corrupted rows.
-	maxChainHops = 1 << 20
+	// store writes is shorter than the checkpoint interval, which is at most
+	// maxCheckpointInterval, so the bound only stops a walk through corrupted
+	// rows, such as a cycle a manual UPDATE made, early.
+	maxChainHops = maxCheckpointInterval
 	// maxNotifyPayload keeps a notification under PostgreSQL's 8000-byte
 	// payload limit. A larger one goes empty, and every watcher then re-reads
 	// the rows it watches.
