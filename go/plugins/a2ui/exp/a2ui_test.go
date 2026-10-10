@@ -366,6 +366,45 @@ func TestMiddlewarePreservesTextPartMetadata(t *testing.T) {
 	}
 }
 
+// A unary Gemini reply is one text part with the thought signature in its
+// Metadata. When that part holds an a2ui block it is rebuilt into segments, and
+// the signature must survive on a trailing empty text part placed after all of
+// the part's text, including a tail the parser held back (here the closing
+// backtick, which could open a fence).
+func TestTransformResponseKeepsRebuiltPartMetadata(t *testing.T) {
+	catalog := BasicCatalog()
+	sig := "thought-sig-unary"
+	part := ai.NewTextPart("Here you go:\n```a2ui\n" +
+		`[{"createSurface":{"surfaceId":"SURFACE_ID","catalogId":"` + catalog.ID + `"}},` +
+		`{"updateComponents":{"surfaceId":"SURFACE_ID","components":[{"id":"root","component":"Text","text":"hi"}]}}]` +
+		"\n```\nRun `ls`")
+	part.Metadata = map[string]any{"signature": sig}
+	resp := &ai.ModelResponse{Message: ai.NewMessage(ai.RoleModel, nil, part)}
+
+	out, err := transformResponse(resp, catalog, ValidateStrict, DefaultVersion, func() string { return "s1" })
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	content := out.Message.Content
+	if n := len(EnvelopesFromParts(content)); n != 2 {
+		t.Fatalf("got %d envelopes, want 2; content=%v", n, content)
+	}
+	last := content[len(content)-1]
+	if !last.IsText() || last.Text != "" || last.Metadata["signature"] != sig {
+		t.Errorf("last part = %+v, want an empty text part with signature %q; content=%v", last, sig, content)
+	}
+	var text strings.Builder
+	for _, p := range content {
+		if p.IsText() {
+			text.WriteString(p.Text)
+		}
+	}
+	if got := text.String(); got != "Here you go:\nRun `ls`" {
+		t.Errorf("prose = %q, want %q", got, "Here you go:\nRun `ls`")
+	}
+}
+
 // A turn that finished abnormally (e.g. blocked) whose partial text contains a
 // malformed a2ui block must not be turned into a strict-mode parse error that
 // discards the response; the response passes through untouched.
