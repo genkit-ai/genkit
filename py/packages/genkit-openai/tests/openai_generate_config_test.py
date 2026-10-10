@@ -452,7 +452,7 @@ async def test_plugin_without_key_lists_built_in_catalog_without_calling_openai(
     keyless_ai: Genkit, server: _OpenAIServer
 ) -> None:
     """The Dev UI catalog for `OpenAI()` with no key has the built-in models and makes no request."""
-    catalog = await keyless_ai.registry.list_actions()
+    catalog = await keyless_ai._registry.list_actions()
 
     assert '/model/openai/gpt-4o' in catalog
     assert server.requests == []

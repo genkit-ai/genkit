@@ -65,7 +65,6 @@ from genkit import (
     Part,
     Role,
 )
-from genkit._core._compat import StrEnum
 from genkit.model import (
     Candidate,
     Constrained,
@@ -77,6 +76,7 @@ from genkit.model import (
     ToolDefinition,
     get_basic_usage_stats,
 )
+from genkit.plugin_api import StrEnum
 
 
 def _to_dict(obj: JsonAny) -> JsonAny:  # noqa: ANN401

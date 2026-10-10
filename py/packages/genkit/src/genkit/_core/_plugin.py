@@ -84,7 +84,7 @@ class Plugin(abc.ABC):
             #    request sent with model='openai/gpt-4o'
 
             # 3. The action lives under the id the app typed
-            action = await ai.registry.resolve_action(ActionKind.MODEL, 'openai/openai/gpt-4o')
+            action = await ai.lookup_model('openai/openai/gpt-4o')
             print(action.name)
             # => openai/openai/gpt-4o
             ```

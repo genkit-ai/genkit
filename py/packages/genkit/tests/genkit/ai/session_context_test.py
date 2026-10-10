@@ -36,7 +36,7 @@ async def test_get_current_session_outside_bind() -> None:
 async def test_middleware_context_ai_current_session_inside_agent_session_raises_attribute_error() -> None:
     """Inside an agent session, a hook calling ctx.ai.current_session() gets AttributeError."""
     ai = Genkit()
-    ctx = GenerateMiddlewareContext(ai=ScopedGenkitView(ai.registry))
+    ctx = GenerateMiddlewareContext(ai=ScopedGenkitView(ai._registry))
     session = Session(SessionState(custom={'bound': True}))
 
     async def check() -> None:

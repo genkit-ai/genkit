@@ -329,7 +329,7 @@ async def test_generate_model_garden_claude_registers_full_publisher_path() -> N
     with patch('genkit_vertexai._model_garden._anthropic.AsyncAnthropicVertex', return_value=client):
         ai = Genkit(plugins=[ModelGarden(project='p', location='us-central1')])
         response = await ai.generate(model=claude, prompt='hi')
-        action = await ai.registry.resolve_action(ActionKind.MODEL, claude)
+        action = await ai.lookup_model(claude)
 
     assert response.text == 'hello'
     sent = client.messages.create.await_args or client.beta.messages.create.await_args
@@ -460,7 +460,7 @@ async def test_resolve_uncataloged_openai_compat_model_advertises_default_suppor
     """An uncataloged OpenAI-compatible model advertises, in camelCase, the label and supports its handler runs with."""
     ai = Genkit(plugins=[ModelGarden(project='p')])
 
-    action = await ai.registry.resolve_action(ActionKind.MODEL, MISTRAL)
+    action = await ai.lookup_model(MISTRAL)
 
     assert action is not None
     info = action.metadata['model']

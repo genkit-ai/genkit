@@ -367,7 +367,7 @@ def test_resolve_model_arg_unwraps_define_model_action_to_its_name() -> None:
     """The action this registry's define_model returned resolves to its name."""
     ai = Genkit()
     action = ai.define_model(name='local/echo', fn=_echo_fn)
-    assert resolve_model_arg(model=action, registry=ai.registry) == 'local/echo'
+    assert resolve_model_arg(model=action, registry=ai._registry) == 'local/echo'
 
 
 def test_resolve_model_arg_rejects_action_from_another_instance() -> None:
@@ -378,7 +378,7 @@ def test_resolve_model_arg_rejects_action_from_another_instance() -> None:
     ai.define_model(name='local/echo', fn=_echo_fn)
 
     with pytest.raises(GenkitError, match="model action 'local/echo' is not the one registered") as exc_info:
-        resolve_model_arg(model=foreign, registry=ai.registry)
+        resolve_model_arg(model=foreign, registry=ai._registry)
     assert exc_info.value.status == 'INVALID_ARGUMENT'
 
 
@@ -386,7 +386,7 @@ def test_resolve_model_arg_rejects_unregistered_action() -> None:
     """An action built with genkit.model.model() and never registered raises INVALID_ARGUMENT, not NOT_FOUND."""
     loose = model(name='loose', fn=_echo_fn)
     with pytest.raises(GenkitError, match="model action 'loose' is not the one registered") as exc_info:
-        resolve_model_arg(model=loose, registry=Genkit().registry)
+        resolve_model_arg(model=loose, registry=Genkit()._registry)
     assert exc_info.value.status == 'INVALID_ARGUMENT'
 
 
@@ -397,7 +397,7 @@ def test_resolve_model_arg_rejects_action_replaced_by_later_define() -> None:
     ai.define_model(name='local/echo', fn=_echo_fn)
 
     with pytest.raises(GenkitError, match="model action 'local/echo' is not the one registered"):
-        resolve_model_arg(model=first, registry=ai.registry)
+        resolve_model_arg(model=first, registry=ai._registry)
 
 
 def test_resolve_model_arg_names_the_kind_of_a_non_model_action() -> None:
@@ -410,7 +410,7 @@ def test_resolve_model_arg_names_the_kind_of_a_non_model_action() -> None:
     embedder = ai.define_embedder(name='emb', fn=embed)
 
     with pytest.raises(GenkitError, match="model is embedder action 'emb', expected a model"):
-        resolve_model_arg(model=embedder, registry=ai.registry)
+        resolve_model_arg(model=embedder, registry=ai._registry)
 
 
 def test_resolve_model_arg_points_a_background_model_at_generate_operation() -> None:
@@ -426,7 +426,7 @@ def test_resolve_model_arg_points_a_background_model_at_generate_operation() -> 
     background = ai.define_background_model(name='bg', start=start, check=check)
 
     with pytest.raises(GenkitError, match="model is background model 'bg'. Pass it to generate_operation"):
-        resolve_model_arg(model=background, registry=ai.registry)
+        resolve_model_arg(model=background, registry=ai._registry)
 
 
 def test_resolve_call_model_string_path_omits_none() -> None:

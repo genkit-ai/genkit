@@ -33,10 +33,13 @@ circular-import cycles.  A realistic example in Genkit is the Registry/Plugin/Mi
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from genkit._core._action import Action, ActionKind
-from genkit._core._model import Artifact, Message
+from genkit._core._model import Artifact, Message, ModelRequest, ModelResponse, ModelResponseChunk
+
+if TYPE_CHECKING:
+    from genkit._core._tool import Tool
 
 
 @runtime_checkable
@@ -104,9 +107,22 @@ class SessionLike(Protocol):
 
 
 class GenkitLike(Protocol):
-    """Structural interface for the Genkit instance exposed on middleware context."""
+    """Structural interface for the Genkit instance exposed on middleware context.
 
-    @property
-    def registry(self) -> RegistryLike:
-        """The call-scoped registry for this generate invocation."""
+    ``lookup_model`` sees the app's models. ``lookup_tool`` sees the app's
+    tools plus tools passed to this generate call with ``tools=[...]``.
+    ``lookup_value`` sees the app's values plus middleware registered for this
+    call by ``use=[...]``.
+    """
+
+    async def lookup_model(self, name: str) -> Action[ModelRequest, ModelResponse, ModelResponseChunk] | None:
+        """Return the model action registered under ``name``, or None."""
+        ...
+
+    async def lookup_tool(self, name: str) -> Tool | None:
+        """Return the tool registered under ``name``, or None."""
+        ...
+
+    def lookup_value(self, *, kind: str, name: str) -> object | None:
+        """Return the value defined under ``kind`` and ``name``, or None."""
         ...

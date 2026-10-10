@@ -126,7 +126,18 @@ HookWrap = Callable[
 
 
 class StreamingCallbackError(Exception):
-    """Carries a caller callback failure through generate's failure handling."""
+    """The caller's ``on_chunk`` raised while a model was streaming.
+
+    Generate wraps the caller's callback before handing it to the model, so a
+    failing client sink surfaces at ``ctx.send_chunk`` as this error, raised
+    from the original. ``cause`` holds the caller's exception.
+
+    It is the caller's failure, not the model's: a model that catches broad
+    exceptions around ``send_chunk`` should let it through, and middleware
+    should not retry or fall back on it. A plugin may still re-raise it as
+    another error ``from`` it, so check the ``__cause__`` chain, not only the
+    top exception.
+    """
 
     def __init__(self, cause: Exception) -> None:
         super().__init__(str(cause))
@@ -253,14 +264,41 @@ async def run_logged_hook(
 
 @dataclass(frozen=True)
 class ScopedGenkitView:
-    """A GenkitLike view over the call-scoped registry for one generate invocation.
+    """Read-only lookups over one registry. ``Genkit`` and ``ctx.ai`` both use it.
 
-    Middleware reads ``ctx.ai.registry`` expecting the per-call child registry
-    (with this call's middleware/tool registrations), not the global one, so we
-    hand it this thin wrapper instead of the full Genkit veneer.
+    ``ctx.ai`` wraps this generate call's child registry, so ``lookup_tool``
+    also sees tools passed with ``tools=[...]`` and ``lookup_value`` sees
+    middleware registered by ``use=[...]`` for this call. ``Genkit`` wraps the
+    app's root registry, so the two never diverge.
     """
 
-    registry: RegistryLike
+    _registry: RegistryLike
+
+    async def lookup_model(self, name: str) -> Action[ModelRequest, ModelResponse, ModelResponseChunk] | None:
+        """Return the model action registered under ``name``, or None.
+
+        Background models aren't included; they run through ``generate_operation``.
+        """
+        action = await self._registry.resolve_action(ActionKind.MODEL, name)
+        return cast(Action[ModelRequest, ModelResponse, ModelResponseChunk], action) if action is not None else None
+
+    async def lookup_tool(self, name: str) -> Tool | None:
+        """Return the tool registered under ``name``, or None.
+
+        The same handle ``@ai.tool()`` returns: call it, read ``definition()``,
+        or pass it in ``tools=[...]``. Interrupts are tools too.
+        """
+        action = await self._registry.resolve_action(ActionKind.TOOL, name)
+        if action is None:
+            return None
+        schema = action.metadata.get(ORIGINAL_OUTPUT_SCHEMA_KEY)
+        return Tool(
+            action, original_output_schema=cast(dict[str, object], schema) if isinstance(schema, dict) else None
+        )
+
+    def lookup_value(self, *, kind: str, name: str) -> object | None:
+        """Return the value defined under ``kind`` and ``name``, or None."""
+        return self._registry.lookup_value(kind, name)
 
 
 def register_middleware(

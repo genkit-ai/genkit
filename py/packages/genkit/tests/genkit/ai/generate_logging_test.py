@@ -194,7 +194,7 @@ async def test_abnormal_finish_skips_output_parsing(monkeypatch: pytest.MonkeyPa
 
     with capture_logs() as entries:
         response = await generate_action(
-            ai.registry,
+            ai._registry,
             GenerateActionOptions(
                 model='scriptedModel',
                 messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
@@ -232,7 +232,7 @@ async def test_other_finish_skips_parsing_even_when_text_is_valid(monkeypatch: p
 
     with capture_logs() as entries:
         response = await generate_action(
-            ai.registry,
+            ai._registry,
             GenerateActionOptions(
                 model='scriptedModel',
                 messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
@@ -275,7 +275,7 @@ async def test_schema_mismatch_logs_when_debug_enabled(monkeypatch: pytest.Monke
 
     with capture_logs() as entries:
         response = await generate_action(
-            ai.registry,
+            ai._registry,
             GenerateActionOptions(
                 model='scriptedModel',
                 messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
@@ -313,7 +313,7 @@ async def test_tool_interrupt_logs(monkeypatch: pytest.MonkeyPatch) -> None:
 
     with capture_logs() as entries:
         response = await generate_action(
-            ai.registry,
+            ai._registry,
             GenerateActionOptions(
                 model='scriptedModel',
                 messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
@@ -353,7 +353,7 @@ async def test_restarted_tool_interrupt_logs(monkeypatch: pytest.MonkeyPatch) ->
         )
     ]
     first = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='scriptedModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
@@ -363,7 +363,7 @@ async def test_restarted_tool_interrupt_logs(monkeypatch: pytest.MonkeyPatch) ->
 
     with capture_logs() as entries:
         response = await generate_action(
-            ai.registry,
+            ai._registry,
             GenerateActionOptions(
                 model='scriptedModel',
                 messages=list(first.messages),
@@ -409,7 +409,7 @@ async def test_tool_stream_callback_failure_fails_generate(monkeypatch: pytest.M
             raise RuntimeError('sink closed')
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='scriptedModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
@@ -444,7 +444,7 @@ async def test_model_stream_callback_failure_returns_closed_history() -> None:
         raise RuntimeError('model sink closed')
 
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='scriptedModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
@@ -485,7 +485,7 @@ async def test_resumed_tool_stream_callback_failure_returns_closed_history() -> 
         ),
     ]
     first = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='scriptedModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
@@ -499,7 +499,7 @@ async def test_resumed_tool_stream_callback_failure_returns_closed_history() -> 
 
     reply = first.interrupts[0].respond({'approved': True})
     response = await generate_action(
-        ai.registry,
+        ai._registry,
         GenerateActionOptions(
             model='scriptedModel',
             messages=list(first.messages),

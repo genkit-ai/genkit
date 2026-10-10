@@ -1119,7 +1119,7 @@ async def test_generate_passes_through_current_action_context() -> None:
             use=[MiddlewareRef(name='inject_ctx')],
         )
 
-    action = ai.registry.register_action(name='test_action', kind=ActionKind.CUSTOM, fn=action_fn)
+    action = ai._registry.register_action(name='test_action', kind=ActionKind.CUSTOM, fn=action_fn)
     action_response = await action.run(context={'foo': 'bar'})
 
     assert action_response.response.text == '''[ECHO] user: "hi {'foo': 'bar'}"'''
@@ -1163,7 +1163,7 @@ async def test_generate_uses_explicitly_passed_in_context() -> None:
             context={'bar': 'baz'},
         )
 
-    action = ai.registry.register_action(name='test_action', kind=ActionKind.CUSTOM, fn=action_fn)
+    action = ai._registry.register_action(name='test_action', kind=ActionKind.CUSTOM, fn=action_fn)
     action_response = await action.run(context={'foo': 'bar'})
 
     assert action_response.response.text == '''[ECHO] user: "hi {'bar': 'baz'}"'''
@@ -1206,7 +1206,7 @@ async def test_generate_uses_inline_middleware_instance_with_context() -> None:
             context={'bar': 'baz'},
         )
 
-    action = ai.registry.register_action(name='test_action', kind=ActionKind.CUSTOM, fn=action_fn)
+    action = ai._registry.register_action(name='test_action', kind=ActionKind.CUSTOM, fn=action_fn)
     action_response = await action.run(context={'foo': 'bar'})
 
     assert action_response.response.text == '''[ECHO] user: "hi {'bar': 'baz'}"'''
@@ -2223,7 +2223,7 @@ def test_background_model_factory_stashes_class_without_registering(setup_test: 
 
     action = background_model('veo-style', start=start_fn, check=check_fn, config_schema=BgConfig)
     assert action.start_action._config_schema is BgConfig
-    registered = ai.registry._entries.get(ActionKind.BACKGROUND_MODEL, {})
+    registered = ai._registry._entries.get(ActionKind.BACKGROUND_MODEL, {})
     assert 'veo-style' not in registered
 
 

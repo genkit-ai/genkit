@@ -46,6 +46,7 @@ from helpers import (
     weather_fence,
 )
 from pydantic import ValidationError
+from structlog.testing import capture_logs
 
 from genkit._core._error import RuntimeErrorReason
 
@@ -80,7 +81,8 @@ async def test_generate_uses_the_bundled_catalog_when_nothing_is_registered() ->
 
 
 @pytest.mark.asyncio
-async def test_generate_uses_a_loaded_catalog() -> None:
+async def test_a2ui_load_catalog_then_middleware_uses_it() -> None:
+    """A catalog loaded on the app is the one Surfaces(catalog=id) renders against."""
     ai, pm = setup()
     load_catalog(ai, BANNER_CATALOG)
     pm.responses = [model_ok(banner_fence())]
@@ -177,7 +179,7 @@ async def test_generate_warn_drops_a_component_the_loaded_catalog_lacks() -> Non
 def test_load_catalog_appears_in_the_registry_the_dev_ui_lists() -> None:
     ai, _ = setup()
     load_catalog(ai, BANNER_CATALOG)
-    listed = ai.registry.list_values(A2UI_CATALOG_VALUE_TYPE)
+    listed = ai._registry.list_values(A2UI_CATALOG_VALUE_TYPE)
     assert BANNER_CATALOG.id in listed
     assert listed[BANNER_CATALOG.id] == BANNER_CATALOG.as_value()
 
@@ -185,7 +187,7 @@ def test_load_catalog_appears_in_the_registry_the_dev_ui_lists() -> None:
 def test_register_basic_catalog_appears_in_the_registry_the_dev_ui_lists() -> None:
     ai, _ = setup()
     register_basic_catalog(ai)
-    listed = ai.registry.list_values(A2UI_CATALOG_VALUE_TYPE)
+    listed = ai._registry.list_values(A2UI_CATALOG_VALUE_TYPE)
     assert BASIC_CATALOG_ID in listed
     basic = listed[BASIC_CATALOG_ID]
     assert isinstance(basic, dict)
@@ -200,20 +202,25 @@ def test_load_catalog_file_registers_and_returns_the_catalog(tmp_path: Path) -> 
     path.write_text(json.dumps(BANNER_CATALOG.as_value()), encoding='utf-8')
     loaded = load_catalog_file(ai, str(path))
     assert loaded == BANNER_CATALOG
-    assert ai.registry.lookup_value(A2UI_CATALOG_VALUE_TYPE, BANNER_CATALOG.id) == BANNER_CATALOG.as_value()
+    assert ai.lookup_value(kind=A2UI_CATALOG_VALUE_TYPE, name=BANNER_CATALOG.id) == BANNER_CATALOG.as_value()
 
 
-def test_load_catalog_same_id_keeps_the_first() -> None:
+def test_a2ui_load_catalog_twice_keeps_first_and_warns() -> None:
+    """Loading a different catalog under a taken id keeps the first and logs a warning."""
     ai, _ = setup()
     load_catalog(ai, BANNER_CATALOG)
     other = A2uiCatalog(
         id=BANNER_CATALOG.id,
         components=(A2uiCatalogComponent(name='Other', description='x', props='y'),),
     )
-    kept = load_catalog(ai, other)
+    with capture_logs() as entries:
+        kept = load_catalog(ai, other)
     assert kept == BANNER_CATALOG
-    stored = A2uiCatalog.from_value(ai.registry.lookup_value(A2UI_CATALOG_VALUE_TYPE, BANNER_CATALOG.id))
+    stored = A2uiCatalog.from_value(ai.lookup_value(kind=A2UI_CATALOG_VALUE_TYPE, name=BANNER_CATALOG.id))
     assert stored == BANNER_CATALOG
+    warnings = [e for e in entries if e['log_level'] == 'warning']
+    assert len(warnings) == 1
+    assert 'keeping the existing one' in warnings[0]['event']
 
 
 def test_load_catalog_same_catalog_twice_is_ok() -> None:
@@ -224,7 +231,7 @@ def test_load_catalog_same_catalog_twice_is_ok() -> None:
 
 def test_load_catalog_raises_when_id_already_holds_something_else() -> None:
     ai, _ = setup()
-    ai.registry.register_value(A2UI_CATALOG_VALUE_TYPE, BANNER_CATALOG.id, 'not-a-catalog')
+    ai.define_value(kind=A2UI_CATALOG_VALUE_TYPE, name=BANNER_CATALOG.id, value='not-a-catalog')
     with pytest.raises(A2uiCatalogError, match='is not a catalog'):
         load_catalog(ai, BANNER_CATALOG)
 
@@ -237,7 +244,7 @@ def test_catalog_error_reports_invalid_argument() -> None:
     answer and reports INTERNAL. The message is not redacted either way.
     """
     ai, _ = setup()
-    ai.registry.register_value(A2UI_CATALOG_VALUE_TYPE, BANNER_CATALOG.id, 'not-a-catalog')
+    ai.define_value(kind=A2UI_CATALOG_VALUE_TYPE, name=BANNER_CATALOG.id, value='not-a-catalog')
     with pytest.raises(A2uiCatalogError, match='is not a catalog') as exc_info:
         load_catalog(ai, BANNER_CATALOG)
     assert exc_info.value.status == 'INVALID_ARGUMENT'

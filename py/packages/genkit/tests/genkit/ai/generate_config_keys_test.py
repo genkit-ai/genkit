@@ -12,7 +12,7 @@ at ``context.secrets``.
 """
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
@@ -820,7 +820,7 @@ async def test_prompt_call_config_api_key_raises() -> None:
 async def test_util_generate_action_config_api_key_raises(name: str) -> None:
     """The registered `/util/generate` action (Dev UI, reflection) raises the same error; the model never runs."""
     ai, fn = _ai_with_model(config_schema=StrictConfig if name == 'strict' else None, name=name)
-    action = await ai.registry.resolve_action(ActionKind.UTIL, 'generate')
+    action = await ai._registry.resolve_action(ActionKind.UTIL, 'generate')
     assert action is not None
 
     with pytest.raises(GenkitError) as err:
@@ -846,11 +846,12 @@ async def test_util_generate_action_config_api_key_raises(name: str) -> None:
 async def test_model_action_run_directly_with_config_api_key_raises(request_input: object) -> None:
     """Running the model action itself, outside generate, raises the same error; the model fn never runs."""
     ai, fn = _ai_with_model(config_schema=None, name='loose')
-    action = await ai.registry.resolve_action(ActionKind.MODEL, 'loose')
+    action = await ai.lookup_model('loose')
     assert action is not None
 
     with pytest.raises(GenkitError) as err:
-        await action.run(request_input)
+        # Wire-shaped inputs on purpose: run() validates whatever it is handed.
+        await action.run(cast(Any, request_input))
 
     _assert_points_to_secrets(err, fn)
 
@@ -869,7 +870,7 @@ async def test_background_model_action_run_directly_with_config_api_key_raises()
         return op
 
     ai.define_background_model(name='bg', start=start, check=check)
-    action = await ai.registry.resolve_action(ActionKind.BACKGROUND_MODEL, 'bg')
+    action = await ai._registry.resolve_action(ActionKind.BACKGROUND_MODEL, 'bg')
     assert action is not None
 
     with pytest.raises(GenkitError) as err:

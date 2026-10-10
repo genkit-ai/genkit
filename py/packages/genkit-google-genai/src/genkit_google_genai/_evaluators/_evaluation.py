@@ -40,9 +40,8 @@ from google.auth import default as google_auth_default
 from google.auth.transport.requests import Request
 
 from genkit import GenkitError
-from genkit._core._compat import StrEnum
 from genkit.evaluator import BaseDataPoint, EvalFnResponse, Score, ScoreDetails
-from genkit.plugin_api import GENKIT_CLIENT_HEADER, Action, loop_local_client, provider_error
+from genkit.plugin_api import GENKIT_CLIENT_HEADER, Action, StrEnum, loop_local_client, provider_error
 
 if TYPE_CHECKING:
     from genkit import Genkit as GenkitRegistry
