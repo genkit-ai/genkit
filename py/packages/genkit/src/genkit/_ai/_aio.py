@@ -1121,14 +1121,17 @@ class Genkit:
             # 1. Initialize Genkit and define a flow
             ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
 
+
             @ai.flow()
             async def suggest_dish(cuisine: str) -> str:
                 response = await ai.generate(prompt=f'Suggest one {cuisine} dish.')
                 return response.text
 
+
             # 2. Run a quick check from your script's entry point
             async def main() -> None:
                 print(await suggest_dish('Thai'))
+
 
             # 3. Start it
             ai.run_main(main())
