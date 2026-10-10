@@ -92,6 +92,15 @@ def _run_main_then_signal(outcome: str, sig: signal.Signals) -> tuple[int, str]:
     return proc.returncode, ''.join(output)
 
 
+def _printed_result(output: str) -> str | None:
+    """The line the child printed with run_main's return value, if any.
+
+    Matched by line start: Python 3.13+ tracebacks quote the ``print('RESULT', ...)``
+    source line, so a substring check would find it in a traceback too.
+    """
+    return next((line for line in output.splitlines() if line.startswith('RESULT ')), None)
+
+
 posix_signals = pytest.mark.skipif(sys.platform == 'win32', reason='sends POSIX signals to a child process')
 
 
@@ -105,7 +114,7 @@ def test_run_main_raises_the_coroutine_error_when_stopped(sig: signal.Signals) -
     assert 'ValueError: boom' in output
     assert 'KeyboardInterrupt' not in output
     assert 'during asyncio.run() shutdown' not in output
-    assert 'RESULT' not in output
+    assert _printed_result(output) is None, output
 
 
 @posix_signals
@@ -114,7 +123,7 @@ def test_run_main_returns_the_coroutine_result_on_sigterm() -> None:
     returncode, output = _run_main_then_signal('ok', signal.SIGTERM)
 
     assert returncode == 0, output
-    assert 'RESULT done' in output
+    assert _printed_result(output) == 'RESULT done', output
 
 
 @posix_signals
@@ -124,7 +133,7 @@ def test_run_main_ctrl_c_after_a_clean_main_exits() -> None:
 
     assert returncode != 0, output
     assert 'KeyboardInterrupt' in output
-    assert 'RESULT' not in output
+    assert _printed_result(output) is None, output
 
 
 @pytest.mark.asyncio
