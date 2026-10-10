@@ -29,6 +29,7 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/status"
 )
 
@@ -57,11 +58,28 @@ type ErrorResponse struct {
 }
 
 // Error is a failure on the wire: the body of a non-streaming error response,
-// and the payload of a streaming one. It carries no details: they used to hold
-// the full err.Error() text, which put internal failure detail on the wire.
+// and the payload of a streaming one. It carries no details, so internal
+// failure text stays off the wire.
 type Error struct {
 	Status  status.Name `json:"status"`
 	Message string      `json:"message"`
+}
+
+// ClientMessage returns the message a client may see for err, and whether it
+// is err's own text. The text leaves the process only when err was built with
+// [status.PublicErrorf], or in the dev environment, where hiding a failure only
+// hides it from the developer causing it. Otherwise it is a generic message
+// derived from the status, so schema dumps, provider text, and internal
+// identifiers stay server-side.
+func ClientMessage(err error) (msg string, own bool) {
+	msg, public := status.PublicMessage(err)
+	switch {
+	case public:
+		return msg, true
+	case api.CurrentEnvironment() == api.EnvironmentDev:
+		return err.Error(), true
+	}
+	return msg, false
 }
 
 // SSEDataPrefix starts every server-sent event line the handler writes.

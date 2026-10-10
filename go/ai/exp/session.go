@@ -654,6 +654,8 @@ func newSnapshotActions[State any](
 	if maxWait <= 0 {
 		maxWait = defaultMaxSnapshotWait
 	}
+	getSnapshotKey := api.KeyFromName(api.ActionTypeAgentSnapshot, agentName)
+	waitKey := api.KeyFromName(api.ActionTypeAgentWait, agentName)
 	getSnapshotAction := core.NewActionOf(api.ActionTypeAgentSnapshot, agentName, nil,
 		func(ctx context.Context, req *GetSnapshotRequest) (*SessionSnapshot[State], error) {
 			if req == nil || (req.SnapshotID == "" && req.SessionID == "") {
@@ -661,7 +663,7 @@ func newSnapshotActions[State any](
 			}
 
 			snap, err := readSnapshot(ctx, store, transform, "getSnapshot", req.SnapshotID, req.SessionID, req.MetadataOnly)
-			return servedSnapshot(ctx, api.KeyFromName(api.ActionTypeAgentSnapshot, agentName), snap), err
+			return servedSnapshot(ctx, getSnapshotKey, snap), err
 		})
 
 	// waitForSnapshot takes getSnapshot's request, so a caller switching from
@@ -678,7 +680,7 @@ func newSnapshotActions[State any](
 				return nil, status.Errorf(status.ErrInvalidArgument, "waitForSnapshot: snapshotId is required")
 			}
 			snap, err := waitSnapshot(ctx, store, transform, "waitForSnapshot", req.SnapshotID, req.SessionID, maxWait)
-			return servedSnapshot(ctx, api.KeyFromName(api.ActionTypeAgentWait, agentName), snap), err
+			return servedSnapshot(ctx, waitKey, snap), err
 		})
 
 	if _, ok := store.(SnapshotSubscriber); !ok {

@@ -1168,6 +1168,7 @@ func newCustomAgent[State any](
 	if cfg.description != "" {
 		metadata["description"] = cfg.description
 	}
+	key := api.KeyFromName(api.ActionTypeAgent, name)
 	action := core.NewBidiActionOf(api.ActionTypeAgent, name,
 		&core.BidiActionOptions{Metadata: metadata},
 		func(
@@ -1186,7 +1187,7 @@ func newCustomAgent[State any](
 			// A transport serving this agent to a client marks ctx (see
 			// genkit.Handler); the output it returns then keeps internal
 			// error text off the wire.
-			served := wire.ServesAction(ctx, api.KeyFromName(api.ActionTypeAgent, name))
+			served := wire.ServesAction(ctx, key)
 			rt, err := newAgentRuntime(ctx, name, cfg, in, inCh, outCh)
 			if err != nil {
 				// Init failures (a rejected init payload, a failed
@@ -1807,17 +1808,19 @@ func convertKeepText(cause error) *status.Error {
 	return e
 }
 
-// clientSafeError returns e as a client of a served agent may see it: as is
-// when its message is public, and otherwise with the generic message for its
-// status and no details, the redaction the HTTP handler applies to the errors
-// it returns. In the dev environment it returns e unchanged, as the handler
-// does, so the Dev UI shows the full text. The full error stays in the store
-// and in this process.
+// clientSafeError returns e as a client of a served agent may see it, under
+// the policy the HTTP handler applies to the errors it returns
+// ([wire.ClientMessage]): unchanged when the client may see its text, and
+// otherwise with the generic message for its status and no details. The full
+// error stays in the store and in this process.
 func clientSafeError(e *status.Error) *status.Error {
-	if e == nil || e.Public || api.CurrentEnvironment() == api.EnvironmentDev {
+	if e == nil {
+		return nil
+	}
+	msg, own := wire.ClientMessage(e)
+	if own {
 		return e
 	}
-	msg, _ := status.PublicMessage(e)
 	return &status.Error{Status: e.Status, Message: msg}
 }
 

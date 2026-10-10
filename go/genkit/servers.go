@@ -187,14 +187,9 @@ func clientDisconnected(ctx context.Context, err error) bool {
 //
 // The status always comes from the error, so an error deliberately marked
 // public reaches the client with its own code rather than falling through to
-// 500. The message only leaves the process when the error was built with
-// [status.PublicErrorf]; anything else becomes a generic string derived from
-// the status, so schema dumps, provider text, and internal identifiers stay
-// server-side. The full error is still logged server-side: by wrapHandler for
-// request failures, and by the streaming runners for mid-stream flow failures.
-//
-// GENKIT_ENV=dev is exempt: suppressing the message during local development
-// only hides the failure from the developer causing it.
+// 500. The message follows [wire.ClientMessage]. The full error is still
+// logged server-side: by wrapHandler for request failures, and by the
+// streaming runners for mid-stream flow failures.
 func clientError(err error) (string, status.Name) {
 	code := status.Of(err)
 	// Only reached on a failure path, so an error that classifies as OK is
@@ -204,20 +199,20 @@ func clientError(err error) (string, status.Name) {
 	if code == status.OK {
 		code = status.Internal
 	}
-	msg, public := status.PublicMessage(err)
-	if !public && api.CurrentEnvironment() == api.EnvironmentDev {
-		msg = err.Error()
-	}
+	msg, _ := wire.ClientMessage(err)
 	return msg, code
 }
 
 // handler returns an HTTP handler function that serves the action with the provided options.
 // Streaming responses are written in server-sent events (SSE) format.
 func handler(a api.Action, opts *handlerOptions) func(http.ResponseWriter, *http.Request) error {
-	return func(w http.ResponseWriter, r *http.Request) error {
-		if a == nil {
+	if a == nil {
+		return func(http.ResponseWriter, *http.Request) error {
 			return errors.New("action is nil; cannot serve")
 		}
+	}
+	key := a.Desc().Key
+	return func(w http.ResponseWriter, r *http.Request) error {
 
 		var body wire.Request
 		if r.Body != nil && r.ContentLength > 0 {
@@ -254,7 +249,7 @@ func handler(a api.Action, opts *handlerOptions) func(http.ResponseWriter, *http
 		}
 		// Tell the action it is serving a client over the wire, so it can
 		// shape what it returns (an agent redacts internal error text).
-		ctx = wire.WithServedAction(ctx, a.Desc().Key)
+		ctx = wire.WithServedAction(ctx, key)
 
 		if stream {
 			streamID := r.Header.Get("X-Genkit-Stream-Id")
@@ -500,24 +495,12 @@ func writeResultResponse(w http.ResponseWriter, result json.RawMessage) error {
 
 // writeSSEResult writes a JSON result as a server-sent event for streaming requests.
 func writeSSEResult(w http.ResponseWriter, result json.RawMessage) error {
-	resp := wire.ResultResponse{Result: result}
-	data, err := json.Marshal(resp)
-	if err != nil {
-		return err
-	}
-	_, err = fmt.Fprintf(w, "%s%s\n\n", wire.SSEDataPrefix, data)
-	return err
+	return writeSSEEvent(w, wire.ResultResponse{Result: result})
 }
 
 // writeSSEMessage writes a streaming chunk as a server-sent event.
 func writeSSEMessage(w http.ResponseWriter, msg json.RawMessage) error {
-	resp := wire.MessageResponse{Message: msg}
-	data, err := json.Marshal(resp)
-	if err != nil {
-		return err
-	}
-	_, err = fmt.Fprintf(w, "%s%s\n\n", wire.SSEDataPrefix, data)
-	return err
+	return writeSSEEvent(w, wire.MessageResponse{Message: msg})
 }
 
 // writeSSEError writes an error as a server-sent event for streaming requests.
@@ -525,8 +508,12 @@ func writeSSEMessage(w http.ResponseWriter, msg json.RawMessage) error {
 // gets the identical redaction and OK-to-INTERNAL coercion as the HTTP path.
 func writeSSEError(w http.ResponseWriter, flowErr error) error {
 	msg, code := clientError(flowErr)
-	resp := wire.ErrorResponse{Error: &wire.Error{Status: code, Message: msg}}
-	data, err := json.Marshal(resp)
+	return writeSSEEvent(w, wire.ErrorResponse{Error: &wire.Error{Status: code, Message: msg}})
+}
+
+// writeSSEEvent writes v as one server-sent event.
+func writeSSEEvent(w http.ResponseWriter, v any) error {
+	data, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
