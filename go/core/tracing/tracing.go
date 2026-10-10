@@ -55,7 +55,7 @@ func markErrorAsHandled(err error) error {
 	var me *markedError
 	if errors.As(err, &me) {
 		me.marked = true
-		return me
+		return err
 	}
 
 	return &markedError{error: err, marked: true}
@@ -68,6 +68,18 @@ func isErrorAlreadyMarked(err error) bool {
 		return me.marked
 	}
 	return false
+}
+
+// unmarkError strips the failure-source marker when it is the outermost error,
+// restoring the identity of the error the application returned. A marker that
+// sits below application wrapping (fmt.Errorf("...: %w", err)) is left alone,
+// since removing it would discard that wrapping; it stays invisible there
+// because markedError only adds an Unwrap level.
+func unmarkError(err error) error {
+	if me, ok := err.(*markedError); ok {
+		return me.Unwrap()
+	}
+	return err
 }
 
 // captureStackTrace captures the current Go stack trace for error reporting
@@ -328,10 +340,17 @@ func RunInNewSpan[I, O any](
 	if err != nil {
 		sm.State = spanStateError
 		sm.Error = err.Error()
-		sm.IsFailureSource = true
+		span.SetStatus(codes.Error, err.Error())
+		// Only the span where an error originates is its failure source. The
+		// marker travels up with the error so ancestors can tell originating a
+		// failure from propagating one; without it every span in the call stack
+		// claimed to be the source, which overcounts failures in monitoring and
+		// hides the root cause in the trace. The error is recorded before it is
+		// marked so exception.type still names the application's error.
 		if !isErrorAlreadyMarked(err) {
+			sm.IsFailureSource = true
 			span.RecordError(err)
-			span.SetStatus(codes.Error, err.Error())
+			err = markErrorAsHandled(err)
 		}
 		// A failure can still carry a result: the generate loop returns the
 		// conversation it completed alongside its error. Record it so the
@@ -344,6 +363,12 @@ func RunInNewSpan[I, O any](
 	} else {
 		sm.State = spanStateSuccess
 		sm.Output = output
+	}
+	// The marker only means something to enclosing Genkit spans, so drop it
+	// before the error leaves the outermost one and callers see the error they
+	// returned rather than a tracing wrapper around it.
+	if parentSM == nil {
+		err = unmarkError(err)
 	}
 	return output, err
 }
