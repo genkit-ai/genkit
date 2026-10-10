@@ -36,14 +36,17 @@ import {
   ToolInterruptError,
   isToolRequest,
   resolveTools,
+  type MultipartToolAction,
   type ToolAction,
   type ToolRunOptions,
 } from '../tool.js';
 import { type GenerateMiddlewareDef } from './middleware.js';
 
-export function toToolMap(tools: ToolAction[]): Record<string, ToolAction> {
+export function toToolMap(
+  tools: (ToolAction | MultipartToolAction)[]
+): Record<string, ToolAction | MultipartToolAction> {
   assertValidToolNames(tools);
-  const out: Record<string, ToolAction> = {};
+  const out: Record<string, ToolAction | MultipartToolAction> = {};
   for (const tool of tools) {
     const name = tool.__action.name;
     const shortName = name.substring(name.lastIndexOf('/') + 1);
@@ -53,7 +56,9 @@ export function toToolMap(tools: ToolAction[]): Record<string, ToolAction> {
 }
 
 /** Ensures that each tool has a unique name. */
-export function assertValidToolNames(tools: ToolAction[]) {
+export function assertValidToolNames(
+  tools: (ToolAction | MultipartToolAction)[]
+) {
   const nameMap: Record<string, string> = {};
   for (const tool of tools) {
     const name = tool.__action.name;
@@ -90,7 +95,7 @@ export function toPendingOutput(
 export async function resolveToolRequest(
   rawRequest: GenerateActionOptions,
   part: ToolRequestPart,
-  toolMap: Record<string, ToolAction>,
+  toolMap: Record<string, ToolAction | MultipartToolAction>,
   middleware: GenerateMiddlewareDef[] = [],
   runOptions?: ToolRunOptions
 ): Promise<{
@@ -186,7 +191,7 @@ export async function resolveToolRequest(
 export async function resolveToolRequests(
   rawRequest: GenerateActionOptions,
   generatedMessage: MessageData,
-  tools: ToolAction[],
+  tools: (ToolAction | MultipartToolAction)[],
   middleware: GenerateMiddlewareDef[] = []
 ): Promise<{
   revisedModelMessage?: MessageData;
@@ -269,7 +274,7 @@ function findCorrespondingToolResponse(
 async function resolveResumedToolRequest(
   rawRequest: GenerateActionOptions,
   part: ToolRequestPart,
-  toolMap: Record<string, ToolAction>,
+  toolMap: Record<string, ToolAction | MultipartToolAction>,
   middleware: GenerateMiddlewareDef[] = []
 ): Promise<{
   toolRequest?: ToolRequestPart;
@@ -354,7 +359,7 @@ async function resolveResumedToolRequest(
 export async function resolveResumeOption(
   registry: Registry,
   rawRequest: GenerateActionOptions,
-  tools: ToolAction[],
+  tools: (ToolAction | MultipartToolAction)[],
   middleware: GenerateMiddlewareDef[] = []
 ): Promise<{
   revisedRequest?: GenerateActionOptions;
@@ -446,11 +451,11 @@ export async function resolveRestartedTools(
   rawRequest: GenerateActionOptions,
   middleware: GenerateMiddlewareDef[] = []
 ): Promise<ToolRequestPart[]> {
-  const tools = await resolveTools(registry, rawRequest.tools);
+  const userTools = await resolveTools(registry, rawRequest.tools);
   // rawRequest.tools only holds user-provided tools (treated as immutable). We must
   // harvest active middleware tools here to ensure we can resolve tools dynamically
   // injected by plugins.
-  tools.push(...middleware.flatMap((m) => m.tools || []));
+  const tools = [...userTools, ...middleware.flatMap((m) => m.tools || [])];
   const toolMap = toToolMap(tools);
   const lastMessage = rawRequest.messages.at(-1);
   if (!lastMessage || lastMessage.role !== 'model') return [];
