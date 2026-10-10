@@ -710,13 +710,13 @@ func (a *Agents) reportTask(ctx context.Context, g *genkit.Genkit, st *agentsSta
 		// the companion action, so whatever surfaces here is worth reporting.
 		// The agent resolved above, so NOT_FOUND here is the snapshot and
 		// nothing else, and re-delegating is genuinely the way to get the
-		// work done; the other dead ends (see deadEndRead) are reported as
+		// work done; the other dead ends (see aix.IsRetryableReadError) are reported as
 		// they are, and anything else is presumed transient.
 		s, _ := status.Classified(err)
 		switch {
 		case s == status.NotFound:
 			report.Error = fmt.Sprintf("No record of this task exists (%v). Delegate the task again if the result is still needed.", err)
-		case deadEndRead(err):
+		case !aix.IsRetryableReadError(err):
 			report.Error = err.Error()
 		default:
 			report.Error = fmt.Sprintf("Could not read the task's status: %v. Check again later.", err)

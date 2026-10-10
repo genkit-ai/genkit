@@ -274,18 +274,25 @@ func (t *httpTransport) WaitForSnapshot(ctx context.Context, req *GetSnapshotReq
 }
 
 // pollSnapshot reads the snapshot until it settles, backing off between reads.
+// Like the runtime's own wait, it rides out a few consecutive transient read
+// failures (see [IsRetryableReadError]).
 func (t *httpTransport) pollSnapshot(ctx context.Context, req *GetSnapshotRequest) (*SessionSnapshot[json.RawMessage], error) {
 	read := *req
 	read.MetadataOnly = true
 	interval := remotePollInitial
+	failures := 0
 	for {
 		snap, err := t.GetSnapshot(ctx, &read)
-		if err != nil {
-			return nil, err
-		}
-		if snap.Status.Terminal() {
+		switch {
+		case err == nil && snap.Status.Terminal():
 			// The settled read carries the state the metadata read left out.
 			return t.GetSnapshot(ctx, req)
+		case err == nil:
+			failures = 0
+		case !IsRetryableReadError(err) || failures >= snapshotWaitReadRetries:
+			return nil, err
+		default:
+			failures++
 		}
 		timer := time.NewTimer(interval)
 		select {

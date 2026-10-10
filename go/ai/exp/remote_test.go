@@ -308,6 +308,39 @@ func TestRemoteAgent_WaitForSnapshot(t *testing.T) {
 			t.Errorf("reads (metadataOnly) = %v, want %v", reads, want)
 		}
 	})
+
+	t.Run("a poll rides out a transient read failure and not a final one", func(t *testing.T) {
+		for _, tc := range []struct {
+			name      string
+			code      int
+			wantReads int32
+			wantErr   status.Name
+		}{
+			// The failed read, the settled metadata read, the full read.
+			{"503", http.StatusServiceUnavailable, 3, status.OK},
+			{"403", http.StatusForbidden, 1, status.PermissionDenied},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				var reads atomic.Int32
+				url := remoteTestServer(t, map[string]http.HandlerFunc{
+					"/getSnapshot": func(w http.ResponseWriter, r *http.Request) {
+						if reads.Add(1) == 1 {
+							http.Error(w, "first read fails", tc.code)
+							return
+						}
+						writeResult(w, &SessionSnapshot[json.RawMessage]{SnapshotID: "s", Status: SnapshotStatusCompleted})
+					},
+				})
+				_, err := NewRemoteAgent("a", url).WaitForSnapshot(ctx, "s")
+				if status.Of(err) != tc.wantErr {
+					t.Errorf("WaitForSnapshot error = %v, want %s", err, tc.wantErr)
+				}
+				if got := reads.Load(); got != tc.wantReads {
+					t.Errorf("reads = %d, want %d", got, tc.wantReads)
+				}
+			})
+		}
+	})
 }
 
 func TestAgentHandle_Register(t *testing.T) {

@@ -764,28 +764,6 @@ func settledStatus(reason aix.AgentFinishReason) string {
 	}
 }
 
-// deadEndRead reports whether a snapshot read failure cannot be helped by
-// retrying: the row is gone, the request itself is rejected, the caller is not
-// allowed to make it, or the agent's server does not offer it. Anything else
-// (a store blip, a timed-out read) is presumed transient. It extends the
-// policy the runtime's own wait applies to its store re-reads with the
-// failures a transport adds. It matches by status name ([status.Classified])
-// rather than sentinel identity, per the handle's contract: an error that
-// crossed a wire carries a status name and nothing else, and a subtype
-// classifies as its base ([aix.ErrSnapshotNotFound] is a NOT_FOUND).
-func deadEndRead(err error) bool {
-	s, ok := status.Classified(err)
-	if !ok {
-		return false
-	}
-	switch s {
-	case status.NotFound, status.FailedPrecondition, status.InvalidArgument,
-		status.Unauthenticated, status.PermissionDenied, status.Unimplemented:
-		return true
-	}
-	return false
-}
-
 // interruptedResponse is the tool text reported when a sub-agent interrupted
 // for input the orchestrator can never provide.
 func interruptedResponse(agentName string) string {

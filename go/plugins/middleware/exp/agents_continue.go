@@ -137,7 +137,7 @@ func (a *Agents) continueFromStore(ctx context.Context, ref aix.AgentRef, st *ag
 		case s == status.NotFound:
 			return delegationResult{Response: fmt.Sprintf(
 				"Error: no record of task %q exists (%v). Delegate the task again if the work is still needed.", in.TaskID, err)}, nil
-		case deadEndRead(err):
+		case !aix.IsRetryableReadError(err):
 			return delegationResult{Response: fmt.Sprintf("Error continuing task %q: %v", in.TaskID, err)}, nil
 		default:
 			a.releaseDelegation(st)
@@ -242,7 +242,7 @@ func (a *Agents) continueExpired(ctx context.Context, ref aix.AgentRef, st *agen
 // is gone, an agent that cannot fence, a rejected request) fails identically
 // on retry and keeps it, so the cap can still bite.
 func (a *Agents) refuseRead(st *agentsState, err error, msg string) delegationResult {
-	if deadEndRead(err) {
+	if !aix.IsRetryableReadError(err) {
 		return delegationResult{Response: msg}
 	}
 	a.releaseDelegation(st)
