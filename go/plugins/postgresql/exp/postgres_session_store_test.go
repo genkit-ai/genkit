@@ -203,6 +203,7 @@ func TestOptionValidation(t *testing.T) {
 		{"schema name too long", WithSchemaName(strings.Repeat("s", maxIdentifierLength+1))},
 		{"zero checkpoint interval", WithCheckpointInterval(0)},
 		{"negative checkpoint interval", WithCheckpointInterval(-1)},
+		{"checkpoint interval above the maximum", WithCheckpointInterval(maxCheckpointInterval + 1)},
 		{"nil prefix fn", WithSnapshotPathPrefix(nil)},
 	}
 	for _, tc := range cases {

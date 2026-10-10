@@ -30,6 +30,9 @@ const (
 	// checkpoints. It matches the Firestore store: per-turn state is small in
 	// the common chat workload, and a read applies at most this many diffs.
 	defaultCheckpointInterval = 25
+	// maxCheckpointInterval caps WithCheckpointInterval, so a read walks a
+	// bounded chain.
+	maxCheckpointInterval = 1000
 	// defaultPrefix is the tenant prefix used when no [WithSnapshotPathPrefix]
 	// is configured.
 	defaultPrefix = "global"
@@ -119,8 +122,8 @@ func WithSchemaName(name string) SessionStoreOption {
 type checkpointIntervalOption struct{ turns int }
 
 func (o checkpointIntervalOption) applySessionStore(opts *sessionStoreOptions) error {
-	if o.turns < 1 {
-		return errors.New("checkpoint interval must be at least 1 (WithCheckpointInterval)")
+	if o.turns < 1 || o.turns > maxCheckpointInterval {
+		return fmt.Errorf("checkpoint interval must be between 1 and %d (WithCheckpointInterval)", maxCheckpointInterval)
 	}
 	if opts.checkpointInterval != 0 {
 		return errors.New("cannot set checkpoint interval more than once (WithCheckpointInterval)")
@@ -133,8 +136,8 @@ func (o checkpointIntervalOption) applySessionStore(opts *sessionStoreOptions) e
 // checkpoints. Between checkpoints each row stores only the JSON Patch from its
 // parent's state, so a larger value writes less per turn and reads apply more
 // patches; a smaller value does the opposite. A read applies at most this many
-// patches, however long the session. Must be at least 1; defaults to 25 when
-// omitted.
+// patches, however long the session. Must be between 1 and 1000; defaults to
+// 25 when omitted.
 func WithCheckpointInterval(turns int) SessionStoreOption {
 	return checkpointIntervalOption{turns}
 }
