@@ -2206,9 +2206,7 @@ export const contextCompression: GenerateMiddleware<
                   ? skippedSummary
                   : cheapUnderBudget;
                 const needsTokenFallbackTruncation =
-                  effectiveTokens > maxInputTokens &&
-                  ((!dedupConfig && !toolResponseConfig && !summaryModelRef) ||
-                    (Boolean(summaryModelRef) && !skippedSummary));
+                  effectiveTokens > maxInputTokens && !cheapSatisfiedBudget;
 
                 let effectiveMaxMessages: number | undefined;
                 if (

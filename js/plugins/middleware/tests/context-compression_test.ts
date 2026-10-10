@@ -216,7 +216,7 @@ describe('contextCompression middleware', () => {
       tools: [heavyTool],
       use: [
         contextCompression({
-          maxInputTokens: 150,
+          maxInputTokens: 400,
           toolResponses: { maxChars: 50, preserveRecent: 1 },
         }),
       ],
@@ -869,7 +869,7 @@ describe('contextCompression middleware', () => {
       ],
       use: [
         contextCompression({
-          maxInputTokens: 10,
+          maxInputTokens: 100,
           toolResponses: { maxChars: 50, preserveRecent: 0 },
         }),
       ],
@@ -920,7 +920,7 @@ describe('contextCompression middleware', () => {
       ],
       use: [
         contextCompression({
-          maxInputTokens: 10,
+          maxInputTokens: 20,
           toolResponses: { maxChars: 10, preserveRecent: 0 },
         }),
       ],
@@ -971,7 +971,7 @@ describe('contextCompression middleware', () => {
       ],
       use: [
         contextCompression({
-          maxInputTokens: 10,
+          maxInputTokens: 1000,
           maxToolResponseChars: 200,
           toolResponses: { maxChars: 50, preserveRecent: 1 },
         }),
@@ -1027,7 +1027,7 @@ describe('contextCompression middleware', () => {
       ],
       use: [
         contextCompression({
-          maxInputTokens: 10,
+          maxInputTokens: 80,
           maxToolResponseChars: 200,
           toolResponses: { maxChars: 50, preserveRecent: 1 },
         }),
@@ -1239,7 +1239,7 @@ describe('contextCompression middleware', () => {
       ],
       use: [
         contextCompression({
-          maxInputTokens: 50,
+          maxInputTokens: 300,
           toolResponses: { maxChars: 20, preserveRecent: 1 },
         }),
       ],
@@ -1308,7 +1308,7 @@ describe('contextCompression middleware', () => {
             {
               toolResponse: {
                 name: 'search',
-                output: 'Short text exceeding 20 chars for truncation test',
+                output: 'S'.repeat(1000),
               },
             },
           ],
@@ -1390,7 +1390,7 @@ describe('contextCompression middleware', () => {
             {
               toolResponse: {
                 name: 'search',
-                output: 'Short text exceeding 20 chars for truncation test',
+                output: 'S'.repeat(1000),
               },
             },
           ],
@@ -1507,7 +1507,7 @@ describe('contextCompression middleware', () => {
       tools: [searchTool],
       use: [
         contextCompression({
-          maxInputTokens: 150,
+          maxInputTokens: 300,
           deduplicateToolResponses: { matchBy: 'name-and-input' },
           toolResponses: { maxChars: 50, preserveRecent: 0 },
         }),
@@ -1588,7 +1588,7 @@ describe('contextCompression middleware', () => {
       tools: [searchTool],
       use: [
         contextCompression({
-          maxInputTokens: 150,
+          maxInputTokens: 450,
           deduplicateToolResponses: { matchBy: 'name-and-input' },
           toolResponses: { maxChars: 50, preserveRecent: 0 },
         }),
@@ -1667,7 +1667,7 @@ describe('contextCompression middleware', () => {
       tools: [searchTool],
       use: [
         contextCompression({
-          maxInputTokens: 150,
+          maxInputTokens: 400,
           deduplicateToolResponses: { matchBy: 'name-and-input' },
         }),
       ],
@@ -1772,7 +1772,7 @@ describe('contextCompression middleware', () => {
       ],
       use: [
         contextCompression({
-          maxInputTokens: 50,
+          maxInputTokens: 230,
           deduplicateToolResponses: { matchBy: 'name-and-input' },
         }),
       ],
@@ -1960,7 +1960,7 @@ describe('contextCompression middleware', () => {
       ],
       use: [
         contextCompression({
-          maxInputTokens: 50,
+          maxInputTokens: 150,
           deduplicateToolResponses: {
             matchBy: 'name-and-input',
             keepRecent: 1,
@@ -2061,7 +2061,10 @@ describe('contextCompression middleware', () => {
       ],
       use: [
         contextCompression({
-          maxInputTokens: 20,
+          maxInputTokens: 100,
+          // Dedupe alone cannot reach the budget here, so the fallback
+          // truncation runs. Its window holds all six messages.
+          preserveRecent: 6,
           deduplicateToolResponses: {
             matchBy: 'name-and-input',
             keepRecent: 1,
@@ -3180,7 +3183,7 @@ describe('contextCompression middleware', () => {
       ],
       use: [
         contextCompression({
-          maxInputTokens: 50,
+          maxInputTokens: 500,
           deduplicateToolResponses: { matchBy: 'name-and-input' },
         }),
       ],
@@ -4471,6 +4474,53 @@ describe('contextCompression middleware', () => {
     assert.strictEqual(
       response.custom?.contextCompression?.inputTokensBefore,
       Math.ceil(('logs'.length + output.length + 'go'.length) / 3.5)
+    );
+  });
+  it('falls back to message truncation when dedupe or tool truncation alone cannot reach the token budget', async () => {
+    const ai = genkit({});
+    let capturedRequest: GenerateRequest | undefined;
+    const pm = ai.defineModel({ name: 'budgetFallbackModel' }, async (req) => {
+      capturedRequest = req;
+      return { message: { role: 'model', content: [{ text: 'ok' }] } };
+    });
+
+    // About 2000 estimated tokens of plain chat: no tool responses to shrink.
+    const history: MessageData[] = [
+      { role: 'system', content: [{ text: 'You are helpful.' }] },
+    ];
+    for (let i = 0; i < 17; i++) {
+      history.push({
+        role: i % 2 === 0 ? 'user' : 'model',
+        content: [{ text: `${i}:${'w'.repeat(400)}` }],
+      });
+    }
+
+    const viewWith = async (
+      options: Partial<z.infer<typeof ContextCompressionOptionsSchema>>
+    ) => {
+      await ai.generate({
+        model: pm,
+        messages: history,
+        use: [contextCompression({ maxInputTokens: 300, ...options })],
+      });
+      return messageLabels(capturedRequest!.messages).map((l) =>
+        l.slice(0, 40)
+      );
+    };
+
+    const plain = await viewWith({});
+    assert.strictEqual(
+      plain.length < history.length,
+      true,
+      `expected fewer than ${history.length} messages, got ${plain.length}`
+    );
+    assert.deepStrictEqual(
+      await viewWith({ deduplicateToolResponses: {} }),
+      plain
+    );
+    assert.deepStrictEqual(
+      await viewWith({ toolResponses: { maxChars: 50 } }),
+      plain
     );
   });
 });
