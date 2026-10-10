@@ -35,6 +35,7 @@ import (
 	aix "github.com/firebase/genkit/go/ai/exp"
 	"github.com/firebase/genkit/go/ai/exp/localstore"
 	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/genkit/exp"
 )
@@ -229,6 +230,43 @@ func TestHandlerAgent(t *testing.T) {
 		// The failed output still hands back the last-good state.
 		if len(res.State) == 0 {
 			t.Error("failed output must carry the last-good state")
+		}
+	})
+
+	t.Run("served failure hides internal error text", func(t *testing.T) {
+		// Dev keeps the full text for the Dev UI; this pins production.
+		t.Setenv("GENKIT_ENV", "prod")
+		code, body := post(t, "agentServer", turn("fail"), false)
+		if code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body = %s", code, body)
+		}
+		res := parseResult(t, body)
+		if res.Error == nil || res.Error.Status != "RESOURCE_EXHAUSTED" {
+			t.Fatalf("error = %+v, want RESOURCE_EXHAUSTED", res.Error)
+		}
+		if strings.Contains(res.Error.Message, "model on fire") {
+			t.Errorf("served output error = %q, leaks the internal text", res.Error.Message)
+		}
+
+		// The failed turn's snapshot, read through the getSnapshot route.
+		snapAction := genkit.LookupAction(g, api.KeyFromName(api.ActionTypeAgentSnapshot, "agentServer"))
+		req := httptest.NewRequest("POST", "/", strings.NewReader(`{"data":{"snapshotId":"`+res.SnapshotID+`"}}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		genkit.Handler(snapAction)(w, req)
+		snapBody, _ := io.ReadAll(w.Result().Body)
+		if strings.Contains(string(snapBody), "model on fire") || !strings.Contains(string(snapBody), "RESOURCE_EXHAUSTED") {
+			t.Errorf("served snapshot = %s, want the status without the internal text", snapBody)
+		}
+
+		// The redaction belongs to the wire: a caller in this process keeps
+		// the full text.
+		out, err := exp.LookupAgent(g, "agentServer").RunText(context.Background(), "fail")
+		if err != nil {
+			t.Fatalf("RunText: %v", err)
+		}
+		if out.Error == nil || !strings.Contains(out.Error.Message, "model on fire") {
+			t.Errorf("in-process output error = %+v, want the full text", out.Error)
 		}
 	})
 

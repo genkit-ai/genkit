@@ -45,6 +45,7 @@ import (
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal/base"
 	"github.com/firebase/genkit/go/internal/genkitbridge"
+	"github.com/firebase/genkit/go/internal/wire"
 )
 
 // --- Heartbeat ---
@@ -1167,6 +1168,7 @@ func newCustomAgent[State any](
 	if cfg.description != "" {
 		metadata["description"] = cfg.description
 	}
+	key := api.KeyFromName(api.ActionTypeAgent, name)
 	action := core.NewBidiActionOf(api.ActionTypeAgent, name,
 		&core.BidiActionOptions{Metadata: metadata},
 		func(
@@ -1182,6 +1184,10 @@ func newCustomAgent[State any](
 			if cfg.contextFunc != nil {
 				ctx = cfg.contextFunc(ctx)
 			}
+			// A transport serving this agent to a client marks ctx (see
+			// genkit.Handler); the output it returns then keeps internal
+			// error text off the wire.
+			served := wire.ServesAction(ctx, key)
 			rt, err := newAgentRuntime(ctx, name, cfg, in, inCh, outCh)
 			if err != nil {
 				// Init failures (a rejected init payload, a failed
@@ -1192,7 +1198,11 @@ func newCustomAgent[State any](
 				// snapshot.
 				return nil, err
 			}
-			return rt.run(ctx, fn)
+			out, err := rt.run(ctx, fn)
+			if served && out != nil {
+				out.Error = clientSafeError(out.Error)
+			}
+			return out, err
 		})
 
 	getSnapshot, wait, abort := newSnapshotActions(name, cfg.store, cfg.transform, cfg.maxSnapshotWait)
@@ -1798,6 +1808,22 @@ func convertKeepText(cause error) *status.Error {
 	return e
 }
 
+// clientSafeError returns e as a client of a served agent may see it, under
+// the policy the HTTP handler applies to the errors it returns
+// ([wire.ClientMessage]): unchanged when the client may see its text, and
+// otherwise with the generic message for its status and no details. The full
+// error stays in the store and in this process.
+func clientSafeError(e *status.Error) *status.Error {
+	if e == nil {
+		return nil
+	}
+	msg, own := wire.ClientMessage(e)
+	if own {
+		return e
+	}
+	return &status.Error{Status: e.Status, Message: msg}
+}
+
 // callerStopped reports whether the invocation ended because the caller
 // stopped it rather than because something inside it broke. Two roads reach
 // the same place:
@@ -2205,7 +2231,7 @@ func loadSession[State any](
 	}
 
 	if init.State != nil && (init.SessionID != "" || init.SnapshotID != "") {
-		return nil, nil, status.Errorf(status.ErrInvalidArgument,
+		return nil, nil, status.PublicErrorf(status.ErrInvalidArgument,
 			"state is mutually exclusive with session ID and snapshot ID; a client-managed conversation's identity rides inside the state (SessionState.SessionID)")
 	}
 
@@ -2217,7 +2243,7 @@ func loadSession[State any](
 	switch {
 	case init.State != nil:
 		if store != nil {
-			return nil, nil, status.Errorf(status.ErrFailedPrecondition,
+			return nil, nil, status.PublicErrorf(status.ErrFailedPrecondition,
 				"state provided but agent has a session store configured (server-managed state); use snapshot ID instead")
 		}
 		// Deep-copy at the entry boundary: an in-process caller retains
@@ -2230,7 +2256,7 @@ func loadSession[State any](
 
 	case init.SnapshotID != "":
 		if store == nil {
-			return nil, nil, status.Errorf(status.ErrFailedPrecondition,
+			return nil, nil, status.PublicErrorf(status.ErrFailedPrecondition,
 				"snapshot ID %q provided but agent has no session store configured (client-managed state); use state instead", init.SnapshotID)
 		}
 		snap, err := store.GetSnapshot(ctx, init.SnapshotID)
@@ -3029,7 +3055,7 @@ func validateUserMessage(m *ai.Message) error {
 		return nil
 	}
 	if m.Role != "" && m.Role != ai.RoleUser {
-		return status.Errorf(status.ErrInvalidArgument,
+		return status.PublicErrorf(status.ErrInvalidArgument,
 			"agent input message must have role %q, got %q", ai.RoleUser, m.Role)
 	}
 	for _, p := range m.Content {
@@ -3037,7 +3063,7 @@ func validateUserMessage(m *ai.Message) error {
 			continue
 		}
 		if p.IsToolRequest() || p.IsToolResponse() {
-			return status.Errorf(status.ErrInvalidArgument,
+			return status.PublicErrorf(status.ErrInvalidArgument,
 				"agent input message must not contain tool request or response parts; use AgentInput.Resume instead")
 		}
 	}
@@ -3116,12 +3142,12 @@ func ValidateResumeAgainstHistory(resume *ToolResume, history []*ai.Message) err
 	unresolved := func(field, name, ref string) error {
 		for i := pending - 1; i >= 0; i-- {
 			if findIn(i, name, ref) != nil {
-				return status.Errorf(status.ErrInvalidArgument,
+				return status.PublicErrorf(status.ErrInvalidArgument,
 					"resume.%s references tool %q%s from an earlier turn which is no longer pending; only tool requests from the most recent model response can be resumed",
 					field, name, toolRefSuffix(ref))
 			}
 		}
-		return status.Errorf(status.ErrInvalidArgument,
+		return status.PublicErrorf(status.ErrInvalidArgument,
 			"resume.%s references tool %q%s which was not found in session history",
 			field, name, toolRefSuffix(ref))
 	}
@@ -3143,7 +3169,7 @@ func ValidateResumeAgainstHistory(resume *ToolResume, history []*ai.Message) err
 			return unresolved("restart", req.Name, req.Ref)
 		}
 		if !jsonEqual(normalizeJSON(restartOriginalInput(p)), normalizeJSON(match.Input)) {
-			return status.Errorf(status.ErrInvalidArgument,
+			return status.PublicErrorf(status.ErrInvalidArgument,
 				"resume.restart for tool %q%s has modified inputs that do not match the original tool request in session history; restart inputs must exactly match the interrupted tool request, or a restart that replaces the input must preserve the original it replaced",
 				req.Name, toolRefSuffix(req.Ref))
 		}
@@ -3218,7 +3244,7 @@ func agentLoop[State any](r api.Registry, prompt ai.Prompt, defaultInput any) Ag
 			// committed, and the model is called on them again. There has to
 			// be something to continue.
 			if !hasInputPayload(input) && len(history) == 0 {
-				return nil, status.Errorf(status.ErrInvalidArgument,
+				return nil, status.PublicErrorf(status.ErrInvalidArgument,
 					"agent input message or resume is required to start a conversation")
 			}
 
