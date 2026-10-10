@@ -130,3 +130,24 @@ if err != nil {
 
 ```
 See the [Retrieval-augmented generation](../rag.md) page for a general discussion on indexers and retrievers.
+
+## Session store
+
+`exp.NewPostgresSessionStore` persists agent session snapshots in PostgreSQL through the pool of the plugin registered with `genkit.Init`. It creates its table when the table does not exist, and it delivers status changes over LISTEN/NOTIFY, so background runs and their abort work across instances.
+
+```go
+import pgexp "github.com/firebase/genkit/go/plugins/postgresql/exp"
+
+engine, err := postgresql.NewPostgresEngine(ctx, postgresql.WithPool(pool))
+g := genkit.Init(ctx,
+    genkit.WithExperimental(),
+    genkit.WithPlugins(&postgresql.Postgres{Engine: engine}))
+
+store, err := pgexp.NewPostgresSessionStore[ChatState](ctx, g)
+chatAgent := genkitx.DefineAgent(g, "chat",
+    aix.InlinePrompt{ai.WithModelName("googleai/gemini-flash-latest")},
+    aix.WithSessionStore(store),
+)
+```
+
+`WithTableName`, `WithSchemaName`, `WithCheckpointInterval`, `WithSnapshotPathPrefix` (per-tenant isolation), and `WithPollInterval` configure it. Connect directly or through a session-mode pooler: a transaction-mode pooler cannot deliver notifications, and subscriptions then rely on the poll.
