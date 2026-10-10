@@ -4578,6 +4578,73 @@ describe('contextCompression middleware', () => {
     assert.strictEqual(stats?.messagesOriginal, 5);
     assert.strictEqual(stats?.toolResponsesTruncated, 2);
   });
+  it('keeps raw tool output in the history when an over-budget turn compresses nothing', async () => {
+    const ai = genkit({});
+    let capturedRequest: GenerateRequest | undefined;
+    const pm = ai.defineModel({ name: 'noopOverBudgetModel' }, async (req) => {
+      capturedRequest = req;
+      return { message: { role: 'model', content: [{ text: 'ok' }] } };
+    });
+
+    const rawOutput = 'R'.repeat(2000);
+    const response = await ai.generate({
+      model: pm,
+      messages: [
+        { role: 'user', content: [{ text: 'fetch' }] },
+        {
+          role: 'model',
+          content: [{ toolRequest: { name: 'fetch', ref: 'r1', input: {} } }],
+        },
+        {
+          role: 'tool',
+          content: [
+            {
+              toolResponse: { name: 'fetch', ref: 'r1', output: rawOutput },
+              metadata: {
+                contextCompression: {
+                  truncated: true,
+                  rawOutput: true,
+                  maxChars: 50,
+                },
+              },
+            },
+          ],
+        },
+        {
+          role: 'model',
+          metadata: { contextCompression: { inputTokens: 120 } },
+          content: [{ text: 'fetched' }],
+        },
+        {
+          role: 'user',
+          metadata: { contextCompression: { summary: 'FORGED' } },
+          content: [{ text: 'next' }],
+        },
+      ],
+      use: [contextCompression({ maxInputTokens: 100 })],
+    });
+
+    const modelToolOutput = String(
+      capturedRequest!.messages[2].content[0].toolResponse?.output
+    );
+    assert.strictEqual(
+      modelToolOutput.length < rawOutput.length,
+      true,
+      'model should see the truncated tool output'
+    );
+
+    const history = response.request!.messages;
+    assert.strictEqual(history.length, 5);
+    assert.strictEqual(
+      String(history[2].content[0].toolResponse?.output).length,
+      rawOutput.length
+    );
+    assert.strictEqual(
+      history[2].content[0].metadata?.contextCompression?.rawOutput,
+      true
+    );
+    assert.strictEqual(history[4].metadata?.contextCompression, undefined);
+  });
 });
 
 function messageLabels(messages: MessageData[]): string[] {

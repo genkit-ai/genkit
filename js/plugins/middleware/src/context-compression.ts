@@ -2392,6 +2392,10 @@ export const contextCompression: GenerateMiddleware<
 
             return updatedMsg;
           });
+        } else if (preserveOriginalMessages) {
+          // Nothing was compressed: the history stays as received, short of
+          // the sanitizing and reconciling above. The model hook resolves it.
+          outgoingMessages = rawMessages;
         } else {
           outgoingMessages =
             wasCompressed ||
