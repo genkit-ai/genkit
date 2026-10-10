@@ -217,9 +217,11 @@ func isolate[M Middleware](prototype M) M {
 // process that created it. Wherever the request is serialized (prompt
 // metadata, trace spans, the Dev UI) it shows as a reference named "inline"
 // with no config, and a request replayed from that JSON (for example, a
-// prompt run from the Dev UI) fails because nothing registered can rebuild
-// the closure. For middleware that must run from JSON, define a named struct
-// that implements [Middleware] and register it with [NewMiddleware].
+// prompt run from the Dev UI) fails because nothing can rebuild the closure.
+// The name "inline" is reserved for this reason: a middleware registered
+// under it is never resolved from JSON. For middleware that must run from
+// JSON, define a named struct that implements [Middleware] and register it
+// with [NewMiddleware].
 //
 // Example:
 //
@@ -371,12 +373,14 @@ func resolveRefs(ctx context.Context, r api.Registry, refs []*MiddlewareRef) ([]
 			bundles = append(bundles, namedHooks{name: ref.Name, hooks: h})
 			continue
 		}
-		d := LookupMiddleware(r, ref.Name)
-		if d == nil && ref.Name == inlineMiddlewareName {
+		if ref.Name == inlineMiddlewareName {
 			// A MiddlewareFunc that went through JSON (e.g. a prompt run from
 			// the Dev UI) arrives here as a name with no closure behind it.
-			return nil, status.Errorf(status.ErrFailedPrecondition, "ai: inline middleware (ai.MiddlewareFunc) cannot run from a serialized request; define a named struct that implements ai.Middleware and register it with ai.NewMiddleware")
+			// The name is checked before the registry so a middleware
+			// registered as "inline" cannot stand in for the lost closure.
+			return nil, status.Errorf(status.ErrFailedPrecondition, "ai: inline middleware (ai.MiddlewareFunc) cannot run from a serialized request, and the name %q is reserved for it; define a named struct that implements ai.Middleware and register it with ai.NewMiddleware", inlineMiddlewareName)
 		}
+		d := LookupMiddleware(r, ref.Name)
 		if d == nil {
 			return nil, status.Errorf(status.ErrNotFound, "ai: middleware %q not registered (is the providing plugin installed?)", ref.Name)
 		}

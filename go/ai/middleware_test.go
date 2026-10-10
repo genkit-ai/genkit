@@ -471,7 +471,9 @@ func TestMiddlewareFuncSerializedRequest(t *testing.T) {
 		t.Fatalf("marshal request: %v", err)
 	}
 
-	// Replayed from that JSON, the ref has no closure behind it.
+	// Replayed from that JSON, the ref has no closure behind it, and a
+	// middleware registered under the same name must not stand in for it.
+	NewMiddleware("impostor", inlineNamedConfig{}).Register(r)
 	var replayed GenerateActionOptions
 	if err := json.Unmarshal(b, &replayed); err != nil {
 		t.Fatalf("unmarshal request: %v", err)
@@ -481,6 +483,14 @@ func TestMiddlewareFuncSerializedRequest(t *testing.T) {
 		t.Errorf("status = %v, want FAILED_PRECONDITION (err: %v)", got, err)
 	}
 }
+
+// inlineNamedConfig is registered middleware that claims the name reserved
+// for [MiddlewareFunc].
+type inlineNamedConfig struct{}
+
+func (inlineNamedConfig) Name() string { return "inline" }
+
+func (inlineNamedConfig) New(context.Context) (*Hooks, error) { return &Hooks{}, nil }
 
 func TestMiddlewareFuncCoexist(t *testing.T) {
 	// Two MiddlewareFunc adapter instances should be able to coexist in a
