@@ -100,7 +100,7 @@ Each sample runs with `go run .`. Start with the `basic-*` set: together they co
 | [basic‑agents](samples/basic-agents) | Inline, prompt-file, and custom agents with snapshots, background runs, and delegation |
 | [basic‑agents‑server](samples/basic-agents-server/main.go) | Store-backed and stateless agents over HTTP |
 | [basic‑tool‑interrupts](samples/basic-tool-interrupts/main.go) | Human in the loop: a tool that pauses for approval |
-| [basic‑middleware](samples/basic-middleware) | [Retry and fallback](samples/basic-middleware/retry-fallback/main.go), [filesystem](samples/basic-middleware/filesystem), and [skills](samples/basic-middleware/skills) middleware |
+| [basic‑middleware](samples/basic-middleware) | [Retry and fallback](samples/basic-middleware/retry-fallback/main.go), [filesystem](samples/basic-middleware/filesystem), [skills](samples/basic-middleware/skills), and [context compression](samples/basic-middleware/context-compression/main.go) middleware |
 | [basic‑errors](samples/basic-errors/main.go) | Error classification with sentinels and `errors.Is` |
 | [basic‑durable‑streaming‑exp](samples/basic-durable-streaming-exp/main.go) | Reconnectable streams with replay *(preview)* |
 
@@ -584,6 +584,8 @@ Also built in:
 - [`SoftToolErrors`](plugins/middleware/soft_tool_errors.go): sends tool errors back to the model so it can correct itself.
 - [`Filesystem`](samples/basic-middleware/filesystem): gives the model file tools confined to one directory.
 - [`Skills`](samples/basic-middleware/skills): loads [Agent Skills](https://agentskills.io) `SKILL.md` files on demand.
+
+Experimental, in `middleware/exp`: [`ContextCompression`](samples/basic-middleware/context-compression/main.go) keeps long conversations and tool loops inside a context budget.
 
 To build your own, implement [`ai.Middleware`](https://genkit.dev/docs/go/middleware/#building-your-own-custom-middleware) or wrap a function with `ai.MiddlewareFunc`.
 

@@ -3557,6 +3557,42 @@ func TestResumeCarriesOptionsForward(t *testing.T) {
 			t.Errorf("resumed response = %q, want %q", got, "done")
 		}
 	})
+	t.Run("the resumed turn keeps a hook's edits to the first turn", func(t *testing.T) {
+		r, tool, res := interruptedForResume(t)
+		respond := tool.Respond(res.Message.Content[0], "answer", nil)
+
+		var resumed []*Message
+		tag := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
+			return &Hooks{
+				WrapGenerate: func(ctx context.Context, p *GenerateParams, next GenerateNext) (*ModelResponse, error) {
+					if p.Iteration > 0 {
+						resumed = p.Request.Messages
+						return next(ctx, p)
+					}
+					tagged := *p.Request.Messages[0]
+					tagged.Metadata = map[string]any{"tagged": true}
+					req := *p.Request
+					req.Messages = append([]*Message{&tagged}, p.Request.Messages[1:]...)
+					p.Request = &req
+					return next(ctx, p)
+				},
+			}, nil
+		})
+
+		_, err := Generate(testCtx, r, WithModelName("test/resumeModel"),
+			WithMessages(res.History()...), WithTools(tool),
+			WithResume(respond), WithUse(tag))
+		assertNoError(t, err)
+
+		// Other turns build on the request a hook passed on, so the resumed
+		// one must as well.
+		if len(resumed) == 0 {
+			t.Fatal("the hook saw no resumed turn")
+		}
+		if got := resumed[0].Metadata; got["tagged"] != true {
+			t.Errorf("resumed turn's first message metadata = %v, want the tag the first turn's hook added", got)
+		}
+	})
 }
 
 // TestGeneratePartialResponseOnFailure covers the partial-response contract:

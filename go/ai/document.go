@@ -384,6 +384,14 @@ func (p *Part) IsReasoning() bool {
 	return p != nil && p.Kind == PartReasoning
 }
 
+// IsOutputInstructions reports whether p holds the output-format
+// instructions that the generate loop injects for a request with an output
+// schema. Middleware that drops or summarizes messages must keep the message
+// that holds this part, or the model loses the format directive.
+func (p *Part) IsOutputInstructions() bool {
+	return p != nil && p.Metadata[partPurposeKey] == partPurposeOutput
+}
+
 // IsImage reports whether the [Part] contains an image.
 func (p *Part) IsImage() bool {
 	if p == nil || !p.IsMedia() {

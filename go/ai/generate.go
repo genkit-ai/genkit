@@ -710,7 +710,12 @@ func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 		// execution is both wrapped by WrapGenerate and recorded under this
 		// turn's span (generate > tool > generate > model > tool).
 		if currentTurn == 0 && resumeRequested(opts) {
-			resumeOutput, err := handleResumeOption(ctx, r, opts, runTool, wrappedCb)
+			// The resume revises the conversation this turn received, so
+			// what the WrapGenerate hooks changed carries into the resumed
+			// turn, as it does from one turn to the next.
+			turnOpts := *opts
+			turnOpts.Messages = req.Messages
+			resumeOutput, err := handleResumeOption(ctx, r, &turnOpts, runTool, wrappedCb)
 			if err != nil {
 				if resumeOutput == nil || resumeOutput.failedMessage == nil {
 					return nil, err
@@ -721,7 +726,7 @@ func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 				// finished, so a retry replays them instead of running
 				// them again.
 				failedReq := *req
-				failedReq.Messages = opts.Messages[:len(opts.Messages)-1]
+				failedReq.Messages = req.Messages[:len(req.Messages)-1]
 				partial := failurePartial(ctx, nil, &failedReq, err)
 				partial.Message = resumeOutput.failedMessage
 				return partial, err
@@ -737,7 +742,7 @@ func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 				// reproduces the full conversation. Copied from the turn's
 				// request so a field added to ModelRequest carries through.
 				irReq := *req
-				irReq.Messages = opts.Messages[:len(opts.Messages)-1]
+				irReq.Messages = req.Messages[:len(req.Messages)-1]
 				ir.Request = &irReq
 				return ir, nil
 			}
@@ -2092,7 +2097,9 @@ func (mr *ModelResponse) Text() string {
 }
 
 // History returns messages from the request combined with the response message
-// to represent the conversation history. The result is always freshly
+// to represent the conversation history. The request is the one the model
+// recorded on the response, so a [Hooks.WrapModel] middleware that changes
+// the messages decides what History returns. The result is always freshly
 // allocated, so callers may retain or append to it without disturbing
 // Request.Messages.
 func (mr *ModelResponse) History() []*Message {

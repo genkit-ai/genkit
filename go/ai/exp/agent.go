@@ -2926,6 +2926,14 @@ func (i *detachIntake) stopAndWait() {
 // excluded from session history after generation.
 const promptMessageKey = "_genkit_prompt"
 
+// IsPromptMessage reports whether m is one of the messages an agent's prompt
+// renders on every turn, such as its system prompt or template output. The
+// agent drops these messages from session history, so metadata that a
+// middleware records on one does not persist.
+func IsPromptMessage(m *ai.Message) bool {
+	return m != nil && hasTag(m, promptMessageKey)
+}
+
 // sessionMessageKey marks the session's own messages on their way into the
 // prompt render. The prompt decides where they land, so afterwards this is the
 // only thing separating them from its scaffolding. [tagRenderedMessages] strips
