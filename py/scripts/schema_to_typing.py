@@ -99,6 +99,7 @@ HEADER = '''# Copyright {year} Google LLC
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any, ClassVar, Literal
 
 from pydantic import ConfigDict, Field, RootModel, field_validator
@@ -352,9 +353,8 @@ def _emit_model(
         desc = v.get('description')
         desc_extra = f', description={repr(desc)}' if desc else ''
         if name == 'EvalFnResponse' and field_name == 'evaluation':
-            # Callers read row.evaluation as a list. Saved JSON that stored one
-            # score object is wrapped; a Score built in code must already be
-            # a list so the type checker and runtime agree.
+            # Callers read row.evaluation as a list. One score, built in code
+            # or saved as a JSON object, is wrapped by the validator below.
             py_type_str = 'list[Score]'
         if k in req:
             lines.append(f'    {field_name}: {py_type_str} = Field(...{desc_extra}{alias_extra})')
@@ -375,10 +375,14 @@ def _emit_model(
             '',
             "    @field_validator('evaluation', mode='before')",
             '    @classmethod',
-            '    def _wrap_single_score_object(cls, value: Any) -> Any:  # noqa: ANN401',
-            '        # saved runs may store one score object. wrap that dict;',
-            '        # a Score built in code must already be a list.',
-            '        return [value] if isinstance(value, dict) else value',
+            '    def _wrap_single_score(cls, value: Any) -> Any:  # noqa: ANN401',
+            '        # most evaluators score a row once, and saved runs may store that one',
+            '        # score as an object. wrap it so whoever reads results always gets a list.',
+            '        if isinstance(value, (dict, Score)):',
+            '            return [value]',
+            '        if isinstance(value, (str, bytes)) or not isinstance(value, Iterable):',
+            "            raise ValueError('evaluation must be a Score or a list of Score')",
+            '        return value',
         ])
     return lines + ['']
 
