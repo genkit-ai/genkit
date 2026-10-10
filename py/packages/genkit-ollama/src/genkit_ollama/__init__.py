@@ -29,18 +29,18 @@ Example:
     from genkit import Genkit
     from genkit_ollama import Ollama
 
-    # 1. Initialize Genkit with local Ollama plugin (models resolve on demand)
+    # 1. Pulled models resolve on demand; /api/show supplies their capabilities
     ai = Genkit(plugins=[Ollama()])
 
     # 2. Generate content entirely on local hardware
     res = await ai.generate(
         model='ollama/llama3.2',
-        prompt='Why run AI models locally in 10 words?',
+        prompt='Suggest a dish for a gluten-free diner in 10 words.',
     )
 
     # 3. Inspect output shapes directly
     print(res.text)
-    # => Complete data privacy with zero cloud latency or API costs.
+    # => Grilled salmon with roasted potatoes and a lemon herb salad.
     ```
 
 See Also:
@@ -48,25 +48,11 @@ See Also:
 """
 
 from genkit_ollama._errors import OllamaConnectionError
-from genkit_ollama.embedders import EmbeddingDefinition
-from genkit_ollama.models import ModelDefinition, OllamaConfig, OllamaSupports
-from genkit_ollama.plugin_api import (
-    Ollama,
-    RequestHeaderFunction,
-    RequestHeaderParams,
-    RequestHeaders,
-    ollama_name,
-)
+from genkit_ollama._models import OllamaConfig
+from genkit_ollama._plugin import Ollama
 
 __all__ = [
-    'EmbeddingDefinition',
-    'ModelDefinition',
     'Ollama',
     'OllamaConfig',
     'OllamaConnectionError',
-    'OllamaSupports',
-    'RequestHeaderFunction',
-    'RequestHeaderParams',
-    'RequestHeaders',
-    'ollama_name',
 ]

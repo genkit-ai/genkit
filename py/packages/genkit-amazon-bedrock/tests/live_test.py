@@ -30,15 +30,12 @@ import re
 from collections.abc import Iterator
 
 import pytest
-from genkit_amazon_bedrock.config import BedrockConfig
-from genkit_amazon_bedrock.converters import (
-    REASONING_SIGNATURE_METADATA_KEY,
-    cache_point_part,
-)
-from genkit_amazon_bedrock.embedders import BedrockEmbedder
-from genkit_amazon_bedrock.image import BedrockImageModel
-from genkit_amazon_bedrock.models import BedrockModel
-from genkit_amazon_bedrock.transport import BedrockTransport
+from genkit_amazon_bedrock import BedrockConfig, cache_point_part
+from genkit_amazon_bedrock._converters import REASONING_SIGNATURE_METADATA_KEY
+from genkit_amazon_bedrock._embedders import BedrockEmbedder
+from genkit_amazon_bedrock._image import BedrockImageModel
+from genkit_amazon_bedrock._models import BedrockModel
+from genkit_amazon_bedrock._transport import BedrockTransport
 
 from genkit import ActionRunContext, Document, FinishReason, GenkitError, Message, ModelResponse, Part, Role
 from genkit.embedder import EmbedRequest
@@ -65,6 +62,7 @@ NOVA_EMBED = 'amazon.nova-2-multimodal-embeddings-v1:0'
 
 NOVA_CANVAS = 'amazon.nova-canvas-v1:0'
 SD3 = 'stability.sd3-5-large-v1:0'
+
 
 # Smallest PNG Titan accepts.
 PNG_1X1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQAABjE+ibYAAAAASUVORK5CYII='

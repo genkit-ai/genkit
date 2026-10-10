@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"sync/atomic"
 	"testing"
@@ -117,7 +118,7 @@ func TestTranslateGenerateChunk(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := translateGenerateChunk(tt.input)
+			got, _, err := translateGenerateChunk(tt.input)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("translateGenerateChunk() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -1121,5 +1122,82 @@ func TestDefineModelReusesDiscoveredCapabilities(t *testing.T) {
 	}
 	if got := showCalls.Load(); got != 1 {
 		t.Errorf("/api/show calls = %d, want 1; DefineModel must not perform I/O", got)
+	}
+}
+
+// TestGenerateReportsUsage pins that a response reports the token counts
+// Ollama sends on its last message, which a stream carries on its final
+// chunk, for chat and generate models alike. The plugin used to report an
+// empty usage on every path.
+func TestGenerateReportsUsage(t *testing.T) {
+	const counts = `"done":true,"prompt_eval_count":26,"prompt_eval_cached_count":20,"eval_count":9`
+	for _, tc := range []struct {
+		name      string
+		modelType string
+		stream    bool
+		body      string
+	}{
+		{
+			name:      "chat",
+			modelType: "chat",
+			body:      `{"model":"llama3","message":{"role":"assistant","content":"Hi"},` + counts + `}`,
+		},
+		{
+			name:      "chat stream",
+			modelType: "chat",
+			stream:    true,
+			body: `{"model":"llama3","message":{"role":"assistant","content":"H"},"done":false}
+{"model":"llama3","message":{"role":"assistant","content":"i"},"done":false}
+{"model":"llama3","message":{"role":"assistant","content":""},` + counts + `}
+`,
+		},
+		{
+			name:      "generate",
+			modelType: "generate",
+			body:      `{"model":"llama3","response":"Hi",` + counts + `}`,
+		},
+		{
+			name:      "generate stream",
+			modelType: "generate",
+			stream:    true,
+			body: `{"model":"llama3","response":"H","done":false}
+{"model":"llama3","response":"i","done":false}
+{"model":"llama3","response":"",` + counts + `}
+`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				fmt.Fprint(w, tc.body)
+			}))
+			defer server.Close()
+
+			g := &generator{model: ModelDefinition{Name: "llama3", Type: tc.modelType}, serverAddress: server.URL, timeout: 30}
+			var cb func(context.Context, *ai.ModelResponseChunk) error
+			if tc.stream {
+				cb = func(context.Context, *ai.ModelResponseChunk) error { return nil }
+			}
+			resp, err := g.generate(t.Context(), &ai.ModelRequest{
+				Messages: []*ai.Message{ai.NewUserTextMessage("hello")},
+			}, cb)
+			if err != nil {
+				t.Fatalf("generate() error = %v", err)
+			}
+			want := ai.GenerationUsage{InputTokens: 26, CachedContentTokens: 20, OutputTokens: 9, TotalTokens: 35}
+			if resp.Usage == nil || !reflect.DeepEqual(*resp.Usage, want) {
+				t.Errorf("Usage = %+v, want %+v", resp.Usage, want)
+			}
+		})
+	}
+}
+
+// TestUsageInputCoversCache pins the input to at least its cached part. An
+// older server leaves prompt_eval_count out when the whole prompt came from
+// the cache, which would report more cached tokens than input tokens.
+func TestUsageInputCoversCache(t *testing.T) {
+	got := ollamaUsage{PromptEvalCachedCount: 20, EvalCount: 9}.toGenkit()
+	want := &ai.GenerationUsage{InputTokens: 20, CachedContentTokens: 20, OutputTokens: 9, TotalTokens: 29}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("toGenkit() = %+v, want %+v", got, want)
 	}
 }

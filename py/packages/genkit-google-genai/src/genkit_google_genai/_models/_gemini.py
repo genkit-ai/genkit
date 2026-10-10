@@ -22,6 +22,21 @@ from datetime import datetime, timedelta, timezone
 from functools import cached_property
 from typing import Annotated, Any, Any as JsonAny, Literal, TypeAlias, cast
 
+from genkit_google_genai._auth import GOOGLE_AUTH_ERRORS, raise_auth_error
+from genkit_google_genai._constants import is_multi_regional_location, multi_regional_base_url
+from genkit_google_genai._models._context_caching._constants import DEFAULT_TTL
+from genkit_google_genai._models._context_caching._utils import generate_cache_key, validate_context_cache_request
+from genkit_google_genai._models._sdk_config import (
+    GEMINI_MANAGED_BODY_FIELDS,
+    GEMINI_MANAGED_GENERATION_FIELDS,
+    attach_config_extra,
+    attach_leftovers,
+    dump_family_config,
+    keep_client_extra_body,
+    sdk_config_error,
+    split_sdk_fields,
+)
+from genkit_google_genai._models._secrets import context_api_key, reject_request_config_api_key
 from google import genai
 from google.auth import default as google_auth_default
 from google.auth.exceptions import DefaultCredentialsError
@@ -62,21 +77,6 @@ from genkit.model import (
     get_basic_usage_stats,
 )
 from genkit.plugin_api import wrap_http_error
-from genkit_google_genai._auth import GOOGLE_AUTH_ERRORS, raise_auth_error
-from genkit_google_genai._constants import is_multi_regional_location, multi_regional_base_url
-from genkit_google_genai._models._context_caching._constants import DEFAULT_TTL
-from genkit_google_genai._models._context_caching._utils import generate_cache_key, validate_context_cache_request
-from genkit_google_genai._models._sdk_config import (
-    GEMINI_MANAGED_BODY_FIELDS,
-    GEMINI_MANAGED_GENERATION_FIELDS,
-    attach_config_extra,
-    attach_leftovers,
-    dump_family_config,
-    keep_client_extra_body,
-    sdk_config_error,
-    split_sdk_fields,
-)
-from genkit_google_genai._models._secrets import context_api_key, reject_request_config_api_key
 
 
 def _to_dict(obj: JsonAny) -> JsonAny:  # noqa: ANN401

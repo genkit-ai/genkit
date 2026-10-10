@@ -84,11 +84,11 @@ from genkit.plugin_api import (
     to_json_schema,
 )
 from genkit_google_genai._auth import GOOGLE_AUTH_ERRORS, raise_auth_error
-from genkit_google_genai._evaluators import (
+from genkit_google_genai._evaluators._evaluation import (
+    METRIC_INFO,
     VertexAIEvaluationMetricType,
     create_vertex_evaluators,
 )
-from genkit_google_genai._evaluators._evaluation import METRIC_INFO
 from genkit_google_genai._interactions._options import ClientOptions
 from genkit_google_genai._models._antigravity import AntigravityConfig, create_antigravity_action
 from genkit_google_genai._models._deep_research import (
@@ -1092,7 +1092,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
                 create_vertex_evaluators(
                     registry,
                     list(VertexAIEvaluationMetricType),
-                    project_id=self._project,
+                    project=self._project,
                     location=self._location,
                 )
             )
@@ -1187,7 +1187,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
         actions = create_vertex_evaluators(
             registry,
             [metric_type],
-            project_id=self._project,
+            project=self._project,
             location=self._location,
         )
         return actions[0] if actions else None

@@ -57,8 +57,8 @@ The minimal policy covering everything this plugin does:
 
 Converse is authorized by `bedrock:InvokeModel` and ConverseStream by
 `bedrock:InvokeModelWithResponseStream`; there is no separate Converse action to
-grant. Embedding and image generation go through InvokeModel, so they need only
-the first.
+grant. Embedding and image generation go through InvokeModel, so they need
+only the first.
 
 The inference-profile resource is the part that is easy to leave out.
 Cross-region profile IDs such as `us.anthropic.claude-sonnet-4-5-20250929-v1:0`
@@ -85,13 +85,13 @@ credentials and is described under [Usage](#usage).
 
 ```python
 from genkit import Genkit
-from genkit_amazon_bedrock import Bedrock, ModelDefinition
+from genkit_amazon_bedrock import Bedrock
 
 ai = Genkit(
     plugins=[
         Bedrock(
             region='us-east-1',
-            models=[ModelDefinition(name='us.anthropic.claude-sonnet-4-5-20250929-v1:0')],
+            models=['us.anthropic.claude-sonnet-4-5-20250929-v1:0'],
         )
     ],
     model='bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0',
@@ -117,7 +117,7 @@ Every `Bedrock()` parameter, with its default:
 | `max_pool_connections` | unset    | HTTP connection pool size. Falls back to `50`, raised off botocore's default of 10.                                         |
 | `total_timeout`        | `3600.0` | Whole-call deadline in seconds for a non-streaming generation, retries included. `None` removes it.                         |
 | `session`              | unset    | Pre-configured `boto3.session.Session` for custom credentials or SDK wiring.                                                |
-| `models`               | `[]`     | `ModelDefinition` entries to register. Unlisted IDs still resolve on demand.                                                |
+| `models`               | `[]`     | Model IDs to register. The route is inferred from the ID. Unlisted IDs still resolve on demand.                             |
 | `embedders`            | `[]`     | Embedding model IDs to register. Unlisted IDs still resolve on demand.                                                      |
 
 `max_retries`, `read_timeout`, `connect_timeout` and `max_pool_connections` are
@@ -177,7 +177,7 @@ Model IDs carrying one of the prefixes `global.`, `us-gov.`, `us.`, `eu.`,
 to whichever region in the geography has capacity:
 
 ```python
-ModelDefinition(name='us.anthropic.claude-sonnet-4-5-20250929-v1:0')
+Bedrock(models=['us.anthropic.claude-sonnet-4-5-20250929-v1:0'])
 ```
 
 The full ID is always sent to Bedrock verbatim. The prefix is stripped only for
@@ -270,18 +270,18 @@ Notes:
 
 Image models go through InvokeModel rather than Converse, but they are ordinary
 Genkit model actions: `ai.generate` returns the result as media parts carrying
-data URLs. Declare one with `type='image'`:
+data URLs. List one by ID like any other model:
 
 ```python
 from genkit import Genkit
-from genkit_amazon_bedrock import Bedrock, ModelDefinition
+from genkit_amazon_bedrock import Bedrock
 
 ai = Genkit(
     plugins=[
         Bedrock(
             # us-west-2: the active text-to-image models are offered there only.
             region='us-west-2',
-            models=[ModelDefinition(name='stability.sd3-5-large-v1:0', type='image')],
+            models=['stability.sd3-5-large-v1:0'],
         )
     ]
 )
@@ -293,12 +293,12 @@ response = await ai.generate(
 image = response.media[0].url  # data:image/png;base64,...
 ```
 
-Declaring is optional here too. An undeclared ID in one of the two families
-below is classified as an image model on the spot, so a bare
-`ai.generate(model='bedrock/<id>')` resolves and takes the InvokeModel path;
-declaring adds the model to the Dev UI and pins the routing. The prompt is the
-text of the most recent user message, concatenated across its text parts; other
-parts are ignored, as these models are text-to-image only.
+The plugin infers the route from the ID: one of the two families below takes
+the InvokeModel path, and anything else goes through Converse. Listing is
+optional here too, so a bare `ai.generate(model='bedrock/<id>')` routes the same
+way; listing only adds the model to the Dev UI. The prompt is the text of the
+most recent user message, concatenated across its text parts; other parts are
+ignored, as these models are text-to-image only.
 
 Streaming callbacks are never invoked for image models. There is nothing to
 stream, so `generate_stream` yields no chunks and the images arrive on the
@@ -340,10 +340,10 @@ config={'aspect_ratio': '16:9', 'output_format': 'jpeg', 'seed': 42}
 
 The media part's MIME type follows `output_format`.
 
-`BedrockImageConfig` is the exported config type for these calls. It declares
-no fields and rejects nothing, on purpose: the two families take disjoint keys,
-and `BedrockConfig` describes Converse parameters, so it would reject every
-family-specific key here.
+Image models register an open config schema. It declares no fields and rejects
+nothing, on purpose: the two families take disjoint keys, and `BedrockConfig`
+describes Converse parameters, so it would reject every family-specific key
+here. Pass image options as a plain dict.
 
 Genkit's generic generation options (`temperature`, `topP`, `maxOutputTokens`,
 and the rest of the common config) are not forwarded to image models, since

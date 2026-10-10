@@ -29,10 +29,10 @@ extra raises an error naming the command to run.
 
 ```python
 from genkit import Genkit
-from genkit_vertexai.model_garden import ModelGarden
+from genkit_vertexai import ModelGarden
 
 ai = Genkit(
-    plugins=[ModelGarden(project_id='my-project', location='us-central1')],
+    plugins=[ModelGarden(project='my-project', location='us-central1')],
 )
 
 res = await ai.generate(

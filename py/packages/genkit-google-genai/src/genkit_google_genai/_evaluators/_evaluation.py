@@ -33,6 +33,8 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 import httpx
+from genkit_google_genai._auth import GOOGLE_AUTH_ERRORS, raise_auth_error
+from genkit_google_genai._constants import GLOBAL_LOCATION, is_multi_regional_location, vertex_api_host
 from google.auth import default as google_auth_default
 from google.auth.transport.requests import Request
 
@@ -42,15 +44,18 @@ from genkit.evaluator import BaseDataPoint, EvalFnResponse, Score, ScoreDetails
 from genkit.plugin_api import (
     GENKIT_CLIENT_HEADER,
     Action,
-    get_cached_client,
+    loop_local_client,
     mark_provider_error,
     wrap_http_error,
 )
-from genkit_google_genai._auth import GOOGLE_AUTH_ERRORS, raise_auth_error
-from genkit_google_genai._constants import GLOBAL_LOCATION, is_multi_regional_location, vertex_api_host
 
 if TYPE_CHECKING:
     from genkit import Genkit as GenkitRegistry
+
+
+@loop_local_client
+def _evaluator_client() -> httpx.AsyncClient:
+    return httpx.AsyncClient(timeout=httpx.Timeout(60.0))
 
 
 class VertexAIEvaluationMetricType(StrEnum):
@@ -138,14 +143,14 @@ def _stringify(value: Any) -> str:  # noqa: ANN401
 class EvaluatorFactory:
     """Factory for creating Vertex AI evaluator actions."""
 
-    def __init__(self, project_id: str, location: str) -> None:
+    def __init__(self, project: str, location: str) -> None:
         """Initialize the factory.
 
         Args:
-            project_id: Google Cloud project ID.
+            project: Google Cloud project ID.
             location: Google Cloud location.
         """
-        self.project_id = project_id
+        self.project = project
         self.location = location
 
     def _api_host(self) -> str:
@@ -177,7 +182,7 @@ class EvaluatorFactory:
         Raises:
             GenkitError: If the API call fails.
         """
-        location_name = f'projects/{self.project_id}/locations/{self.location}'
+        location_name = f'projects/{self.project}/locations/{self.location}'
         url = f'https://{self._api_host()}/v1beta1/{location_name}:evaluateInstances'
 
         # Get authentication token
@@ -207,12 +212,8 @@ class EvaluatorFactory:
             **request_body,
         }
 
-        # Use cached client for better connection reuse.
-        # Note: Auth headers are passed per-request since tokens may expire.
-        client = get_cached_client(
-            cache_key='vertex-ai-evaluator',
-            timeout=60.0,
-        )
+        # Auth headers go on each request since tokens expire.
+        client = _evaluator_client()
 
         # Transport failures (refused connection, timeout) have no known
         # status and propagate as is.
@@ -302,7 +303,7 @@ class EvaluatorFactory:
 def create_vertex_evaluators(
     registry: GenkitRegistry,
     metrics: list[VertexAIEvaluationMetricType],
-    project_id: str,
+    project: str,
     location: str,
 ) -> list[Action]:
     """Create Vertex AI evaluator actions.
@@ -310,13 +311,13 @@ def create_vertex_evaluators(
     Args:
         registry: The Genkit registry.
         metrics: List of metrics to create evaluators for.
-        project_id: Google Cloud project ID.
+        project: Google Cloud project ID.
         location: Google Cloud location.
 
     Returns:
         List of created evaluator actions.
     """
-    factory = EvaluatorFactory(project_id, location)
+    factory = EvaluatorFactory(project, location)
     actions = []
 
     for metric_type in metrics:

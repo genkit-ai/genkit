@@ -44,7 +44,7 @@ from botocore.exceptions import (
     TokenRetrievalError,
     UnauthorizedSSOTokenError,
 )
-from genkit_amazon_bedrock.models import BedrockModel
+from genkit_amazon_bedrock._models import BedrockModel
 
 from genkit import ActionRunContext, FinishReason, GenkitError, Message, Part, Role
 from genkit._core._error import get_callable_json, get_http_status

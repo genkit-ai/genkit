@@ -19,63 +19,43 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
-from genkit_vertexai.model_garden.client import OpenAIClient
+from genkit_vertexai._model_garden._client import CachedOpenAI
 from google.auth.exceptions import DefaultCredentialsError, RefreshError, TransportError
 
 from genkit import GenkitError
 
 
-@pytest.mark.asyncio
-@patch('google.auth.default')
-@patch('google.auth.transport.requests.Request')
-@patch('genkit_vertexai.model_garden.client._AsyncOpenAI')
-async def test_client_initialization_with_explicit_project_id(
-    mock_openai_cls: MagicMock, mock_request_cls: MagicMock, mock_default_auth: MagicMock
-) -> None:
-    """Unittests for init client."""
-    mock_location = 'location'
-    mock_project_id = 'project_id'
-    mock_token = 'token'
-
-    mock_credentials = MagicMock()
-    mock_credentials.token = mock_token
-
-    mock_default_auth.return_value = (mock_credentials, 'project_id')
-
-    client_instance = await OpenAIClient.create(location=mock_location, project_id=mock_project_id)
-
-    mock_default_auth.assert_called_once()
-    mock_credentials.refresh.assert_called_once()
-    mock_request_cls.assert_called_once()
-
-    assert client_instance is not None
+def _adc(project: str | None) -> MagicMock:
+    """Stand-in for google.auth.default that returns a token and `project`."""
+    credentials = MagicMock()
+    credentials.token = 'token'
+    return MagicMock(return_value=(credentials, project))
 
 
 @pytest.mark.asyncio
-@patch('google.auth.default')
+@pytest.mark.parametrize(
+    ('explicit', 'expected'),
+    [
+        pytest.param('menu-prod', 'menu-prod', id='explicit-beats-adc'),
+        pytest.param(None, 'adc-proj', id='adc-fallback'),
+    ],
+)
 @patch('google.auth.transport.requests.Request')
-@patch('genkit_vertexai.model_garden.client._AsyncOpenAI')
-async def test_client_initialization_without_explicit_project_id(
-    mock_openai_cls: MagicMock, mock_request_cls: MagicMock, mock_default_auth: MagicMock
+async def test_client_targets_resolved_project(
+    mock_request_cls: MagicMock, explicit: str | None, expected: str
 ) -> None:
-    """Unittests for init client."""
-    mock_location = 'location'
-    mock_token = 'token'
+    """The OpenAI base_url points at project=, or the ADC project when none is passed."""
+    with (
+        patch('google.auth.default', _adc('adc-proj')),
+        patch('genkit_vertexai._model_garden._client._AsyncOpenAI') as openai_cls,
+    ):
+        await CachedOpenAI(location='us-central1', project=explicit).get()
 
-    mock_credentials = MagicMock()
-    mock_credentials.token = mock_token
-
-    mock_default_auth.return_value = (mock_credentials, 'project_id')
-
-    client_instance = await OpenAIClient.create(
-        location=mock_location,
+    assert openai_cls.call_args.kwargs['base_url'] == (
+        f'https://us-central1-aiplatform.googleapis.com/v1beta1'
+        f'/projects/{expected}/locations/us-central1/endpoints/openapi'
     )
-
-    mock_default_auth.assert_called_once()
-    mock_credentials.refresh.assert_called_once()
-    mock_request_cls.assert_called_once()
-
-    assert client_instance is not None
+    assert openai_cls.call_args.kwargs['api_key'] == 'token'
 
 
 @pytest.mark.asyncio
@@ -89,7 +69,7 @@ async def test_client_initialization_without_explicit_project_id(
 async def test_credential_failure_is_unauthenticated(auth_error: Exception) -> None:
     """Missing or revoked ADC is UNAUTHENTICATED, so retry doesn't keep calling with it."""
     with patch('google.auth.default', side_effect=auth_error), pytest.raises(GenkitError) as raised:
-        await OpenAIClient.create(location='us-central1', project_id='menu-prod')
+        await CachedOpenAI(location='us-central1', project='menu-prod').get()
 
     assert raised.value.status == 'UNAUTHENTICATED'
     assert raised.value.cause is auth_error
@@ -118,7 +98,7 @@ def _metadata_server_blip() -> RefreshError:
 )
 async def test_transient_auth_failure_stays_raw(flaky: Exception) -> None:
     with patch('google.auth.default', side_effect=flaky), pytest.raises(type(flaky)) as raised:
-        await OpenAIClient.create(location='us-central1', project_id='menu-prod')
+        await CachedOpenAI(location='us-central1', project='menu-prod').get()
 
     assert raised.value is flaky
 
@@ -126,10 +106,8 @@ async def test_transient_auth_failure_stays_raw(flaky: Exception) -> None:
 @pytest.mark.asyncio
 @patch('google.auth.transport.requests.Request')
 async def test_missing_project_is_failed_precondition(mock_request_cls: MagicMock) -> None:
-    credentials = MagicMock()
-    credentials.token = 'token'
-    with patch('google.auth.default', return_value=(credentials, None)), pytest.raises(GenkitError) as raised:
-        await OpenAIClient.create(location='us-central1')
+    with patch('google.auth.default', _adc(None)), pytest.raises(GenkitError) as raised:
+        await CachedOpenAI(location='us-central1', project=None).get()
 
     assert raised.value.status == 'FAILED_PRECONDITION'
-    assert 'project_id' in str(raised.value)
+    assert 'project' in str(raised.value)

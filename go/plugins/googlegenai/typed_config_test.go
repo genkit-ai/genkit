@@ -85,7 +85,7 @@ func TestModelConfigSchema(t *testing.T) {
 	client := testClient(t)
 
 	gemini := newModel(client, gemini25Flash, GetModelOptions(gemini25Flash, googleAIProvider)).Desc()
-	imagen := newModel(client, imagen40Generate001, GetModelOptions(imagen40Generate001, googleAIProvider)).Desc()
+	imagen := newModel(client, "imagen-4.0-generate-001", GetModelOptions("imagen-4.0-generate-001", googleAIProvider)).Desc()
 
 	assertAdvertises(t, "gemini", gemini.Metadata["model"].(map[string]any)["customOptions"], geminiConfigSchema)
 	assertAdvertises(t, "imagen", imagen.Metadata["model"].(map[string]any)["customOptions"], imagenConfigSchema)

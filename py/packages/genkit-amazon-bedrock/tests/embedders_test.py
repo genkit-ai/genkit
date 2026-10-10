@@ -22,7 +22,7 @@ from typing import Any, cast
 
 import pytest
 from botocore.exceptions import ClientError, NoCredentialsError
-from genkit_amazon_bedrock.embedders import (
+from genkit_amazon_bedrock._embedders import (
     COHERE_TEXT_BATCH_SIZE,
     EMBED_CONCURRENCY_LIMIT,
     EMBEDDER_INFO,
@@ -33,7 +33,7 @@ from genkit_amazon_bedrock.embedders import (
     image_from_document,
     is_embedding_model,
 )
-from genkit_amazon_bedrock.model_info import strip_inference_profile_prefix
+from genkit_amazon_bedrock._model_info import strip_inference_profile_prefix
 
 from genkit import Document, GenkitError, Part
 from genkit.embedder import EmbedRequest

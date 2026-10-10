@@ -18,7 +18,7 @@
 
 import os
 
-from genkit_ollama import EmbeddingDefinition, ModelDefinition, Ollama, OllamaConnectionError
+from genkit_ollama import Ollama, OllamaConnectionError
 from pydantic import BaseModel
 
 from genkit import FinishReason, Genkit
@@ -27,13 +27,7 @@ chat_model = os.getenv('OLLAMA_CHAT_MODEL', 'llama3.2')
 embedder_model = os.getenv('OLLAMA_EMBEDDER_MODEL', 'nomic-embed-text')
 
 ai = Genkit(
-    plugins=[
-        Ollama(
-            models=[ModelDefinition(name=chat_model)],
-            embedders=[EmbeddingDefinition(name=embedder_model)],
-            server_address=os.getenv('OLLAMA_HOST'),
-        )
-    ],
+    plugins=[Ollama(server_address=os.getenv('OLLAMA_HOST'))],
     model=f'ollama/{chat_model}',
 )
 

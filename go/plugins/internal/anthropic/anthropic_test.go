@@ -17,13 +17,18 @@
 package anthropic
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/internal/base"
 	"github.com/google/go-cmp/cmp"
@@ -705,6 +710,26 @@ func TestToAnthropicRequest_StructuredOutput(t *testing.T) {
 	}
 }
 
+// The array and enum formats ask for a constraint too. Without one their
+// request would reach the API with neither a constraint nor, since the model
+// claims constrained output, the format instructions.
+func TestToAnthropicRequest_StructuredOutputNonObjectRoot(t *testing.T) {
+	for format, schema := range map[string]map[string]any{
+		"array": {"type": "array", "items": map[string]any{"type": "string"}},
+		"enum":  {"type": "string", "enum": []any{"red", "green"}},
+	} {
+		req := userRequest()
+		req.Output = &ai.ModelOutputConfig{Format: format, Schema: schema, Constrained: true}
+		got, err := toAnthropicRequest("anthropic", req, anthropic.MessageNewParams{MaxTokens: 100})
+		if err != nil {
+			t.Fatalf("%s: unexpected error: %v", format, err)
+		}
+		if got.OutputConfig.Format.Schema["type"] != schema["type"] {
+			t.Errorf("%s: OutputConfig schema = %v, want the %s schema", format, got.OutputConfig.Format.Schema, format)
+		}
+	}
+}
+
 // userRequest builds a minimal request carrying a single user message. The
 // config travels beside the request now, so it is not part of it.
 func userRequest() *ai.ModelRequest {
@@ -986,4 +1011,165 @@ func checkError(t *testing.T, err error, expectedErr string) bool {
 		return true
 	}
 	return false
+}
+
+// TestGenerateReportsUsage pins how Anthropic's usage maps onto the
+// [ai.GenerationUsage] convention, from usage the API returned live.
+// Anthropic's input_tokens leaves out cache reads and writes, and its
+// output_tokens includes thinking, which it also reports apart. A stream's
+// final counts arrive on message_delta, of which the SDK's accumulator keeps
+// only output_tokens, so the stream case pins that the rest is not lost.
+func TestGenerateReportsUsage(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		stream bool
+		body   string
+		want   *ai.GenerationUsage
+	}{
+		{
+			name: "cache write",
+			body: `{"id":"msg_1","type":"message","role":"assistant","model":"claude-haiku-4-5","content":[{"type":"text","text":"0.05"}],"stop_reason":"end_turn","usage":{"input_tokens":75,"cache_creation_input_tokens":12608,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":12608,"ephemeral_1h_input_tokens":0},"output_tokens":214,"output_tokens_details":{"thinking_tokens":206},"service_tier":"standard"}}`,
+			want: &ai.GenerationUsage{
+				InputTokens:      12683,
+				CacheWriteTokens: 12608,
+				OutputTokens:     8,
+				ThoughtsTokens:   206,
+				TotalTokens:      12897,
+				Custom:           map[string]float64{"cacheWrite5mTokens": 12608},
+			},
+		},
+		{
+			name:   "stream cache read",
+			stream: true,
+			body: "event: message_start\n" +
+				`data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-haiku-4-5","content":[],"stop_reason":null,"usage":{"input_tokens":75,"cache_creation_input_tokens":0,"cache_read_input_tokens":12608,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":3,"service_tier":"standard"}}}` + "\n\n" +
+				"event: content_block_start\n" +
+				`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}` + "\n\n" +
+				"event: content_block_delta\n" +
+				`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"0.05"}}` + "\n\n" +
+				"event: content_block_stop\n" +
+				`data: {"type":"content_block_stop","index":0}` + "\n\n" +
+				"event: message_delta\n" +
+				`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":75,"cache_creation_input_tokens":0,"cache_read_input_tokens":12608,"output_tokens":256,"output_tokens_details":{"thinking_tokens":248},"server_tool_use":{"web_search_requests":1}}}` + "\n\n" +
+				"event: message_stop\n" +
+				`data: {"type":"message_stop"}` + "\n\n",
+			want: &ai.GenerationUsage{
+				InputTokens:         12683,
+				CachedContentTokens: 12608,
+				OutputTokens:        8,
+				ThoughtsTokens:      248,
+				TotalTokens:         12939,
+				Custom:              map[string]float64{"webSearchRequests": 1},
+			},
+		},
+		{
+			// A later delta that leaves the thinking breakdown out does not
+			// fold the thinking back into the output.
+			name:   "stream second delta without thinking",
+			stream: true,
+			body: "event: message_start\n" +
+				`data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-haiku-4-5","content":[],"stop_reason":null,"usage":{"input_tokens":75,"output_tokens":3}}}` + "\n\n" +
+				"event: message_delta\n" +
+				`data: {"type":"message_delta","delta":{"stop_reason":null},"usage":{"output_tokens":256,"output_tokens_details":{"thinking_tokens":248}}}` + "\n\n" +
+				"event: message_delta\n" +
+				`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":256}}` + "\n\n" +
+				"event: message_stop\n" +
+				`data: {"type":"message_stop"}` + "\n\n",
+			want: &ai.GenerationUsage{
+				InputTokens:    75,
+				OutputTokens:   8,
+				ThoughtsTokens: 248,
+				TotalTokens:    331,
+			},
+		},
+		{
+			// A delta's counts are cumulative, so a zeroed input count does
+			// not lower the start's, and cache writes added after the start
+			// with no split by lifetime drop the start's partial split.
+			name:   "stream delta below start",
+			stream: true,
+			body: "event: message_start\n" +
+				`data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-haiku-4-5","content":[],"stop_reason":null,"usage":{"input_tokens":75,"cache_creation_input_tokens":100,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":100,"ephemeral_1h_input_tokens":0},"output_tokens":1}}}` + "\n\n" +
+				"event: message_delta\n" +
+				`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":0,"cache_creation_input_tokens":300,"output_tokens":50,"server_tool_use":{"web_search_requests":1}}}` + "\n\n" +
+				"event: message_stop\n" +
+				`data: {"type":"message_stop"}` + "\n\n",
+			want: &ai.GenerationUsage{
+				InputTokens:      375,
+				CacheWriteTokens: 300,
+				OutputTokens:     50,
+				TotalTokens:      425,
+				Custom:           map[string]float64{"webSearchRequests": 1},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if tc.stream {
+					w.Header().Set("Content-Type", "text/event-stream")
+				} else {
+					w.Header().Set("Content-Type", "application/json")
+				}
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			defer server.Close()
+
+			client := anthropic.NewClient(option.WithBaseURL(server.URL), option.WithAPIKey("stub"))
+			var cb func(context.Context, *ai.ModelResponseChunk) error
+			if tc.stream {
+				cb = func(context.Context, *ai.ModelResponseChunk) error { return nil }
+			}
+			resp, err := Generate(t.Context(), client, "anthropic", "claude-haiku-4-5",
+				&ai.ModelRequest{Messages: []*ai.Message{ai.NewUserTextMessage("hi")}},
+				anthropic.MessageNewParams{}, cb)
+			if err != nil {
+				t.Fatalf("Generate() error = %v", err)
+			}
+			if diff := cmp.Diff(tc.want, resp.Usage); diff != "" {
+				t.Errorf("Usage mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// A redacted_thinking block is thinking the API encrypted for safety reasons.
+// It must not fail the response, and the next turn must send it back
+// unchanged, after the history has gone through JSON as a stored session does.
+func TestRedactedThinkingRoundTrip(t *testing.T) {
+	var m anthropic.Message
+	if err := json.Unmarshal([]byte(`{
+		"id": "msg_1", "type": "message", "role": "assistant", "model": "claude-sonnet-5",
+		"stop_reason": "end_turn",
+		"content": [
+			{"type": "thinking", "thinking": "Let me think.", "signature": "sig"},
+			{"type": "redacted_thinking", "data": "EmwKAhgB"},
+			{"type": "text", "text": "Done."}
+		],
+		"usage": {"input_tokens": 1, "output_tokens": 2}
+	}`), &m); err != nil {
+		t.Fatalf("unmarshal message: %v", err)
+	}
+	resp, err := toGenkitResponse(&m, 0)
+	if err != nil {
+		t.Fatalf("toGenkitResponse() error = %v", err)
+	}
+	if got := resp.Reasoning(); got != "Let me think." {
+		t.Errorf("Reasoning() = %q, want only the readable thinking", got)
+	}
+
+	var stored ai.Message
+	b, err := json.Marshal(resp.Message)
+	if err != nil {
+		t.Fatalf("marshal message: %v", err)
+	}
+	if err := json.Unmarshal(b, &stored); err != nil {
+		t.Fatalf("unmarshal message: %v", err)
+	}
+	blocks, err := toAnthropicParts(stored.Content)
+	if err != nil {
+		t.Fatalf("toAnthropicParts() error = %v", err)
+	}
+	if got, want := wireJSON(t, blocks[1]), `{"data":"EmwKAhgB","type":"redacted_thinking"}`; got != want {
+		t.Errorf("block = %s, want %s", got, want)
+	}
 }
