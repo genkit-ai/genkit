@@ -16,9 +16,21 @@
 
 """Tests for the typed Anthropic config schema."""
 
+from typing import Any
+
 import pytest
-from genkit_anthropic.config import AnthropicConfig, ThinkingConfig
-from pydantic import ValidationError
+from genkit_anthropic._config import (
+    AnthropicConfig,
+    AnyToolChoice,
+    AutoToolChoice,
+    OutputConfig,
+    RequestMetadata,
+    SpecificToolChoice,
+    TaskBudget,
+    ThinkingConfig,
+    ToolChoiceNone,
+)
+from pydantic import BaseModel, ValidationError
 
 from genkit.plugin_api import to_json_schema
 
@@ -143,10 +155,31 @@ def test_beta_api_version_with_betas_valid() -> None:
     assert cfg.betas == ['token-efficient-tools-2025']
 
 
-def test_unknown_extras_survive_validate_dump() -> None:
-    cfg = AnthropicConfig.model_validate({'temperature': 0.5, 'foo_bar': 'baz'})
+def test_unknown_top_level_key_raises() -> None:
+    with pytest.raises(ValidationError, match='foo_bar'):
+        AnthropicConfig.model_validate({'temperature': 0.5, 'foo_bar': 'baz'})
+
+
+def test_extra_survives_validate_dump() -> None:
+    cfg = AnthropicConfig.model_validate({'temperature': 0.5, 'extra': {'foo_bar': 'baz'}})
     dumped = cfg.model_dump(exclude_none=True, by_alias=False)
-    assert dumped['foo_bar'] == 'baz'
+    assert dumped['extra'] == {'foo_bar': 'baz'}
+
+
+@pytest.mark.parametrize(
+    'raw',
+    [
+        {'thinking': {'enabled': True, 'budgetTokens': 2048, 'budgetToken': 1}},
+        {'output_config': {'effort': 'high', 'efort': 'low'}},
+        {'output_config': {'task_budget': {'total': 20000, 'totl': 1}}},
+        {'tool_choice': {'type': 'tool', 'name': 'lookup_menu', 'nmae': 'lookup_menu'}},
+        {'metadata': {'user_id': 'u', 'userid': 'u'}},
+    ],
+)
+def test_anthropic_config_with_unknown_nested_key_raises_validation_error(raw: dict) -> None:
+    """A typo inside `thinking`, `output_config`, `tool_choice` or `metadata` fails the same way."""
+    with pytest.raises(ValidationError, match='Extra inputs are not permitted'):
+        AnthropicConfig.model_validate(raw)
 
 
 def test_base_max_output_tokens_alias() -> None:
@@ -163,7 +196,6 @@ def test_json_schema_advertises_js_shaped_keys() -> None:
 
     # Advertised common and Anthropic-specific keys.
     for key in (
-        'apiKey',
         'apiVersion',
         'betas',
         'maxOutputTokens',
@@ -176,7 +208,6 @@ def test_json_schema_advertises_js_shaped_keys() -> None:
 
     assert props['maxOutputTokens']['type'] == 'number'
     assert props['maxOutputTokens']['title'] == 'Max output tokens'
-    assert props['apiKey']['description'] == 'Overrides the plugin-configured Anthropic API key for this request.'
     assert props['apiVersion']['description'] == 'Selects the Anthropic API surface for this request.'
     assert (
         props['betas']['description']
@@ -225,16 +256,16 @@ def test_thinking_accepts_unambiguous_modes(raw: dict) -> None:
 @pytest.mark.parametrize(
     ('raw', 'expected'),
     [
-        ({'speed': 'fast'}, {'speed'}),
+        ({'extra': {'speed': 'fast'}}, {'speed'}),
         ({'betas': ['x']}, {'betas'}),
         # Setting a beta-only feature at all is intent, even when the value is empty.
-        ({'mcp_servers': []}, {'mcp_servers'}),
+        ({'extra': {'mcp_servers': []}}, {'mcp_servers'}),
         # An empty betas list requests no beta headers, so it does not select the surface.
         ({'betas': []}, set()),
         ({'output_config': {'task_budget': {'total': 20000}}}, {'output_config.task_budget'}),
         ({'output_config': {'effort': 'high'}}, set()),
         ({'temperature': 0.5}, set()),
-        ({'future_option': 'x'}, set()),
+        ({'extra': {'future_option': 'x'}}, set()),
     ],
 )
 def test_beta_only_fields_detection(raw: dict, expected: set[str]) -> None:
@@ -246,7 +277,7 @@ def test_beta_only_fields_detection(raw: dict, expected: set[str]) -> None:
     'raw',
     [
         {'apiVersion': 'stable', 'betas': ['x']},
-        {'apiVersion': 'stable', 'speed': 'fast'},
+        {'apiVersion': 'stable', 'extra': {'speed': 'fast'}},
         {'apiVersion': 'stable', 'output_config': {'task_budget': {'total': 20000}}},
     ],
 )
@@ -258,8 +289,51 @@ def test_beta_only_fields_rejected_on_stable_surface(raw: dict) -> None:
 
 @pytest.mark.parametrize(
     'raw',
-    [{'apiVersion': 'beta', 'speed': 'fast'}, {'speed': 'fast'}, {'apiVersion': 'stable', 'temperature': 0.5}],
+    [
+        {'apiVersion': 'beta', 'extra': {'speed': 'fast'}},
+        {'extra': {'speed': 'fast'}},
+        {'apiVersion': 'stable', 'temperature': 0.5},
+    ],
 )
 def test_beta_only_fields_allowed_without_explicit_stable(raw: dict) -> None:
     """Beta-only fields are accepted unless stable is explicitly requested."""
     assert AnthropicConfig.model_validate(raw) is not None
+
+
+def test_thinking_type_typo_raises() -> None:
+    """`{'type': 'adaptiv'}` fails before the request is sent."""
+    with pytest.raises(ValidationError):
+        ThinkingConfig.model_validate({'type': 'adaptiv'})
+
+
+def _accepted_keys(model: type[BaseModel]) -> set[str]:
+    keys: set[str] = set()
+    for name, field in model.model_fields.items():
+        keys.add(name)
+        if field.alias:
+            keys.add(field.alias)
+    return keys
+
+
+@pytest.mark.parametrize(
+    'path,models',
+    [
+        (['thinking'], [ThinkingConfig]),
+        (['output_config'], [OutputConfig]),
+        (['output_config', 'task_budget'], [TaskBudget]),
+        (['tool_choice'], [AutoToolChoice, AnyToolChoice, SpecificToolChoice, ToolChoiceNone]),
+        (['metadata'], [RequestMetadata]),
+    ],
+    ids=['thinking', 'output_config', 'task_budget', 'tool_choice', 'metadata'],
+)
+def test_dev_ui_schema_lists_every_nested_key_the_config_accepts(
+    path: list[str], models: list[type[BaseModel]]
+) -> None:
+    """With `additionalProperties: false`, the Dev UI form rejects any key the hand-written schema leaves out."""
+    node: dict[str, Any] = to_json_schema(AnthropicConfig)
+    for key in path:
+        node = node['properties'][key]
+
+    assert node['additionalProperties'] is False
+    accepted = set().union(*(_accepted_keys(m) for m in models))
+    assert accepted <= set(node['properties'])

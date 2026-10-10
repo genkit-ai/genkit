@@ -14,16 +14,12 @@ import pytest
 
 from genkit import Genkit, Message, ModelResponse, Part
 from genkit._ai._generate import generate_action
-from genkit._ai._testing import define_programmable_model
 from genkit._ai._tools import (
     Interrupt,
     MultipartToolResponse,
     ToolRunContext,
-    respond_to_interrupt,
-    response,
-    restart_tool,
 )
-from genkit._core._error import RuntimeErrorReason
+from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import GenerateActionOptions, Resume
 from genkit._core._typing import (
     FinishReason,
@@ -31,6 +27,7 @@ from genkit._core._typing import (
     Role,
 )
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, MiddlewareRef, ToolHookParams
+from genkit.testing import define_scripted_model
 
 
 def _wire(messages: list[Message]) -> list[dict[str, Any]]:
@@ -47,7 +44,7 @@ def _gen_opts(
     use: list[MiddlewareRef] | None = None,
 ) -> GenerateActionOptions:
     return GenerateActionOptions(
-        model='programmableModel',
+        model='scriptedModel',
         messages=messages,
         tools=tools,
         resume=resume,
@@ -70,7 +67,7 @@ async def test_normal_two_arg_tools_see_no_resume_context() -> None:
     (it shouldn't), and we compare the whole conversation to the expected wire.
     """
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
     seen: list[tuple[bool, object | None, object | None]] = []
 
     @ai.tool(name='u1')
@@ -143,7 +140,7 @@ async def test_interrupt_wires_trp_metadata_interrupt_and_stops() -> None:
     ``INTERRUPTED``, and we never get a ``role=tool`` row yet—only user + model in the history.
     """
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='intr')
     async def intr(_: dict) -> str:  # noqa: ARG001
@@ -192,7 +189,7 @@ async def test_resume_respond_trp_gets_resolved_interrupt_and_tool_trp() -> None
     wire before and after the interrupt.
     """
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='intr')
     async def intr(_: dict) -> str:  # noqa: ARG001
@@ -239,7 +236,7 @@ async def test_resume_respond_trp_gets_resolved_interrupt_and_tool_trp() -> None
         },
     ]
 
-    reply = respond_to_interrupt({'bar': 2}, interrupt=first.interrupts[0])
+    reply = first.interrupts[0].respond({'bar': 2})
 
     second = await generate_action(
         ai.registry,
@@ -281,7 +278,7 @@ async def test_resume_respond_trp_gets_resolved_interrupt_and_tool_trp() -> None
 
 async def _interrupted_generate() -> tuple[Genkit, ModelResponse]:
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='intr')
     async def intr(_: dict) -> str:  # noqa: ARG001
@@ -313,7 +310,7 @@ async def test_resume_respond_text_part_raises() -> None:
     ai, first = await _interrupted_generate()
     with pytest.raises(ValueError, match='tool response'):
         await ai.generate(
-            model='programmableModel',
+            model='scriptedModel',
             messages=list(first.messages),
             tools=['intr'],
             resume_respond=Part.from_text('hi'),
@@ -326,7 +323,7 @@ async def test_resume_respond_list_text_part_raises() -> None:
     ai, first = await _interrupted_generate()
     with pytest.raises(ValueError, match='tool response'):
         await ai.generate(
-            model='programmableModel',
+            model='scriptedModel',
             messages=list(first.messages),
             tools=['intr'],
             resume_respond=[Part.from_text('hi')],
@@ -339,7 +336,7 @@ async def test_resume_restart_text_part_raises() -> None:
     ai, first = await _interrupted_generate()
     with pytest.raises(ValueError, match='tool request'):
         await ai.generate(
-            model='programmableModel',
+            model='scriptedModel',
             messages=list(first.messages),
             tools=['intr'],
             resume_restart=Part.from_text('hi'),
@@ -355,7 +352,7 @@ async def test_tool_either_interrupts_or_returns() -> None:
     Both results are wire-asserted in full.
     """
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='bank_transfer')
     async def bank_transfer(inp: dict) -> int:
@@ -482,7 +479,7 @@ async def test_resume_restart_runs_tool_second_time_and_resolved_interrupt_on_mo
     plain ``toolResponse`` (no ``interruptResponse`` on that path).
     """
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
     calls: list[str] = []
 
     @ai.tool(name='pay')
@@ -534,9 +531,7 @@ async def test_resume_restart_runs_tool_second_time_and_resolved_interrupt_on_mo
         },
     ]
 
-    restart_trp = restart_tool(
-        interrupt=first.interrupts[0], replace_input={'ok': True}, resumed_metadata={'by': 'test'}
-    )
+    restart_trp = first.interrupts[0].restart(replace_input={'ok': True}, resumed_metadata={'by': 'test'})
 
     second = await generate_action(
         ai.registry,
@@ -581,7 +576,7 @@ async def test_resume_top_level_metadata_lands_on_tool_message() -> None:
     being flattened to ``True``.
     """
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='pay')
     async def pay(inp: dict) -> str:
@@ -609,7 +604,7 @@ async def test_resume_top_level_metadata_lands_on_tool_message() -> None:
         ai.registry,
         _gen_opts(ai, tools=['pay'], messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'hi'}]})]),
     )
-    restart_trp = restart_tool(interrupt=first.interrupts[0], replace_input={'ok': True})
+    restart_trp = first.interrupts[0].restart(replace_input={'ok': True})
 
     second = await generate_action(
         ai.registry,
@@ -632,7 +627,7 @@ async def test_mixed_resume_one_respond_one_restart() -> None:
     has ``interruptResponse``; restart path does not).
     """
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='a')
     async def a_tool(_: dict) -> str:  # noqa: ARG001
@@ -702,8 +697,8 @@ async def test_mixed_resume_one_respond_one_restart() -> None:
             tools=['a', 'b'],
             messages=list(first.messages),
             resume=Resume(
-                respond=[respond_to_interrupt({'done': True}, interrupt=ia)],
-                restart=[restart_tool(interrupt=ib, replace_input={'ok': True})],
+                respond=[ia.respond({'done': True})],
+                restart=[ib.restart(replace_input={'ok': True})],
             ),
         ),
     )
@@ -760,7 +755,7 @@ async def test_mixed_one_interrupts_one_succeeds_pending_output_in_wire() -> Non
     marks the tool response ``source: pending`` on the wire.
     """
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='a')
     async def a_tool(_: dict) -> str:  # noqa: ARG001
@@ -821,7 +816,7 @@ async def test_mixed_one_interrupts_one_succeeds_pending_output_in_wire() -> Non
             ai,
             tools=['a', 'b'],
             messages=list(first.messages),
-            resume=Resume(respond=[respond_to_interrupt({'approved': True}, interrupt=ia)]),
+            resume=Resume(respond=[ia.respond({'approved': True})]),
         ),
     )
 
@@ -860,7 +855,7 @@ async def test_mixed_one_interrupts_one_succeeds_pending_output_in_wire() -> Non
 @pytest.mark.asyncio
 async def test_pending_multipart_response_survives_wire_round_trip() -> None:
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
     media_calls = 0
 
     @ai.tool(name='pause')
@@ -911,7 +906,7 @@ async def test_pending_multipart_response_survives_wire_round_trip() -> None:
         ),
     ]
     options = GenerateActionOptions(
-        model='programmableModel',
+        model='scriptedModel',
         messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'start'}]})],
         tools=['pause', 'media'],
         use=[MiddlewareRef(name='multipart_media')],
@@ -942,7 +937,7 @@ async def test_pending_multipart_response_survives_wire_round_trip() -> None:
         options.model_copy(
             update={
                 'messages': messages,
-                'resume': Resume(respond=[respond_to_interrupt('approved', interrupt=interrupt)]),
+                'resume': Resume(respond=[interrupt.respond('approved')]),
             }
         ),
     )
@@ -971,7 +966,7 @@ async def test_pending_multipart_response_survives_wire_round_trip() -> None:
 @pytest.mark.asyncio
 async def test_restarted_tools_run_concurrently_and_keep_request_order() -> None:
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
     beta_done = asyncio.Event()
     calls: list[str] = []
 
@@ -1026,8 +1021,8 @@ async def test_restarted_tools_run_concurrently_and_keep_request_order() -> None
                 messages=list(first.messages),
                 resume=Resume(
                     restart=[
-                        restart_tool(interrupt=interrupts['alpha'], replace_input={'restart': True}),
-                        restart_tool(interrupt=interrupts['beta'], replace_input={'restart': True}),
+                        interrupts['alpha'].restart(replace_input={'restart': True}),
+                        interrupts['beta'].restart(replace_input={'restart': True}),
                     ]
                 ),
             ),
@@ -1051,7 +1046,7 @@ async def test_restarted_tools_run_concurrently_and_keep_request_order() -> None
 async def test_resume_without_matching_replies_is_still_resendable() -> None:
     """An interrupted TRP with an empty ``Resume()`` is a failed response they can resend."""
     ai = Genkit()
-    _, _ = define_programmable_model(ai)
+    _, _ = define_scripted_model(ai)
     messages = [
         Message.model_validate({'role': 'user', 'content': [{'text': 'hi'}]}),
         Message.model_validate({
@@ -1068,7 +1063,7 @@ async def test_resume_without_matching_replies_is_still_resendable() -> None:
     response = await generate_action(
         ai.registry,
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=messages,
             resume=Resume(),
         ),
@@ -1092,12 +1087,12 @@ async def test_resume_without_matching_replies_is_still_resendable() -> None:
 async def test_resume_on_empty_messages_is_still_resendable() -> None:
     """resume= on an empty conversation is a failed response, not an IndexError."""
     ai = Genkit()
-    _, _ = define_programmable_model(ai)
+    _, _ = define_scripted_model(ai)
 
     response = await generate_action(
         ai.registry,
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=[],
             resume=Resume(),
         ),
@@ -1115,12 +1110,12 @@ async def test_resume_on_empty_messages_is_still_resendable() -> None:
 async def test_resume_on_user_turn_is_still_resendable() -> None:
     """resume= on a user turn is a failed response of the history they already had."""
     ai = Genkit()
-    _, _ = define_programmable_model(ai)
+    _, _ = define_scripted_model(ai)
 
     response = await generate_action(
         ai.registry,
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'only user'}]})],
             resume=Resume(),
         ),
@@ -1141,12 +1136,12 @@ async def test_resume_on_user_turn_is_still_resendable() -> None:
 async def test_resume_on_text_only_model_turn_is_still_resendable() -> None:
     """A model turn with no tool request is not a resume point; they still get that history back."""
     ai = Genkit()
-    _, _ = define_programmable_model(ai)
+    _, _ = define_scripted_model(ai)
 
     response = await generate_action(
         ai.registry,
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=[
                 Message.model_validate({'role': 'user', 'content': [{'text': 'hi'}]}),
                 Message.model_validate({'role': 'model', 'content': [{'text': 'hello'}]}),
@@ -1171,12 +1166,12 @@ async def test_resume_on_text_only_model_turn_is_still_resendable() -> None:
 async def test_resume_on_tool_turn_is_still_resendable() -> None:
     """A transcript that already ends on a tool message is not a resume point."""
     ai = Genkit()
-    _, _ = define_programmable_model(ai)
+    _, _ = define_scripted_model(ai)
 
     response = await generate_action(
         ai.registry,
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=[
                 Message.model_validate({'role': 'user', 'content': [{'text': 'hi'}]}),
                 Message.model_validate({
@@ -1210,7 +1205,7 @@ async def test_resume_on_tool_turn_is_still_resendable() -> None:
 async def test_restarted_tool_that_interrupts_again_returns_interrupted() -> None:
     """A tool that pauses again on restart returns INTERRUPTED they can answer."""
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='hold')
     async def hold(_: dict) -> str:  # noqa: ARG001
@@ -1228,7 +1223,7 @@ async def test_restarted_tool_that_interrupts_again_returns_interrupted() -> Non
     first = await generate_action(
         ai.registry,
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'hi'}]})],
             tools=['hold'],
         ),
@@ -1237,10 +1232,10 @@ async def test_restarted_tool_that_interrupts_again_returns_interrupted() -> Non
     response = await generate_action(
         ai.registry,
         GenerateActionOptions(
-            model='programmableModel',
+            model='scriptedModel',
             messages=list(first.messages),
             tools=['hold'],
-            resume=Resume(restart=[restart_tool(interrupt=first.interrupts[0])]),
+            resume=Resume(restart=[first.interrupts[0].restart()]),
         ),
     )
     assert response.finish_reason == FinishReason.INTERRUPTED
@@ -1257,7 +1252,7 @@ async def test_restarted_tool_that_interrupts_again_returns_interrupted() -> Non
 async def _screenshot_confirm_interrupted() -> tuple[Genkit, Any]:
     """Screenshot finishes with a PNG; confirm interrupts. Caller resumes or mutates the stash."""
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
     png = Part.from_media('data:image/png;base64,abc', content_type='image/png')
 
     @ai.tool(name='confirm')
@@ -1266,7 +1261,7 @@ async def _screenshot_confirm_interrupted() -> tuple[Genkit, Any]:
 
     @ai.tool(name='screenshot')
     async def screenshot(_: dict) -> MultipartToolResponse:  # noqa: ARG001
-        return response({'ok': True, 'label': 'lab'}, parts=[png], metadata={'src': 'cam'})
+        return MultipartToolResponse(output={'ok': True, 'label': 'lab'}, content=[png], metadata={'src': 'cam'})
 
     pm.responses.append(
         ModelResponse(
@@ -1325,7 +1320,7 @@ async def test_mixed_interrupt_preserves_sibling_media_on_resume() -> None:
             ai,
             tools=['confirm', 'screenshot'],
             messages=list(first.messages),
-            resume=Resume(respond=[respond_to_interrupt({'approved': True}, interrupt=first.interrupts[0])]),
+            resume=Resume(respond=[first.interrupts[0].respond({'approved': True})]),
         ),
     )
     assert second.finish_reason == FinishReason.STOP
@@ -1347,7 +1342,7 @@ async def test_resume_rejects_hollow_pending_content() -> None:
             ai,
             tools=['confirm', 'screenshot'],
             messages=_with_shot_pending(first, pendingContent=[{}]),
-            resume=Resume(respond=[respond_to_interrupt({'approved': True}, interrupt=first.interrupts[0])]),
+            resume=Resume(respond=[first.interrupts[0].respond({'approved': True})]),
         ),
     )
     assert response.finish_reason == FinishReason.FAILED
@@ -1374,7 +1369,7 @@ async def test_resume_rejects_text_and_media_pending_content() -> None:
                 first,
                 pendingContent=[{'text': 'caption', 'media': {'url': 'https://x'}}],
             ),
-            resume=Resume(respond=[respond_to_interrupt({'approved': True}, interrupt=first.interrupts[0])]),
+            resume=Resume(respond=[first.interrupts[0].respond({'approved': True})]),
         ),
     )
     assert response.finish_reason == FinishReason.FAILED
@@ -1398,7 +1393,7 @@ async def test_resume_rejects_non_dict_pending_metadata() -> None:
             ai,
             tools=['confirm', 'screenshot'],
             messages=_with_shot_pending(first, pendingMetadata='cam'),
-            resume=Resume(respond=[respond_to_interrupt({'approved': True}, interrupt=first.interrupts[0])]),
+            resume=Resume(respond=[first.interrupts[0].respond({'approved': True})]),
         ),
     )
     assert response.finish_reason == FinishReason.FAILED
@@ -1415,7 +1410,7 @@ async def test_resume_rejects_non_dict_pending_metadata() -> None:
 async def _restart_screenshot(*, with_passthrough: bool = False) -> tuple[Any, Any]:
     """Interrupt a screenshot tool, then restart it so it returns a PNG + metadata."""
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
     use: list[MiddlewareRef] | None = None
     if with_passthrough:
 
@@ -1435,7 +1430,7 @@ async def _restart_screenshot(*, with_passthrough: bool = False) -> tuple[Any, A
     async def shot(inp: dict) -> MultipartToolResponse:
         if not inp.get('ok'):
             raise Interrupt({'hold': True})
-        return response({'ok': True}, parts=[_png()], metadata={'camera': 'rear'})
+        return MultipartToolResponse(output={'ok': True}, content=[_png()], metadata={'camera': 'rear'})
 
     pm.responses.append(
         ModelResponse(
@@ -1470,7 +1465,7 @@ async def _restart_screenshot(*, with_passthrough: bool = False) -> tuple[Any, A
             ai,
             tools=['shot'],
             messages=list(first.messages),
-            resume=Resume(restart=[restart_tool(interrupt=first.interrupts[0], replace_input={'ok': True})]),
+            resume=Resume(restart=[first.interrupts[0].restart(replace_input={'ok': True})]),
             use=use,
         ),
     )
@@ -1494,3 +1489,112 @@ async def test_resume_restart_keeps_parts_and_metadata_through_middleware() -> N
     assert tr.output == {'ok': True}
     assert tr.content == [WIRE_PNG]
     assert meta == {'camera': 'rear'}
+
+
+@pytest.mark.asyncio
+async def test_resume_restart_rejects_unanswered_interrupt() -> None:
+    """Passing the paused part itself on resume_restart is rejected before the model runs."""
+    ai, first = await _interrupted_generate()
+    with pytest.raises(GenkitError, match='still an interrupt'):
+        await ai.generate(
+            model='scriptedModel',
+            messages=list(first.messages),
+            tools=['intr'],
+            resume_restart=[first.interrupts[0]],
+        )
+
+
+@pytest.mark.asyncio
+async def test_resume_restart_empty_resumed_metadata_reruns_the_tool() -> None:
+    """restart(resumed_metadata={}) re-runs the tool with an empty resume bag."""
+    ai = Genkit()
+    pm, _ = define_scripted_model(ai)
+    seen: list[tuple[bool, object | None]] = []
+
+    @ai.tool(name='intr')
+    async def intr(_: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
+        seen.append((ctx.is_resumed(), ctx.resumed_metadata))
+        if not ctx.is_resumed():
+            raise Interrupt({'reason': 'x'})
+        return 'ok'
+
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message.model_validate({
+                'role': 'model',
+                'content': [{'toolRequest': {'ref': 'r1', 'name': 'intr', 'input': {}}}],
+            }),
+        )
+    )
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message.model_validate({'role': 'model', 'content': [{'text': 'done'}]}),
+        )
+    )
+    first = await ai.generate(model='scriptedModel', prompt='hi', tools=['intr'])
+    assert first.finish_reason == FinishReason.INTERRUPTED
+    second = await ai.generate(
+        model='scriptedModel',
+        messages=list(first.messages),
+        tools=['intr'],
+        resume_restart=first.interrupts[0].restart(resumed_metadata={}),
+    )
+    assert second.finish_reason == FinishReason.STOP
+    assert seen == [(False, None), (True, {})]
+    assert second.text == 'done'
+
+
+@pytest.mark.asyncio
+async def test_generate_action_resume_rejects_paused_part() -> None:
+    """A Resume built with the paused part fails before the tool runs again."""
+    ai, first = await _interrupted_generate()
+    again = await generate_action(
+        ai.registry,
+        _gen_opts(
+            ai,
+            tools=['intr'],
+            messages=list(first.messages),
+            resume=Resume(restart=[first.interrupts[0]]),
+        ),
+    )
+    assert again.finish_reason == FinishReason.FAILED
+    assert again.finish_message is not None
+    assert 'still an interrupt' in again.finish_message
+
+
+@pytest.mark.asyncio
+async def test_resume_respond_with_paused_part_is_invalid_argument() -> None:
+    """ai.generate(resume_respond=paused) is INVALID_ARGUMENT naming Part.respond; the model is not called."""
+    ai = Genkit()
+    pm, _ = define_scripted_model(ai)
+
+    @ai.tool(name='intr')
+    async def intr(_: dict) -> str:  # noqa: ARG001
+        raise Interrupt({'reason': 'x'})
+
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message.model_validate({
+                'role': 'model',
+                'content': [
+                    {'text': 'call'},
+                    {'toolRequest': {'ref': 'r1', 'name': 'intr', 'input': {}}},
+                ],
+            }),
+        )
+    )
+    first = await ai.generate(model='scriptedModel', prompt='hi', tools=['intr'])
+    assert first.finish_reason == FinishReason.INTERRUPTED
+    assert pm.request_count == 1
+    with pytest.raises(GenkitError, match='Part.respond') as exc:
+        await ai.generate(
+            model='scriptedModel',
+            messages=list(first.messages),
+            tools=['intr'],
+            resume_respond=first.interrupts[0],
+        )
+    assert exc.value.status == 'INVALID_ARGUMENT'
+    assert pm.request_count == 1

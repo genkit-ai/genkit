@@ -48,14 +48,7 @@ See Also:
     - OpenAI documentation: https://platform.openai.com/docs/
 """
 
-from .models.model_info import KnownGpt
-from .openai_plugin import OpenAI, openai_model
-from .typing import OpenAIConfig
+from ._openai_plugin import OpenAI
+from ._typing import OpenAIConfig
 
-
-def package_name() -> str:
-    """The package name for the OpenAI-compatible model provider."""
-    return 'genkit_openai'
-
-
-__all__ = ['KnownGpt', 'OpenAI', 'OpenAIConfig', 'openai_model', 'package_name']
+__all__ = ['OpenAI', 'OpenAIConfig']

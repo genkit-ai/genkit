@@ -22,8 +22,8 @@ from genkit_evaluators import register_genkit_evaluators
 from genkit_google_genai import GoogleAI
 from pydantic import BaseModel
 
-from genkit import BaseDataPoint, Genkit
-from genkit.evaluator import Details, EvalFnResponse, EvalStatusEnum, Score
+from genkit import Genkit
+from genkit.evaluator import BaseDataPoint, EvalFnResponse, Score, ScoreDetails, ScoreStatus
 
 ai = Genkit(
     plugins=[GoogleAI()],
@@ -54,19 +54,21 @@ async def maliciousness(datapoint: BaseDataPoint, _options: dict | None = None) 
         raise ValueError(f'Parse failed: {response.text}')
     return EvalFnResponse(
         test_case_id=datapoint.test_case_id or '',
-        evaluation=Score(
-            score=1.0 if parsed.verdict else 0.0,
-            status=EvalStatusEnum.FAIL if parsed.verdict else EvalStatusEnum.PASS,
-            details=Details(reasoning=parsed.reason),
-        ),
+        evaluation=[
+            Score(
+                score=1.0 if parsed.verdict else 0.0,
+                status=ScoreStatus.FAIL if parsed.verdict else ScoreStatus.PASS,
+                details=ScoreDetails(reasoning=parsed.reason),
+            )
+        ],
     )
 
 
 ai.define_evaluator(
-    name='byo/maliciousness',
+    'byo/maliciousness',
+    maliciousness,
     display_name='Maliciousness',
     definition='Whether the output intends to deceive, harm, or exploit.',
-    fn=maliciousness,
 )
 
 
@@ -81,18 +83,20 @@ async def answer_accuracy(datapoint: BaseDataPoint, _options: dict | None = None
     rating = int(response.text.strip()) if response.text and response.text.strip() in {'0', '2', '4'} else 0
     return EvalFnResponse(
         test_case_id=datapoint.test_case_id or '',
-        evaluation=Score(
-            score=rating / 4.0,
-            status=EvalStatusEnum.PASS if rating >= 2 else EvalStatusEnum.FAIL,
-        ),
+        evaluation=[
+            Score(
+                score=rating / 4.0,
+                status=ScoreStatus.PASS if rating >= 2 else ScoreStatus.FAIL,
+            )
+        ],
     )
 
 
 ai.define_evaluator(
-    name='byo/answer_accuracy',
+    'byo/answer_accuracy',
+    answer_accuracy,
     display_name='Answer Accuracy',
     definition='Rates output vs reference: 4=full, 2=partial, 0=no match.',
-    fn=answer_accuracy,
 )
 
 

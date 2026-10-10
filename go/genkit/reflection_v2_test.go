@@ -221,6 +221,68 @@ func TestReflectionServerV2_RegisterHandshakeTelemetry(t *testing.T) {
 	// path to make sure it doesn't panic or stall.
 }
 
+// startRuntimeWithSecret is startRuntime with a reflection secret configured.
+func startRuntimeWithSecret(t *testing.T, g *Genkit, m *fakeManager, secret string) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	errCh := make(chan error, 1)
+	startedCh := make(chan struct{})
+	go startReflectionServerV2(ctx, g, reflectionServerV2Options{URL: m.url, Secret: secret}, errCh, startedCh)
+	select {
+	case err := <-errCh:
+		t.Fatalf("runtime failed to start: %v", err)
+	case <-startedCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for runtime startup")
+	}
+}
+
+func TestReflectionServerV2_RegisterSendsSecret(t *testing.T) {
+	m := newFakeManager(t)
+	defer m.close()
+
+	g := Init(context.Background())
+	startRuntimeWithSecret(t, g, m, "s3cret")
+
+	conn := m.waitForConnection(t)
+	msg := m.ackRegister(t, context.Background(), conn)
+	params := msg["params"].(map[string]any)
+	if params["secret"] != "s3cret" {
+		t.Errorf("register secret = %v, want s3cret", params["secret"])
+	}
+}
+
+func TestReflectionServerV2_AuthRejectionStopsReconnecting(t *testing.T) {
+	m := newFakeManager(t)
+	defer m.close()
+
+	g := Init(context.Background())
+	startRuntimeWithSecret(t, g, m, "wrong")
+
+	// Reject the way the CLI does (closeUnregistered in manager-v2.ts): a
+	// -32001 error immediately followed by a 1008 close.
+	conn := m.waitForConnection(t)
+	ctx := context.Background()
+	msg := m.read(t, ctx, conn)
+	if msg["method"] != "register" {
+		t.Fatalf("expected register, got method=%v", msg["method"])
+	}
+	m.write(t, ctx, conn, map[string]any{
+		"jsonrpc": "2.0",
+		"error":   map[string]any{"code": reflectionAuthErrorCode, "message": "Invalid reflection secret."},
+		"id":      msg["id"],
+	})
+	conn.Close(websocket.StatusPolicyViolation, "unauthorized")
+
+	// A reconnect would arrive after reconnectBaseDelay; wait a few of them.
+	select {
+	case <-m.connCh:
+		t.Fatal("runtime reconnected after an auth rejection")
+	case <-time.After(3 * reconnectBaseDelay):
+	}
+}
+
 func TestReflectionServerV2_ListActions(t *testing.T) {
 	m := newFakeManager(t)
 	defer m.close()

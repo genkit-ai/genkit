@@ -18,22 +18,16 @@
 
 import os
 
-from genkit_ollama import EmbeddingDefinition, ModelDefinition, Ollama, OllamaConnectionError
+from genkit_ollama import Ollama
 from pydantic import BaseModel
 
-from genkit import Genkit, GenkitError
+from genkit import FinishReason, Genkit, GenkitError
 
 chat_model = os.getenv('OLLAMA_CHAT_MODEL', 'llama3.2')
 embedder_model = os.getenv('OLLAMA_EMBEDDER_MODEL', 'nomic-embed-text')
 
 ai = Genkit(
-    plugins=[
-        Ollama(
-            models=[ModelDefinition(name=chat_model)],
-            embedders=[EmbeddingDefinition(name=embedder_model)],
-            server_address=os.getenv('OLLAMA_HOST'),
-        )
-    ],
+    plugins=[Ollama(server_address=os.getenv('OLLAMA_HOST'))],
     model=f'ollama/{chat_model}',
 )
 
@@ -50,6 +44,15 @@ async def current_weather(input: WeatherInput) -> str:
 async def main() -> None:
     try:
         response = await ai.generate(prompt='Write a two-sentence pitch for local AI development.')
+        if response.finish_reason == FinishReason.FAILED:
+            status = response.error.status if response.error is not None else None
+            print(
+                'Start Ollama and pull the sample models first:\n'
+                f'  ollama pull {chat_model}\n'
+                f'  ollama pull {embedder_model}\n\n'
+                f'{status}: {response.finish_message}'
+            )
+            raise SystemExit(1)
         print(response.text)
 
         # Ollama streams text on the chunks and returns an empty final
@@ -70,15 +73,13 @@ async def main() -> None:
         embeddings = await ai.embed(embedder=f'ollama/{embedder_model}', content='Local models stay on your laptop.')
         print(f'dimensions={len(embeddings[0].embedding)}')
     except GenkitError as error:
-        # Genkit wraps provider failures, so unwrap .cause to tell
-        # "Ollama is not running" from a real bug.
-        if not isinstance(error.cause, OllamaConnectionError):
+        if error.status != 'UNAVAILABLE':
             raise
         print(
             'Start Ollama and pull the sample models first:\n'
             f'  ollama pull {chat_model}\n'
             f'  ollama pull {embedder_model}\n\n'
-            f'{error.cause}'
+            f'{error}'
         )
         raise SystemExit(1) from error
 

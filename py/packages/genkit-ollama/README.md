@@ -31,6 +31,7 @@ use before running Genkit:
 
 ```bash
 ollama pull llama3.2
+ollama pull llava
 ollama pull nomic-embed-text
 ```
 
@@ -38,15 +39,10 @@ ollama pull nomic-embed-text
 
 ```python
 from genkit import Genkit
-from genkit_ollama import EmbeddingDefinition, ModelDefinition, Ollama
+from genkit_ollama import Ollama
 
 ai = Genkit(
-    plugins=[
-        Ollama(
-            models=[ModelDefinition(name='llama3.2')],
-            embedders=[EmbeddingDefinition(name='nomic-embed-text')],
-        )
-    ],
+    plugins=[Ollama()],
     model='ollama/llama3.2',
 )
 
@@ -145,36 +141,46 @@ Ollama(server_address='http://ollama.example.com:11434')
 # Static headers
 Ollama(request_headers={'Authorization': 'Bearer <token>'})
 
-# Async-resolved headers, re-evaluated per request (e.g. minting a short-lived token)
-from genkit_ollama import RequestHeaderParams
+# Headers computed per request: Ollama on Cloud Run behind IAM needs a fresh ID token
+import asyncio
+
+import google.auth.transport.requests
+from google.oauth2 import id_token
+
+OLLAMA_URL = 'https://ollama-gpu-abc123-uc.a.run.app'
+creds = id_token.fetch_id_token_credentials(OLLAMA_URL)
 
 
-async def auth_headers(params: RequestHeaderParams) -> dict[str, str]:
-    return {'Authorization': f'Bearer {await mint_token(params.server_address)}'}
+async def cloud_run_auth() -> dict[str, str]:
+    # Refresh only when the cached token has expired, off the event loop.
+    if not creds.valid:
+        await asyncio.to_thread(creds.refresh, google.auth.transport.requests.Request())
+    return {'Authorization': f'Bearer {creds.token}'}
 
 
-Ollama(request_headers=auth_headers, timeout=60.0)
+Ollama(server_address=OLLAMA_URL, request_headers=cloud_run_auth, timeout=60.0)
 ```
 
-Callable headers are re-evaluated on every request, so short-lived tokens refresh
-automatically. A static dict is applied once to a cached client.
+A dict is sent as-is. A callable takes no arguments, may be sync or async, and
+runs before every HTTP request on the plugin's shared connection pool, so it
+should cache its token and only refresh when it expires.
 
-### Vision models
+### Model capabilities
 
-```python
-from genkit_ollama import ModelDefinition, Ollama, OllamaSupports
-
-Ollama(models=[ModelDefinition(name='llava', supports=OllamaSupports(media=True))])
-```
-
-Media support is opt-in per model to avoid advertising a capability the
-underlying model does not actually have.
+There is nothing to configure. The Dev UI lists the models the server has pulled
+(`/api/tags`), and any `ollama/<name>` resolves on first use. Every model goes
+through `/api/chat`. The plugin asks `/api/show` once per model: `vision` turns
+on media input and `tools` turns on tool calling. If the probe fails (server
+down, model not pulled, an Ollama too old to report `capabilities`), the model
+advertises both, as JS and Go do. Names containing `embed` are listed as
+embedders.
 
 ### Troubleshooting
 
-If the plugin can't reach the server it raises `OllamaConnectionError`
-with the URL it tried. Start the daemon (`ollama serve`) or set
-`server_address` to a reachable host.
+If the plugin can't reach the server it raises a `GenkitError` with status
+`UNAVAILABLE` and the URL it tried (`DEADLINE_EXCEEDED` if the request timed
+out). Start the daemon (`ollama serve`) or set `server_address` to a reachable
+host.
 
 ## Sample
 

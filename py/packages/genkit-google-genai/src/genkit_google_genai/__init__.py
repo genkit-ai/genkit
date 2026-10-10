@@ -72,65 +72,30 @@ See Also:
     - Vertex AI: https://cloud.google.com/vertex-ai
 """
 
-from genkit_google_genai.google import (
+from genkit_google_genai._google import (
     GoogleAI,
     VertexAI,
 )
-from genkit_google_genai.models.antigravity import AntigravityConfig
-from genkit_google_genai.models.deep_research import DeepResearchConfig
-from genkit_google_genai.models.embedder import (
-    EmbeddingTaskType,
-    GeminiEmbeddingModels,
-    VertexEmbeddingModels,
+from genkit_google_genai._models._antigravity import AntigravityConfig
+from genkit_google_genai._models._deep_research import DeepResearchConfig
+from genkit_google_genai._models._gemini import (
+    GeminiConfig,
+    GeminiImageConfig,
+    GeminiTtsConfig,
+    GemmaConfig,
 )
-from genkit_google_genai.models.gemini import (
-    GeminiConfigSchema,
-    GeminiImageConfigSchema,
-    GeminiTtsConfigSchema,
-    GemmaConfigSchema,
-    GoogleAIGeminiVersion,
-    KnownGemini,
-    KnownGeminiImage,
-    KnownGeminiTts,
-    KnownGemma,
-    VertexAIGeminiVersion,
-)
-from genkit_google_genai.models.interactions_lyria import LyriaConfig
-from genkit_google_genai.models.interactions_registry import LyriaVersion
-from genkit_google_genai.models.veo import KnownVeo, VeoConfig, VeoVersion
-
-
-def package_name() -> str:
-    """Get the package name for the Vertex AI plugin.
-
-    Returns:
-        The fully qualified package name as a string.
-    """
-    return 'genkit_google_genai'
-
+from genkit_google_genai._models._interactions_lyria import LyriaConfig
+from genkit_google_genai._models._veo import VeoConfig
 
 __all__ = [
-    'EmbeddingTaskType',
-    'GeminiConfigSchema',
-    'GeminiEmbeddingModels',
-    'GeminiImageConfigSchema',
-    'GeminiTtsConfigSchema',
-    'GemmaConfigSchema',
     'AntigravityConfig',
     'DeepResearchConfig',
+    'GeminiConfig',
+    'GeminiImageConfig',
+    'GeminiTtsConfig',
+    'GemmaConfig',
     'GoogleAI',
-    'GoogleAIGeminiVersion',
-    'KnownGemini',
-    'KnownGeminiImage',
-    'KnownGeminiTts',
-    'KnownGemma',
-    'KnownVeo',
     'LyriaConfig',
-    'LyriaVersion',
     'VeoConfig',
-    'VeoVersion',
     'VertexAI',
-    'VertexAIGeminiVersion',
-    'VertexEmbeddingModels',
-    'package_name',
 ]

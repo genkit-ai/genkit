@@ -14,14 +14,14 @@ A collection of middleware implementations for Genkit Python.
 
 ## Overview
 
-This plugin provides six concrete middleware implementations for common use cases:
+This plugin provides concrete middleware implementations for common use cases:
 
 - **Retry**: Retries model API calls on transient errors with exponential backoff
 - **Fallback**: Falls back to alternative models when the primary model fails
 - **ToolApproval**: Requires explicit approval before executing tool calls
 - **Skills**: Exposes a library of skills as system prompts and tools
 - **Filesystem**: Provides sandboxed filesystem operations
-- **Artifacts**: Session artifact listing plus read/write artifact tools
+- **Artifacts** (experimental, `genkit_middleware.exp`): Session artifact listing plus read/write artifact tools
 
 ## Quick start
 
@@ -44,7 +44,9 @@ response = await ai.generate(
 )
 ```
 
-These middlewares appear in the Dev UI by default.
+Every middleware works when you pass an instance in `use=[]`; no plugin
+registration is needed. Registering `Middleware()` lists the stable middleware
+in the Dev UI and lets a `.prompt` file name them in `use:`.
 
 ## Installation
 
@@ -108,7 +110,6 @@ Requires approval before executing tools (useful for sensitive operations):
 ```python
 from pydantic import BaseModel, Field
 
-from genkit import restart_tool
 from genkit_google_genai import GoogleAI
 from genkit_middleware import ToolApproval
 
@@ -144,10 +145,7 @@ response = await ai.generate(
     messages=list(first.messages),
     tools=['delete_database'],
     use=[approval],
-    resume_restart=restart_tool(
-        interrupt=first.interrupts[0],
-        resumed_metadata={'tool_approved': True},
-    ),
+    resume_restart=first.interrupts[0].restart(resumed_metadata={'tool_approved': True}),
 )
 ```
 
@@ -214,10 +212,13 @@ Provides four tools:
 ### Artifacts
 
 Exposes `read_artifact` / `write_artifact` tools and lists session artifacts in the
-system prompt. Intended for agent sessions:
+system prompt. It only works inside an agent, so it's experimental and lives in
+`genkit_middleware.exp`. Pass it straight to the agent; `Middleware()` doesn't
+register it, so it isn't listed in the Dev UI and a `.prompt` file can't name it:
 
 ```python
-from genkit_middleware import Artifacts, Middleware
+from genkit_middleware import Middleware
+from genkit_middleware.exp import Artifacts
 
 from genkit.exp import Genkit
 from genkit.exp.agent import InMemorySessionStore

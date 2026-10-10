@@ -17,10 +17,14 @@ package xai
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
 	"os"
+	"strings"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/plugins/compat_oai"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
@@ -197,7 +201,7 @@ var (
 		SystemRole:  true,
 		Media:       true,
 		ToolChoice:  true,
-		Output:      []string{"text", "json"},
+		Output:      []string{"text", "json", "array", "enum"},
 		Constrained: ai.ConstrainedSupportAll,
 	}
 	multimodalNoToolConstraint = ai.ModelSupports{
@@ -206,10 +210,14 @@ var (
 		SystemRole:  true,
 		Media:       true,
 		ToolChoice:  true,
-		Output:      []string{"text", "json"},
+		Output:      []string{"text", "json", "array", "enum"},
 		Constrained: ai.ConstrainedSupportNoTools,
 	}
 )
+
+// mediaTypes are the media xAI's chat completions read. Files are documented
+// for the Responses API only.
+var mediaTypes = []string{"image/*"}
 
 // supportedModels curates capabilities for well-known Grok models. It is not
 // the set of usable models: any Grok model resolves on demand and takes
@@ -305,7 +313,10 @@ func (x *XAI) Init(ctx context.Context) []api.Action {
 	opts = append(opts, x.Opts...)
 
 	x.openAICompatible.Provider = provider
+	x.openAICompatible.MediaTypes = mediaTypes
+	x.openAICompatible.ClassifyError = classifyError
 	x.openAICompatible.Opts = opts
+	x.openAICompatible.SeparateReasoningTokens = true
 	actions := x.openAICompatible.Init(ctx)
 
 	for model := range supportedModels {
@@ -353,4 +364,18 @@ func (x *XAI) ListActions(ctx context.Context) []api.ActionDesc {
 // described by the plugin's config schema and capabilities.
 func (x *XAI) ResolveAction(atype api.ActionType, id string) api.Action {
 	return compat_oai.ResolveChatAction[ChatConfig](&x.openAICompatible, atype, id, x.modelOptions)
+}
+
+// classifyError reads an xAI error. xAI answers a rejected API key with 400
+// and a body that is a bare JSON string rather than an error object, so the
+// SDK decodes no field of it.
+func classifyError(err *openai.Error) status.Name {
+	if err.StatusCode != http.StatusBadRequest {
+		return ""
+	}
+	var message string
+	if json.Unmarshal([]byte(err.RawJSON()), &message) == nil && strings.HasPrefix(message, "Incorrect API key provided") {
+		return status.Unauthenticated
+	}
+	return ""
 }

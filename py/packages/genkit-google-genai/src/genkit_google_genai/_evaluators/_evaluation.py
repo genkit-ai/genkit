@@ -1,0 +1,484 @@
+# Copyright 2025 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""Vertex AI Evaluation implementation.
+
+This module implements the Vertex AI Evaluation API for evaluating model outputs
+using built-in metrics such as BLEU, ROUGE, fluency, safety, groundedness, and
+summarization quality.
+
+Implementation Notes:
+    - Uses Google Cloud Application Default Credentials (ADC) for authentication.
+    - Calls the Vertex AI Platform ``evaluateInstances`` v1beta1 endpoint.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
+
+import httpx
+from genkit_google_genai._auth import GOOGLE_AUTH_ERRORS, raise_auth_error
+from genkit_google_genai._constants import GLOBAL_LOCATION, is_multi_regional_location, vertex_api_host
+from genkit_google_genai._provider_errors import TRANSPORT_ERRORS, transport_error
+from google.auth import default as google_auth_default
+from google.auth.transport.requests import Request
+
+from genkit import GenkitError
+from genkit._core._compat import StrEnum
+from genkit.evaluator import BaseDataPoint, EvalFnResponse, Score, ScoreDetails
+from genkit.plugin_api import GENKIT_CLIENT_HEADER, Action, loop_local_client, provider_error
+
+if TYPE_CHECKING:
+    from genkit import Genkit as GenkitRegistry
+
+
+@loop_local_client
+def _evaluator_client() -> httpx.AsyncClient:
+    return httpx.AsyncClient(timeout=httpx.Timeout(60.0))
+
+
+class VertexAIEvaluationMetricType(StrEnum):
+    """Vertex AI Evaluation metric types.
+
+    See API documentation for more information:
+    https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/evaluation#parameter-list
+    """
+
+    BLEU = 'BLEU'
+    ROUGE = 'ROUGE'
+    FLUENCY = 'FLUENCY'
+    SAFETY = 'SAFETY'
+    GROUNDEDNESS = 'GROUNDEDNESS'
+    SUMMARIZATION_QUALITY = 'SUMMARIZATION_QUALITY'
+    SUMMARIZATION_HELPFULNESS = 'SUMMARIZATION_HELPFULNESS'
+    SUMMARIZATION_VERBOSITY = 'SUMMARIZATION_VERBOSITY'
+
+
+# Display name and definition per metric. list_actions and define_evaluator both read this.
+METRIC_INFO: dict[VertexAIEvaluationMetricType, tuple[str, str]] = {
+    VertexAIEvaluationMetricType.BLEU: (
+        'BLEU',
+        'Computes the BLEU score by comparing the output against the ground truth',
+    ),
+    VertexAIEvaluationMetricType.ROUGE: (
+        'ROUGE',
+        'Computes the ROUGE score by comparing the output against the ground truth',
+    ),
+    VertexAIEvaluationMetricType.FLUENCY: (
+        'Fluency',
+        'Assesses the language mastery of an output',
+    ),
+    VertexAIEvaluationMetricType.SAFETY: (
+        'Safety',
+        'Assesses the level of safety of an output',
+    ),
+    VertexAIEvaluationMetricType.GROUNDEDNESS: (
+        'Groundedness',
+        'Assesses the ability to provide or reference information included only in the context',
+    ),
+    VertexAIEvaluationMetricType.SUMMARIZATION_QUALITY: (
+        'Summarization quality',
+        'Assesses the overall ability to summarize text',
+    ),
+    VertexAIEvaluationMetricType.SUMMARIZATION_HELPFULNESS: (
+        'Summarization helpfulness',
+        'Assesses ability to provide a summarization with details to substitute the original',
+    ),
+    VertexAIEvaluationMetricType.SUMMARIZATION_VERBOSITY: (
+        'Summarization verbosity',
+        'Assesses the ability to provide a succinct summarization',
+    ),
+}
+
+
+def _create_list_based_score_handler(results_key: str, values_key: str) -> Callable[[dict[str, Any]], Score]:
+    """Create a response handler for metrics that return a list of scored values.
+
+    This is used for BLEU and ROUGE metrics which have similar response structures.
+
+    Args:
+        results_key: The key for the results object (e.g., 'bleuResults').
+        values_key: The key for the metrics list (e.g., 'bleuMetricValues').
+
+    Returns:
+        A function that extracts a Score from the response.
+    """
+
+    def handler(response: dict[str, Any]) -> Score:
+        metrics = response.get(results_key, {}).get(values_key, [])
+        score = metrics[0].get('score') if metrics else None
+        return Score(score=score)
+
+    return handler
+
+
+def _stringify(value: Any) -> str:  # noqa: ANN401
+    """Convert a value to string for the API."""
+    if isinstance(value, str):
+        return value
+    return json.dumps(value)
+
+
+class EvaluatorFactory:
+    """Factory for creating Vertex AI evaluator actions."""
+
+    def __init__(self, project: str, location: str) -> None:
+        """Initialize the factory.
+
+        Args:
+            project: Google Cloud project ID.
+            location: Google Cloud location.
+        """
+        self.project = project
+        self.location = location
+
+    def _api_host(self) -> str:
+        """Vertex AI host for the configured location.
+
+        The Vertex Evaluation Service is only served regionally, so
+        multi-region and global locations are rejected up front.
+
+        Raises:
+            GenkitError: If the location is a multi-region or 'global'.
+        """
+        if is_multi_regional_location(self.location) or self.location == GLOBAL_LOCATION:
+            raise GenkitError(
+                status='FAILED_PRECONDITION',
+                message=f"The Vertex Evaluation Service does not support the '{self.location}' "
+                'location. Configure a regional location (e.g. us-central1) to use evaluators.',
+            )
+        return vertex_api_host(self.location)
+
+    async def evaluate_instances(self, request_body: dict[str, Any]) -> dict[str, Any]:
+        """Call the Vertex AI evaluateInstances API.
+
+        Args:
+            request_body: The request body for the API.
+
+        Returns:
+            The API response.
+
+        Raises:
+            GenkitError: If the API call fails.
+        """
+        location_name = f'projects/{self.project}/locations/{self.location}'
+        url = f'https://{self._api_host()}/v1beta1/{location_name}:evaluateInstances'
+
+        # Get authentication token
+        # Use asyncio.to_thread to avoid blocking the event loop during token refresh
+        try:
+            credentials, _ = google_auth_default()
+            await asyncio.to_thread(credentials.refresh, Request())
+        except GOOGLE_AUTH_ERRORS as e:
+            raise_auth_error(e)
+        token = credentials.token
+
+        if not token:
+            raise GenkitError(
+                message='Unable to authenticate your request. '
+                'Please ensure you have valid Google Cloud credentials configured.',
+                status='UNAUTHENTICATED',
+            )
+
+        headers = {
+            'Authorization': f'Bearer {token}',
+            'Content-Type': 'application/json',
+            'X-Goog-Api-Client': GENKIT_CLIENT_HEADER,
+        }
+
+        request = {
+            'location': location_name,
+            **request_body,
+        }
+
+        # Auth headers go on each request since tokens expire.
+        client = _evaluator_client()
+
+        try:
+            response = await client.post(
+                url,
+                headers=headers,
+                json=request,
+            )
+        except TRANSPORT_ERRORS as e:
+            raise transport_error(e) from e
+
+        if response.status_code != 200:
+            error_message = response.text
+            try:
+                error_json = response.json()
+                if 'error' in error_json and 'message' in error_json['error']:
+                    error_message = error_json['error']['message']
+            except json.JSONDecodeError:  # noqa: S110
+                pass
+
+            message = f'Error calling Vertex AI Evaluation API: [{response.status_code}] {error_message}'
+            error = httpx.HTTPStatusError(message, request=httpx.Request('POST', url), response=response)
+            raise provider_error(
+                error,
+                http_status=response.status_code,
+                # A non-200 success or redirect is not a body this client can read.
+                status='INTERNAL' if response.status_code < 400 else None,
+                headers=response.headers,
+                message=message,
+            ) from error
+
+        try:
+            return response.json()
+        except json.JSONDecodeError as e:
+            raise GenkitError(
+                message='Vertex AI Evaluation API returned a body that is not JSON',
+                status='INTERNAL',
+                cause=e,
+            ) from e
+
+    def create_evaluator_fn(
+        self,
+        metric_type: VertexAIEvaluationMetricType,
+        to_request: Any,  # noqa: ANN401
+        response_handler: Any,  # noqa: ANN401
+    ) -> Any:  # noqa: ANN401
+        """Create an evaluator function.
+
+        Args:
+            metric_type: The metric type.
+            to_request: Function to convert datapoint to request.
+            response_handler: Function to extract score from response.
+
+        Returns:
+            An async evaluator function.
+        """
+
+        async def evaluator_fn(
+            datapoint: BaseDataPoint,
+            options: dict[str, Any] | None = None,
+        ) -> EvalFnResponse:
+            """Evaluate a single datapoint.
+
+            Args:
+                datapoint: The evaluation data point.
+                options: Optional evaluation options.
+
+            Returns:
+                The evaluation response with score.
+            """
+            request_body = to_request(datapoint)
+            response = await self.evaluate_instances(request_body)
+            try:
+                score = response_handler(response)
+            except (KeyError, TypeError, AttributeError) as e:
+                # The 200 body is missing the result fields this metric reads.
+                raise GenkitError(
+                    message=f'Unexpected Vertex AI Evaluation response for {metric_type}',
+                    status='INTERNAL',
+                    cause=e,
+                ) from e
+
+            return EvalFnResponse(
+                evaluation=[score],
+                test_case_id=datapoint.test_case_id or '',
+            )
+
+        return evaluator_fn
+
+
+def create_vertex_evaluators(
+    registry: GenkitRegistry,
+    metrics: list[VertexAIEvaluationMetricType],
+    project: str,
+    location: str,
+) -> list[Action]:
+    """Create Vertex AI evaluator actions.
+
+    Args:
+        registry: The Genkit registry.
+        metrics: List of metrics to create evaluators for.
+        project: Google Cloud project ID.
+        location: Google Cloud location.
+
+    Returns:
+        List of created evaluator actions.
+    """
+    factory = EvaluatorFactory(project, location)
+    actions = []
+
+    for metric_type in metrics:
+        action = _create_evaluator_for_metric(registry, factory, metric_type)
+        if action:
+            actions.append(action)
+
+    return actions
+
+
+def _create_evaluator_for_metric(
+    registry: GenkitRegistry,
+    factory: EvaluatorFactory,
+    metric_type: VertexAIEvaluationMetricType,
+) -> Action | None:
+    """Create an evaluator action for a specific metric.
+
+    Args:
+        registry: The Genkit registry.
+        factory: The evaluator factory.
+        metric_type: The metric type.
+
+    Returns:
+        The created action, or None if metric is not supported.
+    """
+    evaluator_configs = {
+        VertexAIEvaluationMetricType.BLEU: {
+            'to_request': lambda dp: {
+                'bleuInput': {
+                    'metricSpec': {},
+                    'instances': [
+                        {
+                            'prediction': _stringify(dp.output),
+                            'reference': dp.reference,
+                        }
+                    ],
+                }
+            },
+            'response_handler': _create_list_based_score_handler('bleuResults', 'bleuMetricValues'),
+        },
+        VertexAIEvaluationMetricType.ROUGE: {
+            'to_request': lambda dp: {
+                'rougeInput': {
+                    'metricSpec': {},
+                    'instances': [
+                        {
+                            'prediction': _stringify(dp.output),
+                            'reference': dp.reference,
+                        }
+                    ],
+                }
+            },
+            'response_handler': _create_list_based_score_handler('rougeResults', 'rougeMetricValues'),
+        },
+        VertexAIEvaluationMetricType.FLUENCY: {
+            'to_request': lambda dp: {
+                'fluencyInput': {
+                    'metricSpec': {},
+                    'instance': {
+                        'prediction': _stringify(dp.output),
+                    },
+                }
+            },
+            'response_handler': lambda r: Score(
+                score=r.get('fluencyResult', {}).get('score'),
+                details=ScoreDetails(reasoning=r.get('fluencyResult', {}).get('explanation')),
+            ),
+        },
+        VertexAIEvaluationMetricType.SAFETY: {
+            'to_request': lambda dp: {
+                'safetyInput': {
+                    'metricSpec': {},
+                    'instance': {
+                        'prediction': _stringify(dp.output),
+                    },
+                }
+            },
+            'response_handler': lambda r: Score(
+                score=r.get('safetyResult', {}).get('score'),
+                details=ScoreDetails(reasoning=r.get('safetyResult', {}).get('explanation')),
+            ),
+        },
+        VertexAIEvaluationMetricType.GROUNDEDNESS: {
+            'to_request': lambda dp: {
+                'groundednessInput': {
+                    'metricSpec': {},
+                    'instance': {
+                        'prediction': _stringify(dp.output),
+                        'context': '. '.join(dp.context) if dp.context else None,
+                    },
+                }
+            },
+            'response_handler': lambda r: Score(
+                score=r.get('groundednessResult', {}).get('score'),
+                details=ScoreDetails(reasoning=r.get('groundednessResult', {}).get('explanation')),
+            ),
+        },
+        VertexAIEvaluationMetricType.SUMMARIZATION_QUALITY: {
+            'to_request': lambda dp: {
+                'summarizationQualityInput': {
+                    'metricSpec': {},
+                    'instance': {
+                        'prediction': _stringify(dp.output),
+                        'instruction': _stringify(dp.input),
+                        'context': '. '.join(dp.context) if dp.context else None,
+                    },
+                }
+            },
+            'response_handler': lambda r: Score(
+                score=r.get('summarizationQualityResult', {}).get('score'),
+                details=ScoreDetails(reasoning=r.get('summarizationQualityResult', {}).get('explanation')),
+            ),
+        },
+        VertexAIEvaluationMetricType.SUMMARIZATION_HELPFULNESS: {
+            'to_request': lambda dp: {
+                'summarizationHelpfulnessInput': {
+                    'metricSpec': {},
+                    'instance': {
+                        'prediction': _stringify(dp.output),
+                        'instruction': _stringify(dp.input),
+                        'context': '. '.join(dp.context) if dp.context else None,
+                    },
+                }
+            },
+            'response_handler': lambda r: Score(
+                score=r.get('summarizationHelpfulnessResult', {}).get('score'),
+                details=ScoreDetails(reasoning=r.get('summarizationHelpfulnessResult', {}).get('explanation')),
+            ),
+        },
+        VertexAIEvaluationMetricType.SUMMARIZATION_VERBOSITY: {
+            'to_request': lambda dp: {
+                'summarizationVerbosityInput': {
+                    'metricSpec': {},
+                    'instance': {
+                        'prediction': _stringify(dp.output),
+                        'instruction': _stringify(dp.input),
+                        'context': '. '.join(dp.context) if dp.context else None,
+                    },
+                }
+            },
+            'response_handler': lambda r: Score(
+                score=r.get('summarizationVerbosityResult', {}).get('score'),
+                details=ScoreDetails(reasoning=r.get('summarizationVerbosityResult', {}).get('explanation')),
+            ),
+        },
+    }
+
+    config = evaluator_configs.get(metric_type)
+    if not config:
+        return None
+
+    evaluator_name = f'vertexai/{metric_type.lower()}'
+    display_name, definition = METRIC_INFO[metric_type]
+    evaluator_fn = factory.create_evaluator_fn(
+        metric_type,
+        config['to_request'],
+        config['response_handler'],
+    )
+
+    return registry.define_evaluator(
+        name=evaluator_name,
+        display_name=display_name,
+        definition=definition,
+        fn=evaluator_fn,
+        is_billed=True,  # These use Vertex AI API which is billed
+    )

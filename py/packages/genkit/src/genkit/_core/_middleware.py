@@ -39,6 +39,7 @@ from genkit._core._model import (
     as_part,
 )
 from genkit._core._protocols import GenkitLike, RegistryLike
+from genkit._core._tool import Tool
 from genkit._core._typing import MiddlewareDesc
 
 logger = get_logger(__name__)
@@ -142,8 +143,8 @@ class GenerateMiddlewareContext:
 
     ``ai`` is a lightweight Genkit-like view scoped to this one invocation: its
     ``registry`` is the call's child registry (so middleware sees this call's own
-    tool/middleware registrations, not the global ones), and ``current_session()``
-    returns the active agent session when running inside one. Also carries
+    tool/middleware registrations, not the global ones). Inside an agent, read
+    the session with ``genkit.exp.current_session()``. Also carries
     caller-provided metadata (``custom_context``), streaming hooks, and the abort
     signal for the whole generate invocation.
     """
@@ -264,7 +265,7 @@ class BaseMiddleware(Generic[TConfig]):
         else:
             self.config = cast(Any, self.Config(**kwargs))
 
-    def tools(self, ctx: GenerateMiddlewareContext) -> list[Action]:
+    def tools(self, ctx: GenerateMiddlewareContext) -> list[Tool]:
         """Return additional tools to expose to the model for this generate call."""
         return []
 
@@ -313,7 +314,7 @@ class MiddlewareDef(Protocol):
     against this protocol so it only calls hooks, not constructors or config.
     """
 
-    def tools(self, ctx: GenerateMiddlewareContext) -> list[Action]:
+    def tools(self, ctx: GenerateMiddlewareContext) -> list[Tool]:
         """Return additional tools to expose to the model for this generate call."""
         ...
 
@@ -403,24 +404,6 @@ def _derive_config_schema(cls: type[BaseMiddleware]) -> dict[str, Any]:
             'properties': {},
             'additionalProperties': True,
         }
-
-
-def new_middleware(
-    cls: type[BaseMiddleware],
-    name: str,
-    description: str | None = None,
-) -> GenerateMiddleware:
-    """Ergonomic helper to define a new ``GenerateMiddleware``.
-
-    Args:
-        cls: The BaseMiddleware subclass.
-        name: The registry name.
-        description: Optional human-readable description.
-
-    Returns:
-        A new GenerateMiddleware instance.
-    """
-    return GenerateMiddleware(cls=cls, name=name, description=description)
 
 
 def middleware_class_index(registry: RegistryLike) -> dict[type[BaseMiddleware], str]:

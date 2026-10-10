@@ -16,13 +16,15 @@
 
 """Unit tests for Ollama embedders package."""
 
+import json
 import unittest
 from unittest.mock import AsyncMock, MagicMock
 
 import ollama as ollama_api
-from genkit_ollama.embedders import EmbeddingDefinition, OllamaEmbedder
+from genkit_ollama._embedders import OllamaEmbedder
+from pydantic import ValidationError
 
-from genkit import Document, Embedding, Part
+from genkit import Document, Embedding, GenkitError, Part
 from genkit.embedder import EmbedRequest, EmbedResponse
 
 
@@ -34,10 +36,7 @@ class TestOllamaEmbedderEmbed(unittest.IsolatedAsyncioTestCase):
         self.mock_ollama_client_instance = AsyncMock()
         self.mock_ollama_client_factory = MagicMock(return_value=self.mock_ollama_client_instance)
 
-        self.mock_embedding_definition = EmbeddingDefinition(name='test-embed-model', dimensions=1536)
-        self.ollama_embedder = OllamaEmbedder(
-            client=self.mock_ollama_client_factory, embedding_definition=self.mock_embedding_definition
-        )
+        self.ollama_embedder = OllamaEmbedder(client=self.mock_ollama_client_factory, model='test-embed-model')
 
     async def test_embed_single_document_single_content(self) -> None:
         """Test embed with a single document containing single text content."""
@@ -116,6 +115,67 @@ class TestOllamaEmbedderEmbed(unittest.IsolatedAsyncioTestCase):
             await self.ollama_embedder.embed(request)
 
         self.mock_ollama_client_instance.embed.assert_awaited_once()
+
+    async def test_embed_classifies_server_http_status(self) -> None:
+        """A rejected embed call carries the server's HTTP status."""
+        request = EmbedRequest(input=[Document.from_text('Smoked salmon tartine')])
+        cases = [
+            (ollama_api.ResponseError('model "nomic-embed-text" not found, try pulling it first', 404), 'NOT_FOUND'),
+            (ollama_api.ResponseError('input length exceeds the context length', 400), 'INVALID_ARGUMENT'),
+            (ollama_api.ResponseError('llama runner process has terminated', 500), 'INTERNAL'),
+        ]
+        for error, status in cases:
+            with self.subTest(status=status):
+                self.mock_ollama_client_instance.embed.side_effect = error
+
+                with self.assertRaises(GenkitError) as raised:
+                    await self.ollama_embedder.embed(request)
+
+                self.assertEqual(raised.exception.status, status)
+                self.assertIs(raised.exception.__cause__, error)
+
+    async def test_embed_error_without_http_status_is_unknown_genkit_error(self) -> None:
+        """An embed ResponseError with no HTTP status (-1) raises UNKNOWN, keeping the server's message."""
+        request = EmbedRequest(input=[Document.from_text('Smoked salmon tartine')])
+        error = ollama_api.ResponseError('unexpected end of stream')
+        self.mock_ollama_client_instance.embed.side_effect = error
+
+        with self.assertRaises(GenkitError) as raised:
+            await self.ollama_embedder.embed(request)
+
+        self.assertEqual(raised.exception.status, 'UNKNOWN')
+        self.assertIn('unexpected end of stream', str(raised.exception))
+        self.assertIs(raised.exception.__cause__, error)
+
+    async def test_embed_marks_malformed_response_internal(self) -> None:
+        """A non-JSON body or a payload that fails validation is the server's fault."""
+        request = EmbedRequest(input=[Document.from_text('Smoked salmon tartine')])
+        cases: list[Exception] = [
+            json.JSONDecodeError('Expecting value', '<html>502 Bad Gateway</html>', 0),
+            ValidationError.from_exception_data('EmbedResponse', []),
+        ]
+        for error in cases:
+            with self.subTest(error=type(error).__name__):
+                self.mock_ollama_client_instance.embed.side_effect = error
+
+                with self.assertRaises(GenkitError) as raised:
+                    await self.ollama_embedder.embed(request)
+
+                self.assertEqual(raised.exception.status, 'INTERNAL')
+                self.assertIs(raised.exception.__cause__, error)
+
+    async def test_embed_marks_non_numeric_vector_internal(self) -> None:
+        """A vector our Embedding model rejects is a malformed response, not a bad request."""
+        request = EmbedRequest(input=[Document.from_text('Smoked salmon tartine')])
+        bad_response = MagicMock()
+        bad_response.embeddings = [['not-a-float']]
+        self.mock_ollama_client_instance.embed.side_effect = None
+        self.mock_ollama_client_instance.embed.return_value = bad_response
+
+        with self.assertRaises(GenkitError) as raised:
+            await self.ollama_embedder.embed(request)
+
+        self.assertEqual(raised.exception.status, 'INTERNAL')
 
     async def test_embed_response_mismatch_input_count(self) -> None:
         """Test embed when client returns fewer embeddings than input texts (edge case)."""

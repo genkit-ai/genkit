@@ -5,22 +5,135 @@
 
 """Tests for the Genkit extra API methods."""
 
+import os
+import signal
+import socket
+import subprocess  # noqa: S404
+import sys
+import threading
+from typing import TypeVar
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from genkit import Genkit
+from genkit import Genkit, get_logger
 from genkit._core._action import ActionRunContext, _action_context
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import ModelRequest, ModelResponse
-from genkit._core._telemetry._instrumentation import (
+from genkit._core._telemetry._log_exporter import build_log_record
+from genkit._core._typing import Operation
+from genkit.evaluator import BaseDataPoint, EvalFnResponse, Score
+from genkit.telemetry import (
     SpanMetadata,
     SpanNext,
+    configure_instrumentation,
     reset_instrumentation,
 )
-from genkit._core._typing import Operation
-from genkit.telemetry import configure_instrumentation
+
+T = TypeVar('T')
+
+_RUN_MAIN_SCRIPT = """
+import sys
+
+from genkit import Genkit
+
+ai = Genkit()
+
+
+async def main() -> str:
+    if sys.argv[1] == 'fail':
+        raise ValueError('boom')
+    return 'done'
+
+
+print('RESULT', ai.run_main(main()), flush=True)
+"""
+
+
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(('127.0.0.1', 0))
+        return s.getsockname()[1]
+
+
+def _run_main_then_signal(outcome: str, sig: signal.Signals) -> tuple[int, str]:
+    """Start a reflection-enabled run_main in a child, send sig once it waits, return (exit code, output)."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith('GENKIT_')}
+    # Reflection on outside dev, so no runtime file is written.
+    env |= {'GENKIT_REFLECTION_ENABLED': 'true', 'GENKIT_REFLECTION_PORT': str(_free_port())}
+    proc = subprocess.Popen(  # noqa: S603
+        [sys.executable, '-c', _RUN_MAIN_SCRIPT, outcome],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        env=env,
+    )
+    # Kill a child that never reaches the ready line instead of stalling the run.
+    watchdog = threading.Timer(30, proc.kill)
+    watchdog.start()
+    try:
+        assert proc.stdout is not None
+        output: list[str] = []
+        for line in proc.stdout:
+            output.append(line)
+            if 'Press Ctrl+C to stop' in line:
+                break
+    finally:
+        watchdog.cancel()
+    proc.send_signal(sig)
+    try:
+        rest, _ = proc.communicate(timeout=15)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        rest, _ = proc.communicate()
+        pytest.fail(f'process kept running after {sig.name}:\n{"".join(output)}{rest}')
+    output.append(rest)
+    return proc.returncode, ''.join(output)
+
+
+def _printed_result(output: str) -> str | None:
+    """The line the child printed with run_main's return value, if any.
+
+    Matched by line start: Python 3.13+ tracebacks quote the ``print('RESULT', ...)``
+    source line, so a substring check would find it in a traceback too.
+    """
+    return next((line for line in output.splitlines() if line.startswith('RESULT ')), None)
+
+
+posix_signals = pytest.mark.skipif(sys.platform == 'win32', reason='sends POSIX signals to a child process')
+
+
+@posix_signals
+@pytest.mark.parametrize('sig', [signal.SIGINT, signal.SIGTERM], ids=['ctrl_c', 'sigterm'])
+def test_run_main_raises_the_coroutine_error_when_stopped(sig: signal.Signals) -> None:
+    """A failing main keeps reflection up; stopping it (Ctrl+C or SIGTERM) raises the main's error."""
+    returncode, output = _run_main_then_signal('fail', sig)
+
+    assert returncode != 0, output
+    assert 'ValueError: boom' in output
+    assert 'KeyboardInterrupt' not in output
+    assert 'during asyncio.run() shutdown' not in output
+    assert _printed_result(output) is None, output
+
+
+@posix_signals
+def test_run_main_returns_the_coroutine_result_on_sigterm() -> None:
+    """SIGTERM is a clean stop: run_main hands back what main returned and the process exits 0."""
+    returncode, output = _run_main_then_signal('ok', signal.SIGTERM)
+
+    assert returncode == 0, output
+    assert _printed_result(output) == 'RESULT done', output
+
+
+@posix_signals
+def test_run_main_ctrl_c_after_a_clean_main_exits() -> None:
+    """Ctrl+C after a clean main still raises KeyboardInterrupt, and the process exits instead of hanging."""
+    returncode, output = _run_main_then_signal('ok', signal.SIGINT)
+
+    assert returncode != 0, output
+    assert 'KeyboardInterrupt' in output
+    assert _printed_result(output) is None, output
 
 
 @pytest.mark.asyncio
@@ -53,7 +166,7 @@ async def test_genkit_run_tags_flow_step_action_type() -> None:
     class Recording:
         last: SpanMetadata | None = None
 
-        async def run_in_new_span(self, metadata: SpanMetadata, next: SpanNext[str]) -> str:
+        async def run_in_new_span(self, metadata: SpanMetadata, next: SpanNext[T]) -> T:
             self.last = metadata
             return await next()
 
@@ -72,6 +185,30 @@ async def test_genkit_run_tags_flow_step_action_type() -> None:
         assert recording.last.action_type == 'flowStep'
     finally:
         reset_instrumentation()
+
+
+@pytest.mark.asyncio
+async def test_get_logger_in_flow_attaches_trace_id(hex_ids: None) -> None:
+    """get_logger() lines inside a flow attach the flow's trace ID to the log record."""
+    ai = Genkit()
+    captured: list[dict[str, object]] = []
+
+    def capture_log(*, level: int, event: str, attrs: dict[str, object] | None = None) -> None:
+        captured.append(build_log_record(level=level, event=event, attrs=attrs or {}))
+
+    with mock.patch('genkit._core._telemetry._log_exporter.emit_log', side_effect=capture_log):
+
+        @ai.flow()
+        async def cart_flow() -> str:
+            get_logger(__name__).info('looked up cart')
+            return 'ok'
+
+        assert await cart_flow() == 'ok'
+
+    assert len(captured) == 1
+    assert captured[0]['body'] == {'stringValue': 'looked up cart'}
+    trace_id = captured[0].get('traceId')
+    assert isinstance(trace_id, str) and len(trace_id) == 32
 
 
 @pytest.mark.asyncio
@@ -340,3 +477,54 @@ async def test_current_context() -> None:
         _action_context.reset(token)
 
     assert Genkit.current_context() is None
+
+
+def test_genkit_positional_argument_raises_type_error() -> None:
+    with pytest.raises(
+        TypeError,
+        match=(
+            r'Genkit\(\) takes no positional arguments, got 1\. '
+            r'Pass keyword arguments instead, e\.g\. '
+            r"Genkit\(model='googleai/gemini-flash-latest'\)\."
+        ),
+    ):
+        Genkit('googleai/gemini-flash-latest')  # type: ignore[reportCallIssue,too-many-positional-arguments]
+    with pytest.raises(
+        TypeError,
+        match=(
+            r'Genkit\(\) takes no positional arguments, got 1\. '
+            r'Pass keyword arguments instead, e\.g\. '
+            r'Genkit\(plugins=\[...\], model="..."\)\.'
+        ),
+    ):
+        Genkit([])  # type: ignore[reportCallIssue,too-many-positional-arguments]
+
+
+def test_genkit_path_string_does_not_suggest_model_kwarg() -> None:
+    with pytest.raises(TypeError) as exc_info:
+        Genkit('./prompts')  # type: ignore[reportCallIssue,too-many-positional-arguments]
+    message = str(exc_info.value)
+    assert "model='./prompts'" not in message
+    assert 'Genkit(plugins=[...], model="...")' in message
+
+
+def test_genkit_two_positional_args_says_got_2() -> None:
+    with pytest.raises(
+        TypeError,
+        match=r'Genkit\(\) takes no positional arguments, got 2\.',
+    ):
+        Genkit('googleai/gemini-flash-latest', [])  # type: ignore[reportCallIssue,too-many-positional-arguments]
+
+
+def test_define_evaluator_takes_name_and_fn_positionally() -> None:
+    """define_evaluator(name, fn, *, ...) matches define_model; options stay keyword-only."""
+    ai = Genkit()
+
+    async def exact(row: BaseDataPoint, options: object | None) -> EvalFnResponse:
+        return EvalFnResponse(test_case_id=row.test_case_id or '', evaluation=[Score(score=True)])
+
+    action = ai.define_evaluator('exact', exact, display_name='Exact', definition='Matches exactly.')
+    assert action.name == 'exact'
+
+    with pytest.raises(TypeError):
+        ai.define_evaluator('exact2', exact, 'Exact', 'Matches exactly.')  # type: ignore[misc]  # pyright: ignore[reportCallIssue]

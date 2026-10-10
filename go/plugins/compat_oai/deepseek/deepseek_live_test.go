@@ -15,38 +15,32 @@
 package deepseek_test
 
 import (
-	"context"
-	"os"
 	"testing"
 
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/compat_oai/deepseek"
-	"github.com/firebase/genkit/go/plugins/compat_oai/internal/livetest"
+	"github.com/firebase/genkit/go/plugins/internal/livetest"
+	"github.com/firebase/genkit/go/plugins/internal/oailive"
 )
 
 func TestPluginLive(t *testing.T) {
-	if os.Getenv("DEEPSEEK_API_KEY") == "" {
-		t.Skip("DEEPSEEK_API_KEY is not set")
-	}
-
-	ctx := context.Background()
-	g := genkit.Init(ctx,
-		genkit.WithPlugins(&deepseek.DeepSeek{}),
-		genkit.WithDefaultModel("deepseek/deepseek-v4-flash"),
-	)
+	livetest.Env(t, "DEEPSEEK_API_KEY")
+	g := livetest.Init(t, &deepseek.DeepSeek{})
 
 	// Thinking is on by default, so the cheap checks turn it off and the
 	// reasoning checks turn it back on.
-	livetest.Run(t, g, livetest.Suite{
-		Model: deepseek.ModelRef("deepseek-v4-flash", &deepseek.ChatConfig{
-			Thinking: &deepseek.ThinkingConfig{Type: deepseek.ThinkingTypeDisabled},
-		}),
-		ReasoningModel: deepseek.ModelRef("deepseek-v4-flash", &deepseek.ChatConfig{
-			ReasoningEffort: deepseek.ReasoningEffortLow,
-			Thinking:        &deepseek.ThinkingConfig{Type: deepseek.ThinkingTypeEnabled},
-		}),
-		ReasoningContent: true,
-		ToolChoice:       true,
+	noThinking := &deepseek.ThinkingConfig{Type: deepseek.ThinkingTypeDisabled}
+	oailive.Run(t, g, oailive.Suite{
+		Suite: livetest.Suite{
+			Model: deepseek.ModelRef("deepseek-v4-flash", &deepseek.ChatConfig{Thinking: noThinking}),
+			ReasoningModel: deepseek.ModelRef("deepseek-v4-flash", &deepseek.ChatConfig{
+				ReasoningEffort: deepseek.ReasoningEffortLow,
+				Thinking:        &deepseek.ThinkingConfig{Type: deepseek.ThinkingTypeEnabled},
+			}),
+			ReasoningContent: true,
+			LimitConfig:      &deepseek.ChatConfig{MaxOutputTokens: 16, Thinking: noThinking},
+			BadKeyPlugin:     &deepseek.DeepSeek{APIKey: "invalid"},
+			Skip:             map[string]string{},
+		},
 		ExtraConfig: map[string]any{
 			"thinking": map[string]any{"type": "disabled"},
 			"extra":    map[string]any{"logprobs": true},

@@ -32,6 +32,7 @@ from _ai import ai
 from pydantic import BaseModel
 
 from genkit import ActionRunContext
+from genkit.exp import current_session
 
 
 class TaskItem(BaseModel):
@@ -77,7 +78,7 @@ async def add_task(input: AddTaskInput) -> TaskItem:
         s['next_id'] += 1
         return s
 
-    if sess := ai.current_session():
+    if sess := current_session():
         await sess.update_custom(mutate)
     if created is None:
         raise RuntimeError('add_task needs a live session')
@@ -97,7 +98,7 @@ async def toggle_task(input: TaskIdInput) -> dict[str, Any]:
                 result = {'success': True, 'task': t}
         return s
 
-    if sess := ai.current_session():
+    if sess := current_session():
         await sess.update_custom(mutate)
     return result
 
@@ -115,7 +116,7 @@ async def remove_task(input: TaskIdInput) -> dict[str, Any]:
             result = {'success': True}
         return s
 
-    if sess := ai.current_session():
+    if sess := current_session():
         await sess.update_custom(mutate)
     return result
 

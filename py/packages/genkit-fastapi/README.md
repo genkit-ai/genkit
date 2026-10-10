@@ -54,12 +54,12 @@ app.include_router(serve_flow(chat_flow), prefix='/api')
 
 ### Serving Agents (`serve_agent`)
 
-Use `serve_agent` to expose an agent as FastAPI routes (including `/getSnapshot` and `/abort` endpoints when session state storage is enabled):
+Use `serve_agent` to expose an agent as FastAPI routes (including `/getSnapshot` and `/abort` endpoints when session state storage is enabled). Agents are experimental, so `serve_agent` comes from `genkit_fastapi.exp`:
 
 ```python
 from fastapi import FastAPI
 from genkit.exp import Genkit
-from genkit_fastapi import serve_agent
+from genkit_fastapi.exp import serve_agent
 from genkit_google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))

@@ -50,6 +50,31 @@ func TestStaticResource(t *testing.T) {
 	}
 }
 
+func TestResourceOmittedVariables(t *testing.T) {
+	g := registry.New()
+	res := defineResource(g, "test/static", &ResourceOptions{
+		URI: "file:///h",
+	}, func(ctx context.Context, input *ResourceInput) (*ResourceOutput, error) {
+		return &ResourceOutput{Content: []*Part{NewTextPart(input.URI)}}, nil
+	})
+
+	t.Run("nil Variables in Execute", func(t *testing.T) {
+		output, err := res.Execute(context.Background(), &ResourceInput{URI: "file:///h"})
+		if err != nil {
+			t.Fatalf("Execute error: %v", err)
+		}
+		if len(output.Content) != 1 || output.Content[0].Text != "file:///h" {
+			t.Errorf("unexpected output: %v", output.Content)
+		}
+	})
+
+	t.Run("no variables key in JSON input", func(t *testing.T) {
+		if _, err := res.(*resource).RunJSON(context.Background(), []byte(`{"uri":"file:///h"}`), nil); err != nil {
+			t.Fatalf("RunJSON error: %v", err)
+		}
+	})
+}
+
 func TestDynamicResourceWithTemplate(t *testing.T) {
 	r := registry.New()
 

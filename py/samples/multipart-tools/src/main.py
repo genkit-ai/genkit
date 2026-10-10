@@ -14,11 +14,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Multipart tools — bare return vs ``response()`` with a PNG."""
+"""Multipart tools: a bare return vs ``MultipartToolResponse`` with a PNG."""
 
 from genkit_google_genai import GoogleAI
+from pydantic import BaseModel
 
-from genkit import Genkit, MultipartToolResponse, Part, response
+from genkit import Genkit, MultipartToolResponse, Part
 
 ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
 
@@ -29,16 +30,22 @@ _PNG = Part.from_media(
 )
 
 
+class WeatherInput(BaseModel):
+    city: str
+    unit: str = 'C'
+
+
+# A tool takes one input; several fields go on one model the model fills in.
 @ai.tool()
-async def weather(city: str) -> str:
+async def weather(input: WeatherInput) -> str:
     """Look up the weather. A bare return is wrapped as output-only."""
-    return f'Sunny in {city}'
+    return f'Sunny and 22{input.unit} in {input.city}'
 
 
 @ai.tool()
 async def screenshot(label: str) -> MultipartToolResponse:
-    """Take a screenshot. ``response()`` is the action result, PNG included."""
-    return response({'ok': True, 'label': label}, parts=[_PNG], metadata={'src': 'lab-cam'})
+    """Take a screenshot. Return ``MultipartToolResponse`` to send the PNG with the output."""
+    return MultipartToolResponse(output={'ok': True, 'label': label}, content=[_PNG], metadata={'src': 'lab-cam'})
 
 
 async def main() -> None:

@@ -1,0 +1,284 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""Amazon Bedrock plugin for Genkit.
+
+Registers Bedrock-hosted models (Anthropic Claude, Amazon Nova, Meta Llama,
+Mistral, Cohere, and others) as Genkit model actions. Text generation uses the
+Bedrock Converse and ConverseStream APIs; embedders and image generation use
+InvokeModel.
+"""
+
+from typing import TYPE_CHECKING, Literal
+
+import structlog
+
+from genkit import ActionRunContext, ModelResponse
+from genkit.embedder import EmbedRequest, EmbedResponse, embedder, embedder_action_metadata
+from genkit.model import ModelRequest, model as create_model, model_action_metadata
+from genkit.plugin_api import (
+    Action,
+    ActionKind,
+    ActionMetadata,
+    Plugin,
+    to_json_schema,
+)
+from genkit_amazon_bedrock._config import (
+    DEFAULT_TOTAL_TIMEOUT,
+    BedrockConfig,
+    BedrockImageConfig,
+)
+from genkit_amazon_bedrock._embedders import (
+    BedrockEmbedder,
+    get_embedder_info,
+    is_embedding_model,
+    looks_like_embedding_model,
+)
+from genkit_amazon_bedrock._image import BedrockImageModel, is_image_model
+from genkit_amazon_bedrock._model_info import get_model_info, is_rerank_model
+from genkit_amazon_bedrock._models import BedrockModel
+from genkit_amazon_bedrock._transport import BedrockTransport
+
+if TYPE_CHECKING:
+    import boto3.session
+
+logger = structlog.get_logger(__name__)
+
+BEDROCK_PLUGIN_NAME = 'bedrock'
+
+
+def _action_name(model_id: str) -> str:
+    return f'{BEDROCK_PLUGIN_NAME}/{model_id}'
+
+
+def _model_type(model_id: str) -> Literal['chat', 'image']:
+    """Routes a model ID: image families to InvokeModel, the rest to Converse.
+
+    Resolve is lazy, so an ID assumed to be chat would send
+    ``amazon.nova-canvas-v1:0`` down the Converse path and fail only at call
+    time. Embedders classify by ID the same way.
+    """
+    return 'image' if is_image_model(model_id) else 'chat'
+
+
+def _config_schema(model_type: Literal['chat', 'image']) -> type[BedrockConfig] | type[BedrockImageConfig]:
+    """The config schema for a route; resolve and list both read it so the Dev UI matches the action."""
+    return BedrockImageConfig if model_type == 'image' else BedrockConfig
+
+
+def _require_id_list(arg: str, value: list[str] | None) -> list[str]:
+    # A missing bracket (models='amazon.nova-lite-v1:0') would otherwise
+    # iterate the string and list one action per character.
+    if isinstance(value, str):
+        raise TypeError(f'{arg}= takes a list of Bedrock model IDs, got a str. Did you mean {arg}=[{value!r}]?')
+    return list(value or [])
+
+
+class Bedrock(Plugin):
+    """Amazon Bedrock plugin for Genkit."""
+
+    name = BEDROCK_PLUGIN_NAME
+
+    def __init__(
+        self,
+        region: str | None = None,
+        max_retries: int | None = None,
+        read_timeout: float | None = None,
+        connect_timeout: float | None = None,
+        max_pool_connections: int | None = None,
+        total_timeout: float | None = DEFAULT_TOTAL_TIMEOUT,
+        session: 'boto3.session.Session | None' = None,
+        models: list[str] | None = None,
+        embedders: list[str] | None = None,
+    ) -> None:
+        """Initializes the Bedrock plugin.
+
+        The AWS client knobs all default to None, meaning "use the ambient AWS
+        configuration" (``AWS_MAX_ATTEMPTS``, ``AWS_RETRY_MODE``,
+        ``~/.aws/config``, a session's default client config), and fall back to
+        the package defaults only when that configuration says nothing.
+
+        Args:
+            region: AWS region. Defaults to the SDK resolution chain
+                (``AWS_REGION``, ``AWS_DEFAULT_REGION``, ``~/.aws/config``);
+                initialization fails loudly when no region resolves rather
+                than silently picking one.
+            max_retries: Retry limit for Bedrock API calls.
+            read_timeout: Socket read timeout in seconds. Resets on every byte
+                received, so it caps silence, not the call.
+            connect_timeout: Socket connect timeout in seconds.
+            max_pool_connections: HTTP connection pool size.
+            total_timeout: Whole-call deadline in seconds, covering retries and
+                the slow-dribble case the read timeout cannot see. None removes
+                the deadline, leaving only the socket timeouts.
+            session: Optional pre-configured ``boto3.session.Session`` for custom
+                credentials or advanced SDK wiring.
+            models: Bedrock model IDs to list in the Dev UI, e.g.
+                ``us.anthropic.claude-sonnet-4-5-20250929-v1:0``. The route
+                comes from the ID: image-generation families go through
+                InvokeModel, everything else through Converse. Unlisted IDs
+                still resolve dynamically.
+            embedders: Bedrock embedding model IDs to register, e.g.
+                ``amazon.titan-embed-text-v2:0``. As with models, unlisted IDs
+                still resolve dynamically.
+        """
+        self.region = region
+        self.max_retries = max_retries
+        self.read_timeout = read_timeout
+        self.connect_timeout = connect_timeout
+        self.max_pool_connections = max_pool_connections
+        self.total_timeout = total_timeout
+        self._session = session
+        self.models = _require_id_list('models', models)
+        self.embedders = _require_id_list('embedders', embedders)
+        self._transport = BedrockTransport(
+            region=region,
+            max_retries=max_retries,
+            read_timeout=read_timeout,
+            connect_timeout=connect_timeout,
+            max_pool_connections=max_pool_connections,
+            total_timeout=total_timeout,
+            session=session,
+        )
+
+    async def init(self) -> list[Action]:
+        """Initialize plugin.
+
+        Builds the shared client so misconfiguration (e.g. no resolvable AWS
+        region) fails at startup instead of on the first model call.
+
+        Returns:
+            Empty list (actions are lazily created via ``resolve``).
+        """
+        await self._transport.ensure_client()
+        return []
+
+    async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
+        """Resolve an action by its Bedrock model id.
+
+        Any model ID resolves. Nothing is discovered: listing the catalogue
+        needs a second, control-plane ``bedrock`` client and the IAM actions
+        that go with it, and this plugin opens only ``bedrock-runtime``.
+
+        Args:
+            action_type: The kind of action to resolve.
+            name: The Bedrock model id without the ``bedrock/`` prefix
+                (``amazon.nova-lite-v1:0``, or a full inference-profile ARN).
+
+        Returns:
+            Action object if resolvable, None otherwise.
+        """
+        if action_type == ActionKind.EMBEDDER:
+            # An unroutable embedding ID still resolves, so embed() can name it
+            # as an unsupported embedder instead of the registry saying 404.
+            if not looks_like_embedding_model(name):
+                logger.debug('Bedrock resolve declined', model=name, kind='embedder', reason='not_an_embedder')
+                return None
+            return self._create_embedder_action(name)
+        if action_type != ActionKind.MODEL:
+            logger.debug('Bedrock resolve declined', model=name, kind=str(action_type), reason='unsupported_kind')
+            return None
+        if looks_like_embedding_model(name):
+            # Embedding models speak InvokeModel, not Converse; resolving one
+            # as a chat model only defers the failure to call time.
+            logger.debug('Bedrock resolve declined', model=name, kind='model', reason='embedding_model')
+            return None
+        if is_rerank_model(name):
+            # Same story for rerank models; the plugin has no rerank action.
+            logger.debug('Bedrock resolve declined', model=name, kind='model', reason='rerank_model')
+            return None
+        model_type = _model_type(name)
+        logger.debug('Bedrock model resolved', model=name, model_type=model_type, listed=name in self.models)
+        return self._create_model_action(name, model_type)
+
+    def _create_model_action(self, model_id: str, model_type: Literal['chat', 'image'] = 'chat') -> Action:
+        model_info = get_model_info(model_id, model_type)
+        config_schema = _config_schema(model_type)
+
+        async def _generate(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+            if model_type == 'image':
+                image_model = BedrockImageModel(model_id=model_id, transport=self._transport)
+                return await image_model.generate(request, ctx)
+            model = BedrockModel(model_id=model_id, transport=self._transport)
+            return await model.generate(request, ctx)
+
+        return create_model(
+            _action_name(model_id),
+            _generate,
+            config_schema=config_schema,
+            metadata={
+                'model': {
+                    'label': model_info.label,
+                    'stage': model_info.stage.value if model_info.stage else None,
+                    'supports': (
+                        model_info.supports.model_dump(by_alias=True, exclude_none=True) if model_info.supports else {}
+                    ),
+                    'customOptions': to_json_schema(config_schema),
+                },
+            },
+        )
+
+    def _create_embedder_action(self, model_id: str) -> Action:
+        async def _embed(request: EmbedRequest) -> EmbedResponse:
+            embedder = BedrockEmbedder(model_id=model_id, transport=self._transport)
+            return await embedder.embed(request)
+
+        return embedder(
+            _action_name(model_id),
+            _embed,
+            info=get_embedder_info(model_id),
+        )
+
+    async def list_actions(self) -> list[ActionMetadata]:
+        """List configured Bedrock models and embedders.
+
+        Only explicitly configured entries are listed, and only those this
+        plugin can actually serve: an embedding or rerank ID in ``models``, or
+        a chat ID in ``embedders``, would otherwise be advertised and then fail
+        on use. Each model is listed with the same route ``resolve`` picks, so
+        an image model carries the image config schema. A bare ``Bedrock()``
+        therefore lists nothing; see ``resolve`` for why the catalogue is not
+        read.
+
+        Returns:
+            ActionMetadata for each configured model and embedder.
+        """
+        actions: list[ActionMetadata] = []
+        for model_id in self.models:
+            if looks_like_embedding_model(model_id) or is_rerank_model(model_id):
+                continue
+            model_type = _model_type(model_id)
+            actions.append(
+                model_action_metadata(
+                    name=_action_name(model_id),
+                    info=get_model_info(model_id, model_type).model_dump(by_alias=True, exclude_none=True),
+                    config_schema=_config_schema(model_type),
+                )
+            )
+        models = len(actions)
+        actions.extend(
+            embedder_action_metadata(_action_name(model_id), get_embedder_info(model_id))
+            for model_id in self.embedders
+            if is_embedding_model(model_id)
+        )
+        logger.debug(
+            'Bedrock actions listed',
+            models=models,
+            embedders=len(actions) - models,
+            models_configured=len(self.models),
+            embedders_configured=len(self.embedders),
+        )
+        return actions

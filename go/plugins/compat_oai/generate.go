@@ -16,6 +16,7 @@ package compat_oai
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -27,6 +28,7 @@ import (
 	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/base"
 	pluginjsonschema "github.com/firebase/genkit/go/plugins/internal/jsonschema"
+	"github.com/firebase/genkit/go/plugins/internal/uri"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/packages/param"
 	"github.com/openai/openai-go/shared"
@@ -42,6 +44,16 @@ type ModelGenerator struct {
 	// outputFormats is what the model declares it serves natively on the
 	// wire; empty declares nothing and keeps every format eligible.
 	outputFormats []string
+	// separateReasoning is [OpenAICompatible.SeparateReasoningTokens].
+	separateReasoning bool
+	// constrained is the model's constrained output claim. A model that
+	// claims it only without tools gets no JSON mode on a request with
+	// tools, as it gets no schema.
+	constrained ai.ConstrainedSupport
+	// mediaTypes is [OpenAICompatible.MediaTypes].
+	mediaTypes []string
+	// classify is the provider's [OpenAICompatible.ClassifyError].
+	classify func(*openai.Error) status.Name
 	// Store any errors that occur during building
 	err error
 }
@@ -61,6 +73,20 @@ func NewModelGenerator(client *openai.Client, modelName string) *ModelGenerator 
 			Model: (modelName),
 		},
 	}
+}
+
+// withSeparateReasoning sets whether the provider counts reasoning tokens
+// apart from completion_tokens; see [OpenAICompatible.SeparateReasoningTokens].
+func (g *ModelGenerator) withSeparateReasoning(separate bool) *ModelGenerator {
+	g.separateReasoning = separate
+	return g
+}
+
+// withMediaTypes limits the media a user message may carry; see
+// [OpenAICompatible.MediaTypes]. It must come before [ModelGenerator.WithMessages].
+func (g *ModelGenerator) withMediaTypes(types []string) *ModelGenerator {
+	g.mediaTypes = types
+	return g
 }
 
 // WithMessages adds messages to the request
@@ -131,10 +157,11 @@ func (g *ModelGenerator) WithMessages(messages []*ai.Message) *ModelGenerator {
 					parts = append(parts, openai.TextContentPart(p.Text))
 				}
 				if p.IsMedia() {
-					part := openai.ImageContentPart(
-						openai.ChatCompletionContentPartImageImageURLParam{
-							URL: p.Text,
-						})
+					part, err := g.mediaContentPart(p)
+					if err != nil {
+						g.err = err
+						return g
+					}
 					parts = append(parts, part)
 					continue
 				}
@@ -154,6 +181,119 @@ func (g *ModelGenerator) WithMessages(messages []*ai.Message) *ModelGenerator {
 	}
 	g.messages = oaiMessages
 	return g
+}
+
+// mediaContentPart converts a user message's media part to the content part
+// its type calls for: image_url for images and for media of no known type,
+// input_audio for audio, and file for every other type. Audio and files are
+// sent inline, so they must come as data URIs: the plugin does not fetch URLs.
+func (g *ModelGenerator) mediaContentPart(p *ai.Part) (openai.ChatCompletionContentPartUnionParam, error) {
+	var none openai.ChatCompletionContentPartUnionParam
+	contentType := mediaContentType(p)
+	if contentType != "" && !mediaTypeAccepted(g.mediaTypes, contentType) {
+		return none, status.Errorf(status.ErrInvalidArgument,
+			"model %q does not accept %s media; it accepts %s", g.modelName, contentType, strings.Join(g.mediaTypes, ", "))
+	}
+	switch {
+	case contentType == "" || strings.HasPrefix(contentType, "image/"):
+		return openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{URL: p.Text}), nil
+	case strings.HasPrefix(contentType, "video/"):
+		return none, status.Errorf(status.ErrInvalidArgument,
+			"%s media is not supported: chat completions have no standard content part for video", contentType)
+	}
+	if !strings.HasPrefix(p.Text, "data:") {
+		return none, status.Errorf(status.ErrInvalidArgument,
+			"%s media must be a data URI: chat completions take audio and files inline, and the plugin does not fetch URLs", contentType)
+	}
+	_, data, err := uri.Data(p)
+	if err != nil {
+		return none, status.Errorf(status.ErrInvalidArgument, "%s media: %w", contentType, err)
+	}
+	encoded := base64.StdEncoding.EncodeToString(data)
+	if strings.HasPrefix(contentType, "audio/") {
+		return openai.InputAudioContentPart(openai.ChatCompletionContentPartInputAudioInputAudioParam{
+			Data:   encoded,
+			Format: audioFormat(contentType),
+		}), nil
+	}
+	return openai.FileContentPart(openai.ChatCompletionContentPartFileFileParam{
+		FileData: param.NewOpt("data:" + contentType + ";base64," + encoded),
+		Filename: param.NewOpt(fileName(contentType)),
+	}), nil
+}
+
+// mediaContentType returns the part's media type, lowercased and without
+// parameters: the declared content type, or else the one its data URI names.
+func mediaContentType(p *ai.Part) string {
+	contentType := p.ContentType
+	if contentType == "" {
+		if rest, ok := strings.CutPrefix(p.Text, "data:"); ok {
+			contentType, _, _ = strings.Cut(rest, ",")
+		}
+	}
+	contentType, _, _ = strings.Cut(contentType, ";")
+	return strings.ToLower(strings.TrimSpace(contentType))
+}
+
+// mediaTypeAccepted reports whether contentType matches one of patterns, each
+// an exact media type or a "type/*" wildcard. No patterns accept every type.
+func mediaTypeAccepted(patterns []string, contentType string) bool {
+	if len(patterns) == 0 {
+		return true
+	}
+	for _, pattern := range patterns {
+		pattern = strings.ToLower(pattern)
+		if prefix, ok := strings.CutSuffix(pattern, "*"); ok {
+			if strings.HasPrefix(contentType, prefix) {
+				return true
+			}
+		} else if pattern == contentType {
+			return true
+		}
+	}
+	return false
+}
+
+// audioFormat names the input_audio format of an audio media type: "wav" and
+// "mp3" for their common aliases, else the subtype without an "x-" prefix,
+// which providers that take more formats than OpenAI read as is.
+func audioFormat(contentType string) string {
+	subtype := strings.TrimPrefix(strings.TrimPrefix(contentType, "audio/"), "x-")
+	switch subtype {
+	case "wav", "wave", "vnd.wave":
+		return "wav"
+	case "mpeg", "mp3", "mpeg3":
+		return "mp3"
+	}
+	return subtype
+}
+
+// fileName names an inline file after its media type, since some providers
+// read the extension to pick a parser.
+func fileName(contentType string) string {
+	switch contentType {
+	case "application/pdf":
+		return "file.pdf"
+	case "text/plain":
+		return "file.txt"
+	case "text/csv":
+		return "file.csv"
+	case "application/msword":
+		return "file.doc"
+	case "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+		return "file.docx"
+	case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+		return "file.xlsx"
+	case "application/vnd.openxmlformats-officedocument.presentationml.presentation":
+		return "file.pptx"
+	case "application/json":
+		return "file.json"
+	case "text/markdown":
+		return "file.md"
+	case "text/html":
+		return "file.html"
+	}
+	return "file"
 }
 
 // chatCompletionParamFields is the set of wire names the SDK's request params
@@ -305,7 +445,11 @@ func clearManagedFields(params *openai.ChatCompletionNewParams) {
 // WithOutputFormats declares the output formats the model serves natively on
 // the wire. When the declaration leaves "json" out, a schema-less JSON
 // request sends no response_format and rides on the injected format
-// instructions instead. Nil declares nothing and keeps every format eligible.
+// instructions instead. A constrained "array" or "enum" request sends its
+// schema as a json_schema response_format only when the declaration lists
+// that format, since some endpoints (OpenAI's among them) accept only an
+// object at the schema root. Nil declares nothing and keeps the json format
+// eligible.
 func (g *ModelGenerator) WithOutputFormats(formats []string) *ModelGenerator {
 	if g.err != nil {
 		return g
@@ -414,13 +558,41 @@ func (g *ModelGenerator) Generate(ctx context.Context, req *ai.ModelRequest, han
 // "json" out has no schema-less JSON mode on the wire (Anthropic's compatible
 // endpoint rejects the json_object type), so such a request sends no
 // response_format and the format instructions the framework injects carry it
-// instead.
+// instead, as does a request with tools to a model that constrains output
+// only without them. A constrained array or enum request sends its schema
+// only to a model that declares the format.
 func (g *ModelGenerator) applyResponseFormat(output *ai.ModelOutputConfig) {
 	format := getResponseFormat(output)
 	if format.OfJSONObject != nil && len(g.outputFormats) > 0 && !slices.Contains(g.outputFormats, "json") {
 		format = openai.ChatCompletionNewParamsResponseFormatUnion{}
 	}
+	// The framework drops the schema of a model that constrains output only
+	// without tools when the request has tools, since such a model answers
+	// in JSON at once and never calls them. JSON mode does the same, so it
+	// goes too, and the injected format instructions carry the format.
+	if format.OfJSONObject != nil && len(g.tools) > 0 && g.constrained == ai.ConstrainedSupportNoTools {
+		format = openai.ChatCompletionNewParamsResponseFormatUnion{}
+	}
+	if output != nil && output.Constrained && output.Schema != nil && slices.Contains(g.outputFormats, output.Format) {
+		switch output.Format {
+		case "array", "enum":
+			format = jsonSchemaFormat(output.Schema)
+		}
+	}
 	g.request.ResponseFormat = format
+}
+
+// jsonSchemaFormat is a strict json_schema response format for schema.
+func jsonSchemaFormat(schema map[string]any) openai.ChatCompletionNewParamsResponseFormatUnion {
+	return openai.ChatCompletionNewParamsResponseFormatUnion{
+		OfJSONSchema: &shared.ResponseFormatJSONSchemaParam{
+			JSONSchema: shared.ResponseFormatJSONSchemaJSONSchemaParam{
+				Name:   "output",
+				Schema: schema,
+				Strict: openai.Bool(true),
+			},
+		},
+	}
 }
 
 // getResponseFormat determines the appropriate response format based on the output configuration
@@ -434,14 +606,7 @@ func getResponseFormat(output *ai.ModelOutputConfig) openai.ChatCompletionNewPar
 	switch output.Format {
 	case "json":
 		if output.Schema != nil {
-			jsonSchemaParam := shared.ResponseFormatJSONSchemaParam{
-				JSONSchema: shared.ResponseFormatJSONSchemaJSONSchemaParam{
-					Name:   "output",
-					Schema: output.Schema,
-					Strict: openai.Bool(true),
-				},
-			}
-			format.OfJSONSchema = &jsonSchemaParam
+			format = jsonSchemaFormat(output.Schema)
 		} else {
 			jsonObjectParam := shared.NewResponseFormatJSONObjectParam()
 			format.OfJSONObject = &jsonObjectParam
@@ -584,7 +749,7 @@ func (g *ModelGenerator) generateStream(ctx context.Context, req *ai.ModelReques
 	// the middleware around it are told the generation failed, rather than
 	// handed a short answer that reads as a complete one.
 	if err := stream.Err(); err != nil {
-		return nil, wrapStreamError(err)
+		return nil, wrapStreamError(err, g.classify)
 	}
 
 	if usageSeen {
@@ -592,7 +757,7 @@ func (g *ModelGenerator) generateStream(ctx context.Context, req *ai.ModelReques
 	}
 
 	// Convert accumulated ChatCompletion to ai.ModelResponse.
-	resp, err := convertChatCompletionToModelResponse(&acc.ChatCompletion)
+	resp, err := convertChatCompletionToModelResponse(&acc.ChatCompletion, g.separateReasoning)
 	if err != nil {
 		return nil, err
 	}
@@ -638,24 +803,45 @@ func (g *ModelGenerator) generateStream(ctx context.Context, req *ai.ModelReques
 // message. Reading the code back out of it is the one way to recover the status
 // the failure carries.
 //
+// The code is an HTTP status or a status name, which some providers spell in
+// lower case with dashes (xAI sends "resource-exhausted"). A provider's own
+// numbering, such as Z.ai's four-digit codes, is not an HTTP status and is not
+// read as one.
+//
 // An error that classifies to nothing is left unclassified rather than marked
 // Unknown, since the retry middleware reissues an unclassified error and gives
 // up on an Unknown one, and a failure this cannot read is not a reason to stop
 // trying.
-func wrapStreamError(err error) error {
-	err = WrapAPIError(err)
+func wrapStreamError(err error, classify func(*openai.Error) status.Name) error {
+	err = classifyAPIError(err, classify)
 	if _, classified := status.Classified(err); classified {
 		return fmt.Errorf("stream error: %w", err)
 	}
 	message := err.Error()
 	if brace := strings.IndexByte(message, '{'); brace >= 0 {
-		if code, ok := extractErrorObject(message[brace:])["code"].(float64); ok {
-			if name := status.FromHTTPCode(int(code)); name != status.Unknown {
-				return status.Errorf(status.Base(name), "stream error: %w", err)
-			}
+		if name := statusOfCode(extractErrorObject(message[brace:])["code"]); name != "" {
+			return status.Errorf(status.Base(name), "stream error: %w", err)
 		}
 	}
 	return fmt.Errorf("stream error: %w", err)
+}
+
+// statusOfCode reads the code of an error object as a status, or returns ""
+// when it names none.
+func statusOfCode(code any) status.Name {
+	var name status.Name
+	switch c := code.(type) {
+	case float64:
+		if c >= 400 && c < 600 {
+			name = status.FromHTTPCode(int(c))
+		}
+	case string:
+		name = status.Name(strings.ToUpper(strings.ReplaceAll(c, "-", "_")))
+	}
+	if !name.IsValid() || name == status.OK || name == status.Unknown {
+		return ""
+	}
+	return name
 }
 
 // extractTokenCount reads a token count a provider reports as a usage field the
@@ -721,61 +907,18 @@ func extractErrorObject(raw string) map[string]any {
 	return failure
 }
 
-// convertChatCompletionToModelResponse converts openai.ChatCompletion to ai.ModelResponse
-func convertChatCompletionToModelResponse(completion *openai.ChatCompletion) (*ai.ModelResponse, error) {
+// convertChatCompletionToModelResponse converts openai.ChatCompletion to
+// ai.ModelResponse. separateReasoning is
+// [OpenAICompatible.SeparateReasoningTokens].
+func convertChatCompletionToModelResponse(completion *openai.ChatCompletion, separateReasoning bool) (*ai.ModelResponse, error) {
 	if len(completion.Choices) == 0 {
 		return nil, status.Errorf(status.ErrInvalidOutput, "no choices in completion")
 	}
 
 	choice := completion.Choices[0]
 
-	// Build usage information with detailed token breakdown
-	usage := &ai.GenerationUsage{
-		InputTokens:  int(completion.Usage.PromptTokens),
-		OutputTokens: int(completion.Usage.CompletionTokens),
-		TotalTokens:  int(completion.Usage.TotalTokens),
-	}
-
-	// Add reasoning tokens (thoughts tokens) if available
-	if completion.Usage.CompletionTokensDetails.ReasoningTokens > 0 {
-		usage.ThoughtsTokens = int(completion.Usage.CompletionTokensDetails.ReasoningTokens)
-	}
-
-	// Add cached tokens if available. DeepSeek reports its cache hits as a
-	// usage field of its own and returns no prompt_tokens_details at all, so
-	// that field stands in when OpenAI's breakdown is absent.
-	if completion.Usage.PromptTokensDetails.CachedTokens > 0 {
-		usage.CachedContentTokens = int(completion.Usage.PromptTokensDetails.CachedTokens)
-	} else if cached := extractTokenCount(
-		completion.Usage.JSON.ExtraFields["prompt_cache_hit_tokens"].Raw(),
-	); cached > 0 {
-		usage.CachedContentTokens = cached
-	}
-
-	// Add the token counts Genkit has no field of its own for.
-	addCustomTokens(usage, "audioTokens", int(completion.Usage.CompletionTokensDetails.AudioTokens))
-	addCustomTokens(usage, "acceptedPredictionTokens", int(completion.Usage.CompletionTokensDetails.AcceptedPredictionTokens))
-	addCustomTokens(usage, "rejectedPredictionTokens", int(completion.Usage.CompletionTokensDetails.RejectedPredictionTokens))
-	// xAI counts the live-search sources it consulted and breaks image tokens
-	// out of the prompt, neither of which is in OpenAI's usage shape.
-	addCustomTokens(usage, "numSourcesUsed", extractTokenCount(
-		completion.Usage.JSON.ExtraFields["num_sources_used"].Raw()))
-	addCustomTokens(usage, "imageTokens", extractTokenCount(
-		completion.Usage.PromptTokensDetails.JSON.ExtraFields["image_tokens"].Raw()))
-	// A gateway prices the request it routed and reports what it charged, which
-	// is a main reason to route through one. Unlike the counts above, presence
-	// decides rather than the value: a free-tier request is priced at an
-	// explicit zero, which is an answer, while a provider that does not price
-	// requests has no cost field at all.
-	if cost, ok := extractJSONValue(completion.Usage.JSON.ExtraFields["cost"].Raw()).(float64); ok {
-		if usage.Custom == nil {
-			usage.Custom = make(map[string]float64)
-		}
-		usage.Custom["cost"] = cost
-	}
-
 	resp := &ai.ModelResponse{
-		Usage: usage,
+		Usage: convertUsage(completion.Usage, separateReasoning),
 		Message: &ai.Message{
 			Role:    ai.RoleModel,
 			Content: make([]*ai.Part, 0),
@@ -877,6 +1020,70 @@ func convertChatCompletionToModelResponse(completion *openai.ChatCompletion) (*a
 	return resp, nil
 }
 
+// convertUsage maps a chat completion's usage onto [ai.GenerationUsage]'s
+// convention: output excludes the reasoning reported beside it, and the total
+// is the provider's, or input + output + thoughts when it reports none.
+// separateReasoning is [OpenAICompatible.SeparateReasoningTokens].
+func convertUsage(u openai.CompletionUsage, separateReasoning bool) *ai.GenerationUsage {
+	// OpenAI and most providers count reasoning inside completion_tokens. xAI
+	// counts it beside them, which its plugin declares. For a provider that
+	// declares nothing, a total_tokens that adds the reasoning on top tells
+	// the two apart, and a completion count below the reasoning count cannot
+	// contain it either.
+	completion := int(u.CompletionTokens)
+	reasoning := int(u.CompletionTokensDetails.ReasoningTokens)
+	if reasoning > 0 && !separateReasoning && completion >= reasoning &&
+		int(u.TotalTokens) != int(u.PromptTokens)+completion+reasoning {
+		completion -= reasoning
+	}
+	total := int(u.TotalTokens)
+	if total == 0 {
+		total = int(u.PromptTokens) + completion + reasoning
+	}
+
+	// DeepSeek reports its cache hits as a usage field of its own and, on
+	// older models, returns no prompt_tokens_details at all, so that field
+	// stands in when OpenAI's breakdown is absent. OpenRouter reports cache
+	// writes, which OpenAI's shape has no field for.
+	cached := int(u.PromptTokensDetails.CachedTokens)
+	if cached == 0 {
+		cached = extractTokenCount(u.JSON.ExtraFields["prompt_cache_hit_tokens"].Raw())
+	}
+
+	usage := &ai.GenerationUsage{
+		InputTokens:         int(u.PromptTokens),
+		OutputTokens:        completion,
+		ThoughtsTokens:      reasoning,
+		TotalTokens:         total,
+		CachedContentTokens: cached,
+		CacheWriteTokens: extractTokenCount(
+			u.PromptTokensDetails.JSON.ExtraFields["cache_write_tokens"].Raw()),
+	}
+
+	// Add the token counts Genkit has no field of its own for.
+	addCustomTokens(usage, "audioTokens", int(u.CompletionTokensDetails.AudioTokens))
+	addCustomTokens(usage, "acceptedPredictionTokens", int(u.CompletionTokensDetails.AcceptedPredictionTokens))
+	addCustomTokens(usage, "rejectedPredictionTokens", int(u.CompletionTokensDetails.RejectedPredictionTokens))
+	// xAI counts the live-search sources it consulted and breaks image tokens
+	// out of the prompt, neither of which is in OpenAI's usage shape.
+	addCustomTokens(usage, "numSourcesUsed", extractTokenCount(
+		u.JSON.ExtraFields["num_sources_used"].Raw()))
+	addCustomTokens(usage, "imageTokens", extractTokenCount(
+		u.PromptTokensDetails.JSON.ExtraFields["image_tokens"].Raw()))
+	// A gateway prices the request it routed and reports what it charged, which
+	// is a main reason to route through one. Unlike the counts above, presence
+	// decides rather than the value: a free-tier request is priced at an
+	// explicit zero, which is an answer, while a provider that does not price
+	// requests has no cost field at all.
+	if cost, ok := extractJSONValue(u.JSON.ExtraFields["cost"].Raw()).(float64); ok {
+		if usage.Custom == nil {
+			usage.Custom = make(map[string]float64)
+		}
+		usage.Custom["cost"] = cost
+	}
+	return usage
+}
+
 // addCustomTokens records a token count Genkit has no [ai.GenerationUsage]
 // field of its own for, allocating the map on first use. A count of zero is
 // dropped: every caller reads it from a usage field that is absent, and
@@ -895,10 +1102,10 @@ func addCustomTokens(usage *ai.GenerationUsage, name string, count int) {
 func (g *ModelGenerator) generateComplete(ctx context.Context, req *ai.ModelRequest) (*ai.ModelResponse, error) {
 	completion, err := g.client.Chat.Completions.New(ctx, *g.request)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create completion: %w", WrapAPIError(err))
+		return nil, fmt.Errorf("failed to create completion: %w", classifyAPIError(err, g.classify))
 	}
 
-	resp, err := convertChatCompletionToModelResponse(completion)
+	resp, err := convertChatCompletionToModelResponse(completion, g.separateReasoning)
 	if err != nil {
 		return nil, err
 	}

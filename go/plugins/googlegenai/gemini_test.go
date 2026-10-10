@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -1012,6 +1013,36 @@ func genToolName(length int, chars string) string {
 	return string(r)
 }
 
+// Code execution answers come back as custom parts, and the next turn sends
+// them back in its history.
+func TestToGeminiPartCodeExecution(t *testing.T) {
+	sig := []byte("sig")
+	code := newExecutableCodePart("PYTHON", "print(1)")
+	code.Metadata = map[string]any{"signature": sig}
+	gp, err := toGeminiPart(code)
+	if err != nil {
+		t.Fatalf("toGeminiPart(executableCode) error = %v", err)
+	}
+	if gp.ExecutableCode == nil || gp.ExecutableCode.Code != "print(1)" || gp.ExecutableCode.Language != genai.LanguagePython {
+		t.Errorf("ExecutableCode = %+v, want the code and its language", gp.ExecutableCode)
+	}
+	if string(gp.ThoughtSignature) != "sig" {
+		t.Errorf("ThoughtSignature = %q, want %q", gp.ThoughtSignature, "sig")
+	}
+
+	gp, err = toGeminiPart(newCodeExecutionResultPart("OUTCOME_OK", "1\n"))
+	if err != nil {
+		t.Fatalf("toGeminiPart(codeExecutionResult) error = %v", err)
+	}
+	if gp.CodeExecutionResult == nil || gp.CodeExecutionResult.Outcome != genai.OutcomeOK || gp.CodeExecutionResult.Output != "1\n" {
+		t.Errorf("CodeExecutionResult = %+v, want the outcome and output", gp.CodeExecutionResult)
+	}
+
+	if _, err := toGeminiPart(ai.NewCustomPart(map[string]any{"other": 1})); err == nil {
+		t.Error("toGeminiPart(unknown custom part) error = nil, want it rejected")
+	}
+}
+
 // TestThoughtSignatureRoundTrip tests that thought signatures are properly preserved
 // when converting between Genkit and Gemini part formats.
 func TestThoughtSignatureRoundTrip(t *testing.T) {
@@ -1695,6 +1726,53 @@ func streamInput() *ai.ModelRequest {
 	}
 }
 
+// TestTranslateResponseUsage pins how Gemini's usage maps onto the
+// [ai.GenerationUsage] convention. Gemini counts thinking apart from the
+// candidates, as the convention does, but it also counts tool results fed
+// back to the model apart from the prompt, which left InputTokens short of
+// the input Gemini bills. Gemini's own total stands, so a bucket the mapping
+// does not cover still reaches TotalTokens.
+func TestTranslateResponseUsage(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		total int32
+		want  int
+	}{
+		{name: "gemini total", total: 160, want: 160},
+		{name: "no total", total: 0, want: 155},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, err := translateResponse(&genai.GenerateContentResponse{
+				Candidates: []*genai.Candidate{{
+					Content:      genai.NewContentFromText("4", genai.RoleModel),
+					FinishReason: genai.FinishReasonStop,
+				}},
+				UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
+					PromptTokenCount:        100,
+					CachedContentTokenCount: 60,
+					ToolUsePromptTokenCount: 20,
+					CandidatesTokenCount:    5,
+					ThoughtsTokenCount:      30,
+					TotalTokenCount:         tc.total,
+				},
+			})
+			if err != nil {
+				t.Fatalf("translateResponse() error = %v", err)
+			}
+			want := ai.GenerationUsage{
+				InputTokens:         120,
+				CachedContentTokens: 60,
+				OutputTokens:        5,
+				ThoughtsTokens:      30,
+				TotalTokens:         tc.want,
+			}
+			if got := *r.Usage; !reflect.DeepEqual(got, want) {
+				t.Errorf("Usage = %+v, want %+v", got, want)
+			}
+		})
+	}
+}
+
 func TestGenerateStreamPreservesCandidateMetadata(t *testing.T) {
 	srv := httptest.NewServer(sseHandler(
 		`{"candidates":[{"content":{"role":"model","parts":[{"text":"hello "}]}}]}`,
@@ -1738,6 +1816,46 @@ func TestGenerateStreamPreservesCandidateMetadata(t *testing.T) {
 	}
 }
 
+// A stream splits a reply mid-sentence and ends it with an empty text part
+// that carries the thought signature (the chunks below have the shape of a
+// live gemini-3.8-flash stream). The final message must merge the text and
+// keep the signature on its own part.
+func TestGenerateStreamMergesTextParts(t *testing.T) {
+	srv := httptest.NewServer(sseHandler(
+		`{"candidates":[{"content":{"role":"model","parts":[{"text":"plan","thought":true}]}}]}`,
+		`{"candidates":[{"content":{"role":"model","parts":[{"text":" more","thought":true}]}}]}`,
+		`{"candidates":[{"content":{"role":"model","parts":[{"text":"In Go"}]}}]}`,
+		`{"candidates":[{"content":{"role":"model","parts":[{"text":", type parameters use []."}]}}]}`,
+		`{"candidates":[{"content":{"role":"model","parts":[{"text":"","thoughtSignature":"c2lnMQ=="}]},"finishReason":"STOP"}]}`,
+	))
+	defer srv.Close()
+	client := newTestClient(t, srv.URL)
+
+	cb := func(ctx context.Context, c *ai.ModelResponseChunk) error { return nil }
+	r, err := generate(context.Background(), client, "gemini-flash-latest", streamInput(), &genai.GenerateContentConfig{}, cb)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+
+	type part struct {
+		Kind      ai.PartKind
+		Text      string
+		Signature string
+	}
+	var got []part
+	for _, p := range r.Message.Content {
+		got = append(got, part{p.Kind, p.Text, string(metadataSignature(p.Metadata))})
+	}
+	want := []part{
+		{ai.PartReasoning, "plan more", ""},
+		{ai.PartText, "In Go, type parameters use [].", ""},
+		{ai.PartText, "", "sig1"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Message.Content = %+v, want %+v", got, want)
+	}
+}
+
 func TestGenerateStreamEmptyStream(t *testing.T) {
 	srv := httptest.NewServer(sseHandler())
 	defer srv.Close()
@@ -1747,6 +1865,35 @@ func TestGenerateStreamEmptyStream(t *testing.T) {
 	_, err := generate(context.Background(), client, "gemini-flash-latest", streamInput(), &genai.GenerateContentConfig{}, cb)
 	if err == nil {
 		t.Fatal("generate = nil error, want error for an empty stream")
+	}
+}
+
+// A cancel mid-stream must fail the call. The SDK only logs the failed read,
+// so without a check the stream would end as if the model had finished.
+func TestGenerateStreamCancelled(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprintf(w, "data: %s\n\n", `{"candidates":[{"content":{"role":"model","parts":[{"text":"1 2 3"}]}}]}`)
+		w.(http.Flusher).Flush()
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	defer srv.Close()
+	defer close(release)
+	client := newTestClient(t, srv.URL)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cb := func(context.Context, *ai.ModelResponseChunk) error {
+		cancel()
+		return nil
+	}
+	_, err := generate(ctx, client, "gemini-flash-latest", streamInput(), &genai.GenerateContentConfig{}, cb)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("generate error = %v, want one wrapping context.Canceled", err)
 	}
 }
 

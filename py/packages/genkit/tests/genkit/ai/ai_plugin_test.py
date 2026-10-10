@@ -28,7 +28,7 @@ from genkit._core._model import ModelRequest
 from genkit._core._registry import ActionKind
 from genkit._core._typing import ActionMetadata, FinishReason
 from genkit.middleware import BaseMiddleware, GenerateMiddleware
-from genkit.plugin_api import Plugin, new_middleware
+from genkit.plugin_api import Plugin
 
 
 class AsyncResolveOnlyPlugin(Plugin):
@@ -45,7 +45,7 @@ class AsyncResolveOnlyPlugin(Plugin):
         """Resolve an action."""
         if action_type != ActionKind.MODEL:
             return None
-        if name != f'{self.name}/lazy-model':
+        if name != 'lazy-model':
             return None
 
         async def _generate(req: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
@@ -128,7 +128,7 @@ class MiddlewareListingPlugin(Plugin):
         return []
 
     def list_middleware(self) -> list[GenerateMiddleware]:
-        return [new_middleware(_RegistryMw, name='ai_plugin_test_mw')]
+        return [GenerateMiddleware(cls=_RegistryMw, name='ai_plugin_test_mw')]
 
 
 @pytest.mark.asyncio

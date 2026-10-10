@@ -29,7 +29,7 @@ import boto3.session
 import pytest
 from botocore.config import Config
 from botocore.exceptions import ClientError, EventStreamError
-from genkit_amazon_bedrock.transport import BedrockTransport
+from genkit_amazon_bedrock._transport import BedrockTransport
 
 from genkit import GenkitError
 
@@ -253,7 +253,7 @@ async def test_converse_reuses_the_one_client(monkeypatch: pytest.MonkeyPatch) -
 
 @pytest.mark.asyncio
 async def test_converse_propagates_boto3_errors_unwrapped(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Mapping AWS failures to Genkit statuses belongs to models.py, not here.
+    # Mapping AWS failures to Genkit statuses belongs to _models.py, not here.
     error = ClientError({'Error': {'Code': 'ValidationException', 'Message': 'nope'}}, 'Converse')
     transport = stub_transport(monkeypatch, FakeClient(error=error))
 

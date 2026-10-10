@@ -20,17 +20,8 @@
 from genkit._core._action import Action, ActionKind
 from genkit._core._constants import GENKIT_CLIENT_HEADER
 from genkit._core._environment import is_dev_environment
-from genkit._core._error import (
-    ErrorResponseMetadata,
-    StatusName,
-    from_http_code,
-    get_callable_json,
-    parse_retry_after_ms,
-    wrap_http_error,
-)
-from genkit._core._http_client import get_cached_client
-from genkit._core._loop_cache import _loop_local_client as loop_local_client
-from genkit._core._middleware import new_middleware
+from genkit._core._error import StatusName, provider_error
+from genkit._core._loop_cache import loop_local_client
 from genkit._core._plugin import MiddlewarePlugin, Plugin
 from genkit._core._schema import to_json_schema
 from genkit._core._typing import ActionMetadata
@@ -39,15 +30,12 @@ __all__ = [
     # Base class and framework primitives
     'MiddlewarePlugin',
     'Plugin',
-    'new_middleware',
     'Action',
     'ActionMetadata',
     'ActionKind',
-    'ErrorResponseMetadata',
     'StatusName',
-    'from_http_code',
-    'parse_retry_after_ms',
-    'wrap_http_error',
+    # Provider failures
+    'provider_error',
     # HTTP / version stamping
     'GENKIT_CLIENT_HEADER',
     # Loop-local caching
@@ -56,8 +44,4 @@ __all__ = [
     'is_dev_environment',
     # Schema utilities
     'to_json_schema',
-    # HTTP client
-    'get_cached_client',
-    # Error serialization
-    'get_callable_json',
 ]

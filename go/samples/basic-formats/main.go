@@ -23,8 +23,8 @@
 //   - ratingFlow (enum) constrains the answer to one label, so there is
 //     nothing to stream.
 //
-// The rest are "text" (the default, no parsing), "array" (like jsonl, but one
-// JSON array on the wire instead of one object per line), and "media".
+// The rest are "text" (the default, no parsing) and "array" (like jsonl, but
+// one JSON array on the wire instead of one object per line).
 //
 // Run it:
 //
@@ -112,7 +112,9 @@ func main() {
 	for _, a := range genkit.ListFlows(g) {
 		mux.HandleFunc("POST /"+a.Name(), genkit.Handler(a))
 	}
-	log.Fatal(server.Start(ctx, "127.0.0.1:8080", mux))
+	if err := server.Start(ctx, "127.0.0.1:8080", mux); err != nil {
+		log.Fatal(err)
+	}
 }
 
 // DefineCharacterWithJSON demonstrates the json format, which every typed
@@ -164,9 +166,8 @@ func DefineCastWithJSONL(g *genkit.Genkit) {
 					return val.Output, nil
 				}
 				// Characters land one at a time, so a chunk is work the caller
-				// has not been given yet. The exception is the character still
-				// being written: it arrives again next chunk, further along, so
-				// a consumer wanting only finished ones must spot the repeat.
+				// has not been given yet. A character still being written is
+				// held back until its line is complete, so none arrives twice.
 				for _, character := range val.Chunk {
 					sendChunk(ctx, character)
 				}

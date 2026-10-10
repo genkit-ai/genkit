@@ -182,10 +182,10 @@ async def test_skills_unknown_name_lists_available_skills(tmp_path, ctx) -> None
     skills = Skills(skill_paths=[str(tmp_path)])
     tool = skills.tools(ctx)[0]
 
-    unknown = await tool.run(input={'skill_name': 'missing'})
+    unknown = await tool.action().run(input={'skill_name': 'missing'})
     assert unknown.response.output == 'Unknown skill "missing". Available skills: poetry, zebra'
 
-    known = await tool.run(input={'skill_name': 'poetry'})
+    known = await tool.action().run(input={'skill_name': 'poetry'})
     assert known.response.output == 'Write a poem.'
 
 
@@ -309,3 +309,15 @@ Skill body.
 
         assert ' - bare-skill\n' in prompt
         assert 'No description provided' not in prompt
+
+
+def test_use_skill_description_is_nonempty(ctx: GenerateMiddlewareContext) -> None:
+    """The skill tool the model sees has a non-empty description."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        skill_dir = Path(tmpdir) / 'test-skill'
+        skill_dir.mkdir()
+        (skill_dir / 'SKILL.md').write_text('You are a test assistant.')
+
+        handles = Skills(skill_paths=[tmpdir]).tools(ctx)
+        assert handles
+        assert handles[0].description

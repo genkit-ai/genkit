@@ -160,5 +160,7 @@ func main() {
 	for _, route := range genkitx.AllAgentRoutes(g) {
 		mux.HandleFunc(route.Pattern(), route.Handler())
 	}
-	log.Fatal(server.Start(ctx, "127.0.0.1:8080", mux))
+	if err := server.Start(ctx, "127.0.0.1:8080", mux); err != nil {
+		log.Fatal(err)
+	}
 }

@@ -17,7 +17,6 @@
 [project]
 authors = [{ name = "Google" }]
 dependencies = [
-  "dotpromptz==0.1.5",
   "genkit",
   "genkit-amazon-bedrock",
   "genkit-anthropic",
@@ -245,16 +244,14 @@ select = [
 # JSON Patch diff/apply operations require manipulating arbitrary Any JSON structures
 "packages/genkit/src/genkit/_ai/_json_patch.py" = ["ANN401"]
 # HTTP client uses **httpx_kwargs: Any to forward arbitrary options
-"packages/genkit/src/genkit/_core/_http_client.py" = ["ANN401"]
 # Span wrapper uses __getattr__ -> Any for dynamic delegation
-"packages/genkit-google-cloud/src/genkit_google_cloud/telemetry/_adjusting_exporter.py" = ["ANN401"]
+"packages/genkit-google-cloud/src/genkit_google_cloud/_telemetry/_adjusting_exporter.py" = ["ANN401"]
 # Private telemetry folder; helpers here are not a public docstring surface
 "packages/genkit/src/genkit/_core/_telemetry/*.py" = ["D"]
 # Re-export modules (F401 would flag imports used only for re-export)
-"packages/genkit/src/genkit/_ai/__init__.py" = ["F401"]
 "packages/genkit/src/genkit/_ai/_document.py" = ["F401"]
 "packages/genkit/src/genkit/_ai/_model.py" = ["F401"]
-"packages/genkit/src/genkit/_ai/_formats/__init__.py" = ["F401"]
+"packages/genkit/src/genkit/_ai/_testing.py" = ["F401"]
 # Test files don't need docstrings or type ceremony; test names/bodies are self-documenting
 "**/tests/**/*.py" = ["D", "ANN"]
 "packages/genkit/tests/typing/*.py" = ["D", "F821", "F841", "B018", "ANN"]
@@ -351,7 +348,7 @@ aiohappyeyeballs      = "2.6.1"    # Python Software Foundation (transitive dep 
 aiohttp               = "3.13.3"   # Apache-2.0 AND MIT (transitive dep of xai-sdk)
 certifi               = "2026.1.4" # TODO: Verify.
 dependencies          = true
-dotpromptz-handlebars = "0.1.8"    # Apache-2.0 "https://github.com/google/dotprompt/blob/main/LICENSE"
+dotpromptz-handlebars = "0.2.0"    # Apache-2.0 "https://github.com/google/dotprompt/blob/main/LICENSE"
 google-crc32c         = "1.8.0"    # Apache-2.0
 mistralai             = ">=1.9.11" # Apache-2.0 "https://github.com/mistralai/client-python/blob/main/LICENSE"
 multidict             = "6.7.0"    # Apache-2.0
@@ -481,12 +478,6 @@ include = ["**/tests/**", "**/*_test.py", "samples/**", "tools/**"]
 [tool.ty.overrides.rules]
 invalid-argument-type = "ignore"
 no-matching-overload = "ignore"
-
-# Vertex AI model_garden has relative imports ty struggles to resolve (PEP 420 / namespace).
-[[tool.ty.overrides]]
-include = ["packages/genkit-vertexai/**"]
-[tool.ty.overrides.rules]
-unresolved-import = "ignore"
 
 # genkit._ai._formats._schema: dict.get with str keys from JSON schema traversal.
 [[tool.ty.overrides]]

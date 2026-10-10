@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from typing import Any, ClassVar, Literal
 
-from pydantic import ConfigDict, Field, RootModel
+from pydantic import ConfigDict, Field, RootModel, field_validator
 from pydantic.alias_generators import to_camel
 
 from genkit._core._base import GenkitModel
@@ -72,8 +72,8 @@ class SnapshotStatus(StrEnum):
     EXPIRED = 'expired'
 
 
-class EvalStatusEnum(StrEnum):
-    """EvalStatusEnum data type class."""
+class ScoreStatus(StrEnum):
+    """ScoreStatus data type class."""
 
     UNKNOWN = 'UNKNOWN'
     PASS = 'PASS'
@@ -164,6 +164,7 @@ class AgentOutput(GenkitModel):
     artifacts: list[Artifact] | None = None
     finish_reason: AgentFinishReason | None = None
     error: GenkitRuntimeError | None = None
+    usage: GenerationUsage | None = None
 
 
 class AgentResult(GenkitModel):
@@ -237,6 +238,7 @@ class SessionState(GenkitModel):
     messages: list[MessageData] | None = None
     custom: Any | None = Field(default=None)
     artifacts: list[Artifact] | None = None
+    usage: GenerationUsage | None = None
 
 
 class TurnEnd(GenkitModel):
@@ -245,6 +247,7 @@ class TurnEnd(GenkitModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     snapshot_id: str | None = None
     finish_reason: AgentFinishReason | None = None
+    usage: GenerationUsage | None = None
 
 
 class DocumentData(GenkitModel):
@@ -310,7 +313,14 @@ class EvalFnResponse(GenkitModel):
     test_case_id: str = Field(...)
     trace_id: str | None = None
     span_id: str | None = None
-    evaluation: Score = Field(...)
+    evaluation: list[Score] = Field(...)
+
+    @field_validator('evaluation', mode='before')
+    @classmethod
+    def _wrap_single_score_object(cls, value: Any) -> Any:  # noqa: ANN401
+        # saved runs may store one score object. wrap that dict;
+        # a Score built in code must already be a list.
+        return [value] if isinstance(value, dict) else value
 
 
 class EvalRequest(GenkitModel):
@@ -328,9 +338,9 @@ class Score(GenkitModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     id: str | None = None
     score: bool | float | str | None = Field(default=None)
-    status: EvalStatusEnum | None = None
+    status: ScoreStatus | None = None
     error: str | None = None
-    details: Details | None = None
+    details: ScoreDetails | None = None
 
 
 class GenkitError(GenkitModel):
@@ -473,7 +483,6 @@ class GenerationCommonConfig(GenkitModel):
     top_k: float | None = None
     top_p: float | None = None
     stop_sequences: list[str] | None = None
-    api_key: str | None = None
 
 
 class GenerationUsage(GenkitModel):
@@ -494,6 +503,7 @@ class GenerationUsage(GenkitModel):
     custom: Custom | None = None
     thoughts_tokens: float | None = None
     cached_content_tokens: float | None = None
+    cache_write_tokens: float | None = None
 
 
 class MediaPart(GenkitModel):
@@ -781,6 +791,7 @@ class ReflectionRegisterParams(GenkitModel):
     genkit_version: str | None = None
     reflection_api_spec_version: float | None = None
     envs: list[str] | None = None
+    secret: str | None = None
 
 
 class ReflectionRunActionParams(GenkitModel):
@@ -957,8 +968,8 @@ class Resume(GenkitModel):
 StateSchema = dict[str, Any]  # type alias for stateschema (typed string map)
 
 
-class Details(GenkitModel):
-    """Model for details data."""
+class ScoreDetails(GenkitModel):
+    """Model for scoredetails data."""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
     reasoning: str | None = None
@@ -990,7 +1001,6 @@ class Supports(GenkitModel):
     system_role: bool | None = None
     output: list[str] | None = None
     content_type: list[str] | None = None
-    context: bool | None = None
     constrained: Constrained | None = None
     tool_choice: bool | None = None
     long_running: bool | None = None

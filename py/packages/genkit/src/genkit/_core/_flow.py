@@ -58,6 +58,15 @@ def define_flow(
 ) -> Action[InputT, OutputT]: ...
 
 
+@overload
+def define_flow(
+    registry: Registry,
+    func: Callable[[ActionRunContext, InputT], Awaitable[OutputT]],
+    name: str | None = None,
+    description: str | None = None,
+) -> Action[InputT, OutputT]: ...
+
+
 def define_flow(
     registry: Registry,
     func: Callable[..., Awaitable[Any]],
@@ -76,4 +85,5 @@ def define_flow(
         fn=func,
         description=get_func_description(func, description),
         span_metadata={'flow:name': flow_name},
+        _strict_io=True,
     )

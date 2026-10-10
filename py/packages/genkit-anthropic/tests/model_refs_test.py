@@ -19,8 +19,8 @@
 from typing import get_args, get_type_hints
 
 import pytest
-from genkit_anthropic import Anthropic, AnthropicConfig, KnownClaude
-from genkit_anthropic.model_info import SUPPORTED_ANTHROPIC_MODELS
+from genkit_anthropic import Anthropic, AnthropicConfig
+from genkit_anthropic._model_info import SUPPORTED_ANTHROPIC_MODELS, KnownClaude
 
 from genkit import GenkitError
 from genkit.model import ModelRef
@@ -86,7 +86,7 @@ def test_known_claude_matches_catalog() -> None:
 def test_create_model_action_types_anthropic_config() -> None:
     """Anthropic model actions opt into ModelRequest[AnthropicConfig]."""
     plugin = Anthropic(api_key='test-key', models=['claude-sonnet-4'])
-    action = plugin._create_model_action('anthropic/claude-sonnet-4')
+    action = plugin._create_model_action('claude-sonnet-4')
 
     hints = get_type_hints(action._fn)  # noqa: SLF001
     request_type = hints['request']

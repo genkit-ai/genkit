@@ -46,7 +46,7 @@ See Also:
     - Anthropic documentation: https://docs.anthropic.com/
 """
 
-from genkit_anthropic.config import (
+from genkit_anthropic._config import (
     AnthropicConfig,
     AnyToolChoice,
     AutoToolChoice,
@@ -58,15 +58,13 @@ from genkit_anthropic.config import (
     ToolChoice,
     ToolChoiceNone,
 )
-from genkit_anthropic.model_info import KnownClaude
-from genkit_anthropic.plugin import Anthropic, anthropic_name
+from genkit_anthropic._plugin import Anthropic
 
 __all__ = [
     'Anthropic',
     'AnthropicConfig',
     'AutoToolChoice',
     'AnyToolChoice',
-    'KnownClaude',
     'OutputConfig',
     'RequestMetadata',
     'SpecificToolChoice',
@@ -74,5 +72,4 @@ __all__ = [
     'ThinkingConfig',
     'ToolChoice',
     'ToolChoiceNone',
-    'anthropic_name',
 ]

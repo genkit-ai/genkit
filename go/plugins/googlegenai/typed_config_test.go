@@ -85,7 +85,7 @@ func TestModelConfigSchema(t *testing.T) {
 	client := testClient(t)
 
 	gemini := newModel(client, gemini25Flash, GetModelOptions(gemini25Flash, googleAIProvider)).Desc()
-	imagen := newModel(client, imagen40Generate001, GetModelOptions(imagen40Generate001, googleAIProvider)).Desc()
+	imagen := newModel(client, "imagen-4.0-generate-001", GetModelOptions("imagen-4.0-generate-001", googleAIProvider)).Desc()
 
 	assertAdvertises(t, "gemini", gemini.Metadata["model"].(map[string]any)["customOptions"], geminiConfigSchema)
 	assertAdvertises(t, "imagen", imagen.Metadata["model"].(map[string]any)["customOptions"], imagenConfigSchema)
@@ -158,8 +158,8 @@ func TestHiddenConfigFieldsReachPluginErrors(t *testing.T) {
 		config  map[string]any
 		wantErr string
 	}{
-		{"systemInstruction", map[string]any{"systemInstruction": map[string]any{"parts": []any{map[string]any{"text": "talk like a pirate"}}}}, "ai.WithSystemPrompt()"},
-		{"cachedContent", map[string]any{"cachedContent": "some cache uuid"}, "ai.WithCacheTTL()"},
+		{"systemInstruction", map[string]any{"systemInstruction": map[string]any{"parts": []any{map[string]any{"text": "talk like a pirate"}}}}, "ai.WithSystem()"},
+		{"cachedContent", map[string]any{"cachedContent": "some cache uuid"}, "(*ai.Message).WithCacheTTL()"},
 		{"responseSchema", map[string]any{"responseSchema": map[string]any{"type": "object"}}, "response schema must be set using Genkit feature"},
 		{"responseMimeType", map[string]any{"responseMimeType": "image/png"}, "response MIME type must be set using Genkit feature"},
 		{"responseJsonSchema", map[string]any{"responseJsonSchema": map[string]any{"type": "object"}}, "ai.WithOutputSchema()"},

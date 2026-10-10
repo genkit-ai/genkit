@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"strings"
 	"sync"
 
@@ -353,18 +354,30 @@ func partsFromSegments(segments []segment) []*ai.Part {
 }
 
 // partsForTextPart turns the segments a single source text part produced into
-// output parts. When the part carried no a2ui block (the parser yielded exactly
-// its own text back as one prose run), the original part is returned untouched
-// so its Metadata and ContentType survive — critical for Gemini thought
-// signatures (attached as Metadata["signature"] on a plain text part and read
-// back on the next request; losing them degrades or breaks a thinking model in
-// a tool loop) and to avoid re-typing an application/json text part to
-// plain/text. Only a part that actually contained a fence is rebuilt.
-func partsForTextPart(src *ai.Part, segments []segment) []*ai.Part {
+// output parts. When the parser yielded exactly the part's own text back as one
+// prose run, the original part is returned untouched so its Metadata and
+// ContentType survive (this also avoids re-typing an application/json text part
+// to plain/text). Otherwise the part is rebuilt, and carrier is an empty text
+// part holding the source's Metadata, or nil when it had none.
+//
+// A rebuilt part happens when the text contained a fence, or when the parser
+// held back a tail that could open one (text ending in a backtick). Its
+// Metadata goes on a separate carrier part because it belongs to the source
+// part as a whole, not to any one segment: the prose may be split around a
+// block, and a signature on an a2ui data part would be lost when
+// [sanitizeInboundA2UI] rewrites that part as text on replay. The carrier is
+// the same shape as the trailing signature part of a streamed Gemini reply,
+// which the googlegenai plugin round-trips, so a unary Gemini reply keeps its
+// thought signature (Metadata["signature"]) on the next request.
+func partsForTextPart(src *ai.Part, segments []segment) (parts []*ai.Part, carrier *ai.Part) {
 	if len(segments) == 1 && !segments[0].isEnvelope && segments[0].prose == src.Text {
-		return []*ai.Part{src}
+		return []*ai.Part{src}, nil
 	}
-	return partsFromSegments(segments)
+	if len(src.Metadata) > 0 {
+		carrier = ai.NewTextPart("")
+		carrier.Metadata = maps.Clone(src.Metadata)
+	}
+	return partsFromSegments(segments), carrier
 }
 
 // injectInstructions appends A2UI instructions to (or creates) the system
@@ -406,7 +419,13 @@ func transformChunk(chunk *ai.ModelResponseChunk, parser *streamParser) (*ai.Mod
 			if err != nil {
 				return nil, err
 			}
-			newContent = append(newContent, partsForTextPart(part, segments)...)
+			parts, carrier := partsForTextPart(part, segments)
+			newContent = append(newContent, parts...)
+			// The parser may still hold a tail of this part's text; it streams
+			// in a later chunk. Only the final message's order is persisted.
+			if carrier != nil {
+				newContent = append(newContent, carrier)
+			}
 		} else {
 			newContent = append(newContent, part)
 		}
@@ -432,16 +451,21 @@ func transformResponse(resp *ai.ModelResponse, catalog *Catalog, validate Valida
 		surfaceID: surfaceID,
 	})
 	var newContent []*ai.Part
+	// carriers hold the metadata of rebuilt text parts until the next flush, so
+	// each lands after all of its source part's text, including a held tail.
+	var carriers []*ai.Part
 
 	// flushHeld drains whatever the parser is still holding (a withheld prose
-	// tail, or an unterminated trailing block) and appends it. Called at every
-	// non-text boundary and once at the end.
+	// tail, or an unterminated trailing block) and appends it, followed by any
+	// pending carriers. Called at every non-text boundary and once at the end.
 	flushHeld := func() error {
 		tail, err := parser.flush()
 		if err != nil {
 			return err
 		}
 		newContent = append(newContent, partsFromSegments(tail)...)
+		newContent = append(newContent, carriers...)
+		carriers = nil
 		return nil
 	}
 
@@ -450,18 +474,21 @@ func transformResponse(resp *ai.ModelResponse, catalog *Catalog, validate Valida
 			// Push WITHOUT flushing between consecutive text parts so an a2ui
 			// block that spans several adjacent text parts is stitched back
 			// together. The model's final message is not guaranteed to coalesce
-			// adjacent text: the Gemini plugin, for instance, aggregates a turn
-			// into ~30 separate text parts (fence, JSON body split many ways,
-			// close fence, then a trailing empty-text part carrying the thought
-			// signature), so a per-part flush would reset the parser mid-block
-			// and leak the whole surface back out as raw prose. This mirrors the
+			// adjacent text: a plugin can store a streamed turn as one part per
+			// chunk (fence, JSON body split many ways, close fence), so a
+			// per-part flush would reset the parser mid-block and leak the
+			// whole surface back out as raw prose. This mirrors the
 			// streaming path, which shares one parser across all chunks and
 			// flushes only once at the end.
 			segments, err := parser.push(part.Text)
 			if err != nil {
 				return nil, err
 			}
-			newContent = append(newContent, partsForTextPart(part, segments)...)
+			parts, carrier := partsForTextPart(part, segments)
+			newContent = append(newContent, parts...)
+			if carrier != nil {
+				carriers = append(carriers, carrier)
+			}
 		} else {
 			// A non-text part (e.g. a toolRequest) or an empty-text part (e.g.
 			// the trailing thought-signature carrier) is a boundary: flush any

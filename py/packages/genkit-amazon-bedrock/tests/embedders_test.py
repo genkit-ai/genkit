@@ -18,11 +18,11 @@
 
 import asyncio
 import json
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from botocore.exceptions import ClientError, NoCredentialsError
-from genkit_amazon_bedrock.embedders import (
+from genkit_amazon_bedrock._embedders import (
     COHERE_TEXT_BATCH_SIZE,
     EMBED_CONCURRENCY_LIMIT,
     EMBEDDER_INFO,
@@ -33,7 +33,7 @@ from genkit_amazon_bedrock.embedders import (
     image_from_document,
     is_embedding_model,
 )
-from genkit_amazon_bedrock.model_info import strip_inference_profile_prefix
+from genkit_amazon_bedrock._model_info import strip_inference_profile_prefix
 
 from genkit import Document, GenkitError, Part
 from genkit.embedder import EmbedRequest
@@ -252,7 +252,6 @@ async def test_runtime_errors_name_the_document_without_repeating_the_prefix() -
         ('ThrottlingException', 'RESOURCE_EXHAUSTED'),
         ('ValidationException', 'INVALID_ARGUMENT'),
         ('AccessDeniedException', 'PERMISSION_DENIED'),
-        ('SomethingNewException', 'UNKNOWN'),
     ],
 )
 @pytest.mark.asyncio
@@ -262,6 +261,54 @@ async def test_client_errors_map_to_genkit_statuses(code: str, status: str) -> N
     with pytest.raises(GenkitError, match='invoke model failed') as excinfo:
         await embed(TITAN_TEXT, transport, [text_doc('hi')])
     assert excinfo.value.status == status
+
+
+@pytest.mark.asyncio
+async def test_unlisted_client_error_without_http_status_is_unknown_genkit_error() -> None:
+    """An unlisted AWS error code with no HTTP status raises a provider-sourced UNKNOWN naming the document."""
+    error = ClientError({'Error': {'Code': 'SomethingNewException', 'Message': 'boom'}}, 'InvokeModel')
+    transport = FakeInvokeTransport(error=error)
+    with pytest.raises(
+        GenkitError, match=r'document 0: invoke model failed: An error occurred \(SomethingNewException\)'
+    ) as excinfo:
+        await embed(TITAN_TEXT, transport, [text_doc('hi')])
+    assert excinfo.value.status == 'UNKNOWN'
+
+
+@pytest.mark.asyncio
+async def test_throttled_batch_embed_keeps_retry_after() -> None:
+    # 1. The second document of a menu-indexing batch is throttled.
+    throttled = ClientError(
+        cast(
+            Any,
+            {
+                'Error': {'Code': 'ThrottlingException', 'Message': 'Too many requests'},
+                'ResponseMetadata': {'HTTPStatusCode': 429, 'HTTPHeaders': {'retry-after': '3'}},
+            },
+        ),
+        'InvokeModel',
+    )
+
+    def dispatch(body: dict[str, Any]) -> dict[str, Any]:
+        if body['inputText'] == 'tiramisu':
+            raise throttled
+        return titan_response()
+
+    transport = FakeInvokeTransport(dispatch=dispatch)
+
+    # 2. The batch error names the document and still carries Retry-After.
+    with pytest.raises(
+        GenkitError, match=r'document 1: invoke model failed: An error occurred \(ThrottlingException\)'
+    ) as excinfo:
+        await embed(TITAN_TEXT, transport, [text_doc('risotto'), text_doc('tiramisu')])
+
+    # 3. AWS's message appears once, not once per wrapping layer.
+    assert str(excinfo.value).count('Too many requests') == 1
+    assert excinfo.value.status == 'RESOURCE_EXHAUSTED'
+    assert excinfo.value.response_metadata == {'retry_after_ms': 3000.0}
+    document_error = excinfo.value.__cause__
+    assert document_error is not None
+    assert document_error.__cause__ is throttled
 
 
 @pytest.mark.asyncio

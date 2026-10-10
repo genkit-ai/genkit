@@ -31,19 +31,39 @@ import (
 type Hooks struct {
 	// Tools are additional tools to register during the generation this
 	// middleware is attached to. They are available to the model alongside
-	// any user-supplied tools.
+	// any user-supplied tools. Every tool constructor's result is a [Tool],
+	// so a middleware can contribute one that interrupts; the application,
+	// which holds only the part, resolves the interrupt with
+	// [Part.ToToolRestart] and [Part.ToToolResponse].
 	Tools []Tool
 	// WrapGenerate wraps each iteration of the tool loop. It sees the
 	// accumulated request, the iteration index, and the streaming callback.
 	// A single Generate() with N tool-call turns invokes this hook N+1 times.
+	// Tool request parts in the response that next returns carry a Ref, even
+	// when the model sent none, so the next iteration can match each tool
+	// response to its request by Ref.
 	WrapGenerate func(ctx context.Context, params *GenerateParams, next GenerateNext) (*ModelResponse, error)
 	// WrapModel wraps each model API call. Retry, fallback, and caching
 	// middleware typically hook here.
+	//
+	// Models record the request they ran on in the response's Request, and
+	// [ModelResponse.History] reads the conversation from it. A hook that
+	// sends the model different messages than it received must put the
+	// original messages back on the response's Request. If it does not, the
+	// caller's history becomes the messages the model saw.
 	WrapModel func(ctx context.Context, params *ModelParams, next ModelNext) (*ModelResponse, error)
 	// WrapTool wraps each tool execution. It may be called concurrently when
 	// multiple tools execute in parallel for the same Generate() call; any
 	// state closed over from the enclosing scope that this hook mutates must
 	// be guarded with sync primitives.
+	//
+	// An interrupt the hook raises with tool.Interrupt, to hold the call
+	// without running the tool, is the hook's own: the restart that answers
+	// it reaches this hook through tool.ResumeData, and the tool then runs
+	// as a fresh call that may interrupt in turn. A restart answering a
+	// later stage, such an interrupt of the tool's included, reports
+	// tool.Released here when the interrupted call records that this hook
+	// let it through and the restart keeps the call's input.
 	WrapTool func(ctx context.Context, params *ToolParams, next ToolNext) (*MultipartToolResponse, error)
 }
 
@@ -190,7 +210,18 @@ func isolate[M Middleware](prototype M) M {
 
 // MiddlewareFunc adapts a per-call factory closure to the [Middleware]
 // interface for ad-hoc inline use, without a registered descriptor or plugin
-// wiring. The adapted middleware does not appear in the Dev UI.
+// wiring. It works anywhere [WithUse] does, including the options of
+// [DefinePrompt] and an agent's inline prompt.
+//
+// A closure has no JSON form, so a MiddlewareFunc lives only in the Go
+// process that created it. Wherever the request is serialized (prompt
+// metadata, trace spans, the Dev UI) it shows as a reference named "inline"
+// with no config, and a request replayed from that JSON (for example, a
+// prompt run from the Dev UI) fails because nothing can rebuild the closure.
+// The name "inline" is reserved for this reason: a middleware registered
+// under it is never resolved from JSON. For middleware that must run from
+// JSON, define a named struct that implements [Middleware] and register it
+// with [NewMiddleware].
 //
 // Example:
 //
@@ -199,13 +230,22 @@ func isolate[M Middleware](prototype M) M {
 //	}))
 type MiddlewareFunc func(ctx context.Context) (*Hooks, error)
 
+// inlineMiddlewareName is the name every [MiddlewareFunc] reports.
+const inlineMiddlewareName = "inline"
+
 // Name returns the placeholder name shared by all [MiddlewareFunc] values.
 // Uniqueness is unnecessary: inline middleware is resolved via the fast path
 // in [resolveRefs] and never goes through a name-keyed registry lookup.
-func (MiddlewareFunc) Name() string { return "inline" }
+func (MiddlewareFunc) Name() string { return inlineMiddlewareName }
 
 // New implements [Middleware] by calling f.
 func (f MiddlewareFunc) New(ctx context.Context) (*Hooks, error) { return f(ctx) }
+
+// MarshalJSON encodes f as null: a closure has no config to serialize. It
+// lets a request that carries f in [MiddlewareRef.Config] still encode, for
+// prompt output validation and trace span inputs, while the Go value stays on
+// the ref for [resolveRefs] to call.
+func (MiddlewareFunc) MarshalJSON() ([]byte, error) { return []byte("null"), nil }
 
 // middlewareRefArg is a lazy [Middleware] that carries only a registered
 // name and an opaque config payload. It exists so data-driven sources (most
@@ -332,6 +372,13 @@ func resolveRefs(ctx context.Context, r api.Registry, refs []*MiddlewareRef) ([]
 			}
 			bundles = append(bundles, namedHooks{name: ref.Name, hooks: h})
 			continue
+		}
+		if ref.Name == inlineMiddlewareName {
+			// A MiddlewareFunc that went through JSON (e.g. a prompt run from
+			// the Dev UI) arrives here as a name with no closure behind it.
+			// The name is checked before the registry so a middleware
+			// registered as "inline" cannot stand in for the lost closure.
+			return nil, status.Errorf(status.ErrFailedPrecondition, "ai: inline middleware (ai.MiddlewareFunc) cannot run from a serialized request, and the name %q is reserved for it; define a named struct that implements ai.Middleware and register it with ai.NewMiddleware", inlineMiddlewareName)
 		}
 		d := LookupMiddleware(r, ref.Name)
 		if d == nil {

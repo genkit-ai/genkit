@@ -139,9 +139,10 @@ type AgentInput struct {
 	// Message is the user's input for this turn.
 	Message *ai.Message `json:"message,omitempty"`
 	// Resume provides options for resuming an interrupted generation.
-	// Construct using [ai.ToolAction.RestartWith] / [ai.ToolAction.RespondWith]
-	// parts. When set, the generate call resumes with these parts instead
-	// of treating Message as a tool response.
+	// Construct from [ai.InterruptedCall.Restart] / [ai.InterruptedCall.Respond]
+	// or [ai.Part.ToToolRestart] / [ai.Part.ToToolResponse] parts. When set,
+	// the generate call resumes with these parts instead of treating Message
+	// as a tool response.
 	Resume *ToolResume `json:"resume,omitempty"`
 }
 
@@ -197,18 +198,24 @@ type AgentOutput[State any] struct {
 	// state it also rides inside [AgentOutput.State] ([SessionState.SessionID]).
 	SessionID string `json:"sessionId,omitempty"`
 	// SnapshotID is the ID of the most recent turn-end snapshot for this
-	// invocation. Empty when no store is configured or no turn committed. When
+	// invocation. Empty when no store is configured or no turn wrote one. When
 	// FinishReason is [AgentFinishReasonDetached] it is the pending detach
 	// snapshot. When [AgentFinishReasonFailed], it is the resume point: the
-	// failed turn's own [SnapshotStatusFailed] snapshot when the turn committed
-	// anything, otherwise the last committed turn's snapshot.
+	// failed turn's own [SnapshotStatusFailed] snapshot. A turn that failed
+	// before committing anything writes it with the last committed turn's
+	// messages, so its usage still counts.
 	SnapshotID string `json:"snapshotId,omitempty"`
 	// State contains the final conversation state.
 	// Only populated when state is client-managed (no store configured).
 	// When FinishReason is [AgentFinishReasonFailed], it is the resume point:
 	// what the failed turn committed, or the last-good state through the last
-	// successful turn when the turn failed before committing anything.
+	// successful turn when the turn failed before committing anything. Its usage
+	// counts every turn either way.
 	State *SessionState[State] `json:"state,omitempty"`
+	// Usage is the usage of the agent's own model calls during this invocation,
+	// summed field by field, failed turns included. It excludes subagents. Nil
+	// when FinishReason is [AgentFinishReasonDetached], since the work continues.
+	Usage *ai.GenerationUsage `json:"usage,omitempty"`
 }
 
 // AgentResult is the return value from an AgentFunc.
@@ -401,6 +408,11 @@ type SessionState[State any] struct {
 	// state object opaquely. For server-managed agents the snapshot row's
 	// [SessionSnapshot.SessionID] is canonical and this field mirrors it.
 	SessionID string `json:"sessionId,omitempty"`
+	// Usage is the usage of the agent's own model calls across the session,
+	// summed field by field. The framework owns it. It is a ledger and never rolls
+	// back: a failed turn's spend stays even when its messages do not. It
+	// excludes subagents, which report usage in their own sessions.
+	Usage *ai.GenerationUsage `json:"usage,omitempty"`
 }
 
 // SnapshotStatus describes the lifecycle state of a snapshot. A synchronous
@@ -496,7 +508,10 @@ type TurnEnd struct {
 	FinishReason AgentFinishReason `json:"finishReason,omitempty"`
 	// SnapshotID is the ID of the snapshot persisted at the end of this turn,
 	// whether it succeeded or failed. Empty if no snapshot was written (no store
-	// configured, a turn that failed before committing anything, or snapshots
-	// were suspended after detach).
+	// configured, or snapshots were suspended after detach).
 	SnapshotID string `json:"snapshotId,omitempty"`
+	// Usage is the usage of the agent's own model calls during this turn, summed
+	// field by field, whether the turn succeeded or failed. It excludes
+	// subagents.
+	Usage *ai.GenerationUsage `json:"usage,omitempty"`
 }

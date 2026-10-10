@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1120,10 +1121,10 @@ func TestAgent_FailedTurn_LastGoodStateIsResumable(t *testing.T) {
 	}
 }
 
-func TestAgent_FailedTurn_ServerManagedReturnsLastTurnSnapshot(t *testing.T) {
-	// Server-managed: every successful turn snapshots, so when a later turn
-	// fails the last-good state is already the newest row. The failed output
-	// reuses that turn's snapshot ID and no extra row is written.
+func TestAgent_FailedTurn_ServerManagedWritesRowAtLastGoodState(t *testing.T) {
+	// Server-managed: a turn that fails without committing still writes a
+	// failed row, so its spend lands in the ledger. The row's messages are the
+	// last committed turn's, and the failed output points at it.
 	ctx := context.Background()
 	reg := newTestRegistry(t)
 	store := newTestInMemStore[testState]()
@@ -1147,12 +1148,80 @@ func TestAgent_FailedTurn_ServerManagedReturnsLastTurnSnapshot(t *testing.T) {
 	if out.FinishReason != AgentFinishReasonFailed {
 		t.Errorf("expected finish reason %q, got %q", AgentFinishReasonFailed, out.FinishReason)
 	}
-	if out.SnapshotID != turn0.SnapshotID {
-		t.Errorf("expected failed output to reuse the persisted last-good snapshot %q, got %q",
-			turn0.SnapshotID, out.SnapshotID)
+	row, err := store.GetSnapshot(ctx, out.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
 	}
-	if rows := store.snapshotCount(); rows != 1 {
-		t.Errorf("expected no recovery row when last-good is already persisted, got %d rows", rows)
+	if row.Status != SnapshotStatusFailed || row.ParentID != turn0.SnapshotID {
+		t.Errorf("row = %s with parent %q, want failed on %q", row.Status, row.ParentID, turn0.SnapshotID)
+	}
+	prev, err := store.GetSnapshot(ctx, turn0.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if got, want := len(row.State.Messages), len(prev.State.Messages); got != want {
+		t.Errorf("row has %d messages, want the last committed turn's %d", got, want)
+	}
+}
+
+// cancelAwareStore fails reads under a cancelled context, as a networked
+// store does.
+type cancelAwareStore[State any] struct{ *testInMemStore[State] }
+
+func (s *cancelAwareStore[State]) GetSnapshot(ctx context.Context, snapshotID string) (*SessionSnapshot[State], error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return s.testInMemStore.GetSnapshot(ctx, snapshotID)
+}
+
+func TestAgent_CancelledTurn_ServerManagedWritesRowAtLastGoodState(t *testing.T) {
+	// A turn the caller cancels before it commits still writes its row, and
+	// the row holds the turns committed before it, not the state the
+	// invocation began with, even when the store's reads honor the
+	// cancellation.
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+	store := &cancelAwareStore[testState]{newTestInMemStore[testState]()}
+	connCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	af := DefineCustomAgent(reg, "cancelledTurn",
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				if input.Message.Content[0].Text == "hang" {
+					cancel()
+					<-ctx.Done()
+					return nil, ctx.Err()
+				}
+				sess.AddMessages(ai.NewModelTextMessage("echo"))
+				return &TurnResult{FinishReason: AgentFinishReasonStop}, nil
+			})
+		},
+		WithSessionStore[testState](store),
+	)
+
+	conn, err := af.Connect(connCtx)
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	turn0 := sendTurn(t, conn, "one")
+	sendText(t, conn, "hang")
+	_, _ = conn.Output()
+
+	prev, err := store.GetSnapshot(ctx, turn0.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	row, err := store.GetLatestSnapshot(ctx, prev.SessionID)
+	if err != nil {
+		t.Fatalf("GetLatestSnapshot: %v", err)
+	}
+	if row.SnapshotID == turn0.SnapshotID {
+		t.Fatal("the cancelled turn wrote no row")
+	}
+	if got, want := len(row.State.Messages), len(prev.State.Messages); got != want {
+		t.Errorf("row has %d messages, want the last committed turn's %d", got, want)
 	}
 }
 
@@ -1243,10 +1312,10 @@ func TestAgent_CommittedFailedTurn_AdvancesLastGoodState(t *testing.T) {
 	}
 }
 
-func TestAgent_FailedFirstTurn_AfterResume_ReturnsParentSnapshotID(t *testing.T) {
-	// Resuming from a snapshot and failing before any turn completes:
-	// the parent snapshot already captures the last-good state, so the
-	// failed output points back at it and no recovery row is written.
+func TestAgent_FailedFirstTurn_AfterResume_WritesRowOnParent(t *testing.T) {
+	// Resuming from a snapshot and failing before any turn commits: the
+	// failed row chains off the resumed snapshot and carries its messages,
+	// since nothing newer committed.
 	ctx := context.Background()
 	reg := newTestRegistry(t)
 	store := newTestInMemStore[testState]()
@@ -1277,12 +1346,15 @@ func TestAgent_FailedFirstTurn_AfterResume_ReturnsParentSnapshotID(t *testing.T)
 	if out.FinishReason != AgentFinishReasonFailed {
 		t.Errorf("expected finish reason %q, got %q", AgentFinishReasonFailed, out.FinishReason)
 	}
-	if out.SnapshotID != parent.SnapshotID {
-		t.Errorf("expected failed output to return parent snapshot %q, got %q",
-			parent.SnapshotID, out.SnapshotID)
+	row, err := store.GetSnapshot(ctx, out.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
 	}
-	if rows := store.snapshotCount(); rows != 1 {
-		t.Errorf("expected no new rows on first-turn failure after resume, got %d", rows)
+	if row.Status != SnapshotStatusFailed || row.ParentID != parent.SnapshotID {
+		t.Errorf("row = %s with parent %q, want failed on %q", row.Status, row.ParentID, parent.SnapshotID)
+	}
+	if got := len(row.State.Messages); got != 2 {
+		t.Errorf("row has %d messages, want the resumed snapshot's 2", got)
 	}
 }
 
@@ -1290,45 +1362,39 @@ func TestAgent_FailedTurn_EmitsFailedTurnEnd(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
 
-	// Hold the agent fn open until the client has consumed the failed
-	// TurnEnd, so the chunk delivery is deterministic (the runtime stops
-	// forwarding chunks once fn returns with an error).
-	turnEndSeen := make(chan struct{})
+	// fn returns the turn's error at once, so the TurnEnd can still be in
+	// the router's hands when the invocation resolves. Repeated runs catch a
+	// resolution that drops it.
 	af := DefineCustomAgent(reg, "failedTurnEnd",
 		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
-			err := sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				return nil, fmt.Errorf("boom")
 			})
-			select {
-			case <-turnEndSeen:
-			case <-time.After(2 * time.Second):
-			}
-			return nil, err
 		},
 	)
 
-	conn, err := af.Connect(ctx)
-	if err != nil {
-		t.Fatalf("Connect: %v", err)
-	}
-	sendText(t, conn, "hi")
+	for i := range 200 {
+		conn, err := af.Connect(ctx)
+		if err != nil {
+			t.Fatalf("Connect: %v", err)
+		}
+		sendText(t, conn, "hi")
 
-	turnEnd := nextTurnEnd(t, conn)
-	close(turnEndSeen)
+		turnEnd := nextTurnEnd(t, conn)
+		if turnEnd.FinishReason != AgentFinishReasonFailed {
+			t.Fatalf("run %d: expected TurnEnd finish reason %q, got %q", i, AgentFinishReasonFailed, turnEnd.FinishReason)
+		}
+		if turnEnd.SnapshotID != "" {
+			t.Fatalf("run %d: failed turn must not snapshot its partial state, got snapshot %q", i, turnEnd.SnapshotID)
+		}
 
-	if turnEnd.FinishReason != AgentFinishReasonFailed {
-		t.Errorf("expected TurnEnd finish reason %q, got %q", AgentFinishReasonFailed, turnEnd.FinishReason)
-	}
-	if turnEnd.SnapshotID != "" {
-		t.Errorf("failed turn must not snapshot its partial state, got snapshot %q", turnEnd.SnapshotID)
-	}
-
-	out, err := conn.Output()
-	if err != nil {
-		t.Fatalf("Output: %v", err)
-	}
-	if out.FinishReason != AgentFinishReasonFailed {
-		t.Errorf("expected finish reason %q, got %q", AgentFinishReasonFailed, out.FinishReason)
+		out, err := conn.Output()
+		if err != nil {
+			t.Fatalf("run %d: Output: %v", i, err)
+		}
+		if out.FinishReason != AgentFinishReasonFailed {
+			t.Fatalf("run %d: expected finish reason %q, got %q", i, AgentFinishReasonFailed, out.FinishReason)
+		}
 	}
 }
 
@@ -1424,6 +1490,21 @@ func TestAgent_SwallowedTurnErrorIsTheOutcome(t *testing.T) {
 		}
 		if out.Message != nil {
 			t.Errorf("Message = %v, want none on a failed output", out.Message)
+		}
+	})
+
+	t.Run("a turn stopped by a budget reports aborted", func(t *testing.T) {
+		overBudget := func(context.Context) (*TurnResult, error) {
+			return nil, status.Errorf(ai.ErrBudgetExceeded, "spent 10 of 5 tokens")
+		}
+		af := swallowing(t, "swallowBudget", newTestInMemStore[testState](), overBudget)
+		out, err := af.RunText(t.Context(), "go")
+		if err != nil {
+			t.Fatalf("RunText: %v", err)
+		}
+		// A limit the caller set stopped the turn; nothing broke.
+		if out.FinishReason != AgentFinishReasonAborted {
+			t.Errorf("FinishReason = %q, want %q", out.FinishReason, AgentFinishReasonAborted)
 		}
 	})
 
@@ -1790,6 +1871,65 @@ func TestAgent_TurnSpanOutput_WithSnapshots(t *testing.T) {
 	}
 	if got, want := state.Custom.Counter, snap.State.Custom.Counter; got != want {
 		t.Errorf("turn span state.custom.counter = %d, want %d (snapshot's counter)", got, want)
+	}
+}
+
+// TestAgent_CommittedFailedTurn_TurnSpanCarriesSnapshotID verifies that a
+// failed turn that committed tags its own turn span with the snapshot it
+// persisted and records that snapshot's state as the span output, as a
+// successful turn does, and does not tag the root agent span it ran under.
+func TestAgent_CommittedFailedTurn_TurnSpanCarriesSnapshotID(t *testing.T) {
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+	spans := collectSpans(t)
+
+	const agentName = "committedFailureSpanFlow"
+	af := defineCommittingFailureAgent(reg, agentName, WithSessionStore[testState](store))
+
+	out, err := af.RunText(ctx, "go")
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	if out.SnapshotID == "" {
+		t.Fatal("committed failure wrote no snapshot")
+	}
+
+	span := spans.byName("runTurn-1")
+	if span == nil {
+		t.Fatal("missing span runTurn-1")
+	}
+	got, ok := spanAttr(span, snapshotIDSpanAttrKey)
+	if !ok {
+		t.Fatalf("turn span: missing %s", snapshotIDSpanAttrKey)
+	}
+	if got != out.SnapshotID {
+		t.Errorf("turn span %s = %q, want %q (the failed turn's snapshot)", snapshotIDSpanAttrKey, got, out.SnapshotID)
+	}
+	// The turn span still records the failure.
+	if v, _ := spanAttr(span, "genkit:state"); v != "error" {
+		t.Errorf("turn span genkit:state = %q, want %q", v, "error")
+	}
+	// Its output is the state the failed turn's snapshot saved, as a
+	// committed success's is.
+	state := turnSpanState(t, span)
+	snap, err := store.GetSnapshot(ctx, out.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if got, want := state.Custom.Counter, snap.State.Custom.Counter; got != want || got != 5 {
+		t.Errorf("turn span state.custom.counter = %d, want %d (the failed turn's snapshot) and 5", got, want)
+	}
+	if got, want := len(state.Messages), len(snap.State.Messages); got != want {
+		t.Errorf("turn span len(state.messages) = %d, want %d (the failed turn's snapshot)", got, want)
+	}
+
+	root := spans.byName(agentName)
+	if root == nil {
+		t.Fatalf("missing root action span %q", agentName)
+	}
+	if v, ok := spanAttr(root, snapshotIDSpanAttrKey); ok {
+		t.Errorf("root span %q: unexpected %s = %q (want it on the turn span only)", agentName, snapshotIDSpanAttrKey, v)
 	}
 }
 
@@ -2763,6 +2903,36 @@ func TestValidateResumeAgainstHistory(t *testing.T) {
 			// 1, so a faithful restart is not mistaken for a forgery.
 			name:   "restart input matches across json number types",
 			resume: &ToolResume{Restart: restart("numeric", "r3", map[string]any{"a": 1})},
+		},
+		{
+			// A restart that revised the input (RestartWithInput) is
+			// accountable for the original it preserves, so a revision the
+			// person made before approving is not a forgery.
+			name: "restart with replaced input preserves the original",
+			resume: &ToolResume{Restart: func() []*ai.Part {
+				parts := restart("second", "r2", map[string]any{"b": "revised"})
+				parts[0].Restart = &ai.ToolRestart{OriginalInput: map[string]any{"b": "x"}}
+				return parts
+			}()},
+		},
+		{
+			// The same restart as a peer runtime sends it, with the original
+			// under the wire key.
+			name: "restart with replaced input under the wire key",
+			resume: &ToolResume{Restart: func() []*ai.Part {
+				parts := restart("second", "r2", map[string]any{"b": "revised"})
+				parts[0].Metadata = map[string]any{"replacedInput": map[string]any{"b": "x"}, "resumed": true}
+				return parts
+			}()},
+		},
+		{
+			name: "restart with replaced input forges the original",
+			resume: &ToolResume{Restart: func() []*ai.Part {
+				parts := restart("second", "r2", map[string]any{"b": "revised"})
+				parts[0].Restart = &ai.ToolRestart{OriginalInput: map[string]any{"b": "forged"}}
+				return parts
+			}()},
+			wantErr: "modified inputs",
 		},
 		{
 			// A kind-PartToolRequest part with a nil ToolRequest pointer (e.g.
@@ -4502,7 +4672,7 @@ func TestAgent_AbortedRunsResume(t *testing.T) {
 		}
 	})
 
-	t.Run("an uncommitted turn rolls back to its predecessor", func(t *testing.T) {
+	t.Run("an uncommitted turn rolls back its messages", func(t *testing.T) {
 		store := newTestInMemStore[testState]()
 		entered := make(chan struct{})
 		af := abortTestAgent(t, store, "attachedNoCommit", false, entered)
@@ -4525,14 +4695,14 @@ func TestAgent_AbortedRunsResume(t *testing.T) {
 		if out == nil {
 			t.Fatal("Output is nil, want the resume point beside the error")
 		}
-		// The stopped turn committed nothing, so it wrote no snapshot and the
-		// resume point stays the turn before it.
+		// The stopped turn committed nothing, so its row holds the messages
+		// of the turn before it.
 		snap, err := store.GetSnapshot(context.Background(), out.SnapshotID)
 		if err != nil {
 			t.Fatalf("GetSnapshot: %v", err)
 		}
-		if snap.Status != SnapshotStatusCompleted {
-			t.Errorf("snapshot status = %q, want the completed turn before the stop", snap.Status)
+		if snap.Status != SnapshotStatusAborted {
+			t.Errorf("snapshot status = %q, want %q", snap.Status, SnapshotStatusAborted)
 		}
 		for _, m := range snap.State.Messages {
 			if m.Text() == "second turn" {
@@ -7297,14 +7467,11 @@ func TestPromptAgent_ForwardsInterruptedFinishReason(t *testing.T) {
 }
 
 // TestPromptAgent_RestartInterruptsAgain_CommitsAsInterrupted pins the second
-// interrupt to the same landing as the first. [ai.Generate] reports a
-// restarted tool that interrupts again with a FAILED_PRECONDITION, because its
-// caller asked for a completed generation, and taking that at face value would
-// write a failed row whose documented recovery cannot work: the tip it holds
-// ends on a model message carrying an unanswered tool request, which is not a
-// turn seam, so re-attempting the turn sends the model a conversation no
-// provider accepts. Only Resume answers this row, exactly as for the first
-// interrupt.
+// interrupt to the same landing as the first: an interrupted turn with no
+// error, not a failed row. The tip ends on a model message carrying an
+// unanswered tool request, which is not a turn seam, so re-attempting the turn
+// would send the model a conversation no provider accepts. Only Resume answers
+// this row, exactly as for the first interrupt.
 func TestPromptAgent_RestartInterruptsAgain_CommitsAsInterrupted(t *testing.T) {
 	ctx := context.Background()
 	reg := registry.New()
@@ -8604,6 +8771,35 @@ func TestPromptAgent_InlineMessages_ConcurrentInvocations(t *testing.T) {
 	}
 }
 
+func TestPromptAgent_InlineMiddlewareFunc(t *testing.T) {
+	ctx := context.Background()
+	reg := setupPromptTestRegistry(t)
+
+	// The agent's turn runs the prompt action, which encodes the rendered
+	// request (MiddlewareRef config included) for output validation.
+	var called bool
+	mw := ai.MiddlewareFunc(func(ctx context.Context) (*ai.Hooks, error) {
+		return &ai.Hooks{
+			WrapGenerate: func(ctx context.Context, p *ai.GenerateParams, next ai.GenerateNext) (*ai.ModelResponse, error) {
+				called = true
+				return next(ctx, p)
+			},
+		}, nil
+	})
+
+	af := DefineAgent[testState](reg, "inlineMiddlewarePrompt", InlinePrompt{
+		ai.WithModelName("test/echo"),
+		ai.WithUse(mw),
+	})
+
+	if _, err := af.RunText(ctx, "hello"); err != nil {
+		t.Fatalf("RunText failed: %v", err)
+	}
+	if !called {
+		t.Error("inline middleware hook not called")
+	}
+}
+
 func TestAgent_SendNilInput_Rejected(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
@@ -8989,4 +9185,177 @@ func TestAgent_GetSnapshotMetadataOnly(t *testing.T) {
 			t.Errorf("%s: meta read shaped differently from the full read: meta=%+v full=%+v", name, meta, full)
 		}
 	}
+}
+
+// TestAgent_Usage pins who counts which model calls: a turn its own, the
+// invocation all of its turns, the session state the turns it keeps, and a
+// subagent none of its parent's.
+func TestAgent_Usage(t *testing.T) {
+	// setup defines a model that reports 10 input tokens per call and an
+	// agent whose turns call it as many times as the user message says.
+	// A turn sent "fail" calls it once and then fails without committing.
+	setup := func(t *testing.T, opts ...AgentOption[testState]) (*registry.Registry, *Agent[testState]) {
+		t.Helper()
+		reg := newTestRegistry(t)
+		ai.ConfigureFormats(reg)
+		defineTestModel(reg, "test/usage", nil, func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			return &ai.ModelResponse{
+				Message: ai.NewModelTextMessage("ok"),
+				Usage:   &ai.GenerationUsage{InputTokens: 10},
+			}, nil
+		})
+		af := DefineCustomAgent(reg, "counter",
+			func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+				return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+					text := input.Message.Content[0].Text
+					calls, _ := strconv.Atoi(text)
+					if text == "fail" {
+						calls = 1
+					}
+					for range calls {
+						if _, err := ai.Generate(ctx, reg, ai.WithModelName("test/usage"), ai.WithPrompt("go")); err != nil {
+							return nil, err
+						}
+					}
+					if text == "fail" {
+						return nil, errors.New("turn failed")
+					}
+					return nil, nil
+				})
+			},
+			opts...,
+		)
+		return reg, af
+	}
+	inputTokens := func(u *ai.GenerationUsage) int {
+		if u == nil {
+			return 0
+		}
+		return u.InputTokens
+	}
+
+	t.Run("turns, invocations, and the session each total their own calls", func(t *testing.T) {
+		_, af := setup(t)
+		conn, err := af.Connect(t.Context())
+		if err != nil {
+			t.Fatalf("Connect: %v", err)
+		}
+		var turns []int
+		for _, text := range []string{"2", "1"} {
+			sendText(t, conn, text)
+			for chunk, err := range conn.Receive() {
+				if err != nil {
+					t.Fatalf("Receive: %v", err)
+				}
+				if chunk.TurnEnd != nil {
+					turns = append(turns, inputTokens(chunk.TurnEnd.Usage))
+					break
+				}
+			}
+		}
+		conn.Close()
+		out, err := conn.Output()
+		if err != nil || out.Error != nil {
+			t.Fatalf("Output = (%+v, %v), want success", out.Error, err)
+		}
+		if !slices.Equal(turns, []int{20, 10}) {
+			t.Errorf("TurnEnd input tokens = %v, want [20 10]", turns)
+		}
+		if got := inputTokens(out.Usage); got != 30 {
+			t.Errorf("output input tokens = %d, want 30", got)
+		}
+
+		// The next invocation counts only its own calls; the session state
+		// carries on from the one it resumed.
+		next, err := af.RunText(t.Context(), "1", WithState(out.State))
+		if err != nil {
+			t.Fatalf("RunText: %v", err)
+		}
+		if got := inputTokens(next.Usage); got != 10 {
+			t.Errorf("next output input tokens = %d, want 10", got)
+		}
+		if got := inputTokens(next.State.Usage); got != 40 {
+			t.Errorf("next state input tokens = %d, want 40", got)
+		}
+	})
+
+	t.Run("a failed turn's spend stays in the ledger", func(t *testing.T) {
+		_, af := setup(t)
+		conn, err := af.Connect(t.Context())
+		if err != nil {
+			t.Fatalf("Connect: %v", err)
+		}
+		sendText(t, conn, "1")
+		sendText(t, conn, "fail")
+		conn.Close()
+		out, err := conn.Output()
+		if err != nil {
+			t.Fatalf("Output: %v", err)
+		}
+		if out.FinishReason != AgentFinishReasonFailed {
+			t.Fatalf("FinishReason = %q, want %q", out.FinishReason, AgentFinishReasonFailed)
+		}
+		// The failed turn's messages roll back, but its call was billed, so
+		// both the invocation and the resume state count it.
+		if got := inputTokens(out.Usage); got != 20 {
+			t.Errorf("output input tokens = %d, want 20", got)
+		}
+		if got := inputTokens(out.State.Usage); got != 20 {
+			t.Errorf("state input tokens = %d, want 20", got)
+		}
+	})
+
+	t.Run("a server-managed failed turn's spend stays in its row", func(t *testing.T) {
+		store := newTestInMemStore[testState]()
+		_, af := setup(t, WithSessionStore[testState](store))
+		conn, err := af.Connect(t.Context())
+		if err != nil {
+			t.Fatalf("Connect: %v", err)
+		}
+		sendText(t, conn, "1")
+		sendText(t, conn, "fail")
+		conn.Close()
+		out, err := conn.Output()
+		if err != nil {
+			t.Fatalf("Output: %v", err)
+		}
+		// The turn returned no TurnResult, so its messages roll back; the
+		// row it still writes is where the next invocation resumes.
+		row, err := store.GetSnapshot(t.Context(), out.SnapshotID)
+		if err != nil {
+			t.Fatalf("GetSnapshot: %v", err)
+		}
+		if got := inputTokens(row.State.Usage); got != 20 {
+			t.Errorf("row input tokens = %d, want 20", got)
+		}
+	})
+
+	t.Run("a subagent's calls stay out of its parent's usage", func(t *testing.T) {
+		reg, child := setup(t)
+		parent := DefineCustomAgent(reg, "parent",
+			func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+				return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+					out, err := child.RunText(ctx, "2")
+					if err != nil {
+						return nil, err
+					}
+					if got := inputTokens(out.Usage); got != 20 {
+						t.Errorf("child output input tokens = %d, want 20", got)
+					}
+					_, err = ai.Generate(ctx, reg, ai.WithModelName("test/usage"), ai.WithPrompt("go"))
+					return nil, err
+				})
+			},
+		)
+		out, err := parent.RunText(t.Context(), "go")
+		if err != nil {
+			t.Fatalf("RunText: %v", err)
+		}
+		if got := inputTokens(out.Usage); got != 10 {
+			t.Errorf("parent output input tokens = %d, want 10 (its own call only)", got)
+		}
+		if got := inputTokens(out.State.Usage); got != 10 {
+			t.Errorf("parent state input tokens = %d, want 10", got)
+		}
+	})
 }

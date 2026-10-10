@@ -107,7 +107,7 @@ type readArtifactOutput struct {
 }
 
 func newReadArtifactTool() ai.Tool {
-	return aix.NewTool("read_artifact",
+	return plainTool("read_artifact",
 		"Reads the content of a named artifact from the session. Use this to "+
 			"inspect artifacts produced by sub-agents or previously created artifacts.",
 		func(ctx context.Context, in readArtifactInput) (readArtifactOutput, error) {
@@ -134,7 +134,7 @@ type writeArtifactOutput struct {
 }
 
 func newWriteArtifactTool() ai.Tool {
-	return aix.NewTool("write_artifact",
+	return plainTool("write_artifact",
 		"Creates or updates a named artifact in the session. If an artifact with "+
 			"the same name already exists, it is replaced. Use this to produce "+
 			"files, reports, code, or other deliverables.",

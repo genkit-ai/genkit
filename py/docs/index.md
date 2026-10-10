@@ -31,10 +31,6 @@
 
 ::: genkit.Embedding
 
-::: genkit.BaseDataPoint
-
-::: genkit.EvalResponse
-
 ::: genkit.Operation
 
 ::: genkit.tool
@@ -45,21 +41,13 @@
 
 ::: genkit.Interrupt
 
-::: genkit.respond_to_interrupt
-
-::: genkit.restart_tool
-
-::: genkit.response
+::: genkit.tool_response
 
 ::: genkit.MultipartToolResponse
 
-::: genkit.Flow
-
 ::: genkit.ActionRunContext
 
-::: genkit.ExecutablePrompt
-
-::: genkit.PromptGenerateOptions
+::: genkit.Prompt
 
 ::: genkit.GenkitError
 
@@ -125,8 +113,6 @@
 
 ::: genkit.embedder.embedder_action_metadata
 
-::: genkit.embedder.embedder_ref
-
 ::: genkit.embedder.EmbedderRef
 
 ::: genkit.embedder.EmbedderSupports
@@ -145,19 +131,19 @@
 
 ::: genkit.plugin_api.StatusName
 
+::: genkit.plugin_api.provider_error
+
 ::: genkit.plugin_api.GENKIT_CLIENT_HEADER
 
 ::: genkit.plugin_api.loop_local_client
 
 ::: genkit.plugin_api.to_json_schema
 
-::: genkit.plugin_api.get_cached_client
-
-::: genkit.plugin_api.get_callable_json
-
 ::: genkit.plugin_api.is_dev_environment
 
 ## genkit.evaluator
+
+::: genkit.evaluator.BaseDataPoint
 
 ::: genkit.evaluator.EvalRequest
 
@@ -165,13 +151,11 @@
 
 ::: genkit.evaluator.Score
 
-::: genkit.evaluator.Details
+::: genkit.evaluator.ScoreDetails
 
-::: genkit.evaluator.EvalStatusEnum
+::: genkit.evaluator.ScoreStatus
 
 ::: genkit.evaluator.evaluator_action_metadata
-
-::: genkit.evaluator.evaluator_ref
 
 ::: genkit.evaluator.EvaluatorRef
 
