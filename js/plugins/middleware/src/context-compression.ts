@@ -210,7 +210,9 @@ export const ContextCompressionOptionsSchema = z.object({
    * dropped while preserving system messages. Any leading tool or model messages
    * at the truncation cutoff are also discarded to satisfy LLM API requirements
    * (ensuring history begins with a user turn and avoiding orphaned tool responses).
-   * The final message count will be at most `maxMessages`.
+   * The final message count will be at most `maxMessages`, except that the
+   * newest turn is always kept: when the system messages and the truncation
+   * notice fill the cap, the model still gets that turn.
    */
   maxMessages: z
     .number()
@@ -1567,8 +1569,10 @@ export const contextCompression: GenerateMiddleware<
 
       const noticeConsumesSlot =
         insertTruncationNotice && systemMessages.length === 0;
+      // The newest turn is kept even when the system messages and the notice
+      // fill the cap, since a model cannot answer a conversation without one.
       const keepCount = Math.max(
-        0,
+        1,
         cap - systemMessages.length - (noticeConsumesSlot ? 1 : 0)
       );
       let kept = keepCount === 0 ? [] : nonSystemMessages.slice(-keepCount);

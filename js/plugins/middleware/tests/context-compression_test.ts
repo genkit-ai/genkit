@@ -601,36 +601,54 @@ describe('contextCompression middleware', () => {
     assert.strictEqual(msgs[0].content[0].text, 'msg 2');
   });
 
-  it('handles keepCount === 0 without retaining all messages (slice(-0) guard)', async () => {
+  it('keeps the newest turn when maxMessages leaves no room after the system message or notice', async () => {
     const ai = genkit({});
     let capturedRequest: GenerateRequest | undefined;
-
-    const pm = ai.defineModel({ name: 'zeroKeepModel' }, async (req) => {
+    const pm = ai.defineModel({ name: 'fullCapModel' }, async (req) => {
       capturedRequest = req;
-      return {
-        message: { role: 'model', content: [{ text: 'done' }] },
-        usage: { inputTokens: 50 },
-      };
+      return { message: { role: 'model', content: [{ text: 'ok' }] } };
     });
 
     await ai.generate({
       model: pm,
       messages: [
-        { role: 'user', content: [{ text: 'msg 1' }] },
-        { role: 'model', content: [{ text: 'msg 2' }] },
+        { role: 'system', content: [{ text: 'sys' }] },
+        { role: 'user', content: [{ text: 'u0' }] },
+        { role: 'model', content: [{ text: 'm0' }] },
+        { role: 'user', content: [{ text: 'u1' }] },
       ],
-      use: [
-        contextCompression({
-          maxMessages: 1,
-          insertTruncationNotice: true,
-        }),
-      ],
+      use: [contextCompression({ maxMessages: 1 })],
     });
+    let msgs = capturedRequest!.messages;
+    assert.deepStrictEqual(
+      msgs.map((m) => m.role),
+      ['system', 'user']
+    );
+    assert.match(
+      msgs[0].content.map((p) => p.text).join(''),
+      /Some earlier messages in this conversation have been removed/
+    );
+    assert.strictEqual(msgs[1].content[0].text, 'u1');
 
-    const msgs = capturedRequest!.messages;
-    assert.strictEqual(msgs.length, 1);
-    assert.strictEqual(msgs[0].role, 'system');
-    assert.match(msgs[0].content[0].text!, /\[NOTE\] Some earlier messages/);
+    await ai.generate({
+      model: pm,
+      messages: [
+        { role: 'user', content: [{ text: 'u1' }] },
+        { role: 'model', content: [{ text: 'm2' }] },
+        { role: 'user', content: [{ text: 'u3' }] },
+      ],
+      use: [contextCompression({ maxMessages: 1 })],
+    });
+    msgs = capturedRequest!.messages;
+    assert.deepStrictEqual(
+      msgs.map((m) => m.role),
+      ['system', 'user']
+    );
+    assert.strictEqual(
+      msgs[0].metadata?.contextCompression?.standaloneNotice,
+      true
+    );
+    assert.strictEqual(msgs[1].content[0].text, 'u3');
   });
 
   it('does not re-truncate already truncated tool responses across turns (idempotency)', async () => {
