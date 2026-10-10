@@ -37,6 +37,9 @@ type Server struct {
 	// Models is the reply to a GET, the model listing. When empty, a GET
 	// fails with a server error.
 	Models string
+	// Usage, when set, is the usage of every answer, in place of 312
+	// input tokens and 48 output tokens.
+	Usage map[string]any
 	// Wrap, when set, wraps every answer in a server's envelope.
 	Wrap func(reply map[string]any) any
 
@@ -108,6 +111,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		"model":   "jev-1.13.0",
 		"answers": answers,
 		"usage":   map[string]any{"input_tokens": 312, "output_tokens": 48},
+	}
+	if s.Usage != nil {
+		reply["usage"] = s.Usage
 	}
 	var out any = reply
 	if s.Wrap != nil {

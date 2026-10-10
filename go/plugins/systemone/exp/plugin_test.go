@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -662,4 +663,75 @@ The state is a support ticket.
 	if got, _ := department["instructions"].(string); !strings.HasPrefix(got, "The state is a support ticket.") {
 		t.Errorf("instructions = %q, want the system message in front", got)
 	}
+}
+
+func TestOpenRouter(t *testing.T) {
+	fake := &systemonetest.Server{
+		Models: `{"data":[{"id":"liquid/d1","name":"Liquid: d1"},{"id":"typesafe/jev-1.13","name":"TypeSafe: Jev 1.13"}]}`,
+		Usage:  map[string]any{"input_tokens": 10, "output_tokens": 0, "cost": 0.0004},
+	}
+	srv := httptest.NewServer(fake)
+	t.Cleanup(srv.Close)
+	p := OpenRouter()
+	p.APIKey = "test-key"
+	p.BaseURL = srv.URL
+	g := genkit.Init(t.Context(), genkit.WithPlugins(p))
+
+	// Any ID OpenRouter serves goes out as it is, alias marks included.
+	for _, id := range []string{"liquid/d1", "~typesafe/jev-latest"} {
+		_, resp, err := genkit.GenerateData[triage](t.Context(), g, ai.WithModelName("openrouter-decisions/"+id), ai.WithPrompt("hi"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req, body := fake.Last(t)
+		if req.URL.Path != "/api/alpha/decisions" || body["model"] != id {
+			t.Errorf("request = %s model=%v, want the Decisions API with %s", req.URL.Path, body["model"], id)
+		}
+		if resp.Usage.Custom["cost"] != 0.0004 {
+			t.Errorf("usage = %+v, want the gateway's cost", resp.Usage)
+		}
+	}
+
+	// The listing is OpenRouter's models filtered to decision models, by
+	// ID, with the known models beside them.
+	known := []string{
+		"openrouter-decisions/cloudflare/clef", "openrouter-decisions/cloudflare/clef-flash",
+		"openrouter-decisions/liquid/d1", "openrouter-decisions/typesafe/jev-1.13",
+		"openrouter-decisions/~typesafe/jev-latest",
+	}
+	fake.Models = `{"data":[{"id":"liquid/d1","name":"Liquid: d1"},{"id":"upstage/solar-decide"}]}`
+	names := func(p *SystemOne) []string {
+		var names []string
+		for _, desc := range p.ListActions(t.Context()) {
+			names = append(names, desc.Name)
+		}
+		return names
+	}
+	if got, want := names(p), slices.Sorted(slices.Values(append(slices.Clone(known), "openrouter-decisions/upstage/solar-decide"))); !reflect.DeepEqual(got, want) {
+		t.Errorf("listed %v, want %v", got, want)
+	}
+	if got := fake.Listings(); len(got) == 0 || got[len(got)-1] != "/api/v1/models?output_modalities=decisions" {
+		t.Errorf("listings = %v, want OpenRouter's models filtered to decision models", got)
+	}
+
+	// With the listing down, the Dev UI still shows the known models.
+	down := httptest.NewServer(&systemonetest.Server{})
+	t.Cleanup(down.Close)
+	offline := OpenRouter()
+	offline.APIKey = "test-key"
+	offline.BaseURL = down.URL
+	genkit.Init(t.Context(), genkit.WithPlugins(offline))
+	if got := names(offline); !reflect.DeepEqual(got, known) {
+		t.Errorf("listed %v while offline, want the known models %v", got, known)
+	}
+}
+
+func TestOpenRouterRequiresAKey(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "")
+	defer func() {
+		if r := recover(); r == nil || !strings.Contains(r.(string), "OPENROUTER_API_KEY") {
+			t.Errorf("Init without a key: recovered %v, want a panic naming the variable", r)
+		}
+	}()
+	OpenRouter().Init(t.Context())
 }

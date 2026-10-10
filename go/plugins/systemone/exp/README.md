@@ -236,9 +236,14 @@ Models are named by the server they are reached through: the plugin's
 `Provider`, then the ID the server uses, so a model a server adds later works
 on the day it ships.
 
-| Constructor          | Models                   | Key                | Notes                              |
-| -------------------- | ------------------------ | ------------------ | ---------------------------------- |
-| `TypeSafe()`         | `typesafe/jev-1.13.0`    | `TYPESAFE_API_KEY` | `TYPESAFE_BASE_URL` is read too; lists models |
+| Constructor    | Models                                  | Key                  | Notes                                         |
+| -------------- | --------------------------------------- | -------------------- | --------------------------------------------- |
+| `TypeSafe()`   | `typesafe/jev-1.13.0`                   | `TYPESAFE_API_KEY`   | `TYPESAFE_BASE_URL` is read too; lists models |
+| `OpenRouter()` | `openrouter-decisions/liquid/d1`, `openrouter-decisions/typesafe/jev-1.13`, `openrouter-decisions/~typesafe/jev-latest` | `OPENROUTER_API_KEY` | alpha Decisions API; lists OpenRouter's decision models; cost in `resp.Usage.Custom["cost"]` |
+
+A gateway serves several vendors' models under one key, so one plugin reaches
+all of them. OpenRouter's is named `openrouter-decisions` because the plugin for
+its chat models already has `openrouter`, and an app often uses both.
 
 A constructor returns a `*SystemOne` set up for its server, and its fields can
 still be changed before `genkit.Init`, such as to pass a key from a secret
@@ -257,6 +262,24 @@ g := genkit.Init(ctx, genkit.WithPlugins(ts))
 out, resp, err := genkit.GenerateData[Triage](ctx, g,
 	ai.WithModelName("typesafe/jev-1.13.0"),
 	ai.WithPrompt(ticket))
+```
+
+### OpenRouter
+
+Models go by OpenRouter's IDs, and each response reports what the request cost.
+An alias that follows the latest release starts with a tilde, as
+`~typesafe/jev-latest` does; `typesafe/jev-latest` is not an ID.
+
+```go
+g := genkit.Init(ctx, genkit.WithPlugins(systemonex.OpenRouter())) // OPENROUTER_API_KEY
+
+out, resp, err := genkit.GenerateData[Triage](ctx, g,
+	ai.WithModelName("openrouter-decisions/liquid/d1"),
+	ai.WithPrompt(ticket))
+if err != nil {
+	return err
+}
+cost := resp.Usage.Custom["cost"] // in OpenRouter credits
 ```
 
 ### Any other server
@@ -346,4 +369,6 @@ data part.
 ## Tests
 
 `go test ./plugins/systemone/... ./plugins/internal/systemone/...` runs against
-a fake endpoint.
+a fake endpoint. With `OPENROUTER_API_KEY` set, `TestOpenRouterLive` runs the
+decision, guidance, enum, history, runtime-question, document, listing, and
+model-version paths against jev and d1 through OpenRouter.

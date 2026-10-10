@@ -778,7 +778,7 @@ Genkit provides a unified interface across all major AI providers. Use whichever
 | **Vertex AI Model Garden** | `modelgarden.Anthropic`, `.Llama`, `.Mistral` | Claude, Llama, and Mistral via Google Cloud |
 | **Ollama** | `ollama.Ollama` | Llama 4, Qwen 3, DeepSeek, and other local models |
 | **OpenAI Compatible** | `compat_oai` | GPT-5.6, Grok, DeepSeek, Qwen, Kimi, GLM, the OpenRouter gateway, and any OpenAI-compatible API |
-| **System One** *(preview)* | `systemonex.SystemOne`, `systemonex.TypeSafe()` | Decision models such as TypeSafe's jev and Liquid AI's d1, with calibrated answers ([README](plugins/systemone/exp/README.md)) |
+| **System One** *(preview)* | `systemonex.SystemOne`, `systemonex.TypeSafe()`, `systemonex.OpenRouter()` | Decision models such as TypeSafe's jev and Liquid AI's d1, with calibrated answers ([README](plugins/systemone/exp/README.md)) |
 
 ```go
 // Google AI

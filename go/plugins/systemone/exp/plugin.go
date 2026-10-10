@@ -350,3 +350,31 @@ func TypeSafe() *SystemOne {
 		},
 	}
 }
+
+// OpenRouter is OpenRouter's Decisions API, which serves several vendors'
+// decision models under one key. Its models are openrouter-decisions/<ID>
+// by OpenRouter's ID, such as openrouter-decisions/liquid/d1 and
+// openrouter-decisions/typesafe/jev-1.13. The name is not openrouter, which
+// the plugin for OpenRouter's chat models has, so both serve one app. The
+// API key comes from OPENROUTER_API_KEY. The Dev UI lists the models
+// OpenRouter lists as decision models, and the best known of them when the
+// listing fails, and a request's cost is reported in the response's usage.
+func OpenRouter() *SystemOne {
+	return &SystemOne{
+		Provider:   "openrouter-decisions",
+		Path:       "/api/alpha/decisions",
+		ModelsPath: "/api/v1/models?output_modalities=decisions",
+		Models: map[string]ModelSpec{
+			"cloudflare/clef":       {},
+			"cloudflare/clef-flash": {},
+			"liquid/d1":             {},
+			"typesafe/jev-1.13":     {},
+			"~typesafe/jev-latest":  {},
+		},
+		preset: preset{
+			label:     "OpenRouter",
+			apiKeyEnv: "OPENROUTER_API_KEY",
+			baseURL:   "https://openrouter.ai",
+		},
+	}
+}
