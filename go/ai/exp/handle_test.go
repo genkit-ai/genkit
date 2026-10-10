@@ -726,6 +726,10 @@ func (t *cappedWaitTransport) WaitForSnapshot(ctx context.Context, snapshotID st
 // not the outcome, so the handle asks again until the snapshot settles or ctx
 // ends.
 func TestAgentHandle_WaitForSnapshotAsksAgainUntilSettled(t *testing.T) {
+	restore := waitReaskFloor
+	waitReaskFloor = 10 * time.Millisecond
+	t.Cleanup(func() { waitReaskFloor = restore })
+
 	t.Run("settles", func(t *testing.T) {
 		tr := &cappedWaitTransport{settleAfter: 3}
 		h := &AgentHandle{name: "researcher", transport: tr}
@@ -749,6 +753,20 @@ func TestAgentHandle_WaitForSnapshotAsksAgainUntilSettled(t *testing.T) {
 		}
 		if tr.waits != 1 {
 			t.Errorf("waits = %d, want 1", tr.waits)
+		}
+	})
+	t.Run("an answer at once is not asked again in a hot loop", func(t *testing.T) {
+		waitReaskFloor = 50 * time.Millisecond
+		ctx, cancel := context.WithTimeout(context.Background(), 175*time.Millisecond)
+		defer cancel()
+		tr := &cappedWaitTransport{}
+		h := &AgentHandle{name: "researcher", transport: tr}
+		if _, err := h.WaitForSnapshot(ctx, "snap-1"); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("WaitForSnapshot error = %v, want context.DeadlineExceeded", err)
+		}
+		// One request per floor: at 0, 50, 100, and 150ms.
+		if tr.waits > 5 {
+			t.Errorf("waits = %d in 175ms, want at most one per 50ms", tr.waits)
 		}
 	})
 }

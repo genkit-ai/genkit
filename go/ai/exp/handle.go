@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
@@ -335,6 +336,7 @@ func (h *AgentHandle) WaitForSnapshot(ctx context.Context, snapshotID string) (*
 		return nil, status.Errorf(status.ErrInvalidArgument, "agent %q: WaitForSnapshot: snapshotID is required", h.name)
 	}
 	for {
+		start := time.Now()
 		snap, err := h.transport.WaitForSnapshot(ctx, snapshotID)
 		if err != nil {
 			return nil, err
@@ -342,11 +344,21 @@ func (h *AgentHandle) WaitForSnapshot(ctx context.Context, snapshotID string) (*
 		if snap.Status.Terminal() {
 			return snap, nil
 		}
-		if err := ctx.Err(); err != nil {
-			return nil, err
+		// A transport that answers at once, such as a plain read or a server
+		// that answers pending without waiting, must not make this a hot loop.
+		timer := time.NewTimer(max(0, waitReaskFloor-time.Since(start)))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
 		}
 	}
 }
+
+// waitReaskFloor is the least time between the starts of two wait requests in
+// [AgentHandle.WaitForSnapshot]. Package-level so tests can shorten it.
+var waitReaskFloor = time.Second
 
 // GetLatestSnapshot fetches a session's most recently created snapshot
 // (whatever its status) through the agent's getSnapshot companion action, with
