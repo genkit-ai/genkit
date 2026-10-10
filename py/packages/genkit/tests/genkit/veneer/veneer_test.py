@@ -1973,6 +1973,13 @@ def test_eval_response_one_score_in_code_becomes_one_item_list() -> None:
     assert row.evaluation == [Score(id='accuracy', score=0.9)]
 
 
+def test_eval_response_tuple_of_scores_becomes_list() -> None:
+    """Building EvalFnResponse(evaluation=(Score(...),)) in code gives evaluation as a list."""
+    row = EvalFnResponse(test_case_id='case1', evaluation=(Score(id='accuracy', score=0.9),))  # type: ignore[arg-type]
+
+    assert row.evaluation == [Score(id='accuracy', score=0.9)]
+
+
 @pytest.mark.asyncio
 async def test_evaluator_returning_one_score_reads_back_as_one_item_list(setup_test: SetupFixture) -> None:
     """An evaluator that returns evaluation=Score(...) gives each row a one-item score list."""
