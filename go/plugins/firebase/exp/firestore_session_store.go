@@ -21,12 +21,24 @@
 // Firestore. It resolves its Firestore client from the Firebase plugin
 // registered with the Genkit instance, then wires into an agent:
 //
-//	g := genkit.Init(ctx, genkit.WithPlugins(&firebase.Firebase{ProjectId: "my-project"}))
+//	g := genkit.Init(ctx,
+//		genkit.WithPlugins(
+//			&firebase.Firebase{ProjectId: "my-project"},
+//			&googlegenai.GoogleAI{},
+//		),
+//		genkit.WithExperimental(),
+//	)
 //
-//	store, err := exp.NewFirestoreSessionStore[MyState](ctx, g)
+//	store, err := firebasex.NewFirestoreSessionStore[MyState](ctx, g)
 //	// handle err
 //
-//	agent := aix.DefineAgent(g, "assistant", run, aix.WithSessionStore(store))
+//	agent := genkitx.DefineAgent(g, "assistant",
+//		aix.InlinePrompt{
+//			ai.WithModelName("googleai/gemini-flash-latest"),
+//			ai.WithSystem("You are a helpful assistant."),
+//		},
+//		aix.WithSessionStore(store),
+//	)
 //
 // APIs in this package are under active development and may change in any minor
 // version release. Use with caution in production environments.
