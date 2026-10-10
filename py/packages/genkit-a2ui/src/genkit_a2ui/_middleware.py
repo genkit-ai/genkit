@@ -27,7 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from genkit import FinishReason, Message, ModelResponse, ModelResponseChunk, Part, Role
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
-from genkit.model import ModelRequest
+from genkit.model import ABNORMAL_FINISH_REASONS, ModelRequest
 
 from ._catalog import A2uiCatalog, render_catalog_instructions
 from ._loader import resolve_catalog
@@ -41,14 +41,7 @@ from ._types import DEFAULT_VERSION, SURFACE_KEYS, Envelope, SupportedVersion, V
 # unrecognized provider reasons to it, so core keeps validating in case the
 # model finished, while a turn that may have stopped mid-fence would paint a
 # half-written card.
-SKIP_REWRITE_FINISH_REASONS = frozenset({
-    FinishReason.BLOCKED,
-    FinishReason.ABORTED,
-    FinishReason.FAILED,
-    FinishReason.INTERRUPTED,
-    FinishReason.OTHER,
-    FinishReason.UNKNOWN,
-})
+SKIP_REWRITE_FINISH_REASONS = ABNORMAL_FINISH_REASONS | {FinishReason.UNKNOWN}
 
 
 class SurfacesConfig(BaseModel):

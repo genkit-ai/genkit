@@ -36,7 +36,7 @@ from collections.abc import Callable
 from typing import Any, Protocol, runtime_checkable
 
 from genkit._core._action import Action, ActionKind
-from genkit._core._model import Artifact, Message
+from genkit._core._model import Artifact, Message, ModelRequest, ModelResponse, ModelResponseChunk
 
 
 @runtime_checkable
@@ -106,10 +106,11 @@ class SessionLike(Protocol):
 class GenkitLike(Protocol):
     """Structural interface for the Genkit instance exposed on middleware context.
 
-    Lookups see this generate call's own registrations first, then the app's.
+    ``lookup_model`` sees the app's models. ``lookup_value`` sees the app's
+    values plus middleware registered for this generate call by ``use=[...]``.
     """
 
-    async def lookup_model(self, name: str) -> Action | None:
+    async def lookup_model(self, name: str) -> Action[ModelRequest, ModelResponse, ModelResponseChunk] | None:
         """Return the model action registered under ``name``, or None."""
         ...
 

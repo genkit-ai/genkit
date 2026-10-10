@@ -23,8 +23,8 @@ from typing import Any, cast
 
 from pydantic import BaseModel, Field, field_validator
 
-from genkit import GenkitError, ModelResponse
-from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams, StreamingCallbackError
+from genkit import GenkitError, ModelResponse, ModelResponseChunk
+from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams, is_streaming_callback_error
 from genkit.model import ModelRef, ModelRequest
 from genkit.plugin_api import Action
 from genkit_middleware._statuses import TRANSIENT_STATUSES
@@ -92,7 +92,7 @@ class Fallback(BaseMiddleware[FallbackConfig]):
         self,
         ctx: GenerateMiddlewareContext,
         model_name: str,
-    ) -> Action[Any, Any, Any]:
+    ) -> Action[ModelRequest, ModelResponse, ModelResponseChunk]:
         """Look up a fallback model on the per-call registry."""
         action = await ctx.ai.lookup_model(model_name)
         if action is None:
@@ -150,6 +150,6 @@ class Fallback(BaseMiddleware[FallbackConfig]):
         # The caller's own on_chunk failure never switches models. A raw
         # exception has no status, so it also stays on this model. Only a
         # listed GenkitError status sends the request on.
-        if isinstance(exc, StreamingCallbackError):
+        if is_streaming_callback_error(exc):
             return False
         return isinstance(exc, GenkitError) and exc.status in self.config.statuses

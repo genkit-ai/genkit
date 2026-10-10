@@ -544,7 +544,7 @@ async def test_reflection_run_evaluator_returns_json_array_of_rows(evaluator: st
 async def test_reflection_run_slash_retriever_key_returns_404() -> None:
     """Running '/retriever/x' from the Dev UI gets a 404 'Action not found', not a server error."""
     ai = Genkit()
-    client = await _registry_asgi_client(ai.registry)
+    client = await _registry_asgi_client(ai._registry)
     try:
         response = await client.post('/api/runAction', json={'key': '/retriever/x', 'input': 'q'})
     finally:
@@ -564,7 +564,7 @@ async def test_reflection_run_unparseable_key_returns_404(key: str) -> None:
     async def x() -> str:
         return 'ok'
 
-    client = await _registry_asgi_client(ai.registry)
+    client = await _registry_asgi_client(ai._registry)
     try:
         response = await client.post('/api/runAction', json={'key': key, 'input': None})
     finally:

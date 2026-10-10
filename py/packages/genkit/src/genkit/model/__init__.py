@@ -23,6 +23,7 @@ from genkit._ai._model import (
 )
 from genkit._core._background import BackgroundAction, background_model
 from genkit._core._model import (
+    ABNORMAL_FINISH_REASONS,
     Candidate,
     GenerateActionOptions,
     ModelConfig,
@@ -44,6 +45,8 @@ from genkit._core._typing import (
 )
 
 __all__ = [
+    # Finish reasons core won't parse structured output for
+    'ABNORMAL_FINISH_REASONS',
     # Request types
     'BackgroundAction',
     'GenerateActionOptions',

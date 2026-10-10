@@ -12,7 +12,7 @@ at ``context.secrets``.
 """
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
@@ -850,7 +850,8 @@ async def test_model_action_run_directly_with_config_api_key_raises(request_inpu
     assert action is not None
 
     with pytest.raises(GenkitError) as err:
-        await action.run(request_input)
+        # Wire-shaped inputs on purpose: run() validates whatever it is handed.
+        await action.run(cast(Any, request_input))
 
     _assert_points_to_secrets(err, fn)
 

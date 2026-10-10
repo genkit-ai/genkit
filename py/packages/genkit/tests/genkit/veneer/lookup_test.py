@@ -5,12 +5,13 @@
 
 """What app code and middleware get back from lookup_model, lookup_value, and define_value."""
 
+import re
 from collections.abc import Awaitable, Callable
 
 import pytest
 
-from genkit import ActionRunContext, FinishReason, Genkit, Message, ModelResponse, Part, Role
-from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
+from genkit import ActionRunContext, FinishReason, Genkit, Message, ModelResponse, Operation, Part, Role
+from genkit.middleware import BaseMiddleware, GenerateMiddleware, GenerateMiddlewareContext, ModelHookParams
 from genkit.model import ModelRequest, model
 from genkit.plugin_api import Action, ActionKind, ActionMetadata, Plugin
 
@@ -185,24 +186,82 @@ async def test_middleware_ctx_lookup_value_sees_app_value() -> None:
 
 @pytest.mark.asyncio
 async def test_middleware_ctx_has_no_registry_attribute() -> None:
-    """`ctx.ai.registry` raises AttributeError inside middleware; the call still finishes normally."""
+    """`ctx.ai` exposes lookups only; there is no `registry` attribute to reach around them."""
     ai = Genkit()
     _define_answering_model(ai, 'test/echo', 'from echo')
-    errors: list[BaseException] = []
+    has_registry: list[bool] = []
 
     class PeekRegistry(BaseMiddleware):
         async def wrap_model(
             self, params: ModelHookParams, ctx: GenerateMiddlewareContext, next_fn: NextModel
         ) -> ModelResponse:
-            try:
-                _ = ctx.ai.registry  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
-            except AttributeError as exc:
-                errors.append(exc)
+            has_registry.append(hasattr(ctx.ai, 'registry'))
             return await next_fn(params, ctx)
 
-    response = await ai.generate(model='test/echo', prompt='hi', use=[PeekRegistry()])
+    await ai.generate(model='test/echo', prompt='hi', use=[PeekRegistry()])
 
-    assert response.finish_reason == FinishReason.STOP
-    assert response.text == 'from echo'
-    assert len(errors) == 1
-    assert isinstance(errors[0], AttributeError)
+    assert has_registry == [False]
+
+
+@pytest.mark.asyncio
+async def test_middleware_ctx_lookup_value_sees_this_calls_middleware(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Inline `use=[Mw()]` registers on the call's child registry: `ctx.ai` sees it, `ai` doesn't."""
+    monkeypatch.setattr('genkit._ai._generate.secrets.token_hex', lambda _n: 'fixed')
+    reg_name = 'dynamic-middleware-0-fixed'
+    ai = Genkit()
+    _define_answering_model(ai, 'test/echo', 'from echo')
+    seen: list[object | None] = []
+
+    class FindSelf(BaseMiddleware):
+        async def wrap_model(
+            self, params: ModelHookParams, ctx: GenerateMiddlewareContext, next_fn: NextModel
+        ) -> ModelResponse:
+            seen.append(ctx.ai.lookup_value(kind='middleware', name=reg_name))
+            seen.append(ai.lookup_value(kind='middleware', name=reg_name))
+            return await next_fn(params, ctx)
+
+    await ai.generate(model='test/echo', prompt='hi', use=[FindSelf()])
+
+    assert isinstance(seen[0], GenerateMiddleware)
+    assert seen[1] is None
+
+
+@pytest.mark.parametrize(
+    ('kind', 'api'),
+    [('middleware', 'define_middleware'), ('format', 'define_format'), ('defaultModel', 'Genkit(model=...)')],
+)
+def test_define_value_rejects_kinds_genkit_owns(kind: str, api: str) -> None:
+    """`define_value` on a kind core reads with a fixed type raises and names the API to use."""
+    ai = Genkit()
+
+    with pytest.raises(ValueError, match=f'reserved; use {re.escape(api)}'):
+        ai.define_value(kind=kind, name='audit', value={'not': 'the right type'})
+
+    assert ai.lookup_value(kind=kind, name='audit') is None
+
+
+def test_define_value_rejects_none() -> None:
+    """`define_value(value=None)` raises, so None from `lookup_value` always means "not defined"."""
+    ai = Genkit()
+
+    with pytest.raises(ValueError, match='must not be None'):
+        ai.define_value(kind='catalog', name='banner', value=None)
+
+    ai.define_value(kind='catalog', name='banner', value='later')
+    assert ai.lookup_value(kind='catalog', name='banner') == 'later'
+
+
+@pytest.mark.asyncio
+async def test_lookup_model_does_not_return_background_models() -> None:
+    """A background model runs through `generate_operation`, so `lookup_model` returns None for it."""
+    ai = Genkit()
+
+    async def start(request: ModelRequest, ctx: ActionRunContext) -> Operation:
+        return Operation(id='op-1')
+
+    async def check(operation: Operation, ctx: ActionRunContext) -> Operation:
+        return operation
+
+    ai.define_background_model('veo', start=start, check=check)
+
+    assert await ai.lookup_model('veo') is None

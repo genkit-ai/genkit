@@ -497,3 +497,33 @@ async def test_retry_waits_out_the_backoff_when_caller_has_not_stopped(
     assert time.monotonic() - started >= 0.2
     assert result is success
     assert call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_retry_does_not_retry_when_model_wraps_the_callers_on_chunk_failure() -> None:
+    """A model that re-raises the caller's on_chunk failure as UNAVAILABLE is still called once."""
+    ai = Genkit()
+    calls = 0
+
+    async def wraps_stream_errors(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        nonlocal calls
+        calls += 1
+        try:
+            ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('partial')]))
+        except Exception as e:
+            raise GenkitError(status='UNAVAILABLE', message='stream broke') from e
+        return ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('done')]),
+        )
+
+    ai.define_model(name='wraps', fn=wraps_stream_errors)
+
+    def on_chunk(_: object) -> None:
+        raise ValueError('model sink closed')
+
+    prompt = ai.define_prompt(model='wraps', prompt='hi')
+    response = await prompt(on_chunk=on_chunk, use=[Retry(max_retries=2, initial_delay_ms=0, no_jitter=True)])
+
+    assert calls == 1
+    assert response.finish_reason == FinishReason.FAILED

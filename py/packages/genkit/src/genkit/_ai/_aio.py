@@ -45,6 +45,7 @@ from genkit._ai._evaluator import (
 from genkit._ai._formats._builtin import built_in_formats
 from genkit._ai._formats._types import FormatDef
 from genkit._ai._generate import (
+    ScopedGenkitView,
     define_generate_action,
     generate_action,
     register_middleware,
@@ -101,6 +102,7 @@ from genkit._core._model import (
     ModelConfigDict,
     ModelRef,
     ModelRefConfigT,
+    ModelRequest,
     Part,
     ToolChoice,
 )
@@ -142,6 +144,13 @@ ChunkT = TypeVar('ChunkT')
 R = TypeVar('R')
 T = TypeVar('T')
 MiddlewareT = TypeVar('MiddlewareT', bound=BaseMiddleware)
+
+# Value kinds core reads with a fixed type, and the API that registers each.
+_CORE_VALUE_KINDS: dict[str, str] = {
+    'middleware': 'define_middleware',
+    'format': 'define_format',
+    'defaultModel': 'Genkit(model=...)',
+}
 
 _DOCUMENT_METADATA_CONFLICT = (
     'metadata= applies to string content only. A Document carries its own metadata; set it on the Document instead.'
@@ -600,25 +609,32 @@ class Genkit:
         """Register a custom output format."""
         self._registry.register_value('format', format.name, format)
 
-    async def lookup_model(self, name: str) -> Action | None:
+    async def lookup_model(self, name: str) -> Action[ModelRequest, ModelResponse, ModelResponseChunk] | None:
         """Return the model action registered under ``name``, or None.
 
         Plugin models that haven't been used yet are resolved through the
         plugin, so ``'googleai/gemini-flash-latest'`` works before any
-        generate call.
+        generate call. Background models aren't included; they run through
+        ``generate_operation``.
         """
-        return await self._registry.resolve_action(ActionKind.MODEL, name)
+        return await ScopedGenkitView(self._registry).lookup_model(name)
 
     def lookup_value(self, *, kind: str, name: str) -> object | None:
         """Return the value defined under ``kind`` and ``name``, or None."""
-        return self._registry.lookup_value(kind, name)
+        return ScopedGenkitView(self._registry).lookup_value(kind=kind, name=name)
 
     def define_value(self, *, kind: str, name: str, value: object) -> None:
         """Store ``value`` under ``kind`` and ``name`` for later ``lookup_value``.
 
         Raises:
-            ValueError: A value is already defined under this kind and name.
+            ValueError: ``kind`` is one Genkit owns (use ``define_middleware``,
+                ``define_format``, or ``Genkit(model=...)``), ``value`` is None,
+                or a value is already defined under this kind and name.
         """
+        if kind in _CORE_VALUE_KINDS:
+            raise ValueError(f'define_value kind {kind!r} is reserved; use {_CORE_VALUE_KINDS[kind]} instead.')
+        if value is None:
+            raise ValueError('define_value value must not be None; lookup_value returns None for "not defined".')
         self._registry.register_value(kind, name, value)
 
     # Overload 1: Both input_schema and output_schema typed -> Prompt[InputT, OutputT]

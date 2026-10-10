@@ -145,6 +145,17 @@ def streaming_callback_cause(*, exc: BaseException) -> Exception | None:
     return None
 
 
+def is_streaming_callback_error(exc: BaseException) -> bool:
+    """True when ``exc`` is, or was raised from, the caller's streaming callback failing.
+
+    Walks ``__cause__`` like core does, so a model plugin that re-raises
+    ``GenkitError(status='UNAVAILABLE') from e`` around its stream loop still
+    counts. Retry and fallback middleware use this to leave the caller's own
+    failure alone.
+    """
+    return streaming_callback_cause(exc=exc) is not None
+
+
 class ModelContractError(GenkitError):
     """A model action returned a value its registered kind cannot use."""
 
@@ -253,18 +264,22 @@ async def run_logged_hook(
 
 @dataclass(frozen=True)
 class ScopedGenkitView:
-    """A GenkitLike view over the call-scoped registry for one generate invocation.
+    """Read-only lookups over one registry. ``Genkit`` and ``ctx.ai`` both use it.
 
-    Middleware lookups should see this call's own tools and middleware on top
-    of the app's, so ``ctx.ai`` reads the per-call child registry instead of
-    the full Genkit veneer.
+    ``ctx.ai`` wraps this generate call's child registry, so ``lookup_value``
+    also sees middleware registered by ``use=[...]`` for this call. ``Genkit``
+    wraps the app's root registry, so the two never diverge.
     """
 
     _registry: RegistryLike
 
-    async def lookup_model(self, name: str) -> Action | None:
-        """Return the model action registered under ``name``, or None."""
-        return await self._registry.resolve_action(ActionKind.MODEL, name)
+    async def lookup_model(self, name: str) -> Action[ModelRequest, ModelResponse, ModelResponseChunk] | None:
+        """Return the model action registered under ``name``, or None.
+
+        Background models aren't included; they run through ``generate_operation``.
+        """
+        action = await self._registry.resolve_action(ActionKind.MODEL, name)
+        return cast(Action[ModelRequest, ModelResponse, ModelResponseChunk], action) if action is not None else None
 
     def lookup_value(self, *, kind: str, name: str) -> object | None:
         """Return the value defined under ``kind`` and ``name``, or None."""
