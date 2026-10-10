@@ -199,7 +199,6 @@ class Genkit:
             plugins: list[Plugin] | None = None,
             model: ModelArg | None = None,
             prompt_dir: str | Path | None = None,
-            reflection_server_spec: ServerSpec | None = None,
         ) -> None: ...
 
     else:
@@ -212,7 +211,6 @@ class Genkit:
             plugins: list[Plugin] | None = None,
             model: ModelArg | None = None,
             prompt_dir: str | Path | None = None,
-            reflection_server_spec: ServerSpec | None = None,
         ) -> None:
             if args:
                 raise TypeError(
@@ -222,14 +220,11 @@ class Genkit:
             # Before anything that logs, so plugin initialization is covered too.
             configure_logging()
             self.registry = Registry()
-            self._reflection_server_spec = reflection_server_spec
+            self._reflection_server_spec = None
             # The reflection API runs under GENKIT_ENV=dev, or in any environment
             # with GENKIT_REFLECTION_ENABLED=true. Resolving here keeps an invalid
             # setting a constructor-time error.
-            self._reflection_config = resolve_reflection_config(
-                port=reflection_server_spec.port if reflection_server_spec else None,
-                host=reflection_server_spec.host if reflection_server_spec else None,
-            )
+            self._reflection_config = resolve_reflection_config()
             self._reflection_ready = threading.Event()
             # Set when the reflection thread exits for any reason (v2 auth
             # rejection, server crash), so run_main stops waiting on nothing.

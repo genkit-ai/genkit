@@ -122,36 +122,10 @@ def test_dev_probes_from_3100() -> None:
     )
 
 
-def test_env_port_beats_the_programmatic_one() -> None:
-    config = resolve_reflection_config({'GENKIT_ENV': 'dev', 'GENKIT_REFLECTION_PORT': '4200'}, port=9999)
-    assert (config.port, config.pinned) == (4200, True)
-
-
-def test_programmatic_port_is_pinned() -> None:
-    config = resolve_reflection_config({'GENKIT_ENV': 'dev'}, port=9999)
-    assert (config.port, config.pinned) == (9999, True)
-
-
-def test_unset_programmatic_port_probes_from_3100() -> None:
-    config = resolve_reflection_config({'GENKIT_ENV': 'dev'}, port=None)
-    assert (config.port, config.pinned) == (DEFAULT_REFLECTION_PORT, False)
-
-
-def test_programmatic_zero_matches_env_zero() -> None:
-    # 0 lets the OS pick, as with socket.bind and GENKIT_REFLECTION_PORT=0.
-    option_zero = resolve_reflection_config({'GENKIT_ENV': 'dev'}, port=0)
-    env_zero = resolve_reflection_config({'GENKIT_ENV': 'dev', 'GENKIT_REFLECTION_PORT': '0'})
-    assert (option_zero.port, option_zero.pinned) == (env_zero.port, env_zero.pinned) == (0, True)
-
-
-def test_programmatic_port_does_not_turn_it_on() -> None:
-    assert resolve_reflection_config({}, port=9999).mode == 'off'
-
-
-@pytest.mark.parametrize('port', [-1, 70000, True])
-def test_invalid_programmatic_port_raises_even_when_off(port: int) -> None:
-    with pytest.raises(ValueError, match='reflection port'):
-        resolve_reflection_config({}, port=port)
+def test_env_port_zero_lets_the_os_pick() -> None:
+    # 0 lets the OS pick, as with socket.bind.
+    config = resolve_reflection_config({'GENKIT_ENV': 'dev', 'GENKIT_REFLECTION_PORT': '0'})
+    assert (config.port, config.pinned) == (0, True)
 
 
 @pytest.mark.parametrize(
@@ -167,23 +141,6 @@ def test_invalid_programmatic_port_raises_even_when_off(port: int) -> None:
 )
 def test_advertised_reflection_host(host: str, expected: str) -> None:
     assert advertised_reflection_host(host) == expected
-
-
-def test_programmatic_host_is_used_when_env_host_is_unset() -> None:
-    config = resolve_reflection_config({'GENKIT_ENV': 'dev'}, host=ALL_INTERFACES)
-    assert config.host == ALL_INTERFACES
-
-
-def test_env_host_beats_the_programmatic_one() -> None:
-    config = resolve_reflection_config(
-        {'GENKIT_ENV': 'dev', 'GENKIT_REFLECTION_HOST': '127.0.0.2'},
-        host=ALL_INTERFACES,
-    )
-    assert config.host == '127.0.0.2'
-
-
-def test_programmatic_host_does_not_turn_it_on() -> None:
-    assert resolve_reflection_config({}, host=ALL_INTERFACES).mode == 'off'
 
 
 @pytest.mark.parametrize(

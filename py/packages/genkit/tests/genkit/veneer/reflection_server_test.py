@@ -27,13 +27,19 @@ from websockets.asyncio.server import serve
 
 from genkit import Genkit
 from genkit._core._environment import GENKIT_ENV, GenkitEnvironment
-from genkit._core._reflection import ServerSpec
 
 
 def _find_free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(('127.0.0.1', 0))
         return s.getsockname()[1]
+
+
+def _genkit_on_port(port: int) -> Genkit:
+    """Genkit() with reflection pinned to 127.0.0.1:port through the environment, as apps do."""
+    env = {'GENKIT_REFLECTION_HOST': '127.0.0.1', 'GENKIT_REFLECTION_PORT': str(port)}
+    with mock.patch.dict(os.environ, env):
+        return Genkit()
 
 
 def _wait_and_get(ai: Genkit, path: str) -> httpx.Response:
@@ -50,7 +56,7 @@ def test_server_starts_on_construction() -> None:
     """
     port = _find_free_port()
     with mock.patch.dict(os.environ, {GENKIT_ENV: GenkitEnvironment.DEV}):
-        ai = Genkit(reflection_server_spec=ServerSpec(scheme='http', host='127.0.0.1', port=port))
+        ai = _genkit_on_port(port)
         resp = _wait_and_get(ai, '/api/__health')
     assert resp.status_code == 200
 
@@ -64,7 +70,7 @@ def test_flow_registered_after_construction_is_visible() -> None:
     """
     port = _find_free_port()
     with mock.patch.dict(os.environ, {GENKIT_ENV: GenkitEnvironment.DEV}):
-        ai = Genkit(reflection_server_spec=ServerSpec(scheme='http', host='127.0.0.1', port=port))
+        ai = _genkit_on_port(port)
 
         @ai.flow()
         async def greet(name: str) -> str:
@@ -88,7 +94,7 @@ def test_registry_reads_concurrent_with_writes() -> None:
     errors: list[Exception] = []
 
     with mock.patch.dict(os.environ, {GENKIT_ENV: GenkitEnvironment.DEV}):
-        ai = Genkit(reflection_server_spec=ServerSpec(scheme='http', host='127.0.0.1', port=port))
+        ai = _genkit_on_port(port)
         assert ai._reflection_ready.wait(timeout=5)  # pyright: ignore[reportPrivateUsage]
 
         stop = threading.Event()
@@ -125,8 +131,8 @@ def test_two_instances_serve_concurrently() -> None:
     """Two Genkit() instances in the same process don't interfere with each other."""
     port1, port2 = _find_free_port(), _find_free_port()
     with mock.patch.dict(os.environ, {GENKIT_ENV: GenkitEnvironment.DEV}):
-        ai1 = Genkit(reflection_server_spec=ServerSpec(scheme='http', host='127.0.0.1', port=port1))
-        ai2 = Genkit(reflection_server_spec=ServerSpec(scheme='http', host='127.0.0.1', port=port2))
+        ai1 = _genkit_on_port(port1)
+        ai2 = _genkit_on_port(port2)
 
         assert ai1._reflection_ready.wait(timeout=5)  # pyright: ignore[reportPrivateUsage]
         assert ai2._reflection_ready.wait(timeout=5)  # pyright: ignore[reportPrivateUsage]
@@ -161,23 +167,23 @@ def test_serves_on_ipv6_loopback() -> None:
     assert spec.host == '[::1]'
 
 
-def test_programmatic_port_is_bound_exactly() -> None:
-    """ServerSpec(port=N) binds N, and a taken N fails instead of shifting."""
+def test_pinned_port_is_bound_exactly() -> None:
+    """GENKIT_REFLECTION_PORT=N binds N, and a taken N fails instead of shifting."""
     port = _find_free_port()
     with mock.patch.dict(os.environ, {GENKIT_ENV: GenkitEnvironment.DEV}, clear=True):
-        ai = Genkit(reflection_server_spec=ServerSpec(scheme='http', host='127.0.0.1', port=port))
+        ai = _genkit_on_port(port)
         assert _wait_and_get(ai, '/api/__health').status_code == 200
         spec = ai._reflection_server_spec  # pyright: ignore[reportPrivateUsage]
         assert spec is not None
         assert spec.port == port
         with pytest.raises(OSError):
-            Genkit(reflection_server_spec=ServerSpec(scheme='http', host='127.0.0.1', port=port))
+            _genkit_on_port(port)
 
 
-def test_programmatic_port_zero_lets_the_os_pick() -> None:
-    """ServerSpec(port=0) binds an OS-assigned port, like socket.bind and GENKIT_REFLECTION_PORT=0."""
+def test_port_zero_lets_the_os_pick() -> None:
+    """GENKIT_REFLECTION_PORT=0 binds an OS-assigned port, like socket.bind."""
     with mock.patch.dict(os.environ, {GENKIT_ENV: GenkitEnvironment.DEV}, clear=True):
-        ai = Genkit(reflection_server_spec=ServerSpec(scheme='http', host='127.0.0.1', port=0))
+        ai = _genkit_on_port(0)
         assert _wait_and_get(ai, '/api/__health').status_code == 200
         spec = ai._reflection_server_spec  # pyright: ignore[reportPrivateUsage]
         assert spec is not None
@@ -265,7 +271,7 @@ def test_ready_message_in_dev_mentions_the_dev_ui() -> None:
     """Under dev the runtime file is written, so the Dev UI can find the runtime."""
     port = _find_free_port()
     with mock.patch.dict(os.environ, {GENKIT_ENV: GenkitEnvironment.DEV}):
-        ai = Genkit(reflection_server_spec=ServerSpec(scheme='http', host='127.0.0.1', port=port))
+        ai = _genkit_on_port(port)
         message = ai._reflection_ready_message()  # pyright: ignore[reportPrivateUsage]
     assert message.startswith('Dev UI ready.')
 
