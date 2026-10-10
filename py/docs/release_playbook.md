@@ -23,11 +23,26 @@ No PR required.
 
 ## Stable release steps
 
-1. `./bin/bump_version X.Y.Z` — bump all `pyproject.toml` files
-2. Open a PR to main with release notes in the description (CI verifies build, tests, and consistency)
-3. Merge the PR
-4. `./bin/create_release X.Y.Z` — tags `py/vX.Y.Z`, pushes tag, creates GitHub release
-5. Approve the publish at <https://github.com/genkit-ai/genkit/actions>
+There is one path. `create_release` refuses to run unless every step below was followed.
+
+1. `py/bin/bump_version X.Y.Z` on a branch from main. It bumps every `pyproject.toml` and `uv.lock`.
+2. Open a PR to main titled exactly `chore(py): release Python SDK vX.Y.Z`. Its description is the release notes, published word for word.
+3. Get it approved and merged.
+4. `py/bin/create_release X.Y.Z <PR_NUMBER> --dry-run`, then without `--dry-run`.
+5. Approve the publish at <https://github.com/genkit-ai/genkit/actions/workflows/publish_python.yml>. The tag push already started it; don't run it by hand.
+6. `pip index versions genkit` shows X.Y.Z.
+
+`create_release` checks, and reports every failure with its fix:
+
+- the PR is merged into main
+- the title is exactly `chore(py): release Python SDK vX.Y.Z`
+- the description is not empty
+- every `py/packages/*/pyproject.toml` is at X.Y.Z in the merge commit
+- tag `py/vX.Y.Z`, its GitHub release, and `genkit==X.Y.Z` on PyPI don't exist yet
+
+It tags the PR's merge commit, not the tip of main, so anything merged later stays out of the release. Exit codes: `0` released or dry run passed, `1` usage or environment, `2` a check failed and nothing changed, `3` failed partway (the output says how to finish).
+
+To fix notes after release, edit the GitHub release: `gh release edit py/vX.Y.Z --notes-file notes.md`. The PR description isn't read again.
 
 ## Workflow: `publish_python.yml`
 
