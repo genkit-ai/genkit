@@ -305,7 +305,9 @@ Expose flows as HTTP endpoints for production deployment using [Handler]:
 	for _, flow := range genkit.ListFlows(g) {
 		mux.HandleFunc("POST /"+flow.Name(), genkit.Handler(flow))
 	}
-	log.Fatal(server.Start(ctx, "127.0.0.1:8080", mux))
+	if err := server.Start(ctx, "127.0.0.1:8080", mux); err != nil {
+		log.Fatal(err)
+	}
 
 Handlers support streaming responses via Server-Sent Events when the client
 sends Accept: text/event-stream. For durable streaming that survives reconnects,
