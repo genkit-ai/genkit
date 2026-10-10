@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 
 	"cloud.google.com/go/cloudsqlconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -35,19 +36,27 @@ const (
 	PRIVATE IpType = "PRIVATE"
 )
 
-// PostgresEngine postgres engine
+// PostgresEngine holds the connection pool the plugin's features share.
 type PostgresEngine struct {
 	Pool *pgxpool.Pool
+
+	// dialer is the Cloud SQL dialer behind a pool the engine built. Nil for
+	// a pool the caller supplied.
+	dialer *cloudsqlconn.Dialer
+	// ownsPool reports whether the engine built Pool, and so closes it.
+	ownsPool bool
 }
 
-// NewPostgresEngine creates a new Postgres Engine.
+// NewPostgresEngine creates a new Postgres Engine. It either uses the pool
+// given with [WithPool] or dials the Cloud SQL instance given with
+// [WithCloudSQLInstance], and pings the database before returning.
 func NewPostgresEngine(ctx context.Context, opts ...Option) (*PostgresEngine, error) {
-	pgEngine := new(PostgresEngine)
 	cfg, err := applyEngineOptions(opts)
 	if err != nil {
 		return nil, err
 	}
-	if cfg.connPool == nil {
+	engine := &PostgresEngine{Pool: cfg.connPool}
+	if engine.Pool == nil {
 		user, usingIAMAuth, err := getUser(ctx, cfg)
 		if err != nil {
 			// If no user can be determined, return an error.
@@ -56,18 +65,19 @@ func NewPostgresEngine(ctx context.Context, opts ...Option) (*PostgresEngine, er
 		if usingIAMAuth {
 			cfg.user = user
 		}
-		cfg.connPool, err = createPool(ctx, cfg, usingIAMAuth)
+		engine.Pool, engine.dialer, err = createPool(ctx, cfg, usingIAMAuth)
 		if err != nil {
 			return nil, err
 		}
+		engine.ownsPool = true
 	}
 
-	if err := cfg.connPool.Ping(ctx); err != nil {
-		return nil, fmt.Errorf("failed to connect with database %v", err)
+	if err := engine.Pool.Ping(ctx); err != nil {
+		// Release what this call built; a caller's pool stays open.
+		engine.Close()
+		return nil, fmt.Errorf("failed to connect with database: %w", err)
 	}
-
-	pgEngine.Pool = cfg.connPool
-	return pgEngine, nil
+	return engine, nil
 }
 
 func (pgEngine *PostgresEngine) GetClient() *pgxpool.Pool {
@@ -83,7 +93,11 @@ func applyEngineOptions(opts []Option) (engineConfig, error) {
 		opt(cfg)
 	}
 
-	if cfg.connPool == nil && (cfg.projectID == "" || cfg.region == "" || cfg.instance == "") {
+	if cfg.connPool != nil {
+		// The pool already names its database; there is nothing to dial.
+		return *cfg, nil
+	}
+	if cfg.projectID == "" || cfg.region == "" || cfg.instance == "" {
 		return engineConfig{}, errors.New("missing connection: provide a connection pool or db instance fields")
 	}
 	if cfg.database == "" {
@@ -101,7 +115,7 @@ func getUser(ctx context.Context, config engineConfig) (string, bool, error) {
 	}
 	if config.iamAccountEmail != "" {
 		// If iamAccountEmail is provided use it as user.
-		return config.iamAccountEmail, true, nil
+		return iamUser(config.iamAccountEmail), true, nil
 	}
 	// If neither user and password nor iamAccountEmail are provided,
 	// retrieve IAM email from the environment.
@@ -109,8 +123,14 @@ func getUser(ctx context.Context, config engineConfig) (string, bool, error) {
 	if err != nil {
 		return "", false, fmt.Errorf("unable to retrieve service account email: %w", err)
 	}
-	return serviceAccountEmail, true, nil
+	return iamUser(serviceAccountEmail), true, nil
+}
 
+// iamUser returns the database user name Cloud SQL gives an IAM principal: a
+// service account's email without its ".gserviceaccount.com" suffix, and any
+// other email unchanged.
+func iamUser(email string) string {
+	return strings.TrimSuffix(email, ".gserviceaccount.com")
 }
 
 // getServiceAccountEmail retrieves the IAM principal email with users account.
@@ -140,22 +160,20 @@ func getServiceAccountEmail(ctx context.Context) (string, error) {
 	return userInfo.Email, nil
 }
 
-// createPool creates a connection pool to the PostgreSQL database.
-func createPool(ctx context.Context, cfg engineConfig, usingIAMAuth bool) (*pgxpool.Pool, error) {
+// createPool creates a connection pool to the PostgreSQL database, dialed
+// through the Cloud SQL connector, and returns the dialer behind it.
+func createPool(ctx context.Context, cfg engineConfig, usingIAMAuth bool) (*pgxpool.Pool, *cloudsqlconn.Dialer, error) {
+	config, err := poolConfig(cfg, usingIAMAuth)
+	if err != nil {
+		return nil, nil, err
+	}
 	dialeropts := []cloudsqlconn.Option{cloudsqlconn.WithUserAgent(cfg.userAgents)}
-	dsn := fmt.Sprintf("user=%s password=%s dbname=%s sslmode=disable", cfg.user, cfg.password, cfg.database)
 	if usingIAMAuth {
 		dialeropts = append(dialeropts, cloudsqlconn.WithIAMAuthN())
-		dsn = fmt.Sprintf("user=%s dbname=%s sslmode=disable", cfg.user, cfg.database)
 	}
 	d, err := cloudsqlconn.NewDialer(ctx, dialeropts...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to initialize connection: %w", err)
-	}
-
-	config, err := pgxpool.ParseConfig(dsn)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse connection config: %w", err)
+		return nil, nil, fmt.Errorf("failed to initialize connection: %w", err)
 	}
 	instanceURI := fmt.Sprintf("%s:%s:%s", cfg.projectID, cfg.region, cfg.instance)
 	config.ConnConfig.DialFunc = func(ctx context.Context, _ string, _ string) (net.Conn, error) {
@@ -166,15 +184,39 @@ func createPool(ctx context.Context, cfg engineConfig, usingIAMAuth bool) (*pgxp
 	}
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
-		return nil, fmt.Errorf("unable to create connection pool: %w", err)
+		d.Close()
+		return nil, nil, fmt.Errorf("unable to create connection pool: %w", err)
 	}
-	return pool, nil
+	return pool, d, nil
 }
 
-// Close closes the pool connection.
+// poolConfig returns the pool configuration for a Cloud SQL connection. The
+// credentials go into the config's fields rather than a connection string, so
+// a value with spaces or quotes reaches the server intact. TLS is off at this
+// layer because the Cloud SQL connector encrypts the connection itself, and an
+// IAM login sends no password because the connector authenticates it.
+func poolConfig(cfg engineConfig, usingIAMAuth bool) (*pgxpool.Config, error) {
+	config, err := pgxpool.ParseConfig("sslmode=disable")
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse connection config: %w", err)
+	}
+	config.ConnConfig.User = cfg.user
+	config.ConnConfig.Database = cfg.database
+	if !usingIAMAuth {
+		config.ConnConfig.Password = cfg.password
+	}
+	return config, nil
+}
+
+// Close releases what the engine created: the pool [NewPostgresEngine] built
+// and the Cloud SQL dialer behind it. A pool given with [WithPool], or set on
+// Pool directly, belongs to the caller, who closes it.
 func (pgEngine *PostgresEngine) Close() {
-	if pgEngine.Pool != nil {
+	if pgEngine.ownsPool && pgEngine.Pool != nil {
 		pgEngine.Pool.Close()
+	}
+	if pgEngine.dialer != nil {
+		pgEngine.dialer.Close()
 	}
 }
 
