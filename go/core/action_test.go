@@ -201,25 +201,33 @@ func TestActionStreaming(t *testing.T) {
 
 func TestActionTracing(t *testing.T) {
 	r := registry.New()
-	tc := tracing.NewTestOnlyTelemetryClient()
-	tracing.WriteTelemetryImmediate(tc)
+	// An isolated client, so the assertions hold under -count=N.
+	tc := captureTraces(t)
 	name := api.NewName("test", "TestTracing-inc")
 	a := defineStreamingAction(r, name, api.ActionTypeCustom, nil, nil, inc)
 	if _, err := a.Run(context.Background(), 3, nil); err != nil {
 		t.Fatal(err)
 	}
-	// The same trace store is used for all tests, so there might be several traces.
-	// Look for this one, which has a unique name.
+	if len(tc.Traces) != 1 {
+		t.Fatalf("got %d traces, want 1", len(tc.Traces))
+	}
 	for _, td := range tc.Traces {
-		if td.DisplayName == name {
-			// Spot check: expect a single span.
-			if g, w := len(td.Spans), 1; g != w {
-				t.Errorf("got %d spans, want %d", g, w)
-			}
-			return
+		if len(td.Spans) != 1 {
+			t.Fatalf("got %d spans, want 1", len(td.Spans))
+		}
+		var span *tracing.SpanData
+		for _, s := range td.Spans {
+			span = s
+		}
+		// The root span sets the trace envelope.
+		if td.DisplayName != name {
+			t.Errorf("trace DisplayName = %q, want %q", td.DisplayName, name)
+		}
+		if td.StartTime != span.StartTime || td.EndTime != span.EndTime || td.EndTime == 0 {
+			t.Errorf("trace times = [%v, %v], want the root span's [%v, %v]",
+				td.StartTime, td.EndTime, span.StartTime, span.EndTime)
 		}
 	}
-	t.Fatalf("did not find trace named %q", name)
 }
 
 func TestNewAction(t *testing.T) {
