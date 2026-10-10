@@ -158,8 +158,8 @@ func TestHiddenConfigFieldsReachPluginErrors(t *testing.T) {
 		config  map[string]any
 		wantErr string
 	}{
-		{"systemInstruction", map[string]any{"systemInstruction": map[string]any{"parts": []any{map[string]any{"text": "talk like a pirate"}}}}, "ai.WithSystemPrompt()"},
-		{"cachedContent", map[string]any{"cachedContent": "some cache uuid"}, "ai.WithCacheTTL()"},
+		{"systemInstruction", map[string]any{"systemInstruction": map[string]any{"parts": []any{map[string]any{"text": "talk like a pirate"}}}}, "ai.WithSystem()"},
+		{"cachedContent", map[string]any{"cachedContent": "some cache uuid"}, "(*ai.Message).WithCacheTTL()"},
 		{"responseSchema", map[string]any{"responseSchema": map[string]any{"type": "object"}}, "response schema must be set using Genkit feature"},
 		{"responseMimeType", map[string]any{"responseMimeType": "image/png"}, "response MIME type must be set using Genkit feature"},
 		{"responseJsonSchema", map[string]any{"responseJsonSchema": map[string]any{"type": "object"}}, "ai.WithOutputSchema()"},
