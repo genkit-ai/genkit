@@ -822,7 +822,9 @@ func TestFileSessionStore_PathPrefix_EmptyRejected(t *testing.T) {
 func TestFileSessionStore_OptionSetTwice(t *testing.T) {
 	store, err := NewFileSessionStore[testState](t.TempDir(),
 		WithMaxPersistedChainLength(2), WithMaxPersistedChainLength(3),
-		WithPollInterval(time.Second), WithPollInterval(2*time.Second))
+		WithPollInterval(time.Second), WithPollInterval(2*time.Second),
+		WithSnapshotPathPrefix(func(context.Context) string { return "first" }),
+		WithSnapshotPathPrefix(func(context.Context) string { return "second" }))
 	if err != nil {
 		t.Fatalf("NewFileSessionStore: %v", err)
 	}
@@ -831,6 +833,9 @@ func TestFileSessionStore_OptionSetTwice(t *testing.T) {
 	}
 	if store.poll != 2*time.Second {
 		t.Errorf("poll = %v, want 2s (the later option)", store.poll)
+	}
+	if prefix, err := store.derivePrefix(context.Background()); err != nil || prefix != "second" {
+		t.Errorf("prefix = %q, %v; want %q (the later option)", prefix, err, "second")
 	}
 }
 
