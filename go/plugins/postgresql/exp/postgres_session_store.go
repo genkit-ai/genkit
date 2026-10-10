@@ -463,7 +463,10 @@ func chainState(chain []row) (any, error) {
 	var ops aix.JSONPatch
 	for i := len(chain) - 2; i >= 0; i-- {
 		var patch aix.JSONPatch
-		if err := json.Unmarshal(chain[i].patch, &patch); err != nil {
+		// Numbers stay json.Number, so a large integer keeps its exact value.
+		dec := json.NewDecoder(bytes.NewReader(chain[i].patch))
+		dec.UseNumber()
+		if err := dec.Decode(&patch); err != nil {
 			return nil, fmt.Errorf("decode the patch of snapshot %q: %w", chain[i].snapshotID, err)
 		}
 		ops = append(ops, patch...)
