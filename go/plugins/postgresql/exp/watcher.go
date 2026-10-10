@@ -77,6 +77,14 @@ type subscriber struct {
 	ch   chan aix.SnapshotStatus
 	last aix.SnapshotStatus
 	seen bool
+	// since is the clock's tick when the subscription started. Only a read or
+	// notification that starts later resolves the subscription: it delivers
+	// a status, or, for a read that finds no row, closes the subscription if it
+	// has received nothing. What started earlier may be older than the status
+	// when the subscription started.
+	since uint64
+	// stop releases the hook that ends the subscription with its context.
+	stop func() bool
 }
 
 // notification is the payload a save sends when it changes a row's status.
@@ -98,16 +106,18 @@ func newWatcher(pool *pgxpool.Pool, channel string, poll time.Duration, read fun
 
 // subscribe registers a subscription to the row key and returns its channel,
 // which yields the row's status now and on every change until ctx is
-// cancelled. If the row does not exist, the channel is closed at once.
+// cancelled. If the row does not exist, the channel is closed at once, or, if
+// the first read fails, by the first read that works.
 func (w *watcher) subscribe(ctx context.Context, key watchKey) <-chan aix.SnapshotStatus {
-	sub := &subscriber{ch: make(chan aix.SnapshotStatus, 1)}
 	w.mu.Lock()
+	sub := &subscriber{ch: make(chan aix.SnapshotStatus, 1), since: w.clock}
 	wt := w.watches[key]
 	if wt == nil {
 		wt = &watch{}
 		w.watches[key] = wt
 	}
 	wt.subs = append(wt.subs, sub)
+	sub.stop = context.AfterFunc(ctx, func() { w.remove(key, sub) })
 	ready := w.startLocked()
 	w.mu.Unlock()
 
@@ -115,27 +125,10 @@ func (w *watcher) subscribe(ctx context.Context, key watchKey) <-chan aix.Snapsh
 	// poll), so a change committed after the read is delivered too.
 	select {
 	case <-ready:
+		w.refresh(ctx, []watchKey{key})
 	case <-ctx.Done():
 		w.remove(key, sub)
-		return sub.ch
 	}
-	tick := w.nextTick()
-	found, err := w.read(ctx, []watchKey{key})
-
-	w.mu.Lock()
-	switch st, ok := found[key]; {
-	case err != nil:
-		// Keep the subscription: the poll delivers the status once reads work.
-	case ok:
-		w.deliverLocked(wt, tick, st)
-	case !sub.seen:
-		// The row did not exist when the subscription was established.
-		w.removeLocked(key, sub)
-		w.mu.Unlock()
-		return sub.ch
-	}
-	w.mu.Unlock()
-	context.AfterFunc(ctx, func() { w.remove(key, sub) })
 	return sub.ch
 }
 
@@ -158,6 +151,7 @@ func (w *watcher) removeLocked(key watchKey, sub *subscriber) {
 		return
 	}
 	wt.subs = slices.Delete(wt.subs, i, i+1)
+	sub.stop()
 	close(sub.ch)
 	if len(wt.subs) == 0 {
 		delete(w.watches, key)
@@ -188,15 +182,15 @@ func (w *watcher) nextTick() uint64 {
 }
 
 // deliverLocked hands st, from a read or notification that started at tick, to
-// every subscriber of wt that does not hold it already, unless a status from a
-// later start was delivered first.
+// every subscriber of wt that started earlier and does not hold it already,
+// unless a status from a later start was delivered first.
 func (w *watcher) deliverLocked(wt *watch, tick uint64, st aix.SnapshotStatus) {
 	if tick <= wt.tick {
 		return
 	}
 	wt.tick = tick
 	for _, sub := range wt.subs {
-		if sub.seen && sub.last == st {
+		if tick <= sub.since || (sub.seen && sub.last == st) {
 			continue
 		}
 		sub.last, sub.seen = st, true
@@ -306,30 +300,45 @@ func (w *watcher) dispatch(payload string) {
 	}
 }
 
-// pollAll re-reads every watched row and delivers its status. A row that is
-// gone is skipped: its subscribers keep waiting, as they would for a row
-// deleted between notifications.
+// pollAll re-reads every watched row; see refresh.
 func (w *watcher) pollAll(ctx context.Context) {
 	w.mu.Lock()
 	keys := slices.Collect(maps.Keys(w.watches))
-	w.clock++
-	tick := w.clock
 	w.mu.Unlock()
-	if len(keys) == 0 {
-		return
+	if len(keys) > 0 {
+		w.refresh(ctx, keys)
 	}
+}
+
+// refresh reads the rows keys and delivers their statuses. A row that does not
+// exist closes the subscriptions to it that started before the read and have
+// received nothing, since the row was missing when they were established. A
+// subscription that received a status keeps waiting, as it would for a row
+// deleted between notifications. A failed read changes nothing.
+func (w *watcher) refresh(ctx context.Context, keys []watchKey) {
+	tick := w.nextTick()
 	found, err := w.read(ctx, keys)
 	if err != nil {
 		if ctx.Err() == nil {
-			logger.Debug(ctx, "postgresql session store: status poll failed", "channel", w.channel, "error", err)
+			logger.Debug(ctx, "postgresql session store: status read failed", "channel", w.channel, "error", err)
 		}
 		return
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	for k, st := range found {
-		if wt := w.watches[k]; wt != nil {
+	for _, k := range keys {
+		wt := w.watches[k]
+		if wt == nil {
+			continue
+		}
+		if st, ok := found[k]; ok {
 			w.deliverLocked(wt, tick, st)
+			continue
+		}
+		for _, sub := range slices.Clone(wt.subs) {
+			if !sub.seen && sub.since < tick {
+				w.removeLocked(k, sub)
+			}
 		}
 	}
 }
