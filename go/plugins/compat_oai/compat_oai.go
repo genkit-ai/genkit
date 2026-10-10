@@ -215,6 +215,16 @@ type OpenAICompatible struct {
 	// HTTP code gives.
 	ClassifyError func(err *openai.Error) status.Name
 
+	// MediaTypes optionally limits the media a user message may carry to the
+	// types the provider's chat completions read, each an exact media type
+	// such as "application/pdf" or a wildcard such as "image/*". A part of
+	// any other type fails the request with INVALID_ARGUMENT before it is
+	// sent, which matters for providers that strip content parts they do not
+	// read rather than reject them. Empty sends every type and leaves the
+	// provider to reject what its models do not read. Media of no known type
+	// is sent as an image and is not checked.
+	MediaTypes []string
+
 	// descs caches the action descriptors of listed models by name; they are
 	// deterministic per name, and rebuilding a full model action per listed
 	// model on every reflection poll is wasteful. A plugin instance lists
@@ -339,6 +349,7 @@ func (o *OpenAICompatible) DefineModel(provider, id string, opts ai.ModelOptions
 	) (*ai.ModelResponse, error) {
 		return NewModelGenerator(o.client, id).
 			withSeparateReasoning(o.SeparateReasoningTokens).
+			withMediaTypes(o.MediaTypes).
 			WithMessages(input.Messages).
 			WithConfig(input.Config).
 			WithTools(input.Tools).
@@ -370,6 +381,7 @@ func newSDKModel(o *OpenAICompatible, id string, opts ai.ModelOptions) *ai.Model
 		}
 		return NewModelGenerator(o.client, id).
 			withSeparateReasoning(o.SeparateReasoningTokens).
+			withMediaTypes(o.MediaTypes).
 			WithParams(config).
 			WithMessages(input.Messages).
 			WithTools(input.Tools).
@@ -451,6 +463,7 @@ func NewChatModel[Config ChatConfig](o *OpenAICompatible, id string, opts ai.Mod
 		}
 		g := NewModelGenerator(o.clientForKey(config.RequestAPIKey()), id).
 			withSeparateReasoning(o.SeparateReasoningTokens).
+			withMediaTypes(o.MediaTypes).
 			WithParams(params).
 			WithMessages(input.Messages).
 			WithTools(input.Tools).

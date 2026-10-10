@@ -149,6 +149,11 @@ var (
 	}
 )
 
+// mediaTypes are the media Anthropic's OpenAI SDK compatibility layer reads.
+// It strips file and input_audio parts without an error, so they are refused
+// here rather than lost; PDFs need the native anthropic plugin.
+var mediaTypes = []string{"image/*"}
+
 // supportedModels curates capabilities for well-known Claude models. It is not
 // the set of usable models: any Claude model resolves on demand and takes
 // [dynamicModelOptions], so an ID absent here still works. Dated snapshots are
@@ -323,6 +328,7 @@ func (a *Anthropic) Init(ctx context.Context) []api.Action {
 
 	// initialize OpenAICompatible
 	a.openAICompatible.Provider = provider
+	a.openAICompatible.MediaTypes = mediaTypes
 	a.openAICompatible.Opts = a.Opts
 	a.openAICompatible.ListModels = listClaudeModels
 	actions := a.openAICompatible.Init(ctx)

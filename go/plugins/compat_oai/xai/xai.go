@@ -215,6 +215,10 @@ var (
 	}
 )
 
+// mediaTypes are the media xAI's chat completions read. Files are documented
+// for the Responses API only.
+var mediaTypes = []string{"image/*"}
+
 // supportedModels curates capabilities for well-known Grok models. It is not
 // the set of usable models: any Grok model resolves on demand and takes
 // [dynamicModelOptions], so an ID absent here still works. No versions are
@@ -309,6 +313,7 @@ func (x *XAI) Init(ctx context.Context) []api.Action {
 	opts = append(opts, x.Opts...)
 
 	x.openAICompatible.Provider = provider
+	x.openAICompatible.MediaTypes = mediaTypes
 	x.openAICompatible.ClassifyError = classifyError
 	x.openAICompatible.Opts = opts
 	x.openAICompatible.SeparateReasoningTokens = true

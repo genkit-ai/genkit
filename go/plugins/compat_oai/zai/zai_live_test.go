@@ -37,6 +37,7 @@ func TestPluginLive(t *testing.T) {
 			}),
 			ReasoningContent: true,
 			VisionModel:      zai.ModelRef("glm-5v-turbo", nil),
+			DocumentModel:    zai.ModelRef("glm-4.6v", nil),
 			LimitConfig:      &zai.ChatConfig{MaxOutputTokens: 16, Thinking: noThinking},
 			BadKeyPlugin:     &zai.ZAI{APIKey: "invalid"},
 			Skip:             map[string]string{},

@@ -762,6 +762,121 @@ func TestWithMessagesSkipsNilMessagesAndParts(t *testing.T) {
 	}
 }
 
+// TestWithMessagesMediaParts pins the content part each media type is sent
+// as. Audio and PDFs once went out as image_url, which providers reject or
+// misread.
+func TestWithMessagesMediaParts(t *testing.T) {
+	const pdf = "data:application/pdf;base64,JVBERi0xLjQ="
+	tests := []struct {
+		name       string
+		mediaTypes []string
+		part       *ai.Part
+		want       string
+	}{
+		{
+			name: "image data URI",
+			part: ai.NewMediaPart("image/png", "data:image/png;base64,iVBORw0KGgo="),
+			want: `{"type":"image_url","image_url":{"url":"data:image/png;base64,iVBORw0KGgo="}}`,
+		},
+		{
+			name: "remote media of no type stays an image",
+			part: ai.NewMediaPart("", "https://example.com/cat"),
+			want: `{"type":"image_url","image_url":{"url":"https://example.com/cat"}}`,
+		},
+		{
+			name: "wav",
+			part: ai.NewMediaPart("audio/x-wav", "data:audio/x-wav;base64,UklGRg=="),
+			want: `{"type":"input_audio","input_audio":{"data":"UklGRg==","format":"wav"}}`,
+		},
+		{
+			name: "mpeg",
+			part: ai.NewMediaPart("audio/mpeg", "data:audio/mpeg;base64,SUQz"),
+			want: `{"type":"input_audio","input_audio":{"data":"SUQz","format":"mp3"}}`,
+		},
+		{
+			name: "pdf typed by its data URI",
+			part: ai.NewMediaPart("", pdf),
+			want: `{"type":"file","file":{"file_data":"` + pdf + `","filename":"file.pdf"}}`,
+		},
+		{
+			name: "plain data URI is sent as base64",
+			part: ai.NewMediaPart("text/plain", "data:text/plain,hi"),
+			want: `{"type":"file","file":{"file_data":"data:text/plain;base64,aGk=","filename":"file.txt"}}`,
+		},
+		{
+			name:       "empty media types accept every type",
+			mediaTypes: []string{},
+			part:       ai.NewMediaPart("audio/mpeg", "data:audio/mpeg;base64,SUQz"),
+			want:       `{"type":"input_audio","input_audio":{"data":"SUQz","format":"mp3"}}`,
+		},
+		{
+			name:       "accepted by a wildcard",
+			mediaTypes: []string{"image/*", "application/pdf"},
+			part:       ai.NewMediaPart("application/pdf", pdf),
+			want:       `{"type":"file","file":{"file_data":"` + pdf + `","filename":"file.pdf"}}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := newGen().withMediaTypes(tt.mediaTypes).WithMessages([]*ai.Message{
+				ai.NewUserMessage(tt.part),
+			})
+			if g.err != nil {
+				t.Fatalf("WithMessages() error = %v", g.err)
+			}
+			raw, err := json.Marshal(g.messages[0].OfUser.Content.OfArrayOfContentParts[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got, want any
+			if err := json.Unmarshal(raw, &got); err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal([]byte(tt.want), &want); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("content part = %s, want %s", raw, tt.want)
+			}
+		})
+	}
+}
+
+// TestWithMessagesRejectsUnsendableMedia pins that media no content part can
+// carry fails the request instead of reaching the provider, which may strip
+// it and answer as if it was never sent.
+func TestWithMessagesRejectsUnsendableMedia(t *testing.T) {
+	tests := []struct {
+		name       string
+		mediaTypes []string
+		part       *ai.Part
+	}{
+		{
+			name: "remote pdf",
+			part: ai.NewMediaPart("application/pdf", "https://example.com/doc.pdf"),
+		},
+		{
+			name: "video",
+			part: ai.NewMediaPart("video/mp4", "data:video/mp4;base64,AAAA"),
+		},
+		{
+			name:       "type the provider does not read",
+			mediaTypes: []string{"image/*"},
+			part:       ai.NewMediaPart("audio/wav", "data:audio/wav;base64,UklGRg=="),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := newGen().withMediaTypes(tt.mediaTypes).WithMessages([]*ai.Message{
+				ai.NewUserMessage(tt.part),
+			})
+			if got := status.Of(g.err); got != status.InvalidArgument {
+				t.Errorf("WithMessages() error = %v, want INVALID_ARGUMENT", g.err)
+			}
+		})
+	}
+}
+
 // TestWithParams pins how a request is built on top of the config's params:
 // a model the params carry pins the served model while an empty one falls
 // back to the generator's, SDK-modeled fields land on their wire names, and

@@ -17,7 +17,9 @@ package livetest
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/binary"
 	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"image/draw"
@@ -175,4 +177,58 @@ var RedImage = func() string {
 		panic(err)
 	}
 	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(buf.Bytes())
+}()
+
+// ToneAudio is one second of a 440 Hz sine tone as a 16 kHz mono 16-bit WAV
+// data URL.
+var ToneAudio = func() string {
+	const rate, seconds = 16000, 1
+	samples := make([]int16, rate*seconds)
+	for i := range samples {
+		samples[i] = int16(math.MaxInt16 / 2 * math.Sin(2*math.Pi*440*float64(i)/rate))
+	}
+	dataSize := uint32(len(samples) * 2)
+	var buf bytes.Buffer
+	for _, field := range []any{
+		[]byte("RIFF"), 36 + dataSize, []byte("WAVE"),
+		// fmt chunk: PCM, mono, rate, byte rate, block align, bits per sample.
+		[]byte("fmt "), uint32(16), uint16(1), uint16(1), uint32(rate), uint32(rate * 2), uint16(2), uint16(16),
+		[]byte("data"), dataSize, samples,
+	} {
+		if err := binary.Write(&buf, binary.LittleEndian, field); err != nil {
+			panic(err)
+		}
+	}
+	return "data:audio/wav;base64," + base64.StdEncoding.EncodeToString(buf.Bytes())
+}()
+
+// secretWord is the word [SecretPDF] carries, made up so the model can only
+// read it from the document.
+const secretWord = "Quorblex"
+
+// SecretPDF is a one-page PDF whose only text names [secretWord], as a data
+// URL.
+var SecretPDF = func() string {
+	content := fmt.Sprintf("BT /F1 24 Tf 72 700 Td (The secret word is %s.) Tj ET", secretWord)
+	objects := []string{
+		"<< /Type /Catalog /Pages 2 0 R >>",
+		"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+		"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+		fmt.Sprintf("<< /Length %d >>\nstream\n%s\nendstream", len(content), content),
+		"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+	}
+	var buf bytes.Buffer
+	buf.WriteString("%PDF-1.4\n")
+	offsets := make([]int, len(objects))
+	for i, obj := range objects {
+		offsets[i] = buf.Len()
+		fmt.Fprintf(&buf, "%d 0 obj\n%s\nendobj\n", i+1, obj)
+	}
+	xref := buf.Len()
+	fmt.Fprintf(&buf, "xref\n0 %d\n0000000000 65535 f \n", len(objects)+1)
+	for _, off := range offsets {
+		fmt.Fprintf(&buf, "%010d 00000 n \n", off)
+	}
+	fmt.Fprintf(&buf, "trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", len(objects)+1, xref)
+	return "data:application/pdf;base64," + base64.StdEncoding.EncodeToString(buf.Bytes())
 }()

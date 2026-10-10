@@ -40,6 +40,9 @@ func TestPluginLive(t *testing.T) {
 				ReasoningEffort: shared.ReasoningEffortLow,
 			}),
 			VisionModel: openai.ModelRef("gpt-4.1-nano", nil),
+			// Chat completions read input_audio on the audio models only.
+			AudioModel:    openai.ModelRef("gpt-audio-1.5", nil),
+			DocumentModel: openai.ModelRef("gpt-4o-mini", nil),
 			LimitConfig: &openaiGo.ChatCompletionNewParams{
 				MaxCompletionTokens: openaiGo.Int(16),
 			},

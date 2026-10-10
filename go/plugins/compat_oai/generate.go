@@ -16,6 +16,7 @@ package compat_oai
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -27,6 +28,7 @@ import (
 	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/base"
 	pluginjsonschema "github.com/firebase/genkit/go/plugins/internal/jsonschema"
+	"github.com/firebase/genkit/go/plugins/internal/uri"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/packages/param"
 	"github.com/openai/openai-go/shared"
@@ -48,6 +50,8 @@ type ModelGenerator struct {
 	// claims it only without tools gets no JSON mode on a request with
 	// tools, as it gets no schema.
 	constrained ai.ConstrainedSupport
+	// mediaTypes is [OpenAICompatible.MediaTypes].
+	mediaTypes []string
 	// classify is the provider's [OpenAICompatible.ClassifyError].
 	classify func(*openai.Error) status.Name
 	// Store any errors that occur during building
@@ -75,6 +79,13 @@ func NewModelGenerator(client *openai.Client, modelName string) *ModelGenerator 
 // apart from completion_tokens; see [OpenAICompatible.SeparateReasoningTokens].
 func (g *ModelGenerator) withSeparateReasoning(separate bool) *ModelGenerator {
 	g.separateReasoning = separate
+	return g
+}
+
+// withMediaTypes limits the media a user message may carry; see
+// [OpenAICompatible.MediaTypes]. It must come before [ModelGenerator.WithMessages].
+func (g *ModelGenerator) withMediaTypes(types []string) *ModelGenerator {
+	g.mediaTypes = types
 	return g
 }
 
@@ -146,10 +157,11 @@ func (g *ModelGenerator) WithMessages(messages []*ai.Message) *ModelGenerator {
 					parts = append(parts, openai.TextContentPart(p.Text))
 				}
 				if p.IsMedia() {
-					part := openai.ImageContentPart(
-						openai.ChatCompletionContentPartImageImageURLParam{
-							URL: p.Text,
-						})
+					part, err := g.mediaContentPart(p)
+					if err != nil {
+						g.err = err
+						return g
+					}
 					parts = append(parts, part)
 					continue
 				}
@@ -169,6 +181,119 @@ func (g *ModelGenerator) WithMessages(messages []*ai.Message) *ModelGenerator {
 	}
 	g.messages = oaiMessages
 	return g
+}
+
+// mediaContentPart converts a user message's media part to the content part
+// its type calls for: image_url for images and for media of no known type,
+// input_audio for audio, and file for every other type. Audio and files are
+// sent inline, so they must come as data URIs: the plugin does not fetch URLs.
+func (g *ModelGenerator) mediaContentPart(p *ai.Part) (openai.ChatCompletionContentPartUnionParam, error) {
+	var none openai.ChatCompletionContentPartUnionParam
+	contentType := mediaContentType(p)
+	if contentType != "" && !mediaTypeAccepted(g.mediaTypes, contentType) {
+		return none, status.Errorf(status.ErrInvalidArgument,
+			"model %q does not accept %s media; it accepts %s", g.modelName, contentType, strings.Join(g.mediaTypes, ", "))
+	}
+	switch {
+	case contentType == "" || strings.HasPrefix(contentType, "image/"):
+		return openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{URL: p.Text}), nil
+	case strings.HasPrefix(contentType, "video/"):
+		return none, status.Errorf(status.ErrInvalidArgument,
+			"%s media is not supported: chat completions have no standard content part for video", contentType)
+	}
+	if !strings.HasPrefix(p.Text, "data:") {
+		return none, status.Errorf(status.ErrInvalidArgument,
+			"%s media must be a data URI: chat completions take audio and files inline, and the plugin does not fetch URLs", contentType)
+	}
+	_, data, err := uri.Data(p)
+	if err != nil {
+		return none, status.Errorf(status.ErrInvalidArgument, "%s media: %w", contentType, err)
+	}
+	encoded := base64.StdEncoding.EncodeToString(data)
+	if strings.HasPrefix(contentType, "audio/") {
+		return openai.InputAudioContentPart(openai.ChatCompletionContentPartInputAudioInputAudioParam{
+			Data:   encoded,
+			Format: audioFormat(contentType),
+		}), nil
+	}
+	return openai.FileContentPart(openai.ChatCompletionContentPartFileFileParam{
+		FileData: param.NewOpt("data:" + contentType + ";base64," + encoded),
+		Filename: param.NewOpt(fileName(contentType)),
+	}), nil
+}
+
+// mediaContentType returns the part's media type, lowercased and without
+// parameters: the declared content type, or else the one its data URI names.
+func mediaContentType(p *ai.Part) string {
+	contentType := p.ContentType
+	if contentType == "" {
+		if rest, ok := strings.CutPrefix(p.Text, "data:"); ok {
+			contentType, _, _ = strings.Cut(rest, ",")
+		}
+	}
+	contentType, _, _ = strings.Cut(contentType, ";")
+	return strings.ToLower(strings.TrimSpace(contentType))
+}
+
+// mediaTypeAccepted reports whether contentType matches one of patterns, each
+// an exact media type or a "type/*" wildcard. No patterns accept every type.
+func mediaTypeAccepted(patterns []string, contentType string) bool {
+	if len(patterns) == 0 {
+		return true
+	}
+	for _, pattern := range patterns {
+		pattern = strings.ToLower(pattern)
+		if prefix, ok := strings.CutSuffix(pattern, "*"); ok {
+			if strings.HasPrefix(contentType, prefix) {
+				return true
+			}
+		} else if pattern == contentType {
+			return true
+		}
+	}
+	return false
+}
+
+// audioFormat names the input_audio format of an audio media type: "wav" and
+// "mp3" for their common aliases, else the subtype without an "x-" prefix,
+// which providers that take more formats than OpenAI read as is.
+func audioFormat(contentType string) string {
+	subtype := strings.TrimPrefix(strings.TrimPrefix(contentType, "audio/"), "x-")
+	switch subtype {
+	case "wav", "wave", "vnd.wave":
+		return "wav"
+	case "mpeg", "mp3", "mpeg3":
+		return "mp3"
+	}
+	return subtype
+}
+
+// fileName names an inline file after its media type, since some providers
+// read the extension to pick a parser.
+func fileName(contentType string) string {
+	switch contentType {
+	case "application/pdf":
+		return "file.pdf"
+	case "text/plain":
+		return "file.txt"
+	case "text/csv":
+		return "file.csv"
+	case "application/msword":
+		return "file.doc"
+	case "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+		return "file.docx"
+	case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+		return "file.xlsx"
+	case "application/vnd.openxmlformats-officedocument.presentationml.presentation":
+		return "file.pptx"
+	case "application/json":
+		return "file.json"
+	case "text/markdown":
+		return "file.md"
+	case "text/html":
+		return "file.html"
+	}
+	return "file"
 }
 
 // chatCompletionParamFields is the set of wire names the SDK's request params
