@@ -36,12 +36,13 @@ from pydantic.alias_generators import to_camel
 from pydantic.config import JsonDict
 
 from genkit.model import ModelConfig
+from genkit.plugin_api import GenkitConfig
 
 BETA_ONLY_KEYS = frozenset(BetaMessageCreateParamsBase.__annotations__) - frozenset(
     MessageCreateParamsBase.__annotations__
 )
 
-_NESTED_CONFIG = ConfigDict(extra='forbid', populate_by_name=True)
+_NESTED_CONFIG = ConfigDict(extra='forbid', validate_by_name=True, validate_by_alias=True)
 
 _THINKING_SCHEMA = {
     'type': 'object',
@@ -173,18 +174,16 @@ def _anthropic_config_schema_extra(schema: JsonDict) -> None:
     )
 
 
-class ThinkingConfig(BaseModel):
+class ThinkingConfig(GenkitConfig):
     """Extended-thinking configuration.
 
     ``enabled``, ``adaptive`` and ``disabled`` are mutually exclusive, and
     ``budgetTokens`` is required when ``enabled`` is true.
     """
 
-    model_config = _NESTED_CONFIG
-
     enabled: bool | None = None
     # Adaptive mode allows a fractional budget it ignores; integers enforced only when enabled.
-    budget_tokens: float | None = Field(default=None, alias='budgetTokens', ge=1024)
+    budget_tokens: float | None = Field(default=None, ge=1024)
     adaptive: bool | None = None
     display: Literal['summarized', 'omitted'] | None = None
     # The API's own spelling (`{'type': 'enabled', ...}`). A mode this list lacks
@@ -306,7 +305,8 @@ class AnthropicConfig(ModelConfig):
     model_config = ConfigDict(
         alias_generator=to_camel,
         json_schema_extra=_anthropic_config_schema_extra,
-        populate_by_name=True,
+        validate_by_name=True,
+        validate_by_alias=True,
     )
 
     # Config fields that are never create() kwargs. api_version picks the API

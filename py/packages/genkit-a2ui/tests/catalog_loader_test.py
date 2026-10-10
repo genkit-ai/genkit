@@ -153,7 +153,7 @@ async def test_generate_strict_rejects_a_component_the_loaded_catalog_lacks() ->
     response = await ai.generate(
         model='scriptedModel',
         prompt='weather',
-        use=[Surfaces(catalog=BANNER_CATALOG.id, validate='strict')],
+        use=[Surfaces(catalog=BANNER_CATALOG.id, validation='strict')],
     )
     assert_dead_turn(response, reason=RuntimeErrorReason.INVALID_OUTPUT, match='not in catalog')
 

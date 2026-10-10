@@ -226,12 +226,13 @@ class OpenAIConfig(ModelConfig):
 
     # Dev UI and reflection send camelCase. frequencyPenalty binds and goes
     # out as frequency_penalty; maxOutputTokens goes out as the token cap.
-    # populate_by_name keeps the snake_case Python fields working too.
+    # validate_by_name keeps the snake_case Python fields working too.
     # Unknown keys raise (inherited from ModelConfig); a create() param this
     # class doesn't declare goes in ``extra`` and is sent as ``extra_body``.
     model_config: ClassVar[ConfigDict] = ConfigDict(
         alias_generator=to_camel,
-        populate_by_name=True,
+        validate_by_name=True,
+        validate_by_alias=True,
     )
 
     # Core generation parameters

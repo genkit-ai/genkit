@@ -475,7 +475,7 @@ class AnthropicModel:
         config = config or _normalize_config(request.config)
         if use_beta is None:
             use_beta = self._uses_beta_api(config)
-        params = config.model_dump(exclude_none=True, by_alias=False)
+        params = config.model_dump(exclude_none=True)
         extra = params.pop('extra', None)
 
         # Handle mapped parameters

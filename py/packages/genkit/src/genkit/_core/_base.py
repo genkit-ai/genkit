@@ -60,7 +60,8 @@ class GenkitModel(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(
         alias_generator=to_camel,
         extra='forbid',
-        populate_by_name=True,
+        validate_by_name=True,
+        validate_by_alias=True,
     )
 
     def model_dump(self, **kwargs: Any) -> dict[str, Any]:
@@ -82,3 +83,36 @@ class GenkitModel(BaseModel):
         else:
             kwargs.pop('fallback', None)
         return super().model_dump_json(**kwargs)
+
+
+class GenkitConfig(BaseModel):
+    """Base for settings passed to a Genkit action: model and middleware config.
+
+    Python callers construct it with field names (snake_case), and plugins
+    hand model_dump() output to provider SDKs. Genkit's tooling sees
+    camelCase JSON: the Developer UI renders the JSON schema as a form,
+    pre-fills it from traces and .prompt files by exact key, and exports
+    .prompt files from it. Those formats are shared with the JS and Go SDKs,
+    so the schema keys, trace keys and .prompt keys must use one spelling.
+
+    - alias_generator=to_camel: camelCase wire names and schema properties.
+    - validate_by_name / validate_by_alias: accept either spelling; all three
+      type checkers take the snake_case kwarg.
+    - extra='forbid': an unknown key raises instead of being dropped, and so
+      does a second spelling of a key already given (maxOutputTokens and
+      max_output_tokens in one input).
+
+    model_dump() is not overridden: the default returns field names. Pass
+    by_alias=True for Genkit JSON. Nested in a GenkitModel such as
+    ModelRequest, the parent's settings apply, so traces stay camelCase.
+
+    Use plain BaseModel for flow and tool input/output; that data is the
+    app's, and Genkit does not rename it.
+    """
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        alias_generator=to_camel,
+        extra='forbid',
+        validate_by_name=True,
+        validate_by_alias=True,
+    )

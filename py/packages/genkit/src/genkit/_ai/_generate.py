@@ -1055,7 +1055,6 @@ def request_with_messages(*, request: ModelRequest, messages: list[Message]) -> 
 def output_config_from(out: GenerateActionOutputConfig) -> OutputConfig:
     return OutputConfig(
         format=out.format,
-        # pyrefly: ignore[unexpected-keyword] - populate_by_name accepts the field name
         json_schema=out.json_schema,
         constrained=out.constrained,
         content_type=out.content_type,
@@ -2039,7 +2038,6 @@ async def to_model_request(
         tool_choice=options.tool_choice,
         output=OutputConfig(
             format=output.format if output else None,
-            # pyrefly: ignore[unexpected-keyword] - populate_by_name accepts the field name
             json_schema=out_schema,
             constrained=output.constrained if output else None,
             content_type=output.content_type if output else None,

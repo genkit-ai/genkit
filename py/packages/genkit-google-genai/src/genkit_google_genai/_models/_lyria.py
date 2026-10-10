@@ -23,7 +23,8 @@ audio API.
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+from pydantic.alias_generators import to_camel
 
 from genkit.model import ModelInfo, Supports
 
@@ -53,12 +54,12 @@ class LyriaConfig(BaseModel):
         location: Must be 'global' for Lyria. Override if plugin uses different region.
     """
 
-    negative_prompt: str | None = Field(default=None, alias='negativePrompt')
+    negative_prompt: str | None = Field(default=None)
     seed: int | None = Field(default=None)
-    sample_count: int | None = Field(default=None, ge=1, alias='sampleCount')
+    sample_count: int | None = Field(default=None, ge=1)
     location: str | None = Field(default=None)
 
-    model_config = {'populate_by_name': True}
+    model_config = ConfigDict(validate_by_name=True, validate_by_alias=True, alias_generator=to_camel)
 
 
 LYRIA_MODEL_INFO = ModelInfo(

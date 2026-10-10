@@ -1096,8 +1096,8 @@ class TestBuildRequestKwargs:
         assert kwargs == {'think': True, 'keep_alive': '5m'}
 
     def test_dumped_dict_surfaces_think_and_keep_alive(self) -> None:
-        """A dumped OllamaConfig (camelCased keys) still surfaces think/keep_alive."""
-        dumped = OllamaConfig(think='low', keep_alive='10m').model_dump(exclude_none=True, mode='json')
+        """A wire-shaped OllamaConfig dict (camelCased keys) still surfaces think/keep_alive."""
+        dumped = OllamaConfig(think='low', keep_alive='10m').model_dump(by_alias=True, exclude_none=True, mode='json')
         # The dumped dict carries the camelCase alias for keep_alive.
         assert 'keepAlive' in dumped
         kwargs = OllamaModel.build_request_kwargs(dumped)

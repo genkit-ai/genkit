@@ -48,7 +48,8 @@ class BedrockConfig(ModelConfig):
 
     model_config = ConfigDict(
         alias_generator=to_camel,
-        populate_by_name=True,
+        validate_by_name=True,
+        validate_by_alias=True,
         extra='forbid',
     )
 
