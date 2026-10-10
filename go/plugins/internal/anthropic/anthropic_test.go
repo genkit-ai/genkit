@@ -26,12 +26,14 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/internal/base"
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 )
 
 func TestAnthropic(t *testing.T) {
@@ -1127,6 +1129,95 @@ func TestGenerateReportsUsage(t *testing.T) {
 			}
 			if diff := cmp.Diff(tc.want, resp.Usage); diff != "" {
 				t.Errorf("Usage mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// TestGenerateStreamsWhenSDKRefuses pins when a request without a stream
+// callback goes out as a streaming one: exactly when the SDK would refuse it
+// as non-streaming, which is a max_tokens past ten minutes of expected output,
+// or past the model's non-streaming cap, with no request timeout set. Either
+// way the caller gets the same response.
+func TestGenerateStreamsWhenSDKRefuses(t *testing.T) {
+	const (
+		jsonBody = `{"id":"msg_1","type":"message","role":"assistant","model":"m","content":[{"type":"text","text":"Paris"}],"stop_reason":"end_turn","usage":{"input_tokens":10,"cache_read_input_tokens":4,"output_tokens":20,"output_tokens_details":{"thinking_tokens":15}}}`
+		sseBody  = "event: message_start\n" +
+			`data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"m","content":[],"stop_reason":null,"usage":{"input_tokens":10,"cache_read_input_tokens":4,"output_tokens":1}}}` + "\n\n" +
+			"event: content_block_start\n" +
+			`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}` + "\n\n" +
+			"event: content_block_delta\n" +
+			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Paris"}}` + "\n\n" +
+			"event: content_block_stop\n" +
+			`data: {"type":"content_block_stop","index":0}` + "\n\n" +
+			"event: message_delta\n" +
+			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":20,"output_tokens_details":{"thinking_tokens":15}}}` + "\n\n" +
+			"event: message_stop\n" +
+			`data: {"type":"message_stop"}` + "\n\n"
+	)
+	for _, tc := range []struct {
+		name       string
+		model      string
+		maxTokens  int64
+		opts       []option.RequestOption
+		wantStream bool
+	}{
+		{name: "small max_tokens", model: "claude-haiku-4-5", maxTokens: 1024},
+		{name: "at the ten-minute bound", model: "claude-haiku-4-5", maxTokens: 21333},
+		{name: "past the ten-minute bound", model: "claude-haiku-4-5", maxTokens: 21334, wantStream: true},
+		{name: "past the model's non-streaming cap", model: "claude-opus-4-0", maxTokens: 8193, wantStream: true},
+		{
+			name:      "request timeout set",
+			model:     "claude-haiku-4-5",
+			maxTokens: 64000,
+			opts:      []option.RequestOption{option.WithRequestTimeout(time.Hour)},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotStream bool
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body struct {
+					Stream bool `json:"stream"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Errorf("decoding request body: %v", err)
+				}
+				gotStream = body.Stream
+				if body.Stream {
+					w.Header().Set("Content-Type", "text/event-stream")
+					_, _ = io.WriteString(w, sseBody)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, jsonBody)
+			}))
+			defer server.Close()
+
+			opts := append([]option.RequestOption{option.WithBaseURL(server.URL), option.WithAPIKey("stub")}, tc.opts...)
+			client := anthropic.NewClient(opts...)
+			input := &ai.ModelRequest{Messages: []*ai.Message{ai.NewUserTextMessage("hi")}}
+			resp, err := Generate(t.Context(), client, "anthropic", tc.model, input,
+				anthropic.MessageNewParams{MaxTokens: tc.maxTokens}, nil)
+			if err != nil {
+				t.Fatalf("Generate() error = %v", err)
+			}
+			if gotStream != tc.wantStream {
+				t.Errorf("request stream = %v, want %v", gotStream, tc.wantStream)
+			}
+			want := &ai.ModelResponse{
+				Message:      ai.NewModelTextMessage("Paris"),
+				FinishReason: ai.FinishReasonStop,
+				Request:      input,
+				Usage: &ai.GenerationUsage{
+					InputTokens:         14,
+					CachedContentTokens: 4,
+					OutputTokens:        5,
+					ThoughtsTokens:      15,
+					TotalTokens:         34,
+				},
+			}
+			if diff := cmp.Diff(want, resp, cmpopts.IgnoreUnexported(ai.ModelResponse{}), cmpopts.IgnoreFields(ai.ModelResponse{}, "Raw")); diff != "" {
+				t.Errorf("Generate() mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}
