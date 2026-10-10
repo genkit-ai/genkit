@@ -259,6 +259,10 @@ func (w *watcher) receive(ctx context.Context, conn *pgx.Conn) error {
 		pollDue := waitCtx.Err() != nil
 		cancel()
 		switch {
+		case err == nil && n == nil:
+			// The pool's OnNotification handler took the notification, so pgx
+			// returns no payload: read every watched row instead.
+			w.pollAll(ctx)
 		case err == nil:
 			w.dispatch(n.Payload)
 		case ctx.Err() != nil:

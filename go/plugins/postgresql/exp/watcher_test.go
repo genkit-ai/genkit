@@ -19,10 +19,12 @@ package exp
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	aix "github.com/firebase/genkit/go/ai/exp"
@@ -141,6 +143,28 @@ func TestWatcherPollsForUnnotifiedChanges(t *testing.T) {
 	ch := savePending(t, store, "p")
 	setStatus(t, pool, store, "p", aix.SnapshotStatusAborting)
 	waitFor(t, ch, func(st aix.SnapshotStatus) bool { return st == aix.SnapshotStatusAborting })
+}
+
+// TestWatcherWorksWithANotificationHandler checks that status changes arrive
+// on a pool whose connections set OnNotification: pgx hands every
+// notification to that handler and returns the store no payload.
+func TestWatcherWorksWithANotificationHandler(t *testing.T) {
+	var handled atomic.Int32
+	pool := testPool(t, func(cfg *pgxpool.Config) {
+		cfg.ConnConfig.OnNotification = func(*pgconn.PgConn, *pgconn.Notification) { handled.Add(1) }
+	})
+	store := newTestStore(t, pool, testTable(t, pool), WithPollInterval(0))
+	ch := savePending(t, store, "p")
+	if _, err := store.SaveSnapshot(context.Background(), "p", func(s *aix.SessionSnapshot[testState]) (*aix.SessionSnapshot[testState], error) {
+		s.Status = aix.SnapshotStatusAborting
+		return s, nil
+	}); err != nil {
+		t.Fatalf("SaveSnapshot: %v", err)
+	}
+	waitFor(t, ch, func(st aix.SnapshotStatus) bool { return st == aix.SnapshotStatusAborting })
+	if handled.Load() == 0 {
+		t.Error("the pool's OnNotification handler received nothing, so the test did not cover it")
+	}
 }
 
 // TestWatcherReleasesItsConnection checks that the LISTEN connection closes

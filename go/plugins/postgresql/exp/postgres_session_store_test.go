@@ -50,15 +50,25 @@ type testState struct {
 }
 
 // testPool returns a pool for the test database, closed when the test ends.
-func testPool(t *testing.T) *pgxpool.Pool {
+// Each non-nil configure edits the pool's config first.
+func testPool(t *testing.T, configure ...func(*pgxpool.Config)) *pgxpool.Pool {
 	t.Helper()
 	url := os.Getenv("GENKIT_TEST_POSTGRES_URL")
 	if url == "" {
 		t.Skip("Skipping: GENKIT_TEST_POSTGRES_URL not set")
 	}
-	pool, err := pgxpool.New(context.Background(), url)
+	cfg, err := pgxpool.ParseConfig(url)
 	if err != nil {
-		t.Fatalf("pgxpool.New: %v", err)
+		t.Fatalf("pgxpool.ParseConfig: %v", err)
+	}
+	for _, c := range configure {
+		if c != nil {
+			c(cfg)
+		}
+	}
+	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("pgxpool.NewWithConfig: %v", err)
 	}
 	t.Cleanup(pool.Close)
 	return pool
