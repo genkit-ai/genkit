@@ -140,6 +140,7 @@ describe('gpt-6-astra', () => {
     media: true,
     systemRole: true,
     output: ['text', 'json'],
+    constrained: 'all',
   };
 
   it('is in the supported GPT model catalog without tool support', () => {
