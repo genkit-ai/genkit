@@ -180,6 +180,14 @@ RequestHeaderFunction = Callable[
 RequestHeaders = dict[str, str] | RequestHeaderFunction
 
 
+def _require_name_list(arg: str, value: list[str] | None) -> list[str]:
+    # A missing bracket (models='llama3.2') would otherwise iterate the string
+    # and list one model per character.
+    if isinstance(value, str):
+        raise TypeError(f'{arg}= takes a list of Ollama model names, got a str. Did you mean {arg}=[{value!r}]?')
+    return list(value or [])
+
+
 class Ollama(Plugin):
     """Ollama plugin for Genkit.
 
@@ -218,8 +226,8 @@ class Ollama(Plugin):
             timeout: Optional request timeout (seconds) forwarded to the underlying
                 httpx client.
         """
-        self.models = models or []
-        self.embedders = embedders or []
+        self.models = _require_name_list('models', models)
+        self.embedders = _require_name_list('embedders', embedders)
         self.server_address = server_address or DEFAULT_OLLAMA_SERVER_URL
 
         self._request_headers_source = request_headers

@@ -927,3 +927,11 @@ async def test_list_actions_reprobes_a_repulled_model() -> None:
     assert show.await_count == 2
     assert actions[0].metadata is not None
     assert cast(dict[str, Any], actions[0].metadata['model']['supports'])['tools'] is True
+
+
+def test_a_bare_string_name_list_is_rejected() -> None:
+    # A missing bracket would iterate the string and list one model per character.
+    with pytest.raises(TypeError, match=r"models=\['llama3.2'\]"):
+        Ollama(models=cast(Any, 'llama3.2'))
+    with pytest.raises(TypeError, match=r"embedders=\['nomic-embed-text'\]"):
+        Ollama(embedders=cast(Any, 'nomic-embed-text'))
