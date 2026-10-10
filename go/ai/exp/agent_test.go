@@ -1362,45 +1362,39 @@ func TestAgent_FailedTurn_EmitsFailedTurnEnd(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
 
-	// Hold the agent fn open until the client has consumed the failed
-	// TurnEnd, so the chunk delivery is deterministic (the runtime stops
-	// forwarding chunks once fn returns with an error).
-	turnEndSeen := make(chan struct{})
+	// fn returns the turn's error at once, so the TurnEnd can still be in
+	// the router's hands when the invocation resolves. Repeated runs catch a
+	// resolution that drops it.
 	af := DefineCustomAgent(reg, "failedTurnEnd",
 		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
-			err := sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				return nil, fmt.Errorf("boom")
 			})
-			select {
-			case <-turnEndSeen:
-			case <-time.After(2 * time.Second):
-			}
-			return nil, err
 		},
 	)
 
-	conn, err := af.Connect(ctx)
-	if err != nil {
-		t.Fatalf("Connect: %v", err)
-	}
-	sendText(t, conn, "hi")
+	for i := range 200 {
+		conn, err := af.Connect(ctx)
+		if err != nil {
+			t.Fatalf("Connect: %v", err)
+		}
+		sendText(t, conn, "hi")
 
-	turnEnd := nextTurnEnd(t, conn)
-	close(turnEndSeen)
+		turnEnd := nextTurnEnd(t, conn)
+		if turnEnd.FinishReason != AgentFinishReasonFailed {
+			t.Fatalf("run %d: expected TurnEnd finish reason %q, got %q", i, AgentFinishReasonFailed, turnEnd.FinishReason)
+		}
+		if turnEnd.SnapshotID != "" {
+			t.Fatalf("run %d: failed turn must not snapshot its partial state, got snapshot %q", i, turnEnd.SnapshotID)
+		}
 
-	if turnEnd.FinishReason != AgentFinishReasonFailed {
-		t.Errorf("expected TurnEnd finish reason %q, got %q", AgentFinishReasonFailed, turnEnd.FinishReason)
-	}
-	if turnEnd.SnapshotID != "" {
-		t.Errorf("failed turn must not snapshot its partial state, got snapshot %q", turnEnd.SnapshotID)
-	}
-
-	out, err := conn.Output()
-	if err != nil {
-		t.Fatalf("Output: %v", err)
-	}
-	if out.FinishReason != AgentFinishReasonFailed {
-		t.Errorf("expected finish reason %q, got %q", AgentFinishReasonFailed, out.FinishReason)
+		out, err := conn.Output()
+		if err != nil {
+			t.Fatalf("run %d: Output: %v", i, err)
+		}
+		if out.FinishReason != AgentFinishReasonFailed {
+			t.Fatalf("run %d: expected finish reason %q, got %q", i, AgentFinishReasonFailed, out.FinishReason)
+		}
 	}
 }
 
