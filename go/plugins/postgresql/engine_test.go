@@ -176,7 +176,8 @@ func TestGetUser(t *testing.T) {
 }
 
 func TestPoolConfig(t *testing.T) {
-	t.Setenv("PGPASSWORD", "")
+	// pgx reads a password from the environment; the config must not keep it.
+	t.Setenv("PGPASSWORD", "from-the-environment")
 
 	// Credentials reach the connection config verbatim, whatever they contain.
 	cfg := engineConfig{user: "app user", password: `p a's\"s=word`, database: "my db"}

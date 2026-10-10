@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -33,9 +34,9 @@ import (
 )
 
 // listenerPIDs returns the backends LISTENing on the store's channel.
-func listenerPIDs(t *testing.T, pool *pgxpool.Pool, store *PostgresSessionStore[testState]) []int32 {
+func listenerPIDs(t *testing.T, store *PostgresSessionStore[testState]) []int32 {
 	t.Helper()
-	rows, err := pool.Query(context.Background(), `SELECT pid FROM pg_stat_activity WHERE query = $1`,
+	rows, err := store.pool.Query(context.Background(), `SELECT pid FROM pg_stat_activity WHERE query = $1`,
 		"LISTEN "+pgx.Identifier{store.watcher.channel}.Sanitize())
 	if err != nil {
 		t.Fatalf("query pg_stat_activity: %v", err)
@@ -47,11 +48,10 @@ func listenerPIDs(t *testing.T, pool *pgxpool.Pool, store *PostgresSessionStore[
 	return pids
 }
 
-// savePending writes a pending row and subscribes to it, returning the
-// subscription after its first value.
-func savePending(t *testing.T, store *PostgresSessionStore[testState], id string) <-chan aix.SnapshotStatus {
+// savePending writes a pending row and subscribes to it until ctx is cancelled
+// or the test ends, returning the subscription after its first value.
+func savePending(t *testing.T, ctx context.Context, store *PostgresSessionStore[testState], id string) <-chan aix.SnapshotStatus {
 	t.Helper()
-	ctx := context.Background()
 	now := time.Now()
 	if _, err := store.SaveSnapshot(ctx, id, func(*aix.SessionSnapshot[testState]) (*aix.SessionSnapshot[testState], error) {
 		return &aix.SessionSnapshot[testState]{SessionID: "sess", Status: aix.SnapshotStatusPending, CreatedAt: now, UpdatedAt: now, HeartbeatAt: &now}, nil
@@ -102,9 +102,9 @@ func eventually(t *testing.T, what string, cond func() bool) {
 
 // setStatus changes a row's status with plain SQL, the way an operator would,
 // so no notification is sent.
-func setStatus(t *testing.T, pool *pgxpool.Pool, store *PostgresSessionStore[testState], id string, st aix.SnapshotStatus) {
+func setStatus(t *testing.T, store *PostgresSessionStore[testState], id string, st aix.SnapshotStatus) {
 	t.Helper()
-	if _, err := pool.Exec(context.Background(), fmt.Sprintf(`UPDATE %s SET status = $1 WHERE snapshot_id = $2`, store.table), string(st), id); err != nil {
+	if _, err := store.pool.Exec(context.Background(), fmt.Sprintf(`UPDATE %s SET status = $1 WHERE snapshot_id = $2`, store.table), string(st), id); err != nil {
 		t.Fatalf("UPDATE status: %v", err)
 	}
 }
@@ -118,19 +118,19 @@ func TestWatcherRecoversALostConnection(t *testing.T) {
 		t.Run(fmt.Sprintf("poll %v", poll), func(t *testing.T) {
 			pool := testPool(t)
 			store := newTestStore(t, pool, testTable(t, pool), WithPollInterval(poll))
-			ch := savePending(t, store, "p")
+			ch := savePending(t, context.Background(), store, "p")
 
-			pids := listenerPIDs(t, pool, store)
+			pids := listenerPIDs(t, store)
 			if len(pids) != 1 {
 				t.Fatalf("%d backends LISTEN on the store's channel, want 1", len(pids))
 			}
-			setStatus(t, pool, store, "p", aix.SnapshotStatusAborting)
+			setStatus(t, store, "p", aix.SnapshotStatusAborting)
 			if _, err := pool.Exec(context.Background(), `SELECT pg_terminate_backend($1)`, pids[0]); err != nil {
 				t.Fatalf("pg_terminate_backend: %v", err)
 			}
 			waitFor(t, ch, func(st aix.SnapshotStatus) bool { return st == aix.SnapshotStatusAborting })
 			eventually(t, "the watcher LISTENs on a new connection", func() bool {
-				now := listenerPIDs(t, pool, store)
+				now := listenerPIDs(t, store)
 				return len(now) == 1 && now[0] != pids[0]
 			})
 		})
@@ -142,8 +142,8 @@ func TestWatcherRecoversALostConnection(t *testing.T) {
 func TestWatcherPollsForUnnotifiedChanges(t *testing.T) {
 	pool := testPool(t)
 	store := newTestStore(t, pool, testTable(t, pool), WithPollInterval(50*time.Millisecond))
-	ch := savePending(t, store, "p")
-	setStatus(t, pool, store, "p", aix.SnapshotStatusAborting)
+	ch := savePending(t, context.Background(), store, "p")
+	setStatus(t, store, "p", aix.SnapshotStatusAborting)
 	waitFor(t, ch, func(st aix.SnapshotStatus) bool { return st == aix.SnapshotStatusAborting })
 }
 
@@ -156,7 +156,7 @@ func TestWatcherWorksWithANotificationHandler(t *testing.T) {
 		cfg.ConnConfig.OnNotification = func(*pgconn.PgConn, *pgconn.Notification) { handled.Add(1) }
 	})
 	store := newTestStore(t, pool, testTable(t, pool), WithPollInterval(0))
-	ch := savePending(t, store, "p")
+	ch := savePending(t, context.Background(), store, "p")
 	if _, err := store.SaveSnapshot(context.Background(), "p", func(s *aix.SessionSnapshot[testState]) (*aix.SessionSnapshot[testState], error) {
 		s.Status = aix.SnapshotStatusAborting
 		return s, nil
@@ -169,26 +169,38 @@ func TestWatcherWorksWithANotificationHandler(t *testing.T) {
 	}
 }
 
+// TestWatcherReadsOnAnEmptyNotification checks that a status change whose
+// notification payload is too large to send still arrives: the store sends an
+// empty notification, and the watcher re-reads its rows.
+func TestWatcherReadsOnAnEmptyNotification(t *testing.T) {
+	pool := testPool(t)
+	store := newTestStore(t, pool, testTable(t, pool), WithPollInterval(0))
+	// The ID compresses well, so the row fits the index, but the payload that
+	// names it does not fit a notification.
+	id := strings.Repeat("x", maxNotifyPayload)
+	ch := savePending(t, context.Background(), store, id)
+	if _, err := store.SaveSnapshot(context.Background(), id, func(s *aix.SessionSnapshot[testState]) (*aix.SessionSnapshot[testState], error) {
+		s.Status = aix.SnapshotStatusAborting
+		return s, nil
+	}); err != nil {
+		t.Fatalf("SaveSnapshot: %v", err)
+	}
+	waitFor(t, ch, func(st aix.SnapshotStatus) bool { return st == aix.SnapshotStatusAborting })
+}
+
 // TestWatcherReleasesItsConnection checks that the LISTEN connection closes
 // once the last subscription ends, so an idle store holds no connection.
 func TestWatcherReleasesItsConnection(t *testing.T) {
 	pool := testPool(t)
 	store := newTestStore(t, pool, testTable(t, pool))
-	now := time.Now()
-	if _, err := store.SaveSnapshot(context.Background(), "p", func(*aix.SessionSnapshot[testState]) (*aix.SessionSnapshot[testState], error) {
-		return &aix.SessionSnapshot[testState]{SessionID: "sess", Status: aix.SnapshotStatusPending, CreatedAt: now, UpdatedAt: now}, nil
-	}); err != nil {
-		t.Fatalf("SaveSnapshot: %v", err)
-	}
-	subCtx, cancel := context.WithCancel(context.Background())
-	ch := store.OnSnapshotStatusChange(subCtx, "p")
-	<-ch
-	if n := len(listenerPIDs(t, pool, store)); n != 1 {
+	ctx, cancel := context.WithCancel(context.Background())
+	savePending(t, ctx, store, "p")
+	if n := len(listenerPIDs(t, store)); n != 1 {
 		t.Fatalf("%d backends LISTEN while subscribed, want 1", n)
 	}
 	cancel()
 	eventually(t, "the LISTEN connection closes after the last subscription ends", func() bool {
-		return len(listenerPIDs(t, pool, store)) == 0
+		return len(listenerPIDs(t, store)) == 0
 	})
 }
 
@@ -243,6 +255,23 @@ func (f *fakeRows) read(ctx context.Context, keys []watchKey) (map[watchKey]aix.
 	return found, nil
 }
 
+// holdPoll starts a poll of w whose read sees the rows as they are now, and
+// returns once that read started. The poll delivers what it read when
+// release is called, which returns once the poll finished.
+func holdPoll(ctx context.Context, w *watcher) (release func()) {
+	g := newGate()
+	polled := make(chan struct{})
+	go func() {
+		w.pollAll(g.on(ctx))
+		close(polled)
+	}()
+	<-g.started
+	return func() {
+		close(g.release)
+		<-polled
+	}
+}
+
 type gateKey struct{}
 
 // gate holds a read between its start and its result.
@@ -270,17 +299,10 @@ func TestWatcherOrdersReadsByStart(t *testing.T) {
 	go func() { subscribed <- w.subscribe(slow.on(ctx), key) }()
 	<-slow.started
 	rows.set(key, aix.SnapshotStatusAborting)
-	poll := newGate()
-	polled := make(chan struct{})
-	go func() {
-		w.pollAll(poll.on(ctx))
-		close(polled)
-	}()
-	<-poll.started
+	releasePoll := holdPoll(ctx, w)
 	close(slow.release)
 	second := <-subscribed
-	close(poll.release)
-	<-polled
+	releasePoll()
 
 	for name, ch := range map[string]<-chan aix.SnapshotStatus{"first": first, "second": second} {
 		select {
@@ -324,18 +346,11 @@ func TestWatcherClosesASubscriptionToAMissingRow(t *testing.T) {
 	rows.fail(nil)
 	// A poll starts while the row is missing. Then the row is created, and a
 	// second subscription's first read fails.
-	poll := newGate()
-	polled := make(chan struct{})
-	go func() {
-		w.pollAll(poll.on(ctx))
-		close(polled)
-	}()
-	<-poll.started
+	releasePoll := holdPoll(ctx, w)
 	rows.set(key, aix.SnapshotStatusPending)
 	rows.fail(refused)
 	late := w.subscribe(ctx, key)
-	close(poll.release)
-	<-polled
+	releasePoll()
 
 	if !isClosed(t, early) {
 		t.Error("the subscription made while the row was missing is open after a read found no row")
@@ -355,18 +370,11 @@ func TestWatcherSkipsReadsOlderThanASubscription(t *testing.T) {
 	w := newDrivenWatcher(rows.read)
 	<-w.subscribe(ctx, key)
 
-	poll := newGate()
-	polled := make(chan struct{})
-	go func() {
-		w.pollAll(poll.on(ctx))
-		close(polled)
-	}()
-	<-poll.started
+	releasePoll := holdPoll(ctx, w)
 	rows.set(key, aix.SnapshotStatusAborting)
 	rows.fail(errors.New("connection refused"))
 	late := w.subscribe(ctx, key)
-	close(poll.release)
-	<-polled
+	releasePoll()
 
 	select {
 	case st := <-late:

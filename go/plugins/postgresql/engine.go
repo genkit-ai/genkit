@@ -202,8 +202,11 @@ func poolConfig(cfg engineConfig, usingIAMAuth bool) (*pgxpool.Config, error) {
 	}
 	config.ConnConfig.User = cfg.user
 	config.ConnConfig.Database = cfg.database
-	if !usingIAMAuth {
-		config.ConnConfig.Password = cfg.password
+	// Set the password even when it is empty: ParseConfig fills it from
+	// PGPASSWORD or a .pgpass file.
+	config.ConnConfig.Password = cfg.password
+	if usingIAMAuth {
+		config.ConnConfig.Password = ""
 	}
 	return config, nil
 }

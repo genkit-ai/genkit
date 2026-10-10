@@ -79,8 +79,8 @@ const (
 	// a walk through corrupted rows.
 	maxChainHops = 1 << 20
 	// maxNotifyPayload keeps a notification under PostgreSQL's 8000-byte
-	// payload limit. A larger one is not sent, and the poll delivers the
-	// change instead.
+	// payload limit. A larger one goes empty, and every watcher then re-reads
+	// the rows it watches.
 	maxNotifyPayload = 7900
 	// layoutComment marks a table this store created, and the version of its
 	// layout, so a later version can recognize and migrate it.
@@ -249,18 +249,21 @@ var rowColumns = []string{
 // state and the chain bookkeeping.
 var metadataColumns = rowColumns[:9]
 
-// columns renders cols as a select list, each qualified by alias when alias is
-// not empty.
-func columns(alias string, cols []string) string {
-	if alias == "" {
-		return strings.Join(cols, ", ")
-	}
-	qualified := make([]string, len(cols))
-	for i, c := range cols {
-		qualified[i] = alias + "." + c
-	}
-	return strings.Join(qualified, ", ")
-}
+// Select lists of rowColumns and metadataColumns, and of rowColumns qualified
+// by the alias p.
+var (
+	rowList      = strings.Join(rowColumns, ", ")
+	metadataList = strings.Join(metadataColumns, ", ")
+	parentList   = "p." + strings.Join(rowColumns, ", p.")
+)
+
+// Row selectors for reads, where $2 is the key: a snapshot ID, or a session ID
+// for the session's latest row (the greatest CreatedAt, ties broken by the
+// greater snapshot ID in byte order).
+const (
+	bySnapshotID    = `snapshot_id = $2`
+	latestOfSession = `session_id = $2 ORDER BY created_at DESC, snapshot_id DESC LIMIT 1`
+)
 
 // ensureTable creates the snapshot table and its indexes when the table does
 // not exist, checks that an existing table has the columns the store reads,
@@ -318,12 +321,7 @@ func (s *PostgresSessionStore[State]) ensureTable(ctx context.Context, tableName
 			return 0, err
 		}
 	}
-	rows, err := s.pool.Query(ctx, fmt.Sprintf(`SELECT %s FROM %s LIMIT 0`, columns("", rowColumns), s.table))
-	if err == nil {
-		rows.Close()
-		err = rows.Err()
-	}
-	if err != nil {
+	if _, err := s.pool.Exec(ctx, fmt.Sprintf(`SELECT %s FROM %s LIMIT 0`, rowList, s.table)); err != nil {
 		return 0, fmt.Errorf("table %s exists but does not have the session snapshot layout: %w", s.table, err)
 	}
 	return oid, nil
@@ -360,15 +358,11 @@ type row struct {
 	patch        []byte
 }
 
-// fields returns the scan targets for rowColumns, or for metadataColumns when
-// metadataOnly is set.
-func (r *row) fields(metadataOnly bool) []any {
-	f := []any{&r.snapshotID, &r.sessionID, &r.parentID, &r.createdAt, &r.updatedAt, &r.heartbeatAt,
-		&r.status, &r.finishReason, &r.errJSON}
-	if metadataOnly {
-		return f
-	}
-	return append(f, &r.kind, &r.depth, &r.state, &r.patch)
+// fields returns the scan targets for rowColumns. Its first
+// len(metadataColumns) entries are the targets for metadataColumns.
+func (r *row) fields() []any {
+	return []any{&r.snapshotID, &r.sessionID, &r.parentID, &r.createdAt, &r.updatedAt, &r.heartbeatAt,
+		&r.status, &r.finishReason, &r.errJSON, &r.kind, &r.depth, &r.state, &r.patch}
 }
 
 // toSnapshot converts r's metadata into a snapshot carrying state.
@@ -404,50 +398,26 @@ type querier interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 }
 
-// chainQuery returns the recursive query that reads a row and every row back
-// to its checkpoint, the row first. anchor selects the row, and $1 is always
-// the prefix.
-func (s *PostgresSessionStore[State]) chainQuery(anchor string) string {
-	return fmt.Sprintf(`WITH RECURSIVE chain AS (
-		(%s)
+// readChain reads the row sel selects by key and the rows back to its
+// checkpoint, the row first, in one query. It returns nil when there is no
+// such row.
+func (s *PostgresSessionStore[State]) readChain(ctx context.Context, q querier, prefix, sel, key string) ([]row, error) {
+	rows, err := q.Query(ctx, fmt.Sprintf(`WITH RECURSIVE chain AS (
+		(SELECT %[1]s, 0 AS hop FROM %[2]s WHERE prefix = $1 AND %[3]s)
 		UNION ALL
-		SELECT %s, c.hop + 1 FROM chain c
-		JOIN %s p ON p.prefix = $1 AND p.snapshot_id = c.parent_id
-		WHERE c.kind = 'diff' AND c.hop < %d
+		SELECT %[4]s, c.hop + 1 FROM chain c
+		JOIN %[2]s p ON p.prefix = $1 AND p.snapshot_id = c.parent_id
+		WHERE c.kind = 'diff' AND c.hop < %[5]d
 	)
-	SELECT %s FROM chain ORDER BY hop`,
-		anchor, columns("p", rowColumns), s.table, maxChainHops, columns("", rowColumns))
-}
-
-// readChain reads the row id and the rows back to its checkpoint. It returns
-// nil when the row does not exist.
-func (s *PostgresSessionStore[State]) readChain(ctx context.Context, q querier, prefix, id string) ([]row, error) {
-	anchor := fmt.Sprintf(`SELECT %s, 0 AS hop FROM %s WHERE prefix = $1 AND snapshot_id = $2`, columns("", rowColumns), s.table)
-	return collectChain(q.Query(ctx, s.chainQuery(anchor), prefix, id))
-}
-
-// readLatestChain is readChain for a session's latest row: the greatest
-// CreatedAt, ties broken by the greater snapshot ID in byte order.
-func (s *PostgresSessionStore[State]) readLatestChain(ctx context.Context, q querier, prefix, sessionID string) ([]row, error) {
-	anchor := fmt.Sprintf(`SELECT %s, 0 AS hop FROM %s WHERE prefix = $1 AND session_id = $2
-		ORDER BY created_at DESC, snapshot_id DESC LIMIT 1`, columns("", rowColumns), s.table)
-	return collectChain(q.Query(ctx, s.chainQuery(anchor), prefix, sessionID))
-}
-
-func collectChain(rows pgx.Rows, err error) ([]row, error) {
+	SELECT %[1]s FROM chain ORDER BY hop`, rowList, s.table, sel, parentList, maxChainHops), prefix, key)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var chain []row
-	for rows.Next() {
+	return pgx.AppendRows([]row(nil), rows, func(cr pgx.CollectableRow) (row, error) {
 		var r row
-		if err := rows.Scan(r.fields(false)...); err != nil {
-			return nil, err
-		}
-		chain = append(chain, r)
-	}
-	return chain, rows.Err()
+		err := cr.Scan(r.fields()...)
+		return r, err
+	})
 }
 
 // materialize returns the snapshot at the head of chain, with the state its
@@ -457,25 +427,20 @@ func materialize[State any](chain []row) (*aix.SessionSnapshot[State], error) {
 		return nil, nil
 	}
 	head := &chain[0]
-	var state *aix.SessionState[State]
-	if head.kind == kindCheckpoint {
-		if head.state != nil {
-			state = new(aix.SessionState[State])
-			if err := json.Unmarshal(head.state, state); err != nil {
-				return nil, fmt.Errorf("decode the state of snapshot %q: %w", head.snapshotID, err)
-			}
-		}
-	} else {
+	stateJSON := head.state
+	if head.kind != kindCheckpoint {
 		doc, err := chainState(chain)
 		if err != nil {
 			return nil, err
 		}
-		b, err := json.Marshal(doc)
-		if err != nil {
+		if stateJSON, err = json.Marshal(doc); err != nil {
 			return nil, fmt.Errorf("encode the state of snapshot %q: %w", head.snapshotID, err)
 		}
+	}
+	var state *aix.SessionState[State]
+	if stateJSON != nil {
 		state = new(aix.SessionState[State])
-		if err := json.Unmarshal(b, state); err != nil {
+		if err := json.Unmarshal(stateJSON, state); err != nil {
 			return nil, fmt.Errorf("decode the state of snapshot %q: %w", head.snapshotID, err)
 		}
 	}
@@ -483,7 +448,9 @@ func materialize[State any](chain []row) (*aix.SessionSnapshot[State], error) {
 }
 
 // chainState applies the diffs of chain, oldest first, onto the state of the
-// checkpoint that ends it, and returns the head's state as a JSON value.
+// checkpoint that ends it, and returns the head's state as a JSON value. The
+// diffs apply as one patch, so the state is decoded once however long the
+// chain is.
 func chainState(chain []row) (any, error) {
 	base := &chain[len(chain)-1]
 	if base.kind != kindCheckpoint {
@@ -491,19 +458,19 @@ func chainState(chain []row) (any, error) {
 	}
 	var doc any
 	if base.state != nil {
-		if err := json.Unmarshal(base.state, &doc); err != nil {
-			return nil, fmt.Errorf("decode the state of snapshot %q: %w", base.snapshotID, err)
-		}
+		doc = json.RawMessage(base.state)
 	}
+	var ops aix.JSONPatch
 	for i := len(chain) - 2; i >= 0; i-- {
 		var patch aix.JSONPatch
 		if err := json.Unmarshal(chain[i].patch, &patch); err != nil {
 			return nil, fmt.Errorf("decode the patch of snapshot %q: %w", chain[i].snapshotID, err)
 		}
-		var err error
-		if doc, err = aix.ApplyPatch(doc, patch); err != nil {
-			return nil, fmt.Errorf("apply the patch of snapshot %q: %w", chain[i].snapshotID, err)
-		}
+		ops = append(ops, patch...)
+	}
+	doc, err := aix.ApplyPatch(doc, ops)
+	if err != nil {
+		return nil, fmt.Errorf("apply the patches of snapshot %q: %w", chain[0].snapshotID, err)
 	}
 	return doc, nil
 }
@@ -516,15 +483,7 @@ func (s *PostgresSessionStore[State]) GetSnapshot(ctx context.Context, snapshotI
 	if snapshotID == "" {
 		return nil, nil
 	}
-	prefix, err := s.prefixFor(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("postgresql: PostgresSessionStore.GetSnapshot: %w", err)
-	}
-	chain, err := s.readChain(ctx, s.pool, prefix, snapshotID)
-	if err != nil {
-		return nil, fmt.Errorf("postgresql: PostgresSessionStore.GetSnapshot: %w", err)
-	}
-	snap, err := materialize[State](chain)
+	snap, err := s.read(ctx, bySnapshotID, snapshotID)
 	if err != nil {
 		return nil, fmt.Errorf("postgresql: PostgresSessionStore.GetSnapshot: %w", err)
 	}
@@ -538,15 +497,7 @@ func (s *PostgresSessionStore[State]) GetLatestSnapshot(ctx context.Context, ses
 	if sessionID == "" {
 		return nil, errors.New("postgresql: PostgresSessionStore.GetLatestSnapshot: session ID is empty")
 	}
-	prefix, err := s.prefixFor(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("postgresql: PostgresSessionStore.GetLatestSnapshot: %w", err)
-	}
-	chain, err := s.readLatestChain(ctx, s.pool, prefix, sessionID)
-	if err != nil {
-		return nil, fmt.Errorf("postgresql: PostgresSessionStore.GetLatestSnapshot: %w", err)
-	}
-	snap, err := materialize[State](chain)
+	snap, err := s.read(ctx, latestOfSession, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("postgresql: PostgresSessionStore.GetLatestSnapshot: %w", err)
 	}
@@ -560,12 +511,7 @@ func (s *PostgresSessionStore[State]) GetSnapshotMetadata(ctx context.Context, s
 	if snapshotID == "" {
 		return nil, nil
 	}
-	prefix, err := s.prefixFor(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("postgresql: PostgresSessionStore.GetSnapshotMetadata: %w", err)
-	}
-	snap, err := s.readMetadata(ctx, fmt.Sprintf(`SELECT %s FROM %s WHERE prefix = $1 AND snapshot_id = $2`,
-		columns("", metadataColumns), s.table), prefix, snapshotID)
+	snap, err := s.readMetadata(ctx, bySnapshotID, snapshotID)
 	if err != nil {
 		return nil, fmt.Errorf("postgresql: PostgresSessionStore.GetSnapshotMetadata: %w", err)
 	}
@@ -578,26 +524,41 @@ func (s *PostgresSessionStore[State]) GetLatestSnapshotMetadata(ctx context.Cont
 	if sessionID == "" {
 		return nil, errors.New("postgresql: PostgresSessionStore.GetLatestSnapshotMetadata: session ID is empty")
 	}
-	prefix, err := s.prefixFor(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("postgresql: PostgresSessionStore.GetLatestSnapshotMetadata: %w", err)
-	}
-	snap, err := s.readMetadata(ctx, fmt.Sprintf(`SELECT %s FROM %s WHERE prefix = $1 AND session_id = $2
-		ORDER BY created_at DESC, snapshot_id DESC LIMIT 1`, columns("", metadataColumns), s.table), prefix, sessionID)
+	snap, err := s.readMetadata(ctx, latestOfSession, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("postgresql: PostgresSessionStore.GetLatestSnapshotMetadata: %w", err)
 	}
 	return snap, nil
 }
 
-// readMetadata runs a query for at most one row's metadata columns and
-// converts the row without state. It returns nil when there is no row.
-func (s *PostgresSessionStore[State]) readMetadata(ctx context.Context, query string, args ...any) (*aix.SessionSnapshot[State], error) {
+// read returns the snapshot sel selects by key, with its state, or nil when
+// there is none.
+func (s *PostgresSessionStore[State]) read(ctx context.Context, sel, key string) (*aix.SessionSnapshot[State], error) {
+	prefix, err := s.prefixFor(ctx)
+	if err != nil {
+		return nil, err
+	}
+	chain, err := s.readChain(ctx, s.pool, prefix, sel, key)
+	if err != nil {
+		return nil, err
+	}
+	return materialize[State](chain)
+}
+
+// readMetadata returns the snapshot sel selects by key, without its state, or
+// nil when there is none.
+func (s *PostgresSessionStore[State]) readMetadata(ctx context.Context, sel, key string) (*aix.SessionSnapshot[State], error) {
+	prefix, err := s.prefixFor(ctx)
+	if err != nil {
+		return nil, err
+	}
 	var r row
-	if err := s.pool.QueryRow(ctx, query, args...).Scan(r.fields(true)...); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, nil
-		}
+	err = s.pool.QueryRow(ctx, fmt.Sprintf(`SELECT %s FROM %s WHERE prefix = $1 AND %s`, metadataList, s.table, sel),
+		prefix, key).Scan(r.fields()[:len(metadataColumns)]...)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
 		return nil, err
 	}
 	return toSnapshot[State](&r, nil)
@@ -627,7 +588,7 @@ func (s *PostgresSessionStore[State]) SaveSnapshot(
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, hashKey(s.tableID, prefix, id)); err != nil {
 			return err
 		}
-		chain, err := s.readChain(ctx, tx, prefix, id)
+		chain, err := s.readChain(ctx, tx, prefix, bySnapshotID, id)
 		if err != nil {
 			return err
 		}
@@ -809,7 +770,7 @@ func (s *PostgresSessionStore[State]) plan(ctx context.Context, tx pgx.Tx, prefi
 	if !parentHasState || parentDepth+1 >= s.checkpointInterval {
 		return checkpoint, nil
 	}
-	chain, err := s.readChain(ctx, tx, prefix, parentID)
+	chain, err := s.readChain(ctx, tx, prefix, bySnapshotID, parentID)
 	if err != nil {
 		return writePlan{}, err
 	}
@@ -827,11 +788,7 @@ func (s *PostgresSessionStore[State]) plan(ctx context.Context, tx pgx.Tx, prefi
 		// state, so it can still be stored, as a checkpoint.
 		return checkpoint, nil
 	}
-	var nextState any
-	if err := json.Unmarshal(stateJSON, &nextState); err != nil {
-		return writePlan{}, fmt.Errorf("decode state: %w", err)
-	}
-	patch, err := json.Marshal(aix.Diff(parentState, nextState))
+	patch, err := json.Marshal(aix.Diff(parentState, stateJSON))
 	if err != nil {
 		return writePlan{}, fmt.Errorf("encode patch: %w", err)
 	}
@@ -850,7 +807,7 @@ func (s *PostgresSessionStore[State]) notify(ctx context.Context, tx pgx.Tx, pre
 		return err
 	}
 	if len(payload) > maxNotifyPayload {
-		return nil
+		payload = nil // the watchers re-read every row they watch
 	}
 	_, err = tx.Exec(ctx, `SELECT pg_notify($1, $2)`, s.watcher.channel, string(payload))
 	return err
@@ -869,18 +826,14 @@ func (s *PostgresSessionStore[State]) notify(ctx context.Context, tx pgx.Tx, pre
 // reader may skip intermediate values. Treat a received value as "the status is
 // now X", not "X happened once".
 func (s *PostgresSessionStore[State]) OnSnapshotStatusChange(ctx context.Context, snapshotID string) <-chan aix.SnapshotStatus {
-	if snapshotID == "" {
-		ch := make(chan aix.SnapshotStatus)
-		close(ch)
-		return ch
+	if snapshotID != "" {
+		if prefix, err := s.prefixFor(ctx); err == nil {
+			return s.watcher.subscribe(ctx, watchKey{prefix: prefix, id: snapshotID})
+		}
 	}
-	prefix, err := s.prefixFor(ctx)
-	if err != nil {
-		ch := make(chan aix.SnapshotStatus)
-		close(ch)
-		return ch
-	}
-	return s.watcher.subscribe(ctx, watchKey{prefix: prefix, id: snapshotID})
+	ch := make(chan aix.SnapshotStatus)
+	close(ch)
+	return ch
 }
 
 // readStatuses reads the status of each watched row that exists.
@@ -896,17 +849,16 @@ func (s *PostgresSessionStore[State]) readStatuses(ctx context.Context, keys []w
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	found := make(map[watchKey]aix.SnapshotStatus, len(keys))
-	for rows.Next() {
-		var k watchKey
-		var st string
-		if err := rows.Scan(&k.prefix, &k.id, &st); err != nil {
-			return nil, err
-		}
+	var k watchKey
+	var st string
+	if _, err := pgx.ForEachRow(rows, []any{&k.prefix, &k.id, &st}, func() error {
 		found[k] = aix.SnapshotStatus(st)
+		return nil
+	}); err != nil {
+		return nil, err
 	}
-	return found, rows.Err()
+	return found, nil
 }
 
 // --- Helpers ---

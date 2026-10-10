@@ -183,12 +183,7 @@ func TestNewPostgresSessionStore(t *testing.T) {
 		if store.pool != pool {
 			t.Error("the store does not use the plugin's pool")
 		}
-		now := time.Now()
-		if _, err := store.SaveSnapshot(ctx, "x", func(*aix.SessionSnapshot[testState]) (*aix.SessionSnapshot[testState], error) {
-			return &aix.SessionSnapshot[testState]{SessionID: "s", CreatedAt: now, UpdatedAt: now}, nil
-		}); err != nil {
-			t.Fatalf("SaveSnapshot: %v", err)
-		}
+		save(t, store, "x", "", time.Now())
 		if got, err := store.GetSnapshot(ctx, "x"); err != nil || got == nil {
 			t.Errorf("GetSnapshot = (%v, %v), want the row", got, err)
 		}
@@ -272,22 +267,14 @@ func TestTableSetup(t *testing.T) {
 		// Instances starting together all find or create the same table.
 		table := testTable(t, pool)
 		var wg sync.WaitGroup
-		errs := make(chan error, 4)
 		for range 4 {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				_, err := newPostgresSessionStore[testState](ctx, pool, WithTableName(table))
-				errs <- err
-			}()
+			wg.Go(func() {
+				if _, err := newPostgresSessionStore[testState](ctx, pool, WithTableName(table)); err != nil {
+					t.Errorf("newPostgresSessionStore: %v", err)
+				}
+			})
 		}
 		wg.Wait()
-		close(errs)
-		for err := range errs {
-			if err != nil {
-				t.Errorf("newPostgresSessionStore: %v", err)
-			}
-		}
 	})
 
 	t.Run("InSchema", func(t *testing.T) {
@@ -320,6 +307,16 @@ func TestTableSetup(t *testing.T) {
 			t.Errorf("newPostgresSessionStore over a foreign table: err = %v, want a layout error", err)
 		}
 	})
+}
+
+// largeTopics returns topics that make a state large next to a one-topic
+// change, so a child of it is stored as a diff.
+func largeTopics() []string {
+	topics := make([]string, 30)
+	for i := range topics {
+		topics[i] = fmt.Sprintf("a topic that keeps the state large, number %02d", i)
+	}
+	return topics
 }
 
 // save writes a completed row with the given messages, created at at.
@@ -404,10 +401,7 @@ func TestRejectsStateChangeUnderADiff(t *testing.T) {
 	pool := testPool(t)
 	store := newTestStore(t, pool, testTable(t, pool))
 
-	topics := make([]string, 30)
-	for i := range topics {
-		topics[i] = fmt.Sprintf("a topic that keeps the state large, number %02d", i)
-	}
+	topics := largeTopics()
 	at := time.Now()
 	save(t, store, "parent", "", at, topics...)
 	save(t, store, "child", "parent", at.Add(time.Millisecond), append(topics, "one more")...)
@@ -465,26 +459,18 @@ func TestSavesUnderSerializableDefault(t *testing.T) {
 	save(t, store, "row", "", time.Now())
 
 	const writers = 8
-	errs := make(chan error, writers)
 	var wg sync.WaitGroup
 	for i := range writers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			_, err := store.SaveSnapshot(ctx, "row", func(s *aix.SessionSnapshot[testState]) (*aix.SessionSnapshot[testState], error) {
+		wg.Go(func() {
+			if _, err := store.SaveSnapshot(ctx, "row", func(s *aix.SessionSnapshot[testState]) (*aix.SessionSnapshot[testState], error) {
 				s.State.Custom.Topics = append(s.State.Custom.Topics, fmt.Sprintf("writer %d", i))
 				return s, nil
-			})
-			errs <- err
-		}()
+			}); err != nil {
+				t.Errorf("SaveSnapshot: %v", err)
+			}
+		})
 	}
 	wg.Wait()
-	close(errs)
-	for err := range errs {
-		if err != nil {
-			t.Errorf("SaveSnapshot: %v", err)
-		}
-	}
 	got, err := store.GetSnapshot(ctx, "row")
 	if err != nil || got == nil {
 		t.Fatalf("GetSnapshot = (%v, %v), want the row", got, err)
@@ -503,10 +489,7 @@ func TestDiffWaitsForItsParentsChange(t *testing.T) {
 	table := testTable(t, pool)
 	store := newTestStore(t, pool, table)
 
-	topics := make([]string, 30)
-	for i := range topics {
-		topics[i] = fmt.Sprintf("a topic that keeps the state large, number %02d", i)
-	}
+	topics := largeTopics()
 	at := time.Now()
 	save(t, store, "parent", "", at, topics...)
 
