@@ -271,22 +271,19 @@ func (a *Agents) foldDetachOutcome(ctx context.Context, ref aix.AgentRef, st *ag
 		}
 		a.labelTask(st, &result, words.label)
 		return result
-	case out.FinishReason == aix.AgentFinishReasonFailed && maybeDetachRejection(agent, out):
-		// FAILED_PRECONDITION is how the runtime rejects a detach-incapable
-		// agent (no session store, or one without subscriber support). The
-		// error was decoded from the wire, which keeps only the status name
-		// (never the sentinel), and the status is the runtime's general
-		// precondition category, so the hint is phrased conditionally rather
-		// than asserting the cause. Only this failure earns its slot back:
-		// the retry it points at is the synchronous launch, so the cap must
-		// not turn that retry away. Every other failure is the sub-agent's
-		// own, and it ran to produce it, so it counts against the cap, or an
-		// agent that always fails could be launched forever.
+	case out.FinishReason == aix.AgentFinishReasonFailed && isDetachRejection(out):
+		// The runtime refused the detach (no session store, or one without
+		// subscriber support) and said so with a reason that survives the
+		// wire. Only this failure earns its slot back: the retry it points at
+		// is the synchronous launch, so the cap must not turn that retry away.
+		// Every other failure is the sub-agent's own, and it ran to produce
+		// it, so it counts against the cap, or an agent that always fails
+		// could be launched forever.
 		msg := subAgentFailureMessage(out.FinishReason, out.Error, out.Message)
 		logger.Warn(ctx, "background launch rejected", "agent", ref.Name, "error", msg)
 		a.releaseDelegation(st)
 		return delegationResult{Response: fmt.Sprintf(
-			"%s: %s If this agent lacks a session store that supports background work, %s.",
+			"%s: %s This agent lacks a session store that supports background work, so it cannot run in the background; %s.",
 			words.errPrefix, msg, words.withoutBackground)}
 	default:
 		// The run settled before the detach landed, or failed on its own;
@@ -299,16 +296,14 @@ func (a *Agents) foldDetachOutcome(ctx context.Context, ref aix.AgentRef, st *ag
 	}
 }
 
-// maybeDetachRejection reports whether a failed background run may be the
-// runtime's rejection of a detach-incapable agent. Only a metadata-less agent
-// can reach it: one that publishes metadata and cannot detach is refused by
-// the caller's pre-flight, so its own FAILED_PRECONDITIONs must not earn the
-// capability hedge (they came from the agent's turn, and refunding them would
-// leave the cap unable to bite). The rejection was decoded from the wire,
-// which keeps only the status name, so this is a category check and callers
-// phrase their hint conditionally rather than asserting the cause.
-func maybeDetachRejection(agent *aix.AgentHandle, out *aix.AgentOutput[json.RawMessage]) bool {
-	return agent.Metadata() == nil && out.Error != nil && out.Error.Status == status.FailedPrecondition
+// isDetachRejection reports whether a failed background run is the runtime's
+// refusal of a detach it cannot support, which it marks with
+// [aix.ReasonDetachUnsupported]. The status alone cannot say so: an agent's
+// own work fails with FAILED_PRECONDITION too, and refunding those would
+// leave the cap unable to bite. A server too old to send the reason gets no
+// refund, which keeps the cap safe.
+func isDetachRejection(out *aix.AgentOutput[json.RawMessage]) bool {
+	return out.Error != nil && out.Error.Details["reason"] == aix.ReasonDetachUnsupported
 }
 
 // backgroundTaskTools builds the shared background-task tools added when

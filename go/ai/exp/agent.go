@@ -1644,16 +1644,23 @@ func disconnectErr(clientCtx context.Context, cause error) error {
 // pending snapshot, and to abort it and refresh its heartbeat via ordinary
 // SaveSnapshot writes) and a [SnapshotSubscriber] (so the runtime can observe
 // the abort flip and promptly cancel the background work without polling).
+//
+// The refusal is public, so its message reaches a client unredacted, and it
+// carries [ReasonDetachUnsupported] so a caller can tell it from the agent's
+// own failures.
 func (rt *agentRuntime[State]) checkDetachCapabilities() error {
+	var e *status.Error
 	if rt.cfg.store == nil {
-		return status.Errorf(ErrSessionStoreNotConfigured,
+		e = status.PublicErrorf(ErrSessionStoreNotConfigured,
 			"agent %q: detach requires a session store", rt.name)
-	}
-	if _, ok := rt.cfg.store.(SnapshotSubscriber); !ok {
-		return status.Errorf(status.ErrFailedPrecondition,
+	} else if _, ok := rt.cfg.store.(SnapshotSubscriber); !ok {
+		e = status.PublicErrorf(status.ErrFailedPrecondition,
 			"agent %q: detach requires a session store implementing SnapshotSubscriber", rt.name)
+	} else {
+		return nil
 	}
-	return nil
+	e.Details = map[string]any{"reason": ReasonDetachUnsupported}
+	return e
 }
 
 // drainAndWait performs a synchronous shutdown: cancel work, stop router

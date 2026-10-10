@@ -37,7 +37,6 @@ package exp
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 
 	"github.com/firebase/genkit/go/ai"
@@ -337,7 +336,9 @@ func (a *Agents) runContinueFrom(ctx context.Context, ref aix.AgentRef, st *agen
 		aix.WithSnapshotID[json.RawMessage](snapshotID))
 	if err != nil {
 		logger.Warn(ctx, "sub-agent continuation failed", "agent", ref.Name, "taskId", in.TaskID, "error", err)
-		if errors.Is(err, status.ErrFailedPrecondition) {
+		// Matched by status name: an error from a remote agent carries no
+		// sentinel.
+		if s, ok := status.Classified(err); ok && s == status.FailedPrecondition {
 			// The runtime rejected the resume point itself (nothing behind
 			// it, or a still-live worker); its message says which.
 			return delegationResult{Response: fmt.Sprintf(

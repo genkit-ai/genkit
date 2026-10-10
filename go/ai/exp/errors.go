@@ -35,3 +35,10 @@ var (
 	// be resolved back to a conversation.
 	ErrSessionIDRequired = status.ErrInvalidArgument.Subtype("session ID is required")
 )
+
+// ReasonDetachUnsupported is the "reason" in the [status.Error.Details] of the
+// failed output an agent returns when it refuses a detach: it has no session
+// store, or one that does not implement [SnapshotSubscriber]. It survives the
+// wire, so a caller can tell this refusal, which a run without detach avoids,
+// from a failure of the agent's own work.
+const ReasonDetachUnsupported = "DETACH_UNSUPPORTED"
