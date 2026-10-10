@@ -619,6 +619,29 @@ class Genkit:
         """
         return await ScopedGenkitView(self._registry).lookup_model(name)
 
+    async def lookup_tool(self, name: str) -> Tool | None:
+        """Return the tool registered under ``name``, or None.
+
+        The same handle ``@ai.tool()`` returns, so a tool defined in one module
+        can be called or passed in ``tools=[...]`` from another without
+        importing it.
+
+        Example:
+            ```python
+            # 1. Define a tool in one module
+            @ai.tool()
+            async def menu_price(dish: str) -> float:
+                return 14.5
+
+
+            # 2. Find it by name somewhere else
+            price_tool = await ai.lookup_tool('menu_price')
+            response = await ai.generate(prompt='How much is the ramen?', tools=[price_tool])
+            # => The ramen is $14.50.
+            ```
+        """
+        return await ScopedGenkitView(self._registry).lookup_tool(name)
+
     def lookup_value(self, *, kind: str, name: str) -> object | None:
         """Return the value defined under ``kind`` and ``name``, or None."""
         return ScopedGenkitView(self._registry).lookup_value(kind=kind, name=name)

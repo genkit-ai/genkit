@@ -10,7 +10,7 @@ from collections.abc import Awaitable, Callable
 
 import pytest
 
-from genkit import ActionRunContext, FinishReason, Genkit, Message, ModelResponse, Operation, Part, Role
+from genkit import ActionRunContext, FinishReason, Genkit, Message, ModelResponse, Operation, Part, Role, Tool, tool
 from genkit.middleware import BaseMiddleware, GenerateMiddleware, GenerateMiddlewareContext, ModelHookParams
 from genkit.model import ModelRequest, model
 from genkit.plugin_api import Action, ActionKind, ActionMetadata, Plugin
@@ -265,3 +265,65 @@ async def test_lookup_model_does_not_return_background_models() -> None:
     ai.define_background_model('veo', start=start, check=check)
 
     assert await ai.lookup_model('veo') is None
+
+
+@pytest.mark.asyncio
+async def test_lookup_tool_returns_a_callable_tool_with_the_same_definition() -> None:
+    """`ai.lookup_tool('menu_price')` gives back a Tool that runs and describes itself like the decorated one."""
+    ai = Genkit()
+
+    @ai.tool()
+    async def menu_price(dish: str) -> float:
+        """Price of a dish in dollars."""
+        return 14.5
+
+    found = await ai.lookup_tool('menu_price')
+
+    assert isinstance(found, Tool)
+    assert found.definition() == menu_price.definition()
+    assert (await found('ramen')).output == 14.5
+
+
+@pytest.mark.asyncio
+async def test_lookup_tool_unknown_name_returns_none() -> None:
+    """A name nothing answers to returns None."""
+    ai = Genkit()
+
+    assert await ai.lookup_tool('missing') is None
+
+
+@pytest.mark.asyncio
+async def test_lookup_tool_finds_interrupts() -> None:
+    """An interrupt is a tool, so `lookup_tool` finds it."""
+    ai = Genkit()
+    ai.define_interrupt('confirm_order', description='Ask the diner to confirm.')
+
+    found = await ai.lookup_tool('confirm_order')
+
+    assert found is not None
+    assert found.name == 'confirm_order'
+
+
+@pytest.mark.asyncio
+async def test_middleware_ctx_lookup_tool_sees_this_calls_tools() -> None:
+    """A tool passed only to this call (`tools=[tool(fn)]`) is visible through `ctx.ai`, not `ai`."""
+    ai = Genkit()
+    _define_answering_model(ai, 'test/echo', 'from echo')
+    seen: list[object | None] = []
+
+    async def specials_today() -> str:
+        """Today's specials."""
+        return 'miso ramen'
+
+    class FindTool(BaseMiddleware):
+        async def wrap_model(
+            self, params: ModelHookParams, ctx: GenerateMiddlewareContext, next_fn: NextModel
+        ) -> ModelResponse:
+            seen.append(await ctx.ai.lookup_tool('specials_today'))
+            seen.append(await ai.lookup_tool('specials_today'))
+            return await next_fn(params, ctx)
+
+    await ai.generate(model='test/echo', prompt='hi', tools=[tool(specials_today)], use=[FindTool()])
+
+    assert isinstance(seen[0], Tool)
+    assert seen[1] is None

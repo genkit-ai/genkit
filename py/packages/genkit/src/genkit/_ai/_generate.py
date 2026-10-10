@@ -266,9 +266,10 @@ async def run_logged_hook(
 class ScopedGenkitView:
     """Read-only lookups over one registry. ``Genkit`` and ``ctx.ai`` both use it.
 
-    ``ctx.ai`` wraps this generate call's child registry, so ``lookup_value``
-    also sees middleware registered by ``use=[...]`` for this call. ``Genkit``
-    wraps the app's root registry, so the two never diverge.
+    ``ctx.ai`` wraps this generate call's child registry, so ``lookup_tool``
+    also sees tools passed with ``tools=[...]`` and ``lookup_value`` sees
+    middleware registered by ``use=[...]`` for this call. ``Genkit`` wraps the
+    app's root registry, so the two never diverge.
     """
 
     _registry: RegistryLike
@@ -280,6 +281,20 @@ class ScopedGenkitView:
         """
         action = await self._registry.resolve_action(ActionKind.MODEL, name)
         return cast(Action[ModelRequest, ModelResponse, ModelResponseChunk], action) if action is not None else None
+
+    async def lookup_tool(self, name: str) -> Tool | None:
+        """Return the tool registered under ``name``, or None.
+
+        The same handle ``@ai.tool()`` returns: call it, read ``definition()``,
+        or pass it in ``tools=[...]``. Interrupts are tools too.
+        """
+        action = await self._registry.resolve_action(ActionKind.TOOL, name)
+        if action is None:
+            return None
+        schema = action.metadata.get(ORIGINAL_OUTPUT_SCHEMA_KEY)
+        return Tool(
+            action, original_output_schema=cast(dict[str, object], schema) if isinstance(schema, dict) else None
+        )
 
     def lookup_value(self, *, kind: str, name: str) -> object | None:
         """Return the value defined under ``kind`` and ``name``, or None."""
