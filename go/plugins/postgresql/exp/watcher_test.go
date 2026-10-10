@@ -83,6 +83,19 @@ func waitFor(t *testing.T, ch <-chan aix.SnapshotStatus, ok func(aix.SnapshotSta
 	}
 }
 
+// eventually waits up to 10s for cond to hold, and fails t with what if it
+// does not.
+func eventually(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("%s: not within 10s", what)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 // setStatus changes a row's status with plain SQL, the way an operator would,
 // so no notification is sent.
 func setStatus(t *testing.T, pool *pgxpool.Pool, store *PostgresSessionStore[testState], id string, st aix.SnapshotStatus) {
@@ -93,22 +106,31 @@ func setStatus(t *testing.T, pool *pgxpool.Pool, store *PostgresSessionStore[tes
 }
 
 // TestWatcherRecoversALostConnection checks that a subscription outlives its
-// LISTEN connection: with the poll off, a change made while the watcher
-// reconnects still arrives, through the read that follows every reconnect.
+// LISTEN connection, with the poll off and with a poll that never comes due:
+// the watcher LISTENs on a new connection, and the read that follows every
+// reconnect delivers a change that no notification announced.
 func TestWatcherRecoversALostConnection(t *testing.T) {
-	pool := testPool(t)
-	store := newTestStore(t, pool, testTable(t, pool), WithPollInterval(0))
-	ch := savePending(t, store, "p")
+	for _, poll := range []time.Duration{0, time.Hour} {
+		t.Run(fmt.Sprintf("poll %v", poll), func(t *testing.T) {
+			pool := testPool(t)
+			store := newTestStore(t, pool, testTable(t, pool), WithPollInterval(poll))
+			ch := savePending(t, store, "p")
 
-	pids := listenerPIDs(t, pool, store)
-	if len(pids) != 1 {
-		t.Fatalf("%d backends LISTEN on the store's channel, want 1", len(pids))
+			pids := listenerPIDs(t, pool, store)
+			if len(pids) != 1 {
+				t.Fatalf("%d backends LISTEN on the store's channel, want 1", len(pids))
+			}
+			setStatus(t, pool, store, "p", aix.SnapshotStatusAborting)
+			if _, err := pool.Exec(context.Background(), `SELECT pg_terminate_backend($1)`, pids[0]); err != nil {
+				t.Fatalf("pg_terminate_backend: %v", err)
+			}
+			waitFor(t, ch, func(st aix.SnapshotStatus) bool { return st == aix.SnapshotStatusAborting })
+			eventually(t, "the watcher LISTENs on a new connection", func() bool {
+				now := listenerPIDs(t, pool, store)
+				return len(now) == 1 && now[0] != pids[0]
+			})
+		})
 	}
-	if _, err := pool.Exec(context.Background(), `SELECT pg_terminate_backend($1)`, pids[0]); err != nil {
-		t.Fatalf("pg_terminate_backend: %v", err)
-	}
-	setStatus(t, pool, store, "p", aix.SnapshotStatusAborting)
-	waitFor(t, ch, func(st aix.SnapshotStatus) bool { return st == aix.SnapshotStatusAborting })
 }
 
 // TestWatcherPollsForUnnotifiedChanges checks that a status change written
@@ -139,11 +161,7 @@ func TestWatcherReleasesItsConnection(t *testing.T) {
 		t.Fatalf("%d backends LISTEN while subscribed, want 1", n)
 	}
 	cancel()
-	deadline := time.Now().Add(10 * time.Second)
-	for len(listenerPIDs(t, pool, store)) != 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("the LISTEN connection is still open 10s after the last subscription ended")
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	eventually(t, "the LISTEN connection closes after the last subscription ends", func() bool {
+		return len(listenerPIDs(t, pool, store)) == 0
+	})
 }

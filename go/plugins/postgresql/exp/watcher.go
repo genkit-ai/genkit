@@ -254,13 +254,16 @@ func (w *watcher) receive(ctx context.Context, conn *pgx.Conn) error {
 			waitCtx, cancel = context.WithDeadline(ctx, nextPoll)
 		}
 		n, err := conn.WaitForNotification(waitCtx)
+		// cancel sets waitCtx's error too, so read whether the deadline passed
+		// first.
+		pollDue := waitCtx.Err() != nil
 		cancel()
 		switch {
 		case err == nil:
 			w.dispatch(n.Payload)
 		case ctx.Err() != nil:
 			return ctx.Err()
-		case waitCtx.Err() != nil:
+		case pollDue:
 			// The poll interval elapsed. The deadline interrupted the wait
 			// without closing the connection.
 			w.pollAll(ctx)
