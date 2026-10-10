@@ -24,13 +24,19 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from openai import APIError, AsyncOpenAI
+from genkit_openai._models._utils import (
+    OPENAI_CALL_ERRORS,
+    _extract_text,
+    extract_config_dict,
+    pop_extra_body,
+    reraise_openai_error,
+)
+from openai import AsyncOpenAI
 from openai.types.images_response import ImagesResponse
 from pydantic import Field
 
 from genkit import ActionRunContext, FinishReason, Message, ModelResponse, Part, Role
 from genkit.model import ModelConfig, ModelInfo, ModelRequest, Supports
-from genkit_openai._models._utils import _extract_text, extract_config_dict, pop_extra_body, reraise_openai_error
 
 
 class OpenAIDalleConfig(ModelConfig):
@@ -207,5 +213,5 @@ class OpenAIImageModel:
             params = _to_image_generate_params(self._model_name, request)
             result = await self._client.images.generate(**params)
             return _to_generate_response(result)
-        except (APIError, ValueError) as e:
+        except OPENAI_CALL_ERRORS as e:
             reraise_openai_error(e)

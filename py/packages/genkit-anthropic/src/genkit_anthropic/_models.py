@@ -27,19 +27,21 @@ See:
 import json
 from typing import Any, Literal, Protocol, cast
 
+import httpx
 import structlog
-from anthropic import APIError, APIResponseValidationError, AsyncAnthropic
+from anthropic import (
+    APIConnectionError,
+    APIError,
+    APIResponseValidationError,
+    APIStatusError,
+    APITimeoutError,
+    AsyncAnthropic,
+)
 from anthropic.types import Message as AnthropicMessage
 
 from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
 from genkit.model import Constrained, ModelRequest, ModelUsage, ToolRequest, get_basic_usage_stats
-from genkit.plugin_api import (
-    ErrorResponseMetadata,
-    StatusName,
-    from_http_code,
-    mark_provider_error,
-    parse_retry_after_ms,
-)
+from genkit.plugin_api import StatusName, provider_error
 from genkit_anthropic._config import AnthropicConfig
 from genkit_anthropic._model_info import get_model_info
 from genkit_anthropic._secrets import context_api_key
@@ -110,46 +112,36 @@ def _error_body_detail(body: object) -> tuple[str | None, str | None]:
 def _from_anthropic_error(error: APIError) -> GenkitError:
     """Convert an Anthropic SDK error to its Genkit equivalent.
 
-    The status comes from a failing HTTP status (>= 400) or, when that is
-    missing, below 400, or unmapped, from the error type in the body. An
-    unreadable 2xx response is INTERNAL. Anything else, such as a connection
-    failure or timeout, is re-raised unchanged so it stays unclassified.
+    A known error type in the body decides the status, then the HTTP code;
+    an unmapped code with no known type is UNKNOWN. A timeout is
+    DEADLINE_EXCEEDED and a dropped or refused connection is UNAVAILABLE,
+    so retry can try again. An unreadable 2xx response is INTERNAL.
     """
+    if isinstance(error, APITimeoutError):
+        return provider_error(error, status='DEADLINE_EXCEEDED', message=error.message)
+    if isinstance(error, APIConnectionError):
+        return provider_error(error, status='UNAVAILABLE', message=error.message)
     if isinstance(error, APIResponseValidationError):
-        return mark_provider_error(error=GenkitError(status='INTERNAL', message=error.message, cause=error))
+        return provider_error(error, status='INTERNAL', message=error.message)
+    if not isinstance(error, APIStatusError):
+        return provider_error(error, message=error.message)
 
-    status_code = getattr(error, 'status_code', None)
-    failing_code = status_code if isinstance(status_code, int) and status_code >= 400 else None
-    status: StatusName | None = None
-    if failing_code is not None:
-        # 529 is Anthropic's overloaded status.
-        status = 'UNAVAILABLE' if failing_code == 529 else from_http_code(failing_code)
-
+    error_type, body_message = _error_body_detail(error.body)
+    status: StatusName | None = _ERROR_TYPE_TO_STATUS.get(error_type) if error_type else None
+    # 529 is Anthropic's overloaded status.
+    if status is None and error.status_code == 529:
+        status = 'UNAVAILABLE'
     message = error.message
-    if status is None or status == 'UNKNOWN':
-        error_type, body_message = _error_body_detail(error.body)
-        body_status = _ERROR_TYPE_TO_STATUS.get(error_type) if error_type else None
-        if body_status is None:
-            raise error
-        status = body_status
-        # The SDK sets the message of an SSE error event to the repr of its body.
-        if failing_code is None:
-            message = body_message or message
-
-    response = getattr(error, 'response', None)
-    retry_after_header = response.headers.get('retry-after') if response is not None else None
-    retry_after_ms = parse_retry_after_ms(retry_after_header) if retry_after_header else None
-    response_metadata: ErrorResponseMetadata | None = None
-    if retry_after_ms is not None:
-        response_metadata = {'retry_after_ms': retry_after_ms}
-
-    return mark_provider_error(
-        error=GenkitError(
-            status=status,
-            message=message,
-            cause=error,
-            response_metadata=response_metadata,
-        )
+    # A stream that already returned 200 reports its failure as an SSE error
+    # event, and the SDK sets that error's message to the repr of the body.
+    if error.status_code < 400:
+        message = body_message or message
+    return provider_error(
+        error,
+        http_status=error.status_code,
+        status=status,
+        headers=error.response.headers,
+        message=message,
     )
 
 
@@ -365,6 +357,12 @@ class AnthropicModel:
                 response = await messages_client.create(**params)
         except APIError as error:
             raise _from_anthropic_error(error) from error
+        # The SDK wraps httpx failures only while sending; a connection that
+        # drops while the stream is being read comes out raw.
+        except httpx.TimeoutException as error:
+            raise provider_error(error, status='DEADLINE_EXCEEDED') from error
+        except (httpx.NetworkError, httpx.RemoteProtocolError) as error:
+            raise provider_error(error, status='UNAVAILABLE') from error
 
         logger.debug(
             'Anthropic raw API response',

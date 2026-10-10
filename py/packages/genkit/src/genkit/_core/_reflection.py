@@ -39,7 +39,7 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from genkit._core._action import Action, BidiAction, input_from_json
+from genkit._core._action import Action, BidiAction, input_from_json, parse_action_key
 from genkit._core._constants import GENKIT_VERSION
 from genkit._core._environment import is_dev_environment
 from genkit._core._error import get_reflection_json
@@ -60,6 +60,15 @@ def agent_has_server_store(action: Action) -> bool:
     agent_meta = (action.metadata or {}).get('agent')
     agent_dict = cast(dict[str, Any], agent_meta) if isinstance(agent_meta, dict) else {}
     return agent_dict.get('stateManagement') == 'server'
+
+
+async def resolve_runnable_key(registry: Registry, key: str) -> Action | None:
+    """Resolve a Dev UI run key. A key that doesn't parse (such as a removed kind) is not found."""
+    try:
+        parse_action_key(key)
+    except ValueError:
+        return None
+    return await registry.resolve_action_by_key(key)
 
 
 def resolve_agent_init(action: Action, init_val: object) -> AgentInit:
@@ -322,9 +331,10 @@ def create_reflection_asgi_app(
 
     async def run(req: Request) -> Response:
         payload = await req.json()
-        action = await registry.resolve_action_by_key(payload['key'])
+        key = payload['key']
+        action = await resolve_runnable_key(registry, key)
         if not action:
-            return JSONResponse({'error': f'Action not found: {payload["key"]}'}, status_code=404)
+            return JSONResponse({'error': f'Action not found: {key}'}, status_code=404)
         context = payload.get('context')
         if context is not None and not isinstance(context, dict):
             return JSONResponse(

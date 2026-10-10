@@ -72,8 +72,8 @@ class SnapshotStatus(StrEnum):
     EXPIRED = 'expired'
 
 
-class EvalStatusEnum(StrEnum):
-    """EvalStatusEnum data type class."""
+class ScoreStatus(StrEnum):
+    """ScoreStatus data type class."""
 
     UNKNOWN = 'UNKNOWN'
     PASS = 'PASS'
@@ -164,6 +164,7 @@ class AgentOutput(GenkitModel):
     artifacts: list[Artifact] | None = None
     finish_reason: AgentFinishReason | None = None
     error: GenkitRuntimeError | None = None
+    usage: GenerationUsage | None = None
 
 
 class AgentResult(GenkitModel):
@@ -237,6 +238,7 @@ class SessionState(GenkitModel):
     messages: list[MessageData] | None = None
     custom: Any | None = Field(default=None)
     artifacts: list[Artifact] | None = None
+    usage: GenerationUsage | None = None
 
 
 class TurnEnd(GenkitModel):
@@ -245,6 +247,7 @@ class TurnEnd(GenkitModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     snapshot_id: str | None = None
     finish_reason: AgentFinishReason | None = None
+    usage: GenerationUsage | None = None
 
 
 class DocumentData(GenkitModel):
@@ -335,9 +338,9 @@ class Score(GenkitModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     id: str | None = None
     score: bool | float | str | None = Field(default=None)
-    status: EvalStatusEnum | None = None
+    status: ScoreStatus | None = None
     error: str | None = None
-    details: Details | None = None
+    details: ScoreDetails | None = None
 
 
 class GenkitError(GenkitModel):
@@ -500,6 +503,7 @@ class GenerationUsage(GenkitModel):
     custom: Custom | None = None
     thoughts_tokens: float | None = None
     cached_content_tokens: float | None = None
+    cache_write_tokens: float | None = None
 
 
 class MediaPart(GenkitModel):
@@ -964,8 +968,8 @@ class Resume(GenkitModel):
 StateSchema = dict[str, Any]  # type alias for stateschema (typed string map)
 
 
-class Details(GenkitModel):
-    """Model for details data."""
+class ScoreDetails(GenkitModel):
+    """Model for scoredetails data."""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
     reasoning: str | None = None

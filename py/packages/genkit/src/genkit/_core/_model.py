@@ -40,7 +40,7 @@ from pydantic import (
     model_validator,
 )
 from pydantic.alias_generators import to_camel
-from typing_extensions import TypedDict, TypeVar
+from typing_extensions import Self, TypedDict, TypeVar
 
 from genkit._core import _typing as typing_mod
 from genkit._core._base import GenkitModel, dump_keeping_unknown
@@ -867,19 +867,20 @@ class Document(GenkitModel):
         payload: dict[str, Any] = {'content': deepcopy(content), 'metadata': deepcopy(metadata)}
         BaseModel.__init__(self, **cast(Any, payload))
 
-    @staticmethod
-    def from_text(text: str, metadata: dict[str, Any] | None = None) -> Document:
-        """Create a document from a text string."""
-        return Document(content=[Part.from_text(text)], metadata=metadata)
+    @classmethod
+    def from_text(cls, text: str, metadata: dict[str, Any] | None = None) -> Self:
+        """Create a document from a text string. ``metadata`` goes on the document."""
+        return cls(content=[Part.from_text(text)], metadata=metadata)
 
-    @staticmethod
+    @classmethod
     def from_media(
+        cls,
         url: str,
         content_type: str | None = None,
         metadata: dict[str, Any] | None = None,
-    ) -> Document:
-        """Create a document from a media URL."""
-        return Document(content=[Part.from_media(url, content_type)], metadata=metadata)
+    ) -> Self:
+        """Create a document from a media URL. ``metadata`` goes on the document."""
+        return cls(content=[Part.from_media(url, content_type)], metadata=metadata)
 
     @cached_property
     def text(self) -> str:
@@ -930,6 +931,7 @@ class SessionState(GenkitModel):
     messages: list[Message] | None = None
     custom: Any | None = Field(default=None)
     artifacts: list[Artifact] | None = None
+    usage: GenerationUsage | None = None
 
     @field_validator('messages', mode='before')
     @classmethod
@@ -953,6 +955,7 @@ def as_session_state(value: object) -> SessionState:
             messages=value.messages,
             custom=value.custom,
             artifacts=value.artifacts,
+            usage=value.usage,
         )
     return SessionState.model_validate(value)
 
@@ -1026,6 +1029,7 @@ class AgentOutput(GenkitModel):
     artifacts: list[Artifact] | None = None
     finish_reason: AgentFinishReason | None = None
     error: GenkitRuntimeError | None = None
+    usage: GenerationUsage | None = None
 
     @field_validator('message', mode='before')
     @classmethod
@@ -1260,6 +1264,7 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
     finish_message: str | None = None
     latency_ms: float | None = None
     usage: GenerationUsage | None = None
+    total_usage: GenerationUsage | None = None
     custom: dict[str, Any] | None = None
     raw: dict[str, Any] | None = None
     request: ModelRequest | None = None
@@ -1645,10 +1650,19 @@ AgentStreamChunk.model_rebuild(force=True, _types_namespace=_VENEER_NS)
 
 
 class MultipartToolResponse(GenkitModel, Generic[OutputT]):
-    """What ``Action.run()`` returns: ``output`` plus optional media.
+    """A tool result with structured output plus media the model can see.
 
-    People annotate ``MultipartToolResponse[ShotOut]`` so the model binds
-    ``ShotOut``. ``run()`` is still this envelope.
+    Return one from a tool when the reply is more than a JSON value, such as
+    a caption and a screenshot. A plain ``return value`` still works and is
+    treated as ``output`` only. Annotate ``MultipartToolResponse[ShotOut]`` so
+    the tool's output schema is ``ShotOut``.
+
+    Example:
+        ```python
+        @ai.tool()
+        async def screenshot(label: str) -> MultipartToolResponse[Shot]:
+            return MultipartToolResponse(output=Shot(label=label), content=[png])
+        ```
     """
 
     output: OutputT | None = None
@@ -1658,9 +1672,38 @@ class MultipartToolResponse(GenkitModel, Generic[OutputT]):
     @field_validator('content', mode='before')
     @classmethod
     def _wrap_parts(cls, v: object) -> object:
-        if not isinstance(v, list):
-            return v
-        return [as_part(p) for p in v]
+        if v is None:
+            return None
+        if isinstance(v, (str, bytes, Mapping, Part)) or not isinstance(v, Sequence):
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=f'MultipartToolResponse content must be a list of Parts, got {type(v).__name__}.',
+                reason=RuntimeErrorReason.INVALID_PART,
+            )
+        out: list[Part] = []
+        for item in v:
+            try:
+                out.append(as_part(item))
+            except (ValidationError, ValueError, TypeError) as e:
+                raise GenkitError(
+                    status='INVALID_ARGUMENT',
+                    message=(
+                        f'MultipartToolResponse content must be a list of Parts, got {type(item).__name__} in the list.'
+                    ),
+                    reason=RuntimeErrorReason.INVALID_PART,
+                ) from e
+        return out
+
+    @field_validator('metadata', mode='before')
+    @classmethod
+    def _require_dict_metadata(cls, v: object) -> object:
+        if v is not None and not isinstance(v, dict):
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=f'MultipartToolResponse metadata must be a dict, got {type(v).__name__}.',
+                reason=RuntimeErrorReason.INVALID_INPUT,
+            )
+        return v
 
 
 def text_from_message(msg: Message) -> str:

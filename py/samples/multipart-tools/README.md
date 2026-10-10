@@ -1,6 +1,6 @@
 # Multipart tools
 
-A tool either returns a value (we wrap it) or returns `response(...)` (the action result, with optional media).
+A tool either returns a value (we wrap it) or returns `tool_response(...)` (the action result, with optional media).
 
 ```bash
 export GEMINI_API_KEY=your-api-key

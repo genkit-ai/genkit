@@ -182,15 +182,34 @@ reference, so the Dev UI's config sidebar documents each field.
 
 `Constrained` is the one capability worth checking against the provider's docs
 rather than copying. Genkit sends `response_format` as `json_schema` whenever
-the request carries a schema, but it only skips injecting schema instructions
-into the prompt when the model advertises constrained support. Set
+a json request carries a schema, and it leaves the json format instructions
+out of the prompt only when the model advertises constrained support. Set
 `ConstrainedSupportAll` only where the provider documents `response_format`
 with `type: json_schema`; a provider offering `json_object` alone (DashScope,
-DeepSeek, Z.ai) or ignoring `response_format` outright (Anthropic's compatible
-endpoint) must leave it unset, or structured output loses the prompt
+DeepSeek, Z.ai) must leave it unset, or structured output loses the prompt
 instructions that were the only thing enforcing the schema. Use
 `ConstrainedSupportNoTools` where the provider supports schemas but not
-alongside tools, as xAI does outside the Grok 4 family.
+alongside tools, as Kimi does, and as xAI does outside the Grok 4 family.
+
+The `array` and `enum` formats keep their instructions either way. Their
+schema goes out as `json_schema` only to a model whose `Output` lists the
+format, since OpenAI accepts only an object at the schema root and rejects the
+rest with a 400. List `"array"` and `"enum"` only where the provider takes
+those roots, as xAI, Kimi, and Anthropic's compatible endpoint do.
+
+A provider that answers with a misleading HTTP code, such as an unknown model
+answered with 400 rather than 404, sets `OpenAICompatible.ClassifyError` to
+read the real status out of the error body, so retry and fallback middleware
+see it:
+
+```go
+p.openAICompatible.ClassifyError = func(err *openai.Error) status.Name {
+    if err.StatusCode == http.StatusBadRequest && err.Code == "1211" {
+        return status.NotFound // Z.ai's code for an unknown model
+    }
+    return "" // keep the status of the HTTP code
+}
+```
 
 Model IDs are string literals rather than exported constants. An exported
 `ModelMyModel` outlives the model it names: the ID churns every few months,

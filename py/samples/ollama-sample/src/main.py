@@ -18,22 +18,16 @@
 
 import os
 
-from genkit_ollama import EmbeddingDefinition, ModelDefinition, Ollama, OllamaConnectionError
+from genkit_ollama import Ollama
 from pydantic import BaseModel
 
-from genkit import FinishReason, Genkit
+from genkit import FinishReason, Genkit, GenkitError
 
 chat_model = os.getenv('OLLAMA_CHAT_MODEL', 'llama3.2')
 embedder_model = os.getenv('OLLAMA_EMBEDDER_MODEL', 'nomic-embed-text')
 
 ai = Genkit(
-    plugins=[
-        Ollama(
-            models=[ModelDefinition(name=chat_model)],
-            embedders=[EmbeddingDefinition(name=embedder_model)],
-            server_address=os.getenv('OLLAMA_HOST'),
-        )
-    ],
+    plugins=[Ollama(server_address=os.getenv('OLLAMA_HOST'))],
     model=f'ollama/{chat_model}',
 )
 
@@ -78,7 +72,9 @@ async def main() -> None:
 
         embeddings = await ai.embed(embedder=f'ollama/{embedder_model}', content='Local models stay on your laptop.')
         print(f'dimensions={len(embeddings[0].embedding)}')
-    except OllamaConnectionError as error:
+    except GenkitError as error:
+        if error.status != 'UNAVAILABLE':
+            raise
         print(
             'Start Ollama and pull the sample models first:\n'
             f'  ollama pull {chat_model}\n'

@@ -24,12 +24,13 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from genkit_anthropic import Anthropic, AnthropicConfig, anthropic_name
+from genkit_anthropic import Anthropic, AnthropicConfig
 from genkit_anthropic._model_info import (
     SUPPORTED_ANTHROPIC_MODELS as SUPPORTED_MODELS,
     get_model_info,
 )
 from genkit_anthropic._models import AnthropicModel
+from genkit_anthropic._plugin import anthropic_name
 
 from genkit import Genkit, Message, ModelResponse, Part, Role
 from genkit.model import Constrained, ModelRequest, ToolDefinition

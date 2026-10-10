@@ -29,20 +29,20 @@ import pytest
 from anthropic import AsyncAnthropicVertex
 from genkit_anthropic import AnthropicConfig
 from genkit_openai import OpenAIConfig
-from genkit_vertexai.model_garden import ModelGarden
-from genkit_vertexai.model_garden._model_info import DEFAULT_SUPPORTS, SUPPORTED_OPENAI_COMPAT_MODELS
-from genkit_vertexai.model_garden.anthropic import AnthropicModelGarden
-from genkit_vertexai.model_garden.model_garden import ModelGardenModel
+from genkit_vertexai import ModelGarden
+from genkit_vertexai._model_garden._anthropic import AnthropicModelGarden
+from genkit_vertexai._model_garden._model_info import DEFAULT_SUPPORTS, SUPPORTED_OPENAI_COMPAT_MODELS
+from genkit_vertexai._model_garden._plugin import ModelGardenModel
 from google.auth.exceptions import DefaultCredentialsError
 from openai.types.chat import ChatCompletion
 
 from genkit import ActionRunContext, Genkit, GenkitError, Message, Part, Role
-from genkit._ai._formats import built_in_formats
+from genkit._ai._formats._builtin import built_in_formats
 from genkit.model import ModelRequest, OutputConfig
 from genkit.plugin_api import ActionKind
 
 CLAUDE = 'modelgarden/anthropic/claude-sonnet-4@20250514'
-_ADC = 'genkit_vertexai.model_garden.model_garden.google_auth_default'
+_ADC = 'genkit_vertexai._model_garden._plugin.google_auth_default'
 LLAMA = 'modelgarden/meta/llama-3.1-405b-instruct-maas'
 MISTRAL = 'modelgarden/mistralai/mistral-small-2503'
 
@@ -226,7 +226,7 @@ async def test_model_garden_openai_compatible_model_resolves_and_generates() -> 
     client.chat.completions.create = AsyncMock(return_value=_chat_completion('hello from llama'))
 
     with patch(
-        'genkit_vertexai.model_garden.model_garden.ModelGardenModel.create_client',
+        'genkit_vertexai._model_garden._plugin.ModelGardenModel.create_client',
         new=AsyncMock(return_value=client),
     ):
         ai = Genkit(plugins=[ModelGarden(project='my-project', location='us-central1')])
@@ -268,9 +268,9 @@ async def test_model_garden_repeated_generate_refreshes_credentials_once() -> No
         return client
 
     with (
-        patch('genkit_vertexai.model_garden.client.auth.default', return_value=(creds, 'my-project')),
-        patch('genkit_vertexai.model_garden.client.google.auth.transport.requests.Request'),
-        patch('genkit_vertexai.model_garden.client._AsyncOpenAI', side_effect=make_client),
+        patch('genkit_vertexai._model_garden._client.auth.default', return_value=(creds, 'my-project')),
+        patch('genkit_vertexai._model_garden._client.google.auth.transport.requests.Request'),
+        patch('genkit_vertexai._model_garden._client._AsyncOpenAI', side_effect=make_client),
     ):
         ai = Genkit(plugins=[ModelGarden(project='my-project', location='us-central1')])
         for _ in range(3):
@@ -295,9 +295,9 @@ async def test_model_garden_generate_after_token_expiry_sends_fresh_token() -> N
         return client
 
     with (
-        patch('genkit_vertexai.model_garden.client.auth.default', return_value=(creds, 'my-project')),
-        patch('genkit_vertexai.model_garden.client.google.auth.transport.requests.Request'),
-        patch('genkit_vertexai.model_garden.client._AsyncOpenAI', side_effect=make_client),
+        patch('genkit_vertexai._model_garden._client.auth.default', return_value=(creds, 'my-project')),
+        patch('genkit_vertexai._model_garden._client.google.auth.transport.requests.Request'),
+        patch('genkit_vertexai._model_garden._client._AsyncOpenAI', side_effect=make_client),
     ):
         ai = Genkit(plugins=[ModelGarden(project='my-project', location='us-central1')])
         first = await ai.generate(model='modelgarden/meta/llama-3.1-405b-instruct-maas', prompt='hi')
@@ -326,7 +326,7 @@ async def test_generate_model_garden_claude_registers_full_publisher_path() -> N
     client.beta = MagicMock()
     client.messages.create = AsyncMock(return_value=reply)
     client.beta.messages.create = AsyncMock(return_value=reply)
-    with patch('genkit_vertexai.model_garden.anthropic.AsyncAnthropicVertex', return_value=client):
+    with patch('genkit_vertexai._model_garden._anthropic.AsyncAnthropicVertex', return_value=client):
         ai = Genkit(plugins=[ModelGarden(project='p', location='us-central1')])
         response = await ai.generate(model=claude, prompt='hi')
         action = await ai.lookup_model(claude)
@@ -345,7 +345,7 @@ def _uninstall(monkeypatch: pytest.MonkeyPatch, *modules: str) -> None:
     module_table = cast(dict[str, ModuleType | None], sys.modules)
     for module in modules:
         monkeypatch.setitem(module_table, module, None)
-    monkeypatch.delitem(sys.modules, 'genkit_vertexai.model_garden.anthropic', raising=False)
+    monkeypatch.delitem(sys.modules, 'genkit_vertexai._model_garden._anthropic', raising=False)
 
 
 def test_import_genkit_vertexai_does_not_load_publisher_sdks() -> None:
@@ -353,7 +353,7 @@ def test_import_genkit_vertexai_does_not_load_publisher_sdks() -> None:
     code = textwrap.dedent("""
         import json, sys
         import genkit_vertexai
-        from genkit_vertexai.model_garden import ModelGarden
+        from genkit_vertexai import ModelGarden
         ModelGarden(project='my-project')
         publishers = ('anthropic', 'genkit_anthropic', 'openai', 'genkit_openai')
         print(json.dumps(sorted(m for m in publishers if m in sys.modules)))

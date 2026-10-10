@@ -164,7 +164,7 @@ async def test_run_action_standard(asgi_client: AsyncClient, mock_registry: Magi
 
     mock_registry.resolve_action_by_key = mock_resolve_action_by_key
 
-    response = await asgi_client.post('/api/runAction', json={'key': 'test_action', 'input': {'data': 'test'}})
+    response = await asgi_client.post('/api/runAction', json={'key': '/custom/test_action', 'input': {'data': 'test'}})
 
     assert response.status_code == 200
     response_data = response.json()
@@ -265,7 +265,7 @@ async def test_run_action_streaming(
 
     response = await asgi_client.post(
         '/api/runAction?stream=true',
-        json={'key': 'test_action', 'input': {'data': 'test'}},
+        json={'key': '/custom/test_action', 'input': {'data': 'test'}},
     )
 
     assert response.status_code == 200
@@ -318,7 +318,7 @@ async def test_run_action_streaming_primitive_types(
 
     response = await asgi_client.post(
         '/api/runAction?stream=true',
-        json={'key': 'test_action', 'input': {'data': 'test'}},
+        json={'key': '/custom/test_action', 'input': {'data': 'test'}},
     )
 
     assert response.status_code == 200
@@ -538,6 +538,40 @@ async def test_reflection_run_evaluator_returns_json_array_of_rows(evaluator: st
     result = response.json()['result']
     assert [row['testCaseId'] for row in result] == ['case1', 'case2']
     assert [row['evaluation'] for row in result] == [[{'score': True}], [{'score': True}]]
+
+
+@pytest.mark.asyncio
+async def test_reflection_run_slash_retriever_key_returns_404() -> None:
+    """Running '/retriever/x' from the Dev UI gets a 404 'Action not found', not a server error."""
+    ai = Genkit()
+    client = await _registry_asgi_client(ai.registry)
+    try:
+        response = await client.post('/api/runAction', json={'key': '/retriever/x', 'input': 'q'})
+    finally:
+        await client.aclose()
+
+    assert response.status_code == 404
+    assert response.json() == {'error': 'Action not found: /retriever/x'}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('key', ['/tool/x', '/bogus/x', 'no-slashes'])
+async def test_reflection_run_unparseable_key_returns_404(key: str) -> None:
+    """Running a key that doesn't parse (like '/tool/x') gets a 404 'Action not found', not a server error."""
+    ai = Genkit()
+
+    @ai.tool()
+    async def x() -> str:
+        return 'ok'
+
+    client = await _registry_asgi_client(ai.registry)
+    try:
+        response = await client.post('/api/runAction', json={'key': key, 'input': None})
+    finally:
+        await client.aclose()
+
+    assert response.status_code == 404
+    assert response.json() == {'error': f'Action not found: {key}'}
 
 
 def _define_missing(ai: Genkit):  # noqa: ANN202

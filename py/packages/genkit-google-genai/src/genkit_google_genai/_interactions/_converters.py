@@ -68,7 +68,7 @@ from genkit.model import (
     ToolRequest,
     ToolResponse,
 )
-from genkit.plugin_api import StatusName, from_http_code, mark_provider_error
+from genkit.plugin_api import StatusName, provider_error
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +113,26 @@ CONTENT_BLOCK_TYPES = frozenset({'text', 'image'})
 CODE_LANGUAGE: Literal['python'] = 'python'
 
 FAILED_MESSAGE = 'Interaction failed'
+# Step errors report a google.rpc code; its position here is that code.
+GRPC_STATUS_NAMES: tuple[StatusName, ...] = (
+    'OK',
+    'CANCELLED',
+    'UNKNOWN',
+    'INVALID_ARGUMENT',
+    'DEADLINE_EXCEEDED',
+    'NOT_FOUND',
+    'ALREADY_EXISTS',
+    'PERMISSION_DENIED',
+    'RESOURCE_EXHAUSTED',
+    'FAILED_PRECONDITION',
+    'ABORTED',
+    'OUT_OF_RANGE',
+    'UNIMPLEMENTED',
+    'INTERNAL',
+    'UNAVAILABLE',
+    'DATA_LOSS',
+    'UNAUTHENTICATED',
+)
 # Chat generate can pause for a tool; a background job cannot.
 BACKGROUND_INTERRUPT_UNSUPPORTED = 'Background models do not support interrupts'
 
@@ -158,41 +178,44 @@ def interaction_error_message(interaction: Interaction) -> str | None:
     return None
 
 
-def status_from_provider_code(code: object) -> StatusName | None:
-    """Map an error code the Interactions API reported to a Genkit status.
+def error_from_provider_code(code: object, cause: BaseException) -> GenkitError | None:
+    """Turn an error code the Interactions API reported into a GenkitError.
 
     Top-level errors carry a string code (a canonical name like
     ``RESOURCE_EXHAUSTED``, or a number); step errors carry a gRPC int.
     Numbers 1-16 are gRPC codes and 400-599 are HTTP codes. Anything else,
     and any code that only maps to OK or UNKNOWN, returns None so the caller
-    leaves the failure unclassified.
+    can look at the next error.
     """
-    status: str | None = None
     text = str(code).strip() if code is not None and not isinstance(code, bool) else ''
     if text.isdigit():
         number = int(text)
         if 400 <= number <= 599:
-            status = from_http_code(number)
+            error = provider_error(cause, http_status=number)
+        elif number < len(GRPC_STATUS_NAMES):
+            error = provider_error(cause, status=GRPC_STATUS_NAMES[number])
         else:
-            status = GRPC_STATUS_NAMES.get(number)
-    elif text.upper() in GRPC_STATUS_NAMES.values():
-        status = text.upper()
-    if status is None or status in ('OK', 'UNKNOWN'):
+            return None
+    elif text.upper() in GRPC_STATUS_NAMES:
+        error = provider_error(cause, status=cast(StatusName, text.upper()))
+    else:
         return None
-    return cast(StatusName, status)
+    if error.status in ('OK', 'UNKNOWN'):
+        return None
+    return error
 
 
-def interaction_error_status(interaction: Interaction) -> StatusName | None:
-    """The status of the first error on a failed Interaction that has a usable code."""
+def interaction_error(interaction: Interaction, cause: BaseException) -> GenkitError:
+    """The error for the first failure on an Interaction that has a usable code, else UNKNOWN."""
     for err in interaction.errors or []:
         code = err.get('code') if isinstance(err, dict) else getattr(err, 'code', None)
-        if status := status_from_provider_code(code):
-            return status
+        if error := error_from_provider_code(code, cause):
+            return error
     for step in interaction.steps or []:
         if isinstance(step, ModelOutputStep) and step.error is not None:
-            if status := status_from_provider_code(step.error.code):
-                return status
-    return None
+            if error := error_from_provider_code(step.error.code, cause):
+                return error
+    return provider_error(cause, status='UNKNOWN')
 
 
 def clean_schema(schema: dict[str, Any]) -> dict[str, Any]:
@@ -856,15 +879,13 @@ def from_interaction_sync(interaction: Interaction) -> ModelResponse:
     Truncated or over-budget turns keep their real finish reason so a
     generate that ran out of tokens does not look like a clean stop.
     In-flight statuses raise FAILED_PRECONDITION — this helper is not a poll
-    loop. A failed interaction raises with the status its error code maps
-    to; with no usable code it stays a plain ValueError (unclassified).
+    loop. A failed interaction raises a GenkitError with the status its
+    error code maps to, or UNKNOWN when there's no usable code.
     """
     status = interaction.status
     if status == 'failed':
-        message = interaction_error_message(interaction) or FAILED_MESSAGE
-        if error_status := interaction_error_status(interaction):
-            raise mark_provider_error(error=GenkitError(status=error_status, message=message))
-        raise ValueError(message)
+        failure = ValueError(interaction_error_message(interaction) or FAILED_MESSAGE)
+        raise interaction_error(interaction, failure) from failure
     if status == 'cancelled':
         return cancelled_response(interaction)
     if status in ('in_progress', 'queued', 'requires_action'):

@@ -28,13 +28,8 @@ from __future__ import annotations
 import base64
 from typing import Any
 
-from openai import APIError, AsyncOpenAI
-from openai._legacy_response import HttpxBinaryResponseContent
-from openai.types.audio import Transcription, Translation
-
-from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, Part, Role
-from genkit.model import ModelConfig, ModelInfo, ModelRequest, Supports
 from genkit_openai._models._utils import (
+    OPENAI_CALL_ERRORS,
     _extract_media,
     _extract_text,
     _find_text,
@@ -43,6 +38,12 @@ from genkit_openai._models._utils import (
     pop_extra_body,
     reraise_openai_error,
 )
+from openai import AsyncOpenAI
+from openai._legacy_response import HttpxBinaryResponseContent
+from openai.types.audio import Transcription, Translation
+
+from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, Part, Role
+from genkit.model import ModelConfig, ModelInfo, ModelRequest, Supports
 
 
 class OpenAITtsConfig(ModelConfig):
@@ -344,7 +345,7 @@ class OpenAITTSModel:
             response_format = params.get('response_format', 'mp3')
             result = await self._client.audio.speech.create(**params)
             return _to_tts_response(result, response_format)
-        except (APIError, ValueError) as e:
+        except OPENAI_CALL_ERRORS as e:
             reraise_openai_error(e)
 
 
@@ -406,5 +407,5 @@ class OpenAISTTModel:
             # Transcription | TranscriptionVerbose | TranscriptionDiarized | str.
             # _to_stt_response handles all of these via isinstance/hasattr checks.
             return _to_stt_response(result)  # pyright: ignore[reportArgumentType]
-        except (APIError, ValueError) as e:
+        except OPENAI_CALL_ERRORS as e:
             reraise_openai_error(e)

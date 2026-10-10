@@ -503,8 +503,12 @@ class PartConverter:
             GenkitError: INVALID_ARGUMENT when the media host answers with a
                 4xx other than 408/429: the caller's URL is wrong or not
                 public, and another model would fail on it too.
-            httpx.HTTPError: A 5xx, 408, 429, timeout, or transport failure,
-                left unclassified because it may pass on retry.
+            httpx.HTTPStatusError: A 5xx, 408, or 429 from the media host, left
+                raw. It is not Gemini's failure, so Fallback must not switch
+                models over it (the next model needs the same URL); Retry
+                still tries again. The Ollama plugin does the same.
+            httpx.TransportError: A timeout or transport failure, left
+                unclassified because it may pass on retry.
         """
         response = await _media_client().get(url, timeout=60.0)
         try:

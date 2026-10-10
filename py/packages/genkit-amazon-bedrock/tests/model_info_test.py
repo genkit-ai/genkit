@@ -17,7 +17,7 @@
 """Tests for the Bedrock model capability registry."""
 
 import pytest
-from genkit_amazon_bedrock.model_info import (
+from genkit_amazon_bedrock._model_info import (
     INFERENCE_PROFILE_PREFIXES,
     MODEL_CAPABILITIES,
     get_model_info,

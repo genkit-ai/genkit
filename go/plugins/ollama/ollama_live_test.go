@@ -20,32 +20,125 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"flag"
+	"net"
 	"net/http"
+	"os"
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/plugins/internal/livetest"
 	ollamaPlugin "github.com/firebase/genkit/go/plugins/ollama"
 )
 
-var (
-	serverAddress    = flag.String("server-address", "http://localhost:11434", "Ollama server address")
-	modelName        = flag.String("model-name", "tinyllama", "model name")
-	dynamicModelName = flag.String("dynamic-model-name", "moondream", "model name for dynamic discovery test (must not be in hardcoded lists)")
-	liveTimeout      = flag.Duration("live-timeout", 2*time.Minute, "timeout for live Ollama requests")
-	testLive         = flag.Bool("test-live", false, "run live tests")
+// The live test runs against the Ollama server OLLAMA_HOST names, with these
+// models pulled. Each can be overridden through the environment variable
+// beside it.
+const (
+	// defaultModel serves tools and thinking.
+	defaultModel = "qwen3:4b" // GENKIT_OLLAMA_MODEL
+	// defaultVisionModel accepts images.
+	defaultVisionModel = "qwen2.5vl:3b" // GENKIT_OLLAMA_VISION_MODEL
+	// defaultEmbedder serves 768-dimension embeddings.
+	defaultEmbedder = "nomic-embed-text" // GENKIT_OLLAMA_EMBEDDER
+	// defaultDynamicModel is in none of the plugin's static lists, so its
+	// capabilities can only come from the server.
+	defaultDynamicModel = "moondream" // GENKIT_OLLAMA_DYNAMIC_MODEL
 )
+
+// envOr returns the value of the environment variable name, or def when it is
+// not set.
+func envOr(name, def string) string {
+	if v := os.Getenv(name); v != "" {
+		return v
+	}
+	return def
+}
+
+// serverAddress turns host, as OLLAMA_HOST spells it, into a server URL the
+// way the Ollama CLI does: a host without a scheme is http and, without a
+// port, on the default 11434. A host with a scheme is used as given.
+func serverAddress(host string) string {
+	if strings.Contains(host, "://") {
+		return host
+	}
+	hostport, path, _ := strings.Cut(host, "/")
+	if _, _, err := net.SplitHostPort(hostport); err != nil {
+		hostport = net.JoinHostPort(strings.Trim(hostport, "[]"), "11434")
+	}
+	return "http://" + hostport + strings.TrimSuffix("/"+path, "/")
+}
+
+func TestPluginLive(t *testing.T) {
+	// OLLAMA_HOST, as the Ollama CLI reads it, says where the server is,
+	// and so stands in for the API key other providers gate on.
+	server := serverAddress(livetest.Env(t, "OLLAMA_HOST"))
+	o := &ollamaPlugin.Ollama{ServerAddress: server, Timeout: 300}
+	g := livetest.Init(t, o)
+
+	model := "ollama/" + envOr("GENKIT_OLLAMA_MODEL", defaultModel)
+	livetest.Run(t, g, livetest.Suite{
+		Model: ai.NewModelRef(model, &ollamaPlugin.GenerateContentConfig{Think: ollamaPlugin.ThinkEnabled(false)}),
+		ReasoningModel: ai.NewModelRef(model, &ollamaPlugin.GenerateContentConfig{
+			Think: ollamaPlugin.ThinkEnabled(true),
+		}),
+		ReasoningContent: true,
+		VisionModel:      ai.NewModelRef("ollama/"+envOr("GENKIT_OLLAMA_VISION_MODEL", defaultVisionModel), nil),
+		LimitConfig: &ollamaPlugin.GenerateContentConfig{
+			NumPredict: ollamaPlugin.Ptr(16),
+			Think:      ollamaPlugin.ThinkEnabled(false),
+		},
+	})
+
+	// The plugin's embedders are defined explicitly, never discovered.
+	livetest.RunEmbedder(t, g, livetest.EmbedderSuite{
+		Embedder:   o.DefineEmbedder(g, envOr("GENKIT_OLLAMA_EMBEDDER", defaultEmbedder), 768, nil),
+		Dimensions: 768,
+		Normalized: true,
+	})
+
+	// A model in none of the static lists is found through ListActions and
+	// ResolveAction, with the capabilities the server reports for it.
+	t.Run("dynamic discovery", func(t *testing.T) {
+		dynamic := envOr("GENKIT_OLLAMA_DYNAMIC_MODEL", defaultDynamicModel)
+		capabilities, detected := getLiveModelCapabilities(t, t.Context(), server, dynamic)
+		actions := o.ListActions(t.Context())
+		i := slices.IndexFunc(actions, func(a api.ActionDesc) bool { return sameLiveModelName(a.Name, dynamic) })
+		if i < 0 {
+			t.Fatalf("ListActions() did not include %q; pull it first", dynamic)
+		}
+		assertLiveCapabilities(t, actions[i], capabilities, detected)
+
+		m := ollamaPlugin.Model(g, dynamic)
+		if m == nil {
+			t.Fatalf("Model(%q) = nil, want the model resolved", dynamic)
+		}
+		resolved, ok := m.(api.Action)
+		if !ok {
+			t.Fatalf("Model(%q) is a %T, not an action", dynamic, m)
+		}
+		assertLiveCapabilities(t, resolved.Desc(), capabilities, detected)
+
+		resp, err := genkit.Generate(t.Context(), g,
+			ai.WithModel(m),
+			ai.WithPrompt("Say hello in one sentence."))
+		if err != nil {
+			t.Fatalf("Generate() error = %v", err)
+		}
+		if strings.TrimSpace(resp.Text()) == "" {
+			t.Error("Text() is empty")
+		}
+	})
+}
 
 type liveShowResponse struct {
 	Capabilities *[]string `json:"capabilities"`
 }
 
-func getLiveModelCapabilities(t *testing.T, ctx context.Context, modelName string) ([]string, bool) {
+func getLiveModelCapabilities(t *testing.T, ctx context.Context, serverAddress, modelName string) ([]string, bool) {
 	t.Helper()
 
 	body, err := json.Marshal(map[string]string{"model": modelName})
@@ -55,7 +148,7 @@ func getLiveModelCapabilities(t *testing.T, ctx context.Context, modelName strin
 	req, err := http.NewRequestWithContext(
 		ctx,
 		http.MethodPost,
-		strings.TrimRight(*serverAddress, "/")+"/api/show",
+		strings.TrimRight(serverAddress, "/")+"/api/show",
 		bytes.NewReader(body),
 	)
 	if err != nil {
@@ -114,120 +207,4 @@ func assertLiveCapabilities(t *testing.T, desc api.ActionDesc, capabilities []st
 func sameLiveModelName(got, want string) bool {
 	got = strings.TrimPrefix(got, "ollama/")
 	return got == want || got == want+":latest" || got+":latest" == want
-}
-
-// Live tests require a running Ollama server. Use -server-address to override
-// the default http://localhost:11434 endpoint.
-func TestLive(t *testing.T) {
-	if !*testLive {
-		t.Skip("skipping go/plugins/ollama live test")
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), *liveTimeout)
-	defer cancel()
-
-	o := &ollamaPlugin.Ollama{
-		ServerAddress: *serverAddress,
-		Timeout:       int(liveTimeout.Seconds()),
-	}
-	g := genkit.Init(ctx, genkit.WithPlugins(o))
-
-	// Define the model
-	o.DefineModel(g, ollamaPlugin.ModelDefinition{Name: *modelName, Type: "chat"}, nil)
-
-	// Use the Ollama model
-	m := ollamaPlugin.Model(g, *modelName)
-	if m == nil {
-		t.Fatalf(`failed to find model: %s`, *modelName)
-	}
-
-	// Generate a response from the model
-	resp, err := genkit.Generate(ctx, g,
-		ai.WithModel(m),
-		ai.WithConfig(&ollamaPlugin.GenerateContentConfig{Temperature: ollamaPlugin.Ptr(1.0), Think: ollamaPlugin.ThinkEnabled(true)}),
-		ai.WithPrompt("I'm hungry what should I eat?"),
-	)
-	if err != nil {
-		t.Fatalf("failed to generate response: %s", err)
-	}
-
-	if resp == nil {
-		t.Fatalf("response is nil")
-	}
-
-	// Get the text from the response
-	text := resp.Text()
-	t.Logf("Full response: %s", text)
-
-	// Assert that the response text is as expected
-	if text == "" {
-		t.Fatalf("expected non-empty response, got: %s", text)
-	}
-}
-
-// TestLiveDynamicDiscovery verifies that a model NOT registered via DefineModel
-// can be discovered and used through the DynamicPlugin interface (ListActions + ResolveAction).
-func TestLiveDynamicDiscovery(t *testing.T) {
-	if !*testLive {
-		t.Skip("skipping go/plugins/ollama live dynamic discovery test")
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), *liveTimeout)
-	defer cancel()
-	o := &ollamaPlugin.Ollama{
-		ServerAddress: *serverAddress,
-		Timeout:       int(liveTimeout.Seconds()),
-	}
-	g := genkit.Init(ctx, genkit.WithPlugins(o))
-	capabilities, detected := getLiveModelCapabilities(t, ctx, *dynamicModelName)
-	t.Logf("/api/show capabilities for %q: %v (detected: %v)", *dynamicModelName, capabilities, detected)
-
-	// Verify ListActions discovers local models
-	actions := o.ListActions(ctx)
-	if len(actions) == 0 {
-		t.Fatal("ListActions() returned no actions, ensure Ollama has local models")
-	}
-	t.Logf("ListActions() discovered %d models:", len(actions))
-	for _, a := range actions {
-		t.Logf("  - %s", a.Name)
-	}
-	var discovered *api.ActionDesc
-	for i := range actions {
-		if sameLiveModelName(actions[i].Name, *dynamicModelName) {
-			discovered = &actions[i]
-			break
-		}
-	}
-	if discovered == nil {
-		t.Fatalf("ListActions() did not include dynamic model %q", *dynamicModelName)
-	}
-	assertLiveCapabilities(t, *discovered, capabilities, detected)
-
-	// Use a model that is NOT in the hardcoded lists via LookupModel,
-	// which triggers ResolveAction under the hood.
-	m := ollamaPlugin.Model(g, *dynamicModelName)
-	if m == nil {
-		t.Fatalf("Model(%q) returned nil — ResolveAction did not work", *dynamicModelName)
-	}
-	resolvedAction, ok := m.(api.Action)
-	if !ok {
-		t.Fatalf("resolved model %q does not implement api.Action", *dynamicModelName)
-	}
-	assertLiveCapabilities(t, resolvedAction.Desc(), capabilities, detected)
-
-	// Generate a response from the dynamically resolved model
-	resp, err := genkit.Generate(ctx, g,
-		ai.WithModel(m),
-		ai.WithConfig(&ai.GenerationCommonConfig{Temperature: 1}),
-		ai.WithPrompt("Say hello in one sentence."),
-	)
-	if err != nil {
-		t.Fatalf("failed to generate with dynamic model %q: %s", *dynamicModelName, err)
-	}
-
-	text := resp.Text()
-	t.Logf("Dynamic model %q response: %s", *dynamicModelName, text)
-	if text == "" {
-		t.Fatalf("expected non-empty response from dynamic model %q", *dynamicModelName)
-	}
 }

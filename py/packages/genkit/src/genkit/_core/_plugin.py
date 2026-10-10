@@ -147,7 +147,8 @@ class MiddlewarePlugin(Plugin):
     Example:
         from genkit import Genkit
         from genkit.middleware import BaseMiddleware
-        from genkit.plugin_api import MiddlewarePlugin, new_middleware
+        from genkit.middleware import GenerateMiddleware
+        from genkit.plugin_api import MiddlewarePlugin
 
         class PrefixPromptMiddleware(BaseMiddleware):
             ...
@@ -155,8 +156,8 @@ class MiddlewarePlugin(Plugin):
         class MyMiddlewarePlugin(MiddlewarePlugin):
             name = 'my-middleware'
             middleware = [
-                new_middleware(
-                    PrefixPromptMiddleware,
+                GenerateMiddleware(
+                    cls=PrefixPromptMiddleware,
                     name='prefix_prompt',
                     description='Prepends a fixed prompt',
                 ),
@@ -175,7 +176,7 @@ class MiddlewarePlugin(Plugin):
             raise ValueError(
                 f'{type(self).__name__} must provide middleware via the `middleware` class '
                 'attribute or a `list_middleware` override. Each entry should come from '
-                'new_middleware(YourMiddleware, name=..., description=...).'
+                'GenerateMiddleware(cls=YourMiddleware, name=..., description=...).'
             )
 
     async def init(self) -> list[Action]:

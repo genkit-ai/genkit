@@ -39,7 +39,7 @@ classifiers = [
   "License :: OSI Approved :: Apache Software License",
 ]
 # botocore is imported directly (config, exceptions) and pins the floor that
-# keeps the manual AWS_REGION lookup in transport.py necessary: it did not read
+# keeps the manual AWS_REGION lookup in _transport.py necessary: it did not read
 # AWS_REGION itself until 1.41.
 dependencies = ["genkit", "boto3>=1.37.24", "botocore>=1.37.24", "structlog>=25.2.0"]
 description = "Bedrock on Genkit"
@@ -56,7 +56,7 @@ version = "0.12.0"
 
 [project.urls]
 "Bug Tracker"   = "https://github.com/genkit-ai/genkit/issues"
-Changelog       = "https://github.com/genkit-ai/genkit/blob/main/py/packages/genkit-amazon-bedrock/CHANGELOG.md"
+Changelog       = "https://github.com/genkit-ai/genkit/releases"
 "Documentation" = "https://genkit.dev/docs/get-started/?lang=python"
 "Homepage"      = "https://github.com/genkit-ai/genkit"
 "Repository"    = "https://github.com/genkit-ai/genkit/tree/main/py"

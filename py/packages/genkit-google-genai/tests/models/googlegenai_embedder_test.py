@@ -19,6 +19,7 @@
 import base64
 import json
 
+import httpx
 import pytest
 from genkit_google_genai._models._embedder import (
     Embedder,
@@ -506,17 +507,39 @@ async def test_embed_content_credential_failure_is_unauthenticated(mocker: Mocke
 
 
 @pytest.mark.asyncio
-async def test_embed_content_unknown_exception_stays_raw(mocker: MockerFixture) -> None:
-    """A dropped connection has no known status and reaches the caller unchanged."""
-    dropped = ConnectionResetError('Connection reset by peer')
+@pytest.mark.parametrize(
+    'failure',
+    [
+        httpx.ConnectError('[Errno 61] Connection refused'),
+        ConnectionResetError('Connection reset by peer'),
+    ],
+)
+async def test_embedder_connection_refused_is_unavailable(mocker: MockerFixture, failure: Exception) -> None:
+    """A refused or dropped connection while embedding is UNAVAILABLE so retry and fallback try again."""
     client_mock = mocker.AsyncMock()
-    client_mock.aio.models.embed_content.side_effect = dropped
+    client_mock.aio.models.embed_content.side_effect = failure
     embedder = Embedder('gemini-embedding-001', client_mock)
 
-    with pytest.raises(ConnectionResetError) as raised:
+    with pytest.raises(GenkitError) as raised:
         await embedder.generate(EmbedRequest(input=[Document.from_text('Smoked salmon tartine')]))
 
-    assert raised.value is dropped
+    assert raised.value.status == 'UNAVAILABLE'
+    assert raised.value.cause is failure
+
+
+@pytest.mark.asyncio
+async def test_embedder_timeout_is_deadline_exceeded(mocker: MockerFixture) -> None:
+    """An embed call that times out is DEADLINE_EXCEEDED, not a raw transport error."""
+    timeout = httpx.ReadTimeout('timed out')
+    client_mock = mocker.AsyncMock()
+    client_mock.aio.models.embed_content.side_effect = timeout
+    embedder = Embedder('gemini-embedding-001', client_mock)
+
+    with pytest.raises(GenkitError) as raised:
+        await embedder.generate(EmbedRequest(input=[Document.from_text('Smoked salmon tartine')]))
+
+    assert raised.value.status == 'DEADLINE_EXCEEDED'
+    assert raised.value.cause is timeout
 
 
 @pytest.mark.asyncio

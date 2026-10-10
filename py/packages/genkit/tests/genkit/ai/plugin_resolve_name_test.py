@@ -86,7 +86,7 @@ class VideoPlugin(Plugin):
         async def cancel(op: Operation, ctx: ActionRunContext) -> Operation:
             return Operation(id=op.id, done=True, metadata={'cancelled': True})
 
-        return background_model(model_id, start, check, cancel=cancel)
+        return background_model(model_id, start=start, check=check, cancel=cancel)
 
     async def init(self) -> list[Action]:
         return []

@@ -267,6 +267,7 @@ func NewModelAction[Config any](
 		simulateSystemPrompt(&o, nil),
 		augmentWithContext(&o, nil),
 		validateSupport(name, &o),
+		reportUsage(),
 		addAutomaticTelemetry(),
 	)(typedFn)
 
@@ -378,7 +379,8 @@ func responseError(cause error) *status.Error {
 
 // callerStopped reports whether the loop ended because the caller stopped it
 // rather than because something inside it broke: it cancelled the context, its
-// deadline expired, or the loop reached a limit it set ([ErrMaxTurnsExceeded]).
+// deadline expired, or the loop reached a limit it set ([ErrMaxTurnsExceeded],
+// [ErrBudgetExceeded]).
 // Those report [FinishReasonAborted]; everything else reports
 // [FinishReasonFailed].
 //
@@ -391,7 +393,8 @@ func callerStopped(ctx context.Context, cause error) bool {
 	return ctx.Err() != nil ||
 		errors.Is(cause, context.Canceled) ||
 		errors.Is(cause, context.DeadlineExceeded) ||
-		errors.Is(cause, ErrMaxTurnsExceeded)
+		errors.Is(cause, ErrMaxTurnsExceeded) ||
+		errors.Is(cause, ErrBudgetExceeded)
 }
 
 // failurePartial builds the partial [ModelResponse] that accompanies the
@@ -572,8 +575,14 @@ func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 			opts.Output.Constrained && outputCfg.Constrained && m != nil && m.(*ModelAction).supportsConstrained(len(toolDefs) > 0)
 
 		// Add schema instructions to prompt when not using native constraints.
-		// This is a no-op for unstructured output requests.
-		if !outputCfg.Constrained {
+		// Under a native constraint only the json format goes without its
+		// default instructions: a plugin may constrain json alone, and an
+		// array or enum request that reaches it with neither a constraint
+		// nor instructions has nothing to follow. Explicit instructions are
+		// always sent. This matches JS, where only json sets
+		// defaultInstructions to false. This is a no-op for unstructured
+		// output requests.
+		if !outputCfg.Constrained || outputCfg.Format != OutputFormatJSON || opts.Output.Instructions != nil {
 			instructions := ""
 			if opts.Output.Instructions != nil {
 				instructions = *opts.Output.Instructions
@@ -583,7 +592,8 @@ func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 			if instructions != "" {
 				opts.Messages = injectInstructions(opts.Messages, instructions)
 			}
-
+		}
+		if !outputCfg.Constrained {
 			// This is optional to make the output config internally consistent.
 			outputCfg.Schema = nil
 		}
@@ -607,6 +617,28 @@ func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 	} else {
 		fn = m.Generate
 	}
+
+	// The run's total counts every model action call made under it: model
+	// actions report their usage to the context's sink (see
+	// [reportUsage]), so a call a hook makes to another model (a fallback, a
+	// judge) counts as well as a retry, and so does a nested generate, whose
+	// own sink forwards here. A response a cache serves never reaches a model
+	// action and does not count. Calls can be concurrent, hence the lock.
+	var (
+		usageMu    sync.Mutex
+		totalUsage *GenerationUsage
+	)
+	outerSink := base.UsageSinkFromContext(ctx)
+	ctx = base.WithUsageSink(ctx, func(v any) {
+		if u, ok := v.(*GenerationUsage); ok {
+			usageMu.Lock()
+			totalUsage = SumUsage(totalUsage, u)
+			usageMu.Unlock()
+		}
+		if outerSink != nil {
+			outerSink(v)
+		}
+	})
 
 	// Build the full hook chains once: wrapping the model function with
 	// WrapModel hooks from middleware, and wrapping the generate iteration
@@ -678,7 +710,12 @@ func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 		// execution is both wrapped by WrapGenerate and recorded under this
 		// turn's span (generate > tool > generate > model > tool).
 		if currentTurn == 0 && resumeRequested(opts) {
-			resumeOutput, err := handleResumeOption(ctx, r, opts, runTool, wrappedCb)
+			// The resume revises the conversation this turn received, so
+			// what the WrapGenerate hooks changed carries into the resumed
+			// turn, as it does from one turn to the next.
+			turnOpts := *opts
+			turnOpts.Messages = req.Messages
+			resumeOutput, err := handleResumeOption(ctx, r, &turnOpts, runTool, wrappedCb)
 			if err != nil {
 				if resumeOutput == nil || resumeOutput.failedMessage == nil {
 					return nil, err
@@ -689,24 +726,25 @@ func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 				// finished, so a retry replays them instead of running
 				// them again.
 				failedReq := *req
-				failedReq.Messages = opts.Messages[:len(opts.Messages)-1]
+				failedReq.Messages = req.Messages[:len(req.Messages)-1]
 				partial := failurePartial(ctx, nil, &failedReq, err)
 				partial.Message = resumeOutput.failedMessage
 				return partial, err
 			}
 
+			// A restarted call may interrupt again: a later hook holds it,
+			// or the tool asks its own question once a hook lets it
+			// through. That is a pause like any other, answered the same
+			// way, so it returns no error.
 			if ir := resumeOutput.interruptedResponse; ir != nil {
-				err := status.Errorf(status.ErrFailedPrecondition,
-					"One or more tools triggered an interrupt during a restarted execution.")
-				ir.Error = responseError(err)
 				// ir.Message is the conversation's revised last message, so
 				// the request carries the messages before it and History()
 				// reproduces the full conversation. Copied from the turn's
 				// request so a field added to ModelRequest carries through.
 				irReq := *req
-				irReq.Messages = opts.Messages[:len(opts.Messages)-1]
+				irReq.Messages = req.Messages[:len(req.Messages)-1]
 				ir.Request = &irReq
-				return ir, err
+				return ir, nil
 			}
 
 			opts = resumeOutput.revisedRequest
@@ -904,7 +942,49 @@ func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 			resp = failurePartial(ctx, nil, lastReq, err)
 		}
 	}
+	if resp != nil {
+		usageMu.Lock()
+		resp.TotalUsage = totalUsage
+		usageMu.Unlock()
+	}
 	return resp, err
+}
+
+// SumUsage returns the field-by-field sum of usages, adding
+// [GenerationUsage.Custom] key by key. Nil entries are skipped; the result is
+// nil when every entry is. It never mutates its arguments, so it is safe on
+// usage a model or hook still holds.
+func SumUsage(usages ...*GenerationUsage) *GenerationUsage {
+	var sum *GenerationUsage
+	for _, u := range usages {
+		if u == nil {
+			continue
+		}
+		if sum == nil {
+			sum = &GenerationUsage{}
+		}
+		sum.InputTokens += u.InputTokens
+		sum.OutputTokens += u.OutputTokens
+		sum.TotalTokens += u.TotalTokens
+		sum.InputCharacters += u.InputCharacters
+		sum.OutputCharacters += u.OutputCharacters
+		sum.InputImages += u.InputImages
+		sum.OutputImages += u.OutputImages
+		sum.InputVideos += u.InputVideos
+		sum.OutputVideos += u.OutputVideos
+		sum.InputAudioFiles += u.InputAudioFiles
+		sum.OutputAudioFiles += u.OutputAudioFiles
+		sum.ThoughtsTokens += u.ThoughtsTokens
+		sum.CachedContentTokens += u.CachedContentTokens
+		sum.CacheWriteTokens += u.CacheWriteTokens
+		for k, v := range u.Custom {
+			if sum.Custom == nil {
+				sum.Custom = make(map[string]float64, len(u.Custom))
+			}
+			sum.Custom[k] += v
+		}
+	}
+	return sum
 }
 
 // turnOptions returns a per-turn copy of opts for the WrapGenerate hooks and
@@ -1220,12 +1300,15 @@ func recordToolShortCircuit(ctx context.Context, name string, input any, resp *M
 // tool request nothing answered is one no provider accepts. Text streamed
 // before the failure still reached the callback.
 //
-// Two errors are not loop failures and keep their response's message: a
+// One error is not a loop failure and keeps its response's message: a
 // response the model completed but post-processing rejected (structured
 // output that does not match the schema), which keeps the model's own finish
-// reason, and a resume whose restarted tool interrupted again, which keeps
-// FinishReason interrupted under its FAILED_PRECONDITION error and is
-// answered with [WithResume] rather than re-sent.
+// reason.
+//
+// A resume whose restarted call interrupts again, because a later middleware
+// hook holds it or the tool asks its own question, returns no error: like any
+// pause, it reports FinishReason interrupted and is answered with
+// [WithResume]. The model is not called.
 //
 // A resume whose restarted tool failed also keeps the resumed message, with
 // the failed request as it was and its siblings' outcomes recorded on their
@@ -2014,7 +2097,9 @@ func (mr *ModelResponse) Text() string {
 }
 
 // History returns messages from the request combined with the response message
-// to represent the conversation history. The result is always freshly
+// to represent the conversation history. The request is the one the model
+// recorded on the response, so a [Hooks.WrapModel] middleware that changes
+// the messages decides what History returns. The result is always freshly
 // allocated, so callers may retain or append to it without disturbing
 // Request.Messages.
 func (mr *ModelResponse) History() []*Message {

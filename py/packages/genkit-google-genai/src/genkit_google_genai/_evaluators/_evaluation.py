@@ -33,21 +33,15 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 import httpx
+from genkit_google_genai._auth import GOOGLE_AUTH_ERRORS, raise_auth_error
+from genkit_google_genai._constants import GLOBAL_LOCATION, is_multi_regional_location, vertex_api_host
+from genkit_google_genai._provider_errors import TRANSPORT_ERRORS, transport_error
 from google.auth import default as google_auth_default
 from google.auth.transport.requests import Request
 
 from genkit import GenkitError
-from genkit.evaluator import BaseDataPoint, Details, EvalFnResponse, Score
-from genkit.plugin_api import (
-    GENKIT_CLIENT_HEADER,
-    Action,
-    StrEnum,
-    loop_local_client,
-    mark_provider_error,
-    wrap_http_error,
-)
-from genkit_google_genai._auth import GOOGLE_AUTH_ERRORS, raise_auth_error
-from genkit_google_genai._constants import GLOBAL_LOCATION, is_multi_regional_location, vertex_api_host
+from genkit.evaluator import BaseDataPoint, EvalFnResponse, Score, ScoreDetails
+from genkit.plugin_api import GENKIT_CLIENT_HEADER, Action, StrEnum, loop_local_client, provider_error
 
 if TYPE_CHECKING:
     from genkit import Genkit as GenkitRegistry
@@ -215,13 +209,14 @@ class EvaluatorFactory:
         # Auth headers go on each request since tokens expire.
         client = _evaluator_client()
 
-        # Transport failures (refused connection, timeout) have no known
-        # status and propagate as is.
-        response = await client.post(
-            url,
-            headers=headers,
-            json=request,
-        )
+        try:
+            response = await client.post(
+                url,
+                headers=headers,
+                json=request,
+            )
+        except TRANSPORT_ERRORS as e:
+            raise transport_error(e) from e
 
         if response.status_code != 200:
             error_message = response.text
@@ -233,13 +228,15 @@ class EvaluatorFactory:
                 pass
 
             message = f'Error calling Vertex AI Evaluation API: [{response.status_code}] {error_message}'
-            if response.status_code >= 400:
-                try:
-                    response.raise_for_status()
-                except httpx.HTTPStatusError as e:
-                    raise wrap_http_error(e, status_code=response.status_code, message=message) from e
-            # A non-200 success or redirect is not a body this client can read.
-            raise mark_provider_error(error=GenkitError(message=message, status='INTERNAL'))
+            error = httpx.HTTPStatusError(message, request=httpx.Request('POST', url), response=response)
+            raise provider_error(
+                error,
+                http_status=response.status_code,
+                # A non-200 success or redirect is not a body this client can read.
+                status='INTERNAL' if response.status_code < 400 else None,
+                headers=response.headers,
+                message=message,
+            ) from error
 
         try:
             return response.json()
@@ -383,7 +380,7 @@ def _create_evaluator_for_metric(
             },
             'response_handler': lambda r: Score(
                 score=r.get('fluencyResult', {}).get('score'),
-                details=Details(reasoning=r.get('fluencyResult', {}).get('explanation')),
+                details=ScoreDetails(reasoning=r.get('fluencyResult', {}).get('explanation')),
             ),
         },
         VertexAIEvaluationMetricType.SAFETY: {
@@ -397,7 +394,7 @@ def _create_evaluator_for_metric(
             },
             'response_handler': lambda r: Score(
                 score=r.get('safetyResult', {}).get('score'),
-                details=Details(reasoning=r.get('safetyResult', {}).get('explanation')),
+                details=ScoreDetails(reasoning=r.get('safetyResult', {}).get('explanation')),
             ),
         },
         VertexAIEvaluationMetricType.GROUNDEDNESS: {
@@ -412,7 +409,7 @@ def _create_evaluator_for_metric(
             },
             'response_handler': lambda r: Score(
                 score=r.get('groundednessResult', {}).get('score'),
-                details=Details(reasoning=r.get('groundednessResult', {}).get('explanation')),
+                details=ScoreDetails(reasoning=r.get('groundednessResult', {}).get('explanation')),
             ),
         },
         VertexAIEvaluationMetricType.SUMMARIZATION_QUALITY: {
@@ -428,7 +425,7 @@ def _create_evaluator_for_metric(
             },
             'response_handler': lambda r: Score(
                 score=r.get('summarizationQualityResult', {}).get('score'),
-                details=Details(reasoning=r.get('summarizationQualityResult', {}).get('explanation')),
+                details=ScoreDetails(reasoning=r.get('summarizationQualityResult', {}).get('explanation')),
             ),
         },
         VertexAIEvaluationMetricType.SUMMARIZATION_HELPFULNESS: {
@@ -444,7 +441,7 @@ def _create_evaluator_for_metric(
             },
             'response_handler': lambda r: Score(
                 score=r.get('summarizationHelpfulnessResult', {}).get('score'),
-                details=Details(reasoning=r.get('summarizationHelpfulnessResult', {}).get('explanation')),
+                details=ScoreDetails(reasoning=r.get('summarizationHelpfulnessResult', {}).get('explanation')),
             ),
         },
         VertexAIEvaluationMetricType.SUMMARIZATION_VERBOSITY: {
@@ -460,7 +457,7 @@ def _create_evaluator_for_metric(
             },
             'response_handler': lambda r: Score(
                 score=r.get('summarizationVerbosityResult', {}).get('score'),
-                details=Details(reasoning=r.get('summarizationVerbosityResult', {}).get('explanation')),
+                details=ScoreDetails(reasoning=r.get('summarizationVerbosityResult', {}).get('explanation')),
             ),
         },
     }

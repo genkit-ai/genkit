@@ -24,6 +24,7 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from genkit._core import _error as error_mod
 from genkit._core._error import (
+    ErrorResponseMetadata,
     GenkitError,
     GenkitRuntimeError,
     PublicError,
@@ -36,11 +37,9 @@ from genkit._core._error import (
     get_reflection_json,
     mark_request_error,
     parse_retry_after_ms,
-    wrap_http_error,
 )
 from genkit._core._model import AgentOutput, SessionSnapshot
 from genkit._core._typing import GenkitRuntimeError as WireError
-from genkit.plugin_api import ErrorResponseMetadata
 
 
 def test_runtime_error_reasons_are_the_ones_helpers_write() -> None:
@@ -287,92 +286,6 @@ def test_get_error_stack() -> None:
     except ValueError as e:
         tb = get_error_stack(e)
         assert tb == ''
-
-
-def test_wrap_http_error_classifies_status() -> None:
-    cause = RuntimeError('bad request')
-    error = wrap_http_error(cause, status_code=400)
-    assert error.status == 'INVALID_ARGUMENT'
-    assert error.cause is cause
-    assert error.original_message == 'bad request'
-
-
-def test_wrap_http_error_marks_503_unavailable() -> None:
-    """A 503 must stay retryable — not collapse to INTERNAL."""
-    cause = RuntimeError('overloaded')
-    error = wrap_http_error(cause, status_code=503)
-    assert error.status == 'UNAVAILABLE'
-    assert error.cause is cause
-
-
-def test_wrap_http_error_coerces_string_status_code() -> None:
-    """Some SDKs leave the code as a string; still classify a real 503."""
-    cause = RuntimeError('overloaded')
-    error = wrap_http_error(cause, status_code='503')
-    assert error.status == 'UNAVAILABLE'
-
-
-@pytest.mark.parametrize('status_code', [None, 'nope', 0, -1, 200, 301, 402, 413, 418])
-def test_wrap_http_error_leaves_missing_status_unclassified(status_code: object) -> None:
-    """No HTTP failure status, or a 4xx with no canonical status, means retry still sees the raw error."""
-    cause = RuntimeError('model failed')
-    with pytest.raises(RuntimeError) as raised:
-        wrap_http_error(cause, status_code=status_code)
-    assert raised.value is cause
-
-
-def test_wrap_http_error_marks_408_deadline_exceeded() -> None:
-    """A request timeout is transient — retry should wait and try again."""
-    cause = RuntimeError('request timeout')
-    error = wrap_http_error(cause, status_code=408)
-    assert error.status == 'DEADLINE_EXCEEDED'
-    assert error.cause is cause
-
-
-def test_wrap_http_error_reads_retry_after() -> None:
-    """Retry should wait the provider delay, not come back in a second."""
-
-    class FakeResponse:
-        headers = {'retry-after': '60'}
-
-    class FakeError(RuntimeError):
-        def __init__(self) -> None:
-            super().__init__('rate limited')
-            self.response = FakeResponse()
-
-    error = wrap_http_error(FakeError(), status_code=429, message='rate limited')
-    assert error.status == 'RESOURCE_EXHAUSTED'
-    assert error.response_metadata == {'retry_after_ms': 60000.0}
-    assert error.original_message == 'rate limited'
-    assert error.to_callable_serializable().model_dump(exclude_none=True) == {
-        'message': 'Internal Error',
-        'status': 'INTERNAL',
-    }
-
-
-def test_served_error_body_for_provider_401_is_internal_error() -> None:
-    """A plugin error built from a provider 401 serves as 500 Internal Error, with no provider text."""
-    error = wrap_http_error(RuntimeError('API key not valid'), status_code=401)
-
-    assert get_callable_json(error) == {'message': 'Internal Error', 'status': 'INTERNAL'}
-    assert get_http_status(error) == 500
-    assert 'API key not valid' not in str(get_callable_json(error))
-
-
-def test_in_process_provider_error_keeps_unauthenticated() -> None:
-    """wrap_http_error still classifies a 401 as UNAUTHENTICATED for Retry and Fallback."""
-    error = wrap_http_error(RuntimeError('API key not valid'), status_code=401)
-
-    assert error.status == 'UNAUTHENTICATED'
-    assert error.original_message == 'API key not valid'
-
-
-def test_wrap_http_error_keeps_provider_status_in_process() -> None:
-    """A provider 429 stays RESOURCE_EXHAUSTED in-process so Retry still sees it."""
-    error = wrap_http_error(RuntimeError('quota'), status_code=429)
-
-    assert error.status == 'RESOURCE_EXHAUSTED'
-    assert get_callable_json(error) == {'message': 'Internal Error', 'status': 'INTERNAL'}
 
 
 def test_served_error_body_for_unmarked_genkit_error_is_internal_error() -> None:

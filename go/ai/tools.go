@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"maps"
 	"reflect"
+	"strings"
 
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
@@ -907,13 +908,17 @@ func LookupTool(r api.Registry, name string) Tool {
 
 // InterruptedCall is a typed view of an interrupted call to one tool: the part
 // as received, the input decoded to the tool's In type, and the verbs that
-// resolve the interrupt. [ResumableToolAction.Interrupted] returns one
-// only for a part that is an unresolved interrupt of that tool, and Res is
-// checked at definition to serialize as a JSON object, so nothing here can
-// fail: each verb returns the part that resumes generation through
-// [WithResume].
+// resolve the interrupt. Res is the type of the answer the stage that paused
+// the call reads. [ResumableToolAction.Interrupted] returns one for the tool's
+// own interrupt, where Res is the tool's resume type, and
+// [MiddlewareInterrupted] returns one for a hold, an interrupt a middleware's
+// WrapTool hook raised before the tool ran, where Res is the hook's answer
+// type and In and Out are untyped, since a hook holds any tool. Both return
+// one only for an unresolved interrupt, and Res is checked to serialize as a
+// JSON object, so nothing here can fail: each verb returns the part that
+// resumes generation through [WithResume].
 //
-// Read the data the tool sent when it paused, if any, with [InterruptAs] on
+// Read the data the stage sent when it paused, if any, with [InterruptAs] on
 // Part.
 type InterruptedCall[In, Out, Res any] struct {
 	// Part is the interrupted tool request, as received.
@@ -926,7 +931,7 @@ type InterruptedCall[In, Out, Res any] struct {
 // unresolved interrupt of this tool and, when it is, returns the call with
 // its input decoded. A nil part, a part of another kind, an interrupt already
 // resolved, an interrupt of another tool, a hold a WrapTool hook raised for
-// this tool (a middleware's interrupt, which [Part.ToToolRestart] answers),
+// this tool (a middleware's interrupt, which [MiddlewareInterrupted] claims),
 // or an input that no longer decodes as In all report false. Iterate
 // [ModelResponse.Interrupts] and claim each part with the tools that could
 // have raised it:
@@ -961,9 +966,70 @@ func (t *ResumableToolAction[In, Out, Res]) Interrupted(part *Part) (*Interrupte
 	return &InterruptedCall[In, Out, Res]{Part: part, Input: input}, true
 }
 
+// MiddlewareInterrupted claims part for the middleware named name: it reports
+// whether part is an unresolved hold that the WrapTool hook of that middleware
+// raised and, when it is, returns the call, with Res as the answer type the
+// hook reads. A hold is matched by its [ToolInterrupt.RaisedBy] stage, the
+// middleware's name or, when the name repeats in the chain, the name with a
+// "#n" suffix, so two instances of one middleware are not told apart. A tool's
+// own interrupt, another middleware's hold, and a hold that records no stage
+// all report false.
+//
+// A hold is answered with [InterruptedCall.Restart], whose payload the hook
+// reads. [InterruptedCall.Respond] runs neither the hook nor the tool: its
+// output stands in for the tool's and must match the tool's output schema,
+// so it cannot carry a refusal.
+//
+// It is for middleware authors, who wrap it in a function of their own that
+// fixes name and Res, so that applications claim the middleware's holds the
+// way they claim a tool's interrupts:
+//
+//	func ToolApprovalInterrupted(part *ai.Part) (*ai.InterruptedCall[any, any, ToolCallDecision], bool) {
+//		return ai.MiddlewareInterrupted[ToolCallDecision](ToolApproval{}.Name(), part)
+//	}
+//
+// It panics if Res does not serialize to a JSON object (a struct or a map with
+// string keys), as [NewResumableTool] does for a tool's resume type.
+func MiddlewareInterrupted[Res any](name string, part *Part) (*InterruptedCall[any, any, Res], bool) {
+	requireObjectTypeParam[Res]("ai.MiddlewareInterrupted", name, "the answer type Res")
+	if !part.IsInterrupt() {
+		return nil, false
+	}
+	it := part.interruptState()
+	if it == nil || !isStageOf(it.RaisedBy, name) {
+		return nil, false
+	}
+	return &InterruptedCall[any, any, Res]{Part: part, Input: part.ToolRequest.Input}, true
+}
+
+// isStageOf reports whether stage, a [ToolInterrupt.RaisedBy] id, names the
+// middleware called name: the name itself, or the name with the "#n" suffix
+// toolStages gives a repeat.
+func isStageOf(stage, name string) bool {
+	if stage == "" || name == "" {
+		return false
+	}
+	if stage == name {
+		return true
+	}
+	n, ok := strings.CutPrefix(stage, name+"#")
+	if !ok || n == "" {
+		return false
+	}
+	for _, c := range n {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // Restart returns the part that re-executes the tool with resume delivered to
-// its resume parameter (or to [ToolContext.Resumed], for a tool written
-// against [ToolContext]). A nil map is a bare restart: the part carries the
+// the stage that paused it: the tool's resume parameter (or
+// [ToolContext.Resumed], for a tool written against [ToolContext]), or, for a
+// hold, the WrapTool hook that raised it, which reads it with
+// [github.com/firebase/genkit/go/ai/tool.ResumeData] before the tool runs as
+// a fresh call. A nil map is a bare restart: the part carries the
 // bare marker and the tool re-executes with an empty payload, so restarting
 // is itself the approval for a tool that keys on the presence of a resume. A
 // struct Res has no bare form: its zero value is sent as an object with zero
@@ -1009,8 +1075,8 @@ func (c *InterruptedCall[In, Out, Res]) Respond(output Out) *Part {
 // own interrupt, restarting is itself the approval when the tool keys on the
 // presence of a resume, while a tool whose resume type has required fields
 // needs them filled in. A hook's hold needs the payload that hook names, such
-// as {"toolApproved": true} for [github.com/firebase/genkit/go/plugins/middleware.ToolApproval];
-// a bare restart holds the call again.
+// as {"toolApproved": true} for [github.com/firebase/genkit/go/plugins/middleware.ToolApproval],
+// which refuses the call on any other restart, a bare one included.
 //
 //	for _, part := range resp.Interrupts() {
 //		restart, err := part.ToToolRestart(map[string]any{"toolApproved": true})

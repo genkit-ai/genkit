@@ -406,24 +406,6 @@ def _derive_config_schema(cls: type[BaseMiddleware]) -> dict[str, Any]:
         }
 
 
-def new_middleware(
-    cls: type[BaseMiddleware],
-    name: str,
-    description: str | None = None,
-) -> GenerateMiddleware:
-    """Ergonomic helper to define a new ``GenerateMiddleware``.
-
-    Args:
-        cls: The BaseMiddleware subclass.
-        name: The registry name.
-        description: Optional human-readable description.
-
-    Returns:
-        A new GenerateMiddleware instance.
-    """
-    return GenerateMiddleware(cls=cls, name=name, description=description)
-
-
 def middleware_class_index(registry: RegistryLike) -> dict[type[BaseMiddleware], str]:
     """Reverse index from a registered class to the name it was registered under."""
     out: dict[type[BaseMiddleware], str] = {}

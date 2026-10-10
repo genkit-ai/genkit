@@ -202,6 +202,19 @@ type OpenAICompatible struct {
 	// the OpenAI-style listing.
 	ListModels func(ctx context.Context, client *openai.Client) ([]string, error)
 
+	// SeparateReasoningTokens records that the provider counts
+	// completion_tokens_details.reasoning_tokens apart from completion_tokens,
+	// as xAI does, rather than inside them, as OpenAI does. Left false, each
+	// response is read by its total_tokens: a total that adds the reasoning on
+	// top of the completion marks it as counted apart.
+	SeparateReasoningTokens bool
+
+	// ClassifyError optionally names the status of an error response the
+	// provider sends with a misleading HTTP code, such as an unknown model
+	// answered with 400 rather than 404. It returns "" to keep the status the
+	// HTTP code gives.
+	ClassifyError func(err *openai.Error) status.Name
+
 	// descs caches the action descriptors of listed models by name; they are
 	// deterministic per name, and rebuilding a full model action per listed
 	// model on every reflection poll is wasteful. A plugin instance lists
@@ -305,7 +318,7 @@ func (o *OpenAICompatible) clientForKey(key string) *openai.Client {
 // framework to register, or register it with [genkit.RegisterAction].
 func (o *OpenAICompatible) NewModel(id string, opts ai.ModelOptions) *ai.ModelAction {
 	o.checkInitted()
-	return newSDKModel(o.client, o.Provider, id, opts)
+	return newSDKModel(o, id, opts)
 }
 
 // DefineModel creates an unregistered model that takes its config untyped:
@@ -325,6 +338,7 @@ func (o *OpenAICompatible) DefineModel(provider, id string, opts ai.ModelOptions
 		cb ai.ModelStreamCallback,
 	) (*ai.ModelResponse, error) {
 		return NewModelGenerator(o.client, id).
+			withSeparateReasoning(o.SeparateReasoningTokens).
 			WithMessages(input.Messages).
 			WithConfig(input.Config).
 			WithTools(input.Tools).
@@ -333,18 +347,19 @@ func (o *OpenAICompatible) DefineModel(provider, id string, opts ai.ModelOptions
 	})
 }
 
-// newSDKModel creates an unregistered model whose config is the OpenAI SDK's
-// request params type. A nil ConfigSchema defaults to the reflected SDK
-// schema and an empty label is derived from the provider and the name.
-func newSDKModel(client *openai.Client, provider, id string, opts ai.ModelOptions) *ai.ModelAction {
+// newSDKModel creates an unregistered model of o's provider whose config is
+// the OpenAI SDK's request params type. A nil ConfigSchema defaults to the
+// reflected SDK schema and an empty label is derived from the provider and
+// the name.
+func newSDKModel(o *OpenAICompatible, id string, opts ai.ModelOptions) *ai.ModelAction {
 	if opts.ConfigSchema == nil {
 		opts.ConfigSchema = sdkConfigSchema()
 	}
 	if opts.Label == "" {
-		opts.Label = internal.ProviderLabel(provider, id)
+		opts.Label = internal.ProviderLabel(o.Provider, id)
 	}
 
-	return ai.NewModelAction(api.NewName(provider, id), &opts, func(
+	return ai.NewModelAction(api.NewName(o.Provider, id), &opts, func(
 		ctx context.Context,
 		input *ai.ModelRequest,
 		config openai.ChatCompletionNewParams,
@@ -353,7 +368,8 @@ func newSDKModel(client *openai.Client, provider, id string, opts ai.ModelOption
 		if err := rejectManagedConfig(&config); err != nil {
 			return nil, err
 		}
-		return NewModelGenerator(client, id).
+		return NewModelGenerator(o.client, id).
+			withSeparateReasoning(o.SeparateReasoningTokens).
 			WithParams(config).
 			WithMessages(input.Messages).
 			WithTools(input.Tools).
@@ -429,17 +445,20 @@ func NewChatModel[Config ChatConfig](o *OpenAICompatible, id string, opts ai.Mod
 			return nil, err
 		}
 
-		var outputFormats []string
+		var supports ai.ModelSupports
 		if opts.Supports != nil {
-			outputFormats = opts.Supports.Output
+			supports = *opts.Supports
 		}
-		return NewModelGenerator(o.clientForKey(config.RequestAPIKey()), id).
+		g := NewModelGenerator(o.clientForKey(config.RequestAPIKey()), id).
+			withSeparateReasoning(o.SeparateReasoningTokens).
 			WithParams(params).
 			WithMessages(input.Messages).
 			WithTools(input.Tools).
 			WithToolChoice(input.ToolChoice).
-			WithOutputFormats(outputFormats).
-			Generate(ctx, input, cb)
+			WithOutputFormats(supports.Output)
+		g.constrained = supports.Constrained
+		g.classify = o.ClassifyError
+		return g.Generate(ctx, input, cb)
 	})
 }
 
@@ -519,7 +538,7 @@ func (o *OpenAICompatible) newEmbedder(provider, id string, embedOpts *ai.Embedd
 
 		embeddingResp, err := o.clientForKey(config.APIKey).Embeddings.New(ctx, params)
 		if err != nil {
-			return nil, WrapAPIError(err)
+			return nil, classifyAPIError(err, o.ClassifyError)
 		}
 
 		resp := &ai.EmbedResponse{}
@@ -615,7 +634,7 @@ func (o *OpenAICompatible) IsDefinedModel(g *genkit.Genkit, name string) bool {
 // type and curated capabilities of their own use [ListChatActions].
 func (o *OpenAICompatible) ListActions(ctx context.Context) []api.ActionDesc {
 	return listActions(ctx, o, func(id string) api.ActionDesc {
-		return newSDKModel(o.client, o.Provider, id, sdkModelOptions(o.Provider, id)).Desc()
+		return newSDKModel(o, id, sdkModelOptions(o.Provider, id)).Desc()
 	})
 }
 
@@ -625,7 +644,7 @@ func (o *OpenAICompatible) ListActions(ctx context.Context) []api.ActionDesc {
 func (o *OpenAICompatible) ResolveAction(atype api.ActionType, id string) api.Action {
 	switch atype {
 	case api.ActionTypeModel:
-		return newSDKModel(o.client, o.Provider, id, sdkModelOptions(o.Provider, id))
+		return newSDKModel(o, id, sdkModelOptions(o.Provider, id))
 	}
 	return nil
 }
@@ -694,7 +713,7 @@ func ModelOptionsFor(provider, id string, curated map[string]ai.ModelOptions, dy
 // catalog of its own, describing every model with the generic defaults.
 func ListModelActions(ctx context.Context, o *OpenAICompatible, modelOptions func(id string) ai.ModelOptions) []api.ActionDesc {
 	return listActions(ctx, o, func(id string) api.ActionDesc {
-		return newSDKModel(o.client, o.Provider, id, modelOptions(id)).Desc()
+		return newSDKModel(o, id, modelOptions(id)).Desc()
 	})
 }
 
@@ -703,7 +722,7 @@ func ListModelActions(ctx context.Context, o *OpenAICompatible, modelOptions fun
 func ResolveModelAction(o *OpenAICompatible, atype api.ActionType, id string, modelOptions func(id string) ai.ModelOptions) api.Action {
 	switch atype {
 	case api.ActionTypeModel:
-		return newSDKModel(o.client, o.Provider, id, modelOptions(id))
+		return newSDKModel(o, id, modelOptions(id))
 	}
 	return nil
 }

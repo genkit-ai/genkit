@@ -18,7 +18,7 @@
 from unittest.mock import MagicMock
 
 import pytest
-from genkit_openai._models import OpenAIModelHandler
+from genkit_openai._models._handler import OpenAIModelHandler
 from genkit_openai._models._model_info import SUPPORTED_OPENAI_MODELS
 
 

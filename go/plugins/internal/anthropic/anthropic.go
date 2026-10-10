@@ -36,6 +36,7 @@ import (
 	"github.com/invopop/jsonschema"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/anthropics/anthropic-sdk-go/packages/respjson"
 )
 
 const (
@@ -233,7 +234,7 @@ func Generate(
 			return nil, WrapAPIError(err)
 		}
 
-		r, err := toGenkitResponse(msg)
+		r, err := toGenkitResponse(msg, thinkingTokens(msg.Usage.JSON.ExtraFields["output_tokens_details"]))
 		if err != nil {
 			return nil, err
 		}
@@ -243,6 +244,7 @@ func Generate(
 	} else {
 		stream := client.Messages.NewStreaming(ctx, *req)
 		message := anthropic.Message{}
+		var thinking int64
 		for stream.Next() {
 			event := stream.Current()
 			err := message.Accumulate(event)
@@ -281,8 +283,11 @@ func Generate(
 						}
 					}
 				}
+			case anthropic.MessageDeltaEvent:
+				applyDeltaUsage(&message.Usage, event.Usage)
+				thinking = max(thinking, thinkingTokens(event.Usage.JSON.ExtraFields["output_tokens_details"]))
 			case anthropic.MessageStopEvent:
-				r, err := toGenkitResponse(&message)
+				r, err := toGenkitResponse(&message, thinking)
 				if err != nil {
 					return nil, err
 				}
@@ -399,9 +404,11 @@ func toAnthropicRequest(provider string, i *ai.ModelRequest, config anthropic.Me
 		req.ToolChoice = toolChoice
 	}
 
-	if i.Output != nil && i.Output.Format == "json" && i.Output.Schema != nil && i.Output.Constrained {
-		// Native structured output via OutputConfig. Set only the format so a
-		// config-provided OutputConfig.Effort survives.
+	if i.Output != nil && i.Output.Schema != nil && i.Output.Constrained {
+		// Native structured output via OutputConfig, for every format that
+		// asks for it: the API takes an array or an enum at the schema root
+		// as well as an object. Set only the format so a config-provided
+		// OutputConfig.Effort survives.
 		req.OutputConfig.Format = anthropic.JSONOutputFormatParam{
 			Schema: pluginjsonschema.EnforceStrict(i.Output.Schema),
 			// Type is elided, defaults to "json_schema"
@@ -525,6 +532,14 @@ func toAnthropicParts(parts []*ai.Part) ([]anthropic.ContentBlockParamUnion, err
 			blocks = append(blocks, block)
 		case p.IsReasoning():
 			blocks = append(blocks, anthropic.NewThinkingBlock(string(metadataSignature(p.Metadata)), p.Text))
+		case p.IsCustom():
+			// Redacted thinking goes back exactly as it came, as the API
+			// requires.
+			data, ok := p.Custom[redactedThinkingKey].(string)
+			if !ok {
+				return nil, status.Errorf(ai.ErrInvalidPart, "unknown custom part in the request: %v", p.Custom)
+			}
+			blocks = append(blocks, anthropic.NewRedactedThinkingBlock(data))
 		default:
 			return nil, status.Errorf(ai.ErrInvalidPart, "unknown part type in the request")
 		}
@@ -609,8 +624,15 @@ func toAnthropicToolResultContent(p *ai.Part) (anthropic.ToolResultBlockParamCon
 		"unsupported part in tool response content: Anthropic tool results accept text, image, and document parts")
 }
 
-// toGenkitResponse translates an Anthropic Message to [ai.ModelResponse]
-func toGenkitResponse(m *anthropic.Message) (*ai.ModelResponse, error) {
+// redactedThinkingKey names the custom part that carries a redacted_thinking
+// block: thinking the API encrypted for safety reasons, which a later turn
+// must send back unchanged. It is a custom part rather than a reasoning part
+// since it holds no readable thought. The JS plugin uses the same shape.
+const redactedThinkingKey = "redactedThinking"
+
+// toGenkitResponse translates an Anthropic Message, and the thinking token
+// count reported beside it, to [ai.ModelResponse].
+func toGenkitResponse(m *anthropic.Message, thinking int64) (*ai.ModelResponse, error) {
 	r := ai.ModelResponse{}
 
 	switch m.StopReason {
@@ -633,6 +655,8 @@ func toGenkitResponse(m *anthropic.Message) (*ai.ModelResponse, error) {
 		switch part.AsAny().(type) {
 		case anthropic.ThinkingBlock:
 			p = ai.NewReasoningPart(part.Thinking, []byte(part.Signature))
+		case anthropic.RedactedThinkingBlock:
+			p = ai.NewCustomPart(map[string]any{redactedThinkingKey: part.Data})
 		case anthropic.TextBlock:
 			p = ai.NewTextPart(string(part.Text))
 		case anthropic.ToolUseBlock:
@@ -649,10 +673,90 @@ func toGenkitResponse(m *anthropic.Message) (*ai.ModelResponse, error) {
 
 	r.Message = msg
 	r.Raw = m.JSON
-	r.Usage = &ai.GenerationUsage{
-		InputTokens:         int(m.Usage.InputTokens),
-		OutputTokens:        int(m.Usage.OutputTokens),
-		CachedContentTokens: int(m.Usage.CacheReadInputTokens),
-	}
+	r.Usage = toGenkitUsage(m.Usage, thinking)
 	return &r, nil
+}
+
+// toGenkitUsage maps a message's usage and its thinking token count onto
+// [ai.GenerationUsage]'s convention. Anthropic's input_tokens leaves out the
+// tokens read from and written to the cache, so they are added back to make
+// InputTokens the whole prompt. Its output_tokens includes thinking, so the
+// thinking count is taken out of it. A response with no thinking count, as
+// from an API that does not report one, leaves all of it in OutputTokens.
+func toGenkitUsage(u anthropic.Usage, thinking int64) *ai.GenerationUsage {
+	if thinking > u.OutputTokens {
+		thinking = 0
+	}
+	usage := &ai.GenerationUsage{
+		InputTokens:         int(u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens),
+		OutputTokens:        int(u.OutputTokens - thinking),
+		ThoughtsTokens:      int(thinking),
+		CachedContentTokens: int(u.CacheReadInputTokens),
+		CacheWriteTokens:    int(u.CacheCreationInputTokens),
+	}
+	usage.TotalTokens = usage.InputTokens + usage.OutputTokens + usage.ThoughtsTokens
+
+	// Cache writes are billed by how long the entry lives, and server tools
+	// by the request, neither of which has a field of its own. The split by
+	// lifetime is reported only while it adds up to CacheWriteTokens: a
+	// stream whose server tools write more cache after message_start may not
+	// say how the extra writes split, and a partial split would undercharge.
+	split := u.CacheCreation
+	if split.Ephemeral5mInputTokens+split.Ephemeral1hInputTokens != u.CacheCreationInputTokens {
+		split = anthropic.CacheCreation{}
+	}
+	for _, c := range [...]struct {
+		name  string
+		count int64
+	}{
+		{"cacheWrite5mTokens", split.Ephemeral5mInputTokens},
+		{"cacheWrite1hTokens", split.Ephemeral1hInputTokens},
+		{"webSearchRequests", u.ServerToolUse.WebSearchRequests},
+		{"webFetchRequests", u.ServerToolUse.WebFetchRequests},
+	} {
+		if c.count <= 0 {
+			continue
+		}
+		if usage.Custom == nil {
+			usage.Custom = make(map[string]float64)
+		}
+		usage.Custom[c.name] = float64(c.count)
+	}
+	return usage
+}
+
+// thinkingTokens reads output_tokens_details.thinking_tokens, which the SDK
+// models only from v1.62.0, returning zero when the field is absent. Once the
+// SDK is bumped, Usage.OutputTokensDetails replaces it.
+func thinkingTokens(details respjson.Field) int64 {
+	var d struct {
+		ThinkingTokens int64 `json:"thinking_tokens"`
+	}
+	if raw := details.Raw(); raw != "" && raw != "null" {
+		_ = json.Unmarshal([]byte(raw), &d)
+	}
+	return d.ThinkingTokens
+}
+
+// applyDeltaUsage folds a message_delta's usage into the usage that
+// message_start reported. The delta's counts are cumulative, and server tools
+// can raise the input counts after the start, but the SDK's accumulator keeps
+// only output_tokens before v1.62.0. Cumulative counts never fall, so each
+// keeps the larger of the two: a delta that leaves a count out, or a proxy
+// that zeroes it, does not lower what the start reported.
+func applyDeltaUsage(u *anthropic.Usage, d anthropic.MessageDeltaUsage) {
+	u.InputTokens = max(u.InputTokens, d.InputTokens)
+	u.CacheReadInputTokens = max(u.CacheReadInputTokens, d.CacheReadInputTokens)
+	u.CacheCreationInputTokens = max(u.CacheCreationInputTokens, d.CacheCreationInputTokens)
+	u.ServerToolUse.WebSearchRequests = max(u.ServerToolUse.WebSearchRequests, d.ServerToolUse.WebSearchRequests)
+	u.ServerToolUse.WebFetchRequests = max(u.ServerToolUse.WebFetchRequests, d.ServerToolUse.WebFetchRequests)
+	// The split of cache writes by lifetime, which the SDK does not model on
+	// the delta.
+	if raw := d.JSON.ExtraFields["cache_creation"].Raw(); raw != "" && raw != "null" {
+		var c anthropic.CacheCreation
+		if json.Unmarshal([]byte(raw), &c) == nil {
+			u.CacheCreation.Ephemeral5mInputTokens = max(u.CacheCreation.Ephemeral5mInputTokens, c.Ephemeral5mInputTokens)
+			u.CacheCreation.Ephemeral1hInputTokens = max(u.CacheCreation.Ephemeral1hInputTokens, c.Ephemeral1hInputTokens)
+		}
+	}
 }

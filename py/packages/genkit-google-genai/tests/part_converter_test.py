@@ -386,14 +386,20 @@ class TestDownloadMediaErrors:
         assert isinstance(raised.value.cause, httpx.HTTPStatusError)
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize('code', [408, 429, 500, 503])
+    @pytest.mark.parametrize(
+        'code',
+        [408, 429, 500, 503],
+    )
     async def test_transient_status_stays_raw(self, code: int) -> None:
-        client = self._client(lambda request: httpx.Response(code))
+        """A media host's 408, 429, or 5xx is not Gemini's failure, so Fallback must not switch models over it."""
+        client = self._client(lambda request: httpx.Response(code, headers={'Retry-After': '4'}))
         part = Part.from_media('https://cdn.example.com/menu/tartine.jpg', content_type='image/jpeg')
 
         with patch('genkit_google_genai._models._utils._media_client', return_value=client):
-            with pytest.raises(httpx.HTTPStatusError):
+            with pytest.raises(httpx.HTTPStatusError) as raised:
                 await PartConverter.to_gemini(part)
+
+        assert raised.value.response.status_code == code
 
     @pytest.mark.asyncio
     async def test_connect_error_stays_raw(self) -> None:

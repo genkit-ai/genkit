@@ -66,6 +66,13 @@ func structuredModel(label string) ai.ModelOptions {
 	}
 }
 
+// deprecatedModel marks opts as a model Anthropic has deprecated: it still
+// serves it until its retirement date, but the framework warns on each use.
+func deprecatedModel(opts ai.ModelOptions) ai.ModelOptions {
+	opts.Stage = ai.ModelStageDeprecated
+	return opts
+}
+
 // supportedModels curates capabilities for well-known Claude models, mirroring
 // the JS plugin's KNOWN_MODELS. It is not the set of usable models: any Claude
 // model resolves on demand and takes [dynamicModelOptions], so an ID absent
@@ -83,7 +90,9 @@ var supportedModels = map[string]ai.ModelOptions{
 	"claude-opus-4-6":   structuredModel("Claude Opus 4.6"),
 	"claude-opus-4-5":   structuredModel("Claude Opus 4.5"),
 	"claude-sonnet-4-6": structuredModel("Claude Sonnet 4.6"),
-	"claude-sonnet-4-5": structuredModel("Claude Sonnet 4.5"),
+	// Deprecated September 30, 2026; retires November 30, 2026, replaced by
+	// claude-sonnet-5-5.
+	"claude-sonnet-4-5": deprecatedModel(structuredModel("Claude Sonnet 4.5")),
 	"claude-haiku-4-5":  structuredModel("Claude Haiku 4.5"),
 }
 

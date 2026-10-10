@@ -48,3 +48,16 @@ func WrapAPIError(err error) error {
 	}
 	return status.Errorf(status.Base(status.FromHTTPCode(apiErr.StatusCode)), "%w", err)
 }
+
+// classifyAPIError is [WrapAPIError] with the provider's own reading of the
+// error response, from [OpenAICompatible.ClassifyError], taking precedence
+// over the HTTP code.
+func classifyAPIError(err error, classify func(*openai.Error) status.Name) error {
+	var apiErr *openai.Error
+	if classify != nil && errors.As(err, &apiErr) {
+		if name := classify(apiErr); name.IsValid() {
+			return status.Errorf(status.Base(name), "%w", err)
+		}
+	}
+	return WrapAPIError(err)
+}

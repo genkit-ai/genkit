@@ -2841,7 +2841,7 @@ def test_firestore_session_store_clients_are_loop_local(
         return m
 
     monkeypatch.setattr(
-        'genkit_google_cloud.session_store.firestore.firestore.AsyncClient',
+        'genkit_google_cloud._session_store._firestore.firestore.AsyncClient',
         fake_async_client,
     )
 

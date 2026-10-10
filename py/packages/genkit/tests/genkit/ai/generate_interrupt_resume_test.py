@@ -18,7 +18,6 @@ from genkit._ai._tools import (
     Interrupt,
     MultipartToolResponse,
     ToolRunContext,
-    response,
 )
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import GenerateActionOptions, Resume
@@ -1262,7 +1261,7 @@ async def _screenshot_confirm_interrupted() -> tuple[Genkit, Any]:
 
     @ai.tool(name='screenshot')
     async def screenshot(_: dict) -> MultipartToolResponse:  # noqa: ARG001
-        return response({'ok': True, 'label': 'lab'}, parts=[png], metadata={'src': 'cam'})
+        return MultipartToolResponse(output={'ok': True, 'label': 'lab'}, content=[png], metadata={'src': 'cam'})
 
     pm.responses.append(
         ModelResponse(
@@ -1431,7 +1430,7 @@ async def _restart_screenshot(*, with_passthrough: bool = False) -> tuple[Any, A
     async def shot(inp: dict) -> MultipartToolResponse:
         if not inp.get('ok'):
             raise Interrupt({'hold': True})
-        return response({'ok': True}, parts=[_png()], metadata={'camera': 'rear'})
+        return MultipartToolResponse(output={'ok': True}, content=[_png()], metadata={'camera': 'rear'})
 
     pm.responses.append(
         ModelResponse(

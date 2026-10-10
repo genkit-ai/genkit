@@ -53,7 +53,7 @@ See Also:
     - Flask documentation: https://flask.palletsprojects.com/
 """
 
-from .handler import genkit_flask_handler
+from ._handler import genkit_flask_handler
 
 # String literals so pyright can see what's public — `Cls.__name__` looks
 # right at runtime but type checkers can't trace it back to an exported symbol.

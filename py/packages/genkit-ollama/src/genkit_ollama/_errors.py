@@ -23,22 +23,12 @@ from contextlib import asynccontextmanager
 
 import httpx
 
-
-class OllamaConnectionError(ConnectionError):
-    """Raised when the Ollama server is unreachable or times out.
-
-    Subclasses ``ConnectionError`` so callers catching the standard exception
-    still work.
-
-    Deliberately not a ``GenkitError``: a transport failure has no status the
-    server reported, so it stays unclassified, matching the other plugins and
-    Go. Retry retries it; Fallback does not switch models on it.
-    """
+from genkit.plugin_api import provider_error
 
 
 @asynccontextmanager
 async def wrap_connection_errors(server_address: str) -> AsyncIterator[None]:
-    """Translate transport failures into an actionable OllamaConnectionError.
+    """Turn an unreachable or slow Ollama server into a GenkitError that says how to fix it.
 
     Catches two flavours of unreachable-server failure:
 
@@ -58,17 +48,23 @@ async def wrap_connection_errors(server_address: str) -> AsyncIterator[None]:
         None. Wraps the enclosed ``async with`` block.
 
     Raises:
-        OllamaConnectionError: If the enclosed block fails to reach the server.
+        GenkitError: DEADLINE_EXCEEDED if the request timed out, UNAVAILABLE
+            if the server could not be reached.
     """
     try:
         yield
-    except OllamaConnectionError:
-        # Already actionable (e.g. nested wrap); don't re-wrap.
-        raise
     except httpx.TimeoutException as exc:
-        raise OllamaConnectionError(f'Request to Ollama server at {server_address} timed out.') from exc
+        raise provider_error(
+            exc,
+            status='DEADLINE_EXCEEDED',
+            message=f'Request to Ollama server at {server_address} timed out.',
+        ) from exc
     except (httpx.TransportError, ConnectionError) as exc:
-        raise OllamaConnectionError(
-            f'Cannot reach the Ollama server at {server_address}. '
-            f'Start it with `ollama serve` (or set server_address to a reachable host).'
+        raise provider_error(
+            exc,
+            status='UNAVAILABLE',
+            message=(
+                f'Cannot reach the Ollama server at {server_address}. '
+                f'Start it with `ollama serve` (or set server_address to a reachable host).'
+            ),
         ) from exc

@@ -21,6 +21,7 @@ import base64
 from typing import Any, cast, get_args
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from genkit_google_genai._models import _gemini
 from genkit_google_genai._models._gemini import (
@@ -1762,8 +1763,8 @@ async def test_streaming_generate_credential_failure_is_unauthenticated(mocker: 
 
 
 @pytest.mark.asyncio
-async def test_generate_metadata_server_refresh_error_stays_raw(mocker: MockerFixture) -> None:
-    """On Cloud Run or GKE a metadata-server blip is RefreshError from TransportError, retryable=False; still raw."""
+async def test_generate_metadata_server_refresh_error_is_unavailable(mocker: MockerFixture) -> None:
+    """On Cloud Run or GKE a metadata-server blip is RefreshError from TransportError, retryable=False: UNAVAILABLE."""
     try:
         try:
             raise TransportError('metadata server unreachable')
@@ -1775,41 +1776,131 @@ async def test_generate_metadata_server_refresh_error_stays_raw(mocker: MockerFi
     client_mock.aio.models.generate_content.side_effect = blip
     gemini = GeminiModel('gemini-2.5-flash', client_mock)
 
-    with pytest.raises(RefreshError) as raised:
+    with pytest.raises(GenkitError) as raised:
         await gemini.generate(_hi_request(), ActionRunContext())
 
-    assert raised.value is blip
+    assert raised.value.status == 'UNAVAILABLE'
+    assert raised.value.cause is blip
 
 
 @pytest.mark.asyncio
-async def test_generate_retryable_refresh_error_stays_raw(mocker: MockerFixture) -> None:
-    """google.auth marked the refresh retryable (token endpoint 503), so retry must still see it."""
+async def test_generate_retryable_refresh_error_is_unavailable(mocker: MockerFixture) -> None:
+    """google.auth marked the refresh retryable (token endpoint 503): UNAVAILABLE, so Retry and Fallback act on it."""
     flaky = RefreshError('token endpoint returned 503', retryable=True)
     client_mock = mocker.AsyncMock()
     client_mock.aio.models.generate_content.side_effect = flaky
     gemini = GeminiModel('gemini-2.5-flash', client_mock)
 
-    with pytest.raises(RefreshError) as raised:
+    with pytest.raises(GenkitError) as raised:
         await gemini.generate(_hi_request(), ActionRunContext())
 
-    assert raised.value is flaky
+    assert raised.value.status == 'UNAVAILABLE'
+    assert raised.value.cause is flaky
+
+
+@pytest.mark.asyncio
+async def test_generate_bare_auth_transport_error_is_unavailable(mocker: MockerFixture) -> None:
+    """A google.auth TransportError that reaches the call is UNAVAILABLE, as in Vertex AI Model Garden."""
+    blip = TransportError('metadata server unreachable')
+    client_mock = mocker.AsyncMock()
+    client_mock.aio.models.generate_content.side_effect = blip
+    gemini = GeminiModel('gemini-2.5-flash', client_mock)
+
+    with pytest.raises(GenkitError) as raised:
+        await gemini.generate(_hi_request(), ActionRunContext())
+
+    assert raised.value.status == 'UNAVAILABLE'
+    assert raised.value.cause is blip
+
+
+async def _generate_failure(mocker: MockerFixture, failure: BaseException, *, streaming: bool = False) -> GenkitError:
+    client_mock = mocker.AsyncMock()
+    client_mock.aio.models.generate_content.side_effect = failure
+    client_mock.aio.models.generate_content_stream.side_effect = failure
+    gemini = GeminiModel('gemini-2.5-flash', client_mock)
+    ctx = ActionRunContext(streaming_callback=mocker.MagicMock()) if streaming else ActionRunContext()
+    with pytest.raises(GenkitError) as raised:
+        await gemini.generate(_hi_request(), ctx)
+    return raised.value
+
+
+def _quota_error(*, retry_delay: object = None, headers: dict[str, str] | None = None) -> APIError:
+    details = [{'@type': 'type.googleapis.com/google.rpc.RetryInfo', 'retryDelay': retry_delay}] if retry_delay else []
+    body = {'error': {'code': 429, 'message': 'Quota exceeded', 'status': 'RESOURCE_EXHAUSTED', 'details': details}}
+    response = httpx.Response(429, json=body, headers=headers or {})
+    return APIError(429, body, response)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('streaming', [False, True])
-async def test_generate_unknown_exception_stays_raw(mocker: MockerFixture, streaming: bool) -> None:
-    """A dropped connection has no known status; it reaches the caller unchanged, not as INTERNAL."""
-    dropped = ConnectionResetError('Connection reset by peer')
-    client_mock = mocker.AsyncMock()
-    client_mock.aio.models.generate_content.side_effect = dropped
-    client_mock.aio.models.generate_content_stream.side_effect = dropped
-    gemini = GeminiModel('gemini-2.5-flash', client_mock)
-    ctx = ActionRunContext(streaming_callback=mocker.MagicMock()) if streaming else ActionRunContext()
+@pytest.mark.parametrize(
+    'failure',
+    [
+        httpx.ConnectError('[Errno 61] Connection refused'),
+        httpx.RemoteProtocolError('Server disconnected without sending a response.'),
+        ConnectionResetError('Connection reset by peer'),
+    ],
+)
+async def test_connection_refused_is_unavailable(mocker: MockerFixture, failure: Exception, streaming: bool) -> None:
+    """A refused or dropped connection to Gemini is UNAVAILABLE so retry and fallback try again."""
+    error = await _generate_failure(mocker, failure, streaming=streaming)
 
-    with pytest.raises(ConnectionResetError) as raised:
-        await gemini.generate(_hi_request(), ctx)
+    assert error.status == 'UNAVAILABLE'
+    assert error.cause is failure
 
-    assert raised.value is dropped
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('streaming', [False, True])
+@pytest.mark.parametrize('failure', [httpx.ReadTimeout('timed out'), httpx.ConnectTimeout('timed out'), TimeoutError()])
+async def test_timeout_is_deadline_exceeded(mocker: MockerFixture, failure: Exception, streaming: bool) -> None:
+    """A Gemini call that times out is DEADLINE_EXCEEDED, not a raw transport error."""
+    error = await _generate_failure(mocker, failure, streaming=streaming)
+
+    assert error.status == 'DEADLINE_EXCEEDED'
+    assert error.cause is failure
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('code', [413, 418])
+async def test_unmapped_4xx_is_unknown_genkit_error(mocker: MockerFixture, code: int) -> None:
+    """A 4xx with no matching status is an UNKNOWN GenkitError that keeps the SDK error as its cause."""
+    api_error = APIError(code, {'error': {'message': 'Request payload too large'}})
+
+    error = await _generate_failure(mocker, api_error)
+
+    assert error.status == 'UNKNOWN'
+    assert error.cause is api_error
+    assert error.original_message == 'Request payload too large'
+
+
+@pytest.mark.asyncio
+async def test_429_retry_after_header_sets_retry_delay(mocker: MockerFixture) -> None:
+    """A Gemini 429 with a Retry-After header tells retry how long to wait."""
+    error = await _generate_failure(mocker, _quota_error(headers={'Retry-After': '7'}))
+
+    assert error.status == 'RESOURCE_EXHAUSTED'
+    assert error.response_metadata == {'retry_after_ms': 7000.0}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('retry_delay', 'headers', 'expected'),
+    [
+        ('30s', {}, {'retry_after_ms': 30000.0}),
+        ('1.5s', {}, {'retry_after_ms': 1500.0}),
+        ('30s', {'Retry-After': '7'}, {'retry_after_ms': 30000.0}),
+        ('soon', {}, None),
+        (30, {}, None),
+    ],
+)
+async def test_429_retry_info_sets_retry_delay(
+    mocker: MockerFixture, retry_delay: object, headers: dict[str, str], expected: dict[str, float] | None
+) -> None:
+    """A Gemini 429 whose body says RetryInfo "30s" waits 30000 ms, over any header; a malformed delay is ignored."""
+    error = await _generate_failure(mocker, _quota_error(retry_delay=retry_delay, headers=headers))
+
+    assert error.status == 'RESOURCE_EXHAUSTED'
+    assert error.response_metadata == expected
 
 
 @pytest.mark.asyncio

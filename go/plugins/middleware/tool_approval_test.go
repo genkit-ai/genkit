@@ -31,7 +31,6 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/ai/tool"
 	"github.com/firebase/genkit/go/core/api"
-	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/internal/registry"
@@ -322,12 +321,12 @@ func TestToolApprovalResumedCallRuns(t *testing.T) {
 		name    string
 		restart func(t *testing.T, p *ai.Part) *ai.Part
 	}{
-		{"Part.ToToolRestart", func(t *testing.T, p *ai.Part) *ai.Part {
-			restart, err := p.ToToolRestart(map[string]any{"toolApproved": true})
-			if err != nil {
-				t.Fatal(err)
+		{"ToolApprovalInterrupted", func(t *testing.T, p *ai.Part) *ai.Part {
+			call, ok := ToolApprovalInterrupted(p)
+			if !ok {
+				t.Fatalf("ToolApprovalInterrupted(%+v) = false, want the hold", p)
 			}
-			return restart
+			return call.Restart(ToolCallDecision{Approved: true})
 		}},
 		{"raw resumed metadata", func(t *testing.T, p *ai.Part) *ai.Part {
 			restart := ai.NewToolRequestPart(p.ToolRequest)
@@ -358,66 +357,91 @@ func TestToolApprovalResumedCallRuns(t *testing.T) {
 	}
 }
 
-// Resuming without the explicit toolApproved flag must still interrupt, so
-// unrelated resume flows cannot bypass approval.
-func TestToolApprovalResumedWithoutApprovalInterrupts(t *testing.T) {
+// A restart of a hold without Approved true never runs the tool, so no
+// resume flow bypasses approval: the model reads the refusal, with the
+// caller's reason when there is one, as the tool's error, and the generation
+// continues.
+func TestToolApprovalRestartWithoutApprovalDenies(t *testing.T) {
 	r := newTestRegistry(t)
-
-	m := defineToolModel(t, r, "test/singletool", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
-		for _, msg := range req.Messages {
-			for _, part := range msg.Content {
-				if part.IsToolResponse() {
-					return &ai.ModelResponse{Request: req, Message: ai.NewModelTextMessage("done")}, nil
-				}
-			}
+	var got *ai.Part
+	m := defineToolModel(t, r, "test/denied", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		if last := req.Messages[len(req.Messages)-1]; last.Role == ai.RoleTool {
+			got = last.Content[0]
+			return &ai.ModelResponse{Request: req, Message: ai.NewModelTextMessage("done")}, nil
 		}
-		return &ai.ModelResponse{
-			Request: req,
-			Message: &ai.Message{
-				Role: ai.RoleModel,
-				Content: []*ai.Part{
-					ai.NewToolRequestPart(&ai.ToolRequest{Name: "needsApproval", Input: map[string]any{"v": "1"}}),
-				},
-			},
-		}, nil
+		return &ai.ModelResponse{Request: req, Message: &ai.Message{
+			Role:    ai.RoleModel,
+			Content: []*ai.Part{ai.NewToolRequestPart(&ai.ToolRequest{Name: "needsApproval", Input: map[string]any{"v": "1"}})},
+		}}, nil
 	})
 	needsApproval := defineTool(t, r, "needsApproval")
-
 	ta := &ToolApproval{}
 	registerTestMiddleware(r, "toolApproval", ta)
-
-	resp, err := ai.Generate(ctx, r,
-		ai.WithModel(m),
-		ai.WithPrompt("go"),
-		ai.WithTools(needsApproval),
-		ai.WithUse(ta),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.FinishReason != "interrupted" {
-		t.Fatalf("got finish reason %q, want %q", resp.FinishReason, "interrupted")
+	generate := func(opts ...ai.GenerateOption) (*ai.ModelResponse, error) {
+		return ai.Generate(ctx, r, append([]ai.GenerateOption{ai.WithModel(m), ai.WithTools(needsApproval), ai.WithUse(ta)}, opts...)...)
 	}
 
-	// Bare `resumed: true` without `toolApproved: true` must NOT bypass approval;
-	// the tool re-interrupts, which surfaces as a FAILED_PRECONDITION error from
-	// ai.Generate for the restarted turn.
-	var restarts []*ai.Part
-	for _, p := range resp.Interrupts() {
-		restart := ai.NewToolRequestPart(p.ToolRequest)
-		restart.Metadata = map[string]any{"resumed": true}
-		restarts = append(restarts, restart)
-	}
+	// The answer as the docs build it, as a client that only speaks JSON
+	// sends it, and bare restarts, in process and on the wire.
+	for _, tc := range []struct {
+		name       string
+		answer     func(*ai.InterruptedCall[any, any, ToolCallDecision]) *ai.Part
+		wantReason bool
+	}{
+		{"ToolCallDecision", func(call *ai.InterruptedCall[any, any, ToolCallDecision]) *ai.Part {
+			return call.Restart(ToolCallDecision{Reason: "the user is away"})
+		}, true},
+		{"JSON", func(call *ai.InterruptedCall[any, any, ToolCallDecision]) *ai.Part {
+			p, err := call.Part.ToToolRestart(map[string]any{"toolApproved": false, "reason": "the user is away"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return p
+		}, true},
+		{"bare restart", func(call *ai.InterruptedCall[any, any, ToolCallDecision]) *ai.Part {
+			p, err := call.Part.ToToolRestart(nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return p
+		}, false},
+		{"bare resumed metadata", func(call *ai.InterruptedCall[any, any, ToolCallDecision]) *ai.Part {
+			p := ai.NewToolRequestPart(call.Part.ToolRequest)
+			p.Metadata = map[string]any{"resumed": true}
+			return p
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got = nil
+			resp, err := generate(ai.WithPrompt("go"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var answers []*ai.Part
+			for _, p := range resp.Interrupts() {
+				if call, ok := ToolApprovalInterrupted(p); ok {
+					answers = append(answers, tc.answer(call))
+				}
+			}
+			if len(answers) != 1 {
+				t.Fatalf("claimed %d holds of %d interrupts, want 1", len(answers), len(resp.Interrupts()))
+			}
 
-	_, err = ai.Generate(ctx, r,
-		ai.WithModel(m),
-		ai.WithMessages(resp.History()...),
-		ai.WithTools(needsApproval),
-		ai.WithResume(restarts...),
-		ai.WithUse(ta),
-	)
-	if err == nil {
-		t.Fatal("expected error from re-interrupted restart, got nil")
+			resp, err = generate(ai.WithMessages(resp.History()...), ai.WithResume(answers...))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resp.Text() != "done" {
+				t.Errorf("Text() = %q, want done", resp.Text())
+			}
+			if !got.IsToolError() {
+				t.Fatalf("model read %+v, want the refusal as a tool error", got)
+			}
+			msg, _ := got.ToolResponse.Output.(map[string]any)["error"].(string)
+			if !strings.Contains(msg, "denied") || strings.Contains(msg, "the user is away") != tc.wantReason {
+				t.Errorf("refusal = %q, want the denial, with the caller's reason: %v", msg, tc.wantReason)
+			}
+		})
 	}
 }
 
@@ -486,8 +510,8 @@ func TestToolApprovalReleasesTheToolsOwnInterrupt(t *testing.T) {
 	}
 
 	resp2, err := generate(ai.WithMessages(resp.History()...), restart(held[0], map[string]any{"toolApproved": true}))
-	if !errors.Is(err, status.ErrFailedPrecondition) || resp2 == nil {
-		t.Fatalf("approval = (%v, %v), want the tool's own interrupt under FAILED_PRECONDITION", resp2, err)
+	if err != nil || resp2 == nil {
+		t.Fatalf("approval = (%v, %v), want the tool's own interrupt", resp2, err)
 	}
 	if len(resumes) != 1 || resumes[0] != nil {
 		t.Fatalf("tool saw resumes %v, want one fresh call: the approval must not reach it", resumes)
@@ -512,7 +536,7 @@ func TestToolApprovalReleasesTheToolsOwnInterrupt(t *testing.T) {
 // TestToolApprovalHoldWithoutRecordedStageNeedsApproval pins that a hold
 // which does not record the stage that raised it, as one stored before
 // stages were recorded, still needs an explicit approval: the restart's
-// answer reaches the gate, a denial holds the call again, and only
+// answer reaches the gate, a bare restart refuses the call, and only
 // "toolApproved": true runs the tool.
 func TestToolApprovalHoldWithoutRecordedStageNeedsApproval(t *testing.T) {
 	r := newTestRegistry(t)
@@ -576,11 +600,12 @@ func TestToolApprovalHoldWithoutRecordedStageNeedsApproval(t *testing.T) {
 		return ai.Generate(ctx, r, ai.WithModel(m), ai.WithMessages(history...),
 			ai.WithTools(needsApproval), ai.WithToolRestarts(restart), ai.WithUse(ta))
 	}
-	if _, err := resume(map[string]any{"toolApproved": false}); !errors.Is(err, status.ErrFailedPrecondition) {
-		t.Fatalf("denied restart = %v, want the call held again", err)
+	resp, err = resume(nil)
+	if err != nil {
+		t.Fatalf("bare restart: %v", err)
 	}
-	if _, err := resume(nil); !errors.Is(err, status.ErrFailedPrecondition) {
-		t.Fatalf("bare restart = %v, want the call held again", err)
+	if tr := resp.History()[len(resp.History())-2].Content[0]; !tr.IsToolError() {
+		t.Fatalf("bare restart answered the call with %+v, want the refusal", tr)
 	}
 	resp, err = resume(map[string]any{"toolApproved": true})
 	if err != nil {
@@ -962,39 +987,29 @@ func TestToolApprovalJudgeSkipsFilesystemContents(t *testing.T) {
 	}
 }
 
-// A restarted call without the toolApproved flag is judged again, with the
-// conversation it was interrupted in.
-func TestToolApprovalJudgeOnRestart(t *testing.T) {
-	f := newJudgeFixture(t, judgeReply{text: "ask"}, judgeReply{text: "allow"})
+// The caller's answer to a hold the judge asked about decides the call: the
+// judge is not consulted again.
+func TestToolApprovalJudgeAskIsAnsweredByTheCaller(t *testing.T) {
+	f := newJudgeFixture(t, judgeReply{text: "ask"})
 	ta := &ToolApproval{AllowedTools: []string{"safe"}, Judge: f.judge}
 	resp, err := f.generate(ta, ai.WithPrompt("clean up the build directory"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.FinishReason != "interrupted" {
-		t.Fatalf("got finish reason %q, want %q", resp.FinishReason, "interrupted")
-	}
-	// A bare restart carries no approval, so the judge decides the call again.
-	var restarts []*ai.Part
+	var answers []*ai.Part
 	for _, p := range resp.Interrupts() {
-		restart, err := p.ToToolRestart(nil)
-		if err != nil {
-			t.Fatal(err)
+		if call, ok := ToolApprovalInterrupted(p); ok {
+			answers = append(answers, call.Restart(ToolCallDecision{Approved: true}))
 		}
-		restarts = append(restarts, restart)
 	}
-	resp, err = f.generate(ta, ai.WithMessages(resp.History()...), ai.WithResume(restarts...))
+	if len(answers) != 1 {
+		t.Fatalf("claimed %d holds of %d interrupts, want 1", len(answers), len(resp.Interrupts()))
+	}
+	resp, err = f.generate(ta, ai.WithMessages(resp.History()...), ai.WithResume(answers...))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.Text() != "done" || f.ran.Load() != 1 {
-		t.Fatalf("got text %q and %d runs, want %q and 1", resp.Text(), f.ran.Load(), "done")
-	}
-	var got judgeInput
-	if err := json.Unmarshal([]byte(f.requests[1].Messages[len(f.requests[1].Messages)-1].Content[0].Text), &got); err != nil {
-		t.Fatal(err)
-	}
-	if diff := cmp.Diff([]string{"clean up the build directory"}, got.UserMessages); diff != "" {
-		t.Errorf("restart judge user messages mismatch (-want +got):\n%s", diff)
+	if resp.Text() != "done" || f.ran.Load() != 1 || len(f.requests) != 1 {
+		t.Fatalf("got text %q, %d runs, and %d judge calls, want %q, 1, and 1", resp.Text(), f.ran.Load(), len(f.requests), "done")
 	}
 }

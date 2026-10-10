@@ -884,16 +884,18 @@ class TestVeoErrorClassification:
         assert raised.value.status == 'UNAUTHENTICATED'
 
     @pytest.mark.asyncio
-    async def test_check_transport_failure_stays_raw(self) -> None:
+    async def test_check_transport_failure_is_unavailable(self) -> None:
+        """A reset while polling maps the same way as one in start()."""
         dropped = ConnectionResetError('Connection reset by peer')
         client = MagicMock()
         client.aio.operations.get = AsyncMock(side_effect=dropped)
         veo = VeoModel('veo-3.0-generate-001', client)
 
-        with pytest.raises(ConnectionResetError) as raised:
+        with pytest.raises(GenkitError) as raised:
             await veo.check(Operation(id='operations/abc'), ActionRunContext())
 
-        assert raised.value is dropped
+        assert raised.value.status == 'UNAVAILABLE'
+        assert raised.value.cause is dropped
 
     @pytest.mark.asyncio
     async def test_request_client_credential_failure_is_unauthenticated(self) -> None:

@@ -16,6 +16,6 @@
 
 """Genkit built-in evaluators: regex, deep_equal, jsonata."""
 
-from genkit_evaluators.plugin import register_genkit_evaluators
+from genkit_evaluators._plugin import register_genkit_evaluators
 
 __all__ = ['register_genkit_evaluators']
