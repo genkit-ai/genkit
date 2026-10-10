@@ -324,18 +324,6 @@ async def test_embed_config_reaches_embedder_as_options(
 
 
 @pytest.mark.asyncio
-async def test_embed_missing_embedder_raises_error(
-    mock_genkit_instance: tuple[Genkit, MockGenkitRegistry],
-) -> None:
-    """Test that embedding with a missing embedder raises an error."""
-    genkit_instance, _ = mock_genkit_instance
-    content = 'some text'
-
-    with pytest.raises(ValueError, match='Embedder must be specified as a string name or an EmbedderRef.'):
-        await genkit_instance.embed(content=content)
-
-
-@pytest.mark.asyncio
 async def test_embed_many(mock_genkit_instance: tuple[Genkit, MockGenkitRegistry]) -> None:
     """Test the embed_many method."""
     genkit_instance, registry = mock_genkit_instance
@@ -528,6 +516,84 @@ async def test_embed_many_unknown_embedder_raises_not_found() -> None:
     assert 'nope/missing' in str(exc_info.value)
 
 
+@pytest.mark.asyncio
+async def test_embed_document_with_metadata_raises_type_error(
+    mock_genkit_instance: tuple[Genkit, MockGenkitRegistry],
+) -> None:
+    """A Document carries its own metadata, so metadata= next to it raises instead of being dropped."""
+    genkit_instance, _ = mock_genkit_instance
+
+    with pytest.raises(TypeError, match='set it on the Document'):
+        await genkit_instance.embed(
+            embedder='any-embedder',
+            content=Document.from_text('hi'),
+            metadata={'source': 'faq'},
+        )
+
+
+@pytest.mark.asyncio
+async def test_embed_many_document_with_metadata_raises_type_error(
+    mock_genkit_instance: tuple[Genkit, MockGenkitRegistry],
+) -> None:
+    """embed_many follows embed: metadata= with a Document in the list raises."""
+    genkit_instance, _ = mock_genkit_instance
+
+    with pytest.raises(TypeError, match='set it on the Document'):
+        await genkit_instance.embed_many(
+            embedder='any-embedder',
+            content=[Document.from_text('hi')],
+            metadata={'source': 'faq'},
+        )
+
+
+@pytest.mark.asyncio
+async def test_embed_string_with_metadata_attaches_it_to_the_document(
+    mock_genkit_instance: tuple[Genkit, MockGenkitRegistry],
+) -> None:
+    """metadata= with string content still lands on the Document the embedder sees."""
+    genkit_instance, registry = mock_genkit_instance
+
+    async def fake_embedder_fn(request: EmbedRequest) -> EmbedResponse:
+        return EmbedResponse(embeddings=[Embedding(embedding=[1.0])])
+
+    registry.register_action(
+        name='meta-embedder',
+        kind='embedder',
+        fn=fake_embedder_fn,
+        metadata=embedder_action_metadata('meta-embedder').metadata,
+        description='An embedder that records its request',
+    )
+
+    await genkit_instance.embed(embedder='meta-embedder', content='hi', metadata={'source': 'faq'})
+
+    embed_action = await registry.resolve_action('embedder', 'meta-embedder')
+    called_request = embed_action.run.call_args[0][0]
+    assert called_request.input == [Document.from_text('hi', {'source': 'faq'})]
+
+
+@pytest.mark.asyncio
+async def test_embed_many_mixed_list_with_metadata_raises_type_error(
+    mock_genkit_instance: tuple[Genkit, MockGenkitRegistry],
+) -> None:
+    """A Document anywhere in the list rejects metadata=, not just in the first slot."""
+    genkit_instance, _ = mock_genkit_instance
+    mixed: list[Any] = ['Nut-free kitchen.', Document.from_text('Open until 10pm.')]
+
+    with pytest.raises(TypeError, match='set it on the Document'):
+        await genkit_instance.embed_many(embedder='any-embedder', content=mixed, metadata={'source': 'faq'})
+
+
+@pytest.mark.asyncio
+async def test_embed_document_with_empty_metadata_raises_type_error(
+    mock_genkit_instance: tuple[Genkit, MockGenkitRegistry],
+) -> None:
+    """metadata={} counts as passed: only None means no metadata."""
+    genkit_instance, _ = mock_genkit_instance
+
+    with pytest.raises(TypeError, match='set it on the Document'):
+        await genkit_instance.embed(embedder='any-embedder', content=Document.from_text('hi'), metadata={})
+
+
 # --- Tests for _resolve_embedder_name helper ---
 
 
@@ -544,17 +610,3 @@ def test_resolve_embedder_name_with_embedder_ref() -> None:
     ref = EmbedderRef(name='ref-embedder', config={'key': 'value'}, version='v1')
     result = genkit_instance._resolve_embedder_name(ref)
     assert result == 'ref-embedder'
-
-
-def test_resolve_embedder_name_with_none_raises_error() -> None:
-    """Test _resolve_embedder_name raises ValueError when given None."""
-    genkit_instance = Genkit()
-    with pytest.raises(ValueError, match='Embedder must be specified as a string name or an EmbedderRef.'):
-        genkit_instance._resolve_embedder_name(None)
-
-
-def test_resolve_embedder_name_with_invalid_type_raises_error() -> None:
-    """Test _resolve_embedder_name raises ValueError for invalid types."""
-    genkit_instance = Genkit()
-    with pytest.raises(ValueError, match='Embedder must be specified as a string name or an EmbedderRef.'):
-        genkit_instance._resolve_embedder_name(123)  # type: ignore[arg-type]

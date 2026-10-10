@@ -376,8 +376,8 @@ def _create_veo_background_action(
 
     return background_model(
         full_name,
-        _start,
-        _check,
+        start=_start,
+        check=_check,
         config_schema=VeoConfig,
         info=veo_model_info(name),
         metadata={'type': 'background-model'},

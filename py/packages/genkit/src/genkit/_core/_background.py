@@ -292,11 +292,10 @@ def _ensure_operation(*, response: object, name: str) -> Operation:
 
 def background_model(
     name: str,
+    *,
     start: StartModelOpFn,
     check: CheckModelOpFn,
-    *,
     cancel: CancelModelOpFn | None = None,
-    label: str | None = None,
     info: ModelInfo | None = None,
     config_schema: type[BaseModel] | dict[str, Any] | None = None,
     metadata: dict[str, Any] | None = None,
@@ -324,8 +323,7 @@ def background_model(
     supports['longRunning'] = True
     model_options['supports'] = supports
 
-    # Precedence: explicit label argument > info.label > fallback to model name
-    label = label or model_options.get('label') or name
+    label = model_options.get('label') or name
     model_options['label'] = label
 
     if config_schema:
@@ -376,10 +374,10 @@ def background_model(
 def define_background_model(
     registry: Registry,
     name: str,
+    *,
     start: StartModelOpFn,
     check: CheckModelOpFn,
     cancel: CancelModelOpFn | None = None,
-    label: str | None = None,
     info: ModelInfo | None = None,
     config_schema: type[BaseModel] | dict[str, Any] | None = None,
     metadata: dict[str, Any] | None = None,
@@ -388,10 +386,9 @@ def define_background_model(
     """Register a background model for long-running AI operations."""
     action = background_model(
         name,
-        start,
-        check,
+        start=start,
+        check=check,
         cancel=cancel,
-        label=label,
         info=info,
         config_schema=config_schema,
         metadata=metadata,
