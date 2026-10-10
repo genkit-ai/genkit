@@ -406,7 +406,9 @@ func (h *AgentHandle) GetSnapshot(ctx context.Context, snapshotID string, opts .
 // follows a detached invocation: one dispatch per wait limit (see
 // [WithMaxSnapshotWait]) rather than a read per tick. The action answers a
 // request that outlives the limit with the snapshot as it stands, and the
-// handle asks again until the snapshot settles or ctx ends.
+// handle asks again until the snapshot settles or ctx ends. A long task spans
+// many requests, so the handle also rides out a few consecutive transient
+// failures (see [IsRetryableReadError]) before it gives up.
 //
 // A snapshot that failed, aborted, or expired is returned like any other, so a
 // non-nil error means the wait itself could not proceed: reads failed past the
@@ -425,17 +427,25 @@ func (h *AgentHandle) WaitForSnapshot(ctx context.Context, snapshotID string) (*
 	if err != nil {
 		return nil, err
 	}
+	failures := 0
 	for {
 		start := time.Now()
 		snap, err := st.WaitForSnapshot(ctx, &GetSnapshotRequest{SnapshotID: snapshotID})
-		if err != nil {
-			return nil, err
-		}
-		if snap.Status.Terminal() {
+		switch {
+		case err == nil && snap.Status.Terminal():
 			return snap, nil
+		case err == nil:
+			failures = 0
+		case ctx.Err() != nil:
+			return nil, ctx.Err()
+		case !IsRetryableReadError(err) || failures >= snapshotWaitReadRetries:
+			return nil, err
+		default:
+			failures++
 		}
-		// A transport that answers at once, such as a plain read or a server
-		// that answers pending without waiting, must not make this a hot loop.
+		// A transport that answers at once, such as a plain read, a server
+		// that answers pending without waiting, or a failing one, must not
+		// make this a hot loop.
 		timer := time.NewTimer(max(0, waitReaskFloor-time.Since(start)))
 		select {
 		case <-ctx.Done():

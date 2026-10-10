@@ -20,12 +20,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"go.opentelemetry.io/otel/trace"
 
@@ -115,6 +117,9 @@ func TestRemoteAgent_Errors(t *testing.T) {
 				writeWireError(w, status.NotFound, `snapshot "missing" not found`)
 			case "down":
 				http.Error(w, "upstream down", http.StatusServiceUnavailable)
+			case "gone":
+				// A Genkit server from before error bodies were JSON.
+				http.Error(w, `snapshot "gone" not found`, http.StatusNotFound)
 			case "moved":
 				http.Redirect(w, r, "/agents/a/elsewhere", http.StatusTemporaryRedirect)
 			case "zombie":
@@ -137,6 +142,11 @@ func TestRemoteAgent_Errors(t *testing.T) {
 	t.Run("a route the server does not publish is UNIMPLEMENTED", func(t *testing.T) {
 		if _, err := h.Abort(ctx, "s"); statusOf(err) != status.Unimplemented {
 			t.Errorf("error = %v, want UNIMPLEMENTED", err)
+		}
+	})
+	t.Run("an older Genkit server's 404 is NOT_FOUND, not a missing route", func(t *testing.T) {
+		if _, err := h.GetSnapshot(ctx, "gone"); statusOf(err) != status.NotFound {
+			t.Errorf("error = %v, want NOT_FOUND", err)
 		}
 	})
 	t.Run("a plain HTTP error maps by its code", func(t *testing.T) {
@@ -257,6 +267,9 @@ func TestRemoteAgent_Run(t *testing.T) {
 
 func TestRemoteAgent_WaitForSnapshot(t *testing.T) {
 	ctx := context.Background()
+	restore := waitReaskFloor
+	waitReaskFloor = 10 * time.Millisecond
+	t.Cleanup(func() { waitReaskFloor = restore })
 
 	t.Run("asks again while the server answers in flight", func(t *testing.T) {
 		// A server may cap how long one wait blocks and answer pending.
@@ -273,6 +286,62 @@ func TestRemoteAgent_WaitForSnapshot(t *testing.T) {
 		snap, err := NewRemoteAgent("a", url).WaitForSnapshot(ctx, "s")
 		if err != nil || snap.Status != SnapshotStatusCompleted || waits.Load() != 3 {
 			t.Errorf("WaitForSnapshot = %+v, %v after %d waits; want completed after 3", snap, err, waits.Load())
+		}
+	})
+
+	t.Run("a wait rides out a transient failure and not a final one", func(t *testing.T) {
+		for _, tc := range []struct {
+			name      string
+			code      int
+			wantWaits int32
+			wantErr   status.Name
+		}{
+			{"502", http.StatusBadGateway, 2, status.OK},
+			{"403", http.StatusForbidden, 1, status.PermissionDenied},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				var waits atomic.Int32
+				url := remoteTestServer(t, map[string]http.HandlerFunc{
+					"/waitForSnapshot": func(w http.ResponseWriter, r *http.Request) {
+						if waits.Add(1) == 1 {
+							http.Error(w, "first wait fails", tc.code)
+							return
+						}
+						writeResult(w, &SessionSnapshot[json.RawMessage]{SnapshotID: "s", Status: SnapshotStatusCompleted})
+					},
+				})
+				_, err := NewRemoteAgent("a", url).WaitForSnapshot(ctx, "s")
+				if status.Of(err) != tc.wantErr {
+					t.Errorf("WaitForSnapshot error = %v, want %s", err, tc.wantErr)
+				}
+				if got := waits.Load(); got != tc.wantWaits {
+					t.Errorf("waits = %d, want %d", got, tc.wantWaits)
+				}
+			})
+		}
+	})
+
+	t.Run("a client timeout under the server's wait limit is not a failure", func(t *testing.T) {
+		var reads atomic.Int32
+		url := remoteTestServer(t, map[string]http.HandlerFunc{
+			// The server holds every wait past the client's timeout.
+			"/waitForSnapshot": func(w http.ResponseWriter, r *http.Request) {
+				// Reading the body lets the server notice the client hang up.
+				io.Copy(io.Discard, r.Body)
+				<-r.Context().Done()
+			},
+			"/getSnapshot": func(w http.ResponseWriter, r *http.Request) {
+				st := SnapshotStatusPending
+				if reads.Add(1) >= 2 {
+					st = SnapshotStatusCompleted
+				}
+				writeResult(w, &SessionSnapshot[json.RawMessage]{SnapshotID: "s", Status: st})
+			},
+		})
+		h := NewRemoteAgent("a", url, WithHTTPClient(&http.Client{Timeout: 50 * time.Millisecond}))
+		snap, err := h.WaitForSnapshot(ctx, "s")
+		if err != nil || snap.Status != SnapshotStatusCompleted {
+			t.Errorf("WaitForSnapshot = %+v, %v; want completed", snap, err)
 		}
 	})
 
@@ -392,6 +461,38 @@ func TestAgentHandle_Register(t *testing.T) {
 			})
 		}
 	})
+}
+
+func TestAgentHandle_ForwardTurnsUsage(t *testing.T) {
+	// The second input's turn fails: the output counts both turns, as an
+	// in-process agent's failed output does.
+	tr := &scriptedRunTransport{outs: []*AgentOutput[json.RawMessage]{
+		{FinishReason: AgentFinishReasonStop, Usage: &ai.GenerationUsage{InputTokens: 10}},
+		{FinishReason: AgentFinishReasonFailed, Usage: &ai.GenerationUsage{InputTokens: 5}},
+	}}
+	h := NewAgentHandle("a", nil, tr)
+	inCh := make(chan *AgentInput, 2)
+	inCh <- &AgentInput{}
+	inCh <- &AgentInput{}
+	close(inCh)
+	out, err := h.forwardTurns(context.Background(), nil, inCh, make(chan *AgentStreamChunk, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.FinishReason != AgentFinishReasonFailed || out.Usage == nil || out.Usage.InputTokens != 15 {
+		t.Errorf("output = %s with usage %+v, want failed with 15 input tokens", out.FinishReason, out.Usage)
+	}
+}
+
+// scriptedRunTransport answers each Run with the next of outs.
+type scriptedRunTransport struct {
+	outs []*AgentOutput[json.RawMessage]
+}
+
+func (t *scriptedRunTransport) Run(context.Context, *AgentInput, *AgentInit[json.RawMessage], func(context.Context, json.RawMessage) error) (*AgentOutput[json.RawMessage], error) {
+	out := t.outs[0]
+	t.outs = t.outs[1:]
+	return out, nil
 }
 
 // noopAgentFn is an agent that returns without running a turn.

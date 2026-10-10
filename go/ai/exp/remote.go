@@ -21,9 +21,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -264,29 +266,45 @@ func (t *httpTransport) GetSnapshot(ctx context.Context, req *GetSnapshotRequest
 // WaitForSnapshot makes one wait request; the server answers once the snapshot
 // settles or its wait limit passes, and [AgentHandle.WaitForSnapshot] asks
 // again until it settles. For a server that publishes no wait route it polls
-// GetSnapshot until the snapshot settles.
+// GetSnapshot until the snapshot settles. When the HTTP client's own timeout
+// ends the request first, it answers with the snapshot as it stands, so a
+// client timeout under the server's wait limit costs a re-request, not the
+// wait.
 func (t *httpTransport) WaitForSnapshot(ctx context.Context, req *GetSnapshotRequest) (*SessionSnapshot[json.RawMessage], error) {
 	snap, err := t.snapshot(ctx, "/waitForSnapshot", req)
-	if status.Of(err) == status.Unimplemented {
+	var netErr net.Error
+	switch {
+	case status.Of(err) == status.Unimplemented:
 		return t.pollSnapshot(ctx, req)
+	case ctx.Err() == nil && errors.As(err, &netErr) && netErr.Timeout():
+		return t.readSnapshotNow(ctx, req)
 	}
 	return snap, err
+}
+
+// readSnapshotNow reads the snapshot's metadata and, once it is settled, the
+// full snapshot, so a pending snapshot costs no state payload.
+func (t *httpTransport) readSnapshotNow(ctx context.Context, req *GetSnapshotRequest) (*SessionSnapshot[json.RawMessage], error) {
+	read := *req
+	read.MetadataOnly = true
+	snap, err := t.GetSnapshot(ctx, &read)
+	if err != nil || !snap.Status.Terminal() {
+		return snap, err
+	}
+	return t.GetSnapshot(ctx, req)
 }
 
 // pollSnapshot reads the snapshot until it settles, backing off between reads.
 // Like the runtime's own wait, it rides out a few consecutive transient read
 // failures (see [IsRetryableReadError]).
 func (t *httpTransport) pollSnapshot(ctx context.Context, req *GetSnapshotRequest) (*SessionSnapshot[json.RawMessage], error) {
-	read := *req
-	read.MetadataOnly = true
 	interval := remotePollInitial
 	failures := 0
 	for {
-		snap, err := t.GetSnapshot(ctx, &read)
+		snap, err := t.readSnapshotNow(ctx, req)
 		switch {
 		case err == nil && snap.Status.Terminal():
-			// The settled read carries the state the metadata read left out.
-			return t.GetSnapshot(ctx, req)
+			return snap, nil
 		case err == nil:
 			failures = 0
 		case !IsRetryableReadError(err) || failures >= snapshotWaitReadRetries:
@@ -411,11 +429,12 @@ func (t *httpTransport) post(ctx context.Context, suffix string, data any, init 
 
 // responseError turns a failed response into an error with a status name. A
 // Genkit server sends a [wire.Error] body; anything else is classified by its
-// HTTP status, except a plain 404, which means the server publishes no such
-// route.
+// HTTP status, except a 404 from a router, which means the server publishes no
+// such route.
 func (t *httpTransport) responseError(resp *http.Response, suffix string) error {
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-	if mt, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type")); mt == "application/json" {
+	mt, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	if mt == "application/json" {
 		var e status.Error
 		if json.Unmarshal(raw, &e) == nil && e.Status != "" {
 			return &e
@@ -426,13 +445,21 @@ func (t *httpTransport) responseError(resp *http.Response, suffix string) error 
 		route = strings.TrimPrefix(suffix, "/")
 	}
 	switch {
-	case resp.StatusCode == http.StatusNotFound:
+	case resp.StatusCode == http.StatusNotFound && !olderGenkitError(mt, raw):
 		return status.Errorf(status.ErrUnimplemented, "agent %q: the server publishes no %s route at %s", t.name, route, t.endpoint(suffix))
 	case resp.StatusCode >= 300 && resp.StatusCode < 400:
 		return status.Errorf(status.ErrFailedPrecondition, "agent %q: the server redirected the %s request (HTTP %d); redirects are refused", t.name, route, resp.StatusCode)
 	}
 	n := status.FromHTTPCode(resp.StatusCode)
 	return &status.Error{Status: n, Message: fmt.Sprintf("agent %q: %s request failed: HTTP %d: %s", t.name, route, resp.StatusCode, strings.TrimSpace(string(raw)))}
+}
+
+// olderGenkitError reports whether a non-JSON error body is a Genkit server's
+// own error, as servers sent it before error bodies were JSON: plain text with
+// the error's message. Go's router answers a missing route in plain text too,
+// with its fixed message.
+func olderGenkitError(mediaType string, body []byte) bool {
+	return mediaType == "text/plain" && strings.TrimSpace(string(body)) != "404 page not found"
 }
 
 // --- Registration ---
@@ -548,8 +575,13 @@ func (h *AgentHandle) forwardTurns(ctx context.Context, init *AgentInit[json.Raw
 		}
 		usage = ai.SumUsage(usage, turn.Usage)
 		out = turn
-		if turn.FinishReason == AgentFinishReasonDetached || turn.FinishReason == AgentFinishReasonFailed {
+		switch turn.FinishReason {
+		case AgentFinishReasonDetached:
 			// A detached output reports no usage: the work continues.
+			return turn, nil
+		case AgentFinishReasonFailed:
+			// A failed output counts every turn, as it does in this process.
+			turn.Usage = usage
 			return turn, nil
 		}
 		init = nextTurnInit(turn)
