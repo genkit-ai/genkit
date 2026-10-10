@@ -36,7 +36,7 @@ from pydantic.alias_generators import to_camel
 from pydantic.config import JsonDict
 
 from genkit.model import ModelConfig
-from genkit.plugin_api import PluginConfig
+from genkit.plugin_api import GenkitConfig
 
 BETA_ONLY_KEYS = frozenset(BetaMessageCreateParamsBase.__annotations__) - frozenset(
     MessageCreateParamsBase.__annotations__
@@ -174,7 +174,7 @@ def _anthropic_config_schema_extra(schema: JsonDict) -> None:
     )
 
 
-class ThinkingConfig(PluginConfig):
+class ThinkingConfig(GenkitConfig):
     """Extended-thinking configuration.
 
     ``enabled``, ``adaptive`` and ``disabled`` are mutually exclusive, and

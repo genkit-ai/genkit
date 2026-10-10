@@ -27,7 +27,7 @@ from genkit import FinishReason, Message, ModelResponse, ModelResponseChunk, Par
 from genkit._core._model import ABNORMAL_FINISH_REASONS
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
 from genkit.model import ModelRequest
-from genkit.plugin_api import PluginConfig
+from genkit.plugin_api import GenkitConfig
 
 from ._catalog import A2uiCatalog, render_catalog_instructions
 from ._loader import resolve_catalog
@@ -44,7 +44,7 @@ from ._types import DEFAULT_VERSION, SURFACE_KEYS, Envelope, SupportedVersion, V
 SKIP_REWRITE_FINISH_REASONS = ABNORMAL_FINISH_REASONS | {FinishReason.UNKNOWN}
 
 
-class SurfacesConfig(PluginConfig):
+class SurfacesConfig(GenkitConfig):
     """Options for :class:`Surfaces`."""
 
     instructions: Literal['system', 'none'] = 'system'

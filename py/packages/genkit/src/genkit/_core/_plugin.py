@@ -22,7 +22,6 @@ import abc
 from typing import ClassVar
 
 from genkit._core._action import Action, ActionKind, set_action_name
-from genkit._core._base import PluginConfig as PluginConfig
 from genkit._core._middleware import GenerateMiddleware
 from genkit._core._typing import ActionMetadata
 

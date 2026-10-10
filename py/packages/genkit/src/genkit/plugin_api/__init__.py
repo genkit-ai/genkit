@@ -18,6 +18,7 @@
 
 # Base class and framework primitives
 from genkit._core._action import Action, ActionKind
+from genkit._core._base import GenkitConfig
 from genkit._core._constants import GENKIT_CLIENT_HEADER
 from genkit._core._environment import is_dev_environment
 from genkit._core._error import (
@@ -32,7 +33,7 @@ from genkit._core._error import (
 from genkit._core._http_client import get_cached_client
 from genkit._core._loop_cache import _loop_local_client as loop_local_client
 from genkit._core._middleware import new_middleware
-from genkit._core._plugin import MiddlewarePlugin, Plugin, PluginConfig
+from genkit._core._plugin import MiddlewarePlugin, Plugin
 from genkit._core._schema import to_json_schema
 from genkit._core._typing import ActionMetadata
 
@@ -40,7 +41,7 @@ __all__ = [
     # Base class and framework primitives
     'MiddlewarePlugin',
     'Plugin',
-    'PluginConfig',
+    'GenkitConfig',
     'new_middleware',
     'Action',
     'ActionMetadata',

@@ -61,7 +61,7 @@ from genkit.model import (
     ToolDefinition,
     get_basic_usage_stats,
 )
-from genkit.plugin_api import PluginConfig, wrap_http_error
+from genkit.plugin_api import GenkitConfig, wrap_http_error
 from genkit_google_genai._auth import GOOGLE_AUTH_ERRORS, raise_auth_error
 from genkit_google_genai._constants import is_multi_regional_location, multi_regional_base_url
 from genkit_google_genai._models._context_caching._constants import DEFAULT_TTL
@@ -172,7 +172,7 @@ class HarmBlockThreshold(StrEnum):
 # the unknown-key check. googlegenai_gemini_test.py pins the field sets.
 
 
-class SafetySettingsSchema(PluginConfig):
+class SafetySettingsSchema(GenkitConfig):
     """Safety settings schema. Sent as ``genai_types.SafetySetting``."""
 
     category: HarmCategory
@@ -180,7 +180,7 @@ class SafetySettingsSchema(PluginConfig):
     method: genai_types.HarmBlockMethod | None = None
 
 
-class PrebuiltVoiceConfig(PluginConfig):
+class PrebuiltVoiceConfig(GenkitConfig):
     """Prebuilt voice config. Sent as ``genai_types.PrebuiltVoiceConfig``."""
 
     voice_name: str | None = Field(default=None)
@@ -195,7 +195,7 @@ class FunctionCallingMode(StrEnum):
     NONE = 'NONE'
 
 
-class FunctionCallingConfig(PluginConfig):
+class FunctionCallingConfig(GenkitConfig):
     """Function calling config. Sent as ``genai_types.FunctionCallingConfig``."""
 
     mode: FunctionCallingMode | None = None
@@ -212,7 +212,7 @@ class ThinkingLevel(StrEnum):
     HIGH = 'HIGH'
 
 
-class ThinkingConfig(PluginConfig):
+class ThinkingConfig(GenkitConfig):
     """Thinking config. Sent as ``genai_types.ThinkingConfig``."""
 
     include_thoughts: bool | None = Field(default=None)
@@ -220,7 +220,7 @@ class ThinkingConfig(PluginConfig):
     thinking_level: ThinkingLevel | None = Field(default=None)
 
 
-class FileSearchConfig(PluginConfig):
+class FileSearchConfig(GenkitConfig):
     """File search config. Sent as ``genai_types.FileSearch``."""
 
     file_search_store_names: list[str] | None = Field(default=None)
@@ -251,7 +251,7 @@ class ImageSize(StrEnum):
     SIZE_4K = '4K'
 
 
-class ImageConfig(PluginConfig):
+class ImageConfig(GenkitConfig):
     """Image config. Sent as ``genai_types.ImageConfig``."""
 
     aspect_ratio: ImageAspectRatio | None = Field(default=None)
@@ -263,7 +263,7 @@ class ImageConfig(PluginConfig):
     image_output_options: genai_types.ImageConfigImageOutputOptions | None = Field(default=None)
 
 
-class VoiceConfig(PluginConfig):
+class VoiceConfig(GenkitConfig):
     """Voice config. Sent as ``genai_types.VoiceConfig``."""
 
     prebuilt_voice_config: PrebuiltVoiceConfig | None = Field(default=None)
@@ -530,20 +530,20 @@ class GeminiConfig(ModelConfig):
     )
 
 
-class SpeakerVoiceConfig(PluginConfig):
+class SpeakerVoiceConfig(GenkitConfig):
     """Speaker voice config. Sent as ``genai_types.SpeakerVoiceConfig``."""
 
     speaker: str | None = None
     voice_config: VoiceConfig | None = Field(default=None)
 
 
-class MultiSpeakerVoiceConfig(PluginConfig):
+class MultiSpeakerVoiceConfig(GenkitConfig):
     """Multi-speaker voice config. Sent as ``genai_types.MultiSpeakerVoiceConfig``."""
 
     speaker_voice_configs: list[SpeakerVoiceConfig] | None = Field(default=None)
 
 
-class SpeechConfig(PluginConfig):
+class SpeechConfig(GenkitConfig):
     """Speech config. Sent as ``genai_types.SpeechConfig``."""
 
     voice_config: VoiceConfig | None = Field(default=None)

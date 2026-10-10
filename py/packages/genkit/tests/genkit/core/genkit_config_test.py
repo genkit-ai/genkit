@@ -14,7 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Unit tests for PluginConfig base class."""
+"""Unit tests for GenkitConfig base class."""
 
 import pytest
 from pydantic import ValidationError
@@ -22,11 +22,11 @@ from pydantic import ValidationError
 from genkit._core._base import GenkitModel
 from genkit._core._typing import GenerationCommonConfig
 from genkit.model import ModelConfig, ModelRequest
-from genkit.plugin_api import PluginConfig
+from genkit.plugin_api import GenkitConfig
 
 
-class SampleConfig(PluginConfig):
-    """Test configuration model subclassing PluginConfig."""
+class SampleConfig(GenkitConfig):
+    """Test configuration model subclassing GenkitConfig."""
 
     sample_rate: float
     max_retries: int = 3
@@ -34,7 +34,7 @@ class SampleConfig(PluginConfig):
 
 
 def test_plugin_config_snake_case_kwargs() -> None:
-    """PluginConfig accepts snake_case kwargs."""
+    """GenkitConfig accepts snake_case kwargs."""
     cfg = SampleConfig(sample_rate=0.5, max_retries=5, api_key_name='KEY')
     assert cfg.sample_rate == 0.5
     assert cfg.max_retries == 5
@@ -42,7 +42,7 @@ def test_plugin_config_snake_case_kwargs() -> None:
 
 
 def test_plugin_config_accepts_camel_case_wire_dict() -> None:
-    """PluginConfig parses camelCase wire dicts via alias_generator."""
+    """GenkitConfig parses camelCase wire dicts via alias_generator."""
     cfg = SampleConfig.model_validate({'sampleRate': 0.8, 'maxRetries': 2, 'apiKeyName': 'CUSTOM'})
     assert cfg.sample_rate == 0.8
     assert cfg.max_retries == 2
@@ -50,7 +50,7 @@ def test_plugin_config_accepts_camel_case_wire_dict() -> None:
 
 
 def test_plugin_config_model_dump_preserves_snake_case_by_default() -> None:
-    """PluginConfig does not hijack model_dump; default is by_alias=False."""
+    """GenkitConfig does not hijack model_dump; default is by_alias=False."""
     cfg = SampleConfig(sample_rate=0.5, max_retries=5)
     assert cfg.model_dump(exclude_none=True) == {
         'sample_rate': 0.5,
@@ -59,7 +59,7 @@ def test_plugin_config_model_dump_preserves_snake_case_by_default() -> None:
 
 
 def test_plugin_config_model_dump_by_alias_emits_camel_case() -> None:
-    """PluginConfig dumps camelCase wire format when by_alias=True is passed."""
+    """GenkitConfig dumps camelCase wire format when by_alias=True is passed."""
     cfg = SampleConfig(sample_rate=0.5, max_retries=5)
     assert cfg.model_dump(by_alias=True, exclude_none=True) == {
         'sampleRate': 0.5,
@@ -78,7 +78,7 @@ def test_plugin_config_forbids_extra_kwargs() -> None:
 
 def test_model_config_is_plugin_config_not_genkit_model() -> None:
     """Model configs follow the upstream dump contract, not GenkitModel's camelCase default."""
-    assert issubclass(ModelConfig, PluginConfig)
+    assert issubclass(ModelConfig, GenkitConfig)
     assert not issubclass(ModelConfig, GenkitModel)
 
 
@@ -104,3 +104,11 @@ def test_model_config_nested_in_request_keeps_wire_shape() -> None:
     """Inside a GenkitModel parent, the parent's dump settings apply: camelCase, no nulls."""
     request = ModelRequest(messages=[], config=ModelConfig(max_output_tokens=512))
     assert request.model_dump()['config'] == {'maxOutputTokens': 512}
+
+
+def test_genkit_config_rejects_both_spellings_of_one_setting() -> None:
+    """Two spellings of one key in one input raise; neither silently wins."""
+    with pytest.raises(ValidationError):
+        SampleConfig.model_validate({'sampleRate': 0.5, 'sample_rate': 0.5})
+    with pytest.raises(ValidationError):
+        SampleConfig(sample_rate=0.5, sampleRate=0.6)  # type: ignore[call-arg]

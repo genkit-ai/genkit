@@ -85,23 +85,29 @@ class GenkitModel(BaseModel):
         return super().model_dump_json(**kwargs)
 
 
-class PluginConfig(BaseModel):
-    """Base for user-facing config: model, plugin, and middleware options.
+class GenkitConfig(BaseModel):
+    """Base for settings passed to a Genkit action: model and middleware config.
 
-    The wire shape (Developer UI form, ``.prompt`` files, traces, the JS SDK)
-    is camelCase. Python callers and provider SDKs use field names.
+    Python callers construct it with field names (snake_case), and plugins
+    hand model_dump() output to provider SDKs. Genkit's tooling sees
+    camelCase JSON: the Developer UI renders the JSON schema as a form,
+    pre-fills it from traces and .prompt files by exact key, and exports
+    .prompt files from it. Those formats are shared with the JS and Go SDKs,
+    so the schema keys, trace keys and .prompt keys must use one spelling.
 
-    - ``alias_generator=to_camel``: each field's wire name, and the JSON
-      schema's property names.
-    - ``validate_by_name`` / ``validate_by_alias``: accept both spellings on
-      input, and let pyright, pyrefly and ty all take the snake_case kwarg.
-    - ``extra='forbid'``: a typo raises instead of being dropped.
+    - alias_generator=to_camel: camelCase wire names and schema properties.
+    - validate_by_name / validate_by_alias: accept either spelling; all three
+      type checkers take the snake_case kwarg.
+    - extra='forbid': an unknown key raises instead of being dropped, and so
+      does a second spelling of a key already given (maxOutputTokens and
+      max_output_tokens in one input).
 
-    Unlike :class:`GenkitModel`, ``model_dump()`` is not overridden. The
-    default dump returns field names, ready for a provider SDK; pass
-    ``by_alias=True`` for the wire shape. Nested in a ``GenkitModel`` such as
-    ``ModelRequest``, the parent's dump settings apply, so wire JSON is
-    unchanged.
+    model_dump() is not overridden: the default returns field names. Pass
+    by_alias=True for Genkit JSON. Nested in a GenkitModel such as
+    ModelRequest, the parent's settings apply, so traces stay camelCase.
+
+    Use plain BaseModel for flow and tool input/output; that data is the
+    app's, and Genkit does not rename it.
     """
 
     model_config: ClassVar[ConfigDict] = ConfigDict(
