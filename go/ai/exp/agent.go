@@ -132,6 +132,9 @@ type SessionRunner[State any] struct {
 	// is the parent of the next snapshot and the resume point the failed and
 	// detached outputs report.
 	lastSnapshotID string
+	// lastSnapshotAt is the CreatedAt of the lastSnapshotID row, which the
+	// next snapshot must come after (see snapshotTime).
+	lastSnapshotAt time.Time
 
 	// lastTurnFinishReason is the finish reason reported by the most recent
 	// turn (via the [TurnResult] its callback returned), or "" if the turn
@@ -230,11 +233,25 @@ func (s *SessionRunner[State]) totalUsage() *ai.GenerationUsage {
 // is current, not stale), and any later turn end observes the suspension
 // and skips its write. Called by the detach handler, after which the
 // queued inputs roll into a single finalize rewrite of the pending row.
-func (s *SessionRunner[State]) suspendSnapshots() (parentID string) {
+func (s *SessionRunner[State]) suspendSnapshots() (parentID string, parentAt time.Time) {
 	s.snapMu.Lock()
 	defer s.snapMu.Unlock()
 	s.snapshotsSuspended = true
-	return s.lastSnapshotID
+	return s.lastSnapshotID, s.lastSnapshotAt
+}
+
+// snapshotTime returns the CreatedAt for a new snapshot whose parent was
+// created at parentAt: now, but at least a millisecond after the parent.
+// Stores keep only milliseconds, and GetLatestSnapshot breaks a tie by the
+// snapshot ID, which is random, so a row written within a millisecond of its
+// parent (a detach's pending row right after a turn's) would otherwise lose to
+// its parent half the time.
+func snapshotTime(parentAt time.Time) time.Time {
+	now := time.Now()
+	if earliest := parentAt.Add(time.Millisecond); now.Before(earliest) {
+		return earliest
+	}
+	return now
 }
 
 // snapshotsAreSuspended reports whether a detach has stopped turn-end
@@ -662,7 +679,7 @@ func (s *SessionRunner[State]) snapshotTurnEnd(ctx context.Context, finishReason
 	sessionID := s.SessionID()
 	// Timestamps are caller-managed (the store persists them verbatim); a fresh
 	// turn-end snapshot is created now, so CreatedAt and UpdatedAt are equal.
-	now := time.Now()
+	now := snapshotTime(s.lastSnapshotAt)
 	snapStatus := SnapshotStatusCompleted
 	if cause != nil {
 		snapStatus = terminalStatus(finishReason)
@@ -687,7 +704,7 @@ func (s *SessionRunner[State]) snapshotTurnEnd(ctx context.Context, finishReason
 		return ""
 	}
 
-	s.lastSnapshotID = saved.SnapshotID
+	s.lastSnapshotID, s.lastSnapshotAt = saved.SnapshotID, saved.CreatedAt
 	return saved.SnapshotID
 }
 
@@ -1424,7 +1441,7 @@ func newAgentRuntime[State any](
 	if parent != nil {
 		// Resumed: chain the first turn's snapshot off the one we loaded, and
 		// make it the resume point a first-turn failure falls back to.
-		rt.sess.lastSnapshotID = parent.SnapshotID
+		rt.sess.lastSnapshotID, rt.sess.lastSnapshotAt = parent.SnapshotID, parent.CreatedAt
 	}
 	rt.sess.onEndTurn = rt.emitTurnEnd
 	// Stream custom-state mutations as customPatch chunks. beginTurn is armed
@@ -1944,7 +1961,7 @@ func (rt *agentRuntime[State]) handleDetach(
 	// turn-end write already in flight commits first (so the pending row
 	// chains off the real tip instead of becoming its sibling), and any
 	// later turn end skips its write.
-	parentID := rt.sess.suspendSnapshots()
+	parentID, parentAt := rt.sess.suspendSnapshots()
 	sessionID := rt.session.SessionID()
 
 	// Detach intends to outlive the client connection. If clientCtx was
@@ -1965,7 +1982,7 @@ func (rt *agentRuntime[State]) handleDetach(
 	// handles built on this ID rely on the runtime's UUID format (in
 	// particular, it contains no ':'), which a store-minted ID would not
 	// guarantee.
-	now := time.Now()
+	now := snapshotTime(parentAt)
 	pending, err := rt.cfg.store.SaveSnapshot(context.WithoutCancel(clientCtx), uuid.New().String(),
 		func(_ *SessionSnapshot[State]) (*SessionSnapshot[State], error) {
 			return &SessionSnapshot[State]{
@@ -3518,7 +3535,7 @@ func (c *AgentConnection[State]) Receive() iter.Seq2[*AgentStreamChunk, error] {
 func (c *AgentConnection[State]) applyCustomPatch(patch JSONPatch) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if next, err := applyOps(cloneJSON(c.custom), patch); err == nil {
+	if next, err := applyOps(cloneJSON(c.custom), patch, normalizeJSON); err == nil {
 		c.custom = next
 	}
 }

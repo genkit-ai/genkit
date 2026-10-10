@@ -3627,6 +3627,60 @@ func TestAgent_Detach_AfterPriorTurns_ChainsParent(t *testing.T) {
 	})
 }
 
+// TestAgent_SnapshotsComeAfterTheirParent checks that each new snapshot is
+// created at least a millisecond after its parent, even when the parent's
+// CreatedAt is ahead of this clock, so a row never ties with its parent at the
+// millisecond precision stores keep and GetLatestSnapshot finds the newest row.
+func TestAgent_SnapshotsComeAfterTheirParent(t *testing.T) {
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+	af := defineCounterAgent(reg, "snapshotsAfterParent", WithSessionStore(store))
+	ctx := context.Background()
+
+	ahead := time.Now().Add(time.Hour)
+	if _, err := store.SaveSnapshot(ctx, "seed", func(*SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+		return &SessionSnapshot[testState]{SessionID: "sess", Status: SnapshotStatusCompleted,
+			State: &SessionState[testState]{}, CreatedAt: ahead, UpdatedAt: ahead}, nil
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	turn, err := af.RunText(ctx, "turn", WithSnapshotID[testState]("seed"))
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	conn, err := af.Connect(ctx, WithSnapshotID[testState](turn.SnapshotID))
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	drainInBackground(conn)
+	sendText(t, conn, "detached turn")
+	if err := conn.Detach(); err != nil {
+		t.Fatalf("Detach: %v", err)
+	}
+	pending, err := conn.Output()
+	if err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+	waitForSnapshot(t, store, pending.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
+		return s.Status == SnapshotStatusCompleted
+	})
+
+	parentAt := ahead
+	for _, id := range []string{turn.SnapshotID, pending.SnapshotID} {
+		snap, err := store.GetSnapshot(ctx, id)
+		if err != nil || snap == nil {
+			t.Fatalf("GetSnapshot(%s) = (%v, %v)", id, snap, err)
+		}
+		if snap.CreatedAt.Before(parentAt.Add(time.Millisecond)) {
+			t.Errorf("snapshot %s created at %v, want at least a millisecond after its parent's %v", id, snap.CreatedAt, parentAt)
+		}
+		parentAt = snap.CreatedAt
+	}
+	if latest, err := store.GetLatestSnapshot(ctx, "sess"); err != nil || latest == nil || latest.SnapshotID != pending.SnapshotID {
+		t.Errorf("GetLatestSnapshot = (%v, %v), want the detached run's row %s", latest, err, pending.SnapshotID)
+	}
+}
+
 func TestAgent_Detach_RequiresStore(t *testing.T) {
 	reg := newTestRegistry(t)
 
@@ -5615,7 +5669,11 @@ func TestAgent_GetSnapshotAction_BySessionID(t *testing.T) {
 	// The session-ID lookup returns the latest row whatever its status, so a
 	// reconnecting client can observe a failed/pending tip (unlike resume,
 	// which rejects it).
-	failedAt := time.Now()
+	tip, err := store.GetSnapshot(ctx, out2.SnapshotID)
+	if err != nil || tip == nil {
+		t.Fatalf("GetSnapshot(%s) = (%v, %v)", out2.SnapshotID, tip, err)
+	}
+	failedAt := snapshotTime(tip.CreatedAt)
 	failed, err := store.SaveSnapshot(ctx, "", func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
 		return &SessionSnapshot[testState]{
 			SessionID:    out1.SessionID,
