@@ -147,7 +147,6 @@ func (o *agentOptions[State]) applyAgent(opts *agentOptions[State]) error {
 			return fmt.Errorf("snapshot wait limit must be positive, got %v (WithMaxSnapshotWait)", o.maxSnapshotWait)
 		}
 		opts.maxSnapshotWait = o.maxSnapshotWait
-		opts.maxSnapshotWaitSet = true
 	}
 	if o.contextFunc != nil {
 		// Seeded internally by the registry-level constructors
@@ -187,7 +186,6 @@ func (o *promptAgentOptions[State]) applyPromptAgent(opts *promptAgentOptions[St
 	if o.promptSet {
 		opts.promptName = o.promptName
 		opts.promptInput = o.promptInput
-		opts.promptSet = true
 	}
 	return nil
 }
