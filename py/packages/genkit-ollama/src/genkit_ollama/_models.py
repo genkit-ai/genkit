@@ -96,7 +96,7 @@ from pydantic.alias_generators import to_camel, to_snake
 
 from genkit import ActionRunContext, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
 from genkit.model import ModelConfig, ModelRequest, ModelUsage, ToolRequest, get_basic_usage_stats
-from genkit.plugin_api import loop_local_client, wrap_http_error
+from genkit.plugin_api import loop_local_client, provider_error
 from genkit_ollama._constants import DEFAULT_OLLAMA_SERVER_URL
 from genkit_ollama._errors import wrap_connection_errors
 
@@ -245,7 +245,7 @@ class OllamaModel:
         try:
             return await self._generate_classified(request=request, ctx=ctx, client=client, content=content)
         except ollama_api.ResponseError as e:
-            raise wrap_http_error(e, status_code=getattr(e, 'status_code', None)) from e
+            raise provider_error(e, http_status=e.status_code) from e
         except json.JSONDecodeError as e:
             # The server sent a body that is not JSON (e.g. a proxy error page).
             # Caught before ValueError, its base class: this is not a bad request.

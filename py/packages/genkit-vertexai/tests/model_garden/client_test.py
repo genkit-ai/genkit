@@ -96,11 +96,18 @@ def _metadata_server_blip() -> RefreshError:
     ],
     ids=['retryable_refresh', 'transport', 'metadata_server_blip'],
 )
-async def test_transient_auth_failure_stays_raw(flaky: Exception) -> None:
-    with patch('google.auth.default', side_effect=flaky), pytest.raises(type(flaky)) as raised:
+@patch('google.auth.transport.requests.Request')
+async def test_transient_credential_refresh_failure_is_unavailable(
+    mock_request_cls: MagicMock, flaky: Exception
+) -> None:
+    """A credential refresh that fails transiently raises UNAVAILABLE, so retry tries again."""
+    credentials = MagicMock()
+    credentials.refresh.side_effect = flaky
+    with patch('google.auth.default', return_value=(credentials, 'menu-prod')), pytest.raises(GenkitError) as raised:
         await CachedOpenAI(location='us-central1', project='menu-prod').get()
 
-    assert raised.value is flaky
+    assert raised.value.status == 'UNAVAILABLE'
+    assert raised.value.__cause__ is flaky
 
 
 @pytest.mark.asyncio

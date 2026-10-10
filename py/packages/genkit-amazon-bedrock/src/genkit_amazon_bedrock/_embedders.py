@@ -49,7 +49,7 @@ from genkit.embedder import (
     EmbedRequest,
     EmbedResponse,
 )
-from genkit.plugin_api import mark_provider_error
+from genkit.plugin_api import provider_error
 from genkit_amazon_bedrock._model_info import model_label, strip_inference_profile_prefix
 from genkit_amazon_bedrock._models import _from_botocore_error, _from_client_error
 
@@ -528,12 +528,13 @@ class BedrockEmbedder:
                         # response_metadata so retry still honours Retry-After.
                         # Everything in here is the Bedrock call or its reply.
                         detail = _without_own_prefix(error.original_message)
-                        raise mark_provider_error(
-                            error=GenkitError(
-                                message=f'bedrock embed: document {index}: {detail}',
-                                status=error.status,
-                                response_metadata=error.response_metadata,
-                            )
+                        # Wrap the provider's own error, not the inner GenkitError,
+                        # whose str() would repeat the whole message as the cause.
+                        raise provider_error(
+                            error.cause or error,
+                            status=error.status,
+                            retry_after_ms=(error.response_metadata or {}).get('retry_after_ms'),
+                            message=f'bedrock embed: document {index}: {detail}',
                         ) from error
             except asyncio.CancelledError:
                 # Cancelled while queued on the semaphore, so nothing awaited it.

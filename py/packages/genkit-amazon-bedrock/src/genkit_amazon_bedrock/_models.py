@@ -16,11 +16,8 @@
 
 """Bedrock model action implementation (Converse and ConverseStream APIs)."""
 
-import math
-import time
 from collections.abc import AsyncGenerator
 from contextlib import aclosing
-from email.utils import parsedate_to_datetime
 from typing import Any, Protocol
 
 import structlog
@@ -28,9 +25,11 @@ from botocore.exceptions import (
     BotoCoreError,
     ClientError,
     ConfigNotFound,
+    ConnectionError as BotoConnectionError,
     ConnectTimeoutError,
     CredentialRetrievalError,
-    EndpointConnectionError,
+    HTTPClientError,
+    IncompleteReadError,
     MetadataRetrievalError,
     NoAuthTokenError,
     NoCredentialsError,
@@ -46,7 +45,7 @@ from botocore.exceptions import (
 
 from genkit import ActionRunContext, GenkitError, ModelResponse
 from genkit.model import ModelRequest
-from genkit.plugin_api import ErrorResponseMetadata, StatusName, from_http_code, mark_provider_error
+from genkit.plugin_api import StatusName, provider_error
 from genkit_amazon_bedrock._converters import build_converse_request, to_model_response, usage_log_fields
 from genkit_amazon_bedrock._stream import consume_converse_stream
 
@@ -87,9 +86,8 @@ _ERROR_CODE_STATUS: dict[str, StatusName] = {
 
 
 # Client-side botocore failures never reach the service, so they carry no error
-# code; map the exception type instead. Anything unlisted (dropped connections,
-# SSL, proxy, truncated reads) is re-raised as-is so retry treats it as
-# unclassified.
+# code; map the exception type instead, first match wins. Timeouts sit above
+# the connection families they subclass. Anything unlisted is UNKNOWN.
 _BOTOCORE_ERROR_STATUS: tuple[tuple[type[BotoCoreError], StatusName], ...] = (
     (ParamValidationError, 'INVALID_ARGUMENT'),
     (NoCredentialsError, 'UNAUTHENTICATED'),
@@ -104,86 +102,35 @@ _BOTOCORE_ERROR_STATUS: tuple[tuple[type[BotoCoreError], StatusName], ...] = (
     (ConfigNotFound, 'FAILED_PRECONDITION'),
     (ReadTimeoutError, 'DEADLINE_EXCEEDED'),
     (ConnectTimeoutError, 'DEADLINE_EXCEEDED'),
-    (EndpointConnectionError, 'UNAVAILABLE'),
+    # Refused, reset, SSL, proxy, or dropped mid-response: the network let us
+    # down rather than Bedrock saying no, so another try can work.
+    (BotoConnectionError, 'UNAVAILABLE'),
+    (HTTPClientError, 'UNAVAILABLE'),
+    (IncompleteReadError, 'UNAVAILABLE'),
 )
-
-
-def _parse_retry_after_ms(value: str) -> float | None:
-    """Parses an HTTP Retry-After value into milliseconds.
-
-    Accepts both forms the header allows, delay-seconds and an HTTP-date.
-    """
-    value = value.strip()
-    if not value:
-        return None
-    try:
-        seconds = float(value)
-    except ValueError:
-        pass
-    else:
-        # Check the scaled value: a large finite input can overflow to inf.
-        retry_after_ms = seconds * 1000
-        if seconds >= 0 and math.isfinite(retry_after_ms):
-            return retry_after_ms
-    try:
-        retry_at_ms = parsedate_to_datetime(value).timestamp() * 1000
-    except (OSError, OverflowError, TypeError, ValueError):
-        return None
-    return max(0.0, retry_at_ms - time.time() * 1000)
-
-
-def _retry_after_ms(error: ClientError) -> float | None:
-    """Pulls Retry-After out of the response headers Bedrock throttling sends."""
-    metadata = error.response.get('ResponseMetadata') or {}
-    headers = metadata.get('HTTPHeaders') or {}
-    if not isinstance(headers, dict):
-        return None
-    # Header names are case-insensitive; botocore's lowercasing is not promised.
-    for name, value in headers.items():
-        if isinstance(name, str) and name.lower() == 'retry-after' and isinstance(value, str):
-            return _parse_retry_after_ms(value)
-    return None
-
-
-def _http_status(error: ClientError) -> int | None:
-    """The response's HTTP status if it is a failure status (4xx/5xx)."""
-    metadata = error.response.get('ResponseMetadata') or {}
-    status = metadata.get('HTTPStatusCode') if isinstance(metadata, dict) else None
-    if isinstance(status, int) and not isinstance(status, bool) and 400 <= status <= 599:
-        return status
-    return None
 
 
 def _from_client_error(error: ClientError, operation: str = 'converse') -> GenkitError:
     """Classifies an AWS service error by its error code, then its HTTP status.
 
-    Raises ``error`` itself when neither yields a status, e.g. a mid-stream
-    EventStreamError whose exception type is not in ``_ERROR_CODE_STATUS``:
-    the event carries no HTTP status of its own.
+    A code missing from ``_ERROR_CODE_STATUS`` with no usable failure status
+    is UNKNOWN: an unmapped 4xx like 418, or a mid-stream EventStreamError of
+    a new exception type, since the event carries no HTTP status of its own.
     """
     error_info: dict[str, Any] = error.response.get('Error') or {}
     code = error_info.get('Code') or ''
-    status = _ERROR_CODE_STATUS.get(_normalize_error_code(code))
-    if status is None:
-        http_status = _http_status(error)
-        if http_status is not None:
-            status = from_http_code(http_status)
-    # from_http_code has no status for some 4xx (e.g. 418). UNKNOWN would make
-    # retry skip the error, so leave it raw instead.
-    if status is None or status == 'UNKNOWN':
-        raise error
-    message = error_info.get('Message') or str(error)
-    prefix = f'bedrock {operation} failed'
-    retry_after_ms = _retry_after_ms(error)
-    response_metadata: ErrorResponseMetadata | None = None
-    if retry_after_ms is not None:
-        response_metadata = {'retry_after_ms': retry_after_ms}
-    return mark_provider_error(
-        error=GenkitError(
-            message=f'{prefix}: {code}: {message}' if code else f'{prefix}: {message}',
-            status=status,
-            response_metadata=response_metadata,
-        )
+    metadata = error.response.get('ResponseMetadata')
+    if not isinstance(metadata, dict):
+        metadata = {}
+    # str(ClientError) already names the code, the operation, and AWS's message
+    # ("An error occurred (ThrottlingException) when calling the Converse
+    # operation: Rate exceeded"). Embedding it once keeps str() from repeating it.
+    return provider_error(
+        error,
+        status=_ERROR_CODE_STATUS.get(_normalize_error_code(code)),
+        http_status=metadata.get('HTTPStatusCode'),
+        headers=metadata.get('HTTPHeaders'),
+        message=f'bedrock {operation} failed: {error}',
     )
 
 
@@ -210,18 +157,20 @@ def _is_transient_credential_error(error: BotoCoreError) -> bool:
     return isinstance(error.__cause__ or error.__context__, MetadataRetrievalError)
 
 
-def _from_botocore_error(error: BotoCoreError, operation: str = 'converse') -> GenkitError:
-    """Classifies a client-side botocore failure by exception type.
-
-    Raises ``error`` itself when its type is not in ``_BOTOCORE_ERROR_STATUS``,
-    or when it is a transient credential-endpoint failure.
-    """
+def _botocore_status(error: BotoCoreError) -> StatusName:
     if _is_transient_credential_error(error):
-        raise error
+        return 'UNAVAILABLE'
     for error_type, status in _BOTOCORE_ERROR_STATUS:
         if isinstance(error, error_type):
-            return mark_provider_error(error=GenkitError(message=f'bedrock {operation} failed: {error}', status=status))
-    raise error
+            return status
+    return 'UNKNOWN'
+
+
+def _from_botocore_error(error: BotoCoreError, operation: str = 'converse') -> GenkitError:
+    """Classifies a client-side botocore failure by exception type."""
+    # Some botocore errors (a total-timeout cancel) have an empty str().
+    detail = str(error) or type(error).__name__
+    return provider_error(error, status=_botocore_status(error), message=f'bedrock {operation} failed: {detail}')
 
 
 class BedrockModel:

@@ -133,6 +133,8 @@
 
 ::: genkit.plugin_api.StatusName
 
+::: genkit.plugin_api.provider_error
+
 ::: genkit.plugin_api.GENKIT_CLIENT_HEADER
 
 ::: genkit.plugin_api.loop_local_client

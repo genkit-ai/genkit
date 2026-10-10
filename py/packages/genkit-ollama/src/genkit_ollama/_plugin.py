@@ -43,8 +43,8 @@ from genkit.plugin_api import (
     ActionMetadata,
     Plugin,
     loop_local_client,
+    provider_error,
     to_json_schema,
-    wrap_http_error,
 )
 from genkit_ollama._constants import DEFAULT_OLLAMA_SERVER_URL
 from genkit_ollama._embedders import OllamaEmbedder
@@ -426,7 +426,7 @@ class Ollama(Plugin):
             try:
                 response = await self.client().list()
             except ollama_api.ResponseError as e:
-                raise wrap_http_error(e, status_code=e.status_code) from e
+                raise provider_error(e, http_status=e.status_code) from e
 
         embedder_names: list[str] = []
         # (name, digest) per model row, in server order.

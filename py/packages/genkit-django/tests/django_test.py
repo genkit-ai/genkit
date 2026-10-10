@@ -32,7 +32,7 @@ from genkit_django import genkit_django_handler
 from pydantic import BaseModel
 
 from genkit import ActionRunContext, Genkit, GenkitError, PublicError, RequestData
-from genkit.plugin_api import wrap_http_error
+from genkit.plugin_api import provider_error
 
 
 class Receipt(BaseModel):
@@ -134,7 +134,7 @@ def _build_views() -> dict[str, Any]:
     @genkit_django_handler(ai)
     @ai.flow()
     async def raise_provider(_: str) -> None:
-        raise wrap_http_error(RuntimeError('API key not valid'), status_code=401)
+        raise provider_error(RuntimeError('API key not valid'), http_status=401)
 
     return {
         'greet': greet,
