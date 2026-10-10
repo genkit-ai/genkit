@@ -87,6 +87,12 @@ const (
 	layoutComment = "Genkit agent session snapshots, layout 1 (github.com/firebase/genkit/go/plugins/postgresql/exp)"
 )
 
+// txOptions runs the store's transactions at READ COMMITTED, whatever the
+// database's default. The locks rely on it: each statement after a lock wait
+// reads what committed during the wait. At a stricter level, a save that
+// waited for another reads the row as it was before the wait, and fails.
+var txOptions = pgx.TxOptions{IsoLevel: pgx.ReadCommitted}
+
 // Compile-time checks that the store has the capabilities it documents.
 var (
 	_ aix.SessionStore[any]           = (*PostgresSessionStore[any])(nil)
@@ -119,9 +125,10 @@ var (
 // which keeps the exact text the store wrote: jsonb would reject text that
 // contains U+0000, which tool output can carry.
 //
-// SaveSnapshot runs in one transaction that first takes an advisory lock on
-// the snapshot ID, so concurrent saves of one snapshot wait for each other and
-// fn runs once per save. It rejects, with FAILED_PRECONDITION, a change to the
+// SaveSnapshot runs in one READ COMMITTED transaction, whatever the database's
+// default isolation level, that first takes an advisory lock on the snapshot
+// ID, so concurrent saves of one snapshot wait for each other and fn runs once
+// per save. It rejects, with FAILED_PRECONDITION, a change to the
 // state of a row that another row stores a diff against, since the change
 // would corrupt that row (see [aix.SnapshotWriter]).
 //
@@ -293,7 +300,7 @@ func (s *PostgresSessionStore[State]) ensureTable(ctx context.Context, tableName
 				quote(tableName+parentIndexSuffix), s.table),
 			fmt.Sprintf(`COMMENT ON TABLE %s IS '%s'`, s.table, layoutComment),
 		}
-		err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		err := pgx.BeginTxFunc(ctx, s.pool, txOptions, func(tx pgx.Tx) error {
 			if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, hashKey("genkit session store table", s.table)); err != nil {
 				return err
 			}
@@ -616,7 +623,7 @@ func (s *PostgresSessionStore[State]) SaveSnapshot(
 		return nil, fmt.Errorf("postgresql: PostgresSessionStore.SaveSnapshot: %w", err)
 	}
 	var persisted *aix.SessionSnapshot[State]
-	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+	err = pgx.BeginTxFunc(ctx, s.pool, txOptions, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, hashKey(s.tableID, prefix, id)); err != nil {
 			return err
 		}
