@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package exp
+package systemone
 
 import (
 	"context"
@@ -82,21 +82,49 @@ func (r *recorder) calls() int {
 	return len(r.requests)
 }
 
-const cannedReply = `{"model":"jev-1.13.0","answers":` + triageAnswers + `,"usage":{"input_tokens":312,"output_tokens":48}}`
+// testQuestions is one question of each kind, as they go on the wire.
+var testQuestions = map[string]Question{
+	"department": {
+		Type:         KindChoice,
+		Instructions: "Which team should handle this?",
+		Criteria:     Options{{"billing", "Payments, invoicing, refunds"}, {"technical", "Bugs, outages, integrations"}},
+	},
+	"is_urgent": {Type: KindNoul, Instructions: "Does the ticket explicitly communicate time pressure?"},
+	"frustration": {
+		Type:         KindScore,
+		Instructions: "How frustrated is the customer?",
+		Criteria:     []any{"Calm", "Concerned but civil", "Very angry"},
+		Labels:       []string{"Calm", "Concerned but civil", "Very angry"},
+	},
+}
 
-func newClient(t *testing.T, rec *recorder, ep *Endpoint) *client {
+// testAnswers answers testQuestions, as an endpoint returns them.
+const testAnswers = `{
+	"department":  {"type": "choice", "choice": "billing", "probabilities": {"billing": 0.84, "technical": 0.16}, "confidence": 0.6},
+	"is_urgent":   {"type": "noul", "noul": 0.93},
+	"frustration": {"type": "score", "score": 1.3, "legend": {"0": "Calm", "1": "Concerned but civil", "2": "Very angry"}, "probabilities": {"0": 0, "1": 0.7, "2": 0.3}, "confidence": 0.54}
+}`
+
+const cannedReply = `{"model":"jev-1.13.0","answers":` + testAnswers + `,"usage":{"input_tokens":312,"output_tokens":48}}`
+
+// testEndpoint is an endpoint that takes the native body as it is.
+func testEndpoint() *Endpoint {
+	return &Endpoint{Name: "test", Path: "/v1/systemone", ModelsPath: "/v1/models"}
+}
+
+func newClient(t *testing.T, rec *recorder, ep *Endpoint) *Client {
 	t.Helper()
 	srv := httptest.NewServer(rec)
 	t.Cleanup(srv.Close)
-	return &client{http: srv.Client(), baseURL: srv.URL, apiKey: "test-key", ep: ep}
+	return &Client{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Endpoint: ep}
 }
 
-func TestDirectEndpoint(t *testing.T) {
+func TestDecide(t *testing.T) {
 	rec := &recorder{reply: cannedReply}
-	c := newClient(t, rec, Direct())
-	c.headers = http.Header{"X-Trace": {"abc"}}
+	c := newClient(t, rec, testEndpoint())
+	c.Headers = http.Header{"X-Trace": {"abc"}}
 
-	resp, err := c.decide(t.Context(), "jev-1.13.0", &request{State: "hi", Questions: triageQuestions})
+	resp, err := c.Decide(t.Context(), "jev-1.13.0", &Request{State: "hi", Questions: testQuestions})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,111 +150,12 @@ func TestDirectEndpoint(t *testing.T) {
 	}
 }
 
-func TestOpenRouterEndpoint(t *testing.T) {
-	rec := &recorder{reply: `{"id":"gen-1","provider":"TypeSafe","model":"typesafe/jev-1.13","answers":` + triageAnswers + `,"usage":{"input_tokens":1,"output_tokens":2,"cost":0.00004}}`}
-	c := newClient(t, rec, OpenRouter())
-
-	for id, want := range map[string]string{
-		"jev-latest":            "~typesafe/jev-latest",
-		"jev-preview":           "~typesafe/jev-preview",
-		"jev-1.13":              "typesafe/jev-1.13",
-		"typesafe/jev-1.13":     "typesafe/jev-1.13",
-		"~typesafe/jev-preview": "~typesafe/jev-preview",
-	} {
-		resp, err := c.decide(t.Context(), id, &request{State: "hi", Questions: triageQuestions})
-		if err != nil {
-			t.Fatal(err)
-		}
-		req, body := rec.last(t)
-		if req.URL.Path != "/api/alpha/decisions" {
-			t.Errorf("path = %s, want /api/alpha/decisions", req.URL.Path)
-		}
-		if body["model"] != want {
-			t.Errorf("model %q sent as %v, want %q", id, body["model"], want)
-		}
-		if resp.Provider != "TypeSafe" || resp.ID != "gen-1" || resp.Usage.Cost == nil || *resp.Usage.Cost != 0.00004 {
-			t.Errorf("gateway fields not decoded: %+v", resp)
-		}
-	}
-
-	calls := rec.calls()
-	if _, err := c.decide(t.Context(), "jev-1.13.0", &request{State: "hi", Questions: triageQuestions}); err == nil || !errors.Is(err, status.ErrInvalidArgument) || !strings.Contains(err.Error(), "jev-1.13") {
-		t.Errorf("patch version on OpenRouter: error = %v, want invalid argument naming jev-1.13", err)
-	}
-	if rec.calls() != calls {
-		t.Error("a patch version was sent to OpenRouter instead of being refused")
-	}
-}
-
-func TestCloudflareEndpoint(t *testing.T) {
-	envelope := `{"result":` + cannedReply + `,"success":true,"errors":[],"messages":[]}`
-	rec := &recorder{reply: envelope}
-	c := newClient(t, rec, Cloudflare("acct-1"))
-
-	resp, err := c.decide(t.Context(), "jev-latest", &request{State: "hi", Questions: triageQuestions})
-	if err != nil {
-		t.Fatal(err)
-	}
-	req, body := rec.last(t)
-	if req.URL.Path != "/client/v4/accounts/acct-1/ai/run" {
-		t.Errorf("path = %s", req.URL.Path)
-	}
-	if body["model"] != "typesafe/jev" {
-		t.Errorf("model = %v, want typesafe/jev", body["model"])
-	}
-	input, _ := body["input"].(map[string]any)
-	if input["state"] != "hi" || input["questions"] == nil || input["model"] != nil {
-		t.Errorf("input = %v: want state and questions only", input)
-	}
-	if _, top := body["state"]; top {
-		t.Error("state was sent at the top level; Cloudflare takes it under input")
-	}
-	if resp.Answers["department"]["choice"] != "billing" {
-		t.Errorf("the envelope was not unwrapped: %+v", resp)
-	}
-
-	// The bare shape the model page documents works too.
-	rec.reply = cannedReply
-	if resp, err := c.decide(t.Context(), "jev-latest", &request{State: "hi", Questions: triageQuestions}); err != nil || resp.Model != "jev-1.13.0" {
-		t.Errorf("bare response: %+v, %v", resp, err)
-	}
-
-	rec.reply = `{"result":null,"success":false,"errors":[{"code":7000,"message":"No route for that URI"}]}`
-	if _, err := c.decide(t.Context(), "jev-latest", &request{State: "hi", Questions: triageQuestions}); err == nil || !strings.Contains(err.Error(), "No route") {
-		t.Errorf("failed envelope error = %v", err)
-	}
-
-	calls := rec.calls()
-	if _, err := c.decide(t.Context(), "jev-1.13.0", &request{State: "hi", Questions: triageQuestions}); err == nil || !errors.Is(err, status.ErrInvalidArgument) {
-		t.Errorf("pinned version on Cloudflare: error = %v, want invalid argument", err)
-	}
-	if rec.calls() != calls {
-		t.Error("a pinned version was sent to Cloudflare instead of being refused")
-	}
-
-	// The account ID comes from the environment when none is given, and is
-	// escaped into the path.
-	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct/2")
-	ep, err := Cloudflare("").withAccount()
-	if err != nil {
-		t.Fatal(err)
-	}
-	c = newClient(t, rec, ep)
-	rec.reply = cannedReply
-	if _, err := c.decide(t.Context(), "jev-latest", &request{State: "hi", Questions: triageQuestions}); err != nil {
-		t.Fatal(err)
-	}
-	if req, _ := rec.last(t); req.URL.EscapedPath() != "/client/v4/accounts/acct%2F2/ai/run" {
-		t.Errorf("path = %s, want the account from the environment, escaped", req.URL.EscapedPath())
-	}
-}
-
 func TestExtraMergesTopLevelFields(t *testing.T) {
 	rec := &recorder{reply: cannedReply}
-	c := newClient(t, rec, OpenRouter())
-	_, err := c.decide(t.Context(), "jev-latest", &request{
+	c := newClient(t, rec, testEndpoint())
+	_, err := c.Decide(t.Context(), "jev-latest", &Request{
 		State:     "hi",
-		Questions: triageQuestions,
+		Questions: testQuestions,
 		Extra:     map[string]any{"session_id": "s-1", "model": "typesafe/jev-9"},
 	})
 	if err != nil {
@@ -251,9 +180,9 @@ func TestRetriesOverloadAndHonorsRetryAfter(t *testing.T) {
 		}
 		_, _ = io.WriteString(w, cannedReply)
 	}}
-	c := newClient(t, rec, Direct())
+	c := newClient(t, rec, testEndpoint())
 	start := time.Now()
-	if _, err := c.decide(t.Context(), "jev-latest", &request{State: "hi", Questions: triageQuestions}); err != nil {
+	if _, err := c.Decide(t.Context(), "jev-latest", &Request{State: "hi", Questions: testQuestions}); err != nil {
 		t.Fatal(err)
 	}
 	if rec.calls() != 2 {
@@ -271,11 +200,11 @@ func TestCancelDuringBackoffReportsTheCancellation(t *testing.T) {
 		w.Header().Set("Retry-After", "5")
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}}
-	c := newClient(t, rec, Direct())
+	c := newClient(t, rec, testEndpoint())
 	ctx, cancel := context.WithCancel(t.Context())
 	time.AfterFunc(50*time.Millisecond, cancel)
 	start := time.Now()
-	_, err := c.decide(ctx, "jev-latest", &request{State: "hi", Questions: triageQuestions})
+	_, err := c.Decide(ctx, "jev-latest", &Request{State: "hi", Questions: testQuestions})
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("error = %v, want context.Canceled", err)
 	}
@@ -303,7 +232,10 @@ func TestErrorsMapToStatus(t *testing.T) {
 		{400, `{"error":{"message":"HTTP 400: {\"detail\":\"Too many score levels\"}"}}`, status.ErrInvalidArgument, "Too many score levels"},
 		{429, `{"error":"rate limited"}`, status.ErrResourceExhausted, "rate limited"},
 		{503, `service unavailable`, status.ErrUnavailable, "service unavailable"},
-		{500, ``, status.ErrInternal, "HTTP 500"},
+		{500, ``, status.ErrInternal, "HTTP 500: Internal Server Error"},
+		{501, `not implemented`, status.ErrUnimplemented, "not implemented"},
+		{504, `gateway timeout`, status.ErrDeadlineExceeded, "gateway timeout"},
+		{404, ``, status.ErrNotFound, "HTTP 404: Not Found"},
 	}
 	for _, tt := range tests {
 		t.Run(http.StatusText(tt.code), func(t *testing.T) {
@@ -314,16 +246,16 @@ func TestErrorsMapToStatus(t *testing.T) {
 				w.WriteHeader(tt.code)
 				_, _ = io.WriteString(w, tt.body)
 			}}
-			c := newClient(t, rec, Direct())
-			_, err := c.decide(t.Context(), "jev-latest", &request{State: "hi", Questions: triageQuestions})
+			c := newClient(t, rec, testEndpoint())
+			_, err := c.Decide(t.Context(), "jev-latest", &Request{State: "hi", Questions: testQuestions})
 			if !errors.Is(err, tt.want) {
 				t.Errorf("error = %v, want %v", err, tt.want)
 			}
 			if !strings.Contains(err.Error(), tt.msg) {
 				t.Errorf("error = %v, want the message %q", err, tt.msg)
 			}
-			if tt.code == 401 && rec.calls() != 1 {
-				t.Errorf("a 401 was retried %d times", rec.calls()-1)
+			if (tt.code == 401 || tt.code == 501) && rec.calls() != 1 {
+				t.Errorf("a %d was retried %d times", tt.code, rec.calls()-1)
 			}
 		})
 	}
@@ -360,8 +292,8 @@ func TestListModels(t *testing.T) {
 		`{"data":[{"name":"jev-1.13.0"}]}`,
 	} {
 		rec := &recorder{reply: reply}
-		c := newClient(t, rec, Direct())
-		models, err := c.listModels(t.Context())
+		c := newClient(t, rec, testEndpoint())
+		models, err := c.ListModels(t.Context())
 		if err != nil {
 			t.Fatalf("%s: %v", reply, err)
 		}
@@ -373,7 +305,7 @@ func TestListModels(t *testing.T) {
 			t.Errorf("%s: models = %+v", reply, models)
 		}
 	}
-	if _, err := newClient(t, &recorder{reply: `{}`}, OpenRouter()).listModels(t.Context()); !errors.Is(err, status.ErrUnimplemented) {
-		t.Errorf("a gateway listing = %v, want unimplemented", err)
+	if _, err := newClient(t, &recorder{reply: `{}`}, &Endpoint{Name: "gateway"}).ListModels(t.Context()); !errors.Is(err, status.ErrUnimplemented) {
+		t.Errorf("a listing with no path = %v, want unimplemented", err)
 	}
 }

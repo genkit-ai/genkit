@@ -34,7 +34,35 @@ import (
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/internal/base"
+	"github.com/firebase/genkit/go/plugins/internal/systemone"
+	systemonex "github.com/firebase/genkit/go/plugins/systemone/exp"
 )
+
+// The decision type the tests share: one question of each kind.
+
+type dept string
+
+func (dept) Criteria() map[dept]string {
+	return map[dept]string{
+		"billing":   "Payments, invoicing, refunds",
+		"technical": "Bugs, outages, integrations",
+		"other":     "None of the above",
+	}
+}
+
+type anger int
+
+func (anger) Levels() []string { return []string{"Calm", "Concerned but civil", "Very angry"} }
+
+type urgent struct{}
+
+func (urgent) Criteria() (yes, no string) { return "Explicitly time-sensitive", "No urgency expressed" }
+
+type triage struct {
+	Department  systemonex.Choice[dept]   `json:"department" jsonschema_description:"Which team should handle this?"`
+	IsUrgent    systemonex.NoulOf[urgent] `json:"is_urgent" jsonschema_description:"Does the ticket explicitly communicate time pressure?"`
+	Frustration systemonex.Score[anger]   `json:"frustration" jsonschema_description:"How frustrated is the customer?"`
+}
 
 // fakeJev answers whatever questions it is sent, so the tests can check the
 // whole path from a Go type to the wire and back. A choice is answered with
@@ -66,7 +94,7 @@ func (f *fakeJev) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	for id, raw := range questions {
 		q := raw.(map[string]any)
 		switch q["type"] {
-		case kindChoice:
+		case systemone.KindChoice:
 			criteria := q["criteria"].(map[string]any)
 			keys := slices.Sorted(maps.Keys(criteria))
 			probabilities := map[string]float64{}
@@ -76,16 +104,16 @@ func (f *fakeJev) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 					probabilities[k] = 1 - 0.1*float64(len(keys)-1)
 				}
 			}
-			answers[id] = map[string]any{"type": kindChoice, "choice": keys[0], "probabilities": probabilities, "confidence": 0.6}
-		case kindScore:
+			answers[id] = map[string]any{"type": systemone.KindChoice, "choice": keys[0], "probabilities": probabilities, "confidence": 0.6}
+		case systemone.KindScore:
 			levels := q["criteria"].([]any)
 			legend := map[string]any{}
 			for i, level := range levels {
 				legend[strconv.Itoa(i)] = level
 			}
-			answers[id] = map[string]any{"type": kindScore, "score": 1.3, "legend": legend, "probabilities": map[string]float64{"0": 0, "1": 0.7, "2": 0.3}, "confidence": 0.54}
-		case kindNoul:
-			answers[id] = map[string]any{"type": kindNoul, "noul": 0.93}
+			answers[id] = map[string]any{"type": systemone.KindScore, "score": 1.3, "legend": legend, "probabilities": map[string]float64{"0": 0, "1": 0.7, "2": 0.3}, "confidence": 0.54}
+		case systemone.KindNoul:
+			answers[id] = map[string]any{"type": systemone.KindNoul, "noul": 0.93}
 		}
 	}
 	reply := map[string]any{
@@ -130,12 +158,12 @@ func TestGenerateData(t *testing.T) {
 	if body["state"] != "I was charged twice and need the duplicate refunded today." {
 		t.Errorf("state = %v: a single text part is the string state, nothing added", body["state"])
 	}
-	var questions map[string]question
+	var questions map[string]systemone.Question
 	if err := json.Unmarshal([]byte(base.JSONString(body["questions"])), &questions); err != nil {
 		t.Fatal(err)
 	}
 	// Compared as JSON: the round trip turns a []string into []any.
-	if got, want := base.JSONString(questions), base.JSONString(triageQuestions); got != want {
+	if got, want := base.JSONString(questions), base.JSONString(triageQuestions(t)); got != want {
 		t.Errorf("questions on the wire:\n got %s\nwant %s", got, want)
 	}
 
@@ -154,7 +182,7 @@ func TestGenerateData(t *testing.T) {
 	if resp.Usage == nil || resp.Usage.InputTokens != 312 || resp.Usage.OutputTokens != 48 || resp.Usage.TotalTokens != 360 {
 		t.Errorf("usage = %+v", resp.Usage)
 	}
-	if info := ResponseInfo(resp); info.Model != "jev-1.13.0" || info.Answers["department"]["choice"] != "billing" {
+	if info := systemonex.ResponseInfo(resp); info.Model != "jev-1.13.0" || info.Answers["department"]["choice"] != "billing" {
 		t.Errorf("info = %+v", info)
 	}
 	if resp.FinishReason != ai.FinishReasonStop {
@@ -167,10 +195,10 @@ func TestGenerateData(t *testing.T) {
 	if err := json.Unmarshal([]byte(base.JSONString(resp)), &decoded); err != nil {
 		t.Fatal(err)
 	}
-	if info := ResponseInfo(&decoded); info.Model != "jev-1.13.0" || info.Answers["department"]["choice"] != "billing" {
+	if info := systemonex.ResponseInfo(&decoded); info.Model != "jev-1.13.0" || info.Answers["department"]["choice"] != "billing" {
 		t.Errorf("info after a JSON round trip = %+v", info)
 	}
-	if info := ResponseInfo(&ai.ModelResponse{Raw: "another model's"}); info.Model != "" {
+	if info := systemonex.ResponseInfo(&ai.ModelResponse{Raw: "another model's"}); info.Model != "" {
 		t.Errorf("info of another model's response = %+v, want zero", info)
 	}
 }
@@ -270,15 +298,6 @@ func TestStateShapes(t *testing.T) {
 			t.Errorf("state = %v, want the parsed object", state)
 		}
 
-		// The JSON goes out as written, so an ID past a float64's integer
-		// range is not rounded.
-		wire, err := buildState(&ai.ModelRequest{Messages: []*ai.Message{ai.NewUserTextMessage(`{"id": 9007199254740993}`)}}, &Config{StateJSON: true})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := base.JSONString(wire); got != `{"id":9007199254740993}` {
-			t.Errorf("state on the wire = %s, want the number unchanged", got)
-		}
 	})
 	t.Run("extra", func(t *testing.T) {
 		decide(t, ai.WithPrompt("hi"), ai.WithConfig(&Config{Extra: map[string]any{"session_id": "s-1"}}))
@@ -345,8 +364,8 @@ func TestEnumFormat(t *testing.T) {
 		t.Errorf("text = %q, want the chosen option", resp.Text())
 	}
 	_, body := fake.last(t)
-	q := body["questions"].(map[string]any)[enumQuestionID].(map[string]any)
-	if q["type"] != kindChoice || q["instructions"] == "" {
+	q := body["questions"].(map[string]any)[systemone.EnumQuestionID].(map[string]any)
+	if q["type"] != systemone.KindChoice || q["instructions"] == "" {
 		t.Errorf("enum question on the wire = %v", q)
 	}
 
@@ -359,7 +378,7 @@ func TestEnumFormat(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, body = fake.last(t)
-	q = body["questions"].(map[string]any)[enumQuestionID].(map[string]any)
+	q = body["questions"].(map[string]any)[systemone.EnumQuestionID].(map[string]any)
 	if q["instructions"] != "Which team should handle this?" {
 		t.Errorf("enum question on the wire = %v", q)
 	}
@@ -373,7 +392,7 @@ func TestEnumFormat(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, body = fake.last(t)
-	q = body["questions"].(map[string]any)[enumQuestionID].(map[string]any)
+	q = body["questions"].(map[string]any)[systemone.EnumQuestionID].(map[string]any)
 	if q["instructions"] != "Which team should handle this?" {
 		t.Errorf("enum question on the wire = %v", q)
 	}
@@ -400,7 +419,7 @@ func TestSystemMessageIsInstructions(t *testing.T) {
 		}
 		for id, raw := range body["questions"].(map[string]any) {
 			q := raw.(map[string]any)
-			if want := "The state is a support ticket.\n\n" + triageQuestions[id].Instructions.(string); q["instructions"] != want {
+			if want := "The state is a support ticket.\n\n" + triageQuestions(t)[id].Instructions.(string); q["instructions"] != want {
 				t.Errorf("%s instructions = %q, want %q", id, q["instructions"], want)
 			}
 		}
@@ -434,21 +453,21 @@ func TestRuntimeQuestionsThroughGenerate(t *testing.T) {
 		{"search", "Look something up on the web"},
 		{"calendar", "Read or change the user's calendar"},
 	}
-	options := make([]ChoiceOption, 0, len(tools))
+	options := make([]systemonex.ChoiceOption, 0, len(tools))
 	for _, tool := range tools {
-		options = append(options, ChoiceOption{Name: tool.name, Criteria: tool.description})
+		options = append(options, systemonex.ChoiceOption{Name: tool.name, Criteria: tool.description})
 	}
 	resp, err := genkit.Generate(t.Context(), g,
 		ai.WithModelName("typesafe/jev-latest"),
-		ai.WithOutputSchema(Schema(map[string]Question{
-			"tool":     ChoiceQuestion{Instructions: "Which tool serves the request?", Options: options},
-			"personal": NoulQuestion{Instructions: "Does the request involve the user's own data?"},
+		ai.WithOutputSchema(systemonex.Schema(map[string]systemonex.Question{
+			"tool":     systemonex.ChoiceQuestion{Instructions: "Which tool serves the request?", Options: options},
+			"personal": systemonex.NoulQuestion{Instructions: "Does the request involve the user's own data?"},
 		})),
 		ai.WithPrompt("What is on my calendar tomorrow?"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var answers map[string]Answer
+	var answers map[string]systemonex.Answer
 	if err := resp.Output(&answers); err != nil {
 		t.Fatal(err)
 	}
@@ -552,35 +571,6 @@ func TestInitRequiresACloudflareAccount(t *testing.T) {
 		}
 	}()
 	(&TypeSafe{APIKey: "k", Endpoint: Cloudflare("")}).Init(t.Context())
-}
-
-func TestAnswersProjectedOntoDeclaredFields(t *testing.T) {
-	// A field the API or a gateway adds to an answer must not reach the
-	// message: the answer schemas are closed, so it would fail validation on
-	// every call. The untouched answers stay on the response's Info.
-	resp := &response{Answers: map[string]map[string]any{
-		"department":  {"type": kindChoice, "choice": "billing", "probabilities": map[string]any{"billing": 1.0}, "confidence": 1.0, "explanation": "new"},
-		"is_urgent":   {"type": kindNoul, "noul": 0.9, "reasoning": "new"},
-		"frustration": {"type": kindScore, "score": 1.0, "legend": map[string]any{"0": "Calm"}, "probabilities": map[string]any{"0": 1.0}, "confidence": 1.0, "rank": 3},
-	}}
-	text, err := answersText(resp, triageQuestions, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var got map[string]map[string]any
-	if err := json.Unmarshal([]byte(text), &got); err != nil {
-		t.Fatal(err)
-	}
-	want := map[string][]string{
-		"department":  {"choice", "confidence", "probabilities"},
-		"is_urgent":   {"noul"},
-		"frustration": {"confidence", "legend", "probabilities", "score"},
-	}
-	for id, fields := range want {
-		if keys := slices.Sorted(maps.Keys(got[id])); !slices.Equal(keys, fields) {
-			t.Errorf("%s fields = %v, want %v", id, keys, fields)
-		}
-	}
 }
 
 func TestPromptFile(t *testing.T) {

@@ -27,7 +27,53 @@ import (
 	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/internal/base"
+	systemonex "github.com/firebase/genkit/go/plugins/systemone/exp"
 )
+
+// The guided decision type: one question of each kind with structured
+// guidance on some keys, and plain strings on the rest.
+
+type guidedDept string
+
+func (guidedDept) Criteria() map[guidedDept]string {
+	return map[guidedDept]string{
+		"billing":   "Payments, invoicing, refunds",
+		"technical": "Bugs, outages, integrations",
+		"other":     "None of the above",
+	}
+}
+
+func (guidedDept) Guidance() map[guidedDept]any {
+	return map[guidedDept]any{
+		"billing":   map[string]any{"not_for": "Where an order is", "examples": []string{"I was charged twice."}},
+		"technical": map[string]any{"what": "Anything that is broken", "examples": []string{"The app crashes."}},
+		"other":     nil,
+	}
+}
+
+type guidedAnger int
+
+func (guidedAnger) Levels() []string { return []string{"Calm", "Concerned but civil", "Very angry"} }
+
+func (guidedAnger) Guidance() map[int]any {
+	return map[int]any{2: map[string]any{"signals": []string{"threats", "all caps"}}}
+}
+
+type guidedUrgent struct{}
+
+func (guidedUrgent) Criteria() (yes, no string) {
+	return "Explicitly time-sensitive", "No urgency expressed"
+}
+
+func (guidedUrgent) Guidance() (yes, no any) {
+	return map[string]any{"examples": []string{"today", "by Friday"}}, nil
+}
+
+type guidedTriage struct {
+	Department  systemonex.Choice[guidedDept]   `json:"department" jsonschema_description:"Which team should handle this?"`
+	IsUrgent    systemonex.NoulOf[guidedUrgent] `json:"is_urgent" jsonschema_description:"Does the ticket explicitly communicate time pressure?"`
+	Frustration systemonex.Score[guidedAnger]   `json:"frustration" jsonschema_description:"How frustrated is the customer?"`
+}
 
 // The live checks run jev through OpenRouter, the gateway an ordinary key
 // can reach today; TypeSafe's own API is behind a waitlist.
@@ -50,7 +96,7 @@ func TestOpenRouterLive(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Logf("answers: %s", base.JSONString(out))
-		t.Logf("info: %s, usage: %s", base.JSONString(ResponseInfo(resp)), base.JSONString(resp.Usage))
+		t.Logf("info: %s, usage: %s", base.JSONString(systemonex.ResponseInfo(resp)), base.JSONString(resp.Usage))
 
 		if _, ok := out.Department.Choice.Criteria()[out.Department.Choice]; !ok {
 			t.Errorf("choice %q is outside the criteria", out.Department.Choice)
@@ -77,7 +123,7 @@ func TestOpenRouterLive(t *testing.T) {
 		if resp.Usage == nil || resp.Usage.InputTokens == 0 {
 			t.Errorf("usage = %+v", resp.Usage)
 		}
-		if ResponseInfo(resp).Model == "" {
+		if systemonex.ResponseInfo(resp).Model == "" {
 			t.Errorf("no resolved model version on the response: %v", resp.Raw)
 		}
 		if resp.Usage.Custom["cost"] <= 0 {
@@ -113,7 +159,7 @@ func TestOpenRouterLive(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Logf("answers: %s", base.JSONString(out))
-		t.Logf("info: %s, usage: %s", base.JSONString(ResponseInfo(resp)), base.JSONString(resp.Usage))
+		t.Logf("info: %s, usage: %s", base.JSONString(systemonex.ResponseInfo(resp)), base.JSONString(resp.Usage))
 		if out.Department.Choice != "billing" {
 			t.Errorf("department = %q, want billing", out.Department.Choice)
 		}
@@ -131,7 +177,7 @@ func TestOpenRouterLive(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Logf("enum: %q info: %s", resp.Text(), base.JSONString(ResponseInfo(resp)))
+		t.Logf("enum: %q info: %s", resp.Text(), base.JSONString(systemonex.ResponseInfo(resp)))
 		if resp.Text() != "technical" {
 			t.Errorf("text = %q, want technical", resp.Text())
 		}
@@ -139,7 +185,7 @@ func TestOpenRouterLive(t *testing.T) {
 
 	t.Run("history as state", func(t *testing.T) {
 		type handoff struct {
-			WantsHuman Noul `json:"wants_human" jsonschema_description:"Does the user ask to talk to a human?"`
+			WantsHuman systemonex.Noul `json:"wants_human" jsonschema_description:"Does the user ask to talk to a human?"`
 		}
 		out, _, err := genkit.GenerateData[handoff](t.Context(), g,
 			ai.WithModelName(model),
@@ -164,7 +210,7 @@ func TestOpenRouterLive(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Logf("jev-1.13 resolved to %v", ResponseInfo(resp).Model)
+		t.Logf("jev-1.13 resolved to %v", systemonex.ResponseInfo(resp).Model)
 	})
 
 	t.Run("patch version refused", func(t *testing.T) {
@@ -189,7 +235,7 @@ func TestOpenRouterLive(t *testing.T) {
 			t.Logf("no preview channel: %v", err)
 			return
 		}
-		t.Logf("jev-preview resolved to %v", ResponseInfo(resp).Model)
+		t.Logf("jev-preview resolved to %v", systemonex.ResponseInfo(resp).Model)
 	})
 
 	t.Run("runtime questions", func(t *testing.T) {
@@ -198,10 +244,10 @@ func TestOpenRouterLive(t *testing.T) {
 		resp, err := genkit.Generate(t.Context(), g,
 			ai.WithModelName(model),
 			ai.WithSystem("The state is a request a user made to an assistant."),
-			ai.WithOutputSchema(Schema(map[string]Question{
-				"tool": ChoiceQuestion{
+			ai.WithOutputSchema(systemonex.Schema(map[string]systemonex.Question{
+				"tool": systemonex.ChoiceQuestion{
 					Instructions: "Which tool serves the request?",
-					Options: []ChoiceOption{
+					Options: []systemonex.ChoiceOption{
 						{Name: "web_search", Criteria: "Look up facts, news, or prices on the web"},
 						{Name: "calendar", Criteria: "Read or change the user's own calendar", Guidance: map[string]any{
 							"examples": []string{"What meetings do I have on Friday?", "Move my 3pm to 4pm."},
@@ -209,14 +255,14 @@ func TestOpenRouterLive(t *testing.T) {
 						{Name: "none", Criteria: "No tool fits the request"},
 					},
 				},
-				"effort": ScoreQuestion{
+				"effort": systemonex.ScoreQuestion{
 					Instructions: map[string]any{
 						"question": "How much work does fulfilling the request take?",
 						"field":    map[string]any{"name": "request", "description": "What the user asked for"},
 					},
 					Levels: []string{"A single lookup", "A few steps", "A multi-step project"},
 				},
-				"personal": NoulQuestion{
+				"personal": systemonex.NoulQuestion{
 					Instructions: "Does the request involve the user's own data?",
 					Yes:          "Names the user's files, mail, or calendar",
 					No:           "Asks about the world at large",
@@ -226,7 +272,7 @@ func TestOpenRouterLive(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		var answers map[string]Answer
+		var answers map[string]systemonex.Answer
 		if err := resp.Output(&answers); err != nil {
 			t.Fatal(err)
 		}
@@ -257,7 +303,7 @@ func TestOpenRouterLive(t *testing.T) {
 
 	t.Run("document with data", func(t *testing.T) {
 		type stock struct {
-			InStock Noul `json:"in_stock" jsonschema_description:"Does the context show the item the user asks about as in stock?"`
+			InStock systemonex.Noul `json:"in_stock" jsonschema_description:"Does the context show the item the user asks about as in stock?"`
 		}
 		out, _, err := genkit.GenerateData[stock](t.Context(), g,
 			ai.WithModelName(model),

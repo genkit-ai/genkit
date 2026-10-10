@@ -24,7 +24,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/internal/base"
+	"github.com/firebase/genkit/go/plugins/internal/systemone"
 )
 
 // The decision type the tests share: one question of each kind.
@@ -54,26 +56,26 @@ type triage struct {
 }
 
 // triageQuestions is what the triage schema compiles to.
-var triageQuestions = map[string]question{
+var triageQuestions = map[string]systemone.Question{
 	"department": {
-		Type:         kindChoice,
+		Type:         systemone.KindChoice,
 		Instructions: "Which team should handle this?",
-		Criteria: criteria{
-			{"billing", "Payments, invoicing, refunds"},
-			{"other", "None of the above"},
-			{"technical", "Bugs, outages, integrations"},
+		Criteria: systemone.Options{
+			{Name: "billing", Description: "Payments, invoicing, refunds"},
+			{Name: "other", Description: "None of the above"},
+			{Name: "technical", Description: "Bugs, outages, integrations"},
 		},
 	},
 	"is_urgent": {
-		Type:         kindNoul,
+		Type:         systemone.KindNoul,
 		Instructions: "Does the ticket explicitly communicate time pressure?",
 		Criteria:     map[string]any{"true": "Explicitly time-sensitive", "false": "No urgency expressed"},
 	},
 	"frustration": {
-		Type:         kindScore,
+		Type:         systemone.KindScore,
 		Instructions: "How frustrated is the customer?",
 		Criteria:     []any{"Calm", "Concerned but civil", "Very angry"},
-		labels:       []string{"Calm", "Concerned but civil", "Very angry"},
+		Labels:       []string{"Calm", "Concerned but civil", "Very angry"},
 	},
 }
 
@@ -103,8 +105,8 @@ func TestSchemaEncodesQuestions(t *testing.T) {
 	schema := triageSchema(t)
 
 	department := property(t, schema, "department")
-	if got := department[kindKeyword]; got != kindChoice {
-		t.Errorf("department %s = %v, want %q", kindKeyword, got, kindChoice)
+	if got := department[systemone.KindKeyword]; got != systemone.KindChoice {
+		t.Errorf("department %s = %v, want %q", systemone.KindKeyword, got, systemone.KindChoice)
 	}
 	if got := department["description"]; got != "Which team should handle this?" {
 		t.Errorf("department description = %v: the field tag was not merged onto the type's schema", got)
@@ -127,25 +129,25 @@ func TestSchemaEncodesQuestions(t *testing.T) {
 	}
 
 	urgent := property(t, schema, "is_urgent")
-	if got := urgent[kindKeyword]; got != kindNoul {
-		t.Errorf("is_urgent %s = %v, want %q", kindKeyword, got, kindNoul)
+	if got := urgent[systemone.KindKeyword]; got != systemone.KindNoul {
+		t.Errorf("is_urgent %s = %v, want %q", systemone.KindKeyword, got, systemone.KindNoul)
 	}
-	if got := urgent[trueKeyword]; got != "Explicitly time-sensitive" {
-		t.Errorf("is_urgent %s = %v: the criteria type was not applied", trueKeyword, got)
+	if got := urgent[systemone.TrueKeyword]; got != "Explicitly time-sensitive" {
+		t.Errorf("is_urgent %s = %v: the criteria type was not applied", systemone.TrueKeyword, got)
 	}
-	if got := urgent[falseKeyword]; got != "No urgency expressed" {
-		t.Errorf("is_urgent %s = %v: the criteria type was not applied", falseKeyword, got)
+	if got := urgent[systemone.FalseKeyword]; got != "No urgency expressed" {
+		t.Errorf("is_urgent %s = %v: the criteria type was not applied", systemone.FalseKeyword, got)
 	}
 	if got := property(t, urgent, "noul")["type"]; got != "number" {
 		t.Errorf("is_urgent noul type = %v: NoulOf did not keep the plain answer schema", got)
 	}
 
 	frustration := property(t, schema, "frustration")
-	if got := frustration[kindKeyword]; got != kindScore {
-		t.Errorf("frustration %s = %v, want %q", kindKeyword, got, kindScore)
+	if got := frustration[systemone.KindKeyword]; got != systemone.KindScore {
+		t.Errorf("frustration %s = %v, want %q", systemone.KindKeyword, got, systemone.KindScore)
 	}
-	if got := base.JSONString(frustration[levelsKeyword]); got != `["Calm","Concerned but civil","Very angry"]` {
-		t.Errorf("frustration %s = %s", levelsKeyword, got)
+	if got := base.JSONString(frustration[systemone.LevelsKeyword]); got != `["Calm","Concerned but civil","Very angry"]` {
+		t.Errorf("frustration %s = %s", systemone.LevelsKeyword, got)
 	}
 	if got := property(t, frustration, "score")["maximum"]; got != float64(2) {
 		t.Errorf("score maximum = %v, want 2", got)
@@ -153,7 +155,7 @@ func TestSchemaEncodesQuestions(t *testing.T) {
 }
 
 func TestCompileQuestions(t *testing.T) {
-	got, err := compileQuestions(triageSchema(t), "")
+	got, err := systemone.CompileQuestions(triageSchema(t), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +165,7 @@ func TestCompileQuestions(t *testing.T) {
 }
 
 func TestPreambleLeadsEveryQuestion(t *testing.T) {
-	got, err := compileQuestions(triageSchema(t), "The state is a support ticket.")
+	got, err := systemone.CompileQuestions(triageSchema(t), "The state is a support ticket.")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +178,7 @@ func TestPreambleLeadsEveryQuestion(t *testing.T) {
 	// The schema's own description follows the system text.
 	schema := triageSchema(t)
 	schema["description"] = "Triage a ticket for the support queue."
-	got, err = compileQuestions(schema, "The state is a support ticket.")
+	got, err = systemone.CompileQuestions(schema, "The state is a support ticket.")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,52 +189,12 @@ func TestPreambleLeadsEveryQuestion(t *testing.T) {
 	}
 }
 
-func TestCompileQuestionsRejects(t *testing.T) {
-	prop := func(fields map[string]any) map[string]any {
-		return map[string]any{"type": "object", "properties": map[string]any{"q": fields}}
-	}
-	tests := []struct {
-		name   string
-		schema map[string]any
-		want   string
-	}{
-		{"no properties", map[string]any{"type": "string"}, "no properties"},
-		{"plain field", prop(map[string]any{"type": "string", "description": "d"}), "not a question"},
-		{"no instructions", prop(map[string]any{kindKeyword: kindNoul}), "no instructions"},
-		{"unknown kind", prop(map[string]any{kindKeyword: "vibe", "description": "d"}), "unknown type"},
-		{"choice without options", prop(map[string]any{kindKeyword: kindChoice, "description": "d"}), "no options"},
-		{"one level", prop(map[string]any{kindKeyword: kindScore, "description": "d", levelsKeyword: []any{"only"}}), "at least two levels"},
-		{"half a noul", prop(map[string]any{kindKeyword: kindNoul, "description": "d", trueKeyword: "yes"}), "only one side"},
-		{"guidance for no option", prop(map[string]any{
-			kindKeyword: kindChoice, "description": "d",
-			"properties":    map[string]any{"choice": map[string]any{"oneOf": []any{map[string]any{"const": "a"}}}},
-			guidanceKeyword: map[string]any{"b": "x"},
-		}), "not one of its options"},
-		{"guidance for no level", prop(map[string]any{
-			kindKeyword: kindScore, "description": "d", levelsKeyword: []any{"low", "high"},
-			guidanceKeyword: map[string]any{"2": "x"},
-		}), "does not have"},
-		{"guidance for one side", prop(map[string]any{
-			kindKeyword: kindNoul, "description": "d",
-			guidanceKeyword: map[string]any{"true": map[string]any{"examples": []any{"today"}}},
-		}), "only one side"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := compileQuestions(tt.schema, "")
-			if err == nil || !strings.Contains(err.Error(), tt.want) {
-				t.Errorf("error = %v, want one containing %q", err, tt.want)
-			}
-		})
-	}
-}
-
 func TestAnswersFillTheType(t *testing.T) {
-	var resp response
+	var resp systemone.Response
 	if err := json.Unmarshal([]byte(`{"model":"jev-1.13.0","answers":`+triageAnswers+`,"usage":{"input_tokens":312,"output_tokens":48}}`), &resp); err != nil {
 		t.Fatal(err)
 	}
-	text, err := answersText(&resp, triageQuestions, false)
+	text, err := systemone.AnswersText(&resp, triageQuestions, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +241,7 @@ func TestNoulWithoutCriteriaOmitsTheField(t *testing.T) {
 		WantsHuman Noul               `json:"wants_human" jsonschema_description:"Does the user ask for a person?"`
 		Empty      NoulOf[noCriteria] `json:"empty" jsonschema_description:"Is the sky blue? The type gives an empty pair, so this is a plain noul."`
 	}
-	questions, err := compileQuestions(base.SchemaAsMap(base.InferJSONSchema(handoff{})), "")
+	questions, err := systemone.CompileQuestions(base.SchemaAsMap(base.InferJSONSchema(handoff{})), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,7 +256,7 @@ func TestNoulOfRejectsHalfCriteria(t *testing.T) {
 	type decision struct {
 		Half NoulOf[halfCriteria] `json:"half" jsonschema_description:"d"`
 	}
-	_, err := compileQuestions(base.SchemaAsMap(base.InferJSONSchema(decision{})), "")
+	_, err := systemone.CompileQuestions(base.SchemaAsMap(base.InferJSONSchema(decision{})), "")
 	if err == nil || !strings.Contains(err.Error(), "only one side") {
 		t.Errorf("error = %v, want the half pair rejected before the model is called", err)
 	}
@@ -315,63 +277,6 @@ func TestNoulOfFillsFromThePlainAnswer(t *testing.T) {
 	// takes the plain Noul takes any of them by conversion.
 	if plain := Noul(out); plain.Probability != 0.93 {
 		t.Errorf("Noul(out) = %+v", plain)
-	}
-}
-
-func TestAnswersTextRejectsMissingAnswer(t *testing.T) {
-	resp := &response{Answers: map[string]map[string]any{"department": {"type": "choice", "choice": "billing"}}}
-	if _, err := answersText(resp, triageQuestions, false); err == nil || !strings.Contains(err.Error(), `"frustration"`) {
-		t.Errorf("error = %v, want one naming the first missing question in ID order", err)
-	}
-}
-
-func TestEnumQuestion(t *testing.T) {
-	// The options keep the order the values were given in.
-	got, err := enumQuestion(map[string]any{"enum": []string{"technical", "billing"}, "description": "Which team?"}, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := map[string]question{enumQuestionID: {
-		Type:         kindChoice,
-		Instructions: "Which team?",
-		Criteria:     criteria{{"technical", "technical"}, {"billing", "billing"}},
-	}}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("enum question = %s, want %s", base.JSONString(got), base.JSONString(want))
-	}
-
-	got, err = enumQuestion(map[string]any{"enum": []any{"a", "b"}}, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got[enumQuestionID].Instructions == "" {
-		t.Error("an enum without a description got no default instructions")
-	}
-
-	// The system text is the question, and a schema description follows it.
-	got, err = enumQuestion(map[string]any{"enum": []any{"a", "b"}}, "Which team?")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got[enumQuestionID].Instructions != "Which team?" {
-		t.Errorf("instructions = %q, want the system text alone", got[enumQuestionID].Instructions)
-	}
-	got, err = enumQuestion(map[string]any{"enum": []any{"a", "b"}, "description": "Pick one."}, "Context.")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got[enumQuestionID].Instructions != "Context.\n\nPick one." {
-		t.Errorf("instructions = %q, want the system text and then the description", got[enumQuestionID].Instructions)
-	}
-
-	if _, err := enumQuestion(map[string]any{"type": "string"}, ""); err == nil {
-		t.Error("a schema without enum values was accepted")
-	}
-
-	resp := &response{Answers: map[string]map[string]any{enumQuestionID: {"type": "choice", "choice": "billing"}}}
-	text, err := answersText(resp, got, true)
-	if err != nil || text != "billing" {
-		t.Errorf("enum answer text = %q, %v; want the option itself", text, err)
 	}
 }
 
@@ -462,7 +367,7 @@ type guidedTriage struct {
 }
 
 func TestGuidanceOnTheWire(t *testing.T) {
-	questions, err := compileQuestions(base.SchemaAsMap(base.InferJSONSchema(guidedTriage{})), "")
+	questions, err := systemone.CompileQuestions(base.SchemaAsMap(base.InferJSONSchema(guidedTriage{})), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -496,17 +401,17 @@ func TestLegendKeepsTheRubricStrings(t *testing.T) {
 	// With guidance on a level the API echoes the guidance in the legend,
 	// which Score.Legend cannot hold, so the legend is rebuilt from the
 	// rubric's strings.
-	questions, err := compileQuestions(base.SchemaAsMap(base.InferJSONSchema(guidedTriage{})), "")
+	questions, err := systemone.CompileQuestions(base.SchemaAsMap(base.InferJSONSchema(guidedTriage{})), "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp := &response{Answers: map[string]map[string]any{
-		"department": {"type": kindChoice, "choice": "billing", "probabilities": map[string]any{"billing": 1.0}, "confidence": 1.0},
-		"is_urgent":  {"type": kindNoul, "noul": 0.9},
-		"frustration": {"type": kindScore, "score": 1.8, "probabilities": map[string]any{"1": 0.2, "2": 0.8}, "confidence": 0.7,
+	resp := &systemone.Response{Info: systemone.Info{Answers: map[string]map[string]any{
+		"department": {"type": systemone.KindChoice, "choice": "billing", "probabilities": map[string]any{"billing": 1.0}, "confidence": 1.0},
+		"is_urgent":  {"type": systemone.KindNoul, "noul": 0.9},
+		"frustration": {"type": systemone.KindScore, "score": 1.8, "probabilities": map[string]any{"1": 0.2, "2": 0.8}, "confidence": 0.7,
 			"legend": map[string]any{"0": "Calm", "1": "Concerned but civil", "2": map[string]any{"what": "Very angry", "signals": []any{"threats"}}}},
-	}}
-	text, err := answersText(resp, questions, false)
+	}}}
+	text, err := systemone.AnswersText(resp, questions, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -528,17 +433,17 @@ func TestLegendKeepsTheRubricStrings(t *testing.T) {
 
 func TestScoreClampedToTheRubric(t *testing.T) {
 	schema := triageSchema(t)
-	questions, err := compileQuestions(schema, "")
+	questions, err := systemone.CompileQuestions(schema, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, score := range []float64{2.0000000000000004, -1e-17} {
-		var resp response
+		var resp systemone.Response
 		answers := strings.Replace(triageAnswers, `"score": 1.3`, `"score": `+strconv.FormatFloat(score, 'g', -1, 64), 1)
 		if err := json.Unmarshal([]byte(`{"answers":`+answers+`}`), &resp); err != nil {
 			t.Fatal(err)
 		}
-		text, err := answersText(&resp, questions, false)
+		text, err := systemone.AnswersText(&resp, questions, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -574,7 +479,7 @@ func TestRuntimeQuestions(t *testing.T) {
 		},
 	})
 
-	questions, err := compileQuestions(schema, "")
+	questions, err := systemone.CompileQuestions(schema, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -594,7 +499,7 @@ func TestRuntimeQuestions(t *testing.T) {
 	}
 
 	// A preamble goes beside structured instructions, and in front of text.
-	questions, err = compileQuestions(schema, "The state is a user request.")
+	questions, err = systemone.CompileQuestions(schema, "The state is a user request.")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -605,25 +510,43 @@ func TestRuntimeQuestions(t *testing.T) {
 		t.Errorf("text instructions with a preamble = %q", got)
 	}
 	// An array takes the preamble as its first element rather than nested.
-	listed, err := compileQuestions(Schema(map[string]Question{
-		"q": NoulQuestion{Instructions: []any{"Is the request urgent?", map[string]any{"field": "deadline"}}},
-	}), "The state is a user request.")
+	// A raw schema map can carry the array as a []string or a
+	// json.RawMessage, and those spread the same way; bytes encode as a
+	// string and stay nested.
+	raw := Schema(map[string]Question{
+		"q":     NoulQuestion{Instructions: []any{"Is the request urgent?", map[string]any{"field": "deadline"}}},
+		"steps": NoulQuestion{Instructions: "placeholder"},
+		"json":  NoulQuestion{Instructions: "placeholder"},
+		"bytes": NoulQuestion{Instructions: "placeholder"},
+	})
+	props := raw["properties"].(map[string]any)
+	props["steps"].(map[string]any)[systemone.InstructionsKeyword] = []string{"Read the request.", "Is it urgent?"}
+	props["json"].(map[string]any)[systemone.InstructionsKeyword] = json.RawMessage(`["Read the request.",{"field":"deadline"}]`)
+	props["bytes"].(map[string]any)[systemone.InstructionsKeyword] = []byte("Is it urgent?")
+	listed, err := systemone.CompileQuestions(raw, "The state is a user request.")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := base.JSONString(listed["q"].Instructions); got != `["The state is a user request.","Is the request urgent?",{"field":"deadline"}]` {
-		t.Errorf("array instructions with a preamble = %s", got)
+	for id, want := range map[string]string{
+		"q":     `["The state is a user request.","Is the request urgent?",{"field":"deadline"}]`,
+		"steps": `["The state is a user request.","Read the request.","Is it urgent?"]`,
+		"json":  `["The state is a user request.","Read the request.",{"field":"deadline"}]`,
+		"bytes": `["The state is a user request.","SXMgaXQgdXJnZW50Pw=="]`,
+	} {
+		if got := base.JSONString(listed[id].Instructions); got != want {
+			t.Errorf("%s instructions with a preamble = %s, want %s", id, got, want)
+		}
 	}
 
 	// The answers fill a map of Answer.
-	var resp response
+	var resp systemone.Response
 	if err := json.Unmarshal([]byte(`{"answers":{`+
 		`"tool":{"type":"choice","choice":"calendar","probabilities":{"search":0.1,"calendar":0.85,"none":0.05},"confidence":0.7},`+
 		`"effort":{"type":"score","score":0.4,"probabilities":{"0":0.6,"1":0.4,"2":0},"confidence":0.3,"legend":{"0":"Trivial","1":"Some work","2":{"what":"A project"}}},`+
 		`"personal":{"type":"noul","noul":0.91}}}`), &resp); err != nil {
 		t.Fatal(err)
 	}
-	text, err := answersText(&resp, questions, false)
+	text, err := systemone.AnswersText(&resp, questions, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -664,7 +587,7 @@ func TestRuntimeQuestionsRejects(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := compileQuestions(Schema(tt.questions), "")
+			_, err := systemone.CompileQuestions(Schema(tt.questions), "")
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Errorf("error = %v, want one containing %q", err, tt.want)
 			}
@@ -685,7 +608,7 @@ func TestAnswerRoundTripKeepsZeros(t *testing.T) {
 	}`), &answers); err != nil {
 		t.Fatal(err)
 	}
-	for id, kind := range map[string]string{"flat": kindChoice, "low": kindScore, "never": kindNoul} {
+	for id, kind := range map[string]string{"flat": systemone.KindChoice, "low": systemone.KindScore, "never": systemone.KindNoul} {
 		if answers[id].Type != kind {
 			t.Errorf("%s type = %q, want %q read from its fields", id, answers[id].Type, kind)
 		}
@@ -695,5 +618,11 @@ func TestAnswerRoundTripKeepsZeros(t *testing.T) {
 		`"never":{"noul":0,"type":"noul"}}`
 	if got := base.JSONString(answers); got != want {
 		t.Errorf("re-encoded answers:\n got %s\nwant %s", got, want)
+	}
+}
+
+func TestResponseInfoOfNilInfo(t *testing.T) {
+	if info := ResponseInfo(&ai.ModelResponse{Raw: (*Info)(nil)}); info.Model != "" {
+		t.Errorf("info of a nil Info = %+v, want zero", info)
 	}
 }
