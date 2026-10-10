@@ -1670,11 +1670,10 @@ func (rt *agentRuntime[State]) drainAndWait(cancelWork context.CancelFunc) fnDon
 //
 // router.close blocks on the forward goroutine exiting, and fn returning
 // does not imply the router is idle: fn's last accepted chunk may still be
-// in the router's hands, parked on the send to a full out buffer. On the
-// error path stopAndWait closes stopWriting first, deliberately dropping
-// the failed turn's in-flight chunks so close cannot wedge behind a
-// slow/gone consumer. On the success path those chunks are wanted, so
-// close relies on the parked send being released instead: a consuming
+// in the router's hands, parked on the send to a full out buffer. That
+// chunk is often the turn's [TurnEnd], which a failed turn emits like a
+// successful one, so both paths keep it: close relies on the parked send
+// being released, never on stopWriting (which would drop it). A consuming
 // client drains it, a disconnected client's ctx cancellation trips
 // forward's ctx arm, and a client that stopped receiving unparks it when
 // its Output call drains the stream.
@@ -1686,14 +1685,14 @@ func (rt *agentRuntime[State]) handleFnDone(
 	cancelWork()
 	rt.intake.stopAndWait()
 	// A custom-state patch whose transform failed closed latches during fn, so
-	// it is readable now; a failed turn likewise wants its in-flight chunks
-	// dropped. Either way stop router writes before close so it cannot wedge
-	// behind a slow or gone consumer. A stream-transform failure instead puts
-	// the router into discard mode the instant it occurs (forward never parks),
-	// so it needs no stop here and is picked up after close below.
+	// it is readable now; stop router writes before close so no chunk produced
+	// after the refused patch reaches the client. A stream-transform failure
+	// instead puts the router into discard mode the instant it occurs (forward
+	// never parks), so it needs no stop here and is picked up after close
+	// below.
 	_, reason, cause := rt.invocationOutcome(res)
 	fatal := rt.takeFatal()
-	if cause != nil || fatal != nil {
+	if fatal != nil {
 		rt.router.stopAndWait()
 	}
 	rt.router.close()

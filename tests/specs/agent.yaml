@@ -1450,6 +1450,14 @@ tests:
               content:
                 - toolRequest: { name: testTool, input: {}, ref: r1 }
           - error: { status: UNAVAILABLE, message: model melted }
+        expectChunks:
+          - modelChunk:
+              role: tool
+              content:
+                - toolResponse: { name: testTool, ref: r1, output: tool called }
+          # A failed turn still ends with a turnEnd, delivered before the
+          # output resolves, carrying finishReason 'failed'.
+          - turnEnd: { finishReason: failed }
         expectOutput:
           finishReason: failed
           hasSnapshotId: true
