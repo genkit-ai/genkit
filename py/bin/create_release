@@ -183,20 +183,18 @@ if [ "$USE_PR_NOTES" = true ]; then
     echo ""
     echo -e "${YELLOW}Step 4: Finding release PR...${NC}"
     if [ -z "$PR_NUMBER" ]; then
-        # Auto-find the merged PR for this version
+        # Auto-find the merged release PR, titled "... Python SDK v<VERSION>".
+        # GitHub search is fuzzy, so keep only titles that end with the exact
+        # version and require a single match. Publishing another PR's body as
+        # the release notes is worse than asking for the number.
         PR_NUMBER=$(gh pr list --repo genkit-ai/genkit --state merged \
-            --search "Python SDK ${VERSION} in:title" \
-            --json number --limit 1 | jq -r '.[0].number // empty')
-        
+            --search "\"Python SDK v${VERSION}\" in:title" \
+            --json number,title --limit 10 |
+            jq -r --arg suffix "Python SDK v${VERSION}" \
+                '[.[] | select(.title | endswith($suffix))] | if length == 1 then .[0].number else empty end')
+
         if [ -z "$PR_NUMBER" ]; then
-            # Try searching by version in body
-            PR_NUMBER=$(gh pr list --repo genkit-ai/genkit --state merged \
-                --search "v${VERSION} label:python" \
-                --json number --limit 1 | jq -r '.[0].number // empty')
-        fi
-        
-        if [ -z "$PR_NUMBER" ]; then
-            echo -e "${RED}Error: Could not find merged PR for version ${VERSION}${NC}"
+            echo -e "${RED}Error: Could not find a single merged PR titled 'Python SDK v${VERSION}'${NC}"
             echo "Specify PR number manually: $0 ${VERSION} <PR_NUMBER>"
             echo "Or use --notes or --notes-file for release candidates"
             exit 1
