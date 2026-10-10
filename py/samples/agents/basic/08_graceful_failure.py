@@ -17,11 +17,16 @@
 
 """A failing turn fails gracefully instead of crashing the chat.
 
-One turn succeeds; the next raises inside the agent. The chat client surfaces
-that as AgentError so your app can catch it, but the session stays usable:
-the failed turn doesn't advance the resume handle — it stays pinned to the last
-successful snapshot — so the next send picks up from that last good parent. The
-failure is a dead end, not a new branch point.
+One turn succeeds; the next raises inside the agent. The chat returns that
+turn with finish_reason failed and the why on res.error, and the session
+stays usable: the failed turn doesn't advance the resume handle — it stays
+pinned to the last successful snapshot — so the next send picks up from
+that last good parent. The failure is a dead end, not a new branch point.
+
+Because a call that fails before a turn result is produced (such as a
+dropped connection or an init the server rejects as misuse) still raises
+AgentError, production code still wraps chat.send() in try/except AgentError
+for transport drops, while inspecting res.error for in-turn failures.
 """
 
 from __future__ import annotations
@@ -68,25 +73,40 @@ agent = ai.define_custom_agent(name='flakyAgent', fn=flaky_fn, store=store)
 async def main() -> None:
     chat = agent.chat()
 
-    # A normal turn succeeds and becomes the session's last good parent.
+    # 1. A normal turn succeeds and becomes the session's last good parent.
     out_ok = await chat.send('hello')
     assert out_ok.finish_reason == AgentFinishReason.STOP
     last_good_parent = chat.snapshot_id
 
-    # This turn raises inside the agent — the client surfaces AgentError.
+    # 2. Turn execution failure: the turn runs, but raises inside the agent.
+    # The chat returns it with res.error set. A try/except AgentError still
+    # wraps the call to catch transport drops or pre-turn rejects.
     try:
-        await chat.send('please fail now')
-        raise AssertionError('expected AgentError')
+        res = await chat.send('please fail now')
+        if res.error:
+            assert res.finish_reason == AgentFinishReason.FAILED
+            assert 'Simulated turn failure' in res.error.message
+            # The failure didn't advance the session: the resume handle is still the
+            # last successful snapshot, so the next turn won't build on the failure.
+            assert res.snapshot_id == last_good_parent
+            assert chat.snapshot_id == last_good_parent
     except AgentError as err:
-        assert 'Simulated turn failure' in err.message
-        # → the failure didn't advance the session: the resume handle is still the
-        #   last successful snapshot, so the next turn won't build on the failure.
-        assert chat.snapshot_id == last_good_parent
+        raise AssertionError('turn ran, expected res.error rather than AgentError') from err
 
-    # The next send picks up from that last good parent, as if the failure never
+    # 3. The next send picks up from that last good parent, as if the failure never
     # branched the conversation.
     out_ok2 = await chat.send('hello again')
     assert out_ok2.finish_reason == AgentFinishReason.STOP
+
+    # 4. Pre-turn failure: a call that never produces a turn result (such as
+    # passing a snapshot_id to an agent with no store) still raises AgentError.
+    client_agent = ai.define_custom_agent(name='clientAgent', fn=flaky_fn, store=None)
+    bad_chat = client_agent.chat(snapshot_id='unsupported')
+    try:
+        await bad_chat.send('hi')
+        raise AssertionError('expected AgentError for pre-turn misuse')
+    except AgentError as err:
+        assert err.status == 'FAILED_PRECONDITION'
 
 
 if __name__ == '__main__':

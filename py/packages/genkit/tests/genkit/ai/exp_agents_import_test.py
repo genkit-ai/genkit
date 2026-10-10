@@ -35,7 +35,6 @@ from genkit._core._typing import (
 )
 from genkit.exp import Genkit
 from genkit.exp.agent import (
-    AgentError,
     FileSessionStore,
     InMemorySessionStore,
     SessionRunner,
@@ -186,9 +185,10 @@ async def test_agent_turn_awaiting_failing_flow_reports_message_without_details(
 
     agent = ai.define_custom_agent(name='lookupAgent', fn=fn)
 
-    with pytest.raises(AgentError) as exc:
-        await agent.chat().send('hello')
+    res = await agent.chat().send('hello')
 
-    assert exc.value.message == 'db rejected'
-    assert exc.value.details is None
-    assert exc.value.status == 'INTERNAL'
+    assert res.finish_reason == AgentFinishReason.FAILED
+    assert res.error is not None
+    assert res.error.message == 'db rejected'
+    assert res.error.details is None
+    assert res.error.status == 'INTERNAL'
