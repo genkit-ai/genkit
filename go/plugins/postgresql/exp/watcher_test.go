@@ -19,6 +19,7 @@ package exp
 import (
 	"context"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -188,4 +189,96 @@ func TestWatcherReleasesItsConnection(t *testing.T) {
 	eventually(t, "the LISTEN connection closes after the last subscription ends", func() bool {
 		return len(listenerPIDs(t, pool, store)) == 0
 	})
+}
+
+// newDrivenWatcher returns a watcher whose LISTEN loop never runs, so a test
+// drives its reads and notifications itself. read serves every read.
+func newDrivenWatcher(read func(context.Context, []watchKey) (map[watchKey]aix.SnapshotStatus, error)) *watcher {
+	w := newWatcher(nil, "test", 0, read)
+	ready := make(chan struct{})
+	close(ready)
+	// A loop seems to run, so subscribe starts none.
+	w.stop, w.ready = func() {}, ready
+	return w
+}
+
+// fakeRows serves a driven watcher's reads from a map of row statuses. A read
+// whose context carries a gate reports the rows as they were when it started,
+// once the gate opens.
+type fakeRows struct {
+	mu   sync.Mutex
+	rows map[watchKey]aix.SnapshotStatus
+}
+
+func (f *fakeRows) set(k watchKey, st aix.SnapshotStatus) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rows[k] = st
+}
+
+func (f *fakeRows) read(ctx context.Context, keys []watchKey) (map[watchKey]aix.SnapshotStatus, error) {
+	f.mu.Lock()
+	found := make(map[watchKey]aix.SnapshotStatus)
+	for _, k := range keys {
+		if st, ok := f.rows[k]; ok {
+			found[k] = st
+		}
+	}
+	f.mu.Unlock()
+	if g, ok := ctx.Value(gateKey{}).(*gate); ok {
+		close(g.started)
+		<-g.release
+	}
+	return found, nil
+}
+
+type gateKey struct{}
+
+// gate holds a read between its start and its result.
+type gate struct{ started, release chan struct{} }
+
+func newGate() *gate { return &gate{started: make(chan struct{}), release: make(chan struct{})} }
+
+// on returns ctx carrying g, for the read made with it.
+func (g *gate) on(ctx context.Context) context.Context { return context.WithValue(ctx, gateKey{}, g) }
+
+// TestWatcherOrdersReadsByStart checks that a read's result never replaces a
+// status from a read that started later. Here a subscription's first read sees
+// the row before a change that sent no notification (as while the LISTEN
+// connection is down), and lands after a poll that saw the change started.
+func TestWatcherOrdersReadsByStart(t *testing.T) {
+	ctx := t.Context()
+	key := watchKey{prefix: "p", id: "row"}
+	rows := &fakeRows{rows: map[watchKey]aix.SnapshotStatus{key: aix.SnapshotStatusPending}}
+	w := newDrivenWatcher(rows.read)
+	first := w.subscribe(ctx, key)
+	<-first
+
+	slow := newGate()
+	subscribed := make(chan (<-chan aix.SnapshotStatus))
+	go func() { subscribed <- w.subscribe(slow.on(ctx), key) }()
+	<-slow.started
+	rows.set(key, aix.SnapshotStatusAborting)
+	poll := newGate()
+	polled := make(chan struct{})
+	go func() {
+		w.pollAll(poll.on(ctx))
+		close(polled)
+	}()
+	<-poll.started
+	close(slow.release)
+	second := <-subscribed
+	close(poll.release)
+	<-polled
+
+	for name, ch := range map[string]<-chan aix.SnapshotStatus{"first": first, "second": second} {
+		select {
+		case st := <-ch:
+			if st != aix.SnapshotStatusAborting {
+				t.Errorf("the %s subscription holds %q, want aborting", name, st)
+			}
+		default:
+			t.Errorf("the %s subscription holds no status, want aborting", name)
+		}
+	}
 }
