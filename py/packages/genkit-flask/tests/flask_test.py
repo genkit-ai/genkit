@@ -25,7 +25,7 @@ from genkit_flask import genkit_flask_handler
 from pydantic import BaseModel
 
 from genkit import ActionRunContext, Genkit, GenkitError, PublicError, RequestData
-from genkit.plugin_api import wrap_http_error
+from genkit.plugin_api import provider_error
 
 
 def sse_error_event(chunks: list[bytes]) -> dict:
@@ -279,7 +279,7 @@ def test_flask_provider_401_returns_500_internal_error() -> None:
     @genkit_flask_handler(ai)
     @ai.flow()
     async def ask(_: str) -> str:
-        raise wrap_http_error(RuntimeError('API key not valid'), status_code=401)
+        raise provider_error(RuntimeError('API key not valid'), http_status=401)
 
     response = app.test_client().post('/ask', json={'data': 'hi'})
 
@@ -298,7 +298,7 @@ def test_flask_stream_provider_401_sends_sse_internal_error() -> None:
     @genkit_flask_handler(ai)
     @ai.flow()
     async def ask(_: str) -> str:
-        raise wrap_http_error(RuntimeError('API key not valid'), status_code=401)
+        raise provider_error(RuntimeError('API key not valid'), http_status=401)
 
     response = app.test_client().post(
         '/ask',

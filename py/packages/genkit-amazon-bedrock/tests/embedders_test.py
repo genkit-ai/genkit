@@ -264,12 +264,15 @@ async def test_client_errors_map_to_genkit_statuses(code: str, status: str) -> N
 
 
 @pytest.mark.asyncio
-async def test_unlisted_client_error_without_http_status_is_reraised() -> None:
+async def test_unlisted_client_error_without_http_status_is_unknown_genkit_error() -> None:
+    """An unlisted AWS error code with no HTTP status raises a provider-sourced UNKNOWN naming the document."""
     error = ClientError({'Error': {'Code': 'SomethingNewException', 'Message': 'boom'}}, 'InvokeModel')
     transport = FakeInvokeTransport(error=error)
-    with pytest.raises(ClientError) as excinfo:
+    with pytest.raises(
+        GenkitError, match=r'document 0: invoke model failed: An error occurred \(SomethingNewException\)'
+    ) as excinfo:
         await embed(TITAN_TEXT, transport, [text_doc('hi')])
-    assert excinfo.value is error
+    assert excinfo.value.status == 'UNKNOWN'
 
 
 @pytest.mark.asyncio
@@ -294,11 +297,18 @@ async def test_throttled_batch_embed_keeps_retry_after() -> None:
     transport = FakeInvokeTransport(dispatch=dispatch)
 
     # 2. The batch error names the document and still carries Retry-After.
-    with pytest.raises(GenkitError, match='document 1: invoke model failed: ThrottlingException') as excinfo:
+    with pytest.raises(
+        GenkitError, match=r'document 1: invoke model failed: An error occurred \(ThrottlingException\)'
+    ) as excinfo:
         await embed(TITAN_TEXT, transport, [text_doc('risotto'), text_doc('tiramisu')])
 
+    # 3. AWS's message appears once, not once per wrapping layer.
+    assert str(excinfo.value).count('Too many requests') == 1
     assert excinfo.value.status == 'RESOURCE_EXHAUSTED'
     assert excinfo.value.response_metadata == {'retry_after_ms': 3000.0}
+    document_error = excinfo.value.__cause__
+    assert document_error is not None
+    assert document_error.__cause__ is throttled
 
 
 @pytest.mark.asyncio

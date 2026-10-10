@@ -24,7 +24,7 @@ from genkit._ai._generate import DEFAULT_MAX_TURNS, ChunkAccumulator, augment_wi
 from genkit._ai._model import text_from_content, text_from_message
 from genkit._ai._tools import Interrupt, ToolRunContext, define_tool
 from genkit._core._action import ActionRunContext
-from genkit._core._error import GenkitError, PublicError, RuntimeErrorReason, wrap_http_error
+from genkit._core._error import GenkitError, PublicError, RuntimeErrorReason
 from genkit._core._model import GenerateActionOptions, ModelRequest, Resume
 from genkit._core._registry import Registry
 from genkit._core._typing import (
@@ -43,7 +43,7 @@ from genkit.middleware import (
     ModelHookParams,
     ToolHookParams,
 )
-from genkit.plugin_api import ActionKind, MiddlewarePlugin, new_middleware
+from genkit.plugin_api import ActionKind, MiddlewarePlugin, new_middleware, provider_error
 from genkit.testing import (
     ScriptedModel,
     define_echo_model,
@@ -8650,13 +8650,13 @@ async def test_generate_with_failing_streaming_callback_returns_callback_message
 
 @pytest.mark.asyncio
 async def test_generate_with_model_raising_wrapped_provider_500_returns_internal_error() -> None:
-    """A model raising wrap_http_error(..., status_code=500) keeps provider text off finish_message."""
+    """A model raising provider_error(..., http_status=500) keeps provider text off finish_message."""
     ai = Genkit()
 
     async def down(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
-        raise wrap_http_error(
+        raise provider_error(
             RuntimeError('upstream said: db password rejected'),
-            status_code=500,
+            http_status=500,
         )
 
     ai.define_model(name='down', fn=down)

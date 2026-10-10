@@ -1804,13 +1804,68 @@ async def test_generate_classifies_known_mid_stream_error(sample_request: ModelR
 
 
 @pytest.mark.asyncio
-async def test_generate_leaves_unknown_mid_stream_error_raw(sample_request: ModelRequest) -> None:
-    """A mid-stream error the plugin does not know reaches the caller as the SDK raised it."""
+async def test_generate_unknown_mid_stream_error_is_unknown_genkit_error(sample_request: ModelRequest) -> None:
+    """A mid-stream error the plugin does not know reaches the caller as an UNKNOWN GenkitError with its message."""
     chunks, error = await _stream_through_sdk(
         _stream_failing_after_first_token({'message': 'Upstream reset', 'type': 'brand_new_error'}),
         sample_request,
     )
 
     assert chunks == ['Grilled']
-    assert type(error) is APIError
-    assert error.message == 'Upstream reset'
+    assert isinstance(error, GenkitError)
+    assert error.status == 'UNKNOWN'
+    assert error.original_message == 'Upstream reset'
+    assert type(error.cause) is APIError
+
+
+class _DroppingStream(httpx.AsyncByteStream):
+    """A response body that sends ``first`` and then fails, like a connection cut mid-stream."""
+
+    def __init__(self, first: bytes, error: Exception) -> None:
+        self._first = first
+        self._error = error
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        if self._first:
+            yield self._first
+        raise self._error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('drop', 'status'),
+    [
+        (httpx.RemoteProtocolError('peer closed connection without sending complete message body'), 'UNAVAILABLE'),
+        (httpx.ReadTimeout('timed out'), 'DEADLINE_EXCEEDED'),
+    ],
+)
+async def test_generate_classifies_a_stream_cut_mid_read(
+    sample_request: ModelRequest, drop: Exception, status: str
+) -> None:
+    """The SDK wraps httpx errors only while sending; a stream cut after the 200 still maps for Fallback."""
+    first = {
+        'id': 'chatcmpl-1',
+        'object': 'chat.completion.chunk',
+        'created': 1700000000,
+        'model': 'gpt-4o',
+        'choices': [{'index': 0, 'delta': {'role': 'assistant', 'content': 'Grilled'}, 'finish_reason': None}],
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = f'data: {json.dumps(first)}\n\n'.encode()
+        return httpx.Response(200, headers={'content-type': 'text/event-stream'}, stream=_DroppingStream(body, drop))
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    model = OpenAIModel(model='gpt-4o', client=AsyncOpenAI(api_key='test-key', http_client=http_client, max_retries=0))
+    chunks: list[str] = []
+    ctx = MagicMock(spec=ActionRunContext)
+    type(ctx).is_streaming = PropertyMock(return_value=True)
+    ctx.send_chunk.side_effect = lambda chunk: chunks.append(chunk.text)
+
+    with pytest.raises(GenkitError) as exc_info:
+        await model.generate(sample_request, ctx)
+    await http_client.aclose()
+
+    assert chunks == ['Grilled']
+    assert exc_info.value.status == status
+    assert exc_info.value.cause is drop

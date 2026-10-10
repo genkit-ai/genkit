@@ -29,6 +29,7 @@ from genkit import ActionRunContext, FinishReason, Genkit, Message, ModelRespons
 from genkit._core._error import GenkitError
 from genkit.middleware import GenerateMiddlewareContext, ModelHookParams
 from genkit.model import ModelRequest
+from genkit.plugin_api import provider_error
 from genkit.testing import define_scripted_model
 
 
@@ -127,9 +128,10 @@ async def test_retry_non_genkit_error(ctx: GenerateMiddlewareContext) -> None:
 
 
 @pytest.mark.asyncio
-async def test_retry_after_is_delay_floor(ctx: GenerateMiddlewareContext) -> None:
-    """Provider retry delay overrides a smaller local delay."""
+async def test_retry_waits_at_least_provider_retry_after(ctx: GenerateMiddlewareContext) -> None:
+    """A provider_error with `headers={'Retry-After': '5'}` is retried after 5s, not the 0.1s local delay."""
     retry = Retry(max_retries=1, initial_delay_ms=100, max_delay_ms=10000, no_jitter=True)
+    success = ModelResponse(message=None)
 
     call_count = 0
 
@@ -137,19 +139,35 @@ async def test_retry_after_is_delay_floor(ctx: GenerateMiddlewareContext) -> Non
         nonlocal call_count
         call_count += 1
         if call_count == 1:
-            raise GenkitError(
-                message='Rate limited',
-                status='RESOURCE_EXHAUSTED',
-                response_metadata={'retry_after_ms': 5000},
-            )
-        return ModelResponse(message=None)
+            raise provider_error(RuntimeError('Rate limited'), http_status=429, headers={'Retry-After': '5'})
+        return success
 
     with patch('genkit_middleware._retry.sleep_unless_stopped', new_callable=AsyncMock) as sleep:
         result = await retry.wrap_model(_make_params(), ctx, next_fn)
 
-    assert result is not None
+    assert result is success
     assert call_count == 2
     sleep.assert_awaited_once_with(5.0, ctx.abort_signal)
+
+
+@pytest.mark.asyncio
+async def test_retry_does_not_retry_unmapped_4xx(ctx: GenerateMiddlewareContext) -> None:
+    """A model raising `provider_error(e, http_status=413)` is called once and its UNKNOWN error is raised."""
+    retry = Retry(max_retries=3, initial_delay_ms=0, no_jitter=True)
+    error = provider_error(RuntimeError('Request too large'), http_status=413)
+    call_count = 0
+
+    async def next_fn(params, ctx) -> NoReturn:
+        nonlocal call_count
+        call_count += 1
+        raise error
+
+    with pytest.raises(GenkitError) as exc_info:
+        await retry.wrap_model(_make_params(), ctx, next_fn)
+
+    assert exc_info.value is error
+    assert exc_info.value.status == 'UNKNOWN'
+    assert call_count == 1
 
 
 @pytest.mark.asyncio

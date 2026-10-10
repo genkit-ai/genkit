@@ -302,7 +302,13 @@ def _creds() -> MagicMock:
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ('code', 'status'),
-    [(400, 'INVALID_ARGUMENT'), (403, 'PERMISSION_DENIED'), (429, 'RESOURCE_EXHAUSTED'), (503, 'UNAVAILABLE')],
+    [
+        (400, 'INVALID_ARGUMENT'),
+        (403, 'PERMISSION_DENIED'),
+        (418, 'UNKNOWN'),
+        (429, 'RESOURCE_EXHAUSTED'),
+        (503, 'UNAVAILABLE'),
+    ],
 )
 async def test_evaluate_instances_http_status_is_classified(code: int, status: str) -> None:
     """A 429 from the eval service is retryable and a 400 is not."""
@@ -324,17 +330,18 @@ async def test_evaluate_instances_http_status_is_classified(code: int, status: s
 
 
 @pytest.mark.asyncio
-async def test_evaluate_instances_transport_failure_stays_raw() -> None:
-    """A refused connection has no known status, so it reaches the caller unchanged."""
+async def test_evaluator_connection_refused_is_unavailable() -> None:
+    """A refused connection to the eval service is UNAVAILABLE so retry can try again."""
     refused = httpx.ConnectError('connection refused')
     with (
         patch('genkit_google_genai._evaluators._evaluation.google_auth_default', return_value=(_creds(), 'menu-prod')),
         patch('genkit_google_genai._evaluators._evaluation._evaluator_client', return_value=_http_client(refused)),
-        pytest.raises(httpx.ConnectError) as raised,
+        pytest.raises(GenkitError) as raised,
     ):
         await _factory().evaluate_instances({'fluencyInput': {}})
 
-    assert raised.value is refused
+    assert raised.value.status == 'UNAVAILABLE'
+    assert raised.value.cause is refused
 
 
 @pytest.mark.asyncio

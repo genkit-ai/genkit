@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING, Any
 import structlog
 
 from genkit import GenkitError
+from genkit.plugin_api import provider_error
 from genkit_amazon_bedrock._config import (
     DEFAULT_CONNECT_TIMEOUT,
     DEFAULT_MAX_POOL_CONNECTIONS,
@@ -190,9 +191,10 @@ class BedrockTransport:
         try:
             return await asyncio.wait_for(call, self._total_timeout)
         except asyncio.TimeoutError as e:
-            raise GenkitError(
-                message=f'bedrock converse failed: call exceeded the {self._total_timeout}s total timeout',
+            raise provider_error(
+                e,
                 status='DEADLINE_EXCEEDED',
+                message=f'bedrock converse failed: call exceeded the {self._total_timeout}s total timeout',
             ) from e
 
     def _converse_sync(self, kwargs: dict[str, Any]) -> dict[str, Any]:  # noqa: ANN401
@@ -259,9 +261,10 @@ class BedrockTransport:
         try:
             return await asyncio.wait_for(awaitable, remaining)
         except asyncio.TimeoutError as e:
-            raise GenkitError(
-                message=f'bedrock converse stream failed: stream exceeded the {self._total_timeout}s total timeout',
+            raise provider_error(
+                e,
                 status='DEADLINE_EXCEEDED',
+                message=f'bedrock converse stream failed: stream exceeded the {self._total_timeout}s total timeout',
             ) from e
 
     def _converse_stream_sync(self, kwargs: dict[str, Any]) -> dict[str, Any]:  # noqa: ANN401

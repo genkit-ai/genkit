@@ -72,19 +72,6 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
                 await model.generate(self.request, self.ctx)
         self.assertEqual(raised.exception.status, 'INTERNAL')
 
-    async def test_generate_leaves_missing_http_status_unclassified(self) -> None:
-        """A mid-stream ResponseError(status_code=-1) is not an HTTP status."""
-        model = OllamaModel(
-            client=self.mock_client,
-            model_definition=_ResolvedModel(name='chat-model'),
-        )
-        stream_error = ollama_api.ResponseError('model failed')
-        with patch.object(model, '_generate_classified', AsyncMock(side_effect=stream_error)):
-            with self.assertRaises(ollama_api.ResponseError) as raised:
-                await model.generate(self.request, self.ctx)
-        self.assertIs(raised.exception, stream_error)
-        self.assertEqual(raised.exception.status_code, -1)
-
     async def test_generate_marks_non_json_server_body_internal(self) -> None:
         """A proxy error page instead of JSON is the server's fault, not the caller's."""
         model = OllamaModel(

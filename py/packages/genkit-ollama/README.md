@@ -177,9 +177,10 @@ embedders.
 
 ### Troubleshooting
 
-If the plugin can't reach the server it raises `OllamaConnectionError`
-with the URL it tried. Start the daemon (`ollama serve`) or set
-`server_address` to a reachable host.
+If the plugin can't reach the server it raises a `GenkitError` with status
+`UNAVAILABLE` and the URL it tried (`DEADLINE_EXCEEDED` if the request timed
+out). Start the daemon (`ollama serve`) or set `server_address` to a reachable
+host.
 
 ## Sample
 

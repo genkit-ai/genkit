@@ -196,18 +196,20 @@ async def test_cancel_interaction_empty_success_body_is_cancelled(http_client: M
 
 
 @pytest.mark.asyncio
-async def test_rate_limit_includes_retry_after_ms(http_client: MagicMock) -> None:
+async def test_429_retry_after_header_sets_retry_delay(http_client: MagicMock) -> None:
+    """An Interactions 429 with Retry-After 1.5 tells retry to wait 1500 ms."""
     http_client.request.return_value = mock_response(
         status_code=429,
         json_body={'error': {'message': 'slow down'}},
-        headers_map={'retry-after': '1.5'},
+        headers_map={'Retry-After': '1.5'},
     )
     with patch.object(interactions_client, '_http_client', return_value=http_client):
         with pytest.raises(GenkitError) as exc_info:
             await create_interaction('key', {'model': 'lyria'})
     assert exc_info.value.status == 'RESOURCE_EXHAUSTED'
-    assert exc_info.value.response_metadata is not None
-    assert exc_info.value.response_metadata.get('retry_after_ms') == 1500.0
+    assert exc_info.value.response_metadata == {'retry_after_ms': 1500.0}
+    assert isinstance(exc_info.value.cause, httpx.HTTPStatusError)
+    assert exc_info.value.details['error'] == {'message': 'slow down'}
 
 
 @pytest.mark.asyncio
@@ -220,23 +222,30 @@ async def test_empty_success_body_is_internal_error(http_client: MagicMock) -> N
 
 
 @pytest.mark.asyncio
-async def test_timeout_maps_to_deadline_exceeded(http_client: MagicMock) -> None:
-    http_client.request.side_effect = httpx.TimeoutException('late')
+async def test_timeout_is_deadline_exceeded(http_client: MagicMock) -> None:
+    """An Interactions call that times out is DEADLINE_EXCEEDED and keeps the httpx timeout as its cause."""
+    late = httpx.TimeoutException('late')
+    http_client.request.side_effect = late
     with patch.object(interactions_client, '_http_client', return_value=http_client):
         with pytest.raises(GenkitError) as exc_info:
             await create_interaction('key', {'model': 'lyria'}, ClientOptions(timeout=1000))
     assert exc_info.value.status == 'DEADLINE_EXCEEDED'
+    assert exc_info.value.cause is late
 
 
 @pytest.mark.asyncio
-async def test_connect_error_stays_unclassified(http_client: MagicMock) -> None:
-    """A refused connection has no known status; retry sees the raw httpx error."""
-    refused = httpx.ConnectError('connection refused')
-    http_client.request.side_effect = refused
+@pytest.mark.parametrize(
+    'failure',
+    [httpx.ConnectError('connection refused'), httpx.ReadError('connection reset by peer')],
+)
+async def test_connection_refused_is_unavailable(http_client: MagicMock, failure: Exception) -> None:
+    """A refused or reset connection to the Interactions API is UNAVAILABLE so retry tries again."""
+    http_client.request.side_effect = failure
     with patch.object(interactions_client, '_http_client', return_value=http_client):
-        with pytest.raises(httpx.ConnectError) as exc_info:
+        with pytest.raises(GenkitError) as exc_info:
             await create_interaction('key', {'model': 'lyria'})
-    assert exc_info.value is refused
+    assert exc_info.value.status == 'UNAVAILABLE'
+    assert exc_info.value.cause is failure
 
 
 @pytest.mark.asyncio
@@ -279,9 +288,10 @@ async def test_get_interaction_quotes_path_traversal_id(http_client: MagicMock) 
     [
         (502, 'INTERNAL'),
         (504, 'DEADLINE_EXCEEDED'),
+        (418, 'UNKNOWN'),
     ],
 )
-async def test_gateway_errors_mapped_to_status(
+async def test_http_errors_mapped_to_status(
     http_client: MagicMock,
     status_code: int,
     expected_status: str,
