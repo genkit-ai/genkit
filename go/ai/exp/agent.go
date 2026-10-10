@@ -813,8 +813,11 @@ func (a *Agent[State]) GetSnapshotAction() api.Action {
 
 // WaitForSnapshotAction returns the agent's waitForSnapshot companion action,
 // which resolves a snapshot the same way getSnapshot does and returns once it
-// settles (input [GetSnapshotRequest], output [SessionSnapshot]). It returns
-// nil when the agent is client-managed (no [SessionStore] configured).
+// settles (input [GetSnapshotRequest], output [SessionSnapshot]). One request
+// holds for at most the agent's [WithMaxSnapshotWait] limit and then returns
+// the snapshot as it stands, still pending or aborting, so a caller asks again
+// until it settles. It returns nil when the agent is client-managed (no
+// [SessionStore] configured).
 //
 // Use it to expose following a detached invocation over a transport (e.g.
 // mount it with genkit.Handler next to the agent itself), so a remote caller
@@ -895,7 +898,7 @@ func (a *Agent[State]) WaitForSnapshot(ctx context.Context, snapshotID string) (
 	if snapshotID == "" {
 		return nil, status.Errorf(status.ErrInvalidArgument, "agent %q: WaitForSnapshot: snapshotID is required", a.Name())
 	}
-	return waitSnapshot(ctx, a.store, a.transform, "waitForSnapshot", snapshotID, "")
+	return waitSnapshot(ctx, a.store, a.transform, "waitForSnapshot", snapshotID, "", 0)
 }
 
 // GetLatestSnapshot fetches a session's most recently created snapshot (whatever
@@ -1192,7 +1195,7 @@ func newCustomAgent[State any](
 			return rt.run(ctx, fn)
 		})
 
-	getSnapshot, wait, abort := newSnapshotActions(name, cfg.store, cfg.transform)
+	getSnapshot, wait, abort := newSnapshotActions(name, cfg.store, cfg.transform, cfg.maxSnapshotWait)
 
 	return &Agent[State]{
 		action:      action,
@@ -3251,6 +3254,16 @@ func agentLoop[State any](r api.Registry, prompt ai.Prompt, defaultInput any) Ag
 					return nil
 				},
 			)
+			// A refusal is a failed turn. [ai.Generate] hands a blocked
+			// response back as data, but a turn that ends on one has no
+			// answer to commit, and continuing from it would send the model
+			// its own refusal.
+			if err == nil && modelResp != nil && modelResp.FinishReason == ai.FinishReasonBlocked {
+				err = status.Errorf(ai.ErrGenerationBlocked, "generation blocked")
+				if modelResp.FinishMessage != "" {
+					err = status.Errorf(ai.ErrGenerationBlocked, "generation blocked: %s", modelResp.FinishMessage)
+				}
+			}
 			if err != nil {
 				// The partial's history ends at a turn seam (see
 				// [ai.Generate]), so it is a conversation the caller can
@@ -3261,7 +3274,19 @@ func agentLoop[State any](r api.Registry, prompt ai.Prompt, defaultInput any) Ag
 				if modelResp == nil || modelResp.Request == nil {
 					return nil, fmt.Errorf("generate: %w", err)
 				}
-				sess.SetMessages(turnSessionMessages(modelResp.History()))
+				// A loop failure (failed or aborted) leaves the seam as its
+				// history: no message from the failing step, or the resumed
+				// message a failed restart recorded its siblings on. Any
+				// other reason is a completion the model finished and the
+				// turn rejected (blocked, or output off the schema). Its
+				// message is not one to continue from, since a re-attempt
+				// would send the model its own rejected output, so only the
+				// request's messages are committed.
+				committed := modelResp.History()
+				if modelResp.FinishReason != ai.FinishReasonFailed && modelResp.FinishReason != ai.FinishReasonAborted {
+					committed = modelResp.Request.Messages
+				}
+				sess.SetMessages(turnSessionMessages(committed))
 				// No reason: the TurnResult here only says the turn committed,
 				// and [SessionRunner.Run] derives the rest from the error it
 				// is handed. The success arm forwards generate's reason

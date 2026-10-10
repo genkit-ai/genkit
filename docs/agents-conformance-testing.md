@@ -141,6 +141,7 @@ steps.
 | `finishReason` | `string` | Expected `snapshot.finishReason` (e.g. `failed`). Distinct from `status` — a failed run records `finishReason: failed` in addition to `status: failed`. |
 | `hasSessionId` | `boolean` | If `true`, asserts `snapshot.state.sessionId` is a non-empty string. |
 | `stateContains` | `SessionState` (partial) | Subset match on `snapshot.state`. |
+| `messageCount` | `number` | If present, `snapshot.state.messages` must hold exactly this many messages. `stateContains` matches messages as a subsequence, so this is how a case asserts that a message is absent. |
 | `errorContains` | `object` (partial) | If present, asserts that `snapshot.error` contains (at minimum) these fields. Uses "contains" / subset matching. |
 
 

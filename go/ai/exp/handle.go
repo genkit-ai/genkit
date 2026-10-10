@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
@@ -95,7 +96,9 @@ type agentTransport interface {
 	// GetSnapshot reads one snapshot, addressed either by its own ID or as a
 	// session's latest.
 	GetSnapshot(ctx context.Context, lookup *GetSnapshotRequest) (*SessionSnapshot[json.RawMessage], error)
-	// WaitForSnapshot blocks until the snapshot settles and returns it.
+	// WaitForSnapshot blocks until the snapshot settles and returns it, or
+	// returns it as it stands once the agent's wait limit passes (see
+	// [WithMaxSnapshotWait]); [AgentHandle.WaitForSnapshot] then asks again.
 	WaitForSnapshot(ctx context.Context, snapshotID string) (*SessionSnapshot[json.RawMessage], error)
 	// Abort stops the background work behind a pending snapshot and reports
 	// the snapshot's status after the attempt.
@@ -314,8 +317,10 @@ func (h *AgentHandle) GetSnapshot(ctx context.Context, snapshotID string, opts .
 // snapshot shaped exactly as [AgentHandle.GetSnapshot] shapes a read. An
 // already-terminal snapshot returns at once. It is [Agent.WaitForSnapshot] with
 // custom state as raw JSON, and it is how a caller that holds only actions
-// follows a detached invocation: one dispatch for the whole wait, rather than a
-// read per tick.
+// follows a detached invocation: one dispatch per wait limit (see
+// [WithMaxSnapshotWait]) rather than a read per tick. The action answers a
+// request that outlives the limit with the snapshot as it stands, and the
+// handle asks again until the snapshot settles or ctx ends.
 //
 // A snapshot that failed, aborted, or expired is returned like any other, so a
 // non-nil error means the wait itself could not proceed: reads failed past the
@@ -330,8 +335,30 @@ func (h *AgentHandle) WaitForSnapshot(ctx context.Context, snapshotID string) (*
 	if snapshotID == "" {
 		return nil, status.Errorf(status.ErrInvalidArgument, "agent %q: WaitForSnapshot: snapshotID is required", h.name)
 	}
-	return h.transport.WaitForSnapshot(ctx, snapshotID)
+	for {
+		start := time.Now()
+		snap, err := h.transport.WaitForSnapshot(ctx, snapshotID)
+		if err != nil {
+			return nil, err
+		}
+		if snap.Status.Terminal() {
+			return snap, nil
+		}
+		// A transport that answers at once, such as a plain read or a server
+		// that answers pending without waiting, must not make this a hot loop.
+		timer := time.NewTimer(max(0, waitReaskFloor-time.Since(start)))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
+
+// waitReaskFloor is the least time between the starts of two wait requests in
+// [AgentHandle.WaitForSnapshot]. Package-level so tests can shorten it.
+var waitReaskFloor = time.Second
 
 // GetLatestSnapshot fetches a session's most recently created snapshot
 // (whatever its status) through the agent's getSnapshot companion action, with

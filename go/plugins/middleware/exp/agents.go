@@ -134,12 +134,15 @@ func resolveAgent(g *genkit.Genkit, ref aix.AgentRef) (*aix.AgentHandle, error) 
 // [aix.SnapshotSubscriber] (e.g. the localstore stores); launches on other
 // agents are rejected by the sub-agent runtime and reported as tool text.
 //
-// Task handles are not access-scoped: the background-task tools read any
-// snapshot ID belonging to a configured sub-agent, whether or not this
-// conversation launched it (mirroring the sub-agent's getSnapshot companion
-// action, which is itself unscoped). In multi-tenant deployments treat
-// snapshot IDs as capability-like secrets: text that reaches the orchestrator
-// model can steer these tools at any ID it names.
+// The background-task tools and the continue tool accept only the task IDs
+// this conversation launched: ones this generate call minted, or ones a
+// delegation or continue tool's result in the conversation history carries.
+// Text that reaches the orchestrator model (a sub-agent's answer, a retrieved
+// document) therefore cannot steer them at another conversation's task. A
+// history compacted past its launch results loses those tasks' handles. The
+// sub-agent's own companion actions (getSnapshot, waitForSnapshot, abort)
+// stay unscoped, so in multi-tenant deployments treat snapshot IDs as
+// capability-like secrets where those are exposed.
 //
 // The middleware resolves agents through genkit.FromContext, which is seeded by
 // genkit.Generate and by agents defined via the genkit/exp constructors
@@ -204,6 +207,13 @@ type Agents struct {
 	// Background delegation requires server-managed sub-agents whose stores
 	// implement [aix.SnapshotSubscriber].
 	Async bool `json:"async,omitempty" jsonschema_description:"Enables background delegation: delegation tools accept a \"background\" flag, and the check_background_tasks / wait_for_background_tasks / abort_background_tasks tools are added. Background delegation requires server-managed sub-agents whose session stores support detach."`
+	// MaxWaitSeconds bounds how long one wait_for_background_tasks call
+	// blocks, whatever timeoutSeconds the model asks for, including 0 ("until
+	// every task settles"). At the bound the tool returns the current
+	// statuses with TimedOut set, as it does at the model's own timeout, so a
+	// sub-agent that keeps running cannot hold the orchestrator's turn open
+	// past it. 0 means no bound; a negative value is rejected.
+	MaxWaitSeconds int `json:"maxWaitSeconds,omitempty" jsonschema_description:"Upper bound on how long one wait_for_background_tasks call blocks, whatever timeoutSeconds the model asks for (including 0, \"until every task settles\"). At the bound the wait returns the current statuses with timedOut set. Defaults to 0, which lets the model decide."`
 
 	// TODO: add a knob to disable or scope the continue tool (per agent, or
 	// retries vs follow-ups) once real-world usage shows which control
@@ -242,6 +252,12 @@ type agentsState struct {
 	// since edited). Pending, expired, and unresolvable reports are never
 	// cached; those can still change.
 	settledReports map[string]backgroundTaskReport
+	// launched holds the task IDs this conversation launched: the TaskID of
+	// every delegation and continue tool result this generate call returned,
+	// or that a request the generate hook saw carries. launchTools names the
+	// tools whose results carry them; see launchedHere.
+	launched    map[string]struct{}
+	launchTools map[string]bool
 	// agents holds the handles New resolved for the configured sub-agents,
 	// by name. The registry is fixed for the generate call, so resolving once
 	// spares every delegation and task report a lookup plus a fresh handle
@@ -265,11 +281,17 @@ func (a Agents) New(ctx context.Context) (*ai.Hooks, error) {
 				"agents middleware: every agent reference must have a name")
 		}
 	}
+	if a.MaxWaitSeconds < 0 {
+		return nil, status.Errorf(status.ErrInvalidArgument,
+			"agents middleware: MaxWaitSeconds must not be negative, got %d", a.MaxWaitSeconds)
+	}
 
 	prefix := a.prefix()
 	st := &agentsState{
 		settledReports: make(map[string]backgroundTaskReport),
 		labels:         make(map[string]string),
+		launched:       make(map[string]struct{}),
+		launchTools:    make(map[string]bool, len(a.Agents)+1),
 	}
 
 	// Every generated tool name is validated against the set as it is built:
@@ -299,10 +321,11 @@ func (a Agents) New(ctx context.Context) (*ai.Hooks, error) {
 		}
 		// The async variant carries the extra "background" input flag, so the
 		// two modes need distinct input schemas (tool schemas are static).
+		st.launchTools[name] = true
 		if a.Async {
-			tools = append(tools, plainTool(name, desc, a.delegateAsync(ref, st)))
+			tools = append(tools, plainTool(name, desc, recordTaskID(st, a.delegateAsync(ref, st))))
 		} else {
-			tools = append(tools, plainTool(name, desc, a.delegate(ref, st)))
+			tools = append(tools, plainTool(name, desc, recordTaskID(st, a.delegate(ref, st))))
 		}
 	}
 	if a.Async {
@@ -330,10 +353,11 @@ func (a Agents) New(ctx context.Context) (*ai.Hooks, error) {
 		if err := claimName(continueName, "the continue tool"); err != nil {
 			return nil, err
 		}
+		st.launchTools[continueName] = true
 		if a.Async {
-			tools = append(tools, plainTool(continueName, continueToolDescription, a.continueTaskAsync(st)))
+			tools = append(tools, plainTool(continueName, continueToolDescription, recordTaskID(st, a.continueTaskAsync(st))))
 		} else {
-			tools = append(tools, plainTool(continueName, continueToolDescription, a.continueTask(st)))
+			tools = append(tools, plainTool(continueName, continueToolDescription, recordTaskID(st, a.continueTask(st))))
 		}
 	}
 
@@ -349,8 +373,12 @@ func (a Agents) New(ctx context.Context) (*ai.Hooks, error) {
 		// delegation count is intentionally not reset here: this hook runs on
 		// every tool-loop turn, but the count must accumulate across the whole
 		// generate call (it starts at 0 when New allocates st).
+		ids := launchedTaskIDs(params.Request.Messages, st.launchTools)
 		st.mu.Lock()
 		st.conversation = params.Request.Messages
+		for _, id := range ids {
+			st.launched[id] = struct{}{}
+		}
 		st.mu.Unlock()
 
 		params.Request = injectSystemText(params.Request, agentsMarker, instructions)
@@ -361,6 +389,87 @@ func (a Agents) New(ctx context.Context) (*ai.Hooks, error) {
 		Tools:        tools,
 		WrapGenerate: wrapGenerate,
 	}, nil
+}
+
+// recordTaskID wraps a tool that mints task handles (a delegation or the
+// continue tool) so the handle it returns counts as launched by this generate
+// call, before the model has seen it in a later request's history.
+func recordTaskID[In any](st *agentsState, fn func(context.Context, In) (delegationResult, error)) func(context.Context, In) (delegationResult, error) {
+	return func(ctx context.Context, in In) (delegationResult, error) {
+		res, err := fn(ctx, in)
+		if err == nil && res.TaskID != "" {
+			st.mu.Lock()
+			st.launched[res.TaskID] = struct{}{}
+			st.mu.Unlock()
+		}
+		return res, err
+	}
+}
+
+// launchedHere reports whether this conversation launched the task: this
+// generate call minted it, or a delegation or continue tool's result in a
+// request the generate hook saw carries it. The tools that act on a handle
+// accept only these, so text that reaches the model cannot steer them at
+// another conversation's task. A re-instantiated orchestrator still reaches
+// its tasks, since its history carries the launch results.
+func launchedHere(st *agentsState, taskID string) bool {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	_, ok := st.launched[taskID]
+	return ok
+}
+
+// launchedTaskIDs returns the task IDs that the results of launchTools in
+// msgs carry. The generate hook collects them once per request, so a tool
+// that checks a handle does a map lookup rather than a scan of the history.
+func launchedTaskIDs(msgs []*ai.Message, launchTools map[string]bool) []string {
+	var ids []string
+	for _, m := range msgs {
+		if m == nil {
+			continue
+		}
+		for _, p := range m.Content {
+			if p == nil || !p.IsToolResponse() || p.ToolResponse == nil || !launchTools[p.ToolResponse.Name] {
+				continue
+			}
+			if id := taskIDOf(p.ToolResponse.Output); id != "" {
+				ids = append(ids, id)
+			}
+		}
+	}
+	return ids
+}
+
+// taskIDOf returns the taskId a delegation or continue tool result carries:
+// the typed result when the tool ran in this process, or its JSON form when
+// the result came back with the conversation history.
+func taskIDOf(output any) string {
+	switch o := output.(type) {
+	case delegationResult:
+		return o.TaskID
+	case *delegationResult:
+		if o != nil {
+			return o.TaskID
+		}
+		return ""
+	case map[string]any:
+		id, _ := o["taskId"].(string)
+		return id
+	}
+	var res struct {
+		TaskID string `json:"taskId"`
+	}
+	if b, err := json.Marshal(output); err == nil {
+		_ = json.Unmarshal(b, &res)
+	}
+	return res.TaskID
+}
+
+// notLaunchedHereError reports a task handle this conversation did not
+// launch; see launchedHere. action says what the refused tools do.
+func notLaunchedHereError(taskID, action string) error {
+	return status.Errorf(status.ErrPermissionDenied,
+		"task ID %q was not started in this conversation; only tasks a delegation here launched can be %s", taskID, action)
 }
 
 // delegateInput is the input schema for a delegation tool.

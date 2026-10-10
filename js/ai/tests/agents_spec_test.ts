@@ -67,6 +67,7 @@ const SnapshotAssertionsSchema = z.object({
   finishReason: z.string().optional(),
   hasSessionId: z.boolean().optional(),
   stateContains: z.any().optional(),
+  messageCount: z.number().optional(),
   errorContains: z.any().optional(),
 });
 
@@ -888,6 +889,15 @@ async function executeGetSnapshotDataInvocation(
       assertContains(snapshot.state, expect.stateContains, 'snapshot.state');
     }
 
+    if (expect.messageCount !== undefined) {
+      const messages = snapshot.state?.messages ?? [];
+      assert.strictEqual(
+        messages.length,
+        expect.messageCount,
+        `Expected ${expect.messageCount} messages in snapshot.state, got ${messages.length}: ${JSON.stringify(messages)}`
+      );
+    }
+
     if (expect.errorContains) {
       assert.ok(snapshot.error, 'Expected snapshot to have error');
       assertContains(snapshot.error, expect.errorContains, 'snapshot.error');
@@ -966,6 +976,15 @@ async function executeWaitUntilCompletedInvocation(
 
     if (expect.stateContains) {
       assertContains(snapshot.state, expect.stateContains, 'snapshot.state');
+    }
+
+    if (expect.messageCount !== undefined) {
+      const messages = snapshot.state?.messages ?? [];
+      assert.strictEqual(
+        messages.length,
+        expect.messageCount,
+        `Expected ${expect.messageCount} messages in snapshot.state, got ${messages.length}: ${JSON.stringify(messages)}`
+      );
     }
 
     if (expect.errorContains) {

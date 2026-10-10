@@ -401,6 +401,12 @@ const (
 	// A wait runs for as long as the work does, so one store blip must not
 	// fail it; dead ends (see waitReadDeadEnd) are surfaced at once.
 	snapshotWaitReadRetries = 3
+	// defaultMaxSnapshotWait bounds one request to the waitForSnapshot
+	// companion action when the agent sets no limit of its own; see
+	// [WithMaxSnapshotWait]. It stays under the 29-second limit some API
+	// gateways apply, so a wait that outlives it costs a re-request, not a
+	// failed one.
+	defaultMaxSnapshotWait = 25 * time.Second
 )
 
 // waitReadDeadEnd reports whether an in-wait re-read failure cannot be helped
@@ -445,11 +451,15 @@ var waitReadDeadEndStatuses = []status.Name{
 //
 // Cancelling ctx ends the wait with ctx's error. Callers bound a wait with
 // [context.WithTimeout] and re-read the row afterwards to learn where it stands.
+// A positive maxWait bounds the wait without an error: once it passes, the next
+// re-read returns the snapshot as it stands, settled or not. Zero waits until
+// the snapshot settles.
 func waitSnapshot[State any](
 	ctx context.Context,
 	store SessionStore[State],
 	transform StateTransform[State],
 	op, snapshotID, sessionID string,
+	maxWait time.Duration,
 ) (*SessionSnapshot[State], error) {
 	read := func(metadataOnly bool) (*SessionSnapshot[State], error) {
 		readCtx, cancel := context.WithTimeout(ctx, snapshotWaitReadTimeout)
@@ -472,6 +482,16 @@ func waitSnapshot[State any](
 			"snapshotId", snapshotID, "failures", readFailures, "error", err)
 		return nil
 	}
+
+	// The limit runs from the start of the wait, first read included. Once it
+	// passes, the next re-read answers whatever the row says.
+	var deadline <-chan time.Time
+	if maxWait > 0 {
+		timer := time.NewTimer(maxWait)
+		defer timer.Stop()
+		deadline = timer.C
+	}
+	pastDeadline := false
 
 	// The first read prices the common already-terminal case at exactly one
 	// read. A dead end reaches the caller unchanged (e.g. NOT_FOUND for an
@@ -533,6 +553,9 @@ func waitSnapshot[State any](
 			// settled row unseen until the next liveness beat.
 			interval = snapshotWaitPollInterval
 			ticker.Reset(interval)
+		case <-deadline:
+			pastDeadline = true
+			deadline = nil
 		case <-ticker.C:
 		}
 
@@ -555,7 +578,7 @@ func waitSnapshot[State any](
 		// would load the state on the fallback anyway, so it is read in full
 		// once instead.
 		cur, err := read(metaOnly)
-		if err == nil && metaOnly && cur.Status.Terminal() {
+		if err == nil && metaOnly && (cur.Status.Terminal() || pastDeadline) {
 			cur, err = read(false)
 		}
 		if err != nil {
@@ -577,6 +600,11 @@ func waitSnapshot[State any](
 		if cur.Status.Terminal() {
 			return cur, nil
 		}
+		if pastDeadline {
+			logger.Debug(ctx, "snapshot wait reached its limit; returning the snapshot as it stands",
+				"snapshotId", snapshotID, "status", cur.Status, "elapsedMs", time.Since(start).Milliseconds())
+			return cur, nil
+		}
 		if time.Since(lastProgress) >= snapshotWaitProgressInterval {
 			lastProgress = time.Now()
 			logger.Debug(ctx, "still waiting for snapshot",
@@ -595,9 +623,10 @@ func waitSnapshot[State any](
 //
 //   - The agent's name under [api.ActionTypeAgentWait] — waitForSnapshot,
 //     getSnapshot's blocking counterpart: it resolves the same request and
-//     returns once the snapshot settles. It is how a caller that holds only
-//     actions follows a detached invocation without re-dispatching a read per
-//     tick, which is one call and one span instead of a stream of them.
+//     returns once the snapshot settles, or as it stands once maxWait passes
+//     (see [WithMaxSnapshotWait]). It is how a caller that holds only actions
+//     follows a detached invocation without re-dispatching a read per tick,
+//     which is one call and one span per maxWait instead of a stream of them.
 //
 //   - The agent's name under [api.ActionTypeAgentAbort] — abort,
 //     created only when the store also implements [SnapshotSubscriber], so the
@@ -616,9 +645,13 @@ func newSnapshotActions[State any](
 	agentName string,
 	store SessionStore[State],
 	transform StateTransform[State],
+	maxWait time.Duration,
 ) (getSnapshot, waitForSnapshot, abort api.Action) {
 	if store == nil {
 		return nil, nil, nil
+	}
+	if maxWait <= 0 {
+		maxWait = defaultMaxSnapshotWait
 	}
 	getSnapshotAction := core.NewActionOf(api.ActionTypeAgentSnapshot, agentName, nil,
 		func(ctx context.Context, req *GetSnapshotRequest) (*SessionSnapshot[State], error) {
@@ -634,13 +667,15 @@ func newSnapshotActions[State any](
 	// session's latest row is whichever one is latest at resolution time, and
 	// waiting on that is a race with the session's next turn. A session ID may
 	// still accompany the snapshot ID, where it asserts ownership exactly as it
-	// does on a read.
+	// does on a read. One request holds for at most maxWait, so a long task
+	// does not outlive a proxy's or a platform's request timeout: the caller
+	// asks again.
 	waitAction := core.NewActionOf(api.ActionTypeAgentWait, agentName, nil,
 		func(ctx context.Context, req *GetSnapshotRequest) (*SessionSnapshot[State], error) {
 			if req == nil || req.SnapshotID == "" {
 				return nil, status.Errorf(status.ErrInvalidArgument, "waitForSnapshot: snapshotId is required")
 			}
-			return waitSnapshot(ctx, store, transform, "waitForSnapshot", req.SnapshotID, req.SessionID)
+			return waitSnapshot(ctx, store, transform, "waitForSnapshot", req.SnapshotID, req.SessionID, maxWait)
 		})
 
 	if _, ok := store.(SnapshotSubscriber); !ok {
