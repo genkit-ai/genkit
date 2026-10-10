@@ -247,7 +247,7 @@ async def test_embed_with_embedder_ref(
     )
     embedder_ref = EmbedderRef(name='my-plugin/my-embedder', config={'param': 'value'}, version='v1')
 
-    content = Document.from_text('hello world')
+    content = Document.from_text('hello world', metadata={'source': 'allergy-faq'})
 
     response = await genkit_instance.embed(embedder=embedder_ref, content=content, config={'additional_option': True})
 
@@ -352,6 +352,75 @@ async def test_embed_many(mock_genkit_instance: tuple[Genkit, MockGenkitRegistry
 
 
 @pytest.mark.asyncio
+async def test_embed_many_strings_with_metadata_attach_it_to_every_document(
+    mock_genkit_instance: tuple[Genkit, MockGenkitRegistry],
+) -> None:
+    """embed_many(metadata=...) with string content lands on each Document the embedder sees."""
+    genkit_instance, registry = mock_genkit_instance
+
+    async def fake_embedder_fn(request: EmbedRequest) -> EmbedResponse:
+        return EmbedResponse(embeddings=[Embedding(embedding=[1.0]), Embedding(embedding=[2.0])])
+
+    registry.register_action(
+        name='faq-embedder',
+        kind='embedder',
+        fn=fake_embedder_fn,
+        metadata=embedder_action_metadata('faq-embedder').metadata,
+        description='A fake embedder for testing',
+    )
+
+    await genkit_instance.embed_many(
+        embedder='faq-embedder',
+        content=['Nut-free kitchen.', 'Gluten-free buns on request.'],
+        metadata={'source': 'allergy-faq'},
+    )
+
+    embed_action = await registry.resolve_action('embedder', 'faq-embedder')
+    called_request = embed_action.run.call_args[0][0]
+    assert called_request.input == [
+        Document.from_text('Nut-free kitchen.', metadata={'source': 'allergy-faq'}),
+        Document.from_text('Gluten-free buns on request.', metadata={'source': 'allergy-faq'}),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_embedder_writing_request_metadata_leaves_caller_documents_alone(
+    mock_genkit_instance: tuple[Genkit, MockGenkitRegistry],
+) -> None:
+    """An embedder that writes to request.input[i].metadata doesn't reach the caller's Documents."""
+    genkit_instance, registry = mock_genkit_instance
+
+    async def tagging_embedder_fn(request: EmbedRequest) -> EmbedResponse:
+        for doc in request.input:
+            assert doc.metadata is not None
+            doc.metadata['embedded_by'] = 'tagging-embedder'
+        return EmbedResponse(embeddings=[Embedding(embedding=[1.0]) for _ in request.input])
+
+    registry.register_action(
+        name='tagging-embedder',
+        kind='embedder',
+        fn=tagging_embedder_fn,
+        metadata=embedder_action_metadata('tagging-embedder').metadata,
+        description='A fake embedder that writes to request metadata',
+    )
+    faq = Document.from_text('Nut-free kitchen.', metadata={'source': 'allergy-faq'})
+    hours = Document.from_text('Open until 10pm.', metadata={'source': 'hours'})
+
+    await genkit_instance.embed(embedder='tagging-embedder', content=faq)
+    await genkit_instance.embed_many(embedder='tagging-embedder', content=[faq, hours])
+
+    # The embedder's write lands on the request copies, not on the caller's Documents.
+    embed_action = await registry.resolve_action('embedder', 'tagging-embedder')
+    embed_many_request = embed_action.run.call_args_list[1].args[0]
+    assert [doc.metadata for doc in embed_many_request.input] == [
+        {'source': 'allergy-faq', 'embedded_by': 'tagging-embedder'},
+        {'source': 'hours', 'embedded_by': 'tagging-embedder'},
+    ]
+    assert faq.metadata == {'source': 'allergy-faq'}
+    assert hours.metadata == {'source': 'hours'}
+
+
+@pytest.mark.asyncio
 async def test_embed_many_with_embedder_ref_merges_config_the_same_as_embed(
     mock_genkit_instance: tuple[Genkit, MockGenkitRegistry],
 ) -> None:
@@ -369,7 +438,10 @@ async def test_embed_many_with_embedder_ref_merges_config_the_same_as_embed(
         description='A fake embedder for testing',
     )
     embedder_ref = EmbedderRef(name='my-plugin/my-embedder', config={'param': 'value'}, version='v1')
-    content = [Document.from_text('one'), Document.from_text('two')]
+    content = [
+        Document.from_text('one', metadata={'source': 'allergy-faq'}),
+        Document.from_text('two', metadata={'source': 'hours'}),
+    ]
 
     response = await genkit_instance.embed_many(embedder=embedder_ref, content=content, config={'extra': True})
 
