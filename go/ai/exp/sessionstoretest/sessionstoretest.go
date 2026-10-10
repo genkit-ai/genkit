@@ -1233,11 +1233,13 @@ func (s *suite[State]) richState() *exp.SessionState[State] {
 			{Name: "notes.md", Parts: []*ai.Part{ai.NewTextPart("# Notes\n- one\n- two")}, Metadata: map[string]any{"version": 2.0}},
 			{Name: "chart.png", Parts: []*ai.Part{ai.NewMediaPart("image/png", "https://example.com/chart.png")}},
 		},
+		// Counts above 2^53 catch a store that rounds numbers through
+		// float64, as a JSON decode into an any does.
 		Usage: &ai.GenerationUsage{
-			InputTokens:         1200,
+			InputTokens:         1<<53 + 1,
 			OutputTokens:        340,
 			ThoughtsTokens:      56,
-			TotalTokens:         1596,
+			TotalTokens:         1<<53 + 397,
 			CachedContentTokens: 800,
 			Custom:              map[string]float64{"cost": 0.0123},
 		},
@@ -1540,14 +1542,7 @@ func sameJSON(want, got any) (bool, string) {
 	if bytes.Equal(wantJSON, gotJSON) {
 		return true, ""
 	}
-	var w, g any
-	if err := json.Unmarshal(wantJSON, &w); err != nil {
-		return false, fmt.Sprintf("unmarshal want: %v", err)
-	}
-	if err := json.Unmarshal(gotJSON, &g); err != nil {
-		return false, fmt.Sprintf("unmarshal got: %v", err)
-	}
-	patch, err := json.Marshal(exp.Diff(w, g))
+	patch, err := json.Marshal(exp.Diff(json.RawMessage(wantJSON), json.RawMessage(gotJSON)))
 	if err != nil {
 		return false, fmt.Sprintf("marshal diff: %v", err)
 	}

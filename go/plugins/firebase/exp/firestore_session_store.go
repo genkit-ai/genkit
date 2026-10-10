@@ -33,6 +33,7 @@
 package exp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -526,7 +527,7 @@ func (s *FirestoreSessionStore[State]) reconstructFrom(tx *firestore.Transaction
 		}
 		var patch aix.JSONPatch
 		if len(d.StatePatch) > 0 {
-			if err := json.Unmarshal(d.StatePatch, &patch); err != nil {
+			if err := decodeExact(d.StatePatch, &patch); err != nil {
 				return snapshotDoc{}, nil, false, fmt.Errorf("unmarshal patch %q: %w", d.SnapshotID, err)
 			}
 		}
@@ -560,7 +561,7 @@ func stitch(shardSnaps []*firestore.DocumentSnapshot) (any, error) {
 		buf = append(buf, sd.Chunk...)
 	}
 	var state any
-	if err := json.Unmarshal(buf, &state); err != nil {
+	if err := decodeExact(buf, &state); err != nil {
 		return nil, fmt.Errorf("unmarshal checkpoint state: %w", err)
 	}
 	return state, nil
@@ -1055,4 +1056,13 @@ func coalesceSend(ch chan aix.SnapshotStatus, status aix.SnapshotStatus) {
 	case ch <- status:
 	default:
 	}
+}
+
+// decodeExact decodes JSON into v keeping numbers as json.Number, so an
+// integer above 2^53 in a state or patch keeps its exact value through
+// aix.ApplyPatch instead of rounding through float64.
+func decodeExact(data []byte, v any) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	return dec.Decode(v)
 }

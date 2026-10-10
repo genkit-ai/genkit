@@ -17,6 +17,7 @@
 package exp
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -41,7 +42,7 @@ func TestDiff_Shapes(t *testing.T) {
 			name: "add member",
 			from: map[string]any{"a": 1},
 			to:   map[string]any{"a": 1, "b": 2},
-			want: JSONPatch{{Op: JSONPatchOpAdd, Path: "/b", Value: float64(2)}},
+			want: JSONPatch{{Op: JSONPatchOpAdd, Path: "/b", Value: json.Number("2")}},
 		},
 		{
 			name: "remove member",
@@ -53,22 +54,22 @@ func TestDiff_Shapes(t *testing.T) {
 			name: "replace member",
 			from: map[string]any{"a": 1},
 			to:   map[string]any{"a": 2},
-			want: JSONPatch{{Op: JSONPatchOpReplace, Path: "/a", Value: float64(2)}},
+			want: JSONPatch{{Op: JSONPatchOpReplace, Path: "/a", Value: json.Number("2")}},
 		},
 		{
 			name: "keys are sorted for determinism",
 			from: map[string]any{},
 			to:   map[string]any{"b": 1, "a": 2},
 			want: JSONPatch{
-				{Op: JSONPatchOpAdd, Path: "/a", Value: float64(2)},
-				{Op: JSONPatchOpAdd, Path: "/b", Value: float64(1)},
+				{Op: JSONPatchOpAdd, Path: "/a", Value: json.Number("2")},
+				{Op: JSONPatchOpAdd, Path: "/b", Value: json.Number("1")},
 			},
 		},
 		{
 			name: "nested member recurses",
 			from: map[string]any{"o": map[string]any{"x": 1}},
 			to:   map[string]any{"o": map[string]any{"x": 2}},
-			want: JSONPatch{{Op: JSONPatchOpReplace, Path: "/o/x", Value: float64(2)}},
+			want: JSONPatch{{Op: JSONPatchOpReplace, Path: "/o/x", Value: json.Number("2")}},
 		},
 		{
 			name: "array append uses end-of-array token",
@@ -95,15 +96,15 @@ func TestDiff_Shapes(t *testing.T) {
 			name: "root type change collapses to whole-doc replace",
 			from: map[string]any{"a": 1},
 			to:   []any{1, 2},
-			want: JSONPatch{{Op: JSONPatchOpReplace, Path: "", Value: []any{float64(1), float64(2)}}},
+			want: JSONPatch{{Op: JSONPatchOpReplace, Path: "", Value: []any{json.Number("1"), json.Number("2")}}},
 		},
 		{
 			name: "escapes pointer tokens",
 			from: map[string]any{},
 			to:   map[string]any{"a/b": 1, "m~n": 2},
 			want: JSONPatch{
-				{Op: JSONPatchOpAdd, Path: "/a~1b", Value: float64(1)},
-				{Op: JSONPatchOpAdd, Path: "/m~0n", Value: float64(2)},
+				{Op: JSONPatchOpAdd, Path: "/a~1b", Value: json.Number("1")},
+				{Op: JSONPatchOpAdd, Path: "/m~0n", Value: json.Number("2")},
 			},
 		},
 	}
@@ -145,7 +146,7 @@ func TestDiffApply_RoundTrip(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ApplyPatch: %v", err)
 			}
-			want := normalizeJSON(tc.b)
+			want := exactJSON(tc.b)
 			if !reflect.DeepEqual(got, want) {
 				t.Errorf("round trip mismatch\n  got  %#v\n  want %#v\n  patch %s", got, want, patchString(patch))
 			}
@@ -197,7 +198,7 @@ func TestApplyPatch_RootOps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ApplyPatch: %v", err)
 	}
-	if want := map[string]any{"new": float64(1)}; !reflect.DeepEqual(got, want) {
+	if want := map[string]any{"new": json.Number("1")}; !reflect.DeepEqual(got, want) {
 		t.Errorf("root replace = %#v, want %#v", got, want)
 	}
 
@@ -226,7 +227,7 @@ func TestApplyPatch_Lenient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ApplyPatch: %v", err)
 	}
-	want := map[string]any{"a": map[string]any{"b": map[string]any{"c": float64(1)}}}
+	want := map[string]any{"a": map[string]any{"b": map[string]any{"c": json.Number("1")}}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("nested add = %#v, want %#v", got, want)
 	}
@@ -236,7 +237,7 @@ func TestApplyPatch_Lenient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ApplyPatch: %v", err)
 	}
-	if w := map[string]any{"a": float64(1)}; !reflect.DeepEqual(got, w) {
+	if w := map[string]any{"a": json.Number("1")}; !reflect.DeepEqual(got, w) {
 		t.Errorf("remove missing = %#v, want %#v", got, w)
 	}
 
@@ -271,7 +272,7 @@ func TestApplyPatch_MoveCopy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("move: %v", err)
 	}
-	if want := map[string]any{"b": float64(1)}; !reflect.DeepEqual(got, want) {
+	if want := map[string]any{"b": json.Number("1")}; !reflect.DeepEqual(got, want) {
 		t.Errorf("move = %#v, want %#v", got, want)
 	}
 
@@ -279,7 +280,7 @@ func TestApplyPatch_MoveCopy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("copy: %v", err)
 	}
-	if want := map[string]any{"a": float64(1), "b": float64(1)}; !reflect.DeepEqual(got, want) {
+	if want := map[string]any{"a": json.Number("1"), "b": json.Number("1")}; !reflect.DeepEqual(got, want) {
 		t.Errorf("copy = %#v, want %#v", got, want)
 	}
 }
@@ -349,4 +350,34 @@ func patchString(p JSONPatch) string {
 		}
 	}
 	return out + "]"
+}
+
+// TestDiffApply_KeepsLargeIntegers checks that numbers keep their exact text
+// through a diff, a stored patch, and an apply: an integer above 2^53 does not
+// round through float64.
+func TestDiffApply_KeepsLargeIntegers(t *testing.T) {
+	const id = int64(1<<53 + 1)
+	from := map[string]any{"id": id, "n": 1}
+	to := map[string]any{"id": id, "n": 2, "next": id + 2}
+	stored, err := json.Marshal(Diff(from, to))
+	if err != nil {
+		t.Fatalf("marshal patch: %v", err)
+	}
+	var patch JSONPatch
+	dec := json.NewDecoder(bytes.NewReader(stored))
+	dec.UseNumber()
+	if err := dec.Decode(&patch); err != nil {
+		t.Fatalf("decode patch: %v", err)
+	}
+	got, err := ApplyPatch(from, patch)
+	if err != nil {
+		t.Fatalf("ApplyPatch: %v", err)
+	}
+	gotJSON, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("marshal result: %v", err)
+	}
+	if wantJSON, _ := json.Marshal(to); string(gotJSON) != string(wantJSON) {
+		t.Errorf("Diff then ApplyPatch = %s, want %s", gotJSON, wantJSON)
+	}
 }
