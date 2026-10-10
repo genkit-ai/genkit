@@ -43,7 +43,7 @@ from genkit.middleware import (
     ModelHookParams,
     ToolHookParams,
 )
-from genkit.plugin_api import ActionKind, MiddlewarePlugin, new_middleware, provider_error
+from genkit.plugin_api import ActionKind, MiddlewarePlugin, provider_error
 from genkit.testing import (
     ScriptedModel,
     define_echo_model,
@@ -583,13 +583,13 @@ class ExtensionMiddlewarePlugin(MiddlewarePlugin):
 
 
 class PostMiddlewarePlugin(ExtensionMiddlewarePlugin):
-    middleware = [new_middleware(PostMiddleware, name='post_mw')]
+    middleware = [GenerateMiddleware(cls=PostMiddleware, name='post_mw')]
 
 
 class PrePostMiddlewarePlugin(ExtensionMiddlewarePlugin):
     middleware = [
-        new_middleware(PreMiddleware, name='pre_mw'),
-        new_middleware(PostMiddleware, name='post_mw'),
+        GenerateMiddleware(cls=PreMiddleware, name='pre_mw'),
+        GenerateMiddleware(cls=PostMiddleware, name='post_mw'),
     ]
 
 
@@ -651,7 +651,7 @@ class ConfiguredPrefixMiddleware(BaseMiddleware[_PrefixConfig]):
 
 
 class ConfiguredPrefixMiddlewarePlugin(ExtensionMiddlewarePlugin):
-    middleware = [new_middleware(ConfiguredPrefixMiddleware, name='configured_prefix_mw')]
+    middleware = [GenerateMiddleware(cls=ConfiguredPrefixMiddleware, name='configured_prefix_mw')]
 
 
 @pytest.mark.asyncio
@@ -751,15 +751,15 @@ def test_middleware_validation_raises_correct_errors() -> None:
         class InvalidDecoratorMwEmpty(BaseMiddleware):
             pass
 
-    # 2. Test new_middleware helper raising ValueError on bad names
+    # 2. GenerateMiddleware rejects bad names
     with pytest.raises(ValueError, match='GenerateMiddleware name must be one path-free token'):
-        new_middleware(PreMiddleware, name='invalid/name')
+        GenerateMiddleware(cls=PreMiddleware, name='invalid/name')
 
     with pytest.raises(ValueError, match='GenerateMiddleware name must be a non-empty string'):
-        new_middleware(PreMiddleware, name='')
+        GenerateMiddleware(cls=PreMiddleware, name='')
 
-    # 3. Test new_middleware helper behavior
-    desc = new_middleware(PreMiddleware, name='custom_mw', description='custom desc')
+    # 3. GenerateMiddleware keeps name and description
+    desc = GenerateMiddleware(cls=PreMiddleware, name='custom_mw', description='custom desc')
     assert isinstance(desc, GenerateMiddleware)
     assert desc.name == 'custom_mw'
     assert desc.description == 'custom desc'
@@ -793,7 +793,7 @@ def test_base_middleware_infers_config_from_generic() -> None:
 
     assert _Retry.Config is _RetryConfig
     assert _Retry(max_retries=5).config.max_retries == 5
-    schema = cast(dict[str, Any], new_middleware(_Retry, name='retry').config_schema)
+    schema = cast(dict[str, Any], GenerateMiddleware(cls=_Retry, name='retry').config_schema)
     assert schema['properties']['max_retries']['type'] == 'integer'
 
 
@@ -1072,8 +1072,8 @@ class InjectContextMiddleware(BaseMiddleware):
 
 class ContextMiddlewarePlugin(ExtensionMiddlewarePlugin):
     middleware = [
-        new_middleware(AddContextMiddleware, name='add_ctx'),
-        new_middleware(InjectContextMiddleware, name='inject_ctx'),
+        GenerateMiddleware(cls=AddContextMiddleware, name='add_ctx'),
+        GenerateMiddleware(cls=InjectContextMiddleware, name='inject_ctx'),
     ]
 
 
@@ -1351,8 +1351,8 @@ async def test_wrap_generate_called_per_turn() -> None:
 
         def list_middleware(self) -> list[GenerateMiddleware]:
             return [
-                new_middleware(TrackerA, name='track_gen', description='track generate'),
-                new_middleware(TrackerB, name='track_gen2', description='track generate 2'),
+                GenerateMiddleware(cls=TrackerA, name='track_gen', description='track generate'),
+                GenerateMiddleware(cls=TrackerB, name='track_gen2', description='track generate 2'),
             ]
 
     ai = Genkit(plugins=[GenerateTrackerPlugin()])
@@ -1429,7 +1429,7 @@ async def test_wrap_tool_called_on_tool_execution() -> None:
         name = 'extension-middleware'
 
         def list_middleware(self) -> list[GenerateMiddleware]:
-            return [new_middleware(Tracker, name='track_tool', description='track tool')]
+            return [GenerateMiddleware(cls=Tracker, name='track_tool', description='track tool')]
 
     ai = Genkit(plugins=[ToolTrackerPlugin()])
     pm, _ = define_scripted_model(ai)
@@ -8172,6 +8172,20 @@ async def test_unknown_tool_on_request_raises_with_tool_not_found() -> None:
     assert error.reason is RuntimeErrorReason.TOOL_NOT_FOUND
     assert 'Unable to resolve tool ghost' in error.original_message
     assert 'TOOL_NOT_FOUND' not in error.original_message
+
+
+@pytest.mark.asyncio
+async def test_generate_with_tool_ref_slash_retriever_raises_tool_not_found() -> None:
+    """generate(tools=['/retriever/x']) raises NOT_FOUND 'Unable to resolve tool /retriever/x'."""
+    ai = Genkit()
+    define_echo_model(ai)
+
+    with pytest.raises(GenkitError) as raised:
+        await ai.generate(model='echoModel', prompt='hi', tools=['/retriever/x'])
+    error = raised.value
+    assert error.status == 'NOT_FOUND'
+    assert error.reason is RuntimeErrorReason.TOOL_NOT_FOUND
+    assert error.original_message == 'Unable to resolve tool /retriever/x'
 
 
 @pytest.mark.asyncio

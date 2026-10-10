@@ -37,8 +37,8 @@ from genkit._core._typing import (
     EvalFnResponse,
     EvalRequest,
     EvalResponse,
-    EvalStatusEnum,
     Score,
+    ScoreStatus,
 )
 
 logger = get_logger(__name__)
@@ -65,15 +65,6 @@ class EvaluatorRef(BaseModel):
 
     name: str
     config: dict[str, object] | None = None
-
-
-def evaluator_ref(name: str, *, config: dict[str, object] | None = None) -> EvaluatorRef:
-    """Create an EvaluatorRef whose config is merged under ai.evaluate's config=.
-
-    Settings are named. A value in the second position is a TypeError so it
-    cannot be stored as config.
-    """
-    return EvaluatorRef(name=name, config=config)
 
 
 def _evaluator_metadata(
@@ -168,7 +159,7 @@ def define_evaluator(
                         logger.debug(traceback.format_exc())
                         evaluation = Score(
                             error=f'Evaluation of test case {test_case_id} failed: \n{e!s}',
-                            status=EvalStatusEnum.FAIL,
+                            status=ScoreStatus.FAIL,
                         )
                         eval_responses.append(
                             EvalFnResponse(

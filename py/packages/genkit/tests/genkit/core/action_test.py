@@ -90,6 +90,13 @@ def test_parse_action_key_rejects_tool_kind() -> None:
         parse_action_key('/tool/my-tool')
 
 
+@pytest.mark.parametrize('kind', ['retriever', 'indexer', 'reranker'])
+def test_parse_action_key_retriever_indexer_reranker_raise_invalid_action_kind(kind: str) -> None:
+    """Parsing '/retriever/x', '/indexer/x', or '/reranker/x' raises 'Invalid action kind'."""
+    with pytest.raises(ValueError, match=f'Invalid action kind: `{kind}`'):
+        parse_action_key(f'/{kind}/x')
+
+
 def test_parse_dap_qualified_name() -> None:
     """Parse provider:innerKind/innerName segments."""
     assert parse_dap_qualified_name('my-dap:tool/echo') == DapQualifiedName('my-dap', 'tool', 'echo')

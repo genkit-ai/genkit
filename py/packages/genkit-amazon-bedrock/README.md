@@ -117,7 +117,7 @@ Every `Bedrock()` parameter, with its default:
 | `max_pool_connections` | unset    | HTTP connection pool size. Falls back to `50`, raised off botocore's default of 10.                                         |
 | `total_timeout`        | `3600.0` | Whole-call deadline in seconds for a non-streaming generation, retries included. `None` removes it.                         |
 | `session`              | unset    | Pre-configured `boto3.session.Session` for custom credentials or SDK wiring.                                                |
-| `models`               | `[]`     | Model IDs to register. The route is inferred from the ID. Unlisted IDs still resolve on demand.                             |
+| `models`               | `[]`     | Model IDs to register. The route is inferred from the ID. Unlisted IDs still resolve on demand, except rerank models.       |
 | `embedders`            | `[]`     | Embedding model IDs to register. Unlisted IDs still resolve on demand.                                                      |
 
 `max_retries`, `read_timeout`, `connect_timeout` and `max_pool_connections` are

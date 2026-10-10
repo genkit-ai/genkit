@@ -41,7 +41,7 @@
 
 ::: genkit.Interrupt
 
-::: genkit.response
+::: genkit.tool_response
 
 ::: genkit.MultipartToolResponse
 
@@ -113,8 +113,6 @@
 
 ::: genkit.embedder.embedder_action_metadata
 
-::: genkit.embedder.embedder_ref
-
 ::: genkit.embedder.EmbedderRef
 
 ::: genkit.embedder.EmbedderSupports
@@ -153,13 +151,11 @@
 
 ::: genkit.evaluator.Score
 
-::: genkit.evaluator.Details
+::: genkit.evaluator.ScoreDetails
 
-::: genkit.evaluator.EvalStatusEnum
+::: genkit.evaluator.ScoreStatus
 
 ::: genkit.evaluator.evaluator_action_metadata
-
-::: genkit.evaluator.evaluator_ref
 
 ::: genkit.evaluator.EvaluatorRef
 

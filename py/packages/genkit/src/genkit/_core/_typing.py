@@ -72,8 +72,8 @@ class SnapshotStatus(StrEnum):
     EXPIRED = 'expired'
 
 
-class EvalStatusEnum(StrEnum):
-    """EvalStatusEnum data type class."""
+class ScoreStatus(StrEnum):
+    """ScoreStatus data type class."""
 
     UNKNOWN = 'UNKNOWN'
     PASS = 'PASS'
@@ -338,9 +338,9 @@ class Score(GenkitModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     id: str | None = None
     score: bool | float | str | None = Field(default=None)
-    status: EvalStatusEnum | None = None
+    status: ScoreStatus | None = None
     error: str | None = None
-    details: Details | None = None
+    details: ScoreDetails | None = None
 
 
 class GenkitError(GenkitModel):
@@ -968,8 +968,8 @@ class Resume(GenkitModel):
 StateSchema = dict[str, Any]  # type alias for stateschema (typed string map)
 
 
-class Details(GenkitModel):
-    """Model for details data."""
+class ScoreDetails(GenkitModel):
+    """Model for scoredetails data."""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
     reasoning: str | None = None

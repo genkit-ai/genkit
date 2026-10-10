@@ -61,8 +61,14 @@ from genkit._core._registry import define_dynamic_action_provider
 from genkit._core._typing import Role
 from genkit.exp import Genkit as ExpGenkit
 from genkit.exp.agent import InMemorySessionStore
-from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, MiddlewareRef, ModelHookParams
-from genkit.plugin_api import MiddlewarePlugin, new_middleware
+from genkit.middleware import (
+    BaseMiddleware,
+    GenerateMiddleware,
+    GenerateMiddlewareContext,
+    MiddlewareRef,
+    ModelHookParams,
+)
+from genkit.plugin_api import MiddlewarePlugin
 from genkit.testing import (
     EchoModel,
     ScriptedModel,
@@ -108,8 +114,8 @@ class _PostMiddleware(BaseMiddleware):
 class PrePostMiddlewarePlugin(MiddlewarePlugin):
     name = 'extension-middleware'
     middleware = [
-        new_middleware(_PreMiddleware, name='pre_mw'),
-        new_middleware(_PostMiddleware, name='post_mw'),
+        GenerateMiddleware(cls=_PreMiddleware, name='pre_mw'),
+        GenerateMiddleware(cls=_PostMiddleware, name='post_mw'),
     ]
 
 

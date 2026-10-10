@@ -33,7 +33,6 @@ from genkit._ai._embedding import (
     EmbedderInfo,
     EmbedderRef,
     EmbedderSupports,
-    create_embedder_ref as embedder_ref,
     embedder,
     embedder_action_metadata,
 )
@@ -47,7 +46,6 @@ __all__ = [
     # Factory functions and metadata
     'embedder',
     'embedder_action_metadata',
-    'embedder_ref',
     # Reference types
     'EmbedderRef',
     # Options and capabilities
