@@ -390,7 +390,9 @@ class Prompt(Generic[InputT, OutputT]):
             override = normalize_config(config=override_config)
             # `maxOutputTokens` in the prompt and `max_output_tokens` in the
             # call are one setting: fold both to field names so the call wins.
-            schema = (await resolve_for_generate(model=model, registry=self._registry)).config_schema
+            schema = (
+                await resolve_for_generate(model=model, registry=self._registry, check_config=False)
+            ).config_schema
             if schema is not None:
                 base = fold_config_aliases(config=base, schema=schema)
                 override = fold_config_aliases(config=override, schema=schema)
