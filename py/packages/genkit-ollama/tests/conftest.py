@@ -41,7 +41,7 @@ def chat_model_plugin(ollama_model: str, mock_ollama_api_async_client: MagicMock
         'capabilities': ['completion', 'tools'],
         'model_info': {},
     })
-    return Ollama(models=[ollama_model.split('/')[-1]])
+    return Ollama()
 
 
 @pytest.fixture
@@ -67,47 +67,6 @@ def genkit_veneer_chat_model(
 
 
 @pytest.fixture
-def generate_model_plugin(ollama_model: str, mock_ollama_api_async_client: MagicMock) -> Ollama:
-    """Generate model plugin parameters; /api/show reports no chat template.
-
-    Args:
-        ollama_model: Ollama model to use for testing.
-        mock_ollama_api_async_client: The mocked SDK client the probe reaches.
-
-    Returns:
-        Generate model plugin parameters.
-    """
-    mock_ollama_api_async_client.return_value.show.return_value = ollama_api.ShowResponse.model_validate({
-        'template': '{{ .Prompt }}',
-        'capabilities': ['completion'],
-        'model_info': {},
-    })
-    return Ollama(models=[ollama_model.split('/')[-1]])
-
-
-@pytest.fixture
-def genkit_veneer_generate_model(
-    mock_ollama_api_async_client: MagicMock,
-    ollama_model: str,
-    generate_model_plugin: Ollama,
-) -> Genkit:
-    """Genkit veneer generate model.
-
-    Args:
-        mock_ollama_api_async_client: Mock for ollama async client (ensures it's set up first).
-        ollama_model: Ollama model to use for testing.
-        generate_model_plugin: Generate model plugin parameters.
-
-    Returns:
-        Genkit veneer generate model.
-    """
-    return Genkit(
-        plugins=[generate_model_plugin],
-        model=ollama_model,
-    )
-
-
-@pytest.fixture
 def mock_ollama_api_client() -> Generator[MagicMock | AsyncMock, None, None]:
     """Mock the ollama API client."""
     with mock.patch.object(ollama_api, 'Client') as mock_ollama_client:
@@ -121,7 +80,6 @@ def mock_ollama_api_async_client() -> Generator[MagicMock | AsyncMock, None, Non
         # Create an AsyncMock instance with async methods
         client_instance = AsyncMock()
         client_instance.chat = AsyncMock()
-        client_instance.generate = AsyncMock()
         client_instance.embed = AsyncMock()
         client_instance.show = AsyncMock()
         mock_ollama_async_client.return_value = client_instance

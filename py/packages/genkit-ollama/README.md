@@ -42,7 +42,7 @@ from genkit import Genkit
 from genkit_ollama import Ollama
 
 ai = Genkit(
-    plugins=[Ollama(models=['llama3.2', 'llava'], embedders=['nomic-embed-text'])],
+    plugins=[Ollama()],
     model='ollama/llama3.2',
 )
 
@@ -157,16 +157,13 @@ automatically. A static dict is applied once to a cached client.
 
 ### Model capabilities
 
-```python
-Ollama(models=['llama3.2', 'llava'], embedders=['nomic-embed-text'])
-```
-
-`models` and `embedders` take names. The plugin asks the server's `/api/show`
-once per model: `vision` turns on media input, `tools` turns on tool calling, and
-a model with no chat template goes through `/api/generate` instead of `/api/chat`.
-If the probe fails (server down, model not pulled, an Ollama too old to report
-`capabilities`), the model keeps the generic defaults: `/api/chat` with tools and
-media advertised. Unlisted names resolve the same way on first use.
+There is nothing to configure. The Dev UI lists the models the server has pulled
+(`/api/tags`), and any `ollama/<name>` resolves on first use. Every model goes
+through `/api/chat`. The plugin asks `/api/show` once per model: `vision` turns
+on media input and `tools` turns on tool calling. If the probe fails (server
+down, model not pulled, an Ollama too old to report `capabilities`), the model
+advertises both, as JS and Go do. Names containing `embed` are listed as
+embedders.
 
 ### Troubleshooting
 

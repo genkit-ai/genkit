@@ -21,7 +21,7 @@ import inspect
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, cast
 
 import ollama as ollama_api
@@ -66,13 +66,6 @@ _PROBE_TIMEOUT_SECONDS = 5.0
 _MAX_CONCURRENT_PROBES = 4
 _PROBE_FAILURE_TTL_SECONDS = 30.0
 
-# Templates that pass the prompt through untouched. Ollama reports
-# ``{{ .Prompt }}`` for a model that ships no chat template.
-_RAW_TEMPLATES = frozenset({'', '{{ .Prompt }}'})
-# Capabilities only a chat-formatted model has. A model that renders chat
-# natively (no Go template) still reports these, so it stays on /api/chat.
-_CHAT_ONLY_CAPABILITIES = frozenset({'tools', 'vision', 'thinking'})
-
 
 @dataclass(frozen=True)
 class _ProbeResult:
@@ -97,16 +90,7 @@ def _resolved_from_show(name: str, show: object) -> _ResolvedModel | None:
     if not isinstance(capabilities, list):
         return None
     caps = {c for c in cast(list[object], capabilities) if isinstance(c, str)}
-    template = getattr(show, 'template', None)
-    raw = not isinstance(template, str) or template.strip() in _RAW_TEMPLATES
-    return _ResolvedModel(
-        name=name,
-        # /api/chat on a template-less model flattens the turns into one
-        # prompt anyway; /api/generate says so honestly.
-        api_type='generate' if raw and not caps & _CHAT_ONLY_CAPABILITIES else 'chat',
-        tools='tools' in caps,
-        media='vision' in caps,
-    )
+    return _ResolvedModel(name=name, tools='tools' in caps, media='vision' in caps)
 
 
 def ollama_name(name: str) -> str:
@@ -124,26 +108,23 @@ def ollama_name(name: str) -> str:
 def ollama_model_info(model_ref: _ResolvedModel, label: str) -> dict[str, object]:
     """Build Dev UI capability metadata for an Ollama model.
 
-    Capabilities are gated on the model's API type so the Dev UI advertises
-    only what the endpoint actually supports: the ``chat`` endpoint is
-    multiturn and can use tools/media, whereas the ``generate`` endpoint is
-    single-turn text-in/text-out.
+    Every model goes through ``/api/chat``, as in Go; the probe only decides
+    whether tools and media are advertised.
 
     Args:
-        model_ref: The resolved model, with its API type and capabilities.
+        model_ref: The resolved model and its capabilities.
         label: The human-readable label to show in the Dev UI.
 
     Returns:
         The serialized :class:`ModelInfo` metadata (camelCase aliases, no
         ``None`` values) ready to embed under ``metadata['model']``.
     """
-    is_chat = model_ref.api_type == 'chat'
     return ModelInfo(
         label=label,
         supports=Supports(
-            multiturn=is_chat,
-            media=is_chat and model_ref.media,
-            tools=is_chat and model_ref.tools,
+            multiturn=True,
+            media=model_ref.media,
+            tools=model_ref.tools,
             system_role=True,
             # Deliberate JS/Go deviation. we match other Python plugins for Dev UI consistency.
             output=['text', 'json'],
@@ -160,8 +141,9 @@ class RequestHeaderParams:
     tailor headers to the server, the model, or the specific request — e.g. a
     freshly minted, per-request auth token. ``model`` is the model or embedder
     name. ``model_request`` is set for model actions and ``embed_request`` for
-    embedder actions; both are ``None`` for the ``list_actions`` discovery call
-    and for the ``/api/show`` capability probe, which sets only ``model``.
+    embedder actions; both are ``None`` for ``list_actions`` (which also
+    serves its capability probes) and for a resolve-time ``/api/show`` probe,
+    which sets only ``model``.
     """
 
     server_address: str
@@ -180,14 +162,6 @@ RequestHeaderFunction = Callable[
 RequestHeaders = dict[str, str] | RequestHeaderFunction
 
 
-def _require_name_list(arg: str, value: list[str] | None) -> list[str]:
-    # A missing bracket (models='llama3.2') would otherwise iterate the string
-    # and list one model per character.
-    if isinstance(value, str):
-        raise TypeError(f'{arg}= takes a list of Ollama model names, got a str. Did you mean {arg}=[{value!r}]?')
-    return list(value or [])
-
-
 class Ollama(Plugin):
     """Ollama plugin for Genkit.
 
@@ -199,21 +173,18 @@ class Ollama(Plugin):
 
     def __init__(
         self,
-        models: list[str] | None = None,
-        embedders: list[str] | None = None,
         server_address: str | None = None,
         request_headers: RequestHeaders | None = None,
         timeout: float | None = None,
     ) -> None:
         """Initialize the Ollama plugin.
 
+        Models and embedders are not configured here. The Dev UI lists what the
+        server has pulled (``/api/tags``), any ``ollama/<name>`` resolves on
+        demand, and each model's tools and vision support come from one
+        ``/api/show`` probe.
+
         Args:
-            models: Ollama model names to list in the Dev UI, e.g.
-                ``['llama3.2', 'llava']``. Capabilities come from the server:
-                each model is probed once via ``/api/show`` for tools, vision
-                and its chat template. Unlisted names still resolve on demand.
-            embedders: Ollama embedding model names to register, e.g.
-                ``['nomic-embed-text']``.
             server_address: The URL of the Ollama server. Defaults to a predefined
                 Ollama server URL if not provided.
             request_headers: Optional HTTP headers to include with requests to the
@@ -226,8 +197,6 @@ class Ollama(Plugin):
             timeout: Optional request timeout (seconds) forwarded to the underlying
                 httpx client.
         """
-        self.models = _require_name_list('models', models)
-        self.embedders = _require_name_list('embedders', embedders)
         self.server_address = server_address or DEFAULT_OLLAMA_SERVER_URL
 
         self._request_headers_source = request_headers
@@ -236,6 +205,8 @@ class Ollama(Plugin):
         self.timeout = timeout
         self.client = loop_local_client(self._make_client)
         self._probes: dict[str, _ProbeResult] = {}
+        # One probe per model at a time; concurrent first uses await the same task.
+        self._inflight: dict[str, asyncio.Task[_ResolvedModel]] = {}
 
     def _make_client(self, headers: dict[str, str] | None = None) -> ollama_api.AsyncClient:
         """Build an Ollama AsyncClient with the given (or static) headers and timeout.
@@ -316,24 +287,21 @@ class Ollama(Plugin):
     async def init(self) -> list:
         """Initialize the Ollama plugin.
 
-        Registers the configured embedders. Models are not registered here:
-        their capabilities come from ``/api/show``, which ``resolve`` and
-        ``list_actions`` ask for, and an eagerly registered action would mask
-        the probed listing with generic metadata.
+        Registers nothing: models and embedders resolve on demand, and an
+        eagerly registered action would mask the probed listing with generic
+        metadata.
 
         Returns:
-            Embedder actions for the configured embedders.
+            An empty list.
         """
-        # Header callables are resolved per request (see _client_for_request), so
-        # there is nothing to resolve eagerly here; static headers are already set.
-        return [self._create_embedder_action(name) for name in self.embedders]
+        return []
 
     async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
         """Resolve an action by creating and returning an Action object.
 
-        A model is probed once via ``/api/show`` before its action is built,
-        whether or not it is listed in ``models``. A failed probe falls back
-        to ``/api/chat`` with every capability advertised.
+        A model is probed once via ``/api/show`` before its action is built. A
+        failed probe advertises the generic capabilities; the request still
+        goes to ``/api/chat`` either way.
 
         Args:
             action_type: The kind of action to resolve.
@@ -348,13 +316,21 @@ class Ollama(Plugin):
             return self._create_embedder_action(name)
         return None
 
-    async def _resolve_model(self, name: str, digest: str = '') -> _ResolvedModel:
+    async def _resolve_model(
+        self,
+        name: str,
+        digest: str = '',
+        client: ollama_api.AsyncClient | None = None,
+    ) -> _ResolvedModel:
         """Returns the model's capabilities, probing the server at most once.
 
         Args:
-            name: The Ollama model name.
+            name: The Ollama model name. The result always carries this name,
+                even when the cache entry came from ``name:latest``.
             digest: The digest ``/api/tags`` reported, if known. A cached
                 result for a different digest is stale: the model was re-pulled.
+            client: A client to probe with. ``list_actions`` passes its own so
+                a header callable is not run once per model.
 
         Returns:
             The probed definition, or the generic fallback when the probe fails.
@@ -363,9 +339,29 @@ class Ollama(Plugin):
         cached = self._probes.get(key)
         if cached is not None and (not digest or cached.digest == digest):
             if cached.expires_at is None or time.monotonic() < cached.expires_at:
-                return cached.definition
+                return replace(cached.definition, name=name)
 
-        definition = await self._probe(name)
+        loop = asyncio.get_running_loop()
+        task = self._inflight.get(key)
+        if task is None or task.get_loop() is not loop:
+            task = loop.create_task(self._probe_and_cache(key, name, digest, client))
+            self._inflight[key] = task
+            task.add_done_callback(lambda done: self._forget_inflight(key, done))
+        # Shielded so one cancelled caller does not cancel the probe the others await.
+        return replace(await asyncio.shield(task), name=name)
+
+    def _forget_inflight(self, key: str, task: 'asyncio.Task[_ResolvedModel]') -> None:
+        if self._inflight.get(key) is task:
+            del self._inflight[key]
+
+    async def _probe_and_cache(
+        self,
+        key: str,
+        name: str,
+        digest: str,
+        client: ollama_api.AsyncClient | None,
+    ) -> _ResolvedModel:
+        definition = await self._probe(name, client)
         detected = definition is not None
         if definition is None:
             definition = _ResolvedModel(name=name)
@@ -376,19 +372,26 @@ class Ollama(Plugin):
         )
         return definition
 
-    async def _probe(self, name: str) -> _ResolvedModel | None:
+    async def _probe(self, name: str, client: ollama_api.AsyncClient | None = None) -> _ResolvedModel | None:
         """Asks ``/api/show`` what the model can do.
 
         Any failure (server down, model not pulled, an old server without
         ``capabilities``, a header callable that raises) returns None so the
-        caller falls back; plugin init and resolve never fail on a probe.
+        caller falls back; plugin init and resolve never fail on a probe. The
+        timeout covers the header callable too, not just the HTTP call.
         """
         timeout = _PROBE_TIMEOUT_SECONDS
         if self.timeout is not None and 0 < self.timeout < timeout:
             timeout = self.timeout
+
+        async def show_model() -> object:
+            if client is not None:
+                return await client.show(name)
+            async with self._client_for_request(model=name) as fresh:
+                return await fresh.show(name)
+
         try:
-            async with self._client_for_request(model=name) as client:
-                show = await asyncio.wait_for(client.show(name), timeout=timeout)
+            show = await asyncio.wait_for(show_model(), timeout=timeout)
         except Exception as e:  # noqa: BLE001 - every probe failure means the same fallback.
             logger.debug('Ollama capability probe failed', model=name, error=type(e).__name__)
             return None
@@ -399,7 +402,6 @@ class Ollama(Plugin):
         logger.debug(
             'Ollama capabilities probed',
             model=name,
-            api_type=definition.api_type,
             tools=definition.tools,
             media=definition.media,
         )
@@ -480,13 +482,15 @@ class Ollama(Plugin):
         )
 
     async def list_actions(self) -> list[ActionMetadata]:
-        """List the server's models and embedders, plus any configured model it lacks.
+        """List the models and embedders the server has pulled.
 
         Reads ``/api/tags``, then probes each model's ``/api/show``
         concurrently (at most four at once, five seconds each) so the Dev UI
-        shows real capabilities. Results are cached per model and digest; a
-        failed probe falls back to the generic set and is retried after 30s.
-        Names containing ``embed`` are listed as embedders, as in JS and Go.
+        shows real capabilities. The probes reuse this call's client, so a
+        header callable runs once per listing. Results are cached per model
+        and digest; a failed probe falls back to the generic set and is
+        retried after 30s. Names containing ``embed`` are listed as
+        embedders, as in JS and Go.
 
         Returns:
             ActionMetadata for each model and embedder.
@@ -498,29 +502,25 @@ class Ollama(Plugin):
                 except ollama_api.ResponseError as e:
                     raise wrap_http_error(e, status_code=e.status_code) from e
 
-        embedder_names: list[str] = []
-        # (name, digest) per model row, in server order.
-        model_rows: list[tuple[str, str]] = []
-        for model in response.models:
-            name = model.model
-            if not name:
-                continue
-            if 'embed' in name:
-                embedder_names.append(name)
-            else:
-                model_rows.append((name, getattr(model, 'digest', None) or ''))
-        listed = {_cache_key(name) for name, _ in model_rows}
-        # A configured model the server lacks is listed anyway, as before; its
-        # probe 404s and it carries the generic capabilities.
-        model_rows.extend((name, '') for name in self.models if _cache_key(name) not in listed)
+            embedder_names: list[str] = []
+            # (name, digest) per model row, in server order.
+            model_rows: list[tuple[str, str]] = []
+            for model in response.models:
+                name = model.model
+                if not name:
+                    continue
+                if 'embed' in name:
+                    embedder_names.append(name)
+                else:
+                    model_rows.append((name, getattr(model, 'digest', None) or ''))
 
-        slots = asyncio.Semaphore(_MAX_CONCURRENT_PROBES)
+            slots = asyncio.Semaphore(_MAX_CONCURRENT_PROBES)
 
-        async def describe(name: str, digest: str) -> _ResolvedModel:
-            async with slots:
-                return await self._resolve_model(name, digest)
+            async def describe(name: str, digest: str) -> _ResolvedModel:
+                async with slots:
+                    return await self._resolve_model(name, digest, client)
 
-        definitions = await asyncio.gather(*(describe(name, digest) for name, digest in model_rows))
+            definitions = await asyncio.gather(*(describe(name, digest) for name, digest in model_rows))
 
         actions: list[ActionMetadata] = [
             model_action_metadata(

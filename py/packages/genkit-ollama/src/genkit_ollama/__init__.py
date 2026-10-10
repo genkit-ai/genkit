@@ -29,8 +29,8 @@ Example:
     from genkit import Genkit
     from genkit_ollama import Ollama
 
-    # 1. List local models; capabilities come from the server's /api/show
-    ai = Genkit(plugins=[Ollama(models=['llama3.2', 'llava'], embedders=['nomic-embed-text'])])
+    # 1. Pulled models resolve on demand; /api/show supplies their capabilities
+    ai = Genkit(plugins=[Ollama()])
 
     # 2. Generate content entirely on local hardware
     res = await ai.generate(
