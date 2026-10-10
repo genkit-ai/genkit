@@ -35,29 +35,20 @@ type FileStoreOption interface {
 	applyFileStore(*fileStoreOptions) error
 }
 
-// applyFileStore merges o into opts, rejecting an option set more than once.
+// applyFileStore merges o into opts, last-wins per option.
 func (o *fileStoreOptions) applyFileStore(opts *fileStoreOptions) error {
 	if o.maxChain != nil {
 		if *o.maxChain < 1 {
 			return errors.New("max persisted chain length must be at least 1 (WithMaxPersistedChainLength)")
 		}
-		if opts.maxChain != nil {
-			return errors.New("cannot set max persisted chain length more than once (WithMaxPersistedChainLength)")
-		}
 		opts.maxChain = o.maxChain
 	}
 
 	if o.prefixFn != nil {
-		if opts.prefixFn != nil {
-			return errors.New("cannot set snapshot path prefix more than once (WithSnapshotPathPrefix)")
-		}
 		opts.prefixFn = o.prefixFn
 	}
 
 	if o.poll != nil {
-		if opts.poll != nil {
-			return errors.New("cannot set poll interval more than once (WithPollInterval)")
-		}
 		opts.poll = o.poll
 	}
 

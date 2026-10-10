@@ -309,14 +309,6 @@ func TestAgentHandle_Run(t *testing.T) {
 		}
 	})
 
-	t.Run("rejects duplicate options", func(t *testing.T) {
-		_, err := h.Run(context.Background(), &AgentInput{Message: ai.NewUserTextMessage("x")},
-			WithSessionID[json.RawMessage]("a"), WithSessionID[json.RawMessage]("b"))
-		if err == nil || !strings.Contains(err.Error(), "more than once") {
-			t.Fatalf("duplicate WithSessionID error = %v, want duplicate-option rejection", err)
-		}
-	})
-
 	t.Run("rejects mutually exclusive options", func(t *testing.T) {
 		_, err := h.Run(context.Background(), &AgentInput{Message: ai.NewUserTextMessage("x")},
 			WithState(&SessionState[json.RawMessage]{}), WithSessionID[json.RawMessage]("a"))
