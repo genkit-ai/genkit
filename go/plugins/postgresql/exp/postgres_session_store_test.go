@@ -112,8 +112,9 @@ func tenantFromContext(ctx context.Context) string {
 // runSuite runs the conformance suite with every store in one table, each
 // scoped to a prefix of its own: the stores share storage but cannot see one
 // another's rows, which is also how tenants share a production table.
-func runSuite(t *testing.T, opts ...SessionStoreOption) {
-	pool := testPool(t)
+// configure, if not nil, edits the config of every pool the stores use.
+func runSuite(t *testing.T, configure func(*pgxpool.Config), opts ...SessionStoreOption) {
+	pool := testPool(t, configure)
 	table := testTable(t, pool)
 	storeOpts := func(prefixFn func(context.Context) string) []SessionStoreOption {
 		return append([]SessionStoreOption{WithSnapshotPathPrefix(prefixFn)}, opts...)
@@ -124,7 +125,7 @@ func runSuite(t *testing.T, opts ...SessionStoreOption) {
 		// A store on a pool of its own over the same rows stands in for
 		// another process.
 		Reopen: func(t *testing.T, store aix.SessionStore[testState]) aix.SessionStore[testState] {
-			return newTestStore(t, testPool(t), table, storeOpts(store.(*PostgresSessionStore[testState]).prefixFn)...)
+			return newTestStore(t, testPool(t, configure), table, storeOpts(store.(*PostgresSessionStore[testState]).prefixFn)...)
 		},
 		Scoped: func(t *testing.T) (aix.SessionStore[testState], context.Context, context.Context) {
 			tenant := uuid.NewString()
@@ -137,14 +138,25 @@ func runSuite(t *testing.T, opts ...SessionStoreOption) {
 }
 
 func TestPostgresSessionStore(t *testing.T) {
-	runSuite(t)
+	runSuite(t, nil)
 }
 
 // TestPostgresSessionStore_FrequentCheckpoints runs the suite with a checkpoint
 // every three turns, so its chains cross many checkpoint boundaries and every
 // kind of write lands on both sides of one.
 func TestPostgresSessionStore_FrequentCheckpoints(t *testing.T) {
-	runSuite(t, WithCheckpointInterval(3))
+	runSuite(t, nil, WithCheckpointInterval(3))
+}
+
+// TestPostgresSessionStore_QueryExecModes runs the suite in the pgx query
+// modes that infer each parameter's type from its Go type, which
+// transaction-mode poolers such as PgBouncer often need.
+func TestPostgresSessionStore_QueryExecModes(t *testing.T) {
+	for _, mode := range []pgx.QueryExecMode{pgx.QueryExecModeExec, pgx.QueryExecModeSimpleProtocol} {
+		t.Run(mode.String(), func(t *testing.T) {
+			runSuite(t, func(cfg *pgxpool.Config) { cfg.ConnConfig.DefaultQueryExecMode = mode })
+		})
+	}
 }
 
 func TestNewPostgresSessionStore(t *testing.T) {
