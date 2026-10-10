@@ -30,7 +30,7 @@ def _genkit() -> Genkit:
 
 
 @pytest.mark.asyncio
-async def test_generate_model_garden_claude_secrets_key_fails_failed_precondition(
+async def test_generate_model_garden_claude_secrets_key_fails_invalid_argument(
     vertex_requests: list[httpx.Request],
 ) -> None:
     """Model Garden bills the Google Cloud project, so a per-request Anthropic key fails instead of being ignored."""
@@ -40,7 +40,7 @@ async def test_generate_model_garden_claude_secrets_key_fails_failed_preconditio
 
     assert response.finish_reason == FinishReason.FAILED
     assert response.error is not None
-    assert response.error.status == 'FAILED_PRECONDITION'
+    assert response.error.status == 'INVALID_ARGUMENT'
     assert 'context.secrets' in response.error.message
     assert 'tenant-key' not in response.error.message
     assert vertex_requests == []

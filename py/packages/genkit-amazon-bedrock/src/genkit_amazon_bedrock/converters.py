@@ -188,8 +188,7 @@ def normalize_config(config: Any) -> BedrockConfig | None:  # noqa: ANN401
             raise GenkitError(
                 message=(
                     f'bedrock: unknown config key(s): {", ".join(unknown)}; only declared BedrockConfig '
-                    'fields (e.g. maxOutputTokens) are sent, model-specific options go in '
-                    'extra or additionalModelRequestFields'
+                    "fields (e.g. maxOutputTokens) are sent, model-specific options go in config['extra']"
                 ),
                 status='INVALID_ARGUMENT',
             ) from e
@@ -529,14 +528,10 @@ def build_converse_request(model_id: str, request: ModelRequest[Any]) -> dict[st
     if inference_config:
         kwargs['inferenceConfig'] = inference_config
 
-    if config is not None and (config.additional_model_request_fields or config.extra):
-        # Forwarded verbatim (e.g. Claude extended thinking budgets). Converse
-        # rejects unknown top-level fields, so `extra` lands here too, merged
-        # last so a colliding key wins.
-        kwargs['additionalModelRequestFields'] = {
-            **(config.additional_model_request_fields or {}),
-            **(config.extra or {}),
-        }
+    if config is not None and config.extra:
+        # Converse rejects unknown top-level fields, so model-specific options
+        # travel in this one slot, as the caller wrote them.
+        kwargs['additionalModelRequestFields'] = config.extra
 
     if send_tool_config:
         tool_config: dict[str, Any] = {'tools': [to_bedrock_tool(tool) for tool in tools]}
