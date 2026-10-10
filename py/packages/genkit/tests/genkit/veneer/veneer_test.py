@@ -46,7 +46,6 @@ from genkit.evaluator import (
     ScoreDetails,
     ScoreStatus,
     evaluator_action_metadata,
-    evaluator_ref,
 )
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, MiddlewareRef, ModelHookParams
 from genkit.testing import (
@@ -1903,7 +1902,7 @@ async def test_evaluate_row_evaluation_is_the_evaluators_score_list(
 
 
 @pytest.mark.asyncio
-async def test_evaluator_that_raises_reports_eval_status_fail_with_error(setup_test: SetupFixture) -> None:
+async def test_evaluator_that_raises_reports_score_status_fail_with_error(setup_test: SetupFixture) -> None:
     """A row whose evaluator raises comes back as one ScoreStatus.FAIL score with the error, and the next row runs."""
     ai, *_ = setup_test
 
@@ -1926,7 +1925,7 @@ async def test_evaluator_that_raises_reports_eval_status_fail_with_error(setup_t
 
 
 @pytest.mark.asyncio
-async def test_evaluate_score_with_eval_status_pass_and_score_details_sends_pass_and_reasoning(
+async def test_evaluate_score_with_score_status_pass_and_score_details_sends_pass_and_reasoning(
     setup_test: SetupFixture,
 ) -> None:
     """Score(status=ScoreStatus.PASS, details=ScoreDetails(reasoning=...)) comes back as 'PASS' plus that reasoning."""
@@ -1945,7 +1944,7 @@ async def test_evaluate_score_with_eval_status_pass_and_score_details_sends_pass
 
 
 @pytest.mark.asyncio
-async def test_evaluate_score_with_eval_status_fail_and_unknown_sends_same_strings(setup_test: SetupFixture) -> None:
+async def test_evaluate_score_with_score_status_fail_and_unknown_sends_same_strings(setup_test: SetupFixture) -> None:
     """ScoreStatus.FAIL and ScoreStatus.UNKNOWN on a score come back as the strings 'FAIL' and 'UNKNOWN'."""
     ai, *_ = setup_test
     _define_scoring_evaluator(
@@ -2142,15 +2141,9 @@ async def test_evaluate_with_ref_settings_only_passes_ref_settings(setup_test: S
     ai, *_ = setup_test
     seen = _define_recording_evaluator(ai, 'ref_eval')
 
-    await ai.evaluate(evaluator=evaluator_ref('ref_eval', config={'judge': 'j1'}), dataset=_one_row())
+    await ai.evaluate(evaluator=EvaluatorRef(name='ref_eval', config={'judge': 'j1'}), dataset=_one_row())
 
     assert seen == [{'judge': 'j1'}]
-
-
-def test_evaluator_ref_with_positional_config_raises_type_error() -> None:
-    """evaluator_ref(name, {...}) raises TypeError; settings go in config=."""
-    with pytest.raises(TypeError):
-        evaluator_ref('local/x', {'judge': 'j1'})  # type: ignore[misc]
 
 
 def test_evaluator_ref_model_with_config_schema_field_raises_validation_error() -> None:
@@ -2164,7 +2157,7 @@ async def test_evaluate_config_wins_over_ref_settings_per_key(setup_test: SetupF
     """When the ref and config= both set a key, config= wins and other ref keys stay."""
     ai, *_ = setup_test
     seen = _define_recording_evaluator(ai, 'merge_eval')
-    ref = evaluator_ref('merge_eval', config={'judge': 'j1', 'threshold': 0.1})
+    ref = EvaluatorRef(name='merge_eval', config={'judge': 'j1', 'threshold': 0.1})
 
     await ai.evaluate(evaluator=ref, dataset=_one_row(), config={'threshold': 0.9})
 

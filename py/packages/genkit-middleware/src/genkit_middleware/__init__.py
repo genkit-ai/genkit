@@ -35,7 +35,8 @@ them in the Dev UI and to name them in a ``.prompt`` file's ``use:``.
 ``genkit_middleware.exp`` alongside the other experimental agent APIs.
 """
 
-from genkit.plugin_api import MiddlewarePlugin, new_middleware
+from genkit.middleware import GenerateMiddleware
+from genkit.plugin_api import MiddlewarePlugin
 from genkit_middleware._fallback import Fallback
 from genkit_middleware._filesystem import Filesystem
 from genkit_middleware._retry import Retry
@@ -43,28 +44,28 @@ from genkit_middleware._skills import Skills
 from genkit_middleware._tool_approval import ToolApproval
 
 _MIDDLEWARE_DESCS = [
-    new_middleware(
-        Retry,
+    GenerateMiddleware(
+        cls=Retry,
         name='retry',
         description='Retries model calls on transient failures with exponential backoff',
     ),
-    new_middleware(
-        Fallback,
+    GenerateMiddleware(
+        cls=Fallback,
         name='fallback',
         description='Falls back to alternative models on failure',
     ),
-    new_middleware(
-        ToolApproval,
+    GenerateMiddleware(
+        cls=ToolApproval,
         name='tool_approval',
         description='Requires approval before executing tools',
     ),
-    new_middleware(
-        Skills,
+    GenerateMiddleware(
+        cls=Skills,
         name='skills',
         description='Provides access to skill library for specialized instructions',
     ),
-    new_middleware(
-        Filesystem,
+    GenerateMiddleware(
+        cls=Filesystem,
         name='filesystem',
         description='Sandboxed filesystem operations',
     ),

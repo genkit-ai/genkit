@@ -19,7 +19,6 @@ from genkit import (
     Role,
     RuntimeErrorReason,
     Tool,
-    tool_response,
 )
 from genkit._core._action import Action
 from genkit._core._schema import to_json_schema
@@ -91,7 +90,7 @@ async def test_await_tool_from_raw_action_returns_multipart_envelope() -> None:
     """Awaiting a Tool built from a raw Action returns the same multipart envelope generate already speaks."""
 
     async def raw_shot() -> MultipartToolResponse[ShotOut]:
-        return tool_response(ShotOut(ok=True, label='lab'), parts=[_png()], metadata={'src': 'cam'})
+        return MultipartToolResponse(output=ShotOut(ok=True, label='lab'), content=[_png()], metadata={'src': 'cam'})
 
     handle = Tool(Action(name='shot', kind=ActionKind.TOOL, fn=raw_shot))
     out = await handle()
@@ -199,12 +198,12 @@ async def test_generate_pydantic_tool_message_has_dump_and_no_media() -> None:
 
 @pytest.mark.asyncio
 async def test_await_multipart_shotout_returns_dump_and_png() -> None:
-    """-> MultipartToolResponse[ShotOut] plus tool_response(..., parts=[png]) is dump and PNG."""
+    """-> MultipartToolResponse[ShotOut] returning MultipartToolResponse(..., content=[png]) is dump and PNG."""
     ai = Genkit()
 
     @ai.tool(name='screenshot')
     async def screenshot() -> MultipartToolResponse[ShotOut]:
-        return tool_response(ShotOut(ok=True, label='lab'), parts=[_png()], metadata={'src': 'cam'})
+        return MultipartToolResponse(output=ShotOut(ok=True, label='lab'), content=[_png()], metadata={'src': 'cam'})
 
     out = await screenshot()
     assert isinstance(out, MultipartToolResponse)
@@ -216,13 +215,13 @@ async def test_await_multipart_shotout_returns_dump_and_png() -> None:
 
 @pytest.mark.asyncio
 async def test_generate_tool_returning_tool_response_with_image_gives_model_output_and_image_part() -> None:
-    """A tool returning tool_response(ShotOut(...), parts=[png]) sends the model the dump plus the PNG part."""
+    """A tool returning MultipartToolResponse(output=ShotOut(...), content=[png]) sends the dump plus the PNG."""
     ai = Genkit(model='scriptedModel')
     pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='screenshot')
     async def screenshot() -> MultipartToolResponse[ShotOut]:
-        return tool_response(ShotOut(ok=True, label='lab'), parts=[_png()], metadata={'src': 'cam'})
+        return MultipartToolResponse(output=ShotOut(ok=True, label='lab'), content=[_png()], metadata={'src': 'cam'})
 
     generated = await _generate_tool_turn(ai, pm, name='screenshot')
     _assert_closed_tool_round(generated)
@@ -244,7 +243,7 @@ async def test_await_bare_multipart_returns_png_and_tells_model_no_schema() -> N
 
     @ai.tool(name='screenshot')
     async def screenshot() -> MultipartToolResponse:
-        return tool_response({'ok': True, 'label': 'lab'}, parts=[_png()], metadata={'src': 'cam'})
+        return MultipartToolResponse(output={'ok': True, 'label': 'lab'}, content=[_png()], metadata={'src': 'cam'})
 
     out = await screenshot()
     assert isinstance(out, MultipartToolResponse)
@@ -262,7 +261,7 @@ async def test_generate_bare_multipart_puts_png_on_the_tool_message_with_no_sche
 
     @ai.tool(name='screenshot')
     async def screenshot() -> MultipartToolResponse:
-        return tool_response({'ok': True, 'label': 'lab'}, parts=[_png()], metadata={'src': 'cam'})
+        return MultipartToolResponse(output={'ok': True, 'label': 'lab'}, content=[_png()], metadata={'src': 'cam'})
 
     generated = await _generate_tool_turn(ai, pm, name='screenshot')
     _assert_closed_tool_round(generated)
@@ -318,12 +317,12 @@ async def test_generate_multipart_shotout_with_bare_return_has_dump_and_no_media
 
 @pytest.mark.asyncio
 async def test_await_response_without_parts_has_dump_and_no_media() -> None:
-    """tool_response() with no parts is dump and no media."""
+    """MultipartToolResponse with no content is dump and no media."""
     ai = Genkit()
 
     @ai.tool(name='shot')
     async def shot() -> MultipartToolResponse[ShotOut]:
-        return tool_response(ShotOut(ok=True, label='lab'))
+        return MultipartToolResponse(output=ShotOut(ok=True, label='lab'))
 
     out = await shot()
     assert isinstance(out, MultipartToolResponse)
@@ -341,7 +340,7 @@ async def test_generate_response_without_parts_has_dump_and_no_media() -> None:
 
     @ai.tool(name='shot')
     async def shot() -> MultipartToolResponse[ShotOut]:
-        return tool_response(ShotOut(ok=True, label='lab'))
+        return MultipartToolResponse(output=ShotOut(ok=True, label='lab'))
 
     generated = await _generate_tool_turn(ai, pm, name='shot')
     _assert_closed_tool_round(generated)
@@ -362,7 +361,7 @@ async def test_action_run_multipart_shotout_returns_dump_and_png() -> None:
 
     @ai.tool(name='screenshot')
     async def screenshot() -> MultipartToolResponse[ShotOut]:
-        return tool_response(ShotOut(ok=True, label='lab'), parts=[_png()], metadata={'src': 'cam'})
+        return MultipartToolResponse(output=ShotOut(ok=True, label='lab'), content=[_png()], metadata={'src': 'cam'})
 
     ran = await screenshot.action().run()
     assert isinstance(ran.response, MultipartToolResponse)
@@ -373,13 +372,13 @@ async def test_action_run_multipart_shotout_returns_dump_and_png() -> None:
 
 @pytest.mark.asyncio
 async def test_generate_response_with_png_and_text_puts_both_on_the_tool_message() -> None:
-    """Two parts on tool_response() both land on the tool message."""
+    """Two content parts on MultipartToolResponse both land on the tool message."""
     ai = Genkit(model='scriptedModel')
     pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='screenshot')
     async def screenshot() -> MultipartToolResponse[ShotOut]:
-        return tool_response(ShotOut(ok=True, label='lab'), parts=[_png(), _caption()])
+        return MultipartToolResponse(output=ShotOut(ok=True, label='lab'), content=[_png(), _caption()])
 
     generated = await _generate_tool_turn(ai, pm, name='screenshot')
     _assert_closed_tool_round(generated)
@@ -395,12 +394,12 @@ async def test_generate_response_with_png_and_text_puts_both_on_the_tool_message
 
 @pytest.mark.asyncio
 async def test_await_str_tool_may_return_png_without_changing_schema() -> None:
-    """-> str plus tool_response('Sunny', parts=[png]) keeps the string schema and still has the PNG."""
+    """-> str returning MultipartToolResponse(output='Sunny', content=[png]) keeps the string schema and the PNG."""
     ai = Genkit()
 
     @ai.tool(name='weather')
     async def weather(city: str) -> str:
-        return tool_response(f'Sunny in {city}', parts=[_png()])  # type: ignore[return-value]
+        return MultipartToolResponse(output=f'Sunny in {city}', content=[_png()])  # type: ignore[return-value]
 
     out = await weather('Austin')
     assert isinstance(out, MultipartToolResponse)
@@ -418,7 +417,7 @@ async def test_generate_str_tool_may_put_png_on_the_tool_message_without_changin
 
     @ai.tool(name='weather')
     async def weather(city: str) -> str:
-        return tool_response(f'Sunny in {city}', parts=[_png()])  # type: ignore[return-value]
+        return MultipartToolResponse(output=f'Sunny in {city}', content=[_png()])  # type: ignore[return-value]
 
     generated = await _generate_tool_turn(ai, pm, name='weather', tool_input='Austin')
     _assert_closed_tool_round(generated)
@@ -441,7 +440,7 @@ async def test_optional_multipart_shotout_annotation_tells_model_shotout() -> No
 
     @ai.tool(name='screenshot')
     async def screenshot() -> MultipartToolResponse[ShotOut] | None:
-        return tool_response(ShotOut(ok=True, label='lab'), parts=[_png()])
+        return MultipartToolResponse(output=ShotOut(ok=True, label='lab'), content=[_png()])
 
     generated = await _generate_tool_turn(ai, pm, name='screenshot')
     _assert_closed_tool_round(generated)
@@ -465,43 +464,46 @@ async def _generate_with_failing_tool(ai: Genkit, pm: ScriptedModel, *, name: st
 
 @pytest.mark.asyncio
 async def test_tool_response_with_non_dict_metadata_raises_invalid_argument_naming_tool_response() -> None:
-    """tool_response(..., metadata='nope') raises INVALID_ARGUMENT naming tool_response(); generate reports the same."""
+    """MultipartToolResponse(metadata='nope') raises INVALID_ARGUMENT naming the class; generate reports the same."""
     with pytest.raises(GenkitError) as raised:
-        tool_response(ShotOut(ok=True, label='lab'), metadata='nope')  # type: ignore[arg-type]
+        MultipartToolResponse(output=ShotOut(ok=True, label='lab'), metadata='nope')  # type: ignore[arg-type]
     assert raised.value.status == 'INVALID_ARGUMENT'
     assert raised.value.reason is RuntimeErrorReason.INVALID_INPUT
-    assert raised.value.original_message == 'tool_response() metadata must be a dict, got str.'
+    assert raised.value.original_message == 'MultipartToolResponse metadata must be a dict, got str.'
 
     ai = Genkit(model='scriptedModel')
     pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='shot')
     async def shot() -> MultipartToolResponse[ShotOut]:
-        return tool_response(ShotOut(ok=True, label='lab'), metadata='nope')  # type: ignore[arg-type]
+        return MultipartToolResponse(output=ShotOut(ok=True, label='lab'), metadata='nope')  # type: ignore[arg-type]
 
     generated = await _generate_with_failing_tool(ai, pm, name='shot')
     assert generated.error is not None
     assert generated.error.status == 'INVALID_ARGUMENT'
-    assert generated.finish_message == 'tool_response() metadata must be a dict, got str.'
+    assert generated.finish_message == 'MultipartToolResponse metadata must be a dict, got str.'
 
 
 @pytest.mark.asyncio
 async def test_tool_response_with_non_part_in_parts_raises_invalid_part_naming_tool_response() -> None:
-    """tool_response(..., parts=[object()]) raises INVALID_PART naming tool_response(); generate reports the same."""
+    """MultipartToolResponse(content=[object()]) raises INVALID_PART naming the class; generate reports the same."""
     with pytest.raises(GenkitError) as raised:
-        tool_response(ShotOut(ok=True, label='lab'), parts=[object()])  # type: ignore[list-item]
+        MultipartToolResponse(output=ShotOut(ok=True, label='lab'), content=[object()])  # type: ignore[list-item]
     assert raised.value.status == 'INVALID_ARGUMENT'
     assert raised.value.reason is RuntimeErrorReason.INVALID_PART
-    assert raised.value.original_message == 'tool_response() parts must be a list of Parts, got object in the list.'
+    assert (
+        raised.value.original_message
+        == 'MultipartToolResponse content must be a list of Parts, got object in the list.'
+    )
 
     ai = Genkit(model='scriptedModel')
     pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='shot')
     async def shot() -> MultipartToolResponse[ShotOut]:
-        return tool_response(ShotOut(ok=True, label='lab'), parts=[object()])  # type: ignore[list-item]
+        return MultipartToolResponse(output=ShotOut(ok=True, label='lab'), content=[object()])  # type: ignore[list-item]
 
     generated = await _generate_with_failing_tool(ai, pm, name='shot')
     assert generated.error is not None
     assert generated.error.status == 'INVALID_ARGUMENT'
-    assert generated.finish_message == 'tool_response() parts must be a list of Parts, got object in the list.'
+    assert generated.finish_message == 'MultipartToolResponse content must be a list of Parts, got object in the list.'

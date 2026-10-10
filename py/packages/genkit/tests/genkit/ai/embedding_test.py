@@ -28,7 +28,6 @@ from genkit._ai._embedding import (
     EmbedderInfo,
     EmbedderRef,
     EmbedderSupports,
-    create_embedder_ref,
     embedder,
     embedder_action_metadata,
 )
@@ -121,7 +120,7 @@ async def test_embedder_factory_does_not_register() -> None:
 
 def test_create_embedder_ref_basic() -> None:
     """Test basic creation of EmbedderRef."""
-    ref = create_embedder_ref('my-embedder')
+    ref = EmbedderRef(name='my-embedder')
     assert ref.name == 'my-embedder'
     assert ref.config is None
     assert ref.version is None
@@ -130,7 +129,7 @@ def test_create_embedder_ref_basic() -> None:
 def test_create_embedder_ref_with_config() -> None:
     """Test creation of EmbedderRef with configuration."""
     config = {'temperature': 0.5, 'max_tokens': 100}
-    ref = create_embedder_ref('configured-embedder', config=config)
+    ref = EmbedderRef(name='configured-embedder', config=config)
     assert ref.name == 'configured-embedder'
     assert ref.config == config
     assert ref.version is None
@@ -138,7 +137,7 @@ def test_create_embedder_ref_with_config() -> None:
 
 def test_create_embedder_ref_with_version() -> None:
     """Test creation of EmbedderRef with a version."""
-    ref = create_embedder_ref('versioned-embedder', version='v1.0')
+    ref = EmbedderRef(name='versioned-embedder', version='v1.0')
     assert ref.name == 'versioned-embedder'
     assert ref.config is None
     assert ref.version == 'v1.0'
@@ -147,31 +146,16 @@ def test_create_embedder_ref_with_version() -> None:
 def test_create_embedder_ref_with_config_and_version() -> None:
     """Test creation of EmbedderRef with both config and version."""
     config = {'task_type': 'retrieval'}
-    ref = create_embedder_ref('full-embedder', config=config, version='beta')
+    ref = EmbedderRef(name='full-embedder', config=config, version='beta')
     assert ref.name == 'full-embedder'
     assert ref.config == config
     assert ref.version == 'beta'
 
 
-def test_create_embedder_ref_with_positional_config_raises_type_error() -> None:
-    """create_embedder_ref(name, {...}) raises TypeError; settings go in config=."""
-    with pytest.raises(TypeError):
-        create_embedder_ref('e', {'task': 'retrieval'})  # type: ignore[misc]
-
-
-def test_create_embedder_ref_with_positional_version_raises_type_error() -> None:
-    """create_embedder_ref(name, config, version) raises TypeError; version= is named."""
-    with pytest.raises(TypeError):
-        create_embedder_ref('e', None, 'v1')  # type: ignore[misc]
-
-
 @pytest.mark.parametrize(
     'build',
-    [
-        lambda: create_embedder_ref('e', config=cast(Any, 'v1')),
-        lambda: EmbedderRef(name='e', config=cast(Any, 'v1')),
-    ],
-    ids=['create_embedder_ref', 'EmbedderRef'],
+    [lambda: EmbedderRef(name='e', config=cast(Any, 'v1'))],
+    ids=['EmbedderRef'],
 )
 def test_embedder_ref_with_non_dict_config_raises_validation_error(build: Callable[[], EmbedderRef]) -> None:
     """A non-dict config raises instead of being silently dropped by ai.embed."""
@@ -261,7 +245,7 @@ async def test_embed_with_embedder_ref(
         metadata=embedder_action_metadata('my-plugin/my-embedder', info=embedder_info).metadata,
         description='A fake embedder for testing',
     )
-    embedder_ref = create_embedder_ref('my-plugin/my-embedder', config={'param': 'value'}, version='v1')
+    embedder_ref = EmbedderRef(name='my-plugin/my-embedder', config={'param': 'value'}, version='v1')
 
     content = Document.from_text('hello world')
 
@@ -284,7 +268,7 @@ async def test_embed_with_embedder_ref(
 async def test_create_embedder_ref_config_keyword_reaches_the_embedder(
     mock_genkit_instance: tuple[Genkit, MockGenkitRegistry],
 ) -> None:
-    """create_embedder_ref(name, config={...}) arrives at the embedder as request.options."""
+    """EmbedderRef(name=..., config={...}) arrives at the embedder as request.options."""
     genkit_instance, registry = mock_genkit_instance
 
     async def fake_embedder_fn(request: EmbedRequest) -> EmbedResponse:
@@ -297,7 +281,7 @@ async def test_create_embedder_ref_config_keyword_reaches_the_embedder(
         metadata=embedder_action_metadata('kw-embedder').metadata,
         description='A fake embedder for testing',
     )
-    ref = create_embedder_ref('kw-embedder', config={'task': 'retrieval'})
+    ref = EmbedderRef(name='kw-embedder', config={'task': 'retrieval'})
 
     response = await genkit_instance.embed(embedder=ref, content='hello')
 
@@ -396,7 +380,7 @@ async def test_embed_many_with_embedder_ref_merges_config_the_same_as_embed(
         metadata=embedder_action_metadata('my-plugin/my-embedder').metadata,
         description='A fake embedder for testing',
     )
-    embedder_ref = create_embedder_ref('my-plugin/my-embedder', config={'param': 'value'}, version='v1')
+    embedder_ref = EmbedderRef(name='my-plugin/my-embedder', config={'param': 'value'}, version='v1')
     content = [Document.from_text('one'), Document.from_text('two')]
 
     response = await genkit_instance.embed_many(embedder=embedder_ref, content=content, config={'extra': True})
@@ -426,7 +410,7 @@ async def test_embed_many_call_config_wins_over_embedder_ref_config(
         metadata=embedder_action_metadata('override-embedder').metadata,
         description='A fake embedder for testing',
     )
-    embedder_ref = create_embedder_ref('override-embedder', config={'param': 'from_ref'})
+    embedder_ref = EmbedderRef(name='override-embedder', config={'param': 'from_ref'})
 
     response = await genkit_instance.embed_many(
         embedder=embedder_ref,
@@ -458,7 +442,7 @@ async def test_embed_many_does_not_change_the_embedder_ref_config(
         description='A fake embedder for testing',
     )
     config = {'param': 'value'}
-    embedder_ref = create_embedder_ref('stable-embedder', config=config, version='v1')
+    embedder_ref = EmbedderRef(name='stable-embedder', config=config, version='v1')
 
     await genkit_instance.embed_many(
         embedder=embedder_ref,
@@ -557,7 +541,7 @@ def test_resolve_embedder_name_with_string() -> None:
 def test_resolve_embedder_name_with_embedder_ref() -> None:
     """Test _resolve_embedder_name extracts name from EmbedderRef."""
     genkit_instance = Genkit()
-    ref = create_embedder_ref('ref-embedder', config={'key': 'value'}, version='v1')
+    ref = EmbedderRef(name='ref-embedder', config={'key': 'value'}, version='v1')
     result = genkit_instance._resolve_embedder_name(ref)
     assert result == 'ref-embedder'
 

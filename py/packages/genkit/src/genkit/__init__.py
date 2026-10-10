@@ -44,7 +44,6 @@ from genkit._ai._tools import (
     MultipartToolResponse,
     ToolRunContext,
     tool,
-    tool_response,
 )
 from genkit._core._action import ActionRunContext, StreamResponse
 from genkit._core._context import ContextProvider, RequestData
@@ -92,7 +91,6 @@ __all__ = [
     'Tool',
     'ToolRunContext',
     'Interrupt',
-    'tool_response',
     'MultipartToolResponse',
     # Flows, prompts, errors
     'ActionRunContext',

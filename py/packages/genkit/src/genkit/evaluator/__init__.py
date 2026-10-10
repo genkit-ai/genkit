@@ -49,7 +49,6 @@ Example:
 from genkit._ai._evaluator import (
     EvaluatorRef,
     evaluator_action_metadata,
-    evaluator_ref,
 )
 from genkit._core._typing import (
     BaseDataPoint,
@@ -72,7 +71,6 @@ __all__ = [
     # Status
     'ScoreStatus',
     # Factory functions
-    'evaluator_ref',
     # Reference types
     'EvaluatorRef',
     # Plugin list_actions

@@ -62,6 +62,15 @@ def agent_has_server_store(action: Action) -> bool:
     return agent_dict.get('stateManagement') == 'server'
 
 
+async def resolve_runnable_key(registry: Registry, key: str) -> Action | None:
+    """Resolve a Dev UI run key. A key that doesn't parse (such as a removed kind) is not found."""
+    try:
+        parse_action_key(key)
+    except ValueError:
+        return None
+    return await registry.resolve_action_by_key(key)
+
+
 def resolve_agent_init(action: Action, init_val: object) -> AgentInit:
     """Validate a raw init payload into an ``AgentInit``, normalized for the agent's store.
 
@@ -323,12 +332,7 @@ def create_reflection_asgi_app(
     async def run(req: Request) -> Response:
         payload = await req.json()
         key = payload['key']
-        try:
-            parse_action_key(key)
-        except ValueError:
-            action = None
-        else:
-            action = await registry.resolve_action_by_key(key)
+        action = await resolve_runnable_key(registry, key)
         if not action:
             return JSONResponse({'error': f'Action not found: {key}'}, status_code=404)
         context = payload.get('context')

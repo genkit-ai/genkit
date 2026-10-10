@@ -372,7 +372,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from genkit import MultipartToolResponse, tool_response
+from genkit import MultipartToolResponse
 
 if TYPE_CHECKING:
     from genkit import ToolRunContext
@@ -383,7 +383,7 @@ async def weather(input: WeatherInput, ctx: ToolRunContext) -> str:
 
 
 async def forecast(input: WeatherInput, ctx: ToolRunContext) -> MultipartToolResponse[Forecast]:
-    return tool_response(Forecast(city=input.city, days=3))
+    return MultipartToolResponse(output=Forecast(city=input.city, days=3))
 """
 
 

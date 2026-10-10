@@ -29,37 +29,15 @@ from genkit._core._action import Action, ActionKind, ActionRunContext, resolve_t
 from genkit._core._error import GenkitError, Interrupt, RuntimeErrorReason
 from genkit._core._logger import get_logger
 from genkit._core._middleware import GenerateMiddlewareContext
-from genkit._core._model import MultipartToolResponse, OutputT, Part, as_part, as_resumed
+from genkit._core._model import MultipartToolResponse, Part, as_part, as_resumed
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
 from genkit._core._telemetry._instrumentation import set_custom_metadata_attributes
 from genkit._core._tool import Tool as _Tool
 from genkit._core._typing import (
-    Metadata,
     MultipartToolResponse as MultipartToolResponseData,
     ToolResponse,
 )
-
-
-def tool_response(
-    output: OutputT | None = None,
-    *,
-    parts: Sequence[Part] | None = None,
-    metadata: Metadata | None = None,
-) -> MultipartToolResponse[OutputT]:
-    """Build a tool result the model can see as structured output plus media.
-
-    Return this from a tool when the reply is more than a JSON value — a caption
-    and a screenshot, for example. A plain ``return value`` still works; that is
-    treated as ``output`` only. ``parts`` may be a sequence of parts.
-    """
-    if metadata is not None and not isinstance(metadata, dict):
-        raise GenkitError(
-            status='INVALID_ARGUMENT',
-            message=f'tool_response() metadata must be a dict, got {type(metadata).__name__}.',
-            reason=RuntimeErrorReason.INVALID_INPUT,
-        )
-    return MultipartToolResponse(output=output, content=normalize_response_parts(parts), metadata=metadata)
 
 
 def coerce_part(value: object) -> Part | None:
@@ -71,30 +49,8 @@ def coerce_part(value: object) -> Part | None:
         return None
 
 
-def normalize_response_parts(parts: Sequence[Part] | None) -> list[Part] | None:
-    if parts is None:
-        return None
-    if isinstance(parts, (list, tuple, Sequence)) and not isinstance(parts, (str, bytes, dict, Part)):
-        out: list[Part] = []
-        for item in parts:
-            part = coerce_part(item)
-            if part is None:
-                raise GenkitError(
-                    status='INVALID_ARGUMENT',
-                    message=f'tool_response() parts must be a list of Parts, got {type(item).__name__} in the list.',
-                    reason=RuntimeErrorReason.INVALID_PART,
-                )
-            out.append(require_live_part(part))
-        return out
-    raise GenkitError(
-        status='INVALID_ARGUMENT',
-        message=f'tool_response() parts must be a sequence of Parts, got {type(parts).__name__}.',
-        reason=RuntimeErrorReason.INVALID_PART,
-    )
-
-
 def normalize_pending_content(pending_content: object, *, tool_name: str) -> list[dict[str, Any]] | None:
-    """Validate a resume stash as the same part list ``tool_response()`` accepts."""
+    """Validate a resume stash as the same part list ``MultipartToolResponse.content`` accepts."""
     if pending_content is None:
         return None
     if not isinstance(pending_content, list):
@@ -201,7 +157,7 @@ def dump_part(part: Part, *, tool_name: str | None = None, what: str = 'content'
         if tool_name is not None:
             message = f'Tool {tool_name!r} {what} is not JSON-serializable.'
         else:
-            message = f'tool_response() {what} is not JSON-serializable.'
+            message = f'MultipartToolResponse {what} is not JSON-serializable.'
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message=message,
@@ -227,7 +183,7 @@ def require_live_part(part: Part, *, tool_name: str | None = None, where: str = 
         raise live_payload_error(tool_name=tool_name, where=where)
     raise GenkitError(
         status='INVALID_ARGUMENT',
-        message='tool_response() parts include a part with no live payload.',
+        message='MultipartToolResponse content includes a part with no live payload.',
         reason=RuntimeErrorReason.INVALID_PART,
     )
 

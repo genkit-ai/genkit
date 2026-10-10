@@ -67,15 +67,6 @@ class EvaluatorRef(BaseModel):
     config: dict[str, object] | None = None
 
 
-def evaluator_ref(name: str, *, config: dict[str, object] | None = None) -> EvaluatorRef:
-    """Create an EvaluatorRef whose config is merged under ai.evaluate's config=.
-
-    Settings are named. A value in the second position is a TypeError so it
-    cannot be stored as config.
-    """
-    return EvaluatorRef(name=name, config=config)
-
-
 def _evaluator_metadata(
     name: str,
     display_name: str,
