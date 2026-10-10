@@ -666,6 +666,8 @@ def test_stable_gemini_text_models_register_real_capabilities(model_name: str, e
         ('gemini-2.5-flash-preview-tts', 'Google AI - Gemini 2.5 Flash Preview TTS'),
         ('gemini-2.5-pro-preview-tts', 'Google AI - Gemini 2.5 Pro Preview TTS'),
         ('gemini-3.1-flash-tts-preview', 'Google AI - Gemini 3.1 Flash TTS Preview'),
+        ('gemini-3.8-flash-tts', 'Google AI - Gemini 3.8 Flash TTS'),
+        ('gemini-3.8-flash-lite-tts', 'Google AI - Gemini 3.8 Flash Lite TTS'),
     ],
 )
 def test_tts_models_register_per_name_capabilities(model_name: str, expected_label: str) -> None:
@@ -691,6 +693,8 @@ def test_tts_models_register_per_name_capabilities(model_name: str, expected_lab
         'gemini-2.5-flash-preview-tts',
         'gemini-2.5-pro-preview-tts',
         'gemini-3.1-flash-tts-preview',
+        'gemini-3.8-flash-tts',
+        'gemini-3.8-flash-lite-tts',
         'gemini-9.9-flash-preview-tts',
     ],
 )
@@ -1259,6 +1263,8 @@ async def test_gemini_model__tts_json_output_skips_constrained_config() -> None:
     [
         ('gemini-2.5-flash-preview-tts', GeminiTtsConfig),
         ('gemini-3.1-flash-tts-preview', GeminiTtsConfig),
+        ('gemini-3.8-flash-tts', GeminiTtsConfig),
+        ('gemini-3.8-flash-lite-tts', GeminiTtsConfig),
         ('gemini-2.0-flash-preview-image-generation', GeminiImageConfig),
         ('gemini-3-pro-image', GeminiImageConfig),
         ('gemini-3.1-flash-image', GeminiImageConfig),

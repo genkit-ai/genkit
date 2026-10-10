@@ -875,6 +875,16 @@ GEMINI_3_1_FLASH_TTS_PREVIEW = ModelInfo(
     supports=GEMINI_TTS_SUPPORTS,
 )
 
+GEMINI_3_8_FLASH_TTS = ModelInfo(
+    label='Google AI - Gemini 3.8 Flash TTS',
+    supports=GEMINI_TTS_SUPPORTS,
+)
+
+GEMINI_3_8_FLASH_LITE_TTS = ModelInfo(
+    label='Google AI - Gemini 3.8 Flash Lite TTS',
+    supports=GEMINI_TTS_SUPPORTS,
+)
+
 GEMMA_SUPPORTS = Supports(
     multiturn=True,
     media=True,
@@ -960,6 +970,8 @@ KnownGeminiTts: TypeAlias = Literal[
     'gemini-2.5-flash-preview-tts',
     'gemini-2.5-pro-preview-tts',
     'gemini-3.1-flash-tts-preview',
+    'gemini-3.8-flash-tts',
+    'gemini-3.8-flash-lite-tts',
 ]
 KnownGeminiImage: TypeAlias = Literal[
     'gemini-2.5-flash-image',
@@ -1017,6 +1029,8 @@ _add_model(GEMINI_2_5_FLASH_IMAGE, ['gemini-2.5-flash-image'])
 _add_model(GEMINI_2_5_FLASH_PREVIEW_TTS, ['gemini-2.5-flash-preview-tts'])
 _add_model(GEMINI_2_5_PRO_PREVIEW_TTS, ['gemini-2.5-pro-preview-tts'])
 _add_model(GEMINI_3_1_FLASH_TTS_PREVIEW, ['gemini-3.1-flash-tts-preview'])
+_add_model(GEMINI_3_8_FLASH_TTS, ['gemini-3.8-flash-tts'])
+_add_model(GEMINI_3_8_FLASH_LITE_TTS, ['gemini-3.8-flash-lite-tts'])
 _add_model(GEMMA_4_26B_A4B_IT, ['gemma-4-26b-a4b-it'])
 _add_model(GEMMA_4_31B_IT, ['gemma-4-31b-it'])
 
