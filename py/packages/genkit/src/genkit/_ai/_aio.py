@@ -1100,15 +1100,42 @@ class Genkit:
                 self.registry.register_value('middleware', desc.name, desc)
 
     def run_main(self, coro: Coroutine[Any, Any, T]) -> T:
-        """Run the user's main coroutine, blocking while the reflection server runs.
+        """Run your ``main`` coroutine and return its result, like ``asyncio.run``.
 
-        Blocks whenever reflection is on, not only under GENKIT_ENV=dev: the
-        server lives on a daemon thread, so returning here would kill it.
-        Returns once the reflection server stops on its own (for example the
-        CLI rejected this runtime's secret), rather than blocking with nothing
-        serving. A failing coroutine doesn't take the reflection server down
-        with it: the error is logged, the server stays up, and the error is
-        raised once it stops, whether by Ctrl+C, SIGTERM, or on its own.
+        With reflection on (``GENKIT_ENV=dev``, which ``genkit start`` sets, or
+        ``GENKIT_REFLECTION_ENABLED=true``), it keeps the process alive after
+        ``main`` returns, so the Dev UI can keep running your flows, until
+        Ctrl+C, SIGTERM, or the reflection server stops on its own. With
+        reflection off, it returns as soon as ``main`` does.
+
+        If ``main`` raises while reflection is on, the error is logged and the
+        Dev UI stays up. The error is raised once the process stops. Ctrl+C
+        after a successful ``main`` raises ``KeyboardInterrupt``, and SIGTERM
+        returns ``main``'s result.
+
+        Example:
+            ```python
+            from genkit import Genkit
+            from genkit_google_genai import GoogleAI
+
+            # 1. Initialize Genkit and define a flow
+            ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
+
+            @ai.flow()
+            async def suggest_dish(cuisine: str) -> str:
+                response = await ai.generate(prompt=f'Suggest one {cuisine} dish.')
+                return response.text
+
+            # 2. Run a quick check from your script's entry point
+            async def main() -> None:
+                print(await suggest_dish('Thai'))
+
+            # 3. Start it
+            ai.run_main(main())
+            # => Green curry with chicken
+            #    `python main.py` exits here. Under `genkit start`, the process
+            #    stays up for the Dev UI until you press Ctrl+C.
+            ```
         """
         if not self._reflection_config.enabled:
             return run_loop(coro)
