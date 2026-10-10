@@ -32,15 +32,15 @@ There is one path. `create_release` refuses to run unless every step below was f
 5. Approve the publish at <https://github.com/genkit-ai/genkit/actions/workflows/publish_python.yml>. The tag push already started it; don't run it by hand.
 6. `pip index versions genkit` shows X.Y.Z.
 
-`create_release` checks, and reports every failure with its fix:
+`create_release` runs every check before it changes anything and prints a fix for each failure:
 
-- the PR is merged into main
-- the title is exactly `chore(py): release Python SDK vX.Y.Z`
-- the description is not empty
-- every `py/packages/*/pyproject.toml` is at X.Y.Z in the merge commit
-- tag `py/vX.Y.Z`, its GitHub release, and `genkit==X.Y.Z` on PyPI don't exist yet
+- `pr-merged`, `pr-base`: the PR is merged into main
+- `pr-title`: the title is exactly `chore(py): release Python SDK vX.Y.Z`
+- `pr-notes`: the description isn't empty
+- `versions`: every `py/packages/*/pyproject.toml` is at X.Y.Z in the merge commit
+- `tag-free`: tag `py/vX.Y.Z` doesn't exist yet
 
-It tags the PR's merge commit, not the tip of main, so anything merged later stays out of the release. Exit codes: `0` released or dry run passed, `1` usage or environment, `2` a check failed and nothing changed, `3` failed partway (the output says how to finish).
+It tags the PR's merge commit, not the tip of main, so anything merged later stays out of the release. Exit codes: `0` ok, `1` usage or environment, `2` a check failed and nothing changed.
 
 To fix notes after release, edit the GitHub release: `gh release edit py/vX.Y.Z --notes-file notes.md`. The PR description isn't read again.
 

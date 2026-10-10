@@ -15,361 +15,150 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-# Tag and publish a stable Genkit Python SDK release from its merged release PR.
+# Tag and publish a stable Python SDK release from its merged release PR.
+# The PR's description is published as the release notes.
 #
-# Usage:
 #   py/bin/create_release <VERSION> <PR_NUMBER> [--dry-run]
 #
-# There is one way to release:
-#   1. py/bin/bump_version <VERSION> on a branch.
-#   2. Open a PR to main titled exactly "chore(py): release Python SDK v<VERSION>".
-#      Its description is the release notes, published word for word.
-#   3. Merge it.
-#   4. py/bin/create_release <VERSION> <PR_NUMBER>
-#
-# Before touching anything, this script checks that:
-#   - the PR is merged into main
-#   - its title is exactly "chore(py): release Python SDK v<VERSION>"
-#   - its description (the release notes) is not empty
-#   - every py/packages/*/pyproject.toml is at <VERSION> in the PR's merge commit
-#   - tag py/v<VERSION>, its GitHub release, and genkit==<VERSION> on PyPI don't exist yet
-# All failed checks are reported together, each with the fix.
-#
-# Then it tags the PR's merge commit (not the tip of main, so later merges never
-# leak into the release), pushes the tag, and creates the GitHub release. The
-# tag push starts publish_python.yml, which uploads to PyPI after approval.
-#
-# --dry-run runs every check and prints the plan without tagging or publishing.
-#
-# Release candidates don't use this script; run the "Release Python RC" workflow.
-#
-# Exit codes: 0 released (or dry run passed), 1 usage or environment error,
-# 2 a release check failed (nothing was changed), 3 failed partway (see output).
+# Steps and checks: py/docs/release_playbook.md
+# Exit codes: 0 ok, 1 usage/environment, 2 a check failed (nothing changed).
 
 set -euo pipefail
 
 REPO="genkit-ai/genkit"
-PUBLISH_WORKFLOW="publish_python.yml"
-
-if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
-    RED='\033[0;31m'
-    GREEN='\033[0;32m'
-    YELLOW='\033[1;33m'
-    BLUE='\033[0;34m'
-    NC='\033[0m'
-else
-    RED=''
-    GREEN=''
-    YELLOW=''
-    BLUE=''
-    NC=''
-fi
 
 usage() {
     cat <<EOF
 Usage: py/bin/create_release <VERSION> <PR_NUMBER> [--dry-run]
 
-  VERSION     Stable version X.Y.Z, matching what bump_version set (e.g. 0.13.0).
-  PR_NUMBER   The merged release PR. Its title must be exactly
-              "chore(py): release Python SDK v<VERSION>", and its description
-              is published as the release notes.
-  --dry-run   Run every check and print the plan. Tags and publishes nothing.
+  VERSION     X.Y.Z, as set by py/bin/bump_version.
+  PR_NUMBER   The merged release PR, titled exactly
+              "chore(py): release Python SDK v<VERSION>".
+              Its description is published as the release notes.
+  --dry-run   Run the checks only. Tags and publishes nothing.
 
-Example:
-  py/bin/create_release 0.13.0 6801 --dry-run
-  py/bin/create_release 0.13.0 6801
-
-Release candidates: run the "Release Python RC" workflow in GitHub Actions instead.
+Release candidates: use the "Release Python RC" workflow instead.
 EOF
 }
 
-die_usage() {
-    echo -e "${RED}ERROR [usage]: $1${NC}" >&2
-    echo "" >&2
-    usage >&2
-    exit 1
-}
-
-die_env() {
-    echo -e "${RED}ERROR [environment]: $1${NC}" >&2
+die() {
+    echo "ERROR: $1" >&2
     echo "Fix: $2" >&2
     exit 1
 }
 
-# --- Arguments ---------------------------------------------------------------
-
 VERSION=""
 PR_NUMBER=""
 DRY_RUN=false
-
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        -h|--help)
-            usage
-            exit 0
-            ;;
-        --dry-run)
-            DRY_RUN=true
-            ;;
-        --notes|--notes-file)
-            die_usage "$1 was removed. Release notes come only from the release PR's description. Edit the PR description, then pass the PR number."
-            ;;
-        -*)
-            die_usage "Unknown option: $1"
-            ;;
+for arg in "$@"; do
+    case "$arg" in
+        -h|--help) usage; exit 0 ;;
+        --dry-run) DRY_RUN=true ;;
+        -*) usage >&2; die "Unknown option: $arg" "Only --dry-run is supported. Release notes come from the PR description." ;;
         *)
-            if [ -z "$VERSION" ]; then
-                VERSION="$1"
-            elif [ -z "$PR_NUMBER" ]; then
-                PR_NUMBER="$1"
-            else
-                die_usage "Unexpected extra argument: $1"
+            if [ -z "$VERSION" ]; then VERSION="$arg"
+            elif [ -z "$PR_NUMBER" ]; then PR_NUMBER="$arg"
+            else usage >&2; die "Unexpected argument: $arg" "Pass exactly <VERSION> <PR_NUMBER>."
             fi
             ;;
     esac
-    shift
 done
 
-[ -n "$VERSION" ] || die_usage "Missing VERSION and PR_NUMBER."
-[ -n "$PR_NUMBER" ] || die_usage "Missing PR_NUMBER. Pass the number of the merged release PR (find it with: gh pr list --repo $REPO --state merged --search \"Python SDK v${VERSION} in:title\")."
-
-VERSION="${VERSION#v}"
-if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    die_usage "VERSION must be X.Y.Z (got '$VERSION'). For release candidates, run the \"Release Python RC\" workflow."
+if [ -z "$VERSION" ] || [ -z "$PR_NUMBER" ]; then
+    usage >&2
+    die "VERSION and PR_NUMBER are required." "py/bin/create_release <VERSION> <PR_NUMBER>"
 fi
-PR_NUMBER="${PR_NUMBER#\#}"
-if ! [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
-    die_usage "PR_NUMBER must be a number (got '$PR_NUMBER')."
-fi
+[[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
+    die "VERSION must be X.Y.Z (got '$VERSION')." "For release candidates, use the \"Release Python RC\" workflow."
+[[ "$PR_NUMBER" =~ ^[0-9]+$ ]] ||
+    die "PR_NUMBER must be a number (got '$PR_NUMBER')." "Pass the release PR's number, e.g. 6430."
 
-TAG_NAME="py/v${VERSION}"
-EXPECTED_TITLE="chore(py): release Python SDK v${VERSION}"
+command -v gh >/dev/null 2>&1 || die "gh is not installed." "Install the GitHub CLI: https://cli.github.com/"
+gh auth status >/dev/null 2>&1 || die "gh is not logged in." "Run: gh auth login"
+cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 
-# --- Environment -------------------------------------------------------------
+TAG="py/v${VERSION}"
+TITLE="chore(py): release Python SDK v${VERSION}"
 
-command -v git >/dev/null 2>&1 || die_env "git is not installed." "Install git."
-command -v gh >/dev/null 2>&1 || die_env "GitHub CLI (gh) is not installed." "Install it: https://cli.github.com/"
-command -v curl >/dev/null 2>&1 || die_env "curl is not installed." "Install curl."
-gh auth status >/dev/null 2>&1 || die_env "gh is not logged in." "Run: gh auth login"
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-cd "$REPO_ROOT"
-git rev-parse --git-dir >/dev/null 2>&1 || die_env "$REPO_ROOT is not a git checkout." "Run this from a clone of $REPO."
-ORIGIN_URL=$(git remote get-url origin 2>/dev/null || true)
-case "$ORIGIN_URL" in
-    *github.com[:/]"${REPO}"|*github.com[:/]"${REPO}".git) ;;
-    *) die_env "'origin' is '${ORIGIN_URL:-<unset>}', not ${REPO}. The tag would be pushed to the wrong repo." \
-        "Run from a clone whose origin is ${REPO}, or: git remote set-url origin https://github.com/${REPO}.git" ;;
-esac
-
-echo -e "${BLUE}=== Genkit Python SDK release v${VERSION} from PR #${PR_NUMBER} ===${NC}"
-echo ""
-
-# --- Checks ------------------------------------------------------------------
-# Collect every failure so one run tells you everything to fix.
-
-FAILURES=()
-fail() {
-    # $1 check id, $2 what's wrong, $3 how to fix it
-    FAILURES+=("[$1] $2"$'\n'"    Fix: $3")
-    echo -e "  ${RED}✗ $1${NC}: $2"
-}
-pass() {
-    echo -e "  ${GREEN}✓ $1${NC}: $2"
-}
-
-echo -e "${YELLOW}Checking release PR #${PR_NUMBER}...${NC}"
-
-if ! PR_INFO=$(gh pr view "$PR_NUMBER" --repo "$REPO" \
-    --json state,baseRefName,title,url,mergeCommit \
-    --jq '[.state, .baseRefName, (.mergeCommit.oid // ""), .url, .title] | join("\u001f")' 2>/dev/null); then
-    echo -e "${RED}ERROR [pr-exists]: PR #${PR_NUMBER} was not found in ${REPO}.${NC}" >&2
-    echo "Fix: Check the number. List recent release PRs with: gh pr list --repo $REPO --state all --search \"Python SDK in:title\"" >&2
-    exit 2
-fi
+PR_INFO=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json state,baseRefName,mergeCommit,url,title \
+    --jq '[.state, .baseRefName, (.mergeCommit.oid // ""), .url, .title] | join("\u001f")' 2>/dev/null) ||
+    die "PR #$PR_NUMBER not found in $REPO." "Check the number."
 IFS=$'\x1f' read -r PR_STATE PR_BASE MERGE_SHA PR_URL PR_TITLE <<< "$PR_INFO"
-PR_BODY=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json body --jq '.body')
+NOTES=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json body --jq .body)
 
-if [ "$PR_STATE" = "MERGED" ]; then
-    pass "pr-merged" "$PR_URL is merged"
-else
-    fail "pr-merged" "PR #${PR_NUMBER} is ${PR_STATE}, not MERGED." \
-        "Get it approved and merged first ($PR_URL), then rerun. Never release from an unmerged PR."
-fi
-
-if [ "$PR_BASE" = "main" ]; then
-    pass "pr-base" "targets main"
-else
-    fail "pr-base" "PR #${PR_NUMBER} targets '${PR_BASE}', not main." \
-        "Release PRs must merge into main. Open a new release PR against main."
-fi
-
-if [ "$PR_TITLE" = "$EXPECTED_TITLE" ]; then
-    pass "pr-title" "\"$PR_TITLE\""
-else
-    # Only suggest a rename for a near-miss title of this exact version.
-    # Otherwise it's the wrong PR, and renaming it would publish the wrong notes.
-    title_lower=$(printf '%s' "$PR_TITLE" | tr '[:upper:]' '[:lower:]')
-    if [[ "$title_lower" == *"python sdk"* ]] && [[ "$PR_TITLE" == *"$VERSION"* ]] && [[ "$PR_TITLE" != *"${VERSION}"[0-9]* ]]; then
-        fail "pr-title" "Title is \"${PR_TITLE}\", expected exactly \"${EXPECTED_TITLE}\"." \
-            "This looks like the v${VERSION} release PR with a malformed title. Rename it (allowed after merge): gh pr edit $PR_NUMBER --repo $REPO --title \"$EXPECTED_TITLE\""
+# Every check runs, so one pass reports everything to fix.
+FAILED=0
+check() {
+    # $1 name, $2 "ok" to pass, otherwise the problem; $3 fix
+    if [ "$2" = "ok" ]; then
+        echo "  ✓ $1"
     else
-        fail "pr-title" "Title is \"${PR_TITLE}\", expected exactly \"${EXPECTED_TITLE}\". This is not the v${VERSION} release PR." \
-            "Do not rename this PR to pass the check. Pass the number of the PR that bumped the packages to ${VERSION}, or check that VERSION is right."
+        echo "  ✗ $1: $2"
+        echo "      Fix: $3"
+        FAILED=$((FAILED + 1))
     fi
-fi
+}
 
-if [ -n "$(printf '%s' "$PR_BODY" | tr -d '[:space:]')" ]; then
-    pass "pr-notes" "description has $(printf '%s\n' "$PR_BODY" | wc -l | tr -d ' ') lines (becomes the release notes)"
-else
-    fail "pr-notes" "PR #${PR_NUMBER} has an empty description. It is published as the release notes." \
-        "Write the release notes into the PR description: gh pr edit $PR_NUMBER --repo $REPO --body-file notes.md"
-fi
+echo "Checking release of v${VERSION} from $PR_URL"
 
-echo ""
-echo -e "${YELLOW}Checking package versions in the merge commit...${NC}"
+check "pr-merged" "$([ "$PR_STATE" = MERGED ] && echo ok || echo "PR is $PR_STATE.")" \
+    "Merge the PR first, then rerun."
+check "pr-base" "$([ "$PR_BASE" = main ] && echo ok || echo "PR targets '$PR_BASE'.")" \
+    "Release PRs must merge into main."
+check "pr-title" "$([ "$PR_TITLE" = "$TITLE" ] && echo ok || echo "Title is \"$PR_TITLE\", expected \"$TITLE\".")" \
+    "Pass the PR that bumped the packages to $VERSION. Rename only if this is that PR: gh pr edit $PR_NUMBER --repo $REPO --title \"$TITLE\""
+check "pr-notes" "$([ -n "$(printf '%s' "$NOTES" | tr -d '[:space:]')" ] && echo ok || echo "Description is empty.")" \
+    "Write the release notes: gh pr edit $PR_NUMBER --repo $REPO --body-file notes.md"
 
 if [ -n "$MERGE_SHA" ]; then
-    if ! git fetch --quiet origin main 2>/dev/null; then
-        die_env "Could not fetch main from origin." "Check your network and that 'origin' points at $REPO (git remote -v)."
-    fi
-    if ! git cat-file -e "${MERGE_SHA}^{commit}" 2>/dev/null; then
-        fail "merge-commit" "Merge commit ${MERGE_SHA} is not on origin/main." \
-            "Run: git fetch origin main. If it's still missing, the PR may have been merged somewhere other than main."
-    elif ! git merge-base --is-ancestor "$MERGE_SHA" origin/main; then
-        fail "merge-commit" "Merge commit ${MERGE_SHA} is not on origin/main." \
-            "The PR must be merged into main. Check $PR_URL."
+    git fetch --quiet origin main || die "Could not fetch origin/main." "Check your network and 'git remote -v'."
+    if git merge-base --is-ancestor "$MERGE_SHA" origin/main 2>/dev/null; then
+        WRONG=""
+        for toml in $(git ls-tree -r --name-only "$MERGE_SHA" -- py/packages | grep -E '^py/packages/[^/]+/pyproject\.toml$'); do
+            v=$(git show "$MERGE_SHA:$toml" 2>/dev/null | sed -n 's/^version *= *"\(.*\)"/\1/p' | head -1)
+            [ "$v" = "$VERSION" ] || WRONG="$WRONG $(basename "$(dirname "$toml")")=${v:-none}"
+        done
+        check "versions" "$([ -z "$WRONG" ] && echo ok || echo "Not at $VERSION in the merge commit:$WRONG")" \
+            "Wrong VERSION or PR, or bump_version wasn't run. Bump on a new branch and release from that PR."
     else
-        pass "merge-commit" "${MERGE_SHA:0:12} is on main"
-        WRONG_VERSIONS=()
-        PKG_COUNT=0
-        while IFS= read -r toml; do
-            PKG_COUNT=$((PKG_COUNT + 1))
-            pkg_version=$(git show "${MERGE_SHA}:${toml}" | grep -m1 '^version' | sed 's/.*= *"//; s/".*//' || true)
-            if [ "$pkg_version" != "$VERSION" ]; then
-                WRONG_VERSIONS+=("${toml} is ${pkg_version:-<none>}")
-            fi
-        done < <(git ls-tree -r --name-only "$MERGE_SHA" -- py/packages | grep -E '^py/packages/[^/]+/pyproject\.toml$')
-
-        if [ "$PKG_COUNT" -eq 0 ]; then
-            fail "versions" "No py/packages/*/pyproject.toml found in ${MERGE_SHA:0:12}." \
-                "Check that PR #${PR_NUMBER} is a Python release PR."
-        elif [ "${#WRONG_VERSIONS[@]}" -eq 0 ]; then
-            pass "versions" "all ${PKG_COUNT} packages are at ${VERSION}"
-        else
-            if [ "${#WRONG_VERSIONS[@]}" -eq "$PKG_COUNT" ] && [ "$(printf '%s\n' "${WRONG_VERSIONS[@]}" | sed 's/.* is //' | sort -u | wc -l | tr -d ' ')" = "1" ]; then
-                found_version="${WRONG_VERSIONS[0]##* is }"
-                detail="All ${PKG_COUNT} packages are at ${found_version}, not ${VERSION}, in the merge commit."
-            else
-                detail="${#WRONG_VERSIONS[@]} of ${PKG_COUNT} packages are not at ${VERSION} in the merge commit: $(IFS=';'; echo "${WRONG_VERSIONS[*]}" | sed 's/;/, /g')."
-            fi
-            fail "versions" "$detail" \
-                "Either VERSION or PR_NUMBER is wrong, or the release PR didn't bump every package. To fix the PR: py/bin/bump_version ${VERSION} on a new branch from main, merge it as \"${EXPECTED_TITLE}\", and release from that PR."
-        fi
+        check "versions" "Merge commit $MERGE_SHA is not on origin/main." "Release PRs must merge into main."
     fi
-else
-    echo "  (skipped: PR is not merged)"
 fi
 
-echo ""
-echo -e "${YELLOW}Checking ${TAG_NAME} isn't already released...${NC}"
+check "tag-free" "$(git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1 && echo "$TAG already exists." || echo ok)" \
+    "This version is already released. Bump to the next version."
 
-if git ls-remote --exit-code --tags origin "refs/tags/${TAG_NAME}" >/dev/null 2>&1; then
-    fail "tag-free" "Tag ${TAG_NAME} already exists on origin. This version was already released." \
-        "Don't reuse versions. Bump to the next version with py/bin/bump_version and release that."
-elif git rev-parse -q --verify "refs/tags/${TAG_NAME}" >/dev/null 2>&1; then
-    fail "tag-free" "Tag ${TAG_NAME} exists locally but not on origin (left over from an earlier attempt)." \
-        "Delete the local tag and rerun: git tag -d ${TAG_NAME}"
-else
-    pass "tag-free" "${TAG_NAME} doesn't exist"
-fi
-
-if gh release view "$TAG_NAME" --repo "$REPO" >/dev/null 2>&1; then
-    fail "release-free" "GitHub release ${TAG_NAME} already exists." \
-        "This version was already released: https://github.com/${REPO}/releases/tag/${TAG_NAME}"
-else
-    pass "release-free" "no GitHub release for ${TAG_NAME}"
-fi
-
-PYPI_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "https://pypi.org/pypi/genkit/${VERSION}/json" || echo "000")
-if [ "$PYPI_STATUS" = "404" ]; then
-    pass "pypi-free" "genkit ${VERSION} is not on PyPI"
-elif [ "$PYPI_STATUS" = "200" ]; then
-    fail "pypi-free" "genkit ${VERSION} is already on PyPI. PyPI never accepts the same version twice." \
-        "Release the next version instead: py/bin/bump_version <next version>."
-else
-    fail "pypi-free" "Could not reach PyPI (HTTP ${PYPI_STATUS})." \
-        "Check your network and rerun. Check by hand: https://pypi.org/project/genkit/${VERSION}/"
-fi
-
-echo ""
-if [ "${#FAILURES[@]}" -gt 0 ]; then
-    echo -e "${RED}RELEASE BLOCKED: ${#FAILURES[@]} check(s) failed. Nothing was tagged or published.${NC}"
+if [ "$FAILED" -gt 0 ]; then
     echo ""
-    for f in "${FAILURES[@]}"; do
-        echo "$f"
-        echo ""
-    done
-    echo "Fix the above, then rerun: py/bin/create_release ${VERSION} ${PR_NUMBER}"
+    echo "RELEASE BLOCKED: $FAILED check(s) failed. Nothing was tagged or published."
     exit 2
 fi
 
-echo -e "${GREEN}All checks passed.${NC}"
 echo ""
-echo "Plan:"
-echo "  1. Tag ${MERGE_SHA:0:12} (merge commit of PR #${PR_NUMBER}) as ${TAG_NAME} and push it."
-echo "     The push starts ${PUBLISH_WORKFLOW}, which uploads to PyPI after approval."
-echo "  2. Create GitHub release \"Genkit Python SDK v${VERSION}\" with PR #${PR_NUMBER}'s description as notes."
-
+echo "All checks passed. Will tag ${MERGE_SHA:0:12} as $TAG and publish the PR description as the release notes."
 if $DRY_RUN; then
-    echo ""
-    echo -e "${YELLOW}DRY RUN: nothing was tagged or published.${NC}"
-    echo "To release for real: py/bin/create_release ${VERSION} ${PR_NUMBER}"
+    echo "Dry run: nothing changed. Rerun without --dry-run to release."
     exit 0
 fi
 
-# --- Release -----------------------------------------------------------------
+# Tag the merge commit, not the tip of main, so later merges stay out.
+git tag -a "$TAG" "$MERGE_SHA" -m "Genkit Python SDK v${VERSION}
 
-echo ""
-echo -e "${YELLOW}Tagging ${TAG_NAME}...${NC}"
-TAG_MSG="Genkit Python SDK v${VERSION}
+Release PR: $PR_URL"
+git push origin "refs/tags/$TAG"
 
-Release notes: https://github.com/${REPO}/releases/tag/${TAG_NAME}
-Release PR: ${PR_URL}"
-git tag -a "$TAG_NAME" "$MERGE_SHA" -m "$TAG_MSG"
-if ! git push origin "refs/tags/${TAG_NAME}"; then
-    git tag -d "$TAG_NAME" >/dev/null
-    echo -e "${RED}ERROR [tag-push]: Could not push ${TAG_NAME}. Nothing was published; the local tag was removed.${NC}" >&2
-    echo "Fix: Check that you can push tags to ${REPO} (git push --dry-run origin main), then rerun: py/bin/create_release ${VERSION} ${PR_NUMBER}" >&2
-    exit 3
-fi
-echo -e "${GREEN}✓ Pushed ${TAG_NAME}. ${PUBLISH_WORKFLOW} is starting.${NC}"
-
-echo ""
-echo -e "${YELLOW}Creating GitHub release...${NC}"
 NOTES_FILE=$(mktemp)
 trap 'rm -f "$NOTES_FILE"' EXIT
-printf '%s\n' "$PR_BODY" > "$NOTES_FILE"
-if ! gh release create "$TAG_NAME" --repo "$REPO" --verify-tag \
-    --title "Genkit Python SDK v${VERSION}" --notes-file "$NOTES_FILE"; then
-    echo -e "${RED}ERROR [github-release]: ${TAG_NAME} is pushed and PyPI publishing has started, but the GitHub release was not created.${NC}" >&2
-    echo "Fix: Don't delete the tag. Create the release with:" >&2
-    echo "  gh pr view ${PR_NUMBER} --repo ${REPO} --json body --jq .body > notes.md" >&2
-    echo "  gh release create ${TAG_NAME} --repo ${REPO} --verify-tag --title \"Genkit Python SDK v${VERSION}\" --notes-file notes.md" >&2
-    exit 3
-fi
-echo -e "${GREEN}✓ Created https://github.com/${REPO}/releases/tag/${TAG_NAME}${NC}"
+printf '%s\n' "$NOTES" > "$NOTES_FILE"
+gh release create "$TAG" --repo "$REPO" --verify-tag --title "Genkit Python SDK v${VERSION}" --notes-file "$NOTES_FILE" || {
+    echo "ERROR: $TAG is pushed (PyPI publish has started) but the GitHub release failed." >&2
+    echo "Fix: Don't delete the tag. Rerun just this: gh pr view $PR_NUMBER --repo $REPO --json body --jq .body | gh release create $TAG --repo $REPO --verify-tag --title \"Genkit Python SDK v${VERSION}\" --notes-file -" >&2
+    exit 1
+}
 
 echo ""
-echo -e "${BLUE}=== Released ${TAG_NAME} ===${NC}"
-echo ""
-echo "Remaining steps:"
-echo "  1. Approve the PyPI publish. ${PUBLISH_WORKFLOW} waits for approval on the"
-echo "     pypi_github_publishing environment: https://github.com/${REPO}/actions/workflows/${PUBLISH_WORKFLOW}"
-echo "     Watch it: gh run watch --repo ${REPO} \$(gh run list --repo ${REPO} --workflow ${PUBLISH_WORKFLOW} --branch ${TAG_NAME} --limit 1 --json databaseId --jq '.[0].databaseId')"
-echo "     Don't start ${PUBLISH_WORKFLOW} by hand; the tag push already did."
-echo "  2. Confirm it's live: pip index versions genkit   (expect ${VERSION})"
-echo ""
-echo "To fix the notes later, edit the GitHub release (the PR description is not re-read):"
-echo "  gh release edit ${TAG_NAME} --repo ${REPO} --notes-file notes.md"
+echo "Released https://github.com/$REPO/releases/tag/$TAG"
+echo "Next:"
+echo "  1. The tag push started publish_python.yml. Approve it (don't start it by hand):"
+echo "     https://github.com/$REPO/actions/workflows/publish_python.yml"
+echo "  2. Confirm: pip index versions genkit   (expect $VERSION)"
