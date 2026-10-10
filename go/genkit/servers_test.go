@@ -21,9 +21,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/firebase/genkit/go/core"
@@ -439,6 +442,116 @@ data: {"result":"hello-end"}
 			t.Errorf("want error body:\n%q\n\nGot:\n%q", expected, string(body))
 		}
 	})
+}
+
+// recordingHandler is a slog.Handler that keeps every record it receives.
+type recordingHandler struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (h *recordingHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *recordingHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.records = append(h.records, r.Clone())
+	return nil
+}
+
+func (h *recordingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *recordingHandler) WithGroup(string) slog.Handler      { return h }
+
+// messages returns the messages of the records logged at level.
+func (h *recordingHandler) messages(level slog.Level) []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var msgs []string
+	for _, r := range h.records {
+		if r.Level == level {
+			msgs = append(msgs, r.Message)
+		}
+	}
+	return msgs
+}
+
+func TestHandlerClientDisconnectLogging(t *testing.T) {
+	g := Init(context.Background())
+
+	// Each flow streams one chunk (when streaming), signals it is in flight,
+	// and then either waits for the request to end or fails on its own with
+	// context.Canceled while the request is still live.
+	defineFlow := func(name string, selfCancel bool, started chan<- struct{}) api.Action {
+		return DefineStreamingFlow(g, name,
+			func(ctx context.Context, _ string, cb func(context.Context, string) error) (string, error) {
+				if cb != nil {
+					if err := cb(ctx, "chunk"); err != nil {
+						return "", err
+					}
+				}
+				close(started)
+				if selfCancel {
+					return "", context.Canceled
+				}
+				<-ctx.Done()
+				return "", ctx.Err()
+			})
+	}
+
+	tests := []struct {
+		name       string
+		stream     bool
+		selfCancel bool
+		wantError  bool
+	}{
+		{name: "streaming client disconnects", stream: true},
+		{name: "non-streaming client disconnects"},
+		{name: "streaming flow cancels itself", stream: true, selfCancel: true, wantError: true},
+	}
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := &recordingHandler{}
+			prev := slog.Default()
+			slog.SetDefault(slog.New(rec))
+			t.Cleanup(func() { slog.SetDefault(prev) })
+
+			started := make(chan struct{})
+			h := Handler(defineFlow(fmt.Sprintf("disconnect%d", i), tt.selfCancel, started))
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			req := httptest.NewRequestWithContext(ctx, "POST", "/", strings.NewReader(`{"data":"x"}`))
+			req.Header.Set("Content-Type", "application/json")
+			if tt.stream {
+				req.Header.Set("Accept", "text/event-stream")
+			}
+
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				h(httptest.NewRecorder(), req)
+			}()
+			<-started
+			if !tt.selfCancel {
+				cancel()
+			}
+			<-done
+
+			errs := rec.messages(slog.LevelError)
+			if tt.wantError {
+				if len(errs) == 0 {
+					t.Fatal("no ERROR record for a cancellation the flow raised itself")
+				}
+				return
+			}
+			if len(errs) > 0 {
+				t.Errorf("ERROR records for a client disconnect: %q", errs)
+			}
+			if debug := rec.messages(slog.LevelDebug); !slices.Contains(debug, "client disconnected") {
+				t.Errorf("DEBUG records = %q, want one with message %q", debug, "client disconnected")
+			}
+		})
+	}
 }
 
 func TestDurableStreamingHandlerFunc(t *testing.T) {

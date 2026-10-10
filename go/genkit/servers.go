@@ -148,7 +148,13 @@ func wrapHandler(h func(http.ResponseWriter, *http.Request) error) http.HandlerF
 
 		var err error
 		defer func() {
-			if err != nil {
+			if clientDisconnected(ctx, err) {
+				logger.Debug(ctx, "client disconnected",
+					"method", r.Method,
+					"path", r.URL.Path,
+					"duration", time.Since(start).Round(time.Millisecond),
+					"error", err)
+			} else if err != nil {
 				logger.Error(ctx, "request failed",
 					"method", r.Method,
 					"path", r.URL.Path,
@@ -164,6 +170,15 @@ func wrapHandler(h func(http.ResponseWriter, *http.Request) error) http.HandlerF
 			http.Error(w, msg, code.HTTPCode())
 		}
 	}
+}
+
+// clientDisconnected reports whether err is the cancellation that follows the
+// client closing the connection: the request context is canceled and err
+// carries that cancellation. A disconnect is routine, not a server failure, so
+// callers log it at Debug rather than Error. A cancellation the action raised
+// on its own while the request is still live does not match.
+func clientDisconnected(ctx context.Context, err error) bool {
+	return errors.Is(err, context.Canceled) && errors.Is(ctx.Err(), context.Canceled)
 }
 
 // clientError returns the message and status to send a client for err. Both
@@ -318,6 +333,11 @@ func runWithStreaming(ctx context.Context, w http.ResponseWriter, run runJSONFun
 	}
 
 	out, err := run(ctx, input, callback)
+	if clientDisconnected(ctx, err) {
+		// Nobody is left to read an error frame.
+		logger.Debug(ctx, "client disconnected", "error", err)
+		return nil
+	}
 	if err != nil {
 		// The SSE frame carries only the redacted message and this function
 		// returns nil, so wrapHandler never sees the error: this log is the
