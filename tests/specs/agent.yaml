@@ -1604,7 +1604,8 @@ tests:
         inputs:
           - message: { role: user, content: [{ text: say something risky }] }
         modelResponses:
-          - message: { role: model, content: [{ text: I cannot help with that }] }
+          - message:
+              { role: model, content: [{ text: I cannot help with that }] }
             finishReason: blocked
             finishMessage: safety
         expectOutput:
