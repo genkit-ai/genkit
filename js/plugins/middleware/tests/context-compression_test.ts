@@ -4443,6 +4443,36 @@ describe('contextCompression middleware', () => {
       assert.deepStrictEqual(labels.slice(2), expectedTail);
     }
   });
+  it('estimates tool responses by name and raw output length, without JSON escaping', async () => {
+    const ai = genkit({});
+    const pm = ai.defineModel({ name: 'rawEstimateModel' }, async () => ({
+      message: { role: 'model', content: [{ text: 'ok' }] },
+    }));
+
+    const output = 'a "line"\n'.repeat(100);
+    const response = (await ai.generate({
+      model: pm,
+      messages: [
+        {
+          role: 'tool',
+          content: [{ toolResponse: { name: 'logs', ref: 'r1', output } }],
+        },
+        { role: 'user', content: [{ text: 'go' }] },
+      ],
+      use: [
+        contextCompression({
+          maxInputTokens: 100,
+          toolResponses: { maxChars: 50, preserveRecent: 0 },
+        }),
+      ],
+    })) as any;
+
+    // 'logs' + output + 'go', at 3.5 chars per token.
+    assert.strictEqual(
+      response.custom?.contextCompression?.inputTokensBefore,
+      Math.ceil(('logs'.length + output.length + 'go'.length) / 3.5)
+    );
+  });
 });
 
 function messageLabels(messages: MessageData[]): string[] {

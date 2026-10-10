@@ -740,13 +740,11 @@ function estimatePartChars(p: Part): number {
   }
   if (p.toolRequest) return stringifyOutput(p.toolRequest).length;
   if (p.toolResponse) {
-    if (!p.toolResponse.content?.length) {
-      return stringifyOutput(p.toolResponse).length;
-    }
-    const { content, ...restToolResponse } = p.toolResponse;
+    // Count the raw output, as the tool response caps do, not its JSON
+    // encoding, which counts each escaped quote and newline twice.
     return (
-      stringifyOutput(restToolResponse).length +
-      content.reduce((cSum, cPart) => cSum + estimatePartChars(cPart), 0)
+      (p.toolResponse.name?.length ?? 0) +
+      getToolResponseCharLength(p.toolResponse)
     );
   }
   return 0;
