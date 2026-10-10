@@ -248,9 +248,8 @@ func (d descriptionOption[State]) applyPromptAgent(opts *promptAgentOptions[Stat
 	return d.applyAgent(&opts.agentOptions)
 }
 
-func (d descriptionOption[State]) applyRemoteAgent(opts *remoteAgentOptions) error {
+func (d descriptionOption[State]) applyRemoteAgent(opts *remoteAgentOptions) {
 	opts.description = string(d)
-	return nil
 }
 
 // WithMaxSnapshotWait bounds how long one request to the agent's

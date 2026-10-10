@@ -658,8 +658,8 @@ func newSnapshotActions[State any](
 	waitKey := api.KeyFromName(api.ActionTypeAgentWait, agentName)
 	getSnapshotAction := core.NewActionOf(api.ActionTypeAgentSnapshot, agentName, nil,
 		func(ctx context.Context, req *GetSnapshotRequest) (*SessionSnapshot[State], error) {
-			if req == nil || (req.SnapshotID == "" && req.SessionID == "") {
-				return nil, status.Errorf(status.ErrInvalidArgument, "getSnapshot: snapshotId or sessionId is required")
+			if err := checkGetSnapshotRequest(req); err != nil {
+				return nil, err
 			}
 
 			snap, err := readSnapshot(ctx, store, transform, "getSnapshot", req.SnapshotID, req.SessionID, req.MetadataOnly)
@@ -676,8 +676,8 @@ func newSnapshotActions[State any](
 	// asks again.
 	waitAction := core.NewActionOf(api.ActionTypeAgentWait, agentName, nil,
 		func(ctx context.Context, req *GetSnapshotRequest) (*SessionSnapshot[State], error) {
-			if req == nil || req.SnapshotID == "" {
-				return nil, status.Errorf(status.ErrInvalidArgument, "waitForSnapshot: snapshotId is required")
+			if err := checkWaitRequest(req); err != nil {
+				return nil, err
 			}
 			snap, err := waitSnapshot(ctx, store, transform, "waitForSnapshot", req.SnapshotID, req.SessionID, maxWait)
 			return servedSnapshot(ctx, waitKey, snap), err
@@ -690,8 +690,8 @@ func newSnapshotActions[State any](
 	}
 	abortAction := core.NewActionOf(api.ActionTypeAgentAbort, agentName, nil,
 		func(ctx context.Context, req *AgentAbortRequest) (*AgentAbortResponse, error) {
-			if req == nil || req.SnapshotID == "" {
-				return nil, status.Errorf(status.ErrInvalidArgument, "abort: snapshotId is required")
+			if err := checkAbortRequest(req); err != nil {
+				return nil, err
 			}
 			// Aborting is an ordinary SaveSnapshot that flips a pending row to
 			// aborting; the store has no dedicated abort method.
@@ -705,6 +705,30 @@ func newSnapshotActions[State any](
 			return &AgentAbortResponse{SnapshotID: req.SnapshotID, Status: snapStatus}, nil
 		})
 	return getSnapshotAction, waitAction, abortAction
+}
+
+// checkGetSnapshotRequest, checkWaitRequest, and checkAbortRequest reject a
+// snapshot companion request that names no snapshot, for the companions an
+// agent defines and the ones [AgentHandle.Register] forwards alike.
+func checkGetSnapshotRequest(req *GetSnapshotRequest) error {
+	if req == nil || (req.SnapshotID == "" && req.SessionID == "") {
+		return status.Errorf(status.ErrInvalidArgument, "getSnapshot: snapshotId or sessionId is required")
+	}
+	return nil
+}
+
+func checkWaitRequest(req *GetSnapshotRequest) error {
+	if req == nil || req.SnapshotID == "" {
+		return status.Errorf(status.ErrInvalidArgument, "waitForSnapshot: snapshotId is required")
+	}
+	return nil
+}
+
+func checkAbortRequest(req *AgentAbortRequest) error {
+	if req == nil || req.SnapshotID == "" {
+		return status.Errorf(status.ErrInvalidArgument, "abort: snapshotId is required")
+	}
+	return nil
 }
 
 // servedSnapshot returns snap as the companion action keyed key returns it:

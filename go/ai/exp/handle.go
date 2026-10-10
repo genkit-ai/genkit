@@ -151,8 +151,6 @@ func NewAgentHandle(name string, opts *AgentHandleOptions, t AgentTransport) *Ag
 		h.desc = opts.Description
 		h.meta = cloneAgentMetadata(opts.Metadata)
 	}
-	// Nothing to derive: the info was supplied, so mark it resolved.
-	h.infoOnce.Do(func() {})
 	return h
 }
 
@@ -240,15 +238,9 @@ func agentMetadataOf(a api.Action) *AgentMetadata {
 	}
 	switch m := a.Desc().Metadata["agent"].(type) {
 	case AgentMetadata:
-		m.StateSchema = base.CloneSchema(m.StateSchema)
-		return &m
+		return cloneAgentMetadata(&m)
 	case *AgentMetadata:
-		if m == nil {
-			return nil
-		}
-		copied := *m
-		copied.StateSchema = base.CloneSchema(copied.StateSchema)
-		return &copied
+		return cloneAgentMetadata(m)
 	case map[string]any:
 		meta, err := base.MapToStruct[AgentMetadata](m)
 		if err != nil {

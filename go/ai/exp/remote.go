@@ -43,7 +43,7 @@ import (
 // RemoteAgentOption configures a remote agent built by [NewRemoteAgent]. A
 // later option of the same kind replaces an earlier one.
 type RemoteAgentOption interface {
-	applyRemoteAgent(*remoteAgentOptions) error
+	applyRemoteAgent(*remoteAgentOptions)
 }
 
 type remoteAgentOptions struct {
@@ -53,20 +53,16 @@ type remoteAgentOptions struct {
 	metadata    *AgentMetadata
 }
 
-func (o *remoteAgentOptions) applyRemoteAgent(opts *remoteAgentOptions) error {
+func (o *remoteAgentOptions) applyRemoteAgent(opts *remoteAgentOptions) {
 	if o.httpClient != nil {
 		opts.httpClient = o.httpClient
 	}
 	if o.headers != nil {
 		opts.headers = o.headers
 	}
-	if o.description != "" {
-		opts.description = o.description
-	}
 	if o.metadata != nil {
 		opts.metadata = o.metadata
 	}
-	return nil
 }
 
 // WithHTTPClient sets the HTTP client that reaches a remote agent. Use it for
@@ -125,9 +121,7 @@ func NewRemoteAgent(name, url string, opts ...RemoteAgentOption) *AgentHandle {
 	}
 	var o remoteAgentOptions
 	for _, opt := range opts {
-		if err := opt.applyRemoteAgent(&o); err != nil {
-			panic(fmt.Sprintf("aix.NewRemoteAgent: agent %q: %v", name, err))
-		}
+		opt.applyRemoteAgent(&o)
 	}
 	client := http.DefaultClient
 	if o.httpClient != nil {
@@ -220,30 +214,27 @@ func (t *httpTransport) Run(ctx context.Context, input *AgentInput, init *AgentI
 		if !ok {
 			continue
 		}
+		// The events of the wire format, decoded in one pass; RawMessage
+		// copies, so Message outlives the scanner's buffer.
 		var event struct {
-			Message json.RawMessage `json:"message"`
-			Result  json.RawMessage `json:"result"`
-			Error   *wire.Error     `json:"error"`
+			Message json.RawMessage               `json:"message"`
+			Result  *AgentOutput[json.RawMessage] `json:"result"`
+			Error   *status.Error                 `json:"error"`
 		}
 		if err := json.Unmarshal(data, &event); err != nil {
 			return nil, status.Errorf(status.ErrInternal, "agent %q: malformed stream event: %w", t.name, err)
 		}
 		switch {
 		case event.Error != nil:
-			return nil, wireError(event.Error)
+			return nil, event.Error
 		case event.Result != nil:
-			var out AgentOutput[json.RawMessage]
-			if err := json.Unmarshal(event.Result, &out); err != nil {
-				return nil, status.Errorf(status.ErrInternal, "agent %q: malformed output: %w", t.name, err)
-			}
-			if err := t.checkOutput(&out); err != nil {
+			if err := t.checkOutput(event.Result); err != nil {
 				return nil, err
 			}
-			return &out, nil
+			return event.Result, nil
 		case event.Message != nil:
 			if cb != nil {
-				// A copy: the scanner reuses its buffer for the next line.
-				if err := cb(ctx, bytes.Clone(event.Message)); err != nil {
+				if err := cb(ctx, event.Message); err != nil {
 					return nil, err
 				}
 			}
@@ -308,26 +299,26 @@ func (t *httpTransport) pollSnapshot(ctx context.Context, req *GetSnapshotReques
 }
 
 func (t *httpTransport) Abort(ctx context.Context, req *AgentAbortRequest) (*AgentAbortResponse, error) {
-	var resp AgentAbortResponse
-	if err := t.call(ctx, "/abort", req, &resp); err != nil {
+	resp, err := call[AgentAbortResponse](ctx, t, "/abort", req)
+	if err != nil {
 		return nil, err
 	}
 	if !knownSnapshotStatus(resp.Status) {
 		return nil, status.Errorf(status.ErrInternal, "agent %q: abort answered with unknown status %q", t.name, resp.Status)
 	}
-	return &resp, nil
+	return resp, nil
 }
 
 func (t *httpTransport) snapshot(ctx context.Context, suffix string, req *GetSnapshotRequest) (*SessionSnapshot[json.RawMessage], error) {
-	var snap SessionSnapshot[json.RawMessage]
-	if err := t.call(ctx, suffix, req, &snap); err != nil {
+	snap, err := call[SessionSnapshot[json.RawMessage]](ctx, t, suffix, req)
+	if err != nil {
 		return nil, err
 	}
 	// An unknown status would read as settled and be cached as final.
 	if !knownSnapshotStatus(snap.Status) {
 		return nil, status.Errorf(status.ErrInternal, "agent %q: snapshot %q has unknown status %q", t.name, snap.SnapshotID, snap.Status)
 	}
-	return &snap, nil
+	return snap, nil
 }
 
 // knownSnapshotStatus reports whether s is a status this runtime knows. Empty
@@ -341,21 +332,24 @@ func knownSnapshotStatus(s SnapshotStatus) bool {
 	return false
 }
 
-// call posts data to the route suffix names and decodes the result into out.
-func (t *httpTransport) call(ctx context.Context, suffix string, data, out any) error {
+// call posts data to the route suffix names and returns its result.
+func call[T any](ctx context.Context, t *httpTransport, suffix string, data any) (*T, error) {
 	resp, err := t.post(ctx, suffix, data, nil, false)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer resp.Body.Close()
-	var result wire.ResultResponse
-	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseBytes)).Decode(&result); err != nil {
-		return status.Errorf(status.ErrInternal, "agent %q: malformed response from %s: %w", t.name, suffix, err)
+	// wire.ResultResponse, decoded in one pass.
+	var body struct {
+		Result *T `json:"result"`
 	}
-	if err := json.Unmarshal(result.Result, out); err != nil {
-		return status.Errorf(status.ErrInternal, "agent %q: malformed result from %s: %w", t.name, suffix, err)
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseBytes)).Decode(&body); err != nil {
+		return nil, status.Errorf(status.ErrInternal, "agent %q: malformed response from %s: %w", t.name, suffix, err)
 	}
-	return nil
+	if body.Result == nil {
+		return nil, status.Errorf(status.ErrInternal, "agent %q: the response from %s carries no result", t.name, suffix)
+	}
+	return body.Result, nil
 }
 
 // post sends one request to the route suffix names and returns the response
@@ -415,9 +409,9 @@ func (t *httpTransport) post(ctx context.Context, suffix string, data any, init 
 func (t *httpTransport) responseError(resp *http.Response, suffix string) error {
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	if mt, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type")); mt == "application/json" {
-		var e wire.Error
+		var e status.Error
 		if json.Unmarshal(raw, &e) == nil && e.Status != "" {
-			return wireError(&e)
+			return &e
 		}
 	}
 	route := "turn"
@@ -432,12 +426,6 @@ func (t *httpTransport) responseError(resp *http.Response, suffix string) error 
 	}
 	n := status.FromHTTPCode(resp.StatusCode)
 	return &status.Error{Status: n, Message: fmt.Sprintf("agent %q: %s request failed: HTTP %d: %s", t.name, route, resp.StatusCode, strings.TrimSpace(string(raw)))}
-}
-
-// wireError returns the error a [wire.Error] describes. Like every error that
-// crossed a wire, it carries a status name and no sentinel.
-func wireError(e *wire.Error) error {
-	return &status.Error{Status: e.Status, Message: e.Message}
 }
 
 // --- Registration ---
@@ -488,15 +476,15 @@ func (h *AgentHandle) Register(r api.Registry) {
 	if meta == nil || meta.StateManagement == AgentStateManagementServer {
 		core.NewActionOf(api.ActionTypeAgentSnapshot, h.name, nil,
 			func(ctx context.Context, req *GetSnapshotRequest) (*SessionSnapshot[json.RawMessage], error) {
-				if req == nil {
-					return nil, status.Errorf(status.ErrInvalidArgument, "getSnapshot: snapshotId or sessionId is required")
+				if err := checkGetSnapshotRequest(req); err != nil {
+					return nil, err
 				}
 				return st.GetSnapshot(ctx, req)
 			}).Register(r)
 		core.NewActionOf(api.ActionTypeAgentWait, h.name, nil,
 			func(ctx context.Context, req *GetSnapshotRequest) (*SessionSnapshot[json.RawMessage], error) {
-				if req == nil || req.SnapshotID == "" {
-					return nil, status.Errorf(status.ErrInvalidArgument, "waitForSnapshot: snapshotId is required")
+				if err := checkWaitRequest(req); err != nil {
+					return nil, err
 				}
 				return st.WaitForSnapshot(ctx, req)
 			}).Register(r)
@@ -504,8 +492,8 @@ func (h *AgentHandle) Register(r api.Registry) {
 	if meta == nil || meta.Abortable {
 		core.NewActionOf(api.ActionTypeAgentAbort, h.name, nil,
 			func(ctx context.Context, req *AgentAbortRequest) (*AgentAbortResponse, error) {
-				if req == nil || req.SnapshotID == "" {
-					return nil, status.Errorf(status.ErrInvalidArgument, "abort: snapshotId is required")
+				if err := checkAbortRequest(req); err != nil {
+					return nil, err
 				}
 				return st.Abort(ctx, req)
 			}).Register(r)
