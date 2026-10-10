@@ -1980,6 +1980,17 @@ def test_eval_response_tuple_of_scores_becomes_list() -> None:
     assert row.evaluation == [Score(id='accuracy', score=0.9)]
 
 
+def test_eval_response_generator_of_scores_becomes_list() -> None:
+    """Building EvalFnResponse(evaluation=(Score(...) for ...)) in code gives evaluation as a list."""
+    metrics = {'accuracy': 0.9, 'fluency': 0.8}
+    row = EvalFnResponse(
+        test_case_id='case1',
+        evaluation=(Score(id=name, score=value) for name, value in metrics.items()),  # type: ignore[arg-type]
+    )
+
+    assert row.evaluation == [Score(id='accuracy', score=0.9), Score(id='fluency', score=0.8)]
+
+
 @pytest.mark.asyncio
 async def test_evaluator_returning_one_score_reads_back_as_one_item_list(setup_test: SetupFixture) -> None:
     """An evaluator that returns evaluation=Score(...) gives each row a one-item score list."""

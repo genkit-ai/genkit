@@ -99,7 +99,7 @@ HEADER = '''# Copyright {year} Google LLC
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable
 from typing import Any, ClassVar, Literal
 
 from pydantic import ConfigDict, Field, RootModel, field_validator
@@ -380,7 +380,7 @@ def _emit_model(
             '        # score as an object. wrap it so whoever reads results always gets a list.',
             '        if isinstance(value, (dict, Score)):',
             '            return [value]',
-            '        if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):',
+            '        if isinstance(value, (str, bytes)) or not isinstance(value, Iterable):',
             "            raise ValueError('evaluation must be a Score or a list of Score')",
             '        return value',
         ])
