@@ -489,8 +489,9 @@ include = ["**/tests/**", "**/*_test.py", "samples/**", "tools/**"]
 invalid-argument-type = "ignore"
 no-matching-overload = "ignore"
 
-# Typing contracts are the exception: they exist to fail on exactly these
-# rules. Later overrides win, so this re-enables them under tests/typecheck/.
+# tests/typecheck/ also matches **/tests/** above, which mutes these two rules.
+# Contract files exist to fail on them, so turn them back on. ty applies
+# overrides in order, so this block must stay after the tests/** one.
 [[tool.ty.overrides]]
 include = ["**/tests/typecheck/**"]
 [tool.ty.overrides.rules]
