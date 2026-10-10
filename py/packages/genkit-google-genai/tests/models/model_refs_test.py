@@ -276,6 +276,14 @@ class TestKnownIdLiterals:
         assert 'gemini-3.1-flash-tts-preview' in get_args(KnownGeminiTts)
         assert 'gemini-3.1-flash-tts-preview' not in get_args(KnownGemini)
 
+    def test_gemini_3_8_tts_ids_autocomplete_on_the_tts_constructor(self) -> None:
+        """The 3.8 TTS ids are offered by ``gemini_tts_model``, not ``gemini_model``."""
+        ids = {'gemini-3.8-flash-tts', 'gemini-3.8-flash-lite-tts'}
+        assert ids <= set(get_args(KnownGeminiTts))
+        assert not ids & set(get_args(KnownGemini))
+        for name in ids:
+            assert GoogleAI.gemini_tts_model(name).config_schema is GeminiTtsConfig
+
     def test_gemma_4_autocompletes_on_gemma_model(self) -> None:
         """The gemma-4 ids are offered by ``gemma_model``."""
         assert {'gemma-4-26b-a4b-it', 'gemma-4-31b-it'} <= set(get_args(KnownGemma))
