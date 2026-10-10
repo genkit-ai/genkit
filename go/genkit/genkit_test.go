@@ -18,6 +18,7 @@ package genkit
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -383,6 +384,24 @@ func (p *pluginWithTool) Init(ctx context.Context) []api.Action {
 // A plugin ships tools the same way it ships models: by returning them in its
 // action slice. This is the shape the core package documentation prescribes,
 // and it only compiles because *ai.ToolAction satisfies api.Action.
+func TestListTools(t *testing.T) {
+	g := Init(context.Background())
+	echo := func(ctx *ai.ToolContext, in string) (string, error) { return in, nil }
+	// Defined out of order, and with a flow sharing a tool's name, to check
+	// that each tool is listed once and sorted.
+	DefineTool(g, "zeta", "zeta tool", echo)
+	DefineTool(g, "alpha", "alpha tool", echo)
+	DefineFlow(g, "alpha", func(ctx context.Context, in string) (string, error) { return in, nil })
+
+	var got []string
+	for _, tool := range ListTools(g) {
+		got = append(got, tool.Name())
+	}
+	if want := []string{"alpha", "zeta"}; !slices.Equal(got, want) {
+		t.Errorf("ListTools() names = %v, want %v", got, want)
+	}
+}
+
 func TestPluginCanReturnTools(t *testing.T) {
 	g := Init(context.Background(), WithPlugins(&pluginWithTool{}))
 

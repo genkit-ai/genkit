@@ -673,13 +673,22 @@ func ListFlows(g *Genkit) []api.Action {
 
 // ListTools returns a slice of all [ai.Tool] instances that are registered
 // with the Genkit instance `g`. This is useful for introspection and for
-// exposing tools to external systems like MCP servers.
+// exposing tools to external systems like MCP servers. Each tool appears once,
+// sorted by name.
 func ListTools(g *Genkit) []ai.Tool {
-	acts := g.reg.ListActions()
 	tools := []ai.Tool{}
-	for _, action := range acts {
-		tool := LookupTool(g, action.Desc().Name)
-		if tool != nil {
+	seen := map[string]bool{}
+	for _, desc := range listActions(g) {
+		// A non-multipart tool is registered under both the "tool.v2" and the
+		// legacy "tool" key, so the same name comes up twice.
+		if desc.Type != api.ActionTypeToolV2 && desc.Type != api.ActionTypeTool {
+			continue
+		}
+		if seen[desc.Name] {
+			continue
+		}
+		seen[desc.Name] = true
+		if tool := LookupTool(g, desc.Name); tool != nil {
 			tools = append(tools, tool)
 		}
 	}
