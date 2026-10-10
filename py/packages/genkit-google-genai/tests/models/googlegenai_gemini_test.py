@@ -1656,6 +1656,16 @@ _NESTED_SDK_MIRRORS: list[tuple[type[BaseModel], type[BaseModel]]] = [
     (_gemini.SpeakerVoiceConfig, genai_types.SpeakerVoiceConfig),
     (_gemini.MultiSpeakerVoiceConfig, genai_types.MultiSpeakerVoiceConfig),
     (_gemini.SpeechConfig, genai_types.SpeechConfig),
+    (_gemini.ImageOutputOptions, genai_types.ImageConfigImageOutputOptions),
+    (_gemini.ReplicatedVoiceConfig, genai_types.ReplicatedVoiceConfig),
+    (_gemini.VoiceConsentSignature, genai_types.VoiceConsentSignature),
+    (_gemini.CodeExecutionConfig, genai_types.ToolCodeExecution),
+    (_gemini.UrlContextConfig, genai_types.UrlContext),
+    (_gemini.GoogleSearchConfig, genai_types.GoogleSearch),
+    (_gemini.SearchTypes, genai_types.SearchTypes),
+    (_gemini.WebSearchConfig, genai_types.WebSearch),
+    (_gemini.ImageSearchConfig, genai_types.ImageSearch),
+    (_gemini.TimeRangeFilter, genai_types.Interval),
 ]
 
 

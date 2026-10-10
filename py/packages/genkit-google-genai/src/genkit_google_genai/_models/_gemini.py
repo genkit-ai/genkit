@@ -20,7 +20,7 @@ import asyncio
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from functools import cached_property
-from typing import Annotated, Any, Any as JsonAny, Literal, TypeAlias, cast
+from typing import Annotated, Any, Any as JsonAny, Literal, TypeAlias, cast, get_args
 
 from google import genai
 from google.auth import default as google_auth_default
@@ -167,9 +167,26 @@ class HarmBlockThreshold(StrEnum):
 # it is sent as (named in its docstring), so a key the SDK accepts never fails
 # the unknown-key check. googlegenai_gemini_test.py pins the field sets.
 #
-# Each strict nested class below declares every field of the google.genai type
-# it is sent as (named in its docstring), so a key the SDK accepts never fails
-# the unknown-key check. googlegenai_gemini_test.py pins the field sets.
+# Config fields don't use google.genai types. SDK enums are Literals of their
+# values and nested messages are GenkitConfig mirrors; tests pin both against
+# the installed SDK.
+
+HarmBlockMethod: TypeAlias = Literal['HARM_BLOCK_METHOD_UNSPECIFIED', 'SEVERITY', 'PROBABILITY']
+"""Values of ``genai_types.HarmBlockMethod``."""
+
+ProminentPeople: TypeAlias = Literal['PROMINENT_PEOPLE_UNSPECIFIED', 'ALLOW_PROMINENT_PEOPLE', 'BLOCK_PROMINENT_PEOPLE']
+"""Values of ``genai_types.ProminentPeople``."""
+
+PhishBlockThreshold: TypeAlias = Literal[
+    'PHISH_BLOCK_THRESHOLD_UNSPECIFIED',
+    'BLOCK_LOW_AND_ABOVE',
+    'BLOCK_MEDIUM_AND_ABOVE',
+    'BLOCK_HIGH_AND_ABOVE',
+    'BLOCK_HIGHER_AND_ABOVE',
+    'BLOCK_VERY_HIGH_AND_ABOVE',
+    'BLOCK_ONLY_EXTREMELY_HIGH',
+]
+"""Values of ``genai_types.PhishBlockThreshold``."""
 
 
 class SafetySettingsSchema(GenkitConfig):
@@ -177,7 +194,7 @@ class SafetySettingsSchema(GenkitConfig):
 
     category: HarmCategory
     threshold: HarmBlockThreshold
-    method: genai_types.HarmBlockMethod | None = None
+    method: HarmBlockMethod | None = None
 
 
 class PrebuiltVoiceConfig(GenkitConfig):
@@ -251,6 +268,13 @@ class ImageSize(StrEnum):
     SIZE_4K = '4K'
 
 
+class ImageOutputOptions(GenkitConfig):
+    """Image output options. Sent as ``genai_types.ImageConfigImageOutputOptions``."""
+
+    mime_type: str | None = Field(default=None)
+    compression_quality: int | None = Field(default=None)
+
+
 class ImageConfig(GenkitConfig):
     """Image config. Sent as ``genai_types.ImageConfig``."""
 
@@ -259,22 +283,81 @@ class ImageConfig(GenkitConfig):
     output_mime_type: str | None = Field(default=None)
     output_compression_quality: int | None = Field(default=None)
     person_generation: str | None = Field(default=None)
-    prominent_people: genai_types.ProminentPeople | None = Field(default=None)
-    image_output_options: genai_types.ImageConfigImageOutputOptions | None = Field(default=None)
+    prominent_people: ProminentPeople | None = Field(default=None)
+    image_output_options: ImageOutputOptions | None = Field(default=None)
+
+
+class VoiceConsentSignature(GenkitConfig):
+    """Voice consent signature. Sent as ``genai_types.VoiceConsentSignature``."""
+
+    signature: str | None = Field(default=None)
+
+
+class ReplicatedVoiceConfig(GenkitConfig):
+    """Replicated voice config. Sent as ``genai_types.ReplicatedVoiceConfig``."""
+
+    # Same bytes handling as the SDK type: a str (JSON, Dev UI) is base64-decoded,
+    # raw bytes pass through, JSON output is base64. The python-mode dump then
+    # hands the SDK raw bytes, so audio isn't encoded twice.
+    model_config = ConfigDict(val_json_bytes='base64', ser_json_bytes='base64')
+
+    mime_type: str | None = Field(default=None)
+    voice_sample_audio: bytes | None = Field(default=None)
+    consent_audio: bytes | None = Field(default=None)
+    voice_consent_signature: VoiceConsentSignature | None = Field(default=None)
 
 
 class VoiceConfig(GenkitConfig):
     """Voice config. Sent as ``genai_types.VoiceConfig``."""
 
     prebuilt_voice_config: PrebuiltVoiceConfig | None = Field(default=None)
-    replicated_voice_config: genai_types.ReplicatedVoiceConfig | None = Field(default=None)
+    replicated_voice_config: ReplicatedVoiceConfig | None = Field(default=None)
 
 
-# The google.genai tool type a dict under each tool toggle is validated as.
-_TOOL_OPTION_TYPES: dict[str, type[BaseModel]] = {
-    'code_execution': genai_types.ToolCodeExecution,
-    'google_search': genai_types.GoogleSearch,
-    'url_context': genai_types.UrlContext,
+class CodeExecutionConfig(GenkitConfig):
+    """Code execution tool options. Sent as ``genai_types.ToolCodeExecution``."""
+
+
+class UrlContextConfig(GenkitConfig):
+    """URL context tool options. Sent as ``genai_types.UrlContext``."""
+
+
+class WebSearchConfig(GenkitConfig):
+    """Enables web search. Sent as ``genai_types.WebSearch``."""
+
+
+class ImageSearchConfig(GenkitConfig):
+    """Enables image search. Sent as ``genai_types.ImageSearch``."""
+
+
+class SearchTypes(GenkitConfig):
+    """Search types to enable. Sent as ``genai_types.SearchTypes``."""
+
+    web_search: WebSearchConfig | None = Field(default=None)
+    image_search: ImageSearchConfig | None = Field(default=None)
+
+
+class TimeRangeFilter(GenkitConfig):
+    """Search result time range. Sent as ``genai_types.Interval``."""
+
+    start_time: datetime | None = Field(default=None)
+    end_time: datetime | None = Field(default=None)
+
+
+class GoogleSearchConfig(GenkitConfig):
+    """Google Search tool options. Sent as ``genai_types.GoogleSearch``."""
+
+    search_types: SearchTypes | None = Field(default=None)
+    blocking_confidence: PhishBlockThreshold | None = Field(default=None)
+    exclude_domains: list[str] | None = Field(default=None)
+    time_range_filter: TimeRangeFilter | None = Field(default=None)
+
+
+# The options class a dict under each tool toggle is validated as.
+_TOOL_OPTION_TYPES: dict[str, type[GenkitConfig]] = {
+    'code_execution': CodeExecutionConfig,
+    'google_search': GoogleSearchConfig,
+    'url_context': UrlContextConfig,
 }
 
 
@@ -285,9 +368,9 @@ class GeminiConfig(ModelConfig):
     ``extra`` under its wire name and is merged into the request body.
     """
 
-    # alias_generator=to_camel is inherited from ModelConfig; don't pass alias=
-    # on fields here or type checkers stop accepting the snake_case kwarg.
-    model_config = ConfigDict(extra='forbid', validate_by_name=True, validate_by_alias=True)
+    # GenkitConfig's flags (to_camel, both spellings, extra='forbid') are
+    # inherited; don't pass alias= on fields or type checkers stop accepting
+    # the snake_case kwarg.
 
     base_url: str | None = Field(
         default=None, description='Overrides the plugin-configured or default baseUrl, if specified.'
@@ -313,7 +396,7 @@ class GeminiConfig(ModelConfig):
                 'properties': {
                     'category': {'type': 'string', 'enum': [e.value for e in HarmCategory]},
                     'threshold': {'type': 'string', 'enum': [e.value for e in HarmBlockThreshold]},
-                    'method': {'type': 'string', 'enum': [e.value for e in genai_types.HarmBlockMethod]},
+                    'method': {'type': 'string', 'enum': list(get_args(HarmBlockMethod))},
                 },
                 'required': ['category', 'threshold'],
                 'additionalProperties': False,
@@ -327,7 +410,7 @@ class GeminiConfig(ModelConfig):
         default=None,
     )
 
-    code_execution: bool | genai_types.ToolCodeExecution | None = Field(
+    code_execution: bool | CodeExecutionConfig | None = Field(
         default=None,
         description='Enables the model to generate and run code. True attaches the tool; a dict is the tool options.',
     )
@@ -366,7 +449,7 @@ class GeminiConfig(ModelConfig):
         description='The modalities to be used in the response.',
     )
 
-    google_search: bool | genai_types.GoogleSearch | None = Field(
+    google_search: bool | GoogleSearchConfig | None = Field(
         default=None,
         description=(
             'Ground the response in public web data with the Google Search tool. '
@@ -395,7 +478,7 @@ class GeminiConfig(ModelConfig):
         handler: ValidatorFunctionWrapHandler,
         info: ValidationInfo,
     ) -> Any:  # noqa: ANN401
-        """True/False toggles the tool; anything else validates as the SDK tool type alone.
+        """True/False toggles the tool; anything else validates as the tool options class alone.
 
         Skipping the ``bool | Tool`` union keeps the error path to the bad key
         (``google_search.exclude_domainz``) instead of one error per union arm.
@@ -430,7 +513,7 @@ class GeminiConfig(ModelConfig):
         }),
     ] = Field(default=None)
 
-    url_context: bool | genai_types.UrlContext | None = Field(
+    url_context: bool | UrlContextConfig | None = Field(
         default=None, description='Return grounding metadata from links included in the query'
     )
 
@@ -583,7 +666,7 @@ class GeminiImageConfig(GeminiConfig):
                 'outputMimeType': {'type': 'string'},
                 'outputCompressionQuality': {'type': 'integer'},
                 'personGeneration': {'type': 'string'},
-                'prominentPeople': {'type': 'string', 'enum': [e.value for e in genai_types.ProminentPeople]},
+                'prominentPeople': {'type': 'string', 'enum': list(get_args(ProminentPeople))},
                 'imageOutputOptions': {
                     'type': 'object',
                     'properties': {'mimeType': {'type': 'string'}, 'compressionQuality': {'type': 'integer'}},
@@ -2044,7 +2127,7 @@ class GeminiModel:
         Mutates *config* by popping consumed keys and appends to *tools*.
         """
         # Code execution, Google Search, URL context: True or an options dict
-        # (already checked against the SDK type) attaches the tool; False
+        # (already checked against the options class) attaches the tool; False
         # or None doesn't.
         val = config.pop('code_execution', None)
         if val is not None and val is not False:

@@ -36,10 +36,12 @@ from genkit_google_genai._models._gemini import (
     FileSearchConfig,
     FunctionCallingConfig,
     FunctionCallingMode,
+    GoogleSearchConfig,
     HarmBlockThreshold,
     HarmCategory,
     ImageAspectRatio,
     ImageConfig,
+    ImageOutputOptions,
     ImageSize,
     MultiSpeakerVoiceConfig,
     PrebuiltVoiceConfig,
@@ -51,7 +53,6 @@ from genkit_google_genai._models._gemini import (
     VoiceConfig,
 )
 from genkit_google_genai._models._lyria import LyriaConfig as VertexLyriaConfig
-from google.genai import types as genai_types
 from pydantic import BaseModel
 
 
@@ -80,6 +81,8 @@ def test_empty_construction() -> None:
         SpeakerVoiceConfig,
         MultiSpeakerVoiceConfig,
         SpeechConfig,
+        ImageOutputOptions,
+        GoogleSearchConfig,
     ):
         assert _wire(cls()) == {}
 
@@ -105,7 +108,7 @@ def test_gemini_config_snake_case_kwargs() -> None:
         response_modalities=['TEXT'],
         context_cache=True,
         code_execution=True,
-        google_search=genai_types.GoogleSearch(exclude_domains=['example.com']),
+        google_search=GoogleSearchConfig(exclude_domains=['example.com']),
         url_context=True,
         safety_settings=[
             SafetySettingsSchema(
@@ -215,8 +218,8 @@ def test_gemini_image_config_nested_image() -> None:
             output_mime_type='image/png',
             output_compression_quality=80,
             person_generation='ALLOW_ADULT',
-            prominent_people=genai_types.ProminentPeople.BLOCK_PROMINENT_PEOPLE,
-            image_output_options=genai_types.ImageConfigImageOutputOptions(mime_type='image/jpeg'),
+            prominent_people='BLOCK_PROMINENT_PEOPLE',
+            image_output_options=ImageOutputOptions(mime_type='image/jpeg'),
         ),
     )
 
@@ -249,8 +252,8 @@ def test_veo_config_snake_case_kwargs() -> None:
         fps=24,
         output_gcs_uri='gs://kitchen/promo.mp4',
         pubsub_topic='projects/p/topics/renders',
-        compression_quality=genai_types.VideoCompressionQuality.OPTIMIZED,
-        resize_mode=genai_types.ImageResizeMode.PAD,
+        compression_quality='OPTIMIZED',
+        resize_mode='PAD',
         labels={'team': 'kitchen'},
         last_frame={'uri': 'gs://kitchen/last.png'},
         reference_images=[{'uri': 'gs://kitchen/ref.png'}],

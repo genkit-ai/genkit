@@ -56,6 +56,13 @@ KnownVeo: TypeAlias = Literal[
 ]
 
 
+VideoCompressionQuality: TypeAlias = Literal['OPTIMIZED', 'LOSSLESS']
+"""Values of ``genai_types.VideoCompressionQuality``."""
+
+ImageResizeMode: TypeAlias = Literal['CROP', 'PAD']
+"""Values of ``genai_types.ImageResizeMode``."""
+
+
 def is_veo_model(name: str) -> bool:
     """Check if a model name is a Veo model.
 
@@ -76,8 +83,8 @@ class VeoConfig(GenkitConfig):
     fps: int | None = Field(default=None)
     output_gcs_uri: str | None = Field(default=None)
     pubsub_topic: str | None = Field(default=None)
-    compression_quality: genai_types.VideoCompressionQuality | None = Field(default=None)
-    resize_mode: genai_types.ImageResizeMode | None = Field(default=None)
+    compression_quality: VideoCompressionQuality | None = Field(default=None)
+    resize_mode: ImageResizeMode | None = Field(default=None)
     labels: dict[str, str] | None = Field(default=None)
     last_frame: dict[str, Any] | None = Field(default=None)
     reference_images: list[dict[str, Any]] | None = Field(default=None)
