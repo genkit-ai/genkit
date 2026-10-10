@@ -208,7 +208,7 @@ func (a *Agents) launchDelegation(ctx context.Context, ref aix.AgentRef, st *age
 		logger.Warn(ctx, "background launch failed", "agent", ref.Name, "error", err)
 		return delegationResult{Response: fmt.Sprintf("%s: %v", words.errPrefix, err)}, nil
 	}
-	return a.foldDetachOutcome(ctx, ref, st, agent, invocationNum, out, words), nil
+	return a.foldDetachOutcome(ctx, ref, st, invocationNum, out, words), nil
 }
 
 // launchWords are the model-facing phrasings that differ between the two
@@ -253,7 +253,7 @@ func (a *Agents) refuseUndetachable(ctx context.Context, ref aix.AgentRef, st *a
 // result: the pending handle when the detach landed, a hedged refusal when a
 // metadata-less agent may have rejected the detach, and the ordinary fold when
 // the run settled before detaching.
-func (a *Agents) foldDetachOutcome(ctx context.Context, ref aix.AgentRef, st *agentsState, agent *aix.AgentHandle, invocationNum int, out *aix.AgentOutput[json.RawMessage], words launchWords) delegationResult {
+func (a *Agents) foldDetachOutcome(ctx context.Context, ref aix.AgentRef, st *agentsState, invocationNum int, out *aix.AgentOutput[json.RawMessage], words launchWords) delegationResult {
 	switch {
 	case out.FinishReason == aix.AgentFinishReasonDetached:
 		taskID := formatTaskID(ref.Name, out.SnapshotID)

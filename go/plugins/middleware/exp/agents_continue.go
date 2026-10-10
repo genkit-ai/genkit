@@ -347,7 +347,7 @@ func (a *Agents) runContinueFrom(ctx context.Context, ref aix.AgentRef, st *agen
 		return delegationResult{Response: fmt.Sprintf("%s: %v", words.errPrefix, err)}, nil
 	}
 	if background {
-		return a.foldDetachOutcome(ctx, ref, st, agent, invocationNum, out, words), nil
+		return a.foldDetachOutcome(ctx, ref, st, invocationNum, out, words), nil
 	}
 	result := a.foldDelegationOutput(ctx, ref, out, invocationNum)
 	a.labelTask(st, &result, words.label)
