@@ -451,6 +451,49 @@ func TestLatestBreaksTiesInByteOrder(t *testing.T) {
 	}
 }
 
+// TestSavesUnderSerializableDefault checks that concurrent saves of one row
+// all succeed on a database whose default isolation level is serializable. The
+// store's locks rely on READ COMMITTED: at a stricter level, a save that waited
+// for the lock reads the row as it was before the wait, and fails. The suite
+// cannot show this, since it retries a failed save.
+func TestSavesUnderSerializableDefault(t *testing.T) {
+	ctx := context.Background()
+	pool := testPool(t, func(cfg *pgxpool.Config) {
+		cfg.ConnConfig.RuntimeParams["default_transaction_isolation"] = "serializable"
+	})
+	store := newTestStore(t, pool, testTable(t, pool))
+	save(t, store, "row", "", time.Now())
+
+	const writers = 8
+	errs := make(chan error, writers)
+	var wg sync.WaitGroup
+	for i := range writers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := store.SaveSnapshot(ctx, "row", func(s *aix.SessionSnapshot[testState]) (*aix.SessionSnapshot[testState], error) {
+				s.State.Custom.Topics = append(s.State.Custom.Topics, fmt.Sprintf("writer %d", i))
+				return s, nil
+			})
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Errorf("SaveSnapshot: %v", err)
+		}
+	}
+	got, err := store.GetSnapshot(ctx, "row")
+	if err != nil || got == nil {
+		t.Fatalf("GetSnapshot = (%v, %v), want the row", got, err)
+	}
+	if n := len(got.State.Custom.Topics); n != writers {
+		t.Errorf("the row holds %d topics after %d concurrent saves, want one from each", n, writers)
+	}
+}
+
 // TestDiffWaitsForItsParentsChange checks that a new row computes its diff
 // only after a change to its parent's state commits, so the diff is never taken
 // against a state that is about to be replaced.
