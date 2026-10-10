@@ -252,6 +252,9 @@ func handler(a api.Action, opts *handlerOptions) func(http.ResponseWriter, *http
 		if err != nil {
 			return err
 		}
+		// Tell the action it is serving a client over the wire, so it can
+		// shape what it returns (an agent redacts internal error text).
+		ctx = wire.WithServedAction(ctx, a.Desc().Key)
 
 		if stream {
 			streamID := r.Header.Get("X-Genkit-Stream-Id")

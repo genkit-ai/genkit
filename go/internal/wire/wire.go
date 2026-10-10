@@ -26,6 +26,7 @@
 package wire
 
 import (
+	"context"
 	"encoding/json"
 
 	"github.com/firebase/genkit/go/core/status"
@@ -65,3 +66,21 @@ type Error struct {
 
 // SSEDataPrefix starts every server-sent event line the handler writes.
 const SSEDataPrefix = "data: "
+
+type servedActionKey struct{}
+
+// WithServedAction marks ctx as the context of a request that a transport
+// serves for the action with the given key. The action reads it with
+// [ServesAction] to shape what it returns for a client, such as redacting
+// internal error text. The mark names one action, so actions that the served
+// action calls in turn do not read it as their own.
+func WithServedAction(ctx context.Context, key string) context.Context {
+	return context.WithValue(ctx, servedActionKey{}, key)
+}
+
+// ServesAction reports whether ctx is the context of a transport serving the
+// action with the given key.
+func ServesAction(ctx context.Context, key string) bool {
+	k, _ := ctx.Value(servedActionKey{}).(string)
+	return k != "" && k == key
+}

@@ -30,6 +30,7 @@ import (
 	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/base"
+	"github.com/firebase/genkit/go/internal/wire"
 )
 
 // --- Snapshot ---
@@ -659,7 +660,8 @@ func newSnapshotActions[State any](
 				return nil, status.Errorf(status.ErrInvalidArgument, "getSnapshot: snapshotId or sessionId is required")
 			}
 
-			return readSnapshot(ctx, store, transform, "getSnapshot", req.SnapshotID, req.SessionID, req.MetadataOnly)
+			snap, err := readSnapshot(ctx, store, transform, "getSnapshot", req.SnapshotID, req.SessionID, req.MetadataOnly)
+			return servedSnapshot(ctx, api.KeyFromName(api.ActionTypeAgentSnapshot, agentName), snap), err
 		})
 
 	// waitForSnapshot takes getSnapshot's request, so a caller switching from
@@ -675,7 +677,8 @@ func newSnapshotActions[State any](
 			if req == nil || req.SnapshotID == "" {
 				return nil, status.Errorf(status.ErrInvalidArgument, "waitForSnapshot: snapshotId is required")
 			}
-			return waitSnapshot(ctx, store, transform, "waitForSnapshot", req.SnapshotID, req.SessionID, maxWait)
+			snap, err := waitSnapshot(ctx, store, transform, "waitForSnapshot", req.SnapshotID, req.SessionID, maxWait)
+			return servedSnapshot(ctx, api.KeyFromName(api.ActionTypeAgentWait, agentName), snap), err
 		})
 
 	if _, ok := store.(SnapshotSubscriber); !ok {
@@ -700,6 +703,18 @@ func newSnapshotActions[State any](
 			return &AgentAbortResponse{SnapshotID: req.SnapshotID, Status: snapStatus}, nil
 		})
 	return getSnapshotAction, waitAction, abortAction
+}
+
+// servedSnapshot returns snap as the companion action keyed key returns it:
+// with its error redacted by [clientSafeError] when a transport serves the
+// action to a client, and unchanged otherwise. snap may be nil.
+func servedSnapshot[State any](ctx context.Context, key string, snap *SessionSnapshot[State]) *SessionSnapshot[State] {
+	if snap == nil || snap.Error == nil || !wire.ServesAction(ctx, key) {
+		return snap
+	}
+	shaped := *snap
+	shaped.Error = clientSafeError(snap.Error)
+	return &shaped
 }
 
 // --- Session ---
