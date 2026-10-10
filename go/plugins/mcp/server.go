@@ -175,6 +175,9 @@ func (s *GenkitMCPServer) createToolHandler(tool ai.Tool) func(context.Context, 
 // audio content. MCP has no content type for other media or for media given
 // by URL, so those parts are dropped with a warning.
 func toolResultToMCP(name string, resp *ai.MultipartToolResponse) (*mcp.CallToolResult, error) {
+	if resp == nil {
+		resp = &ai.MultipartToolResponse{}
+	}
 	var content []mcp.Content
 	switch v := resp.Output.(type) {
 	case nil:
@@ -188,6 +191,9 @@ func toolResultToMCP(name string, resp *ai.MultipartToolResponse) (*mcp.CallTool
 		content = append(content, mcp.NewTextContent(string(b)))
 	}
 	for _, p := range resp.Content {
+		if p == nil {
+			continue
+		}
 		c, err := partToMCP(p)
 		if err != nil {
 			slog.Warn("dropping tool response part that MCP cannot carry", "tool", name, "kind", p.Kind, "error", err)
