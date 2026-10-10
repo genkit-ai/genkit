@@ -307,6 +307,13 @@ func (s *PostgresSessionStore[State]) ensureTable(ctx context.Context, tableName
 			if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, hashKey("genkit session store table", s.table)); err != nil {
 				return err
 			}
+			// Another store may have created the table while this one waited
+			// for the lock. Its DDL would then fail for a role that has CREATE
+			// on the schema but does not own the table: COMMENT needs ownership.
+			var exists bool
+			if err := tx.QueryRow(ctx, `SELECT to_regclass($1) IS NOT NULL`, s.table).Scan(&exists); err != nil || exists {
+				return err
+			}
 			for _, stmt := range ddl {
 				if _, err := tx.Exec(ctx, stmt); err != nil {
 					return err

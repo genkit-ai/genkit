@@ -277,6 +277,61 @@ func TestTableSetup(t *testing.T) {
 		wg.Wait()
 	})
 
+	t.Run("WaiterThatDoesNotOwnTheTable", func(t *testing.T) {
+		// Two stores find no table and queue for the creation lock. The first
+		// creates the table; the second, whose role may create tables but does
+		// not own this one, must find it rather than run the DDL again.
+		table := testTable(t, pool)
+		role := "genkit_test_" + strings.ReplaceAll(uuid.NewString(), "-", "")[:12]
+		for _, stmt := range []string{
+			"CREATE ROLE " + role + " LOGIN",
+			"GRANT USAGE, CREATE ON SCHEMA public TO " + role,
+			"ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE ON TABLES TO " + role,
+		} {
+			if _, err := pool.Exec(ctx, stmt); err != nil {
+				t.Fatalf("%s: %v", stmt, err)
+			}
+		}
+		t.Cleanup(func() {
+			pool.Exec(context.Background(), "DROP OWNED BY "+role)
+			pool.Exec(context.Background(), "DROP ROLE "+role)
+		})
+		other := testPool(t, func(cfg *pgxpool.Config) { cfg.ConnConfig.User = role })
+
+		// Hold the lock so both stores queue behind it, in order.
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatalf("Begin: %v", err)
+		}
+		defer tx.Rollback(ctx)
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, hashKey("genkit session store table", pgx.Identifier{table}.Sanitize())); err != nil {
+			t.Fatalf("lock: %v", err)
+		}
+		waiting := func(n int) func() bool {
+			return func() bool {
+				var got int
+				pool.QueryRow(ctx, `SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted`).Scan(&got)
+				return got >= n
+			}
+		}
+		errs := make(chan error, 2)
+		for i, p := range []*pgxpool.Pool{pool, other} {
+			go func() {
+				_, err := newPostgresSessionStore[testState](ctx, p, WithTableName(table))
+				errs <- err
+			}()
+			eventually(t, "the store waits for the creation lock", waiting(i+1))
+		}
+		if err := tx.Commit(ctx); err != nil {
+			t.Fatalf("Commit: %v", err)
+		}
+		for range 2 {
+			if err := <-errs; err != nil {
+				t.Errorf("newPostgresSessionStore: %v", err)
+			}
+		}
+	})
+
 	t.Run("InSchema", func(t *testing.T) {
 		schema := testTable(t, pool) // a unique name; the schema replaces the table
 		if _, err := pool.Exec(ctx, "CREATE SCHEMA "+pgx.Identifier{schema}.Sanitize()); err != nil {
