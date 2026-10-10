@@ -45,7 +45,7 @@ from genkit._core._typing import (
 )
 
 __all__ = [
-    # Finish reasons core won't parse structured output for
+    # Finish reasons
     'ABNORMAL_FINISH_REASONS',
     # Request types
     'BackgroundAction',
