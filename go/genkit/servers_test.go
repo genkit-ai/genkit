@@ -547,8 +547,12 @@ func TestHandlerClientDisconnectLogging(t *testing.T) {
 			if len(errs) > 0 {
 				t.Errorf("ERROR records for a client disconnect: %q", errs)
 			}
-			if debug := rec.messages(slog.LevelDebug); !slices.Contains(debug, "client disconnected") {
-				t.Errorf("DEBUG records = %q, want one with message %q", debug, "client disconnected")
+			debug := rec.messages(slog.LevelDebug)
+			if n := len(slices.DeleteFunc(slices.Clone(debug), func(m string) bool { return m != "client disconnected" })); n != 1 {
+				t.Errorf("DEBUG records = %q, want exactly one %q", debug, "client disconnected")
+			}
+			if slices.Contains(debug, "request finished") {
+				t.Errorf("DEBUG records = %q, want no %q for a disconnect", debug, "request finished")
 			}
 		})
 	}

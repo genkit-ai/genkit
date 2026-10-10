@@ -165,7 +165,7 @@ func wrapHandler(h func(http.ResponseWriter, *http.Request) error) http.HandlerF
 			}
 		}()
 
-		if err = h(w, r); err != nil {
+		if err = h(w, r); err != nil && !clientDisconnected(ctx, err) {
 			msg, code := clientError(err)
 			http.Error(w, msg, code.HTTPCode())
 		}
@@ -334,9 +334,9 @@ func runWithStreaming(ctx context.Context, w http.ResponseWriter, run runJSONFun
 
 	out, err := run(ctx, input, callback)
 	if clientDisconnected(ctx, err) {
-		// Nobody is left to read an error frame.
-		logger.Debug(ctx, "client disconnected", "error", err)
-		return nil
+		// Nobody is left to read an error frame; wrapHandler logs the
+		// disconnect.
+		return err
 	}
 	if err != nil {
 		// The SSE frame carries only the redacted message and this function
