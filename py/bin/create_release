@@ -201,7 +201,24 @@ if [ "$USE_PR_NOTES" = true ]; then
         fi
     fi
 
-    echo -e "${GREEN}✓ Found PR #${PR_NUMBER}${NC}"
+    # Same rule whether the number was passed or found: the PR must be merged
+    # and titled "... Python SDK v<VERSION>". A mistyped number would otherwise
+    # publish an unrelated PR's body as the release notes.
+    PR_INFO=$(gh pr view "$PR_NUMBER" --repo genkit-ai/genkit --json state,title --jq '"\(.state)\t\(.title)"')
+    PR_STATE="${PR_INFO%%$'\t'*}"
+    PR_TITLE="${PR_INFO#*$'\t'}"
+    if [ "$PR_STATE" != "MERGED" ]; then
+        echo -e "${RED}Error: PR #${PR_NUMBER} is ${PR_STATE}, not MERGED${NC}"
+        exit 1
+    fi
+    if [[ "$PR_TITLE" != *"Python SDK v${VERSION}" ]]; then
+        echo -e "${RED}Error: PR #${PR_NUMBER} title doesn't end with 'Python SDK v${VERSION}'${NC}"
+        echo "  Title: ${PR_TITLE}"
+        echo "Fix the PR title, or check you passed the right PR number."
+        exit 1
+    fi
+
+    echo -e "${GREEN}✓ Found PR #${PR_NUMBER}: ${PR_TITLE}${NC}"
 
     echo ""
     echo -e "${YELLOW}Step 5: Fetching PR description...${NC}"
@@ -291,7 +308,7 @@ fi
 echo "Release: https://github.com/genkit-ai/genkit/releases/tag/${TAG_NAME}"
 echo ""
 echo -e "${YELLOW}Next steps:${NC}"
-echo "1. Go to Actions → Publish Python Package"
-echo "2. Run workflow with: publish_scope=all"
-echo "3. Monitor the publish workflow"
-echo "4. Verify on PyPI: pip index versions genkit"
+echo "1. The tag push started Publish Python (publish_python.yml). Don't run it by hand."
+echo "   Watch it: https://github.com/genkit-ai/genkit/actions/workflows/publish_python.yml"
+echo "   If it's waiting for environment approval, approve it."
+echo "2. Verify on PyPI: pip index versions genkit"
