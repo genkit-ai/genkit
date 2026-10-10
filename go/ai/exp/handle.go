@@ -86,6 +86,8 @@ type AgentHandle struct {
 //     the turn and Run returns it.
 //   - Run is not idempotent: the agent may have started the turn when a call
 //     fails, so a transport must never retry it.
+//   - Run returns an output whenever it returns no error. The handle reports
+//     a nil output as INTERNAL rather than pass it on.
 //
 // Capability metadata is not here. It is static, [AgentHandle] holds it
 // directly, and a transport that had to fetch it could report no failure
@@ -323,7 +325,17 @@ func (h *AgentHandle) Run(ctx context.Context, input *AgentInput, opts ...Invoca
 	// No stream callback: a handle reports a turn by its final output. The
 	// transport takes one because a turn is streamed at that level whatever
 	// carries it, so a streaming surface on the handle needs no new seam.
-	return h.transport.Run(ctx, input, init, nil)
+	return h.runTurn(ctx, input, init, nil)
+}
+
+// runTurn runs one turn on the transport, refusing the nil output a faulty
+// transport could return without an error, so no caller dereferences it.
+func (h *AgentHandle) runTurn(ctx context.Context, input *AgentInput, init *AgentInit[json.RawMessage], cb func(context.Context, json.RawMessage) error) (*AgentOutput[json.RawMessage], error) {
+	out, err := h.transport.Run(ctx, input, init, cb)
+	if err == nil && out == nil {
+		return nil, status.Errorf(status.ErrInternal, "agent %q: the transport returned no output and no error", h.name)
+	}
+	return out, err
 }
 
 // RunText is [AgentHandle.Run] with a user text message as the input, the way
@@ -388,6 +400,9 @@ func nilHandleError(method string) error {
 // agent has no session store and INVALID_ARGUMENT when snapshotID is empty; a
 // missing snapshot is NOT_FOUND.
 func (h *AgentHandle) GetSnapshot(ctx context.Context, snapshotID string, opts ...SnapshotReadOption) (*SessionSnapshot[json.RawMessage], error) {
+	if h == nil {
+		return nil, nilHandleError("GetSnapshot")
+	}
 	if snapshotID == "" {
 		return nil, status.Errorf(status.ErrInvalidArgument, "agent %q: GetSnapshot: snapshotID is required", h.name)
 	}
@@ -420,6 +435,9 @@ func (h *AgentHandle) GetSnapshot(ctx context.Context, snapshotID string, opts .
 // agent has no session store and INVALID_ARGUMENT when snapshotID is empty; a
 // missing snapshot is NOT_FOUND.
 func (h *AgentHandle) WaitForSnapshot(ctx context.Context, snapshotID string) (*SessionSnapshot[json.RawMessage], error) {
+	if h == nil {
+		return nil, nilHandleError("WaitForSnapshot")
+	}
 	if snapshotID == "" {
 		return nil, status.Errorf(status.ErrInvalidArgument, "agent %q: WaitForSnapshot: snapshotID is required", h.name)
 	}
@@ -470,6 +488,9 @@ var waitReaskFloor = time.Second
 // agent has no session store and INVALID_ARGUMENT when sessionID is empty; an
 // unknown session is NOT_FOUND.
 func (h *AgentHandle) GetLatestSnapshot(ctx context.Context, sessionID string, opts ...SnapshotReadOption) (*SessionSnapshot[json.RawMessage], error) {
+	if h == nil {
+		return nil, nilHandleError("GetLatestSnapshot")
+	}
 	if sessionID == "" {
 		return nil, status.Errorf(status.ErrInvalidArgument, "agent %q: GetLatestSnapshot: sessionID is required", h.name)
 	}
@@ -495,6 +516,9 @@ func (h *AgentHandle) GetLatestSnapshot(ctx context.Context, sessionID string, o
 // [SnapshotSubscriber]; see [AgentMetadata.Abortable]), and INVALID_ARGUMENT
 // when snapshotID is empty.
 func (h *AgentHandle) Abort(ctx context.Context, snapshotID string) (SnapshotStatus, error) {
+	if h == nil {
+		return "", nilHandleError("Abort")
+	}
 	if snapshotID == "" {
 		return "", status.Errorf(status.ErrInvalidArgument, "agent %q: Abort: snapshotID is required", h.name)
 	}

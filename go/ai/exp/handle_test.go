@@ -138,6 +138,25 @@ func TestLookupAgent(t *testing.T) {
 		if _, err := h.RunDetached(context.Background(), &AgentInput{}); !errors.Is(err, status.ErrInvalidArgument) {
 			t.Errorf("RunDetached on a nil handle = %v, want INVALID_ARGUMENT", err)
 		}
+		ctx := context.Background()
+		for name, call := range map[string]func() error{
+			"GetSnapshot":       func() error { _, err := h.GetSnapshot(ctx, "s"); return err },
+			"WaitForSnapshot":   func() error { _, err := h.WaitForSnapshot(ctx, "s"); return err },
+			"GetLatestSnapshot": func() error { _, err := h.GetLatestSnapshot(ctx, "sess"); return err },
+			"Abort":             func() error { _, err := h.Abort(ctx, "s"); return err },
+			"Task(...).Poll":    func() error { _, err := h.Task("s").Poll(ctx); return err },
+		} {
+			if err := call(); !errors.Is(err, status.ErrInvalidArgument) {
+				t.Errorf("%s on a nil handle = %v, want INVALID_ARGUMENT", name, err)
+			}
+		}
+	})
+
+	t.Run("a transport's nil output is refused", func(t *testing.T) {
+		h := NewAgentHandle("a", nil, &scriptedRunTransport{outs: []*AgentOutput[json.RawMessage]{nil}})
+		if _, err := h.RunText(context.Background(), "hi"); status.Of(err) != status.Internal {
+			t.Errorf("RunText = %v, want INTERNAL", err)
+		}
 	})
 }
 

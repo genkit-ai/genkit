@@ -569,7 +569,7 @@ func (h *AgentHandle) forwardTurns(ctx context.Context, init *AgentInit[json.Raw
 		if !ok {
 			break
 		}
-		turn, err := h.transport.Run(ctx, in, init, forward)
+		turn, err := h.runTurn(ctx, in, init, forward)
 		if err != nil {
 			return nil, err
 		}
