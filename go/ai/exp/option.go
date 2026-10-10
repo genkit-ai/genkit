@@ -127,34 +127,22 @@ type agentOptions[State any] struct {
 }
 
 func (o *agentOptions[State]) applyAgent(opts *agentOptions[State]) error {
+	// Options merge last-wins, like the ai package's: a later option of the
+	// same kind replaces an earlier one, and an unset field leaves the
+	// accumulator alone.
 	if o.store != nil {
-		if opts.store != nil {
-			return errors.New("cannot set session store more than once (WithSessionStore)")
-		}
 		opts.store = o.store
 	}
 	if o.transform != nil {
-		if opts.transform != nil {
-			return errors.New("cannot set state transform more than once (WithStateTransform)")
-		}
 		opts.transform = o.transform
 	}
 	if o.streamTransform != nil {
-		if opts.streamTransform != nil {
-			return errors.New("cannot set stream transform more than once (WithStreamTransform)")
-		}
 		opts.streamTransform = o.streamTransform
 	}
 	if o.description != "" {
-		if opts.description != "" {
-			return errors.New("cannot set description more than once (WithDescription)")
-		}
 		opts.description = o.description
 	}
 	if o.maxSnapshotWaitSet {
-		if opts.maxSnapshotWaitSet {
-			return errors.New("cannot set snapshot wait limit more than once (WithMaxSnapshotWait)")
-		}
 		if o.maxSnapshotWait <= 0 {
 			return fmt.Errorf("snapshot wait limit must be positive, got %v (WithMaxSnapshotWait)", o.maxSnapshotWait)
 		}
@@ -186,7 +174,7 @@ type promptAgentOptions[State any] struct {
 	agentOptions[State]
 	promptName  string // referenced prompt; "" resolves to the agent's own name
 	promptInput any    // render input for the referenced prompt
-	promptSet   bool   // WithNamedPrompt was used (guards against duplicates)
+	promptSet   bool   // WithNamedPrompt was used
 }
 
 // applyPromptAgent merges the base agent options and the prompt source. It
@@ -197,9 +185,6 @@ func (o *promptAgentOptions[State]) applyPromptAgent(opts *promptAgentOptions[St
 		return err
 	}
 	if o.promptSet {
-		if opts.promptSet {
-			return errors.New("cannot set prompt source more than once (WithNamedPrompt)")
-		}
 		opts.promptName = o.promptName
 		opts.promptInput = o.promptInput
 		opts.promptSet = true
@@ -292,29 +277,19 @@ type invocationOptions[State any] struct {
 	sessionIDSet bool
 }
 
-// applyInvocation merges o into opts, rejecting duplicate options.
-// Mutual exclusivity (WithState versus WithSessionID/WithSnapshotID) is
+// applyInvocation merges o into opts, last-wins per option. Mutual exclusivity (WithState versus WithSessionID/WithSnapshotID) is
 // checked once, after all options are applied, in
 // resolveInvocationInit.
 func (o *invocationOptions[State]) applyInvocation(opts *invocationOptions[State]) error {
 	if o.state != nil {
-		if opts.state != nil {
-			return errors.New("cannot set state more than once (WithState)")
-		}
 		opts.state = o.state
 	}
 	if o.snapshotID != "" {
-		if opts.snapshotID != "" {
-			return errors.New("cannot set snapshot ID more than once (WithSnapshotID)")
-		}
 		opts.snapshotID = o.snapshotID
 	}
 	if o.sessionIDSet {
 		if o.sessionID == "" {
 			return errors.New("session ID is empty (WithSessionID); an empty AgentOutput.SessionID means the invocation had no session, check before resuming")
-		}
-		if opts.sessionIDSet {
-			return errors.New("cannot set session ID more than once (WithSessionID)")
 		}
 		opts.sessionID = o.sessionID
 		opts.sessionIDSet = true
@@ -365,7 +340,7 @@ func WithSessionID[State any](id string) InvocationOption[State] {
 }
 
 // resolveInvocationInit merges opts into the invocation's [AgentInit],
-// enforcing the per-option duplicate checks and the mutual-exclusivity rules:
+// enforcing the empty-session-ID check and the mutual-exclusivity rules:
 // WithState excludes both WithSessionID and WithSnapshotID (a client-managed
 // conversation's identity rides inside the state itself), while WithSessionID
 // and WithSnapshotID compose as an assertion. Shared by [Agent.Connect] and

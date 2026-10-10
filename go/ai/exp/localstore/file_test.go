@@ -817,17 +817,20 @@ func TestFileSessionStore_PathPrefix_EmptyRejected(t *testing.T) {
 	}
 }
 
-// TestFileSessionStore_OptionSetTwice verifies the construction options reject
-// being set more than once, surfacing the error from NewFileSessionStore.
+// TestFileSessionStore_OptionSetTwice verifies a repeated construction option
+// replaces the earlier one rather than failing the constructor.
 func TestFileSessionStore_OptionSetTwice(t *testing.T) {
-	dir := t.TempDir()
-	if _, err := NewFileSessionStore[testState](dir,
-		WithMaxPersistedChainLength(2), WithMaxPersistedChainLength(3)); err == nil {
-		t.Error("expected error setting max persisted chain length twice, got nil")
+	store, err := NewFileSessionStore[testState](t.TempDir(),
+		WithMaxPersistedChainLength(2), WithMaxPersistedChainLength(3),
+		WithPollInterval(time.Second), WithPollInterval(2*time.Second))
+	if err != nil {
+		t.Fatalf("NewFileSessionStore: %v", err)
 	}
-	if _, err := NewFileSessionStore[testState](dir,
-		WithSnapshotPathPrefix(prefixFromCtx), WithSnapshotPathPrefix(prefixFromCtx)); err == nil {
-		t.Error("expected error setting snapshot path prefix twice, got nil")
+	if store.maxChain != 3 {
+		t.Errorf("maxChain = %d, want 3 (the later option)", store.maxChain)
+	}
+	if store.poll != 2*time.Second {
+		t.Errorf("poll = %v, want 2s (the later option)", store.poll)
 	}
 }
 

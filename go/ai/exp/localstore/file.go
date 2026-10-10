@@ -127,8 +127,8 @@ const pointersSubdir = ".pointers"
 
 // NewFileSessionStore creates a file-based snapshot store rooted at dir.
 // The directory is created (mode 0o700) if it does not already exist.
-// Returns an error if dir is empty, cannot be created, or an option is set
-// more than once. See [WithMaxPersistedChainLength] and
+// Returns an error if dir is empty, cannot be created, or an option value is
+// invalid. A repeated option replaces the earlier one. See [WithMaxPersistedChainLength] and
 // [WithSnapshotPathPrefix].
 func NewFileSessionStore[State any](dir string, opts ...FileStoreOption) (*FileSessionStore[State], error) {
 	if dir == "" {
