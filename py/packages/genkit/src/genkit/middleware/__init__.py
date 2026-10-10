@@ -63,7 +63,6 @@ A_after()
 ```
 """
 
-from genkit._core._base import GenkitConfig
 from genkit._core._middleware import (
     BaseMiddleware,
     GenerateHookParams,
@@ -76,7 +75,6 @@ from genkit._core._typing import MiddlewareRef
 
 __all__ = [
     'BaseMiddleware',
-    'GenkitConfig',
     'GenerateHookParams',
     'GenerateMiddleware',
     'GenerateMiddlewareContext',
