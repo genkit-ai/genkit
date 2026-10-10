@@ -118,6 +118,11 @@ func Run[State any](t *testing.T, newStore func(t *testing.T) exp.SessionStore[S
 	if opts != nil {
 		s.opts = *opts
 	}
+	// Every store from newStore has the same type, so one probes the optional
+	// capabilities for all.
+	probe := newStore(t)
+	_, s.metadata = probe.(exp.SnapshotMetadataReader[State])
+	_, s.subscriber = probe.(exp.SnapshotSubscriber)
 	t.Run("Save", s.testSave)
 	t.Run("Lifecycle", s.testLifecycle)
 	t.Run("Chains", s.testChains)
@@ -128,10 +133,13 @@ func Run[State any](t *testing.T, newStore func(t *testing.T) exp.SessionStore[S
 	t.Run("Scopes", s.testScopes)
 }
 
-// suite holds what every check needs: the store factory and the options.
+// suite holds what every check needs: the store factory, the options, and
+// which optional capabilities the stores have.
 type suite[State any] struct {
-	newStore func(t *testing.T) exp.SessionStore[State]
-	opts     Options[State]
+	newStore   func(t *testing.T) exp.SessionStore[State]
+	opts       Options[State]
+	metadata   bool // the stores implement exp.SnapshotMetadataReader
+	subscriber bool // the stores implement exp.SnapshotSubscriber
 }
 
 // --- Save ---
@@ -838,7 +846,7 @@ func (s *suite[State]) testLatest(t *testing.T) {
 
 func (s *suite[State]) testMetadata(t *testing.T) {
 	ctx := context.Background()
-	if _, ok := s.newStore(t).(exp.SnapshotMetadataReader[State]); !ok {
+	if !s.metadata {
 		t.Skip("the store does not implement exp.SnapshotMetadataReader")
 	}
 	newStore := func(t *testing.T) (exp.SessionStore[State], exp.SnapshotMetadataReader[State]) {
@@ -935,7 +943,7 @@ func (s *suite[State]) testMetadata(t *testing.T) {
 
 func (s *suite[State]) testSubscriber(t *testing.T) {
 	ctx := context.Background()
-	if _, ok := s.newStore(t).(exp.SnapshotSubscriber); !ok {
+	if !s.subscriber {
 		t.Skip("the store does not implement exp.SnapshotSubscriber")
 	}
 	newStore := func(t *testing.T) (exp.SessionStore[State], exp.SnapshotSubscriber) {
