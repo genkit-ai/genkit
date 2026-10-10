@@ -56,7 +56,7 @@ func NewMCPHost(g *genkit.Genkit, options MCPHostOptions) (*MCPHost, error) {
 		options.Name = "genkit-mcp"
 	}
 	if options.Version == "" {
-		options.Version = "1.0.0"
+		options.Version = defaultMCPVersion
 	}
 
 	host := &MCPHost{
@@ -97,6 +97,12 @@ func (h *MCPHost) Connect(ctx context.Context, g *genkit.Genkit, serverName stri
 	// Create and connect the client
 	client, err := NewGenkitMCPClient(config)
 	if err != nil {
+		// Retain the configuration so Reconnect can retry after a transient
+		// startup failure. The failed client has no live transport to close.
+		if config.Version == "" {
+			config.Version = defaultMCPVersion
+		}
+		h.clients[serverName] = &GenkitMCPClient{options: config}
 		return fmt.Errorf("error connecting to server %s: %w", serverName, err)
 	}
 
