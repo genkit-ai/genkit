@@ -234,7 +234,7 @@ rainy, err := chatAgent.RunText(ctx, "Assume it rains.",
 fmt.Println(rainy.Message.Text())
 ```
 
-Failed and stopped runs land as snapshots too, keeping the work they finished, so you resume them instead of starting over. Background runs, sub-agent tasks, and HTTP clients all address work by snapshot ID. Stores ship for memory, files, and Firestore.
+Failed and stopped runs land as snapshots too, keeping the work they finished, so you resume them instead of starting over. Background runs, sub-agent tasks, and HTTP clients all address work by snapshot ID. Stores ship for memory, files, Firestore, and PostgreSQL.
 
 [Docs](https://genkit.dev/docs/go/agents/state/) &middot; [Stores](https://genkit.dev/docs/go/agents/session-stores/) &middot; [Failures](https://genkit.dev/docs/go/agents/errors/#resume-after-a-failure-or-a-stop) &middot; [Example](samples/basic-agents)
 
