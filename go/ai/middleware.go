@@ -210,7 +210,18 @@ func isolate[M Middleware](prototype M) M {
 
 // MiddlewareFunc adapts a per-call factory closure to the [Middleware]
 // interface for ad-hoc inline use, without a registered descriptor or plugin
-// wiring. The adapted middleware does not appear in the Dev UI.
+// wiring. It works anywhere [WithUse] does, including the options of
+// [DefinePrompt] and an agent's inline prompt.
+//
+// A closure has no JSON form, so a MiddlewareFunc lives only in the Go
+// process that created it. Wherever the request is serialized (prompt
+// metadata, trace spans, the Dev UI) it shows as a reference named "inline"
+// with no config, and a request replayed from that JSON (for example, a
+// prompt run from the Dev UI) fails because nothing can rebuild the closure.
+// The name "inline" is reserved for this reason: a middleware registered
+// under it is never resolved from JSON. For middleware that must run from
+// JSON, define a named struct that implements [Middleware] and register it
+// with [NewMiddleware].
 //
 // Example:
 //
@@ -219,13 +230,22 @@ func isolate[M Middleware](prototype M) M {
 //	}))
 type MiddlewareFunc func(ctx context.Context) (*Hooks, error)
 
+// inlineMiddlewareName is the name every [MiddlewareFunc] reports.
+const inlineMiddlewareName = "inline"
+
 // Name returns the placeholder name shared by all [MiddlewareFunc] values.
 // Uniqueness is unnecessary: inline middleware is resolved via the fast path
 // in [resolveRefs] and never goes through a name-keyed registry lookup.
-func (MiddlewareFunc) Name() string { return "inline" }
+func (MiddlewareFunc) Name() string { return inlineMiddlewareName }
 
 // New implements [Middleware] by calling f.
 func (f MiddlewareFunc) New(ctx context.Context) (*Hooks, error) { return f(ctx) }
+
+// MarshalJSON encodes f as null: a closure has no config to serialize. It
+// lets a request that carries f in [MiddlewareRef.Config] still encode, for
+// prompt output validation and trace span inputs, while the Go value stays on
+// the ref for [resolveRefs] to call.
+func (MiddlewareFunc) MarshalJSON() ([]byte, error) { return []byte("null"), nil }
 
 // middlewareRefArg is a lazy [Middleware] that carries only a registered
 // name and an opaque config payload. It exists so data-driven sources (most
@@ -352,6 +372,13 @@ func resolveRefs(ctx context.Context, r api.Registry, refs []*MiddlewareRef) ([]
 			}
 			bundles = append(bundles, namedHooks{name: ref.Name, hooks: h})
 			continue
+		}
+		if ref.Name == inlineMiddlewareName {
+			// A MiddlewareFunc that went through JSON (e.g. a prompt run from
+			// the Dev UI) arrives here as a name with no closure behind it.
+			// The name is checked before the registry so a middleware
+			// registered as "inline" cannot stand in for the lost closure.
+			return nil, status.Errorf(status.ErrFailedPrecondition, "ai: inline middleware (ai.MiddlewareFunc) cannot run from a serialized request, and the name %q is reserved for it; define a named struct that implements ai.Middleware and register it with ai.NewMiddleware", inlineMiddlewareName)
 		}
 		d := LookupMiddleware(r, ref.Name)
 		if d == nil {
