@@ -19,6 +19,7 @@ package exp
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"slices"
 	"sync"
 	"time"
@@ -50,6 +51,9 @@ type watcher struct {
 
 	mu      sync.Mutex
 	watches map[watchKey]*watch
+	// clock orders reads and notifications: each takes the next tick as it
+	// starts.
+	clock uint64
 	// stop ends the running loop; nil while no loop runs.
 	stop context.CancelFunc
 	// ready is closed once the running loop's first LISTEN attempt finished.
@@ -62,10 +66,10 @@ type watchKey struct{ prefix, id string }
 // watch holds the subscribers of one row.
 type watch struct {
 	subs []*subscriber
-	// gen counts the deliveries to the row's subscribers. A read that started
-	// before a delivery may hold an older status than the one delivered, so a
-	// read's result is delivered only if gen did not move while it ran.
-	gen uint64
+	// tick is the clock tick of the newest status delivered to the row's
+	// subscribers. A status from a read that started earlier may be older, so
+	// it is not delivered.
+	tick uint64
 }
 
 // subscriber is one subscription's channel and the status it last received.
@@ -105,7 +109,6 @@ func (w *watcher) subscribe(ctx context.Context, key watchKey) <-chan aix.Snapsh
 	}
 	wt.subs = append(wt.subs, sub)
 	ready := w.startLocked()
-	gen := wt.gen
 	w.mu.Unlock()
 
 	// Read the row only once the loop listens (or failed to, leaving the
@@ -116,16 +119,15 @@ func (w *watcher) subscribe(ctx context.Context, key watchKey) <-chan aix.Snapsh
 		w.remove(key, sub)
 		return sub.ch
 	}
+	tick := w.nextTick()
 	found, err := w.read(ctx, []watchKey{key})
 
 	w.mu.Lock()
 	switch st, ok := found[key]; {
 	case err != nil:
 		// Keep the subscription: the poll delivers the status once reads work.
-	case wt.gen != gen:
-		// A notification or the poll delivered a status at least as new.
 	case ok:
-		w.deliverLocked(wt, st)
+		w.deliverLocked(wt, tick, st)
 	case !sub.seen:
 		// The row did not exist when the subscription was established.
 		w.removeLocked(key, sub)
@@ -177,10 +179,22 @@ func (w *watcher) startLocked() chan struct{} {
 	return w.ready
 }
 
-// deliverLocked hands st to every subscriber of wt that does not hold it
-// already.
-func (w *watcher) deliverLocked(wt *watch, st aix.SnapshotStatus) {
-	wt.gen++
+// nextTick advances the clock and returns its new tick.
+func (w *watcher) nextTick() uint64 {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.clock++
+	return w.clock
+}
+
+// deliverLocked hands st, from a read or notification that started at tick, to
+// every subscriber of wt that does not hold it already, unless a status from a
+// later start was delivered first.
+func (w *watcher) deliverLocked(wt *watch, tick uint64, st aix.SnapshotStatus) {
+	if tick <= wt.tick {
+		return
+	}
+	wt.tick = tick
 	for _, sub := range wt.subs {
 		if sub.seen && sub.last == st {
 			continue
@@ -286,8 +300,9 @@ func (w *watcher) dispatch(payload string) {
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	w.clock++
 	if wt := w.watches[watchKey{prefix: n.Prefix, id: n.ID}]; wt != nil {
-		w.deliverLocked(wt, n.Status)
+		w.deliverLocked(wt, w.clock, n.Status)
 	}
 }
 
@@ -296,12 +311,9 @@ func (w *watcher) dispatch(payload string) {
 // deleted between notifications.
 func (w *watcher) pollAll(ctx context.Context) {
 	w.mu.Lock()
-	keys := make([]watchKey, 0, len(w.watches))
-	gens := make(map[watchKey]uint64, len(w.watches))
-	for k, wt := range w.watches {
-		keys = append(keys, k)
-		gens[k] = wt.gen
-	}
+	keys := slices.Collect(maps.Keys(w.watches))
+	w.clock++
+	tick := w.clock
 	w.mu.Unlock()
 	if len(keys) == 0 {
 		return
@@ -316,8 +328,8 @@ func (w *watcher) pollAll(ctx context.Context) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	for k, st := range found {
-		if wt := w.watches[k]; wt != nil && wt.gen == gens[k] {
-			w.deliverLocked(wt, st)
+		if wt := w.watches[k]; wt != nil {
+			w.deliverLocked(wt, tick, st)
 		}
 	}
 }
