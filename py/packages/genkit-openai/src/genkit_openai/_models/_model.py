@@ -21,13 +21,6 @@ from collections.abc import Callable
 from typing import Any, cast
 
 import structlog
-from openai import APIError, AsyncOpenAI
-from openai.lib._pydantic import _ensure_strict_json_schema
-from openai.types import CompletionUsage
-from openai.types.completion_usage import CompletionTokensDetails, PromptTokensDetails
-
-from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
-from genkit.model import ModelConfig, ModelRequest, ModelUsage, Supports, ToolDefinition
 from genkit_openai._models._utils import (
     DictMessageAdapter,
     MessageAdapter,
@@ -38,6 +31,13 @@ from genkit_openai._models._utils import (
     strip_markdown_fences,
 )
 from genkit_openai._typing import OpenAIConfig
+from openai import APIError, AsyncOpenAI
+from openai.lib._pydantic import _ensure_strict_json_schema
+from openai.types import CompletionUsage
+from openai.types.completion_usage import CompletionTokensDetails, PromptTokensDetails
+
+from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
+from genkit.model import ModelConfig, ModelRequest, ModelUsage, Supports, ToolDefinition
 
 logger = structlog.get_logger(__name__)
 

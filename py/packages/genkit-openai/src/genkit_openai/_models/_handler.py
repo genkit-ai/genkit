@@ -19,12 +19,12 @@
 from collections.abc import Awaitable, Callable, Mapping
 from typing import cast
 
+from genkit_openai._models._model import OpenAIModel
+from genkit_openai._models._model_info import SUPPORTED_OPENAI_MODELS
 from openai import AsyncOpenAI
 
 from genkit import ActionRunContext, ModelResponse
 from genkit.model import ModelInfo, ModelRequest
-from genkit_openai._models._model import OpenAIModel
-from genkit_openai._models._model_info import SUPPORTED_OPENAI_MODELS
 
 _SUPPORTED_MODELS = cast(Mapping[str, ModelInfo], SUPPORTED_OPENAI_MODELS)
 

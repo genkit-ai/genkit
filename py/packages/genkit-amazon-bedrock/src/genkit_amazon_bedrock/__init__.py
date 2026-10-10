@@ -36,10 +36,10 @@ Example:
     ```
 """
 
-from genkit_amazon_bedrock.config import BedrockConfig, BedrockImageConfig, ModelDefinition
-from genkit_amazon_bedrock.converters import cache_point_part
-from genkit_amazon_bedrock.plugin import Bedrock
-from genkit_amazon_bedrock.rerank import (
+from genkit_amazon_bedrock._config import BedrockConfig, BedrockImageConfig, ModelDefinition
+from genkit_amazon_bedrock._converters import cache_point_part
+from genkit_amazon_bedrock._plugin import Bedrock
+from genkit_amazon_bedrock._rerank import (
     BedrockRerankOptions,
     RankedDocumentData,
     RankedDocumentMetadata,

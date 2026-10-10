@@ -48,15 +48,15 @@ from genkit import GenkitError
 from genkit.plugin_api import is_dev_environment
 from genkit.telemetry import configure_instrumentation, is_instrumented_by
 
-from .constants import (
+from ._constants import (
     DEFAULT_METRIC_EXPORT_INTERVAL_MS,
     DEV_METRIC_EXPORT_INTERVAL_MS,
     MIN_METRIC_EXPORT_INTERVAL_MS,
     PROJECT_ID_ENV_VARS,
 )
-from .exporters import handle_logging_error, handle_metric_error, handle_tracing_error
-from .metrics_exporter import GenkitMetricExporter
-from .trace_exporter import GcpAdjustingTraceExporter, GenkitGCPExporter
+from ._exporters import handle_logging_error, handle_metric_error, handle_tracing_error
+from ._metrics_exporter import GenkitMetricExporter
+from ._trace_exporter import GcpAdjustingTraceExporter, GenkitGCPExporter
 
 logger = structlog.get_logger(__name__)
 

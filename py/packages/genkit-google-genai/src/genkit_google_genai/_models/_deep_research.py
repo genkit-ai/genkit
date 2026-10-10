@@ -20,12 +20,6 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, field_validator
-from pydantic.alias_generators import to_camel
-
-from genkit import ActionRunContext, GenkitError, Operation
-from genkit.model import BackgroundAction, ModelRef, ModelRequest, model_ref
-from genkit.plugin_api import Action, ActionKind, to_json_schema
 from genkit_google_genai._interactions._client import (
     cancel_interaction,
     create_interaction,
@@ -45,6 +39,12 @@ from genkit_google_genai._models._interactions_utils import (
     steps_with_folded_system_instruction,
 )
 from genkit_google_genai._models._secrets import reject_request_config_api_key
+from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic.alias_generators import to_camel
+
+from genkit import ActionRunContext, GenkitError, Operation
+from genkit.model import BackgroundAction, ModelRef, ModelRequest, model_ref
+from genkit.plugin_api import Action, ActionKind, to_json_schema
 
 AGENT_CONFIG_KEYS = (
     'thinking_summaries',

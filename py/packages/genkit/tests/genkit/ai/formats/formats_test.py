@@ -3,18 +3,15 @@
 # Copyright 2025 Google LLC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the formats module initialization and built-in formats."""
+"""Tests for the built-in formats."""
 
-from genkit._ai._formats import (
-    ArrayFormat,
-    EnumFormat,
-    FormatDef,
-    Formatter,
-    JsonFormat,
-    JsonlFormat,
-    TextFormat,
-    built_in_formats,
-)
+from genkit._ai._formats._array import ArrayFormat
+from genkit._ai._formats._builtin import built_in_formats
+from genkit._ai._formats._enum import EnumFormat
+from genkit._ai._formats._json import JsonFormat
+from genkit._ai._formats._jsonl import JsonlFormat
+from genkit._ai._formats._text import TextFormat
+from genkit._ai._formats._types import FormatDef, Formatter
 
 
 class TestBuiltInFormats:

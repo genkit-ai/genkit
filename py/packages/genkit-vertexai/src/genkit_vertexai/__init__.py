@@ -22,7 +22,7 @@ including Model Garden for accessing third-party models.
 Example:
     ```python
     from genkit import Genkit
-    from genkit_vertexai.model_garden import ModelGarden
+    from genkit_vertexai import ModelGarden
 
     # 1. Initialize Genkit with the Model Garden plugin
     ai = Genkit(
@@ -49,7 +49,7 @@ See Also:
     - Vertex AI Model Garden: https://cloud.google.com/vertex-ai/docs/model-garden
 """
 
-from genkit_vertexai.model_garden import ModelGarden
+from genkit_vertexai._model_garden._plugin import ModelGarden
 
 __all__ = [
     'ModelGarden',

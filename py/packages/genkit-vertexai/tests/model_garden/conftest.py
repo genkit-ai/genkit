@@ -57,5 +57,5 @@ def vertex_requests() -> Iterator[list[httpx.Request]]:
         http_client = httpx.AsyncClient(transport=httpx.MockTransport(fake.handler))
         return AsyncAnthropicVertex(access_token='google-token', http_client=http_client, **kwargs)
 
-    with patch('genkit_vertexai.model_garden.anthropic.AsyncAnthropicVertex', client):
+    with patch('genkit_vertexai._model_garden._anthropic.AsyncAnthropicVertex', client):
         yield fake.requests

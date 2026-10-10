@@ -19,7 +19,7 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
-from genkit_vertexai.model_garden.client import CachedOpenAI
+from genkit_vertexai._model_garden._client import CachedOpenAI
 from google.auth.exceptions import DefaultCredentialsError, RefreshError, TransportError
 
 from genkit import GenkitError
@@ -47,7 +47,7 @@ async def test_client_targets_resolved_project(
     """The OpenAI base_url points at project=, or the ADC project when none is passed."""
     with (
         patch('google.auth.default', _adc('adc-proj')),
-        patch('genkit_vertexai.model_garden.client._AsyncOpenAI') as openai_cls,
+        patch('genkit_vertexai._model_garden._client._AsyncOpenAI') as openai_cls,
     ):
         await CachedOpenAI(location='us-central1', project=explicit).get()
 

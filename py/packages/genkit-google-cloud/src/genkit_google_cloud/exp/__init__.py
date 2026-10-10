@@ -26,7 +26,7 @@ agent = ai.define_agent(name='assistant', store=FirestoreSessionStore())
 ```
 """
 
-from genkit_google_cloud.session_store.firestore import FirestoreSessionStore
+from genkit_google_cloud._session_store._firestore import FirestoreSessionStore
 
 __all__ = [
     'FirestoreSessionStore',

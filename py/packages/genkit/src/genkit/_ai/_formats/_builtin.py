@@ -14,4 +14,20 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Vertex AI plugin."""
+
+"""Built-in output formats registered on every Genkit instance."""
+
+from genkit._ai._formats._array import ArrayFormat
+from genkit._ai._formats._enum import EnumFormat
+from genkit._ai._formats._json import JsonFormat
+from genkit._ai._formats._jsonl import JsonlFormat
+from genkit._ai._formats._text import TextFormat
+from genkit._ai._formats._types import FormatDef
+
+built_in_formats: list[FormatDef] = [
+    ArrayFormat(),
+    EnumFormat(),
+    JsonFormat(),
+    JsonlFormat(),
+    TextFormat(),
+]

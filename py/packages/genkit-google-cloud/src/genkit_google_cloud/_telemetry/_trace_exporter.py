@@ -30,7 +30,7 @@ from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 
 from ._adjusting_exporter import AdjustingTraceExporter, RedactedSpan
-from .constants import (
+from ._constants import (
     MIN_SPAN_DURATION_NS,
     TRACE_RETRY_DEADLINE,
     TRACE_RETRY_INITIAL,

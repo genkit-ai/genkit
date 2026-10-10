@@ -245,15 +245,13 @@ select = [
 "packages/genkit/src/genkit/_ai/_json_patch.py" = ["ANN401"]
 # HTTP client uses **httpx_kwargs: Any to forward arbitrary options
 # Span wrapper uses __getattr__ -> Any for dynamic delegation
-"packages/genkit-google-cloud/src/genkit_google_cloud/telemetry/_adjusting_exporter.py" = ["ANN401"]
+"packages/genkit-google-cloud/src/genkit_google_cloud/_telemetry/_adjusting_exporter.py" = ["ANN401"]
 # Private telemetry folder; helpers here are not a public docstring surface
 "packages/genkit/src/genkit/_core/_telemetry/*.py" = ["D"]
 # Re-export modules (F401 would flag imports used only for re-export)
-"packages/genkit/src/genkit/_ai/__init__.py" = ["F401"]
 "packages/genkit/src/genkit/_ai/_document.py" = ["F401"]
 "packages/genkit/src/genkit/_ai/_model.py" = ["F401"]
 "packages/genkit/src/genkit/_ai/_testing.py" = ["F401"]
-"packages/genkit/src/genkit/_ai/_formats/__init__.py" = ["F401"]
 # Test files don't need docstrings or type ceremony; test names/bodies are self-documenting
 "**/tests/**/*.py" = ["D", "ANN"]
 "packages/genkit/tests/typing/*.py" = ["D", "F821", "F841", "B018", "ANN"]
@@ -480,12 +478,6 @@ include = ["**/tests/**", "**/*_test.py", "samples/**", "tools/**"]
 [tool.ty.overrides.rules]
 invalid-argument-type = "ignore"
 no-matching-overload = "ignore"
-
-# Vertex AI model_garden has relative imports ty struggles to resolve (PEP 420 / namespace).
-[[tool.ty.overrides]]
-include = ["packages/genkit-vertexai/**"]
-[tool.ty.overrides.rules]
-unresolved-import = "ignore"
 
 # genkit._ai._formats._schema: dict.get with str keys from JSON schema traversal.
 [[tool.ty.overrides]]

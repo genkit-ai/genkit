@@ -47,7 +47,7 @@ from opentelemetry.sdk.trace.sampling import Sampler
 
 from genkit import GenkitError
 
-from .config import GcpTelemetry, _reject_unusable_cloud_setup
+from ._config import GcpTelemetry, _reject_unusable_cloud_setup
 
 # Once per process: the app (or a test) may call enable_google_cloud_telemetry
 # once. A second call raises so Cloud Trace does not get two exporters.

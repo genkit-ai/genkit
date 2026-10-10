@@ -25,14 +25,9 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 import httpx
 import ollama as ollama_api
 import pytest
-from genkit_ollama.constants import OllamaAPITypes
-from genkit_ollama.models import (
-    ModelDefinition,
-    OllamaConfig,
-    OllamaModel,
-    _convert_parameters,
-    _image_fetch_client,
-)
+from genkit_ollama import ModelDefinition, OllamaConfig
+from genkit_ollama._constants import OllamaAPITypes
+from genkit_ollama._models import OllamaModel, _convert_parameters, _image_fetch_client
 from pydantic import ConfigDict, ValidationError
 
 from genkit import ActionRunContext, GenkitError, Message, ModelResponseChunk, Part, Role
@@ -173,7 +168,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
         client.chat.assert_not_called()
 
     @patch(
-        'genkit_ollama.models.get_basic_usage_stats',
+        'genkit_ollama._models.get_basic_usage_stats',
         return_value=ModelUsage(
             input_tokens=10,
             output_tokens=20,
@@ -237,7 +232,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(cast(ModelUsage, response.usage).output_tokens, 10)
 
     @patch(
-        'genkit_ollama.models.get_basic_usage_stats',
+        'genkit_ollama._models.get_basic_usage_stats',
         return_value=ModelUsage(
             input_tokens=10,
             output_tokens=20,
@@ -292,7 +287,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(cast(ModelUsage, response.usage).output_tokens, 14)
 
     @patch(
-        'genkit_ollama.models.get_basic_usage_stats',
+        'genkit_ollama._models.get_basic_usage_stats',
         return_value=ModelUsage(),
     )
     async def test_generate_chat_streaming(self, mock_get_basic_usage_stats: MagicMock) -> None:
@@ -341,7 +336,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
         )
 
     @patch(
-        'genkit_ollama.models.get_basic_usage_stats',
+        'genkit_ollama._models.get_basic_usage_stats',
         return_value=ModelUsage(),
     )
     async def test_generate_generate_streaming(self, mock_get_basic_usage_stats: MagicMock) -> None:
@@ -387,7 +382,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
         )
 
     @patch(
-        'genkit_ollama.models.get_basic_usage_stats',
+        'genkit_ollama._models.get_basic_usage_stats',
         return_value=ModelUsage(),
     )
     async def test_generate_chat_api_response_none(self, mock_get_basic_usage_stats: MagicMock) -> None:
@@ -411,7 +406,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(cast(ModelUsage, response.usage).output_tokens, None)
 
     @patch(
-        'genkit_ollama.models.get_basic_usage_stats',
+        'genkit_ollama._models.get_basic_usage_stats',
         return_value=ModelUsage(),
     )
     async def test_generate_generate_api_response_none(self, mock_get_basic_usage_stats: MagicMock) -> None:
@@ -433,7 +428,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(cast(ModelUsage, response.usage).output_tokens, None)
 
     @patch(
-        'genkit_ollama.models.get_basic_usage_stats',
+        'genkit_ollama._models.get_basic_usage_stats',
         return_value=ModelUsage(),
     )
     async def test_generate_chat_streaming_zero_chunks(self, mock_get_basic_usage_stats: MagicMock) -> None:
@@ -452,7 +447,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(cast(Message, response.message).content, [])
 
     @patch(
-        'genkit_ollama.models.get_basic_usage_stats',
+        'genkit_ollama._models.get_basic_usage_stats',
         return_value=ModelUsage(),
     )
     async def test_generate_generate_streaming_zero_chunks(self, mock_get_basic_usage_stats: MagicMock) -> None:
@@ -1141,7 +1136,7 @@ class TestFromOllamaRole:
 
     def test_unknown_role_warns_and_defaults_to_model(self) -> None:
         """An unrecognized role warns and falls back to MODEL."""
-        with patch('genkit_ollama.models.logger') as mock_logger:
+        with patch('genkit_ollama._models.logger') as mock_logger:
             assert OllamaModel._from_ollama_role('wizard') == Role.MODEL
             cast(MagicMock, mock_logger.warning).assert_called_once()
 
@@ -1463,7 +1458,7 @@ class TestResolveImage(unittest.IsolatedAsyncioTestCase):
         result = await OllamaModel._resolve_image(path)
         assert result == path
 
-    @patch('genkit_ollama.models._image_fetch_client')
+    @patch('genkit_ollama._models._image_fetch_client')
     async def test_http_url_downloads_image(self, mock_get_client: MagicMock) -> None:
         """HTTP URLs should be downloaded and returned as bytes."""
         mock_response = MagicMock()
@@ -1490,7 +1485,7 @@ class TestResolveImage(unittest.IsolatedAsyncioTestCase):
         finally:
             await client.aclose()
 
-    @patch('genkit_ollama.models._image_fetch_client')
+    @patch('genkit_ollama._models._image_fetch_client')
     async def test_http_url_client_error_is_invalid_argument(self, mock_get_client: MagicMock) -> None:
         """A 4xx from the image host means the caller's URL is bad.
 
@@ -1510,7 +1505,7 @@ class TestResolveImage(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(raised.exception.status, 'INVALID_ARGUMENT')
                 self.assertIsInstance(raised.exception.__cause__, httpx.HTTPStatusError)
 
-    @patch('genkit_ollama.models._image_fetch_client')
+    @patch('genkit_ollama._models._image_fetch_client')
     async def test_http_url_transient_error_stays_raw(self, mock_get_client: MagicMock) -> None:
         """408/429/5xx from the image host stay unclassified so Retry can try again."""
         for status in (408, 429, 500, 503):
@@ -1639,7 +1634,7 @@ class TestBuildPrompt:
             ]
         )
 
-        with patch('genkit_ollama.models.logger') as mock_logger:
+        with patch('genkit_ollama._models.logger') as mock_logger:
             result = OllamaModel.build_prompt(request)
 
         assert result == 'see '
