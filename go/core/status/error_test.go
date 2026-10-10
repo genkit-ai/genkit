@@ -295,6 +295,9 @@ func TestJSONRoundTrip(t *testing.T) {
 	if back.Sentinel() != nil {
 		t.Error("a decoded error should carry no sentinel")
 	}
+	if !errors.Is(&back, ErrFailedPrecondition) {
+		t.Error("errors.Is(decoded, ErrFailedPrecondition) = false, want the base sentinel of its status")
+	}
 }
 
 func TestMarshalOmitsStack(t *testing.T) {
