@@ -1,4 +1,4 @@
-// Copyright 2025 Google LLC
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,27 +11,24 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-//
-// SPDX-License-Identifier: Apache-2.0
 
-package modelgarden_test
+// Package anthropiclive is the live checklist tier for the plugins built on
+// the shared Anthropic Messages API code: the anthropic plugin and the Model
+// Garden Claude models. It runs the shared [livetest] checklist, and is where
+// a gap or a check that code has whatever the plugin is recorded once for
+// both plugins.
+package anthropiclive
 
 import (
 	"testing"
 
-	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/internal/livetest"
-	"github.com/firebase/genkit/go/plugins/internal/oailive"
-	"github.com/firebase/genkit/go/plugins/vertexai/modelgarden"
 )
 
-func TestLlamaLive(t *testing.T) {
-	vertexEnv(t)
-	g := livetest.Init(t, &modelgarden.Llama{})
-
-	oailive.Run(t, g, oailive.Suite{
-		Suite: livetest.Suite{
-			Model: ai.NewModelRef("vertexai/meta/llama-4-maverick-17b-128e-instruct-maas", nil),
-		},
-	})
+// Run walks the plugin registered on g through the shared checklist. See
+// [livetest.Run] for what it defines on g.
+func Run(t *testing.T, g *genkit.Genkit, s livetest.Suite) {
+	t.Helper()
+	livetest.Run(t, g, s)
 }

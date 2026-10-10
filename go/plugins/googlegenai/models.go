@@ -144,10 +144,6 @@ const (
 	// Served under the same ID by both backends.
 	gemini31FlashTTSPreview = "gemini-3.1-flash-tts-preview"
 
-	imagen40FastGenerate001  = "imagen-4.0-fast-generate-001"
-	imagen40Generate001      = "imagen-4.0-generate-001"
-	imagen40UltraGenerate001 = "imagen-4.0-ultra-generate-001"
-
 	// Vertex AI serves Veo 3.1 as GA "-001" IDs; Google AI serves it as
 	// "-preview". Each backend has retired the other's spelling.
 	veo31Generate001         = "veo-3.1-generate-001"
@@ -211,13 +207,6 @@ var (
 		gemini31FlashImage,
 		gemini31FlashLiteImage,
 		gemini3ProImage,
-
-		// Imagen is retired on Vertex AI (June 30, 2026) and retires on Google
-		// AI on August 17, 2026. Nano Banana (gemini-*-image, via
-		// generateContent) is the replacement on both.
-		imagen40FastGenerate001,
-		imagen40Generate001,
-		imagen40UltraGenerate001,
 
 		gemini25FlashPreviewTTS,
 		gemini25ProPreviewTTS,
@@ -363,27 +352,6 @@ var (
 		},
 	}
 
-	supportedImagenModels = map[string]ai.ModelOptions{
-		imagen40FastGenerate001: {
-			Label:    "Imagen 4 Fast Generate 001",
-			Versions: []string{},
-			Supports: &Media,
-			Stage:    ai.ModelStageStable,
-		},
-		imagen40Generate001: {
-			Label:    "Imagen 4 Generate 001",
-			Versions: []string{},
-			Supports: &Media,
-			Stage:    ai.ModelStageStable,
-		},
-		imagen40UltraGenerate001: {
-			Label:    "Imagen 4 Ultra Generate 001",
-			Versions: []string{},
-			Supports: &Media,
-			Stage:    ai.ModelStageStable,
-		},
-	}
-
 	supportedVideoModels = map[string]ai.ModelOptions{
 		veo31Generate001: {
 			Label:    "Veo 3.1 Generate 001",
@@ -492,10 +460,11 @@ func GetModelOptions(name, provider string) ai.ModelOptions {
 			opts = defaultGeminiOpts
 		}
 	case ModelTypeImagen:
-		opts, ok = supportedImagenModels[name]
-		if !ok {
-			opts = defaultImagenOpts
-		}
+		// Imagen is shut down on the Gemini API (August 17, 2026) and
+		// retired on Vertex AI (June 30, 2026), so no Imagen model is
+		// curated. Nano Banana (gemini-*-image, via generateContent) is the
+		// replacement on both. An Imagen ID still resolves here.
+		opts = defaultImagenOpts
 	case ModelTypeVeo:
 		opts, ok = supportedVideoModels[name]
 		if !ok {

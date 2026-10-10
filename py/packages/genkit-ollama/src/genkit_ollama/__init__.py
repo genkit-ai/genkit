@@ -55,7 +55,6 @@ from genkit_ollama._plugin import (
     RequestHeaderFunction,
     RequestHeaderParams,
     RequestHeaders,
-    ollama_name,
 )
 
 __all__ = [
@@ -68,5 +67,4 @@ __all__ = [
     'RequestHeaderFunction',
     'RequestHeaderParams',
     'RequestHeaders',
-    'ollama_name',
 ]

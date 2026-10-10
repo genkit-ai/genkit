@@ -20,53 +20,21 @@ func hitUnknownModelFallback(opts ai.ModelOptions, name string) bool {
 	return strings.HasSuffix(opts.Label, name)
 }
 
-func TestImagen4ModelOptions(t *testing.T) {
-	tests := []struct {
-		name  string
-		label string
-	}{
-		{imagen40FastGenerate001, "Google AI - Imagen 4 Fast Generate 001"},
-		{imagen40Generate001, "Google AI - Imagen 4 Generate 001"},
-		{imagen40UltraGenerate001, "Google AI - Imagen 4 Ultra Generate 001"},
+// No Imagen model is curated now that every backend has retired them, but an
+// Imagen ID still resolves through the generic Imagen path with its config
+// schema, so code that names one keeps compiling and gets the provider's own
+// answer.
+func TestImagenModelOptions(t *testing.T) {
+	const name = "imagen-4.0-generate-001"
+	if got := ClassifyModel(name); got != ModelTypeImagen {
+		t.Fatalf("ClassifyModel(%q) = %v, want %v", name, got, ModelTypeImagen)
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := ClassifyModel(tt.name); got != ModelTypeImagen {
-				t.Fatalf("ClassifyModel(%q) = %v, want %v", tt.name, got, ModelTypeImagen)
-			}
-
-			opts := GetModelOptions(tt.name, googleAIProvider)
-			if opts.Label != tt.label {
-				t.Fatalf("label = %q, want %q", opts.Label, tt.label)
-			}
-			if opts.Stage != ai.ModelStageStable {
-				t.Fatalf("stage = %v, want %v", opts.Stage, ai.ModelStageStable)
-			}
-			if opts.Supports != &Media {
-				t.Fatalf("supports = %#v, want Media", opts.Supports)
-			}
-			if opts.ConfigSchema == nil {
-				t.Fatal("ConfigSchema should be populated for Imagen 4")
-			}
-		})
+	opts := GetModelOptions(name, googleAIProvider)
+	if opts.Supports != &Media {
+		t.Errorf("supports = %#v, want Media", opts.Supports)
 	}
-}
-
-func TestListModelsIncludesImagen4ForGoogleAI(t *testing.T) {
-	models, err := listModels(googleAIProvider)
-	if err != nil {
-		t.Fatalf("listModels(%q) error = %v", googleAIProvider, err)
-	}
-
-	for _, name := range []string{
-		imagen40FastGenerate001,
-		imagen40Generate001,
-		imagen40UltraGenerate001,
-	} {
-		if _, ok := models[name]; !ok {
-			t.Fatalf("Google AI models missing %q", name)
-		}
+	if opts.ConfigSchema == nil {
+		t.Error("ConfigSchema should be populated for an Imagen model")
 	}
 }
 

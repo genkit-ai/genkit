@@ -272,6 +272,7 @@ export const GenerationUsageSchema = z.object({
   custom: z.record(z.number()).optional(),
   thoughtsTokens: z.number().optional(),
   cachedContentTokens: z.number().optional(),
+  cacheWriteTokens: z.number().optional(),
 });
 
 /**
@@ -320,7 +321,17 @@ export const ModelResponseSchema = z.object({
   finishReason: FinishReasonSchema,
   finishMessage: z.string().optional(),
   latencyMs: z.number().optional(),
+  /** Usage of the model call that produced this response. */
   usage: GenerationUsageSchema.optional(),
+  /**
+   * Usage of every model call made under one generate run, summed field by
+   * field (`custom` key by key): the tool loop's calls and the calls its
+   * tools and hooks make, such as a nested generate or a fallback model.
+   * Set by generate, never by a model: `usage` reports only the call that
+   * produced the response. A subagent's calls count in its own session
+   * instead, and a resumed run counts only its own calls.
+   */
+  totalUsage: GenerationUsageSchema.optional(),
   /** @deprecated use `raw` instead */
   custom: z.unknown(),
   raw: z.unknown(),

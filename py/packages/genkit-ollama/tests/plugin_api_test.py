@@ -31,7 +31,6 @@ from genkit_ollama import (
     OllamaConnectionError,
     OllamaSupports,
     RequestHeaderParams,
-    ollama_name,
 )
 from genkit_ollama._constants import OllamaAPITypes
 from genkit_ollama._errors import wrap_connection_errors
@@ -115,7 +114,7 @@ async def test_resolve_action(kind: ActionKind, name: str, ollama_plugin_instanc
 
     assert action is not None
     assert action.kind == kind
-    assert action.name == ollama_name(name)
+    assert action.name == f'ollama/{name}'
     assert action.metadata is not None
     metadata = cast(dict[str, Any], action.metadata)
 

@@ -34,14 +34,21 @@ import (
 // is in [AllowedTools], the call has been explicitly approved on resume, or
 // the [Judge] model allows it.
 //
-// To approve on resume, attach a "toolApproved" flag to the resume data of the
-// restart part:
+// Claim a hold with [ToolApprovalInterrupted] and answer it with a restart
+// carrying a [ToolCallDecision]. Every restart of a hold decides it: Approved
+// true runs the call, and any other restart, a bare one included, answers it
+// with an error the model sees, as a judge's "deny" does, so the generation
+// continues without it:
 //
-//	restart, err := interruptPart.ToToolRestart(map[string]any{"toolApproved": true})
+//	for _, part := range resp.Interrupts() {
+//		if call, ok := middleware.ToolApprovalInterrupted(part); ok {
+//			parts = append(parts, call.Restart(middleware.ToolCallDecision{Approved: true}))
+//		}
+//	}
 //
-// A bare restart, resumed with no payload, is NOT treated as approval; callers
-// must opt in so that unrelated resume flows (e.g. respond-only turns) cannot
-// bypass approval.
+// Answer a hold with a restart: a response from [ai.InterruptedCall.Respond]
+// does not refuse the call but stands in for the tool's output, which must
+// match the tool's output schema.
 //
 // The hold is the middleware's own interrupt, so a tool's
 // [ai.ResumableToolAction.Interrupted] declines it and the approval is
@@ -51,7 +58,8 @@ import (
 // records that the gate let it through, unless it replaces the call's input,
 // which the gate then holds for approval again. A hold that does not record
 // which stage raised it, such as one stored before stages were recorded, is
-// approved the same way, with "toolApproved" on the restart.
+// not claimed by [ToolApprovalInterrupted]; answer it with
+// part.ToToolRestart and a [ToolCallDecision].
 //
 // Usage:
 //
@@ -62,12 +70,13 @@ import (
 //	    ai.WithUse(&middleware.ToolApproval{AllowedTools: []string{"toolA"}}),
 //	)
 //	// toolA runs; toolB triggers an interrupt.
-//	// Resume with ai.WithResume(restart), the restart carrying {"toolApproved": true}.
+//	// Resume with ai.WithResume(call.Restart(middleware.ToolCallDecision{Approved: true})).
 //
 // # Judge
 //
-// With [Judge] set, a model decides each call that the allowlist and a resume
-// approval do not already approve, in place of an unconditional interrupt.
+// With [Judge] set, a model decides each call that the allowlist does not
+// approve, in place of an unconditional interrupt. A restart that answers a
+// hold is the caller's decision, which the judge does not revisit.
 // The judge answers with one of three verdicts:
 //
 //   - "allow" runs the tool.
@@ -106,18 +115,32 @@ type ToolApproval struct {
 	// interruption. Tools not in this list trigger an interrupt, or go to
 	// the Judge when one is set. An empty list covers no tools.
 	AllowedTools []string `json:"allowedTools,omitempty" jsonschema_description:"Tool names pre-approved to run without interruption. Any other tool triggers an interrupt, or goes to the judge when one is set. An empty list covers no tools."`
-	// Judge is the model that decides the calls AllowedTools and a resume
-	// approval do not approve. The zero value interrupts those calls.
-	Judge ai.ModelRef `json:"judge,omitzero" jsonschema_description:"Model that decides each call that allowedTools and a resume approval do not approve: it allows the call, denies it (the model sees the denial), or asks for approval (an interrupt). Unset interrupts those calls."`
+	// Judge is the model that decides the calls AllowedTools does not
+	// approve. The zero value interrupts those calls.
+	Judge ai.ModelRef `json:"judge,omitzero" jsonschema_description:"Model that decides each call that allowedTools does not approve: it allows the call, denies it (the model sees the denial), or asks for approval (an interrupt). Unset interrupts those calls."`
 	// JudgePolicy is extra rules for the Judge, in natural language, added
 	// to its default instructions.
 	JudgePolicy string `json:"judgePolicy,omitempty" jsonschema_description:"Extra rules for the judge, in natural language, added to its default instructions."`
 }
 
-// toolApprovalResume is the resume payload the middleware reads on a restart:
-// the caller approves the held call by restarting it with toolApproved set.
-type toolApprovalResume struct {
-	ToolApproved bool `json:"toolApproved"`
+// ToolCallDecision is the answer to a [ToolApproval] hold, sent with
+// [ai.InterruptedCall.Restart] on the call [ToolApprovalInterrupted] claims.
+type ToolCallDecision struct {
+	// Approved decides the held call: true runs it, and false, the zero
+	// value, answers it with an error the model sees instead, so the
+	// generation continues without it.
+	Approved bool `json:"toolApproved"`
+	// Reason, when Approved is false, is added to the error the model
+	// sees.
+	Reason string `json:"reason,omitempty"`
+}
+
+// ToolApprovalInterrupted claims part for [ToolApproval]: it reports whether
+// part is a call the middleware held and, when it is, returns the call, to be
+// answered with a [ToolCallDecision]. Every ToolApproval in a chain
+// claims the same holds. See [ai.MiddlewareInterrupted].
+func ToolApprovalInterrupted(part *ai.Part) (*ai.InterruptedCall[any, any, ToolCallDecision], bool) {
+	return ai.MiddlewareInterrupted[ToolCallDecision](ToolApproval{}.Name(), part)
 }
 
 // Name implements [ai.Middleware].
@@ -141,12 +164,16 @@ func (t *ToolApproval) wrapTool(ctx context.Context, params *ai.ToolParams, next
 
 	// A restart answers the stage that raised the interrupt: one answering
 	// a later stage, the tool's own question after this hook released the
-	// call, passes through; one answering this hook carries the approval.
+	// call, passes through; one answering this hook carries the decision.
 	if tool.Released(ctx) {
 		return next(ctx, params)
 	}
-	if resume, ok := tool.ResumeData[toolApprovalResume](ctx); ok && resume.ToolApproved {
-		return next(ctx, params)
+	if resume, ok := tool.ResumeData[ToolCallDecision](ctx); ok {
+		if resume.Approved {
+			return next(ctx, params)
+		}
+		logger.Debug(ctx, "tool denied on resume", "tool", name)
+		return nil, tool.Fail(ctx, errors.New(callerDeniedMessage(resume.Reason)))
 	}
 
 	interrupt := map[string]any{"message": "Tool not in approved list: " + name}
@@ -189,6 +216,16 @@ const judgeFailed = "failed"
 
 // deniedMessage is the error the model receives for a call the judge denies.
 const deniedMessage = "the tool call was denied by the approval policy; do not retry it or work around the denial, continue without it or tell the user it was refused"
+
+// callerDeniedMessage is the error the model receives for a call the caller
+// denies, with Approved false in its [ToolCallDecision].
+func callerDeniedMessage(reason string) string {
+	msg := "the tool call was denied; do not retry it or work around the denial, continue without it or tell the user it was refused"
+	if reason != "" {
+		msg += ". Reason: " + reason
+	}
+	return msg
+}
 
 // judgeInstructions is the judge's system message. For a decision model such
 // as jev it is the question, with the verdicts as the options.

@@ -17,106 +17,45 @@
 package modelgarden_test
 
 import (
-	"context"
 	"strings"
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/plugins/internal/livetest"
+	"github.com/firebase/genkit/go/plugins/internal/oailive"
 	"github.com/firebase/genkit/go/plugins/vertexai/modelgarden"
 )
 
 func TestMistralLive(t *testing.T) {
-	if _, ok := requireEnv("GOOGLE_CLOUD_PROJECT"); !ok {
-		t.Skip("GOOGLE_CLOUD_PROJECT not found in the environment")
+	vertexEnv(t)
+	g := livetest.Init(t, &modelgarden.Mistral{})
+
+	oailive.Run(t, g, oailive.Suite{
+		Suite: livetest.Suite{
+			Model: ai.NewModelRef("vertexai/mistral-small-2503", nil),
+		},
+	})
+
+	for name, id := range map[string]string{
+		// The publisher prefix is trimmed, so both forms find the model.
+		"publisher-prefixed id": "mistralai/mistral-small-2503",
+		"codestral":             "codestral-2",
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := modelgarden.MistralModel(g, id)
+			if m == nil {
+				t.Fatalf("MistralModel(%q) = nil, want the registered model", id)
+			}
+			resp, err := genkit.Generate(t.Context(), g,
+				ai.WithModel(m),
+				ai.WithPrompt("Reply with the single word: ok."))
+			if err != nil {
+				t.Fatalf("Generate() error = %v", err)
+			}
+			if strings.TrimSpace(resp.Text()) == "" {
+				t.Error("Text() is empty")
+			}
+		})
 	}
-	if _, ok := requireEnv("GOOGLE_CLOUD_LOCATION"); !ok {
-		t.Skip("GOOGLE_CLOUD_LOCATION not found in the environment")
-	}
-
-	ctx := context.Background()
-	g := genkit.Init(ctx, genkit.WithPlugins(&modelgarden.Mistral{}))
-
-	t.Run("invalid model", func(t *testing.T) {
-		m := modelgarden.MistralModel(g, "mistral-does-not-exist")
-		if m != nil {
-			t.Fatalf("model should have been empty, got: %#v", m)
-		}
-	})
-
-	t.Run("mistral small generation", func(t *testing.T) {
-		m := modelgarden.MistralModel(g, "mistralai/mistral-small-2503")
-		if m == nil {
-			t.Fatal("mistralai/mistral-small-2503 model was not registered")
-		}
-		resp, err := genkit.Generate(ctx, g,
-			ai.WithModel(m),
-			ai.WithSystem("You are a helpful assistant. Reply in one short sentence."),
-			ai.WithMessages(ai.NewUserMessage(ai.NewTextPart("Say hello."))),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if strings.TrimSpace(resp.Text()) == "" {
-			t.Fatal("expected a non-empty response")
-		}
-	})
-
-	t.Run("codestral generation", func(t *testing.T) {
-		m := modelgarden.MistralModel(g, "mistralai/codestral-2")
-		if m == nil {
-			t.Fatal("mistralai/codestral-2 model was not registered")
-		}
-		resp, err := genkit.Generate(ctx, g,
-			ai.WithModel(m),
-			ai.WithMessages(ai.NewUserMessage(ai.NewTextPart("Write a one-line Python function that returns 42."))),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if strings.TrimSpace(resp.Text()) == "" {
-			t.Fatal("expected a non-empty response")
-		}
-	})
-
-	t.Run("bare id lookup", func(t *testing.T) {
-		// Same registered action; verifies the publisher-prefix trim path.
-		m := modelgarden.MistralModel(g, "mistral-small-2503")
-		if m == nil {
-			t.Fatal("mistral-small-2503 model was not registered under bare id")
-		}
-		resp, err := genkit.Generate(ctx, g,
-			ai.WithModel(m),
-			ai.WithMessages(ai.NewUserMessage(ai.NewTextPart("Reply with the single word: ok."))),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if strings.TrimSpace(resp.Text()) == "" {
-			t.Fatal("expected a non-empty response")
-		}
-	})
-
-	t.Run("streaming", func(t *testing.T) {
-		m := modelgarden.MistralModel(g, "mistralai/mistral-small-2503")
-		out := ""
-		_, err := genkit.Generate(ctx, g,
-			ai.WithModel(m),
-			ai.WithPrompt("Count from one to three."),
-			ai.WithStreaming(func(ctx context.Context, c *ai.ModelResponseChunk) error {
-				for _, p := range c.Content {
-					if p.IsText() {
-						out += p.Text
-					}
-				}
-				return nil
-			}),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if out == "" {
-			t.Fatal("expected streamed content")
-		}
-	})
 }
