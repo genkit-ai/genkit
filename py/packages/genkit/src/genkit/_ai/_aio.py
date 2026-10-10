@@ -472,17 +472,39 @@ class Genkit:
 
     def define_evaluator(
         self,
-        *,
         name: str,
+        fn: EvaluatorFn[Any],
+        *,
         display_name: str,
         definition: str,
-        fn: EvaluatorFn[Any],
         is_billed: bool = False,
         config_schema: type[BaseModel] | dict[str, object] | None = None,
         metadata: dict[str, object] | None = None,
         description: str | None = None,
     ) -> Action:
-        """Register an evaluator action."""
+        """Register an evaluator that scores one dataset row at a time.
+
+        Example:
+            ```python
+            # 1. Score whether the answer mentions the expected dish
+            async def mentions_dish(row: BaseDataPoint, options: object | None) -> EvalFnResponse:
+                hit = row.reference.lower() in str(row.output).lower()
+                return EvalFnResponse(test_case_id=row.test_case_id or '', evaluation=[Score(score=hit)])
+
+
+            # 2. Register it under a name
+            ai.define_evaluator(
+                'mentions_dish',
+                mentions_dish,
+                display_name='Mentions dish',
+                definition='Whether the answer names the expected dish.',
+            )
+
+            # 3. Run it over a dataset
+            rows = await ai.evaluate(evaluator='mentions_dish', dataset=dataset)
+            # => [EvalResponse row with evaluation=[Score(score=True)], ...]
+            ```
+        """
         return define_evaluator(
             self.registry,
             name=name,
@@ -497,11 +519,11 @@ class Genkit:
 
     def define_batch_evaluator(
         self,
-        *,
         name: str,
+        fn: BatchEvaluatorFn,
+        *,
         display_name: str,
         definition: str,
-        fn: BatchEvaluatorFn,
         is_billed: bool = False,
         config_schema: type[BaseModel] | dict[str, object] | None = None,
         metadata: dict[str, object] | None = None,

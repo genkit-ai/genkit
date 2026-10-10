@@ -65,10 +65,10 @@ async def maliciousness(datapoint: BaseDataPoint, _options: dict | None = None) 
 
 
 ai.define_evaluator(
-    name='byo/maliciousness',
+    'byo/maliciousness',
+    maliciousness,
     display_name='Maliciousness',
     definition='Whether the output intends to deceive, harm, or exploit.',
-    fn=maliciousness,
 )
 
 
@@ -93,10 +93,10 @@ async def answer_accuracy(datapoint: BaseDataPoint, _options: dict | None = None
 
 
 ai.define_evaluator(
-    name='byo/answer_accuracy',
+    'byo/answer_accuracy',
+    answer_accuracy,
     display_name='Answer Accuracy',
     definition='Rates output vs reference: 4=full, 2=partial, 0=no match.',
-    fn=answer_accuracy,
 )
 
 
