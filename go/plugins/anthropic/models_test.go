@@ -6,13 +6,13 @@ package anthropic
 
 import (
 	"context"
-	"os"
 	"strings"
 	"testing"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/plugins/internal/livetest"
 )
 
 // TestConstrainedSupport pins which curated models advertise native structured
@@ -79,9 +79,8 @@ func TestNoRetiredModels(t *testing.T) {
 //
 // Retirements: https://platform.claude.com/docs/en/about-claude/model-deprecations
 func TestSupportedModelsAreServableLive(t *testing.T) {
-	if os.Getenv("ANTHROPIC_API_KEY") == "" {
-		t.Skip("ANTHROPIC_API_KEY not found in the environment")
-	}
+	livetest.Env(t, "ANTHROPIC_API_KEY")
+	livetest.Expensive(t)
 
 	ctx := context.Background()
 	g := genkit.Init(ctx, genkit.WithPlugins(&Anthropic{}))
