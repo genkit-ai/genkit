@@ -18,6 +18,7 @@ package genkit
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -31,7 +32,9 @@ import (
 
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/core/x/streaming"
+	"github.com/firebase/genkit/go/internal/wire"
 )
 
 func FakeContextProvider(ctx context.Context, req core.RequestData) (core.ActionContext, error) {
@@ -127,9 +130,15 @@ func TestHandler(t *testing.T) {
 			t.Errorf("want status code %d for INVALID_ARGUMENT, got %d", http.StatusBadRequest, resp.StatusCode)
 		}
 
-		// The generic label for the status, not the flow's own text.
-		if got, want := strings.TrimSpace(string(body)), "invalid argument"; got != want {
-			t.Errorf("body = %q, want the generic %q", got, want)
+		// A JSON body naming the status, the format JS servers send and the
+		// remote agent client reads: an HTTP 400 alone does not say which
+		// status it was. The message is the generic label for the status,
+		// not the flow's own text.
+		if ct := resp.Header.Get("Content-Type"); ct != "application/json" {
+			t.Errorf("Content-Type = %q, want application/json", ct)
+		}
+		if got, want := decodeErrorBody(t, body), (wire.Error{Status: status.InvalidArgument, Message: "invalid argument"}); got != want {
+			t.Errorf("body = %+v, want %+v", got, want)
 		}
 	})
 
@@ -170,8 +179,8 @@ func TestHandler(t *testing.T) {
 			t.Errorf("want status code %d for PERMISSION_DENIED, got %d", http.StatusForbidden, resp.StatusCode)
 		}
 
-		if got, want := strings.TrimSpace(string(body)), "permission denied"; got != want {
-			t.Errorf("body = %q, want the generic %q", got, want)
+		if got, want := decodeErrorBody(t, body).Message, "permission denied"; got != want {
+			t.Errorf("message = %q, want the generic %q", got, want)
 		}
 		if strings.Contains(string(body), "acme-prod") {
 			t.Errorf("internal detail leaked to client: %q", string(body))
@@ -834,4 +843,14 @@ func TestHandlerBidiInitEnvelope(t *testing.T) {
 			t.Errorf("Content-Type = %q; response must not commit to SSE before rejecting init", ct)
 		}
 	})
+}
+
+// decodeErrorBody decodes a non-streaming error response body.
+func decodeErrorBody(t *testing.T, body []byte) wire.Error {
+	t.Helper()
+	var e wire.Error
+	if err := json.Unmarshal(body, &e); err != nil {
+		t.Fatalf("error body %q is not a JSON wire error: %v", body, err)
+	}
+	return e
 }
