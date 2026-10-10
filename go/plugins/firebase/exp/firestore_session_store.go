@@ -56,10 +56,13 @@ const (
 	kindCheckpoint = "checkpoint"
 )
 
-// Compile-time checks that the store satisfies the session-store interfaces.
+// Compile-time checks that the store has the capabilities it documents. The
+// conformance suite skips the checks for a capability a store lacks, so losing
+// one would otherwise go unnoticed.
 var (
-	_ aix.SessionStore[any]  = (*FirestoreSessionStore[any])(nil)
-	_ aix.SnapshotSubscriber = (*FirestoreSessionStore[any])(nil)
+	_ aix.SessionStore[any]           = (*FirestoreSessionStore[any])(nil)
+	_ aix.SnapshotMetadataReader[any] = (*FirestoreSessionStore[any])(nil)
+	_ aix.SnapshotSubscriber          = (*FirestoreSessionStore[any])(nil)
 )
 
 // FirestoreSessionStore is a Firestore-backed [aix.SessionStore] that persists
