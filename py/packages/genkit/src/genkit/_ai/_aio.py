@@ -355,7 +355,13 @@ class Genkit:
         cache_ttl_millis: int | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> DynamicActionProvider:
-        """Register a Dynamic Action Provider (DAP)."""
+        """Register a Dynamic Action Provider (DAP).
+
+        The callback returns action lists keyed by selector, for example
+        ``{'tool': tools}``. Use ``'tool'`` for tools, rather than
+        ``ActionKind.TOOL`` (``'tool.v2'``). The provider name must be nonempty
+        and contain neither ``/`` nor ``:`` for its children to be resolvable.
+        """
         return define_dap_block(
             self.registry,
             name,

@@ -663,30 +663,40 @@ async def test_list_actions_drops_children_of_a_timed_out_dap() -> None:
 
 
 @pytest.mark.asyncio
-async def test_list_actions_holds_a_timed_out_listing_until_it_finishes() -> None:
-    """The in-flight fetch is referenced until it completes, then released."""
+async def test_list_actions_releases_timed_out_listings_but_keeps_shared_fetch() -> None:
+    """Repeated polling retains one provider fetch and no abandoned listing wrappers."""
     from genkit._core._registry import _dap_listing_tasks
 
     registry = Registry()
     release = asyncio.Event()
+    finished = asyncio.Event()
+    calls = 0
 
     async def slow_fn() -> DapValue:
+        nonlocal calls
+        calls += 1
         await release.wait()
+        finished.set()
         return {'tool': [_dap_child('echo', 'echoes')]}
 
-    define_dynamic_action_provider(registry, 'slow', slow_fn)
-
+    provider = define_dynamic_action_provider(registry, 'slow', slow_fn)
     before = set(_dap_listing_tasks)
-    await asyncio.wait_for(registry.list_actions(dap_timeout_seconds=0.05), timeout=5)
-    abandoned = _dap_listing_tasks - before
-
-    assert len(abandoned) == 1
-    (task,) = abandoned
-
-    release.set()
-    await task
-
-    assert task not in _dap_listing_tasks
+    retained: list[int] = []
+    try:
+        for _ in range(12):
+            await asyncio.wait_for(registry.list_actions(dap_timeout_seconds=0.001), timeout=5)
+            retained.append(len(_dap_listing_tasks - before))
+        assert retained == [0] * 12
+        assert calls == 1
+        assert not provider._fetch_tasks[asyncio.get_running_loop()].task.done()
+    finally:
+        release.set()
+        await asyncio.wait_for(finished.wait(), timeout=5)
+        pending = _dap_listing_tasks - before
+        if pending:
+            await asyncio.wait_for(asyncio.gather(*pending, return_exceptions=True), timeout=5)
+    assert '/dynamic-action-provider/slow:tool/echo' in await registry.list_actions()
+    assert calls == 1
 
 
 @pytest.mark.asyncio
@@ -762,7 +772,7 @@ async def test_list_actions_releases_a_cancelled_listing() -> None:
         await release.wait()
         raise RuntimeError('mcp server died')
 
-    define_dynamic_action_provider(registry, 'slow', failing_fn)
+    provider = define_dynamic_action_provider(registry, 'slow', failing_fn)
 
     before = set(_dap_listing_tasks)
     listing = asyncio.ensure_future(registry.list_actions())
@@ -772,15 +782,17 @@ async def test_list_actions_releases_a_cancelled_listing() -> None:
     assert len(in_flight) == 1
     (task,) = in_flight
 
+    fetch = provider._fetch_tasks[asyncio.get_running_loop()].task
     listing.cancel()
     with pytest.raises(asyncio.CancelledError):
         await listing
 
-    release.set()
-    with pytest.raises(RuntimeError):
-        await task
-
+    assert task.cancelled()
     assert task not in _dap_listing_tasks
+    assert not fetch.done()
+    release.set()
+    with pytest.raises(RuntimeError, match='mcp server died'):
+        await fetch
 
 
 @pytest.mark.asyncio

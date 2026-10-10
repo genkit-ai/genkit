@@ -147,9 +147,15 @@ async def _list_dap_children(
     _dap_listing_tasks.add(task)
     task.add_done_callback(_release_listing_task)
 
-    # asyncio.wait rather than wait_for: cancelling would abort a fetch that
-    # concurrent callers share through the provider cache.
-    done, _pending = await asyncio.wait({task}, timeout=timeout_seconds)
+    try:
+        done, _pending = await asyncio.wait({task}, timeout=timeout_seconds)
+    finally:
+        if not task.done():
+            # This listing wrapper belongs to one catalog request. The provider
+            # shields its shared fetch, so releasing this waiter leaves that
+            # fetch running for other callers and for cache warming.
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
     if not done:
         logger.warning('Timed out listing actions for dynamic action provider %s', provider_name)
         return {}
@@ -917,7 +923,13 @@ def define_dynamic_action_provider(
     cache_ttl_millis: int | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> DynamicActionProvider:
-    """Define and register a Dynamic Action Provider for lazy action resolution."""
+    """Define and register a Dynamic Action Provider for lazy action resolution.
+
+    The callback returns action lists keyed by selector, for example
+    ``{'tool': tools}``. Use ``'tool'`` for tools, rather than
+    ``ActionKind.TOOL`` (``'tool.v2'``). The provider name must be nonempty
+    and contain neither ``/`` nor ``:`` for its children to be resolvable.
+    """
 
     async def dap_action(input: DapMetadata) -> DapMetadata:
         return input
