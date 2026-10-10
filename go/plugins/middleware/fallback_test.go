@@ -17,14 +17,17 @@
 package middleware
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/genkit"
 )
 
@@ -36,7 +39,7 @@ func newTestGenkit(t *testing.T) *genkit.Genkit {
 func defineTestModel(t *testing.T, g *genkit.Genkit, name string, fn ai.ModelFunc) ai.Model {
 	t.Helper()
 	return genkit.DefineModel(g, name, &ai.ModelOptions{
-		Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true},
+		Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true, Tools: true},
 	}, fn)
 }
 
@@ -437,5 +440,124 @@ func TestFallbackOnBareRegistry(t *testing.T) {
 	}
 	if got := resp.Text(); got != "secondary ok" {
 		t.Errorf("got %q, want %q", got, "secondary ok")
+	}
+}
+
+// The reroute warning names the model that failed and the one tried next as
+// separate attributes; it once logged only the next model under "model".
+func TestFallbackLogsFailedModel(t *testing.T) {
+	g := newTestGenkit(t)
+	primary := defineTestModel(t, g, "test/primary", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		return nil, core.NewError(core.UNAVAILABLE, "primary down")
+	})
+	secondary := defineTestModel(t, g, "test/secondary", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		return &ai.ModelResponse{Message: ai.NewModelTextMessage("secondary ok")}, nil
+	})
+
+	var buf bytes.Buffer
+	logCtx := logger.WithContext(ctx, slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	fb := &Fallback{Models: []ai.ModelRef{ai.NewModelRef(secondary.Name(), nil)}}
+	if _, err := genkit.Generate(logCtx, g, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithUse(fb)); err != nil {
+		t.Fatal(err)
+	}
+
+	var rec map[string]any
+	for line := range strings.Lines(buf.String()) {
+		var r map[string]any
+		if err := json.Unmarshal([]byte(line), &r); err != nil {
+			t.Fatal(err)
+		}
+		if r["msg"] == "model call failed, falling back" {
+			rec = r
+		}
+	}
+	if rec == nil {
+		t.Fatalf("no fallback warning logged; got:\n%s", buf.String())
+	}
+	if rec["model"] != "test/primary" || rec["fallbackModel"] != "test/secondary" {
+		t.Errorf("got model=%v fallbackModel=%v, want model=test/primary fallbackModel=test/secondary", rec["model"], rec["fallbackModel"])
+	}
+}
+
+// A model that fails with a sticky status is skipped for the rest of the
+// generate call, so a three-turn tool loop reaches the dead primary once. The
+// next generate call starts over, so the state is per call and never global.
+func TestFallbackSkipsDeadModelForRestOfCall(t *testing.T) {
+	g := newTestGenkit(t)
+	primaryCalls, secondaryCalls := 0, 0
+	primary := defineTestModel(t, g, "test/primary", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		primaryCalls++
+		return nil, core.NewError(core.NOT_FOUND, "model not found")
+	})
+	secondary := defineTestModel(t, g, "test/secondary", echoLoopModel(&secondaryCalls, 3))
+	tool := genkit.DefineTool(g, "echo", "Echoes.", func(ctx *ai.ToolContext, in struct {
+		V string `json:"v"`
+	}) (string, error) {
+		return in.V, nil
+	})
+	fb := &Fallback{Models: []ai.ModelRef{ai.NewModelRef(secondary.Name(), nil)}}
+
+	for run := 1; run <= 2; run++ {
+		secondaryCalls = 0
+		resp, err := genkit.Generate(ctx, g, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithTools(tool), ai.WithUse(fb))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.Text() != "done" {
+			t.Errorf("run %d: got %q, want %q", run, resp.Text(), "done")
+		}
+		if secondaryCalls != 3 {
+			t.Errorf("run %d: secondary called %d times, want 3", run, secondaryCalls)
+		}
+		if primaryCalls != run {
+			t.Errorf("after run %d: primary called %d times, want %d", run, primaryCalls, run)
+		}
+	}
+}
+
+// A transient failure does not skip the model: the next turn tries the
+// primary again.
+func TestFallbackRetriesTransientFailureNextTurn(t *testing.T) {
+	g := newTestGenkit(t)
+	primaryCalls, secondaryCalls := 0, 0
+	primary := defineTestModel(t, g, "test/primary", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		primaryCalls++
+		if primaryCalls == 1 {
+			return nil, core.NewError(core.UNAVAILABLE, "primary down")
+		}
+		return &ai.ModelResponse{Message: ai.NewModelTextMessage("primary ok")}, nil
+	})
+	secondary := defineTestModel(t, g, "test/secondary", echoLoopModel(&secondaryCalls, 2))
+	tool := genkit.DefineTool(g, "echo", "Echoes.", func(ctx *ai.ToolContext, in struct {
+		V string `json:"v"`
+	}) (string, error) {
+		return in.V, nil
+	})
+	fb := &Fallback{Models: []ai.ModelRef{ai.NewModelRef(secondary.Name(), nil)}}
+
+	resp, err := genkit.Generate(ctx, g, ai.WithModel(primary), ai.WithPrompt("hello"), ai.WithTools(tool), ai.WithUse(fb))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Text() != "primary ok" {
+		t.Errorf("got %q, want %q", resp.Text(), "primary ok")
+	}
+	if primaryCalls != 2 || secondaryCalls != 1 {
+		t.Errorf("primary called %d times and secondary %d, want 2 and 1", primaryCalls, secondaryCalls)
+	}
+}
+
+// echoLoopModel returns a model that requests the echo tool on each of its
+// first turns-1 calls and answers "done" after that, counting calls in calls.
+func echoLoopModel(calls *int, turns int) ai.ModelFunc {
+	return func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		*calls++
+		if *calls >= turns {
+			return &ai.ModelResponse{Message: ai.NewModelTextMessage("done")}, nil
+		}
+		return &ai.ModelResponse{Message: &ai.Message{
+			Role:    ai.RoleModel,
+			Content: []*ai.Part{ai.NewToolRequestPart(&ai.ToolRequest{Name: "echo", Input: map[string]any{"v": "x"}})},
+		}}, nil
 	}
 }
