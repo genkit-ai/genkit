@@ -19,13 +19,13 @@
 Example:
     ```python
     from genkit import Genkit
-    from genkit_amazon_bedrock import Bedrock, ModelDefinition
+    from genkit_amazon_bedrock import Bedrock
 
     ai = Genkit(
         plugins=[
             Bedrock(
                 region='us-east-1',
-                models=[ModelDefinition(name='us.anthropic.claude-sonnet-4-5-20250929-v1:0')],
+                models=['us.anthropic.claude-sonnet-4-5-20250929-v1:0'],
             )
         ],
         model='bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0',
@@ -36,26 +36,12 @@ Example:
     ```
 """
 
-from genkit_amazon_bedrock._config import BedrockConfig, BedrockImageConfig, ModelDefinition
+from genkit_amazon_bedrock._config import BedrockConfig
 from genkit_amazon_bedrock._converters import cache_point_part
 from genkit_amazon_bedrock._plugin import Bedrock
-from genkit_amazon_bedrock._rerank import (
-    BedrockRerankOptions,
-    RankedDocumentData,
-    RankedDocumentMetadata,
-    RerankerRequest,
-    RerankerResponse,
-)
 
 __all__ = [
     'Bedrock',
     'BedrockConfig',
-    'BedrockImageConfig',
-    'BedrockRerankOptions',
-    'ModelDefinition',
-    'RankedDocumentData',
-    'RankedDocumentMetadata',
-    'RerankerRequest',
-    'RerankerResponse',
     'cache_point_part',
 ]

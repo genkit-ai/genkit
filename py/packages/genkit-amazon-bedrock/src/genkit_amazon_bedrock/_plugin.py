@@ -19,15 +19,14 @@
 Registers Bedrock-hosted models (Anthropic Claude, Amazon Nova, Meta Llama,
 Mistral, Cohere, and others) as Genkit model actions. Text generation uses the
 Bedrock Converse and ConverseStream APIs; embedders and image generation use
-InvokeModel. Reranking also uses InvokeModel but ships as the ``Bedrock.rerank``
-helper: Genkit Python has no reranker primitive to register an action against.
+InvokeModel.
 """
 
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Literal
 
 import structlog
 
-from genkit import ActionRunContext, Document, GenkitError, ModelResponse
+from genkit import ActionRunContext, ModelResponse
 from genkit.embedder import EmbedRequest, EmbedResponse, embedder, embedder_action_metadata
 from genkit.model import ModelRequest, model as create_model, model_action_metadata
 from genkit.plugin_api import (
@@ -41,7 +40,6 @@ from genkit_amazon_bedrock._config import (
     DEFAULT_TOTAL_TIMEOUT,
     BedrockConfig,
     BedrockImageConfig,
-    ModelDefinition,
 )
 from genkit_amazon_bedrock._embedders import (
     BedrockEmbedder,
@@ -50,15 +48,8 @@ from genkit_amazon_bedrock._embedders import (
     looks_like_embedding_model,
 )
 from genkit_amazon_bedrock._image import BedrockImageModel, is_image_model
-from genkit_amazon_bedrock._model_info import get_model_info
+from genkit_amazon_bedrock._model_info import get_model_info, is_rerank_model
 from genkit_amazon_bedrock._models import BedrockModel
-from genkit_amazon_bedrock._rerank import (
-    BedrockReranker,
-    BedrockRerankOptions,
-    RerankerRequest,
-    RerankerResponse,
-    is_rerank_model,
-)
 from genkit_amazon_bedrock._transport import BedrockTransport
 
 if TYPE_CHECKING:
@@ -69,16 +60,31 @@ logger = structlog.get_logger(__name__)
 BEDROCK_PLUGIN_NAME = 'bedrock'
 
 
-def bedrock_name(name: str) -> str:
-    """Fully qualified Genkit action name for a Bedrock model.
+def _action_name(model_id: str) -> str:
+    return f'{BEDROCK_PLUGIN_NAME}/{model_id}'
 
-    Args:
-        name: Bedrock model ID.
 
-    Returns:
-        The namespaced action name, e.g. ``bedrock/anthropic.claude-...``.
+def _model_type(model_id: str) -> Literal['chat', 'image']:
+    """Routes a model ID: image families to InvokeModel, the rest to Converse.
+
+    Resolve is lazy, so an ID assumed to be chat would send
+    ``amazon.nova-canvas-v1:0`` down the Converse path and fail only at call
+    time. Embedders classify by ID the same way.
     """
-    return f'{BEDROCK_PLUGIN_NAME}/{name}'
+    return 'image' if is_image_model(model_id) else 'chat'
+
+
+def _config_schema(model_type: Literal['chat', 'image']) -> type[BedrockConfig] | type[BedrockImageConfig]:
+    """The config schema for a route; resolve and list both read it so the Dev UI matches the action."""
+    return BedrockImageConfig if model_type == 'image' else BedrockConfig
+
+
+def _require_id_list(arg: str, value: list[str] | None) -> list[str]:
+    # A missing bracket (models='amazon.nova-lite-v1:0') would otherwise
+    # iterate the string and list one action per character.
+    if isinstance(value, str):
+        raise TypeError(f'{arg}= takes a list of Bedrock model IDs, got a str. Did you mean {arg}=[{value!r}]?')
+    return list(value or [])
 
 
 class Bedrock(Plugin):
@@ -95,7 +101,7 @@ class Bedrock(Plugin):
         max_pool_connections: int | None = None,
         total_timeout: float | None = DEFAULT_TOTAL_TIMEOUT,
         session: 'boto3.session.Session | None' = None,
-        models: list[ModelDefinition] | None = None,
+        models: list[str] | None = None,
         embedders: list[str] | None = None,
     ) -> None:
         """Initializes the Bedrock plugin.
@@ -120,8 +126,11 @@ class Bedrock(Plugin):
                 the deadline, leaving only the socket timeouts.
             session: Optional pre-configured ``boto3.session.Session`` for custom
                 credentials or advanced SDK wiring.
-            models: Bedrock models to register. Models not listed can still be
-                resolved dynamically by namespaced name.
+            models: Bedrock model IDs to list in the Dev UI, e.g.
+                ``us.anthropic.claude-sonnet-4-5-20250929-v1:0``. The route
+                comes from the ID: image-generation families go through
+                InvokeModel, everything else through Converse. Unlisted IDs
+                still resolve dynamically.
             embedders: Bedrock embedding model IDs to register, e.g.
                 ``amazon.titan-embed-text-v2:0``. As with models, unlisted IDs
                 still resolve dynamically.
@@ -133,8 +142,8 @@ class Bedrock(Plugin):
         self.max_pool_connections = max_pool_connections
         self.total_timeout = total_timeout
         self._session = session
-        self.models = models or []
-        self.embedders = embedders or []
+        self.models = _require_id_list('models', models)
+        self.embedders = _require_id_list('embedders', embedders)
         self._transport = BedrockTransport(
             region=region,
             max_retries=max_retries,
@@ -188,38 +197,28 @@ class Bedrock(Plugin):
             logger.debug('Bedrock resolve declined', model=name, kind='model', reason='embedding_model')
             return None
         if is_rerank_model(name):
-            # Same story for rerank models; reranking is the Bedrock.rerank helper.
+            # Same story for rerank models; the plugin has no rerank action.
             logger.debug('Bedrock resolve declined', model=name, kind='model', reason='rerank_model')
             return None
-        declared = self._declared_model_type(name)
-        # Undeclared IDs are classified rather than assumed to be chat: resolve
-        # is lazy, so otherwise bedrock/amazon.nova-canvas-v1:0 would take the
-        # Converse path and fail at call time. Embedders classify the same way.
-        model_type = declared if declared is not None else ('image' if is_image_model(name) else 'chat')
-        logger.debug('Bedrock model resolved', model=name, model_type=model_type, declared=declared is not None)
+        model_type = _model_type(name)
+        logger.debug('Bedrock model resolved', model=name, model_type=model_type, listed=name in self.models)
         return self._create_model_action(name, model_type)
 
-    def _declared_model_type(self, model_id: str) -> Literal['chat', 'text', 'image'] | None:
-        for definition in self.models:
-            if definition.name == model_id:
-                return definition.type
-        return None
-
-    def _create_model_action(self, model_id: str, model_type: Literal['chat', 'text', 'image'] = 'chat') -> Action:
+    def _create_model_action(self, model_id: str, model_type: Literal['chat', 'image'] = 'chat') -> Action:
         model_info = get_model_info(model_id, model_type)
-        is_image = model_type == 'image'
+        config_schema = _config_schema(model_type)
 
         async def _generate(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
-            if is_image:
+            if model_type == 'image':
                 image_model = BedrockImageModel(model_id=model_id, transport=self._transport)
                 return await image_model.generate(request, ctx)
             model = BedrockModel(model_id=model_id, transport=self._transport)
             return await model.generate(request, ctx)
 
         return create_model(
-            bedrock_name(model_id),
+            _action_name(model_id),
             _generate,
-            config_schema=BedrockImageConfig if is_image else BedrockConfig,
+            config_schema=config_schema,
             metadata={
                 'model': {
                     'label': model_info.label,
@@ -227,7 +226,7 @@ class Bedrock(Plugin):
                     'supports': (
                         model_info.supports.model_dump(by_alias=True, exclude_none=True) if model_info.supports else {}
                     ),
-                    'customOptions': to_json_schema(BedrockImageConfig if is_image else BedrockConfig),
+                    'customOptions': to_json_schema(config_schema),
                 },
             },
         )
@@ -238,7 +237,7 @@ class Bedrock(Plugin):
             return await embedder.embed(request)
 
         return embedder(
-            bedrock_name(model_id),
+            _action_name(model_id),
             _embed,
             info=get_embedder_info(model_id),
         )
@@ -247,30 +246,31 @@ class Bedrock(Plugin):
         """List configured Bedrock models and embedders.
 
         Only explicitly configured entries are listed, and only those this
-        plugin can actually serve: an ID in the wrong list, or a chat model
-        declared ``type='image'``, would otherwise be advertised and then fail
-        on use. Such a declaration still resolves, so the caller reads the
-        image path's reason rather than a generic model-not-found. A bare
-        ``Bedrock()`` therefore lists nothing; see ``resolve`` for why the
-        catalogue is not read.
+        plugin can actually serve: an embedding or rerank ID in ``models``, or
+        a chat ID in ``embedders``, would otherwise be advertised and then fail
+        on use. Each model is listed with the same route ``resolve`` picks, so
+        an image model carries the image config schema. A bare ``Bedrock()``
+        therefore lists nothing; see ``resolve`` for why the catalogue is not
+        read.
 
         Returns:
             ActionMetadata for each configured model and embedder.
         """
-        actions: list[ActionMetadata] = [
-            model_action_metadata(
-                name=bedrock_name(definition.name),
-                info=get_model_info(definition.name, definition.type).model_dump(by_alias=True, exclude_none=True),
-                config_schema=BedrockImageConfig if definition.type == 'image' else BedrockConfig,
+        actions: list[ActionMetadata] = []
+        for model_id in self.models:
+            if looks_like_embedding_model(model_id) or is_rerank_model(model_id):
+                continue
+            model_type = _model_type(model_id)
+            actions.append(
+                model_action_metadata(
+                    name=_action_name(model_id),
+                    info=get_model_info(model_id, model_type).model_dump(by_alias=True, exclude_none=True),
+                    config_schema=_config_schema(model_type),
+                )
             )
-            for definition in self.models
-            if not looks_like_embedding_model(definition.name)
-            and not is_rerank_model(definition.name)
-            and (definition.type != 'image' or is_image_model(definition.name))
-        ]
         models = len(actions)
         actions.extend(
-            embedder_action_metadata(bedrock_name(model_id), get_embedder_info(model_id))
+            embedder_action_metadata(_action_name(model_id), get_embedder_info(model_id))
             for model_id in self.embedders
             if is_embedding_model(model_id)
         )
@@ -282,46 +282,3 @@ class Bedrock(Plugin):
             embedders_configured=len(self.embedders),
         )
         return actions
-
-    async def rerank(
-        self,
-        model_id: str,
-        *,
-        query: str | Document,
-        documents: list[Document],
-        options: BedrockRerankOptions | dict[str, Any] | None = None,
-    ) -> RerankerResponse:
-        """Rerank documents by relevance to a query.
-
-        A helper rather than a registered action: Genkit Python has no
-        first-class reranker primitive, so there is nothing to register
-        against. Both the Cohere and Amazon rerank families are supported,
-        and the request body is built from the model ID because they disagree
-        over ``api_version``. The ID itself is sent to the service verbatim.
-
-        Args:
-            model_id: Bedrock rerank model ID, e.g. ``cohere.rerank-v3-5:0``
-                or ``amazon.rerank-v1:0``.
-            query: The query to rank against, as text or as a document.
-            documents: The documents to rank.
-            options: Per-call options, as ``BedrockRerankOptions`` or a mapping.
-
-        Returns:
-            The ranked documents in the order the service returned them, each
-            carrying its relevance score.
-
-        Raises:
-            GenkitError: INVALID_ARGUMENT for a missing model ID or a query or
-                document with no text, INTERNAL for a malformed response, and
-                the mapped AWS status for a failed call.
-        """
-        if not model_id:
-            raise GenkitError(message='bedrock rerank: model ID required', status='INVALID_ARGUMENT')
-        reranker = BedrockReranker(model_id=model_id, transport=self._transport)
-        return await reranker.rerank(
-            RerankerRequest(
-                query=Document.from_text(query) if isinstance(query, str) else query,
-                documents=documents,
-                options=options,
-            )
-        )

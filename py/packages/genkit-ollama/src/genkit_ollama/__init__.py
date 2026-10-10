@@ -50,12 +50,7 @@ See Also:
 from genkit_ollama._embedders import EmbeddingDefinition
 from genkit_ollama._errors import OllamaConnectionError
 from genkit_ollama._models import ModelDefinition, OllamaConfig, OllamaSupports
-from genkit_ollama._plugin import (
-    Ollama,
-    RequestHeaderFunction,
-    RequestHeaderParams,
-    RequestHeaders,
-)
+from genkit_ollama._plugin import Ollama, RequestHeaderParams
 
 __all__ = [
     'EmbeddingDefinition',
@@ -64,7 +59,5 @@ __all__ = [
     'OllamaConfig',
     'OllamaConnectionError',
     'OllamaSupports',
-    'RequestHeaderFunction',
     'RequestHeaderParams',
-    'RequestHeaders',
 ]

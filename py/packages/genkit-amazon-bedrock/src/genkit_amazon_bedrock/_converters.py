@@ -84,19 +84,17 @@ STOP_REASON_MAP = {
 }
 
 
-def cache_point_part(cache_type: str = DEFAULT_CACHE_POINT_TYPE) -> Part:
+def cache_point_part() -> Part:
     """Builds a prompt cache-point part.
 
     A cache point should be inserted after a big static prompt that is reused
-    across multiple requests.
-
-    Args:
-        cache_type: Bedrock cache-point type; only ``default`` exists today.
+    across multiple requests. Bedrock has one cache-point type (``default``)
+    today, so there is nothing to choose.
 
     Returns:
         A custom Part that converts to a Converse ``cachePoint`` block.
     """
-    return Part.model_validate({'custom': {CACHE_POINT_CUSTOM_KEY: cache_type}})
+    return Part.model_validate({'custom': {CACHE_POINT_CUSTOM_KEY: DEFAULT_CACHE_POINT_TYPE}})
 
 
 def _cache_point_type(part: Part) -> str | None:
