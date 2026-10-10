@@ -2411,17 +2411,16 @@ export const contextCompression: GenerateMiddleware<
 
         const response = await next(modifiedEnvelope, ctx);
 
-        if (isTopLevel) {
-          const finalMeta = turnCompressionMeta ?? latestCompressionMeta;
-          if (finalMeta) {
-            return {
-              ...response,
-              custom: {
-                ...((response.custom as Record<string, unknown>) ?? {}),
-                contextCompression: finalMeta,
-              },
-            };
-          }
+        // Every iteration of the tool loop updates latestCompressionMeta, so
+        // by now it holds the newest compression, not this iteration's.
+        if (isTopLevel && latestCompressionMeta) {
+          return {
+            ...response,
+            custom: {
+              ...((response.custom as Record<string, unknown>) ?? {}),
+              contextCompression: latestCompressionMeta,
+            },
+          };
         }
 
         return response;

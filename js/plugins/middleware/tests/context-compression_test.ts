@@ -4523,6 +4523,61 @@ describe('contextCompression middleware', () => {
       plain
     );
   });
+  it('reports the newest compression of a tool loop on the top-level response', async () => {
+    const ai = genkit({});
+    const big = 'B'.repeat(2000);
+    const bigTool = ai.defineTool(
+      {
+        name: 'big',
+        description: 'big',
+        inputSchema: z.object({}),
+        outputSchema: z.string(),
+      },
+      async () => big
+    );
+    let calls = 0;
+    const pm = ai.defineModel({ name: 'latestStatsModel' }, async () => {
+      calls++;
+      if (calls === 1) {
+        return {
+          message: {
+            role: 'model',
+            content: [{ toolRequest: { name: 'big', ref: 'r2', input: {} } }],
+          },
+        };
+      }
+      return { message: { role: 'model', content: [{ text: 'done' }] } };
+    });
+
+    const response = (await ai.generate({
+      model: pm,
+      tools: [bigTool],
+      messages: [
+        { role: 'user', content: [{ text: 'fetch twice' }] },
+        {
+          role: 'model',
+          content: [{ toolRequest: { name: 'big', ref: 'r1', input: {} } }],
+        },
+        {
+          role: 'tool',
+          content: [{ toolResponse: { name: 'big', ref: 'r1', output: big } }],
+        },
+      ],
+      use: [
+        contextCompression({
+          maxInputTokens: 300,
+          toolResponses: { maxChars: 50, preserveRecent: 0 },
+        }),
+      ],
+    })) as any;
+
+    assert.strictEqual(response.text, 'done');
+    // Iteration 0 compressed 3 messages and truncated r1; iteration 1
+    // compressed 5 and truncated r2 as well.
+    const stats = response.custom?.contextCompression;
+    assert.strictEqual(stats?.messagesOriginal, 5);
+    assert.strictEqual(stats?.toolResponsesTruncated, 2);
+  });
 });
 
 function messageLabels(messages: MessageData[]): string[] {
