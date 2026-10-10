@@ -14,12 +14,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Package exp holds the question types of the System One protocol, which
-// decision models speak. A decision model does not generate text. It
-// evaluates a state against typed questions and returns one typed answer
-// per question, with calibrated probabilities.
+// Package exp serves decision models, the models that speak the System One
+// protocol, and holds the question types a decision is declared with. A
+// decision model does not generate text. It evaluates a state against typed
+// questions and returns one typed answer per question, with calibrated
+// probabilities.
 //
-// A plugin serves such a model as one that speaks only constrained JSON,
+// The plugin serves such a model as one that speaks only constrained JSON,
 // which is the subset of the generate API it fits exactly. The questions
 // are the fields of the output type, declared with [Choice], [Score],
 // [Noul], and [NoulOf], so a decision is one typed generate call with
@@ -40,6 +41,8 @@
 //		IsUrgent   systemonex.Noul         `json:"is_urgent"  jsonschema_description:"Does the ticket explicitly communicate time pressure?"`
 //	}
 //
+//	g := genkit.Init(ctx, genkit.WithPlugins(systemonex.TypeSafe()))
+//
 //	out, resp, err := genkit.GenerateData[Triage](ctx, g,
 //		ai.WithModelName("typesafe/jev-1.13.0"),
 //		ai.WithPrompt(ticket))
@@ -55,8 +58,9 @@
 // that answered and the raw answers off a response.
 //
 // The types are the same for every model that speaks the protocol, so one
-// decision type works with each of them. The models are served by their
-// vendors' plugins, such as go/plugins/typesafe/exp for TypeSafe's jev.
+// decision type works with each of them. [SystemOne] is the plugin that
+// serves the models, from any server that speaks the protocol; [TypeSafe]
+// and the other constructors set it up for the known ones.
 //
 // This package is a preview: its API may change in any minor release.
 package exp
@@ -413,7 +417,7 @@ func withInstructions(s *jsonschema.Schema, instructions any) *jsonschema.Schema
 //	for _, tool := range tools {
 //		options = append(options, systemonex.ChoiceOption{Name: tool.Name, Criteria: tool.Description})
 //	}
-//	resp, err := genkit.Generate(ctx, g,
+//	answers, _, err := genkit.GenerateData[map[string]systemonex.Answer](ctx, g,
 //		ai.WithModelName("typesafe/jev-1.13.0"),
 //		ai.WithOutputSchema(systemonex.Schema(map[string]systemonex.Question{
 //			"tool": systemonex.ChoiceQuestion{Instructions: "Which tool serves the request?", Options: options},
@@ -422,11 +426,7 @@ func withInstructions(s *jsonschema.Schema, instructions any) *jsonschema.Schema
 //	if err != nil {
 //		return err
 //	}
-//	var answers map[string]systemonex.Answer
-//	if err := resp.Output(&answers); err != nil {
-//		return err
-//	}
-//	tool := answers["tool"].Choice
+//	tool := (*answers)["tool"].Choice
 func Schema(questions map[string]Question) map[string]any {
 	ids := slices.Sorted(maps.Keys(questions))
 	props := jsonschema.NewProperties()

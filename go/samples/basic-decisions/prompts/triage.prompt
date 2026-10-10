@@ -2,7 +2,7 @@
 # The triage decision from a prompt file. The questions are still the Triage
 # type, registered by name in main.go; the file owns the model, the preamble,
 # and how the input becomes the state.
-model: typesafe/jev-latest
+model: openrouter-decisions/~typesafe/jev-latest
 config:
   # A template renders text. This parses it as JSON, so the state is an
   # object with named fields, the same state that triageFlow sends.

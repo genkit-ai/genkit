@@ -37,15 +37,21 @@ type Server struct {
 	// Models is the reply to a GET, the model listing. When empty, a GET
 	// fails with a server error.
 	Models string
+	// Wrap, when set, wraps every answer in a server's envelope.
+	Wrap func(reply map[string]any) any
 
 	mu       sync.Mutex
 	requests []*http.Request
 	bodies   []map[string]any
+	listings []string
 }
 
 // ServeHTTP implements [http.Handler].
 func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	if req.Method == http.MethodGet {
+		s.mu.Lock()
+		s.listings = append(s.listings, req.URL.RequestURI())
+		s.mu.Unlock()
 		if s.Models == "" {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
@@ -61,7 +67,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	s.bodies = append(s.bodies, body)
 	s.mu.Unlock()
 
-	questions, _ := body["questions"].(map[string]any)
+	// A server that wraps the native body, as Workers AI does for a
+	// partner's model, carries the questions under input.
+	native := body
+	if input, ok := body["input"].(map[string]any); ok {
+		native = input
+	}
+	questions, _ := native["questions"].(map[string]any)
 	answers := map[string]any{}
 	for id, raw := range questions {
 		q, _ := raw.(map[string]any)
@@ -95,10 +107,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	reply := map[string]any{
 		"model":   "jev-1.13.0",
 		"answers": answers,
-		"usage":   map[string]int{"input_tokens": 312, "output_tokens": 48},
+		"usage":   map[string]any{"input_tokens": 312, "output_tokens": 48},
+	}
+	var out any = reply
+	if s.Wrap != nil {
+		out = s.Wrap(reply)
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(reply)
+	_ = json.NewEncoder(w).Encode(out)
 }
 
 // Last is the last request posted and its JSON body. It fails the test
@@ -111,6 +127,13 @@ func (s *Server) Last(t *testing.T) (*http.Request, map[string]any) {
 		t.Fatal("the endpoint was never called")
 	}
 	return s.requests[len(s.requests)-1], s.bodies[len(s.bodies)-1]
+}
+
+// Listings are the paths, with their queries, of the listings asked for.
+func (s *Server) Listings() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.listings)
 }
 
 // Calls is how many requests were posted.

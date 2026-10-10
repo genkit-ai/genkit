@@ -1,33 +1,34 @@
-# TypeSafe plugin for Genkit Go
+# System One decision models for Genkit Go
 
-Adds [TypeSafe AI](https://typesafe.ai)'s System One models to Genkit Go. Jev,
-the first of them, does not generate text. It evaluates a state against typed
-questions and returns one typed answer per question, with calibrated
-probabilities, in a few hundred milliseconds. That makes it a fit for the
-decisions inside an application: routing, classification, scoring, guardrails,
-and verification.
+Adds decision models to Genkit Go: models that speak System One, the protocol
+TypeSafe AI introduced with jev and that Liquid AI's d1, Cloudflare's Clef, and
+the gateways serving them also speak. A decision model does not generate text.
+It evaluates a state against typed questions and returns one typed answer per
+question, with calibrated probabilities, in a few hundred milliseconds. That
+makes it a fit for the decisions inside an application: routing,
+classification, scoring, guardrails, and verification.
 
-> Status: in preview. The plugin lives under `go/plugins/typesafe/exp`, and the
-> question types under `go/plugins/systemone/exp`. Their APIs may change in any
-> minor version release. Import them as `typesafex` and `systemonex`.
+> Status: in preview. The package lives under `go/plugins/systemone/exp` and its
+> APIs may change in any minor version release. Import it as `systemonex`.
+
+One plugin type, `SystemOne`, serves any server that speaks the protocol.
+Constructors set it up for the known ones, and any other server takes a few
+fields; see [Servers](#servers).
 
 ## Design principle: the output type is the question set
 
-Jev is served as a model that speaks only constrained JSON, which is the subset
-of the generate API it fits exactly. The questions are the fields of the output
+A decision model is served as a model that speaks only constrained JSON, which
+is the subset of the generate API it fits exactly. The questions are the fields of the output
 type, declared with `Choice`, `Score`, and `Noul`. Each field's description is
 the question's instructions, and each field's JSON is the wire answer, so a
 decision is one typed generate call and the answer lands in typed fields.
 
-The question types belong to System One, the protocol jev speaks, not to the
-plugin, so they live in `systemonex` and one decision type serves every model
-that speaks it.
+The question types belong to the protocol, not to a server, so one decision
+type serves every model that speaks it, and a fallback from one to another
+needs no second type.
 
 ```go
-import (
-	systemonex "github.com/firebase/genkit/go/plugins/systemone/exp"
-	typesafex "github.com/firebase/genkit/go/plugins/typesafe/exp"
-)
+import systemonex "github.com/firebase/genkit/go/plugins/systemone/exp"
 
 // The options of a choice belong to their type, with their criteria.
 type Dept string
@@ -52,7 +53,7 @@ type Triage struct {
 	Frustration systemonex.Score[Anger] `json:"frustration" jsonschema_description:"How frustrated is the customer?"`
 }
 
-g := genkit.Init(ctx, genkit.WithPlugins(&typesafex.TypeSafe{})) // TYPESAFE_API_KEY
+g := genkit.Init(ctx, genkit.WithPlugins(systemonex.TypeSafe())) // TYPESAFE_API_KEY
 
 out, resp, err := genkit.GenerateData[Triage](ctx, g,
 	ai.WithModelName("typesafe/jev-1.13.0"),
@@ -74,7 +75,7 @@ on the output schema, which the model reads back, so no output format needs
 naming.
 
 Everything else is the generate API as it already is: prompt files and the Dev
-UI prompts page, model middleware such as fallback across gateways, the trace
+UI prompts page, model middleware such as fallback across servers, the trace
 with the question set on the request and the distributions on the response, and
 the token counters.
 
@@ -156,7 +157,7 @@ options := make([]systemonex.ChoiceOption, 0, len(tools))
 for _, tool := range tools {
 	options = append(options, systemonex.ChoiceOption{Name: tool.Name, Criteria: tool.Description})
 }
-resp, err := genkit.Generate(ctx, g,
+answers, _, err := genkit.GenerateData[map[string]systemonex.Answer](ctx, g,
 	ai.WithModelName("typesafe/jev-1.13.0"),
 	ai.WithOutputSchema(systemonex.Schema(map[string]systemonex.Question{
 		"tool": systemonex.ChoiceQuestion{Instructions: "Which tool serves the request?", Options: options},
@@ -170,11 +171,7 @@ resp, err := genkit.Generate(ctx, g,
 if err != nil {
 	return err
 }
-var answers map[string]systemonex.Answer
-if err := resp.Output(&answers); err != nil {
-	return err
-}
-if a := answers["tool"]; a.Confidence >= 0.8 {
+if a := (*answers)["tool"]; a.Confidence >= 0.8 {
 	return run(a.Choice)
 }
 ```
@@ -200,7 +197,7 @@ the messages.
 
 - One message is sent as its value: the string of a text part, or the JSON of a
   data part. `ai.WithPromptParts(ai.NewDataPart(v))` sends any value as an
-  object state, which TypeSafe recommends so that a question can name a field.
+  object state, which the vendors recommend so that a question can name a field.
 - Several messages are sent as an array of `{role, content}` records, roles
   included, so a question can refer to what the user said and what the model
   said.
@@ -233,35 +230,103 @@ output:
 {{ticket}}
 ```
 
-## Endpoints and gateways
+## Servers
 
-The same questions reach jev through TypeSafe's own API or through a gateway.
-Pick the endpoint on the plugin; the model names stay `typesafe/<id>`.
+Models are named by the server they are reached through: the plugin's
+`Provider`, then the ID the server uses, so a model a server adds later works
+on the day it ships.
 
-| Endpoint                          | Key                     | Notes                                                     |
-| --------------------------------- | ----------------------- | --------------------------------------------------------- |
-| `Direct()` (default)              | `TYPESAFE_API_KEY`      | `TYPESAFE_BASE_URL` is read too; lists models              |
-| `OpenRouter()`                    | `OPENROUTER_API_KEY`    | alpha Decisions API; releases by minor version, `jev-1.13`; a patch version is refused |
-| `Cloudflare(accountID)`           | `CLOUDFLARE_API_TOKEN`  | alias `typesafe/jev` only; a pinned version is refused; `CLOUDFLARE_ACCOUNT_ID` when `accountID` is empty |
+| Constructor          | Models                   | Key                | Notes                              |
+| -------------------- | ------------------------ | ------------------ | ---------------------------------- |
+| `TypeSafe()`         | `typesafe/jev-1.13.0`    | `TYPESAFE_API_KEY` | `TYPESAFE_BASE_URL` is read too; lists models |
+
+A constructor returns a `*SystemOne` set up for its server, and its fields can
+still be changed before `genkit.Init`, such as to pass a key from a secret
+manager rather than the environment.
+
+### TypeSafe
+
+TypeSafe's own API serves jev, by version and as `jev-latest`, which follows
+each release. Pin a version in production.
 
 ```go
-genkit.WithPlugins(&typesafex.TypeSafe{Endpoint: typesafex.OpenRouter()})
+ts := systemonex.TypeSafe()
+ts.APIKey = key // when not in TYPESAFE_API_KEY
+g := genkit.Init(ctx, genkit.WithPlugins(ts))
+
+out, resp, err := genkit.GenerateData[Triage](ctx, g,
+	ai.WithModelName("typesafe/jev-1.13.0"),
+	ai.WithPrompt(ticket))
 ```
 
-A proxy that forwards the native protocol, such as LiteLLM, is the default
-endpoint with `BaseURL` set to the proxy root plus its prefix. `HTTPClient` and
-`Headers` are the escape hatches to the transport, and `Config.Extra` merges
-fields into the request body that the plugin does not model, such as
-OpenRouter's `session_id` or `trace`.
+### Any other server
+
+Any other server that speaks the protocol takes a few fields. `Provider` names
+the plugin and prefixes its models, and must differ from every other plugin's
+name; `BaseURL` is the root that `Path` (default `/v1/systemone`, or `/` for
+`BaseURL` itself) and `ModelsPath` hang under; `APIKey` is optional for a server
+that takes none.
+
+```go
+// Liquid AI's d1, from Liquid's own API.
+liquid := &systemonex.SystemOne{
+	Provider:   "liquid",
+	BaseURL:    "https://api.liquid.ai/decisions",
+	ModelsPath: "/v1/models",
+	APIKey:     os.Getenv("LIQUID_API_KEY"),
+}
+
+// Clef on a local Ollama, which takes no key.
+local := &systemonex.SystemOne{Provider: "local", BaseURL: "http://localhost:11434"}
+
+g := genkit.Init(ctx, genkit.WithPlugins(liquid, local))
+// liquid/d1, local/clef
+```
+
+A proxy that forwards the native protocol, such as LiteLLM, is reached the same
+way. A server whose wire is not the native one takes two hooks over the native
+body, so it needs no Genkit release:
+
+```go
+wrapped := &systemonex.SystemOne{
+	Provider: "wrapped",
+	BaseURL:  "https://decisions.example.com",
+	Path:     "/run",
+	// The request: the native body under input, the model in the path.
+	Route: func(model string, body map[string]any) (string, any, error) {
+		delete(body, "model")
+		return "/" + model, map[string]any{"input": body}, nil
+	},
+	// The response: the native body out of the server's envelope.
+	Unwrap: func(body []byte) ([]byte, error) {
+		var envelope struct{ Result json.RawMessage }
+		err := json.Unmarshal(body, &envelope)
+		return envelope.Result, err
+	},
+}
+```
+
+### Every server
+
+`Models` describes the models known ahead, keyed by the server's ID or by the
+full model name; they are listed in the Dev UI with whatever the server's
+listing adds, which is kept for five minutes. The fields are read once, when
+Genkit initializes the plugin. `HTTPClient` and `Headers` are the escape hatches
+to the transport, and `Config.Extra` merges fields into the request body that
+the plugin does not model, such as a gateway's `session_id` or `trace`; it
+cannot replace a field the request builds itself.
 
 Requests that fail to connect, time out, are rate limited, or hit a server
 error are retried twice, with `Retry-After` honored.
 
-Pin a version in production. Confidence thresholds tuned against one release do
-not carry over to the next, and `systemonex.ResponseInfo(resp).Model` is the
-version that answered, on every call. A gateway's cost is
-`resp.Usage.Custom["cost"]`. Where a reference with a config is needed, such
-as a fallback list, `typesafex.ModelRef("jev-1.13.0", &cfg)` builds one.
+Pin a version in production where the server offers one. Confidence thresholds
+tuned against one release do not carry over to the next, nor from one model to
+another, and `systemonex.ResponseInfo(resp).Model` is the version that answered,
+on every call. A gateway's cost is `resp.Usage.Custom["cost"]`. Where a
+reference with a config is needed, such as a fallback list, the plugin's
+`ModelRef("jev-1.13.0", &cfg)` builds one. A fallback takes each model's own
+config, so give every reference the `StateJSON` it needs, or send the state as a
+data part.
 
 ## Limits
 
@@ -270,14 +335,15 @@ as a fallback list, `typesafex.ModelRef("jev-1.13.0", &cfg)` builds one.
 - The instructions of a field in a decision type are a string, since a
   field's description is a tag. Structured instructions need a runtime
   question.
-- Text only, English mostly. A request takes up to 64k tokens of state and
-  questions together, and up to 32k of state and its longest question.
+- Text only. Media parts are refused.
+- Each server sets its own limits on questions and tokens; jev takes up to 64k
+  tokens of state and questions together, and up to 32k of state and its
+  longest question.
+- A server can cut a long state to fit its limit and answer from what is left,
+  with no error. Check a long document against the model's limit, or split it.
 - No streaming; the answer arrives whole.
 
 ## Tests
 
-`go test ./plugins/typesafe/... ./plugins/systemone/... ./plugins/internal/systemone/...`
-runs against a fake endpoint. With
-`OPENROUTER_API_KEY` set, `TestOpenRouterLive` runs the decision, guidance,
-enum, history, runtime-question, document, and model-version paths against jev
-through OpenRouter.
+`go test ./plugins/systemone/... ./plugins/internal/systemone/...` runs against
+a fake endpoint.
