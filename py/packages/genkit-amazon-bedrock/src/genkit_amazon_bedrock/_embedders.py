@@ -528,8 +528,10 @@ class BedrockEmbedder:
                         # response_metadata so retry still honours Retry-After.
                         # Everything in here is the Bedrock call or its reply.
                         detail = _without_own_prefix(error.original_message)
+                        # Wrap the provider's own error, not the inner GenkitError,
+                        # whose str() would repeat the whole message as the cause.
                         raise provider_error(
-                            error,
+                            error.cause or error,
                             status=error.status,
                             retry_after_ms=(error.response_metadata or {}).get('retry_after_ms'),
                             message=f'bedrock embed: document {index}: {detail}',

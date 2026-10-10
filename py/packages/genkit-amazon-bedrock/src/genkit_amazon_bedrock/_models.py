@@ -122,14 +122,15 @@ def _from_client_error(error: ClientError, operation: str = 'converse') -> Genki
     metadata = error.response.get('ResponseMetadata')
     if not isinstance(metadata, dict):
         metadata = {}
-    message = error_info.get('Message') or str(error)
-    prefix = f'bedrock {operation} failed'
+    # str(ClientError) already names the code, the operation, and AWS's message
+    # ("An error occurred (ThrottlingException) when calling the Converse
+    # operation: Rate exceeded"). Embedding it once keeps str() from repeating it.
     return provider_error(
         error,
         status=_ERROR_CODE_STATUS.get(_normalize_error_code(code)),
         http_status=metadata.get('HTTPStatusCode'),
         headers=metadata.get('HTTPHeaders'),
-        message=f'{prefix}: {code}: {message}' if code else f'{prefix}: {message}',
+        message=f'bedrock {operation} failed: {error}',
     )
 
 
@@ -167,7 +168,9 @@ def _botocore_status(error: BotoCoreError) -> StatusName:
 
 def _from_botocore_error(error: BotoCoreError, operation: str = 'converse') -> GenkitError:
     """Classifies a client-side botocore failure by exception type."""
-    return provider_error(error, status=_botocore_status(error), message=f'bedrock {operation} failed: {error}')
+    # Some botocore errors (a total-timeout cancel) have an empty str().
+    detail = str(error) or type(error).__name__
+    return provider_error(error, status=_botocore_status(error), message=f'bedrock {operation} failed: {detail}')
 
 
 class BedrockModel:

@@ -17,6 +17,7 @@
 """Tests for Anthropic API error handling."""
 
 import json
+from collections.abc import AsyncIterator
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -32,7 +33,7 @@ from anthropic import (
 )
 from genkit_anthropic._models import AnthropicModel
 
-from genkit import GenkitError, Message, Part, Role
+from genkit import ActionRunContext, GenkitError, Message, Part, Role
 from genkit._core._error import get_callable_json, get_http_status
 from genkit.model import ModelRequest
 from genkit.plugin_api import StatusName
@@ -450,3 +451,57 @@ async def test_generate_marks_invalid_thinking_budget_invalid_argument() -> None
     assert exc_info.value.status == 'INVALID_ARGUMENT'
     assert isinstance(exc_info.value.cause, ValueError)
     client.messages.create.assert_not_called()
+
+
+class _DroppingStream(httpx.AsyncByteStream):
+    """A response body that sends ``first`` and then fails, like a connection cut mid-stream."""
+
+    def __init__(self, first: bytes, error: Exception) -> None:
+        self._first = first
+        self._error = error
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        if self._first:
+            yield self._first
+        raise self._error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('drop', 'status'),
+    [
+        (httpx.RemoteProtocolError('peer closed connection without sending complete message body'), 'UNAVAILABLE'),
+        (httpx.ReadTimeout('timed out'), 'DEADLINE_EXCEEDED'),
+    ],
+)
+async def test_stream_cut_mid_read_is_classified(drop: Exception, status: str) -> None:
+    """The SDK wraps httpx errors only while sending; a stream cut after the 200 still maps for Fallback."""
+    start = {
+        'type': 'message_start',
+        'message': {
+            'id': 'msg_1',
+            'type': 'message',
+            'role': 'assistant',
+            'model': 'claude-sonnet-4-6',
+            'content': [],
+            'stop_reason': None,
+            'stop_sequence': None,
+            'usage': {'input_tokens': 5, 'output_tokens': 0},
+        },
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = f'event: message_start\ndata: {json.dumps(start)}\n\n'.encode()
+        return httpx.Response(200, headers={'content-type': 'text/event-stream'}, stream=_DroppingStream(body, drop))
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = AsyncAnthropic(api_key='test-key', http_client=http_client, max_retries=0)
+    model = AnthropicModel(model_name='claude-sonnet-4-6', client=client)
+    ctx = ActionRunContext(streaming_callback=MagicMock())
+
+    with pytest.raises(GenkitError) as exc_info:
+        await model.generate(_request(), ctx)
+    await http_client.aclose()
+
+    assert exc_info.value.status == status
+    assert exc_info.value.cause is drop

@@ -268,7 +268,9 @@ async def test_unlisted_client_error_without_http_status_is_unknown_genkit_error
     """An unlisted AWS error code with no HTTP status raises a provider-sourced UNKNOWN naming the document."""
     error = ClientError({'Error': {'Code': 'SomethingNewException', 'Message': 'boom'}}, 'InvokeModel')
     transport = FakeInvokeTransport(error=error)
-    with pytest.raises(GenkitError, match='document 0: invoke model failed: SomethingNewException') as excinfo:
+    with pytest.raises(
+        GenkitError, match=r'document 0: invoke model failed: An error occurred \(SomethingNewException\)'
+    ) as excinfo:
         await embed(TITAN_TEXT, transport, [text_doc('hi')])
     assert excinfo.value.status == 'UNKNOWN'
 
@@ -295,9 +297,13 @@ async def test_throttled_batch_embed_keeps_retry_after() -> None:
     transport = FakeInvokeTransport(dispatch=dispatch)
 
     # 2. The batch error names the document and still carries Retry-After.
-    with pytest.raises(GenkitError, match='document 1: invoke model failed: ThrottlingException') as excinfo:
+    with pytest.raises(
+        GenkitError, match=r'document 1: invoke model failed: An error occurred \(ThrottlingException\)'
+    ) as excinfo:
         await embed(TITAN_TEXT, transport, [text_doc('risotto'), text_doc('tiramisu')])
 
+    # 3. AWS's message appears once, not once per wrapping layer.
+    assert str(excinfo.value).count('Too many requests') == 1
     assert excinfo.value.status == 'RESOURCE_EXHAUSTED'
     assert excinfo.value.response_metadata == {'retry_after_ms': 3000.0}
     document_error = excinfo.value.__cause__

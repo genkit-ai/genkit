@@ -59,7 +59,7 @@ from google import genai
 
 from genkit import GenkitError, Part
 from genkit.model import ToolRequest, ToolResponse
-from genkit.plugin_api import loop_local_client, provider_error
+from genkit.plugin_api import loop_local_client
 
 logger = logging.getLogger(__name__)
 
@@ -502,8 +502,11 @@ class PartConverter:
         Raises:
             GenkitError: INVALID_ARGUMENT when the media host answers with a
                 4xx other than 408/429: the caller's URL is wrong or not
-                public, and another model would fail on it too. A 5xx, 408,
-                or 429 keeps its retryable status and the host's Retry-After.
+                public, and another model would fail on it too.
+            httpx.HTTPStatusError: A 5xx, 408, or 429 from the media host, left
+                raw. It is not Gemini's failure, so Fallback must not switch
+                models over it (the next model needs the same URL); Retry
+                still tries again. The Ollama plugin does the same.
             httpx.TransportError: A timeout or transport failure, left
                 unclassified because it may pass on retry.
         """
@@ -518,5 +521,5 @@ class PartConverter:
                     message=f'Could not download request media (HTTP {code})',
                     cause=e,
                 ) from e
-            raise provider_error(e, http_status=code, headers=e.response.headers) from e
+            raise
         return response.content, response.headers.get('content-type')

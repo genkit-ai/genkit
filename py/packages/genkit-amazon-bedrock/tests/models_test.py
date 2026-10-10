@@ -352,7 +352,10 @@ async def test_unmapped_4xx_is_unknown_genkit_error(http_status: int) -> None:
     genkit_error = await generate_error(error)
 
     assert genkit_error.status == 'UNKNOWN'
-    assert genkit_error.original_message == 'bedrock converse failed: SomeFutureException: teapot'
+    assert genkit_error.original_message == (
+        'bedrock converse failed: An error occurred (SomeFutureException) when calling the Converse operation: teapot'
+    )
+    assert str(genkit_error).count('teapot') == 1
     assert genkit_error.__cause__ is error
 
 

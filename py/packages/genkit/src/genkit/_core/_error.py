@@ -442,9 +442,10 @@ class GenkitError(Exception):
             formatted = format_validation_error(cause)
             cause_suffix = f': {formatted}' if formatted else ''
         else:
-            # A provider error usually takes its message from the cause, so
-            # don't say the same sentence twice.
-            cause_suffix = f': {cause}' if cause and str(cause) != message else ''
+            # Skip a cause whose text is empty or already in the message, so a
+            # bare TimeoutError() adds no dangling ': ' and nothing repeats.
+            cause_text = str(cause) if cause is not None else ''
+            cause_suffix = f': {cause_text}' if cause_text and cause_text not in message else ''
         super().__init__(f'{source_prefix}{self.status}: {message}{cause_suffix}')
         self.original_message: str = message
 
@@ -553,10 +554,11 @@ def provider_error(
     (seconds or an HTTP date). Retry waits at least that long before the next
     attempt. A missing or malformed header just means no floor.
 
-    The message is ``message`` or ``str(error)``, and ``error`` is kept as the
-    cause. A served flow still answers 500 Internal Error: a dead API key on
-    the server isn't the caller's 401. Raise PublicError to show the caller
-    a status.
+    The message is ``message``, else ``str(error)``, else the error's type
+    name, and ``error`` is kept as the cause; ``str()`` appends the cause's
+    text unless the message already contains it. A served flow still answers
+    500 Internal Error: a dead API key on the server isn't the caller's 401.
+    Raise PublicError to show the caller a status.
 
     Args:
         error: What the provider SDK raised.
@@ -578,12 +580,10 @@ def provider_error(
     response_metadata: ErrorResponseMetadata | None = None
     if retry_after_ms is not None:
         response_metadata = {'retry_after_ms': retry_after_ms}
-    result = GenkitError(
-        status=status,
-        message=message if message is not None else str(error),
-        cause=error,
-        response_metadata=response_metadata,
-    )
+    # A bare TimeoutError() or httpx.ReadTimeout often has empty str(); the type
+    # name at least says what failed.
+    text = message if message is not None else (str(error) or type(error).__name__)
+    result = GenkitError(status=status, message=text, cause=error, response_metadata=response_metadata)
     result.__cause__ = error
     return mark_provider_error(error=result)
 

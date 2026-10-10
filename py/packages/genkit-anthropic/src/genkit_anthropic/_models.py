@@ -27,6 +27,7 @@ See:
 import json
 from typing import Any, Literal, Protocol, cast
 
+import httpx
 import structlog
 from anthropic import (
     APIConnectionError,
@@ -356,6 +357,12 @@ class AnthropicModel:
                 response = await messages_client.create(**params)
         except APIError as error:
             raise _from_anthropic_error(error) from error
+        # The SDK wraps httpx failures only while sending; a connection that
+        # drops while the stream is being read comes out raw.
+        except httpx.TimeoutException as error:
+            raise provider_error(error, status='DEADLINE_EXCEEDED') from error
+        except (httpx.NetworkError, httpx.RemoteProtocolError) as error:
+            raise provider_error(error, status='UNAVAILABLE') from error
 
         logger.debug(
             'Anthropic raw API response',

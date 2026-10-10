@@ -24,6 +24,7 @@ from urllib.parse import quote
 
 import httpx
 from genkit_google_genai._interactions._options import ClientOptions
+from genkit_google_genai._provider_errors import TRANSPORT_ERRORS, transport_error
 from google.genai.interactions import Interaction
 
 from genkit import GenkitError
@@ -169,14 +170,8 @@ async def request(
                 headers=request_headers,
                 json=json_body,
             )
-    except httpx.TimeoutException as error:
-        raise provider_error(
-            error,
-            status='DEADLINE_EXCEEDED',
-            message=f'Request to {url} exceeded the configured timeout: {error}',
-        ) from error
-    except (httpx.NetworkError, httpx.RemoteProtocolError) as error:
-        raise provider_error(error, status='UNAVAILABLE') from error
+    except TRANSPORT_ERRORS as error:
+        raise transport_error(error) from error
 
     if response.is_success:
         if not response.content:

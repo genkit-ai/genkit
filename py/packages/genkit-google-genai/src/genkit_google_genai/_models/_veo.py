@@ -408,6 +408,8 @@ class VeoModel:
             raise api_error(e) from e
         except GOOGLE_AUTH_ERRORS as e:
             raise_auth_error(e)
+        except TRANSPORT_ERRORS as e:
+            raise transport_error(e) from e
 
         return _from_veo_operation(api_op=response)
 

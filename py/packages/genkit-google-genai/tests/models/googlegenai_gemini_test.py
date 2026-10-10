@@ -1763,8 +1763,8 @@ async def test_streaming_generate_credential_failure_is_unauthenticated(mocker: 
 
 
 @pytest.mark.asyncio
-async def test_generate_metadata_server_refresh_error_stays_raw(mocker: MockerFixture) -> None:
-    """On Cloud Run or GKE a metadata-server blip is RefreshError from TransportError, retryable=False; still raw."""
+async def test_generate_metadata_server_refresh_error_is_unavailable(mocker: MockerFixture) -> None:
+    """On Cloud Run or GKE a metadata-server blip is RefreshError from TransportError, retryable=False: UNAVAILABLE."""
     try:
         try:
             raise TransportError('metadata server unreachable')
@@ -1776,24 +1776,41 @@ async def test_generate_metadata_server_refresh_error_stays_raw(mocker: MockerFi
     client_mock.aio.models.generate_content.side_effect = blip
     gemini = GeminiModel('gemini-2.5-flash', client_mock)
 
-    with pytest.raises(RefreshError) as raised:
+    with pytest.raises(GenkitError) as raised:
         await gemini.generate(_hi_request(), ActionRunContext())
 
-    assert raised.value is blip
+    assert raised.value.status == 'UNAVAILABLE'
+    assert raised.value.cause is blip
 
 
 @pytest.mark.asyncio
-async def test_generate_retryable_refresh_error_stays_raw(mocker: MockerFixture) -> None:
-    """google.auth marked the refresh retryable (token endpoint 503), so retry must still see it."""
+async def test_generate_retryable_refresh_error_is_unavailable(mocker: MockerFixture) -> None:
+    """google.auth marked the refresh retryable (token endpoint 503): UNAVAILABLE, so Retry and Fallback act on it."""
     flaky = RefreshError('token endpoint returned 503', retryable=True)
     client_mock = mocker.AsyncMock()
     client_mock.aio.models.generate_content.side_effect = flaky
     gemini = GeminiModel('gemini-2.5-flash', client_mock)
 
-    with pytest.raises(RefreshError) as raised:
+    with pytest.raises(GenkitError) as raised:
         await gemini.generate(_hi_request(), ActionRunContext())
 
-    assert raised.value is flaky
+    assert raised.value.status == 'UNAVAILABLE'
+    assert raised.value.cause is flaky
+
+
+@pytest.mark.asyncio
+async def test_generate_bare_auth_transport_error_is_unavailable(mocker: MockerFixture) -> None:
+    """A google.auth TransportError that reaches the call is UNAVAILABLE, as in Vertex AI Model Garden."""
+    blip = TransportError('metadata server unreachable')
+    client_mock = mocker.AsyncMock()
+    client_mock.aio.models.generate_content.side_effect = blip
+    gemini = GeminiModel('gemini-2.5-flash', client_mock)
+
+    with pytest.raises(GenkitError) as raised:
+        await gemini.generate(_hi_request(), ActionRunContext())
+
+    assert raised.value.status == 'UNAVAILABLE'
+    assert raised.value.cause is blip
 
 
 async def _generate_failure(mocker: MockerFixture, failure: BaseException, *, streaming: bool = False) -> GenkitError:

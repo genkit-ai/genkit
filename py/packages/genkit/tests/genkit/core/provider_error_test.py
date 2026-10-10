@@ -172,3 +172,27 @@ def test_provider_error_is_internal_error_over_http() -> None:
     assert error.status == 'UNAUTHENTICATED'
     assert get_http_status(error) == 500
     assert get_callable_json(error) == {'message': 'Internal Error', 'status': 'INTERNAL'}
+
+
+def test_provider_error_names_the_type_when_the_error_has_no_text() -> None:
+    """A bare TimeoutError() has an empty str(); the message falls back to its type name."""
+    error = provider_error(TimeoutError(), status='DEADLINE_EXCEEDED')
+
+    assert str(error) == 'DEADLINE_EXCEEDED: TimeoutError'
+    assert error.original_message == 'TimeoutError'
+
+
+def test_genkit_error_does_not_repeat_a_cause_already_in_the_message() -> None:
+    """A message that embeds the cause's text does not get it appended a second time."""
+    cause = RuntimeError('Rate exceeded')
+
+    error = GenkitError(status='RESOURCE_EXHAUSTED', message='bedrock converse failed: Rate exceeded', cause=cause)
+
+    assert str(error) == 'RESOURCE_EXHAUSTED: bedrock converse failed: Rate exceeded'
+
+
+def test_genkit_error_skips_a_cause_with_no_text() -> None:
+    """A cause whose str() is empty adds no dangling ': '."""
+    error = GenkitError(status='DEADLINE_EXCEEDED', message='bedrock converse failed', cause=TimeoutError())
+
+    assert str(error) == 'DEADLINE_EXCEEDED: bedrock converse failed'
