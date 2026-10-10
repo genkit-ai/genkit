@@ -654,7 +654,7 @@ func TestWaitValidation(t *testing.T) {
 	}
 }
 
-// recordingTransport is an [agentTransport] that records what reached it and
+// recordingTransport is an [AgentTransport] and [SnapshotTransport] that records what reached it and
 // answers from canned values. It is how the delegation tests see the seam: a
 // real transport would prove only that the call worked, not which arguments
 // the handle chose to send.
@@ -680,16 +680,16 @@ func (t *recordingTransport) GetSnapshot(ctx context.Context, lookup *GetSnapsho
 	return &SessionSnapshot[json.RawMessage]{Status: SnapshotStatusCompleted}, nil
 }
 
-func (t *recordingTransport) WaitForSnapshot(ctx context.Context, snapshotID string) (*SessionSnapshot[json.RawMessage], error) {
+func (t *recordingTransport) WaitForSnapshot(ctx context.Context, req *GetSnapshotRequest) (*SessionSnapshot[json.RawMessage], error) {
 	t.callCount++
-	t.waitID = snapshotID
+	t.waitID = req.SnapshotID
 	return &SessionSnapshot[json.RawMessage]{Status: SnapshotStatusCompleted}, nil
 }
 
-func (t *recordingTransport) Abort(ctx context.Context, snapshotID string) (SnapshotStatus, error) {
+func (t *recordingTransport) Abort(ctx context.Context, req *AgentAbortRequest) (*AgentAbortResponse, error) {
 	t.callCount++
-	t.abortID = snapshotID
-	return SnapshotStatusAborted, nil
+	t.abortID = req.SnapshotID
+	return &AgentAbortResponse{SnapshotID: req.SnapshotID, Status: SnapshotStatusAborted}, nil
 }
 
 // cappedWaitTransport answers each wait with a pending row until settleAfter
@@ -702,7 +702,8 @@ type cappedWaitTransport struct {
 	onWait      func()
 }
 
-func (t *cappedWaitTransport) WaitForSnapshot(ctx context.Context, snapshotID string) (*SessionSnapshot[json.RawMessage], error) {
+func (t *cappedWaitTransport) WaitForSnapshot(ctx context.Context, req *GetSnapshotRequest) (*SessionSnapshot[json.RawMessage], error) {
+	snapshotID := req.SnapshotID
 	t.waits++
 	if t.onWait != nil {
 		t.onWait()
@@ -724,7 +725,7 @@ func TestAgentHandle_WaitForSnapshotAsksAgainUntilSettled(t *testing.T) {
 
 	t.Run("settles", func(t *testing.T) {
 		tr := &cappedWaitTransport{settleAfter: 3}
-		h := &AgentHandle{name: "researcher", transport: tr}
+		h := NewAgentHandle("researcher", nil, tr)
 		snap, err := h.WaitForSnapshot(context.Background(), "snap-1")
 		if err != nil {
 			t.Fatalf("WaitForSnapshot: %v", err)
@@ -739,7 +740,7 @@ func TestAgentHandle_WaitForSnapshotAsksAgainUntilSettled(t *testing.T) {
 	t.Run("ctx ends", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		tr := &cappedWaitTransport{onWait: cancel}
-		h := &AgentHandle{name: "researcher", transport: tr}
+		h := NewAgentHandle("researcher", nil, tr)
 		if _, err := h.WaitForSnapshot(ctx, "snap-1"); !errors.Is(err, context.Canceled) {
 			t.Fatalf("WaitForSnapshot error = %v, want context.Canceled", err)
 		}
@@ -769,7 +770,7 @@ func TestAgentHandle_WaitForSnapshotAsksAgainUntilSettled(t *testing.T) {
 // about it. A remote transport can only be a drop-in if that line holds.
 func TestAgentHandle_DelegatesToTransport(t *testing.T) {
 	tr := &recordingTransport{}
-	h := &AgentHandle{name: "researcher", transport: tr}
+	h := NewAgentHandle("researcher", nil, tr)
 	ctx := context.Background()
 
 	// One transport read serves both lookups, which is why it takes the

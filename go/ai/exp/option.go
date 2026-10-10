@@ -217,10 +217,40 @@ func WithStreamTransform[State any](transform StreamTransform) AgentOption[State
 	return &agentOptions[State]{streamTransform: transform}
 }
 
-// WithDescription sets a human-readable description of the agent, stored on its
-// action descriptor (read back via [Agent.Desc] and shown in the Dev UI).
-func WithDescription[State any](description string) AgentOption[State] {
-	return &agentOptions[State]{description: description}
+// WithDescription sets a human-readable description of the agent. For an
+// agent defined in this process it is stored on the action descriptor (read
+// back via [Agent.Desc] and shown in the Dev UI); for a remote agent
+// ([NewRemoteAgent]) it is what [AgentHandle.Ref] and the registered agent's
+// descriptor carry. A remote agent has no State, so any type argument does,
+// e.g. WithDescription[any]("...").
+func WithDescription[State any](description string) DescriptionOption[State] {
+	return descriptionOption[State](description)
+}
+
+// DescriptionOption is the option [WithDescription] returns: it describes an
+// agent defined in this process (an [AgentOption]) or a remote one (a
+// [RemoteAgentOption]).
+type DescriptionOption[State any] interface {
+	AgentOption[State]
+	RemoteAgentOption
+}
+
+// descriptionOption is a [DescriptionOption]. Its remote method does not
+// mention State, which is what lets one value serve both kinds of agent.
+type descriptionOption[State any] string
+
+func (d descriptionOption[State]) applyAgent(opts *agentOptions[State]) error {
+	opts.description = string(d)
+	return nil
+}
+
+func (d descriptionOption[State]) applyPromptAgent(opts *promptAgentOptions[State]) error {
+	return d.applyAgent(&opts.agentOptions)
+}
+
+func (d descriptionOption[State]) applyRemoteAgent(opts *remoteAgentOptions) error {
+	opts.description = string(d)
+	return nil
 }
 
 // WithMaxSnapshotWait bounds how long one request to the agent's

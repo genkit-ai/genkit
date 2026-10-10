@@ -35,7 +35,8 @@ import (
 // does not hold the defining [Agent] value calls an agent it knows only by
 // name: orchestrators, middleware, and tools resolve one with [LookupAgent]
 // (or the genkit/exp package's LookupAgent), and a typed owner hands one out
-// with [Agent.Handle].
+// with [Agent.Handle]. [NewRemoteAgent] builds one for an agent another
+// process serves.
 //
 // A handle adds no capability over the agent it names; it only removes the
 // wire plumbing (JSON marshaling, companion-action lookup and dispatch) that
@@ -43,42 +44,48 @@ import (
 // is [json.RawMessage]: unmarshal [SessionState.Custom] into the agent's own
 // state type when the caller knows it.
 //
-// Reaching the agent is an [agentTransport]'s job, so where the agent lives is
-// not part of this surface. Both constructors bind the in-process transport
-// today; the seam is what will let one bind an agent behind an HTTP endpoint
-// without moving a method.
+// Reaching the agent is an [AgentTransport]'s job, so where the agent lives is
+// not part of this surface.
 type AgentHandle struct {
 	name string
-	// meta is the agent's capability metadata, or nil when it is unknown. It
-	// is static, so the handle holds it rather than asking the transport for
-	// it on every call, and it is resolved on first use rather than at
-	// construction: deriving it deep-copies the agent's state schema, which
-	// costs more than a lookup itself, and most callers only run the agent.
-	// metaSrc is the descriptor it comes from, released once resolved.
-	metaOnce  sync.Once
+	// meta and desc are the agent's capability metadata (nil when unknown)
+	// and description. They are static, so the handle holds them rather than
+	// asking the transport on every call. For a handle over a registered
+	// action they are resolved on first use rather than at construction:
+	// deriving the metadata deep-copies the agent's state schema, which costs
+	// more than a lookup itself, and most callers only run the agent. src is
+	// the descriptor they come from, released once resolved.
+	infoOnce  sync.Once
 	meta      *AgentMetadata
-	metaSrc   api.Action
-	transport agentTransport
+	desc      string
+	src       api.Action
+	transport AgentTransport
 }
 
-// agentTransport is how an [AgentHandle] reaches the agent it names. The
+// AgentTransport is how an [AgentHandle] reaches the agent it names. The
 // handle owns the ergonomic surface and the argument validation that holds
 // wherever the agent lives; a transport owns marshaling, dispatch, and the
-// refusal an agent that lacks a capability earns.
+// refusal an agent that lacks a capability earns. Build a handle over one
+// with [NewAgentHandle].
 //
-// It is unexported until a second implementation exists. The in-process
-// transport below is the only one today, and an HTTP one over the
-// /agents/{name}/... routes is what the seam is for; writing that is what will
-// settle the shape well enough to publish it.
+// The methods mirror the agent's served routes (see the genkit/exp package's
+// AgentRoutes) and take the wire types, so a field added to a request reaches
+// every transport without a new method. Snapshot operations live in the
+// optional [SnapshotTransport].
 //
-// Two rules every implementation owes its callers:
+// Rules every implementation owes its callers:
 //
-// Errors are matched by status name ([status.Classified]), never by sentinel
-// identity. A transport that crosses a wire decodes a status name and nothing
-// else, so a sentinel subtype arrives as its parent status: the in-process
-// transport's live error chain is a convenience of where it runs, not a
-// promise of the seam. A message that would name which subtype it is has to
-// hedge instead.
+//   - Errors are matched by status name ([status.Classified]), never by
+//     sentinel identity. A transport that crosses a wire decodes a status name
+//     and nothing else, so a sentinel subtype arrives as its parent status.
+//   - A failure inside the agent resolves as a failed [AgentOutput] (with
+//     [AgentOutput.Error]), not an error. An error means the call could not
+//     reach the agent or produce an output.
+//   - Run delivers chunks to cb in the order the agent sent them, from one
+//     goroutine at a time, and never after it returns. An error from cb stops
+//     the turn and Run returns it.
+//   - Run is not idempotent: the agent may have started the turn when a call
+//     fails, so a transport must never retry it.
 //
 // Capability metadata is not here. It is static, [AgentHandle] holds it
 // directly, and a transport that had to fetch it could report no failure
@@ -86,23 +93,78 @@ type AgentHandle struct {
 // what it knows about the agent, and nil means unknown.
 //
 // Connect-style sessions are deliberately out of scope. [AgentHandle] exposes
-// none, and a long-lived duplex stream is a different problem from four
+// none, and a long-lived duplex stream is a different problem from
 // request/response calls.
-type agentTransport interface {
+type AgentTransport interface {
 	// Run delivers one turn and returns its final output. init carries the
-	// session source and may be nil; cb receives streamed chunks as raw JSON
-	// and may be nil.
+	// session source and may be nil; cb receives the turn's stream chunks, each
+	// an [AgentStreamChunk] as JSON, and may be nil.
 	Run(ctx context.Context, input *AgentInput, init *AgentInit[json.RawMessage], cb func(context.Context, json.RawMessage) error) (*AgentOutput[json.RawMessage], error)
+}
+
+// SnapshotTransport is the optional part of an [AgentTransport] that reaches
+// the agent's snapshot lifecycle. A handle whose transport lacks it refuses
+// snapshot operations with FAILED_PRECONDITION. A method may also refuse with
+// a status of its own, such as UNIMPLEMENTED for an operation the agent's
+// server does not offer.
+type SnapshotTransport interface {
 	// GetSnapshot reads one snapshot, addressed either by its own ID or as a
 	// session's latest.
-	GetSnapshot(ctx context.Context, lookup *GetSnapshotRequest) (*SessionSnapshot[json.RawMessage], error)
-	// WaitForSnapshot blocks until the snapshot settles and returns it, or
-	// returns it as it stands once the agent's wait limit passes (see
-	// [WithMaxSnapshotWait]); [AgentHandle.WaitForSnapshot] then asks again.
-	WaitForSnapshot(ctx context.Context, snapshotID string) (*SessionSnapshot[json.RawMessage], error)
+	GetSnapshot(ctx context.Context, req *GetSnapshotRequest) (*SessionSnapshot[json.RawMessage], error)
+	// WaitForSnapshot blocks until the snapshot req.SnapshotID names settles
+	// and returns it, or returns it as it stands once the agent's wait limit
+	// passes (see [WithMaxSnapshotWait]); [AgentHandle.WaitForSnapshot] then
+	// asks again. req.SnapshotID is always set.
+	WaitForSnapshot(ctx context.Context, req *GetSnapshotRequest) (*SessionSnapshot[json.RawMessage], error)
 	// Abort stops the background work behind a pending snapshot and reports
 	// the snapshot's status after the attempt.
-	Abort(ctx context.Context, snapshotID string) (SnapshotStatus, error)
+	Abort(ctx context.Context, req *AgentAbortRequest) (*AgentAbortResponse, error)
+}
+
+// AgentHandleOptions describes the agent an [AgentHandle] reaches, for
+// [NewAgentHandle].
+type AgentHandleOptions struct {
+	// Description is shown to callers that list agents, such as the agents
+	// middleware.
+	Description string
+	// Metadata is the agent's capability metadata, or nil when it is unknown.
+	// Callers treat nil as "ask the agent and see": a capability that is
+	// present but false is a definite no.
+	Metadata *AgentMetadata
+}
+
+// NewAgentHandle returns a handle to the agent named name that reaches it
+// through t. It is for transport authors; [NewRemoteAgent] builds one for an
+// agent that a Genkit app serves over HTTP. opts may be nil.
+//
+// The handle holds a copy of opts.Metadata. It panics if name is empty or t is
+// nil.
+func NewAgentHandle(name string, opts *AgentHandleOptions, t AgentTransport) *AgentHandle {
+	if name == "" {
+		panic("aix.NewAgentHandle: name is required")
+	}
+	if t == nil {
+		panic(fmt.Sprintf("aix.NewAgentHandle: agent %q: transport is required", name))
+	}
+	h := &AgentHandle{name: name, transport: t}
+	if opts != nil {
+		h.desc = opts.Description
+		h.meta = cloneAgentMetadata(opts.Metadata)
+	}
+	// Nothing to derive: the info was supplied, so mark it resolved.
+	h.infoOnce.Do(func() {})
+	return h
+}
+
+// cloneAgentMetadata returns a copy of m that shares nothing mutable with it,
+// or nil for nil.
+func cloneAgentMetadata(m *AgentMetadata) *AgentMetadata {
+	if m == nil {
+		return nil
+	}
+	c := *m
+	c.StateSchema = base.CloneSchema(c.StateSchema)
+	return &c
 }
 
 // LookupAgent resolves the agent registered under name and returns its
@@ -123,8 +185,8 @@ func LookupAgent(r api.Registry, name string) *AgentHandle {
 		return nil
 	}
 	return &AgentHandle{
-		name:    name,
-		metaSrc: run,
+		name: name,
+		src:  run,
 		transport: &actionTransport{
 			name:        name,
 			run:         run,
@@ -142,11 +204,14 @@ func LookupAgent(r api.Registry, name string) *AgentHandle {
 // lookup, so it also works for an unregistered agent (see [NewCustomAgent]).
 func (a *Agent[State]) Handle() *AgentHandle {
 	return &AgentHandle{
-		name:    a.Name(),
-		metaSrc: a,
+		name: a.Name(),
+		src:  a,
 		transport: &actionTransport{
-			name:        a.Name(),
-			run:         a,
+			name: a.Name(),
+			// The core action, as LookupAgent finds it in a registry, not the
+			// Agent wrapper: registering the wrapper also registers the
+			// companions, which Register registers on their own.
+			run:         a.action,
 			getSnapshot: a.getSnapshot,
 			wait:        a.wait,
 			abort:       a.abort,
@@ -194,28 +259,53 @@ func agentMetadataOf(a api.Action) *AgentMetadata {
 	return nil
 }
 
-// Name returns the agent's registered name.
-func (h *AgentHandle) Name() string { return h.name }
+// Name returns the agent's name.
+func (h *AgentHandle) Name() string {
+	if h == nil {
+		return ""
+	}
+	return h.name
+}
 
 // Metadata returns the agent's capability metadata (who manages state, whether
-// background work can be aborted), or nil when the agent's descriptor carries
-// none or did not decode. The handle holds one copy, detached from the
-// descriptor but shared across calls, so treat it as read-only.
+// background work can be aborted), or nil when it is unknown: the agent's
+// descriptor carries none or did not decode, or a remote agent was declared
+// without it. The handle holds one copy, detached from the descriptor but
+// shared across calls, so treat it as read-only.
 func (h *AgentHandle) Metadata() *AgentMetadata {
 	if h == nil {
 		return nil
 	}
-	h.metaOnce.Do(func() {
-		// Derive only when there is a descriptor to derive from. A handle
-		// constructed with eager metadata and no metaSrc (the shape a remote
-		// transport takes, having no api.Action to inspect, like JS
-		// remoteAgent filling stateManagement) keeps what it was built with;
-		// running the derivation over a nil source would clobber it to nil.
-		if h.metaSrc != nil {
-			h.meta, h.metaSrc = agentMetadataOf(h.metaSrc), nil
+	h.resolveInfo()
+	return h.meta
+}
+
+// Description returns the agent's description, or "" when it has none.
+func (h *AgentHandle) Description() string {
+	if h == nil {
+		return ""
+	}
+	h.resolveInfo()
+	return h.desc
+}
+
+// Ref returns an [AgentRef] for the agent, carrying its name and description,
+// the way [Agent.Ref] does for a typed agent.
+func (h *AgentHandle) Ref() AgentRef {
+	return AgentRef{Name: h.Name(), Description: h.Description()}
+}
+
+// resolveInfo derives the metadata and description from the descriptor the
+// handle was built over, once. A handle built by [NewAgentHandle] has no
+// descriptor and keeps what it was given.
+func (h *AgentHandle) resolveInfo() {
+	h.infoOnce.Do(func() {
+		if h.src != nil {
+			h.meta = agentMetadataOf(h.src)
+			h.desc = h.src.Desc().Description
+			h.src = nil
 		}
 	})
-	return h.meta
 }
 
 // Run starts a single-turn invocation with the given input and returns the
@@ -309,7 +399,11 @@ func (h *AgentHandle) GetSnapshot(ctx context.Context, snapshotID string, opts .
 	if snapshotID == "" {
 		return nil, status.Errorf(status.ErrInvalidArgument, "agent %q: GetSnapshot: snapshotID is required", h.name)
 	}
-	return h.transport.GetSnapshot(ctx, resolveSnapshotRead(&GetSnapshotRequest{SnapshotID: snapshotID}, opts))
+	st, err := h.snapshotTransport("read")
+	if err != nil {
+		return nil, err
+	}
+	return st.GetSnapshot(ctx, resolveSnapshotRead(&GetSnapshotRequest{SnapshotID: snapshotID}, opts))
 }
 
 // WaitForSnapshot fetches a session snapshot by ID and blocks until it settles,
@@ -335,9 +429,13 @@ func (h *AgentHandle) WaitForSnapshot(ctx context.Context, snapshotID string) (*
 	if snapshotID == "" {
 		return nil, status.Errorf(status.ErrInvalidArgument, "agent %q: WaitForSnapshot: snapshotID is required", h.name)
 	}
+	st, err := h.snapshotTransport("follow")
+	if err != nil {
+		return nil, err
+	}
 	for {
 		start := time.Now()
-		snap, err := h.transport.WaitForSnapshot(ctx, snapshotID)
+		snap, err := st.WaitForSnapshot(ctx, &GetSnapshotRequest{SnapshotID: snapshotID})
 		if err != nil {
 			return nil, err
 		}
@@ -373,7 +471,11 @@ func (h *AgentHandle) GetLatestSnapshot(ctx context.Context, sessionID string, o
 	if sessionID == "" {
 		return nil, status.Errorf(status.ErrInvalidArgument, "agent %q: GetLatestSnapshot: sessionID is required", h.name)
 	}
-	return h.transport.GetSnapshot(ctx, resolveSnapshotRead(&GetSnapshotRequest{SessionID: sessionID}, opts))
+	st, err := h.snapshotTransport("read")
+	if err != nil {
+		return nil, err
+	}
+	return st.GetSnapshot(ctx, resolveSnapshotRead(&GetSnapshotRequest{SessionID: sessionID}, opts))
 }
 
 // Abort asks the background work behind a pending snapshot to stop, through
@@ -394,14 +496,33 @@ func (h *AgentHandle) Abort(ctx context.Context, snapshotID string) (SnapshotSta
 	if snapshotID == "" {
 		return "", status.Errorf(status.ErrInvalidArgument, "agent %q: Abort: snapshotID is required", h.name)
 	}
-	return h.transport.Abort(ctx, snapshotID)
+	st, err := h.snapshotTransport("abort")
+	if err != nil {
+		return "", err
+	}
+	resp, err := st.Abort(ctx, &AgentAbortRequest{SnapshotID: snapshotID})
+	if err != nil {
+		return "", err
+	}
+	return resp.Status, nil
+}
+
+// snapshotTransport returns the handle's transport as a [SnapshotTransport],
+// or the refusal for one that reaches no snapshot lifecycle. verb names what
+// the caller wanted to do with a snapshot.
+func (h *AgentHandle) snapshotTransport(verb string) (SnapshotTransport, error) {
+	st, ok := h.transport.(SnapshotTransport)
+	if !ok {
+		return nil, status.Errorf(status.ErrFailedPrecondition,
+			"agent %q: its transport cannot %s a snapshot", h.name, verb)
+	}
+	return st, nil
 }
 
 // --- In-process transport ---
 
 // actionTransport reaches an agent through its registered actions, in this
-// process. It is what [LookupAgent] and [Agent.Handle] build, and the only
-// [agentTransport] today.
+// process. It is what [LookupAgent] and [Agent.Handle] build.
 //
 // A companion action is nil when the agent does not publish it, which an agent
 // does only when it has a session store supporting that capability. Turning
@@ -412,7 +533,7 @@ func (h *AgentHandle) Abort(ctx context.Context, snapshotID string) (SnapshotSta
 // Errors from here keep a live chain, so sentinel matching with errors.Is
 // works, subtypes included ([ErrSnapshotNotFound] is a [status.ErrNotFound]).
 // That is a property of running in-process, not of the seam. Callers written
-// against [AgentHandle] match on status name, per [agentTransport].
+// against [AgentHandle] match on status name, per [AgentTransport].
 type actionTransport struct {
 	name        string
 	run         api.BidiAction
@@ -448,8 +569,8 @@ func (t *actionTransport) GetSnapshot(ctx context.Context, lookup *GetSnapshotRe
 	return t.snapshotVia(ctx, t.getSnapshot, "read", lookup)
 }
 
-func (t *actionTransport) WaitForSnapshot(ctx context.Context, snapshotID string) (*SessionSnapshot[json.RawMessage], error) {
-	return t.snapshotVia(ctx, t.wait, "follow", &GetSnapshotRequest{SnapshotID: snapshotID})
+func (t *actionTransport) WaitForSnapshot(ctx context.Context, req *GetSnapshotRequest) (*SessionSnapshot[json.RawMessage], error) {
+	return t.snapshotVia(ctx, t.wait, "follow", req)
 }
 
 // snapshotVia dispatches req to act, one of the two companion actions that
@@ -469,24 +590,20 @@ func (t *actionTransport) snapshotVia(ctx context.Context, act api.Action, verb 
 	return callJSON[SessionSnapshot[json.RawMessage]](ctx, t.name, act, "snapshot", req)
 }
 
-func (t *actionTransport) Abort(ctx context.Context, snapshotID string) (SnapshotStatus, error) {
+func (t *actionTransport) Abort(ctx context.Context, req *AgentAbortRequest) (*AgentAbortResponse, error) {
 	if t.abort == nil {
 		// Two refusals, because the caller can act on the difference: no
 		// snapshot action at all means no session store, while a store that
 		// reads but cannot abort is one without SnapshotSubscriber.
 		if t.getSnapshot == nil {
-			return "", status.Errorf(ErrSessionStoreNotConfigured,
+			return nil, status.Errorf(ErrSessionStoreNotConfigured,
 				"agent %q publishes no action to abort background work; an agent publishes one only when it has a session store that can observe aborts",
 				t.name)
 		}
-		return "", status.Errorf(status.ErrFailedPrecondition,
+		return nil, status.Errorf(status.ErrFailedPrecondition,
 			"agent %q: the session store does not support abort (it does not implement SnapshotSubscriber)", t.name)
 	}
-	resp, err := callJSON[AgentAbortResponse](ctx, t.name, t.abort, "abort", &AgentAbortRequest{SnapshotID: snapshotID})
-	if err != nil {
-		return "", err
-	}
-	return resp.Status, nil
+	return callJSON[AgentAbortResponse](ctx, t.name, t.abort, "abort", req)
 }
 
 // callJSON dispatches req to act, one of the agent's companion actions, and
