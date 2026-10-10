@@ -508,6 +508,8 @@ function resolveCompressedHistoryWithIndices(messages: MessageData[]): {
   messages: MessageData[];
   origIndexByMsg: WeakMap<MessageData, number>;
   boundaryIndex: number;
+  /** The anchor user message the boundary restored, if any. */
+  anchor?: MessageData;
 } {
   const origIndexByMsg = new WeakMap<MessageData, number>();
   const lastModelOrToolIdx = findLastModelOrToolIndex(messages);
@@ -617,11 +619,13 @@ function resolveCompressedHistoryWithIndices(messages: MessageData[]): {
     resolvedMessages.push(summaryMsg);
   }
 
+  let anchor: MessageData | undefined;
   if (ccMeta.anchorUser === true) {
     for (let i = boundaryIndex; i >= leadingSystemEnd; i--) {
       if (messages[i].role === 'user') {
-        origIndexByMsg.set(messages[i], i);
-        resolvedMessages.push(messages[i]);
+        anchor = messages[i];
+        origIndexByMsg.set(anchor, i);
+        resolvedMessages.push(anchor);
         break;
       }
     }
@@ -642,6 +646,7 @@ function resolveCompressedHistoryWithIndices(messages: MessageData[]): {
     messages: resolvedMessages,
     origIndexByMsg,
     boundaryIndex,
+    anchor,
   };
 }
 
@@ -1971,6 +1976,7 @@ export const contextCompression: GenerateMiddleware<
           );
         const resolved = resolveCompressedHistoryWithIndices(rawMessages);
         const prevBoundary = resolved.boundaryIndex;
+        const prevAnchor = resolved.anchor;
         const origIndexByMsg = resolved.origIndexByMsg;
         const {
           messages: activeMessages,
@@ -2166,6 +2172,12 @@ export const contextCompression: GenerateMiddleware<
                   isSummarized = sumResult.summarized;
                   if (isSummarized) {
                     sText = sumResult.summaryText;
+                    // The boundary search below skips the previous anchor,
+                    // which sits at or before prevBoundary, so restore it
+                    // when the tail still holds it.
+                    mUsedAnchorUser =
+                      prevAnchor !== undefined &&
+                      sumResult.tailMessages.includes(prevAnchor);
                     const firstKeptRawIdx = sumResult.tailMessages
                       .map((m) => origIndexByMsg.get(m) ?? -1)
                       .find((idx) => idx > prevBoundary);
@@ -2239,7 +2251,10 @@ export const contextCompression: GenerateMiddleware<
                   noticeInserted = msgResult.noticeInserted;
                   if (msgResult.dropped > 0) {
                     msgTruncated = true;
-                    mUsedAnchorUser = msgResult.usedAnchorUser;
+                    mUsedAnchorUser =
+                      msgResult.usedAnchorUser ||
+                      (prevAnchor !== undefined &&
+                        msgResult.tailMessages.includes(prevAnchor));
                     const firstKeptRawIdx = msgResult.tailMessages
                       .map((m) => origIndexByMsg.get(m) ?? -1)
                       .find((idx) => idx > prevBoundary);

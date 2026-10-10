@@ -4342,4 +4342,138 @@ describe('contextCompression middleware', () => {
     );
     assert.strictEqual(mainCalledAfterAbort, false);
   });
+
+  it('keeps the previous anchor user message when a re-truncation keeps it at the head of the tail', async () => {
+    const ai = genkit({});
+    let capturedRequest: GenerateRequest | undefined;
+    const pm = ai.defineModel({ name: 'reanchorTruncModel' }, async (req) => {
+      capturedRequest = req;
+      return { message: { role: 'model', content: [{ text: 'done' }] } };
+    });
+
+    const response = await ai.generate({
+      model: pm,
+      messages: anchoredToolLoopHistory(),
+      use: [
+        contextCompression({ maxMessages: 8, insertTruncationNotice: false }),
+      ],
+    });
+
+    const expected = [
+      'system:sys',
+      'user:PROMPT',
+      'model:call:b',
+      'tool:resp:b',
+      'model:call:c',
+      'tool:resp:c',
+      'model:call:d',
+      'tool:resp:d',
+    ];
+    assert.deepStrictEqual(messageLabels(capturedRequest!.messages), expected);
+    assert.deepStrictEqual(
+      messageLabels(resolveCompressedHistory(response.request!.messages)),
+      expected
+    );
+  });
+
+  it('keeps the previous anchor user message when a re-summarization keeps it at the head of the tail', async () => {
+    const ai = genkit({});
+    let capturedRequest: GenerateRequest | undefined;
+    const summarizer = ai.defineModel(
+      { name: 'reanchorSummarizer' },
+      async () => ({
+        message: { role: 'model', content: [{ text: 'NEW_SUMMARY' }] },
+      })
+    );
+    const pm = ai.defineModel({ name: 'reanchorSumModel' }, async (req) => {
+      capturedRequest = req;
+      return { message: { role: 'model', content: [{ text: 'done' }] } };
+    });
+
+    const response = await ai.generate({
+      model: pm,
+      messages: anchoredToolLoopHistory({
+        contextCompression: { inputTokens: 120 },
+      }),
+      use: [
+        contextCompression({
+          maxInputTokens: 100,
+          summarize: { model: summarizer, preserveRecent: 7 },
+        }),
+      ],
+    });
+
+    // The new summary covers only the old summary, so the prompt of the tool
+    // loop must still follow it.
+    const expectedTail = [
+      'user:PROMPT',
+      'model:call:b',
+      'tool:resp:b',
+      'model:call:c',
+      'tool:resp:c',
+      'model:call:d',
+      'tool:resp:d',
+    ];
+    for (const view of [
+      capturedRequest!.messages,
+      resolveCompressedHistory(response.request!.messages),
+    ]) {
+      const labels = messageLabels(view);
+      assert.strictEqual(labels.length, 9, `unexpected view: ${labels}`);
+      assert.strictEqual(labels[0], 'system:sys');
+      assert.match(labels[1], /^user:.*NEW_SUMMARY/s);
+      assert.deepStrictEqual(labels.slice(2), expectedTail);
+    }
+  });
 });
+
+function messageLabels(messages: MessageData[]): string[] {
+  return messages.map(
+    (m) =>
+      `${m.role}:` +
+      m.content
+        .map((p) =>
+          p.toolRequest
+            ? `call:${p.toolRequest.name}`
+            : p.toolResponse
+              ? `resp:${p.toolResponse.name}`
+              : (p.text ?? '')
+        )
+        .join('')
+  );
+}
+
+/**
+ * A tool loop whose earlier compaction kept PROMPT as its anchor user message:
+ * the boundary on t(a) resolves to [sys, summary, PROMPT, m(b) ... t(d)].
+ */
+function anchoredToolLoopHistory(
+  lastModelMetadata?: MessageData['metadata']
+): MessageData[] {
+  const call = (name: string, metadata?: MessageData['metadata']) =>
+    ({
+      role: 'model',
+      ...(metadata ? { metadata } : {}),
+      content: [{ toolRequest: { name, ref: name, input: {} } }],
+    }) as MessageData;
+  const resp = (name: string, metadata?: MessageData['metadata']) =>
+    ({
+      role: 'tool',
+      ...(metadata ? { metadata } : {}),
+      content: [{ toolResponse: { name, ref: name, output: `out ${name}` } }],
+    }) as MessageData;
+  return [
+    { role: 'system', content: [{ text: 'sys' }] },
+    { role: 'user', content: [{ text: 'u' }] },
+    { role: 'model', content: [{ text: 'm' }] },
+    { role: 'user', content: [{ text: 'PROMPT' }] },
+    call('a'),
+    resp('a', { contextCompression: { summary: 'S', anchorUser: true } }),
+    call('b'),
+    resp('b'),
+    call('c'),
+    resp('c'),
+    call('d', lastModelMetadata),
+    resp('d'),
+  ];
+}
