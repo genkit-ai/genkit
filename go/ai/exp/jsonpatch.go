@@ -17,6 +17,7 @@
 package exp
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -37,10 +38,12 @@ import (
 // operation set for interoperability and is deliberately lenient so a stream of
 // deltas stays robust.
 //
-// Both operate on JSON-shaped values: the map[string]any / []any / float64 /
-// string / bool / nil tree produced by unmarshaling into an any. Inputs are
-// normalized (round-tripped through JSON) on the way in, so any
-// JSON-serializable Go value may be passed.
+// Both operate on JSON-shaped values: the map[string]any / []any /
+// json.Number / string / bool / nil tree produced by decoding into an any with
+// [json.Decoder.UseNumber]. Inputs are normalized (round-tripped through JSON)
+// on the way in, so any JSON-serializable Go value may be passed, and numbers
+// keep their exact text: an integer above 2^53 survives a diff and an apply.
+// Decode a stored patch with UseNumber too, or its values round on the way in.
 
 // Diff computes an RFC 6902 JSON Patch that transforms from into to.
 //
@@ -54,7 +57,7 @@ import (
 //
 // Object keys are visited in sorted order, so the patch is deterministic.
 func Diff(from, to any) JSONPatch {
-	return diffValues(normalizeJSON(from), normalizeJSON(to))
+	return diffValues(exactJSON(from), exactJSON(to))
 }
 
 // diffValues diffs two already-normalized JSON values. The runtime uses it
@@ -123,19 +126,20 @@ func diffWalk(from, to any, pointer string, patch *JSONPatch) {
 // a missing member is a no-op. A test operation is honored and returns an error
 // on mismatch. Other unknown operations also return an error.
 func ApplyPatch(document any, patch JSONPatch) (any, error) {
-	return applyOps(cloneJSON(normalizeJSON(document)), patch)
+	return applyOps(cloneJSON(exactJSON(document)), patch, exactJSON)
 }
 
 // applyOps applies patch to an already-normalized doc, mutating it in place
 // where possible and returning the result (which may be a fresh value for
-// root-level operations). The runtime/client pass a clone they own.
-func applyOps(doc any, patch JSONPatch) (any, error) {
+// root-level operations). normalize is how doc was normalized, and normalizes
+// each operation's value to match. The runtime/client pass a clone they own.
+func applyOps(doc any, patch JSONPatch, normalize func(any) any) (any, error) {
 	for _, op := range patch {
 		if op == nil {
 			continue
 		}
 		var err error
-		doc, err = applyOp(doc, op)
+		doc, err = applyOp(doc, op, normalize)
 		if err != nil {
 			return nil, err
 		}
@@ -143,20 +147,20 @@ func applyOps(doc any, patch JSONPatch) (any, error) {
 	return doc, nil
 }
 
-func applyOp(doc any, op *JSONPatchOperation) (any, error) {
+func applyOp(doc any, op *JSONPatchOperation, normalize func(any) any) (any, error) {
 	tokens, err := parsePointer(op.Path)
 	if err != nil {
 		return nil, err
 	}
 	switch op.Op {
 	case JSONPatchOpAdd:
-		return setPath(doc, tokens, normalizeJSON(op.Value), true), nil
+		return setPath(doc, tokens, normalize(op.Value), true), nil
 	case JSONPatchOpReplace:
-		return setPath(doc, tokens, normalizeJSON(op.Value), false), nil
+		return setPath(doc, tokens, normalize(op.Value), false), nil
 	case JSONPatchOpRemove:
 		return removePath(doc, tokens), nil
 	case JSONPatchOpTest:
-		if !jsonEqual(getPath(doc, tokens), normalizeJSON(op.Value)) {
+		if !jsonEqual(getPath(doc, tokens), normalize(op.Value)) {
 			return nil, fmt.Errorf("jsonpatch: test failed at %q", op.Path)
 		}
 		return doc, nil
@@ -412,6 +416,27 @@ func normalizeJSON(v any) any {
 	}
 	var out any
 	if err := json.Unmarshal(b, &out); err != nil {
+		return v
+	}
+	return out
+}
+
+// exactJSON is normalizeJSON with numbers kept as json.Number, so they keep
+// their exact text instead of rounding through float64. The exported Diff and
+// ApplyPatch use it; the runtime's own custom-state paths keep float64, which
+// prompt templates and stream consumers read.
+func exactJSON(v any) any {
+	if v == nil {
+		return nil
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return v
+	}
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.UseNumber()
+	var out any
+	if err := dec.Decode(&out); err != nil {
 		return v
 	}
 	return out
