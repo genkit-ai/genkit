@@ -211,6 +211,20 @@ p.openAICompatible.ClassifyError = func(err *openai.Error) status.Name {
 }
 ```
 
+Media in a user message is sent by its content type: images as `image_url`,
+audio as `input_audio`, and other types, such as PDF, as a `file` part. Audio
+and files must be data URIs, since chat completions take them inline and the
+plugin does not fetch URLs. Video has no standard content part and is
+rejected. A provider whose endpoint reads only some of these sets
+`OpenAICompatible.MediaTypes`, so a part of any other type fails with
+`INVALID_ARGUMENT` before the request is sent. This matters most where the
+endpoint strips a part it does not read instead of rejecting it, as
+Anthropic's compatible endpoint does with files and audio:
+
+```go
+p.openAICompatible.MediaTypes = []string{"image/*", "application/pdf"}
+```
+
 Model IDs are string literals rather than exported constants. An exported
 `ModelMyModel` outlives the model it names: the ID churns every few months,
 but the constant cannot be removed without a breaking change. The map key is

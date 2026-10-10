@@ -169,6 +169,10 @@ var (
 	}
 )
 
+// mediaTypes are the media Moonshot's chat completions read that the plugin
+// sends. Its content parts are text, image_url and video_url only.
+var mediaTypes = []string{"image/*"}
+
 // supportedModels curates capabilities for well-known Kimi models. It is not
 // the set of usable models: any Kimi model resolves on demand and takes
 // [dynamicModelOptions], so an ID absent here still works. No versions are
@@ -260,6 +264,7 @@ func (k *Kimi) Init(ctx context.Context) []api.Action {
 	opts = append(opts, k.Opts...)
 
 	k.openAICompatible.Provider = provider
+	k.openAICompatible.MediaTypes = mediaTypes
 	k.openAICompatible.Opts = opts
 	actions := k.openAICompatible.Init(ctx)
 
