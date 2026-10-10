@@ -99,7 +99,7 @@ Each sample runs with `go run .`. Start with the `basic-*` set: together they co
 | [basic‑tools](samples/basic-tools/main.go) | A tool that streams progress and attaches a chart |
 | [basic‑agents](samples/basic-agents) | Inline, prompt-file, and custom agents with snapshots, background runs, and delegation |
 | [basic‑agents‑server](samples/basic-agents-server/main.go) | Store-backed and stateless agents over HTTP |
-| [basic‑agents‑remote](samples/basic-agents-remote) | An orchestrator that delegates to an agent in a second process, both started by one `go run .` |
+| [basic‑agents‑remote](samples/basic-agents-remote/main.go) | An orchestrator that delegates to an agent in a second process, both started by one `go run .` |
 | [basic‑tool‑interrupts](samples/basic-tool-interrupts/main.go) | Human in the loop: a tool that pauses for approval |
 | [basic‑middleware](samples/basic-middleware) | [Retry and fallback](samples/basic-middleware/retry-fallback/main.go), [filesystem](samples/basic-middleware/filesystem), [skills](samples/basic-middleware/skills), and [context compression](samples/basic-middleware/context-compression/main.go) middleware |
 | [basic‑errors](samples/basic-errors/main.go) | Error classification with sentinels and `errors.Is` |
@@ -404,7 +404,7 @@ orchestrator := genkitx.DefineAgent(g, "orchestrator",
 
 Call it directly with `researcher.RunText`, `RunDetached`, and `Task`, or build an unregistered handle with `aix.NewRemoteAgent`.
 
-[Docs](https://genkit.dev/docs/go/agents/http/#connect-a-client) &middot; [Example](samples/basic-agents-remote/orchestrator.go)
+[Docs](https://genkit.dev/docs/go/agents/http/#connect-a-client) &middot; [Example](samples/basic-agents-remote/main.go)
 
 ---
 

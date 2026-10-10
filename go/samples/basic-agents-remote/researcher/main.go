@@ -12,11 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Command researcher serves the researcher agent of the basic-agents-remote
+// sample on 127.0.0.1:8081. It is an ordinary Genkit app serving an agent over
+// HTTP, which is all a remote agent needs; nothing here knows about the
+// orchestrator.
+//
+// The sample starts it. To run it on its own, from the sample's directory:
+//
+//	go run ./researcher
 package main
 
 import (
 	"context"
 	"io"
+	"log"
 	"net/http"
 	"os"
 
@@ -29,16 +38,11 @@ import (
 	"github.com/firebase/genkit/go/plugins/server"
 )
 
-// serveResearcher runs the researcher service: one agent, served over HTTP on
-// addr with the AllAgentRoutes layout, until ctx ends or its input closes.
-//
-// Nothing here knows about the orchestrator. The service is an ordinary
-// Genkit app serving an agent, which is all a remote agent needs.
-func serveResearcher(ctx context.Context, addr string) error {
-	// The orchestrator holds this process's stdin open, so end of input means
-	// the orchestrator is gone, however it ended.
-	ctx, cancel := context.WithCancel(ctx)
+func main() {
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	// The sample holds this process's stdin open, so end of input means the
+	// sample is gone. Run from a terminal, stdin stays open.
 	go func() {
 		io.Copy(io.Discard, os.Stdin)
 		cancel()
@@ -46,14 +50,13 @@ func serveResearcher(ctx context.Context, addr string) error {
 
 	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}), genkit.WithExperimental())
 
-	// The session store is what lets the orchestrator run this agent in the
-	// background: a background task is a pending snapshot in this store, and
-	// the orchestrator follows it through the getSnapshot, waitForSnapshot,
-	// and abort routes. The in-memory store suits a service that lives as long
-	// as the demo; a deployed one would use a store all its replicas share.
+	// The session store is what lets a caller run this agent in the
+	// background: a background task is a pending snapshot in this store, which
+	// the caller follows through the getSnapshot, waitForSnapshot, and abort
+	// routes. A deployed service would use a store all its replicas share.
 	genkitx.DefineAgent(g, "researcher",
 		aix.InlinePrompt{
-			ai.WithModel(model),
+			ai.WithModelName("googleai/gemini-flash-latest"),
 			ai.WithSystem("You are a research assistant. You get one question at a time. " +
 				"Answer it from what you know in at most five sentences, and say when you are unsure."),
 		},
@@ -64,5 +67,7 @@ func serveResearcher(ctx context.Context, addr string) error {
 	for _, route := range genkitx.AllAgentRoutes(g) {
 		mux.HandleFunc(route.Pattern(), route.Handler())
 	}
-	return server.Start(ctx, addr, mux)
+	if err := server.Start(ctx, "127.0.0.1:8081", mux); err != nil {
+		log.Fatal(err)
+	}
 }
