@@ -30,11 +30,8 @@ import re
 from collections.abc import Iterator
 
 import pytest
-from genkit_amazon_bedrock._config import BedrockConfig
-from genkit_amazon_bedrock._converters import (
-    REASONING_SIGNATURE_METADATA_KEY,
-    cache_point_part,
-)
+from genkit_amazon_bedrock import BedrockConfig, cache_point_part
+from genkit_amazon_bedrock._converters import REASONING_SIGNATURE_METADATA_KEY
 from genkit_amazon_bedrock._embedders import BedrockEmbedder
 from genkit_amazon_bedrock._image import BedrockImageModel
 from genkit_amazon_bedrock._models import BedrockModel

@@ -62,7 +62,7 @@ func TestConvertChatCompletionToModelResponseReasoning(t *testing.T) {
 				t.Fatalf("json.Unmarshal() error = %v", err)
 			}
 
-			resp, err := convertChatCompletionToModelResponse(&completion)
+			resp, err := convertChatCompletionToModelResponse(&completion, false)
 			if err != nil {
 				t.Fatalf("convertChatCompletionToModelResponse() error = %v", err)
 			}
@@ -167,7 +167,7 @@ func TestConvertChatCompletionToModelResponseProviderFinishReasons(t *testing.T)
 					},
 				}},
 			}
-			resp, err := convertChatCompletionToModelResponse(completion)
+			resp, err := convertChatCompletionToModelResponse(completion, false)
 			if err != nil {
 				t.Fatalf("convertChatCompletionToModelResponse() error = %v", err)
 			}
@@ -178,51 +178,66 @@ func TestConvertChatCompletionToModelResponseProviderFinishReasons(t *testing.T)
 	}
 }
 
-// TestConvertChatCompletionToModelResponseCachedTokens covers both shapes a
-// provider reports prompt cache hits in: OpenAI's prompt_tokens_details
-// breakdown and the top-level field DeepSeek uses, which returns no
-// prompt_tokens_details at all.
-func TestConvertChatCompletionToModelResponseCachedTokens(t *testing.T) {
+// TestConvertUsage pins how each provider's usage maps onto the
+// [ai.GenerationUsage] convention. The OpenAI, xAI, and DeepSeek reasoning
+// rows are usage those providers returned live. OpenAI and DeepSeek count reasoning inside completion_tokens, so passing
+// that through beside ThoughtsTokens counted reasoning twice; xAI counts it
+// beside completion_tokens, so subtracting it there would count it never.
+func TestConvertUsage(t *testing.T) {
 	for _, tc := range []struct {
-		name  string
-		usage string
-		want  int
+		name     string
+		usage    string
+		separate bool
+		want     ai.GenerationUsage
 	}{
 		{
-			name:  "openai prompt_tokens_details",
-			usage: `{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12,"prompt_tokens_details":{"cached_tokens":6}}`,
-			want:  6,
+			name:  "openai reasoning inside completion",
+			usage: `{"prompt_tokens":4806,"completion_tokens":76,"total_tokens":4882,"prompt_tokens_details":{"cached_tokens":0,"audio_tokens":0},"completion_tokens_details":{"reasoning_tokens":64,"audio_tokens":0,"accepted_prediction_tokens":0,"rejected_prediction_tokens":0}}`,
+			want:  ai.GenerationUsage{InputTokens: 4806, OutputTokens: 12, ThoughtsTokens: 64, TotalTokens: 4882},
 		},
 		{
-			name:  "deepseek prompt_cache_hit_tokens",
+			name:  "xai reasoning beside completion",
+			usage: `{"prompt_tokens":5294,"completion_tokens":3,"total_tokens":5508,"prompt_tokens_details":{"text_tokens":5294,"audio_tokens":0,"image_tokens":0,"cached_tokens":5248},"completion_tokens_details":{"reasoning_tokens":211,"audio_tokens":0,"accepted_prediction_tokens":0,"rejected_prediction_tokens":0},"num_sources_used":0}`,
+			want:  ai.GenerationUsage{InputTokens: 5294, OutputTokens: 3, ThoughtsTokens: 211, CachedContentTokens: 5248, TotalTokens: 5508},
+		},
+		{
+			// A stream's final chunk may leave total_tokens out, which takes
+			// away the total the undeclared case decides by.
+			name:     "xai declared, no total",
+			usage:    `{"prompt_tokens":5294,"completion_tokens":3,"prompt_tokens_details":{"cached_tokens":5248},"completion_tokens_details":{"reasoning_tokens":211}}`,
+			separate: true,
+			want:     ai.GenerationUsage{InputTokens: 5294, OutputTokens: 3, ThoughtsTokens: 211, CachedContentTokens: 5248, TotalTokens: 5508},
+		},
+		{
+			name:  "deepseek cache hit",
+			usage: `{"prompt_tokens":4826,"completion_tokens":71,"total_tokens":4897,"prompt_tokens_details":{"cached_tokens":4608},"completion_tokens_details":{"reasoning_tokens":67},"prompt_cache_hit_tokens":4608,"prompt_cache_miss_tokens":218}`,
+			want:  ai.GenerationUsage{InputTokens: 4826, OutputTokens: 4, ThoughtsTokens: 67, CachedContentTokens: 4608, TotalTokens: 4897},
+		},
+		{
+			name:  "deepseek cache hit without details",
 			usage: `{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12,"prompt_cache_hit_tokens":6,"prompt_cache_miss_tokens":4}`,
-			want:  6,
+			want:  ai.GenerationUsage{InputTokens: 10, OutputTokens: 2, CachedContentTokens: 6, TotalTokens: 12},
 		},
 		{
-			name:  "no cache hit reported",
-			usage: `{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12,"prompt_cache_hit_tokens":0,"prompt_cache_miss_tokens":10}`,
-			want:  0,
+			name:  "openrouter cache write",
+			usage: `{"prompt_tokens":194,"completion_tokens":2,"total_tokens":196,"prompt_tokens_details":{"cached_tokens":0,"cache_write_tokens":100,"audio_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}`,
+			want:  ai.GenerationUsage{InputTokens: 194, OutputTokens: 2, CacheWriteTokens: 100, TotalTokens: 196},
+		},
+		{
+			name:  "no total reported",
+			usage: `{"prompt_tokens":10,"completion_tokens":7,"completion_tokens_details":{"reasoning_tokens":5}}`,
+			want:  ai.GenerationUsage{InputTokens: 10, OutputTokens: 2, ThoughtsTokens: 5, TotalTokens: 17},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			var completion openai.ChatCompletion
-			if err := json.Unmarshal([]byte(`{
-				"id":"1","object":"chat.completion","created":1,"model":"test-model",
-				"choices":[{"index":0,"message":{"role":"assistant","content":"answer"},"finish_reason":"stop"}],
-				"usage":`+tc.usage+`
-			}`), &completion); err != nil {
+			var u openai.CompletionUsage
+			if err := json.Unmarshal([]byte(tc.usage), &u); err != nil {
 				t.Fatalf("json.Unmarshal() error = %v", err)
 			}
-
-			resp, err := convertChatCompletionToModelResponse(&completion)
-			if err != nil {
-				t.Fatalf("convertChatCompletionToModelResponse() error = %v", err)
-			}
-			if got := resp.Usage.CachedContentTokens; got != tc.want {
-				t.Errorf("CachedContentTokens = %d, want %d", got, tc.want)
-			}
-			if got := resp.Usage.InputTokens; got != 10 {
-				t.Errorf("InputTokens = %d, want 10", got)
+			got := convertUsage(u, tc.separate)
+			got.Custom = nil
+			if !reflect.DeepEqual(*got, tc.want) {
+				t.Errorf("convertUsage() = %+v, want %+v", *got, tc.want)
 			}
 		})
 	}
@@ -271,7 +286,7 @@ func TestConvertChatCompletionToModelResponseCitations(t *testing.T) {
 				t.Fatalf("json.Unmarshal() error = %v", err)
 			}
 
-			resp, err := convertChatCompletionToModelResponse(&completion)
+			resp, err := convertChatCompletionToModelResponse(&completion, false)
 			if err != nil {
 				t.Fatalf("convertChatCompletionToModelResponse() error = %v", err)
 			}
@@ -301,7 +316,7 @@ func TestConvertChatCompletionToModelResponseSearchUsage(t *testing.T) {
 		t.Fatalf("json.Unmarshal() error = %v", err)
 	}
 
-	resp, err := convertChatCompletionToModelResponse(&completion)
+	resp, err := convertChatCompletionToModelResponse(&completion, false)
 	if err != nil {
 		t.Fatalf("convertChatCompletionToModelResponse() error = %v", err)
 	}
@@ -340,7 +355,7 @@ func TestConvertChatCompletionToModelResponseCost(t *testing.T) {
 				t.Fatalf("json.Unmarshal() error = %v", err)
 			}
 
-			resp, err := convertChatCompletionToModelResponse(&completion)
+			resp, err := convertChatCompletionToModelResponse(&completion, false)
 			if err != nil {
 				t.Fatalf("convertChatCompletionToModelResponse() error = %v", err)
 			}
@@ -372,7 +387,7 @@ func TestConvertChatCompletionToModelResponseProviderFailure(t *testing.T) {
 		t.Fatalf("json.Unmarshal() error = %v", err)
 	}
 
-	resp, err := convertChatCompletionToModelResponse(&completion)
+	resp, err := convertChatCompletionToModelResponse(&completion, false)
 	if err != nil {
 		t.Fatalf("convertChatCompletionToModelResponse() error = %v", err)
 	}
@@ -418,7 +433,7 @@ func TestConvertChatCompletionToModelResponseErrorBesideStop(t *testing.T) {
 		t.Fatalf("json.Unmarshal() error = %v", err)
 	}
 
-	resp, err := convertChatCompletionToModelResponse(&completion)
+	resp, err := convertChatCompletionToModelResponse(&completion, false)
 	if err != nil {
 		t.Fatalf("convertChatCompletionToModelResponse() error = %v", err)
 	}
@@ -447,7 +462,7 @@ func TestConvertChatCompletionToModelResponseNoErrorObject(t *testing.T) {
 		t.Fatalf("json.Unmarshal() error = %v", err)
 	}
 
-	resp, err := convertChatCompletionToModelResponse(&completion)
+	resp, err := convertChatCompletionToModelResponse(&completion, false)
 	if err != nil {
 		t.Fatalf("convertChatCompletionToModelResponse() error = %v", err)
 	}
@@ -505,7 +520,7 @@ func TestGenerateStreamReportsUsage(t *testing.T) {
 		want  int
 	}{
 		{"InputTokens", resp.Usage.InputTokens, 10},
-		{"OutputTokens", resp.Usage.OutputTokens, 7},
+		{"OutputTokens", resp.Usage.OutputTokens, 2},
 		{"TotalTokens", resp.Usage.TotalTokens, 17},
 		{"ThoughtsTokens", resp.Usage.ThoughtsTokens, 5},
 		{"CachedContentTokens", resp.Usage.CachedContentTokens, 6},
@@ -618,23 +633,28 @@ func TestGenerateStreamReportsProviderFailure(t *testing.T) {
 // the error rather than the finish reason, and a truncated answer returned as a
 // success would reach neither.
 func TestGenerateStreamTopLevelFailureEndsStream(t *testing.T) {
-	// The code the gateway reports decides the status the failure carries. A
-	// code that maps to nothing stays unclassified rather than becoming
-	// Unknown, which the retry middleware would give up on.
+	// The code the gateway reports decides the status the failure carries,
+	// as an HTTP status or a status name in any case and dash style. A code
+	// that maps to nothing stays unclassified rather than becoming Unknown,
+	// which the retry middleware would give up on, and so does a provider's
+	// own numbering.
 	for name, tc := range map[string]struct {
-		code int
+		code string // the code's JSON value
 		want status.Name
 	}{
-		"rate limited upstream": {code: 429, want: status.ResourceExhausted},
-		"dead upstream":         {code: 502, want: status.Internal},
-		"unmapped code":         {code: 402, want: ""},
+		"rate limited upstream": {code: `429`, want: status.ResourceExhausted},
+		"dead upstream":         {code: `502`, want: status.Internal},
+		"unmapped code":         {code: `402`, want: ""},
+		"status name":           {code: `"resource-exhausted"`, want: status.ResourceExhausted},
+		"unknown name":          {code: `"model_overloaded"`, want: ""},
+		"provider numbering":    {code: `1302`, want: ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "text/event-stream")
 				for _, event := range []string{
 					`{"id":"1","object":"chat.completion.chunk","created":1,"model":"openai/gpt-5","choices":[{"index":0,"delta":{"role":"assistant","content":"partial out"},"finish_reason":null}]}`,
-					fmt.Sprintf(`{"id":"1","object":"chat.completion.chunk","created":1,"model":"openai/gpt-5","provider":"Together","error":{"code":%d,"message":"Provider disconnected","metadata":{"error_type":"provider_unavailable"}},"choices":[{"index":0,"delta":{"content":""},"finish_reason":"error","native_finish_reason":"provider_error"}]}`, tc.code),
+					fmt.Sprintf(`{"id":"1","object":"chat.completion.chunk","created":1,"model":"openai/gpt-5","provider":"Together","error":{"code":%s,"message":"Provider disconnected","metadata":{"error_type":"provider_unavailable"}},"choices":[{"index":0,"delta":{"content":""},"finish_reason":"error","native_finish_reason":"provider_error"}]}`, tc.code),
 				} {
 					_, _ = io.WriteString(w, "data: "+event+"\n\n")
 				}
@@ -1146,6 +1166,40 @@ func TestApplyResponseFormatHonorsDeclaredOutputs(t *testing.T) {
 	g.applyResponseFormat(schemaOutput)
 	if g.request.ResponseFormat.OfJSONSchema == nil {
 		t.Error("a schema keeps its json_schema form regardless of the declaration")
+	}
+
+	// OpenAI accepts only an object at the schema root, so an array or enum
+	// schema goes out only to a model that declares the format.
+	enumOutput := &ai.ModelOutputConfig{
+		Format:      "enum",
+		Constrained: true,
+		Schema:      map[string]any{"type": "string", "enum": []any{"red", "green"}},
+	}
+	g = NewModelGenerator(&client, "m").WithOutputFormats([]string{"text", "json"})
+	g.applyResponseFormat(enumOutput)
+	if g.request.ResponseFormat.OfJSONSchema != nil {
+		t.Error("enum not declared: no json_schema should be sent")
+	}
+	g = NewModelGenerator(&client, "m").WithOutputFormats([]string{"text", "json", "enum"})
+	g.applyResponseFormat(enumOutput)
+	if g.request.ResponseFormat.OfJSONSchema == nil {
+		t.Error("enum declared: its schema should be sent as json_schema")
+	}
+
+	// A model that constrains output only without tools answers in JSON at
+	// once under JSON mode and never calls the tools.
+	tools := []*ai.ToolDefinition{{Name: "t", InputSchema: map[string]any{"type": "object"}}}
+	g = NewModelGenerator(&client, "m").WithOutputFormats([]string{"text", "json"}).WithTools(tools)
+	g.constrained = ai.ConstrainedSupportNoTools
+	g.applyResponseFormat(jsonOutput)
+	if g.request.ResponseFormat.OfJSONObject != nil {
+		t.Error("no-tools model with tools: json_object should be dropped")
+	}
+	g = NewModelGenerator(&client, "m").WithOutputFormats([]string{"text", "json"}).WithTools(tools)
+	g.constrained = ai.ConstrainedSupportAll
+	g.applyResponseFormat(jsonOutput)
+	if g.request.ResponseFormat.OfJSONObject == nil {
+		t.Error("model constrained alongside tools: json_object should be sent")
 	}
 
 	g = NewModelGenerator(&client, "m")

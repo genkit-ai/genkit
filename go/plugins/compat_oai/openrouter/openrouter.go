@@ -32,10 +32,13 @@ package openrouter
 
 import (
 	"context"
+	"net/http"
 	"os"
+	"strings"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/plugins/compat_oai"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
@@ -563,6 +566,7 @@ func (o *OpenRouter) Init(ctx context.Context) []api.Action {
 	opts = append(opts, o.Opts...)
 
 	o.openAICompatible.Provider = provider
+	o.openAICompatible.ClassifyError = classifyError
 	o.openAICompatible.Opts = opts
 	return o.openAICompatible.Init(ctx)
 }
@@ -604,4 +608,14 @@ func (o *OpenRouter) ListActions(ctx context.Context) []api.ActionDesc {
 // serves resolves, whether or not this plugin has heard of it.
 func (o *OpenRouter) ResolveAction(atype api.ActionType, id string) api.Action {
 	return compat_oai.ResolveChatAction[ChatConfig](&o.openAICompatible, atype, id, o.modelOptions)
+}
+
+// classifyError reads an OpenRouter error. OpenRouter answers an unknown
+// model with 400 and repeats the HTTP status as its code; only its message
+// names the cause.
+func classifyError(err *openai.Error) status.Name {
+	if err.StatusCode == http.StatusBadRequest && strings.HasSuffix(err.Message, " is not a valid model ID") {
+		return status.NotFound
+	}
+	return ""
 }

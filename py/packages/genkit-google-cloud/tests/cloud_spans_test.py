@@ -24,10 +24,8 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
-from genkit_google_cloud._telemetry._tracing import (
-    _reset_google_cloud_telemetry,
-    enable_google_cloud_telemetry,
-)
+from genkit_google_cloud import enable_google_cloud_telemetry
+from genkit_google_cloud._telemetry._tracing import _reset_google_cloud_telemetry
 from genkit_otel import GenAiInstrumentation
 from opentelemetry import _logs, context as otel_context, trace as trace_api
 from opentelemetry.sdk.trace import TracerProvider

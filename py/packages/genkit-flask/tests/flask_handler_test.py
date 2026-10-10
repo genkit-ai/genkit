@@ -17,7 +17,7 @@
 """Tests for Flask handler decorator validation."""
 
 import pytest
-from genkit_flask._handler import genkit_flask_handler
+from genkit_flask import genkit_flask_handler
 
 from genkit._core._error import GenkitError
 

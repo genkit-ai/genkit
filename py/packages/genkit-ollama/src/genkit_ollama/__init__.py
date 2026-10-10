@@ -49,12 +49,11 @@ See Also:
 
 from genkit_ollama._errors import OllamaConnectionError
 from genkit_ollama._models import OllamaConfig
-from genkit_ollama._plugin import Ollama, RequestHeaderParams, ollama_name
+from genkit_ollama._plugin import Ollama, RequestHeaderParams
 
 __all__ = [
     'Ollama',
     'OllamaConfig',
     'OllamaConnectionError',
     'RequestHeaderParams',
-    'ollama_name',
 ]

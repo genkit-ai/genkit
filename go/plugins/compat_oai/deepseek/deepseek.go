@@ -17,10 +17,13 @@ package deepseek
 
 import (
 	"context"
+	"net/http"
 	"os"
+	"strings"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/plugins/compat_oai"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
@@ -234,6 +237,7 @@ func (d *DeepSeek) Init(ctx context.Context) []api.Action {
 	opts = append(opts, d.Opts...)
 
 	d.openAICompatible.Provider = provider
+	d.openAICompatible.ClassifyError = classifyError
 	d.openAICompatible.Opts = opts
 	actions := d.openAICompatible.Init(ctx)
 
@@ -282,4 +286,14 @@ func (d *DeepSeek) ListActions(ctx context.Context) []api.ActionDesc {
 // described by the plugin's config schema and capabilities.
 func (d *DeepSeek) ResolveAction(atype api.ActionType, id string) api.Action {
 	return compat_oai.ResolveChatAction[ChatConfig](&d.openAICompatible, atype, id, d.modelOptions)
+}
+
+// classifyError reads a DeepSeek error. DeepSeek answers an unknown model
+// with 400 and a generic invalid_request_error code; only its message, which
+// lists the models it serves, names the cause.
+func classifyError(err *openai.Error) status.Name {
+	if err.StatusCode == http.StatusBadRequest && strings.HasPrefix(err.Message, "The supported API model names are ") {
+		return status.NotFound
+	}
+	return ""
 }
