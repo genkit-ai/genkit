@@ -64,7 +64,9 @@ func main() {
 	for _, a := range genkit.ListFlows(g) {
 		mux.HandleFunc("POST /"+a.Name(), genkit.Handler(a))
 	}
-	log.Fatal(server.Start(ctx, "127.0.0.1:3400", mux))
+	if err := server.Start(ctx, "127.0.0.1:3400", mux); err != nil {
+		log.Fatal(err)
+	}
 }
 
 func echo(ctx context.Context, req *ai.ModelRequest, cb func(context.Context, *ai.ModelResponseChunk) error) (*ai.ModelResponse, error) {

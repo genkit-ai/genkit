@@ -97,7 +97,9 @@ func main() {
 	for _, a := range genkit.ListFlows(g) {
 		mux.HandleFunc("POST /"+a.Name(), genkit.Handler(a))
 	}
-	log.Fatal(server.Start(ctx, "127.0.0.1:8080", mux))
+	if err := server.Start(ctx, "127.0.0.1:8080", mux); err != nil {
+		log.Fatal(err)
+	}
 }
 
 // DefineExploreFlow is read-only. AllowWriteAccess is unset, so write_file and

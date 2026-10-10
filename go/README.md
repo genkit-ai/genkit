@@ -373,7 +373,9 @@ for _, r := range genkitx.AllAgentRoutes(g) {
 // POST /agents/chat/getSnapshot       read a snapshot
 // POST /agents/chat/waitForSnapshot   wait for a snapshot to settle
 // POST /agents/chat/abort             abort background work
-log.Fatal(server.Start(ctx, "127.0.0.1:8080", mux))
+if err := server.Start(ctx, "127.0.0.1:8080", mux); err != nil {
+    log.Fatal(err)
+}
 ```
 
 [Docs](https://genkit.dev/docs/go/agents/http/) &middot; [Example](samples/basic-agents-server/main.go)
