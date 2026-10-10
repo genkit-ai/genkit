@@ -138,6 +138,22 @@ def ollama_model_info(model_ref: _ResolvedModel, label: str) -> dict[str, object
 _HeaderSource = Callable[[], dict[str, str] | None | Awaitable[dict[str, str] | None]]
 
 
+def _require_no_arg_callable(source: _HeaderSource) -> None:
+    # A one-argument callable from the RequestHeaderParams era would otherwise
+    # fail inside the httpx auth hook on the first request, where the TypeError
+    # surfaces as a bare INTERNAL error.
+    try:
+        signature = inspect.signature(source)
+    except (TypeError, ValueError):  # Builtins and C callables have no signature to check.
+        return
+    try:
+        signature.bind()
+    except TypeError:
+        raise TypeError(
+            'request_headers callables take no arguments; change `def headers(params)` to `def headers()`.'
+        ) from None
+
+
 class _CallableHeaders(httpx.Auth):
     """Runs a ``request_headers`` callable before every HTTP request.
 
@@ -199,6 +215,7 @@ class Ollama(Plugin):
         if isinstance(request_headers, dict):
             self.request_headers = dict(request_headers)
         elif request_headers is not None:
+            _require_no_arg_callable(request_headers)
             self._auth = _CallableHeaders(request_headers)
         self.timeout = timeout
         self.client = loop_local_client(self._make_client)

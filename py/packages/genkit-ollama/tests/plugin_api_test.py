@@ -325,6 +325,29 @@ async def test_static_headers_are_sent_without_an_auth_hook() -> None:
     assert 'auth' not in factory.call_args.kwargs
 
 
+def test_a_header_callable_with_a_required_argument_fails_at_construction() -> None:
+    """A leftover ``def headers(params)`` fails at startup with the fix, not as INTERNAL on the first request."""
+
+    def old_style(params: object) -> dict[str, str]:
+        return {}
+
+    with pytest.raises(TypeError, match=r'change `def headers\(params\)` to `def headers\(\)`'):
+        Ollama(request_headers=cast(Any, old_style))
+
+
+def test_a_header_callable_with_only_optional_arguments_is_accepted() -> None:
+    """Defaults and *args still allow a zero-argument call."""
+
+    def with_default(scope: str = 'ollama') -> dict[str, str]:
+        return {}
+
+    def variadic(*args: object) -> dict[str, str]:
+        return {}
+
+    Ollama(request_headers=with_default)
+    Ollama(request_headers=variadic)
+
+
 @pytest.mark.asyncio
 async def test_the_client_is_cached_per_event_loop() -> None:
     """Repeated calls on one loop reuse the same client and its connection pool."""
