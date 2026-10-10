@@ -217,11 +217,14 @@ func newDrivenWatcher(read func(context.Context, []watchKey) (map[watchKey]aix.S
 
 // fakeRows serves a driven watcher's reads from a map of row statuses, or
 // fails them with err. A read whose context carries a gate reports what it
-// found when it started, once the gate opens.
+// found when it started, once the gate opens. It records the most reads that
+// ran at once.
 type fakeRows struct {
-	mu   sync.Mutex
-	rows map[watchKey]aix.SnapshotStatus
-	err  error
+	mu      sync.Mutex
+	rows    map[watchKey]aix.SnapshotStatus
+	err     error
+	running int
+	most    int
 }
 
 func (f *fakeRows) set(k watchKey, st aix.SnapshotStatus) {
@@ -238,6 +241,8 @@ func (f *fakeRows) fail(err error) {
 
 func (f *fakeRows) read(ctx context.Context, keys []watchKey) (map[watchKey]aix.SnapshotStatus, error) {
 	f.mu.Lock()
+	f.running++
+	f.most = max(f.most, f.running)
 	found, err := make(map[watchKey]aix.SnapshotStatus), f.err
 	for _, k := range keys {
 		if st, ok := f.rows[k]; ok {
@@ -245,6 +250,11 @@ func (f *fakeRows) read(ctx context.Context, keys []watchKey) (map[watchKey]aix.
 		}
 	}
 	f.mu.Unlock()
+	defer func() {
+		f.mu.Lock()
+		f.running--
+		f.mu.Unlock()
+	}()
 	if g, ok := ctx.Value(gateKey{}).(*gate); ok {
 		close(g.started)
 		<-g.release
@@ -282,38 +292,22 @@ func newGate() *gate { return &gate{started: make(chan struct{}), release: make(
 // on returns ctx carrying g, for the read made with it.
 func (g *gate) on(ctx context.Context) context.Context { return context.WithValue(ctx, gateKey{}, g) }
 
-// TestWatcherOrdersReadsByStart checks that a read's result never replaces a
-// status from a read that started later. Here a subscription's first read sees
-// the row before a change that sent no notification (as while the LISTEN
-// connection is down), and lands after a poll that saw the change started.
-func TestWatcherOrdersReadsByStart(t *testing.T) {
-	ctx := t.Context()
-	key := watchKey{prefix: "p", id: "row"}
-	rows := &fakeRows{rows: map[watchKey]aix.SnapshotStatus{key: aix.SnapshotStatusPending}}
-	w := newDrivenWatcher(rows.read)
-	first := w.subscribe(ctx, key)
-	<-first
-
-	slow := newGate()
-	subscribed := make(chan (<-chan aix.SnapshotStatus))
-	go func() { subscribed <- w.subscribe(slow.on(ctx), key) }()
-	<-slow.started
-	rows.set(key, aix.SnapshotStatusAborting)
-	releasePoll := holdPoll(ctx, w)
-	close(slow.release)
-	second := <-subscribed
-	releasePoll()
-
-	for name, ch := range map[string]<-chan aix.SnapshotStatus{"first": first, "second": second} {
-		select {
-		case st := <-ch:
-			if st != aix.SnapshotStatusAborting {
-				t.Errorf("the %s subscription holds %q, want aborting", name, st)
-			}
-		default:
-			t.Errorf("the %s subscription holds no status, want aborting", name)
-		}
-	}
+// subscribeDuring subscribes to key in the background while a read holds w,
+// and returns once the subscription is registered. The returned channel yields
+// the subscription's channel once subscribe returns.
+func subscribeDuring(t *testing.T, ctx context.Context, w *watcher, key watchKey) <-chan (<-chan aix.SnapshotStatus) {
+	t.Helper()
+	w.mu.Lock()
+	before := len(w.watches[key])
+	w.mu.Unlock()
+	subscribed := make(chan (<-chan aix.SnapshotStatus), 1)
+	go func() { subscribed <- w.subscribe(ctx, key) }()
+	eventually(t, "the subscription registers", func() bool {
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		return len(w.watches[key]) > before
+	})
+	return subscribed
 }
 
 // isClosed reports whether ch is closed, without waiting, and fails t if ch
@@ -331,6 +325,50 @@ func isClosed(t *testing.T, ch <-chan aix.SnapshotStatus) bool {
 	}
 }
 
+// TestWatcherNeverGoesBackToAnOlderStatus checks that a notification that
+// arrives after a newer read, such as an abort's that waited unread on the
+// connection while a read saw the run finish, does not bring back the older
+// status: the watcher re-reads the row instead of trusting the notification.
+func TestWatcherNeverGoesBackToAnOlderStatus(t *testing.T) {
+	ctx := t.Context()
+	key := watchKey{prefix: "p", id: "row"}
+	rows := &fakeRows{rows: map[watchKey]aix.SnapshotStatus{key: aix.SnapshotStatusAborted}}
+	w := newDrivenWatcher(rows.read)
+	ch := w.subscribe(ctx, key)
+	<-ch
+
+	w.notified(ctx, &pgconn.Notification{Payload: `{"p":"p","id":"row","s":"aborting"}`})
+	select {
+	case st := <-ch:
+		t.Errorf("the subscription got %q after aborted, want no change", st)
+	default:
+	}
+}
+
+// TestWatcherRunsOneReadAtATime checks that reads never overlap, whatever
+// starts them, so each read sees the rows at least as new as the one before.
+func TestWatcherRunsOneReadAtATime(t *testing.T) {
+	ctx := t.Context()
+	rows := &fakeRows{rows: map[watchKey]aix.SnapshotStatus{}}
+	w := newDrivenWatcher(func(ctx context.Context, keys []watchKey) (map[watchKey]aix.SnapshotStatus, error) {
+		found, err := rows.read(ctx, keys)
+		time.Sleep(time.Millisecond) // widen the window for an overlap
+		return found, err
+	})
+	var wg sync.WaitGroup
+	for i := range 4 {
+		key := watchKey{prefix: "p", id: fmt.Sprintf("row-%d", i)}
+		rows.set(key, aix.SnapshotStatusPending)
+		wg.Go(func() { w.subscribe(ctx, key) })
+		wg.Go(func() { w.pollAll(ctx) })
+		wg.Go(func() { w.notified(ctx, &pgconn.Notification{Payload: fmt.Sprintf(`{"p":"p","id":%q}`, key.id)}) })
+	}
+	wg.Wait()
+	if rows.most != 1 {
+		t.Errorf("%d reads ran at once, want 1", rows.most)
+	}
+}
+
 // TestWatcherClosesASubscriptionToAMissingRow checks that a subscription to a
 // row that does not exist closes even when its first read fails: the first
 // read that works closes it, if that read started after the subscription.
@@ -345,12 +383,13 @@ func TestWatcherClosesASubscriptionToAMissingRow(t *testing.T) {
 	early := w.subscribe(ctx, key)
 	rows.fail(nil)
 	// A poll starts while the row is missing. Then the row is created, and a
-	// second subscription's first read fails.
+	// second subscription starts, whose first read fails.
 	releasePoll := holdPoll(ctx, w)
 	rows.set(key, aix.SnapshotStatusPending)
 	rows.fail(refused)
-	late := w.subscribe(ctx, key)
+	subscribed := subscribeDuring(t, ctx, w, key)
 	releasePoll()
+	late := <-subscribed
 
 	if !isClosed(t, early) {
 		t.Error("the subscription made while the row was missing is open after a read found no row")
@@ -373,8 +412,9 @@ func TestWatcherSkipsReadsOlderThanASubscription(t *testing.T) {
 	releasePoll := holdPoll(ctx, w)
 	rows.set(key, aix.SnapshotStatusAborting)
 	rows.fail(errors.New("connection refused"))
-	late := w.subscribe(ctx, key)
+	subscribed := subscribeDuring(t, ctx, w, key)
 	releasePoll()
+	late := <-subscribed
 
 	select {
 	case st := <-late:
