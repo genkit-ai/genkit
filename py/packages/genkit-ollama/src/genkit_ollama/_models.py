@@ -25,7 +25,6 @@ See:
 Key Features
 ------------
 - Chat completions using the ``/api/chat`` endpoint
-- Text generation using the ``/api/generate`` endpoint
 - Tool/function calling support
 - Streaming responses
 - Multimodal inputs (images for vision models like ``llava``)
@@ -86,12 +85,13 @@ import json
 import mimetypes
 import re
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any, Literal, cast
 
 import httpx
 import ollama as ollama_api
 import structlog
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import ConfigDict, ValidationError
 from pydantic.alias_generators import to_camel, to_snake
 
 from genkit import ActionRunContext, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
@@ -161,19 +161,17 @@ class OllamaConfig(ModelConfig):
     num_predict: int | None = None
 
 
-class OllamaSupports(BaseModel):
-    """Supports for Ollama models."""
+@dataclass(frozen=True)
+class _ResolvedModel:
+    """A model's capabilities from ``/api/show``.
 
-    tools: bool = True
-    media: bool = False
-
-
-class ModelDefinition(BaseModel):
-    """Meta definition for Ollama models."""
+    The defaults (tools and media on) are what JS and Go advertise when the
+    probe fails.
+    """
 
     name: str
-    api_type: Literal['chat', 'generate'] = 'chat'
-    supports: OllamaSupports = OllamaSupports()
+    tools: bool = True
+    media: bool = True
 
 
 class OllamaModel:
@@ -186,7 +184,7 @@ class OllamaModel:
     def __init__(
         self,
         client: Callable,
-        model_definition: ModelDefinition,
+        model_definition: _ResolvedModel,
         server_address: str = DEFAULT_OLLAMA_SERVER_URL,
     ) -> None:
         """Initializes the OllamaModel.
@@ -200,8 +198,7 @@ class OllamaModel:
 
         Args:
             client: A callable that returns an asynchronous Ollama client instance.
-            model_definition: The definition describing the specific Ollama model
-                to be used (e.g., its name, API type, supported features).
+            model_definition: The model's name and probed capabilities.
             server_address: The Ollama server URL, surfaced in connectivity errors.
         """
         self._client_factory = client
@@ -242,7 +239,6 @@ class OllamaModel:
         logger.debug(
             'Ollama generate request',
             model=self.model_definition.name,
-            api_type=str(self.model_definition.api_type),
             streaming=self.is_streaming_request(ctx=ctx),
         )
 
@@ -260,8 +256,6 @@ class OllamaModel:
             # are raised as INVALID_ARGUMENT while the request is built.
             raise GenkitError(status='INTERNAL', message=str(e), cause=e) from e
         except ValueError as e:
-            if str(e).startswith('Unresolved API type:'):
-                raise GenkitError(status='INTERNAL', message=str(e), cause=e) from e
             raise GenkitError(status='INVALID_ARGUMENT', message=str(e), cause=e) from e
 
     async def _generate_classified(
@@ -272,32 +266,17 @@ class OllamaModel:
         client: ollama_api.AsyncClient | None,
         content: list[Part],
     ) -> ModelResponse:
-        if self.model_definition.api_type == 'chat':
-            api_response = await self._chat_with_ollama(request=request, ctx=ctx, client=client)
-            if api_response:
-                logger.debug(
-                    'Ollama raw API response',
-                    model=self.model_definition.name,
-                    content=str(api_response.message.content)[:500] if api_response.message else None,
-                )
-                content = self._build_multimodal_chat_response(
-                    chat_response=api_response,
-                    thinking_enabled=self._thinking_requested(request.config),
-                )
-        elif self.model_definition.api_type == 'generate':
-            api_response = await self._generate_ollama_response(request=request, ctx=ctx, client=client)
-            if api_response:
-                logger.debug(
-                    'Ollama raw API response',
-                    model=self.model_definition.name,
-                    response=str(api_response.response)[:500],
-                )
-                content = self._build_generate_response(
-                    generate_response=api_response,
-                    thinking_enabled=self._thinking_requested(request.config),
-                )
-        else:
-            raise ValueError(f'Unresolved API type: {self.model_definition.api_type}')
+        api_response = await self._chat_with_ollama(request=request, ctx=ctx, client=client)
+        if api_response:
+            logger.debug(
+                'Ollama raw API response',
+                model=self.model_definition.name,
+                content=str(api_response.message.content)[:500] if api_response.message else None,
+            )
+            content = self._build_multimodal_chat_response(
+                chat_response=api_response,
+                thinking_enabled=self._thinking_requested(request.config),
+            )
 
         if not api_response and self.is_streaming_request(ctx=ctx):
             content = []
@@ -437,80 +416,6 @@ class OllamaModel:
                 )
             return chat_response
 
-    async def _generate_ollama_response(
-        self,
-        request: ModelRequest,
-        ctx: ActionRunContext | None = None,
-        client: ollama_api.AsyncClient | None = None,
-    ) -> ollama_api.GenerateResponse | None:
-        """Generate a response from Ollama.
-
-        Args:
-            request: The request to generate a response for.
-            ctx: The context to generate a response for.
-            client: An optional pre-resolved Ollama client; falls back to the
-                stored client factory when omitted.
-
-        Returns:
-            The generated response from Ollama. For streaming requests,
-            returns the last streamed chunk with ``response`` and ``thinking``
-            replaced by the values accumulated across all chunks; other fields
-            reflect the final chunk. Returns ``None`` if the stream yielded
-            no chunks.
-        """
-        prompt = self.build_prompt(request)
-        if client is None:
-            client = self._get_client()
-        streaming_request = self.is_streaming_request(ctx=ctx)
-        options = self.build_request_options(config=request.config)
-        extra_kwargs = self.build_request_kwargs(config=request.config)
-
-        # Wrap only the Ollama SDK call (and its streamed iteration) so transport
-        # errors are attributed to the Ollama server, matching the chat path.
-        if streaming_request:
-            async with wrap_connection_errors(self._server_address):
-                # Streaming call with literal stream=True for proper overload resolution
-                generate_response = await client.generate(
-                    model=self.model_definition.name,
-                    prompt=prompt,
-                    options=options,
-                    stream=True,
-                    **extra_kwargs,
-                )
-                idx = 0
-                accumulated_text = ''
-                accumulated_thinking = ''
-                last_chunk: ollama_api.GenerateResponse | None = None
-                async for chunk in generate_response:
-                    idx += 1
-                    last_chunk = chunk
-                    accumulated_text += chunk.response or ''
-                    accumulated_thinking += chunk.thinking or ''
-                    if ctx:
-                        ctx.send_chunk(
-                            chunk=ModelResponseChunk(
-                                role=Role.MODEL,
-                                index=idx,
-                                content=self._build_generate_response(generate_response=chunk),
-                            )
-                        )
-            if last_chunk is not None:
-                last_chunk.response = accumulated_text
-                last_chunk.thinking = accumulated_thinking or None
-                return last_chunk
-            return None
-        else:
-            async with wrap_connection_errors(self._server_address):
-                # Non-streaming call with literal stream=False for proper overload resolution
-                generate_response = await client.generate(
-                    model=self.model_definition.name,
-                    prompt=prompt,
-                    options=options,
-                    stream=False,
-                    **extra_kwargs,
-                )
-            return generate_response
-
     @staticmethod
     def _build_multimodal_chat_response(
         chat_response: ollama_api.ChatResponse,
@@ -569,46 +474,10 @@ class OllamaModel:
         return content
 
     @staticmethod
-    def _build_generate_response(
-        generate_response: ollama_api.GenerateResponse,
-        thinking_enabled: bool = False,
-    ) -> list[Part]:
-        """Build the response parts for a ``generate`` endpoint response.
-
-        Mirrors :meth:`_build_multimodal_chat_response` for the ``generate`` API,
-        which returns plain text (no media/tool calls): ``think`` reasoning is
-        surfaced as a leading ReasoningPart so the Dev UI renders it separately
-        from the answer text.
-
-        Args:
-            generate_response: A complete generate response or a streamed chunk.
-            thinking_enabled: Whether the request explicitly enabled thinking. When
-                the model returns no dedicated ``thinking`` field, this allows the
-                ``<think>``/``<thinking>`` content fallback to run (matching the Go
-                plugin). It is only applied to complete (non-streaming) responses,
-                never to partial streamed chunks where a tag may be split.
-
-        Returns:
-            The reasoning/text parts for the response.
-        """
-        content: list[Part] = []
-        text = generate_response.response or ''
-        thinking = getattr(generate_response, 'thinking', None)
-        if thinking:
-            content.append(Part.from_reasoning(thinking))
-        elif thinking_enabled and text:
-            reasoning, text = _parse_thinking(text)
-            if reasoning:
-                content.append(Part.from_reasoning(reasoning))
-        if text:
-            content.append(Part.from_text(text))
-        return content
-
-    @staticmethod
     def build_request_options(
         config: ModelConfig | ollama_api.Options | dict[str, object] | None,
     ) -> dict[str, Any]:
-        """Build the sampler ``options`` mapping for the chat/generate APIs.
+        """Build the sampler ``options`` mapping for the chat API.
 
         Accepts an :class:`OllamaConfig`/:class:`ModelConfig` instance, a raw
         ``Options``, or a plain dict (e.g. a config already dumped to JSON by
@@ -686,10 +555,10 @@ class OllamaModel:
     def build_request_kwargs(
         config: ModelConfig | ollama_api.Options | dict[str, object] | None,
     ) -> dict[str, Any]:
-        """Extract top-level chat/generate kwargs from the config.
+        """Extract top-level chat kwargs from the config.
 
         ``think`` and ``keep_alive`` are top-level parameters of the Ollama
-        ``chat``/``generate`` calls — not sampler ``options``. The framework
+        ``chat`` call — not sampler ``options``. The framework
         dumps a ``BaseModel`` config to a dict before the model fn sees it, so
         this reads them from any :class:`ModelConfig` instance *or* a dumped
         dict. Both paths snake-case the keys (declared fields can arrive
@@ -742,25 +611,6 @@ class OllamaModel:
         if isinstance(think, str):
             return think != ''
         return False
-
-    @staticmethod
-    def build_prompt(request: ModelRequest) -> str:
-        """Build the prompt for the generate API.
-
-        Args:
-            request: The request to build the prompt for.
-
-        Returns:
-            The prompt for the generate API.
-        """
-        prompt = ''
-        for message in request.messages:
-            for text_part in message.content:
-                if text_part.text is not None:
-                    prompt += text_part.text
-                else:
-                    logger.error('Non-text messages are not supported')
-        return prompt
 
     @classmethod
     async def build_chat_messages(cls, request: ModelRequest) -> list[ollama_api.Message]:
@@ -905,7 +755,7 @@ class OllamaModel:
     @staticmethod
     def get_usage_info(
         basic_generation_usage: ModelUsage,
-        api_response: ollama_api.GenerateResponse | ollama_api.ChatResponse | None,
+        api_response: ollama_api.ChatResponse | None,
     ) -> ModelUsage:
         """Extracts and calculates token usage information from an Ollama API response.
 

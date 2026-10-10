@@ -16,12 +16,14 @@
 
 """Ollama Plugin for Genkit."""
 
+import asyncio
 import inspect
-from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
-from dataclasses import dataclass
+import time
+from collections.abc import AsyncGenerator, Awaitable, Callable
+from dataclasses import dataclass, replace
 from typing import Any, cast
 
+import httpx
 import ollama as ollama_api
 import structlog
 
@@ -45,27 +47,50 @@ from genkit.plugin_api import (
     wrap_http_error,
 )
 from genkit_ollama._constants import DEFAULT_OLLAMA_SERVER_URL
-from genkit_ollama._embedders import (
-    EmbeddingDefinition,
-    OllamaEmbedder,
-)
+from genkit_ollama._embedders import OllamaEmbedder
 from genkit_ollama._errors import wrap_connection_errors
 from genkit_ollama._models import (
-    ModelDefinition,
     OllamaConfig,
     OllamaModel,
-    OllamaSupports,
+    _ResolvedModel,
 )
 
 OLLAMA_PLUGIN_NAME = 'ollama'
 logger = structlog.get_logger(__name__)
 
-# Models that are dynamically discovered (``list_actions``) or resolved on
-# demand can't be capability-probed, so we advertise the full generic
-# capability set. This mirrors the JS plugin's ``GENERIC_MODEL_INFO`` and the
-# Go plugin's ``defaultOllamaSupports``, which both enable every capability for
-# models that weren't explicitly pre-configured.
-_DYNAMIC_MODEL_SUPPORTS = OllamaSupports(tools=True, media=True)
+# Capability probing (POST /api/show), bounded the way the Go plugin bounds it:
+# a probe never waits longer than this, or the plugin timeout if that is
+# shorter; listing runs at most this many probes at once; and a failed probe
+# is remembered only briefly, so a server that comes up later gets asked again.
+_PROBE_TIMEOUT_SECONDS = 5.0
+_MAX_CONCURRENT_PROBES = 4
+_PROBE_FAILURE_TTL_SECONDS = 30.0
+
+
+@dataclass(frozen=True)
+class _ProbeResult:
+    definition: _ResolvedModel
+    digest: str
+    expires_at: float | None
+    """Monotonic deadline for a failed probe; None keeps a success for good."""
+
+
+def _cache_key(name: str) -> str:
+    # ``llama3.2`` and ``llama3.2:latest`` are the same model on the server.
+    return name.removesuffix(':latest')
+
+
+def _resolved_from_show(name: str, show: object) -> _ResolvedModel | None:
+    """Reads an ``/api/show`` answer into a model definition.
+
+    Returns None when the answer carries no ``capabilities`` list, which is
+    what an Ollama server older than the field sends.
+    """
+    capabilities = getattr(show, 'capabilities', None)
+    if not isinstance(capabilities, list):
+        return None
+    caps = {c for c in cast(list[object], capabilities) if isinstance(c, str)}
+    return _ResolvedModel(name=name, tools='tools' in caps, media='vision' in caps)
 
 
 def ollama_name(name: str) -> str:
@@ -80,29 +105,26 @@ def ollama_name(name: str) -> str:
     return f'{OLLAMA_PLUGIN_NAME}/{name}'
 
 
-def ollama_model_info(model_ref: ModelDefinition, label: str) -> dict[str, object]:
+def ollama_model_info(model_ref: _ResolvedModel, label: str) -> dict[str, object]:
     """Build Dev UI capability metadata for an Ollama model.
 
-    Capabilities are gated on the model's API type so the Dev UI advertises
-    only what the endpoint actually supports: the ``chat`` endpoint is
-    multiturn and can use tools/media, whereas the ``generate`` endpoint is
-    single-turn text-in/text-out.
+    Every model goes through ``/api/chat``, as in Go; the probe only decides
+    whether tools and media are advertised.
 
     Args:
-        model_ref: The model definition describing its API type and supports.
+        model_ref: The resolved model and its capabilities.
         label: The human-readable label to show in the Dev UI.
 
     Returns:
         The serialized :class:`ModelInfo` metadata (camelCase aliases, no
         ``None`` values) ready to embed under ``metadata['model']``.
     """
-    is_chat = model_ref.api_type == 'chat'
     return ModelInfo(
         label=label,
         supports=Supports(
-            multiturn=is_chat,
-            media=is_chat and model_ref.supports.media,
-            tools=is_chat and model_ref.supports.tools,
+            multiturn=True,
+            media=model_ref.media,
+            tools=model_ref.tools,
             system_role=True,
             # Deliberate JS/Go deviation. we match other Python plugins for Dev UI consistency.
             output=['text', 'json'],
@@ -111,31 +133,45 @@ def ollama_model_info(model_ref: ModelDefinition, label: str) -> dict[str, objec
     ).model_dump(by_alias=True, exclude_none=True)
 
 
-@dataclass(frozen=True)
-class RequestHeaderParams:
-    """Context passed to a ``request_headers`` callable.
+# A request_headers callable takes no arguments and returns the headers to
+# merge (or None), optionally as an awaitable.
+_HeaderSource = Callable[[], dict[str, str] | None | Awaitable[dict[str, str] | None]]
 
-    Mirrors the JS plugin's ``RequestHeaderFunction`` params so a callback can
-    tailor headers to the server, the model, or the specific request — e.g. a
-    freshly minted, per-request auth token. ``model_request`` is set for model
-    actions and ``embed_request`` for embedder actions; both are ``None`` for the
-    ``list_actions`` discovery call.
+
+def _require_no_arg_callable(source: _HeaderSource) -> None:
+    # A one-argument callable from the RequestHeaderParams era would otherwise
+    # fail inside the httpx auth hook on the first request, where the TypeError
+    # surfaces as a bare INTERNAL error.
+    try:
+        signature = inspect.signature(source)
+    except (TypeError, ValueError):  # Builtins and C callables have no signature to check.
+        return
+    try:
+        signature.bind()
+    except TypeError:
+        raise TypeError(
+            'request_headers callables take no arguments; change `def headers(params)` to `def headers()`.'
+        ) from None
+
+
+class _CallableHeaders(httpx.Auth):
+    """Runs a ``request_headers`` callable before every HTTP request.
+
+    The Ollama SDK fixes headers when its client is built. Hooking httpx auth
+    instead keeps one pooled client per event loop and still lets an expiring
+    token refresh on every call.
     """
 
-    server_address: str
-    model: ModelDefinition | EmbeddingDefinition | None = None
-    model_request: ModelRequest | None = None
-    embed_request: EmbedRequest | None = None
+    def __init__(self, source: _HeaderSource) -> None:
+        self._source = source
 
-
-# A request_headers callable receives the per-request context and returns the
-# headers to merge (or ``None`` for no extra headers), optionally as an awaitable.
-RequestHeaderFunction = Callable[
-    [RequestHeaderParams],
-    dict[str, str] | None | Awaitable[dict[str, str] | None],
-]
-# request_headers may be a static dict or a (sync/async) callable.
-RequestHeaders = dict[str, str] | RequestHeaderFunction
+    async def async_auth_flow(self, request: httpx.Request) -> AsyncGenerator[httpx.Request, httpx.Response]:
+        result = self._source()
+        if inspect.isawaitable(result):
+            result = await result
+        if result:
+            request.headers.update(result)
+        yield request
 
 
 class Ollama(Plugin):
@@ -149,142 +185,76 @@ class Ollama(Plugin):
 
     def __init__(
         self,
-        models: list[ModelDefinition] | None = None,
-        embedders: list[EmbeddingDefinition] | None = None,
         server_address: str | None = None,
-        request_headers: RequestHeaders | None = None,
+        request_headers: dict[str, str] | _HeaderSource | None = None,
         timeout: float | None = None,
     ) -> None:
         """Initialize the Ollama plugin.
 
+        Models and embedders are not configured here. The Dev UI lists what the
+        server has pulled (``/api/tags``), any ``ollama/<name>`` resolves on
+        demand, and each model's tools and vision support come from one
+        ``/api/show`` probe.
+
         Args:
-            models: An Optional list of model definitions to be registered with Genkit.
-            embedders: An Optional list of embedding model definitions to be
-                registered with Genkit.
             server_address: The URL of the Ollama server. Defaults to a predefined
                 Ollama server URL if not provided.
-            request_headers: Optional HTTP headers to include with requests to the
-                Ollama server. May be a static dict, or a sync/async callable that
-                takes a :class:`RequestHeaderParams` (server address plus model/request
-                context) and returns a dict (or ``None``). A callable is resolved per
-                request — matching the JS plugin — so expiring auth tokens and
-                request-specific headers take effect; a static dict is applied once to a
-                cached client.
+            request_headers: Extra HTTP headers for every request to the Ollama
+                server, typically auth for a proxy in front of it. A dict is
+                sent as-is. A callable (sync or async, no arguments) runs before
+                every request, so an expiring token can be refreshed; it should
+                cache the token itself.
             timeout: Optional request timeout (seconds) forwarded to the underlying
                 httpx client.
         """
-        self.models = models or []
-        self.embedders = embedders or []
         self.server_address = server_address or DEFAULT_OLLAMA_SERVER_URL
 
-        self._request_headers_source = request_headers
-        # Static dicts are baked into the cached client; callables resolve per request.
-        self.request_headers = dict(request_headers) if isinstance(request_headers, dict) else {}
+        # A dict is baked into the cached client; a callable runs per request via httpx auth.
+        self.request_headers: dict[str, str] = {}
+        self._auth: _CallableHeaders | None = None
+        if isinstance(request_headers, dict):
+            self.request_headers = dict(request_headers)
+        elif request_headers is not None:
+            _require_no_arg_callable(request_headers)
+            self._auth = _CallableHeaders(request_headers)
         self.timeout = timeout
         self.client = loop_local_client(self._make_client)
+        self._probes: dict[str, _ProbeResult] = {}
+        # One probe per model at a time; concurrent first uses await the same task.
+        self._inflight: dict[str, asyncio.Task[_ResolvedModel]] = {}
 
-    def _make_client(self, headers: dict[str, str] | None = None) -> ollama_api.AsyncClient:
-        """Build an Ollama AsyncClient with the given (or static) headers and timeout.
-
-        Args:
-            headers: Per-request headers to use instead of the static ``request_headers``
-                (e.g. resolved from a callable). Defaults to the static headers, which is
-                what the per-event-loop cached client is built with.
+    def _make_client(self) -> ollama_api.AsyncClient:
+        """Build the Ollama AsyncClient for the current event loop.
 
         Returns:
             A new ``ollama.AsyncClient`` targeting the configured server.
         """
-        kwargs: dict[str, Any] = {
-            'host': self.server_address,
-            'headers': self.request_headers if headers is None else headers,
-        }
+        kwargs: dict[str, Any] = {'host': self.server_address, 'headers': self.request_headers}
+        if self._auth is not None:
+            # Extra kwargs go straight to httpx.AsyncClient.
+            kwargs['auth'] = self._auth
         if self.timeout is not None:
             kwargs['timeout'] = self.timeout
         return ollama_api.AsyncClient(**kwargs)
 
-    @asynccontextmanager
-    async def _client_for_request(
-        self,
-        *,
-        model: ModelDefinition | EmbeddingDefinition | None = None,
-        model_request: ModelRequest | None = None,
-        embed_request: EmbedRequest | None = None,
-    ) -> AsyncIterator[ollama_api.AsyncClient]:
-        """Yield the Ollama client to use for a single request.
-
-        Static (or absent) headers are baked into a per-event-loop cached client that
-        is shared across requests and left open. A header *callable* is resolved on
-        every call — receiving the server address plus any model/request context —
-        and applied to a *fresh* client, so expiring auth tokens or
-        request-specific headers take effect. Because the Ollama SDK bakes headers in
-        at construction (it has no per-request header hook), that fresh client owns
-        its own httpx connection pool; it is closed on exit so long-running callers
-        don't accumulate pools.
-
-        Args:
-            model: The model/embedder definition this request targets, if any.
-            model_request: The generate request, when resolving for a model action.
-            embed_request: The embed request, when resolving for an embedder action.
-
-        Yields:
-            The Ollama client for this request.
-        """
-        source = self._request_headers_source
-        if not callable(source):
-            # Shared per-event-loop cached client — reused across requests, not closed.
-            yield self.client()
-            return
-
-        params = RequestHeaderParams(
-            server_address=self.server_address,
-            model=model,
-            model_request=model_request,
-            embed_request=embed_request,
-        )
-        result = source(params)
-        if inspect.isawaitable(result):
-            result = await result
-        headers = dict(cast(dict[str, str], result)) if result else {}
-        client = self._make_client(headers=headers)
-        try:
-            yield client
-        finally:
-            # ollama.AsyncClient exposes no public close, so close the wrapped httpx
-            # client to release this request's connection pool. aclose() is idempotent.
-            inner = getattr(client, '_client', None)
-            if inner is not None:
-                await inner.aclose()
-            else:
-                # Defensive: if a future ollama SDK renames/drops ``_client`` this
-                # would silently leak a connection pool per request. Surface it.
-                logger.warning('ollama client exposes no _client; per-request connection pool was not closed')
-
     async def init(self) -> list:
         """Initialize the Ollama plugin.
 
-        Returns pre-registered models and embedders.
+        Registers nothing: models and embedders resolve on demand, and an
+        eagerly registered action would mask the probed listing with generic
+        metadata.
 
         Returns:
-            List of Action objects for pre-configured models and embedders.
+            An empty list.
         """
-        # Header callables are resolved per request (see _client_for_request), so
-        # there is nothing to resolve eagerly here; static headers are already set.
-        actions = []
-
-        # Register pre-configured models
-        for model_def in self.models:
-            action = self._create_model_action(model_def.name)
-            actions.append(action)
-
-        # Register pre-configured embedders
-        for embedder_def in self.embedders:
-            action = self._create_embedder_action(embedder_def.name)
-            actions.append(action)
-
-        return actions
+        return []
 
     async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
         """Resolve an action by creating and returning an Action object.
+
+        A model is probed once via ``/api/show`` before its action is built. A
+        failed probe advertises the generic capabilities; the request still
+        goes to ``/api/chat`` either way.
 
         Args:
             action_type: The kind of action to resolve.
@@ -294,33 +264,94 @@ class Ollama(Plugin):
             Action object if found, None otherwise.
         """
         if action_type == ActionKind.MODEL:
-            return self._create_model_action(name)
+            return self._create_model_action(await self._resolve_model(name))
         elif action_type == ActionKind.EMBEDDER:
             return self._create_embedder_action(name)
         return None
 
-    def _create_model_action(self, name: str) -> Action:
+    async def _resolve_model(self, name: str, digest: str = '') -> _ResolvedModel:
+        """Returns the model's capabilities, probing the server at most once.
+
+        Args:
+            name: The Ollama model name. The result always carries this name,
+                even when the cache entry came from ``name:latest``.
+            digest: The digest ``/api/tags`` reported, if known. A cached
+                result for a different digest is stale: the model was re-pulled.
+
+        Returns:
+            The probed definition, or the generic fallback when the probe fails.
+        """
+        key = _cache_key(name)
+        cached = self._probes.get(key)
+        if cached is not None and (not digest or cached.digest == digest):
+            if cached.expires_at is None or time.monotonic() < cached.expires_at:
+                return replace(cached.definition, name=name)
+
+        loop = asyncio.get_running_loop()
+        task = self._inflight.get(key)
+        if task is None or task.get_loop() is not loop:
+            task = loop.create_task(self._probe_and_cache(key, name, digest))
+            self._inflight[key] = task
+            task.add_done_callback(lambda done: self._forget_inflight(key, done))
+        # Shielded so one cancelled caller does not cancel the probe the others await.
+        return replace(await asyncio.shield(task), name=name)
+
+    def _forget_inflight(self, key: str, task: 'asyncio.Task[_ResolvedModel]') -> None:
+        if self._inflight.get(key) is task:
+            del self._inflight[key]
+
+    async def _probe_and_cache(self, key: str, name: str, digest: str) -> _ResolvedModel:
+        definition = await self._probe(name)
+        detected = definition is not None
+        if definition is None:
+            definition = _ResolvedModel(name=name)
+        self._probes[key] = _ProbeResult(
+            definition=definition,
+            digest=digest,
+            expires_at=None if detected else time.monotonic() + _PROBE_FAILURE_TTL_SECONDS,
+        )
+        return definition
+
+    async def _probe(self, name: str) -> _ResolvedModel | None:
+        """Asks ``/api/show`` what the model can do.
+
+        Any failure (server down, model not pulled, an old server without
+        ``capabilities``, a header callable that raises) returns None so the
+        caller falls back; plugin init and resolve never fail on a probe. The
+        header callable runs inside the request, so the timeout covers it too.
+        """
+        timeout = _PROBE_TIMEOUT_SECONDS
+        if self.timeout is not None and 0 < self.timeout < timeout:
+            timeout = self.timeout
+
+        try:
+            show = await asyncio.wait_for(self.client().show(name), timeout=timeout)
+        except Exception as e:  # noqa: BLE001 - every probe failure means the same fallback.
+            logger.debug('Ollama capability probe failed', model=name, error=type(e).__name__)
+            return None
+        definition = _resolved_from_show(name, show)
+        if definition is None:
+            logger.debug('Ollama capability probe failed', model=name, error='no_capabilities')
+            return None
+        logger.debug(
+            'Ollama capabilities probed',
+            model=name,
+            tools=definition.tools,
+            media=definition.media,
+        )
+        return definition
+
+    def _create_model_action(self, model_ref: _ResolvedModel) -> Action:
         """Create an Action object for an Ollama model.
 
         Args:
-            name: The model id as received (no plugin-prefix stripping).
+            model_ref: The resolved model; its name is used as received (no
+                plugin-prefix stripping).
 
         Returns:
             Action object for the model.
         """
-        # Try to find the model definition from pre-configured models
-        model_ref = None
-        for model_def in self.models:
-            if model_def.name == name:
-                model_ref = model_def
-                break
-
-        # If not found in pre-configured models, create a generic one. Dynamically
-        # resolved models advertise the full capability set (see JS/Go parity note
-        # on _DYNAMIC_MODEL_SUPPORTS).
-        if model_ref is None:
-            model_ref = ModelDefinition(name=name, supports=_DYNAMIC_MODEL_SUPPORTS)
-
+        name = model_ref.name
         model = OllamaModel(
             client=self.client,
             model_definition=model_ref,
@@ -334,12 +365,9 @@ class Ollama(Plugin):
         )
 
         async def _run(request: ModelRequest, ctx: ActionRunContext | None = None) -> ModelResponse:
-            # Resolve per-request headers (no-op for static headers), passing the model
-            # and request context to a header callable (JS parity). OllamaModel wraps
-            # connection errors at the SDK boundary, so a failed media-URL fetch isn't
-            # misreported as an Ollama server outage.
-            async with self._client_for_request(model=model_ref, model_request=request) as client:
-                return await model.generate(request, ctx, client=client)
+            # OllamaModel wraps connection errors at the SDK boundary, so a failed
+            # media-URL fetch isn't misreported as an Ollama server outage.
+            return await model.generate(request, ctx)
 
         action = create_model(
             ollama_name(name),
@@ -363,74 +391,80 @@ class Ollama(Plugin):
         Returns:
             Action object for the embedder.
         """
-        embedder_ref = EmbeddingDefinition(name=name)
-        embedder = OllamaEmbedder(
-            client=self.client,
-            embedding_definition=embedder_ref,
-        )
+        embedder = OllamaEmbedder(client=self.client, model=name)
 
         server_address = self.server_address
 
         async def _run(request: EmbedRequest) -> EmbedResponse:
-            # Pass the embedder and embed request to a header callable (JS parity).
             # Embedding requests never fetch media, so the whole SDK call is wrapped.
-            async with self._client_for_request(model=embedder_ref, embed_request=request) as client:
-                async with wrap_connection_errors(server_address):
-                    return await embedder.embed(request, client=client)
+            async with wrap_connection_errors(server_address):
+                return await embedder.embed(request)
 
         return create_embedder(
             ollama_name(name),
             _run,
             info=EmbedderInfo(
                 label=f'Ollama Embedding - {name}',
-                dimensions=embedder_ref.dimensions,
                 supports=EmbedderSupports(input=['text']),
                 config_schema=to_json_schema(ollama_api.Options),
             ),
         )
 
     async def list_actions(self) -> list[ActionMetadata]:
-        """Generate a list of available actions or models.
+        """List the models and embedders the server has pulled.
+
+        Reads ``/api/tags``, then probes each model's ``/api/show``
+        concurrently (at most four at once, five seconds each) so the Dev UI
+        shows real capabilities. Results are cached per model and digest; a
+        failed probe falls back to the generic set and is retried after 30s.
+        Names containing ``embed`` are listed as embedders, as in JS and Go.
 
         Returns:
-            list[ActionMetadata]: A list of ActionMetadata objects, each with the following attributes:
-                - name (str): The name of the action or model.
-                - kind (ActionKind): The type or category of the action.
-                - info (dict): The metadata dictionary describing the model configuration and properties.
-                - config_schema (type): The schema class used for validating the model's configuration.
+            ActionMetadata for each model and embedder.
         """
-        async with self._client_for_request() as client:
-            async with wrap_connection_errors(self.server_address):
-                try:
-                    response = await client.list()
-                except ollama_api.ResponseError as e:
-                    raise wrap_http_error(e, status_code=e.status_code) from e
+        async with wrap_connection_errors(self.server_address):
+            try:
+                response = await self.client().list()
+            except ollama_api.ResponseError as e:
+                raise wrap_http_error(e, status_code=e.status_code) from e
 
-        actions = []
+        embedder_names: list[str] = []
+        # (name, digest) per model row, in server order.
+        model_rows: list[tuple[str, str]] = []
         for model in response.models:
             name = model.model
             if not name:
                 continue
             if 'embed' in name:
-                actions.append(
-                    embedder_action_metadata(
-                        name=ollama_name(name),
-                        info=EmbedderInfo(
-                            config_schema=to_json_schema(ollama_api.Options),
-                            label=f'Ollama Embedding - {name}',
-                            supports=EmbedderSupports(input=['text']),
-                        ),
-                    )
-                )
+                embedder_names.append(name)
             else:
-                actions.append(
-                    model_action_metadata(
-                        name=ollama_name(name),
-                        config_schema=OllamaConfig,
-                        info=ollama_model_info(
-                            ModelDefinition(name=name, supports=_DYNAMIC_MODEL_SUPPORTS),
-                            f'Ollama - {name}',
-                        ),
-                    )
-                )
+                model_rows.append((name, getattr(model, 'digest', None) or ''))
+
+        slots = asyncio.Semaphore(_MAX_CONCURRENT_PROBES)
+
+        async def describe(name: str, digest: str) -> _ResolvedModel:
+            async with slots:
+                return await self._resolve_model(name, digest)
+
+        definitions = await asyncio.gather(*(describe(name, digest) for name, digest in model_rows))
+
+        actions: list[ActionMetadata] = [
+            model_action_metadata(
+                name=ollama_name(definition.name),
+                config_schema=OllamaConfig,
+                info=ollama_model_info(definition, f'Ollama - {definition.name}'),
+            )
+            for definition in definitions
+        ]
+        actions.extend(
+            embedder_action_metadata(
+                name=ollama_name(name),
+                info=EmbedderInfo(
+                    config_schema=to_json_schema(ollama_api.Options),
+                    label=f'Ollama Embedding - {name}',
+                    supports=EmbedderSupports(input=['text']),
+                ),
+            )
+            for name in embedder_names
+        )
         return actions

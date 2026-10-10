@@ -21,7 +21,6 @@ import unittest
 from unittest.mock import AsyncMock, MagicMock
 
 import ollama as ollama_api
-from genkit_ollama import EmbeddingDefinition
 from genkit_ollama._embedders import OllamaEmbedder
 from pydantic import ValidationError
 
@@ -37,10 +36,7 @@ class TestOllamaEmbedderEmbed(unittest.IsolatedAsyncioTestCase):
         self.mock_ollama_client_instance = AsyncMock()
         self.mock_ollama_client_factory = MagicMock(return_value=self.mock_ollama_client_instance)
 
-        self.mock_embedding_definition = EmbeddingDefinition(name='test-embed-model', dimensions=1536)
-        self.ollama_embedder = OllamaEmbedder(
-            client=self.mock_ollama_client_factory, embedding_definition=self.mock_embedding_definition
-        )
+        self.ollama_embedder = OllamaEmbedder(client=self.mock_ollama_client_factory, model='test-embed-model')
 
     async def test_embed_single_document_single_content(self) -> None:
         """Test embed with a single document containing single text content."""
