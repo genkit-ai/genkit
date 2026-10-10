@@ -21,6 +21,7 @@ import (
 	"context"
 	"maps"
 	"net/http"
+	"net/url"
 	"os"
 	"slices"
 	"strings"
@@ -180,6 +181,11 @@ type preset struct {
 	// overrides it.
 	baseURL    string
 	baseURLEnv string
+	// account fills the {account} segment of the base URL, from
+	// accountEnv when it is empty. A server that names accountEnv
+	// requires an account while its base URL has that segment.
+	account    string
+	accountEnv string
 }
 
 // Config is the per-request configuration of a decision model: StateJSON
@@ -193,9 +199,9 @@ type Config = systemone.Config
 func (s *SystemOne) Name() string { return s.provider() }
 
 // Init implements [api.Plugin]. It builds the client, and panics without a
-// provider name or a base URL, or without a key for a server that requires
-// one, since every request would fail, and when Models names one model
-// twice. No actions are registered up front:
+// provider name or a base URL, or without a key or an account ID for a
+// server that requires one, since every request would fail, and when
+// Models names one model twice. No actions are registered up front:
 // models resolve by name.
 func (s *SystemOne) Init(ctx context.Context) []api.Action {
 	s.mu.Lock()
@@ -218,6 +224,13 @@ func (s *SystemOne) Init(ctx context.Context) []api.Action {
 	}
 	if baseURL == "" {
 		panic(s.Provider + ": set BaseURL, the root of the server's System One API")
+	}
+	if env := s.preset.accountEnv; env != "" && strings.Contains(baseURL, "{account}") {
+		account := cmp.Or(s.preset.account, os.Getenv(env))
+		if account == "" {
+			panic(s.Provider + ": pass an account ID or set the " + env + " environment variable")
+		}
+		baseURL = strings.ReplaceAll(baseURL, "{account}", url.PathEscape(account))
 	}
 	path := rooted(cmp.Or(s.Path, "/v1/systemone"))
 	if path == "/" {
