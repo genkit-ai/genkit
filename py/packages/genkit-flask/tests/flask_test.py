@@ -135,7 +135,7 @@ def test_flask_flow_raising_public_error_returns_its_status_and_message() -> Non
     response = app.test_client().post('/lookup', json={'data': '99'})
 
     assert response.status_code == 404
-    assert json.loads(response.data) == {'message': 'no order 99', 'status': 'NOT_FOUND'}
+    assert response.data == b'{"message":"no order 99","status":"NOT_FOUND"}'
 
 
 def test_flask_flow_raising_value_error_returns_500_internal_error_without_stack() -> None:
@@ -234,7 +234,7 @@ def test_flask_flow_rejects_non_dict_json_payload_with_400() -> None:
 
     assert response.status_code == 400
     assert json.loads(response.data) == {
-        'message': 'flow request must be wrapped in {"data": data} object',
+        'message': 'Flow request must be wrapped in {"data": ...}',
         'status': 'INVALID_ARGUMENT',
     }
 
@@ -245,9 +245,59 @@ def test_flask_missing_data_wrapper_returns_the_wrap_message() -> None:
 
     assert response.status_code == 400
     assert json.loads(response.data) == {
-        'message': 'flow request must be wrapped in {"data": data} object',
+        'message': 'Flow request must be wrapped in {"data": ...}',
         'status': 'INVALID_ARGUMENT',
     }
+
+
+def _no_input_app() -> Flask:
+    ai = Genkit()
+    app = Flask(__name__)
+    app.config.update({'TESTING': True})
+
+    @app.post('/void_flow')
+    @genkit_flask_handler(ai)
+    @ai.flow()
+    async def void_flow() -> dict[str, str]:
+        return {'ok': 'true'}
+
+    return app
+
+
+def test_empty_body_runs_no_input_flow_on_every_adapter() -> None:
+    """POST {} to a served flow that takes no input returns its result."""
+    response = _no_input_app().test_client().post('/void_flow', json={})
+
+    assert response.status_code == 200
+    assert response.json == {'result': {'ok': 'true'}}
+
+
+def test_input_key_body_is_400_on_every_adapter() -> None:
+    """POST {"input": 1} to a served flow is a 400 telling the caller to wrap in data."""
+    response = _no_input_app().test_client().post('/void_flow', json={'input': 1})
+
+    assert response.status_code == 400
+    assert (
+        response.data == b'{"message":"Flow request must be wrapped in {\\"data\\": ...}","status":"INVALID_ARGUMENT"}'
+    )
+
+
+def test_streamed_flow_failure_ends_with_same_error_frame() -> None:
+    """A streamed flow raising PublicError('NOT_FOUND', 'no order 99') ends with that exact error frame."""
+    ai = Genkit()
+    app = Flask(__name__)
+    app.config.update({'TESTING': True})
+
+    @app.post('/lookup')
+    @genkit_flask_handler(ai)
+    @ai.flow()
+    async def lookup(_: str) -> None:
+        raise PublicError('NOT_FOUND', 'no order 99')
+
+    response = app.test_client().post('/lookup', json={'data': '99'}, headers={'accept': 'text/event-stream'})
+
+    chunks = list(response.response)
+    assert chunks[-1] == b'data: {"error":{"message":"no order 99","status":"NOT_FOUND"}}\n\n'
 
 
 def test_flask_malformed_json_body_returns_400_valid_json_message() -> None:

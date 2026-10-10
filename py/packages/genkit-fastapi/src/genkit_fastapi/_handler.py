@@ -30,10 +30,8 @@ from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from genkit import ContextProvider, Genkit, GenkitError, PublicError, RequestData
-from genkit._core._action import input_from_json
-from genkit._core._context import joined_headers
-from genkit._core._error import log_served_failure, served_error_json, served_stream_error_event
 from genkit.plugin_api import Action
+from genkit.web import error_body, error_status, read_body, wants_stream
 
 logger = logging.getLogger(__name__)
 
@@ -59,19 +57,16 @@ class FastAPIRequestData(RequestData):
         super().__init__(
             request=request,
             method=request.method,
-            headers=joined_headers(
-                (name.decode('latin-1'), value.decode('latin-1')) for name, value in request.headers.raw
-            ),
+            headers=[(name.decode('latin-1'), value.decode('latin-1')) for name, value in request.headers.raw],
             input=body.get('data') if body else None,
         )
 
 
 def json_error_response(error: Exception, status_code: int | None = None) -> Response:
     """Build a compact JSON error response from an exception."""
-    status, body = served_error_json(error=error)
     return Response(
-        status_code=status if status_code is None else status_code,
-        content=body,
+        status_code=error_status(error) if status_code is None else status_code,
+        content=json.dumps(error_body(error), separators=JSON_SEPARATORS),
         media_type='application/json',
     )
 
@@ -84,26 +79,12 @@ async def _read_json_request_body(*, request: Request) -> object:
         raise PublicError('INVALID_ARGUMENT', 'request body must be valid JSON') from err
 
 
-def extract_action_input(body: dict[str, Any]) -> object:
-    """Extract action input from the stable ``data`` / ``input`` / ``{}`` envelopes."""
-    if 'data' in body:
-        return body['data']
-    if 'input' in body:
-        return body['input']
-    # Callable clients omit ``data`` when runFlow has no input (POST ``{}``).
-    # A missing wrapper is not a wire error; the action decides if input is required.
-    if not body:
-        return None
-    raise PublicError(
-        'INVALID_ARGUMENT',
-        'Action request must be wrapped in {"data": ...} object',
-    )
-
-
-def wants_stream(request: Request) -> bool:
-    """Check if the client requested an event stream or NDJSON stream."""
-    accept = request.headers.get('accept', '')
-    return 'text/event-stream' in accept or request.query_params.get('stream') == 'true'
+def _log_failure(*, error: Exception, where: str) -> None:
+    """Log a served-flow failure; 5xx includes the traceback."""
+    if error_status(error) >= 500:
+        logger.exception('served flow %s failed', where)
+    else:
+        logger.warning('served flow %s failed: %s', where, error)
 
 
 def format_stream_chunk(chunk: object) -> str:
@@ -120,7 +101,8 @@ def format_stream_result(result: object) -> str:
 
 def format_stream_error(error: Exception) -> str:
     """Format a stream failure as a canonical SSE data event."""
-    return served_stream_error_event(error=error)
+    err_json = json.dumps({'error': error_body(error)}, separators=JSON_SEPARATORS)
+    return f'data: {err_json}\n\n'
 
 
 async def handle_genkit_request(
@@ -132,8 +114,8 @@ async def handle_genkit_request(
 ) -> Response | dict[str, Any]:
     """Run one Genkit action request and return its FastAPI response.
 
-    This is the wire contract every stable route sits on. It reads ``data`` /
-    ``input`` / ``{}`` plus body ``init``, then either streams SSE frames —
+    This is the wire contract every stable route sits on. It reads ``{"data": ...}``
+    or ``{}`` plus body ``init``, then either streams SSE frames —
     ``data: {"message": ...}`` chunks followed by a final ``data: {"result": ...}``
     — or returns a one-shot ``{"result": ...}``.
 
@@ -173,21 +155,18 @@ async def _handle_action_request(
     try:
         body = await _read_json_request_body(request=request)
     except PublicError as err:
-        log_served_failure(adapter_logger=logger, error=err, where='run')
+        _log_failure(error=err, where='run')
         return json_error_response(err)
-    if not isinstance(body, dict):
-        return json_error_response(
-            PublicError(
-                'INVALID_ARGUMENT',
-                'Action request must be a JSON object',
-            )
-        )
-    body = cast(dict[str, Any], body)
-
     try:
-        input_data = (extract_input or extract_action_input)(body)
+        if extract_input is None:
+            action_input = read_body(body)
+        elif isinstance(body, dict):
+            action_input = extract_input(cast(dict[str, Any], body))
+        else:
+            raise PublicError('INVALID_ARGUMENT', 'Action request must be a JSON object')
     except GenkitError as err:
         return json_error_response(err)
+    body = cast(dict[str, Any], body)
 
     if init is not None:
         resolved_init = init
@@ -196,9 +175,8 @@ async def _handle_action_request(
     else:
         resolved_init = body.get('init')
     action_obj = cast(Action[Any, Any, Any, Any], action)
-    action_input = input_from_json(input_data)
 
-    if wants_stream(request):
+    if wants_stream(accept=request.headers.get('accept'), stream=request.query_params.get('stream')):
 
         async def event_stream() -> AsyncIterator[str]:
             try:
@@ -208,7 +186,7 @@ async def _handle_action_request(
                 result = await stream_response.response
                 yield format_stream_result(result)
             except Exception as e:
-                log_served_failure(adapter_logger=logger, error=e, where='stream')
+                _log_failure(error=e, where='stream')
                 yield format_stream_error(e)
 
         return StreamingResponse(event_stream(), media_type='text/event-stream')
@@ -219,7 +197,7 @@ async def _handle_action_request(
             return Response(status_code=empty_status)
         return {'result': to_dict(response.response)}
     except Exception as e:
-        log_served_failure(adapter_logger=logger, error=e, where='run')
+        _log_failure(error=e, where='run')
         return json_error_response(e)
 
 
@@ -286,7 +264,7 @@ def genkit_fastapi_handler(
                 # The wrapper's own HTTP response (e.g. 503 while the action isn't ready).
                 raise
             except Exception as e:
-                log_served_failure(adapter_logger=logger, error=e, where='handler')
+                _log_failure(error=e, where='handler')
                 return json_error_response(e)
 
             # This decorator reads context from the request itself. Routes that
@@ -308,7 +286,7 @@ def genkit_fastapi_handler(
                     # handles it so a 401 from context_provider stays a 401.
                     raise
                 except Exception as e:
-                    log_served_failure(adapter_logger=logger, error=e, where='context provider')
+                    _log_failure(error=e, where='context provider')
                     return json_error_response(e)
 
             return await handle_genkit_request(

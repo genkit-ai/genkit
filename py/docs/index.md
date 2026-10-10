@@ -167,6 +167,16 @@
 
 ::: genkit.telemetry.SpanMetadata
 
+## genkit.web
+
+::: genkit.web.error_body
+
+::: genkit.web.error_status
+
+::: genkit.web.read_body
+
+::: genkit.web.wants_stream
+
 ## genkit.exp.agent
 
 ::: genkit.exp.agent.apply_json_patch

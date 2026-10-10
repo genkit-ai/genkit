@@ -33,9 +33,9 @@ from anthropic import (
 from genkit_anthropic._models import AnthropicModel
 
 from genkit import GenkitError, Message, Part, Role
-from genkit._core._error import get_callable_json, get_http_status
 from genkit.model import ModelRequest
 from genkit.plugin_api import StatusName
+from genkit.web import error_body, error_status
 
 _ERROR_MESSAGE = 'Anthropic request failed'
 
@@ -108,9 +108,9 @@ async def test_anthropic_api_error_is_served_as_internal_error() -> None:
 
     error = exc_info.value
     assert error.status == 'UNAUTHENTICATED'
-    assert get_callable_json(error) == {'message': 'Internal Error', 'status': 'INTERNAL'}
-    assert get_http_status(error) == 500
-    assert _ERROR_MESSAGE not in str(get_callable_json(error))
+    assert error_body(error) == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert error_status(error) == 500
+    assert _ERROR_MESSAGE not in str(error_body(error))
 
 
 @pytest.mark.asyncio

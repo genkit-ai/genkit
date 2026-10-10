@@ -28,10 +28,8 @@ from pydantic import BaseModel
 from werkzeug.exceptions import HTTPException
 
 from genkit import ContextProvider, Genkit, GenkitError, PublicError, RequestData
-from genkit._core._action import input_from_json
-from genkit._core._context import joined_headers
-from genkit._core._error import log_served_failure, served_error_json, served_stream_error_event
 from genkit.plugin_api import Action
+from genkit.web import error_body, error_status, read_body, wants_stream
 
 logger = logging.getLogger(__name__)
 
@@ -39,11 +37,18 @@ logger = logging.getLogger(__name__)
 _JSON_SEPARATORS = (',', ':')
 
 
+def _log_failure(*, error: Exception, where: str) -> None:
+    """Log a served-flow failure; 5xx includes the traceback."""
+    if error_status(error) >= 500:
+        logger.exception('served flow %s failed', where)
+    else:
+        logger.warning('served flow %s failed: %s', where, error)
+
+
 def _error_response(error: Exception, status: int | None = None) -> Response:
-    resolved_status, body = served_error_json(error=error)
     return Response(
-        status=resolved_status if status is None else status,
-        response=body,
+        status=error_status(error) if status is None else status,
+        response=json.dumps(error_body(error), separators=_JSON_SEPARATORS),
         mimetype='application/json',
     )
 
@@ -101,7 +106,7 @@ class _FlaskRequestData(RequestData):
         super().__init__(
             request=request,
             method=request.method,
-            headers=joined_headers(request.headers.items()),
+            headers=request.headers.items(),
             input=input_data.get('data'),
         )
 
@@ -142,12 +147,12 @@ def genkit_flask_handler(
             try:
                 input_data = _parse_request_json()
             except PublicError as e:
-                log_served_failure(adapter_logger=logger, error=e, where='run')
+                _log_failure(error=e, where='run')
                 return _error_response(e)
-            if not isinstance(input_data, dict) or 'data' not in input_data:
-                return _error_response(
-                    PublicError('INVALID_ARGUMENT', 'flow request must be wrapped in {"data": data} object')
-                )
+            try:
+                action_input = read_body(input_data)
+            except PublicError as e:
+                return _error_response(e)
             input_data = cast(dict[str, Any], input_data)
 
             request_data = _FlaskRequestData(input_data)
@@ -163,15 +168,11 @@ def genkit_flask_handler(
                     # The app's own abort(401) passes through.
                     raise
                 except Exception as e:
-                    log_served_failure(adapter_logger=logger, error=e, where='context provider')
+                    _log_failure(error=e, where='context provider')
                     return _error_response(e)
 
-            # Substring match so Accept: text/event-stream, */* (and similar) still streams.
-            accept = request_data.headers.get('accept', '')
-            stream = 'text/event-stream' in accept or request.args.get('stream') == 'true'
             init = input_data.get('init')
-            action_input = input_from_json(input_data['data'])
-            if stream:
+            if wants_stream(accept=request_data.headers.get('accept'), stream=request.args.get('stream')):
 
                 async def async_gen() -> AsyncIterator[str]:
                     try:
@@ -182,8 +183,8 @@ def genkit_flask_handler(
                         result = await stream_response.response
                         yield f'data: {json.dumps({"result": _to_dict(result)}, separators=_JSON_SEPARATORS)}\n\n'
                     except Exception as e:
-                        log_served_failure(adapter_logger=logger, error=e, where='stream')
-                        yield served_stream_error_event(error=e)
+                        _log_failure(error=e, where='stream')
+                        yield f'data: {json.dumps({"error": error_body(e)}, separators=_JSON_SEPARATORS)}\n\n'
 
                 iter = _iter_over_async(async_gen(), loop)
                 return iter
@@ -192,7 +193,7 @@ def genkit_flask_handler(
                     response = await flow.run(input=action_input, context=action_context, init=init)
                     return {'result': _to_dict(response.response)}
                 except Exception as e:
-                    log_served_failure(adapter_logger=logger, error=e, where='run')
+                    _log_failure(error=e, where='run')
                     return _error_response(e)
 
         return handler
