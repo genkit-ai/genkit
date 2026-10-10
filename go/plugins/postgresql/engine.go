@@ -19,13 +19,14 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"strings"
 
 	"cloud.google.com/go/cloudsqlconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/oauth2/v2"
 	"google.golang.org/api/option"
+
+	"github.com/firebase/genkit/go/plugins/internal/pgengine"
 )
 
 // IpType type of IP address, public or private
@@ -115,7 +116,7 @@ func getUser(ctx context.Context, config engineConfig) (string, bool, error) {
 	}
 	if config.iamAccountEmail != "" {
 		// If iamAccountEmail is provided use it as user.
-		return iamUser(config.iamAccountEmail), true, nil
+		return pgengine.IAMUser(config.iamAccountEmail), true, nil
 	}
 	// If neither user and password nor iamAccountEmail are provided,
 	// retrieve IAM email from the environment.
@@ -123,14 +124,7 @@ func getUser(ctx context.Context, config engineConfig) (string, bool, error) {
 	if err != nil {
 		return "", false, fmt.Errorf("unable to retrieve service account email: %w", err)
 	}
-	return iamUser(serviceAccountEmail), true, nil
-}
-
-// iamUser returns the database user name Cloud SQL gives an IAM principal: a
-// service account's email without its ".gserviceaccount.com" suffix, and any
-// other email unchanged.
-func iamUser(email string) string {
-	return strings.TrimSuffix(email, ".gserviceaccount.com")
+	return pgengine.IAMUser(serviceAccountEmail), true, nil
 }
 
 // getServiceAccountEmail retrieves the IAM principal email with users account.
@@ -163,7 +157,7 @@ func getServiceAccountEmail(ctx context.Context) (string, error) {
 // createPool creates a connection pool to the PostgreSQL database, dialed
 // through the Cloud SQL connector, and returns the dialer behind it.
 func createPool(ctx context.Context, cfg engineConfig, usingIAMAuth bool) (*pgxpool.Pool, *cloudsqlconn.Dialer, error) {
-	config, err := poolConfig(cfg, usingIAMAuth)
+	config, err := pgengine.PoolConfig(cfg.user, cfg.password, cfg.database, usingIAMAuth)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -188,27 +182,6 @@ func createPool(ctx context.Context, cfg engineConfig, usingIAMAuth bool) (*pgxp
 		return nil, nil, fmt.Errorf("unable to create connection pool: %w", err)
 	}
 	return pool, d, nil
-}
-
-// poolConfig returns the pool configuration for a Cloud SQL connection. The
-// credentials go into the config's fields rather than a connection string, so
-// a value with spaces or quotes reaches the server intact. TLS is off at this
-// layer because the Cloud SQL connector encrypts the connection itself, and an
-// IAM login sends no password because the connector authenticates it.
-func poolConfig(cfg engineConfig, usingIAMAuth bool) (*pgxpool.Config, error) {
-	config, err := pgxpool.ParseConfig("sslmode=disable")
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse connection config: %w", err)
-	}
-	config.ConnConfig.User = cfg.user
-	config.ConnConfig.Database = cfg.database
-	// Set the password even when it is empty: ParseConfig fills it from
-	// PGPASSWORD or a .pgpass file.
-	config.ConnConfig.Password = cfg.password
-	if usingIAMAuth {
-		config.ConnConfig.Password = ""
-	}
-	return config, nil
 }
 
 // Close releases what the engine created: the pool [NewPostgresEngine] built
