@@ -258,3 +258,10 @@ func TestEmbedderErrorClassification(t *testing.T) {
 		t.Errorf("Retrieve error = %v, want errors.Is ErrResourceExhausted", err)
 	}
 }
+
+func TestDocIDMarshalError(t *testing.T) {
+	doc := ai.DocumentFromText("hello", map[string]any{"bad": make(chan int)})
+	if _, err := docID(doc); !errors.Is(err, status.ErrInvalidArgument) {
+		t.Errorf("docID error = %v, want errors.Is ErrInvalidArgument", err)
+	}
+}
