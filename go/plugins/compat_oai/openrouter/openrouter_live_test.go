@@ -35,6 +35,7 @@ const (
 	chatModel      = "openai/gpt-5-mini"
 	visionModel    = "anthropic/claude-haiku-4.5"
 	reasoningModel = "anthropic/claude-haiku-4.5"
+	audioModel     = "google/gemini-2.5-pro"
 )
 
 func TestPluginLive(t *testing.T) {
@@ -52,6 +53,8 @@ func TestPluginLive(t *testing.T) {
 			}),
 			ReasoningContent: true,
 			VisionModel:      openrouter.ModelRef(visionModel, nil),
+			AudioModel:       openrouter.ModelRef(audioModel, nil),
+			DocumentModel:    openrouter.ModelRef(visionModel, nil),
 			LimitConfig:      &openrouter.ChatConfig{MaxOutputTokens: 16},
 			// Deliberately not shaped like a key. OpenRouter rejects any
 			// bearer token it does not recognize, and a realistic-looking

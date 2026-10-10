@@ -155,6 +155,11 @@ type Suite struct {
 	// VisionModel accepts inline images. Nil falls back to Model when Model
 	// claims media support, and skips the vision cases otherwise.
 	VisionModel ai.ModelArg
+	// AudioModel accepts audio input. Nil skips the audio case, as models
+	// that read images often read no audio.
+	AudioModel ai.ModelArg
+	// DocumentModel accepts PDF input. Nil skips the document case.
+	DocumentModel ai.ModelArg
 	// LimitConfig is a request config for Model that caps output at a few
 	// tokens, to check the length finish reason. Config types differ per
 	// plugin, so the suite cannot build one. Nil skips the case.
@@ -245,6 +250,11 @@ func Run(t *testing.T, g *genkit.Genkit, s Suite, groups ...Group) {
 	}
 	if s.ReasoningModel != nil {
 		r.reasoningCaps = supportsOf(t, g, s.ReasoningModel)
+	}
+	for field, m := range map[string]ai.ModelArg{"AudioModel": s.AudioModel, "DocumentModel": s.DocumentModel} {
+		if m != nil && !supportsOf(t, g, m).Media {
+			t.Fatalf("livetest: Suite.%s %q does not claim media support", field, m.Name())
+		}
 	}
 
 	type group struct {
@@ -346,6 +356,22 @@ func needSystemRole(r *runner) string {
 func needVision(r *runner) string {
 	if r.vision == nil {
 		return "no model in the suite claims media support"
+	}
+	return ""
+}
+
+// needAudio runs a case against Suite.AudioModel.
+func needAudio(r *runner) string {
+	if r.s.AudioModel == nil {
+		return "Suite.AudioModel is not set"
+	}
+	return ""
+}
+
+// needDocument runs a case against Suite.DocumentModel.
+func needDocument(r *runner) string {
+	if r.s.DocumentModel == nil {
+		return "Suite.DocumentModel is not set"
 	}
 	return ""
 }

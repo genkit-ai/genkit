@@ -465,6 +465,22 @@ func generateCases() []liveCase {
 				)))
 			wantReply(t, resp, "red")
 		}},
+		{"audio input", needAudio, func(t *testing.T, r *runner) {
+			resp := r.gen(t, r.s.AudioModel,
+				ai.WithMessages(ai.NewUserMessage(
+					ai.NewMediaPart("audio/wav", ToneAudio),
+					ai.NewTextPart("Is this recording silence, speech, or a steady tone? Reply with one word."),
+				)))
+			wantReply(t, resp, "tone")
+		}},
+		{"document input", needDocument, func(t *testing.T, r *runner) {
+			resp := r.gen(t, r.s.DocumentModel,
+				ai.WithMessages(ai.NewUserMessage(
+					ai.NewMediaPart("application/pdf", SecretPDF),
+					ai.NewTextPart("What is the secret word in this document? Reply with the word only."),
+				)))
+			wantReply(t, resp, secretWord)
+		}},
 
 		// Reasoning.
 		{"reasoning", needNonStreamReasoning, func(t *testing.T, r *runner) {
