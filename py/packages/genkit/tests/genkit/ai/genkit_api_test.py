@@ -5,8 +5,13 @@
 
 """Tests for the Genkit extra API methods."""
 
-from collections.abc import Iterator
-from contextlib import contextmanager
+import os
+import signal
+import socket
+import subprocess  # noqa: S404
+import sys
+import threading
+from typing import TypeVar
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock
 
@@ -25,54 +30,100 @@ from genkit.telemetry import (
     reset_instrumentation,
 )
 
+T = TypeVar('T')
 
-class _NoWaitTaskGroup:
-    """Stands in for the Ctrl+C wait so the Dev UI block ends right away."""
+_RUN_MAIN_SCRIPT = """
+import sys
 
-    async def __aenter__(self) -> '_NoWaitTaskGroup':
-        return self
+from genkit import Genkit
 
-    async def __aexit__(self, *exc: object) -> bool:
-        return False
-
-    def start_soon(self, *args: object) -> None:
-        pass
+ai = Genkit()
 
 
-async def _return_now() -> None:
-    return None
-
-
-@contextmanager
-def _dev_ui_stops_immediately() -> Iterator[None]:
-    with (
-        mock.patch('genkit._ai._aio.is_dev_environment', return_value=True),
-        mock.patch('genkit._ai._aio.anyio.create_task_group', _NoWaitTaskGroup),
-        mock.patch('genkit._ai._aio.anyio.sleep_forever', _return_now),
-    ):
-        yield
-
-
-def test_run_main_in_dev_returns_the_coroutine_result() -> None:
-    """ai.run_main(coro) in dev hands back what the coroutine returned once the Dev UI stops."""
-    ai = Genkit()
-
-    async def main() -> str:
-        return 'done'
-
-    with _dev_ui_stops_immediately():
-        assert ai.run_main(main()) == 'done'
-
-
-def test_run_main_in_dev_raises_the_coroutine_error_once_dev_ui_stops() -> None:
-    """A failing main keeps the Dev UI up, then the error surfaces instead of run_main returning None."""
-    ai = Genkit()
-
-    async def main() -> str:
+async def main() -> str:
+    if sys.argv[1] == 'fail':
         raise ValueError('boom')
+    return 'done'
 
-    with _dev_ui_stops_immediately(), pytest.raises(ValueError, match='boom'):
-        ai.run_main(main())
+
+print('RESULT', ai.run_main(main()), flush=True)
+"""
+
+
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(('127.0.0.1', 0))
+        return s.getsockname()[1]
+
+
+def _run_main_then_signal(outcome: str, sig: signal.Signals) -> tuple[int, str]:
+    """Start a reflection-enabled run_main in a child, send sig once it waits, return (exit code, output)."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith('GENKIT_')}
+    # Reflection on outside dev, so no runtime file is written.
+    env |= {'GENKIT_REFLECTION_ENABLED': 'true', 'GENKIT_REFLECTION_PORT': str(_free_port())}
+    proc = subprocess.Popen(  # noqa: S603
+        [sys.executable, '-c', _RUN_MAIN_SCRIPT, outcome],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        env=env,
+    )
+    # Kill a child that never reaches the ready line instead of stalling the run.
+    watchdog = threading.Timer(30, proc.kill)
+    watchdog.start()
+    try:
+        assert proc.stdout is not None
+        output: list[str] = []
+        for line in proc.stdout:
+            output.append(line)
+            if 'Press Ctrl+C to stop' in line:
+                break
+    finally:
+        watchdog.cancel()
+    proc.send_signal(sig)
+    try:
+        rest, _ = proc.communicate(timeout=15)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        rest, _ = proc.communicate()
+        pytest.fail(f'process kept running after {sig.name}:\n{"".join(output)}{rest}')
+    output.append(rest)
+    return proc.returncode, ''.join(output)
+
+
+posix_signals = pytest.mark.skipif(sys.platform == 'win32', reason='sends POSIX signals to a child process')
+
+
+@posix_signals
+@pytest.mark.parametrize('sig', [signal.SIGINT, signal.SIGTERM], ids=['ctrl_c', 'sigterm'])
+def test_run_main_raises_the_coroutine_error_when_stopped(sig: signal.Signals) -> None:
+    """A failing main keeps reflection up; stopping it (Ctrl+C or SIGTERM) raises the main's error."""
+    returncode, output = _run_main_then_signal('fail', sig)
+
+    assert returncode != 0, output
+    assert 'ValueError: boom' in output
+    assert 'KeyboardInterrupt' not in output
+    assert 'during asyncio.run() shutdown' not in output
+    assert 'RESULT' not in output
+
+
+@posix_signals
+def test_run_main_returns_the_coroutine_result_on_sigterm() -> None:
+    """SIGTERM is a clean stop: run_main hands back what main returned and the process exits 0."""
+    returncode, output = _run_main_then_signal('ok', signal.SIGTERM)
+
+    assert returncode == 0, output
+    assert 'RESULT done' in output
+
+
+@posix_signals
+def test_run_main_ctrl_c_after_a_clean_main_exits() -> None:
+    """Ctrl+C after a clean main still raises KeyboardInterrupt, and the process exits instead of hanging."""
+    returncode, output = _run_main_then_signal('ok', signal.SIGINT)
+
+    assert returncode != 0, output
+    assert 'KeyboardInterrupt' in output
+    assert 'RESULT' not in output
 
 
 @pytest.mark.asyncio
@@ -105,7 +156,7 @@ async def test_genkit_run_tags_flow_step_action_type() -> None:
     class Recording:
         last: SpanMetadata | None = None
 
-        async def run_in_new_span(self, metadata: SpanMetadata, next: SpanNext[str]) -> str:
+        async def run_in_new_span(self, metadata: SpanMetadata, next: SpanNext[T]) -> T:
             self.last = metadata
             return await next()
 

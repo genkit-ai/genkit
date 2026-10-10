@@ -31,7 +31,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar, cast, overload
 
 import anyio
-import anyio.to_thread
 import uvicorn
 from pydantic import BaseModel
 
@@ -989,6 +988,11 @@ class Genkit:
             if ':' in bound_host:
                 bound_host = f'[{bound_host}]'
             self._reflection_bound_addr = f'{bound_host}:{bound_port}'
+            # Bound already, so the spec is known before the thread starts.
+            # spec.url goes into the runtime file, so advertise a reachable,
+            # URL-safe host (wildcard binds as loopback, IPv6 bracketed).
+            host, port = sock.getsockname()[:2]
+            self._reflection_server_spec = ServerSpec(scheme='http', host=advertised_reflection_host(host), port=port)
 
         async def _run_server() -> None:
             if config.mode == 'v2':
@@ -1000,11 +1004,8 @@ class Genkit:
                 return
 
             assert sock is not None
-            host, port = sock.getsockname()[:2]
-            # spec.url goes into the runtime file, so advertise a reachable,
-            # URL-safe host (wildcard binds as loopback, IPv6 bracketed).
-            spec = ServerSpec(scheme='http', host=advertised_reflection_host(host), port=port)
-            self._reflection_server_spec = spec
+            spec = self._reflection_server_spec
+            assert spec is not None
             sockets = [sock]
 
             if not config.secret and not is_loopback_host(config.host):
@@ -1107,14 +1108,17 @@ class Genkit:
         CLI rejected this runtime's secret), rather than blocking with nothing
         serving. A failing coroutine doesn't take the reflection server down
         with it: the error is logged, the server stays up, and the error is
-        raised once it stops.
+        raised once it stops, whether by Ctrl+C, SIGTERM, or on its own.
         """
         if not self._reflection_config.enabled:
             return run_loop(coro)
 
-        async def reflection_runner() -> T:
+        user_error: Exception | None = None
+        stop_signal: signal.Signals | None = None
+
+        async def reflection_runner() -> T | None:
+            nonlocal user_error, stop_signal
             user_result: T | None = None
-            user_error: Exception | None = None
             try:
                 user_result = await coro
                 logger.debug('User coroutine completed successfully.')
@@ -1125,37 +1129,54 @@ class Genkit:
                 logger.debug('Startup failure details', exc_info=True)
                 user_error = e
 
-            # Block until Ctrl+C (SIGINT handled by anyio) or SIGTERM, keeping
-            # the daemon reflection thread alive.
-            logger.info(self._reflection_ready_message())
+            # Block until Ctrl+C, SIGTERM, or the reflection server stops,
+            # keeping the daemon reflection thread alive. The receiver is open
+            # before the ready line, so a signal sent once it prints is ours,
+            # not asyncio's default SIGINT handling.
             try:
-                async with anyio.create_task_group() as tg:
+                with anyio.open_signal_receiver(signal.SIGINT, signal.SIGTERM) as sigs:
+                    logger.info(self._reflection_ready_message())
+                    async with anyio.create_task_group() as tg:
 
-                    async def _handle_sigterm(tg_: anyio.abc.TaskGroup) -> None:  # type: ignore[name-defined]
-                        with anyio.open_signal_receiver(signal.SIGTERM) as sigs:
-                            async for _ in sigs:
+                        async def _handle_signal(tg_: anyio.abc.TaskGroup) -> None:  # type: ignore[name-defined]
+                            nonlocal stop_signal
+                            async for sig in sigs:
+                                stop_signal = sig
                                 tg_.cancel_scope.cancel()
                                 return
 
-                    async def _handle_reflection_stopped(tg_: anyio.abc.TaskGroup) -> None:  # type: ignore[name-defined]
-                        # abandon_on_cancel: Ctrl+C must not wait for a worker
-                        # thread still blocked in Event.wait.
-                        await anyio.to_thread.run_sync(self._reflection_stopped.wait, abandon_on_cancel=True)
-                        logger.warning('Reflection server stopped; returning from run_main.')
-                        tg_.cancel_scope.cancel()
+                        async def _handle_reflection_stopped(tg_: anyio.abc.TaskGroup) -> None:  # type: ignore[name-defined]
+                            # Poll rather than park a worker thread in Event.wait:
+                            # anyio worker threads are non-daemon, so a parked one
+                            # keeps the process alive after run_main returns.
+                            while not self._reflection_stopped.is_set():  # noqa: ASYNC110 - threading.Event, set off-loop
+                                await anyio.sleep(0.25)
+                            logger.warning('Reflection server stopped; returning from run_main.')
+                            tg_.cancel_scope.cancel()
 
-                    tg.start_soon(_handle_sigterm, tg)
-                    tg.start_soon(_handle_reflection_stopped, tg)
-                    await anyio.sleep_forever()
+                        tg.start_soon(_handle_signal, tg)
+                        tg.start_soon(_handle_reflection_stopped, tg)
+                        await anyio.sleep_forever()
             except anyio.get_cancelled_exc_class():
                 pass
 
             logger.debug('Reflection server stopped.')
-            if user_error is not None:
-                raise user_error
-            return cast(T, user_result)
+            return user_result
 
-        return anyio.run(reflection_runner)
+        # Decide out here, after the loop has shut down cleanly, so neither the
+        # coroutine's error nor KeyboardInterrupt is raised during asyncio shutdown.
+        try:
+            result = anyio.run(reflection_runner)
+        except KeyboardInterrupt:
+            # Ctrl+C before the receiver opened (main still running).
+            if user_error is None:
+                raise
+            raise user_error from None
+        if user_error is not None:
+            raise user_error
+        if stop_signal == signal.SIGINT:
+            raise KeyboardInterrupt
+        return cast(T, result)
 
     def _reflection_ready_message(self) -> str:
         """The line run_main logs once it starts waiting on the reflection server."""
