@@ -100,7 +100,7 @@ var gccOverrides = internal.SchemaOverrides{
 		"systemInstruction",            // ai.WithSystem
 		"cachedContent",                // (*ai.Message).WithCacheTTL / WithCacheName
 		"responseSchema",               // ai.WithOutputType / ai.WithOutputSchema
-		"responseMimeType",             // ai.WithOutputFormat / ai.WithOutputType / ai.WithOutputSchema
+		"responseMimeType",             // ai.WithOutputFormat / ai.WithOutputType / ai.WithOutputSchema / ai.WithOutputSchemaName
 		"responseJsonSchema",           // ai.WithOutputType / ai.WithOutputSchema
 		"tools[].functionDeclarations", // ai.WithTools (built-in API tools on Tool stay visible)
 		// Pinned to 1 by the plugin; the API only supports a single candidate.
