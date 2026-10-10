@@ -106,9 +106,9 @@ bump-version VERSION:
 build:
     "{{ py_dir }}/bin/build_dists"
 
-# Create a GitHub release.
-create-release:
-    "{{ py_dir }}/bin/create_release"
+# Tag and publish a release from its merged release PR.
+create-release VERSION PR *FLAGS:
+    "{{ py_dir }}/bin/create_release" {{ VERSION }} {{ PR }} {{ FLAGS }}
 
 # Publish to PyPI.
 publish:
