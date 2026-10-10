@@ -225,6 +225,9 @@ func generate(
 		if err != nil {
 			return nil, wrapAPIError(err)
 		}
+		if ctx.Err() != nil {
+			break
+		}
 		sawChunk = true
 		for _, c := range chunk.Candidates {
 			if merged == nil {
@@ -261,6 +264,12 @@ func generate(
 		if chunk.PromptFeedback != nil {
 			feedback = chunk.PromptFeedback
 		}
+	}
+	// The SDK only logs a failed read rather than yielding it, so a stream
+	// whose context ends mid-read stops with no error. Report the cause, as
+	// the read error would.
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("model stream: %w", err)
 	}
 	if !sawChunk {
 		// A stream can end without yielding a chunk: the SDK only logs a
@@ -797,8 +806,18 @@ func toGeminiPart(p *ai.Part) (*genai.Part, error) {
 			fc.ThoughtSignature = metadataSignature(p.Metadata)
 		}
 		return fc, nil
+	case p.IsCustom():
+		// Code execution comes back as custom parts, which the next turn
+		// sends back as history.
+		if ec := ToExecutableCode(p); ec != nil {
+			gp = genai.NewPartFromExecutableCode(ec.Code, genai.Language(ec.Language))
+		} else if cr := ToCodeExecutionResult(p); cr != nil {
+			gp = genai.NewPartFromCodeExecutionResult(genai.Outcome(cr.Outcome), cr.Output)
+		} else {
+			return nil, status.Errorf(status.ErrInvalidArgument, "unknown custom part in the request: %v", p.Custom)
+		}
 	default:
-		return nil, status.Errorf(status.ErrInvalidArgument, "unknown part in the request: %q", p.Kind)
+		return nil, status.Errorf(status.ErrInvalidArgument, "unknown part kind %d in the request", p.Kind)
 	}
 
 	// Restore ThoughtSignature if present in metadata.

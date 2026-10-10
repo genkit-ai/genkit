@@ -1013,6 +1013,36 @@ func genToolName(length int, chars string) string {
 	return string(r)
 }
 
+// Code execution answers come back as custom parts, and the next turn sends
+// them back in its history.
+func TestToGeminiPartCodeExecution(t *testing.T) {
+	sig := []byte("sig")
+	code := newExecutableCodePart("PYTHON", "print(1)")
+	code.Metadata = map[string]any{"signature": sig}
+	gp, err := toGeminiPart(code)
+	if err != nil {
+		t.Fatalf("toGeminiPart(executableCode) error = %v", err)
+	}
+	if gp.ExecutableCode == nil || gp.ExecutableCode.Code != "print(1)" || gp.ExecutableCode.Language != genai.LanguagePython {
+		t.Errorf("ExecutableCode = %+v, want the code and its language", gp.ExecutableCode)
+	}
+	if string(gp.ThoughtSignature) != "sig" {
+		t.Errorf("ThoughtSignature = %q, want %q", gp.ThoughtSignature, "sig")
+	}
+
+	gp, err = toGeminiPart(newCodeExecutionResultPart("OUTCOME_OK", "1\n"))
+	if err != nil {
+		t.Fatalf("toGeminiPart(codeExecutionResult) error = %v", err)
+	}
+	if gp.CodeExecutionResult == nil || gp.CodeExecutionResult.Outcome != genai.OutcomeOK || gp.CodeExecutionResult.Output != "1\n" {
+		t.Errorf("CodeExecutionResult = %+v, want the outcome and output", gp.CodeExecutionResult)
+	}
+
+	if _, err := toGeminiPart(ai.NewCustomPart(map[string]any{"other": 1})); err == nil {
+		t.Error("toGeminiPart(unknown custom part) error = nil, want it rejected")
+	}
+}
+
 // TestThoughtSignatureRoundTrip tests that thought signatures are properly preserved
 // when converting between Genkit and Gemini part formats.
 func TestThoughtSignatureRoundTrip(t *testing.T) {
@@ -1795,6 +1825,35 @@ func TestGenerateStreamEmptyStream(t *testing.T) {
 	_, err := generate(context.Background(), client, "gemini-flash-latest", streamInput(), &genai.GenerateContentConfig{}, cb)
 	if err == nil {
 		t.Fatal("generate = nil error, want error for an empty stream")
+	}
+}
+
+// A cancel mid-stream must fail the call. The SDK only logs the failed read,
+// so without a check the stream would end as if the model had finished.
+func TestGenerateStreamCancelled(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprintf(w, "data: %s\n\n", `{"candidates":[{"content":{"role":"model","parts":[{"text":"1 2 3"}]}}]}`)
+		w.(http.Flusher).Flush()
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	defer srv.Close()
+	defer close(release)
+	client := newTestClient(t, srv.URL)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cb := func(context.Context, *ai.ModelResponseChunk) error {
+		cancel()
+		return nil
+	}
+	_, err := generate(ctx, client, "gemini-flash-latest", streamInput(), &genai.GenerateContentConfig{}, cb)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("generate error = %v, want one wrapping context.Canceled", err)
 	}
 }
 

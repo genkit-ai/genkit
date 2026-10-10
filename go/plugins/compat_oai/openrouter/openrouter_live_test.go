@@ -58,9 +58,7 @@ func TestPluginLive(t *testing.T) {
 			// placeholder only trips secret scanning on the way to the same
 			// 401.
 			BadKeyPlugin: &openrouter.OpenRouter{APIKey: "invalid"},
-			Skip: map[string]string{
-				"generate/unknown model": "OpenRouter answers an unknown model ID with 400, not 404",
-			},
+			Skip:         map[string]string{},
 		},
 		ExtraConfig: map[string]any{
 			"extra": map[string]any{"user": "genkit-livetest"},

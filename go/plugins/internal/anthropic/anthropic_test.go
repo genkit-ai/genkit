@@ -710,6 +710,26 @@ func TestToAnthropicRequest_StructuredOutput(t *testing.T) {
 	}
 }
 
+// The array and enum formats ask for a constraint too. Without one their
+// request would reach the API with neither a constraint nor, since the model
+// claims constrained output, the format instructions.
+func TestToAnthropicRequest_StructuredOutputNonObjectRoot(t *testing.T) {
+	for format, schema := range map[string]map[string]any{
+		"array": {"type": "array", "items": map[string]any{"type": "string"}},
+		"enum":  {"type": "string", "enum": []any{"red", "green"}},
+	} {
+		req := userRequest()
+		req.Output = &ai.ModelOutputConfig{Format: format, Schema: schema, Constrained: true}
+		got, err := toAnthropicRequest("anthropic", req, anthropic.MessageNewParams{MaxTokens: 100})
+		if err != nil {
+			t.Fatalf("%s: unexpected error: %v", format, err)
+		}
+		if got.OutputConfig.Format.Schema["type"] != schema["type"] {
+			t.Errorf("%s: OutputConfig schema = %v, want the %s schema", format, got.OutputConfig.Format.Schema, format)
+		}
+	}
+}
+
 // userRequest builds a minimal request carrying a single user message. The
 // config travels beside the request now, so it is not part of it.
 func userRequest() *ai.ModelRequest {
@@ -1109,5 +1129,47 @@ func TestGenerateReportsUsage(t *testing.T) {
 				t.Errorf("Usage mismatch (-want +got):\n%s", diff)
 			}
 		})
+	}
+}
+
+// A redacted_thinking block is thinking the API encrypted for safety reasons.
+// It must not fail the response, and the next turn must send it back
+// unchanged, after the history has gone through JSON as a stored session does.
+func TestRedactedThinkingRoundTrip(t *testing.T) {
+	var m anthropic.Message
+	if err := json.Unmarshal([]byte(`{
+		"id": "msg_1", "type": "message", "role": "assistant", "model": "claude-sonnet-5",
+		"stop_reason": "end_turn",
+		"content": [
+			{"type": "thinking", "thinking": "Let me think.", "signature": "sig"},
+			{"type": "redacted_thinking", "data": "EmwKAhgB"},
+			{"type": "text", "text": "Done."}
+		],
+		"usage": {"input_tokens": 1, "output_tokens": 2}
+	}`), &m); err != nil {
+		t.Fatalf("unmarshal message: %v", err)
+	}
+	resp, err := toGenkitResponse(&m, 0)
+	if err != nil {
+		t.Fatalf("toGenkitResponse() error = %v", err)
+	}
+	if got := resp.Reasoning(); got != "Let me think." {
+		t.Errorf("Reasoning() = %q, want only the readable thinking", got)
+	}
+
+	var stored ai.Message
+	b, err := json.Marshal(resp.Message)
+	if err != nil {
+		t.Fatalf("marshal message: %v", err)
+	}
+	if err := json.Unmarshal(b, &stored); err != nil {
+		t.Fatalf("unmarshal message: %v", err)
+	}
+	blocks, err := toAnthropicParts(stored.Content)
+	if err != nil {
+		t.Fatalf("toAnthropicParts() error = %v", err)
+	}
+	if got, want := wireJSON(t, blocks[1]), `{"data":"EmwKAhgB","type":"redacted_thinking"}`; got != want {
+		t.Errorf("block = %s, want %s", got, want)
 	}
 }

@@ -5586,3 +5586,83 @@ func TestSumUsageSumsEveryField(t *testing.T) {
 		t.Errorf("SumUsage mutated its argument: %+v", u)
 	}
 }
+
+// A model that claims constrained output may constrain the json format
+// alone, so the array and enum formats keep their instructions under a
+// native constraint, and only json goes without them.
+func TestGenerateConstrainedFormatInstructions(t *testing.T) {
+	r := registry.New()
+	ConfigureFormats(r)
+	var got *ModelRequest
+	m := defineModel(r, "test/constrainedInstructions", &ModelOptions{
+		Supports: &ModelSupports{Constrained: ConstrainedSupportAll},
+	}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		got = req
+		return &ModelResponse{Request: req, Message: NewModelTextMessage(`"red"`)}, nil
+	})
+
+	for _, tc := range []struct {
+		name             string
+		opts             []GenerateOption
+		wantInstructions bool
+	}{
+		{"json", []GenerateOption{WithOutputType(struct{ Name string }{})}, false},
+		{"array", []GenerateOption{WithOutputType([]string{}), WithOutputFormat(OutputFormatArray)}, true},
+		{"enum", []GenerateOption{WithOutputEnums("red", "green")}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got = nil
+			opts := append([]GenerateOption{WithModel(m), WithPrompt("hi")}, tc.opts...)
+			Generate(context.Background(), r, opts...) // only the request matters
+			if got == nil {
+				t.Fatal("the model was not called")
+			}
+			if !got.Output.Constrained {
+				t.Errorf("Output.Constrained = false, want the native constraint kept")
+			}
+			var instructed bool
+			for _, msg := range got.Messages {
+				for _, p := range msg.Content {
+					instructed = instructed || p.Metadata["purpose"] == "output"
+				}
+			}
+			if instructed != tc.wantInstructions {
+				t.Errorf("format instructions sent = %v, want %v", instructed, tc.wantInstructions)
+			}
+		})
+	}
+
+	// The wire form can carry a native constraint and explicit instructions
+	// together, as a JS client or the Dev UI may send.
+	t.Run("json with explicit instructions", func(t *testing.T) {
+		got = nil
+		custom := "Reply with a JSON object."
+		GenerateWithRequest(context.Background(), r, &GenerateActionOptions{
+			Model:    m.Name(),
+			Messages: []*Message{NewUserTextMessage("hi")},
+			Output: &GenerateActionOutputConfig{
+				Format:       OutputFormatJSON,
+				JsonSchema:   map[string]any{"type": "object"},
+				Constrained:  true,
+				Instructions: &custom,
+			},
+		}, nil, nil) // only the request matters
+		if got == nil {
+			t.Fatal("the model was not called")
+		}
+		if !got.Output.Constrained {
+			t.Errorf("Output.Constrained = false, want the native constraint kept")
+		}
+		var sent string
+		for _, msg := range got.Messages {
+			for _, p := range msg.Content {
+				if p.Metadata["purpose"] == "output" {
+					sent = p.Text
+				}
+			}
+		}
+		if sent != custom {
+			t.Errorf("output instructions = %q, want %q", sent, custom)
+		}
+	})
+}

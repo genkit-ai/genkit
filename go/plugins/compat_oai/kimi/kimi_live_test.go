@@ -33,12 +33,6 @@ func TestPluginLive(t *testing.T) {
 			ReasoningContent: true,
 			LimitConfig:      &kimi.ChatConfig{MaxOutputTokens: 16},
 			BadKeyPlugin:     &kimi.Kimi{APIKey: "invalid"},
-			Skip: map[string]string{
-				// The catalog claims constrained output alongside tools, but
-				// with a response format set the model answers in JSON at
-				// once and never calls the tool.
-				"generate/tools then structured output": "kimi-k3 skips tools under a response format",
-			},
 		},
 		ExtraConfig: map[string]any{
 			"extra": map[string]any{"thinking": map[string]any{"type": "disabled"}},

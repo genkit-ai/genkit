@@ -44,6 +44,12 @@ type ModelGenerator struct {
 	outputFormats []string
 	// separateReasoning is [OpenAICompatible.SeparateReasoningTokens].
 	separateReasoning bool
+	// constrained is the model's constrained output claim. A model that
+	// claims it only without tools gets no JSON mode on a request with
+	// tools, as it gets no schema.
+	constrained ai.ConstrainedSupport
+	// classify is the provider's [OpenAICompatible.ClassifyError].
+	classify func(*openai.Error) status.Name
 	// Store any errors that occur during building
 	err error
 }
@@ -314,7 +320,11 @@ func clearManagedFields(params *openai.ChatCompletionNewParams) {
 // WithOutputFormats declares the output formats the model serves natively on
 // the wire. When the declaration leaves "json" out, a schema-less JSON
 // request sends no response_format and rides on the injected format
-// instructions instead. Nil declares nothing and keeps every format eligible.
+// instructions instead. A constrained "array" or "enum" request sends its
+// schema as a json_schema response_format only when the declaration lists
+// that format, since some endpoints (OpenAI's among them) accept only an
+// object at the schema root. Nil declares nothing and keeps the json format
+// eligible.
 func (g *ModelGenerator) WithOutputFormats(formats []string) *ModelGenerator {
 	if g.err != nil {
 		return g
@@ -423,13 +433,41 @@ func (g *ModelGenerator) Generate(ctx context.Context, req *ai.ModelRequest, han
 // "json" out has no schema-less JSON mode on the wire (Anthropic's compatible
 // endpoint rejects the json_object type), so such a request sends no
 // response_format and the format instructions the framework injects carry it
-// instead.
+// instead, as does a request with tools to a model that constrains output
+// only without them. A constrained array or enum request sends its schema
+// only to a model that declares the format.
 func (g *ModelGenerator) applyResponseFormat(output *ai.ModelOutputConfig) {
 	format := getResponseFormat(output)
 	if format.OfJSONObject != nil && len(g.outputFormats) > 0 && !slices.Contains(g.outputFormats, "json") {
 		format = openai.ChatCompletionNewParamsResponseFormatUnion{}
 	}
+	// The framework drops the schema of a model that constrains output only
+	// without tools when the request has tools, since such a model answers
+	// in JSON at once and never calls them. JSON mode does the same, so it
+	// goes too, and the injected format instructions carry the format.
+	if format.OfJSONObject != nil && len(g.tools) > 0 && g.constrained == ai.ConstrainedSupportNoTools {
+		format = openai.ChatCompletionNewParamsResponseFormatUnion{}
+	}
+	if output != nil && output.Constrained && output.Schema != nil && slices.Contains(g.outputFormats, output.Format) {
+		switch output.Format {
+		case "array", "enum":
+			format = jsonSchemaFormat(output.Schema)
+		}
+	}
 	g.request.ResponseFormat = format
+}
+
+// jsonSchemaFormat is a strict json_schema response format for schema.
+func jsonSchemaFormat(schema map[string]any) openai.ChatCompletionNewParamsResponseFormatUnion {
+	return openai.ChatCompletionNewParamsResponseFormatUnion{
+		OfJSONSchema: &shared.ResponseFormatJSONSchemaParam{
+			JSONSchema: shared.ResponseFormatJSONSchemaJSONSchemaParam{
+				Name:   "output",
+				Schema: schema,
+				Strict: openai.Bool(true),
+			},
+		},
+	}
 }
 
 // getResponseFormat determines the appropriate response format based on the output configuration
@@ -443,14 +481,7 @@ func getResponseFormat(output *ai.ModelOutputConfig) openai.ChatCompletionNewPar
 	switch output.Format {
 	case "json":
 		if output.Schema != nil {
-			jsonSchemaParam := shared.ResponseFormatJSONSchemaParam{
-				JSONSchema: shared.ResponseFormatJSONSchemaJSONSchemaParam{
-					Name:   "output",
-					Schema: output.Schema,
-					Strict: openai.Bool(true),
-				},
-			}
-			format.OfJSONSchema = &jsonSchemaParam
+			format = jsonSchemaFormat(output.Schema)
 		} else {
 			jsonObjectParam := shared.NewResponseFormatJSONObjectParam()
 			format.OfJSONObject = &jsonObjectParam
@@ -593,7 +624,7 @@ func (g *ModelGenerator) generateStream(ctx context.Context, req *ai.ModelReques
 	// the middleware around it are told the generation failed, rather than
 	// handed a short answer that reads as a complete one.
 	if err := stream.Err(); err != nil {
-		return nil, wrapStreamError(err)
+		return nil, wrapStreamError(err, g.classify)
 	}
 
 	if usageSeen {
@@ -647,24 +678,45 @@ func (g *ModelGenerator) generateStream(ctx context.Context, req *ai.ModelReques
 // message. Reading the code back out of it is the one way to recover the status
 // the failure carries.
 //
+// The code is an HTTP status or a status name, which some providers spell in
+// lower case with dashes (xAI sends "resource-exhausted"). A provider's own
+// numbering, such as Z.ai's four-digit codes, is not an HTTP status and is not
+// read as one.
+//
 // An error that classifies to nothing is left unclassified rather than marked
 // Unknown, since the retry middleware reissues an unclassified error and gives
 // up on an Unknown one, and a failure this cannot read is not a reason to stop
 // trying.
-func wrapStreamError(err error) error {
-	err = WrapAPIError(err)
+func wrapStreamError(err error, classify func(*openai.Error) status.Name) error {
+	err = classifyAPIError(err, classify)
 	if _, classified := status.Classified(err); classified {
 		return fmt.Errorf("stream error: %w", err)
 	}
 	message := err.Error()
 	if brace := strings.IndexByte(message, '{'); brace >= 0 {
-		if code, ok := extractErrorObject(message[brace:])["code"].(float64); ok {
-			if name := status.FromHTTPCode(int(code)); name != status.Unknown {
-				return status.Errorf(status.Base(name), "stream error: %w", err)
-			}
+		if name := statusOfCode(extractErrorObject(message[brace:])["code"]); name != "" {
+			return status.Errorf(status.Base(name), "stream error: %w", err)
 		}
 	}
 	return fmt.Errorf("stream error: %w", err)
+}
+
+// statusOfCode reads the code of an error object as a status, or returns ""
+// when it names none.
+func statusOfCode(code any) status.Name {
+	var name status.Name
+	switch c := code.(type) {
+	case float64:
+		if c >= 400 && c < 600 {
+			name = status.FromHTTPCode(int(c))
+		}
+	case string:
+		name = status.Name(strings.ToUpper(strings.ReplaceAll(c, "-", "_")))
+	}
+	if !name.IsValid() || name == status.OK || name == status.Unknown {
+		return ""
+	}
+	return name
 }
 
 // extractTokenCount reads a token count a provider reports as a usage field the
@@ -925,7 +977,7 @@ func addCustomTokens(usage *ai.GenerationUsage, name string, count int) {
 func (g *ModelGenerator) generateComplete(ctx context.Context, req *ai.ModelRequest) (*ai.ModelResponse, error) {
 	completion, err := g.client.Chat.Completions.New(ctx, *g.request)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create completion: %w", WrapAPIError(err))
+		return nil, fmt.Errorf("failed to create completion: %w", classifyAPIError(err, g.classify))
 	}
 
 	resp, err := convertChatCompletionToModelResponse(completion, g.separateReasoning)

@@ -19,7 +19,6 @@
 package oailive
 
 import (
-	"maps"
 	"strings"
 	"testing"
 
@@ -38,27 +37,11 @@ type Suite struct {
 	ExtraConfig map[string]any
 }
 
-// baseGaps are the shared cases the compat_oai base cannot pass yet, whatever
-// the provider. Each is a defect in the base, not in a provider.
-var baseGaps = map[string]string{
-	// The base constrains only the json format. The models claim
-	// constrained output, so the framework leaves the format instructions
-	// out, and an array or enum request reaches the provider with neither a
-	// constraint nor instructions.
-	"generate/array output":               "compat_oai sends no response_format for the array format",
-	"generate/array output streaming":     "compat_oai sends no response_format for the array format",
-	"generate/enum output":                "compat_oai sends no response_format for the enum format",
-	"generate/enum output is constrained": "compat_oai sends no response_format for the enum format",
-}
-
 // Run walks the plugin registered on g through the shared checklist and then
 // the OpenAI-compatible one, under a "compat_oai" subtest. See [livetest.Run]
 // for what it defines on g.
 func Run(t *testing.T, g *genkit.Genkit, s Suite) {
 	t.Helper()
-	skip := maps.Clone(baseGaps)
-	maps.Copy(skip, s.Skip)
-	s.Skip = skip
 	livetest.Run(t, g, s.Suite, livetest.Group{Name: "compat_oai", Cases: []livetest.Case{
 		{
 			Name: "extra config passthrough",

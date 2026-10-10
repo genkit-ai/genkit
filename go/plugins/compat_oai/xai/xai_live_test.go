@@ -40,12 +40,7 @@ func TestPluginLive(t *testing.T) {
 			}),
 			LimitConfig:  &xai.ChatConfig{MaxOutputTokens: 16},
 			BadKeyPlugin: &xai.XAI{APIKey: "invalid"},
-			Skip: map[string]string{
-				"generate/bad api key": "xAI answers a rejected key with 400, not 401",
-				// With a response format set, the model at times answers in
-				// JSON at once and never calls the tool.
-				"generate/tools then structured output": "grok-4.5 skips tools under a response format",
-			},
+			Skip:         map[string]string{},
 		},
 		ExtraConfig: map[string]any{
 			"extra": map[string]any{"user": "genkit-livetest"},

@@ -404,9 +404,11 @@ func toAnthropicRequest(provider string, i *ai.ModelRequest, config anthropic.Me
 		req.ToolChoice = toolChoice
 	}
 
-	if i.Output != nil && i.Output.Format == "json" && i.Output.Schema != nil && i.Output.Constrained {
-		// Native structured output via OutputConfig. Set only the format so a
-		// config-provided OutputConfig.Effort survives.
+	if i.Output != nil && i.Output.Schema != nil && i.Output.Constrained {
+		// Native structured output via OutputConfig, for every format that
+		// asks for it: the API takes an array or an enum at the schema root
+		// as well as an object. Set only the format so a config-provided
+		// OutputConfig.Effort survives.
 		req.OutputConfig.Format = anthropic.JSONOutputFormatParam{
 			Schema: pluginjsonschema.EnforceStrict(i.Output.Schema),
 			// Type is elided, defaults to "json_schema"
@@ -530,6 +532,14 @@ func toAnthropicParts(parts []*ai.Part) ([]anthropic.ContentBlockParamUnion, err
 			blocks = append(blocks, block)
 		case p.IsReasoning():
 			blocks = append(blocks, anthropic.NewThinkingBlock(string(metadataSignature(p.Metadata)), p.Text))
+		case p.IsCustom():
+			// Redacted thinking goes back exactly as it came, as the API
+			// requires.
+			data, ok := p.Custom[redactedThinkingKey].(string)
+			if !ok {
+				return nil, status.Errorf(ai.ErrInvalidPart, "unknown custom part in the request: %v", p.Custom)
+			}
+			blocks = append(blocks, anthropic.NewRedactedThinkingBlock(data))
 		default:
 			return nil, status.Errorf(ai.ErrInvalidPart, "unknown part type in the request")
 		}
@@ -614,6 +624,12 @@ func toAnthropicToolResultContent(p *ai.Part) (anthropic.ToolResultBlockParamCon
 		"unsupported part in tool response content: Anthropic tool results accept text, image, and document parts")
 }
 
+// redactedThinkingKey names the custom part that carries a redacted_thinking
+// block: thinking the API encrypted for safety reasons, which a later turn
+// must send back unchanged. It is a custom part rather than a reasoning part
+// since it holds no readable thought. The JS plugin uses the same shape.
+const redactedThinkingKey = "redactedThinking"
+
 // toGenkitResponse translates an Anthropic Message, and the thinking token
 // count reported beside it, to [ai.ModelResponse].
 func toGenkitResponse(m *anthropic.Message, thinking int64) (*ai.ModelResponse, error) {
@@ -639,6 +655,8 @@ func toGenkitResponse(m *anthropic.Message, thinking int64) (*ai.ModelResponse, 
 		switch part.AsAny().(type) {
 		case anthropic.ThinkingBlock:
 			p = ai.NewReasoningPart(part.Thinking, []byte(part.Signature))
+		case anthropic.RedactedThinkingBlock:
+			p = ai.NewCustomPart(map[string]any{redactedThinkingKey: part.Data})
 		case anthropic.TextBlock:
 			p = ai.NewTextPart(string(part.Text))
 		case anthropic.ToolUseBlock:

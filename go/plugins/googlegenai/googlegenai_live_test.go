@@ -17,7 +17,6 @@ package googlegenai_test
 import (
 	"context"
 	"fmt"
-	"maps"
 	"strings"
 	"testing"
 	"time"
@@ -38,32 +37,17 @@ type genaiSuite struct {
 	ref func(id string, config *genai.GenerateContentConfig) ai.ModelRef
 	// flash is the Gemini model the family cases spend on.
 	flash string
-	// imageModel, speechModel, imagenModel and videoModel serve the
-	// expensive media output cases. An empty one skips its case.
-	imageModel, speechModel, imagenModel, videoModel string
-	// imagenRef and videoRef build references to the Imagen and Veo models.
-	imagenRef func(id string) ai.ModelRef
-	videoRef  func(id string) ai.ModelRef
-}
-
-// genaiGaps are the cases the plugin cannot pass yet on either backend, keyed
-// like [livetest.Suite.Skip].
-var genaiGaps = map[string]string{
-	"generate/cancel while streaming": "the stream keeps reading after its context is cancelled",
-	"agent/abort while streaming":     "the stream keeps reading after its context is cancelled",
-	// The plugin turns code execution output into custom parts and has no
-	// way back: the next request fails with "unknown part in the request".
-	"googlegenai/code execution across turns": "custom parts in history are rejected",
+	// imageModel, speechModel and videoModel serve the expensive media
+	// output cases. An empty one skips its case.
+	imageModel, speechModel, videoModel string
+	// videoRef builds references to the Veo models.
+	videoRef func(id string) ai.ModelRef
 }
 
 // runGenAI walks the backend registered on g through the shared checklist and
 // then the Google GenAI one, under a "googlegenai" subtest.
 func runGenAI(t *testing.T, g *genkit.Genkit, s genaiSuite) {
 	t.Helper()
-	skip := maps.Clone(genaiGaps)
-	maps.Copy(skip, s.Skip)
-	s.Skip = skip
-
 	flash := func(config *genai.GenerateContentConfig) ai.ModelRef { return s.ref(s.flash, config) }
 	gen := func(t *testing.T, opts ...ai.GenerateOption) *ai.ModelResponse {
 		t.Helper()
@@ -199,14 +183,6 @@ func runGenAI(t *testing.T, g *genkit.Genkit, s genaiSuite) {
 				ai.WithModel(s.ref(s.speechModel, nil)),
 				ai.WithPrompt("Say: the quick brown fox jumps over the lazy dog."))
 			wantMedia(t, resp, "audio/")
-		}},
-
-		{Name: "imagen output", Needs: needModel(s.imagenModel, "Imagen"), Run: func(t *testing.T) {
-			livetest.Expensive(t)
-			resp := gen(t,
-				ai.WithModel(s.imagenRef(s.imagenModel)),
-				ai.WithPrompt("A red circle on a white background."))
-			wantMedia(t, resp, "image/")
 		}},
 
 		{Name: "veo output", Needs: needModel(s.videoModel, "Veo"), Run: func(t *testing.T) {

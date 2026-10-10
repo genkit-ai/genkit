@@ -28,6 +28,7 @@ import (
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/compat_oai"
 	"github.com/firebase/genkit/go/plugins/compat_oai/xai"
@@ -216,8 +217,8 @@ func TestPluginRegistersModelsAndHandlesReasoning(t *testing.T) {
 			}
 		}
 		output, _ := supports["output"].([]string)
-		if !slices.Equal(output, []string{"text", "json"}) {
-			t.Errorf("%s output = %v, want [text json]", modelID, output)
+		if !slices.Equal(output, []string{"text", "json", "array", "enum"}) {
+			t.Errorf("%s output = %v, want [text json array enum]", modelID, output)
 		}
 	}
 
@@ -800,5 +801,30 @@ func TestConstrainedSupport(t *testing.T) {
 	}
 	if got := constrained(resolved); got != ai.ConstrainedSupportNoTools {
 		t.Errorf("dynamic constrained = %q, want %q", got, ai.ConstrainedSupportNoTools)
+	}
+}
+
+// xAI answers a rejected key with 400 and a bare string in place of an error object. The plugin reports the status the cause calls for, and leaves any
+// other 400 as INVALID_ARGUMENT.
+func TestRejectedKeyIsUnauthenticated(t *testing.T) {
+	for body, want := range map[string]status.Name{
+		`{"code":"Client specified an invalid argument","error":"Incorrect API key provided. You can obtain an API key from https://console.x.ai."}`: status.Unauthenticated,
+		`{"code":"Client specified an invalid argument","error":"Invalid request content."}`:                                                         status.InvalidArgument,
+	} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, body)
+		}))
+		g := genkit.Init(context.Background(), genkit.WithPlugins(&xai.XAI{
+			APIKey: "test-key",
+			Opts:   []option.RequestOption{option.WithBaseURL(server.URL)},
+		}))
+		_, err := genkit.Generate(context.Background(), g,
+			ai.WithModelName("xai/no-such-model"), ai.WithPrompt("hi"))
+		server.Close()
+		if got := status.Of(err); got != want {
+			t.Errorf("body %s: status = %q, want %q: %v", body, got, want, err)
+		}
 	}
 }
