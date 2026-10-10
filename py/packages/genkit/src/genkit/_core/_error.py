@@ -292,8 +292,7 @@ class Status(BaseModel):
         frozen=True,
         validate_assignment=True,
         extra='forbid',
-        validate_by_name=True,
-        validate_by_alias=True,
+        populate_by_name=True,
     )
 
     name: StatusName
@@ -308,9 +307,7 @@ class Status(BaseModel):
 class ReflectionErrorDetails(BaseModel):
     """Wire format for reflection API error details."""
 
-    model_config: ClassVar[ConfigDict] = ConfigDict(
-        extra='allow', validate_by_name=True, validate_by_alias=True, alias_generator=to_camel
-    )
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra='allow', populate_by_name=True, alias_generator=to_camel)
 
     stack: str | None = None
     trace_id: str | None = None
@@ -327,15 +324,14 @@ class ReflectionError(BaseModel):
         frozen=True,
         validate_assignment=True,
         extra='forbid',
-        validate_by_name=True,
-        validate_by_alias=True,
+        populate_by_name=True,
     )
 
 
 class HttpErrorWireFormat(BaseModel):
     """Wire format for HTTP error details."""
 
-    model_config: ClassVar[ConfigDict] = ConfigDict(extra='allow', validate_by_name=True, validate_by_alias=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra='allow', populate_by_name=True)
 
     details: Any
     message: str

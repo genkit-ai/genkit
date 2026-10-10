@@ -148,8 +148,7 @@ class _SnapshotWriteMeta(BaseModel):
 
     model_config = ConfigDict(
         extra='ignore',
-        validate_by_name=True,
-        validate_by_alias=True,
+        populate_by_name=True,
         alias_generator=to_camel,
     )
 
@@ -168,8 +167,7 @@ class _ParentChainMeta(BaseModel):
 
     model_config = ConfigDict(
         extra='ignore',
-        validate_by_name=True,
-        validate_by_alias=True,
+        populate_by_name=True,
         alias_generator=to_camel,
     )
 
@@ -183,8 +181,7 @@ class _SnapshotDoc(BaseModel):
 
     model_config = ConfigDict(
         extra='ignore',
-        validate_by_name=True,
-        validate_by_alias=True,
+        populate_by_name=True,
         alias_generator=to_camel,
     )
 
@@ -229,8 +226,7 @@ class _PointerDoc(BaseModel):
 
     model_config = ConfigDict(
         extra='ignore',
-        validate_by_name=True,
-        validate_by_alias=True,
+        populate_by_name=True,
         alias_generator=to_camel,
     )
 

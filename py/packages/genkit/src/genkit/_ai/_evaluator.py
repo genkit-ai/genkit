@@ -61,9 +61,7 @@ BatchEvaluatorFn = Callable[[EvalRequest], Coroutine[Any, Any, list[EvalFnRespon
 class EvaluatorRef(BaseModel):
     """Reference to an evaluator."""
 
-    model_config: ClassVar[ConfigDict] = ConfigDict(
-        extra='forbid', validate_by_name=True, validate_by_alias=True, alias_generator=to_camel
-    )
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra='forbid', populate_by_name=True, alias_generator=to_camel)
 
     name: str
     config: dict[str, object] | None = None

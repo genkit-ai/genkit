@@ -70,7 +70,7 @@ class RankedDocumentMetadata(BaseModel):
     """
 
     # The only reranker type the schema opens up; the other three forbid extras.
-    model_config = ConfigDict(alias_generator=to_camel, extra='allow', validate_by_name=True, validate_by_alias=True)
+    model_config = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
 
     score: float
     """The model's relevance score for this document against the query."""
@@ -82,7 +82,7 @@ class RankedDocumentData(BaseModel):
     Mirrors the genkit-schema type of the same name.
     """
 
-    model_config = ConfigDict(alias_generator=to_camel, extra='forbid', validate_by_name=True, validate_by_alias=True)
+    model_config = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
 
     content: list[Part]
     """The ranked document's parts, taken verbatim from the input document."""
@@ -105,7 +105,7 @@ class RerankerRequest(BaseModel):
     Mirrors the genkit-schema type of the same name.
     """
 
-    model_config = ConfigDict(alias_generator=to_camel, extra='forbid', validate_by_name=True, validate_by_alias=True)
+    model_config = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
 
     query: Document
     """The query to rank the documents against."""
@@ -135,7 +135,7 @@ class RerankerResponse(BaseModel):
     Mirrors the genkit-schema type of the same name.
     """
 
-    model_config = ConfigDict(alias_generator=to_camel, extra='forbid', validate_by_name=True, validate_by_alias=True)
+    model_config = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
 
     documents: list[RankedDocumentData]
     """The ranked documents, in the order the service returned them."""
@@ -145,7 +145,7 @@ class BedrockRerankOptions(BaseModel):
     """Per-call options for a Bedrock rerank call."""
 
     # Unknown keys are ignored rather than forbidden.
-    model_config = ConfigDict(alias_generator=to_camel, validate_by_name=True, validate_by_alias=True)
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
 
     top_n: int | None = None
     """Caps how many ranked documents the service returns. Unset, ``<= 0``, or

@@ -34,7 +34,7 @@ class ClientOptions(BaseModel):
     them; check/cancel receive the options needed for their own request.
     """
 
-    model_config = ConfigDict(alias_generator=to_camel, extra='ignore', validate_by_name=True, validate_by_alias=True)
+    model_config = ConfigDict(alias_generator=to_camel, extra='ignore', populate_by_name=True)
 
     api_key: str | None = None
     api_version: str | None = None
