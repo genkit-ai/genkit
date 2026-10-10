@@ -18,12 +18,14 @@ package localvec
 
 import (
 	"context"
+	"errors"
 	"math"
 	"strings"
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/internal/fakeembedder"
 )
@@ -232,5 +234,27 @@ func TestInit(t *testing.T) {
 	want := "devLocalVectorStore/" + name
 	if g := ret.Name(); g != want {
 		t.Errorf("got %q, want %q", g, want)
+	}
+}
+
+func TestEmbedderErrorClassification(t *testing.T) {
+	ctx := context.Background()
+	g := genkit.Init(ctx)
+	embedder := genkit.DefineEmbedder(g, "fake/failing", nil,
+		func(context.Context, *ai.EmbedRequest) (*ai.EmbedResponse, error) {
+			return nil, status.Errorf(status.ErrResourceExhausted, "quota exceeded")
+		})
+	ds, ret, err := DefineRetriever(g, "failing", Config{Dir: t.TempDir(), Embedder: embedder}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = Index(ctx, []*ai.Document{ai.DocumentFromText("hello", nil)}, ds)
+	if !errors.Is(err, status.ErrResourceExhausted) {
+		t.Errorf("Index error = %v, want errors.Is ErrResourceExhausted", err)
+	}
+	_, err = ret.Retrieve(ctx, &ai.RetrieverRequest{Query: ai.DocumentFromText("hello", nil)})
+	if !errors.Is(err, status.ErrResourceExhausted) {
+		t.Errorf("Retrieve error = %v, want errors.Is ErrResourceExhausted", err)
 	}
 }
