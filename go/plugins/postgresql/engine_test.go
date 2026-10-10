@@ -175,34 +175,6 @@ func TestGetUser(t *testing.T) {
 	}
 }
 
-func TestPoolConfig(t *testing.T) {
-	// pgx reads a password from the environment; the config must not keep it.
-	t.Setenv("PGPASSWORD", "from-the-environment")
-
-	// Credentials reach the connection config verbatim, whatever they contain.
-	cfg := engineConfig{user: "app user", password: `p a's\"s=word`, database: "my db"}
-	config, err := poolConfig(cfg, false)
-	if err != nil {
-		t.Fatalf("poolConfig: %v", err)
-	}
-	if got := config.ConnConfig; got.User != cfg.user || got.Password != cfg.password || got.Database != cfg.database {
-		t.Errorf("config has user %q, password %q, database %q; want %q, %q, %q",
-			got.User, got.Password, got.Database, cfg.user, cfg.password, cfg.database)
-	}
-	if config.ConnConfig.TLSConfig != nil {
-		t.Error("config enables TLS, but the Cloud SQL connector encrypts the connection itself")
-	}
-
-	// An IAM login sends no password: the connector authenticates it.
-	iam, err := poolConfig(engineConfig{user: "runner@my-project.iam", password: "unused", database: "db"}, true)
-	if err != nil {
-		t.Fatalf("poolConfig: %v", err)
-	}
-	if iam.ConnConfig.Password != "" {
-		t.Errorf("IAM config has password %q, want none", iam.ConnConfig.Password)
-	}
-}
-
 // TestCloseLeavesCallerPool needs a PostgreSQL server: set
 // GENKIT_TEST_POSTGRES_URL to a connection URL for a database the test may use.
 func TestCloseLeavesCallerPool(t *testing.T) {

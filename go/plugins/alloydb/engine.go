@@ -25,6 +25,8 @@ import (
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/oauth2/v2"
 	"google.golang.org/api/option"
+
+	"github.com/firebase/genkit/go/plugins/internal/pgengine"
 )
 
 // IpType type of IP address, public or private
@@ -101,7 +103,7 @@ func getUser(ctx context.Context, config engineConfig) (string, bool, error) {
 	}
 	if config.iamAccountEmail != "" {
 		// If iamAccountEmail is provided use it as user.
-		return config.iamAccountEmail, true, nil
+		return pgengine.IAMUser(config.iamAccountEmail), true, nil
 	}
 	// If neither user and password nor iamAccountEmail are provided,
 	// retrieve IAM email from the environment.
@@ -109,7 +111,7 @@ func getUser(ctx context.Context, config engineConfig) (string, bool, error) {
 	if err != nil {
 		return "", false, fmt.Errorf("unable to retrieve service account email: %w", err)
 	}
-	return serviceAccountEmail, true, nil
+	return pgengine.IAMUser(serviceAccountEmail), true, nil
 
 }
 
@@ -142,20 +144,17 @@ func getServiceAccountEmail(ctx context.Context) (string, error) {
 
 // createPool creates a connection pool to the PostgreSQL database.
 func createPool(ctx context.Context, cfg engineConfig, usingIAMAuth bool) (*pgxpool.Pool, error) {
+	config, err := pgengine.PoolConfig(cfg.user, cfg.password, cfg.database, usingIAMAuth)
+	if err != nil {
+		return nil, err
+	}
 	dialeropts := []alloydbconn.Option{alloydbconn.WithUserAgent(cfg.userAgents)}
-	dsn := fmt.Sprintf("user=%s password=%s dbname=%s sslmode=disable", cfg.user, cfg.password, cfg.database)
 	if usingIAMAuth {
 		dialeropts = append(dialeropts, alloydbconn.WithIAMAuthN())
-		dsn = fmt.Sprintf("user=%s dbname=%s sslmode=disable", cfg.user, cfg.database)
 	}
 	d, err := alloydbconn.NewDialer(ctx, dialeropts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize connection: %w", err)
-	}
-
-	config, err := pgxpool.ParseConfig(dsn)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse connection config: %w", err)
 	}
 	instanceURI := fmt.Sprintf("projects/%s/locations/%s/clusters/%s/instances/%s", cfg.projectID, cfg.region, cfg.cluster, cfg.instance)
 	config.ConnConfig.DialFunc = func(ctx context.Context, _ string, _ string) (net.Conn, error) {
