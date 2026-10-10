@@ -142,8 +142,11 @@ class Anthropic(Plugin):
         self.models = models or list(SUPPORTED_ANTHROPIC_MODELS.keys())
         self._default_api_version: Literal['stable', 'beta'] | None = api_version
         self._anthropic_params = anthropic_params
-        self._runtime_client = loop_local_client(lambda: AsyncAnthropic(**cast(dict[str, Any], self._anthropic_params)))
         self._list_actions_cache: list[ActionMetadata] | None = None
+
+    @loop_local_client
+    def _runtime_client(self) -> AsyncAnthropic:
+        return AsyncAnthropic(**cast(dict[str, Any], self._anthropic_params))
 
     async def init(self) -> list[Action]:
         """Initialize plugin.

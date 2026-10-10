@@ -53,10 +53,15 @@ class AnthropicModelGarden:
                 model is deployed.
         """
         self.name = model
-        self._runtime_client = loop_local_client(lambda: AsyncAnthropicVertex(region=location, project_id=project))
+        self._location = location
+        self._project = project
         # Strip 'anthropic/' prefix for the model passed to Anthropic SDK
         clean_model_name = model.removeprefix('anthropic/')
         self._model_name = clean_model_name
+
+    @loop_local_client
+    def _runtime_client(self) -> AsyncAnthropicVertex:
+        return AsyncAnthropicVertex(region=self._location, project_id=self._project)
 
     def get_handler(self) -> Callable[[ModelRequest, ActionRunContext], Awaitable[ModelResponse]]:
         """Returns the generate handler function for this model.

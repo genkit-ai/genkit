@@ -139,14 +139,15 @@ class ModelGardenModel:
                 model is deployed.
         """
         self.name = model
+        self._location = location
+        self._project = project
 
-        def _new_cached_client() -> 'CachedOpenAI':
-            # _client.py imports openai, which is an extra; load it on first generate.
-            from genkit_vertexai._model_garden._client import CachedOpenAI
+    @loop_local_client
+    def _runtime_client(self) -> 'CachedOpenAI':
+        # _client.py imports openai, which is an extra; load it on first generate.
+        from genkit_vertexai._model_garden._client import CachedOpenAI
 
-            return CachedOpenAI(location=location, project=project)
-
-        self._runtime_client = loop_local_client(_new_cached_client)
+        return CachedOpenAI(location=self._location, project=self._project)
 
     async def create_client(self) -> 'AsyncOpenAI':
         """Return the per-loop AsyncOpenAI client, refreshing the token only when expired.
