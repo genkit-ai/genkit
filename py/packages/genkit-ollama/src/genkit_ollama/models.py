@@ -91,8 +91,8 @@ from typing import Any, Literal, cast
 import httpx
 import ollama as ollama_api
 import structlog
-from pydantic import BaseModel, ConfigDict, ValidationError
-from pydantic.alias_generators import to_camel, to_snake
+from pydantic import BaseModel, ValidationError
+from pydantic.alias_generators import to_snake
 
 from genkit import ActionRunContext, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
 from genkit.model import ModelConfig, ModelRequest, ModelUsage, ToolRequest, get_basic_usage_stats
@@ -141,8 +141,6 @@ class OllamaConfig(ModelConfig):
     ``mirostat``, ...) goes in ``extra`` and is merged into the request's
     ``options`` as-is, so newer sampler parameters work without an SDK bump.
     """
-
-    model_config = ConfigDict(alias_generator=to_camel, validate_by_name=True, validate_by_alias=True)
 
     think: bool | Literal['low', 'medium', 'high'] | None = None
     keep_alive: float | str | None = None

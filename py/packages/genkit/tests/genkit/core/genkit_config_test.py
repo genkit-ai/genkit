@@ -78,19 +78,15 @@ def test_plugin_config_forbids_extra_kwargs() -> None:
 
 def test_model_config_is_plugin_config_not_genkit_model() -> None:
     """Model configs follow the upstream dump contract, not GenkitModel's camelCase default."""
-    assert issubclass(ModelConfig, GenkitConfig)
+    assert issubclass(ModelConfig, GenerationCommonConfig)
+    assert issubclass(GenerationCommonConfig, GenkitConfig)
     assert not issubclass(ModelConfig, GenkitModel)
 
 
-def test_model_config_mirrors_generated_common_fields() -> None:
-    """ModelConfig declares every GenerationCommonConfig field with the same type.
-
-    GenerationCommonConfig is generated from the shared JSON schema. If it
-    gains a knob, this fails until ModelConfig (and ModelConfigDict) add it.
-    """
-    for name, field in GenerationCommonConfig.model_fields.items():
-        assert name in ModelConfig.model_fields, name
-        assert ModelConfig.model_fields[name].annotation == field.annotation, name
+def test_generated_common_config_rejects_unknown_keys() -> None:
+    """The schema marks GenerationCommonConfig open; the generated class still forbids extras."""
+    with pytest.raises(ValidationError):
+        GenerationCommonConfig.model_validate({'temprature': 0.2})
 
 
 def test_model_config_default_dump_is_sdk_shape() -> None:

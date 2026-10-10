@@ -32,7 +32,6 @@ from typing import Annotated, ClassVar, Literal, cast
 from anthropic.types.beta.message_create_params import MessageCreateParamsBase as BetaMessageCreateParamsBase
 from anthropic.types.message_create_params import MessageCreateParamsBase
 from pydantic import BaseModel, ConfigDict, Field, WithJsonSchema, model_validator
-from pydantic.alias_generators import to_camel
 from pydantic.config import JsonDict
 
 from genkit.model import ModelConfig
@@ -302,12 +301,7 @@ class AnthropicConfig(ModelConfig):
     call to the beta API, the same as ``betas`` does.
     """
 
-    model_config = ConfigDict(
-        alias_generator=to_camel,
-        json_schema_extra=_anthropic_config_schema_extra,
-        validate_by_name=True,
-        validate_by_alias=True,
-    )
+    model_config = ConfigDict(json_schema_extra=_anthropic_config_schema_extra)
 
     # Config fields that are never create() kwargs. api_version picks the API
     # surface. (api_key was removed from ModelConfig in #6597).

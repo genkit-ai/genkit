@@ -25,7 +25,7 @@ from typing import Any, ClassVar, Literal
 from pydantic import ConfigDict, Field, RootModel, field_validator
 from pydantic.alias_generators import to_camel
 
-from genkit._core._base import GenkitModel
+from genkit._core._base import GenkitConfig, GenkitModel
 from genkit._core._compat import StrEnum
 
 
@@ -538,12 +538,9 @@ class GenerateResponseChunk(GenkitModel):
     aggregated: bool | None = None
 
 
-class GenerationCommonConfig(GenkitModel):
+class GenerationCommonConfig(GenkitConfig):
     """Model for generationcommonconfig data."""
 
-    model_config: ClassVar[ConfigDict] = ConfigDict(
-        alias_generator=to_camel, extra='allow', validate_by_name=True, validate_by_alias=True
-    )
     version: str | None = None
     temperature: float | None = None
     max_output_tokens: float | None = None
