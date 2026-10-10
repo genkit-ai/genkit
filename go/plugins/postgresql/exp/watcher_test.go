@@ -18,6 +18,7 @@ package exp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -202,12 +203,13 @@ func newDrivenWatcher(read func(context.Context, []watchKey) (map[watchKey]aix.S
 	return w
 }
 
-// fakeRows serves a driven watcher's reads from a map of row statuses. A read
-// whose context carries a gate reports the rows as they were when it started,
-// once the gate opens.
+// fakeRows serves a driven watcher's reads from a map of row statuses, or
+// fails them with err. A read whose context carries a gate reports what it
+// found when it started, once the gate opens.
 type fakeRows struct {
 	mu   sync.Mutex
 	rows map[watchKey]aix.SnapshotStatus
+	err  error
 }
 
 func (f *fakeRows) set(k watchKey, st aix.SnapshotStatus) {
@@ -216,9 +218,15 @@ func (f *fakeRows) set(k watchKey, st aix.SnapshotStatus) {
 	f.rows[k] = st
 }
 
+func (f *fakeRows) fail(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.err = err
+}
+
 func (f *fakeRows) read(ctx context.Context, keys []watchKey) (map[watchKey]aix.SnapshotStatus, error) {
 	f.mu.Lock()
-	found := make(map[watchKey]aix.SnapshotStatus)
+	found, err := make(map[watchKey]aix.SnapshotStatus), f.err
 	for _, k := range keys {
 		if st, ok := f.rows[k]; ok {
 			found[k] = st
@@ -228,6 +236,9 @@ func (f *fakeRows) read(ctx context.Context, keys []watchKey) (map[watchKey]aix.
 	if g, ok := ctx.Value(gateKey{}).(*gate); ok {
 		close(g.started)
 		<-g.release
+	}
+	if err != nil {
+		return nil, err
 	}
 	return found, nil
 }
@@ -280,5 +291,86 @@ func TestWatcherOrdersReadsByStart(t *testing.T) {
 		default:
 			t.Errorf("the %s subscription holds no status, want aborting", name)
 		}
+	}
+}
+
+// isClosed reports whether ch is closed, without waiting, and fails t if ch
+// holds a status.
+func isClosed(t *testing.T, ch <-chan aix.SnapshotStatus) bool {
+	t.Helper()
+	select {
+	case st, open := <-ch:
+		if open {
+			t.Fatalf("the subscription yielded %q, want none", st)
+		}
+		return true
+	default:
+		return false
+	}
+}
+
+// TestWatcherClosesASubscriptionToAMissingRow checks that a subscription to a
+// row that does not exist closes even when its first read fails: the first
+// read that works closes it, if that read started after the subscription.
+func TestWatcherClosesASubscriptionToAMissingRow(t *testing.T) {
+	ctx := t.Context()
+	key := watchKey{prefix: "p", id: "row"}
+	rows := &fakeRows{rows: map[watchKey]aix.SnapshotStatus{}}
+	w := newDrivenWatcher(rows.read)
+	refused := errors.New("connection refused")
+
+	rows.fail(refused)
+	early := w.subscribe(ctx, key)
+	rows.fail(nil)
+	// A poll starts while the row is missing. Then the row is created, and a
+	// second subscription's first read fails.
+	poll := newGate()
+	polled := make(chan struct{})
+	go func() {
+		w.pollAll(poll.on(ctx))
+		close(polled)
+	}()
+	<-poll.started
+	rows.set(key, aix.SnapshotStatusPending)
+	rows.fail(refused)
+	late := w.subscribe(ctx, key)
+	close(poll.release)
+	<-polled
+
+	if !isClosed(t, early) {
+		t.Error("the subscription made while the row was missing is open after a read found no row")
+	}
+	if isClosed(t, late) {
+		t.Error("a read that started before the row existed closed a subscription made after")
+	}
+}
+
+// TestWatcherSkipsReadsOlderThanASubscription checks that a subscription gets
+// no status from a read that started before it: here the row changed between
+// that read and the subscription, whose own first read fails.
+func TestWatcherSkipsReadsOlderThanASubscription(t *testing.T) {
+	ctx := t.Context()
+	key := watchKey{prefix: "p", id: "row"}
+	rows := &fakeRows{rows: map[watchKey]aix.SnapshotStatus{key: aix.SnapshotStatusPending}}
+	w := newDrivenWatcher(rows.read)
+	<-w.subscribe(ctx, key)
+
+	poll := newGate()
+	polled := make(chan struct{})
+	go func() {
+		w.pollAll(poll.on(ctx))
+		close(polled)
+	}()
+	<-poll.started
+	rows.set(key, aix.SnapshotStatusAborting)
+	rows.fail(errors.New("connection refused"))
+	late := w.subscribe(ctx, key)
+	close(poll.release)
+	<-polled
+
+	select {
+	case st := <-late:
+		t.Errorf("the subscription got %q from a read that started before it, want no status yet", st)
+	default:
 	}
 }
