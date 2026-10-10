@@ -804,6 +804,12 @@ func TestWithMessagesMediaParts(t *testing.T) {
 			want: `{"type":"file","file":{"file_data":"data:text/plain;base64,aGk=","filename":"file.txt"}}`,
 		},
 		{
+			name:       "empty media types accept every type",
+			mediaTypes: []string{},
+			part:       ai.NewMediaPart("audio/mpeg", "data:audio/mpeg;base64,SUQz"),
+			want:       `{"type":"input_audio","input_audio":{"data":"SUQz","format":"mp3"}}`,
+		},
+		{
 			name:       "accepted by a wildcard",
 			mediaTypes: []string{"image/*", "application/pdf"},
 			part:       ai.NewMediaPart("application/pdf", pdf),

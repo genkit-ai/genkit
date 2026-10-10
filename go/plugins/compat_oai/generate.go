@@ -236,9 +236,9 @@ func mediaContentType(p *ai.Part) string {
 }
 
 // mediaTypeAccepted reports whether contentType matches one of patterns, each
-// an exact media type or a "type/*" wildcard. Nil patterns accept every type.
+// an exact media type or a "type/*" wildcard. No patterns accept every type.
 func mediaTypeAccepted(patterns []string, contentType string) bool {
-	if patterns == nil {
+	if len(patterns) == 0 {
 		return true
 	}
 	for _, pattern := range patterns {
@@ -282,6 +282,16 @@ func fileName(contentType string) string {
 		return "file.doc"
 	case "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
 		return "file.docx"
+	case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+		return "file.xlsx"
+	case "application/vnd.openxmlformats-officedocument.presentationml.presentation":
+		return "file.pptx"
+	case "application/json":
+		return "file.json"
+	case "text/markdown":
+		return "file.md"
+	case "text/html":
+		return "file.html"
 	}
 	return "file"
 }

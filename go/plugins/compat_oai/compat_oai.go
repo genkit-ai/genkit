@@ -220,7 +220,7 @@ type OpenAICompatible struct {
 	// such as "application/pdf" or a wildcard such as "image/*". A part of
 	// any other type fails the request with INVALID_ARGUMENT before it is
 	// sent, which matters for providers that strip content parts they do not
-	// read rather than reject them. Nil sends every type and leaves the
+	// read rather than reject them. Empty sends every type and leaves the
 	// provider to reject what its models do not read. Media of no known type
 	// is sent as an image and is not checked.
 	MediaTypes []string
