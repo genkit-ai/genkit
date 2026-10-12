@@ -30,36 +30,13 @@ one = f'{client.name}:tool/{client.tool_name("echo")}'
 result = await ai.generate(prompt='Echo "hello".', tools=[one])
 ```
 
-## Building a client without registering it
-
-`create_mcp_client` builds the same client and registers nothing:
-
-```python
-from genkit_mcp import McpStdioServerConfig, create_mcp_client
-
-client = create_mcp_client(
-    name='everything',
-    server=McpStdioServerConfig(
-        command='npx',
-        args=['-y', '@modelcontextprotocol/server-everything'],
-    ),
-)
-tools = await client.get_active_tools()
-```
-
-It takes no `Genkit` instance, and no selector reaches this server: the actions `get_active_tools()`
-returns are unregistered, for a dynamic action provider of your own to serve. Naming, connecting,
-`restart()` and `close()` behave as they do for a defined client. `get_active_tools()` lists from the
-server on every call, registered or not, so what it returns is what the server serves now.
-
 ## Tool names
 
 Every tool is named `<prefix>_<tool>`, so the tool above is `everything_echo`. The prefix is the
-provider name you registered the server under, `everything` here, and `tool_prefix=` overrides it.
-The separator is an underscore because Gemini and OpenAI reject a `/` in a function declaration
-name. The prefix is checked against the same rules when the client is defined, so a prefix a
-model would refuse fails there rather than on your first `generate`. A tool name the server lists
-with such a character, such as `look.up`, has it rewritten to an underscore with a warning. Two
+provider name you registered the server under, `everything` here. The separator is an underscore
+because Gemini and OpenAI reject a `/` in a function declaration name. The name is checked against
+the same rules when the client is defined, so a name a model would refuse fails there rather than
+on your first `generate`. A tool name the server lists with such a character, such as `look.up`, has it rewritten to an underscore with a warning. Two
 tools that then share a name, such as `look.up` and `look/up`, fail the listing. Length is not
 checked at definition, because the tool half of the name is unknown until the server lists it. A
 `<prefix>_<tool>` longer than 64 characters is warned about when the tools are listed and passed
@@ -78,10 +55,11 @@ keeps state, such as a session or an open file, keeps one copy of it for each.
 
 `await client.restart()` reconnects a live client, for a server whose configuration or state
 changed underneath you. `await client.close()` disconnects and stops the child process: a
-closed client cannot be restarted, and anything that asks for a tool afterwards fails with
-`McpConnectionClosedError`. To use that server again, build a new client with `create_mcp_client`
-or `define_mcp_client`. A connection that died on its own is replaced on next use, so one bad
-server start is not permanent.
+closed client cannot be restarted, and anything that asks for a tool afterwards fails with a
+`GenkitError` whose status is `FAILED_PRECONDITION`. To use that server again, define a new
+client. A server that cannot start, or whose process dies, fails with status `UNAVAILABLE`. A
+connection that died on its own is replaced on next use, so one bad server start is not
+permanent.
 
 Nothing needs closing at exit. Call `close()` when you are done with a server before your process
 is, not as cleanup on the way out: a process running under `genkit start` outlives your `main()`,

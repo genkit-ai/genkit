@@ -45,7 +45,7 @@ class _ConnectionClosedError(_ClientError):
     """The client was shut down by :meth:`McpClient.close`. Status ``FAILED_PRECONDITION``.
 
     Closing is final: a closed client cannot be restarted. Build a new one with
-    :func:`create_mcp_client` or :func:`define_mcp_client`.
+    :func:`define_mcp_client`.
     """
 
     _status: ClassVar[StatusName] = 'FAILED_PRECONDITION'

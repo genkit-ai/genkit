@@ -93,8 +93,7 @@ def validate_tool_prefix(prefix: str) -> None:
         return
     raise ValueError(
         f'{prefix!r} cannot prefix an MCP tool name: a function declaration name must start with a '
-        'letter or an underscore and hold only letters, digits, underscores and hyphens. Pass '
-        'tool_prefix= with a name that can.'
+        'letter or an underscore and hold only letters, digits, underscores and hyphens.'
     )
 
 
