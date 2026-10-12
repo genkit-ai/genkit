@@ -20,13 +20,6 @@ Exposes the tools of one or more stdio MCP servers as Genkit ``tool.v2`` actions
 """
 
 from genkit_mcp._client import McpClient, define_mcp_client
-from genkit_mcp._host import McpHost, McpHostServer, create_mcp_host, define_mcp_host
+from genkit_mcp._host import McpHost, define_mcp_host
 
-__all__ = [
-    'McpClient',
-    'McpHost',
-    'McpHostServer',
-    'create_mcp_host',
-    'define_mcp_client',
-    'define_mcp_host',
-]
+__all__ = ['McpClient', 'McpHost', 'define_mcp_client', 'define_mcp_host']

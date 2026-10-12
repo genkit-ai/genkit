@@ -6,6 +6,7 @@
 
 """Integration tests for several MCP servers behind one dynamic action provider."""
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -13,17 +14,10 @@ from typing import Any
 
 import psutil
 import pytest
-from genkit_mcp import (
-    McpClient,
-    McpConnectionClosedError,
-    McpConnectionFailedError,
-    McpHostServer,
-    McpStdioServerConfig,
-    create_mcp_host,
-    define_mcp_host,
-)
+from genkit_mcp import McpClient, McpHost, define_mcp_host
+from pydantic import ValidationError
 
-from genkit import Genkit, Message, ModelResponse, Part
+from genkit import Genkit, GenkitError, Message, ModelResponse, Part
 from genkit._ai._generate import expand_wildcard_tools
 from genkit._core._action import Action, ActionKind
 from genkit._core._typing import (
@@ -50,27 +44,27 @@ ALL_TOOLS = [
 LONG_TTL_MILLIS = 600_000
 
 
-def config(tmp_path: Path, pid_name: str = 'server', **env: str) -> McpStdioServerConfig:
-    """Launch the test server with the same interpreter as the test suite."""
-    return McpStdioServerConfig(
-        command=sys.executable,
-        args=[str(Path(__file__).with_name('fake_server.py'))],
-        env={
+def server(tmp_path: Path, pid_name: str = 'server', **env: str) -> dict[str, Any]:
+    """One mcpServers entry, or connect() keyword arguments, for the test server."""
+    return {
+        'command': sys.executable,
+        'args': [str(Path(__file__).with_name('fake_server.py'))],
+        'env': {
             **os.environ,
             'MCP_FAKE_PID_FILE': str(tmp_path / f'{pid_name}.pid'),
             **env,
         },
-    )
+    }
 
 
-def spec(name: str, tmp_path: Path, **env: str) -> McpHostServer:
-    """Name one test server for a host to hold."""
-    return McpHostServer(name=name, server=config(tmp_path, pid_name=name, **env))
+def servers(tmp_path: Path, *names: str, **env: str) -> dict[str, dict[str, Any]]:
+    """An mcpServers mapping holding one test server per name, each writing its own pid file."""
+    return {name: server(tmp_path, pid_name=name, **env) for name in names}
 
 
-def missing_server(tmp_path: Path) -> McpStdioServerConfig:
+def missing_server(tmp_path: Path) -> dict[str, Any]:
     """A server whose command does not exist, so it can never start."""
-    return McpStdioServerConfig(command=str(tmp_path / 'no-such-server'))
+    return {'command': str(tmp_path / 'no-such-server')}
 
 
 def server_processes() -> list[psutil.Process]:
@@ -122,9 +116,9 @@ def tool_call_response(tool_name: str, input: dict[str, Any]) -> ModelResponse:
 @pytest.mark.asyncio
 async def test_every_server_is_listed_under_its_own_name(tmp_path: Path) -> None:
     """One host, two servers, and each tool named after the server serving it."""
-    host = create_mcp_host('hosted', [spec('alpha', tmp_path), spec('beta', tmp_path)])
+    host = McpHost('hosted', mcp_servers=servers(tmp_path, 'alpha', 'beta'))
     try:
-        assert host.server_names == ['alpha', 'beta']
+        assert list(host._clients) == ['alpha', 'beta']
         tools = await host.get_active_tools()
     finally:
         await host.close()
@@ -134,55 +128,14 @@ async def test_every_server_is_listed_under_its_own_name(tmp_path: Path) -> None
 
 
 @pytest.mark.asyncio
-async def test_two_servers_cannot_share_a_name(tmp_path: Path) -> None:
-    """A name is how the host addresses a server, so two servers cannot answer to one."""
-    with pytest.raises(ValueError, match='two servers named'):
-        create_mcp_host('hosted', [spec('alpha', tmp_path), spec('alpha', tmp_path)])
-    assert server_processes() == []
-
-
-@pytest.mark.asyncio
-async def test_two_servers_cannot_share_a_tool_prefix(tmp_path: Path) -> None:
-    """Distinct names with one prefix would list every tool twice, and a registry keeps only one."""
-    with pytest.raises(ValueError, match="servers 'alpha' and 'beta' together: both prefix their tools with 'shared'"):
-        create_mcp_host(
-            'hosted',
-            [
-                McpHostServer(name='alpha', server=config(tmp_path), tool_prefix='shared'),
-                McpHostServer(name='beta', server=config(tmp_path), tool_prefix='shared'),
-            ],
-        )
-    with pytest.raises(ValueError, match="servers 'alpha' and 'beta' together: both prefix their tools with 'alpha'"):
-        create_mcp_host(
-            'hosted',
-            [spec('alpha', tmp_path), McpHostServer(name='beta', server=config(tmp_path), tool_prefix='alpha')],
-        )
-    assert server_processes() == []
-
-
-@pytest.mark.asyncio
-async def test_connect_refuses_a_prefix_another_server_uses(tmp_path: Path) -> None:
-    """Only the server being replaced may give up its prefix to the newcomer."""
-    host = create_mcp_host('hosted', [spec('alpha', tmp_path), spec('beta', tmp_path)])
-    try:
-        with pytest.raises(
-            ValueError, match="servers 'alpha' and 'gamma' together: both prefix their tools with 'alpha'"
-        ):
-            await host.connect('gamma', config(tmp_path, pid_name='gamma'), tool_prefix='alpha')
-        assert host.server_names == ['alpha', 'beta']
-
-        await host.connect('beta', config(tmp_path, pid_name='beta'), tool_prefix='beta')
-        assert host.server_names == ['alpha', 'beta']
-    finally:
-        await host.close()
-
-
-@pytest.mark.asyncio
 async def test_two_servers_whose_tool_names_collide_cannot_be_listed(tmp_path: Path) -> None:
-    """Prefix and tool join on an underscore either may hold, so distinct prefixes still collide."""
-    host = create_mcp_host(
+    """Server name and tool join on an underscore either may hold, so distinct names still collide."""
+    host = McpHost(
         'hosted',
-        [spec('alpha_beta', tmp_path), spec('alpha', tmp_path, MCP_FAKE_TOOL_NAME_PREFIX='beta_')],
+        mcp_servers={
+            'alpha_beta': server(tmp_path, pid_name='alpha_beta'),
+            'alpha': server(tmp_path, pid_name='alpha', MCP_FAKE_TOOL_NAME_PREFIX='beta_'),
+        },
     )
     try:
         assert host.tool_name('alpha_beta', 'echo') == host.tool_name('alpha', 'beta_echo')
@@ -199,12 +152,9 @@ async def test_two_servers_whose_tool_names_collide_cannot_be_listed(tmp_path: P
 @pytest.mark.asyncio
 async def test_a_server_which_cannot_start_leaves_the_others_listed(tmp_path: Path) -> None:
     """One unreachable server is skipped, not fatal: it must not blank the catalog."""
-    host = create_mcp_host(
+    host = McpHost(
         'hosted',
-        [
-            McpHostServer(name='broken', server=missing_server(tmp_path)),
-            spec('alpha', tmp_path),
-        ],
+        mcp_servers={'broken': missing_server(tmp_path), **servers(tmp_path, 'alpha')},
     )
     try:
         tools = await host.get_active_tools()
@@ -218,7 +168,7 @@ async def test_a_server_which_cannot_start_leaves_the_others_listed(tmp_path: Pa
 async def test_a_wildcard_selector_binds_tools_from_every_server(tmp_path: Path) -> None:
     """``<host>:tool/*`` reaches every server behind the one provider."""
     ai = Genkit()
-    host = define_mcp_host(ai, 'hosted', [spec('alpha', tmp_path), spec('beta', tmp_path)])
+    host = define_mcp_host(ai, 'hosted', mcp_servers=servers(tmp_path, 'alpha', 'beta'))
     try:
         expanded = await expand_wildcard_tools(ai._registry, ['hosted:tool/*'])
     finally:
@@ -232,7 +182,7 @@ async def test_generate_calls_a_tool_on_one_hosted_server(tmp_path: Path) -> Non
     """A model sees every hosted tool and reads back what one of them returned."""
     ai = Genkit()
     pm, _ = define_scripted_model(ai)
-    host = define_mcp_host(ai, 'hosted', [spec('alpha', tmp_path), spec('beta', tmp_path)])
+    host = define_mcp_host(ai, 'hosted', mcp_servers=servers(tmp_path, 'alpha', 'beta'))
     pm.responses = [
         tool_call_response('beta_echo', {'message': 'hello'}),
         text_response('done'),
@@ -258,7 +208,7 @@ async def test_tool_name_builds_a_selector_for_one_hosted_tool(tmp_path: Path) -
     """A selector built from the helpers reaches one tool of one server."""
     ai = Genkit()
     pm, _ = define_scripted_model(ai)
-    host = define_mcp_host(ai, 'hosted', [spec('alpha', tmp_path), spec('beta', tmp_path)])
+    host = define_mcp_host(ai, 'hosted', mcp_servers=servers(tmp_path, 'alpha', 'beta'))
     pm.responses = [
         tool_call_response('beta_echo', {'message': 'hello'}),
         text_response('done'),
@@ -280,12 +230,12 @@ async def test_tool_name_builds_a_selector_for_one_hosted_tool(tmp_path: Path) -
 async def test_connect_adds_a_server_and_drops_the_listing(tmp_path: Path) -> None:
     """A server added after registration is selectable without waiting for the TTL."""
     ai = Genkit()
-    host = define_mcp_host(ai, 'hosted', [spec('alpha', tmp_path)], cache_ttl_millis=LONG_TTL_MILLIS)
+    host = define_mcp_host(ai, 'hosted', mcp_servers=servers(tmp_path, 'alpha'), cache_ttl_millis=LONG_TTL_MILLIS)
     try:
         before = await expand_wildcard_tools(ai._registry, ['hosted:tool/*'])
-        await host.connect('beta', config(tmp_path, pid_name='beta'))
+        await host.connect('beta', **server(tmp_path, pid_name='beta'))
         after = await expand_wildcard_tools(ai._registry, ['hosted:tool/*'])
-        assert host.server_names == ['alpha', 'beta']
+        assert list(host._clients) == ['alpha', 'beta']
     finally:
         await host.close()
 
@@ -296,18 +246,18 @@ async def test_connect_adds_a_server_and_drops_the_listing(tmp_path: Path) -> No
 @pytest.mark.asyncio
 async def test_connect_replaces_a_server_of_the_same_name(tmp_path: Path) -> None:
     """Reconfiguring a name stops the server it replaces, and the new one starts lazily."""
-    host = create_mcp_host('hosted', [spec('alpha', tmp_path)])
+    host = McpHost('hosted', mcp_servers=servers(tmp_path, 'alpha'))
     try:
         await host.get_active_tools()
         assert len(server_processes()) == 1
 
-        await host.connect('alpha', config(tmp_path, pid_name='replacement'))
+        await host.connect('alpha', **server(tmp_path, pid_name='replacement'))
         assert server_processes() == []
 
         tools = await host.get_active_tools()
         assert len(server_processes()) == 1
         assert server_process(tmp_path, 'replacement').is_running()
-        assert host.server_names == ['alpha']
+        assert list(host._clients) == ['alpha']
     finally:
         await host.close()
 
@@ -318,7 +268,7 @@ async def test_connect_replaces_a_server_of_the_same_name(tmp_path: Path) -> Non
 async def test_connect_installs_the_replacement_when_the_replaced_server_fails_to_close(tmp_path: Path) -> None:
     """A close that raises still hands the name to the new server and drops the listing."""
     ai = Genkit()
-    host = define_mcp_host(ai, 'hosted', [spec('alpha', tmp_path)], cache_ttl_millis=LONG_TTL_MILLIS)
+    host = define_mcp_host(ai, 'hosted', mcp_servers=servers(tmp_path, 'alpha'), cache_ttl_millis=LONG_TTL_MILLIS)
     close = McpClient.close
 
     async def close_and_complain(client: McpClient) -> None:
@@ -330,8 +280,8 @@ async def test_connect_installs_the_replacement_when_the_replaced_server_fails_t
         with pytest.MonkeyPatch.context() as patch:
             patch.setattr(McpClient, 'close', close_and_complain)
             with pytest.raises(RuntimeError, match='close failed after the fact'):
-                await host.connect('alpha', config(tmp_path, pid_name='replacement'))
-        assert host.server_names == ['alpha']
+                await host.connect('alpha', **server(tmp_path, pid_name='replacement'))
+        assert list(host._clients) == ['alpha']
         assert server_processes() == []
 
         expanded = await expand_wildcard_tools(ai._registry, ['hosted:tool/*'])
@@ -350,7 +300,7 @@ async def test_disconnect_removes_one_server_and_stops_it(tmp_path: Path) -> Non
     host = define_mcp_host(
         ai,
         'hosted',
-        [spec('alpha', tmp_path), spec('beta', tmp_path)],
+        mcp_servers=servers(tmp_path, 'alpha', 'beta'),
         cache_ttl_millis=LONG_TTL_MILLIS,
     )
     try:
@@ -359,7 +309,7 @@ async def test_disconnect_removes_one_server_and_stops_it(tmp_path: Path) -> Non
 
         await host.disconnect('beta')
 
-        assert host.server_names == ['alpha']
+        assert list(host._clients) == ['alpha']
         assert [process.pid for process in server_processes()] == [server_process(tmp_path, 'alpha').pid]
         expanded = await expand_wildcard_tools(ai._registry, ['hosted:tool/*'])
     finally:
@@ -372,7 +322,7 @@ async def test_disconnect_removes_one_server_and_stops_it(tmp_path: Path) -> Non
 @pytest.mark.asyncio
 async def test_reconnect_replaces_one_server_process(tmp_path: Path) -> None:
     """Reconnecting restarts that server alone and keeps the tools it serves."""
-    host = create_mcp_host('hosted', [spec('alpha', tmp_path), spec('beta', tmp_path)])
+    host = McpHost('hosted', mcp_servers=servers(tmp_path, 'alpha', 'beta'))
     try:
         listed = tool_names(await host.get_active_tools())
         alpha = server_process(tmp_path, 'alpha')
@@ -391,11 +341,12 @@ async def test_reconnect_replaces_one_server_process(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_reconnect_reports_a_server_which_cannot_be_started(tmp_path: Path) -> None:
     """The caller of reconnect hears about a broken server, and keeps holding it."""
-    host = create_mcp_host('hosted', [McpHostServer(name='broken', server=missing_server(tmp_path))])
+    host = McpHost('hosted', mcp_servers={'broken': missing_server(tmp_path)})
     try:
-        with pytest.raises(McpConnectionFailedError, match='failed'):
+        with pytest.raises(GenkitError, match='failed') as raised:
             await host.reconnect('broken')
-        assert host.server_names == ['broken']
+        assert raised.value.status == 'UNAVAILABLE'
+        assert list(host._clients) == ['broken']
     finally:
         await host.close()
 
@@ -403,18 +354,18 @@ async def test_reconnect_reports_a_server_which_cannot_be_started(tmp_path: Path
 @pytest.mark.asyncio
 async def test_close_releases_every_server_and_leaves_the_host_usable(tmp_path: Path) -> None:
     """Closing a host empties it rather than ending it: it can hold servers again."""
-    host = create_mcp_host('hosted', [spec('alpha', tmp_path), spec('beta', tmp_path)])
+    host = McpHost('hosted', mcp_servers=servers(tmp_path, 'alpha', 'beta'))
     try:
         assert tool_names(await host.get_active_tools()) == hosted('alpha', 'beta')
         assert len(server_processes()) == 2
 
         await host.close()
 
-        assert host.server_names == []
+        assert list(host._clients) == []
         assert await host.get_active_tools() == []
         assert server_processes() == []
 
-        await host.connect('gamma', config(tmp_path, pid_name='gamma'))
+        await host.connect('gamma', **server(tmp_path, pid_name='gamma'))
         assert tool_names(await host.get_active_tools()) == hosted('gamma')
     finally:
         await host.close()
@@ -429,10 +380,10 @@ async def test_a_failed_tool_call_re_lists_every_server(tmp_path: Path) -> None:
     host = define_mcp_host(
         ai,
         'hosted',
-        [
-            spec('alpha', tmp_path, MCP_FAKE_PAGE_SIZE=str(len(ALL_TOOLS))),
-            spec('beta', tmp_path),
-        ],
+        mcp_servers={
+            **servers(tmp_path, 'alpha', MCP_FAKE_PAGE_SIZE=str(len(ALL_TOOLS))),
+            **servers(tmp_path, 'beta'),
+        },
         cache_ttl_millis=LONG_TTL_MILLIS,
     )
     try:
@@ -446,8 +397,9 @@ async def test_a_failed_tool_call_re_lists_every_server(tmp_path: Path) -> None:
         killed = server_process(tmp_path, 'beta')
         killed.kill()
         killed.wait(timeout=30)
-        with pytest.raises(McpConnectionFailedError):
+        with pytest.raises(GenkitError) as raised:
             await beta_echo.run({'message': 'second'})
+        assert raised.value.status == 'UNAVAILABLE'
 
         # The listing outlives its TTL, so re-listing here is beta's failure
         # invalidating the listing alpha shares with it.
@@ -464,11 +416,11 @@ async def test_a_server_connected_later_shares_the_same_listing(tmp_path: Path) 
     host = define_mcp_host(
         ai,
         'hosted',
-        [spec('alpha', tmp_path, MCP_FAKE_PAGE_SIZE=str(len(ALL_TOOLS)))],
+        mcp_servers=servers(tmp_path, 'alpha', MCP_FAKE_PAGE_SIZE=str(len(ALL_TOOLS))),
         cache_ttl_millis=LONG_TTL_MILLIS,
     )
     try:
-        await host.connect('beta', config(tmp_path, pid_name='beta'))
+        await host.connect('beta', **server(tmp_path, pid_name='beta'))
         await expand_wildcard_tools(ai._registry, ['hosted:tool/*'])
         counter = await ai._registry.resolve_action(ActionKind.TOOL, 'alpha_list_requests')
         beta_echo = await ai._registry.resolve_action(ActionKind.TOOL, 'beta_echo')
@@ -479,8 +431,9 @@ async def test_a_server_connected_later_shares_the_same_listing(tmp_path: Path) 
         killed = server_process(tmp_path, 'beta')
         killed.kill()
         killed.wait(timeout=30)
-        with pytest.raises(McpConnectionFailedError):
+        with pytest.raises(GenkitError) as raised:
             await beta_echo.run({'message': 'second'})
+        assert raised.value.status == 'UNAVAILABLE'
 
         await expand_wildcard_tools(ai._registry, ['hosted:tool/*'])
         assert (await counter.run({})).response.output == '2'
@@ -495,7 +448,10 @@ async def test_a_disconnected_server_cannot_drop_the_listing(tmp_path: Path) -> 
     host = define_mcp_host(
         ai,
         'hosted',
-        [spec('alpha', tmp_path, MCP_FAKE_PAGE_SIZE=str(len(ALL_TOOLS))), spec('beta', tmp_path)],
+        mcp_servers={
+            **servers(tmp_path, 'alpha', MCP_FAKE_PAGE_SIZE=str(len(ALL_TOOLS))),
+            **servers(tmp_path, 'beta'),
+        },
         cache_ttl_millis=LONG_TTL_MILLIS,
     )
     try:
@@ -510,8 +466,9 @@ async def test_a_disconnected_server_cannot_drop_the_listing(tmp_path: Path) -> 
         await expand_wildcard_tools(ai._registry, ['hosted:tool/*'])
         assert (await counter.run({})).response.output == '2'
 
-        with pytest.raises(McpConnectionClosedError):
+        with pytest.raises(GenkitError) as raised:
             await beta_echo.run({'message': 'late'})
+        assert raised.value.status == 'FAILED_PRECONDITION'
 
         await expand_wildcard_tools(ai._registry, ['hosted:tool/*'])
         assert (await counter.run({})).response.output == '2'
@@ -524,7 +481,7 @@ async def test_a_disconnected_server_cannot_drop_the_listing(tmp_path: Path) -> 
 async def test_a_host_name_no_selector_could_carry_is_refused(tmp_path: Path, name: str) -> None:
     """A host name is a provider name, which is looser than a tool name."""
     with pytest.raises(ValueError, match='cannot name an MCP provider'):
-        create_mcp_host(name, [spec('alpha', tmp_path)])
+        McpHost(name, mcp_servers=servers(tmp_path, 'alpha'))
     assert server_processes() == []
 
 
@@ -532,7 +489,7 @@ async def test_a_host_name_no_selector_could_carry_is_refused(tmp_path: Path, na
 async def test_a_host_name_a_model_would_refuse_is_accepted(tmp_path: Path) -> None:
     """A host name reaches no model, so the tool name rules do not apply to it."""
     ai = Genkit()
-    host = define_mcp_host(ai, 'my.host', [spec('alpha', tmp_path)])
+    host = define_mcp_host(ai, 'my.host', mcp_servers=servers(tmp_path, 'alpha'))
     try:
         assert host.name == 'my.host'
         expanded = await expand_wildcard_tools(ai._registry, ['my.host:tool/*'])
@@ -546,29 +503,14 @@ async def test_a_host_name_a_model_would_refuse_is_accepted(tmp_path: Path) -> N
 async def test_a_server_name_no_model_would_accept_is_refused(tmp_path: Path) -> None:
     """A server name becomes a tool prefix, which a model provider has to accept."""
     with pytest.raises(ValueError, match='cannot prefix an MCP tool name'):
-        create_mcp_host('hosted', [McpHostServer(name='my server', server=config(tmp_path))])
+        McpHost('hosted', mcp_servers={'my server': server(tmp_path)})
     assert server_processes() == []
-
-
-@pytest.mark.asyncio
-async def test_a_supplied_prefix_replaces_the_server_name(tmp_path: Path) -> None:
-    """A server names its tools after itself, unless the host gives it a prefix."""
-    host = create_mcp_host(
-        'hosted',
-        [McpHostServer(name='shop', server=config(tmp_path), tool_prefix='bookshop')],
-    )
-    try:
-        assert host.server_names == ['shop']
-        assert host.tool_name('shop', 'echo') == 'bookshop_echo'
-        assert tool_names(await host.get_active_tools()) == hosted('bookshop')
-    finally:
-        await host.close()
 
 
 @pytest.mark.asyncio
 async def test_a_server_this_host_does_not_hold_is_refused(tmp_path: Path) -> None:
     """Every operation naming a server says so when the host holds no such name."""
-    host = create_mcp_host('hosted', [spec('alpha', tmp_path)])
+    host = McpHost('hosted', mcp_servers=servers(tmp_path, 'alpha'))
     try:
         with pytest.raises(ValueError, match='holds no server named'):
             host.tool_name('beta', 'echo')
@@ -576,20 +518,45 @@ async def test_a_server_this_host_does_not_hold_is_refused(tmp_path: Path) -> No
             await host.disconnect('beta')
         with pytest.raises(ValueError, match='holds no server named'):
             await host.reconnect('beta')
-        assert host.server_names == ['alpha']
+        assert list(host._clients) == ['alpha']
     finally:
         await host.close()
 
 
 @pytest.mark.asyncio
-async def test_a_created_host_registers_nothing(tmp_path: Path) -> None:
-    """create_mcp_host puts nothing in a registry, so no selector reaches its servers."""
+async def test_an_unregistered_host_registers_nothing(tmp_path: Path) -> None:
+    """A host built directly puts nothing in a registry, so no selector reaches its servers."""
     ai = Genkit()
-    host = create_mcp_host('hosted', [spec('alpha', tmp_path)])
+    host = McpHost('hosted', mcp_servers=servers(tmp_path, 'alpha'))
     try:
-        assert host.dynamic_action_provider is None
+        assert host._provider is None
         assert await ai._registry.resolve_action_by_key('/dynamic-action-provider/hosted:tool/alpha_echo') is None
         assert await expand_wildcard_tools(ai._registry, ['hosted:tool/*']) == ['hosted:tool/*']
         assert server_processes() == []
     finally:
         await host.close()
+
+
+@pytest.mark.asyncio
+async def test_an_mcp_servers_block_passes_through_unchanged(tmp_path: Path) -> None:
+    """A Claude Desktop or Cursor block, ``type`` marker included, is a valid mcp_servers value."""
+    block = json.loads(json.dumps({'mcpServers': {'alpha': {'type': 'stdio', **server(tmp_path, pid_name='alpha')}}}))
+    host = McpHost('hosted', mcp_servers=block['mcpServers'])
+    try:
+        assert tool_names(await host.get_active_tools()) == hosted('alpha')
+    finally:
+        await host.close()
+
+    assert server_processes() == []
+
+
+@pytest.mark.asyncio
+async def test_an_entry_with_an_unknown_key_is_refused_without_echoing_it(tmp_path: Path) -> None:
+    """A misspelt env must not launch the server without its secret, nor print the secret."""
+    secret = 'sk-distinctive-secret-7f3a'
+    loaded: dict[str, Any] = json.loads(json.dumps({'command': 'npx', 'enviroment': {'API_KEY': secret}}))
+    with pytest.raises(ValidationError) as raised:
+        McpHost('hosted', mcp_servers={'alpha': loaded})
+    assert 'enviroment' in str(raised.value)
+    assert secret not in str(raised.value)
+    assert server_processes() == []

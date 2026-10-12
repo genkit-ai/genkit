@@ -102,23 +102,17 @@ all of them:
 
 ```python
 from genkit import Genkit
-from genkit_mcp import McpHostServer, McpStdioServerConfig, define_mcp_host
+from genkit_mcp import define_mcp_host
 
 ai = Genkit()
 
 host = define_mcp_host(
     ai,
-    name='hosted',
-    servers=[
-        McpHostServer(
-            name='everything',
-            server=McpStdioServerConfig(command='npx', args=['-y', '@modelcontextprotocol/server-everything']),
-        ),
-        McpHostServer(
-            name='git',
-            server=McpStdioServerConfig(command='uvx', args=['mcp-server-git']),
-        ),
-    ],
+    'hosted',
+    mcp_servers={
+        'everything': {'command': 'npx', 'args': ['-y', '@modelcontextprotocol/server-everything']},
+        'git': {'command': 'uvx', 'args': ['mcp-server-git']},
+    },
 )
 
 result = await ai.generate(prompt='Echo "hello".', tools=['hosted:tool/*'])
@@ -126,18 +120,19 @@ one = f'{host.name}:tool/{host.tool_name("everything", "echo")}'
 result = await ai.generate(prompt='Echo "hello".', tools=[one])
 ```
 
+`mcp_servers` has the shape of the `mcpServers` block that Claude Desktop and Cursor read, so an
+existing one can be passed through: `mcp_servers=json.load(f)['mcpServers']`. Only stdio entries are
+accepted, and an entry with any key besides `command`, `args`, `env`, `cwd` and `type` fails.
+
 Each server keeps its own namespace, so the tools above are `everything_echo` and `git_git_log`. The
-name a host gives a server is the prefix, and `tool_prefix=` on the entry overrides it; the host's
-own name is only the provider name, so it has to fit a selector but no model ever reads it. Two
-servers cannot share a name within a host, since a shared name would mean two tools with one name.
+key a server has in `mcp_servers` is its prefix. The host's own name is only the provider name, so
+it has to fit a selector but no model ever reads it.
 
 A server that cannot be started is logged and skipped, so the other servers stay selectable. Only
 the server you ask for is affected by `await host.connect(...)`, `await host.disconnect(...)` and
 `await host.reconnect(...)`; `await host.close()` disconnects every server the host holds. Unlike
 `McpClient.close()`, that is not final: the host holds no servers afterwards, and `connect()` puts
 servers back.
-
-`create_mcp_host` builds the same host and registers nothing, as `create_mcp_client` does.
 
 One provider means one listing. A tool call that fails on one server drops the listing for all of
 them, so the next `generate` lists every server again.

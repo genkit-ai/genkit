@@ -17,40 +17,20 @@
 """Genkit host for several MCP servers behind one dynamic action provider."""
 
 import asyncio
+import os
+from collections.abc import Mapping
 from typing import Any
 
 import structlog
-from pydantic import BaseModel
 
-from genkit import Genkit
-from genkit._core._dap import DynamicActionProvider
+from genkit import DynamicActionProvider, Genkit
 from genkit.plugin_api import Action
-from genkit_mcp._client import McpClient, create_mcp_client
-from genkit_mcp._config import McpStdioServerConfig
+from genkit_mcp._client import McpClient
+from genkit_mcp._config import McpServerEntry, McpStdioServerConfig
 from genkit_mcp._connection import DEFAULT_REQUEST_TIMEOUT_MILLIS
 from genkit_mcp._tools import validate_provider_name
 
 logger = structlog.get_logger(__name__)
-
-
-class McpHostServer(BaseModel):
-    """One named MCP server in the list a host is built from.
-
-    The name is the host's own label for the server rather than anything the
-    server advertises, and it namespaces that server's tools, so a host holding
-    ``bookshop`` serves ``bookshop_opening_hours``.
-
-    Attributes:
-        name: Name for this server within its host. Unique across the host, and
-            usable in a tool name unless ``tool_prefix`` supplies another.
-        server: How to launch the server.
-        tool_prefix: Namespace for this server's tool names. Defaults to ``name``.
-            The prefix in use is unique across the host.
-    """
-
-    name: str
-    server: McpStdioServerConfig
-    tool_prefix: str | None = None
 
 
 class McpHost:
@@ -64,18 +44,17 @@ class McpHost:
     the listing, so one server which will not start leaves the rest selectable.
 
     A host holds no Genkit instance. Registering the provider is
-    :func:`define_mcp_host`, which is also what fills
-    :attr:`dynamic_action_provider`.
+    :func:`define_mcp_host`.
 
-    Obtain instances from :func:`create_mcp_host` or :func:`define_mcp_host`
-    rather than constructing directly.
+    Obtain instances from :func:`define_mcp_host` rather than constructing
+    directly.
     """
 
     def __init__(
         self,
         name: str,
-        servers: list[McpHostServer],
         *,
+        mcp_servers: Mapping[str, McpServerEntry],
         request_timeout_millis: int | None = DEFAULT_REQUEST_TIMEOUT_MILLIS,
     ) -> None:
         """Build a host. No server process starts until its tools are listed.
@@ -83,29 +62,26 @@ class McpHost:
         Args:
             name: Host name, which :func:`define_mcp_host` registers as the
                 provider name used in tool selectors.
-            servers: The servers this host manages, in the order it lists them.
+            mcp_servers: The servers this host manages, keyed by the name that
+                prefixes each server's tools, in the order it lists them.
             request_timeout_millis: How long one MCP request may take before it
                 fails, for every server. ``None`` waits forever.
 
         Raises:
-            ValueError: If ``name`` cannot appear in a tool selector, if two
-                servers share a name or a tool prefix, or if a server's name or
-                ``tool_prefix`` cannot appear in a model-facing tool name.
+            ValueError: If ``name`` cannot appear in a tool selector, if a
+                server name cannot appear in a model-facing tool name, or if an
+                entry is not a stdio server entry.
         """
         validate_provider_name(name)
         self._name = name
         self._request_timeout_millis = request_timeout_millis
         self._provider: DynamicActionProvider | None = None
         self._clients: dict[str, McpClient] = {}
-        for server in servers:
-            if server.name in self._clients:
-                raise ValueError(
-                    f'MCP host {name!r} was given two servers named {server.name!r}. A server name '
-                    'is how its host addresses it, so it has to be unique within its host.'
-                )
-            client = self._build_client(server)
-            self._refuse_shared_prefix(client)
-            self._clients[server.name] = client
+        for server_name, entry in mcp_servers.items():
+            config = McpStdioServerConfig.model_validate(entry)
+            self._clients[server_name] = self._build_client(
+                server_name, command=config.command, args=config.args, env=config.env, cwd=config.cwd
+            )
 
     @property
     def name(self) -> str:
@@ -116,26 +92,15 @@ class McpHost:
         """
         return self._name
 
-    @property
-    def server_names(self) -> list[str]:
-        """Names of the servers this host holds, in listing order."""
-        return list(self._clients)
+    def _set_provider(self, provider: DynamicActionProvider | None) -> None:
+        """Serve every server's tools from ``provider``, now and for servers added later.
 
-    @property
-    def dynamic_action_provider(self) -> DynamicActionProvider | None:
-        """The provider serving every server's tools, or ``None`` when unregistered.
-
-        :func:`define_mcp_host` assigns it. Assigning it hands the same provider
-        to every client this host holds, now and later, which is how a tool call
-        that fails on one server drops the listing this host handed out.
+        Each client holds the same provider, which is how a tool call that fails
+        on one server drops the listing this host handed out.
         """
-        return self._provider
-
-    @dynamic_action_provider.setter
-    def dynamic_action_provider(self, provider: DynamicActionProvider | None) -> None:
         self._provider = provider
         for client in self._clients.values():
-            client.dynamic_action_provider = provider
+            client._provider = provider
 
     def tool_name(self, server_name: str, tool: str) -> str:
         """Return the Genkit name of one tool of one of this host's servers.
@@ -160,9 +125,11 @@ class McpHost:
     async def connect(
         self,
         server_name: str,
-        server: McpStdioServerConfig,
         *,
-        tool_prefix: str | None = None,
+        command: str,
+        args: list[str] | None = None,
+        env: dict[str, str] | None = None,
+        cwd: str | os.PathLike[str] | None = None,
     ) -> None:
         """Add a server to this host, replacing any server of that name.
 
@@ -170,18 +137,19 @@ class McpHost:
         lazy: the new server starts on the next listing.
 
         Args:
-            server_name: Name for this server within this host.
-            server: How to launch the server.
-            tool_prefix: Namespace for this server's tool names. Defaults to
-                ``server_name``.
+            server_name: Name for this server within this host, which prefixes
+                its tool names.
+            command: Executable that runs the server.
+            args: Arguments passed to ``command``.
+            env: Extra environment for the server process, over the minimal set
+                the MCP SDK supplies.
+            cwd: Working directory for the server process.
 
         Raises:
-            ValueError: If ``server_name``, or ``tool_prefix`` when given,
-                cannot appear in a model-facing tool name, or if the prefix in
-                use is that of another server this host holds.
+            ValueError: If ``server_name`` cannot appear in a model-facing tool
+                name.
         """
-        client = self._build_client(McpHostServer(name=server_name, server=server, tool_prefix=tool_prefix))
-        self._refuse_shared_prefix(client, replacing=server_name)
+        client = self._build_client(server_name, command=command, args=args, env=env, cwd=cwd)
         replaced = self._clients.pop(server_name, None)
         try:
             if replaced is not None:
@@ -218,7 +186,7 @@ class McpHost:
 
         Raises:
             ValueError: If this host holds no such server.
-            McpConnectionFailedError: If the server cannot be started.
+            GenkitError: ``UNAVAILABLE`` if the server cannot be started.
         """
         client = self._client(server_name)
         try:
@@ -242,9 +210,9 @@ class McpHost:
             order.
 
         Raises:
-            ValueError: If two servers serve tools of one name. Distinct prefixes
-                do not rule this out, because the prefix and the tool name are
-                joined by the underscore either of them may hold.
+            ValueError: If two servers serve tools of one name. Distinct server
+                names do not rule this out, because the name and the tool name
+                are joined by the underscore either of them may hold.
         """
         servers = list(self._clients.items())
         listings = await asyncio.gather(
@@ -269,8 +237,8 @@ class McpHost:
                 if other != server_name:
                     raise ValueError(
                         f'MCP host {self._name!r} cannot serve servers {other!r} and {server_name!r} '
-                        f'together: both serve a tool named {tool.name!r}. Give one of them a '
-                        'tool_prefix= that keeps their tool names apart.'
+                        f'together: both serve a tool named {tool.name!r}. Rename one of them so '
+                        'their tool names stay apart.'
                     )
             tools.extend(listing)
         return tools
@@ -283,8 +251,8 @@ class McpHost:
         servers back. A provider registered for this host stays registered.
 
         Raises:
-            McpClientError: If a server could not be disconnected. Every server
-                is disconnected first, and the first failure is reported.
+            GenkitError: If a server could not be disconnected. Every server is
+                disconnected first, and the first failure is reported.
         """
         clients = list(self._clients.values())
         self._clients.clear()
@@ -300,29 +268,29 @@ class McpHost:
         A client invalidates whatever provider it holds, so a dropped one would
         otherwise still drop the listing of the servers it left behind.
         """
-        client.dynamic_action_provider = None
+        client._provider = None
         await client.close()
 
-    def _build_client(self, server: McpHostServer) -> McpClient:
+    def _build_client(
+        self,
+        server_name: str,
+        *,
+        command: str,
+        args: list[str] | None,
+        env: dict[str, str] | None,
+        cwd: str | os.PathLike[str] | None,
+    ) -> McpClient:
         """Build a client for one server, serving this host's provider."""
-        client = create_mcp_client(
-            server.name,
-            server.server,
-            tool_prefix=server.tool_prefix,
+        client = McpClient(
+            server_name,
+            command=command,
+            args=args,
+            env=env,
+            cwd=cwd,
             request_timeout_millis=self._request_timeout_millis,
         )
-        client.dynamic_action_provider = self._provider
+        client._provider = self._provider
         return client
-
-    def _refuse_shared_prefix(self, client: McpClient, *, replacing: str | None = None) -> None:
-        """Raise if a server this host holds, other than ``replacing``, uses this client's prefix."""
-        for server_name, held in self._clients.items():
-            if server_name != replacing and held.tool_prefix == client.tool_prefix:
-                raise ValueError(
-                    f'MCP host {self._name!r} cannot hold servers {server_name!r} and {client.name!r} '
-                    f'together: both prefix their tools with {client.tool_prefix!r}, so their tools '
-                    'would share names. Give one of them another tool_prefix=.'
-                )
 
     def _client(self, server_name: str) -> McpClient:
         """Return the client for one server name, or say the host has no such server."""
@@ -337,44 +305,11 @@ class McpHost:
             self._provider.invalidate_cache()
 
 
-def create_mcp_host(
-    name: str,
-    servers: list[McpHostServer],
-    *,
-    request_timeout_millis: int | None = DEFAULT_REQUEST_TIMEOUT_MILLIS,
-) -> McpHost:
-    """Build a host for several MCP servers without registering it with Genkit.
-
-    Nothing reaches a registry, so no selector resolves to these servers' tools
-    and no Genkit instance is needed. Use :meth:`McpHost.get_active_tools` to
-    obtain them as actions and serve them from a dynamic action provider of your
-    own. Connection is lazy: a child process starts on the first tool listing.
-
-    Reach for :func:`define_mcp_host` instead to expose every server's tools as
-    ``<name>:tool/*`` straight away.
-
-    Args:
-        name: Host name, carried by its provider and its errors.
-        servers: The servers this host manages, in the order it lists them.
-        request_timeout_millis: How long one MCP request may take before it
-            fails, for every server. ``None`` waits forever.
-
-    Returns:
-        A handle for listing tools, connecting, reconnecting and disconnecting.
-
-    Raises:
-        ValueError: If ``name`` cannot appear in a tool selector, if two servers
-            share a name or a tool prefix, or if a server's name or
-            ``tool_prefix`` cannot appear in a model-facing tool name.
-    """
-    return McpHost(name, servers, request_timeout_millis=request_timeout_millis)
-
-
 def define_mcp_host(
     ai: Genkit,
     name: str,
-    servers: list[McpHostServer],
     *,
+    mcp_servers: Mapping[str, McpServerEntry],
     cache_ttl_millis: int | None = None,
     request_timeout_millis: int | None = DEFAULT_REQUEST_TIMEOUT_MILLIS,
 ) -> McpHost:
@@ -385,34 +320,43 @@ def define_mcp_host(
     ``<name>:tool/*`` for all of them, or ``<name>:tool/<server>_<tool>`` for
     one. Connection is lazy: a child process starts on the first tool listing.
 
+    ``mcp_servers`` takes the shape of an ``mcpServers`` block from Claude
+    Desktop or Cursor, so one can be passed straight from its file::
+
+        host = define_mcp_host(ai, 'hosted', mcp_servers=json.load(f)['mcpServers'])
+
     Args:
         ai: The Genkit instance to register with.
         name: Provider name, used in tool selectors.
-        servers: The servers this host manages, in the order it lists them.
+        mcp_servers: The servers this host manages, keyed by the name that
+            prefixes each server's tools, in the order it lists them. Each
+            entry holds ``command`` and optionally ``args``, ``env``, ``cwd``
+            and ``type``, which can only be ``stdio``.
         cache_ttl_millis: How long a tool listing stays fresh. Defaults to the
             core dynamic action provider default.
         request_timeout_millis: How long one MCP request may take before it
             fails, for every server. ``None`` waits forever.
 
     Returns:
-        A handle for connecting, reconnecting and disconnecting, carrying the
-        registered provider as :attr:`McpHost.dynamic_action_provider`.
+        A handle for listing tools, connecting, reconnecting and disconnecting.
 
     Raises:
-        ValueError: If ``name`` cannot appear in a tool selector, if two servers
-            share a name or a tool prefix, or if a server's name or
-            ``tool_prefix`` cannot appear in a model-facing tool name.
+        ValueError: If ``name`` cannot appear in a tool selector, if a server
+            name cannot appear in a model-facing tool name, or if an entry is
+            not a stdio server entry.
     """
-    host = McpHost(name, servers, request_timeout_millis=request_timeout_millis)
+    host = McpHost(name, mcp_servers=mcp_servers, request_timeout_millis=request_timeout_millis)
 
     async def list_tools() -> dict[str, list[Action[Any, Any]]]:
         """Provide every server's tools to the dynamic action provider."""
         return {'tool': await host.get_active_tools()}
 
-    host.dynamic_action_provider = ai.define_dynamic_action_provider(
-        name,
-        list_tools,
-        description=f'Tools of the MCP servers hosted by {name}.',
-        cache_ttl_millis=cache_ttl_millis,
+    host._set_provider(
+        ai.define_dynamic_action_provider(
+            name,
+            list_tools,
+            description=f'Tools of the MCP servers hosted by {name}.',
+            cache_ttl_millis=cache_ttl_millis,
+        )
     )
     return host
