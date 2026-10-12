@@ -50,7 +50,7 @@ from genkit_mcp._errors import (
 )
 
 if sys.version_info < (3, 11):
-    from exceptiongroup import BaseExceptionGroup  # pyright: ignore[reportMissingImports]
+    from exceptiongroup import BaseExceptionGroup  # type: ignore[import-not-found]
 
 _T = TypeVar('_T')
 
