@@ -12,17 +12,15 @@ Tracking issue: <https://github.com/genkit-ai/genkit/issues/6194>
 
 ```python
 from genkit import Genkit
-from genkit_mcp import McpStdioServerConfig, define_mcp_client
+from genkit_mcp import define_mcp_client
 
 ai = Genkit()
 
 client = define_mcp_client(
     ai,
-    name='everything',
-    server=McpStdioServerConfig(
-        command='npx',
-        args=['-y', '@modelcontextprotocol/server-everything'],
-    ),
+    'everything',
+    command='npx',
+    args=['-y', '@modelcontextprotocol/server-everything'],
 )
 
 result = await ai.generate(prompt='Echo "hello".', tools=['everything:tool/*'])

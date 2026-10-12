@@ -14,34 +14,57 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Errors raised by the MCP client."""
+"""Errors raised by the MCP client.
+
+None of these is exported. Callers catch ``GenkitError`` and read its
+``status``; the classes exist so this package can tell its own failures apart.
+"""
+
+from typing import ClassVar
+
+from genkit import GenkitError
+from genkit.plugin_api import StatusName
 
 
-class McpClientError(Exception):
+class _ClientError(GenkitError):
     """Base class for every error this package raises.
 
-    Catch this to handle any MCP client failure. It does not derive from
-    ``RuntimeError``: the MCP SDK reports a tool result that fails the server's
-    own output schema as a bare ``RuntimeError``, and that failure is reported
-    to the model as a tool error while these are not.
+    It does not derive from ``RuntimeError``: the MCP SDK reports a tool result
+    that fails the server's own output schema as a bare ``RuntimeError``, and
+    that failure is reported to the model as a tool error while these are not.
     """
 
+    _status: ClassVar[StatusName] = 'INTERNAL'
 
-class McpConnectionClosedError(McpClientError):
-    """The client was shut down by :meth:`McpClient.close`.
+    def __init__(self, message: str, *, status: StatusName | None = None) -> None:
+        """Build the error with this class's status unless ``status`` overrides it.
+
+        Args:
+            message: What went wrong.
+            status: Status to report instead of the class default.
+        """
+        super().__init__(message=message, status=status or self._status)
+
+
+class _ConnectionClosedError(_ClientError):
+    """The client was shut down by :meth:`McpClient.close`. Status ``FAILED_PRECONDITION``.
 
     Closing is final: a closed client cannot be restarted. Build a new one with
     :func:`define_mcp_client`.
     """
 
+    _status: ClassVar[StatusName] = 'FAILED_PRECONDITION'
 
-class McpConnectionFailedError(McpClientError):
-    """The server could not be started, or its session died.
+
+class _ConnectionFailedError(_ClientError):
+    """The server could not be started, or its session died. Status ``UNAVAILABLE``.
 
     ``__cause__`` carries what the transport or the server raised, when it is
     known.
     """
 
+    _status: ClassVar[StatusName] = 'UNAVAILABLE'
 
-class McpProtocolError(McpClientError):
-    """The server answered in a way the protocol does not allow."""
+
+class _ProtocolError(_ClientError):
+    """The server answered in a way the protocol does not allow. Status ``INTERNAL``."""
