@@ -7,11 +7,11 @@ import asyncio
 
 import pytest
 
+from genkit import FlowContext
 from genkit._core._action import Action, ActionKind
-from genkit.plugin_api import ActionRunContext
 
 
-async def _plate(dish: str, ctx: ActionRunContext[str]) -> str:
+async def _plate(dish: str, ctx: FlowContext[str]) -> str:
     ctx.send_chunk(f'plating {dish}')
     return f'{dish} served'
 
@@ -50,7 +50,7 @@ async def test_run_with_keywords_streams_chunks_and_returns() -> None:
 async def test_stream_abort_signal_reaches_the_action() -> None:
     """`stream(abort_signal=ev)` hands `ev` to the action as `ctx.abort_signal`, so setting it stops the run."""
 
-    async def simmer(dish: str, ctx: ActionRunContext[str]) -> str:
+    async def simmer(dish: str, ctx: FlowContext[str]) -> str:
         ctx.send_chunk('simmering')
         await ctx.abort_signal.wait()
         return f'{dish} pulled off the heat'
