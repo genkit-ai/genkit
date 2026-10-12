@@ -44,8 +44,7 @@ tools=[f'{client.name}:tool/{client.tool_name("opening_hours")}']  # one
 ```
 
 The name after `tool/` is `bookshop_<tool>`, where `bookshop` is the name you
-registered the server under. Pass `tool_prefix=` to `define_mcp_client` to
-choose a different one. The separator is an underscore because Gemini and
+registered the server under. The separator is an underscore because Gemini and
 OpenAI reject a `/` in a function declaration name.
 
 The server calls itself `Corner Bookshop`, which no model would accept in a
@@ -58,7 +57,7 @@ images, audio and resource links all map across too.
 The sample never calls `client.close()`. Under `genkit start` the flows run
 from the Dev UI after `main()` returns, and they need the client open. Closing
 is final: after `close()`, listing tools, calling them and `restart()` all
-raise `McpConnectionClosedError`. Call `close()` when you are done with a
+raise a `GenkitError` with status `FAILED_PRECONDITION`. Call `close()` when you are done with a
 server before your process is. Call `restart()` on a live client to reconnect
 after the server changes, such as when you edit its tools. To use a closed
 server again, call `define_mcp_client` for it again.
