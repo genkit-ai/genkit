@@ -26,14 +26,13 @@ from genkit_mcp import (
 
 from genkit import Genkit, Message, ModelResponse, Part
 from genkit._ai._generate import expand_wildcard_tools
-from genkit._ai._testing import define_programmable_model
 from genkit._core._action import ActionKind
-from genkit._core._error import GenkitError
 from genkit._core._typing import (
     FinishReason,
     Role,
     ToolRequest,
 )
+from genkit.testing import define_scripted_model
 
 _T = TypeVar('_T')
 
@@ -124,7 +123,7 @@ async def test_wildcard_selector_expands_to_every_tool(tmp_path: Path) -> None:
     ai = Genkit()
     client = define_mcp_client(ai, 'fake', config(tmp_path))
     try:
-        expanded = await expand_wildcard_tools(ai.registry, ['fake:tool/*'])
+        expanded = await expand_wildcard_tools(ai._registry, ['fake:tool/*'])
     finally:
         await client.close()
 
@@ -138,7 +137,7 @@ async def test_resolve_action_by_key_runs_the_tool(tmp_path: Path) -> None:
     ai = Genkit()
     client = define_mcp_client(ai, 'fake', config(tmp_path))
     try:
-        action = await ai.registry.resolve_action_by_key('/dynamic-action-provider/fake:tool/fake_echo')
+        action = await ai._registry.resolve_action_by_key('/dynamic-action-provider/fake:tool/fake_echo')
         assert action is not None
         response = (await action.run({'message': 'hello'})).response
     finally:
@@ -152,7 +151,7 @@ async def test_resolve_action_by_key_runs_the_tool(tmp_path: Path) -> None:
 async def test_generate_calls_a_tool_and_receives_its_result(tmp_path: Path) -> None:
     """A model can request an MCP tool through a selector and read what it returned."""
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
     client = define_mcp_client(ai, 'fake', config(tmp_path))
     pm.responses = [
         tool_call_response('fake_echo', {'message': 'hello'}),
@@ -161,7 +160,7 @@ async def test_generate_calls_a_tool_and_receives_its_result(tmp_path: Path) -> 
 
     try:
         response = await ai.generate(
-            model='programmableModel',
+            model='scriptedModel',
             prompt='echo hello',
             tools=['fake:tool/*'],
         )
@@ -184,7 +183,7 @@ async def test_disabled_server_has_no_tools_and_starts_no_process(tmp_path: Path
     ai = Genkit()
     client = define_mcp_client(ai, 'fake', config(tmp_path, disabled=True))
     try:
-        expanded = await expand_wildcard_tools(ai.registry, ['fake:tool/*'])
+        expanded = await expand_wildcard_tools(ai._registry, ['fake:tool/*'])
     finally:
         await client.close()
 
@@ -204,7 +203,7 @@ async def test_tool_names_carry_the_provider_name(
     ai = Genkit()
     client = define_mcp_client(ai, 'fake', config(tmp_path), tool_prefix=override)
     try:
-        expanded = await expand_wildcard_tools(ai.registry, ['fake:tool/*'])
+        expanded = await expand_wildcard_tools(ai._registry, ['fake:tool/*'])
     finally:
         await client.close()
 
@@ -217,10 +216,10 @@ async def test_a_dead_server_drops_the_listing_and_is_replaced(tmp_path: Path) -
     ai = Genkit()
     client = define_mcp_client(ai, 'fake', config(tmp_path), cache_ttl_millis=LONG_TTL_MILLIS)
     try:
-        action = await ai.registry.resolve_action(ActionKind.TOOL, 'fake_echo')
+        action = await ai._registry.resolve_action(ActionKind.TOOL, 'fake_echo')
         assert action is None
-        await expand_wildcard_tools(ai.registry, ['fake:tool/*'])
-        action = await ai.registry.resolve_action(ActionKind.TOOL, 'fake_echo')
+        await expand_wildcard_tools(ai._registry, ['fake:tool/*'])
+        action = await ai._registry.resolve_action(ActionKind.TOOL, 'fake_echo')
         assert action is not None
         assert (await action.run({'message': 'first'})).response.output == 'first'
 
@@ -229,13 +228,12 @@ async def test_a_dead_server_drops_the_listing_and_is_replaced(tmp_path: Path) -
         killed[0].kill()
         killed[0].wait(timeout=30)
 
-        with pytest.raises(GenkitError) as raised:
+        with pytest.raises(McpConnectionFailedError):
             await action.run({'message': 'second'})
-        assert isinstance(raised.value.cause, McpConnectionFailedError)
 
         # The listing outlives its TTL, so re-listing here is the invalidation,
         # and a process to list from is the replaced connection.
-        expanded = await expand_wildcard_tools(ai.registry, ['fake:tool/*'])
+        expanded = await expand_wildcard_tools(ai._registry, ['fake:tool/*'])
         assert sorted(expanded) == sorted(f'/tool.v2/fake_{tool}' for tool in ALL_TOOLS)
         replaced = server_processes()
         assert len(replaced) == 1
@@ -251,7 +249,7 @@ async def test_close_stops_the_server_on_every_loop_that_opened_one(tmp_path: Pa
     client = define_mcp_client(ai, 'fake', config(tmp_path))
     background = BackgroundLoop()
     try:
-        action = await ai.registry.resolve_action_by_key('/dynamic-action-provider/fake:tool/fake_echo')
+        action = await ai._registry.resolve_action_by_key('/dynamic-action-provider/fake:tool/fake_echo')
         assert action is not None
         assert (await action.run({'message': 'main'})).response.output == 'main'
         assert (await background.run(action.run({'message': 'background'}))).response.output == 'background'
@@ -269,7 +267,7 @@ async def test_close_ignores_a_loop_which_already_finished(tmp_path: Path) -> No
     """A finished loop cancelled its connection on the way out, taking the server with it."""
     ai = Genkit()
     client = define_mcp_client(ai, 'fake', config(tmp_path))
-    action = await ai.registry.resolve_action_by_key('/dynamic-action-provider/fake:tool/fake_echo')
+    action = await ai._registry.resolve_action_by_key('/dynamic-action-provider/fake:tool/fake_echo')
     assert action is not None
     outputs: list[object] = []
 
@@ -293,7 +291,7 @@ async def test_a_closed_client_starts_no_server_on_a_new_loop(tmp_path: Path) ->
     """Close is final: a loop which never had a connection does not get one."""
     ai = Genkit()
     client = define_mcp_client(ai, 'fake', config(tmp_path))
-    action = await ai.registry.resolve_action_by_key('/dynamic-action-provider/fake:tool/fake_echo')
+    action = await ai._registry.resolve_action_by_key('/dynamic-action-provider/fake:tool/fake_echo')
     assert action is not None
     await client.close()
 
@@ -309,8 +307,7 @@ async def test_a_closed_client_starts_no_server_on_a_new_loop(tmp_path: Path) ->
     thread.start()
     thread.join(timeout=30)
 
-    assert isinstance(errors[0], GenkitError)
-    assert isinstance(errors[0].cause, McpConnectionClosedError)
+    assert isinstance(errors[0], McpConnectionClosedError)
     assert server_processes() == []
 
 
@@ -423,7 +420,7 @@ async def test_a_prefix_rescues_a_name_a_model_would_reject(tmp_path: Path) -> N
         assert client.name == 'my bookshop'
         assert client.tool_name('echo') == 'bookshop_echo'
         assert [tool.name for tool in await client.get_active_tools()] == [f'bookshop_{tool}' for tool in ALL_TOOLS]
-        assert await expand_wildcard_tools(ai.registry, ['my bookshop:tool/*']) == [
+        assert await expand_wildcard_tools(ai._registry, ['my bookshop:tool/*']) == [
             f'/tool.v2/bookshop_{tool}' for tool in ALL_TOOLS
         ]
     finally:
@@ -460,7 +457,7 @@ async def test_get_active_tools_lists_what_the_selector_binds(tmp_path: Path) ->
     client = define_mcp_client(ai, 'fake', config(tmp_path))
     try:
         tools = await client.get_active_tools()
-        expanded = await expand_wildcard_tools(ai.registry, ['fake:tool/*'])
+        expanded = await expand_wildcard_tools(ai._registry, ['fake:tool/*'])
     finally:
         await client.close()
 
@@ -473,7 +470,7 @@ async def test_get_active_tools_lists_what_the_selector_binds(tmp_path: Path) ->
 async def test_tool_name_builds_a_selector_generate_accepts(tmp_path: Path) -> None:
     """A selector built from the helpers reaches exactly that one tool."""
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
     client = define_mcp_client(ai, 'fake', config(tmp_path))
     pm.responses = [
         tool_call_response('fake_echo', {'message': 'hello'}),
@@ -482,7 +479,7 @@ async def test_tool_name_builds_a_selector_generate_accepts(tmp_path: Path) -> N
 
     try:
         selector = f'{client.name}:tool/{client.tool_name("echo")}'
-        response = await ai.generate(model='programmableModel', prompt='echo hello', tools=[selector])
+        response = await ai.generate(model='scriptedModel', prompt='echo hello', tools=[selector])
     finally:
         await client.close()
 
@@ -499,8 +496,8 @@ async def test_a_created_client_registers_nothing(tmp_path: Path) -> None:
     client = create_mcp_client('fake', config(tmp_path))
     try:
         assert client.dynamic_action_provider is None
-        assert await ai.registry.resolve_action_by_key('/dynamic-action-provider/fake:tool/fake_echo') is None
-        assert await expand_wildcard_tools(ai.registry, ['fake:tool/*']) == ['fake:tool/*']
+        assert await ai._registry.resolve_action_by_key('/dynamic-action-provider/fake:tool/fake_echo') is None
+        assert await expand_wildcard_tools(ai._registry, ['fake:tool/*']) == ['fake:tool/*']
         assert server_processes() == []
     finally:
         await client.close()
@@ -555,12 +552,12 @@ async def test_get_active_tools_asks_the_server_every_call(tmp_path: Path) -> No
         cache_ttl_millis=LONG_TTL_MILLIS,
     )
     try:
-        await expand_wildcard_tools(ai.registry, ['fake:tool/*'])
+        await expand_wildcard_tools(ai._registry, ['fake:tool/*'])
         await client.get_active_tools()
         counter = next(tool for tool in await client.get_active_tools() if tool.name == 'fake_list_requests')
         listings = (await counter.run({})).response.output
 
-        await expand_wildcard_tools(ai.registry, ['fake:tool/*'])
+        await expand_wildcard_tools(ai._registry, ['fake:tool/*'])
         cached = (await counter.run({})).response.output
     finally:
         await client.close()
@@ -579,6 +576,6 @@ async def test_tools_sharing_a_genkit_name_fail_the_listing(tmp_path: Path) -> N
         with pytest.raises(ValueError, match=collision):
             await client.get_active_tools()
         with pytest.raises(ValueError, match=collision):
-            await expand_wildcard_tools(ai.registry, ['bookshop:tool/*'])
+            await expand_wildcard_tools(ai._registry, ['bookshop:tool/*'])
     finally:
         await client.close()
