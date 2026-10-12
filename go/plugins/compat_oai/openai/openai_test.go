@@ -18,6 +18,7 @@ package openai
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -27,6 +28,7 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
+	"github.com/google/go-cmp/cmp"
 	openaiGo "github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
 	"github.com/openai/openai-go/shared"
@@ -404,6 +406,77 @@ func TestSupportedModelCatalog(t *testing.T) {
 		if opts.Dimensions == 0 {
 			t.Errorf("%s declares no dimensions", name)
 		}
+	}
+}
+
+// TestGPT6AstraCatalogEntry pins the one catalog entry that advertises no
+// tools. The Chat Completions endpoint rejects function tools for gpt-6-astra
+// at every reasoning_effort, so claiming them would let generation offer the
+// model tools every request then fails on. Text, media, system role, multiturn
+// and structured output do work there and stay advertised.
+func TestGPT6AstraCatalogEntry(t *testing.T) {
+	opts, ok := supportedModels["gpt-6-astra"]
+	if !ok {
+		t.Fatal("gpt-6-astra is not in the catalog")
+	}
+	if opts.Label != "OpenAI GPT-6 Astra" {
+		t.Errorf("label = %q, want %q", opts.Label, "OpenAI GPT-6 Astra")
+	}
+	if len(opts.Versions) != 1 || opts.Versions[0] != "gpt-6-astra" {
+		t.Errorf("versions = %v, want the bare ID alone", opts.Versions)
+	}
+	want := ai.ModelSupports{
+		Multiturn:   true,
+		Tools:       false,
+		SystemRole:  true,
+		Media:       true,
+		ToolChoice:  false,
+		Output:      []string{"text", "json"},
+		Constrained: ai.ConstrainedSupportAll,
+	}
+	if opts.Supports == nil {
+		t.Fatal("gpt-6-astra has no Supports")
+	}
+	if diff := cmp.Diff(want, *opts.Supports); diff != "" {
+		t.Errorf("supports mismatch (-want +got):\n%s", diff)
+	}
+
+	_, g := initPlugin(t)
+	m := genkit.LookupModel(g, "openai/gpt-6-astra")
+	if m == nil {
+		t.Fatal("gpt-6-astra not registered by Init")
+	}
+	model, ok := m.(*ai.ModelAction).Desc().Metadata["model"].(map[string]any)
+	if !ok {
+		t.Fatalf("model metadata missing")
+	}
+	supports, ok := model["supports"].(map[string]any)
+	if !ok {
+		t.Fatalf("supports metadata missing")
+	}
+	if supports["tools"] == true || supports["toolChoice"] == true {
+		t.Errorf("registered supports = %v, want no tools advertised", supports)
+	}
+	if supports["media"] != true || supports["multiturn"] != true || supports["systemRole"] != true {
+		t.Errorf("registered supports = %v, want media, multiturn and systemRole", supports)
+	}
+}
+
+// TestGPT6AstraRejectsToolsBeforeSend pins that a tool request against
+// gpt-6-astra fails in the framework's support check and never reaches the
+// API, since the Chat Completions endpoint would reject it anyway.
+func TestGPT6AstraRejectsToolsBeforeSend(t *testing.T) {
+	_, g := initPlugin(t)
+	lookup := genkit.DefineTool(g, "lookup", "Looks up a value.",
+		func(ctx *ai.ToolContext, in struct{ Key string }) (string, error) { return in.Key, nil })
+
+	_, err := genkit.Generate(context.Background(), g,
+		ai.WithModelName("openai/gpt-6-astra"),
+		ai.WithTools(lookup),
+		ai.WithPrompt("look up foo"),
+	)
+	if !errors.Is(err, ai.ErrUnsupportedByModel) {
+		t.Fatalf("Generate() error = %v, want ai.ErrUnsupportedByModel", err)
 	}
 }
 
