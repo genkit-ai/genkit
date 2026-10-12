@@ -22,7 +22,7 @@ from __future__ import annotations
 import asyncio
 import os
 import weakref
-from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar, Generic, NamedTuple, TypedDict, TypeVar, cast
@@ -65,6 +65,7 @@ from genkit._core._action import (
     Action,
     ActionKind,
     StreamingCallback,
+    StreamResponse,
     create_action_key,
     get_current_context,
 )
@@ -150,57 +151,27 @@ class PromptGenerateOptions(PromptSettings, ModelSettings, total=False):
     context: dict[str, Any] | None
 
 
-class ModelStreamResponse(Generic[OutputT]):
-    """Response from streaming prompt execution with stream and response properties."""
+# Generic[OutputT] is spelled out because ModelResponse[OutputT] is a Pydantic
+# generic, which typing doesn't scan for type parameters.
+class ModelStreamResponse(StreamResponse[ModelResponseChunk[OutputT], ModelResponse[OutputT]], Generic[OutputT]):
+    """Chunks of a model reply, then the full ``ModelResponse``.
 
-    def __init__(
-        self,
-        channel: Channel[ModelResponseChunk[OutputT], ModelResponse[OutputT]],
-        response_future: asyncio.Future[ModelResponse[OutputT]],
-    ) -> None:
-        """Initialize with streaming channel and response future."""
-        self._channel: Channel[ModelResponseChunk[OutputT], ModelResponse[OutputT]] = channel
-        self._response_future: asyncio.Future[ModelResponse[OutputT]] = response_future
+    Returned by ``ai.generate_stream()`` and ``prompt.stream()``. If a tool or
+    later turn fails, ``.response`` still resolves, with ``error`` set.
 
-    @property
-    def stream(self) -> AsyncIterable[ModelResponseChunk[OutputT]]:
-        """Async iterable of response chunks.
+    Example:
+        ```python
+        result = ai.generate_stream(prompt='Describe miso soup in one line.')
+        async for chunk in result:
+            print(chunk.text)
+        # => Savory soybean broth
+        #    with tofu and scallions.
 
-        Returns:
-            An async iterable that yields ModelResponseChunk objects
-            as they are received from the model. Each chunk contains:
-            - text: The partial text generated so far
-            - index: The chunk index
-            - Additional metadata from the model
-        """
-        return self._channel
-
-    @property
-    def response(self) -> Awaitable[ModelResponse[OutputT]]:
-        """Awaitable for the complete response.
-
-        Returns:
-            An awaitable that resolves to a ModelResponse containing:
-            - text: The complete generated text
-            - output: The typed output, or None when the reply isn't that shape
-            - messages: The full message history
-            - usage: Token usage statistics
-            - finish_reason: Why generation stopped (e.g., 'stop', 'length')
-            - Any tool calls or interrupts from the response
-
-        If the model fails partway through, this still resolves rather than
-        raising: ``finish_reason`` is FAILED, ``error`` is set, ``text`` is
-        empty, ``message`` is None, and ``messages`` ends at the last complete
-        turn. The chunks already streamed are the record of what was shown.
-        """
-        return self._response_future
-
-    # The natural Python expectation is `async for chunk in ai.generate_stream(...)`.
-    # Delegating to the underlying channel lets that work without forcing the
-    # caller to remember the extra `.stream` hop, while `.stream` and `.response`
-    # remain available for cases where you want both halves explicitly.
-    def __aiter__(self) -> AsyncIterator[ModelResponseChunk[OutputT]]:
-        return self._channel.__aiter__()
+        response = await result.response
+        print(response.finish_reason)
+        # => stop
+        ```
+    """
 
 
 @dataclass
@@ -530,7 +501,7 @@ class Prompt(Generic[InputT, OutputT]):
         )
         channel.set_close_future(response_future)
 
-        return ModelStreamResponse[OutputT](channel=channel, response_future=response_future)
+        return ModelStreamResponse[OutputT](stream=channel, response=response_future)
 
     async def render(
         self,
