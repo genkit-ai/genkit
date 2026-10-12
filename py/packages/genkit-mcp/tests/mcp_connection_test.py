@@ -24,11 +24,11 @@ from genkit_mcp import _connection
 from genkit_mcp._config import McpStdioServerConfig
 from genkit_mcp._connection import McpConnection, _call_tool, _ConnectionState, _Request
 from genkit_mcp._errors import (
-    McpClientError,
-    McpConnectionClosedError,
-    McpConnectionFailedError,
-    McpProtocolError,
-    McpToolResultError,
+    _ClientError,
+    _ConnectionClosedError,
+    _ConnectionFailedError,
+    _ProtocolError,
+    _ToolResultError,
 )
 from mcp import ClientSession
 from mcp.shared.exceptions import McpError
@@ -165,7 +165,7 @@ async def test_connect_list_call_and_close_reaps_server(tmp_path: Path) -> None:
     await asyncio.wait_for(connection.close(), timeout=LIMIT)
     await asyncio.wait_for(connection.close(), timeout=LIMIT)
     assert not is_running(pid)
-    with pytest.raises(McpConnectionClosedError, match='closed'):
+    with pytest.raises(_ConnectionClosedError, match='closed'):
         await asyncio.wait_for(connection.list_tools(), timeout=LIMIT)
 
 
@@ -184,7 +184,7 @@ async def test_list_tools_follows_pagination_cursors(tmp_path: Path) -> None:
 async def test_list_tools_rejects_a_non_advancing_cursor(tmp_path: Path) -> None:
     connection = McpConnection(config(tmp_path, MCP_FAKE_STUCK_CURSOR='1'))
     try:
-        with pytest.raises(McpProtocolError, match='repeated the tools/list cursor'):
+        with pytest.raises(_ProtocolError, match='repeated the tools/list cursor'):
             await asyncio.wait_for(connection.list_tools(), timeout=LIMIT)
         alive = await asyncio.wait_for(connection.call_tool('echo', {'message': 'alive'}), timeout=LIMIT)
         assert text_of(alive) == 'alive'
@@ -241,7 +241,7 @@ async def test_close_interrupts_an_in_flight_call(tmp_path: Path) -> None:
     await asyncio.sleep(0.05)
 
     await asyncio.wait_for(connection.close(), timeout=LIMIT)
-    with pytest.raises(McpConnectionClosedError, match='closed'):
+    with pytest.raises(_ConnectionClosedError, match='closed'):
         await asyncio.wait_for(call, timeout=LIMIT)
 
 
@@ -259,9 +259,9 @@ async def test_close_releases_a_request_that_never_reached_the_server(tmp_path: 
     queued: asyncio.Future[list[McpTool]] = asyncio.get_running_loop().create_future()
 
     await asyncio.wait_for(close_with_queued(connection, _Request(unstarted, queued)), timeout=LIMIT)
-    with pytest.raises(McpConnectionClosedError, match='closed'):
+    with pytest.raises(_ConnectionClosedError, match='closed'):
         await asyncio.wait_for(queued, timeout=LIMIT)
-    with pytest.raises(McpConnectionClosedError, match='closed'):
+    with pytest.raises(_ConnectionClosedError, match='closed'):
         await asyncio.wait_for(blocker.result, timeout=LIMIT)
     assert started == []
 
@@ -297,7 +297,7 @@ async def test_close_before_the_owner_task_starts_releases_the_waiter(tmp_path: 
     assert connection._state is _ConnectionState.CONNECTING
 
     await asyncio.wait_for(connection.close(), timeout=LIMIT)
-    with pytest.raises(McpConnectionClosedError, match='closed'):
+    with pytest.raises(_ConnectionClosedError, match='closed'):
         await asyncio.wait_for(waiter, timeout=LIMIT)
 
 
@@ -308,7 +308,7 @@ async def test_close_never_started_twice(tmp_path: Path) -> None:
     await asyncio.wait_for(connection.close(), timeout=LIMIT)
 
     assert connection._owner_task is None
-    with pytest.raises(McpConnectionClosedError, match='closed'):
+    with pytest.raises(_ConnectionClosedError, match='closed'):
         await asyncio.wait_for(connection.list_tools(), timeout=LIMIT)
     assert not (tmp_path / 'server.pid').exists()
 
@@ -323,7 +323,7 @@ async def test_close_during_startup_releases_the_waiter(tmp_path: Path) -> None:
     assert connection._state is _ConnectionState.CONNECTING
     await asyncio.wait_for(connection.close(), timeout=LIMIT)
 
-    with pytest.raises(McpConnectionClosedError, match='closed'):
+    with pytest.raises(_ConnectionClosedError, match='closed'):
         await asyncio.wait_for(waiter, timeout=LIMIT)
     assert connection._state is _ConnectionState.CLOSED
     assert not is_running(pid)
@@ -339,7 +339,7 @@ async def test_close_from_inside_a_request_is_rejected(tmp_path: Path) -> None:
             # Bounded by the wait_for around _request.
             await connection.close()
 
-        with pytest.raises(McpClientError, match='from inside one of its own requests'):
+        with pytest.raises(_ClientError, match='from inside one of its own requests'):
             await asyncio.wait_for(connection._request(close_from_operation), timeout=LIMIT)
 
         assert connection._state is _ConnectionState.OPEN
@@ -357,13 +357,13 @@ async def test_server_death_makes_the_connection_terminal(tmp_path: Path) -> Non
     assert owner is not None
     os.kill(int((tmp_path / 'server.pid').read_text(encoding='utf-8')), signal.SIGKILL)
 
-    with pytest.raises(McpConnectionFailedError, match='failed') as first:
+    with pytest.raises(_ConnectionFailedError, match='failed') as first:
         await asyncio.wait_for(connection.call_tool('echo', {}), timeout=LIMIT)
     assert connection._state is _ConnectionState.FAILED
 
     await settle(owner)
     assert connection._state is _ConnectionState.FAILED
-    with pytest.raises(McpConnectionFailedError, match='failed') as later:
+    with pytest.raises(_ConnectionFailedError, match='failed') as later:
         await asyncio.wait_for(connection.list_tools(), timeout=LIMIT)
     # The reply stream and the stdin write race to notice the death; only the first cause is ever recorded.
     assert isinstance(later.value.__cause__, (anyio.BrokenResourceError, anyio.ClosedResourceError, McpError))
@@ -379,12 +379,12 @@ async def test_a_caller_cut_off_by_a_broken_stdin_carries_the_transport_error(tm
     try:
         owner = await start_with_closed_stdin(connection, marker)
 
-        with pytest.raises(McpConnectionFailedError, match='failed') as failure:
+        with pytest.raises(_ConnectionFailedError, match='failed') as failure:
             await asyncio.wait_for(connection.call_tool('echo', {}), timeout=LIMIT)
         assert isinstance(failure.value.__cause__, anyio.BrokenResourceError)
 
         await settle(owner)
-        with pytest.raises(McpConnectionFailedError, match='failed') as later:
+        with pytest.raises(_ConnectionFailedError, match='failed') as later:
             await asyncio.wait_for(connection.list_tools(), timeout=LIMIT)
         assert later.value.__cause__ is failure.value.__cause__
     finally:
@@ -412,9 +412,9 @@ async def test_a_caller_arriving_while_the_owner_unwinds_waits_for_the_transport
                 raise
             return []
 
-        with pytest.raises(McpConnectionFailedError, match='failed') as first:
+        with pytest.raises(_ConnectionFailedError, match='failed') as first:
             await asyncio.wait_for(connection._request(cut_off), timeout=LIMIT)
-        with pytest.raises(McpConnectionFailedError, match='failed') as second:
+        with pytest.raises(_ConnectionFailedError, match='failed') as second:
             await asyncio.wait_for(late[0], timeout=LIMIT)
 
         assert seen == [(_ConnectionState.FAILED, None)]
@@ -445,7 +445,7 @@ async def test_close_while_the_owner_unwinds_releases_a_cut_off_caller_as_closed
     assert connection._failure is None
 
     await asyncio.wait_for(connection.close(), timeout=LIMIT)
-    with pytest.raises(McpConnectionClosedError, match='closed') as closed:
+    with pytest.raises(_ConnectionClosedError, match='closed') as closed:
         await asyncio.wait_for(caller, timeout=LIMIT)
     assert closed.value.__cause__ is None
 
@@ -464,7 +464,7 @@ async def test_a_transport_failure_is_logged_without_the_server_env(tmp_path: Pa
     structlog.configure(logger_factory=structlog.PrintLoggerFactory(output))
     try:
         owner = await start_with_closed_stdin(connection, marker)
-        with pytest.raises(McpConnectionFailedError, match='failed'):
+        with pytest.raises(_ConnectionFailedError, match='failed'):
             await asyncio.wait_for(connection.call_tool('echo', {}), timeout=LIMIT)
         await settle(owner)
     finally:
@@ -532,7 +532,7 @@ async def test_list_tools_rejects_endlessly_advancing_cursors(tmp_path: Path, mo
     monkeypatch.setattr(_connection, 'MAX_TOOL_PAGES', 3)
     connection = McpConnection(config(tmp_path, MCP_FAKE_ENDLESS_CURSOR='1'))
     try:
-        with pytest.raises(McpProtocolError, match='served over 3 tools/list pages'):
+        with pytest.raises(_ProtocolError, match='served over 3 tools/list pages'):
             await asyncio.wait_for(connection.list_tools(), timeout=LIMIT)
         # The server counts what it served, so an off-by-N cap cannot hide
         # behind a message built from the same constant.
@@ -568,7 +568,7 @@ async def test_a_concurrent_close_waits_for_the_child_to_be_reaped(tmp_path: Pat
         await asyncio.wait_for(asyncio.gather(first, second, return_exceptions=True), timeout=LIMIT)
 
     assert not is_running(pid)
-    with pytest.raises(McpConnectionClosedError, match='closed'):
+    with pytest.raises(_ConnectionClosedError, match='closed'):
         await asyncio.wait_for(call, timeout=LIMIT)
 
 
@@ -660,7 +660,7 @@ async def test_close_during_a_probe_settles_the_in_flight_caller(
     await asyncio.wait_for(probing.wait(), timeout=LIMIT)
 
     await asyncio.wait_for(connection.close(), timeout=LIMIT)
-    with pytest.raises(McpConnectionClosedError, match='closed'):
+    with pytest.raises(_ConnectionClosedError, match='closed'):
         await asyncio.wait_for(waiter, timeout=LIMIT)
 
 
@@ -682,11 +682,11 @@ async def test_each_released_caller_gets_its_own_error(tmp_path: Path) -> None:
     )
     errors = []
     for result in queued:
-        with pytest.raises(McpConnectionClosedError, match='closed') as raised:
+        with pytest.raises(_ConnectionClosedError, match='closed') as raised:
             await asyncio.wait_for(result, timeout=LIMIT)
         errors.append(raised.value)
     assert errors[0] is not errors[1]
-    with pytest.raises(McpConnectionClosedError, match='closed'):
+    with pytest.raises(_ConnectionClosedError, match='closed'):
         await asyncio.wait_for(blocker.result, timeout=LIMIT)
 
 
@@ -726,9 +726,9 @@ async def test_settle_makes_a_silent_owner_exit_terminal(tmp_path: Path, monkeyp
 
         assert connection._state is _ConnectionState.FAILED
         assert connection._failure is None
-        with pytest.raises(McpConnectionFailedError, match='failed'):
+        with pytest.raises(_ConnectionFailedError, match='failed'):
             await asyncio.wait_for(queued, timeout=LIMIT)
-        with pytest.raises(McpConnectionFailedError, match='failed'):
+        with pytest.raises(_ConnectionFailedError, match='failed'):
             await asyncio.wait_for(connection.list_tools(), timeout=LIMIT)
     finally:
         await asyncio.wait_for(connection.close(), timeout=LIMIT)
@@ -738,8 +738,8 @@ async def test_settle_makes_a_silent_owner_exit_terminal(tmp_path: Path, monkeyp
 @pytest.mark.parametrize(
     ('state', 'error', 'message'),
     [
-        (_ConnectionState.CLOSED, McpConnectionClosedError, 'closed'),
-        (_ConnectionState.FAILED, McpConnectionFailedError, 'failed'),
+        (_ConnectionState.CLOSED, _ConnectionClosedError, 'closed'),
+        (_ConnectionState.FAILED, _ConnectionFailedError, 'failed'),
     ],
 )
 async def test_request_rejects_a_state_change_after_start(
@@ -774,13 +774,13 @@ async def test_startup_failure_is_terminal_and_names_the_command(tmp_path: Path)
     unhandled: list[dict[str, object]] = []
     asyncio.get_running_loop().set_exception_handler(lambda _loop, context: unhandled.append(context))
 
-    with pytest.raises(McpConnectionFailedError, match='failed') as failure:
+    with pytest.raises(_ConnectionFailedError, match='failed') as failure:
         await asyncio.wait_for(connection.list_tools(), timeout=LIMIT)
     assert str(missing) in str(failure.value)
     assert isinstance(failure.value.__cause__, OSError)
     assert connection._state is _ConnectionState.FAILED
 
-    with pytest.raises(McpConnectionFailedError, match='failed'):
+    with pytest.raises(_ConnectionFailedError, match='failed'):
         await asyncio.wait_for(connection.call_tool('echo', {}), timeout=LIMIT)
 
     await asyncio.wait_for(connection.close(), timeout=LIMIT)
@@ -838,7 +838,7 @@ async def test_a_handshake_which_never_answers_gives_up(tmp_path: Path) -> None:
     """Without the timeout a server that never initializes parks every caller forever."""
     connection = McpConnection(config(tmp_path, MCP_FAKE_STALL='1'), request_timeout_millis=100)
 
-    with pytest.raises(McpConnectionFailedError, match='failed') as failure:
+    with pytest.raises(_ConnectionFailedError, match='failed') as failure:
         await asyncio.wait_for(connection.list_tools(), timeout=LIMIT)
 
     causes = leaf_causes(failure.value.__cause__)
@@ -867,7 +867,7 @@ async def test_an_owner_cancelled_from_outside_never_hands_on_its_cancellation(t
     await asyncio.sleep(0.05)
     owner.cancel()
 
-    with pytest.raises(McpConnectionFailedError, match='failed'):
+    with pytest.raises(_ConnectionFailedError, match='failed'):
         await asyncio.wait_for(call, timeout=LIMIT)
     # Terminal before the caller hears, or the client hands the next one a corpse.
     assert connection.is_terminal
@@ -922,7 +922,7 @@ async def test_list_tools_completes_while_a_call_is_stalled(tmp_path: Path) -> N
         assert not stalled.done()
     finally:
         await asyncio.wait_for(connection.close(), timeout=LIMIT)
-    with pytest.raises(McpConnectionClosedError, match='closed'):
+    with pytest.raises(_ConnectionClosedError, match='closed'):
         await asyncio.wait_for(stalled, timeout=LIMIT)
 
 
@@ -932,9 +932,7 @@ async def test_an_output_schema_violation_is_a_tool_result_error(tmp_path: Path)
     try:
         # The SDK validates against the schemas it has listed, and its own refresh reads one tools/list page.
         await asyncio.wait_for(connection.list_tools(), timeout=LIMIT)
-        with pytest.raises(
-            McpToolResultError, match='Invalid structured content returned by tool bad_output'
-        ) as raised:
+        with pytest.raises(_ToolResultError, match='Invalid structured content returned by tool bad_output') as raised:
             await asyncio.wait_for(connection.call_tool('bad_output', {}), timeout=LIMIT)
         assert isinstance(raised.value.__cause__, RuntimeError)
 
@@ -974,7 +972,7 @@ async def test_other_runtime_errors_from_the_session_are_not_translated() -> Non
 )
 async def test_each_output_schema_wording_is_translated(message: str) -> None:
     session = cast(ClientSession, _RaisingSession(RuntimeError(message)))
-    with pytest.raises(McpToolResultError) as raised:
+    with pytest.raises(_ToolResultError) as raised:
         await _call_tool(session, 'echo', {}, None)
-    assert str(raised.value) == message
+    assert raised.value.original_message == message
     assert isinstance(raised.value.__cause__, RuntimeError)
