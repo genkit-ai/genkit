@@ -18,12 +18,128 @@ import { stringify } from 'yaml';
 import type { MessageData, Part } from '../types/model';
 import type { PromptFrontmatter } from '../types/prompt';
 
-function toFrontmatterSchema(config?: {
-  schema?: unknown;
-  jsonSchema?: unknown;
-}): unknown | undefined {
+/** A JSON Schema-ish object. */
+type JsonSchema = Record<string, any>;
+
+function getPrimaryType(
+  schema: JsonSchema | null | undefined
+): string | undefined {
+  const type = schema?.type;
+  if (Array.isArray(type)) {
+    const nonNullTypes = type.filter((t) => t !== 'null');
+    if (nonNullTypes.length === 1) {
+      return nonNullTypes[0];
+    }
+    if (nonNullTypes.length === 0 && type.includes('null')) {
+      return 'null';
+    }
+    return undefined;
+  }
+  return typeof type === 'string' ? type : undefined;
+}
+
+function scalarType(schema: JsonSchema | null | undefined): string {
+  const type = getPrimaryType(schema);
+  switch (type) {
+    case 'string':
+    case 'integer':
+    case 'number':
+    case 'boolean':
+    case 'null':
+      return type;
+    default:
+      return 'any';
+  }
+}
+
+/** Wraps a type kind with an optional description, e.g. `(array, the tags)`. */
+function wrap(kind: string, description?: string): string {
+  return description ? `(${kind}, ${description})` : `(${kind})`;
+}
+
+/**
+ * Encodes a single property as a Picoschema key suffix and value. Scalars carry
+ * their description after a comma in the value (`string, the title`); wrapped
+ * kinds (object, array, enum) carry it inside the parentheses on the key.
+ */
+function picoEntry(schema: JsonSchema): { suffix: string; value: any } {
+  const description =
+    typeof schema?.description === 'string' ? schema.description : undefined;
+
+  if (Array.isArray(schema?.enum)) {
+    return { suffix: wrap('enum', description), value: schema.enum };
+  }
+  const type = getPrimaryType(schema);
+  if (type === 'array') {
+    const items: JsonSchema = schema.items ?? {};
+    const itemType = getPrimaryType(items);
+    const value =
+      itemType === 'object' || items.properties
+        ? picoObject(items)
+        : scalarType(items);
+    return { suffix: wrap('array', description), value };
+  }
+  if (type === 'object' || schema?.properties) {
+    return { suffix: wrap('object', description), value: picoObject(schema) };
+  }
+  const scalar = scalarType(schema);
+  return {
+    suffix: '',
+    value: description ? `${scalar}, ${description}` : scalar,
+  };
+}
+
+/** Converts an object JSON Schema into a Picoschema object structure. */
+function picoObject(schema: JsonSchema): Record<string, any> {
+  const required = new Set<string>(
+    Array.isArray(schema.required) ? schema.required : []
+  );
+  const out: Record<string, any> = {};
+  for (const [name, propSchema] of Object.entries<any>(
+    schema.properties ?? {}
+  )) {
+    const optional = required.has(name) ? '' : '?';
+    const { suffix, value } = picoEntry(propSchema);
+    out[`${name}${optional}${suffix}`] = value;
+  }
+  const additional = schema.additionalProperties;
+  if (additional && typeof additional === 'object') {
+    const { suffix, value } = picoEntry(additional);
+    out[`(*)${suffix}`] = value;
+  }
+  return out;
+}
+
+/**
+ * Converts a JSON Schema into the equivalent Picoschema for a `.prompt` file.
+ * Object schemas become the compact Picoschema form. Non-object top-level
+ * schemas (a bare array or scalar) have no Picoschema form, so the JSON Schema
+ * is returned unchanged; Dotprompt accepts raw JSON Schema there too.
+ */
+export function jsonSchemaToPicoschema(schema: unknown): any {
+  if (!schema || typeof schema !== 'object') {
+    return schema;
+  }
+  const s = schema as JsonSchema;
+  const type = getPrimaryType(s);
+  if (type === 'object' || s.properties) {
+    return picoObject(s);
+  }
+  return schema;
+}
+
+function toFrontmatterSchema(
+  config?: {
+    schema?: unknown;
+    jsonSchema?: unknown;
+  },
+  picoSchema?: boolean
+): unknown | undefined {
   const schema = config?.jsonSchema ?? config?.schema;
-  return schema && typeof schema === 'object' ? schema : undefined;
+  if (!schema || typeof schema !== 'object') {
+    return undefined;
+  }
+  return picoSchema ? jsonSchemaToPicoschema(schema) : schema;
 }
 
 /**
@@ -32,11 +148,14 @@ function toFrontmatterSchema(config?: {
  * formats (json, jsonl, array, enum) map onto `json`. Returns undefined when
  * there is nothing to record.
  */
-export function toFrontmatterOutput(output?: {
-  format?: string;
-  jsonSchema?: unknown;
-  schema?: unknown;
-}): PromptFrontmatter['output'] | undefined {
+export function toFrontmatterOutput(
+  output?: {
+    format?: string;
+    jsonSchema?: unknown;
+    schema?: unknown;
+  },
+  picoSchema?: boolean
+): PromptFrontmatter['output'] | undefined {
   if (!output) return undefined;
   const result: NonNullable<PromptFrontmatter['output']> = {};
   if (output.format === 'text') {
@@ -46,7 +165,7 @@ export function toFrontmatterOutput(output?: {
   } else if (output.format) {
     result.format = 'json';
   }
-  const schema = toFrontmatterSchema(output);
+  const schema = toFrontmatterSchema(output, picoSchema);
   if (schema !== undefined) {
     result.schema = schema;
   }
@@ -57,14 +176,17 @@ export function toFrontmatterOutput(output?: {
  * Maps a request's input config onto `.prompt` frontmatter. Returns undefined
  * when there is nothing to record.
  */
-export function toFrontmatterInput(input?: {
-  schema?: unknown;
-  jsonSchema?: unknown;
-  default?: unknown;
-}): PromptFrontmatter['input'] | undefined {
+export function toFrontmatterInput(
+  input?: {
+    schema?: unknown;
+    jsonSchema?: unknown;
+    default?: unknown;
+  },
+  picoSchema?: boolean
+): PromptFrontmatter['input'] | undefined {
   if (!input) return undefined;
   const result: NonNullable<PromptFrontmatter['input']> = {
-    schema: toFrontmatterSchema(input),
+    schema: toFrontmatterSchema(input, picoSchema),
     default: input.default,
   };
   return result.schema || result.default !== undefined ? result : undefined;
@@ -79,6 +201,7 @@ export function toPromptFile(request: {
   config?: Record<string, unknown>;
   tools?: { name: string }[];
   use?: PromptFrontmatter['use'];
+  picoSchema?: boolean;
   input?: {
     schema?: unknown;
     jsonSchema?: unknown;
@@ -95,8 +218,8 @@ export function toPromptFile(request: {
     config: request.config,
     tools: request.tools?.map((toolDefinition) => toolDefinition.name),
     use: request.use,
-    input: toFrontmatterInput(request.input),
-    output: toFrontmatterOutput(request.output),
+    input: toFrontmatterInput(request.input, request.picoSchema),
+    output: toFrontmatterOutput(request.output, request.picoSchema),
   };
   return renderPromptFile(frontmatter, request.messages);
 }
