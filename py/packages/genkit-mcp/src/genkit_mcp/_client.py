@@ -16,8 +16,9 @@
 
 """Genkit client for a single MCP server."""
 
+import os
+
 from genkit import Genkit
-from genkit_mcp._config import McpStdioServerConfig
 from genkit_mcp._connection import DEFAULT_REQUEST_TIMEOUT_MILLIS
 
 
@@ -39,7 +40,7 @@ class McpClient:
         """Reconnect to the server, replacing any connection it already has.
 
         Raises:
-            McpConnectionClosedError: If this client is closed.
+            GenkitError: ``FAILED_PRECONDITION`` if this client is closed.
         """
         raise NotImplementedError
 
@@ -55,9 +56,11 @@ class McpClient:
 def define_mcp_client(
     ai: Genkit,
     name: str,
-    server: McpStdioServerConfig,
     *,
-    tool_prefix: str | None = None,
+    command: str,
+    args: list[str] | None = None,
+    env: dict[str, str] | None = None,
+    cwd: str | os.PathLike[str] | None = None,
     cache_ttl_millis: int | None = None,
     request_timeout_millis: int | None = DEFAULT_REQUEST_TIMEOUT_MILLIS,
 ) -> McpClient:
@@ -65,9 +68,8 @@ def define_mcp_client(
 
     The server's tools become ``tool.v2`` actions behind a dynamic action provider
     named ``name``. Select them from ``generate`` as ``<name>:tool/*`` for all of
-    them, or ``<name>:tool/<tool_prefix>_<tool>`` for one, where ``tool_prefix``
-    defaults to ``name``. Connection is lazy: the child process starts on the
-    first tool listing.
+    them, or ``<name>:tool/<name>_<tool>`` for one. Connection is lazy: the child
+    process starts on the first tool listing.
 
     This is a function rather than a Genkit plugin because the registry rewrites a
     plugin's action names to ``<plugin>/<action>``, and a provider name cannot
@@ -75,10 +77,13 @@ def define_mcp_client(
 
     Args:
         ai: The Genkit instance to register with.
-        name: Provider name, used in tool selectors.
-        server: How to launch the server.
-        tool_prefix: Namespace for this server's tool names. Defaults to
-            ``name``.
+        name: Provider name, used in tool selectors and as the namespace of
+            this server's tool names.
+        command: Executable that runs the server, for example ``npx`` or ``uv``.
+        args: Arguments passed to ``command``.
+        env: Extra environment for the server process, over the minimal set the
+            MCP SDK supplies. The parent environment is not inherited.
+        cwd: Working directory for the server process.
         cache_ttl_millis: How long a tool listing stays fresh. Defaults to the
             core dynamic action provider default.
         request_timeout_millis: How long one MCP request may take before it
@@ -88,6 +93,7 @@ def define_mcp_client(
         A handle for disconnecting.
 
     Raises:
-        ValueError: If the tool prefix cannot appear in a model-facing tool name.
+        ValueError: If ``name`` cannot appear in a tool selector or a
+            model-facing tool name.
     """
     raise NotImplementedError

@@ -25,9 +25,11 @@ from pydantic import BaseModel, ConfigDict, Field
 class McpStdioServerConfig(BaseModel):
     """How to launch an MCP server as a child process over stdio.
 
-    Field names match the stdio `mcpServers` entries used by Claude Desktop and
-    Cursor, so an existing config block can be passed through unchanged. Any
-    other key fails validation, and validation errors never echo input values.
+    Not exported: the public functions take these fields as keyword arguments
+    or as one ``mcpServers`` entry and build this model from them. Field names
+    match the stdio ``mcpServers`` entries used by Claude Desktop and Cursor, so
+    an existing entry passes through unchanged. Any other key fails validation,
+    and validation errors never echo input values.
 
     Attributes:
         type: Transport marker some `mcpServers` blocks carry; only ``stdio``.
@@ -44,7 +46,6 @@ class McpStdioServerConfig(BaseModel):
             needs, an API key for example, has to be listed here even when this
             process already has it. Omitted from ``repr``.
         cwd: Working directory for the child process.
-        disabled: When true the client connects to nothing and advertises no tools.
     """
 
     model_config = ConfigDict(extra='forbid', hide_input_in_errors=True)
@@ -54,4 +55,3 @@ class McpStdioServerConfig(BaseModel):
     args: list[str] | None = None
     env: dict[str, str] | None = Field(default=None, repr=False)
     cwd: str | os.PathLike[str] | None = None
-    disabled: bool = False
