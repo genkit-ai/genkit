@@ -15,6 +15,7 @@ import psutil
 import pytest
 from genkit_mcp import (
     McpClient,
+    McpConnectionClosedError,
     McpConnectionFailedError,
     McpHostServer,
     McpStdioServerConfig,
@@ -24,14 +25,13 @@ from genkit_mcp import (
 
 from genkit import Genkit, Message, ModelResponse, Part
 from genkit._ai._generate import expand_wildcard_tools
-from genkit._ai._testing import define_programmable_model
 from genkit._core._action import Action, ActionKind
-from genkit._core._error import GenkitError
 from genkit._core._typing import (
     FinishReason,
     Role,
     ToolRequest,
 )
+from genkit.testing import define_scripted_model
 
 ALL_TOOLS = [
     'echo',
@@ -220,7 +220,7 @@ async def test_a_wildcard_selector_binds_tools_from_every_server(tmp_path: Path)
     ai = Genkit()
     host = define_mcp_host(ai, 'hosted', [spec('alpha', tmp_path), spec('beta', tmp_path)])
     try:
-        expanded = await expand_wildcard_tools(ai.registry, ['hosted:tool/*'])
+        expanded = await expand_wildcard_tools(ai._registry, ['hosted:tool/*'])
     finally:
         await host.close()
 
@@ -231,7 +231,7 @@ async def test_a_wildcard_selector_binds_tools_from_every_server(tmp_path: Path)
 async def test_generate_calls_a_tool_on_one_hosted_server(tmp_path: Path) -> None:
     """A model sees every hosted tool and reads back what one of them returned."""
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
     host = define_mcp_host(ai, 'hosted', [spec('alpha', tmp_path), spec('beta', tmp_path)])
     pm.responses = [
         tool_call_response('beta_echo', {'message': 'hello'}),
@@ -239,7 +239,7 @@ async def test_generate_calls_a_tool_on_one_hosted_server(tmp_path: Path) -> Non
     ]
 
     try:
-        response = await ai.generate(model='programmableModel', prompt='echo hello', tools=['hosted:tool/*'])
+        response = await ai.generate(model='scriptedModel', prompt='echo hello', tools=['hosted:tool/*'])
     finally:
         await host.close()
 
@@ -257,7 +257,7 @@ async def test_generate_calls_a_tool_on_one_hosted_server(tmp_path: Path) -> Non
 async def test_tool_name_builds_a_selector_for_one_hosted_tool(tmp_path: Path) -> None:
     """A selector built from the helpers reaches one tool of one server."""
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
     host = define_mcp_host(ai, 'hosted', [spec('alpha', tmp_path), spec('beta', tmp_path)])
     pm.responses = [
         tool_call_response('beta_echo', {'message': 'hello'}),
@@ -266,7 +266,7 @@ async def test_tool_name_builds_a_selector_for_one_hosted_tool(tmp_path: Path) -
 
     try:
         selector = f'{host.name}:tool/{host.tool_name("beta", "echo")}'
-        response = await ai.generate(model='programmableModel', prompt='echo hello', tools=[selector])
+        response = await ai.generate(model='scriptedModel', prompt='echo hello', tools=[selector])
     finally:
         await host.close()
 
@@ -282,9 +282,9 @@ async def test_connect_adds_a_server_and_drops_the_listing(tmp_path: Path) -> No
     ai = Genkit()
     host = define_mcp_host(ai, 'hosted', [spec('alpha', tmp_path)], cache_ttl_millis=LONG_TTL_MILLIS)
     try:
-        before = await expand_wildcard_tools(ai.registry, ['hosted:tool/*'])
+        before = await expand_wildcard_tools(ai._registry, ['hosted:tool/*'])
         await host.connect('beta', config(tmp_path, pid_name='beta'))
-        after = await expand_wildcard_tools(ai.registry, ['hosted:tool/*'])
+        after = await expand_wildcard_tools(ai._registry, ['hosted:tool/*'])
         assert host.server_names == ['alpha', 'beta']
     finally:
         await host.close()
@@ -326,7 +326,7 @@ async def test_connect_installs_the_replacement_when_the_replaced_server_fails_t
         raise RuntimeError('close failed after the fact')
 
     try:
-        await expand_wildcard_tools(ai.registry, ['hosted:tool/*'])
+        await expand_wildcard_tools(ai._registry, ['hosted:tool/*'])
         with pytest.MonkeyPatch.context() as patch:
             patch.setattr(McpClient, 'close', close_and_complain)
             with pytest.raises(RuntimeError, match='close failed after the fact'):
@@ -334,7 +334,7 @@ async def test_connect_installs_the_replacement_when_the_replaced_server_fails_t
         assert host.server_names == ['alpha']
         assert server_processes() == []
 
-        expanded = await expand_wildcard_tools(ai.registry, ['hosted:tool/*'])
+        expanded = await expand_wildcard_tools(ai._registry, ['hosted:tool/*'])
         assert server_process(tmp_path, 'replacement').is_running()
     finally:
         await host.close()
@@ -354,14 +354,14 @@ async def test_disconnect_removes_one_server_and_stops_it(tmp_path: Path) -> Non
         cache_ttl_millis=LONG_TTL_MILLIS,
     )
     try:
-        await expand_wildcard_tools(ai.registry, ['hosted:tool/*'])
+        await expand_wildcard_tools(ai._registry, ['hosted:tool/*'])
         assert len(server_processes()) == 2
 
         await host.disconnect('beta')
 
         assert host.server_names == ['alpha']
         assert [process.pid for process in server_processes()] == [server_process(tmp_path, 'alpha').pid]
-        expanded = await expand_wildcard_tools(ai.registry, ['hosted:tool/*'])
+        expanded = await expand_wildcard_tools(ai._registry, ['hosted:tool/*'])
     finally:
         await host.close()
 
@@ -436,9 +436,9 @@ async def test_a_failed_tool_call_re_lists_every_server(tmp_path: Path) -> None:
         cache_ttl_millis=LONG_TTL_MILLIS,
     )
     try:
-        await expand_wildcard_tools(ai.registry, ['hosted:tool/*'])
-        counter = await ai.registry.resolve_action(ActionKind.TOOL, 'alpha_list_requests')
-        beta_echo = await ai.registry.resolve_action(ActionKind.TOOL, 'beta_echo')
+        await expand_wildcard_tools(ai._registry, ['hosted:tool/*'])
+        counter = await ai._registry.resolve_action(ActionKind.TOOL, 'alpha_list_requests')
+        beta_echo = await ai._registry.resolve_action(ActionKind.TOOL, 'beta_echo')
         assert counter is not None
         assert beta_echo is not None
         assert (await counter.run({})).response.output == '1'
@@ -446,13 +446,12 @@ async def test_a_failed_tool_call_re_lists_every_server(tmp_path: Path) -> None:
         killed = server_process(tmp_path, 'beta')
         killed.kill()
         killed.wait(timeout=30)
-        with pytest.raises(GenkitError) as raised:
+        with pytest.raises(McpConnectionFailedError):
             await beta_echo.run({'message': 'second'})
-        assert isinstance(raised.value.cause, McpConnectionFailedError)
 
         # The listing outlives its TTL, so re-listing here is beta's failure
         # invalidating the listing alpha shares with it.
-        await expand_wildcard_tools(ai.registry, ['hosted:tool/*'])
+        await expand_wildcard_tools(ai._registry, ['hosted:tool/*'])
         assert (await counter.run({})).response.output == '2'
     finally:
         await host.close()
@@ -470,9 +469,9 @@ async def test_a_server_connected_later_shares_the_same_listing(tmp_path: Path) 
     )
     try:
         await host.connect('beta', config(tmp_path, pid_name='beta'))
-        await expand_wildcard_tools(ai.registry, ['hosted:tool/*'])
-        counter = await ai.registry.resolve_action(ActionKind.TOOL, 'alpha_list_requests')
-        beta_echo = await ai.registry.resolve_action(ActionKind.TOOL, 'beta_echo')
+        await expand_wildcard_tools(ai._registry, ['hosted:tool/*'])
+        counter = await ai._registry.resolve_action(ActionKind.TOOL, 'alpha_list_requests')
+        beta_echo = await ai._registry.resolve_action(ActionKind.TOOL, 'beta_echo')
         assert counter is not None
         assert beta_echo is not None
         assert (await counter.run({})).response.output == '1'
@@ -480,10 +479,10 @@ async def test_a_server_connected_later_shares_the_same_listing(tmp_path: Path) 
         killed = server_process(tmp_path, 'beta')
         killed.kill()
         killed.wait(timeout=30)
-        with pytest.raises(GenkitError):
+        with pytest.raises(McpConnectionFailedError):
             await beta_echo.run({'message': 'second'})
 
-        await expand_wildcard_tools(ai.registry, ['hosted:tool/*'])
+        await expand_wildcard_tools(ai._registry, ['hosted:tool/*'])
         assert (await counter.run({})).response.output == '2'
     finally:
         await host.close()
@@ -500,21 +499,21 @@ async def test_a_disconnected_server_cannot_drop_the_listing(tmp_path: Path) -> 
         cache_ttl_millis=LONG_TTL_MILLIS,
     )
     try:
-        await expand_wildcard_tools(ai.registry, ['hosted:tool/*'])
-        counter = await ai.registry.resolve_action(ActionKind.TOOL, 'alpha_list_requests')
-        beta_echo = await ai.registry.resolve_action(ActionKind.TOOL, 'beta_echo')
+        await expand_wildcard_tools(ai._registry, ['hosted:tool/*'])
+        counter = await ai._registry.resolve_action(ActionKind.TOOL, 'alpha_list_requests')
+        beta_echo = await ai._registry.resolve_action(ActionKind.TOOL, 'beta_echo')
         assert counter is not None
         assert beta_echo is not None
         assert (await counter.run({})).response.output == '1'
 
         await host.disconnect('beta')
-        await expand_wildcard_tools(ai.registry, ['hosted:tool/*'])
+        await expand_wildcard_tools(ai._registry, ['hosted:tool/*'])
         assert (await counter.run({})).response.output == '2'
 
-        with pytest.raises(GenkitError):
+        with pytest.raises(McpConnectionClosedError):
             await beta_echo.run({'message': 'late'})
 
-        await expand_wildcard_tools(ai.registry, ['hosted:tool/*'])
+        await expand_wildcard_tools(ai._registry, ['hosted:tool/*'])
         assert (await counter.run({})).response.output == '2'
     finally:
         await host.close()
@@ -536,7 +535,7 @@ async def test_a_host_name_a_model_would_refuse_is_accepted(tmp_path: Path) -> N
     host = define_mcp_host(ai, 'my.host', [spec('alpha', tmp_path)])
     try:
         assert host.name == 'my.host'
-        expanded = await expand_wildcard_tools(ai.registry, ['my.host:tool/*'])
+        expanded = await expand_wildcard_tools(ai._registry, ['my.host:tool/*'])
     finally:
         await host.close()
 
@@ -589,8 +588,8 @@ async def test_a_created_host_registers_nothing(tmp_path: Path) -> None:
     host = create_mcp_host('hosted', [spec('alpha', tmp_path)])
     try:
         assert host.dynamic_action_provider is None
-        assert await ai.registry.resolve_action_by_key('/dynamic-action-provider/hosted:tool/alpha_echo') is None
-        assert await expand_wildcard_tools(ai.registry, ['hosted:tool/*']) == ['hosted:tool/*']
+        assert await ai._registry.resolve_action_by_key('/dynamic-action-provider/hosted:tool/alpha_echo') is None
+        assert await expand_wildcard_tools(ai._registry, ['hosted:tool/*']) == ['hosted:tool/*']
         assert server_processes() == []
     finally:
         await host.close()
