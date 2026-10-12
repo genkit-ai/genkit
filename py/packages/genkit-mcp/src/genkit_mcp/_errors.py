@@ -65,7 +65,7 @@ class _ProtocolError(_ClientError):
     """The server answered in a way the protocol does not allow. Status ``INTERNAL``."""
 
 
-class McpToolResultError(_ClientError):
+class _ToolResultError(_ClientError):
     """A server's tool result violated the tool's declared output schema.
 
     The MCP SDK reports this as a bare ``RuntimeError``; the connection

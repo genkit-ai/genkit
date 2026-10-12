@@ -38,7 +38,7 @@ import genkit
 from genkit import ActionRunContext, MultipartToolResponse, Part
 from genkit._core._typing import Resource
 from genkit.plugin_api import Action
-from genkit_mcp._errors import McpToolResultError
+from genkit_mcp._errors import _ToolResultError
 
 McpToolCall = Callable[[str, dict[str, Any], dict[str, Any] | None], Awaitable[CallToolResult]]
 
@@ -210,9 +210,9 @@ def mcp_tool_to_action(
         meta = context_mcp.get('_meta') if isinstance(context_mcp, dict) else None
         try:
             result = await call(tool.name, input, meta)
-        except McpToolResultError as error:
+        except _ToolResultError as error:
             result = CallToolResult(
-                content=[TextContent(type='text', text=str(error))],
+                content=[TextContent(type='text', text=error.original_message)],
                 isError=True,
             )
         return call_result_to_multipart(result)
