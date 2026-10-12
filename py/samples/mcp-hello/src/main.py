@@ -20,22 +20,21 @@ import sys
 from pathlib import Path
 
 from genkit_google_genai import GoogleAI
-from genkit_mcp import McpStdioServerConfig, define_mcp_client
+from genkit_mcp import define_mcp_client
 
 from genkit import Genkit
-
-# Any command works here: `npx`, `uvx`, a binary on PATH. This one is the
-# sample's own virtualenv, which is where the server's dependencies live. The
-# fields match a `mcpServers` entry from Claude Desktop or Cursor.
-BOOKSHOP = McpStdioServerConfig(
-    command=sys.executable,
-    args=[str(Path(__file__).with_name('bookshop_server.py'))],
-)
 
 ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
 
 # No process starts here. The server is launched the first time its tools are listed.
-client = define_mcp_client(ai, 'bookshop', BOOKSHOP)
+# Any command works: `npx`, `uvx`, a binary on PATH. This one is the sample's own
+# virtualenv, which is where the server's dependencies live.
+client = define_mcp_client(
+    ai,
+    'bookshop',
+    command=sys.executable,
+    args=[str(Path(__file__).with_name('bookshop_server.py'))],
+)
 
 
 @ai.flow()
