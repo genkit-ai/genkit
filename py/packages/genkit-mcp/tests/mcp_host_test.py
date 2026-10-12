@@ -8,6 +8,7 @@
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,7 @@ from typing import Any
 import psutil
 import pytest
 from genkit_mcp import McpClient, McpHost, define_mcp_host
+from mcp.shared.exceptions import McpError
 from pydantic import ValidationError
 
 from genkit import Genkit, GenkitError, Message, ModelResponse, Part
@@ -352,24 +354,30 @@ async def test_reconnect_reports_a_server_which_cannot_be_started(tmp_path: Path
 
 
 @pytest.mark.asyncio
-async def test_close_releases_every_server_and_leaves_the_host_usable(tmp_path: Path) -> None:
-    """Closing a host empties it rather than ending it: it can hold servers again."""
-    host = McpHost('hosted', mcp_servers=servers(tmp_path, 'alpha', 'beta'))
-    try:
-        assert tool_names(await host.get_active_tools()) == hosted('alpha', 'beta')
-        assert len(server_processes()) == 2
+async def test_close_is_final(tmp_path: Path) -> None:
+    """A closed host stops every server and refuses to list, connect or reconnect, as a client does."""
+    ai = Genkit()
+    host = define_mcp_host(ai, 'hosted', mcp_servers=servers(tmp_path, 'alpha', 'beta'))
+    assert tool_names(await host.get_active_tools()) == hosted('alpha', 'beta')
+    assert len(server_processes()) == 2
 
-        await host.close()
+    await host.close()
+    await host.close()
 
-        assert list(host._clients) == []
-        assert await host.get_active_tools() == []
-        assert server_processes() == []
-
+    assert server_processes() == []
+    closed = "MCP host 'hosted' is closed"
+    with pytest.raises(GenkitError, match=closed) as listing:
+        await host.get_active_tools()
+    with pytest.raises(GenkitError, match=closed) as selecting:
+        await expand_wildcard_tools(ai._registry, ['hosted:tool/*'])
+    with pytest.raises(GenkitError, match=closed) as connecting:
         await host.connect('gamma', **server(tmp_path, pid_name='gamma'))
-        assert tool_names(await host.get_active_tools()) == hosted('gamma')
-    finally:
-        await host.close()
-
+    with pytest.raises(GenkitError, match=closed) as reconnecting:
+        await host.reconnect('alpha')
+    with pytest.raises(GenkitError, match=closed) as disconnecting:
+        await host.disconnect('alpha')
+    for raised in (listing, selecting, connecting, reconnecting, disconnecting):
+        assert raised.value.status == 'FAILED_PRECONDITION'
     assert server_processes() == []
 
 
@@ -500,10 +508,20 @@ async def test_a_host_name_a_model_would_refuse_is_accepted(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
-async def test_a_server_name_no_model_would_accept_is_refused(tmp_path: Path) -> None:
-    """A server name becomes a tool prefix, which a model provider has to accept."""
-    with pytest.raises(ValueError, match='cannot prefix an MCP tool name'):
-        McpHost('hosted', mcp_servers={'my server': server(tmp_path)})
+@pytest.mark.parametrize('server_name', ['my server', 'a:b', 'a/b', '9lives', ''])
+async def test_a_server_name_no_model_would_accept_is_refused(tmp_path: Path, server_name: str) -> None:
+    """A server name becomes a tool prefix, and the host, not a provider, is what refuses it."""
+    refused = f"MCP host 'hosted' cannot hold a server named {server_name!r}: the name prefixes its tool names"
+    with pytest.raises(ValueError, match=re.escape(refused)):
+        McpHost('hosted', mcp_servers={server_name: server(tmp_path)})
+
+    host = McpHost('hosted', mcp_servers={})
+    try:
+        with pytest.raises(ValueError, match=re.escape(refused)):
+            await host.connect(server_name, **server(tmp_path))
+        assert list(host._clients) == []
+    finally:
+        await host.close()
     assert server_processes() == []
 
 
@@ -560,3 +578,54 @@ async def test_an_entry_with_an_unknown_key_is_refused_without_echoing_it(tmp_pa
     assert 'enviroment' in str(raised.value)
     assert secret not in str(raised.value)
     assert server_processes() == []
+
+
+@pytest.mark.asyncio
+async def test_a_server_breaking_the_protocol_fails_the_listing(tmp_path: Path) -> None:
+    """Only a server that cannot be reached is skipped: a broken one is reported, not hidden."""
+    ai = Genkit()
+    host = define_mcp_host(
+        ai,
+        'hosted',
+        mcp_servers={**servers(tmp_path, 'alpha'), **servers(tmp_path, 'beta', MCP_FAKE_STUCK_CURSOR='1')},
+    )
+    try:
+        with pytest.raises(GenkitError, match='repeated the tools/list cursor') as raised:
+            await host.get_active_tools()
+        assert raised.value.status == 'INTERNAL'
+        with pytest.raises(GenkitError, match='repeated the tools/list cursor'):
+            await expand_wildcard_tools(ai._registry, ['hosted:tool/*'])
+    finally:
+        await host.close()
+
+
+@pytest.mark.asyncio
+async def test_a_server_error_answering_the_listing_fails_it(tmp_path: Path) -> None:
+    """A server that answers tools/list with an error is up, so its error reaches the caller."""
+    ai = Genkit()
+    host = define_mcp_host(
+        ai,
+        'hosted',
+        mcp_servers={**servers(tmp_path, 'alpha'), **servers(tmp_path, 'beta', MCP_FAKE_APP_ERROR='1')},
+    )
+    try:
+        with pytest.raises(McpError, match='application-level failure'):
+            await expand_wildcard_tools(ai._registry, ['hosted:tool/*'])
+    finally:
+        await host.close()
+
+
+@pytest.mark.asyncio
+async def test_tools_of_one_server_sharing_a_genkit_name_fail_the_listing(tmp_path: Path) -> None:
+    """A server whose own tools collide is not skipped: one of them would vanish silently."""
+    host = McpHost(
+        'hosted',
+        mcp_servers={**servers(tmp_path, 'alpha'), **servers(tmp_path, 'beta', MCP_FAKE_COLLIDING_TOOLS='1')},
+    )
+    try:
+        with pytest.raises(
+            ValueError, match=r"MCP tools 'look\.up' and 'look/up' both map to the Genkit tool name 'beta_look_up'"
+        ):
+            await host.get_active_tools()
+    finally:
+        await host.close()

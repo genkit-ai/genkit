@@ -128,11 +128,13 @@ Each server keeps its own namespace, so the tools above are `everything_echo` an
 key a server has in `mcp_servers` is its prefix. The host's own name is only the provider name, so
 it has to fit a selector but no model ever reads it.
 
-A server that cannot be started is logged and skipped, so the other servers stay selectable. Only
-the server you ask for is affected by `await host.connect(...)`, `await host.disconnect(...)` and
-`await host.reconnect(...)`; `await host.close()` disconnects every server the host holds. Unlike
-`McpClient.close()`, that is not final: the host holds no servers afterwards, and `connect()` puts
-servers back.
+A server that cannot start, or whose process dies, fails with status `UNAVAILABLE`. The host logs
+it and skips it, so the other servers stay selectable. Any other failure fails the whole listing:
+a server that breaks the protocol, a server that answers the listing with an error, and two tools
+that share a name. Only the server you ask for is affected by `await host.connect(...)`,
+`await host.disconnect(...)` and `await host.reconnect(...)`. `await host.close()` disconnects every
+server the host holds, and like `McpClient.close()` it is final: afterwards the host fails with
+status `FAILED_PRECONDITION`, so define a new host to use those servers again.
 
 One provider means one listing. A tool call that fails on one server drops the listing for all of
 them, so the next `generate` lists every server again.

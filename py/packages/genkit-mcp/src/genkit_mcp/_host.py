@@ -28,7 +28,8 @@ from genkit.plugin_api import Action
 from genkit_mcp._client import McpClient
 from genkit_mcp._config import McpServerEntry, McpStdioServerConfig
 from genkit_mcp._connection import DEFAULT_REQUEST_TIMEOUT_MILLIS
-from genkit_mcp._tools import validate_provider_name
+from genkit_mcp._errors import _ConnectionClosedError, _ConnectionFailedError
+from genkit_mcp._tools import TOOL_NAME_PATTERN, validate_provider_name
 
 logger = structlog.get_logger(__name__)
 
@@ -40,8 +41,10 @@ class McpHost:
     provider across all of them, so ``<host>:tool/*`` selects every tool of
     every server and ``<host>:tool/<server>_<tool>`` selects one of them.
 
-    A server which cannot be listed is logged and skipped rather than failing
-    the listing, so one server which will not start leaves the rest selectable.
+    A server that cannot start, or whose process dies, is logged and skipped,
+    so one such server leaves the rest selectable. Any other failure to list a
+    server, such as a protocol violation, an error the server returns, or two
+    of its tools sharing a name, fails the listing.
 
     A host holds no Genkit instance. Registering the provider is
     :func:`define_mcp_host`.
@@ -77,6 +80,7 @@ class McpHost:
         self._request_timeout_millis = request_timeout_millis
         self._provider: DynamicActionProvider | None = None
         self._clients: dict[str, McpClient] = {}
+        self._closed = False
         for server_name, entry in mcp_servers.items():
             config = McpStdioServerConfig.model_validate(entry)
             self._clients[server_name] = self._build_client(
@@ -148,7 +152,9 @@ class McpHost:
         Raises:
             ValueError: If ``server_name`` cannot appear in a model-facing tool
                 name.
+            GenkitError: ``FAILED_PRECONDITION`` if this host is closed.
         """
+        self._refuse_when_closed()
         client = self._build_client(server_name, command=command, args=args, env=env, cwd=cwd)
         replaced = self._clients.pop(server_name, None)
         try:
@@ -166,7 +172,9 @@ class McpHost:
 
         Raises:
             ValueError: If this host holds no such server.
+            GenkitError: ``FAILED_PRECONDITION`` if this host is closed.
         """
+        self._refuse_when_closed()
         client = self._client(server_name)
         del self._clients[server_name]
         try:
@@ -186,8 +194,10 @@ class McpHost:
 
         Raises:
             ValueError: If this host holds no such server.
-            GenkitError: ``UNAVAILABLE`` if the server cannot be started.
+            GenkitError: ``FAILED_PRECONDITION`` if this host is closed, or
+                ``UNAVAILABLE`` if the server cannot be started.
         """
+        self._refuse_when_closed()
         client = self._client(server_name)
         try:
             await client.restart()
@@ -198,9 +208,9 @@ class McpHost:
         """List the tools every server currently offers, as Genkit actions.
 
         Servers are listed concurrently, and each of them is listed afresh, as
-        :meth:`McpClient.get_active_tools` is. A server which cannot be listed
-        is logged and contributes nothing, so one server which will not start
-        cannot empty this host's catalog.
+        :meth:`McpClient.get_active_tools` is. A server that cannot start, or
+        whose process dies, is logged and contributes nothing, so it cannot
+        empty this host's catalog. Any other failure fails the listing.
 
         The actions are unregistered: a model reaches them through a dynamic
         action provider serving them, which :func:`define_mcp_host` sets up.
@@ -210,10 +220,15 @@ class McpHost:
             order.
 
         Raises:
-            ValueError: If two servers serve tools of one name. Distinct server
-                names do not rule this out, because the name and the tool name
-                are joined by the underscore either of them may hold.
+            GenkitError: ``FAILED_PRECONDITION`` if this host is closed, or
+                ``INTERNAL`` if a server breaks the protocol.
+            McpError: If a server answers the listing with an error.
+            ValueError: If two tools share a name, within one server or across
+                two. Distinct server names do not rule this out, because the
+                name and the tool name are joined by the underscore either of
+                them may hold.
         """
+        self._refuse_when_closed()
         servers = list(self._clients.items())
         listings = await asyncio.gather(
             *(client.get_active_tools() for _, client in servers),
@@ -222,16 +237,16 @@ class McpHost:
         tools: list[Action[Any, Any]] = []
         served_by: dict[str, str] = {}
         for (server_name, _), listing in zip(servers, listings, strict=True):
-            if isinstance(listing, asyncio.CancelledError):
-                raise listing
-            if isinstance(listing, BaseException):
+            if isinstance(listing, _ConnectionFailedError):
                 logger.error(
-                    'MCP server could not be listed, serving the other servers without it',
+                    'MCP server could not be reached, serving the other servers without it',
                     server=server_name,
                     host=self._name,
                     exc_info=listing,
                 )
                 continue
+            if isinstance(listing, BaseException):
+                raise listing
             for tool in listing:
                 other = served_by.setdefault(tool.name, server_name)
                 if other != server_name:
@@ -244,16 +259,18 @@ class McpHost:
         return tools
 
     async def close(self) -> None:
-        """Disconnect every server this host holds and stop their processes.
+        """Disconnect every server this host holds, stop their processes, and keep it that way.
 
-        Unlike :meth:`McpClient.close` this is not the end of the host: it holds
-        no servers afterwards and advertises no tools, and :meth:`connect` puts
-        servers back. A provider registered for this host stays registered.
+        Closing is final, as it is for :meth:`McpClient.close`: a closed host
+        cannot connect servers again, so build a new one with
+        :func:`define_mcp_host`. A provider registered for this host stays
+        registered and its listing now fails as closed.
 
         Raises:
             GenkitError: If a server could not be disconnected. Every server is
                 disconnected first, and the first failure is reported.
         """
+        self._closed = True
         clients = list(self._clients.values())
         self._clients.clear()
         results = await asyncio.gather(*(self._release(client) for client in clients), return_exceptions=True)
@@ -281,6 +298,12 @@ class McpHost:
         cwd: str | os.PathLike[str] | None,
     ) -> McpClient:
         """Build a client for one server, serving this host's provider."""
+        if not TOOL_NAME_PATTERN.fullmatch(server_name):
+            raise ValueError(
+                f'MCP host {self._name!r} cannot hold a server named {server_name!r}: the name prefixes '
+                'its tool names, so it must start with a letter or an underscore and hold only letters, '
+                'digits, underscores and hyphens.'
+            )
         client = McpClient(
             server_name,
             command=command,
@@ -291,6 +314,11 @@ class McpHost:
         )
         client._provider = self._provider
         return client
+
+    def _refuse_when_closed(self) -> None:
+        """Raise if this host has been closed."""
+        if self._closed:
+            raise _ConnectionClosedError(f'MCP host {self._name!r} is closed')
 
     def _client(self, server_name: str) -> McpClient:
         """Return the client for one server name, or say the host has no such server."""
