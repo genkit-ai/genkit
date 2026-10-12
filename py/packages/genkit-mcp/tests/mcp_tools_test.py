@@ -36,7 +36,6 @@ from pydantic import AnyUrl
 from structlog.testing import capture_logs
 
 from genkit import Part
-from genkit._core._error import GenkitError
 from genkit._core._typing import Resource
 from genkit.plugin_api import Action
 
@@ -226,11 +225,10 @@ async def test_mcp_tool_to_action_lets_a_runtime_error_through() -> None:
 
     action = mcp_tool_to_action(tool, 'catalog', call)
 
-    with pytest.raises(GenkitError) as raised:
+    with pytest.raises(RuntimeError, match='^Event loop is closed$') as raised:
         await action.run({})
 
-    assert type(raised.value.cause) is RuntimeError
-    assert str(raised.value.cause) == 'Event loop is closed'
+    assert type(raised.value) is RuntimeError
 
 
 @pytest.mark.asyncio
@@ -243,10 +241,8 @@ async def test_mcp_tool_to_action_lets_a_connection_failure_through() -> None:
 
     action = mcp_tool_to_action(tool, 'catalog', call)
 
-    with pytest.raises(GenkitError) as raised:
+    with pytest.raises(McpConnectionFailedError):
         await action.run({})
-
-    assert isinstance(raised.value.cause, McpConnectionFailedError)
 
 
 @pytest.mark.parametrize(
