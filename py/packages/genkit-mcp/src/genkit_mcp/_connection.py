@@ -42,11 +42,11 @@ from mcp.types import (
 
 from genkit_mcp._config import McpStdioServerConfig
 from genkit_mcp._errors import (
-    McpClientError,
-    McpConnectionClosedError,
-    McpConnectionFailedError,
-    McpProtocolError,
-    McpToolResultError,
+    _ClientError,
+    _ConnectionClosedError,
+    _ConnectionFailedError,
+    _ProtocolError,
+    _ToolResultError,
 )
 
 if sys.version_info < (3, 11):
@@ -180,14 +180,14 @@ async def _call_tool(
         The raw result, for the caller to map.
 
     Raises:
-        McpToolResultError: If the result violates the tool's declared output schema.
+        _ToolResultError: If the result violates the tool's declared output schema.
     """
     try:
         return await session.call_tool(name, arguments, meta=meta)
     except RuntimeError as error:
         message = str(error)
         if any(marker in message for marker in _OUTPUT_SCHEMA_VIOLATIONS):
-            raise McpToolResultError(message) from error
+            raise _ToolResultError(message) from error
         raise
 
 
@@ -237,7 +237,7 @@ class McpConnection:
             All tools, in server order.
 
         Raises:
-            McpProtocolError: If the server's cursors never terminate.
+            _ProtocolError: If the server's cursors never terminate.
         """
 
         async def list_all(session: ClientSession) -> list[McpTool]:
@@ -253,9 +253,9 @@ class McpConnection:
                 if cursor is None:
                     return tools
                 if cursor in seen:
-                    raise McpProtocolError(f'{self._config.command!r} repeated the tools/list cursor {cursor!r}')
+                    raise _ProtocolError(f'{self._config.command!r} repeated the tools/list cursor {cursor!r}')
                 seen.add(cursor)
-            raise McpProtocolError(f'{self._config.command!r} served over {MAX_TOOL_PAGES} tools/list pages')
+            raise _ProtocolError(f'{self._config.command!r} served over {MAX_TOOL_PAGES} tools/list pages')
 
         return await self._request(list_all)
 
@@ -276,7 +276,7 @@ class McpConnection:
             The raw result, for the caller to map.
 
         Raises:
-            McpToolResultError: If the result violates the tool's declared output schema.
+            _ToolResultError: If the result violates the tool's declared output schema.
         """
 
         async def call(session: ClientSession) -> CallToolResult:
@@ -291,13 +291,16 @@ class McpConnection:
         connection serves nothing more.
 
         Raises:
-            McpClientError: If called from inside one of this connection's
-                own operations, which teardown would wait on forever.
+            GenkitError: ``FAILED_PRECONDITION`` if called from inside one of
+                this connection's own operations, which teardown would wait on
+                forever.
         """
         task: asyncio.Task[None] | None = None
         async with self._state_lock:
             if _serving.get() is self:
-                raise McpClientError('MCP connection cannot be closed from inside one of its own requests')
+                raise _ClientError(
+                    'MCP connection cannot be closed from inside one of its own requests', status='FAILED_PRECONDITION'
+                )
             teardown_started = self._state is _ConnectionState.CLOSED
             if not teardown_started:
                 self._state = _ConnectionState.CLOSED
@@ -439,7 +442,7 @@ class McpConnection:
             if not deferred and not request.result.done():
                 request.result.set_exception(self._terminal_error())
 
-    def _terminal_error(self) -> McpConnectionClosedError | McpConnectionFailedError:
+    def _terminal_error(self) -> _ConnectionClosedError | _ConnectionFailedError:
         """Build the error for a caller the connection can no longer serve."""
         if self._state is _ConnectionState.CLOSED:
             return self._closed_error()
@@ -481,12 +484,12 @@ class McpConnection:
             if not request.result.done():
                 request.result.set_exception(build_error())
 
-    def _closed_error(self) -> McpConnectionClosedError:
+    def _closed_error(self) -> _ConnectionClosedError:
         """Build the error reported once this connection is shut down."""
-        return McpConnectionClosedError(f'MCP connection to {self._config.command!r} is closed')
+        return _ConnectionClosedError(f'MCP connection to {self._config.command!r} is closed')
 
-    def _failed_error(self) -> McpConnectionFailedError:
+    def _failed_error(self) -> _ConnectionFailedError:
         """Build the error reported when startup or the session died."""
-        error = McpConnectionFailedError(f'MCP connection to {self._config.command!r} failed')
+        error = _ConnectionFailedError(f'MCP connection to {self._config.command!r} failed')
         error.__cause__ = self._failure
         return error
