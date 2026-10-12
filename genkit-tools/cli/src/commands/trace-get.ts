@@ -16,9 +16,11 @@
 
 import type { BaseRuntimeManager } from '@genkit-ai/tools-common/manager';
 import {
+  extractTrajectoryFromTrace,
   findProjectRoot,
   forceStderr,
   logger,
+  mergeSessionTrajectories,
 } from '@genkit-ai/tools-common/utils';
 import { yellow } from 'colorette';
 import { Command, Option } from 'commander';
@@ -33,6 +35,10 @@ export interface TraceGetOptions {
   format: 'tree' | 'json';
   /** If true, preserves raw base64 data instead of sanitizing them with placeholders. */
   keepBase64?: boolean;
+  /** If true, projects the trace into a chronological agent trajectory. */
+  trajectory?: boolean;
+  /** If true, merges all traces sharing the same agent sessionId into a multi-turn trajectory. */
+  session?: boolean;
 }
 
 /** Command to get a trace. */
@@ -45,6 +51,16 @@ export const traceGet = new Command('trace:get')
       .default('tree')
   )
   .option('--keep-base64', 'do not strip base64 data URLs in output', false)
+  .option(
+    '--trajectory',
+    'project the trace into a flattened chronological agent trajectory',
+    false
+  )
+  .option(
+    '--session',
+    'merge all traces belonging to the same agent session into a multi-turn trajectory',
+    false
+  )
   .action(async (traceId: string, options: TraceGetOptions) => {
     // Redirect logging to stderr for clean JSON
     forceStderr();
@@ -61,6 +77,28 @@ export const traceGet = new Command('trace:get')
 
         const keepBase64 = !!options.keepBase64;
         const processedTrace = cleanTraceJson(response, keepBase64);
+
+        if (options.trajectory || options.session) {
+          let bundle = extractTrajectoryFromTrace(processedTrace);
+          if (options.session && bundle.sessionId) {
+            const list = await manager.listTraces({
+              limit: 1000,
+              filter: { eq: { sessionId: bundle.sessionId } },
+            });
+            if (list.traces.length > 0) {
+              const fullTraces = await Promise.all(
+                list.traces.map((t) => manager.getTrace({ traceId: t.traceId }))
+              );
+              const cleanedSessionTraces = fullTraces
+                .filter((t) => !!t)
+                .map((t) => cleanTraceJson(t, keepBase64));
+              bundle = mergeSessionTrajectories(cleanedSessionTraces);
+            }
+          }
+
+          console.log(JSON.stringify(bundle, undefined, 2));
+          return;
+        }
 
         if (options.format === 'json') {
           console.log(JSON.stringify(processedTrace, undefined, 2));
@@ -80,3 +118,4 @@ export const traceGet = new Command('trace:get')
 
     await runWithManager(projectRoot, runAction);
   });
+

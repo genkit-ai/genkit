@@ -403,9 +403,18 @@ export class Index {
     if (rootSpan?.displayName) {
       indexData['status'] = rootSpan.status?.code ?? 'UNKNOWN';
     }
-    const sessionId =
+    const sessionSpan =
       rootSpan?.attributes?.['genkit:metadata:agent:sessionId'] ||
-      rootSpan?.attributes?.['session.id'];
+      rootSpan?.attributes?.['session.id']
+        ? rootSpan
+        : Object.values(traceData.spans).find(
+            (s) =>
+              s.attributes?.['genkit:metadata:agent:sessionId'] ||
+              s.attributes?.['session.id']
+          );
+    const sessionId =
+      sessionSpan?.attributes?.['genkit:metadata:agent:sessionId'] ||
+      sessionSpan?.attributes?.['session.id'];
     if (sessionId) {
       indexData['sessionId'] = `${sessionId}`;
     }

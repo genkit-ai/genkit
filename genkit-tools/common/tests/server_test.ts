@@ -554,4 +554,36 @@ describe('Tools Server', () => {
       );
     });
   });
+
+  describe('listTraces with sessionId filter', () => {
+    it('forwards sessionId eq filter to manager.listTraces', async () => {
+      mockManager.listTraces.mockResolvedValue({
+        traces: [
+          { traceId: 't2', startTime: 200, spans: {} },
+          { traceId: 't1', startTime: 100, spans: {} },
+        ],
+      });
+
+      const res = await axios.get(
+        `http://localhost:${port}/api/listTraces?input=${encodeURIComponent(
+          JSON.stringify({
+            limit: 1000,
+            filter: { eq: { sessionId: 'session-abc' } },
+          })
+        )}`
+      );
+
+      expect(mockManager.listTraces).toHaveBeenCalledWith({
+        limit: 1000,
+        filter: { eq: { sessionId: 'session-abc' } },
+      });
+      expect(res.data.result.data).toEqual({
+        traces: [
+          { traceId: 't2', startTime: 200, spans: {} },
+          { traceId: 't1', startTime: 100, spans: {} },
+        ],
+      });
+    });
+  });
 });
+

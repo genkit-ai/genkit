@@ -72,6 +72,29 @@ export const mcpHost = defineMcpHost(ai, {
   },
 });
 
+
+export const mcpHost2 = defineMcpHost(ai, {
+  name: 'test-mcp-manager2',
+  mcpServers: {
+    'git-client': {
+      command: 'uvx',
+      args: ['mcp-server-git'],
+    },
+    fs: {
+      command: 'npx',
+      args: [
+        '-y',
+        '@modelcontextprotocol/server-filesystem',
+        `${process.cwd()}/test-workspace`,
+      ],
+    },
+    everything: {
+      command: 'npx',
+      args: ['-y', '@modelcontextprotocol/server-everything'],
+    },
+  },
+});
+
 ai.defineFlow('git-commits', async (q) => {
   const { text } = await ai.generate({
     prompt: `summarize last 5 commits in '${path.resolve(process.cwd(), '../../..')}'`,

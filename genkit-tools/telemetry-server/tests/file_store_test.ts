@@ -571,7 +571,11 @@ describe('index', () => {
     spanB.attributes['session.id'] = 'session-2';
 
     const spanC = span(TRACE_ID_3, SPAN_C, 200, 200);
-    spanC.displayName = 'flowB';
+    spanC.displayName = 'dev-run-action-wrapper';
+    const childTurnSpan = span(TRACE_ID_3, 'turn_span_1', 150, 150);
+    childTurnSpan.parentSpanId = SPAN_C;
+    childTurnSpan.displayName = 'runTurn-1';
+    childTurnSpan.attributes['genkit:metadata:agent:sessionId'] = 'session-1';
 
     index.add({
       traceId: TRACE_ID_1,
@@ -583,7 +587,7 @@ describe('index', () => {
     } as TraceData);
     index.add({
       traceId: TRACE_ID_3,
-      spans: { [SPAN_C]: spanC },
+      spans: { [SPAN_C]: spanC, turn_span_1: childTurnSpan },
     } as TraceData);
 
     assert.deepStrictEqual(
@@ -594,6 +598,15 @@ describe('index', () => {
         },
       }).data,
       [
+        {
+          id: TRACE_ID_3,
+          type: 'flow',
+          name: 'dev-run-action-wrapper',
+          start: 1,
+          end: 2,
+          status: 0,
+          sessionId: 'session-1',
+        },
         {
           id: TRACE_ID_1,
           type: 'flow',

@@ -15,9 +15,11 @@
  */
 
 import {
+  extractTrajectoryFromTrace,
   findProjectRoot,
   forceStderr,
   logger,
+  mergeSessionTrajectories,
   parseAndSanitizeJson,
   sanitizeBase64DataUrls,
   stackTraceSpans,
@@ -50,6 +52,8 @@ const {
   stackTraceSpans: actualStackTraceSpans,
   parseAndSanitizeJson: actualParseAndSanitizeJson,
   sanitizeBase64DataUrls: actualSanitizeBase64DataUrls,
+  extractTrajectoryFromTrace: actualExtractTrajectoryFromTrace,
+  mergeSessionTrajectories: actualMergeSessionTrajectories,
 } = jest.requireActual('@genkit-ai/tools-common/utils') as any;
 
 describe('trace:get', () => {
@@ -74,10 +78,18 @@ describe('trace:get', () => {
     (sanitizeBase64DataUrls as jest.MockedFunction<any>).mockImplementation(
       actualSanitizeBase64DataUrls
     );
+    (extractTrajectoryFromTrace as jest.MockedFunction<any>).mockImplementation(
+      actualExtractTrajectoryFromTrace
+    );
+    (mergeSessionTrajectories as jest.MockedFunction<any>).mockImplementation(
+      actualMergeSessionTrajectories
+    );
 
     // Reset option values on the commander object
     traceGet.setOptionValue('format', undefined);
     traceGet.setOptionValue('keepBase64', undefined);
+    traceGet.setOptionValue('trajectory', undefined);
+    traceGet.setOptionValue('session', undefined);
 
     // Mock console.log to avoid spamming test output
     jest.spyOn(console, 'log').mockImplementation(() => {});
@@ -212,4 +224,144 @@ describe('trace:get', () => {
     );
     expect(process.exitCode).toBe(1);
   });
+
+  it('should output JSON trajectory bundle when --trajectory is passed', async () => {
+    mockedRunWithManager.mockImplementation(async (_projectRoot, fn) => {
+      const mockManager = {
+        getTrace: jest.fn<any>().mockResolvedValue({
+          traceId: 'traj-trace-1',
+          startTime: 100,
+          endTime: 200,
+          spans: {
+            m1: {
+              traceId: 'traj-trace-1',
+              spanId: 'm1',
+              displayName: '/model/gemini-2.5-pro',
+              startTime: 100,
+              endTime: 200,
+              instrumentationLibrary: { name: 'genkit' },
+              spanKind: 'INTERNAL',
+              attributes: {
+                'genkit:metadata:subtype': 'model',
+                'genkit:input': JSON.stringify({
+                  messages: [{ role: 'user', content: [{ text: 'Hi agent' }] }],
+                }),
+                'genkit:output': JSON.stringify({
+                  message: {
+                    role: 'model',
+                    content: [{ text: 'Hello user' }],
+                  },
+                  finishReason: 'stop',
+                }),
+              },
+            },
+          },
+        }),
+      };
+      await fn(mockManager as any);
+    });
+
+    await createCommand().parseAsync([
+      'node',
+      'trace:get',
+      'traj-trace-1',
+      '--trajectory',
+    ]);
+
+    const loggedStr = (console.log as jest.Mock).mock.calls[0][0] as string;
+    const bundle = JSON.parse(loggedStr);
+    expect(bundle.rootTrajectoryId).toBe('traj-trace-1');
+    expect(bundle.trajectories['traj-trace-1'].steps).toHaveLength(2);
+  });
+
+  it('should merge session traces when --session and -f json are passed', async () => {
+    const trace1 = {
+      traceId: 't1',
+      startTime: 100,
+      endTime: 200,
+      spans: {
+        m1: {
+          traceId: 't1',
+          spanId: 'm1',
+          displayName: '/model/gemini',
+          startTime: 100,
+          endTime: 200,
+          instrumentationLibrary: { name: 'genkit' },
+          spanKind: 'INTERNAL',
+          attributes: {
+            'genkit:metadata:subtype': 'model',
+            'genkit:metadata:agent:sessionId': 'sess-99',
+            'genkit:input': JSON.stringify({
+              messages: [{ role: 'user', content: [{ text: 'Turn 1' }] }],
+            }),
+            'genkit:output': JSON.stringify({
+              message: { role: 'model', content: [{ text: 'Reply 1' }] },
+              finishReason: 'stop',
+            }),
+          },
+        },
+      },
+    };
+    const trace2 = {
+      traceId: 't2',
+      startTime: 300,
+      endTime: 400,
+      spans: {
+        m2: {
+          traceId: 't2',
+          spanId: 'm2',
+          displayName: '/model/gemini',
+          startTime: 300,
+          endTime: 400,
+          instrumentationLibrary: { name: 'genkit' },
+          spanKind: 'INTERNAL',
+          attributes: {
+            'genkit:metadata:subtype': 'model',
+            'genkit:metadata:agent:sessionId': 'sess-99',
+            'genkit:input': JSON.stringify({
+              messages: [
+                { role: 'user', content: [{ text: 'Turn 1' }] },
+                { role: 'model', content: [{ text: 'Reply 1' }] },
+                { role: 'user', content: [{ text: 'Turn 2' }] },
+              ],
+            }),
+            'genkit:output': JSON.stringify({
+              message: { role: 'model', content: [{ text: 'Reply 2' }] },
+              finishReason: 'stop',
+            }),
+          },
+        },
+      },
+    };
+
+    mockedRunWithManager.mockImplementation(async (_projectRoot, fn) => {
+      const mockManager = {
+        getTrace: jest
+          .fn<any>()
+          .mockImplementation(async ({ traceId }: { traceId: string }) => {
+            return traceId === 't1' ? trace1 : trace2;
+          }),
+        listTraces: jest.fn<any>().mockResolvedValue({
+          traces: [{ traceId: 't2' }, { traceId: 't1' }],
+        }),
+      };
+      await fn(mockManager as any);
+    });
+
+    await createCommand().parseAsync([
+      'node',
+      'trace:get',
+      't1',
+      '--trajectory',
+      '--session',
+      '-f',
+      'json',
+    ]);
+
+    const loggedStr = (console.log as jest.Mock).mock.calls[0][0] as string;
+    const bundle = JSON.parse(loggedStr);
+    expect(bundle.sessionId).toBe('sess-99');
+    expect(bundle.trajectories.t1.steps).toHaveLength(4);
+  });
 });
+

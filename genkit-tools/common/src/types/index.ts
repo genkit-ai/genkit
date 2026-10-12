@@ -33,3 +33,5 @@ export * from './reflection';
 export * from './retriever';
 export * from './status';
 export * from './trace';
+export * from './trajectory';
+

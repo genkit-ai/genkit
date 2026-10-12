@@ -21,4 +21,6 @@ export * from './logger';
 export * from './package';
 export * from './prompt';
 export * from './trace';
+export * from './trajectory';
 export * from './utils';
+
