@@ -16,15 +16,9 @@ from typing import Any, TypeVar
 
 import psutil
 import pytest
-from genkit_mcp import (
-    McpConnectionClosedError,
-    McpConnectionFailedError,
-    McpStdioServerConfig,
-    create_mcp_client,
-    define_mcp_client,
-)
+from genkit_mcp import McpClient, define_mcp_client
 
-from genkit import Genkit, Message, ModelResponse, Part
+from genkit import Genkit, GenkitError, Message, ModelResponse, Part
 from genkit._ai._generate import expand_wildcard_tools
 from genkit._core._action import ActionKind
 from genkit._core._typing import (
@@ -53,18 +47,17 @@ ALL_TOOLS = [
 LONG_TTL_MILLIS = 600_000
 
 
-def config(tmp_path: Path, disabled: bool = False, **env: str) -> McpStdioServerConfig:
-    """Launch the test server with the same interpreter as the test suite."""
-    return McpStdioServerConfig(
-        command=sys.executable,
-        args=[str(Path(__file__).with_name('fake_server.py'))],
-        env={
+def server(tmp_path: Path, **env: str) -> dict[str, Any]:
+    """Keyword arguments that launch the test server with the suite's interpreter."""
+    return {
+        'command': sys.executable,
+        'args': [str(Path(__file__).with_name('fake_server.py'))],
+        'env': {
             **os.environ,
             'MCP_FAKE_PID_FILE': str(tmp_path / 'server.pid'),
             **env,
         },
-        disabled=disabled,
-    )
+    }
 
 
 def server_processes() -> list[psutil.Process]:
@@ -121,7 +114,7 @@ def tool_call_response(tool_name: str, input: dict[str, Any]) -> ModelResponse:
 async def test_wildcard_selector_expands_to_every_tool(tmp_path: Path) -> None:
     """``<provider>:tool/*`` binds every server tool, which needs metadata['name']."""
     ai = Genkit()
-    client = define_mcp_client(ai, 'fake', config(tmp_path))
+    client = define_mcp_client(ai, 'fake', **server(tmp_path))
     try:
         expanded = await expand_wildcard_tools(ai._registry, ['fake:tool/*'])
     finally:
@@ -135,7 +128,7 @@ async def test_wildcard_selector_expands_to_every_tool(tmp_path: Path) -> None:
 async def test_resolve_action_by_key_runs_the_tool(tmp_path: Path) -> None:
     """A DAP-qualified key resolves to the tool, and running it returns the envelope."""
     ai = Genkit()
-    client = define_mcp_client(ai, 'fake', config(tmp_path))
+    client = define_mcp_client(ai, 'fake', **server(tmp_path))
     try:
         action = await ai._registry.resolve_action_by_key('/dynamic-action-provider/fake:tool/fake_echo')
         assert action is not None
@@ -152,7 +145,7 @@ async def test_generate_calls_a_tool_and_receives_its_result(tmp_path: Path) -> 
     """A model can request an MCP tool through a selector and read what it returned."""
     ai = Genkit()
     pm, _ = define_scripted_model(ai)
-    client = define_mcp_client(ai, 'fake', config(tmp_path))
+    client = define_mcp_client(ai, 'fake', **server(tmp_path))
     pm.responses = [
         tool_call_response('fake_echo', {'message': 'hello'}),
         text_response('done'),
@@ -178,43 +171,23 @@ async def test_generate_calls_a_tool_and_receives_its_result(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
-async def test_disabled_server_has_no_tools_and_starts_no_process(tmp_path: Path) -> None:
-    """``disabled`` advertises nothing and launches nothing."""
+async def test_tool_names_carry_the_provider_name(tmp_path: Path) -> None:
+    """Tool names carry the provider name, which the caller chose."""
     ai = Genkit()
-    client = define_mcp_client(ai, 'fake', config(tmp_path, disabled=True))
+    client = define_mcp_client(ai, 'fake', **server(tmp_path))
     try:
         expanded = await expand_wildcard_tools(ai._registry, ['fake:tool/*'])
     finally:
         await client.close()
 
-    assert expanded == ['fake:tool/*']
-    assert not (tmp_path / 'server.pid').exists()
-    assert server_processes() == []
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(('override', 'prefix'), [(None, 'fake'), ('custom', 'custom')])
-async def test_tool_names_carry_the_provider_name(
-    tmp_path: Path,
-    override: str | None,
-    prefix: str,
-) -> None:
-    """Tool names carry the provider name, which the caller chose, unless overridden."""
-    ai = Genkit()
-    client = define_mcp_client(ai, 'fake', config(tmp_path), tool_prefix=override)
-    try:
-        expanded = await expand_wildcard_tools(ai._registry, ['fake:tool/*'])
-    finally:
-        await client.close()
-
-    assert sorted(expanded) == sorted(f'/tool.v2/{prefix}_{tool}' for tool in ALL_TOOLS)
+    assert sorted(expanded) == sorted(f'/tool.v2/fake_{tool}' for tool in ALL_TOOLS)
 
 
 @pytest.mark.asyncio
 async def test_a_dead_server_drops_the_listing_and_is_replaced(tmp_path: Path) -> None:
     """A failed call invalidates the listing, and the next one gets a new process."""
     ai = Genkit()
-    client = define_mcp_client(ai, 'fake', config(tmp_path), cache_ttl_millis=LONG_TTL_MILLIS)
+    client = define_mcp_client(ai, 'fake', **server(tmp_path), cache_ttl_millis=LONG_TTL_MILLIS)
     try:
         action = await ai._registry.resolve_action(ActionKind.TOOL, 'fake_echo')
         assert action is None
@@ -228,8 +201,9 @@ async def test_a_dead_server_drops_the_listing_and_is_replaced(tmp_path: Path) -
         killed[0].kill()
         killed[0].wait(timeout=30)
 
-        with pytest.raises(McpConnectionFailedError):
+        with pytest.raises(GenkitError) as raised:
             await action.run({'message': 'second'})
+        assert raised.value.status == 'UNAVAILABLE'
 
         # The listing outlives its TTL, so re-listing here is the invalidation,
         # and a process to list from is the replaced connection.
@@ -246,7 +220,7 @@ async def test_a_dead_server_drops_the_listing_and_is_replaced(tmp_path: Path) -
 async def test_close_stops_the_server_on_every_loop_that_opened_one(tmp_path: Path) -> None:
     """Each loop gets its own server process, and close stops all of them."""
     ai = Genkit()
-    client = define_mcp_client(ai, 'fake', config(tmp_path))
+    client = define_mcp_client(ai, 'fake', **server(tmp_path))
     background = BackgroundLoop()
     try:
         action = await ai._registry.resolve_action_by_key('/dynamic-action-provider/fake:tool/fake_echo')
@@ -266,7 +240,7 @@ async def test_close_stops_the_server_on_every_loop_that_opened_one(tmp_path: Pa
 async def test_close_ignores_a_loop_which_already_finished(tmp_path: Path) -> None:
     """A finished loop cancelled its connection on the way out, taking the server with it."""
     ai = Genkit()
-    client = define_mcp_client(ai, 'fake', config(tmp_path))
+    client = define_mcp_client(ai, 'fake', **server(tmp_path))
     action = await ai._registry.resolve_action_by_key('/dynamic-action-provider/fake:tool/fake_echo')
     assert action is not None
     outputs: list[object] = []
@@ -290,7 +264,7 @@ async def test_close_ignores_a_loop_which_already_finished(tmp_path: Path) -> No
 async def test_a_closed_client_starts_no_server_on_a_new_loop(tmp_path: Path) -> None:
     """Close is final: a loop which never had a connection does not get one."""
     ai = Genkit()
-    client = define_mcp_client(ai, 'fake', config(tmp_path))
+    client = define_mcp_client(ai, 'fake', **server(tmp_path))
     action = await ai._registry.resolve_action_by_key('/dynamic-action-provider/fake:tool/fake_echo')
     assert action is not None
     await client.close()
@@ -307,7 +281,8 @@ async def test_a_closed_client_starts_no_server_on_a_new_loop(tmp_path: Path) ->
     thread.start()
     thread.join(timeout=30)
 
-    assert isinstance(errors[0], McpConnectionClosedError)
+    assert isinstance(errors[0], GenkitError)
+    assert errors[0].status == 'FAILED_PRECONDITION'
     assert server_processes() == []
 
 
@@ -315,12 +290,13 @@ async def test_a_closed_client_starts_no_server_on_a_new_loop(tmp_path: Path) ->
 async def test_a_closed_client_refuses_to_restart(tmp_path: Path) -> None:
     """Closing is the end of this client, not a pause."""
     ai = Genkit()
-    client = define_mcp_client(ai, 'fake', config(tmp_path))
+    client = define_mcp_client(ai, 'fake', **server(tmp_path))
     await client.get_active_tools()
     await client.close()
 
-    with pytest.raises(McpConnectionClosedError, match="MCP client 'fake' is closed"):
+    with pytest.raises(GenkitError, match="MCP client 'fake' is closed") as raised:
         await client.restart()
+    assert raised.value.status == 'FAILED_PRECONDITION'
     assert server_processes() == []
 
 
@@ -328,7 +304,7 @@ async def test_a_closed_client_refuses_to_restart(tmp_path: Path) -> None:
 async def test_restart_replaces_the_server_and_its_listing(tmp_path: Path) -> None:
     """Restart connects and lists on the calling loop before it returns."""
     ai = Genkit()
-    client = define_mcp_client(ai, 'fake', config(tmp_path), cache_ttl_millis=LONG_TTL_MILLIS)
+    client = define_mcp_client(ai, 'fake', **server(tmp_path), cache_ttl_millis=LONG_TTL_MILLIS)
     try:
         listed = [tool.name for tool in await client.get_active_tools()]
         before = server_processes()
@@ -348,10 +324,11 @@ async def test_restart_replaces_the_server_and_its_listing(tmp_path: Path) -> No
 async def test_restart_reports_a_server_which_cannot_be_started(tmp_path: Path) -> None:
     """The caller of restart hears about a broken server, not the next generate."""
     ai = Genkit()
-    client = define_mcp_client(ai, 'fake', McpStdioServerConfig(command=str(tmp_path / 'no-such-server')))
+    client = define_mcp_client(ai, 'fake', command=str(tmp_path / 'no-such-server'))
     try:
-        with pytest.raises(McpConnectionFailedError, match='failed'):
+        with pytest.raises(GenkitError, match='failed') as raised:
             await client.restart()
+        assert raised.value.status == 'UNAVAILABLE'
     finally:
         await client.close()
 
@@ -360,9 +337,8 @@ async def test_restart_reports_a_server_which_cannot_be_started(tmp_path: Path) 
 async def test_tool_names_are_known_before_anything_connects(tmp_path: Path) -> None:
     """Naming a tool costs nothing: the prefix is the caller's own."""
     ai = Genkit()
-    client = define_mcp_client(ai, 'fake', config(tmp_path))
+    client = define_mcp_client(ai, 'fake', **server(tmp_path))
     try:
-        assert client.tool_prefix == 'fake'
         assert client.tool_name('echo') == 'fake_echo'
         assert not (tmp_path / 'server.pid').exists()
         assert server_processes() == []
@@ -371,30 +347,12 @@ async def test_tool_names_are_known_before_anything_connects(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
-async def test_a_supplied_prefix_replaces_the_provider_name(tmp_path: Path) -> None:
-    ai = Genkit()
-    client = define_mcp_client(ai, 'fake', config(tmp_path), tool_prefix='bookshop')
-    try:
-        assert client.tool_prefix == 'bookshop'
-        assert client.tool_name('echo') == 'bookshop_echo'
-    finally:
-        await client.close()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ('name', 'prefix'),
-    [('my server', None), ('tools.everything', None), ('fake', 'mcp servers')],
-)
-async def test_a_prefix_no_model_would_accept_is_refused_at_definition(
-    tmp_path: Path,
-    name: str,
-    prefix: str | None,
-) -> None:
-    """The prefix a tool name is built from has to be one a model accepts."""
+@pytest.mark.parametrize('name', ['my server', 'tools.everything', '9lives', '-fake'])
+async def test_a_name_no_model_would_accept_is_refused_at_definition(tmp_path: Path, name: str) -> None:
+    """The name prefixes every tool name, so it has to be one a model accepts."""
     ai = Genkit()
     with pytest.raises(ValueError, match='cannot prefix an MCP tool name'):
-        define_mcp_client(ai, name, config(tmp_path), tool_prefix=prefix)
+        define_mcp_client(ai, name, **server(tmp_path))
     assert server_processes() == []
 
 
@@ -404,57 +362,18 @@ async def test_a_name_no_selector_could_carry_is_refused_at_definition(
     tmp_path: Path,
     name: str,
 ) -> None:
-    """A tool_prefix cannot rescue a name, because the name is the selector."""
+    """The name is the selector, so it has to parse as one."""
     ai = Genkit()
     with pytest.raises(ValueError, match='cannot name an MCP provider'):
-        define_mcp_client(ai, name, config(tmp_path), tool_prefix='bookshop')
+        define_mcp_client(ai, name, **server(tmp_path))
     assert server_processes() == []
-
-
-@pytest.mark.asyncio
-async def test_a_prefix_rescues_a_name_a_model_would_reject(tmp_path: Path) -> None:
-    """A name is only a selector, so a prefix makes an awkward one usable."""
-    ai = Genkit()
-    client = define_mcp_client(ai, 'my bookshop', config(tmp_path), tool_prefix='bookshop')
-    try:
-        assert client.name == 'my bookshop'
-        assert client.tool_name('echo') == 'bookshop_echo'
-        assert [tool.name for tool in await client.get_active_tools()] == [f'bookshop_{tool}' for tool in ALL_TOOLS]
-        assert await expand_wildcard_tools(ai._registry, ['my bookshop:tool/*']) == [
-            f'/tool.v2/bookshop_{tool}' for tool in ALL_TOOLS
-        ]
-    finally:
-        await client.close()
-
-
-@pytest.mark.asyncio
-async def test_an_empty_prefix_is_not_silently_used(tmp_path: Path) -> None:
-    """An empty prefix would name tools ``_echo``, so it is refused like any other."""
-    ai = Genkit()
-    with pytest.raises(ValueError, match='cannot prefix an MCP tool name'):
-        define_mcp_client(ai, 'fake', config(tmp_path), tool_prefix='')
-    assert server_processes() == []
-
-
-@pytest.mark.asyncio
-async def test_a_disabled_server_names_tools_it_never_serves(tmp_path: Path) -> None:
-    """A disabled server offers nothing, and naming still needs no connection."""
-    ai = Genkit()
-    client = define_mcp_client(ai, 'fake', config(tmp_path, disabled=True))
-    try:
-        assert client.tool_name('echo') == 'fake_echo'
-        assert await client.get_active_tools() == []
-        assert not (tmp_path / 'server.pid').exists()
-        assert server_processes() == []
-    finally:
-        await client.close()
 
 
 @pytest.mark.asyncio
 async def test_get_active_tools_lists_what_the_selector_binds(tmp_path: Path) -> None:
     """The listing is the one ``<name>:tool/*`` binds, namespaced names and all."""
     ai = Genkit()
-    client = define_mcp_client(ai, 'fake', config(tmp_path))
+    client = define_mcp_client(ai, 'fake', **server(tmp_path))
     try:
         tools = await client.get_active_tools()
         expanded = await expand_wildcard_tools(ai._registry, ['fake:tool/*'])
@@ -471,7 +390,7 @@ async def test_tool_name_builds_a_selector_generate_accepts(tmp_path: Path) -> N
     """A selector built from the helpers reaches exactly that one tool."""
     ai = Genkit()
     pm, _ = define_scripted_model(ai)
-    client = define_mcp_client(ai, 'fake', config(tmp_path))
+    client = define_mcp_client(ai, 'fake', **server(tmp_path))
     pm.responses = [
         tool_call_response('fake_echo', {'message': 'hello'}),
         text_response('done'),
@@ -490,12 +409,12 @@ async def test_tool_name_builds_a_selector_generate_accepts(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
-async def test_a_created_client_registers_nothing(tmp_path: Path) -> None:
-    """create_mcp_client puts nothing in a registry, so no selector reaches it."""
+async def test_an_unregistered_client_registers_nothing(tmp_path: Path) -> None:
+    """A client built directly puts nothing in a registry, so no selector reaches it."""
     ai = Genkit()
-    client = create_mcp_client('fake', config(tmp_path))
+    client = McpClient('fake', **server(tmp_path))
     try:
-        assert client.dynamic_action_provider is None
+        assert client._provider is None
         assert await ai._registry.resolve_action_by_key('/dynamic-action-provider/fake:tool/fake_echo') is None
         assert await expand_wildcard_tools(ai._registry, ['fake:tool/*']) == ['fake:tool/*']
         assert server_processes() == []
@@ -504,9 +423,9 @@ async def test_a_created_client_registers_nothing(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_created_client_lists_tools_a_host_could_serve(tmp_path: Path) -> None:
+async def test_an_unregistered_client_lists_tools_a_host_could_serve(tmp_path: Path) -> None:
     """An unregistered client still lists and runs its tools, which a host needs."""
-    client = create_mcp_client('fake', config(tmp_path))
+    client = McpClient('fake', **server(tmp_path))
     try:
         tools = await client.get_active_tools()
         assert [tool.name for tool in tools] == [f'fake_{tool}' for tool in ALL_TOOLS]
@@ -518,9 +437,9 @@ async def test_a_created_client_lists_tools_a_host_could_serve(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
-async def test_a_created_client_restarts_and_closes_without_a_provider(tmp_path: Path) -> None:
+async def test_an_unregistered_client_restarts_and_closes_without_a_provider(tmp_path: Path) -> None:
     """Restart and close do not need a provider, and close is still final."""
-    client = create_mcp_client('fake', config(tmp_path))
+    client = McpClient('fake', **server(tmp_path))
     try:
         listed = [tool.name for tool in await client.get_active_tools()]
         before = server_processes()
@@ -535,10 +454,11 @@ async def test_a_created_client_restarts_and_closes_without_a_provider(tmp_path:
     finally:
         await client.close()
 
-    assert client.dynamic_action_provider is None
+    assert client._provider is None
     assert server_processes() == []
-    with pytest.raises(McpConnectionClosedError, match="MCP client 'fake' is closed"):
+    with pytest.raises(GenkitError, match="MCP client 'fake' is closed") as raised:
         await client.restart()
+    assert raised.value.status == 'FAILED_PRECONDITION'
 
 
 @pytest.mark.asyncio
@@ -548,7 +468,7 @@ async def test_get_active_tools_asks_the_server_every_call(tmp_path: Path) -> No
     client = define_mcp_client(
         ai,
         'fake',
-        config(tmp_path, MCP_FAKE_PAGE_SIZE=str(len(ALL_TOOLS))),
+        **server(tmp_path, MCP_FAKE_PAGE_SIZE=str(len(ALL_TOOLS))),
         cache_ttl_millis=LONG_TTL_MILLIS,
     )
     try:
@@ -570,7 +490,7 @@ async def test_get_active_tools_asks_the_server_every_call(tmp_path: Path) -> No
 async def test_tools_sharing_a_genkit_name_fail_the_listing(tmp_path: Path) -> None:
     """The provider keeps one action per name, so a collision would hide a tool."""
     ai = Genkit()
-    client = define_mcp_client(ai, 'bookshop', config(tmp_path, MCP_FAKE_COLLIDING_TOOLS='1'))
+    client = define_mcp_client(ai, 'bookshop', **server(tmp_path, MCP_FAKE_COLLIDING_TOOLS='1'))
     collision = r"MCP tools 'look\.up' and 'look/up' both map to the Genkit tool name 'bookshop_look_up'"
     try:
         with pytest.raises(ValueError, match=collision):
