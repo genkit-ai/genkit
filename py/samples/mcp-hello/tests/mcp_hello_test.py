@@ -25,8 +25,8 @@ from genkit import (
     Part,
     Role,
 )
-from genkit._ai._testing import ProgrammableModel, define_programmable_model
 from genkit.model import ModelRequest, ToolRequest
+from genkit.testing import ScriptedModel, define_scripted_model
 
 SAMPLE_MAIN = Path(__file__).resolve().parents[1] / 'src' / 'main.py'
 
@@ -43,10 +43,10 @@ def load_sample(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     return module
 
 
-def fake_model(sample: ModuleType, monkeypatch: pytest.MonkeyPatch) -> ProgrammableModel:
-    """Point every generate call the sample's flows make at a programmable model."""
-    pm, _ = define_programmable_model(sample.ai)
-    monkeypatch.setattr(sample.ai, 'generate', partial(sample.ai.generate, model='programmableModel'))
+def fake_model(sample: ModuleType, monkeypatch: pytest.MonkeyPatch) -> ScriptedModel:
+    """Point every generate call the sample's flows make at a scripted model."""
+    pm, _ = define_scripted_model(sample.ai)
+    monkeypatch.setattr(sample.ai, 'generate', partial(sample.ai.generate, model='scriptedModel'))
     return pm
 
 
