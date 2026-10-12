@@ -13,7 +13,7 @@
 from typing import Any
 
 import pytest
-from genkit_mcp._errors import McpConnectionFailedError, McpToolResultError
+from genkit_mcp._errors import _ConnectionFailedError, _ToolResultError
 from genkit_mcp._tools import (
     call_result_to_multipart,
     mcp_tool_name,
@@ -205,7 +205,7 @@ async def test_mcp_tool_to_action_folds_a_tool_result_error_into_an_error_envelo
     tool = Tool(name='lookup', inputSchema={'type': 'object'})
 
     async def call(name: str, arguments: dict[str, Any], meta: dict[str, Any] | None) -> CallToolResult:  # noqa: ARG001
-        raise McpToolResultError('MCP output did not match the declared schema')
+        raise _ToolResultError('MCP output did not match the declared schema')
 
     action = mcp_tool_to_action(tool, 'catalog', call)
     response = (await action.run({})).response
@@ -237,11 +237,11 @@ async def test_mcp_tool_to_action_lets_a_connection_failure_through() -> None:
     tool = Tool(name='lookup', inputSchema={'type': 'object'})
 
     async def call(name: str, arguments: dict[str, Any], meta: dict[str, Any] | None) -> CallToolResult:  # noqa: ARG001
-        raise McpConnectionFailedError("MCP connection to 'npx' failed")
+        raise _ConnectionFailedError("MCP connection to 'npx' failed")
 
     action = mcp_tool_to_action(tool, 'catalog', call)
 
-    with pytest.raises(McpConnectionFailedError):
+    with pytest.raises(_ConnectionFailedError):
         await action.run({})
 
 
