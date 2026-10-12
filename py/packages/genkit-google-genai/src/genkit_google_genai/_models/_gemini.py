@@ -55,20 +55,12 @@ from pydantic import (
     model_validator,
 )
 
-from genkit import (
-    ActionRunContext,
-    FinishReason,
-    GenkitError,
-    Message,
-    ModelResponse,
-    ModelResponseChunk,
-    Part,
-    Role,
-)
+from genkit import FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
 from genkit.model import (
     Candidate,
     Constrained,
     ModelConfig,
+    ModelContext,
     ModelInfo,
     ModelRequest,
     ModelUsage,
@@ -1495,7 +1487,7 @@ class GeminiModel:
             raise transport_error(e) from e
         return cache
 
-    async def generate(self, request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def generate(self, request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         """Handle a generation request.
 
         Args:
@@ -1782,7 +1774,7 @@ class GeminiModel:
         self,
         request_contents: list[genai_types.Content],
         request_cfg: genai_types.GenerateContentConfig | None,
-        ctx: ActionRunContext,
+        ctx: ModelContext,
         model_name: str,
         client: genai.Client | None = None,
         tools: ToolTable | None = None,

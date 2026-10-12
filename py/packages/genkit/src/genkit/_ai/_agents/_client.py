@@ -32,6 +32,7 @@ from genkit._ai._agents._runtime import AgentInitError, seeded_init_fields
 from genkit._ai._agents._snapshot import lookup_label
 from genkit._ai._agents._types import StateManagement
 from genkit._ai._json_patch import apply_json_patch
+from genkit._core._action import _stream_to_sse
 from genkit._core._channel import CloseableQueue
 from genkit._core._error import (
     _STATUS_CODE_MAP,
@@ -482,6 +483,10 @@ class AgentTurn(Generic[StateT]):
 
     def __await__(self) -> Generator[Any, None, AgentResponse[StateT]]:
         return self.response.__await__()
+
+    def to_sse(self) -> AsyncIterator[str]:
+        r"""Frame this turn as Genkit SSE lines (``data: {"message"|"result"|"error": ...}\n\n``)."""
+        return _stream_to_sse(self.stream, self.response)
 
     async def abort(self) -> None:
         """Detaches the client from this turn: stops streaming and settles the result now.

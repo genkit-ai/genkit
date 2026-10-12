@@ -36,8 +36,8 @@ from genkit_vertexai._model_garden._model_info import (
 from google.auth import default as google_auth_default
 from google.auth.exceptions import DefaultCredentialsError
 
-from genkit import ActionRunContext, GenkitError, ModelResponse
-from genkit.model import ModelInfo, ModelRequest, model as create_model, model_action_metadata
+from genkit import GenkitError, ModelResponse
+from genkit.model import ModelContext, ModelInfo, ModelRequest, model as create_model, model_action_metadata
 from genkit.plugin_api import Action, ActionKind, ActionMetadata, Plugin, loop_local_client
 
 if TYPE_CHECKING:
@@ -179,7 +179,7 @@ class ModelGardenModel:
             ),
         }
 
-    def to_openai_compatible_model(self) -> Callable[[ModelRequest, ActionRunContext], Awaitable[ModelResponse]]:
+    def to_openai_compatible_model(self) -> Callable[[ModelRequest, ModelContext], Awaitable[ModelResponse]]:
         """Convert the Model Garden model into an OpenAI-compatible Genkit model function.
 
         Returns:
@@ -187,7 +187,7 @@ class ModelGardenModel:
             ``OpenAIModel`` instance) that can be used by Genkit.
         """
 
-        async def _generate(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        async def _generate(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
             # Private import across packages, on purpose. The [openai] extra
             # pins genkit-openai to this package's exact version, so Model
             # Garden reuses the OpenAI-compatible model class instead of

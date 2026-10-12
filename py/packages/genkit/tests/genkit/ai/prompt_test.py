@@ -39,7 +39,7 @@ from genkit import (
     ModelResponseChunk,
     Part,
     Prompt,
-    ToolRunContext,
+    ToolContext,
     tool,
 )
 from genkit._ai._model import ModelRequest, text_from_message
@@ -1368,7 +1368,7 @@ def _allergy_check_prompt(ai: Genkit, pm: ScriptedModel, seen: list[tuple[str, d
             return await next_fn(params, ctx)
 
     @ai.tool(name='check_allergies')
-    async def check_allergies(_: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
+    async def check_allergies(_: dict, ctx: ToolContext) -> str:  # noqa: ARG001
         seen.append(('tool', dict(ctx.context)))
         return 'no nuts'
 

@@ -17,6 +17,7 @@
 
 """Tests for the FastAPI plugin."""
 
+import asyncio
 import json
 import logging
 
@@ -24,11 +25,13 @@ import pytest
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from genkit_fastapi import genkit_fastapi_handler, serve_flow
+from genkit_fastapi.exp import to_sse
 from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from genkit import ActionRunContext, Genkit, GenkitError, PublicError, RequestData
+from genkit import FlowContext, Genkit, GenkitError, PublicError
 from genkit.plugin_api import provider_error
+from genkit.web import RequestData
 
 
 def assert_is_error_response(parsed: dict) -> None:
@@ -56,7 +59,7 @@ def create_app() -> FastAPI:
     @app.post('/chat', response_model=None)
     @genkit_fastapi_handler(ai)
     @ai.flow()
-    async def say_hi(name: str, ctx: ActionRunContext) -> dict[str, str]:
+    async def say_hi(name: str, ctx: FlowContext) -> dict[str, str]:
         return {'greeting': f'Hi {name}'}
 
     @ai.flow()
@@ -73,12 +76,23 @@ def create_app() -> FastAPI:
     return app
 
 
-def test_void_flow_accepts_empty_body() -> None:
-    """runFlow() with no input sends {}; void flows should still run."""
+def test_empty_body_runs_no_input_flow_on_every_adapter() -> None:
+    """POST {} to a served flow that takes no input returns its result."""
     client = TestClient(create_app())
     response = client.post('/void_flow', json={})
     assert response.status_code == 200
-    assert response.json()['result'] == {'ok': 'true'}
+    assert response.json() == {'result': {'ok': 'true'}}
+
+
+def test_input_key_body_is_400_on_every_adapter() -> None:
+    """POST {"input": 1} to a served flow is a 400 telling the caller to wrap in data."""
+    client = TestClient(create_app())
+    response = client.post('/void_flow', json={'input': 1})
+    assert response.status_code == 400
+    assert (
+        response.content
+        == b'{"message":"Flow request must be wrapped in {\\"data\\": ...}","status":"INVALID_ARGUMENT"}'
+    )
 
 
 def test_void_flow_accepts_explicit_null_data() -> None:
@@ -119,7 +133,7 @@ def test_unknown_body_shape_still_returns_400() -> None:
     response = client.post('/chat', json={'foo': 'bar'})
     assert response.status_code == 400
     assert response.json() == {
-        'message': 'Action request must be wrapped in {"data": ...} object',
+        'message': 'Flow request must be wrapped in {"data": ...}',
         'status': 'INVALID_ARGUMENT',
     }
 
@@ -147,8 +161,6 @@ def test_serve_flow_message_body_is_rejected_as_bad_request() -> None:
 def test_500_flow_exception_returns_valid_json() -> None:
     """500 (flow exception) must return valid JSON (not TypeError).
 
-    get_callable_json now returns a dict, so json.dumps works directly.
-
     Uses real code snippet (SQL injection pattern) to exercise error path realistically.
     """
     client = TestClient(create_app())
@@ -164,7 +176,7 @@ def test_context_dependency_value_reaches_action() -> None:
     ai = Genkit()
 
     @ai.flow()
-    async def whoami(_: str, ctx: ActionRunContext) -> str:
+    async def whoami(_: str, ctx: FlowContext) -> str:
         return str(ctx.context.get('uid'))
 
     async def current_uid() -> str:
@@ -182,6 +194,107 @@ def test_context_dependency_value_reaches_action() -> None:
 
     assert response.status_code == 200
     assert response.json()['result'] == 'user-123'
+
+
+class _Turn:
+    """A generate_stream-shaped handle for to_sse tests."""
+
+    def __init__(
+        self,
+        chunks: list[object],
+        result: object = None,
+        error: Exception | None = None,
+        *,
+        fail_after_chunks: bool = False,
+    ) -> None:
+        self._chunks = chunks
+        self._result = result
+        self._error = error
+        self._fail_after_chunks = fail_after_chunks
+
+    @property
+    def stream(self):
+        return self._iter()
+
+    async def _iter(self):
+        if self._error is not None and not self._chunks and not self._fail_after_chunks:
+            raise self._error
+        for chunk in self._chunks:
+            yield chunk
+        if self._error is not None and self._fail_after_chunks:
+            raise self._error
+
+    @property
+    def response(self):
+        return self._done()
+
+    async def _done(self):
+        if self._error is not None and not self._fail_after_chunks:
+            raise self._error
+        return self._result
+
+
+def _sse_lines(turn: _Turn) -> list[str]:
+    async def collect() -> list[str]:
+        return [line async for line in to_sse(turn)]
+
+    return asyncio.run(collect())
+
+
+def test_to_sse_text_chunk_then_result_are_data_frames() -> None:
+    """A chunk then a result become data: {message} and data: {result}."""
+    lines = _sse_lines(_Turn(chunks=[{'text': 'Hi'}], result={'ok': True}))
+
+    assert lines == [
+        'data: {"message":{"text":"Hi"}}\n\n',
+        'data: {"result":{"ok":true}}\n\n',
+    ]
+
+
+def test_to_sse_no_chunks_is_only_the_result_frame() -> None:
+    """A settled turn with no chunks is a single result frame."""
+    lines = _sse_lines(_Turn(chunks=[], result={'ok': True}))
+
+    assert lines == ['data: {"result":{"ok":true}}\n\n']
+
+
+def test_to_sse_error_after_a_chunk_is_chunk_then_error_no_result() -> None:
+    """A failure after a chunk keeps the chunk and sends error, not result."""
+    lines = _sse_lines(
+        _Turn(
+            chunks=[{'text': 'Hi'}],
+            error=GenkitError(status='INTERNAL', message='boom'),
+            fail_after_chunks=True,
+        )
+    )
+
+    assert len(lines) == 2
+    assert lines[0] == 'data: {"message":{"text":"Hi"}}\n\n'
+    assert lines[1].startswith('data: {')
+    payload = json.loads(lines[1].removeprefix('data: ').strip())
+    assert 'error' in payload
+    assert 'result' not in payload
+
+
+def test_to_sse_error_before_chunks_is_only_the_error_frame() -> None:
+    """A failure before any chunk is a single error frame."""
+    lines = _sse_lines(_Turn(chunks=[], error=GenkitError(status='INTERNAL', message='boom')))
+
+    assert len(lines) == 1
+    payload = json.loads(lines[0].removeprefix('data: ').strip())
+    assert 'error' in payload
+    assert 'result' not in payload
+    assert 'message' not in payload
+
+
+def test_to_sse_is_experimental_only() -> None:
+    """to_sse comes from genkit_fastapi.exp, not the stable import."""
+    import genkit_fastapi
+    import genkit_fastapi.exp
+
+    assert 'to_sse' not in genkit_fastapi.__all__
+    assert not hasattr(genkit_fastapi, 'to_sse')
+    assert 'to_sse' in genkit_fastapi.exp.__all__
 
 
 def test_fastapi_flow_raising_not_found_returns_500_internal_error() -> None:
@@ -215,6 +328,28 @@ def test_fastapi_flow_raising_public_error_returns_its_status_and_message() -> N
 
     assert response.status_code == 404
     assert response.json() == {'message': 'no order 99', 'status': 'NOT_FOUND'}
+
+
+def test_fastapi_flow_error_response_is_redacted_body_and_status() -> None:
+    """A flow raising GenkitError('secret') is a compact 500 Internal Error; a bad input stays a compact 400."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def save(_: str) -> None:
+        raise GenkitError(status='INVALID_ARGUMENT', message='secret')
+
+    app = FastAPI()
+    app.include_router(serve_flow(save, base_path='/save'))
+    client = TestClient(app)
+
+    crashed = client.post('/save', json={'data': 'x'})
+    assert crashed.status_code == 500
+    assert crashed.content == b'{"message":"Internal Error","status":"INTERNAL"}'
+    assert crashed.headers['content-type'] == 'application/json'
+
+    bad_input = client.post('/save', json={'data': {'ssn': '123-45-6789'}})
+    assert bad_input.status_code == 400
+    assert bad_input.content == b'{"message":"Invalid argument","status":"INVALID_ARGUMENT"}'
 
 
 def test_fastapi_flow_raising_value_error_returns_500_internal_error_without_stack() -> None:
@@ -256,8 +391,8 @@ def test_fastapi_stream_flow_raising_not_found_sends_sse_internal_error() -> Non
     assert 'alice@example.com' not in response.text
 
 
-def test_fastapi_stream_flow_raising_public_error_sends_its_status_and_message() -> None:
-    """FastAPI SSE to a flow that raises PublicError ends with an error event carrying its message."""
+def test_streamed_flow_failure_ends_with_same_error_frame() -> None:
+    """A streamed flow raising PublicError('NOT_FOUND', 'no order 99') ends with that exact error frame."""
     ai = Genkit()
 
     @ai.flow()
@@ -272,7 +407,7 @@ def test_fastapi_stream_flow_raising_public_error_sends_its_status_and_message()
         headers={'Accept': 'text/event-stream'},
     )
 
-    assert sse_error_event(response.text) == {'message': 'no order 99', 'status': 'NOT_FOUND'}
+    assert response.content.endswith(b'data: {"error":{"message":"no order 99","status":"NOT_FOUND"}}\n\n')
 
 
 def test_fastapi_stream_flow_raising_value_error_sends_sse_internal_error_without_stack() -> None:
@@ -312,7 +447,7 @@ def test_fastapi_context_provider_sees_method_lowercase_headers_and_input() -> N
     @app.post('/echo', response_model=None)
     @genkit_fastapi_handler(ai, context_provider=provider)
     @ai.flow()
-    async def echo(_: str, ctx: ActionRunContext) -> dict[str, object]:
+    async def echo(_: str, ctx: FlowContext) -> dict[str, object]:
         return {
             'method': ctx.context['method'],
             'authorization': ctx.context['authorization'],
@@ -344,7 +479,7 @@ def test_request_data_duplicate_authorization_is_comma_joined() -> None:
     @app.post('/echo', response_model=None)
     @genkit_fastapi_handler(ai, context_provider=provider)
     @ai.flow()
-    async def echo(_: str, ctx: ActionRunContext) -> dict[str, object]:
+    async def echo(_: str, ctx: FlowContext) -> dict[str, object]:
         return {'authorization': ctx.context['authorization']}
 
     response = TestClient(app).post(
@@ -368,7 +503,7 @@ def test_request_data_duplicate_x_forwarded_for_is_comma_joined() -> None:
     @app.post('/echo', response_model=None)
     @genkit_fastapi_handler(ai, context_provider=provider)
     @ai.flow()
-    async def echo(_: str, ctx: ActionRunContext) -> dict[str, object]:
+    async def echo(_: str, ctx: FlowContext) -> dict[str, object]:
         return {'xff': ctx.context['xff']}
 
     response = TestClient(app).post(

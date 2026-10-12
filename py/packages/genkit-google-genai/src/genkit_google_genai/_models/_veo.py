@@ -39,8 +39,8 @@ from google.genai import types as genai_types
 from google.genai.errors import APIError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, Operation, Part, Role
-from genkit.model import ModelInfo, ModelRequest, OperationError, Supports
+from genkit import FinishReason, GenkitError, Message, ModelResponse, Operation, Part, Role
+from genkit.model import ModelContext, ModelInfo, ModelRequest, OperationError, Supports
 
 # Quote autocomplete needs a Literal, so this alias is the Veo catalog.
 # ``veo_model`` takes ``KnownVeo | str`` so unlisted ids still work.
@@ -280,7 +280,7 @@ class VeoModel:
 
     def _client_for_context(
         self,
-        ctx: ActionRunContext,
+        ctx: ModelContext,
         *,
         config: Mapping[str, Any] | None = None,
     ) -> genai.Client:
@@ -349,7 +349,7 @@ class VeoModel:
                 cause=e,
             ) from e
 
-    async def start(self, request: ModelRequest[VeoConfig], ctx: ActionRunContext) -> Operation:
+    async def start(self, request: ModelRequest[VeoConfig], ctx: ModelContext) -> Operation:
         """Start a video generation operation.
 
         Args:
@@ -385,7 +385,7 @@ class VeoModel:
 
         return _from_veo_operation(api_op=response)
 
-    async def check(self, operation: Operation, ctx: ActionRunContext) -> Operation:
+    async def check(self, operation: Operation, ctx: ModelContext) -> Operation:
         """Check the status of a video generation operation.
 
         Args:

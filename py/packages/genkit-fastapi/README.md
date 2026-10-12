@@ -105,6 +105,60 @@ app.include_router(
 )
 ```
 
+### Streaming from Custom Routes (`stream.to_sse()`)
+
+Call `.to_sse()` on any `StreamResponse` (`flow.stream()`, `ai.generate_stream()`) or `AgentTurn` (`chat.send_stream()`) to frame chunks, the final result, and errors as Genkit SSE events (`data: {"message": ...}`, `data: {"result": ...}`, or `data: {"error": ...}`) inside your own FastAPI route:
+
+```python
+from fastapi import Depends, FastAPI
+from fastapi.responses import StreamingResponse
+from genkit import FlowContext, Genkit
+
+ai = Genkit(...)
+app = FastAPI()
+
+
+@ai.flow
+async def deploy_service(service: str, ctx: FlowContext[str]) -> str:
+    user_id = ctx.context['user_id']
+    ctx.send_chunk(f'[{user_id}] building {service}')
+    ctx.send_chunk(f'[{user_id}] rolling out {service}')
+    return f'https://{service}.run.app'
+
+
+@app.post('/deploy/stream')
+async def deploy_stream(service: str, user: User = Depends(current_user)):
+    stream = deploy_service.stream(service, context={'user_id': user.id})
+    return StreamingResponse(stream.to_sse(), media_type='text/event-stream')
+    # => data: {"message": "[u_42] building payments"}
+    # => data: {"message": "[u_42] rolling out payments"}
+    # => data: {"result": "https://payments.run.app"}
+
+
+@app.post('/chat/stream')
+async def chat_stream(prompt: str, user: User = Depends(current_user)):
+    stream = ai.generate_stream(prompt=prompt, context={'user_id': user.id})
+    return StreamingResponse(stream.to_sse(), media_type='text/event-stream')
+```
+
+### Handling Full Genkit Requests (`handle_genkit_request`)
+
+When FastAPI owns the route signature and `Depends(...)` parameters (for authentication, rate limiting, or database sessions) and you want one endpoint to serve both JSON `POST` (`{"result": ...}`) and SSE streaming (`Accept: text/event-stream` or `?stream=true`), delegate the HTTP turn to `handle_genkit_request`:
+
+```python
+from fastapi import Depends, Request
+from genkit_fastapi import handle_genkit_request
+
+
+@app.post('/api/deploy', response_model=None)
+async def deploy_endpoint(request: Request, user: User = Depends(current_user)):
+    return await handle_genkit_request(
+        request,
+        action=deploy_service,
+        context={'user_id': user.id},
+    )
+```
+
 ### Decorator Handler (`genkit_fastapi_handler`)
 
 For custom route definitions, you can also use `@genkit_fastapi_handler`:

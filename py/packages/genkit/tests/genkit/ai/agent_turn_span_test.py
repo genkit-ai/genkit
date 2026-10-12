@@ -29,11 +29,10 @@ from genkit._ai._agents._base import define_custom_agent
 from genkit._ai._agents._runtime import SessionRunner
 from genkit._ai._agents._session import Session
 from genkit._ai._agents._types import TurnContext, TurnResult
-from genkit._core._action import ActionRunContext
 from genkit._core._model import AgentInput, AgentResult, Message, SessionState
 from genkit._core._telemetry._attrs import Attr, metadata_key
 from genkit._core._telemetry._http import ActiveSpan
-from genkit.exp.agent import AgentFinishReason, InMemorySessionStore
+from genkit.exp.agent import AgentContext, AgentFinishReason, InMemorySessionStore
 
 UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I)
 SESSION_ID_ATTR = metadata_key('agent:sessionId')
@@ -52,7 +51,7 @@ def _counter_agent(
     name: str,
     store: InMemorySessionStore | None,
 ):
-    async def fn(session_runner: SessionRunner, _: ActionRunContext) -> AgentResult:
+    async def fn(session_runner: SessionRunner, _: AgentContext) -> AgentResult:
         async def handle_turn(_: AgentInput, __: TurnContext) -> TurnResult | None:
             def bump(custom: dict | None) -> dict:
                 return {'count': (custom or {}).get('count', 0) + 1}

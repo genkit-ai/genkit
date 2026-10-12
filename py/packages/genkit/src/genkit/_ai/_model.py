@@ -62,9 +62,19 @@ from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
 from genkit._core._typing import ActionMetadata, GenerationCommonConfig, ModelInfo
 
+# Context parameter passed to model and background-model functions.
+ModelContext: TypeAlias = ActionRunContext[ModelResponseChunk]
+"""Context parameter passed to model and background-model functions.
+
+- ``ctx.send_chunk(chunk)`` streams a :class:`~genkit.ModelResponseChunk` to the caller.
+- ``ctx.is_streaming`` is ``True`` when the caller requested streaming.
+- ``ctx.context`` holds the caller's context dict (e.g. ``ctx.context.get('secrets')``).
+- ``ctx.abort_signal`` is the :class:`asyncio.Event` set when the turn is cancelled.
+"""
+
 # Type alias for model functions (must be async)
 # Use ctx.send_chunk() for streaming
-ModelFn = Callable[[ModelRequest, ActionRunContext], Awaitable[ModelResponse[Any]]]
+ModelFn = Callable[[ModelRequest, ModelContext], Awaitable[ModelResponse[Any]]]
 
 logger = get_logger(__name__)
 

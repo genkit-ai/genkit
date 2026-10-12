@@ -18,23 +18,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field
-from typing import Any
-
-
-def joined_headers(pairs: Iterable[tuple[str, str]]) -> dict[str, str]:
-    """Collapse the same header name into one comma-joined value.
-
-    The same header can arrive twice (two Authorization lines, each hop in
-    an X-Forwarded-For chain). A context_provider looks the name up once, so
-    keep every part instead of dropping all but the last.
-    """
-    joined: dict[str, str] = {}
-    for key, value in pairs:
-        existing = joined.get(key)
-        joined[key] = value if existing is None else f'{existing}, {value}'
-    return joined
+from typing import Any, cast
 
 
 @dataclass
@@ -44,14 +30,15 @@ class ContextMetadata:
     trace_id: str | None = None
 
 
-@dataclass
+@dataclass(init=False)
 class RequestData:
     """What a context_provider sees for one HTTP request.
 
     ``headers`` keys are lowercase so ``Authorization`` and ``authorization``
     look the same on every served flow. Repeated names become one
     comma-joined string, so ``headers.get('authorization')`` sees every
-    value that arrived.
+    value that arrived. Pass ``headers`` as a mapping or as the raw
+    ``(name, value)`` pairs off the wire.
     """
 
     request: Any = None
@@ -60,11 +47,30 @@ class RequestData:
     input: Any = None
     metadata: ContextMetadata | None = None
 
-    def __post_init__(self) -> None:
-        # Header names are case-insensitive on the wire. Lowercase them so
-        # Authorization and authorization are the same lookup, and join
-        # values when mixed-case keys collapse to one name.
-        self.headers = joined_headers((key.lower(), value) for key, value in self.headers.items())
+    def __init__(
+        self,
+        request: Any = None,  # noqa: ANN401
+        method: str = '',
+        headers: Mapping[str, str] | Iterable[tuple[str, str]] | None = None,
+        input: Any = None,  # noqa: ANN401
+        metadata: ContextMetadata | None = None,
+    ) -> None:
+        """Build request data; header names are lowercased and repeats comma-joined."""
+        self.request = request
+        self.method = method
+        self.input = input
+        self.metadata = metadata
+        pairs: Iterable[tuple[str, str]] = (
+            cast(Mapping[str, str], headers).items() if isinstance(headers, Mapping) else headers or ()
+        )
+        # The same header can arrive twice (two Authorization lines, each hop
+        # in an X-Forwarded-For chain). A context_provider looks the name up
+        # once, so keep every part instead of dropping all but the last.
+        self.headers = {}
+        for name, value in pairs:
+            key = name.lower()
+            existing = self.headers.get(key)
+            self.headers[key] = value if existing is None else f'{existing}, {value}'
 
 
 ContextProvider = Callable[[RequestData], dict[str, Any] | Awaitable[dict[str, Any]]]

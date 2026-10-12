@@ -25,19 +25,9 @@ import pytest
 from genkit_middleware import Retry
 from pydantic import ValidationError
 
-from genkit import (
-    ActionRunContext,
-    FinishReason,
-    Genkit,
-    GenkitError,
-    Message,
-    ModelResponse,
-    ModelResponseChunk,
-    Part,
-    Role,
-)
+from genkit import FinishReason, Genkit, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
 from genkit.middleware import GenerateMiddlewareContext, ModelHookParams
-from genkit.model import ModelRequest
+from genkit.model import ModelContext, ModelRequest
 from genkit.plugin_api import provider_error
 from genkit.testing import define_scripted_model
 
@@ -351,7 +341,7 @@ async def test_generate_with_failing_model_and_retry_retries_connection_error() 
     ai = Genkit()
     calls = 0
 
-    async def flaky(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def flaky(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         nonlocal calls
         calls += 1
         if calls == 1:
@@ -380,7 +370,7 @@ async def test_generate_with_failing_model_and_retry_retries_unclassified_error_
     ai = Genkit()
     calls = 0
 
-    async def down(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def down(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         nonlocal calls
         calls += 1
         raise ConnectionError('connection refused')
@@ -505,7 +495,7 @@ async def test_retry_does_not_retry_when_model_wraps_the_callers_on_chunk_failur
     ai = Genkit()
     calls = 0
 
-    async def wraps_stream_errors(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def wraps_stream_errors(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         nonlocal calls
         calls += 1
         try:

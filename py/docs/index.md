@@ -37,7 +37,7 @@
 
 ::: genkit.Tool
 
-::: genkit.ToolRunContext
+::: genkit.ToolContext
 
 ::: genkit.Interrupt
 
@@ -45,7 +45,7 @@
 
 ::: genkit.MultipartToolResponse
 
-::: genkit.ActionRunContext
+::: genkit.FlowContext
 
 ::: genkit.Prompt
 
@@ -54,10 +54,6 @@
 ::: genkit.PublicError
 
 ::: genkit.RuntimeErrorReason
-
-::: genkit.ContextProvider
-
-::: genkit.RequestData
 
 ::: genkit.FormatDef
 
@@ -70,6 +66,8 @@
 ::: genkit.model.BackgroundAction
 
 ::: genkit.model.GenerateActionOptions
+
+::: genkit.model.ModelContext
 
 ::: genkit.model.ModelRequest
 
@@ -166,6 +164,20 @@
 ::: genkit.telemetry.run_in_new_span
 
 ::: genkit.telemetry.SpanMetadata
+
+## genkit.web
+
+::: genkit.web.ContextProvider
+
+::: genkit.web.RequestData
+
+::: genkit.web.error_body
+
+::: genkit.web.error_status
+
+::: genkit.web.read_body
+
+::: genkit.web.wants_stream
 
 ## genkit.exp.agent
 

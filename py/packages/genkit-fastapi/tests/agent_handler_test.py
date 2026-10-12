@@ -97,15 +97,26 @@ def test_base_path_defaults_to_agent_name() -> None:
     assert 'Hi there!' in json.dumps(response.json()['result'])
 
 
-def test_turn_shorthand_matches_wire_format() -> None:
-    """The {"input": ..., "init": ...} wire shape works the same as the shorthand."""
+def test_turn_data_envelope_matches_shorthand() -> None:
+    """The {"data": ..., "init": ...} wire shape works the same as the shorthand."""
     client_obj = client(build_agent('wireAgent'))
 
-    body = {'input': {'message': {'role': 'user', 'content': [{'text': 'Hi'}]}}, 'init': {}}
+    body = {'data': {'message': {'role': 'user', 'content': [{'text': 'Hi'}]}}, 'init': {}}
     response = client_obj.post('/api/chat', json=body)
 
     assert response.status_code == 200
     assert 'Hi there!' in json.dumps(response.json()['result'])
+
+
+def test_agent_input_key_body_is_400() -> None:
+    """POST {"input": "hi"} to an agent route is a 400 telling the caller to wrap in data."""
+    response = client(build_agent('inputKeyAgent')).post('/api/chat', json={'input': 'hi'})
+
+    assert response.status_code == 400
+    assert response.json() == {
+        'message': 'Action request must be wrapped in {"data": ...} object',
+        'status': 'INVALID_ARGUMENT',
+    }
 
 
 def test_get_snapshot_missing_returns_404() -> None:
@@ -198,6 +209,31 @@ def test_handle_genkit_request_agent_route_with_data_envelope_runs_turn() -> Non
     assert 'Hi there!' in json.dumps(result)
 
 
+def test_hand_rolled_route_yields_to_sse_same_frames_as_serve_agent() -> None:
+    """A custom route that streams via handle_genkit_request matches serve_agent SSE."""
+    mounted = client(build_agent('mountedFrames'))
+    served = mounted.post('/api/chat?stream=true', json={'message': 'Hi'})
+
+    agent = build_agent('handFrames')
+    app = FastAPI()
+
+    @app.post('/custom', response_model=None)
+    async def custom(request: Request) -> object:
+        return await handle_genkit_request(request, action=agent)
+
+    hand = TestClient(app).post(
+        '/custom?stream=true',
+        json={'data': {'message': {'role': 'user', 'content': [{'text': 'Hi'}]}}},
+    )
+
+    served_kinds = [next(iter(e)) for e in sse_events(served.text)]
+    hand_kinds = [next(iter(e)) for e in sse_events(hand.text)]
+    assert served_kinds == hand_kinds
+    assert served_kinds[-1] == 'result'
+    assert 'Hi there!' in json.dumps(sse_events(served.text)[-1]['result'])
+    assert 'Hi there!' in json.dumps(sse_events(hand.text)[-1]['result'])
+
+
 @pytest.mark.parametrize(
     'path, body, message',
     [
@@ -247,7 +283,7 @@ def test_serve_agent_init_mismatch_returns_agent_init_error(
 ) -> None:
     """AgentInitError is a PublicError, so a remote client sees the status, message, and reason it would in-process."""
     response = client(build_agent('initAgent', server_managed=server_managed)).post(
-        '/api/chat', json={'input': {'message': {'role': 'user', 'content': [{'text': 'Hi'}]}}, 'init': init}
+        '/api/chat', json={'data': {'message': {'role': 'user', 'content': [{'text': 'Hi'}]}}, 'init': init}
     )
 
     assert response.status_code == 400
