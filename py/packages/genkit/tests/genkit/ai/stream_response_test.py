@@ -32,7 +32,7 @@ async def test_async_for_on_flow_stream_yields_chunks_then_response() -> None:
     """`async for update in flow.stream(...)` reads the chunks; `.response` is the return value."""
     ai = Genkit()
 
-    @ai.flow(chunk_type=str)
+    @ai.flow()
     async def track_order(order_id: str, ctx: FlowContext[str]) -> str:
         ctx.send_chunk('Packed')
         ctx.send_chunk('Out for delivery')
@@ -50,7 +50,7 @@ async def test_flow_stream_that_raises_raises_from_loop_and_response() -> None:
     """If the flow raises, both the `async for` and `await result.response` raise it."""
     ai = Genkit()
 
-    @ai.flow(chunk_type=str)
+    @ai.flow()
     async def track_order(order_id: str, ctx: FlowContext[str]) -> str:
         ctx.send_chunk('Packed')
         raise ValueError(f'no courier for {order_id}')
