@@ -43,6 +43,27 @@ code: network egress is open and there are no CPU/memory limits. See the
 On a platform without a local sandbox (e.g. Windows), `localSandbox()` throws;
 use the container variant below.
 
+## Boxed agent variant (`src/index-agent.ts`)
+
+The whole agent runs in the box (`src/boxed-agent.ts`), one process per chat
+session. The main process has no model and no tools; `myBox.defineAgent`
+registers the boxed agent so the Dev UI can chat with it.
+
+```bash
+export GEMINI_API_KEY=...
+pnpm genkit:dev:agent
+```
+
+- Chat with `notesAgent` and tell it something to remember. The reply
+  mentions the pid of the box that ran `takeNote`.
+- The `chatWithNotes` flow drives the same agent in-process. Run it with
+  `{ "sessionId": "alice", "message": "buy milk" }`, then with `"bob"`: a
+  different pid, because `route: sessionRoute` gives each session its own box.
+  Run `"alice"` again: alice's pid, and her notes (custom state) keep growing.
+- The boxed agent keeps sessions in a file store (`.genkit/box-sessions`)
+  that every box shares, so a turn that lands on another box (e.g. after an
+  idle box is reclaimed) still continues the conversation.
+
 ## Container variant (`src/index-podman.ts`)
 
 Same demo, but the boxed side runs in a podman container instead of a local OS
