@@ -236,12 +236,13 @@ export class Runner extends BaseRunner<RunnerTypes> {
     // Need to extract topP and topK from request.config to avoid duplicate properties being added to the body
     // This happens because topP and topK have different property names (top_p and top_k) in the Anthropic API.
     // Thinking is extracted separately to avoid type issues.
-    // ApiVersion is extracted separately as it's not a valid property for the Anthropic API.
+    // ApiVersion and betas are extracted separately as they're not valid body properties on the stable API.
     const {
       topP,
       topK,
       apiVersion: _1,
       thinking: _2,
+      betas: _3,
       maxOutputTokens,
       stopSequences,
       version,
@@ -289,12 +290,13 @@ export class Runner extends BaseRunner<RunnerTypes> {
     // Need to extract topP and topK from request.config to avoid duplicate properties being added to the body
     // This happens because topP and topK have different property names (top_p and top_k) in the Anthropic API.
     // Thinking is extracted separately to avoid type issues.
-    // ApiVersion is extracted separately as it's not a valid property for the Anthropic API.
+    // ApiVersion and betas are extracted separately as they're not valid body properties on the stable API.
     const {
       topP,
       topK,
       apiVersion: _1,
       thinking: _2,
+      betas: _3,
       maxOutputTokens,
       stopSequences,
       version,
