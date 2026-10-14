@@ -72,10 +72,15 @@ export function isEvaluator(key: string) {
 export async function confirmLlmUse(
   evaluatorActions: Action[]
 ): Promise<boolean> {
-  const isBilled = evaluatorActions.some(
-    (action) =>
-      action.metadata && action.metadata[EVALUATOR_METADATA_KEY_IS_BILLED]
-  );
+  const isBilled = evaluatorActions.some((action) => {
+    const evaluatorMetadata = action.metadata?.evaluator as
+      | Record<string, unknown>
+      | undefined;
+    return Boolean(
+      evaluatorMetadata?.[EVALUATOR_METADATA_KEY_IS_BILLED] ||
+        action.metadata?.[EVALUATOR_METADATA_KEY_IS_BILLED]
+    );
+  });
 
   if (!isBilled) {
     return true;

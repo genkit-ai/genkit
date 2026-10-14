@@ -14,11 +14,30 @@
  * limitations under the License.
  */
 
+import { confirm } from '@inquirer/prompts';
 import { describe, expect, it, jest } from '@jest/globals';
 import * as configModule from '../../src/plugin/config';
+import type { Action } from '../../src/types/action';
 import type { TraceData } from '../../src/types/trace';
-import { getEvalExtractors } from '../../src/utils/eval';
+import { confirmLlmUse, getEvalExtractors } from '../../src/utils/eval';
 import { MockTrace } from './trace';
+
+jest.mock('@inquirer/prompts', () => ({
+  confirm: jest.fn(),
+}));
+
+const mockConfirm = confirm as jest.MockedFunction<typeof confirm>;
+
+function evaluatorAction(
+  name: string,
+  metadata?: Record<string, unknown>
+): Action {
+  return {
+    key: `/evaluator/${name}`,
+    name,
+    metadata,
+  } as Action;
+}
 
 const CONTEXT_TEXTS = [
   'are about 10 times larger, making them particularly difficult for humans to ignore.',
@@ -232,5 +251,61 @@ describe('eval utils', () => {
     expect(extractors.input(trace)).toEqual('My input');
     expect(extractors.output(trace)).toEqual('');
     expect(extractors.context(trace)).toEqual(CONTEXT_TEXTS);
+  });
+
+  describe('confirmLlmUse', () => {
+    it('confirmLlmUse prompts when an evaluator has evaluator.evaluatorIsBilled true', async () => {
+      mockConfirm.mockResolvedValue(true);
+
+      const confirmed = await confirmLlmUse([
+        evaluatorAction('genkitEval/maliciousness', {
+          evaluator: { evaluatorIsBilled: false },
+        }),
+        evaluatorAction('vertexai/fluency', {
+          evaluator: { evaluatorIsBilled: true },
+        }),
+      ]);
+
+      expect(mockConfirm).toHaveBeenCalledTimes(1);
+      expect(mockConfirm).toHaveBeenCalledWith(
+        expect.objectContaining({ default: false })
+      );
+      expect(confirmed).toBe(true);
+    });
+
+    it('confirmLlmUse returns false when the user declines a billed evaluator', async () => {
+      mockConfirm.mockResolvedValue(false);
+
+      const confirmed = await confirmLlmUse([
+        evaluatorAction('vertexai/fluency', {
+          evaluator: { evaluatorIsBilled: true },
+        }),
+      ]);
+
+      expect(mockConfirm).toHaveBeenCalledTimes(1);
+      expect(confirmed).toBe(false);
+    });
+
+    it('confirmLlmUse does not prompt when no evaluator is billed', async () => {
+      const confirmed = await confirmLlmUse([
+        evaluatorAction('genkitEval/maliciousness', {
+          evaluator: { evaluatorIsBilled: false },
+        }),
+        evaluatorAction('genkitEval/regex', { evaluator: {} }),
+      ]);
+
+      expect(mockConfirm).not.toHaveBeenCalled();
+      expect(confirmed).toBe(true);
+    });
+
+    it('confirmLlmUse treats an evaluator with no evaluator metadata as not billed', async () => {
+      const confirmed = await confirmLlmUse([
+        evaluatorAction('custom/noMetadata'),
+        evaluatorAction('custom/emptyMetadata', {}),
+      ]);
+
+      expect(mockConfirm).not.toHaveBeenCalled();
+      expect(confirmed).toBe(true);
+    });
   });
 });
