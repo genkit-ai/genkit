@@ -22,7 +22,6 @@ from collections.abc import Mapping
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
-import structlog
 from anthropic import AsyncAnthropic
 
 from genkit import ActionRunContext, GenkitError, ModelResponse
@@ -32,6 +31,7 @@ from genkit.plugin_api import (
     ActionKind,
     ActionMetadata,
     Plugin,
+    get_logger,
     loop_local_client,
     to_json_schema,
 )
@@ -40,7 +40,7 @@ from genkit_anthropic._model_info import SUPPORTED_ANTHROPIC_MODELS, KnownClaude
 from genkit_anthropic._models import AnthropicModel, pinned_credential_header
 from genkit_anthropic._secrets import context_api_key, reject_config_api_key
 
-logger = structlog.get_logger(__name__)
+logger = get_logger(__name__)
 
 ANTHROPIC_PLUGIN_NAME = 'anthropic'
 

@@ -25,7 +25,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from genkit import Genkit, get_logger
+from genkit import Genkit
 from genkit._core._action import Action
 from genkit._core._environment import GENKIT_ENV
 from genkit._core._reflection import create_reflection_asgi_app
@@ -33,6 +33,7 @@ from genkit._core._registry import Registry
 from genkit._core._telemetry._http import (
     ActiveSpan,
     DevUIInstrumentation,
+    DirectHttpInstrumentation,
     _parent_span,
     maybe_inject_dev_instrumentation,
 )
@@ -41,9 +42,8 @@ from genkit._core._telemetry._instrumentation import (
     set_custom_metadata_attributes,
     set_span_state,
 )
-from genkit.plugin_api import ActionKind
+from genkit.plugin_api import ActionKind, get_logger
 from genkit.telemetry import (
-    DirectHttpInstrumentation,
     SpanContext,
     SpanMetadata,
     configure_instrumentation,

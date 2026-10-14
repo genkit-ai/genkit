@@ -17,13 +17,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from genkit import Genkit, get_logger
+from genkit import Genkit
 from genkit._core._action import ActionRunContext, _action_context
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import ModelRequest, ModelResponse
 from genkit._core._telemetry._log_exporter import build_log_record
 from genkit._core._typing import Operation
 from genkit.evaluator import BaseDataPoint, EvaluatorResponse, Score
+from genkit.plugin_api import get_logger
 from genkit.telemetry import (
     SpanMetadata,
     SpanNext,

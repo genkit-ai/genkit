@@ -341,7 +341,7 @@ def resolve_middleware_from_use(
                 status='NOT_FOUND',
                 message=(
                     f'A middleware with the name "{entry.name}" cannot be found. '
-                    'Register it via @ai.middleware(...), a middleware plugin, or pass '
+                    "Register it via @ai.middleware(...), a plugin's list_middleware(), or pass "
                     'a BaseMiddleware instance in use= so the framework can normalize it.'
                 ),
                 source='genkit.generate',
@@ -353,7 +353,7 @@ def resolve_middleware_from_use(
                 message=(
                     f'Middleware "{entry.name}" is registered with the wrong type '
                     f'({type(defn).__name__}). Expected GenerateMiddleware from '
-                    '@ai.middleware(...), a middleware plugin, or inline use= normalization.'
+                    "@ai.middleware(...), a plugin's list_middleware(), or inline use= normalization."
                 ),
                 source='genkit.generate',
                 reason=RuntimeErrorReason.INVALID_INPUT,

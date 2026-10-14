@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import abc
 from collections.abc import Sequence
-from typing import ClassVar
 
 from genkit._core._action import Action, ActionKind, set_action_name
 from genkit._core._middleware import GenerateMiddleware
@@ -103,16 +102,40 @@ class Plugin(abc.ABC):
         ...
 
     def list_middleware(self) -> list[GenerateMiddleware]:
-        """Return middleware descriptors for this plugin to register on the app.
+        """Return middleware this plugin registers on the app. Defaults to none.
 
-        This runs while :class:`Genkit` is being constructed, after
-        built-in middleware is registered. Use unique flat names without
-        slash characters so they do not collide with built-ins or other
-        plugins.
+        Runs once while :class:`Genkit` is constructed, after built-in
+        middleware. Use flat names without ``/`` so they don't collide.
 
-        Returns:
-            Descriptors to list in the Dev UI and to resolve by name from
-            ``generate(use=...)``.
+        Example:
+            ```python
+            from genkit import Genkit
+            from genkit.middleware import GenerateMiddleware, MiddlewareRef
+            from genkit.plugin_api import Action, ActionKind, ActionMetadata, Plugin
+
+
+            # 1. A plugin that only contributes middleware
+            class AllergyGuard(Plugin):
+                name = 'allergy-guard'
+
+                async def init(self) -> list[Action]:
+                    return []
+
+                async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
+                    return None
+
+                async def list_actions(self) -> list[ActionMetadata]:
+                    return []
+
+                def list_middleware(self) -> list[GenerateMiddleware]:
+                    return [GenerateMiddleware(cls=AllergyCheck, name='allergy_check')]
+
+
+            # 2. Register it, then use the middleware by name
+            ai = Genkit(plugins=[AllergyGuard()])
+            res = await ai.generate(prompt='Suggest a dish.', use=[MiddlewareRef(name='allergy_check')])
+            # => allergy_check runs around the model call
+            ```
         """
         return []
 
@@ -140,54 +163,3 @@ class Plugin(abc.ABC):
         if action is not None:
             set_action_name(action, resolved_action_name(plugin=self.name, requested_id=requested_id))
         return action
-
-
-class MiddlewarePlugin(Plugin):
-    """Plugin that contributes middleware descriptors only.
-
-    Example:
-        from genkit import Genkit
-        from genkit.middleware import BaseMiddleware
-        from genkit.middleware import GenerateMiddleware
-        from genkit.plugin_api import MiddlewarePlugin
-
-        class PrefixPromptMiddleware(BaseMiddleware):
-            ...
-
-        class MyMiddlewarePlugin(MiddlewarePlugin):
-            name = 'my-middleware'
-            middleware = [
-                GenerateMiddleware(
-                    cls=PrefixPromptMiddleware,
-                    name='prefix_prompt',
-                    description='Prepends a fixed prompt',
-                ),
-            ]
-
-        ai = Genkit(plugins=[MyMiddlewarePlugin()])
-    """
-
-    name: str = ''
-    middleware: ClassVar[list[GenerateMiddleware]] = []
-
-    def __init__(self) -> None:
-        if not type(self).name:
-            raise ValueError(f'{type(self).__name__} must set `name` to the plugin namespace string.')
-        if not self.list_middleware():
-            raise ValueError(
-                f'{type(self).__name__} must provide middleware via the `middleware` class '
-                'attribute or a `list_middleware` override. Each entry should come from '
-                'GenerateMiddleware(cls=YourMiddleware, name=..., description=...).'
-            )
-
-    async def init(self) -> list[Action]:
-        return []
-
-    async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
-        return None
-
-    async def list_actions(self) -> Sequence[Action | ActionMetadata]:
-        return []
-
-    def list_middleware(self) -> list[GenerateMiddleware]:
-        return list(type(self).middleware)

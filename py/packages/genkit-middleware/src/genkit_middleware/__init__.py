@@ -36,7 +36,7 @@ them in the Dev UI and to name them in a ``.prompt`` file's ``use:``.
 """
 
 from genkit.middleware import GenerateMiddleware
-from genkit.plugin_api import MiddlewarePlugin
+from genkit.plugin_api import Action, ActionKind, ActionMetadata, Plugin
 from genkit_middleware._fallback import Fallback
 from genkit_middleware._filesystem import Filesystem
 from genkit_middleware._retry import Retry
@@ -72,7 +72,7 @@ _MIDDLEWARE_DESCS = [
 ]
 
 
-class Middleware(MiddlewarePlugin):
+class Middleware(Plugin):
     """Plugin that registers Retry, Fallback, ToolApproval, Skills, and Filesystem.
 
     Registering lists them in the Dev UI and lets a ``.prompt`` file name them
@@ -105,7 +105,22 @@ class Middleware(MiddlewarePlugin):
     """
 
     name = 'genkit-middleware'
-    middleware = list(_MIDDLEWARE_DESCS)
+
+    async def init(self) -> list[Action]:
+        """No actions; this plugin only contributes middleware."""
+        return []
+
+    async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
+        """Resolves nothing."""
+        return None
+
+    async def list_actions(self) -> list[ActionMetadata]:
+        """Lists nothing."""
+        return []
+
+    def list_middleware(self) -> list[GenerateMiddleware]:
+        """Retry, Fallback, ToolApproval, Skills and Filesystem."""
+        return list(_MIDDLEWARE_DESCS)
 
 
 __all__ = [

@@ -47,7 +47,7 @@ from pydantic import ValidationError
 from genkit import Document, Genkit, GenkitError, Message, Part, Role
 from genkit.embedder import EmbedRequest
 from genkit.model import ModelInfo, ModelRequest
-from genkit.plugin_api import GENKIT_CLIENT_HEADER, Action, ActionKind, ActionMetadata
+from genkit.plugin_api import GENKIT_USER_AGENT, Action, ActionKind, ActionMetadata
 
 
 async def _get_runtime_client(plugin: GoogleAI | VertexAI) -> object:
@@ -384,102 +384,109 @@ async def test_googleai_list_actions(googleai_plugin_instance: GoogleAI) -> None
         (
             None,
             {
-                'x-goog-api-client': GENKIT_CLIENT_HEADER,
-                'user-agent': GENKIT_CLIENT_HEADER,
+                'x-goog-api-client': GENKIT_USER_AGENT,
+                'user-agent': GENKIT_USER_AGENT,
             },
         ),
         (
             {},
             {
-                'x-goog-api-client': GENKIT_CLIENT_HEADER,
-                'user-agent': GENKIT_CLIENT_HEADER,
+                'x-goog-api-client': GENKIT_USER_AGENT,
+                'user-agent': GENKIT_USER_AGENT,
             },
         ),
         (
             {'headers': {'existing-header': 'value'}},
             {
                 'existing-header': 'value',
-                'x-goog-api-client': GENKIT_CLIENT_HEADER,
-                'user-agent': GENKIT_CLIENT_HEADER,
+                'x-goog-api-client': GENKIT_USER_AGENT,
+                'user-agent': GENKIT_USER_AGENT,
             },
         ),
         (
             {'headers': {'x-goog-api-client': 'initial-client'}},
             {
-                'x-goog-api-client': f'initial-client {GENKIT_CLIENT_HEADER}',
-                'user-agent': GENKIT_CLIENT_HEADER,
+                'x-goog-api-client': f'initial-client {GENKIT_USER_AGENT}',
+                'user-agent': GENKIT_USER_AGENT,
             },
         ),
         (
             {'headers': {'user-agent': 'initial-agent'}},
             {
-                'x-goog-api-client': GENKIT_CLIENT_HEADER,
-                'user-agent': f'initial-agent {GENKIT_CLIENT_HEADER}',
+                'x-goog-api-client': GENKIT_USER_AGENT,
+                'user-agent': f'initial-agent {GENKIT_USER_AGENT}',
             },
         ),
         (
             {'headers': {'x-goog-api-client': 'old', 'user-agent': 'old-ua'}},
             {
-                'x-goog-api-client': f'old {GENKIT_CLIENT_HEADER}',
-                'user-agent': f'old-ua {GENKIT_CLIENT_HEADER}',
+                'x-goog-api-client': f'old {GENKIT_USER_AGENT}',
+                'user-agent': f'old-ua {GENKIT_USER_AGENT}',
             },
         ),
         (
             HttpOptions(),
             {
-                'x-goog-api-client': GENKIT_CLIENT_HEADER,
-                'user-agent': GENKIT_CLIENT_HEADER,
+                'x-goog-api-client': GENKIT_USER_AGENT,
+                'user-agent': GENKIT_USER_AGENT,
             },
         ),
         (
             HttpOptions(headers={'other': 'value'}),
             {
                 'other': 'value',
-                'x-goog-api-client': GENKIT_CLIENT_HEADER,
-                'user-agent': GENKIT_CLIENT_HEADER,
+                'x-goog-api-client': GENKIT_USER_AGENT,
+                'user-agent': GENKIT_USER_AGENT,
             },
         ),
         (
             HttpOptions(headers={'x-goog-api-client': 'initial'}),
             {
-                'x-goog-api-client': f'initial {GENKIT_CLIENT_HEADER}',
-                'user-agent': GENKIT_CLIENT_HEADER,
+                'x-goog-api-client': f'initial {GENKIT_USER_AGENT}',
+                'user-agent': GENKIT_USER_AGENT,
             },
         ),
         (
             HttpOptions(headers={'user-agent': 'initial-u'}),
             {
-                'x-goog-api-client': GENKIT_CLIENT_HEADER,
-                'user-agent': f'initial-u {GENKIT_CLIENT_HEADER}',
+                'x-goog-api-client': GENKIT_USER_AGENT,
+                'user-agent': f'initial-u {GENKIT_USER_AGENT}',
             },
         ),
         (
             HttpOptions(headers={'x-goog-api-client': 'pre', 'user-agent': 'pre-u'}),
             {
-                'x-goog-api-client': f'pre {GENKIT_CLIENT_HEADER}',
-                'user-agent': f'pre-u {GENKIT_CLIENT_HEADER}',
+                'x-goog-api-client': f'pre {GENKIT_USER_AGENT}',
+                'user-agent': f'pre-u {GENKIT_USER_AGENT}',
             },
         ),
         (
             HttpOptions(timeout=10),
             {
-                'x-goog-api-client': GENKIT_CLIENT_HEADER,
-                'user-agent': GENKIT_CLIENT_HEADER,
+                'x-goog-api-client': GENKIT_USER_AGENT,
+                'user-agent': GENKIT_USER_AGENT,
             },
         ),
         (
             {'timeout': 5},
             {
-                'x-goog-api-client': GENKIT_CLIENT_HEADER,
-                'user-agent': GENKIT_CLIENT_HEADER,
+                'x-goog-api-client': GENKIT_USER_AGENT,
+                'user-agent': GENKIT_USER_AGENT,
             },
         ),
         (
             {'headers': {'one': '1'}},
             {
                 'one': '1',
-                'x-goog-api-client': GENKIT_CLIENT_HEADER,
-                'user-agent': GENKIT_CLIENT_HEADER,
+                'x-goog-api-client': GENKIT_USER_AGENT,
+                'user-agent': GENKIT_USER_AGENT,
+            },
+        ),
+        (
+            HttpOptions(headers={'X-Goog-Api-Client': 'custom-client', 'User-Agent': 'custom-agent'}),
+            {
+                'X-Goog-Api-Client': f'custom-client {GENKIT_USER_AGENT}',
+                'User-Agent': f'custom-agent {GENKIT_USER_AGENT}',
             },
         ),
     ],

@@ -68,7 +68,7 @@ from genkit.middleware import (
     MiddlewareRef,
     ModelHookParams,
 )
-from genkit.plugin_api import MiddlewarePlugin
+from genkit.plugin_api import ActionMetadata, Plugin
 from genkit.testing import (
     EchoModel,
     ScriptedModel,
@@ -111,12 +111,23 @@ class _PostMiddleware(BaseMiddleware):
         )
 
 
-class PrePostMiddlewarePlugin(MiddlewarePlugin):
+class PrePostPlugin(Plugin):
     name = 'extension-middleware'
-    middleware = [
-        GenerateMiddleware(cls=_PreMiddleware, name='pre_mw'),
-        GenerateMiddleware(cls=_PostMiddleware, name='post_mw'),
-    ]
+
+    async def init(self) -> list[Action]:
+        return []
+
+    async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
+        return None
+
+    async def list_actions(self) -> list[ActionMetadata]:
+        return []
+
+    def list_middleware(self) -> list[GenerateMiddleware]:
+        return [
+            GenerateMiddleware(cls=_PreMiddleware, name='pre_mw'),
+            GenerateMiddleware(cls=_PostMiddleware, name='post_mw'),
+        ]
 
 
 def setup_test() -> tuple[Genkit, EchoModel, ScriptedModel]:
@@ -1994,7 +2005,7 @@ def test_parse_dotprompt_use_invalid(raw: object) -> None:
 @pytest.mark.asyncio
 async def test_load_prompt_with_use_middleware() -> None:
     """Dotprompt frontmatter ``use`` runs middleware on prompt execution."""
-    ai = Genkit(model='echoModel', plugins=[PrePostMiddlewarePlugin()])
+    ai = Genkit(model='echoModel', plugins=[PrePostPlugin()])
     define_echo_model(ai)
 
     with tempfile.TemporaryDirectory() as tmpdir:

@@ -45,7 +45,7 @@ from opentelemetry.sdk.trace.sampling import Sampler
 from opentelemetry.trace import ProxyTracerProvider, get_current_span, span as trace_span
 
 from genkit import GenkitError
-from genkit.plugin_api import is_dev_environment
+from genkit.plugin_api import get_logger, is_dev_environment
 from genkit.telemetry import configure_instrumentation, is_instrumented_by
 
 from ._constants import (
@@ -58,7 +58,7 @@ from ._exporters import handle_logging_error, handle_metric_error, handle_tracin
 from ._metrics_exporter import GenkitMetricExporter
 from ._trace_exporter import GcpAdjustingTraceExporter, GenkitGCPExporter
 
-logger = structlog.get_logger(__name__)
+logger = get_logger(__name__)
 
 
 def _nothing_registered(provider: object) -> bool:

@@ -21,8 +21,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from genkit import Genkit, GenkitError, RuntimeErrorReason, get_logger
+from genkit import Genkit, GenkitError, RuntimeErrorReason
 from genkit.middleware import GenerateMiddlewareContext
+from genkit.plugin_api import get_logger
 
 from ._catalog import BASIC_CATALOG, A2uiCatalog
 from ._types import A2UI_CATALOG_VALUE_TYPE, BASIC_CATALOG_ID, DEFAULT_CATALOG_ID

@@ -1,7 +1,7 @@
 # Copyright 2025 Google LLC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Internal logger for genkit core. Not part of public API."""
+"""Genkit logging. ``get_logger`` is public via ``genkit.plugin_api``; the rest is internal."""
 
 from __future__ import annotations
 
@@ -212,7 +212,21 @@ def _interpolate_event(event: str, args: tuple[object, ...]) -> str:
 
 
 def get_logger(name: str | None = None) -> FilteringBoundLogger:
-    """Return a structlog bound logger that also feeds the Dev UI log sink."""
+    """Return a structlog logger whose lines also reach the Dev UI trace panel.
+
+    Same calls and kwargs as ``structlog.get_logger``. Under ``genkit start``,
+    each line is also exported to the Dev UI with the active trace and span IDs.
+
+    Example:
+        ```python
+        from genkit.plugin_api import get_logger
+
+        logger = get_logger(__name__)
+        logger.debug('menu lookup', restaurant_id='r-42', items=12)
+        # => console: menu lookup  restaurant_id=r-42 items=12
+        # => Dev UI:  same line, attached to the running flow's trace
+        ```
+    """
     return cast(FilteringBoundLogger, ExportTee(structlog.get_logger(name)))
 
 

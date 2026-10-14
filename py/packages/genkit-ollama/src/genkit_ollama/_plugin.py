@@ -27,7 +27,6 @@ from urllib.parse import urlsplit
 
 import httpx
 import ollama as ollama_api
-import structlog
 
 from genkit import ActionRunContext, ModelResponse
 from genkit.embedder import (
@@ -44,6 +43,7 @@ from genkit.plugin_api import (
     ActionKind,
     ActionMetadata,
     Plugin,
+    get_logger,
     loop_local_client,
     provider_error,
     to_json_schema,
@@ -58,7 +58,7 @@ from genkit_ollama._models import (
 )
 
 OLLAMA_PLUGIN_NAME = 'ollama'
-logger = structlog.get_logger(__name__)
+logger = get_logger(__name__)
 
 # Capability probing (POST /api/show), bounded the way the Go plugin bounds it:
 # a probe never waits longer than this, or the plugin timeout if that is

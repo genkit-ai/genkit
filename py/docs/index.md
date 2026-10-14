@@ -63,8 +63,6 @@
 
 ::: genkit.FormatterConfig
 
-::: genkit.DynamicActionProvider
-
 ## genkit.model
 
 ::: genkit.model.BackgroundAction
@@ -129,11 +127,15 @@
 
 ::: genkit.plugin_api.ActionKind
 
+::: genkit.plugin_api.DynamicActionProvider
+
 ::: genkit.plugin_api.StatusName
 
 ::: genkit.plugin_api.provider_error
 
-::: genkit.plugin_api.GENKIT_CLIENT_HEADER
+::: genkit.plugin_api.get_logger
+
+::: genkit.plugin_api.GENKIT_USER_AGENT
 
 ::: genkit.plugin_api.loop_local_client
 

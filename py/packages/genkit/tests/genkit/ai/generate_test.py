@@ -11,7 +11,7 @@ import json
 import pathlib
 import time
 from collections.abc import Awaitable, Callable, Sequence
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 import pytest
 import yaml
@@ -50,7 +50,7 @@ from genkit.middleware import (
     ModelHookParams,
     ToolHookParams,
 )
-from genkit.plugin_api import ActionKind, MiddlewarePlugin, provider_error
+from genkit.plugin_api import Action, ActionKind, ActionMetadata, Plugin, provider_error
 from genkit.testing import (
     ScriptedModel,
     define_echo_model,
@@ -588,17 +588,30 @@ class PostMiddleware(BaseMiddleware):
         )
 
 
-class ExtensionMiddlewarePlugin(MiddlewarePlugin):
-    """Test plugin subclass; mirrors ``genkit_middleware.Middleware``."""
+class ExtensionPlugin(Plugin):
+    """Middleware-only plugin; mirrors ``genkit_middleware.Middleware``."""
 
     name = 'extension-middleware'
+    middleware: ClassVar[list[GenerateMiddleware]] = []
+
+    async def init(self) -> list[Action]:
+        return []
+
+    async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
+        return None
+
+    async def list_actions(self) -> list[ActionMetadata]:
+        return []
+
+    def list_middleware(self) -> list[GenerateMiddleware]:
+        return list(type(self).middleware)
 
 
-class PostMiddlewarePlugin(ExtensionMiddlewarePlugin):
+class PostPlugin(ExtensionPlugin):
     middleware = [GenerateMiddleware(cls=PostMiddleware, name='post_mw')]
 
 
-class PrePostMiddlewarePlugin(ExtensionMiddlewarePlugin):
+class PrePostPlugin(ExtensionPlugin):
     middleware = [
         GenerateMiddleware(cls=PreMiddleware, name='pre_mw'),
         GenerateMiddleware(cls=PostMiddleware, name='post_mw'),
@@ -623,7 +636,7 @@ async def test_generate_accepts_inline_base_middleware_instance() -> None:
 @pytest.mark.asyncio
 async def test_generate_interleaves_inline_instances_and_middleware_refs() -> None:
     """Inline instances and ``MiddlewareRef`` entries preserve ``use=`` ordering together."""
-    ai = Genkit(plugins=[PostMiddlewarePlugin()])
+    ai = Genkit(plugins=[PostPlugin()])
     define_echo_model(ai)
 
     response = await ai.generate(
@@ -662,7 +675,7 @@ class ConfiguredPrefixMiddleware(BaseMiddleware[_PrefixConfig]):
         )
 
 
-class ConfiguredPrefixMiddlewarePlugin(ExtensionMiddlewarePlugin):
+class ConfiguredPrefixPlugin(ExtensionPlugin):
     middleware = [GenerateMiddleware(cls=ConfiguredPrefixMiddleware, name='configured_prefix_mw')]
 
 
@@ -699,7 +712,7 @@ async def test_generate_inline_instance_accepts_config_object() -> None:
 @pytest.mark.asyncio
 async def test_generate_middleware_ref_config_instantiates_class() -> None:
     """``MiddlewareRef(config=...)`` feeds ``**config`` into the class constructor."""
-    ai = Genkit(plugins=[ConfiguredPrefixMiddlewarePlugin()])
+    ai = Genkit(plugins=[ConfiguredPrefixPlugin()])
     define_echo_model(ai)
 
     response = await ai.generate(
@@ -866,7 +879,7 @@ async def test_prompt_call_runs_per_call_middleware() -> None:
 @pytest.mark.asyncio
 async def test_prompt_call_use_interleaves_inline_and_refs() -> None:
     """Prompts mix inline ``BaseMiddleware`` and ``MiddlewareRef`` like ``generate``."""
-    ai = Genkit(plugins=[PostMiddlewarePlugin()])
+    ai = Genkit(plugins=[PostPlugin()])
     define_echo_model(ai)
 
     my_prompt = ai.define_prompt(
@@ -918,7 +931,7 @@ async def test_prompt_stream_runs_middleware() -> None:
 @pytest.mark.asyncio
 async def test_generate_applies_middleware() -> None:
     """When middleware is provided, apply it via MiddlewareRef resolution."""
-    ai = Genkit(plugins=[PrePostMiddlewarePlugin()])
+    ai = Genkit(plugins=[PrePostPlugin()])
     define_echo_model(ai)
 
     response = await generate_action(
@@ -941,7 +954,7 @@ async def test_generate_applies_middleware() -> None:
 @pytest.mark.asyncio
 async def test_generate_middleware_next_fn_args_optional() -> None:
     """Can call next function without modifying params (pass params through)."""
-    ai = Genkit(plugins=[PostMiddlewarePlugin()])
+    ai = Genkit(plugins=[PostPlugin()])
     define_echo_model(ai)
 
     response = await generate_action(
@@ -1082,7 +1095,7 @@ class InjectContextMiddleware(BaseMiddleware):
         )
 
 
-class ContextMiddlewarePlugin(ExtensionMiddlewarePlugin):
+class ContextPlugin(ExtensionPlugin):
     middleware = [
         GenerateMiddleware(cls=AddContextMiddleware, name='add_ctx'),
         GenerateMiddleware(cls=InjectContextMiddleware, name='inject_ctx'),
@@ -1092,7 +1105,7 @@ class ContextMiddlewarePlugin(ExtensionMiddlewarePlugin):
 @pytest.mark.asyncio
 async def test_generate_middleware_can_modify_context() -> None:
     """Test that middleware can modify custom_context on the shared generate ctx."""
-    ai = Genkit(plugins=[ContextMiddlewarePlugin()])
+    ai = Genkit(plugins=[ContextPlugin()])
     define_echo_model(ai)
 
     response = await generate_action(
@@ -1358,8 +1371,17 @@ async def test_wrap_generate_called_per_turn() -> None:
             iters_b.append(params.iteration)
             return await next_fn(params, ctx)
 
-    class GenerateTrackerPlugin(MiddlewarePlugin):
+    class GenerateTrackerPlugin(Plugin):
         name = 'extension-middleware'
+
+        async def init(self) -> list[Action]:
+            return []
+
+        async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
+            return None
+
+        async def list_actions(self) -> list[ActionMetadata]:
+            return []
 
         def list_middleware(self) -> list[GenerateMiddleware]:
             return [
@@ -1437,8 +1459,17 @@ async def test_wrap_tool_called_on_tool_execution() -> None:
             tool_names.append(tool_req.name)
             return await next_fn(params, ctx)
 
-    class ToolTrackerPlugin(MiddlewarePlugin):
+    class ToolTrackerPlugin(Plugin):
         name = 'extension-middleware'
+
+        async def init(self) -> list[Action]:
+            return []
+
+        async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
+            return None
+
+        async def list_actions(self) -> list[ActionMetadata]:
+            return []
 
         def list_middleware(self) -> list[GenerateMiddleware]:
             return [GenerateMiddleware(cls=Tracker, name='track_tool', description='track tool')]

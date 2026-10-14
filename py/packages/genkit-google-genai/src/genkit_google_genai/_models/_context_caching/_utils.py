@@ -19,7 +19,6 @@
 import hashlib
 import json
 
-import structlog
 from genkit_google_genai._models._context_caching._constants import (
     CONTEXT_CACHE_SUPPORTED_MODELS,
     INVALID_ARGUMENT_MESSAGES,
@@ -28,8 +27,9 @@ from google.genai import types as genai_types
 
 from genkit import GenkitError
 from genkit.model import ModelRequest
+from genkit.plugin_api import get_logger
 
-logger = structlog.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def generate_cache_key(contents: list[genai_types.Content], model_name: str) -> str:
