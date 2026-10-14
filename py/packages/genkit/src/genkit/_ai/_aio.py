@@ -45,7 +45,7 @@ from genkit._ai._evaluator import (
     define_evaluator,
 )
 from genkit._ai._formats._builtin import built_in_formats
-from genkit._ai._formats._types import FormatDef
+from genkit._ai._formats._types import Formatter
 from genkit._ai._generate import (
     CallScope,
     define_generate_action,
@@ -607,8 +607,8 @@ class Genkit:
         """Register a custom embedder action."""
         return define_embedder(self._registry, name, fn, info, metadata, description)
 
-    def define_format(self, format: FormatDef) -> None:
-        """Register a custom output format."""
+    def define_format(self, format: Formatter) -> None:
+        """Register a custom output format. See `genkit.formats.Formatter`."""
         self._registry.register_value('format', format.name, format)
 
     async def lookup_model(self, name: str) -> Action[ModelRequest, ModelResponse, ModelResponseChunk] | None:

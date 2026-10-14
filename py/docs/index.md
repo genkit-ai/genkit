@@ -59,10 +59,6 @@
 
 ::: genkit.RequestData
 
-::: genkit.FormatDef
-
-::: genkit.FormatterConfig
-
 ::: genkit.DynamicActionProvider
 
 ## genkit.model
@@ -118,6 +114,14 @@
 ::: genkit.embedder.EmbedderSupports
 
 ::: genkit.embedder.EmbedderInfo
+
+## genkit.formats
+
+::: genkit.formats.Formatter
+
+::: genkit.formats.FormatterConfig
+
+::: genkit.formats.FormatHandler
 
 ## genkit.plugin_api
 

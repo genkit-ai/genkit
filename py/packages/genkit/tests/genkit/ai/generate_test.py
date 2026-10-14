@@ -19,7 +19,6 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import assert_type
 
 from genkit import Document, Genkit, Message, ModelResponse, ModelResponseChunk, MultipartToolResponse, Part, Tool, tool
-from genkit._ai._formats._types import FormatDef, Formatter, FormatterConfig
 from genkit._ai._generate import (
     DEFAULT_MAX_TURNS,
     CallScope,
@@ -41,6 +40,7 @@ from genkit._core._typing import (
     Role,
     ToolRequest,
 )
+from genkit.formats import FormatHandler, Formatter, FormatterConfig
 from genkit.middleware import (
     BaseMiddleware,
     GenerateHookParams,
@@ -7832,18 +7832,18 @@ async def test_generate_format_parse_error_keeps_model_text() -> None:
     class Recipe(BaseModel):
         title: str
 
-    class BoomFormat(FormatDef):
+    class BoomFormat(Formatter):
         def __init__(self) -> None:
             super().__init__('boom', FormatterConfig(format='json'))
 
-        def handle(self, schema: dict[str, object] | None) -> Formatter[object, object]:
+        def handle(self, schema: dict[str, object] | None) -> FormatHandler[object, object]:
             def message_parser(_msg: Message) -> object:
                 raise TypeError('parser exploded')
 
             def chunk_parser(_chunk: ModelResponseChunk) -> object:
                 return None
 
-            return Formatter(
+            return FormatHandler(
                 message_parser=message_parser,
                 chunk_parser=chunk_parser,
                 instructions=None,
@@ -8894,16 +8894,16 @@ async def test_generate_jsonl_format_drops_cut_off_last_line() -> None:
 
 @pytest.mark.asyncio
 async def test_generate_custom_format_parser_output_is_used_for_cut_off_reply() -> None:
-    """A custom FormatDef whose parser closes a cut-off object still gets its City back."""
+    """A custom Formatter whose parser closes a cut-off object still gets its City back."""
     ai = Genkit(model='scriptedModel')
     pm, _ = define_scripted_model(ai)
 
-    class ClosingFormat(FormatDef):
+    class ClosingFormat(Formatter):
         def __init__(self) -> None:
             super().__init__('closing', FormatterConfig(format='json'))
 
-        def handle(self, schema: dict[str, object] | None) -> Formatter[object, object]:
-            return Formatter(
+        def handle(self, schema: dict[str, object] | None) -> FormatHandler[object, object]:
+            return FormatHandler(
                 message_parser=lambda msg: json.loads(msg.text + '}'),
                 chunk_parser=lambda _chunk: None,
                 instructions=None,

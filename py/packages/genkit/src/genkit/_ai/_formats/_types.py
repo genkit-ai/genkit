@@ -14,7 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Format definition classes."""
+"""Output format types: Formatter, FormatterConfig, FormatHandler."""
 
 import abc
 from collections.abc import Callable
@@ -28,9 +28,10 @@ from genkit._core._base import GenkitModel
 
 
 class FormatterConfig(GenkitModel):
-    """SDK configuration for output formatters (format, content_type, etc.).
+    """Request settings a Formatter applies to every generate call that uses it.
 
-    Used by format definitions (json, array, enum, etc.) - not the schema type.
+    `format` and `content_type` replace the request's values; `constrained` is a default
+    the request can override. `default_instructions=False` skips the handler's instructions.
     """
 
     format: str | None = None
@@ -43,12 +44,10 @@ OutputT = TypeVar('OutputT')
 ChunkT = TypeVar('ChunkT')
 
 
-class Formatter(Generic[OutputT, ChunkT]):
-    """Base class representing a formatter for model outputs.
+class FormatHandler(Generic[OutputT, ChunkT]):
+    """Per-request parsers and prompt instructions returned by `Formatter.handle()`.
 
-    Formatters are responsible for parsing raw model messages and chunks
-    into structured data (types OutputT and ChunkT respectively) and potentially
-    providing instructions to the model on how to format its output.
+    `message_parser` builds `response.output`; `chunk_parser` builds `chunk.output`.
     """
 
     def __init__(
@@ -57,77 +56,85 @@ class Formatter(Generic[OutputT, ChunkT]):
         chunk_parser: Callable[[ModelResponseChunk], ChunkT],
         instructions: str | None,
     ) -> None:
-        """Initializes a Formatter.
+        """Initializes a FormatHandler.
 
         Args:
-            message_parser: A callable that parses a Message into type OutputT.
-            chunk_parser: A callable that parses a ModelResponseChunk into type ChunkT.
-            instructions: Optional instructions for the formatter.
+            message_parser: Parses the final model message into the output value.
+            chunk_parser: Parses a streamed chunk into the chunk output value.
+            instructions: Text appended to the prompt, or None for no instructions.
         """
         self.instructions: str | None = instructions
         self.__message_parser = message_parser
         self.__chunk_parser = chunk_parser
 
     def parse_message(self, message: Message) -> OutputT:
-        """Parses a message.
-
-        Args:
-            message: The message to parse.
-
-        Returns:
-            The parsed message.
-        """
+        """Parses the final model message."""
         return self.__message_parser(message)
 
     def parse_chunk(self, chunk: ModelResponseChunk) -> ChunkT:
-        """Parses a chunk.
-
-        Args:
-            chunk: The chunk to parse.
-
-        Returns:
-            The parsed chunk.
-        """
+        """Parses one streamed chunk."""
         return self.__chunk_parser(chunk)
 
 
-class FormatDef:
-    """Represents the definition of a specific output format.
+class Formatter:
+    """A named output format. Subclass it, implement `handle()`, register with `ai.define_format()`.
 
-    This class holds the name and configuration for a format and provides
-    a method (`handle`) to create a specific Formatter instance based on
-    an optional schema.
+    `handle()` runs once per generate call with the request's JSON schema (or None).
+
+    Example:
+        ```python
+        import csv
+        import io
+
+        from genkit import Genkit
+        from genkit.formats import FormatHandler, Formatter, FormatterConfig
+        from genkit_google_genai import GoogleAI
+
+
+        class CsvFormat(Formatter):
+            def __init__(self) -> None:
+                super().__init__('csv', FormatterConfig(content_type='text/csv'))
+
+            def handle(self, schema: dict[str, object] | None) -> FormatHandler:
+                return FormatHandler(
+                    message_parser=lambda msg: list(csv.DictReader(io.StringIO(msg.text))),
+                    chunk_parser=lambda chunk: chunk.text,
+                    instructions='Reply only with CSV. First row is the header.',
+                )
+
+
+        # 1. Register the format
+        ai = Genkit(plugins=[GoogleAI()], model='googleai/gemini-flash-latest')
+        ai.define_format(CsvFormat())
+
+        # 2. Request it by name
+        response = await ai.generate(prompt='List 2 dishes with price.', output_format='csv')
+
+        # 3. response.output is what message_parser returned
+        print(response.output)
+        # => [{'dish': 'Ramen', 'price': '14.50'}, {'dish': 'Pho', 'price': '13.00'}]
+        ```
     """
 
     def __init__(self, name: str, config: FormatterConfig) -> None:
-        """Initializes a FormatDef.
+        """Initializes a Formatter.
 
         Args:
-            name: The name of the format.
-            config: The configuration for the format.
+            name: Name passed as `output_format=` to select this format.
+            config: Request settings applied when this format is selected.
         """
         self.name: str = name
         self.config: FormatterConfig = config
 
     @abc.abstractmethod
-    def handle(self, schema: dict[str, object] | None) -> Formatter[Any, Any]:
-        """Handles the format.
+    def handle(self, schema: dict[str, object] | None) -> FormatHandler[Any, Any]:
+        """Returns the FormatHandler for one generate call.
 
         Args:
-            schema: Optional schema for the format.
-
-        Returns:
-            A Formatter instance.
+            schema: The request's output JSON schema, or None.
         """
         pass
 
-    def __call__(self, schema: dict[str, object] | None) -> Formatter[Any, Any]:
-        """Calls the handle method.
-
-        Args:
-            schema: Optional schema for the format.
-
-        Returns:
-            A Formatter instance.
-        """
+    def __call__(self, schema: dict[str, object] | None) -> FormatHandler[Any, Any]:
+        """Same as `handle(schema)`."""
         return self.handle(schema)

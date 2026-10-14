@@ -19,7 +19,7 @@
 import json
 from typing import Any
 
-from genkit._ai._formats._types import FormatDef, Formatter, FormatterConfig
+from genkit._ai._formats._types import FormatHandler, Formatter, FormatterConfig
 from genkit._ai._model import (
     Message,
     ModelResponseChunk,
@@ -28,7 +28,7 @@ from genkit._core._compat import override
 from genkit._core._extract_json import extract_json, extract_partial_json
 
 
-class JsonFormat(FormatDef):
+class JsonFormat(Formatter):
     """Defines a JSON format for use with AI models.
 
     This format instructs the model to output a valid JSON object. It is the default format
@@ -62,8 +62,8 @@ class JsonFormat(FormatDef):
         )
 
     @override
-    def handle(self, schema: dict[str, object] | None) -> Formatter[Any, Any]:
-        """Creates a Formatter for handling JSON data based on an optional schema.
+    def handle(self, schema: dict[str, object] | None) -> FormatHandler[Any, Any]:
+        """Creates a FormatHandler for handling JSON data based on an optional schema.
 
         Args:
             schema: An optional dictionary representing the JSON schema.
@@ -71,7 +71,7 @@ class JsonFormat(FormatDef):
                     conforms to this schema.
 
         Returns:
-            A Formatter instance configured for JSON handling, including
+            A FormatHandler instance configured for JSON handling, including
             parsers for messages and chunks, and instructions derived from
             the provided schema.
         """
@@ -117,7 +117,7 @@ Output should be in JSON format and conform to the following schema:
 ```
 """
 
-        return Formatter(
+        return FormatHandler(
             chunk_parser=chunk_parser,
             message_parser=message_parser,
             instructions=instructions,

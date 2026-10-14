@@ -1,6 +1,6 @@
 # Types
 
-Types exported from genkit, genkit.model, genkit.embedder, genkit.plugin_api, genkit.evaluator, genkit.telemetry, and genkit.exp.agent.
+Types exported from genkit, genkit.model, genkit.embedder, genkit.formats, genkit.plugin_api, genkit.evaluator, genkit.telemetry, and genkit.exp.agent.
 
 ## genkit
 
@@ -58,10 +58,6 @@ Types exported from genkit, genkit.model, genkit.embedder, genkit.plugin_api, ge
 
 ::: genkit.RequestData
 
-::: genkit.FormatDef
-
-::: genkit.FormatterConfig
-
 ::: genkit.DynamicActionProvider
 
 ## genkit.model
@@ -109,6 +105,14 @@ Types exported from genkit, genkit.model, genkit.embedder, genkit.plugin_api, ge
 ::: genkit.embedder.EmbedderSupports
 
 ::: genkit.embedder.EmbedderInfo
+
+## genkit.formats
+
+::: genkit.formats.Formatter
+
+::: genkit.formats.FormatterConfig
+
+::: genkit.formats.FormatHandler
 
 ## genkit.plugin_api
 

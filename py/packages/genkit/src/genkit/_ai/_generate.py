@@ -30,7 +30,7 @@ from typing import Any, TypeVar, cast
 from pydantic import BaseModel, ValidationError
 
 from genkit._ai import _aio
-from genkit._ai._formats._types import FormatDef, Formatter
+from genkit._ai._formats._types import FormatHandler, Formatter
 from genkit._ai._messages import inject_instructions
 from genkit._ai._model import (
     Message,
@@ -168,7 +168,7 @@ def log_output_parse(
     model: str | None,
     finish_reason: FinishReason | None,
     finish_message: str | None,
-    formatter: Formatter[Any, Any] | None,
+    formatter: FormatHandler[Any, Any] | None,
     message: Message | None,
 ) -> None:
     """Warn on an abnormal finish; debug when the formatter cannot parse."""
@@ -885,7 +885,7 @@ class ChunkAccumulator:
     def __init__(
         self,
         message_index: int,
-        formatter: Formatter[Any, Any] | None,
+        formatter: FormatHandler[Any, Any] | None,
         schema_type: type[BaseModel] | None = None,
     ) -> None:
         self.message_index = message_index
@@ -1011,7 +1011,7 @@ class ResolvedTurn:
 
     model: Action
     tools: list[Action]
-    formatter: Formatter[Any, Any] | None = None
+    formatter: FormatHandler[Any, Any] | None = None
 
 
 @dataclass
@@ -1663,7 +1663,7 @@ def stop_after_model(
     response: ModelResponse,
     options: GenerateActionOptions,
     current_turn: int,
-    formatter: Formatter[Any, Any] | None,
+    formatter: FormatHandler[Any, Any] | None,
 ) -> ModelResponse | None:
     """Return when this model call is the whole turn (ticket, no tools, or they asked to stop)."""
     generated_msg = response.message
@@ -1851,7 +1851,7 @@ def stamp_output(
     response: ModelResponse,
     options: GenerateActionOptions,
     call: GenerateRun,
-    formatter: Formatter[Any, Any] | None,
+    formatter: FormatHandler[Any, Any] | None,
 ) -> ModelResponse:
     """Put format and schema on the response they get back."""
     out = call.output
@@ -1879,8 +1879,8 @@ def stamp_output(
 def apply_format(
     *,
     options: GenerateActionOptions,
-    format_def: FormatDef | None,
-) -> tuple[GenerateActionOptions, Formatter[Any, Any] | None]:
+    format_def: Formatter | None,
+) -> tuple[GenerateActionOptions, FormatHandler[Any, Any] | None]:
     """Apply format definition to request, injecting instructions and output config."""
     if not format_def:
         return options, None
@@ -1923,7 +1923,7 @@ def apply_format(
     return (out_request, formatter)
 
 
-def resolve_instructions(*, formatter: Formatter[Any, Any], instructions: str | None) -> str | None:
+def resolve_instructions(*, formatter: FormatHandler[Any, Any], instructions: str | None) -> str | None:
     """Return custom instructions if provided, otherwise use formatter defaults."""
     if instructions is not None:
         return instructions
@@ -2004,7 +2004,7 @@ async def resolve_parameters(
     *,
     registry: Registry,
     options: GenerateActionOptions,
-) -> tuple[Action, list[Action], FormatDef | None]:
+) -> tuple[Action, list[Action], Formatter | None]:
     """Resolve model, tools, and format from registry for a generation request."""
     model_action = await resolve_model_action(registry, options.model)
 
@@ -2012,7 +2012,7 @@ async def resolve_parameters(
     # can wrap that call; it cannot add names we have not resolved.
     tools = await resolve_tools_from_options(registry, options.tools)
 
-    format_def: FormatDef | None = None
+    format_def: Formatter | None = None
     if options.output and options.output.format:
         looked_up_format = registry.lookup_value('format', options.output.format)
         if looked_up_format is None:
@@ -2021,7 +2021,7 @@ async def resolve_parameters(
                 message=f'Unable to resolve format {options.output.format}',
                 reason=RuntimeErrorReason.INVALID_INPUT,
             )
-        format_def = cast(FormatDef, looked_up_format)
+        format_def = cast(Formatter, looked_up_format)
 
     if options.output and options.output.json_schema is not None:
         json_schema = options.output.json_schema

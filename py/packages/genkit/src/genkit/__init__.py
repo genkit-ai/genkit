@@ -35,7 +35,6 @@ Example:
 """
 
 from genkit._ai._aio import Genkit
-from genkit._ai._formats._types import FormatDef, FormatterConfig
 from genkit._ai._prompt import (
     ModelStreamResponse,
     Prompt,
@@ -102,8 +101,6 @@ __all__ = [
     # HTTP request context for flow handlers
     'ContextProvider',
     'RequestData',
-    # Custom output formats and dynamic providers
-    'FormatDef',
-    'FormatterConfig',
+    # Dynamic action providers
     'DynamicActionProvider',
 ]
