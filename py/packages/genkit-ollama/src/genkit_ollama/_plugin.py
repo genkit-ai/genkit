@@ -238,10 +238,14 @@ class Ollama(Plugin):
             _require_no_arg_callable(request_headers)
             self._auth = _CallableHeaders(request_headers)
         self.timeout = timeout
-        self.client = loop_local_client(self._make_client)
         self._probes: dict[str, _ProbeResult] = {}
         # One probe per model at a time; concurrent first uses await the same task.
         self._inflight: dict[str, asyncio.Task[_ResolvedModel]] = {}
+
+    @loop_local_client
+    def client(self) -> ollama_api.AsyncClient:
+        """The per-event-loop client built with the static headers and timeout."""
+        return self._make_client()
 
     def _make_client(self) -> ollama_api.AsyncClient:
         """Build the Ollama AsyncClient for the current event loop.

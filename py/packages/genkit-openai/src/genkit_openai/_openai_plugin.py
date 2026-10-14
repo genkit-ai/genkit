@@ -371,16 +371,23 @@ class OpenAI(Plugin):
                 take, or repeats ``api_key`` or ``base_url``.
         """
         options = _client_kwargs(api_key=api_key, base_url=base_url, client_options=client_options)
+        self._options = options
         self._plugin_api_key: str | None = options.get('api_key')
-        self._runtime_client = loop_local_client(lambda: AsyncOpenAI(**options))
-        # Only used when the plugin has no key of its own. Its placeholder key is
-        # never sent: every call through it swaps in the caller's key first.
-        tenant_only_options: dict[str, Any] = {**options, 'api_key': 'unset'}
-        self._tenant_only_client = loop_local_client(lambda: AsyncOpenAI(**tenant_only_options))
         plugin_headers: dict[str, str] = dict(options.get('default_headers') or {})
         self._tenant_headers = {k: v for k, v in plugin_headers.items() if k.lower() not in _PLUGIN_ACCOUNT_HEADERS}
         self._pins_authorization = any(k.lower() == 'authorization' for k in plugin_headers)
         self._list_actions_cache: list[ActionMetadata] | None = None
+
+    @loop_local_client
+    def _runtime_client(self) -> AsyncOpenAI:
+        return AsyncOpenAI(**self._options)
+
+    @loop_local_client
+    def _tenant_only_client(self) -> AsyncOpenAI:
+        # Only used when the plugin has no key of its own. Its placeholder key is
+        # never sent: every call through it swaps in the caller's key first.
+        params: dict[str, Any] = {**self._options, 'api_key': 'unset'}
+        return AsyncOpenAI(**params)
 
     def _has_plugin_key(self) -> bool:
         return bool(self._plugin_api_key or os.environ.get('OPENAI_API_KEY'))
