@@ -198,7 +198,7 @@ async def test_botocore_errors_map_to_genkit_statuses(error: BotoCoreError, expe
         await model.generate(text_request())
 
     assert excinfo.value.status == expected_status
-    assert 'bedrock converse failed' in excinfo.value.original_message
+    assert 'bedrock converse failed' in excinfo.value.message
     assert excinfo.value.__cause__ is error
     assert excinfo.value.cause is error
 
@@ -214,7 +214,7 @@ async def test_timeout_is_deadline_exceeded(error: BotoCoreError) -> None:
     genkit_error = await generate_error(error)
 
     assert genkit_error.status == 'DEADLINE_EXCEEDED'
-    assert 'bedrock converse failed' in genkit_error.original_message
+    assert 'bedrock converse failed' in genkit_error.message
     assert genkit_error.__cause__ is error
 
 
@@ -272,7 +272,7 @@ async def test_connection_refused_is_unavailable(error: BotoCoreError) -> None:
     genkit_error = await generate_error(error)
 
     assert genkit_error.status == 'UNAVAILABLE'
-    assert 'bedrock converse failed' in genkit_error.original_message
+    assert 'bedrock converse failed' in genkit_error.message
     assert genkit_error.__cause__ is error
 
 
@@ -303,7 +303,7 @@ async def test_client_errors_map_to_genkit_statuses(code: str, expected_status: 
         await model.generate(text_request())
 
     assert excinfo.value.status == expected_status
-    assert 'bedrock converse failed' in excinfo.value.original_message
+    assert 'bedrock converse failed' in excinfo.value.message
     assert excinfo.value.__cause__ is error
 
 
@@ -352,7 +352,7 @@ async def test_unmapped_4xx_is_unknown_genkit_error(http_status: int) -> None:
     genkit_error = await generate_error(error)
 
     assert genkit_error.status == 'UNKNOWN'
-    assert genkit_error.original_message == (
+    assert genkit_error.message == (
         'bedrock converse failed: An error occurred (SomeFutureException) when calling the Converse operation: teapot'
     )
     assert str(genkit_error).count('teapot') == 1
@@ -460,7 +460,7 @@ async def test_mid_stream_errors_map_to_genkit_statuses(code: str, expected_stat
         await model.generate(text_request(), ActionRunContext(streaming_callback=chunks.append))
 
     assert excinfo.value.status == expected_status
-    assert 'bedrock converse stream failed' in excinfo.value.original_message
+    assert 'bedrock converse stream failed' in excinfo.value.message
     assert excinfo.value.__cause__ is error
     # Chunks already delivered stand; the stream is closed on the way out.
     assert len(chunks) == 1
@@ -481,7 +481,7 @@ async def test_mid_stream_connection_drop_is_unavailable() -> None:
         await model.generate(text_request(), ActionRunContext(streaming_callback=lambda _chunk: None))
 
     assert excinfo.value.status == 'UNAVAILABLE'
-    assert 'bedrock converse stream failed' in excinfo.value.original_message
+    assert 'bedrock converse stream failed' in excinfo.value.message
     assert excinfo.value.__cause__ is error
     assert transport.stream_closed
 
@@ -496,7 +496,7 @@ async def test_stream_botocore_errors_map_to_genkit_statuses() -> None:
         await model.generate(text_request(), ActionRunContext(streaming_callback=lambda _chunk: None))
 
     assert excinfo.value.status == 'DEADLINE_EXCEEDED'
-    assert 'bedrock converse stream failed' in excinfo.value.original_message
+    assert 'bedrock converse stream failed' in excinfo.value.message
     assert transport.stream_closed
 
 

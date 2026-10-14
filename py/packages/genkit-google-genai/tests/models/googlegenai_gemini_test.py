@@ -2788,7 +2788,7 @@ async def test_unmapped_4xx_is_unknown_genkit_error(mocker: MockerFixture, code:
 
     assert error.status == 'UNKNOWN'
     assert error.cause is api_error
-    assert error.original_message == 'Request payload too large'
+    assert error.message == 'Request payload too large'
 
 
 @pytest.mark.asyncio

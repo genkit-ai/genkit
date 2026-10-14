@@ -469,7 +469,7 @@ async def test_tool_response_with_non_dict_metadata_raises_invalid_argument_nami
         MultipartToolResponse(output=ShotOut(ok=True, label='lab'), metadata='nope')  # type: ignore[arg-type]
     assert raised.value.status == 'INVALID_ARGUMENT'
     assert raised.value.reason is RuntimeErrorReason.INVALID_INPUT
-    assert raised.value.original_message == 'MultipartToolResponse metadata must be a dict, got str.'
+    assert raised.value.message == 'MultipartToolResponse metadata must be a dict, got str.'
 
     ai = Genkit(model='scriptedModel')
     pm, _ = define_scripted_model(ai)
@@ -491,10 +491,7 @@ async def test_tool_response_with_non_part_in_parts_raises_invalid_part_naming_t
         MultipartToolResponse(output=ShotOut(ok=True, label='lab'), content=[object()])  # type: ignore[list-item]
     assert raised.value.status == 'INVALID_ARGUMENT'
     assert raised.value.reason is RuntimeErrorReason.INVALID_PART
-    assert (
-        raised.value.original_message
-        == 'MultipartToolResponse content must be a list of Parts, got object in the list.'
-    )
+    assert raised.value.message == 'MultipartToolResponse content must be a list of Parts, got object in the list.'
 
     ai = Genkit(model='scriptedModel')
     pm, _ = define_scripted_model(ai)

@@ -630,7 +630,7 @@ async def test_non_name_model_is_hard_error_not_default() -> None:
 
     assert 'model is int, expected str, ModelRef, or a model action' in str(exc_info.value)
     assert exc_info.value.reason is RuntimeErrorReason.INVALID_INPUT
-    assert 'INVALID_INPUT' not in exc_info.value.original_message
+    assert 'INVALID_INPUT' not in exc_info.value.message
     assert echo.last_request is None
 
 
@@ -645,7 +645,7 @@ async def test_non_name_config_is_hard_error() -> None:
 
     assert 'config is int, expected Mapping or BaseModel' in str(exc_info.value)
     assert exc_info.value.reason is RuntimeErrorReason.INVALID_INPUT
-    assert 'INVALID_INPUT' not in exc_info.value.original_message
+    assert 'INVALID_INPUT' not in exc_info.value.message
     assert echo.last_request is None
 
 
@@ -1025,7 +1025,7 @@ async def test_generate_rejects_wrong_config_class_on_ref() -> None:
     ) as exc_info:
         await ai.generate(model=ref, prompt='hi', config=OtherFamilyConfig(frequency_penalty=0.2))
     assert exc_info.value.reason is RuntimeErrorReason.INVALID_INPUT
-    assert 'INVALID_INPUT' not in exc_info.value.original_message
+    assert 'INVALID_INPUT' not in exc_info.value.message
 
 
 @pytest.mark.asyncio

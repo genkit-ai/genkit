@@ -464,7 +464,7 @@ async def test_generate_both_spellings_of_one_setting_raises_same_setting(config
         await ai.generate(model='strict', prompt='hi', config=config)
 
     _assert_rejected(err, fn)
-    assert err.value.original_message == 'strict: max_output_tokens and maxOutputTokens are the same setting; pass one'
+    assert err.value.message == 'strict: max_output_tokens and maxOutputTokens are the same setting; pass one'
 
 
 @pytest.mark.asyncio
@@ -480,7 +480,7 @@ async def test_generate_two_settings_each_in_both_spellings_names_both_pairs() -
         )
 
     _assert_rejected(err, fn)
-    assert err.value.original_message == (
+    assert err.value.message == (
         'strict: max_output_tokens and maxOutputTokens are the same setting; pass one; '
         'top_k and topK are the same setting; pass one'
     )
@@ -499,7 +499,7 @@ async def test_generate_both_spellings_of_plugin_declared_alias_raises_same_sett
         )
 
     _assert_rejected(err, fn)
-    assert err.value.original_message == 'gem: thinking_config and thinkingConfig are the same setting; pass one'
+    assert err.value.message == 'gem: thinking_config and thinkingConfig are the same setting; pass one'
 
 
 @pytest.mark.asyncio
@@ -515,7 +515,7 @@ async def test_generate_three_spellings_of_one_setting_lists_all_three() -> None
         await ai.generate(model='seeded', prompt='hi', config={'seedValue': 1, 'seed': 1, 'seed_value': 1})
 
     _assert_rejected(err, fn)
-    assert err.value.original_message == 'seeded: seed_value, seedValue, and seed are the same setting; pass one'
+    assert err.value.message == 'seeded: seed_value, seedValue, and seed are the same setting; pass one'
 
 
 @pytest.mark.asyncio
@@ -541,7 +541,7 @@ async def test_generate_both_spellings_typo_and_bad_value_all_in_one_error() -> 
         )
 
     _assert_rejected(err, fn)
-    assert err.value.original_message.startswith(
+    assert err.value.message.startswith(
         'strict: max_output_tokens and maxOutputTokens are the same setting; pass one; '
         "unknown config key 'temprature'; put provider-only settings in config['extra']; "
         "config 'top_p': "

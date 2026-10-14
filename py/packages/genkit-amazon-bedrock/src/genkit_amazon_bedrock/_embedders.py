@@ -433,7 +433,7 @@ class BedrockEmbedder:
                 mime, image = image_from_document(document)
             except GenkitError as error:
                 raise GenkitError(
-                    message=f'bedrock embed: document {index}: {_without_own_prefix(error.original_message)}',
+                    message=f'bedrock embed: document {index}: {_without_own_prefix(error.message)}',
                     status=error.status,
                     response_metadata=error.response_metadata,
                 ) from error
@@ -527,7 +527,7 @@ class BedrockEmbedder:
                         # but the inner message already names the plugin. Keep
                         # response_metadata so retry still honours Retry-After.
                         # Everything in here is the Bedrock call or its reply.
-                        detail = _without_own_prefix(error.original_message)
+                        detail = _without_own_prefix(error.message)
                         # Wrap the provider's own error, not the inner GenkitError,
                         # whose str() would repeat the whole message as the cause.
                         raise provider_error(

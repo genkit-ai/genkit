@@ -163,7 +163,7 @@ def test_normalize_config_rejects_unsupported_type() -> None:
     with pytest.raises(GenkitError, match='config is int, expected Mapping or BaseModel') as exc_info:
         normalize_config(config=123)
     assert exc_info.value.reason is RuntimeErrorReason.INVALID_INPUT
-    assert 'INVALID_INPUT' not in exc_info.value.original_message
+    assert 'INVALID_INPUT' not in exc_info.value.message
 
 
 def test_resolve_model_name_raises_when_default_is_not_string() -> None:
@@ -173,7 +173,7 @@ def test_resolve_model_name_raises_when_default_is_not_string() -> None:
     with pytest.raises(GenkitError, match='defaultModel is int, expected str or ModelRef') as exc_info:
         resolve_model_name(model=None, registry=registry)
     assert exc_info.value.reason is RuntimeErrorReason.INVALID_INPUT
-    assert 'INVALID_INPUT' not in exc_info.value.original_message
+    assert 'INVALID_INPUT' not in exc_info.value.message
 
 
 def test_resolve_model_name_empty_string_falls_back_to_default() -> None:
@@ -203,8 +203,8 @@ def test_resolve_model_name_empty_default_means_not_configured() -> None:
         resolve_model_name(model=None, registry=registry)
     assert empty.value.reason is RuntimeErrorReason.MODEL_NOT_FOUND
     assert omitted.value.reason is RuntimeErrorReason.MODEL_NOT_FOUND
-    assert 'MODEL_NOT_FOUND' not in empty.value.original_message
-    assert 'MODEL_NOT_FOUND' not in omitted.value.original_message
+    assert 'MODEL_NOT_FOUND' not in empty.value.message
+    assert 'MODEL_NOT_FOUND' not in omitted.value.message
 
 
 def test_normalize_config_preserves_explicit_none_on_model_config() -> None:
@@ -523,7 +523,7 @@ def test_assert_correct_config_class_uses_schema_only() -> None:
     ) as exc_info:
         assert_correct_config_class(config=OtherFamilyConfig(frequency_penalty=0.2), schema=CustomConfig)
     assert exc_info.value.reason is RuntimeErrorReason.INVALID_INPUT
-    assert 'INVALID_INPUT' not in exc_info.value.original_message
+    assert 'INVALID_INPUT' not in exc_info.value.message
 
 
 def test_resolve_model_ref_keeps_other_family_keys() -> None:
