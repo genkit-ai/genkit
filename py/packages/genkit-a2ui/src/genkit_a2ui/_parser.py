@@ -24,7 +24,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, cast
 
-from genkit import GenkitError, RuntimeErrorReason, get_logger
+from genkit import ErrorReason, GenkitError, get_logger
 
 from ._catalog import A2uiCatalog
 from ._types import DEFAULT_VERSION, SURFACE_ID_PLACEHOLDER, SURFACE_KEYS, Envelope, ValidateMode
@@ -76,7 +76,7 @@ class A2uiParseError(GenkitError):
         super().__init__(
             status='INTERNAL',
             message=message,
-            reason=RuntimeErrorReason.INVALID_OUTPUT,
+            reason=ErrorReason.INVALID_OUTPUT,
         )
 
 

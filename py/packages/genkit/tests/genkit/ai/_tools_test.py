@@ -14,7 +14,7 @@ from genkit._ai._tools import (
     restart_interrupt_error,
     run_tool_after_restart,
 )
-from genkit._core._error import GenkitError, RuntimeErrorReason
+from genkit._core._error import ErrorReason, GenkitError
 from genkit._core._middleware import GenerateMiddlewareContext
 from genkit.plugin_api import ActionKind
 
@@ -157,10 +157,10 @@ async def test_run_tool_after_restart_nested_interrupt_raises() -> None:
     with pytest.raises(GenkitError) as ei:
         await run_tool_after_restart(tool=action, restart_trp=restart_trp)
     assert ei.value.status == 'FAILED_PRECONDITION'
-    assert ei.value.reason is RuntimeErrorReason.INVALID_RESUME
+    assert ei.value.reason is ErrorReason.INVALID_RESUME
     assert 'interrupted again' in ei.value.message.lower()
     assert 'INVALID_RESUME' not in ei.value.message
-    assert isinstance(ei.value.cause, Interrupt)
+    assert isinstance(ei.value.__cause__, Interrupt)
 
 
 def test_restart_interrupt_error_accepts_string_metadata() -> None:
@@ -168,7 +168,7 @@ def test_restart_interrupt_error_accepts_string_metadata() -> None:
     intr = Interrupt('plain string reason')  # type: ignore[arg-type]
     err = restart_interrupt_error(intr)
     assert err.status == 'FAILED_PRECONDITION'
-    assert err.reason is RuntimeErrorReason.INVALID_RESUME
+    assert err.reason is ErrorReason.INVALID_RESUME
     assert err.message == 'Tool interrupted again during restart: plain string reason'
     assert 'INVALID_RESUME' not in err.message
 
@@ -189,10 +189,10 @@ async def test_run_tool_after_restart_nested_interrupt_includes_reason() -> None
     with pytest.raises(GenkitError) as ei:
         await run_tool_after_restart(tool=action, restart_trp=restart_trp)
     assert ei.value.status == 'FAILED_PRECONDITION'
-    assert ei.value.reason is RuntimeErrorReason.INVALID_RESUME
+    assert ei.value.reason is ErrorReason.INVALID_RESUME
     assert ei.value.message == ('Tool interrupted again during restart: Tool not in approved list: t3')
     assert 'INVALID_RESUME' not in ei.value.message
-    assert isinstance(ei.value.cause, Interrupt)
+    assert isinstance(ei.value.__cause__, Interrupt)
 
 
 def test_respond_wire_format_basic() -> None:

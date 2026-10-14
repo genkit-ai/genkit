@@ -138,5 +138,5 @@ async def test_thinking_budget_rejected_on_adaptive_only_model(ai: Genkit) -> No
 
     cause: BaseException | None = excinfo.value
     while isinstance(cause, GenkitError):
-        cause = cause.cause
+        cause = cause.__cause__
     assert isinstance(cause, BadRequestError)

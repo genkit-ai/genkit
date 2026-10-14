@@ -48,7 +48,7 @@ from genkit._ai._tools import (
 from genkit._core._action import ActionRunContext, StreamResponse
 from genkit._core._context import ContextProvider, RequestData
 from genkit._core._dap import DynamicActionProvider
-from genkit._core._error import GenkitError, GenkitRuntimeError, Interrupt, PublicError, RuntimeErrorReason
+from genkit._core._error import ErrorReason, Failure, GenkitError, Interrupt, PublicError
 from genkit._core._logger import get_logger
 from genkit._core._model import (
     Document,
@@ -79,7 +79,7 @@ __all__ = [
     # What came back
     'ModelResponse',
     'ModelResponseChunk',
-    'GenkitRuntimeError',
+    'Failure',
     'ModelStreamResponse',
     'StreamResponse',
     'FinishReason',
@@ -97,7 +97,7 @@ __all__ = [
     'Prompt',
     'GenkitError',
     'PublicError',
-    'RuntimeErrorReason',
+    'ErrorReason',
     'get_logger',
     # HTTP request context for flow handlers
     'ContextProvider',

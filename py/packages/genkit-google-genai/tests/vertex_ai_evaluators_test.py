@@ -305,7 +305,7 @@ async def test_evaluate_instances_http_status_is_classified(code: int, status: s
         await _factory().evaluate_instances({'fluencyInput': {}})
 
     assert raised.value.status == status
-    assert raised.value.response_metadata == {'retry_after_ms': 2000.0}
+    assert raised.value.retry_after_ms == 2000.0
 
 
 @pytest.mark.asyncio
@@ -320,7 +320,7 @@ async def test_evaluator_connection_refused_is_unavailable() -> None:
         await _factory().evaluate_instances({'fluencyInput': {}})
 
     assert raised.value.status == 'UNAVAILABLE'
-    assert raised.value.cause is refused
+    assert raised.value.__cause__ is refused
 
 
 @pytest.mark.asyncio
@@ -349,7 +349,7 @@ async def test_evaluate_instances_credential_failure_is_unauthenticated(auth_err
         await _factory().evaluate_instances({'fluencyInput': {}})
 
     assert raised.value.status == 'UNAUTHENTICATED'
-    assert raised.value.cause is auth_error
+    assert raised.value.__cause__ is auth_error
 
 
 @pytest.mark.asyncio
@@ -368,4 +368,4 @@ async def test_evaluator_fn_malformed_result_is_internal() -> None:
         await evaluator_fn(BaseDataPoint(input='Describe the tartine', output='Smoked salmon on rye'))
 
     assert raised.value.status == 'INTERNAL'
-    assert isinstance(raised.value.cause, KeyError)
+    assert isinstance(raised.value.__cause__, KeyError)

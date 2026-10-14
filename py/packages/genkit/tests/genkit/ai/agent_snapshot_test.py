@@ -26,7 +26,7 @@ from genkit._ai._agents._session_stores._inmemory_store import InMemorySessionSt
 from genkit._ai._agents._snapshot import is_heartbeat_expired, resolve_snapshot
 from genkit._ai._agents._types import TurnContext, TurnResult
 from genkit._core._action import ActionKind, ActionRunContext
-from genkit._core._error import GenkitError, RuntimeErrorReason
+from genkit._core._error import ErrorReason, GenkitError
 from genkit._core._model import AgentInput, AgentResult, Message, SessionSnapshot, SessionState
 from genkit._core._typing import (
     SnapshotStatus,
@@ -300,7 +300,7 @@ async def test_chat_points_at_detached_snapshot_so_send_needs_completed_or_reloa
     too_soon = await chat.send('too soon')
     assert too_soon.finish_reason == AgentFinishReason.FAILED
     assert too_soon.error is not None
-    assert too_soon.error.reason is RuntimeErrorReason.SNAPSHOT_NOT_RESUMABLE
+    assert too_soon.error.reason is ErrorReason.SNAPSHOT_NOT_RESUMABLE
     assert 'not resumable' in too_soon.error.message
 
     status = await task.abort()
@@ -312,7 +312,7 @@ async def test_chat_points_at_detached_snapshot_so_send_needs_completed_or_reloa
     still = await chat.send('still stranded')
     assert still.finish_reason == AgentFinishReason.FAILED
     assert still.error is not None
-    assert still.error.reason is RuntimeErrorReason.SNAPSHOT_NOT_RESUMABLE
+    assert still.error.reason is ErrorReason.SNAPSHOT_NOT_RESUMABLE
     assert 'not resumable' in still.error.message
 
     chat = agent.chat(session_id=session_id)
@@ -358,7 +358,7 @@ async def test_load_chat_by_session_hydrates_aborted_leaf() -> None:
     rejected = await reloaded.send('still there?')
     assert rejected.finish_reason == AgentFinishReason.FAILED
     assert rejected.error is not None
-    assert rejected.error.reason is RuntimeErrorReason.SNAPSHOT_NOT_RESUMABLE
+    assert rejected.error.reason is ErrorReason.SNAPSHOT_NOT_RESUMABLE
     assert 'not resumable' in rejected.error.message
 
     resumed = agent.chat(session_id=session_id)

@@ -45,7 +45,7 @@ def test_provider_error_maps_http_status_to_genkit_status(http_status: int, stat
     assert isinstance(error, GenkitError)
     assert error.status == status
     assert error.message == 'boom'
-    assert error.response_metadata is None
+    assert error.retry_after_ms is None
 
 
 @pytest.mark.parametrize('http_status', [413, 418, 422])
@@ -56,7 +56,7 @@ def test_provider_error_unmapped_4xx_is_unknown(http_status: int) -> None:
     assert isinstance(error, GenkitError)
     assert error.status == 'UNKNOWN'
     assert error.message == 'too large'
-    assert error.response_metadata is None
+    assert error.retry_after_ms is None
 
 
 def test_provider_error_explicit_status_wins_over_http_status() -> None:
@@ -66,7 +66,7 @@ def test_provider_error_explicit_status_wins_over_http_status() -> None:
     assert isinstance(error, GenkitError)
     assert error.status == 'UNAVAILABLE'
     assert error.message == 'overloaded'
-    assert error.response_metadata is None
+    assert error.retry_after_ms is None
 
 
 @pytest.mark.parametrize('http_status', [None, -1])
@@ -77,7 +77,7 @@ def test_provider_error_with_no_usable_status_is_unknown(http_status: int | None
     assert isinstance(error, GenkitError)
     assert error.status == 'UNKNOWN'
     assert error.message == 'reset'
-    assert error.response_metadata is None
+    assert error.retry_after_ms is None
 
 
 @pytest.mark.parametrize('header_name', ['Retry-After', 'retry-after'])
@@ -88,7 +88,7 @@ def test_provider_error_reads_retry_after_seconds_from_headers(header_name: str)
     assert isinstance(error, GenkitError)
     assert error.status == 'RESOURCE_EXHAUSTED'
     assert error.message == 'slow down'
-    assert error.response_metadata == {'retry_after_ms': 30000.0}
+    assert error.retry_after_ms == 30000.0
 
 
 @pytest.mark.parametrize(
@@ -110,7 +110,7 @@ def test_provider_error_reads_retry_after_http_date(
     assert isinstance(error, GenkitError)
     assert error.status == 'RESOURCE_EXHAUSTED'
     assert error.message == 'slow down'
-    assert error.response_metadata == {'retry_after_ms': expected_ms}
+    assert error.retry_after_ms == expected_ms
 
 
 def test_provider_error_explicit_retry_after_ms_wins_over_header() -> None:
@@ -125,7 +125,7 @@ def test_provider_error_explicit_retry_after_ms_wins_over_header() -> None:
     assert isinstance(error, GenkitError)
     assert error.status == 'RESOURCE_EXHAUSTED'
     assert error.message == 'slow down'
-    assert error.response_metadata == {'retry_after_ms': 1500}
+    assert error.retry_after_ms == 1500
 
 
 @pytest.mark.parametrize(
@@ -140,7 +140,7 @@ def test_provider_error_ignores_missing_or_malformed_retry_after(headers: dict[s
     assert isinstance(error, GenkitError)
     assert error.status == 'RESOURCE_EXHAUSTED'
     assert error.message == 'slow down'
-    assert error.response_metadata is None
+    assert error.retry_after_ms is None
 
 
 def test_provider_error_keeps_provider_message_and_cause() -> None:
@@ -153,12 +153,12 @@ def test_provider_error_keeps_provider_message_and_cause() -> None:
     assert isinstance(error, GenkitError)
     assert error.status == 'UNAUTHENTICATED'
     assert error.message == 'API key not valid'
-    assert error.cause is cause
+    assert error.__cause__ is cause
     assert error.__cause__ is cause
     assert str(error) == 'UNAUTHENTICATED: API key not valid'
     assert renamed.status == 'UNAUTHENTICATED'
     assert renamed.message == 'gemini rejected the key'
-    assert renamed.cause is cause
+    assert renamed.__cause__ is cause
     assert renamed.__cause__ is cause
     assert str(renamed) == 'UNAUTHENTICATED: gemini rejected the key: API key not valid'
 

@@ -9,7 +9,7 @@ import pytest
 import structlog
 from structlog.testing import capture_logs
 
-from genkit import Genkit, Message, ModelResponse, ModelResponseChunk, Part
+from genkit import ErrorReason, Genkit, Message, ModelResponse, ModelResponseChunk, Part
 from genkit._ai._generate import CallScope, generate_action
 from genkit._ai._model import resolve_model_arg
 from genkit._ai._tools import Interrupt
@@ -422,7 +422,7 @@ async def test_tool_stream_callback_failure_fails_generate(monkeypatch: pytest.M
     assert response.message is None
     assert response.error is not None
     assert response.error.status == 'INTERNAL'
-    assert response.error.reason is None
+    assert response.error.reason is ErrorReason.STREAM_CALLBACK_FAILED
     assert response.error.message == response.finish_message
     assert [message.role for message in response.messages] == [Role.USER, Role.MODEL, Role.TOOL]
 
@@ -456,7 +456,7 @@ async def test_model_stream_callback_failure_returns_closed_history() -> None:
     assert response.message is None
     assert response.error is not None
     assert response.error.status == 'INTERNAL'
-    assert response.error.reason is None
+    assert response.error.reason is ErrorReason.STREAM_CALLBACK_FAILED
     assert response.error.message == response.finish_message
     assert [message.role for message in response.messages] == [Role.USER]
 
@@ -513,6 +513,6 @@ async def test_resumed_tool_stream_callback_failure_returns_closed_history() -> 
     assert response.message is None
     assert response.error is not None
     assert response.error.status == 'INTERNAL'
-    assert response.error.reason is None
+    assert response.error.reason is ErrorReason.STREAM_CALLBACK_FAILED
     assert response.error.message == response.finish_message
     assert [message.role for message in response.messages] == [Role.USER, Role.MODEL, Role.TOOL]

@@ -44,7 +44,7 @@ from typing_extensions import Self, TypedDict, TypeVar
 
 from genkit._core import _typing as typing_mod
 from genkit._core._base import GenkitModel, dump_keeping_unknown
-from genkit._core._error import GenkitError, GenkitRuntimeError, RuntimeErrorReason
+from genkit._core._error import ErrorReason, Failure, GenkitError
 from genkit._core._extract_json import extract_json, extract_partial_json
 from genkit._core._logger import get_logger
 from genkit._core._partial import construct_partial
@@ -161,7 +161,7 @@ def misplaced_api_key_error() -> GenkitError:
     return GenkitError(
         status='INVALID_ARGUMENT',
         message=f'API key belongs in context.secrets, not config. {SECRETS_HINT}',
-        reason=RuntimeErrorReason.INVALID_INPUT,
+        reason=ErrorReason.INVALID_INPUT,
     )
 
 
@@ -971,7 +971,7 @@ class SessionSnapshot(GenkitModel):
     heartbeat_at: str | None = None
     status: SnapshotStatus | None = None
     finish_reason: AgentFinishReason | None = None
-    error: GenkitRuntimeError | None = None
+    error: Failure | None = None
     state: SessionState | None = None
 
     @field_validator('state', mode='before')
@@ -1028,7 +1028,7 @@ class AgentOutput(GenkitModel):
     message: Message | None = None
     artifacts: list[Artifact] | None = None
     finish_reason: AgentFinishReason | None = None
-    error: GenkitRuntimeError | None = None
+    error: Failure | None = None
     usage: GenerationUsage | None = None
 
     @field_validator('message', mode='before')
@@ -1259,7 +1259,7 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
     _schema_type: type[BaseModel] | None = PrivateAttr(None)
     # Wire fields (must be declared for extra='forbid' to accept wire responses)
     message: Message | None = None
-    error: GenkitRuntimeError | None = None
+    error: Failure | None = None
     finish_reason: FinishReason | None = None
     finish_message: str | None = None
     latency_ms: float | None = None
@@ -1300,10 +1300,10 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
             self.custom = {}
 
     def _mark_invalid_output(self, message: str) -> None:
-        self.error = GenkitRuntimeError(
+        self.error = Failure(
             status='INTERNAL',
             message=message,
-            details={'reason': RuntimeErrorReason.INVALID_OUTPUT.value},
+            details={'reason': ErrorReason.INVALID_OUTPUT.value},
         )
 
     @property
@@ -1678,7 +1678,7 @@ class MultipartToolResponse(GenkitModel, Generic[OutputT]):
             raise GenkitError(
                 status='INVALID_ARGUMENT',
                 message=f'MultipartToolResponse content must be a list of Parts, got {type(v).__name__}.',
-                reason=RuntimeErrorReason.INVALID_PART,
+                reason=ErrorReason.INVALID_PART,
             )
         out: list[Part] = []
         for item in v:
@@ -1690,7 +1690,7 @@ class MultipartToolResponse(GenkitModel, Generic[OutputT]):
                     message=(
                         f'MultipartToolResponse content must be a list of Parts, got {type(item).__name__} in the list.'
                     ),
-                    reason=RuntimeErrorReason.INVALID_PART,
+                    reason=ErrorReason.INVALID_PART,
                 ) from e
         return out
 
@@ -1701,7 +1701,7 @@ class MultipartToolResponse(GenkitModel, Generic[OutputT]):
             raise GenkitError(
                 status='INVALID_ARGUMENT',
                 message=f'MultipartToolResponse metadata must be a dict, got {type(v).__name__}.',
-                reason=RuntimeErrorReason.INVALID_INPUT,
+                reason=ErrorReason.INVALID_INPUT,
             )
         return v
 

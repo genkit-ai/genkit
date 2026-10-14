@@ -70,10 +70,11 @@ from genkit._core._background import (
     missing_operation_error,
     stamp_operation_action,
 )
-from genkit._core._error import GenkitError, GenkitRuntimeError, PublicError, RuntimeErrorReason
+from genkit._core._error import ErrorReason, Failure, GenkitError, PublicError, _StreamingCallbackError
 from genkit._core._logger import get_logger, is_debug_enabled
 from genkit._core._middleware import (
     BaseMiddleware,
+    EngineOnChunk,
     GenerateHookParams,
     GenerateMiddleware,
     GenerateMiddlewareContext,
@@ -104,7 +105,6 @@ from genkit._core._typing import (
     GenerateActionOutputConfig,
     MiddlewareRef,
     Operation,
-    OperationError,
     Role,
     ToolDefinition,
     ToolRequest,
@@ -118,7 +118,7 @@ DEFAULT_MAX_TURNS = 50
 TOOL_RAISES = (Exception, Interrupt)
 # What a hook or model can raise that becomes a FAILED turn (#6255). A
 # foreign CancelledError is re-raised by raise_if_foreign_cancel.
-TURN_FAILURES = (Exception, Interrupt, asyncio.CancelledError)
+TURN_FAILURES = (Exception, Interrupt, _StreamingCallbackError, asyncio.CancelledError)
 
 logger = get_logger(__name__)
 
@@ -135,33 +135,14 @@ HookWrap = Callable[
 ]
 
 
-class StreamingCallbackError(Exception):
-    """The caller's ``on_chunk`` raised while a model was streaming.
-
-    Generate wraps the caller's callback before handing it to the model, so a
-    failing client sink surfaces at ``ctx.send_chunk`` as this error, raised
-    from the original. ``cause`` holds the caller's exception.
-
-    It is the caller's failure, not the model's: a model that catches broad
-    exceptions around ``send_chunk`` should let it through, and middleware
-    should not retry or fall back on it. A plugin may still re-raise it as
-    another error ``from`` it, so check the ``__cause__`` chain, not only the
-    top exception.
-    """
-
-    def __init__(self, cause: Exception) -> None:
-        super().__init__(str(cause))
-        self.cause = cause
-
-
 def streaming_callback_cause(*, exc: BaseException) -> Exception | None:
-    """Find the caller's on_chunk exception through whatever wrapped it."""
+    """Find the on_chunk callback's exception through whatever wrapped it."""
     current: BaseException | None = exc
     seen: set[int] = set()
     while current is not None and id(current) not in seen:
         seen.add(id(current))
-        if isinstance(current, StreamingCallbackError):
-            return current.cause
+        if isinstance(current, _StreamingCallbackError) and isinstance(current.__cause__, Exception):
+            return current.__cause__
         current = current.__cause__
     return None
 
@@ -352,7 +333,7 @@ def resolve_middleware_from_use(
                     'a BaseMiddleware instance in use= so the framework can normalize it.'
                 ),
                 source='genkit.generate',
-                reason=RuntimeErrorReason.INVALID_INPUT,
+                reason=ErrorReason.INVALID_INPUT,
             )
         if not isinstance(defn, GenerateMiddleware):
             raise GenkitError(
@@ -363,7 +344,7 @@ def resolve_middleware_from_use(
                     '@ai.middleware(...), a middleware plugin, or inline use= normalization.'
                 ),
                 source='genkit.generate',
-                reason=RuntimeErrorReason.INVALID_INPUT,
+                reason=ErrorReason.INVALID_INPUT,
             )
         cfg = entry.config if isinstance(entry.config, dict) else None
         out.append(defn.instantiate(cfg))
@@ -785,7 +766,7 @@ async def run_generate(
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message=f'max turns cannot be negative, got {options.max_turns}',
-            reason=RuntimeErrorReason.INVALID_INPUT,
+            reason=ErrorReason.INVALID_INPUT,
         )
     # The veneer already checked ahead of its span. /util/generate (Dev UI,
     # reflection) starts here, so it fails before middleware or the model runs.
@@ -801,20 +782,14 @@ async def run_generate(
         options.tools = await expand_wildcard_tools(registry, options.tools)
 
     middleware = resolve_middleware_from_use(registry, options.use)
-    caller_on_chunk = on_chunk
 
-    def send_caller_chunk(chunk: ModelResponseChunk) -> None:
-        if caller_on_chunk is None:
-            return
-        try:
-            caller_on_chunk(chunk)
-        except Exception as exc:
-            raise StreamingCallbackError(exc) from exc
-
+    # ctx guards on_chunk: the caller's callback, or one middleware installs,
+    # raising fails the turn with STREAM_CALLBACK_FAILED instead of looking
+    # like a model failure that Retry or Fallback would act on.
     ctx = GenerateMiddlewareContext(
         ai=scope.ai,
         custom_context=dict(context or {}),
-        on_chunk=send_caller_chunk if caller_on_chunk is not None else None,
+        on_chunk=on_chunk,
         abort_signal=abort_signal if abort_signal is not None else asyncio.Event(),
     )
 
@@ -835,7 +810,7 @@ async def run_generate(
                     raise GenkitError(
                         status='INVALID_ARGUMENT',
                         message=(f"tool '{name}' is contributed by middleware but already declared elsewhere"),
-                        reason=RuntimeErrorReason.INVALID_INPUT,
+                        reason=ErrorReason.INVALID_INPUT,
                     )
                 # The child registry stores Actions; Tool is the handle authors return.
                 registry.register_action_from_instance(t.action())
@@ -870,7 +845,7 @@ async def run_generate(
             current_turn=current_turn,
             call=call,
         )
-    except Exception as exc:
+    except (Exception, _StreamingCallbackError) as exc:
         if streaming_callback_cause(exc=exc) is None:
             raise
         return box_from_exc(
@@ -951,7 +926,7 @@ class ChunkAccumulator:
             if downstream is not None:
                 downstream(self.make(role=role, chunk=chunk))
 
-        previous = ctx.replace_on_chunk(handler)
+        previous = ctx.replace_on_chunk(EngineOnChunk(handler))
         try:
             yield
         finally:
@@ -1140,7 +1115,7 @@ def box_dead_turn(
     messages: list[Message],
     finish_reason: FinishReason,
     finish_message: str,
-    error: GenkitRuntimeError,
+    error: Failure,
     request: ModelRequest | None = None,
 ) -> ModelResponse:
     """Stop before this turn closed: only completed rounds stay.
@@ -1160,7 +1135,7 @@ def box_dead_turn(
     if out.operation is not None and out.operation.error is None:
         # The ticket already started. The failure why lives on the
         # handle so check/cancel is not a clean start.
-        out.operation = out.operation.model_copy(update={'error': OperationError(message=finish_message)})
+        out.operation = out.operation.model_copy(update={'error': error})
     if request is not None:
         # The turn's own request wins. A provider may echo back the request its
         # middleware rewrote, and the caller asked about theirs. Go overrides
@@ -1195,7 +1170,7 @@ def boxed_finish_message(*, exc: BaseException, pipe_failed: bool) -> str:
     if published is not None:
         return published.message or INTERNAL_FINISH_MESSAGE
     if isinstance(exc, GenkitError) and (
-        exc.cause is None or isinstance(exc.cause, GenkitError) or exc.status != 'INTERNAL'
+        exc._cause is None or isinstance(exc._cause, GenkitError) or exc.status != 'INTERNAL'  # noqa: SLF001
     ):
         return exc.message or INTERNAL_FINISH_MESSAGE
     return INTERNAL_FINISH_MESSAGE
@@ -1214,7 +1189,7 @@ def box_from_exc(
     messages: list[Message],
     exc: BaseException,
     caller_stopped: bool,
-    reason: RuntimeErrorReason | None = None,
+    reason: ErrorReason | None = None,
     request: ModelRequest | None = None,
 ) -> ModelResponse:
     """Box a failure after generate has entered: closed history, unanswered turn dropped."""
@@ -1222,9 +1197,9 @@ def box_from_exc(
     pipe_failed = False
     if callback_cause is not None:
         # The stream pipe is framework plumbing, not a tool or model
-        # sentinel. Keep the sink's wording; drop any loop reason.
+        # sentinel. Keep the sink's wording; replace any loop reason.
         exc = callback_cause
-        reason = None
+        reason = ErrorReason.STREAM_CALLBACK_FAILED
         pipe_failed = True
     finish_message = boxed_finish_message(exc=exc, pipe_failed=pipe_failed)
     if caller_stopped:
@@ -1243,12 +1218,14 @@ def box_from_exc(
     if reason is not None and not caller_stopped:
         details = dict(details) if isinstance(details, Mapping) else {}
         details['reason'] = reason.value
+    # Failure.details is a JSON object (Go's map[string]any); drop an empty one.
+    failure_details = dict(cast(Mapping[str, Any], details)) if isinstance(details, Mapping) and details else None
     return box_dead_turn(
         response=response,
         messages=messages,
         finish_reason=FinishReason.ABORTED if caller_stopped else FinishReason.FAILED,
         finish_message=finish_message,
-        error=GenkitRuntimeError(status=status, message=finish_message, details=details),
+        error=Failure(status=status, message=finish_message, details=failure_details),
         request=request,
     )
 
@@ -1341,7 +1318,7 @@ async def resolve_door(
                 f"Cannot resume background model '{turn_model.name}'; "
                 'a background start cannot satisfy an interrupted tool turn'
             ),
-            reason=RuntimeErrorReason.INVALID_RESUME,
+            reason=ErrorReason.INVALID_RESUME,
         )
     options, formatter = apply_format(options=options, format_def=format_def)
     assert_valid_tool_names(turn_tools)
@@ -1373,7 +1350,7 @@ async def run_wrap_generate(
             messages=call.messages,
             finish_reason=FinishReason.ABORTED,
             finish_message='Generation aborted.',
-            error=GenkitRuntimeError(status='CANCELLED', message='Generation aborted.'),
+            error=Failure(status='CANCELLED', message='Generation aborted.'),
         )
 
     if resolved is None:
@@ -1742,10 +1719,10 @@ async def run_tools_or_stop(
             messages=list(options.messages),
             finish_reason=FinishReason.ABORTED,
             finish_message=finish_message,
-            error=GenkitRuntimeError(
+            error=Failure(
                 status='ABORTED',
                 message=finish_message,
-                details={'reason': RuntimeErrorReason.MAX_TURNS_EXCEEDED.value},
+                details={'reason': ErrorReason.MAX_TURNS_EXCEEDED.value},
             ),
         )
 
@@ -1755,7 +1732,7 @@ async def run_tools_or_stop(
             messages=list(options.messages),
             finish_reason=FinishReason.ABORTED,
             finish_message='Generation aborted.',
-            error=GenkitRuntimeError(status='CANCELLED', message='Generation aborted.'),
+            error=Failure(status='CANCELLED', message='Generation aborted.'),
         )
 
     known_tools = tool_map_from_actions(resolved.tools)
@@ -1780,10 +1757,10 @@ async def run_tools_or_stop(
             messages=list(options.messages),
             finish_reason=FinishReason.FAILED,
             finish_message=finish_message,
-            error=GenkitRuntimeError(
+            error=Failure(
                 status='NOT_FOUND',
                 message=finish_message,
-                details={'reason': RuntimeErrorReason.TOOL_NOT_FOUND.value},
+                details={'reason': ErrorReason.TOOL_NOT_FOUND.value},
             ),
         )
 
@@ -1800,7 +1777,7 @@ async def run_tools_or_stop(
             messages=list(options.messages),
             exc=exc,
             caller_stopped=ctx.abort_signal.is_set(),
-            reason=RuntimeErrorReason.TOOL_FAILED,
+            reason=ErrorReason.TOOL_FAILED,
         )
 
     if revised_model_msg:
@@ -1972,7 +1949,7 @@ def assert_valid_tool_names(tools: list[Action]) -> None:
             raise GenkitError(
                 status='INVALID_ARGUMENT',
                 message=(f"Cannot provide two tools with the same name: '{tool.name}' and '{seen[short]}'"),
-                reason=RuntimeErrorReason.INVALID_INPUT,
+                reason=ErrorReason.INVALID_INPUT,
             )
         seen[short] = tool.name
 
@@ -2002,7 +1979,7 @@ async def resolve_model_action(registry: Registry, model: str | None) -> Action:
         raise GenkitError(
             status='NOT_FOUND',
             message=message,
-            reason=RuntimeErrorReason.MODEL_NOT_FOUND,
+            reason=ErrorReason.MODEL_NOT_FOUND,
         )
     return action
 
@@ -2026,7 +2003,7 @@ async def resolve_parameters(
             raise GenkitError(
                 status='INVALID_ARGUMENT',
                 message=f'Unable to resolve format {options.output.format}',
-                reason=RuntimeErrorReason.INVALID_INPUT,
+                reason=ErrorReason.INVALID_INPUT,
             )
         format_def = cast(FormatDef, looked_up_format)
 
@@ -2125,7 +2102,7 @@ async def resolve_tool_requests(
             raise GenkitError(
                 status='NOT_FOUND',
                 message=f'Tool {tool_request.name} not found',
-                reason=RuntimeErrorReason.TOOL_NOT_FOUND,
+                reason=ErrorReason.TOOL_NOT_FOUND,
             )
         tool = tool_dict[tool_request.name]
         work.append((i, tool, tool_request_part))
@@ -2321,19 +2298,19 @@ async def resolve_tool(registry: Registry, tool_ref: str | Tool) -> Action:
             raise GenkitError(
                 status='NOT_FOUND',
                 message=f'Unable to resolve tool {tool_ref}',
-                reason=RuntimeErrorReason.TOOL_NOT_FOUND,
+                reason=ErrorReason.TOOL_NOT_FOUND,
             ) from e
         if kind != ActionKind.TOOL:
             raise GenkitError(
                 status='NOT_FOUND',
                 message=f'Unable to resolve tool {tool_ref}',
-                reason=RuntimeErrorReason.TOOL_NOT_FOUND,
+                reason=ErrorReason.TOOL_NOT_FOUND,
             )
     elif parse_dap_qualified_name(tool_ref) is not None:
         raise GenkitError(
             status='NOT_FOUND',
             message=f'Unable to resolve tool {tool_ref}',
-            reason=RuntimeErrorReason.TOOL_NOT_FOUND,
+            reason=ErrorReason.TOOL_NOT_FOUND,
         )
 
     tool = await registry.resolve_action(kind=ActionKind.TOOL, name=name)
@@ -2341,7 +2318,7 @@ async def resolve_tool(registry: Registry, tool_ref: str | Tool) -> Action:
         raise GenkitError(
             status='NOT_FOUND',
             message=f'Unable to resolve tool {tool_ref}',
-            reason=RuntimeErrorReason.TOOL_NOT_FOUND,
+            reason=ErrorReason.TOOL_NOT_FOUND,
         )
     return tool
 
@@ -2367,7 +2344,7 @@ async def resolve_resume_options(
                 "Cannot 'resume' generation unless the previous message is a model "
                 'message with at least one tool request.'
             ),
-            reason=RuntimeErrorReason.INVALID_RESUME,
+            reason=ErrorReason.INVALID_RESUME,
         )
 
     # Build updated_content in a new list — do NOT mutate last_message.content
@@ -2416,7 +2393,7 @@ async def resolve_resume_options(
         raise GenkitError(
             status='FAILED_PRECONDITION',
             message=f'Expected {len(tool_requests)} responses, but resolved to {len(tool_responses)}',
-            reason=RuntimeErrorReason.INVALID_RESUME,
+            reason=ErrorReason.INVALID_RESUME,
         )
 
     tool_message = Message(
@@ -2451,7 +2428,7 @@ async def resolve_resumed_tool(
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message='Expected a tool request part, got a different part type.',
-            reason=RuntimeErrorReason.INVALID_PART,
+            reason=ErrorReason.INVALID_PART,
         )
 
     tool_req_root = tool_request_part
@@ -2472,7 +2449,7 @@ async def resolve_resumed_tool(
                 message=(
                     f'Tool {tool_name!r} pendingMetadata must be a dict, got {type(pending_part_metadata).__name__}.'
                 ),
-                reason=RuntimeErrorReason.INVALID_INPUT,
+                reason=ErrorReason.INVALID_INPUT,
             )
         revised_trp = Part(
             tool_request=tool_req,
@@ -2530,7 +2507,7 @@ async def resolve_resumed_tool(
             raise GenkitError(
                 status='NOT_FOUND',
                 message=f'Tool {tool_req.name} not found',
-                reason=RuntimeErrorReason.TOOL_NOT_FOUND,
+                reason=ErrorReason.TOOL_NOT_FOUND,
             )
         try:
             executed = await run_restart(
@@ -2564,7 +2541,7 @@ async def resolve_resumed_tool(
         message=f"Unresolved tool request '{tool_req.name}' "
         + "was not handled by the 'resume' argument. You must supply replies or "
         + 'restarts for all interrupted tool requests.',
-        reason=RuntimeErrorReason.UNRESOLVED_TOOL_REQUEST,
+        reason=ErrorReason.UNRESOLVED_TOOL_REQUEST,
     )
 
 

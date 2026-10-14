@@ -39,8 +39,8 @@ from google.genai import types as genai_types
 from google.genai.errors import APIError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, Operation, Part, Role
-from genkit.model import ModelInfo, ModelRequest, OperationError, Supports
+from genkit import ActionRunContext, Failure, FinishReason, GenkitError, Message, ModelResponse, Operation, Part, Role
+from genkit.model import ModelInfo, ModelRequest, Supports
 
 # Quote autocomplete needs a Literal, so these aliases list the Veo ids each
 # backend autocompletes. ``veo_model`` takes ``Known*Veo | str`` so unlisted
@@ -216,7 +216,7 @@ def _from_veo_operation(*, api_op: genai_types.GenerateVideosOperation) -> Opera
     """
     op = Operation(id=api_op.name or '', done=bool(api_op.done))
     if api_op.error:
-        op.error = OperationError(message=_operation_error_message(error=api_op.error))
+        op.error = Failure(message=_operation_error_message(error=api_op.error))
         return op
 
     response = api_op.response
@@ -247,13 +247,11 @@ def _from_veo_operation(*, api_op: genai_types.GenerateVideosOperation) -> Opera
     # dropped every sample. Name that, don't hand back an empty success.
     if api_op.done and response.rai_media_filtered_count:
         reasons = [str(reason) for reason in (response.rai_media_filtered_reasons or []) if reason]
-        op.error = OperationError(
-            message='; '.join(reasons) or 'All generated videos were filtered out by safety filters.'
-        )
+        op.error = Failure(message='; '.join(reasons) or 'All generated videos were filtered out by safety filters.')
         return op
 
     if api_op.done and not content and not op.error:
-        op.error = OperationError(message='Operation completed but returned no playable media.')
+        op.error = Failure(message='Operation completed but returned no playable media.')
     return op
 
 

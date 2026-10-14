@@ -46,7 +46,7 @@ from genkit._ai._agents._session_stores._inmemory_store import InMemorySessionSt
 from genkit._ai._agents._types import TurnContext, TurnResult
 from genkit._ai._tools import Interrupt, ToolRunContext
 from genkit._core._action import ActionRunContext
-from genkit._core._error import GenkitError, GenkitRuntimeError
+from genkit._core._error import Failure, GenkitError
 from genkit._core._model import (
     AgentInit,
     AgentInput,
@@ -64,6 +64,7 @@ from genkit._core._typing import (
 )
 from genkit.exp import Genkit
 from genkit.exp.agent import Agent
+from genkit.plugin_api import StatusName
 from genkit.testing import ScriptedModel, define_scripted_model
 
 DEFAULT_STEP_TIMEOUT_S = 5.0
@@ -995,11 +996,11 @@ def test_dump_keeps_explicit_null_and_drops_unset() -> None:
 def test_snapshot_error_contains_is_exact_message() -> None:
     """Snapshot errorContains uses subset matching; a string field is exact."""
 
-    def snap(*, message: str, status: str | None = None) -> SessionSnapshotSchema:
+    def snap(*, message: str, status: StatusName | None = None) -> SessionSnapshotSchema:
         return SessionSnapshotSchema(
             snapshot_id='s',
             created_at='t',
-            error=GenkitRuntimeError(status=status, message=message),
+            error=Failure(status=status, message=message),
         )
 
     wrapped = snap(message='background: intentional failure (wrapped)')

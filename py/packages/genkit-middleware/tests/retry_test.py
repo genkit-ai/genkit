@@ -18,6 +18,7 @@
 
 import asyncio
 import time
+from collections.abc import Awaitable, Callable
 from typing import NoReturn
 from unittest.mock import AsyncMock, patch
 
@@ -27,6 +28,7 @@ from pydantic import ValidationError
 
 from genkit import (
     ActionRunContext,
+    ErrorReason,
     FinishReason,
     Genkit,
     GenkitError,
@@ -36,7 +38,7 @@ from genkit import (
     Part,
     Role,
 )
-from genkit.middleware import GenerateMiddlewareContext, ModelHookParams
+from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
 from genkit.model import ModelRequest
 from genkit.plugin_api import provider_error
 from genkit.testing import define_scripted_model
@@ -193,7 +195,7 @@ async def test_local_delay_wins_when_larger_than_retry_after(ctx: GenerateMiddle
             raise GenkitError(
                 message='Rate limited',
                 status='RESOURCE_EXHAUSTED',
-                response_metadata={'retry_after_ms': 10},
+                retry_after_ms=10,
             )
         return ModelResponse(message=None)
 
@@ -219,7 +221,7 @@ async def test_zero_retry_after_preserves_local_delay(ctx: GenerateMiddlewareCon
             raise GenkitError(
                 message='Rate limited',
                 status='RESOURCE_EXHAUSTED',
-                response_metadata={'retry_after_ms': 0},
+                retry_after_ms=0,
             )
         return ModelResponse(message=None)
 
@@ -245,7 +247,7 @@ async def test_retry_after_floor_is_applied_before_jitter(ctx: GenerateMiddlewar
             raise GenkitError(
                 message='Rate limited',
                 status='RESOURCE_EXHAUSTED',
-                response_metadata={'retry_after_ms': 5000},
+                retry_after_ms=5000,
             )
         return ModelResponse(message=None)
 
@@ -274,7 +276,7 @@ async def test_retry_after_is_capped_by_max_delay(ctx: GenerateMiddlewareContext
             raise GenkitError(
                 message='Rate limited',
                 status='RESOURCE_EXHAUSTED',
-                response_metadata={'retry_after_ms': 86_400_000},
+                retry_after_ms=86_400_000,
             )
         return ModelResponse(message=None)
 
@@ -304,7 +306,7 @@ async def test_small_retry_after_preserves_local_delay_cap(
             raise GenkitError(
                 message='Rate limited',
                 status='RESOURCE_EXHAUSTED',
-                response_metadata={'retry_after_ms': retry_after_ms},
+                retry_after_ms=retry_after_ms,
             )
         return ModelResponse(message=None)
 
@@ -332,7 +334,7 @@ async def test_retry_does_not_retry_unauthenticated_error(ctx: GenerateMiddlewar
         raise GenkitError(
             message='Invalid API key',
             status='UNAUTHENTICATED',
-            response_metadata={'retry_after_ms': 5000},
+            retry_after_ms=5000,
         )
 
     with (
@@ -428,7 +430,69 @@ async def test_retry_does_not_retry_when_caller_on_chunk_raises() -> None:
     assert response.finish_message == 'model sink closed'
     assert response.error is not None
     assert response.error.status == 'INTERNAL'
+    assert response.error.reason is ErrorReason.STREAM_CALLBACK_FAILED
     assert response.message is None
+
+
+class _RaisingChunkRewriter(BaseMiddleware):
+    """Forwards the first chunk, then its own chunk callback hits a bug."""
+
+    async def wrap_model(
+        self,
+        params: ModelHookParams,
+        ctx: GenerateMiddlewareContext,
+        next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+    ) -> ModelResponse:
+        seen = 0
+        previous = ctx.on_chunk
+
+        def rewrite(chunk: ModelResponseChunk) -> None:
+            nonlocal seen
+            seen += 1
+            if seen == 2:
+                raise KeyError('dish_id')
+            if previous is not None:
+                previous(chunk)
+
+        ctx.replace_on_chunk(rewrite)
+        try:
+            return await next_fn(params, ctx)
+        finally:
+            ctx.replace_on_chunk(previous)
+
+
+@pytest.mark.asyncio
+async def test_retry_does_not_retry_when_inner_middleware_chunk_callback_raises() -> None:
+    """Retry outside a middleware whose replaced on_chunk raises: one model call, STREAM_CALLBACK_FAILED."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('Smoked Salmon Tartine')]),
+        )
+    ] * 3
+    pm.chunks = [
+        [
+            ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('Smoked ')]),
+            ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('Salmon')]),
+        ]
+    ] * 3
+
+    stream = ai.generate_stream(
+        prompt='Suggest a dish.',
+        use=[Retry(max_retries=2, initial_delay_ms=0, no_jitter=True), _RaisingChunkRewriter()],
+    )
+    chunks = [chunk.text async for chunk in stream]
+    response = await stream.response
+
+    assert pm.request_count == 1
+    assert chunks == ['Smoked ']
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.error is not None
+    assert response.error.status == 'INTERNAL'
+    assert response.error.message == "'dish_id'"
+    assert response.error.reason is ErrorReason.STREAM_CALLBACK_FAILED
 
 
 @pytest.mark.asyncio

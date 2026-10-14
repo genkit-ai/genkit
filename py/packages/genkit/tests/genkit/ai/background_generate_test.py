@@ -25,13 +25,12 @@ from pydantic import BaseModel
 
 from genkit import Document, Genkit, Message, Part
 from genkit._core._action import ActionRunContext, _action_context
-from genkit._core._error import GenkitError, RuntimeErrorReason
+from genkit._core._error import ErrorReason, Failure, GenkitError
 from genkit._core._middleware import BaseMiddleware, GenerateHookParams, GenerateMiddlewareContext, ModelHookParams
 from genkit._core._model import ModelRequest, ModelResponse, ModelResponseChunk
 from genkit._core._typing import (
     FinishReason,
     Operation,
-    OperationError,
     Role,
     ToolRequest,
 )
@@ -236,7 +235,7 @@ class RaisesAfterStart(BaseMiddleware):
         raise GenkitError(
             status='FAILED_PRECONDITION',
             message='hook after start',
-            reason=RuntimeErrorReason.INVALID_INPUT,
+            reason=ErrorReason.INVALID_INPUT,
         )
 
 
@@ -250,7 +249,7 @@ async def test_generate_keeps_operation_when_wrap_generate_raises_after_start(ai
     assert response.finish_message == 'hook after start'
     assert response.error is not None
     assert response.error.status == 'FAILED_PRECONDITION'
-    assert response.error.reason is RuntimeErrorReason.INVALID_INPUT
+    assert response.error.reason is ErrorReason.INVALID_INPUT
     assert response.message is None
     assert response.operation is not None
     assert response.operation.id == 'bg-op-123'
@@ -270,7 +269,7 @@ class RaisesAfterStartModel(BaseMiddleware):
         raise GenkitError(
             status='FAILED_PRECONDITION',
             message='hook after start',
-            reason=RuntimeErrorReason.INVALID_INPUT,
+            reason=ErrorReason.INVALID_INPUT,
         )
 
 
@@ -300,7 +299,7 @@ async def test_generate_operation_failed_start_is_not_a_clean_start(ai: Genkit) 
     with pytest.raises(GenkitError) as raised:
         await ai.generate_operation(model='bg-model', prompt='a cat surfing', use=[RaisesAfterStart()])
     assert raised.value.status == 'FAILED_PRECONDITION'
-    assert raised.value.reason is RuntimeErrorReason.INVALID_INPUT
+    assert raised.value.reason is ErrorReason.INVALID_INPUT
     assert raised.value.message == 'hook after start'
 
 
@@ -377,7 +376,7 @@ async def test_generate_rejects_resume_on_background_model(ai: Genkit) -> None:
         )
 
     assert exc_info.value.status == 'FAILED_PRECONDITION'
-    assert exc_info.value.reason is RuntimeErrorReason.INVALID_RESUME
+    assert exc_info.value.reason is ErrorReason.INVALID_RESUME
     assert 'INVALID_RESUME' not in exc_info.value.message
     assert starts == []
 
@@ -639,7 +638,7 @@ def test_model_response_eq_uses_operation_snapshot() -> None:
 
     in_flight = ModelResponse(operation=Operation(id='job1', done=False))
     finished = ModelResponse(operation=Operation(id='job1', done=True, output={'url': 'x'}))
-    failed = ModelResponse(operation=Operation(id='job1', done=True, error=OperationError(message='boom')))
+    failed = ModelResponse(operation=Operation(id='job1', done=True, error=Failure(message='boom')))
     assert in_flight != finished
     assert finished != failed
 
@@ -1081,7 +1080,7 @@ async def test_wrap_generate_cannot_rescue_a_missing_model_name(ai: Genkit) -> N
         await ai.generate(model='no-such-model', prompt='hi', use=[Reroute(to='plain')])
 
     assert raised.value.status == 'NOT_FOUND'
-    assert raised.value.reason is RuntimeErrorReason.MODEL_NOT_FOUND
+    assert raised.value.reason is ErrorReason.MODEL_NOT_FOUND
 
 
 @pytest.mark.asyncio
@@ -1330,7 +1329,7 @@ async def test_wrap_generate_short_circuit_cannot_skip_a_missing_model(ai: Genki
         await ai.generate(model='no-such-model', prompt='hi', use=[ReturnsFlashWithoutNext()])
 
     assert raised.value.status == 'NOT_FOUND'
-    assert raised.value.reason is RuntimeErrorReason.MODEL_NOT_FOUND
+    assert raised.value.reason is ErrorReason.MODEL_NOT_FOUND
 
 
 @pytest.mark.asyncio

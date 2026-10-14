@@ -26,7 +26,7 @@ from genkit._ai._tools import (
     parts_to_wire,
 )
 from genkit._core._action import Action, create_action_key, parse_action_key
-from genkit._core._error import GenkitError, RuntimeErrorReason
+from genkit._core._error import ErrorReason, GenkitError
 from genkit._core._model import GenerateActionOptions
 from genkit._core._schema import to_json_schema
 from genkit._core._typing import (
@@ -66,7 +66,7 @@ def test_returning_hollow_parts_is_invalid_part_naming_the_tool() -> None:
     with pytest.raises(GenkitError) as ei:
         as_multipart_tool_response(hollow, tool_name='shot')
     assert ei.value.status == 'INVALID_ARGUMENT'
-    assert ei.value.reason is RuntimeErrorReason.INVALID_PART
+    assert ei.value.reason is ErrorReason.INVALID_PART
     assert ei.value.message == "Tool 'shot' content includes a part with no live payload."
 
 
@@ -95,7 +95,7 @@ def test_response_rejects_bare_part() -> None:
     with pytest.raises(GenkitError) as ei:
         MultipartToolResponse(output={'ok': True}, content=_png())  # type: ignore[arg-type]
     assert ei.value.status == 'INVALID_ARGUMENT'
-    assert ei.value.reason is RuntimeErrorReason.INVALID_PART
+    assert ei.value.reason is ErrorReason.INVALID_PART
     assert ei.value.message == 'MultipartToolResponse content must be a list of Parts, got Part.'
     assert 'INVALID_PART' not in ei.value.message
 
@@ -104,7 +104,7 @@ def test_response_rejects_non_part_parts() -> None:
     with pytest.raises(GenkitError) as ei:
         MultipartToolResponse(output={'ok': True}, content='not-a-part')  # type: ignore[arg-type]
     assert ei.value.status == 'INVALID_ARGUMENT'
-    assert ei.value.reason is RuntimeErrorReason.INVALID_PART
+    assert ei.value.reason is ErrorReason.INVALID_PART
     assert ei.value.message == 'MultipartToolResponse content must be a list of Parts, got str.'
     assert 'INVALID_PART' not in ei.value.message
 
@@ -334,7 +334,7 @@ async def test_unserializable_tool_output_is_invalid_argument() -> None:
     assert response.message is None
     assert response.error is not None
     assert response.error.status == 'INVALID_ARGUMENT'
-    assert response.error.reason is RuntimeErrorReason.TOOL_FAILED
+    assert response.error.reason is ErrorReason.TOOL_FAILED
     assert [message.role for message in response.messages] == ['user']
 
 

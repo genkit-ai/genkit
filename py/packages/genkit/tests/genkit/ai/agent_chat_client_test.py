@@ -31,12 +31,12 @@ from genkit._ai._agents._client import (
     DetachedTask,
     TurnDriver,
 )
-from genkit._ai._agents._runtime import AgentInitError, SessionRunner
+from genkit._ai._agents._runtime import AgentInitError, SessionRunner, to_error_details
 from genkit._ai._agents._types import StateManagement, TurnResult
 from genkit._ai._json_patch import apply_json_patch
 from genkit._core._action import ActionRunContext
 from genkit._core._channel import CloseableQueue
-from genkit._core._error import GenkitError, GenkitRuntimeError, Interrupt, RuntimeErrorReason
+from genkit._core._error import ErrorReason, Failure, GenkitError, Interrupt
 from genkit._core._model import (
     AgentInit,
     AgentInput,
@@ -1640,9 +1640,9 @@ def _flaky(
     return _define_turns(ai, name, handle, store=store)
 
 
-def _assert_failed(res: Any, *, message: str) -> GenkitRuntimeError:  # noqa: ANN401
+def _assert_failed(res: Any, *, message: str) -> Failure:  # noqa: ANN401
     assert res.finish_reason == AgentFinishReason.FAILED
-    assert isinstance(res.error, GenkitRuntimeError)
+    assert isinstance(res.error, Failure)
     assert res.error.message == message
     assert res.message is None
     assert res.text == ''
@@ -1707,12 +1707,12 @@ async def test_send_on_failed_turn_with_reason_reads_reason() -> None:
         Genkit(),
         'failReason',
         store=InMemorySessionStore(),
-        fail=GenkitError(status='INTERNAL', message='tool died', reason=RuntimeErrorReason.TOOL_FAILED),
+        fail=GenkitError(status='INTERNAL', message='tool died', reason=ErrorReason.TOOL_FAILED),
     )
     res = await agent.chat().send('please fail now')
     err = _assert_failed(res, message='tool died')
     assert err.status == 'INTERNAL'
-    assert err.reason is RuntimeErrorReason.TOOL_FAILED
+    assert err.reason is ErrorReason.TOOL_FAILED
 
 
 @pytest.mark.asyncio
@@ -1849,7 +1849,7 @@ async def test_send_with_snapshot_id_on_agent_without_store_raises_genkit_error(
     with pytest.raises(GenkitError) as exc:
         await chat.send('hi')
     assert exc.value.status == 'FAILED_PRECONDITION'
-    assert exc.value.reason is RuntimeErrorReason.SESSION_STORE_NOT_CONFIGURED
+    assert exc.value.reason is ErrorReason.SESSION_STORE_NOT_CONFIGURED
     # Same type the client raises for client-side misuse; no wrapper in between.
     assert isinstance(exc.value, AgentInitError)
     assert chat.messages == []
@@ -1879,7 +1879,7 @@ async def test_send_over_dropped_connection_raises_unavailable_and_keeps_last_go
     with pytest.raises(GenkitError) as exc:
         await chat.send('next')
     assert exc.value.status == 'UNAVAILABLE'
-    assert isinstance(exc.value.cause, ConnectionError)
+    assert isinstance(exc.value.__cause__, ConnectionError)
     assert chat.state == {'n': 1}
     assert chat.messages == messages_before
 
@@ -1991,8 +1991,8 @@ async def test_send_with_invalid_custom_state_returns_response_with_error() -> N
     agent = _define_turns(Genkit(), 'badState', handle, store=None, state_schema=_TaskState)
     res = await agent.chat(state={'done': 'nope'}).send('hi')  # type: ignore[arg-type]
     assert res.finish_reason == AgentFinishReason.FAILED
-    assert isinstance(res.error, GenkitRuntimeError)
-    assert res.error.reason is RuntimeErrorReason.INVALID_INPUT
+    assert isinstance(res.error, Failure)
+    assert res.error.reason is ErrorReason.INVALID_INPUT
     assert res.error.status == 'INVALID_ARGUMENT'
     assert res.state is None
 
@@ -2208,3 +2208,39 @@ async def test_send_on_failed_turn_without_snapshot_falls_back_to_last_completed
     # 3. f1 can't be resumed, so the caller is pointed at s1.
     assert res.finish_reason == AgentFinishReason.FAILED
     assert res.snapshot_id == 's1'
+
+
+class _ClientResponseError(Exception):
+    """Stands in for aiohttp.ClientResponseError, whose ``status`` is an int HTTP code."""
+
+    def __init__(self) -> None:
+        super().__init__('429, message=Too Many Requests')
+        self.status = 429
+        self.details = {'retry': 'later'}
+
+
+@pytest.mark.parametrize(
+    ('exc', 'status', 'message', 'details'),
+    [
+        (
+            GenkitError(status='NOT_FOUND', message='no order A-17', reason=ErrorReason.TOOL_NOT_FOUND),
+            'NOT_FOUND',
+            'no order A-17',
+            {'reason': 'TOOL_NOT_FOUND'},
+        ),
+        (GenkitError(status='ABORTED', message='stopped'), 'ABORTED', 'stopped', None),
+        (asyncio.CancelledError(), 'CANCELLED', 'Internal failure', None),
+        (TimeoutError('kitchen printer timed out'), 'DEADLINE_EXCEEDED', 'kitchen printer timed out', None),
+        (_ClientResponseError(), 'INTERNAL', '429, message=Too Many Requests', None),
+        (ValueError('bad table number'), 'INTERNAL', 'bad table number', None),
+    ],
+)
+def test_to_error_details_classifies_status_like_go(
+    exc: BaseException, status: str, message: str, details: dict[str, Any] | None
+) -> None:
+    """Only a GenkitError names its status; a foreign int ``.status`` (aiohttp's 429) is INTERNAL."""
+    failure = to_error_details(exc)
+
+    assert failure.status == status
+    assert failure.message == message
+    assert failure.details == details

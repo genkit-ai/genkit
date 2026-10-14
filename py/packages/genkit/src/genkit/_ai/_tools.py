@@ -26,7 +26,7 @@ from typing import Any, Union, cast, get_args, get_origin
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from genkit._core._action import Action, ActionKind, ActionRunContext, resolve_type_hints
-from genkit._core._error import GenkitError, Interrupt, RuntimeErrorReason
+from genkit._core._error import ErrorReason, GenkitError, Interrupt
 from genkit._core._logger import get_logger
 from genkit._core._middleware import GenerateMiddlewareContext
 from genkit._core._model import MultipartToolResponse, Part, as_part, as_resumed
@@ -59,7 +59,7 @@ def normalize_pending_content(pending_content: object, *, tool_name: str) -> lis
             message=(
                 f'Tool {tool_name!r} pendingContent must be a list of parts, got {type(pending_content).__name__}.'
             ),
-            reason=RuntimeErrorReason.INVALID_PART,
+            reason=ErrorReason.INVALID_PART,
         )
     out: list[dict[str, Any]] = []
     for i, item in enumerate(pending_content):
@@ -74,14 +74,14 @@ def normalize_pending_content(pending_content: object, *, tool_name: str) -> lis
                     status='INVALID_ARGUMENT',
                     message=f'Tool {tool_name!r} pendingContent[{i}]: {detail}',
                     cause=e,
-                    reason=RuntimeErrorReason.INVALID_PART,
+                    reason=ErrorReason.INVALID_PART,
                 ) from e
             except (ValueError, TypeError) as e:
                 raise GenkitError(
                     status='INVALID_ARGUMENT',
                     message=f'Tool {tool_name!r} pendingContent[{i}] must be a part, got {type(item).__name__}.',
                     cause=e,
-                    reason=RuntimeErrorReason.INVALID_PART,
+                    reason=ErrorReason.INVALID_PART,
                 ) from e
         dumped = dump_part(part, tool_name=tool_name, what=f'pendingContent[{i}]')
         if not wire_part_is_live(dumped):
@@ -162,7 +162,7 @@ def dump_part(part: Part, *, tool_name: str | None = None, what: str = 'content'
             status='INVALID_ARGUMENT',
             message=message,
             cause=e,
-            reason=RuntimeErrorReason.INVALID_PART,
+            reason=ErrorReason.INVALID_PART,
         ) from e
 
 
@@ -170,7 +170,7 @@ def live_payload_error(*, tool_name: str, where: str) -> GenkitError:
     return GenkitError(
         status='INVALID_ARGUMENT',
         message=f'Tool {tool_name!r} {where} includes a part with no live payload.',
-        reason=RuntimeErrorReason.INVALID_PART,
+        reason=ErrorReason.INVALID_PART,
     )
 
 
@@ -184,7 +184,7 @@ def require_live_part(part: Part, *, tool_name: str | None = None, where: str = 
     raise GenkitError(
         status='INVALID_ARGUMENT',
         message='MultipartToolResponse content includes a part with no live payload.',
-        reason=RuntimeErrorReason.INVALID_PART,
+        reason=ErrorReason.INVALID_PART,
     )
 
 
@@ -204,7 +204,7 @@ def dump_tool_output(value: Any, *, tool_name: str | None = None, what: str = 'o
             status='INVALID_ARGUMENT',
             message=f'Tool {name!r} {what} is not JSON-serializable.',
             cause=e,
-            reason=RuntimeErrorReason.INVALID_INPUT,
+            reason=ErrorReason.INVALID_INPUT,
         ) from e
 
 
@@ -219,7 +219,7 @@ def dump_tool_metadata(value: dict[str, Any] | None, *, tool_name: str | None = 
     raise GenkitError(
         status='INVALID_ARGUMENT',
         message=f'Tool {name!r} metadata is not a JSON object.',
-        reason=RuntimeErrorReason.INVALID_INPUT,
+        reason=ErrorReason.INVALID_INPUT,
     )
 
 
@@ -342,7 +342,7 @@ def restart_interrupt_error(interrupt: Interrupt) -> GenkitError:
         status='FAILED_PRECONDITION',
         message=message,
         cause=interrupt,
-        reason=RuntimeErrorReason.INVALID_RESUME,
+        reason=ErrorReason.INVALID_RESUME,
     )
 
 

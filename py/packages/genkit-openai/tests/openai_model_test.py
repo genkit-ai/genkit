@@ -1800,7 +1800,7 @@ async def test_generate_classifies_known_mid_stream_error(sample_request: ModelR
     assert isinstance(error, GenkitError)
     assert error.status == 'RESOURCE_EXHAUSTED'
     assert error.message == 'Rate limit reached for gpt-4o'
-    assert type(error.cause) is APIError
+    assert type(error.__cause__) is APIError
 
 
 @pytest.mark.asyncio
@@ -1815,7 +1815,7 @@ async def test_generate_unknown_mid_stream_error_is_unknown_genkit_error(sample_
     assert isinstance(error, GenkitError)
     assert error.status == 'UNKNOWN'
     assert error.message == 'Upstream reset'
-    assert type(error.cause) is APIError
+    assert type(error.__cause__) is APIError
 
 
 class _DroppingStream(httpx.AsyncByteStream):
@@ -1868,4 +1868,4 @@ async def test_generate_classifies_a_stream_cut_mid_read(
 
     assert chunks == ['Grilled']
     assert exc_info.value.status == status
-    assert exc_info.value.cause is drop
+    assert exc_info.value.__cause__ is drop

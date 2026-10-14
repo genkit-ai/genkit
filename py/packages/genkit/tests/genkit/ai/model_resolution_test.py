@@ -32,7 +32,7 @@ from genkit._ai._model import (
     resolve_model_ref,
 )
 from genkit._core._action import ActionRunContext
-from genkit._core._error import GenkitError, RuntimeErrorReason
+from genkit._core._error import ErrorReason, GenkitError
 from genkit._core._model import EmbedRequest, Message, ModelRequest, ModelResponse, Part
 from genkit._core._registry import Registry
 from genkit._core._typing import EmbedResponse, Operation, Role
@@ -162,7 +162,7 @@ def test_normalize_config_rejects_unsupported_type() -> None:
     """A leftover int is INVALID_ARGUMENT, same class of reject as model=123."""
     with pytest.raises(GenkitError, match='config is int, expected Mapping or BaseModel') as exc_info:
         normalize_config(config=123)
-    assert exc_info.value.reason is RuntimeErrorReason.INVALID_INPUT
+    assert exc_info.value.reason is ErrorReason.INVALID_INPUT
     assert 'INVALID_INPUT' not in exc_info.value.message
 
 
@@ -172,7 +172,7 @@ def test_resolve_model_name_raises_when_default_is_not_string() -> None:
     registry.register_value('defaultModel', 'defaultModel', 123)
     with pytest.raises(GenkitError, match='defaultModel is int, expected str or ModelRef') as exc_info:
         resolve_model_name(model=None, registry=registry)
-    assert exc_info.value.reason is RuntimeErrorReason.INVALID_INPUT
+    assert exc_info.value.reason is ErrorReason.INVALID_INPUT
     assert 'INVALID_INPUT' not in exc_info.value.message
 
 
@@ -201,8 +201,8 @@ def test_resolve_model_name_empty_default_means_not_configured() -> None:
         resolve_model_name(model='', registry=registry)
     with pytest.raises(GenkitError, match='No model configured') as omitted:
         resolve_model_name(model=None, registry=registry)
-    assert empty.value.reason is RuntimeErrorReason.MODEL_NOT_FOUND
-    assert omitted.value.reason is RuntimeErrorReason.MODEL_NOT_FOUND
+    assert empty.value.reason is ErrorReason.MODEL_NOT_FOUND
+    assert omitted.value.reason is ErrorReason.MODEL_NOT_FOUND
     assert 'MODEL_NOT_FOUND' not in empty.value.message
     assert 'MODEL_NOT_FOUND' not in omitted.value.message
 
@@ -522,7 +522,7 @@ def test_assert_correct_config_class_uses_schema_only() -> None:
         GenkitError, match=r'config must be .+\.CustomConfig or a mapping, got .+\.OtherFamilyConfig'
     ) as exc_info:
         assert_correct_config_class(config=OtherFamilyConfig(frequency_penalty=0.2), schema=CustomConfig)
-    assert exc_info.value.reason is RuntimeErrorReason.INVALID_INPUT
+    assert exc_info.value.reason is ErrorReason.INVALID_INPUT
     assert 'INVALID_INPUT' not in exc_info.value.message
 
 

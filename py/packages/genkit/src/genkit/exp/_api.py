@@ -34,7 +34,7 @@ from genkit._ai._agents._session import SessionStore, StateT, get_current_sessio
 from genkit._ai._agents._types import ChunkTransform, StateTransform
 from genkit._ai._aio import Genkit as StableGenkit
 from genkit._core._action import Action, ActionKind
-from genkit._core._error import GenkitError, RuntimeErrorReason
+from genkit._core._error import ErrorReason, GenkitError
 from genkit._core._middleware import BaseMiddleware
 from genkit._core._model import ModelConfigDict, ModelRef, ModelRefConfigT, Part
 from genkit._core._protocols import SessionLike
@@ -61,7 +61,7 @@ class Genkit(StableGenkit):
             raise GenkitError(
                 status='NOT_FOUND',
                 message=f"Agent '{name}' not found in registry.",
-                reason=RuntimeErrorReason.ACTION_NOT_FOUND,
+                reason=ErrorReason.ACTION_NOT_FOUND,
             )
         if not isinstance(resolved, Agent):
             raise GenkitError(

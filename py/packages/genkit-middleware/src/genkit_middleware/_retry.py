@@ -28,7 +28,6 @@ from pydantic import BaseModel, Field
 
 from genkit import GenkitError, ModelResponse
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
-from genkit_middleware._errors import caused_by_caller_callback
 from genkit_middleware._statuses import TRANSIENT_STATUSES
 
 _DEFAULT_RETRY_STATUSES: list[str] = list(TRANSIENT_STATUSES)
@@ -69,19 +68,14 @@ class Retry(BaseMiddleware[RetryConfig]):
                 if attempt == self.config.max_retries:
                     raise
 
-                # The caller's own on_chunk failure is not retried. A
-                # GenkitError is retried only when its status is listed. Any
+                # A GenkitError is retried only when its status is listed. Any
                 # other exception is retried.
-                if caused_by_caller_callback(e):
-                    raise
                 if isinstance(e, GenkitError) and e.status not in self.config.statuses:
                     raise
 
                 delay_ms = current_delay_ms
-                if isinstance(e, GenkitError) and e.response_metadata is not None:
-                    retry_after_ms = e.response_metadata.get('retry_after_ms')
-                    if retry_after_ms is not None:
-                        delay_ms = max(delay_ms, retry_after_ms)
+                if isinstance(e, GenkitError) and e.retry_after_ms is not None:
+                    delay_ms = max(delay_ms, e.retry_after_ms)
 
                 if not self.config.no_jitter:
                     delay_ms += 1000.0 * math.pow(2, attempt) * random.random()

@@ -383,7 +383,7 @@ class TestDownloadMediaErrors:
                 await PartConverter.to_gemini(part)
 
         assert raised.value.status == 'INVALID_ARGUMENT'
-        assert isinstance(raised.value.cause, httpx.HTTPStatusError)
+        assert isinstance(raised.value.__cause__, httpx.HTTPStatusError)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(

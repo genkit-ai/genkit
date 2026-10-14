@@ -46,7 +46,7 @@ from helpers import (
 from pydantic import ValidationError
 
 from genkit import Message, ModelResponse, ModelResponseChunk
-from genkit._core._error import RuntimeErrorReason
+from genkit._core._error import ErrorReason
 from genkit._core._model import Candidate
 from genkit._core._typing import FinishReason, GenerationUsage, Role
 
@@ -221,7 +221,7 @@ async def test_generate_a2ui_strict_fails_the_turn_on_bad_block() -> None:
         prompt=WEATHER_PROMPT,
         use=[Surfaces(validate='strict')],
     )
-    assert_dead_turn(response, reason=RuntimeErrorReason.INVALID_OUTPUT, match='NotAThing')
+    assert_dead_turn(response, reason=ErrorReason.INVALID_OUTPUT, match='NotAThing')
 
 
 @pytest.mark.asyncio
@@ -244,7 +244,7 @@ async def test_generate_stream_strict_fails_the_turn_on_bad_block() -> None:
 
     # The refusal fires at flush, before any envelope reaches the sink.
     assert streamed_envs == []
-    assert_dead_turn(response, reason=RuntimeErrorReason.INVALID_OUTPUT, match='NotAThing')
+    assert_dead_turn(response, reason=ErrorReason.INVALID_OUTPUT, match='NotAThing')
 
 
 @pytest.mark.asyncio
@@ -271,7 +271,7 @@ async def test_strict_refusal_keeps_the_tokens_the_turn_cost() -> None:
         use=[Surfaces(validate='strict')],
     )
 
-    assert_dead_turn(response, reason=RuntimeErrorReason.INVALID_OUTPUT, match='NotAThing')
+    assert_dead_turn(response, reason=ErrorReason.INVALID_OUTPUT, match='NotAThing')
     assert response.usage is not None
     assert response.usage.output_tokens == 22
     assert response.usage.total_tokens == 33
@@ -288,7 +288,7 @@ def test_a2ui_parse_error_reports_invalid_output() -> None:
     """
     exc = A2uiParseError("A2UI: component 'NotAThing' is not in catalog 'basic'.")
     assert exc.status == 'INTERNAL'
-    assert exc.reason == RuntimeErrorReason.INVALID_OUTPUT
+    assert exc.reason == ErrorReason.INVALID_OUTPUT
 
 
 @pytest.mark.asyncio
@@ -592,7 +592,7 @@ async def test_generate_a2ui_strict_fails_on_malformed_json_fence() -> None:
         prompt=WEATHER_PROMPT,
         use=[Surfaces(validate='strict')],
     )
-    assert_dead_turn(response, reason=RuntimeErrorReason.INVALID_OUTPUT, match='failed to parse envelope block as JSON')
+    assert_dead_turn(response, reason=ErrorReason.INVALID_OUTPUT, match='failed to parse envelope block as JSON')
 
 
 @pytest.mark.asyncio
@@ -621,7 +621,7 @@ async def test_generate_a2ui_strict_fails_on_missing_root() -> None:
         prompt=WEATHER_PROMPT,
         use=[Surfaces(validate='strict')],
     )
-    assert_dead_turn(response, reason=RuntimeErrorReason.INVALID_OUTPUT, match='id "root"')
+    assert_dead_turn(response, reason=ErrorReason.INVALID_OUTPUT, match='id "root"')
 
 
 @pytest.mark.asyncio

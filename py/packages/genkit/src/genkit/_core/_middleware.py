@@ -28,6 +28,7 @@ from typing import Any, ClassVar, Generic, NamedTuple, Protocol, TypeVar, cast, 
 from pydantic import BaseModel, ConfigDict, PrivateAttr, field_validator
 
 from genkit._core._action import Action
+from genkit._core._error import _StreamingCallbackError
 from genkit._core._logger import get_logger
 from genkit._core._model import (
     GenerateActionOptions,
@@ -137,6 +138,52 @@ class ToolHookParams(BaseModel):
         return part
 
 
+class _GuardedOnChunk:
+    """A chunk callback whose ``Exception`` surfaces as ``_StreamingCallbackError``.
+
+    The model sees the carrier as a ``BaseException``, so its own
+    ``except Exception`` (and Retry or Fallback outside it) can't mistake a
+    stream callback bug for a provider failure. A carrier already raised by
+    a downstream guarded callback passes through unchanged.
+    """
+
+    __slots__ = ('fn',)
+
+    def __init__(self, fn: Callable[[ModelResponseChunk], None]) -> None:
+        self.fn = fn
+
+    def __call__(self, chunk: ModelResponseChunk) -> None:
+        try:
+            self.fn(chunk)
+        except Exception as exc:
+            raise _StreamingCallbackError(str(exc)) from exc
+
+
+class EngineOnChunk:
+    """A chunk callback owned by the generate engine, stored on ctx unguarded.
+
+    The engine stamps raw model chunks before passing them on. If that
+    raises, the plugin sent a malformed chunk, which is a model failure. The
+    downstream it forwards to is already guarded.
+    """
+
+    __slots__ = ('fn',)
+
+    def __init__(self, fn: Callable[[ModelResponseChunk], None]) -> None:
+        self.fn = fn
+
+    def __call__(self, chunk: ModelResponseChunk) -> None:
+        self.fn(chunk)
+
+
+def _guard_on_chunk(
+    on_chunk: Callable[[ModelResponseChunk], None] | None,
+) -> Callable[[ModelResponseChunk], None] | None:
+    if on_chunk is None or isinstance(on_chunk, (_GuardedOnChunk, EngineOnChunk)):
+        return on_chunk
+    return _GuardedOnChunk(on_chunk)
+
+
 @dataclass
 class GenerateMiddlewareContext:
     """Per-``generate()`` runtime services shared by every middleware in ``use=[...]``.
@@ -147,6 +194,9 @@ class GenerateMiddlewareContext:
     ``genkit.exp.current_session()``. Also carries caller-provided metadata
     (``custom_context``), streaming hooks, and the abort signal for the whole
     generate invocation.
+
+    A callback stored on ``on_chunk`` that raises fails the turn; see
+    ``replace_on_chunk``.
     """
 
     ai: GenkitLike
@@ -154,6 +204,12 @@ class GenerateMiddlewareContext:
     custom_context: dict[str, object] = field(default_factory=dict)
     on_chunk: Callable[[ModelResponseChunk], None] | None = None
     telemetry_labels: dict[str, str] | None = None
+
+    def __setattr__(self, name: str, value: object) -> None:
+        # Covers the constructor, replace_on_chunk, and `ctx.on_chunk = fn`.
+        if name == 'on_chunk':
+            value = _guard_on_chunk(cast('Callable[[ModelResponseChunk], None] | None', value))
+        object.__setattr__(self, name, value)
 
     @property
     def is_streaming(self) -> bool:
@@ -169,7 +225,52 @@ class GenerateMiddlewareContext:
         self,
         on_chunk: Callable[[ModelResponseChunk], None] | None,
     ) -> Callable[[ModelResponseChunk], None] | None:
-        """Swap the streaming callback; returns the previous callback."""
+        """Swap the streaming callback; returns the previous callback.
+
+        Pass the returned callback back in to restore it. Assigning
+        ``ctx.on_chunk`` directly behaves the same.
+
+        If the callback you install raises, generate treats it like a raising
+        caller callback, not a model failure:
+
+        * the turn ends with ``finish_reason == FAILED`` and
+          ``error.reason == ErrorReason.STREAM_CALLBACK_FAILED``;
+        * the model is not called again: Retry and Fallback don't see it;
+        * the caller's ``async for`` over ``stream.stream`` ends without
+          raising, after the chunks sent before the failure.
+
+        Example:
+            ```python
+            # 1. A middleware that redacts card numbers in streamed text
+            class Redact(BaseMiddleware):
+                async def wrap_model(self, params, ctx, next_fn):
+                    previous = ctx.on_chunk
+
+                    def redact(chunk):
+                        previous(scrub_card_numbers(chunk))  # raises on a bug
+
+                    ctx.replace_on_chunk(redact)
+                    try:
+                        return await next_fn(params, ctx)
+                    finally:
+                        ctx.replace_on_chunk(previous)
+
+
+            # 2. Stream through it; Retry outside doesn't re-call the model
+            stream = ai.generate_stream(
+                prompt='Read back my order.',
+                use=[Retry(max_retries=2), Redact()],
+            )
+            async for chunk in stream.stream:
+                print(chunk.text)
+            # => Your order:
+
+            # 3. The turn failed on the callback, not the provider
+            response = await stream.response
+            print(response.finish_reason, response.error.reason)
+            # => failed STREAM_CALLBACK_FAILED
+            ```
+        """
         previous = self.on_chunk
         self.on_chunk = on_chunk
         return previous

@@ -365,7 +365,7 @@ async def test_429_retry_after_header_sets_retry_delay() -> None:
 
     assert exc_info.value.status == 'RESOURCE_EXHAUSTED'
     assert exc_info.value.__cause__ is api_error
-    assert exc_info.value.response_metadata == {'retry_after_ms': 2500.0}
+    assert exc_info.value.retry_after_ms == 2500.0
 
 
 @pytest.mark.asyncio

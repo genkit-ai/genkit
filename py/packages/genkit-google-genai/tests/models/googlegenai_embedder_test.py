@@ -488,7 +488,7 @@ async def test_embed_content_api_error_is_classified(mocker: MockerFixture, code
         await embedder.generate(EmbedRequest(input=[Document.from_text('Smoked salmon tartine')]))
 
     assert raised.value.status == status
-    assert raised.value.cause is api_error
+    assert raised.value.__cause__ is api_error
 
 
 @pytest.mark.asyncio
@@ -503,7 +503,7 @@ async def test_embed_content_credential_failure_is_unauthenticated(mocker: Mocke
         await embedder.generate(EmbedRequest(input=[Document.from_text('Smoked salmon tartine')]))
 
     assert raised.value.status == 'UNAUTHENTICATED'
-    assert raised.value.cause is no_adc
+    assert raised.value.__cause__ is no_adc
 
 
 @pytest.mark.asyncio
@@ -524,7 +524,7 @@ async def test_embedder_connection_refused_is_unavailable(mocker: MockerFixture,
         await embedder.generate(EmbedRequest(input=[Document.from_text('Smoked salmon tartine')]))
 
     assert raised.value.status == 'UNAVAILABLE'
-    assert raised.value.cause is failure
+    assert raised.value.__cause__ is failure
 
 
 @pytest.mark.asyncio
@@ -539,7 +539,7 @@ async def test_embedder_timeout_is_deadline_exceeded(mocker: MockerFixture) -> N
         await embedder.generate(EmbedRequest(input=[Document.from_text('Smoked salmon tartine')]))
 
     assert raised.value.status == 'DEADLINE_EXCEEDED'
-    assert raised.value.cause is timeout
+    assert raised.value.__cause__ is timeout
 
 
 @pytest.mark.asyncio
@@ -554,7 +554,7 @@ async def test_multimodal_embedding_api_error_is_classified(mocker: MockerFixtur
         await embedder.generate(EmbedRequest(input=[Document.from_media('gs://menu/tartine.png', 'image/png')]))
 
     assert raised.value.status == 'RESOURCE_EXHAUSTED'
-    assert raised.value.cause is api_error
+    assert raised.value.__cause__ is api_error
 
 
 @pytest.mark.asyncio
@@ -583,7 +583,7 @@ async def test_multimodal_embedding_non_json_body_is_internal(mocker: MockerFixt
         await embedder.generate(EmbedRequest(input=[Document.from_media('gs://menu/tartine.png', 'image/png')]))
 
     assert raised.value.status == 'INTERNAL'
-    assert isinstance(raised.value.cause, json.JSONDecodeError)
+    assert isinstance(raised.value.__cause__, json.JSONDecodeError)
 
 
 @pytest.mark.asyncio

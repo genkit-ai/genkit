@@ -20,13 +20,16 @@
 
 from __future__ import annotations
 
-from typing import Any, ClassVar, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 from pydantic import ConfigDict, Field, RootModel, field_validator
 from pydantic.alias_generators import to_camel
 
 from genkit._core._base import GenkitModel
 from genkit._core._compat import StrEnum
+
+if TYPE_CHECKING:
+    from genkit._core._error import Failure
 
 
 class AgentFinishReason(StrEnum):
@@ -163,7 +166,7 @@ class AgentOutput(GenkitModel):
     message: MessageData | None = None
     artifacts: list[Artifact] | None = None
     finish_reason: AgentFinishReason | None = None
-    error: GenkitRuntimeError | None = None
+    error: _RuntimeErrorWire | None = None
     usage: GenerationUsage | None = None
 
 
@@ -226,7 +229,7 @@ class SessionSnapshot(GenkitModel):
     heartbeat_at: str | None = None
     status: SnapshotStatus | None = None
     finish_reason: AgentFinishReason | None = None
-    error: GenkitRuntimeError | None = None
+    error: _RuntimeErrorWire | None = None
     state: SessionState | None = None
 
 
@@ -353,8 +356,8 @@ class GenkitError(GenkitModel):
     data: Data | None = None
 
 
-class GenkitRuntimeError(GenkitModel):
-    """Model for genkitruntimeerror data."""
+class _RuntimeErrorWire(GenkitModel):
+    """Model for runtimeerrorwire data."""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     status: str | None = None
@@ -576,7 +579,7 @@ class Operation(GenkitModel):
     id: str = Field(...)
     done: bool | None = None
     output: Any | None = Field(default=None)
-    error: OperationError | None = None
+    error: Failure | None = None
     metadata: Metadata | None = None
 
 
@@ -999,13 +1002,6 @@ class Supports(GenkitModel):
     long_running: bool | None = None
 
 
-class OperationError(GenkitModel):
-    """Model for operationerror data."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
-    message: str = Field(...)
-
-
 class Resource(GenkitModel):
     """Model for resource data."""
 
@@ -1105,3 +1101,5 @@ class Text(RootModel[str]):
 
 
 Resource1 = Resource  # alias for Resource (resource with uri)
+
+import genkit._core._error  # noqa: E402, F401

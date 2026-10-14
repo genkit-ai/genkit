@@ -200,7 +200,7 @@ async def test_botocore_errors_map_to_genkit_statuses(error: BotoCoreError, expe
     assert excinfo.value.status == expected_status
     assert 'bedrock converse failed' in excinfo.value.message
     assert excinfo.value.__cause__ is error
-    assert excinfo.value.cause is error
+    assert excinfo.value.__cause__ is error
 
 
 @pytest.mark.parametrize(
@@ -407,7 +407,7 @@ async def test_429_retry_after_header_sets_retry_delay(header: str) -> None:
     genkit_error = await generate_error(error)
 
     assert genkit_error.status == 'RESOURCE_EXHAUSTED'
-    assert genkit_error.response_metadata == {'retry_after_ms': 2000.0}
+    assert genkit_error.retry_after_ms == 2000.0
     assert genkit_error.__cause__ is error
 
 
@@ -416,7 +416,7 @@ async def test_retry_after_accepts_an_http_date() -> None:
     genkit_error = await generate_error(throttling_error({'Retry-After': 'Wed, 21 Oct 2015 07:28:00 GMT'}))
 
     # The date is long past, so the wait clamps to zero rather than going negative.
-    assert genkit_error.response_metadata == {'retry_after_ms': 0.0}
+    assert genkit_error.retry_after_ms == 0.0
 
 
 @pytest.mark.parametrize(
@@ -429,7 +429,7 @@ async def test_missing_or_unparseable_retry_after_is_omitted(headers: dict[str, 
     genkit_error = await generate_error(throttling_error(headers))
 
     assert genkit_error.status == 'RESOURCE_EXHAUSTED'
-    assert genkit_error.response_metadata is None
+    assert genkit_error.retry_after_ms is None
 
 
 # Mid-stream failures are named by the event stream's ``:exception-type``

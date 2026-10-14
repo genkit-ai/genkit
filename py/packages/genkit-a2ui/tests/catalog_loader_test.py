@@ -48,7 +48,7 @@ from helpers import (
 from pydantic import ValidationError
 from structlog.testing import capture_logs
 
-from genkit._core._error import RuntimeErrorReason
+from genkit._core._error import ErrorReason
 
 BANNER_CATALOG = A2uiCatalog(
     id='https://example.com/catalogs/banner.json',
@@ -128,7 +128,7 @@ async def test_generate_unknown_catalog_fails_the_turn_before_the_model() -> Non
     )
     assert_dead_turn(
         response,
-        reason=RuntimeErrorReason.INVALID_INPUT,
+        reason=ErrorReason.INVALID_INPUT,
         match='no catalog registered',
         status='INVALID_ARGUMENT',
     )
@@ -157,7 +157,7 @@ async def test_generate_strict_rejects_a_component_the_loaded_catalog_lacks() ->
         prompt='weather',
         use=[Surfaces(catalog=BANNER_CATALOG.id, validate='strict')],
     )
-    assert_dead_turn(response, reason=RuntimeErrorReason.INVALID_OUTPUT, match='not in catalog')
+    assert_dead_turn(response, reason=ErrorReason.INVALID_OUTPUT, match='not in catalog')
 
 
 @pytest.mark.asyncio

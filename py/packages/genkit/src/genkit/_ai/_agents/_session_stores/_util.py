@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 
 from genkit._ai._agents._session import SnapshotStatusStream, select_leaf_snapshot
 from genkit._ai._agents._snapshot import parse_snapshot_lookup_kw
-from genkit._core._error import GenkitError, RuntimeErrorReason
+from genkit._core._error import ErrorReason, GenkitError
 from genkit._core._model import SessionSnapshot
 from genkit._core._typing import SnapshotStatus
 
@@ -70,7 +70,7 @@ def assert_safe_snapshot_id(*, snapshot_id: str) -> None:
                 f'Invalid snapshotId: "{snapshot_id}". '
                 'A snapshotId must be a plain file name (no path separators or "..").'
             ),
-            reason=RuntimeErrorReason.INVALID_SNAPSHOT_ID,
+            reason=ErrorReason.INVALID_SNAPSHOT_ID,
         )
 
 

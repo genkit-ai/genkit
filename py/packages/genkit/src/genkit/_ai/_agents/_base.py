@@ -67,7 +67,7 @@ from genkit._ai._prompt import (
     register_prompt_actions,
 )
 from genkit._core._action import Action, ActionKind, ActionRunContext, BidiAction, BidiFn, get_current_context
-from genkit._core._error import GenkitError, RuntimeErrorReason
+from genkit._core._error import ErrorReason, GenkitError
 from genkit._core._middleware import BaseMiddleware
 from genkit._core._model import (
     AgentInit,
@@ -314,7 +314,7 @@ def register_snapshot_actions(*, registry: Registry, name: str, agent: Agent) ->
             raise GenkitError(
                 status='NOT_FOUND',
                 message=f'Snapshot {target!r} not found for agent {name!r}.',
-                reason=RuntimeErrorReason.SNAPSHOT_NOT_FOUND,
+                reason=ErrorReason.SNAPSHOT_NOT_FOUND,
             )
         return snap
 

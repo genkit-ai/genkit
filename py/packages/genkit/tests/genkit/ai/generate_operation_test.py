@@ -51,7 +51,7 @@ import pytest
 
 from genkit import Document, Genkit, Message, ModelResponse, Part
 from genkit._core._action import ActionRunContext
-from genkit._core._error import GenkitError, RuntimeErrorReason
+from genkit._core._error import ErrorReason, GenkitError
 from genkit._core._model import ModelRequest
 from genkit._core._typing import (
     ModelInfo,
@@ -74,7 +74,7 @@ async def test_generate_operation_no_model_specified(ai: Genkit) -> None:
         await ai.generate_operation(prompt='Hi')
 
     assert 'No model specified' in str(exc_info.value)
-    assert exc_info.value.reason is RuntimeErrorReason.MODEL_NOT_FOUND
+    assert exc_info.value.reason is ErrorReason.MODEL_NOT_FOUND
     assert 'MODEL_NOT_FOUND' not in exc_info.value.message
 
 
@@ -85,7 +85,7 @@ async def test_generate_operation_model_not_found(ai: Genkit) -> None:
         await ai.generate_operation(model='nonexistent/model', prompt='Hi')
 
     assert 'not found' in str(exc_info.value).lower()
-    assert exc_info.value.reason is RuntimeErrorReason.MODEL_NOT_FOUND
+    assert exc_info.value.reason is ErrorReason.MODEL_NOT_FOUND
     assert 'MODEL_NOT_FOUND' not in exc_info.value.message
 
 
@@ -122,7 +122,7 @@ async def test_generate_operation_model_no_long_running_support(ai: Genkit) -> N
         await ai.generate_operation(model='standard-model', prompt='Hi')
 
     assert 'does not support long running operations' in str(exc_info.value)
-    assert exc_info.value.reason is RuntimeErrorReason.UNSUPPORTED_BY_MODEL
+    assert exc_info.value.reason is ErrorReason.UNSUPPORTED_BY_MODEL
     assert 'UNSUPPORTED_BY_MODEL' not in exc_info.value.message
 
 
@@ -145,7 +145,7 @@ async def test_generate_operation_model_no_supports_info(ai: Genkit) -> None:
         await ai.generate_operation(model='no-info-model', prompt='Hi')
 
     assert 'does not support long running operations' in str(exc_info.value)
-    assert exc_info.value.reason is RuntimeErrorReason.UNSUPPORTED_BY_MODEL
+    assert exc_info.value.reason is ErrorReason.UNSUPPORTED_BY_MODEL
     assert 'UNSUPPORTED_BY_MODEL' not in exc_info.value.message
 
 

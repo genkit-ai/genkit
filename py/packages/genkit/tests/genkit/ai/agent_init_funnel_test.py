@@ -24,7 +24,7 @@ from genkit import Part
 from genkit._ai._agents._base import define_custom_agent
 from genkit._ai._agents._runtime import AgentInitError, SessionRunner
 from genkit._core._action import ActionRunContext
-from genkit._core._error import GenkitError, RuntimeErrorReason, runtime_error_reason
+from genkit._core._error import ErrorReason, GenkitError, error_reason
 from genkit._core._model import AgentInit, AgentInput, AgentResult, Message, SessionSnapshot, SessionState
 from genkit._core._typing import (
     AgentFinishReason,
@@ -84,7 +84,7 @@ async def test_non_resumable_snapshot_resolves_as_failed_agent_output() -> None:
     assert out.finish_reason == AgentFinishReason.FAILED
     assert out.error is not None
     assert out.error.status == 'INVALID_ARGUMENT'
-    assert runtime_error_reason(out.error.details) is RuntimeErrorReason.SNAPSHOT_NOT_RESUMABLE
+    assert error_reason(out.error.details) is ErrorReason.SNAPSHOT_NOT_RESUMABLE
     assert 'not resumable' in (out.error.message or '')
     assert 'SNAPSHOT_NOT_RESUMABLE' not in (out.error.message or '')
 
@@ -157,7 +157,7 @@ async def test_snapshot_id_on_client_managed_agent_raises_agent_init_error() -> 
         await conn.output()
 
     assert exc.value.status == 'FAILED_PRECONDITION'
-    assert exc.value.reason is RuntimeErrorReason.SESSION_STORE_NOT_CONFIGURED
+    assert exc.value.reason is ErrorReason.SESSION_STORE_NOT_CONFIGURED
     assert 'no store configured' in str(exc.value)
     assert 'SESSION_STORE_NOT_CONFIGURED' not in exc.value.message
 
@@ -174,7 +174,7 @@ async def test_send_to_missing_snapshot_returns_failed_response() -> None:
     assert res.finish_reason == AgentFinishReason.FAILED
     assert res.error is not None
     assert res.error.status == 'NOT_FOUND'
-    assert res.error.reason is RuntimeErrorReason.SNAPSHOT_NOT_FOUND
+    assert res.error.reason is ErrorReason.SNAPSHOT_NOT_FOUND
 
 
 @pytest.mark.asyncio
@@ -186,6 +186,6 @@ async def test_unknown_agent_raises_with_action_not_found() -> None:
         await ai.agent('ghost')
 
     assert exc.value.status == 'NOT_FOUND'
-    assert exc.value.reason is RuntimeErrorReason.ACTION_NOT_FOUND
+    assert exc.value.reason is ErrorReason.ACTION_NOT_FOUND
     assert "Agent 'ghost' not found" in exc.value.message
     assert 'ACTION_NOT_FOUND' not in exc.value.message

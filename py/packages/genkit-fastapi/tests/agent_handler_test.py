@@ -23,7 +23,7 @@ from genkit_fastapi import handle_genkit_request  # noqa: E402
 from genkit_fastapi.exp import serve_agent  # noqa: E402
 
 from genkit._ai._agents._client import error_from_http  # noqa: E402
-from genkit._core._error import RuntimeErrorReason  # noqa: E402
+from genkit._core._error import ErrorReason  # noqa: E402
 from genkit._core._model import (  # noqa: E402
     Message,
     ModelResponse,
@@ -237,13 +237,13 @@ def test_serve_agent_bad_input_returns_400_with_its_message(path: str, body: dic
             {'snapshotId': 'snap-1'},
             "Cannot use 'snapshotId' with agent 'initAgent': this agent has no store configured "
             "(client-managed state). Send 'state' instead.",
-            RuntimeErrorReason.SESSION_STORE_NOT_CONFIGURED,
+            ErrorReason.SESSION_STORE_NOT_CONFIGURED,
             id='snapshot-id-without-store',
         ),
     ],
 )
 def test_serve_agent_init_mismatch_returns_agent_init_error(
-    server_managed: bool, init: dict[str, Any], message: str, reason: RuntimeErrorReason | None
+    server_managed: bool, init: dict[str, Any], message: str, reason: ErrorReason | None
 ) -> None:
     """AgentInitError is a PublicError, so a remote client sees the status, message, and reason it would in-process."""
     response = client(build_agent('initAgent', server_managed=server_managed)).post(

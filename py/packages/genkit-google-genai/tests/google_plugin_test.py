@@ -947,7 +947,7 @@ async def test_lazy_client_credential_failure_is_unauthenticated_in_action_body(
             await embedder_action.run(EmbedRequest(input=[Document.from_text('Smoked salmon tartine')]))
 
     assert raised.value.status == 'UNAUTHENTICATED'
-    assert raised.value.cause is no_adc
+    assert raised.value.__cause__ is no_adc
 
 
 @pytest.mark.asyncio

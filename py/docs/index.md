@@ -29,6 +29,8 @@
 
 ::: genkit.FinishReason
 
+::: genkit.Failure
+
 ::: genkit.Embedding
 
 ::: genkit.Operation
@@ -53,7 +55,9 @@
 
 ::: genkit.PublicError
 
-::: genkit.RuntimeErrorReason
+::: genkit.ErrorReason
+
+::: genkit.Failure
 
 ::: genkit.ContextProvider
 
@@ -78,8 +82,6 @@
 ::: genkit.model.ModelUsage
 
 ::: genkit.model.Candidate
-
-::: genkit.model.OperationError
 
 ::: genkit.model.ToolRequest
 

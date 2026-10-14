@@ -28,6 +28,8 @@ Types exported from genkit, genkit.model, genkit.embedder, genkit.plugin_api, ge
 
 ::: genkit.FinishReason
 
+::: genkit.Failure
+
 ::: genkit.Embedding
 
 ::: genkit.Operation
@@ -52,7 +54,9 @@ Types exported from genkit, genkit.model, genkit.embedder, genkit.plugin_api, ge
 
 ::: genkit.PublicError
 
-::: genkit.RuntimeErrorReason
+::: genkit.ErrorReason
+
+::: genkit.Failure
 
 ::: genkit.ContextProvider
 
@@ -77,8 +81,6 @@ Types exported from genkit, genkit.model, genkit.embedder, genkit.plugin_api, ge
 ::: genkit.model.ModelUsage
 
 ::: genkit.model.Candidate
-
-::: genkit.model.OperationError
 
 ::: genkit.model.ToolRequest
 

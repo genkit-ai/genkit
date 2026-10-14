@@ -871,7 +871,7 @@ class TestVeoErrorClassification:
             await veo.start(_text_request(), ActionRunContext())
 
         assert raised.value.status == 'UNAUTHENTICATED'
-        assert raised.value.cause is revoked
+        assert raised.value.__cause__ is revoked
 
     @pytest.mark.asyncio
     async def test_check_credential_failure_is_unauthenticated(self) -> None:
@@ -896,7 +896,7 @@ class TestVeoErrorClassification:
             await veo.check(Operation(id='operations/abc'), ActionRunContext())
 
         assert raised.value.status == 'UNAVAILABLE'
-        assert raised.value.cause is dropped
+        assert raised.value.__cause__ is dropped
 
     @pytest.mark.asyncio
     async def test_request_client_credential_failure_is_unauthenticated(self) -> None:

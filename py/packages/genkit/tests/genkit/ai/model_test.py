@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from genkit import FinishReason, Message, ModelResponse, ModelResponseChunk, Part, Role
 from genkit._ai._model import text_from_content
-from genkit._core._error import RuntimeErrorReason
+from genkit._core._error import ErrorReason
 from genkit._core._model import OutputConfig, chunk_for_stream
 from genkit._core._schema import InvalidOutputSchemaError, to_json_schema
 from genkit._core._typing import (
@@ -419,7 +419,7 @@ def test_schema_check_marks_error_when_output_does_not_conform() -> None:
     assert response.finish_reason == FinishReason.STOP
     assert response.error is not None
     assert response.error.status == 'INTERNAL'
-    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert response.error.reason is ErrorReason.INVALID_OUTPUT
     assert response.output is None
     assert response.text == '{"name": "John", "age": "30"}'
 
@@ -661,7 +661,7 @@ def test_schema_check_marks_invalid_output_when_json_format_no_schema_unparseabl
     assert response.output is None
     assert response.text == 'plain unparseable text'
     assert response.error is not None
-    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert response.error.reason is ErrorReason.INVALID_OUTPUT
     assert 'not valid JSON' in response.error.message
 
 
@@ -682,7 +682,7 @@ def test_schema_check_marks_invalid_output_when_array_format_no_schema_unparseab
     assert response.output is None
     assert response.text == 'plain unparseable text'
     assert response.error is not None
-    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert response.error.reason is ErrorReason.INVALID_OUTPUT
 
 
 def test_schema_check_passes_when_json_format_no_schema_valid() -> None:

@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from genkit import Genkit, GenkitError, RuntimeErrorReason, get_logger
+from genkit import ErrorReason, Genkit, GenkitError, get_logger
 from genkit.middleware import GenerateMiddlewareContext
 
 from ._catalog import BASIC_CATALOG, A2uiCatalog
@@ -46,7 +46,7 @@ class A2uiCatalogError(GenkitError):
         super().__init__(
             status='INVALID_ARGUMENT',
             message=message,
-            reason=RuntimeErrorReason.INVALID_INPUT,
+            reason=ErrorReason.INVALID_INPUT,
         )
 
 

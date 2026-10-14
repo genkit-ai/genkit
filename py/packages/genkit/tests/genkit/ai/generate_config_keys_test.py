@@ -172,7 +172,7 @@ async def test_generate_unknown_config_key_error_has_validation_error_as_cause()
         await ai.generate(model='strict', prompt='hi', config={'temprature': 0.2})
 
     _assert_rejected(err, fn, 'temprature')
-    assert isinstance(err.value.cause, ValidationError)
+    assert isinstance(err.value.__cause__, ValidationError)
 
 
 @pytest.mark.asyncio

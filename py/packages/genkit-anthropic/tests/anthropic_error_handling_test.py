@@ -93,9 +93,9 @@ async def test_generate_maps_anthropic_status_errors(status_code: int, expected_
     error = exc_info.value
     assert error.status == expected_status
     assert error.message == _ERROR_MESSAGE
-    assert error.cause is api_error
     assert error.__cause__ is api_error
-    assert error.response_metadata is None
+    assert error.__cause__ is api_error
+    assert error.retry_after_ms is None
 
 
 @pytest.mark.asyncio
@@ -137,8 +137,8 @@ async def test_connection_refused_is_unavailable() -> None:
     error = await _generate_over_transport(handler)
 
     assert error.status == 'UNAVAILABLE'
-    assert isinstance(error.cause, APIConnectionError)
-    assert error.__cause__ is error.cause
+    assert isinstance(error.__cause__, APIConnectionError)
+    assert error.__cause__ is error.__cause__
     assert get_http_status(error) == 500
 
 
@@ -152,8 +152,8 @@ async def test_timeout_is_deadline_exceeded() -> None:
     error = await _generate_over_transport(handler)
 
     assert error.status == 'DEADLINE_EXCEEDED'
-    assert isinstance(error.cause, APITimeoutError)
-    assert error.__cause__ is error.cause
+    assert isinstance(error.__cause__, APITimeoutError)
+    assert error.__cause__ is error.__cause__
 
 
 @pytest.mark.asyncio
@@ -166,7 +166,7 @@ async def test_generate_marks_status_less_sdk_error_unknown() -> None:
 
     assert exc_info.value.status == 'UNKNOWN'
     assert exc_info.value.message == _ERROR_MESSAGE
-    assert exc_info.value.cause is api_error
+    assert exc_info.value.__cause__ is api_error
 
 
 @pytest.mark.asyncio
@@ -185,7 +185,7 @@ async def test_generate_reads_error_type_when_http_status_is_unmapped() -> None:
 
     assert exc_info.value.status == 'INVALID_ARGUMENT'
     assert exc_info.value.message == _ERROR_MESSAGE
-    assert exc_info.value.cause is api_error
+    assert exc_info.value.__cause__ is api_error
 
 
 @pytest.mark.asyncio
@@ -202,7 +202,7 @@ async def test_generate_maps_billing_error_to_resource_exhausted() -> None:
         await _model_failing_with(api_error).generate(_request())
 
     assert exc_info.value.status == 'RESOURCE_EXHAUSTED'
-    assert exc_info.value.cause is api_error
+    assert exc_info.value.__cause__ is api_error
 
 
 @pytest.mark.asyncio
@@ -216,7 +216,7 @@ async def test_unmapped_4xx_is_unknown_genkit_error() -> None:
 
     assert exc_info.value.status == 'UNKNOWN'
     assert exc_info.value.message == _ERROR_MESSAGE
-    assert exc_info.value.cause is api_error
+    assert exc_info.value.__cause__ is api_error
     assert exc_info.value.__cause__ is api_error
 
 
@@ -230,12 +230,12 @@ async def test_generate_marks_unreadable_response_internal() -> None:
         await _model_failing_with(api_error).generate(_request())
 
     assert exc_info.value.status == 'INTERNAL'
-    assert exc_info.value.cause is api_error
+    assert exc_info.value.__cause__ is api_error
 
 
 @pytest.mark.asyncio
 async def test_429_retry_after_header_sets_retry_delay() -> None:
-    """A 429 with a Retry-After header puts the delay in response_metadata['retry_after_ms']."""
+    """A 429 with a Retry-After header puts the delay in retry_after_ms."""
     request = _http_request()
     response = httpx.Response(429, request=request, headers={'Retry-After': '2.5'})
     api_error = APIStatusError(_ERROR_MESSAGE, response=response, body={'type': 'error'})
@@ -246,8 +246,8 @@ async def test_429_retry_after_header_sets_retry_delay() -> None:
 
     error = exc_info.value
     assert error.status == 'RESOURCE_EXHAUSTED'
-    assert error.response_metadata == {'retry_after_ms': 2500.0}
-    assert error.cause is api_error
+    assert error.retry_after_ms == 2500.0
+    assert error.__cause__ is api_error
     assert error.__cause__ is api_error
 
 
@@ -291,8 +291,8 @@ async def test_generate_maps_streaming_anthropic_errors() -> None:
 
     error = exc_info.value
     assert error.status == 'UNAVAILABLE'
-    assert error.response_metadata == {'retry_after_ms': 1000.0}
-    assert error.cause is api_error
+    assert error.retry_after_ms == 1000.0
+    assert error.__cause__ is api_error
     assert error.__cause__ is api_error
 
 
@@ -306,7 +306,7 @@ async def test_generate_omits_invalid_retry_after_metadata(retry_after: str | No
     with pytest.raises(GenkitError) as exc_info:
         await model.generate(_request())
 
-    assert exc_info.value.response_metadata is None
+    assert exc_info.value.retry_after_ms is None
 
 
 def _sse(event: str, data: dict[str, Any]) -> str:
@@ -385,8 +385,8 @@ async def test_streaming_in_band_error_event_maps_its_type(error_type: str, expe
     assert isinstance(error, GenkitError)
     assert error.status == expected_status
     assert error.message == 'Overloaded'
-    assert isinstance(error.cause, APIStatusError)
-    assert error.cause.status_code == 200
+    assert isinstance(error.__cause__, APIStatusError)
+    assert error.__cause__.status_code == 200
 
 
 @pytest.mark.asyncio
@@ -397,7 +397,7 @@ async def test_streaming_in_band_error_event_with_unknown_type_is_unknown() -> N
     assert isinstance(error, GenkitError)
     assert error.status == 'UNKNOWN'
     assert error.message == 'x'
-    assert isinstance(error.cause, APIStatusError)
+    assert isinstance(error.__cause__, APIStatusError)
 
 
 def _model_never_called() -> tuple[AnthropicModel, MagicMock]:
@@ -430,8 +430,8 @@ async def test_generate_marks_unsendable_history_invalid_argument(part: Part, me
 
     assert exc_info.value.status == 'INVALID_ARGUMENT'
     assert message_fragment in exc_info.value.message
-    assert isinstance(exc_info.value.cause, ValueError)
-    assert exc_info.value.__cause__ is exc_info.value.cause
+    assert isinstance(exc_info.value.__cause__, ValueError)
+    assert exc_info.value.__cause__ is exc_info.value.__cause__
     client.messages.create.assert_not_called()
 
 
@@ -448,7 +448,7 @@ async def test_generate_marks_invalid_thinking_budget_invalid_argument() -> None
         await model.generate(request)
 
     assert exc_info.value.status == 'INVALID_ARGUMENT'
-    assert isinstance(exc_info.value.cause, ValueError)
+    assert isinstance(exc_info.value.__cause__, ValueError)
     client.messages.create.assert_not_called()
 
 
@@ -503,4 +503,4 @@ async def test_stream_cut_mid_read_is_classified(drop: Exception, status: str) -
     await http_client.aclose()
 
     assert exc_info.value.status == status
-    assert exc_info.value.cause is drop
+    assert exc_info.value.__cause__ is drop

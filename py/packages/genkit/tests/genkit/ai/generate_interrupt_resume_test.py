@@ -19,7 +19,7 @@ from genkit._ai._tools import (
     MultipartToolResponse,
     ToolRunContext,
 )
-from genkit._core._error import GenkitError, RuntimeErrorReason
+from genkit._core._error import ErrorReason, GenkitError
 from genkit._core._model import GenerateActionOptions, Resume
 from genkit._core._typing import (
     FinishReason,
@@ -1221,7 +1221,7 @@ async def test_resume_without_matching_replies_is_still_resendable() -> None:
     assert 'unresolved tool request' in response.finish_message.lower()
     assert response.error is not None
     assert response.error.status == 'INVALID_ARGUMENT'
-    assert response.error.reason is RuntimeErrorReason.UNRESOLVED_TOOL_REQUEST
+    assert response.error.reason is ErrorReason.UNRESOLVED_TOOL_REQUEST
     assert 'UNRESOLVED_TOOL_REQUEST' not in response.error.message
     assert response.message is None
     assert [m.role for m in response.messages] == [Role.USER, Role.MODEL]
@@ -1249,7 +1249,7 @@ async def test_resume_on_empty_messages_is_still_resendable() -> None:
     assert response.finish_message is not None
     assert "cannot 'resume'" in response.finish_message.lower()
     assert response.error is not None
-    assert response.error.reason is RuntimeErrorReason.INVALID_RESUME
+    assert response.error.reason is ErrorReason.INVALID_RESUME
     assert response.message is None
     assert response.messages == []
 
@@ -1273,7 +1273,7 @@ async def test_resume_on_user_turn_is_still_resendable() -> None:
     assert "cannot 'resume'" in response.finish_message.lower()
     assert response.error is not None
     assert response.error.status == 'FAILED_PRECONDITION'
-    assert response.error.reason is RuntimeErrorReason.INVALID_RESUME
+    assert response.error.reason is ErrorReason.INVALID_RESUME
     assert 'INVALID_RESUME' not in response.error.message
     assert response.message is None
     assert [m.role for m in response.messages] == [Role.USER]
@@ -1302,7 +1302,7 @@ async def test_resume_on_text_only_model_turn_is_still_resendable() -> None:
     assert "cannot 'resume'" in response.finish_message.lower()
     assert response.error is not None
     assert response.error.status == 'FAILED_PRECONDITION'
-    assert response.error.reason is RuntimeErrorReason.INVALID_RESUME
+    assert response.error.reason is ErrorReason.INVALID_RESUME
     assert 'INVALID_RESUME' not in response.error.message
     assert response.message is None
     assert [m.role for m in response.messages] == [Role.USER, Role.MODEL]
@@ -1339,7 +1339,7 @@ async def test_resume_on_tool_turn_is_still_resendable() -> None:
     assert "cannot 'resume'" in response.finish_message.lower()
     assert response.error is not None
     assert response.error.status == 'FAILED_PRECONDITION'
-    assert response.error.reason is RuntimeErrorReason.INVALID_RESUME
+    assert response.error.reason is ErrorReason.INVALID_RESUME
     assert 'INVALID_RESUME' not in response.error.message
     assert response.message is None
     assert [m.role for m in response.messages] == [Role.USER, Role.MODEL, Role.TOOL]
@@ -1496,7 +1496,7 @@ async def test_resume_rejects_hollow_pending_content() -> None:
     assert response.finish_reason == FinishReason.FAILED
     assert response.error is not None
     assert response.error.status == 'INVALID_ARGUMENT'
-    assert response.error.reason is RuntimeErrorReason.INVALID_PART
+    assert response.error.reason is ErrorReason.INVALID_PART
     assert 'screenshot' in (response.finish_message or '')
     assert 'pendingContent' in (response.finish_message or '')
     assert response.message is None
@@ -1523,7 +1523,7 @@ async def test_resume_rejects_text_and_media_pending_content() -> None:
     assert response.finish_reason == FinishReason.FAILED
     assert response.error is not None
     assert response.error.status == 'INVALID_ARGUMENT'
-    assert response.error.reason is RuntimeErrorReason.INVALID_PART
+    assert response.error.reason is ErrorReason.INVALID_PART
     assert 'pendingContent' in (response.finish_message or '')
     assert 'exactly one' in (response.finish_message or '')
     assert response.message is None
@@ -1547,7 +1547,7 @@ async def test_resume_rejects_non_dict_pending_metadata() -> None:
     assert response.finish_reason == FinishReason.FAILED
     assert response.error is not None
     assert response.error.status == 'INVALID_ARGUMENT'
-    assert response.error.reason is RuntimeErrorReason.INVALID_INPUT
+    assert response.error.reason is ErrorReason.INVALID_INPUT
     assert 'screenshot' in (response.finish_message or '')
     assert 'pendingMetadata' in (response.finish_message or '')
     assert response.message is None
