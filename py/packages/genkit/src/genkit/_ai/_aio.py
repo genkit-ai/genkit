@@ -1723,7 +1723,7 @@ class Genkit:
         With ``output_schema=Recipe``, each ``chunk.output`` is a partial of
         that type: same attributes, any field may still be ``None`` or a
         prefix. Guard the field you are about to use. The finished
-        ``Recipe`` is only ``(await stream.response).output``, and it's ``None``
+        ``Recipe`` is only ``(await result.response).output``, and it's ``None``
         when the reply isn't a ``Recipe``.
 
         If the model fails partway through, the ``async for`` still ends
@@ -1733,10 +1733,10 @@ class Genkit:
         chunks you already received are the record of what was shown.
 
         Example:
-            stream = ai.generate_stream(prompt='Write a haiku about rain.')
-            async for chunk in stream.stream:
+            result = ai.generate_stream(prompt='Write a haiku about rain.')
+            async for chunk in result:
                 print(chunk.text)
-            final = await stream.response
+            final = await result.response
         """
         channel: Channel[ModelResponseChunk, ModelResponse[Any]] = Channel()
 
@@ -1768,7 +1768,7 @@ class Genkit:
         response_future: asyncio.Future[ModelResponse[Any]] = asyncio.create_task(_run_generate())
         channel.set_close_future(response_future)
 
-        return ModelStreamResponse[Any](channel=channel, response_future=response_future)
+        return ModelStreamResponse[Any](stream=channel, response=response_future)
 
     async def _generate(
         self,

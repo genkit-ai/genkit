@@ -201,7 +201,28 @@ OutputT_co = TypeVar('OutputT_co', covariant=True)
 
 
 class StreamResponse(Generic[ChunkT_co, OutputT_co]):
-    """Wrapper for streaming action results."""
+    """Chunks from a running flow, then its result.
+
+    Returned by ``flow.stream()``. If the flow raises, both the loop and
+    ``.response`` raise.
+
+    Example:
+        ```python
+        @ai.flow()
+        async def track_order(order_id: str, ctx: FlowContext[str]) -> str:
+            ctx.send_chunk('Out for delivery')
+            return f'Order {order_id} delivered'
+
+
+        result = track_order.stream('A-1042')
+        async for update in result:
+            print(update)
+        # => Out for delivery
+
+        print(await result.response)
+        # => Order A-1042 delivered
+        ```
+    """
 
     def __init__(
         self,
@@ -213,11 +234,17 @@ class StreamResponse(Generic[ChunkT_co, OutputT_co]):
 
     @property
     def stream(self) -> AsyncIterator[ChunkT_co]:
+        """The chunks, in order. Iterating the response itself reads the same stream."""
         return self._stream
 
     @property
     def response(self) -> Awaitable[OutputT_co]:
+        """The final result, available once the run ends."""
         return self._response
+
+    def __aiter__(self) -> AsyncIterator[ChunkT_co]:
+        # `async for chunk in result` reads `.stream`, so callers can skip the hop.
+        return self._stream.__aiter__()
 
 
 class ActionMetadataKey(StrEnum):
@@ -999,9 +1026,10 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         abort_signal: asyncio.Event | None = None,
         init: InitT | None = None,
     ) -> StreamResponse[ChunkT, OutputT]:
-        """Start the action and return its chunks (``.stream``) and result (``.response``).
+        """Start the action and return a ``StreamResponse``: iterate it for chunks, await ``.response`` for the result.
 
-        Takes the same keyword arguments as ``run``, minus ``on_chunk``.
+        Takes the same keyword arguments as ``run``, minus ``on_chunk``. If the
+        action raises, both the loop and ``.response`` raise.
         """
         return self._stream(
             input,
