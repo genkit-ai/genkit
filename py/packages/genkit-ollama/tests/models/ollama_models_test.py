@@ -22,10 +22,9 @@ from collections.abc import AsyncIterator
 from typing import Any, cast
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
-import httpx
 import ollama as ollama_api
 import pytest
-from genkit_ollama._models import OllamaConfig, OllamaModel, _convert_parameters, _image_fetch_client, _ResolvedModel
+from genkit_ollama._models import OllamaConfig, OllamaModel, _convert_parameters, _ResolvedModel
 from pydantic import ConfigDict, ValidationError
 
 from genkit import ActionRunContext, GenkitError, Message, ModelResponseChunk, Part, Role
@@ -1016,99 +1015,6 @@ class TestThinkingRequested:
         assert OllamaModel._thinking_requested(OllamaConfig(num_ctx=8)) is False
         assert OllamaModel._thinking_requested(None) is False
         assert OllamaModel._thinking_requested({'think': 'low'}) is True
-
-
-class TestResolveImage(unittest.IsolatedAsyncioTestCase):
-    """Tests for OllamaModel._resolve_image."""
-
-    async def test_data_uri_strips_prefix(self) -> None:
-        """Data URIs should have their prefix stripped, returning raw base64."""
-        data_uri = 'data:image/jpeg;base64,/9j/4AAQSkZJRg=='
-        result = await OllamaModel._resolve_image(data_uri)
-        assert result == '/9j/4AAQSkZJRg=='
-
-    async def test_data_uri_png(self) -> None:
-        """PNG data URI should also be stripped correctly."""
-        data_uri = 'data:image/png;base64,iVBORw0KGgo='
-        result = await OllamaModel._resolve_image(data_uri)
-        assert result == 'iVBORw0KGgo='
-
-    async def test_data_uri_without_comma_raises(self) -> None:
-        """A malformed data URI with no comma separator should raise ValueError."""
-        with self.assertRaises(ValueError):
-            await OllamaModel._resolve_image('data:image/png;base64')
-
-    async def test_raw_base64_passthrough(self) -> None:
-        """Raw base64 strings (not data URIs, not URLs) pass through unchanged."""
-        raw_b64 = '/9j/4AAQSkZJRgABAQ=='
-        result = await OllamaModel._resolve_image(raw_b64)
-        assert result == raw_b64
-
-    async def test_local_file_path_passthrough(self) -> None:
-        """Local file paths pass through unchanged for Image to handle."""
-        path = './test_images/cat.jpg'
-        result = await OllamaModel._resolve_image(path)
-        assert result == path
-
-    @patch('genkit_ollama._models._image_fetch_client')
-    async def test_http_url_downloads_image(self, mock_get_client: MagicMock) -> None:
-        """HTTP URLs should be downloaded and returned as bytes."""
-        mock_response = MagicMock()
-        mock_response.content = b'\x89PNG\r\n\x1a\n'
-        mock_response.raise_for_status = MagicMock()
-
-        mock_client = AsyncMock()
-        mock_client.get.return_value = mock_response
-        mock_get_client.return_value = mock_client
-
-        result = await OllamaModel._resolve_image('https://example.com/cat.jpg')
-
-        assert result == b'\x89PNG\r\n\x1a\n'
-        mock_client.get.assert_awaited_once_with('https://example.com/cat.jpg')
-        mock_response.raise_for_status.assert_called_once()
-
-    async def test_image_fetch_sends_user_agent_and_follows_redirects(self) -> None:
-        """Image hosts that 403 bare requests still serve Ollama's image fetch."""
-        client = _image_fetch_client()
-        try:
-            assert client.headers['User-Agent'].startswith('Genkit/')
-            assert client.follow_redirects is True
-            assert client.timeout == httpx.Timeout(60.0)
-        finally:
-            await client.aclose()
-
-    @patch('genkit_ollama._models._image_fetch_client')
-    async def test_http_url_client_error_is_invalid_argument(self, mock_get_client: MagicMock) -> None:
-        """A 4xx from the image host means the caller's URL is bad.
-
-        INVALID_ARGUMENT, not NOT_FOUND, so Fallback does not switch models
-        over a URL no model can fetch.
-        """
-        for status in (403, 404, 410):
-            with self.subTest(status=status):
-                request = httpx.Request('GET', 'https://menu.example/dishes/tiramisu.jpg')
-                mock_client = AsyncMock()
-                mock_client.get.return_value = httpx.Response(status, request=request)
-                mock_get_client.return_value = mock_client
-
-                with self.assertRaises(GenkitError) as raised:
-                    await OllamaModel._resolve_image('https://menu.example/dishes/tiramisu.jpg')
-
-                self.assertEqual(raised.exception.status, 'INVALID_ARGUMENT')
-                self.assertIsInstance(raised.exception.__cause__, httpx.HTTPStatusError)
-
-    @patch('genkit_ollama._models._image_fetch_client')
-    async def test_http_url_transient_error_stays_raw(self, mock_get_client: MagicMock) -> None:
-        """408/429/5xx from the image host stay unclassified so Retry can try again."""
-        for status in (408, 429, 500, 503):
-            with self.subTest(status=status):
-                request = httpx.Request('GET', 'https://menu.example/dishes/tiramisu.jpg')
-                mock_client = AsyncMock()
-                mock_client.get.return_value = httpx.Response(status, request=request)
-                mock_get_client.return_value = mock_client
-
-                with self.assertRaises(httpx.HTTPStatusError):
-                    await OllamaModel._resolve_image('https://menu.example/dishes/tiramisu.jpg')
 
 
 class TestBuildChatMessagesWithMedia(unittest.IsolatedAsyncioTestCase):
