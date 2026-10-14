@@ -144,6 +144,18 @@ Types exported from genkit, genkit.model, genkit.embedder, genkit.plugin_api, ge
 
 ::: genkit.telemetry.SpanMetadata
 
+## genkit.middleware
+
+::: genkit.middleware.Middleware
+
+::: genkit.middleware.MiddlewareContext
+
+::: genkit.middleware.GenerateHookParams
+
+::: genkit.middleware.ModelHookParams
+
+::: genkit.middleware.ToolHookParams
+
 ## genkit.exp.agent
 
 ::: genkit.exp.agent.apply_json_patch

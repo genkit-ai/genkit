@@ -35,41 +35,13 @@ them in the Dev UI and to name them in a ``.prompt`` file's ``use:``.
 ``genkit_middleware.exp`` alongside the other experimental agent APIs.
 """
 
-from genkit.middleware import GenerateMiddleware
+from genkit.middleware import Middleware as GenkitMiddleware
 from genkit.plugin_api import Action, ActionKind, ActionMetadata, Plugin
 from genkit_middleware._fallback import Fallback
 from genkit_middleware._filesystem import Filesystem
 from genkit_middleware._retry import Retry
 from genkit_middleware._skills import Skills
 from genkit_middleware._tool_approval import ToolApproval
-
-_MIDDLEWARE_DESCS = [
-    GenerateMiddleware(
-        cls=Retry,
-        name='retry',
-        description='Retries model calls on transient failures with exponential backoff',
-    ),
-    GenerateMiddleware(
-        cls=Fallback,
-        name='fallback',
-        description='Falls back to alternative models on failure',
-    ),
-    GenerateMiddleware(
-        cls=ToolApproval,
-        name='tool_approval',
-        description='Requires approval before executing tools',
-    ),
-    GenerateMiddleware(
-        cls=Skills,
-        name='skills',
-        description='Provides access to skill library for specialized instructions',
-    ),
-    GenerateMiddleware(
-        cls=Filesystem,
-        name='filesystem',
-        description='Sandboxed filesystem operations',
-    ),
-]
 
 
 class Middleware(Plugin):
@@ -118,9 +90,9 @@ class Middleware(Plugin):
         """Lists nothing."""
         return []
 
-    def list_middleware(self) -> list[GenerateMiddleware]:
+    def list_middleware(self) -> list[type[GenkitMiddleware]]:
         """Retry, Fallback, ToolApproval, Skills and Filesystem."""
-        return list(_MIDDLEWARE_DESCS)
+        return [Retry, Fallback, ToolApproval, Skills, Filesystem]
 
 
 __all__ = [

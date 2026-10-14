@@ -26,7 +26,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from genkit import FinishReason, Message, ModelResponse, ModelResponseChunk, Part, Role
-from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
+from genkit.middleware import Middleware, MiddlewareContext, ModelHookParams
 from genkit.model import ABNORMAL_FINISH_REASONS, ModelRequest
 
 from ._catalog import A2uiCatalog, render_catalog_instructions
@@ -61,7 +61,7 @@ class SurfacesConfig(BaseModel):
     version: SupportedVersion = DEFAULT_VERSION
 
 
-class Surfaces(BaseMiddleware[SurfacesConfig]):
+class Surfaces(Middleware[SurfacesConfig]):
     """Rewrites A2UI fenced model output into data parts.
 
     On the next turn, inbound A2UI parts become text so the model can see
@@ -75,11 +75,13 @@ class Surfaces(BaseMiddleware[SurfacesConfig]):
     hallucinated surface back to the model.
     """
 
+    name = 'surfaces'
+
     async def wrap_model(
         self,
         params: ModelHookParams,
-        ctx: GenerateMiddlewareContext,
-        next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ctx: MiddlewareContext,
+        next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         catalog = resolve_catalog(ctx=ctx, catalog=self.config.catalog)
         version = self.config.version or DEFAULT_VERSION

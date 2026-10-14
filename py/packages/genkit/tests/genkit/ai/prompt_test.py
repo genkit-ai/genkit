@@ -58,14 +58,12 @@ from genkit._core._dap import DapValue
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import GenerateActionOptions, ModelConfig, resume_options_to_resume
 from genkit._core._registry import define_dynamic_action_provider
-from genkit._core._typing import Role
+from genkit._core._typing import MiddlewareRef, Role
 from genkit.exp import Genkit as ExpGenkit
 from genkit.exp.agent import InMemorySessionStore
 from genkit.middleware import (
-    BaseMiddleware,
-    GenerateMiddleware,
-    GenerateMiddlewareContext,
-    MiddlewareRef,
+    Middleware,
+    MiddlewareContext,
     ModelHookParams,
 )
 from genkit.plugin_api import ActionMetadata, Plugin
@@ -77,12 +75,14 @@ from genkit.testing import (
 )
 
 
-class _PreMiddleware(BaseMiddleware):
+class _PreMiddleware(Middleware):
+    name = 'pre_mw'
+
     async def wrap_model(
         self,
         params: ModelHookParams,
-        ctx: GenerateMiddlewareContext,
-        next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ctx: MiddlewareContext,
+        next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         txt = ''.join(text_from_message(m) for m in params.request.messages)
         return await next_fn(
@@ -95,12 +95,14 @@ class _PreMiddleware(BaseMiddleware):
         )
 
 
-class _PostMiddleware(BaseMiddleware):
+class _PostMiddleware(Middleware):
+    name = 'post_mw'
+
     async def wrap_model(
         self,
         params: ModelHookParams,
-        ctx: GenerateMiddlewareContext,
-        next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ctx: MiddlewareContext,
+        next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         resp: ModelResponse = await next_fn(params, ctx)
         assert resp.message is not None
@@ -123,11 +125,8 @@ class PrePostPlugin(Plugin):
     async def list_actions(self) -> list[ActionMetadata]:
         return []
 
-    def list_middleware(self) -> list[GenerateMiddleware]:
-        return [
-            GenerateMiddleware(cls=_PreMiddleware, name='pre_mw'),
-            GenerateMiddleware(cls=_PostMiddleware, name='post_mw'),
-        ]
+    def list_middleware(self) -> list[type[Middleware]]:
+        return [_PreMiddleware, _PostMiddleware]
 
 
 def setup_test() -> tuple[Genkit, EchoModel, ScriptedModel]:
@@ -1145,7 +1144,7 @@ def test_with_overrides_applies_every_prompt_setting() -> None:
         'tools': ['grill'],
         'tool_choice': 'none',
         'docs': [Document.from_text('allergen chart')],
-        'use': [MiddlewareRef(name='allergy_check')],
+        'use': [_PreMiddleware()],
         'max_turns': 2,
         'return_tool_requests': True,
         'resume_respond': [answer],
@@ -1402,14 +1401,14 @@ def _allergy_check_prompt(ai: Genkit, pm: ScriptedModel, seen: list[tuple[str, d
     """A prompt whose model calls `check_allergies` once. Middleware and the tool record the context they ran with."""
 
     # The engine builds middleware from its class, so the recorder closes over `seen` instead of holding it.
-    class RecordContext(BaseMiddleware):
+    class RecordContext(Middleware):
         async def wrap_model(
             self,
             params: ModelHookParams,
-            ctx: GenerateMiddlewareContext,
-            next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+            ctx: MiddlewareContext,
+            next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
         ) -> ModelResponse:
-            seen.append(('middleware', dict(ctx.custom_context)))
+            seen.append(('middleware', dict(ctx.context)))
             return await next_fn(params, ctx)
 
     @ai.tool(name='check_allergies')

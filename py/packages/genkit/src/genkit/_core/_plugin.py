@@ -22,7 +22,7 @@ import abc
 from collections.abc import Sequence
 
 from genkit._core._action import Action, ActionKind, set_action_name
-from genkit._core._middleware import GenerateMiddleware
+from genkit._core._middleware import Middleware
 from genkit._core._typing import ActionMetadata
 
 
@@ -101,20 +101,27 @@ class Plugin(abc.ABC):
         """
         ...
 
-    def list_middleware(self) -> list[GenerateMiddleware]:
-        """Return middleware this plugin registers on the app. Defaults to none.
+    def list_middleware(self) -> Sequence[type[Middleware]]:
+        """Return middleware classes this plugin registers on the app. Defaults to none.
 
         Runs once while :class:`Genkit` is constructed, after built-in
-        middleware. Use flat names without ``/`` so they don't collide.
+        middleware. Each returned :class:`~genkit.middleware.Middleware`
+        subclass is registered under its ``cls.name`` via
+        :meth:`Genkit.define_middleware() <genkit.Genkit.define_middleware>`.
 
         Example:
             ```python
             from genkit import Genkit
-            from genkit.middleware import GenerateMiddleware, MiddlewareRef
+            from genkit.middleware import Middleware
             from genkit.plugin_api import Action, ActionKind, ActionMetadata, Plugin
 
 
-            # 1. A plugin that only contributes middleware
+            # 1. Define a middleware class with a registry name
+            class AllergyCheck(Middleware):
+                name = 'allergy_check'
+
+
+            # 2. A plugin that contributes the middleware class
             class AllergyGuard(Plugin):
                 name = 'allergy-guard'
 
@@ -127,14 +134,14 @@ class Plugin(abc.ABC):
                 async def list_actions(self) -> list[ActionMetadata]:
                     return []
 
-                def list_middleware(self) -> list[GenerateMiddleware]:
-                    return [GenerateMiddleware(cls=AllergyCheck, name='allergy_check')]
+                def list_middleware(self) -> list[type[Middleware]]:
+                    return [AllergyCheck]
 
 
-            # 2. Register it, then use the middleware by name
+            # 3. Register the plugin and pass the middleware in use=[...]
             ai = Genkit(plugins=[AllergyGuard()])
-            res = await ai.generate(prompt='Suggest a dish.', use=[MiddlewareRef(name='allergy_check')])
-            # => allergy_check runs around the model call
+            res = await ai.generate(prompt='Suggest a dish.', use=[AllergyCheck()])
+            # => AllergyCheck runs around the model call
             ```
         """
         return []

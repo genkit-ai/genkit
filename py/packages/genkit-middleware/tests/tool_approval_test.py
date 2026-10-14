@@ -22,7 +22,7 @@ from genkit_middleware import ToolApproval
 from genkit import MultipartToolResponse, Part
 from genkit._ai._tools import Interrupt, define_tool
 from genkit._core._registry import Registry
-from genkit.middleware import GenerateMiddlewareContext, ToolHookParams
+from genkit.middleware import MiddlewareContext, ToolHookParams
 
 
 def _make_tool(name: str):
@@ -36,7 +36,7 @@ def _make_tool(name: str):
 
 
 @pytest.mark.asyncio
-async def test_tool_approval_allowed_tool(ctx: GenerateMiddlewareContext) -> None:
+async def test_tool_approval_allowed_tool(ctx: MiddlewareContext) -> None:
     """Test that allowed tools pass through without approval."""
     approval = ToolApproval(allowed_tools=['get_weather'])
 
@@ -52,7 +52,7 @@ async def test_tool_approval_allowed_tool(ctx: GenerateMiddlewareContext) -> Non
 
 
 @pytest.mark.asyncio
-async def test_tool_approval_non_allowed_tool(ctx: GenerateMiddlewareContext) -> None:
+async def test_tool_approval_non_allowed_tool(ctx: MiddlewareContext) -> None:
     """Test that non-allowed tools raise Interrupt."""
     approval = ToolApproval(allowed_tools=['get_weather'])
 
@@ -69,7 +69,7 @@ async def test_tool_approval_non_allowed_tool(ctx: GenerateMiddlewareContext) ->
 
 
 @pytest.mark.asyncio
-async def test_tool_approval_resumed_with_approval(ctx: GenerateMiddlewareContext) -> None:
+async def test_tool_approval_resumed_with_approval(ctx: MiddlewareContext) -> None:
     """Test that resumed tools with approval metadata pass through."""
     approval = ToolApproval(allowed_tools=[])
 
@@ -87,7 +87,7 @@ async def test_tool_approval_resumed_with_approval(ctx: GenerateMiddlewareContex
 
 
 @pytest.mark.asyncio
-async def test_tool_approval_empty_allowed_list(ctx: GenerateMiddlewareContext) -> None:
+async def test_tool_approval_empty_allowed_list(ctx: MiddlewareContext) -> None:
     """Test that empty allowed list requires approval for all tools."""
     approval = ToolApproval(allowed_tools=[])
 
@@ -103,7 +103,7 @@ async def test_tool_approval_empty_allowed_list(ctx: GenerateMiddlewareContext) 
 
 
 @pytest.mark.asyncio
-async def test_tool_approval_resumed_with_snake_case_approval(ctx: GenerateMiddlewareContext) -> None:
+async def test_tool_approval_resumed_with_snake_case_approval(ctx: MiddlewareContext) -> None:
     """Test that resumed tools with tool_approved snake_case metadata pass through."""
     approval = ToolApproval(allowed_tools=[])
 

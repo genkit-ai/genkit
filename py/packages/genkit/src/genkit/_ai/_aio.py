@@ -93,11 +93,7 @@ from genkit._core._dap import DapFn, DynamicActionProvider
 from genkit._core._environment import is_dev_environment
 from genkit._core._error import GenkitError, RuntimeErrorReason, StatusName
 from genkit._core._logger import configure_logging, get_logger, resolve_level
-from genkit._core._middleware import (
-    BaseMiddleware,
-    GenerateMiddleware,
-    _validate_middleware_key_segment,
-)
+from genkit._core._middleware import Middleware
 from genkit._core._model import (
     Document,
     EmbedRequest,
@@ -127,7 +123,6 @@ from genkit._core._typing import (
     Embedding,
     EvaluatorRequest,
     EvaluatorResponse,
-    MiddlewareRef,
     ModelInfo,
     Operation,
     Role,
@@ -145,7 +140,7 @@ ChunkT = TypeVar('ChunkT')
 
 R = TypeVar('R')
 T = TypeVar('T')
-MiddlewareT = TypeVar('MiddlewareT', bound=BaseMiddleware)
+MiddlewareT = TypeVar('MiddlewareT', bound=Middleware)
 
 # Value kinds core reads with a fixed type, and the API that registers each.
 _CORE_VALUE_KINDS: dict[str, str] = {
@@ -423,31 +418,44 @@ class Genkit:
 
     def define_middleware(
         self,
-        cls: type[BaseMiddleware],
+        cls: type[MiddlewareT],
         *,
-        name: str,
+        name: str | None = None,
         description: str | None = None,
-    ) -> GenerateMiddleware:
-        """Register a middleware class on this app's registry under ``name``."""
-        res = _validate_middleware_key_segment(name)
-        if res.errored:
-            raise ValueError(f'middleware name {res.error_message}')
-        desc = GenerateMiddleware(cls=cls, name=name, description=description)
-        self._registry.register_value('middleware', name, desc)
-        return desc
+    ) -> type[MiddlewareT]:
+        """Register a middleware class on this app's registry."""
+        desc = cls._middleware_metadata(name, description=description)
+        self._registry.register_value('middleware', desc.name, desc)
+        return cls
 
+    @overload
+    def middleware(
+        self,
+        cls: type[MiddlewareT],
+    ) -> type[MiddlewareT]: ...
+
+    @overload
     def middleware(
         self,
         *,
-        name: str,
+        name: str | None = None,
         description: str | None = None,
-    ) -> Callable[[type[MiddlewareT]], type[MiddlewareT]]:
+    ) -> Callable[[type[MiddlewareT]], type[MiddlewareT]]: ...
+
+    def middleware(
+        self,
+        cls: type[MiddlewareT] | None = None,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+    ) -> type[MiddlewareT] | Callable[[type[MiddlewareT]], type[MiddlewareT]]:
         """Decorator that registers a custom middleware on this app's registry."""
 
-        def decorator(cls: type[MiddlewareT]) -> type[MiddlewareT]:
-            self.define_middleware(cls, name=name, description=description)
-            return cls
+        def decorator(target: type[MiddlewareT]) -> type[MiddlewareT]:
+            return self.define_middleware(target, name=name, description=description)
 
+        if cls is not None:
+            return decorator(cls)
         return decorator
 
     def define_interrupt(
@@ -691,7 +699,7 @@ class Genkit:
         metadata: dict[str, object] | None = None,
         tools: Sequence[str | Tool] | None = None,
         tool_choice: ToolChoice | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
         input_schema: type[InputT],
         output_schema: type[OutputT],
@@ -718,7 +726,7 @@ class Genkit:
         metadata: dict[str, object] | None = None,
         tools: Sequence[str | Tool] | None = None,
         tool_choice: ToolChoice | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
         input_schema: type[InputT],
         output_schema: type[OutputT],
@@ -746,7 +754,7 @@ class Genkit:
         metadata: dict[str, object] | None = None,
         tools: Sequence[str | Tool] | None = None,
         tool_choice: ToolChoice | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
         input_schema: type[InputT],
         output_schema: dict[str, object] | str | None = None,
@@ -773,7 +781,7 @@ class Genkit:
         metadata: dict[str, object] | None = None,
         tools: Sequence[str | Tool] | None = None,
         tool_choice: ToolChoice | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
         input_schema: type[InputT],
         output_schema: dict[str, object] | str | None = None,
@@ -801,7 +809,7 @@ class Genkit:
         metadata: dict[str, object] | None = None,
         tools: Sequence[str | Tool] | None = None,
         tool_choice: ToolChoice | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
         input_schema: dict[str, object] | str | None = None,
         output_schema: type[OutputT],
@@ -828,7 +836,7 @@ class Genkit:
         metadata: dict[str, object] | None = None,
         tools: Sequence[str | Tool] | None = None,
         tool_choice: ToolChoice | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
         input_schema: dict[str, object] | str | None = None,
         output_schema: type[OutputT],
@@ -856,7 +864,7 @@ class Genkit:
         metadata: dict[str, object] | None = None,
         tools: Sequence[str | Tool] | None = None,
         tool_choice: ToolChoice | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
         input_schema: type | dict[str, object] | str | None = None,
         output_schema: type | dict[str, object] | str | None = None,
@@ -883,7 +891,7 @@ class Genkit:
         metadata: dict[str, object] | None = None,
         tools: Sequence[str | Tool] | None = None,
         tool_choice: ToolChoice | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
         input_schema: type | dict[str, object] | str | None = None,
         output_schema: type | dict[str, object] | str | None = None,
@@ -909,7 +917,7 @@ class Genkit:
         metadata: dict[str, object] | None = None,
         tools: Sequence[str | Tool] | None = None,
         tool_choice: ToolChoice | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
         input_schema: type | dict[str, object] | str | None = None,
         output_schema: type | dict[str, object] | str | None = None,
@@ -1178,12 +1186,12 @@ class Genkit:
                     raise ValueError(f'Invalid {plugin=} provided to Genkit: must be of type `genkit.ai.Plugin`')
 
     def _register_plugin_middleware(self, plugins: list[Plugin] | None) -> None:
-        """Register middleware descriptors returned by ``Plugin.list_middleware``."""
+        """Register middleware classes returned by ``Plugin.list_middleware``."""
         if not plugins:
             return
         for plugin in plugins:
-            for desc in plugin.list_middleware():
-                self._registry.register_value('middleware', desc.name, desc)
+            for mw_cls in plugin.list_middleware():
+                self.define_middleware(mw_cls)
 
     def run_main(self, coro: Coroutine[Any, Any, T]) -> T:
         """Run your ``main`` coroutine and return its result, like ``asyncio.run``.
@@ -1362,7 +1370,7 @@ class Genkit:
         output_content_type: str | None = None,
         output_instructions: bool | str | None = None,
         output_constrained: bool | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
     ) -> ModelResponse[OutputT]: ...
 
@@ -1389,7 +1397,7 @@ class Genkit:
         output_content_type: str | None = None,
         output_instructions: bool | str | None = None,
         output_constrained: bool | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
     ) -> ModelResponse[OutputT]: ...
 
@@ -1416,7 +1424,7 @@ class Genkit:
         output_content_type: str | None = None,
         output_instructions: bool | str | None = None,
         output_constrained: bool | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
     ) -> ModelResponse[Any]: ...
 
@@ -1443,7 +1451,7 @@ class Genkit:
         output_content_type: str | None = None,
         output_instructions: bool | str | None = None,
         output_constrained: bool | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
     ) -> ModelResponse[Any]: ...
 
@@ -1468,7 +1476,7 @@ class Genkit:
         output_content_type: str | None = None,
         output_instructions: bool | str | None = None,
         output_constrained: bool | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
     ) -> ModelResponse[Any]:
         """Generate text or structured data using a language model.
@@ -1546,7 +1554,7 @@ class Genkit:
         output_content_type: str | None = None,
         output_instructions: bool | str | None = None,
         output_constrained: bool | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
     ) -> ModelStreamResponse[OutputT]: ...
 
@@ -1573,7 +1581,7 @@ class Genkit:
         output_content_type: str | None = None,
         output_instructions: bool | str | None = None,
         output_constrained: bool | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
     ) -> ModelStreamResponse[OutputT]: ...
 
@@ -1600,7 +1608,7 @@ class Genkit:
         output_content_type: str | None = None,
         output_instructions: bool | str | None = None,
         output_constrained: bool | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
     ) -> ModelStreamResponse[Any]: ...
 
@@ -1627,7 +1635,7 @@ class Genkit:
         output_content_type: str | None = None,
         output_instructions: bool | str | None = None,
         output_constrained: bool | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
     ) -> ModelStreamResponse[Any]: ...
 
@@ -1652,7 +1660,7 @@ class Genkit:
         output_content_type: str | None = None,
         output_instructions: bool | str | None = None,
         output_constrained: bool | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
     ) -> ModelStreamResponse[Any]:
         """Stream generated text, returning a ModelStreamResponse with .stream and .response.
@@ -1728,7 +1736,7 @@ class Genkit:
         output_content_type: str | None = None,
         output_instructions: bool | str | None = None,
         output_constrained: bool | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
         on_chunk: Callable[[ModelResponseChunk], None] | None = None,
     ) -> ModelResponse[Any]:
@@ -1743,7 +1751,7 @@ class Genkit:
         scope = CallScope(self)
         registry = scope.registry
         await register_tools(registry, tools)
-        use = register_middleware(registry, use)
+        use_refs = register_middleware(registry, use)
         resolved = await resolve_for_generate(model=model, config=config, registry=registry)
         check_call_config(config=config, schema=resolved.config_schema, model=resolved.name)
         # strings passed at call time are content, not templates: braces may be
@@ -1777,7 +1785,7 @@ class Genkit:
                 output_schema=output_schema,
                 output_constrained=output_constrained,
                 docs=docs,
-                use=use,
+                use=use_refs,
             ),
         )
         return await generate_action(
@@ -1999,7 +2007,7 @@ class Genkit:
         messages: list[Message] | None = None,
         config: ModelConfigDict,
         context: dict[str, object] | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
     ) -> Operation: ...
 
@@ -2013,7 +2021,7 @@ class Genkit:
         messages: list[Message] | None = None,
         config: ModelRefConfigT | Mapping[str, Any] | None = None,
         context: dict[str, object] | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
     ) -> Operation: ...
 
@@ -2026,7 +2034,7 @@ class Genkit:
         messages: list[Message] | None = None,
         config: BaseModel | ModelConfigDict | Mapping[str, Any] | None = None,
         context: dict[str, object] | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
     ) -> Operation:
         """Generate content using a long-running model, returning an Operation to poll.

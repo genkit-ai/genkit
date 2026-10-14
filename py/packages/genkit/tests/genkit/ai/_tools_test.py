@@ -15,7 +15,7 @@ from genkit._ai._tools import (
     run_tool_after_restart,
 )
 from genkit._core._error import GenkitError, RuntimeErrorReason
-from genkit._core._middleware import GenerateMiddlewareContext
+from genkit._core._middleware import MiddlewareContext
 from genkit.plugin_api import ActionKind
 
 
@@ -314,7 +314,7 @@ async def test_run_tool_after_restart_response_preserves_ref_and_uses_new_input(
 
 @pytest.mark.asyncio
 async def test_run_tool_after_restart_pipes_generate_context() -> None:
-    """``run_tool_after_restart(..., ctx=ctx)`` pipes custom_context into ``ToolRunContext.context``."""
+    """``run_tool_after_restart(..., ctx=ctx)`` pipes context into ``ToolRunContext.context``."""
     ai = Genkit()
     seen: list[dict[str, object]] = []
 
@@ -327,7 +327,7 @@ async def test_run_tool_after_restart_pipes_generate_context() -> None:
     assert action is not None
 
     restart_trp = Part.from_tool_request(name='ctx_restart_tool', ref='r1', input={}, metadata={'resumed': True})
-    mw_ctx = GenerateMiddlewareContext(ai, custom_context={'auth_role': 'admin'})
+    mw_ctx = MiddlewareContext(ai, context={'auth_role': 'admin'})
     await run_tool_after_restart(tool=action, restart_trp=restart_trp, ctx=mw_ctx)
 
     assert seen == [{'auth_role': 'admin'}]
