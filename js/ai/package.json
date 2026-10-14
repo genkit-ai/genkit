@@ -32,7 +32,7 @@
     "@types/node": "^20.11.19",
     "colorette": "^2.0.20",
     "dotprompt": "^1.1.1",
-    "handlebars": "^4.7.8",
+    "handlebars": "^4.7.10",
     "json5": "^2.2.3",
     "node-fetch": "^3.3.2",
     "partial-json": "^0.1.7",
