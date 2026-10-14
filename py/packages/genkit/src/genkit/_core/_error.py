@@ -349,11 +349,16 @@ class ErrorResponseMetadata(TypedDict, total=False):
     headers: dict[str, str]
 
 
-class Interrupt(Exception):  # noqa: N818 - public Genkit name; not renamed *Error for style
-    """Pause a tool or generate so the caller can approve, reply, or restart.
+class Interrupt(BaseException):
+    """Pause a tool so the caller can approve, reply, or restart.
 
     Raise ``Interrupt(metadata)`` from a tool or from tool middleware.
-    Tracing treats this as control flow, not a failed span.
+    It is a control-flow signal like ``asyncio.CancelledError``, so it
+    subclasses ``BaseException``: an ``except Exception`` in tool code can't
+    swallow it and skip the approval. Catch ``Interrupt`` by name if a tool
+    needs to clean up, then re-raise. Raised anywhere else (a flow, an
+    agent turn body), the action fails with ``GenkitError`` INTERNAL.
+    Tracing treats it as control flow, not a failed span.
     """
 
     def __init__(self, metadata: dict[str, Any] | None = None) -> None:
@@ -588,6 +593,19 @@ def provider_error(
     return mark_provider_error(error=result)
 
 
+def interrupt_outside_tool_error(interrupt: Interrupt) -> GenkitError:
+    """The error an Interrupt becomes when it escapes something that isn't a tool.
+
+    Only generate's tool loop can turn an Interrupt into a pause. Anywhere
+    else it would escape ``except Exception`` handlers as a bare
+    BaseException, so the action boundary and the agent turn loop report it
+    as a failed run instead. ``cause`` keeps the metadata for debugging.
+    """
+    error = GenkitError(status='INTERNAL', message='Interrupt raised outside a tool', cause=interrupt)
+    error.__cause__ = interrupt
+    return error
+
+
 class PublicError(GenkitError):
     """Error class for issues to be returned to users.
 
@@ -741,7 +759,7 @@ def get_error_stack(error: object) -> str | None:
     Returns:
         The stack trace string if available, None otherwise.
     """
-    if isinstance(error, Exception):
+    if isinstance(error, BaseException):
         # Stack traces are valuable for debugging; consider making this configurable
         # to enable them in development/staging and suppress in production.
         # For now, return an empty string to keep Dev UI clean as per requirements.

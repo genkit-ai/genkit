@@ -45,7 +45,13 @@ from typing_extensions import TypeVar
 
 from genkit._core._channel import Channel, CloseableQueue
 from genkit._core._compat import StrEnum
-from genkit._core._error import GenkitError, Interrupt, RuntimeErrorReason, mark_request_error
+from genkit._core._error import (
+    GenkitError,
+    Interrupt,
+    RuntimeErrorReason,
+    interrupt_outside_tool_error,
+    mark_request_error,
+)
 from genkit._core._model import (
     EmbedRequest,
     ModelRequest,
@@ -1188,6 +1194,11 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             except Interrupt as e:
                 if e.metadata:
                     span.set_metadata({'interrupt': e.metadata})
+                # Only generate's tool loop turns an Interrupt into a pause.
+                # Anywhere else it is a BaseException that `except Exception`
+                # handlers (web adapters, agent transports) would miss.
+                if self._kind != ActionKind.TOOL:
+                    raise interrupt_outside_tool_error(e) from e
                 raise
             if self._strict_io:
                 output = self._validate_output(output)

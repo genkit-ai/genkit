@@ -36,7 +36,7 @@ from genkit._ai._agents._types import StateManagement, TurnResult
 from genkit._ai._json_patch import apply_json_patch
 from genkit._core._action import ActionRunContext
 from genkit._core._channel import CloseableQueue
-from genkit._core._error import GenkitError, GenkitRuntimeError, RuntimeErrorReason
+from genkit._core._error import GenkitError, GenkitRuntimeError, Interrupt, RuntimeErrorReason
 from genkit._core._model import (
     AgentInit,
     AgentInput,
@@ -2027,6 +2027,53 @@ async def test_send_on_failed_turn_without_error_still_has_error() -> None:
 
     err = _assert_failed(res, message='Agent turn failed.')
     assert err.status == 'UNKNOWN'
+
+
+@pytest.mark.asyncio
+async def test_send_when_turn_calls_interrupting_tool_directly_returns_failed_turn() -> None:
+    """A turn body that calls an interrupting tool itself fails the turn instead of hanging.
+
+    Only generate can pause on an Interrupt. Raised straight out of a turn
+    body it would skip the runtime's `except Exception` and leave send()
+    waiting forever, so the runtime fails the turn with INTERNAL.
+    """
+    ai = Genkit()
+
+    @ai.tool()
+    async def refund_order(order_id: str) -> str:
+        """Refund an order; needs approval."""
+        raise Interrupt({'reason': 'needs approval', 'order_id': order_id})
+
+    async def handle(session_runner: SessionRunner, inp: AgentInput) -> TurnResult | None:
+        del session_runner, inp
+        await refund_order('A-17')
+        return TurnResult(finish_reason=AgentFinishReason.STOP)
+
+    agent = _define_turns(ai, 'refundDesk', handle, store=InMemorySessionStore())
+    res = await asyncio.wait_for(agent.chat().send('refund A-17'), timeout=2.0)
+
+    err = _assert_failed(res, message='Interrupt raised outside a tool')
+    assert err.status == 'INTERNAL'
+
+
+@pytest.mark.asyncio
+async def test_send_when_agent_fn_raises_interrupt_outside_turn_does_not_hang() -> None:
+    """An Interrupt raised by the agent fn outside any turn settles send() with GenkitError.
+
+    No turn ran, so there is no turn result to return; send() raises like
+    any other agent fn failure instead of waiting forever.
+    """
+
+    async def fn(session_runner: SessionRunner, _: ActionRunContext) -> AgentResult:
+        del session_runner
+        raise Interrupt({'reason': 'needs approval'})
+
+    agent = define_custom_agent(Genkit(), 'refundDeskSetup', fn, store=InMemorySessionStore())
+    with pytest.raises(GenkitError) as exc:
+        await asyncio.wait_for(agent.chat().send('refund A-17'), timeout=2.0)
+
+    assert exc.value.status == 'INTERNAL'
+    assert 'Interrupt raised outside a tool' in str(exc.value)
 
 
 @pytest.mark.asyncio

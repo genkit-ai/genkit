@@ -27,7 +27,7 @@ from genkit_fastapi import genkit_fastapi_handler, serve_flow
 from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from genkit import ActionRunContext, Genkit, GenkitError, PublicError, RequestData
+from genkit import ActionRunContext, Genkit, GenkitError, Interrupt, PublicError, RequestData
 from genkit.plugin_api import provider_error
 
 
@@ -295,6 +295,32 @@ def test_fastapi_stream_flow_raising_value_error_sends_sse_internal_error_withou
     assert error == {'message': 'Internal Error', 'status': 'INTERNAL'}
     assert 'secret' not in response.text
     assert 'stack' not in error
+
+
+def test_fastapi_flow_raising_interrupt_returns_500_and_sse_internal_error() -> None:
+    """A flow raising Interrupt (a BaseException) still gets the Genkit 500 body and SSE error frame.
+
+    The action boundary turns it into GenkitError INTERNAL, so the adapter's
+    `except Exception` sees it; without that the run is a bare 500 and the
+    stream a 200 with no error event.
+    """
+    ai = Genkit()
+
+    @ai.flow()
+    async def refund(order_id: str) -> str:
+        raise Interrupt({'reason': 'needs approval', 'order_id': order_id})
+
+    app = FastAPI()
+    app.include_router(serve_flow(refund, base_path='/refund'))
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.post('/refund', json={'data': 'A-17'})
+    assert response.status_code == 500
+    assert response.json() == {'message': 'Internal Error', 'status': 'INTERNAL'}
+
+    response = client.post('/refund', json={'data': 'A-17'}, headers={'Accept': 'text/event-stream'})
+    assert sse_error_event(response.text) == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert 'A-17' not in response.text
 
 
 def test_fastapi_context_provider_sees_method_lowercase_headers_and_input() -> None:

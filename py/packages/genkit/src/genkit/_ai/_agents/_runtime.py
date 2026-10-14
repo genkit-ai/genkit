@@ -44,7 +44,15 @@ from genkit._ai._generate import CallScope, generate_action
 from genkit._ai._json_patch import diff_json
 from genkit._core._action import ActionRunContext, StreamingCallback, get_current_context
 from genkit._core._channel import CloseableQueue, QueueShutDown
-from genkit._core._error import GenkitError, GenkitRuntimeError, PublicError, RuntimeErrorReason, StatusName
+from genkit._core._error import (
+    GenkitError,
+    GenkitRuntimeError,
+    Interrupt,
+    PublicError,
+    RuntimeErrorReason,
+    StatusName,
+    interrupt_outside_tool_error,
+)
 from genkit._core._logger import get_logger
 from genkit._core._model import (
     AgentInit,
@@ -191,7 +199,11 @@ class SessionRunner(Generic[StateT]):
                 self.last_good_state_version = self.session.version
                 self.last_good_finish_reason = self.last_turn_finish_reason
                 self.turn_index += 1
-            except Exception as exc:
+            except (Exception, Interrupt) as exc:
+                # A tool the turn body called directly can raise Interrupt.
+                # There's no generate loop here to pause, so the turn fails.
+                if isinstance(exc, Interrupt):
+                    exc = interrupt_outside_tool_error(exc)
                 self.last_turn_finish_reason = AgentFinishReason.FAILED
                 self.last_turn_error = to_error_details(exc)
 
@@ -869,6 +881,8 @@ class AgentRuntime:
                     coro=fn(self.session_runner, action_ctx),
                 )
                 result_holder.append(result)
+            except Interrupt as e:
+                err_holder.append(interrupt_outside_tool_error(e))
             except Exception as e:  # noqa: BLE001
                 err_holder.append(e)
             finally:

@@ -182,6 +182,154 @@ async def test_interrupt_wires_trp_metadata_interrupt_and_stops() -> None:
     ]
 
 
+def _refund_request(*, order_id: str, amount: int) -> ModelResponse:
+    return ModelResponse(
+        finish_reason=FinishReason.STOP,
+        message=Message.model_validate({
+            'role': 'model',
+            'content': [
+                {
+                    'toolRequest': {
+                        'ref': 'r1',
+                        'name': 'refund_order',
+                        'input': {'order_id': order_id, 'amount': amount},
+                    }
+                }
+            ],
+        }),
+    )
+
+
+def _refund_turn_wire(*, order_id: str, amount: int) -> list[dict[str, Any]]:
+    return [
+        {'role': 'user', 'content': [{'text': 'refund my order'}]},
+        {
+            'role': 'model',
+            'content': [
+                {
+                    'toolRequest': {
+                        'ref': 'r1',
+                        'name': 'refund_order',
+                        'input': {'order_id': order_id, 'amount': amount},
+                    },
+                    'metadata': {'interrupt': {'reason': 'needs approval', 'order_id': order_id}},
+                }
+            ],
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_tool_catch_all_does_not_swallow_interrupt() -> None:
+    """A tool's ``except Exception`` can't turn an approval Interrupt into a tool result.
+
+    Interrupt is a BaseException, so the catch-all misses it and generate
+    pauses instead of handing the model ``'error: ...'``.
+    """
+    ai = Genkit()
+    pm, _ = define_scripted_model(ai)
+
+    @ai.tool(name='refund_order')
+    async def refund_order(inp: dict) -> str:
+        try:
+            if inp['amount'] > 500:
+                raise Interrupt({'reason': 'needs approval', 'order_id': inp['order_id']})
+            return 'refunded'
+        except Exception as e:  # noqa: BLE001 - the catch-all under test
+            return f'error: {e!r}'
+
+    pm.responses.append(_refund_request(order_id='A-17', amount=900))
+
+    r = await generate_action(
+        CallScope(ai),
+        _gen_opts(
+            ai,
+            tools=['refund_order'],
+            messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'refund my order'}]})],
+        ),
+    )
+    assert r.finish_reason == FinishReason.INTERRUPTED
+    # No role=tool row: the model never received 'error: Interrupt()'.
+    assert _wire(r.messages) == _refund_turn_wire(order_id='A-17', amount=900)
+
+
+@pytest.mark.asyncio
+async def test_wrap_tool_catch_all_does_not_swallow_interrupt() -> None:
+    """A wrap_tool middleware that degrades failures to an output still lets Interrupt through."""
+    ai = Genkit()
+    pm, _ = define_scripted_model(ai)
+
+    @ai.middleware(name='degrade_tool_errors')
+    class DegradeToolErrors(BaseMiddleware):
+        async def wrap_tool(
+            self,
+            params: ToolHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[ToolHookParams, GenerateMiddlewareContext], Awaitable[MultipartToolResponse]],
+        ) -> MultipartToolResponse:
+            try:
+                return await next_fn(params, ctx)
+            except Exception:  # noqa: BLE001 - the catch-all under test
+                return MultipartToolResponse(output='tool failed')
+
+    @ai.tool(name='refund_order')
+    async def refund_order(inp: dict) -> str:
+        raise Interrupt({'reason': 'needs approval', 'order_id': inp['order_id']})
+
+    pm.responses.append(_refund_request(order_id='A-17', amount=900))
+
+    r = await generate_action(
+        CallScope(ai),
+        _gen_opts(
+            ai,
+            tools=['refund_order'],
+            messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'refund my order'}]})],
+            use=[MiddlewareRef(name='degrade_tool_errors')],
+        ),
+    )
+    assert r.finish_reason == FinishReason.INTERRUPTED
+    assert _wire(r.messages) == _refund_turn_wire(order_id='A-17', amount=900)
+
+
+@pytest.mark.asyncio
+async def test_restarted_tool_catch_all_still_interrupts_again() -> None:
+    """On restart, a catch-all around a second Interrupt still pauses instead of returning a result."""
+    ai = Genkit()
+    pm, _ = define_scripted_model(ai)
+
+    @ai.tool(name='refund_order')
+    async def refund_order(inp: dict) -> str:
+        try:
+            raise Interrupt({'reason': 'needs approval', 'order_id': inp['order_id']})
+        except Exception as e:  # noqa: BLE001 - the catch-all under test
+            return f'error: {e!r}'
+
+    pm.responses.append(_refund_request(order_id='A-17', amount=900))
+    first = await generate_action(
+        CallScope(ai),
+        _gen_opts(
+            ai,
+            tools=['refund_order'],
+            messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'refund my order'}]})],
+        ),
+    )
+    assert first.finish_reason == FinishReason.INTERRUPTED
+
+    second = await generate_action(
+        CallScope(ai),
+        _gen_opts(
+            ai,
+            tools=['refund_order'],
+            messages=list(first.messages),
+            resume=Resume(restart=[first.interrupts[0].restart()]),
+        ),
+    )
+    assert second.finish_reason == FinishReason.INTERRUPTED
+    assert second.error is None
+    assert second.interrupts[0].metadata is not None
+    assert second.interrupts[0].metadata['interrupt'] == {'reason': 'needs approval', 'order_id': 'A-17'}
+
+
 @pytest.mark.asyncio
 async def test_resume_respond_trp_gets_resolved_interrupt_and_tool_trp() -> None:
     """Follow-up generate with ``Resume(respond=[...])``: the stuck TRP picks up ``resolvedInterrupt``,

@@ -41,7 +41,6 @@ from typing import Any
 from pydantic import BaseModel as PydanticBaseModel
 
 from genkit import (
-    Interrupt,
     Message,
     ModelResponse,
     ModelResponseChunk,
@@ -362,8 +361,6 @@ class Filesystem(BaseMiddleware[FilesystemConfig]):
 
         try:
             return await next_fn(params, ctx)
-        except Interrupt:
-            raise
         except Exception as exc:
             error_msg = f'Tool "{params.tool.name}" failed: {exc}'
             self._enqueue_parts([Part.from_text(error_msg)])

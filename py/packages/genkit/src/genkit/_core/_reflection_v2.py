@@ -45,7 +45,7 @@ from websockets.exceptions import ConnectionClosed
 from genkit._core._action import Action, BidiAction, input_from_json
 from genkit._core._channel import CloseableQueue
 from genkit._core._constants import GENKIT_VERSION
-from genkit._core._error import ReflectionError, ReflectionErrorDetails, StatusCodes, get_reflection_json
+from genkit._core._error import Interrupt, ReflectionError, ReflectionErrorDetails, StatusCodes, get_reflection_json
 from genkit._core._logger import get_logger
 from genkit._core._middleware import GenerateMiddleware
 from genkit._core._model import AgentInput, ModelRef
@@ -584,7 +584,9 @@ class ReflectionServerV2:
                 output.response,
                 output.trace_id or trace_holder[0],
             )
-        except (asyncio.CancelledError, Exception) as e:
+        except (asyncio.CancelledError, Exception, Interrupt) as e:
+            # A tool run on its own has no generate loop to pause, so its
+            # Interrupt is reported like any other failure.
             await drain_chunks()
             await self.send_run_action_error(sid, e, trace_holder)
             # Report the cancellation to the Dev UI, then let it propagate so the

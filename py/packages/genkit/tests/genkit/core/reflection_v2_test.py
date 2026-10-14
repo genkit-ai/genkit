@@ -44,8 +44,9 @@ import pytest_asyncio
 from pydantic import BaseModel, Field
 from websockets.asyncio.server import serve
 
-from genkit import Genkit
+from genkit import Genkit, Interrupt
 from genkit._core._action import Action, ActionKind, ActionRunContext, BidiAction
+from genkit._core._error import StatusCodes
 from genkit._core._middleware import BaseMiddleware
 from genkit._core._model import AgentInit, AgentInput, ModelConfig
 from genkit._core._reflection import ActionRunner
@@ -546,6 +547,46 @@ async def test_reflection_server_v2_run_action(fake_manager: FakeReflectionManag
 
 
 @pytest.mark.asyncio
+async def test_reflection_server_v2_run_tool_that_interrupts_replies_with_error(
+    fake_manager: FakeReflectionManager,
+) -> None:
+    """Running an interrupting tool from the Dev UI gets an error reply, not silence.
+
+    The tool keeps its raw Interrupt (a BaseException), so runAction has to
+    catch it by name or the request never gets a response.
+    """
+    ai = Genkit()
+
+    @ai.tool()
+    async def refund_order(order_id: str) -> str:
+        """Refund an order; needs approval."""
+        raise Interrupt({'reason': 'needs approval', 'order_id': order_id})
+
+    client, task = await _run_client_lifecycle(ai._registry, fake_manager)
+    try:
+        await ack_register(fake_manager)
+        await fake_manager.write_rpc({
+            'jsonrpc': '2.0',
+            'method': 'runAction',
+            'params': {'key': '/tool.v2/refund_order', 'input': 'A-17'},
+            'id': 'r1',
+        })
+        resp: dict[str, Any] | None = None
+        while resp is None:
+            msg = await asyncio.wait_for(fake_manager.read_rpc(), timeout=2.0)
+            if msg.get('method') == 'runActionState':
+                continue
+            resp = msg
+        assert resp.get('id') == 'r1'
+        assert resp.get('result') is None
+        err = resp.get('error')
+        assert isinstance(err, dict)
+        assert err.get('data', {}).get('code') == StatusCodes.INTERNAL.value
+    finally:
+        await _stop_client(client, task)
+
+
+@pytest.mark.asyncio
 async def test_reflection_server_v2_streaming_run_action(fake_manager: FakeReflectionManager) -> None:
     registry = Registry()
 
@@ -944,6 +985,30 @@ async def test_empty_trace_id_is_not_registered_for_cancel() -> None:
     )
     await runner.on_trace_start('', 'span')
     assert '' not in active
+
+
+@pytest.mark.asyncio
+async def test_reflection_v1_run_tool_that_interrupts_writes_error_payload() -> None:
+    """The HTTP reflection runner reports an interrupting tool as an error, not an empty body."""
+    ai = Genkit()
+
+    @ai.tool()
+    async def refund_order(order_id: str) -> str:
+        """Refund an order; needs approval."""
+        raise Interrupt({'reason': 'needs approval', 'order_id': order_id})
+
+    runner = ActionRunner(
+        action=refund_order.action(),
+        payload={'input': 'A-17'},
+        stream=False,
+        active_actions={},
+    )
+    await runner.execute()
+
+    body = runner.queue.get_nowait()
+    assert body is not None
+    assert json.loads(body)['error']['code'] == StatusCodes.INTERNAL.value
+    assert runner.queue.get_nowait() is None
 
 
 @pytest.mark.asyncio

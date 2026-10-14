@@ -24,7 +24,7 @@ from genkit._core._action import (
     parse_dap_qualified_name,
     parse_plugin_name_from_action_name,
 )
-from genkit._core._error import GenkitError, RuntimeErrorReason
+from genkit._core._error import GenkitError, Interrupt, RuntimeErrorReason
 from genkit._core._model import OutputConfig
 from genkit.embedder import EmbedRequest, EmbedResponse
 from genkit.model import ModelRequest
@@ -676,6 +676,50 @@ async def test_await_tool_that_raises_value_error_raises_value_error() -> None:
         await balance('acme')
 
     assert type(exc.value) is ValueError
+
+
+@pytest.mark.asyncio
+async def test_await_flow_that_raises_interrupt_raises_internal_genkit_error() -> None:
+    """A flow has no tool loop to pause, so its Interrupt becomes GenkitError INTERNAL.
+
+    Interrupt is a BaseException; letting it escape the flow would skip every
+    `except Exception` between here and the web adapter.
+    """
+    ai = Genkit()
+    interrupt = Interrupt({'reason': 'needs approval', 'order_id': 'A-17'})
+
+    @ai.flow()
+    async def refund(order_id: str) -> str:
+        raise interrupt
+
+    with pytest.raises(GenkitError) as exc:
+        await refund('A-17')
+
+    assert exc.value.status == 'INTERNAL'
+    assert exc.value.message == 'Interrupt raised outside a tool'
+    assert exc.value.cause is interrupt
+    assert exc.value.__cause__ is interrupt
+
+
+@pytest.mark.asyncio
+async def test_await_tool_that_raises_interrupt_raises_interrupt_past_except_exception() -> None:
+    """Calling a tool directly lets its Interrupt through raw, past `except Exception`."""
+    ai = Genkit()
+
+    @ai.tool()
+    async def refund_order(order_id: str) -> str:
+        """Refund an order; needs approval."""
+        raise Interrupt({'reason': 'needs approval', 'order_id': order_id})
+
+    caught_by_catch_all = False
+    with pytest.raises(Interrupt) as exc:
+        try:
+            await refund_order('A-17')
+        except Exception:  # noqa: BLE001 - the catch-all under test
+            caught_by_catch_all = True
+
+    assert not caught_by_catch_all
+    assert exc.value.metadata == {'reason': 'needs approval', 'order_id': 'A-17'}
 
 
 @pytest.mark.asyncio

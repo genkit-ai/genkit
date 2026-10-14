@@ -22,6 +22,10 @@ from pathlib import Path
 import pytest
 from genkit_middleware import Filesystem
 
+from genkit import Interrupt, MultipartToolResponse, Part
+from genkit.middleware import GenerateMiddlewareContext, ToolHookParams
+from genkit.model import ToolRequest
+
 # ---------------------------------------------------------------------------
 # Construction / validation
 # ---------------------------------------------------------------------------
@@ -190,3 +194,24 @@ async def test_tools_have_nonempty_descriptions(ctx) -> None:
         fs = Filesystem(root_dir=tmpdir, allow_write_access=True)
         for t in fs.tools(ctx):
             assert t.description, f'{t.name} has empty description'
+
+
+@pytest.mark.asyncio
+async def test_wrap_tool_lets_interrupt_through_without_queueing_an_error(ctx) -> None:
+    """A filesystem tool that pauses still pauses; the error catch-all can't turn it into a message."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        fs = Filesystem(root_dir=tmpdir, allow_write_access=True)
+        write_file = next(t for t in fs.tools(ctx) if t.name == 'write_file')
+        params = ToolHookParams(
+            tool_request_part=Part(tool_request=ToolRequest(name='write_file', input={'path': 'menu.md'})),
+            tool=write_file.action(),
+        )
+
+        async def needs_approval(_params: ToolHookParams, _ctx: GenerateMiddlewareContext) -> MultipartToolResponse:
+            raise Interrupt({'reason': 'confirm overwrite', 'path': 'menu.md'})
+
+        with pytest.raises(Interrupt) as raised:
+            await fs.wrap_tool(params, ctx, needs_approval)
+
+        assert raised.value.metadata == {'reason': 'confirm overwrite', 'path': 'menu.md'}
+        assert fs._message_queue == []  # noqa: SLF001

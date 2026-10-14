@@ -113,6 +113,13 @@ from genkit._core._typing import (
 
 DEFAULT_MAX_TURNS = 50
 
+# Interrupt is a BaseException so a tool's `except Exception` can't swallow it.
+# The engine still catches it wherever a raise becomes a result.
+TOOL_RAISES = (Exception, Interrupt)
+# What a hook or model can raise that becomes a FAILED turn (#6255). A
+# foreign CancelledError is re-raised by raise_if_foreign_cancel.
+TURN_FAILURES = (Exception, Interrupt, asyncio.CancelledError)
+
 logger = get_logger(__name__)
 
 T = TypeVar('T')
@@ -1416,7 +1423,7 @@ async def run_wrap_generate(
             ),
             name=resolved.model.name,
         )
-    except (Exception, asyncio.CancelledError) as exc:
+    except TURN_FAILURES as exc:
         raise_if_foreign_cancel(exc=exc, abort_signal=ctx.abort_signal)
         # A hook can raise before the model ever built a request. Build it here
         # so the caller still gets back what they asked for; the cost is only
@@ -1504,7 +1511,7 @@ async def generate_turn(
             mw_pipeline=mw_pipeline,
             current_turn=current_turn,
         )
-    except (Exception, asyncio.CancelledError) as exc:
+    except TURN_FAILURES as exc:
         raise_if_foreign_cancel(exc=exc, abort_signal=ctx.abort_signal)
         return box_from_exc(
             response=call.earned(),
@@ -1786,7 +1793,7 @@ async def run_tools_or_stop(
             mw_pipeline=mw_pipeline,
             tools=resolved.tools,
         )
-    except (Exception, asyncio.CancelledError) as exc:
+    except TURN_FAILURES as exc:
         raise_if_foreign_cancel(exc=exc, abort_signal=ctx.abort_signal)
         return box_from_exc(
             response=response,
@@ -2160,7 +2167,7 @@ async def resolve_tool_requests(
             else:
                 multipart = as_multipart_tool_response(await next_fn(params, ctx), tool_name=trp.tool_request.name)
             return (multipart, None)
-        except Exception as e:
+        except TOOL_RAISES as e:
             # Interrupts (raised by the tool body or by middleware) become a
             # tool-request Part with interrupt metadata.  Any tracing span is the
             # middleware's responsibility (e.g. ToolApproval wraps its raise in
@@ -2225,7 +2232,7 @@ def to_pending_response(request: Part, response: Part) -> Part:
     )
 
 
-def interrupt_from_exc(exc: Exception) -> Interrupt | None:
+def interrupt_from_exc(exc: BaseException) -> Interrupt | None:
     """If ``exc`` is an Interrupt, or was raised from one, return it.
 
     A tool that pauses again on restart is still an interrupt the caller
@@ -2531,7 +2538,7 @@ async def resolve_resumed_tool(
                 restart_trp=restart_trp,
                 mw_pipeline=mw_pipeline,
             )
-        except Exception as e:
+        except TOOL_RAISES as e:
             intr = interrupt_from_exc(e)
             if intr is not None:
                 return (interrupt_request_part(tool_req_root, intr), None)
@@ -2611,7 +2618,7 @@ async def run_restart(
             ),
             tool_name=tool_req.name,
         )
-    except Exception as e:
+    except TOOL_RAISES as e:
         intr = interrupt_from_exc(e)
         if intr is not None:
             # run_tool_after_restart already logged when the tool body interrupted.
