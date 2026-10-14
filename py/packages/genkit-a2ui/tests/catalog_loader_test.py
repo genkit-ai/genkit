@@ -48,7 +48,7 @@ from helpers import (
 from pydantic import ValidationError
 from structlog.testing import capture_logs
 
-from genkit._core._error import RuntimeErrorReason
+from genkit import RuntimeErrorReason
 
 BANNER_CATALOG = A2uiCatalog(
     id='https://example.com/catalogs/banner.json',

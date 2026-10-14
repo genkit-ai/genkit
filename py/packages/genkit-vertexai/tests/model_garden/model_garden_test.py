@@ -37,7 +37,6 @@ from google.auth.exceptions import DefaultCredentialsError
 from openai.types.chat import ChatCompletion
 
 from genkit import ActionRunContext, Genkit, GenkitError, Message, Part, Role
-from genkit._ai._formats._builtin import built_in_formats
 from genkit.model import ModelRequest, OutputConfig
 from genkit.plugin_api import ActionKind
 
@@ -55,11 +54,15 @@ OPENAI_EXTRA_MISSING = (
 
 def test_catalog_output_names_are_known_formats() -> None:
     """supports.output lists Genkit output formats, not OpenAI request options like json_mode."""
-    known = {f.name for f in built_in_formats}
+    ai = Genkit()
     entries = {name: info.supports for name, info in SUPPORTED_OPENAI_COMPAT_MODELS.items()}
     entries['<default>'] = DEFAULT_SUPPORTS
     for name, supports in entries.items():
-        unknown = set((supports.output if supports else None) or []) - known
+        unknown = [
+            out
+            for out in ((supports.output if supports else None) or [])
+            if ai.lookup_value(kind='format', name=out) is None
+        ]
         assert not unknown, f'{name}: {sorted(unknown)}'
 
 

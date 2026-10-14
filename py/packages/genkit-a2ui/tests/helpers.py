@@ -10,9 +10,15 @@ from typing import Any
 
 from genkit_a2ui import A2UI_MIME_TYPE
 
-from genkit import Genkit, Message, ModelResponse, Part
-from genkit._core._error import RuntimeErrorReason
-from genkit._core._typing import FinishReason, Role
+from genkit import (
+    FinishReason,
+    Genkit,
+    Message,
+    ModelResponse,
+    Part,
+    Role,
+    RuntimeErrorReason,
+)
 from genkit.testing import ScriptedModel, define_scripted_model
 
 BASIC_CATALOG_ID = 'https://a2ui.org/specification/v0_9/catalogs/basic/catalog.json'

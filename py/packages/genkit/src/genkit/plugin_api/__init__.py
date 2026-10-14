@@ -17,11 +17,18 @@
 """Framework primitives for plugin authors."""
 
 # Base class and framework primitives
-from genkit._core._action import Action, ActionKind
+from genkit._core._action import Action, ActionKind, input_from_json
 from genkit._core._compat import StrEnum
 from genkit._core._constants import GENKIT_CLIENT_HEADER
+from genkit._core._context import joined_headers
 from genkit._core._environment import is_dev_environment
-from genkit._core._error import StatusName, provider_error
+from genkit._core._error import (
+    StatusName,
+    log_served_failure,
+    provider_error,
+    served_error_json,
+    served_stream_error_event,
+)
 from genkit._core._loop_cache import loop_local_client
 from genkit._core._plugin import MiddlewarePlugin, Plugin
 from genkit._core._schema import to_json_schema
@@ -47,4 +54,10 @@ __all__ = [
     'is_dev_environment',
     # Schema utilities
     'to_json_schema',
+    # Served action helpers for HTTP framework plugins
+    'input_from_json',
+    'joined_headers',
+    'log_served_failure',
+    'served_error_json',
+    'served_stream_error_event',
 ]

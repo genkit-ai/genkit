@@ -45,10 +45,8 @@ from helpers import (
 )
 from pydantic import ValidationError
 
-from genkit import Message, ModelResponse, ModelResponseChunk
-from genkit._core._error import RuntimeErrorReason
-from genkit._core._model import Candidate
-from genkit._core._typing import FinishReason, GenerationUsage, Role
+from genkit import FinishReason, Message, ModelResponse, ModelResponseChunk, Role, RuntimeErrorReason
+from genkit.model import Candidate, ModelUsage
 
 
 @pytest.mark.asyncio
@@ -261,7 +259,7 @@ async def test_strict_refusal_keeps_the_tokens_the_turn_cost() -> None:
         ModelResponse(
             finish_reason=FinishReason.STOP,
             message=Message(role=Role.MODEL, content=[text_part(bad_component_fence())]),
-            usage=GenerationUsage(input_tokens=11, output_tokens=22, total_tokens=33),
+            usage=ModelUsage(input_tokens=11, output_tokens=22, total_tokens=33),
         )
     ]
 

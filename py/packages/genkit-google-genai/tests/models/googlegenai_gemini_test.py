@@ -52,9 +52,8 @@ from pydantic import BaseModel, Field, HttpUrl, ValidationError
 from pytest_mock import MockerFixture
 
 from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, Part, Role
-from genkit._core._compat import StrEnum
 from genkit.model import Constrained, ModelInfo, ModelRequest, OutputConfig, Supports, ToolDefinition
-from genkit.plugin_api import to_json_schema
+from genkit.plugin_api import StrEnum, to_json_schema
 
 ALL_VERSIONS = sorted({*GEMINI_CATALOG_IDS, *get_args(KnownGemma)})
 IMAGE_GENERATION_VERSIONS = ['gemini-2.5-flash']

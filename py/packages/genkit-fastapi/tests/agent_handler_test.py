@@ -22,15 +22,16 @@ AgentInit = _genkit_agent.AgentInit
 from genkit_fastapi import handle_genkit_request  # noqa: E402
 from genkit_fastapi.exp import serve_agent  # noqa: E402
 
-from genkit._ai._agents._client import error_from_http  # noqa: E402
-from genkit._core._error import RuntimeErrorReason  # noqa: E402
-from genkit._core._model import (  # noqa: E402
+from genkit import (  # noqa: E402
+    FinishReason,
+    GenkitRuntimeError,
     Message,
     ModelResponse,
     ModelResponseChunk as ModelResponseChunkModel,
     Part,
+    Role,
+    RuntimeErrorReason,
 )
-from genkit._core._typing import FinishReason, Role  # noqa: E402
 from genkit.exp import Genkit  # noqa: E402
 from genkit.testing import define_scripted_model  # noqa: E402
 
@@ -256,6 +257,6 @@ def test_serve_agent_init_mismatch_returns_agent_init_error(
         expected['details'] = {'reason': reason.value}
     assert response.json() == expected
 
-    err = error_from_http(status_code=response.status_code, body=response.text)
+    err = GenkitRuntimeError.model_validate_json(response.text)
     assert err.status == 'FAILED_PRECONDITION'
     assert err.reason is reason

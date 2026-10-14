@@ -56,17 +56,17 @@ from genkit import (
     ModelResponseChunk,
     Part,
     Role,
+    ToolRunContext,
 )
-from genkit._ai._tools import run_tool_after_restart
-from genkit._core._action import Action
 from genkit.model import ModelRequest, ModelUsage
-from genkit.plugin_api import ActionKind
+from genkit.plugin_api import Action, ActionKind
 from genkit.telemetry import (
     DirectHttpInstrumentation,
     configure_instrumentation,
     is_instrumented_by,
     reset_instrumentation,
 )
+from genkit.testing import define_scripted_model
 
 
 def _hex_id(value: str, length: int) -> bool:
@@ -932,15 +932,35 @@ async def test_resumed_tool_payload_is_redacted_in_cloud_trace() -> None:
     ai = Genkit()
 
     @ai.tool(name='approve')
-    async def approve(query: str) -> str:
+    async def approve(query: str, ctx: ToolRunContext) -> str:
         """Ask a human to approve."""
+        if not ctx.is_resumed():
+            raise Interrupt({'echo': query})
         return 'approved'
 
-    action = await ai._registry.resolve_action(kind=ActionKind.TOOL, name='approve')
-    assert action is not None
-    restart = Part.from_tool_request(name='approve', ref='r1', input='q', metadata={'resumed': {'note': _PROMPT}})
+    define_scripted_model(
+        ai,
+        name=_MODEL,
+        responses=[
+            ModelResponse(
+                finish_reason=FinishReason.STOP,
+                message=Message(
+                    role=Role.MODEL,
+                    content=[Part.from_tool_request(name='approve', input='q', ref='r1')],
+                ),
+            ),
+            _echo_response(),
+        ],
+    )
+    interrupted = await ai.generate(prompt='approve this', model=_MODEL, tools=['approve'])
+    paused = interrupted.interrupts[0]
     with _cloud_trace() as cloud:
-        await run_tool_after_restart(tool=action, restart_trp=restart)
+        await ai.generate(
+            messages=interrupted.messages,
+            model=_MODEL,
+            tools=['approve'],
+            resume_restart=paused.restart(resumed_metadata={'note': _PROMPT}),
+        )
         _force_flush()
 
     span = _one_span(cloud, 'approve')
