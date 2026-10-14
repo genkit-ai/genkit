@@ -20,7 +20,8 @@ import asyncio
 import inspect
 import os
 import time
-from collections.abc import AsyncGenerator, Awaitable, Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from typing import Any, cast
 from urllib.parse import urlsplit
@@ -56,6 +57,7 @@ from genkit_ollama._models import (
     OllamaModel,
     _ResolvedModel,
 )
+from genkit_ollama._secrets import context_api_key, reject_config_api_key
 
 OLLAMA_PLUGIN_NAME = 'ollama'
 logger = structlog.get_logger(__name__)
@@ -164,8 +166,9 @@ class _CallableHeaders(httpx.Auth):
     token refresh on every call.
     """
 
-    def __init__(self, source: _HeaderSource) -> None:
+    def __init__(self, source: _HeaderSource, *, api_key: str | None = None) -> None:
         self._source = source
+        self._api_key = api_key
 
     async def async_auth_flow(self, request: httpx.Request) -> AsyncGenerator[httpx.Request, httpx.Response]:
         result = self._source()
@@ -173,6 +176,11 @@ class _CallableHeaders(httpx.Auth):
             result = await result
         if result:
             request.headers.update(result)
+        if self._api_key is not None:
+            for k in list(request.headers.keys()):
+                if k.lower() == 'authorization':
+                    del request.headers[k]
+            request.headers['Authorization'] = f'Bearer {self._api_key}'
         yield request
 
 
@@ -231,11 +239,13 @@ class Ollama(Plugin):
 
         # A dict is baked into the cached client; a callable runs per request via httpx auth.
         self.request_headers: dict[str, str] = {}
+        self._header_source: _HeaderSource | None = None
         self._auth: _CallableHeaders | None = None
         if isinstance(request_headers, dict):
             self.request_headers = dict(request_headers)
         elif request_headers is not None:
             _require_no_arg_callable(request_headers)
+            self._header_source = request_headers
             self._auth = _CallableHeaders(request_headers)
         self.timeout = timeout
         self.client = loop_local_client(self._make_client)
@@ -256,6 +266,37 @@ class Ollama(Plugin):
         if self.timeout is not None:
             kwargs['timeout'] = self.timeout
         return ollama_api.AsyncClient(**kwargs)
+
+    @asynccontextmanager
+    async def _client_for_request(self, *, api_key: str | None = None) -> AsyncIterator[ollama_api.AsyncClient]:
+        """Yield the Ollama client to use for a single request.
+
+        When no per-request api_key is given, the shared per-event-loop client
+        is yielded. A per-request key forces a fresh client: hosted Ollama
+        bills whoever's bearer token is on the request, so that key replaces
+        any Authorization header the plugin was configured with. The fresh client
+        owns its own httpx connection pool and is closed on exit.
+        """
+        if api_key is None:
+            yield self.client()
+            return
+
+        headers = {k: v for k, v in self.request_headers.items() if k.lower() != 'authorization'}
+        headers['Authorization'] = f'Bearer {api_key}'
+        auth: httpx.Auth | None = None
+        if self._header_source is not None:
+            auth = _CallableHeaders(self._header_source, api_key=api_key)
+        kwargs: dict[str, Any] = {'host': self.base_url, 'headers': headers}
+        if auth is not None:
+            kwargs['auth'] = auth
+        if self.timeout is not None:
+            kwargs['timeout'] = self.timeout
+
+        client = ollama_api.AsyncClient(**kwargs)
+        try:
+            yield client
+        finally:
+            await client._client.aclose()
 
     async def init(self) -> list:
         """Initialize the Ollama plugin.
@@ -361,16 +402,18 @@ class Ollama(Plugin):
         )
         return definition
 
-    def _create_model_action(self, model_ref: _ResolvedModel) -> Action:
+    def _create_model_action(self, model_ref: _ResolvedModel | str) -> Action:
         """Create an Action object for an Ollama model.
 
         Args:
-            model_ref: The resolved model; its name is used as received (no
+            model_ref: The resolved model or model name; its name is used as received (no
                 plugin-prefix stripping).
 
         Returns:
             Action object for the model.
         """
+        if isinstance(model_ref, str):
+            model_ref = _ResolvedModel(name=model_ref.removeprefix(f'{OLLAMA_PLUGIN_NAME}/'))
         name = model_ref.name
         model = OllamaModel(
             client=self.client,
@@ -385,9 +428,13 @@ class Ollama(Plugin):
         )
 
         async def _run(request: ModelRequest, ctx: ActionRunContext | None = None) -> ModelResponse:
-            # OllamaModel wraps connection errors at the SDK boundary, so a failed
-            # media-URL fetch isn't misreported as an Ollama server outage.
-            return await model.generate(request, ctx)
+            # A key on config would be dropped and the call would run on the
+            # plugin's header. The per-request key, when there is one, replaces
+            # that header for this call only.
+            reject_config_api_key(request.config)
+            api_key = context_api_key(ctx.context) if ctx is not None else None
+            async with self._client_for_request(api_key=api_key) as client:
+                return await model.generate(request, ctx, client=client)
 
         action = create_model(
             ollama_name(name),
