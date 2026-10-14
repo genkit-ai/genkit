@@ -158,7 +158,8 @@ class GenAiInstrumentation(Instrumentation):
         kind = metadata.action_type
         if kind == 'model':
             return await self._run_model_span(metadata, next)
-        if kind == 'tool.v2' and self.emit_tool_spans:
+        # generate runs 'tool'; the Dev UI runs the 'tool.v2' envelope.
+        if kind in ('tool', 'tool.v2') and self.emit_tool_spans:
             return await self._run_tool_span(metadata, next)
         return await self._run_generic_span(metadata, next)
 

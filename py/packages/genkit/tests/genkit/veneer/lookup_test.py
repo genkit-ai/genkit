@@ -119,7 +119,7 @@ async def test_lookup_tool_returns_a_callable_tool_with_the_same_definition() ->
 
     assert isinstance(found, Tool)
     assert found.definition() == menu_price.definition()
-    assert (await found('ramen')).output == 14.5
+    assert await found('ramen') == 14.5
 
 
 @pytest.mark.asyncio

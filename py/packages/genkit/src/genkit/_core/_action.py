@@ -175,8 +175,11 @@ class ActionKind(StrEnum):
     FLOW = 'flow'
     MODEL = 'model'
     PROMPT = 'prompt'
-    # Catalog key for tools. Action.run / Dev UI see the multipart envelope.
-    TOOL = 'tool.v2'
+    # A tool: run returns what the function returned. Generate runs this one.
+    TOOL = 'tool'
+    # The same tool returning the MultipartToolResponse envelope. The Dev UI
+    # lists and runs this one when both exist (same as JS and Go).
+    TOOL_V2 = 'tool.v2'
     UTIL = 'util'
 
 
@@ -344,7 +347,7 @@ class ActionParams:
 
 def _kind_label(kind: ActionKind) -> str:
     """The action kind as error messages say it: `flow`, `model`, `tool`, `background model`."""
-    # ActionKind.TOOL is 'tool.v2' (the catalog key); people call it a tool.
+    # ActionKind.TOOL_V2 is 'tool.v2'; people call it a tool.
     return str(kind).split('.')[0].replace('-', ' ')
 
 
@@ -365,7 +368,11 @@ def find_input_and_context(
     ``hints`` is ``resolve_type_hints(fn)``. ``*args`` and ``**kwargs`` are ignored.
     """
     owner = describe_action(kind, name)
-    context_class = {ActionKind.TOOL: 'ToolContext', ActionKind.FLOW: 'FlowContext'}.get(kind, 'ActionRunContext')
+    context_class = {
+        ActionKind.TOOL: 'ToolContext',
+        ActionKind.TOOL_V2: 'ToolContext',
+        ActionKind.FLOW: 'FlowContext',
+    }.get(kind, 'ActionRunContext')
 
     params = [
         p
@@ -404,7 +411,7 @@ def find_input_and_context(
     # A tool's input type is the schema the model sees, and a flow's is its
     # public API, so those need one. Other actions (models, embedders, ...)
     # get a fixed input from Genkit and may leave it unannotated.
-    if kind in (ActionKind.TOOL, ActionKind.FLOW) and input_param is not None:
+    if kind in (ActionKind.TOOL, ActionKind.TOOL_V2, ActionKind.FLOW) and input_param is not None:
         if hints.get(input_param.name, input_param.annotation) is inspect.Parameter.empty:
             raise TypeError(
                 f"{owner} input '{input_param.name}' has no type annotation. "
@@ -654,8 +661,8 @@ def parse_dap_qualified_name(name: str) -> DapQualifiedName | None:
     provider, inner_kind, inner_name = match.groups()
     if not provider or not inner_kind or not inner_name:
         return None
-    # Catalog kind, not a selector. People write provider:tool/name.
-    if inner_kind == ActionKind.TOOL:
+    # Envelope kind, not a selector. People write provider:tool/name.
+    if inner_kind == ActionKind.TOOL_V2:
         return None
     return DapQualifiedName(provider, inner_kind, inner_name)
 

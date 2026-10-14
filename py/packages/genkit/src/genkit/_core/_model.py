@@ -539,6 +539,11 @@ class Part(GenkitModel):
             metadata={'interruptResponse': interrupt_metadata},
         )
 
+    @property
+    def is_partial(self) -> bool:
+        """Whether this part is a partial tool response streamed during tool execution."""
+        return self.tool_response is not None and bool(self.metadata and self.metadata.get('partial') is True)
+
 
 def as_part(value: object) -> Part:
     if isinstance(value, Part):
@@ -1540,6 +1545,11 @@ class ModelResponseChunk(GenkitModel, Generic[OutputT]):
             prior = ''.join(p.text for chunk in self._previous_chunks for p in chunk.content if p.text)
         return prior + self.text
 
+    @property
+    def tool_responses(self) -> list[Part]:
+        """All tool response parts in this chunk."""
+        return [p for p in self.content if p.tool_response is not None]
+
     @cached_property
     def output(self) -> OutputT | None:
         """The reply so far, parsed as far as it goes. Never raises.
@@ -1554,6 +1564,8 @@ class ModelResponseChunk(GenkitModel, Generic[OutputT]):
         or scalar). It's ``None`` before an object starts or while the text
         can't be parsed.
         """
+        if self.role is not None and self.role != Role.MODEL:
+            return None
         try:
             parsed = self._chunk_parser(self) if self._chunk_parser else extract_partial_json(self.accumulated_text)
             if (

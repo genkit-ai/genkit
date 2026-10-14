@@ -50,6 +50,7 @@ from genkit._core._model import (
     ModelResponseChunk,
 )
 from genkit._core._plugin import Plugin, resolved_action_name
+from genkit._core._tool import Tool
 from genkit._core._typing import (
     ActionMetadata,
     EmbedResponse,
@@ -340,9 +341,19 @@ class Registry:
            action: The action instance to register.
         """
         with self._lock:
-            if action.kind not in self._entries:
-                self._entries[action.kind] = {}
-            self._entries[action.kind][action.name] = action
+            self._store_locked(action, action.name)
+
+    def _store_locked(self, action: Action, name: str) -> None:
+        """Store ``action`` under ``name``; a Tool also stores its ``tool.v2`` envelope action.
+
+        Caller holds ``self._lock``.
+        """
+        self._entries.setdefault(action.kind, {})[name] = action
+        wire = action.wire_action if isinstance(action, Tool) else None
+        if wire is not None:
+            # Keep the envelope action's name in step with a namespaced tool.
+            set_action_name(wire, name)
+            self._entries.setdefault(wire.kind, {})[name] = wire
 
     def registered_action(self, kind: ActionKind, name: str) -> Action | None:
         """Return an action that is already in this registry.
@@ -421,7 +432,8 @@ class Registry:
                 key = f'/{meta.action_type}/{meta.name}'
                 catalog[key] = meta.model_copy(update={'key': key})
 
-        # 2. Concrete registered actions (local tools are ``/tool.v2/<name>``).
+        # 2. Concrete registered actions. A local tool is ``/tool/<name>`` plus its
+        #    ``/tool.v2/<name>`` envelope; the Dev UI shows the ``tool.v2`` row.
         for kind in ActionKind.__members__.values():
             for name, action in (await self.resolve_actions_by_kind(kind)).items():
                 key = create_action_key(kind, name)
@@ -598,9 +610,7 @@ class Registry:
             set_action_name(action, name)
 
         with self._lock:
-            if action.kind not in self._entries:
-                self._entries[action.kind] = {}
-            self._entries[action.kind][name] = action
+            self._store_locked(action, name)
 
     async def _trigger_lazy_loading(self, action: Action | None) -> Action | None:
         """Trigger lazy loading for an action if needed.

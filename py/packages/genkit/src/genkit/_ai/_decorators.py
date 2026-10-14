@@ -14,16 +14,20 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Flow decorator classes for type-safe flow registration."""
+"""Flow and tool decorator classes for type-safe registration."""
 
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar, overload
 
+from pydantic import BaseModel
+
+from genkit._ai._tools import ToolContext, define_tool
 from genkit._core._action import ActionRunContext
 from genkit._core._flow import Flow, define_flow
 from genkit._core._registry import Registry
+from genkit._core._tool import Tool
 
 # TypeVars for generic input/output typing
 InputT = TypeVar('InputT')
@@ -70,3 +74,49 @@ class _FlowDecorator:
 
     def __call__(self, func: Callable[..., Awaitable[Any]]) -> Flow[Any, Any, Any]:
         return define_flow(self._registry, func, self._name, self._description)
+
+
+class _ToolDecorator:
+    """Decorator class for tool registration, typed so ``await tool(...)`` returns the function's own type."""
+
+    def __init__(
+        self,
+        registry: Registry,
+        name: str | None,
+        description: str | None,
+        input_schema: type[BaseModel] | dict[str, object] | None,
+    ) -> None:
+        self._registry = registry
+        self._name = name
+        self._description = description
+        self._input_schema = input_schema
+
+    # Same order as define_tool's overloads: context-only before input-only,
+    # since a ``ctx`` function also fits ``[InputT]``.
+    @overload
+    def __call__(
+        self, func: Callable[[InputT, ToolContext[ChunkT]], Awaitable[OutputT]]
+    ) -> Tool[InputT, OutputT, ChunkT]: ...
+
+    @overload
+    def __call__(
+        self, func: Callable[[ToolContext[ChunkT], InputT], Awaitable[OutputT]]
+    ) -> Tool[InputT, OutputT, ChunkT]: ...
+
+    @overload
+    def __call__(self, func: Callable[[ToolContext[ChunkT]], Awaitable[OutputT]]) -> Tool[Any, OutputT, ChunkT]: ...
+
+    @overload
+    def __call__(self, func: Callable[[InputT], Awaitable[OutputT]]) -> Tool[InputT, OutputT]: ...
+
+    @overload
+    def __call__(self, func: Callable[[], Awaitable[OutputT]]) -> Tool[None, OutputT]: ...
+
+    def __call__(self, func: Callable[..., Awaitable[Any]]) -> Tool[Any, Any, Any]:
+        return define_tool(
+            self._registry,
+            func,
+            self._name,
+            self._description,
+            input_schema=self._input_schema,
+        )

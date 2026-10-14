@@ -3,7 +3,7 @@
 
 """``MultipartToolResponse`` construction, schema stamping, registry keys, and wrap_tool.
 
-The peel leftover ``await tool()`` / ``ai.generate`` callers reuse is pinned in
+What ``await tool()`` and ``ai.generate`` hand back is pinned in
 ``tool_response_contract_test.py``.
 """
 
@@ -29,6 +29,7 @@ from genkit._core._action import Action, create_action_key, parse_action_key
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import GenerateActionOptions
 from genkit._core._schema import to_json_schema
+from genkit._core._tool import Tool
 from genkit._core._typing import (
     FinishReason,
     MultipartToolResponse as MultipartToolResponseData,
@@ -43,6 +44,13 @@ def _png() -> Part:
 
 
 WIRE_PNG = {'media': {'contentType': 'image/png', 'url': 'data:image/png;base64,abc'}}
+
+
+def _wire(tool: Tool) -> Action:
+    """The ``tool.v2`` envelope action the Dev UI runs for this tool."""
+    wire = tool.wire_action
+    assert wire is not None
+    return wire
 
 
 def test_response_text_part_is_live() -> None:
@@ -129,19 +137,25 @@ def test_returning_unserializable_part_data_is_invalid_argument_naming_the_tool(
 
 
 def test_define_tool_stamps_envelope_and_declared_schema() -> None:
-    """Dev UI / Action.run see the envelope; the model binds the return type."""
+    """The tool advertises its return type; its tool.v2 action (Dev UI) advertises the envelope."""
     ai = Genkit()
 
     @ai.tool(name='weather')
     async def weather(city: str) -> str:
         return f'Sunny in {city}'
 
-    action = weather.action()
     envelope = TypeAdapter(MultipartToolResponseData).json_schema()
-    assert action.kind == ActionKind.TOOL
-    assert create_action_key(action.kind, action.name) == '/tool.v2/weather'
-    assert action.output_schema == envelope
-    assert action.metadata[ORIGINAL_OUTPUT_SCHEMA_KEY] == {'type': 'string'}
+    assert weather.kind == ActionKind.TOOL
+    assert create_action_key(weather.kind, weather.name) == '/tool/weather'
+    assert weather.output_schema == {'type': 'string'}
+    assert weather.metadata[ORIGINAL_OUTPUT_SCHEMA_KEY] == {'type': 'string'}
+
+    wire = _wire(weather)
+    assert wire.kind == ActionKind.TOOL_V2
+    assert create_action_key(wire.kind, wire.name) == '/tool.v2/weather'
+    assert wire.input_schema == weather.input_schema
+    assert wire.output_schema == envelope
+    assert wire.metadata[ORIGINAL_OUTPUT_SCHEMA_KEY] == {'type': 'string'}
 
 
 def test_bare_envelope_annotation_has_no_inner_schema() -> None:
@@ -151,10 +165,11 @@ def test_bare_envelope_annotation_has_no_inner_schema() -> None:
     async def shot() -> MultipartToolResponse:
         return MultipartToolResponse(output={'ok': True})
 
-    action = shot.action()
     envelope = TypeAdapter(MultipartToolResponseData).json_schema()
-    assert action.output_schema == envelope
-    assert action.metadata[ORIGINAL_OUTPUT_SCHEMA_KEY] is None
+    assert _wire(shot).output_schema == envelope
+    assert _wire(shot).metadata[ORIGINAL_OUTPUT_SCHEMA_KEY] is None
+    assert shot.metadata[ORIGINAL_OUTPUT_SCHEMA_KEY] is None
+    assert shot.definition().output_schema is None
 
 
 def test_to_tool_definition_sends_original_schema_not_envelope() -> None:
@@ -165,15 +180,15 @@ def test_to_tool_definition_sends_original_schema_not_envelope() -> None:
     async def weather(city: str) -> str:
         return f'Sunny in {city}'
 
-    defined = to_tool_definition(weather.action())
+    defined = to_tool_definition(weather)
     assert defined.output_schema == {'type': 'string'}
-    assert weather.action().output_schema == TypeAdapter(MultipartToolResponseData).json_schema()
+    assert _wire(weather).output_schema == TypeAdapter(MultipartToolResponseData).json_schema()
 
     @ai.tool(name='shot')
     async def shot() -> MultipartToolResponse:
         return MultipartToolResponse(output={'ok': True})
 
-    assert to_tool_definition(shot.action()).output_schema is None
+    assert to_tool_definition(shot).output_schema is None
 
     async def echo_fn(x: str) -> str:
         return x
@@ -191,7 +206,7 @@ async def test_pydantic_return_dumps_json_aliases() -> None:
     async def shot() -> CamelOut:
         return CamelOut(content_type='image/png', taken_at=datetime(2026, 8, 25, 12, 0))
 
-    out = await shot()
+    out = (await _wire(shot).run()).response
     assert out.output == {'contentType': 'image/png', 'takenAt': '2026-08-25T12:00:00'}
 
 
@@ -203,7 +218,7 @@ async def test_response_metadata_datetime_is_json() -> None:
     async def shot() -> MultipartToolResponse:
         return MultipartToolResponse(output={'ok': True}, metadata={'when': datetime(2026, 8, 25, 12, 0)})
 
-    out = await shot()
+    out = (await _wire(shot).run()).response
     assert out.metadata == {'when': '2026-08-25T12:00:00'}
 
 
@@ -218,7 +233,7 @@ async def test_response_pydantic_output_plus_media() -> None:
             content=[_png()],
         )
 
-    out = await shot()
+    out = (await _wire(shot).run()).response
     assert out.output == {'contentType': 'image/png', 'takenAt': '2026-08-25T12:00:00'}
     assert parts_to_wire(out.content) == [WIRE_PNG]
 
@@ -339,23 +354,20 @@ async def test_unserializable_tool_output_is_invalid_argument() -> None:
 
 
 @pytest.mark.asyncio
-async def test_tool_registers_under_tool() -> None:
+async def test_tool_registers_under_tool_and_tool_v2() -> None:
+    """``@ai.tool`` stores the tool at /tool/<name> and its envelope action at /tool.v2/<name>."""
     ai = Genkit()
 
     @ai.tool(name='weather')
     async def weather(city: str) -> str:
         return f'Sunny in {city}'
 
-    assert create_action_key(ActionKind.TOOL, 'weather') == '/tool.v2/weather'
-    assert parse_action_key('/tool.v2/weather') == (ActionKind.TOOL, 'weather')
+    assert parse_action_key('/tool/weather') == (ActionKind.TOOL, 'weather')
+    assert parse_action_key('/tool.v2/weather') == (ActionKind.TOOL_V2, 'weather')
 
-    by_name = await ai._registry.resolve_action(ActionKind.TOOL, 'weather')
-    by_key = await ai._registry.resolve_action_by_key('/tool.v2/weather')
-    assert by_name is weather.action()
-    assert by_key is weather.action()
-
-    with pytest.raises(ValueError, match='Invalid action kind'):
-        parse_action_key('/tool/weather')
+    assert await ai._registry.resolve_action(ActionKind.TOOL, 'weather') is weather
+    assert await ai._registry.resolve_action_by_key('/tool/weather') is weather
+    assert await ai._registry.resolve_action_by_key('/tool.v2/weather') is _wire(weather)
 
 
 @pytest.mark.asyncio

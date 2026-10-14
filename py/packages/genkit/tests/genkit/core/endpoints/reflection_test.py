@@ -555,10 +555,57 @@ async def test_reflection_run_slash_retriever_key_returns_404() -> None:
     assert response.json() == {'error': 'Action not found: /retriever/x'}
 
 
+class Shot(BaseModel):
+    label: str
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize('key', ['/tool/x', '/bogus/x', 'no-slashes'])
+async def test_reflection_lists_tool_and_tool_v2_rows_with_their_schemas() -> None:
+    """A tool lists as /tool/<name> (its return type) and /tool.v2/<name> (the envelope the Dev UI shows)."""
+    ai = Genkit()
+
+    @ai.tool()
+    async def snap(label: str) -> Shot:
+        return Shot(label=label)
+
+    client = await _registry_asgi_client(ai._registry)
+    try:
+        listed = (await client.get('/api/actions')).json()
+    finally:
+        await client.aclose()
+
+    tool_row, wire_row = listed['/tool/snap'], listed['/tool.v2/snap']
+    assert tool_row['inputSchema'] == wire_row['inputSchema'] == {'type': 'string'}
+    assert tool_row['outputSchema']['title'] == 'Shot'
+    assert set(wire_row['outputSchema']['properties']) == {'output', 'content', 'metadata'}
+    assert tool_row['metadata']['originalOutputSchema']['title'] == 'Shot'
+    assert wire_row['metadata']['originalOutputSchema']['title'] == 'Shot'
+
+
+@pytest.mark.asyncio
+async def test_reflection_run_tool_v2_returns_envelope_and_tool_returns_value() -> None:
+    """Running /tool.v2/<name> (what the Dev UI runs) returns the envelope; /tool/<name> returns the value."""
+    ai = Genkit()
+
+    @ai.tool()
+    async def snap(label: str) -> Shot:
+        return Shot(label=label)
+
+    client = await _registry_asgi_client(ai._registry)
+    try:
+        wire = (await client.post('/api/runAction', json={'key': '/tool.v2/snap', 'input': 'deck'})).json()
+        raw = (await client.post('/api/runAction', json={'key': '/tool/snap', 'input': 'deck'})).json()
+    finally:
+        await client.aclose()
+
+    assert wire['result'] == {'output': {'label': 'deck'}}
+    assert raw['result'] == {'label': 'deck'}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('key', ['/bogus/x', 'no-slashes'])
 async def test_reflection_run_unparseable_key_returns_404(key: str) -> None:
-    """Running a key that doesn't parse (like '/tool/x') gets a 404 'Action not found', not a server error."""
+    """Running a key that doesn't parse (like '/bogus/x') gets a 404 'Action not found', not a server error."""
     ai = Genkit()
 
     @ai.tool()

@@ -28,7 +28,7 @@ import threading
 import uuid
 from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, NoReturn, TypeVar, cast, overload
 
 import anyio
 import uvicorn
@@ -76,7 +76,7 @@ from genkit._ai._prompt import (
     register_prompt_actions,
     to_generate_options,
 )
-from genkit._ai._tools import ORIGINAL_OUTPUT_SCHEMA_KEY, define_interrupt, define_tool
+from genkit._ai._tools import ToolContext, define_interrupt
 from genkit._core._action import Action, ActionKind, ActionRunContext, get_current_context
 from genkit._core._background import (
     BackgroundAction,
@@ -134,7 +134,7 @@ from genkit._core._typing import (
     Role,
 )
 
-from ._decorators import _FlowDecorator
+from ._decorators import _FlowDecorator, _ToolDecorator
 from ._runtime import RuntimeManager, setup_signal_handlers
 
 logger = get_logger(__name__)
@@ -417,28 +417,57 @@ class Genkit:
         *,
         description: str | None = None,
         input_schema: type[BaseModel] | dict[str, object] | None = None,
-    ) -> Callable[[Callable[..., Any]], Tool]: ...
+    ) -> _ToolDecorator: ...
 
     @overload
     def tool(
         self,
-        func: Callable[..., Any],
+        func: Callable[[InputT, ToolContext[ChunkT]], Awaitable[OutputT]],
         /,
-    ) -> Tool: ...
+    ) -> Tool[InputT, OutputT, ChunkT]: ...
+
+    @overload
+    def tool(
+        self,
+        func: Callable[[ToolContext[ChunkT], InputT], Awaitable[OutputT]],
+        /,
+    ) -> Tool[InputT, OutputT, ChunkT]: ...
+
+    @overload
+    def tool(
+        self,
+        func: Callable[[ToolContext[ChunkT]], Awaitable[OutputT]],
+        /,
+    ) -> Tool[Any, OutputT, ChunkT]: ...
+
+    @overload
+    def tool(
+        self,
+        func: Callable[[InputT], Awaitable[OutputT]],
+        /,
+    ) -> Tool[InputT, OutputT]: ...
+
+    @overload
+    def tool(
+        self,
+        func: Callable[[], Awaitable[OutputT]],
+        /,
+    ) -> Tool[None, OutputT]: ...
 
     def tool(
         self,
-        name: str | Callable[..., Any] | None = None,
+        name: str | Callable[..., Awaitable[Any]] | None = None,
         *,
         description: str | None = None,
         input_schema: type[BaseModel] | dict[str, object] | None = None,
-    ) -> Callable[[Callable[..., Any]], Tool] | Tool:
+    ) -> _ToolDecorator | Tool[Any, Any, Any]:
         """Decorator to register a function as a tool.
 
         Can be used bare (``@ai.tool``) or with arguments (``@ai.tool()``,
         ``@ai.tool('custom_name', description='...')``).
 
         The return annotation is what the model binds as ``outputSchema``.
+        Awaiting the tool directly returns what the function returned.
 
         A tool takes at most one input, and that input's type is the schema the
         model fills in. For several fields, use one Pydantic model. To read the
@@ -462,27 +491,9 @@ class Genkit:
 
             res = await ai.generate(prompt='Weather in Paris?', tools=['current_weather', 'forecast'])
         """
-        if callable(name):
-            return define_tool(
-                self._registry,
-                name,
-                None,
-                description,
-                input_schema=input_schema,
-            )
-
-        tool_name: str | None = name
-
-        def wrapper(func: Callable[..., Any]) -> Tool:
-            return define_tool(
-                self._registry,
-                func,
-                tool_name,
-                description,
-                input_schema=input_schema,
-            )
-
-        return wrapper
+        if not isinstance(name, str) and name is not None:
+            return _ToolDecorator(self._registry, None, description, input_schema)(name)
+        return _ToolDecorator(self._registry, name, description, input_schema)
 
     def define_middleware(
         self,
@@ -519,7 +530,7 @@ class Genkit:
         *,
         input_schema: type[BaseModel] | dict[str, object] | None = None,
         description: str | None = None,
-    ) -> Tool:
+    ) -> Tool[Any, NoReturn]:
         """Register an interrupt tool that always pauses for user input.
 
         Args:
@@ -528,7 +539,7 @@ class Genkit:
             description: Tool description
 
         Returns:
-            The registered interrupt tool
+            The registered interrupt tool. Awaiting it directly raises ``Interrupt``.
 
         Example:
             ask_user = ai.define_interrupt(
@@ -709,10 +720,10 @@ class Genkit:
         action = await self._registry.resolve_action(ActionKind.TOOL, name)
         if action is None:
             return None
-        schema = action.metadata.get(ORIGINAL_OUTPUT_SCHEMA_KEY)
-        return Tool(
-            action, original_output_schema=cast(dict[str, object], schema) if isinstance(schema, dict) else None
-        )
+        if isinstance(action, Tool):
+            return action
+        # A tool action from a plugin, a DAP, or register_action wasn't built as a Tool.
+        return Tool._from_action(action)
 
     def lookup_value(self, *, kind: str, name: str) -> object | None:
         """Return the value defined under ``kind`` and ``name``, or None."""

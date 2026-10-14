@@ -63,7 +63,7 @@ async def test_resolve_action_by_key_invalid_format() -> None:
 
 @pytest.mark.asyncio
 async def test_lookup_mcp_tool_echo_does_not_register_tool_v2_echo() -> None:
-    """resolve_action(TOOL, 'mcp:tool/echo') returns the Action. It does not write /tool.v2/echo."""
+    """resolve_action(TOOL, 'mcp:tool/echo') returns the Action. It does not write /tool/echo."""
     registry = Registry()
 
     async def tool_fn(x: str) -> str:
@@ -140,7 +140,7 @@ async def test_resolve_action_by_key_dap_qualified() -> None:
     catalog = await registry.list_actions()
     assert '/dynamic-action-provider/my-dap' in catalog
     assert '/dynamic-action-provider/my-dap:tool/inner-tool' in catalog
-    assert '/tool.v2/inner-tool' not in catalog
+    assert '/tool/inner-tool' not in catalog
 
 
 @pytest.mark.asyncio
@@ -372,14 +372,14 @@ async def test_child_resolvable_local_tool_shadows_parent_plugin_metadata() -> N
     )
 
     catalog = await child.list_actions()
-    entry = catalog['/tool.v2/parentplugin/shared-name']
+    entry = catalog['/tool/parentplugin/shared-name']
     assert entry.description == 'from child registry'
     assert entry.description != 'from parent plugin'
 
 
 @pytest.mark.asyncio
 async def test_child_dap_child_row_does_not_shadow_parent_plugin_metadata() -> None:
-    """A DAP child is its own catalog row; the plugin-advertised ``/tool.v2/`` row is untouched."""
+    """A DAP child is its own catalog row; the plugin-advertised ``/tool/`` row is untouched."""
 
     class ParentPlugin(Plugin):
         name = 'parentplugin'
@@ -421,7 +421,7 @@ async def test_child_dap_child_row_does_not_shadow_parent_plugin_metadata() -> N
     catalog = await child.list_actions()
     qualified = create_action_key(ActionKind.DYNAMIC_ACTION_PROVIDER, 'mcp:tool/parentplugin/mcp-tool')
     assert catalog[qualified].description == 'from mcp'
-    assert catalog['/tool.v2/parentplugin/mcp-tool'].description == 'stale parent schema'
+    assert catalog['/tool/parentplugin/mcp-tool'].description == 'stale parent schema'
 
 
 @pytest.mark.asyncio
@@ -569,7 +569,7 @@ async def test_list_actions_expands_dap_children() -> None:
 
     catalog = await registry.list_actions()
 
-    assert '/tool.v2/local-tool' in catalog
+    assert '/tool/local-tool' in catalog
     assert '/dynamic-action-provider/mcp' in catalog
     echo = catalog['/dynamic-action-provider/mcp:tool/echo']
     assert echo.key == '/dynamic-action-provider/mcp:tool/echo'
@@ -589,7 +589,7 @@ async def test_list_actions_without_dap_is_unaffected() -> None:
 
     catalog = await registry.list_actions()
 
-    assert sorted(catalog) == ['/custom/local-custom', '/tool.v2/local-tool']
+    assert sorted(catalog) == ['/custom/local-custom', '/tool/local-tool']
 
 
 @pytest.mark.asyncio
@@ -611,7 +611,7 @@ async def test_list_actions_survives_a_failing_dap() -> None:
         catalog = await registry.list_actions()
 
     assert any('Error listing actions' in entry['event'] and 'broken' in entry['event'] for entry in logs)
-    assert '/tool.v2/local-tool' in catalog
+    assert '/tool/local-tool' in catalog
     assert '/dynamic-action-provider/broken' in catalog
     assert '/dynamic-action-provider/healthy:tool/echo' in catalog
     assert not [key for key in catalog if key.startswith('/dynamic-action-provider/broken:')]
@@ -630,7 +630,7 @@ async def test_list_actions_survives_a_dap_child_without_a_name() -> None:
 
     catalog = await registry.list_actions()
 
-    assert '/tool.v2/local-tool' in catalog
+    assert '/tool/local-tool' in catalog
     assert '/dynamic-action-provider/nameless' in catalog
     assert not [key for key in catalog if key.startswith('/dynamic-action-provider/nameless:')]
 
@@ -718,7 +718,7 @@ async def test_list_actions_only_lists_children_that_can_be_run() -> None:
     registry = Registry()
 
     async def dap_fn() -> DapValue:
-        return {'tool': [_dap_child('echo', 'echoes')], ActionKind.TOOL: [_dap_child('shadow', 'wrong bucket')]}
+        return {'tool': [_dap_child('echo', 'echoes')], ActionKind.TOOL_V2: [_dap_child('shadow', 'wrong bucket')]}
 
     define_dynamic_action_provider(registry, 'mcp', dap_fn)
 
@@ -830,6 +830,6 @@ async def test_list_actions_survives_a_third_party_cancelling_a_listing() -> Non
         catalog = await asyncio.wait_for(listing, timeout=5)
 
     assert any('was cancelled' in entry['event'] and 'shared' in entry['event'] for entry in logs)
-    assert '/tool.v2/local-tool' in catalog
+    assert '/tool/local-tool' in catalog
     assert '/dynamic-action-provider/shared' in catalog
     assert not [key for key in catalog if key.startswith('/dynamic-action-provider/shared:')]

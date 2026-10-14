@@ -32,7 +32,7 @@ def _make_tool(name: str):
     async def fn() -> str:
         return ''
 
-    return define_tool(scratch, fn, name=name).action()
+    return define_tool(scratch, fn, name=name)
 
 
 @pytest.mark.asyncio
