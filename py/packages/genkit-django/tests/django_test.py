@@ -17,6 +17,7 @@
 
 """Tests for the Django plugin."""
 
+import asyncio
 import json
 import sys
 import types
@@ -25,6 +26,7 @@ from typing import Any
 
 import pytest
 from django.core.exceptions import PermissionDenied
+from django.core.handlers.asgi import ASGIHandler
 from django.test import AsyncClient
 from django.test.utils import override_settings
 from django.urls import path
@@ -448,3 +450,62 @@ async def test_django_stream_provider_401_sends_sse_internal_error(urlconf: None
     error = _sse_error_event(chunks)
     assert error == {'message': 'Internal Error', 'status': 'INTERNAL'}
     assert b'API key not valid' not in b''.join(chunks)
+
+
+@pytest.mark.asyncio
+async def test_django_streaming_client_disconnect_cancels_flow(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A client that hangs up after the first SSE chunk of a streamed flow view cancels the flow."""
+    ai = Genkit()
+    flow_cancelled = asyncio.Event()
+
+    @genkit_django_handler(ai)
+    @ai.flow()
+    async def slow(_: str, ctx: ActionRunContext) -> str:
+        ctx.send_chunk(1)
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            flow_cancelled.set()
+            raise
+        return 'never'
+
+    module = types.ModuleType('genkit_django_disconnect_urls')
+    module.urlpatterns = [path('slow', slow)]  # type: ignore[attr-defined]  # pyrefly: ignore[missing-attribute]
+    monkeypatch.setitem(sys.modules, 'genkit_django_disconnect_urls', module)
+
+    first_chunk = asyncio.Event()
+    request_read = False
+    bodies: list[bytes] = []
+
+    async def receive() -> dict[str, Any]:
+        nonlocal request_read
+        if not request_read:
+            request_read = True
+            return {'type': 'http.request', 'body': json.dumps({'data': 'x'}).encode(), 'more_body': False}
+        await first_chunk.wait()
+        return {'type': 'http.disconnect'}
+
+    async def send(message: dict[str, Any]) -> None:
+        if message['type'] == 'http.response.body' and message.get('body'):
+            bodies.append(message['body'])
+            first_chunk.set()
+
+    scope = {
+        'type': 'http',
+        'asgi': {'version': '3.0'},
+        'http_version': '1.1',
+        'method': 'POST',
+        'scheme': 'http',
+        'path': '/slow',
+        'raw_path': b'/slow',
+        'root_path': '',
+        'query_string': b'',
+        'headers': [(b'content-type', b'application/json'), (b'accept', b'text/event-stream')],
+        'client': ('testclient', 50000),
+        'server': ('testserver', 80),
+    }
+    with override_settings(ROOT_URLCONF='genkit_django_disconnect_urls'):
+        await asyncio.wait_for(ASGIHandler()(scope, receive, send), timeout=5)
+
+    assert bodies == [b'data: {"message":1}\n\n']
+    assert flow_cancelled.is_set()

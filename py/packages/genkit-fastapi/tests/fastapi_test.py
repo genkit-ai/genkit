@@ -17,8 +17,10 @@
 
 """Tests for the FastAPI plugin."""
 
+import asyncio
 import json
 import logging
+from typing import Any
 
 import pytest
 from fastapi import Depends, FastAPI, HTTPException
@@ -749,3 +751,65 @@ def test_fastapi_wrapper_http_exception_keeps_503() -> None:
 
     assert response.status_code == 503
     assert response.json() == {'detail': 'not ready'}
+
+
+async def post_sse_then_hang_up(app: FastAPI, path: str) -> list[bytes]:
+    """POST `{"data": "x"}` asking for SSE, then disconnect right after the first body chunk arrives."""
+    first_chunk = asyncio.Event()
+    request_read = False
+    bodies: list[bytes] = []
+
+    async def receive() -> dict[str, Any]:
+        nonlocal request_read
+        if not request_read:
+            request_read = True
+            return {'type': 'http.request', 'body': json.dumps({'data': 'x'}).encode(), 'more_body': False}
+        await first_chunk.wait()
+        return {'type': 'http.disconnect'}
+
+    async def send(message: dict[str, Any]) -> None:
+        if message['type'] == 'http.response.body' and message.get('body'):
+            bodies.append(message['body'])
+            first_chunk.set()
+
+    scope = {
+        'type': 'http',
+        'asgi': {'version': '3.0', 'spec_version': '2.3'},
+        'http_version': '1.1',
+        'method': 'POST',
+        'scheme': 'http',
+        'path': path,
+        'raw_path': path.encode(),
+        'root_path': '',
+        'query_string': b'',
+        'headers': [(b'content-type', b'application/json'), (b'accept', b'text/event-stream')],
+        'client': ('testclient', 50000),
+        'server': ('testserver', 80),
+    }
+    await asyncio.wait_for(app(scope, receive, send), timeout=5)
+    return bodies
+
+
+@pytest.mark.asyncio
+async def test_fastapi_streaming_client_disconnect_cancels_flow() -> None:
+    """A client that hangs up after the first SSE chunk of a streamed flow route cancels the flow."""
+    ai = Genkit()
+    flow_cancelled = asyncio.Event()
+
+    @ai.flow()
+    async def slow(_: str, ctx: ActionRunContext) -> str:
+        ctx.send_chunk(1)
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            flow_cancelled.set()
+            raise
+        return 'never'
+
+    app = FastAPI()
+    app.include_router(serve_flow(slow, base_path='/slow'))
+
+    bodies = await post_sse_then_hang_up(app, '/slow')
+
+    assert bodies == [b'data: {"message":1}\n\n']
+    assert flow_cancelled.is_set()

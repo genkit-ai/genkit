@@ -17,6 +17,7 @@
 """Genkit Flask plugin."""
 
 import asyncio
+import contextlib
 import json
 import logging
 from asyncio import AbstractEventLoop
@@ -84,12 +85,20 @@ def _iter_over_async(ait: AsyncIterable[T], loop: AbstractEventLoop) -> Iterable
         except StopAsyncIteration:
             return True, None
 
-    while True:
-        done, obj = loop.run_until_complete(get_next())
-        if done:
-            break
-        assert obj is not None
-        yield obj
+    try:
+        while True:
+            done, obj = loop.run_until_complete(get_next())
+            if done:
+                break
+            assert obj is not None
+            yield obj
+    finally:
+        # Werkzeug closes this iterator when the client hangs up. The async side
+        # only runs while we drive the loop, so close it here or the flow never
+        # hears about it.
+        aclose = getattr(ait_iter, 'aclose', None)
+        if aclose is not None:
+            loop.run_until_complete(aclose())
 
 
 # Type alias for Flask-compatible route handler return type
@@ -176,8 +185,12 @@ def genkit_flask_handler(
                 async def async_gen() -> AsyncIterator[str]:
                     try:
                         stream_response = flow.stream(input=action_input, context=action_context, init=init)
-                        async for chunk in stream_response.stream:
-                            yield f'data: {json.dumps({"message": _to_dict(chunk)}, separators=_JSON_SEPARATORS)}\n\n'
+                        # closing this generator has to cancel the flow before the
+                        # loop stops; nothing runs the loop afterwards to collect it.
+                        async with contextlib.aclosing(stream_response.stream) as chunks:
+                            async for chunk in chunks:
+                                message = json.dumps({'message': _to_dict(chunk)}, separators=_JSON_SEPARATORS)
+                                yield f'data: {message}\n\n'
 
                         result = await stream_response.response
                         yield f'data: {json.dumps({"result": _to_dict(result)}, separators=_JSON_SEPARATORS)}\n\n'

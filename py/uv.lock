@@ -1730,7 +1730,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "django", specifier = ">=4.2" },
+    { name = "django", specifier = ">=5.0" },
     { name = "genkit", editable = "packages/genkit" },
     { name = "pydantic", specifier = ">=2.10.5" },
 ]

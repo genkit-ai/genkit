@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
@@ -203,8 +204,11 @@ async def _handle_action_request(
         async def event_stream() -> AsyncIterator[str]:
             try:
                 stream_response = action_obj.stream(input=action_input, context=context, init=resolved_init)
-                async for chunk in stream_response.stream:
-                    yield format_stream_chunk(chunk)
+                # a client that hangs up closes this generator; aclosing makes
+                # that cancel the flow right away instead of whenever it's collected.
+                async with contextlib.aclosing(stream_response.stream) as chunks:
+                    async for chunk in chunks:
+                        yield format_stream_chunk(chunk)
                 result = await stream_response.response
                 yield format_stream_result(result)
             except Exception as e:

@@ -17,7 +17,9 @@
 
 """Tests for the Flask plugin."""
 
+import asyncio
 import json
+import threading
 from typing import Any
 
 from flask import Flask, abort
@@ -391,3 +393,33 @@ def test_flask_context_provider_abort_keeps_its_status() -> None:
     response = app.test_client().post('/chat', json={'data': 'x'})
 
     assert response.status_code == 401
+
+
+def test_flask_streaming_client_disconnect_cancels_flow() -> None:
+    """A client that hangs up after the first SSE chunk of a streamed flow route cancels the flow."""
+    ai = Genkit()
+    flow_cancelled = threading.Event()
+    app = Flask(__name__)
+    app.config.update({'TESTING': True})
+
+    @app.post('/slow')
+    @genkit_flask_handler(ai)
+    @ai.flow()
+    async def slow(_: str, ctx: ActionRunContext) -> str:
+        ctx.send_chunk(1)
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            flow_cancelled.set()
+            raise
+        return 'never'
+
+    response = app.test_client().post(
+        '/slow', json={'data': 'x'}, headers={'accept': 'text/event-stream'}, buffered=False
+    )
+    first = next(iter(response.response))
+    # Werkzeug closes the response iterator when the client goes away.
+    response.close()
+
+    assert first == b'data: {"message":1}\n\n'
+    assert flow_cancelled.is_set()
