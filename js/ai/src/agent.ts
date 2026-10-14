@@ -1584,6 +1584,9 @@ export function definePromptAgent<
           ...(input.resume.respond?.length && {
             respond: input.resume.respond as ToolResponsePart[],
           }),
+          ...(input.resume.metadata && {
+            metadata: input.resume.metadata,
+          }),
         };
       }
 

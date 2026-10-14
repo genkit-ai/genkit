@@ -150,6 +150,8 @@ type AgentInput struct {
 // Mirrors [ai.GenerateActionResume] but is named for the tool-call
 // callsite where it is set on an [AgentInput].
 type ToolResume struct {
+	// Metadata contains additional context for resuming the generation.
+	Metadata map[string]any `json:"metadata,omitempty"`
 	// Respond contains tool response parts to send to the model when resuming.
 	Respond []*ai.Part `json:"respond,omitempty"`
 	// Restart contains tool request parts to restart when resuming.

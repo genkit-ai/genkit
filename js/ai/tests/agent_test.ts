@@ -31,6 +31,7 @@ import {
 import { TestSpanExporter } from '../../core/tests/utils.js';
 import { AgentError } from '../src/agent-core.js';
 import {
+  AgentInputSchema,
   AgentStreamChunk,
   SessionRunner,
   defineAgent,
@@ -4400,6 +4401,42 @@ Now respond to the latest message.`,
 
       // Type-level checks (ex. rejecting `context` on transports that do not
       // declare it) live in `tests/types/`, checked by `tsconfig.types-test.json`.
+    });
+
+    it('AgentInputSchema parses resume metadata without stripping it', () => {
+      const parsed = AgentInputSchema.parse({
+        resume: {
+          metadata: { approvedBy: 'jeff', ticket: 'INC-123' },
+        },
+      });
+      assert.deepEqual(parsed.resume?.metadata, {
+        approvedBy: 'jeff',
+        ticket: 'INC-123',
+      });
+    });
+
+    it('chat.resume forwards resume.metadata to agent execution', async () => {
+      const store = new InMemorySessionStore<{}>();
+      let lastGenOptsResume: any = undefined;
+
+      const agent = defineCustomAgent<{}>(
+        new Registry(),
+        { name: 'apiResumeMetadata', store },
+        async (sess) => {
+          await sess.run(async (input) => {
+            lastGenOptsResume = input?.resume;
+            return { finishReason: 'stop' as const };
+          });
+          return {
+            message: { role: 'model', content: [{ text: 'resumed' }] },
+            finishReason: 'stop' as const,
+          };
+        }
+      );
+
+      const chat = agent.chat();
+      await chat.resume({ metadata: { approvedBy: 'jeff' } });
+      assert.deepEqual(lastGenOptsResume?.metadata, { approvedBy: 'jeff' });
     });
   });
 });
