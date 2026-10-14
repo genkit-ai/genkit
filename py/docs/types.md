@@ -54,10 +54,6 @@ Types exported from genkit, genkit.model, genkit.embedder, genkit.plugin_api, ge
 
 ::: genkit.RuntimeErrorReason
 
-::: genkit.ContextProvider
-
-::: genkit.RequestData
-
 ::: genkit.FormatDef
 
 ::: genkit.FormatterConfig
@@ -143,6 +139,12 @@ Types exported from genkit, genkit.model, genkit.embedder, genkit.plugin_api, ge
 ::: genkit.telemetry.run_in_new_span
 
 ::: genkit.telemetry.SpanMetadata
+
+## genkit.web
+
+::: genkit.web.ContextProvider
+
+::: genkit.web.RequestData
 
 ## genkit.exp.agent
 

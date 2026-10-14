@@ -46,7 +46,6 @@ from genkit._ai._tools import (
     tool,
 )
 from genkit._core._action import ActionRunContext, StreamResponse
-from genkit._core._context import ContextProvider, RequestData
 from genkit._core._dap import DynamicActionProvider
 from genkit._core._error import GenkitError, GenkitRuntimeError, Interrupt, PublicError, RuntimeErrorReason
 from genkit._core._logger import get_logger
@@ -99,9 +98,6 @@ __all__ = [
     'PublicError',
     'RuntimeErrorReason',
     'get_logger',
-    # HTTP request context for flow handlers
-    'ContextProvider',
-    'RequestData',
     # Custom output formats and dynamic providers
     'FormatDef',
     'FormatterConfig',

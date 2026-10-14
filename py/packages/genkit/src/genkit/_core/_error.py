@@ -16,8 +16,6 @@
 
 """Error classes and utilities for the Genkit framework."""
 
-import json
-import logging
 import math
 import reprlib
 import time
@@ -482,12 +480,12 @@ class GenkitError(Exception):
         return runtime_error_reason(self.details)
 
     def to_callable_serializable(self) -> HttpErrorWireFormat:
-        """Served-flow wire body; same redaction as ``get_callable_json``.
+        """Served-flow wire body; same redaction as ``error_body``.
 
         Only a PublicError keeps its message and details. In-process code
         that needs the real error reads ``original_message`` and ``details``.
         """
-        body = get_callable_json(self)
+        body = error_body(self)
         return HttpErrorWireFormat(
             details=body.get('details'),
             status=body['status'],
@@ -511,7 +509,9 @@ def mark_request_error(*, error: GenkitError) -> GenkitError:
     """Mark an error from the served action's own input or init check.
 
     The HTTP caller sent a body the action cannot accept, so they get a 4xx
-    with a generic sentence. The validation dump stays off the wire.
+    with the message and the failing fields (path and Pydantic's wording,
+    never the values). Only the outermost action marks its errors; a nested
+    action called wrong is a server bug and stays a 500.
     """
     error._request_sourced = True
     return error
@@ -615,7 +615,7 @@ def _client_facing_error(error: object) -> GenkitError | None:
 
     A PublicError is the app saying this status and sentence are for the
     caller. The served action's own input/init check is the caller's
-    request, so it keeps a 4xx and a generic sentence. A missing model or
+    request, so it keeps a 4xx and its message. A missing model or
     a plugin "bad role" is the server failing to run the flow.
     """
     if isinstance(error, PublicError):
@@ -625,11 +625,27 @@ def _client_facing_error(error: object) -> GenkitError | None:
     return None
 
 
-def _generic_client_message(status: StatusName) -> str:
-    """'INVALID_ARGUMENT' -> 'Invalid argument'; INTERNAL uses 'Internal Error'."""
-    if status == 'INTERNAL':
-        return 'Internal Error'
-    return status.replace('_', ' ').capitalize()
+def _request_client_message(error: GenkitError) -> str:
+    """The input/init message plus each failing field, without the values the caller sent.
+
+    ``Invalid input for flow 'place': order_id: Field required; qty: Input should be a valid integer``
+    """
+    details = error.details if isinstance(error.details, dict) else {}
+    errors = details.get('errors')
+    problems: list[str] = []
+    if isinstance(errors, list):
+        for err in cast(list[object], errors)[:3]:
+            if not isinstance(err, dict):
+                continue
+            entry = cast(dict[str, object], err)
+            loc = entry.get('loc')
+            parts = cast(list[object], loc) if isinstance(loc, list) else []
+            path = ''.join(f'[{p}]' if isinstance(p, int) else f'.{p}' for p in parts).lstrip('.')
+            text = str(entry.get('message', ''))
+            problems.append(f'{path}: {text}' if path else text)
+        if len(errors) > 3:
+            problems.append(f'and {len(errors) - 3} more')
+    return f'{error.original_message}: {"; ".join(problems)}' if problems else error.original_message
 
 
 _ANY_ADAPTER: TypeAdapter[Any] = TypeAdapter(Any)
@@ -646,12 +662,12 @@ def _client_details(details: Any) -> Any:  # noqa: ANN401
     return dumped
 
 
-def get_http_status(error: object) -> int:
-    """HTTP status for a served-flow error.
+def error_status(error: object) -> int:
+    """HTTP status to send back when a served flow fails; pairs with ``error_body``.
 
-    A PublicError keeps its own status (NOT_FOUND is a 404). Any other
-    GenkitError, a provider-sourced error, a plain exception, or anything
-    else is a 500.
+    A PublicError keeps its own status (NOT_FOUND is a 404), and a bad
+    request to the flow itself keeps its 4xx. Any other GenkitError, a
+    provider error, a plain exception, or anything else is a 500.
     """
     facing = _client_facing_error(error)
     if facing is not None:
@@ -688,18 +704,30 @@ def get_reflection_json(error: object, *, trace_id: str | None = None) -> Reflec
     return ref.model_copy(update={'details': details})
 
 
-def get_callable_json(error: object) -> dict[str, Any]:
-    """JSON body for a served-flow HTTP or SSE error.
+def error_body(error: object) -> dict[str, Any]:
+    """JSON body to send back when a served flow fails.
 
     Only a PublicError's message, details, and status go on the wire; it's
-    the one error whose author said the text is safe for callers. Any other
-    GenkitError, a provider-sourced error, and anything else become
-    ``{"message": "Internal Error", "status": "INTERNAL"}``.
+    the one error whose author said the text is safe for callers. A bad
+    request to the flow itself keeps its 4xx status and says which fields
+    failed
+    such as ``"Invalid argument"``. Any other GenkitError, a provider error,
+    and anything else become ``{"message": "Internal Error", "status": "INTERNAL"}``.
+
+    Example:
+        ```python
+        from genkit.web import error_body, error_status
+
+        try:
+            response = await my_flow.run(input=data)
+        except Exception as e:
+            return JSONResponse(error_body(e), status_code=error_status(e))
+        ```
     """
     facing = _client_facing_error(error)
     if facing is None:
         return dict(_INTERNAL_CLIENT_BODY)
-    message = facing.original_message if isinstance(facing, PublicError) else _generic_client_message(facing.status)
+    message = facing.original_message if isinstance(facing, PublicError) else _request_client_message(facing)
     body: dict[str, Any] = {
         'message': message,
         'status': facing.status,
@@ -709,27 +737,6 @@ def get_callable_json(error: object) -> dict[str, Any]:
         if details is not None:
             body['details'] = details
     return body
-
-
-_JSON_SEPARATORS = (',', ':')
-
-
-def served_error_json(*, error: object) -> tuple[int, str]:
-    """HTTP status and compact JSON body for a served-flow failure."""
-    return get_http_status(error), json.dumps(get_callable_json(error), separators=_JSON_SEPARATORS)
-
-
-def served_stream_error_event(*, error: object) -> str:
-    """SSE ``data: {"error": ...}`` event for a served-flow failure."""
-    return f'data: {json.dumps({"error": get_callable_json(error)}, separators=_JSON_SEPARATORS)}\n\n'
-
-
-def log_served_failure(*, adapter_logger: logging.Logger, error: Exception, where: str) -> None:
-    """Log a served-flow failure; 5xx includes the traceback."""
-    if get_http_status(error) >= 500:
-        adapter_logger.exception('served flow %s failed', where)
-    else:
-        adapter_logger.warning('served flow %s failed: %s', where, error)
 
 
 def get_error_stack(error: object) -> str | None:

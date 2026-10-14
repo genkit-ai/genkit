@@ -97,15 +97,26 @@ def test_base_path_defaults_to_agent_name() -> None:
     assert 'Hi there!' in json.dumps(response.json()['result'])
 
 
-def test_turn_shorthand_matches_wire_format() -> None:
-    """The {"input": ..., "init": ...} wire shape works the same as the shorthand."""
+def test_turn_data_envelope_matches_shorthand() -> None:
+    """The {"data": ..., "init": ...} wire shape works the same as the shorthand."""
     client_obj = client(build_agent('wireAgent'))
 
-    body = {'input': {'message': {'role': 'user', 'content': [{'text': 'Hi'}]}}, 'init': {}}
+    body = {'data': {'message': {'role': 'user', 'content': [{'text': 'Hi'}]}}, 'init': {}}
     response = client_obj.post('/api/chat', json=body)
 
     assert response.status_code == 200
     assert 'Hi there!' in json.dumps(response.json()['result'])
+
+
+def test_agent_input_key_body_is_400() -> None:
+    """POST {"input": "hi"} to an agent route is a 400 telling the caller to wrap in data."""
+    response = client(build_agent('inputKeyAgent')).post('/api/chat', json={'input': 'hi'})
+
+    assert response.status_code == 400
+    assert response.json() == {
+        'message': 'Action request must be wrapped in {"data": ...} object',
+        'status': 'INVALID_ARGUMENT',
+    }
 
 
 def test_get_snapshot_missing_returns_404() -> None:
@@ -247,7 +258,7 @@ def test_serve_agent_init_mismatch_returns_agent_init_error(
 ) -> None:
     """AgentInitError is a PublicError, so a remote client sees the status, message, and reason it would in-process."""
     response = client(build_agent('initAgent', server_managed=server_managed)).post(
-        '/api/chat', json={'input': {'message': {'role': 'user', 'content': [{'text': 'Hi'}]}}, 'init': init}
+        '/api/chat', json={'data': {'message': {'role': 'user', 'content': [{'text': 'Hi'}]}}, 'init': init}
     )
 
     assert response.status_code == 400

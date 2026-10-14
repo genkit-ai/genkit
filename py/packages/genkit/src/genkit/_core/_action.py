@@ -674,6 +674,15 @@ BidiFn = Callable[
 _action_context: ContextVar[dict[str, Any] | None] = ContextVar('context')
 _ = _action_context.set(None)
 
+# True while an action body runs. An input check that fails inside one is the
+# server calling a nested action wrong, not the HTTP caller's request.
+_inside_action: ContextVar[bool] = ContextVar('inside_action', default=False)
+
+
+def _request_error(error: GenkitError) -> GenkitError:
+    """Mark an input/init failure as the caller's request only on the outermost action."""
+    return error if _inside_action.get() else mark_request_error(error=error)
+
 
 class NoInput:
     def __repr__(self) -> str:
@@ -943,6 +952,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         token = None
         if context is not None:
             token = _action_context.set(context)
+        inside_token = _inside_action.set(True)
 
         streaming_cb = cast(StreamingCallback, on_chunk) if on_chunk else None
 
@@ -960,6 +970,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
                 telemetry_labels,
             )
         finally:
+            _inside_action.reset(inside_token)
             if token is not None:
                 _action_context.reset(token)
 
@@ -1069,15 +1080,15 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             return self._init_type.validate_python(init if init is not None else {})
         except ValidationError as e:
             if init is None:
-                raise mark_request_error(
-                    error=GenkitError(
+                raise _request_error(
+                    GenkitError(
                         message=(f"{self._kind_label.capitalize()} '{self.name}' requires init but none was provided."),
                         status='INVALID_ARGUMENT',
                         reason=RuntimeErrorReason.INVALID_INPUT,
                     )
                 ) from e
-            raise mark_request_error(
-                error=GenkitError(
+            raise _request_error(
+                GenkitError(
                     message=f"Invalid init for {self._kind_label} '{self.name}'",
                     status='INVALID_ARGUMENT',
                     cause=e,
@@ -1109,8 +1120,8 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
                 if isinstance(config, BaseModel):
                     expected = declared_config_type(self._input_class) if self._input_class is not None else None
                     want = config_type_path(expected) if isinstance(expected, type) else 'the plugin config class'
-                    raise mark_request_error(
-                        error=GenkitError(
+                    raise _request_error(
+                        GenkitError(
                             message=(
                                 f"Invalid input for {self._kind_label} '{self.name}': "
                                 f'config must be {want} or a mapping, '
@@ -1130,8 +1141,8 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
                 if omitted
                 else f"Invalid input for {self._kind_label} '{self.name}'"
             )
-            raise mark_request_error(
-                error=GenkitError(
+            raise _request_error(
+                GenkitError(
                     message=msg,
                     status='INVALID_ARGUMENT',
                     # Nothing was passed, so Pydantic's "got None" would only mislead.
