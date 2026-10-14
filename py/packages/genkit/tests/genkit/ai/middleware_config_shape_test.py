@@ -17,11 +17,10 @@ import pytest
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from genkit import Genkit, GenkitError, Message, ModelResponse, Part
-from genkit._core._action import ActionRunContext
 from genkit._core._middleware import BaseMiddleware
 from genkit._core._model import ModelRequest
 from genkit._core._typing import FinishReason, Role
-from genkit.model import ModelConfig
+from genkit.model import ModelConfig, ModelContext
 
 
 class StrictConfig(ModelConfig):
@@ -49,11 +48,11 @@ class _Model:
     def __init__(self) -> None:
         self.configs: list[object] = []
 
-    async def typed(self, request: ModelRequest[StrictConfig], _ctx: ActionRunContext) -> ModelResponse:
+    async def typed(self, request: ModelRequest[StrictConfig], _ctx: ModelContext) -> ModelResponse:
         self.configs.append(request.config)
         return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))
 
-    async def untyped(self, request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+    async def untyped(self, request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
         self.configs.append(request.config)
         return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))
 
@@ -83,7 +82,7 @@ def _nested_ai() -> tuple[Genkit, _Model]:
     ai = Genkit()
     model = _Model()
 
-    async def fn(request: ModelRequest[NestedConfig], _ctx: ActionRunContext) -> ModelResponse:
+    async def fn(request: ModelRequest[NestedConfig], _ctx: ModelContext) -> ModelResponse:
         model.configs.append(request.config)
         return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))
 
@@ -295,7 +294,7 @@ async def test_fields_middleware_did_not_touch_are_not_revalidated() -> None:
     ai = Genkit()
     configs: list[Any] = []
 
-    async def fn(request: ModelRequest[PrefixedConfig], _ctx: ActionRunContext) -> ModelResponse:
+    async def fn(request: ModelRequest[PrefixedConfig], _ctx: ModelContext) -> ModelResponse:
         configs.append(request.config)
         return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))
 
@@ -321,7 +320,7 @@ async def test_middleware_changed_field_is_validated_once() -> None:
     ai = Genkit()
     configs: list[Any] = []
 
-    async def fn(request: ModelRequest[PrefixedConfig], _ctx: ActionRunContext) -> ModelResponse:
+    async def fn(request: ModelRequest[PrefixedConfig], _ctx: ModelContext) -> ModelResponse:
         configs.append(request.config)
         return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))
 
@@ -469,7 +468,7 @@ async def test_middleware_change_runs_model_validators_naming_the_changed_field(
     ai = Genkit()
     configs: list[Any] = []
 
-    async def fn(request: ModelRequest[AllergyConfig], _ctx: ActionRunContext) -> ModelResponse:
+    async def fn(request: ModelRequest[AllergyConfig], _ctx: ModelContext) -> ModelResponse:
         configs.append(request.config)
         return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))
 

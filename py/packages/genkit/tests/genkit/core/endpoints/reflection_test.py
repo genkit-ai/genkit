@@ -46,7 +46,7 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from pydantic import BaseModel, Field
 
-from genkit import ActionRunContext, Genkit, PublicError
+from genkit import FlowContext, Genkit, PublicError
 from genkit._core._action import ActionKind
 from genkit._core._middleware import BaseMiddleware
 from genkit._core._model import ModelConfig
@@ -191,11 +191,11 @@ async def test_run_action_context_reaches_flow_and_subflow() -> None:
     caller = {'auth': {'uid': 'u_42', 'tier': 'gold'}, 'locale': 'en-US'}
 
     @ai.flow()
-    async def allergy_check(dish: str, ctx: ActionRunContext) -> dict[str, Any]:
+    async def allergy_check(dish: str, ctx: FlowContext) -> dict[str, Any]:
         return dict(ctx.context)
 
     @ai.flow()
-    async def order_dish(dish: str, ctx: ActionRunContext) -> dict[str, Any]:
+    async def order_dish(dish: str, ctx: FlowContext) -> dict[str, Any]:
         return {'flow': dict(ctx.context), 'subflow': await allergy_check(dish)}
 
     app = create_reflection_asgi_app(ai._registry)

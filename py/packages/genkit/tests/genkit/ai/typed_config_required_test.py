@@ -28,12 +28,11 @@ import pytest
 from pydantic import BaseModel, ConfigDict
 
 from genkit import FinishReason, Genkit, Part
-from genkit._core._action import ActionRunContext
 from genkit._core._error import GenkitError
 from genkit._core._model import Message, ModelRequest, ModelResponse
 from genkit._core._typing import Operation, Role
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
-from genkit.model import model_ref
+from genkit.model import ModelContext, model_ref
 
 NextModel = Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]]
 
@@ -84,7 +83,7 @@ class Tts:
             ai.define_model('acme/tts', fn, config_schema=schema)
         else:
 
-            async def check(operation: Operation, ctx: ActionRunContext) -> Operation:
+            async def check(operation: Operation, ctx: ModelContext) -> Operation:
                 return operation
 
             ai.define_background_model('acme/tts', start=fn, check=check, config_schema=schema)
@@ -96,13 +95,13 @@ class Tts:
         return Operation(id='op-1', done=False)
 
     def _typed_fn(self, config_class: type[BaseModel]) -> Callable[..., Awaitable[object]]:
-        async def tts(request: ModelRequest[config_class], ctx: ActionRunContext):  # type: ignore[valid-type]  # noqa: ANN202
+        async def tts(request: ModelRequest[config_class], ctx: ModelContext):  # type: ignore[valid-type]  # noqa: ANN202
             return self._reply(request.config)
 
         return tts
 
     def _plain_fn(self) -> Callable[..., Awaitable[object]]:
-        async def tts(request: ModelRequest, ctx: ActionRunContext):  # noqa: ANN202
+        async def tts(request: ModelRequest, ctx: ModelContext):  # noqa: ANN202
             return self._reply(request.config)
 
         return tts
@@ -249,10 +248,10 @@ def test_sync_fn_fails_at_define(kind: Kind, declared: Declared) -> None:
     ai = Genkit()
     schema = VoiceConfig if declared == 'class_only' else VoiceConfig.model_json_schema()
 
-    def tts(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    def tts(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('audio')]))
 
-    async def check(operation: Operation, ctx: ActionRunContext) -> Operation:
+    async def check(operation: Operation, ctx: ModelContext) -> Operation:
         return operation
 
     with pytest.raises(TypeError, match='must be async'):
@@ -267,10 +266,10 @@ def test_invalid_json_schema_fails_at_define(kind: Kind) -> None:
     """A config_schema dict that isn't a JSON schema is the model author's bug; it raises at define."""
     ai = Genkit()
 
-    async def tts(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def tts(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('audio')]))
 
-    async def check(operation: Operation, ctx: ActionRunContext) -> Operation:
+    async def check(operation: Operation, ctx: ModelContext) -> Operation:
         return operation
 
     with pytest.raises(GenkitError, match='not a valid JSON schema'):
@@ -334,7 +333,7 @@ async def test_direct_run_with_unannotated_request_checks_config() -> None:
     """A direct action run (Dev UI) hands an unannotated fn the raw dict; the check reads config from it."""
     ai = Genkit()
 
-    async def tts(request, ctx: ActionRunContext) -> ModelResponse:  # noqa: ANN001
+    async def tts(request, ctx: ModelContext) -> ModelResponse:  # noqa: ANN001
         return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('audio')]))
 
     action = ai.define_model('acme/tts', tts, config_schema=VoiceConfig)
