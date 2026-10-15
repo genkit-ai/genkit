@@ -58,13 +58,31 @@ const contextProvider: ContextProvider<Context> = (req: RequestData) => {
   };
 };
 
+// Takes long enough for a test client to disconnect while the handler is still
+// waiting for the context.
+const slowContextProvider: ContextProvider<Context> = async () => {
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  return { auth: { user: 'Ali Baba' } };
+};
+
 describe('expressHandler', async () => {
   let server: http.Server;
   let port;
-  let abortableFlowResult;
+  let flowStarted: Promise<void>;
+  let resolveFlowStarted: () => void;
+  let flowFinished: Promise<{ aborted: boolean; signal: AbortSignal }>;
+  let resolveFlowFinished: (v: {
+    aborted: boolean;
+    signal: AbortSignal;
+  }) => void;
 
   beforeEach(async () => {
-    abortableFlowResult = undefined;
+    flowStarted = new Promise<void>((r) => {
+      resolveFlowStarted = r;
+    });
+    flowFinished = new Promise((r) => {
+      resolveFlowFinished = r;
+    });
     const ai = genkit({});
     const echoModel = defineEchoModel(ai);
 
@@ -116,24 +134,39 @@ describe('expressHandler', async () => {
       }
     );
 
+    // Reports when it starts and what its abortSignal looked like when it
+    // finished. With the input 'wait' it holds the request open until the client
+    // disconnects (the timer is only a safety net so that a regression fails the
+    // test instead of hanging it).
     const abortableFlow = ai.defineFlow(
       {
         name: 'abortableFlow',
+        inputSchema: z.string(),
       },
-      async (_, { abortSignal, sendChunk }) => {
-        let itersLeft = 20;
-        while (itersLeft > 0 && !abortSignal.aborted) {
-          await new Promise((r) => {
-            setTimeout(r, 100);
+      async (input, { abortSignal }) => {
+        resolveFlowStarted();
+        if (input === 'wait') {
+          await new Promise<void>((resolve) => {
+            if (abortSignal.aborted) {
+              resolve();
+              return;
+            }
+            const timer = setTimeout(resolve, 3000);
+            abortSignal.addEventListener(
+              'abort',
+              () => {
+                clearTimeout(timer);
+                resolve();
+              },
+              { once: true }
+            );
           });
-          sendChunk(itersLeft);
-          itersLeft--;
         }
-        abortableFlowResult = [
-          itersLeft > 0 ? 'success' : 'failure',
-          abortSignal.aborted,
-        ];
-        return itersLeft > 0 ? 'success' : 'failure';
+        resolveFlowFinished({
+          aborted: abortSignal.aborted,
+          signal: abortSignal,
+        });
+        return 'done';
       }
     );
 
@@ -194,6 +227,10 @@ describe('expressHandler', async () => {
     app.post('/flowWithInit', expressHandler(flowWithInit));
     app.post('/flowWithInitSchema', expressHandler(flowWithInitSchema));
     app.post('/abortableFlow', expressHandler(abortableFlow));
+    app.post(
+      '/abortableFlowSlowContext',
+      expressHandler(abortableFlow, { contextProvider: slowContextProvider })
+    );
 
     server = app.listen(port, () => {
       console.log(`Example app listening on port ${port}`);
@@ -362,35 +399,91 @@ describe('expressHandler', async () => {
       });
     });
 
-    // TODO: This test is flaky, skipping until fixed.
-    it.skip('should abort a flow with auth', async () => {
+    it('aborts the flow when the client disconnects', async () => {
       const controller = new AbortController();
       const response = fetch(`http://localhost:${port}/abortableFlow`, {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: 'wait' }),
         signal: controller.signal,
       });
-      // TODO: make this work instead of direct fetch. For some reason doesn't work in a test,
-      // even though appears to be doing exactly the same thing.
-      /*
-      const response = runFlow({
-        url: `http://localhost:${port}/abortableFlow`,
-        abortSignal: controller.signal,
-      });
-      */
-
-      setTimeout(() => controller.abort(), 10);
-
+      await flowStarted;
+      controller.abort();
       await assert.rejects(response); // abort error
 
-      await new Promise((r) => {
-        setTimeout(r, 200);
-      });
+      const { aborted } = await flowFinished;
+      assert.strictEqual(aborted, true);
+    });
 
-      assert.deepStrictEqual(abortableFlowResult, ['success', true]);
+    it('aborts the flow when the client disconnects while the context is being resolved', async () => {
+      const controller = new AbortController();
+      const response = fetch(
+        `http://localhost:${port}/abortableFlowSlowContext`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ data: 'wait' }),
+          signal: controller.signal,
+        }
+      );
+      // Disconnect while the slow context provider is still running, so the
+      // flow has not started yet.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      controller.abort();
+      await assert.rejects(response); // abort error
+
+      const { aborted } = await flowFinished;
+      assert.strictEqual(aborted, true);
+    });
+
+    it('does not abort the flow for a request that completes', async () => {
+      const result = await runFlow({
+        url: `http://localhost:${port}/abortableFlow`,
+        input: 'quick',
+      });
+      assert.strictEqual(result, 'done');
+
+      const { aborted, signal } = await flowFinished;
+      assert.strictEqual(aborted, false);
+      // Give the connection a chance to close; that must not abort the flow.
+      await new Promise((r) => setTimeout(r, 50));
+      assert.strictEqual(signal.aborted, false);
     });
   });
 
   describe('streamFlow', () => {
+    it('aborts the flow when a streaming client disconnects', async () => {
+      const controller = new AbortController();
+      const response = fetch(`http://localhost:${port}/abortableFlow`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'text/event-stream',
+        },
+        body: JSON.stringify({ data: 'wait' }),
+        signal: controller.signal,
+      });
+      await flowStarted;
+      controller.abort();
+      await assert.rejects(response); // abort error
+
+      const { aborted } = await flowFinished;
+      assert.strictEqual(aborted, true);
+    });
+
+    it('does not abort the flow for a streaming request that completes', async () => {
+      const { output } = streamFlow<string, string>({
+        url: `http://localhost:${port}/abortableFlow`,
+        input: 'quick',
+      });
+      assert.strictEqual(await output, 'done');
+
+      const { aborted, signal } = await flowFinished;
+      assert.strictEqual(aborted, false);
+      await new Promise((r) => setTimeout(r, 50));
+      assert.strictEqual(signal.aborted, false);
+    });
+
     it('stream a flow', async () => {
       const result = streamFlow<string, GenerateResponseChunkData>({
         url: `http://localhost:${port}/streamingFlow`,

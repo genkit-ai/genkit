@@ -108,8 +108,20 @@ export function expressHandler<
     }
 
     const abortController = new AbortController();
-    request.on('close', () => {
+    // The client may have disconnected while the context provider was running,
+    // before the 'close' listener below existed; 'close' fires only once.
+    if (response.destroyed) {
       abortController.abort();
+    }
+    // Listen on the response, not the request: since Node 16 the request
+    // (IncomingMessage) emits 'close' as soon as its body has been consumed,
+    // which is long before the client disconnects. The response emits 'close'
+    // either after it finished or when the underlying connection was terminated
+    // early, so only abort in the latter case.
+    response.on('close', () => {
+      if (!response.writableFinished) {
+        abortController.abort();
+      }
     });
     // when/if using timeout middleware, it will emit 'timeout' event.
     request.on('timeout', () => {
