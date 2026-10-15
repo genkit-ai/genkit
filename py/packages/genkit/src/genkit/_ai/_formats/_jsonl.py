@@ -132,7 +132,7 @@ class JsonlFormat(FormatDef):
                 if trimmed.startswith('{'):
                     try:
                         result = json5.loads(trimmed)
-                        if result:
+                        if result is not None:
                             results.append(result)
                     except ValueError:
                         # Incomplete or invalid JSON line, stop processing this chunk
