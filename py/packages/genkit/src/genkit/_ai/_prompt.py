@@ -1000,7 +1000,6 @@ async def to_prompt_model_request(*, registry: Registry, options: GenerateAction
     output_config = OutputConfig(
         content_type=options.output.content_type if options.output else None,
         format=options.output.format if options.output else None,
-        # pyrefly: ignore[unexpected-keyword] - populate_by_name accepts the field name
         json_schema=options.output.json_schema if options.output else None,
         constrained=options.output.constrained if options.output else None,
     )
@@ -1372,7 +1371,7 @@ def _use_to_wire_metadata(
             name = cls_index.get(type(entry))
             if not name:
                 continue
-            config = entry.config.model_dump(exclude_none=True, mode='json')
+            config = entry.config.model_dump(exclude_none=True, by_alias=True, mode='json')
             item = {'name': name}
             if config:
                 item['config'] = config

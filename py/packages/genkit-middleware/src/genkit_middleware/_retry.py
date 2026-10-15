@@ -24,10 +24,11 @@ import math
 import random
 from collections.abc import Awaitable, Callable
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from genkit import GenkitError, ModelResponse
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
+from genkit.plugin_api import GenkitConfig
 from genkit_middleware._errors import caused_by_caller_callback
 from genkit_middleware._statuses import TRANSIENT_STATUSES
 
@@ -39,7 +40,7 @@ async def sleep_unless_stopped(seconds: float, abort_signal: asyncio.Event) -> N
         await asyncio.wait_for(abort_signal.wait(), seconds)
 
 
-class RetryConfig(BaseModel):
+class RetryConfig(GenkitConfig):
     """Knobs for retry backoff and which error statuses are retried."""
 
     max_retries: int = Field(default=3, ge=0)

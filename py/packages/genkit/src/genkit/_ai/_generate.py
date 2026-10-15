@@ -81,6 +81,7 @@ from genkit._core._middleware import (
     ModelHookParams,
     ToolHookParams,
     _copy_middleware_instance,
+    _dump_middleware_ref_config,
     middleware_class_index,
 )
 from genkit._core._model import (
@@ -315,7 +316,8 @@ def register_middleware(
                     reg_name,
                     GenerateMiddleware(cls=mw_cls, name=reg_name),
                 )
-            config = cast(BaseModel, entry.config).model_dump(exclude_none=True, mode='json') or None
+            # Dump keys that match the schema and that the config class validates.
+            config = _dump_middleware_ref_config(cast(BaseModel, entry.config))
             refs.append(MiddlewareRef(name=reg_name, config=config))
         else:
             refs.append(entry)
@@ -1076,7 +1078,6 @@ def request_with_messages(*, request: ModelRequest, messages: list[Message]) -> 
 def output_config_from(out: GenerateActionOutputConfig) -> OutputConfig:
     return OutputConfig(
         format=out.format,
-        # pyrefly: ignore[unexpected-keyword] - populate_by_name accepts the field name
         json_schema=out.json_schema,
         constrained=out.constrained,
         content_type=out.content_type,
@@ -2056,7 +2057,6 @@ async def to_model_request(
         tool_choice=options.tool_choice,
         output=OutputConfig(
             format=output.format if output else None,
-            # pyrefly: ignore[unexpected-keyword] - populate_by_name accepts the field name
             json_schema=out_schema,
             constrained=output.constrained if output else None,
             content_type=output.content_type if output else None,

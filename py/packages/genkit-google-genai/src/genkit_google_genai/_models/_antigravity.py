@@ -34,13 +34,12 @@ from genkit_google_genai._models._interactions_utils import (
     steps_with_folded_system_instruction,
 )
 from genkit_google_genai._models._secrets import reject_request_config_api_key
-from pydantic import BaseModel, ConfigDict, field_validator
-from pydantic.alias_generators import to_camel
+from pydantic import field_validator
 from typing_extensions import Never
 
 from genkit import ActionRunContext, ModelResponse
 from genkit.model import ModelRequest, model_action_metadata
-from genkit.plugin_api import Action, ActionKind
+from genkit.plugin_api import Action, ActionKind, GenkitConfig
 
 DEFAULT_ENVIRONMENT: dict[str, str] = {'type': 'remote'}
 
@@ -52,10 +51,9 @@ CREATE_OPTION_KEYS = (
 )
 
 
-class AntigravityConfig(BaseModel):
+class AntigravityConfig(GenkitConfig):
     """Antigravity model configuration."""
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True, alias_generator=to_camel)
     base_url: str | None = None
     api_version: str | None = None
     # Milliseconds — applied to the HTTP call, not the create body.
@@ -89,7 +87,8 @@ def create_antigravity_action(
         api_key = api_key_for_context(ctx.context, plugin_api_key)
         merged_options = client_options.merge(client_overrides_from_config(config))
 
-        # Known create kwargs vs undocumented passthrough — non-mutating split.
+        # Known create kwargs vs. the rest — non-mutating split. GenkitConfig
+        # rejects undeclared keys, so the rest is empty unless a subclass adds fields.
         dumped = remove_client_option_overrides(config.model_dump(exclude_none=True))
         create_options, passthrough = partition_keys(dumped, CREATE_OPTION_KEYS)
         create_kwargs: dict[str, Any] = {

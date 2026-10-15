@@ -21,13 +21,14 @@ from __future__ import annotations
 import asyncio
 import inspect
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Generic, NamedTuple, Protocol, TypeVar, cast, get_args, get_origin
 
-from pydantic import BaseModel, ConfigDict, PrivateAttr, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, PrivateAttr, ValidationError, field_validator
 
 from genkit._core._action import Action
+from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._logger import get_logger
 from genkit._core._model import (
     GenerateActionOptions,
@@ -94,6 +95,86 @@ class _EmptyMiddlewareConfig(BaseModel):
 
 
 TConfig = TypeVar('TConfig', bound=BaseModel)
+
+
+def _config_key_spellings(config_cls: type[BaseModel]) -> dict[str, str] | None:
+    """Map every key ``config_cls`` accepts to the spelling to suggest for it.
+
+    Returns None when the class takes keys it doesn't declare (``extra``
+    set explicitly to ``'allow'`` or ``'ignore'``) or uses an alias path this
+    check can't enumerate.
+    """
+    if config_cls.model_config.get('extra') in ('allow', 'ignore'):
+        return None
+    accepts_field_name = bool(
+        config_cls.model_config.get('validate_by_name') or config_cls.model_config.get('populate_by_name')
+    )
+    spellings: dict[str, str] = {}
+    for name, info in config_cls.model_fields.items():
+        shown = info.alias or name
+        has_validation_alias = info.alias is not None or info.validation_alias is not None
+        if not has_validation_alias or accepts_field_name:
+            spellings[name] = shown
+        if info.alias:
+            spellings[info.alias] = shown
+        validation_alias = info.validation_alias
+        if isinstance(validation_alias, str):
+            spellings[validation_alias] = shown
+        elif isinstance(validation_alias, AliasChoices):
+            for choice in validation_alias.choices:
+                if not isinstance(choice, str):
+                    return None
+                spellings[choice] = shown
+        elif validation_alias is not None:
+            return None
+    return spellings
+
+
+def _dump_middleware_ref_config(config: BaseModel) -> dict[str, Any] | None:
+    """Dump a middleware config for ``MiddlewareRef`` using keys the class validates.
+
+    Excludes ``@computed_field``s and falls back to the validation alias or
+    field name when ``serialization_alias`` is output-only.
+    """
+    cfg_cls = type(config)
+    computed = set(cfg_cls.model_computed_fields)
+    dumped = config.model_dump(exclude_none=True, by_alias=True, mode='json', exclude=computed)
+    spellings = _config_key_spellings(cfg_cls)
+    if spellings is None or all(k in spellings for k in dumped):
+        return dumped or None
+    raw = config.model_dump(exclude_none=True, by_alias=False, mode='json', exclude=computed)
+    out: dict[str, Any] = {}
+    for name, val in raw.items():
+        info = cfg_cls.model_fields.get(name)
+        if info is None:
+            out[name] = val
+            continue
+        candidates: list[str] = []
+        if info.serialization_alias:
+            candidates.append(info.serialization_alias)
+        if info.alias:
+            candidates.append(info.alias)
+        if isinstance(info.validation_alias, str):
+            candidates.append(info.validation_alias)
+        elif isinstance(info.validation_alias, AliasChoices):
+            candidates.extend(c for c in info.validation_alias.choices if isinstance(c, str))
+        candidates.append(name)
+        key = next((c for c in candidates if c in spellings), name)
+        out[key] = val
+    return out or None
+
+
+def _unknown_config_keys(config_cls: type[BaseModel], keys: Iterable[str]) -> tuple[list[str], list[str]]:
+    """Keys ``config_cls`` would drop, and the keys it accepts, for an error message.
+
+    A plain BaseModel ignores unknown keys, so ``maxRetries`` against a
+    ``max_retries`` field would run with the default and no error.
+    """
+    spellings = _config_key_spellings(config_cls)
+    if spellings is None:
+        return [], []
+    unknown = sorted(k for k in keys if k not in spellings)
+    return unknown, sorted(set(spellings.values()))
 
 
 class GenerateHookParams(BaseModel):
@@ -191,6 +272,12 @@ class BaseMiddleware(Generic[TConfig]):
         class RetryConfig(BaseModel):
             max_retries: int = 3
 
+       Any pydantic BaseModel works. Its keys (field names, or aliases if it
+       declares them) are the config keys in .prompt files, the Dev UI form
+       and traces. A key the class doesn't declare raises instead of being
+       dropped (a ValidationError, as for a GenkitConfig), unless the class sets
+       ``extra='allow'`` or ``'ignore'``.
+
     2. Extend BaseMiddleware with your config model, e.g. Retry:
         ai = Genkit()
 
@@ -263,6 +350,13 @@ class BaseMiddleware(Generic[TConfig]):
                 raise TypeError(f'expected config type {self.Config.__name__}, got {type(config).__name__}')
             self.config = config
         else:
+            unknown, _ = _unknown_config_keys(self.Config, kwargs)
+            if unknown:
+                # The same error a GenkitConfig raises, so the base class doesn't change what callers catch.
+                raise ValidationError.from_exception_data(
+                    self.Config.__name__,
+                    [{'type': 'extra_forbidden', 'loc': (key,), 'input': kwargs[key]} for key in unknown],
+                )
             self.config = cast(Any, self.Config(**kwargs))
 
     def tools(self, ctx: GenerateMiddlewareContext) -> list[Tool]:
@@ -375,8 +469,24 @@ class GenerateMiddleware(MiddlewareDesc):
         self._cls = cls
 
     def instantiate(self, config: dict[str, Any] | None = None) -> BaseMiddleware:
-        """Build a configured middleware instance for one resolve step."""
-        return self._cls(**(config or {}))
+        """Build a configured middleware instance for one resolve step.
+
+        ``config`` comes from a .prompt file, the Dev UI or a trace, so an
+        unknown key is INVALID_ARGUMENT naming the middleware and its keys.
+        """
+        config = config or {}
+        unknown, accepted = _unknown_config_keys(self._cls.Config, config)
+        if unknown:
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=(
+                    f'Middleware "{self.name}" got unknown config key(s) {", ".join(unknown)}; '
+                    f'accepted keys: {", ".join(accepted) or "none"}'
+                ),
+                source='genkit.generate',
+                reason=RuntimeErrorReason.INVALID_INPUT,
+            )
+        return self._cls(**config)
 
     def __call__(self, config: dict[str, Any] | None = None) -> BaseMiddleware:
         return self.instantiate(config)

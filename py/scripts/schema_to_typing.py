@@ -82,6 +82,12 @@ FIELD_TYPE_OVERRIDES = {
     ('ActionMetadata', 'outputSchema'): 'dict[str, Any]',
 }
 
+# Settings a caller passes into a model, not data Genkit emits. These subclass
+# GenkitConfig instead of GenkitModel: model_dump() returns field names for
+# provider SDKs, unknown keys raise, and the schema's additionalProperties is
+# ignored (provider-only keys go in ModelConfig.extra).
+CONFIG_MODELS = frozenset({'GenerationCommonConfig'})
+
 
 def _output_name(name: str) -> str:
     """Resolve schema type name to output type name for refs and emission."""
@@ -126,7 +132,7 @@ from typing import Any, ClassVar, Literal
 from pydantic import ConfigDict, Field, RootModel, field_validator
 from pydantic.alias_generators import to_camel
 
-from genkit._core._base import GenkitModel
+from genkit._core._base import GenkitConfig, GenkitModel
 from genkit._core._compat import StrEnum
 
 '''
@@ -332,12 +338,21 @@ def _emit_model(
         req = req - omit - {_camel_to_snake(k) for k in omit}
     ext = ', protected_namespaces=()' if any(_camel_to_snake(k) in ('schema', 'schema_') for k in props) else ''
     frz = ', frozen=True' if name == 'PathMetadata' else ''
-    cfg = f"ConfigDict(alias_generator=to_camel, extra='{'allow' if name in allow else 'forbid'}', populate_by_name=True{ext}{frz})"
-    lines = [
-        f'class {name}(GenkitModel):',
-        f'    """Model for {name.lower().replace("_", " ")} data."""',
-        f'    model_config: ClassVar[ConfigDict] = {cfg}',
-    ]
+    extra = 'allow' if name in allow else 'forbid'
+    cfg = f"ConfigDict(alias_generator=to_camel, extra='{extra}', validate_by_name=True, validate_by_alias=True{ext}{frz})"
+    if name in CONFIG_MODELS:
+        # GenkitConfig already carries the flags; redeclaring them here would
+        # let the schema's additionalProperties reopen extra='allow'.
+        lines = [
+            f'class {name}(GenkitConfig):',
+            f'    """Model for {name.lower().replace("_", " ")} data."""',
+        ]
+    else:
+        lines = [
+            f'class {name}(GenkitModel):',
+            f'    """Model for {name.lower().replace("_", " ")} data."""',
+            f'    model_config: ClassVar[ConfigDict] = {cfg}',
+        ]
     for k, v in props.items():
         # OutputConfig.schema would shadow BaseModel.schema, so the Python
         # name is json_schema. alias pins the wire key; to_camel would emit
