@@ -166,7 +166,10 @@ type SnapshotWriter[State any] interface {
 	//     (e.g. a heartbeat refresh, which carries the existing snapshot through
 	//     unchanged but for HeartbeatAt). Keeping timestamps with the caller is
 	//     what lets a heartbeat advance liveness without registering as a state
-	//     change - the store has no special heartbeat path.
+	//     change - the store has no special heartbeat path. A store may round
+	//     timestamps to its native precision but must keep milliseconds:
+	//     CreatedAt orders a session's rows, and a detach writes its pending
+	//     row right after the turn before it.
 	//   - Status: if the snapshot returned by fn has Status="", it is
 	//     defaulted to [SnapshotStatusCompleted] (the common case for
 	//     synchronous turn-end writes). Callers writing a pending row must
@@ -174,7 +177,18 @@ type SnapshotWriter[State any] interface {
 	//
 	// fn receives the existing snapshot (or nil if id is empty or the
 	// row does not exist) and returns the snapshot to commit, or
-	// (nil, nil) to skip the write without changing the row.
+	// (nil, nil) to skip the write without changing the row. The commit
+	// replaces the row: a field fn leaves empty is empty afterward rather
+	// than carried over, which is how a finalize clears the heartbeat.
+	//
+	// Callers must not change the State of a row that another row names as
+	// its ParentID. A store may persist a row as a change against its
+	// parent's state (the Firestore store writes JSON Patch diffs), so such a
+	// rewrite can silently change what the child reads back, and stores are
+	// not required to detect it. The runtime changes the State of one kind of
+	// existing row only: a detached run's pending row, at its finalize, before
+	// anything descends from it. Rewrites that leave State as it is, such as
+	// heartbeats and aborts, may target any row.
 	//
 	// Under contention, stores that use optimistic concurrency or
 	// transaction retries may call fn multiple times. fn must therefore
@@ -217,6 +231,10 @@ type SnapshotSubscriber interface {
 // [SnapshotSubscriber] capability and checked at runtime: a store wired
 // into an agent that intends to support detach must also implement
 // [SnapshotSubscriber], or the runtime will reject detach attempts.
+//
+// An implementation can check itself against this contract, optional
+// capabilities included, with
+// [github.com/firebase/genkit/go/ai/exp/sessionstoretest.Run].
 type SessionStore[State any] interface {
 	SnapshotReader[State]
 	SnapshotWriter[State]

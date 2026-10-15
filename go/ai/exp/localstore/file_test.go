@@ -25,7 +25,14 @@ import (
 	"time"
 
 	"github.com/firebase/genkit/go/ai/exp"
+	"github.com/firebase/genkit/go/ai/exp/sessionstoretest"
 )
+
+// testState is the custom-state type the store tests use.
+type testState struct {
+	Counter int      `json:"counter"`
+	Topics  []string `json:"topics,omitempty"`
+}
 
 func newFileStore(t *testing.T) *FileSessionStore[testState] {
 	t.Helper()
@@ -38,6 +45,30 @@ func newFileStore(t *testing.T) *FileSessionStore[testState] {
 }
 
 func TestFileSessionStore(t *testing.T) {
+	sessionstoretest.Run(t, func(t *testing.T) exp.SessionStore[testState] {
+		return newFileStore(t)
+	}, &sessionstoretest.Options[testState]{
+		// A second store over the same directory stands in for another
+		// process. Its short poll interval keeps the cross-process status
+		// check fast without changing what it checks.
+		Reopen: func(t *testing.T, store exp.SessionStore[testState]) exp.SessionStore[testState] {
+			reopened, err := NewFileSessionStore[testState](store.(*FileSessionStore[testState]).dir, WithPollInterval(5*time.Millisecond))
+			if err != nil {
+				t.Fatalf("NewFileSessionStore: %v", err)
+			}
+			return reopened
+		},
+		Scoped: func(t *testing.T) (exp.SessionStore[testState], context.Context, context.Context) {
+			store, err := NewFileSessionStore[testState](t.TempDir(), WithSnapshotPathPrefix(prefixFromCtx))
+			if err != nil {
+				t.Fatalf("NewFileSessionStore: %v", err)
+			}
+			return store, ctxWithPrefix("tenant-a"), ctxWithPrefix("tenant-b")
+		},
+	})
+}
+
+func TestNewFileSessionStore(t *testing.T) {
 	t.Run("EmptyDirRejected", func(t *testing.T) {
 		if _, err := NewFileSessionStore[testState](""); err == nil {
 			t.Error("expected error for empty dir, got nil")
@@ -53,302 +84,9 @@ func TestFileSessionStore(t *testing.T) {
 			t.Errorf("expected dir to be created, stat: %v", err)
 		}
 	})
+}
 
-	t.Run("GetMissing", func(t *testing.T) {
-		store := newFileStore(t)
-		snap, err := store.GetSnapshot(context.Background(), "nonexistent")
-		if err != nil {
-			t.Fatalf("GetSnapshot failed: %v", err)
-		}
-		if snap != nil {
-			t.Errorf("expected nil, got %v", snap)
-		}
-	})
-
-	t.Run("SaveWithFixedID", func(t *testing.T) {
-		store := newFileStore(t)
-		now := time.Now()
-		saved, err := store.SaveSnapshot(context.Background(), "snap-1",
-			func(existing *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
-				if existing != nil {
-					t.Errorf("expected nil existing on first save, got %+v", existing)
-				}
-				return &exp.SessionSnapshot[testState]{
-					SessionID: "sess-1",
-					Status:    exp.SnapshotStatusCompleted,
-					State:     &exp.SessionState[testState]{Custom: testState{Counter: 1}},
-					CreatedAt: now,
-					UpdatedAt: now,
-				}, nil
-			})
-		if err != nil {
-			t.Fatalf("SaveSnapshot failed: %v", err)
-		}
-		if saved.SnapshotID != "snap-1" {
-			t.Errorf("saved SnapshotID = %q, want %q", saved.SnapshotID, "snap-1")
-		}
-		// Timestamps are caller-managed: the store persists them verbatim.
-		if !saved.CreatedAt.Equal(now) || !saved.UpdatedAt.Equal(now) {
-			t.Errorf("expected caller-set timestamps persisted, got created=%v updated=%v want %v",
-				saved.CreatedAt, saved.UpdatedAt, now)
-		}
-	})
-
-	t.Run("SaveWithEmptyIDGeneratesUUID", func(t *testing.T) {
-		store := newFileStore(t)
-		saved, err := store.SaveSnapshot(context.Background(), "",
-			func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
-				return &exp.SessionSnapshot[testState]{SessionID: "sess-1", Status: exp.SnapshotStatusCompleted}, nil
-			})
-		if err != nil {
-			t.Fatalf("SaveSnapshot: %v", err)
-		}
-		if saved.SnapshotID == "" {
-			t.Error("expected store to generate SnapshotID")
-		}
-	})
-
-	t.Run("GetReturnsCopy", func(t *testing.T) {
-		store := newFileStore(t)
-		if _, err := store.SaveSnapshot(context.Background(), "snap-1",
-			func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
-				return &exp.SessionSnapshot[testState]{
-					SessionID: "sess-1",
-					Status:    exp.SnapshotStatusCompleted,
-					State:     &exp.SessionState[testState]{Custom: testState{Counter: 1}},
-				}, nil
-			}); err != nil {
-			t.Fatalf("SaveSnapshot: %v", err)
-		}
-		retrieved, _ := store.GetSnapshot(context.Background(), "snap-1")
-		retrieved.State.Custom.Counter = 999
-		retrieved2, _ := store.GetSnapshot(context.Background(), "snap-1")
-		if retrieved2.State.Custom.Counter != 1 {
-			t.Errorf("expected counter=1 (isolation), got %d", retrieved2.State.Custom.Counter)
-		}
-	})
-
-	t.Run("DefaultsEmptyStatusToCompleted", func(t *testing.T) {
-		store := newFileStore(t)
-		saved, err := store.SaveSnapshot(context.Background(), "",
-			func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
-				return &exp.SessionSnapshot[testState]{SessionID: "sess-1"}, nil
-			})
-		if err != nil {
-			t.Fatalf("SaveSnapshot: %v", err)
-		}
-		if saved.Status != exp.SnapshotStatusCompleted {
-			t.Errorf("expected Status=completed by default, got %q", saved.Status)
-		}
-	})
-
-	t.Run("NoopFnSkipsWrite", func(t *testing.T) {
-		store := newFileStore(t)
-		if _, err := store.SaveSnapshot(context.Background(), "snap-1",
-			func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
-				return &exp.SessionSnapshot[testState]{SessionID: "sess-1", Status: exp.SnapshotStatusCompleted}, nil
-			}); err != nil {
-			t.Fatalf("seed: %v", err)
-		}
-		before, _ := store.GetSnapshot(context.Background(), "snap-1")
-		noop, err := store.SaveSnapshot(context.Background(), "snap-1",
-			func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
-				return nil, nil
-			})
-		if err != nil {
-			t.Fatalf("noop SaveSnapshot: %v", err)
-		}
-		if noop != nil {
-			t.Errorf("expected nil return on noop, got %+v", noop)
-		}
-		after, _ := store.GetSnapshot(context.Background(), "snap-1")
-		if !before.UpdatedAt.Equal(after.UpdatedAt) {
-			t.Errorf("noop should not bump UpdatedAt: before=%v after=%v", before.UpdatedAt, after.UpdatedAt)
-		}
-	})
-
-	t.Run("PersistsCallerTimestamps", func(t *testing.T) {
-		// Timestamps are caller-managed: the store round-trips them verbatim
-		// (it does not stamp). The caller preserves CreatedAt and advances
-		// UpdatedAt across a rewrite.
-		store := newFileStore(t)
-		created := time.Now()
-		saved, err := store.SaveSnapshot(context.Background(), "snap-1",
-			func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
-				return &exp.SessionSnapshot[testState]{SessionID: "sess-1", Status: exp.SnapshotStatusCompleted, CreatedAt: created, UpdatedAt: created}, nil
-			})
-		if err != nil {
-			t.Fatalf("seed: %v", err)
-		}
-		time.Sleep(time.Millisecond)
-		later := time.Now()
-		updated, err := store.SaveSnapshot(context.Background(), "snap-1",
-			func(existing *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
-				if existing == nil {
-					t.Fatal("expected non-nil existing on update")
-				}
-				return &exp.SessionSnapshot[testState]{
-					Status:    exp.SnapshotStatusCompleted,
-					State:     &exp.SessionState[testState]{Custom: testState{Counter: 2}},
-					CreatedAt: existing.CreatedAt,
-					UpdatedAt: later,
-				}, nil
-			})
-		if err != nil {
-			t.Fatalf("update: %v", err)
-		}
-		if !updated.CreatedAt.Equal(saved.CreatedAt) {
-			t.Errorf("CreatedAt not preserved: before=%v after=%v", saved.CreatedAt, updated.CreatedAt)
-		}
-		if !updated.UpdatedAt.After(saved.UpdatedAt) {
-			t.Errorf("UpdatedAt did not advance: before=%v after=%v", saved.UpdatedAt, updated.UpdatedAt)
-		}
-	})
-
-	t.Run("AbortPendingFlipsToAborted", func(t *testing.T) {
-		store := newFileStore(t)
-		if _, err := store.SaveSnapshot(context.Background(), "snap-1",
-			func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
-				return &exp.SessionSnapshot[testState]{SessionID: "sess-1", Status: exp.SnapshotStatusPending}, nil
-			}); err != nil {
-			t.Fatalf("seed: %v", err)
-		}
-		if status := abortViaSave(t, store, "snap-1"); status != exp.SnapshotStatusAborted {
-			t.Errorf("status = %q, want %q", status, exp.SnapshotStatusAborted)
-		}
-		snap, _ := store.GetSnapshot(context.Background(), "snap-1")
-		if snap.Status != exp.SnapshotStatusAborted {
-			t.Errorf("persisted status = %q, want %q", snap.Status, exp.SnapshotStatusAborted)
-		}
-	})
-
-	t.Run("AbortTerminalIsNoop", func(t *testing.T) {
-		store := newFileStore(t)
-		if _, err := store.SaveSnapshot(context.Background(), "snap-1",
-			func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
-				return &exp.SessionSnapshot[testState]{SessionID: "sess-1", Status: exp.SnapshotStatusCompleted}, nil
-			}); err != nil {
-			t.Fatalf("seed: %v", err)
-		}
-		if status := abortViaSave(t, store, "snap-1"); status != exp.SnapshotStatusCompleted {
-			t.Errorf("status = %q, want %q (no-op on terminal)", status, exp.SnapshotStatusCompleted)
-		}
-	})
-
-	t.Run("AbortMissingReturnsEmpty", func(t *testing.T) {
-		store := newFileStore(t)
-		if status := abortViaSave(t, store, "nonexistent"); status != "" {
-			t.Errorf("status = %q, want empty (not found)", status)
-		}
-	})
-
-	t.Run("StatusSubscriptionYieldsCurrentAndChanges", func(t *testing.T) {
-		store := newFileStore(t)
-		if _, err := store.SaveSnapshot(context.Background(), "snap-1",
-			func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
-				return &exp.SessionSnapshot[testState]{SessionID: "sess-1", Status: exp.SnapshotStatusPending}, nil
-			}); err != nil {
-			t.Fatalf("seed: %v", err)
-		}
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		ch := store.OnSnapshotStatusChange(ctx, "snap-1")
-
-		select {
-		case s := <-ch:
-			if s != exp.SnapshotStatusPending {
-				t.Errorf("initial status = %q, want %q", s, exp.SnapshotStatusPending)
-			}
-		case <-time.After(time.Second):
-			t.Fatal("timeout waiting for initial status")
-		}
-
-		abortViaSave(t, store, "snap-1")
-		select {
-		case s := <-ch:
-			if s != exp.SnapshotStatusAborted {
-				t.Errorf("post-abort status = %q, want %q", s, exp.SnapshotStatusAborted)
-			}
-		case <-time.After(time.Second):
-			t.Fatal("timeout waiting for aborted status")
-		}
-	})
-
-	t.Run("StatusSubscriptionOnMissingIsClosed", func(t *testing.T) {
-		store := newFileStore(t)
-		ch := store.OnSnapshotStatusChange(context.Background(), "nonexistent")
-		select {
-		case _, ok := <-ch:
-			if ok {
-				t.Error("expected closed channel for missing snapshot")
-			}
-		case <-time.After(time.Second):
-			t.Fatal("timeout waiting on closed channel")
-		}
-	})
-
-	t.Run("StatusSubscriptionClosesOnCtxCancel", func(t *testing.T) {
-		store := newFileStore(t)
-		if _, err := store.SaveSnapshot(context.Background(), "snap-1",
-			func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
-				return &exp.SessionSnapshot[testState]{SessionID: "sess-1", Status: exp.SnapshotStatusPending}, nil
-			}); err != nil {
-			t.Fatalf("seed: %v", err)
-		}
-		ctx, cancel := context.WithCancel(context.Background())
-		ch := store.OnSnapshotStatusChange(ctx, "snap-1")
-		<-ch // drain initial
-		cancel()
-		select {
-		case _, ok := <-ch:
-			if ok {
-				select {
-				case _, ok2 := <-ch:
-					if ok2 {
-						t.Error("expected channel closed after ctx cancel")
-					}
-				case <-time.After(time.Second):
-					t.Fatal("timeout waiting for channel close")
-				}
-			}
-		case <-time.After(time.Second):
-			t.Fatal("timeout waiting for channel close")
-		}
-	})
-
-	t.Run("PersistsAcrossStoreInstances", func(t *testing.T) {
-		dir := t.TempDir()
-		store1, err := NewFileSessionStore[testState](dir)
-		if err != nil {
-			t.Fatalf("NewFileSessionStore: %v", err)
-		}
-		if _, err := store1.SaveSnapshot(context.Background(), "snap-1",
-			func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
-				return &exp.SessionSnapshot[testState]{
-					SessionID: "sess-1",
-					Status:    exp.SnapshotStatusCompleted,
-					State:     &exp.SessionState[testState]{Custom: testState{Counter: 42}},
-				}, nil
-			}); err != nil {
-			t.Fatalf("SaveSnapshot: %v", err)
-		}
-
-		store2, err := NewFileSessionStore[testState](dir)
-		if err != nil {
-			t.Fatalf("NewFileSessionStore: %v", err)
-		}
-		got, err := store2.GetSnapshot(context.Background(), "snap-1")
-		if err != nil {
-			t.Fatalf("GetSnapshot: %v", err)
-		}
-		if got == nil {
-			t.Fatal("expected snapshot to persist across store instances")
-		}
-		if got.State.Custom.Counter != 42 {
-			t.Errorf("counter = %d, want 42", got.State.Custom.Counter)
-		}
-	})
-
+func TestFileSessionStore_Files(t *testing.T) {
 	t.Run("InvalidIDRejected", func(t *testing.T) {
 		store := newFileStore(t)
 		cases := []string{
@@ -394,11 +132,6 @@ func TestFileSessionStore(t *testing.T) {
 			t.Errorf("snapshot must not land in store root, stat err = %v", err)
 		}
 	})
-
-	t.Run("ImplementsSessionStoreAndSubscriber", func(t *testing.T) {
-		var _ exp.SessionStore[testState] = (*FileSessionStore[testState])(nil)
-		var _ exp.SnapshotSubscriber = (*FileSessionStore[testState])(nil)
-	})
 }
 
 // recvStatus waits up to timeout for the next status on ch, failing the test on
@@ -417,45 +150,31 @@ func recvStatus(t *testing.T, ch <-chan exp.SnapshotStatus, timeout time.Duratio
 	}
 }
 
-// TestFileSessionStore_CrossProcessStatusChange verifies that a status change
-// written through one store instance is observed by a subscriber on a separate
-// instance over the same directory - the cross-process case that backs aborting
-// a detached turn from a different process. A second *FileSessionStore stands in
-// for the other process.
-func TestFileSessionStore_CrossProcessStatusChange(t *testing.T) {
-	dir := t.TempDir()
-	writer, err := NewFileSessionStore[testState](dir)
+// abortViaSave flips a pending snapshot to aborted through SaveSnapshot, the
+// way a writer in another process would. Returns the resulting status, or ""
+// when the snapshot does not exist.
+func abortViaSave(t *testing.T, store exp.SessionStore[testState], id string) exp.SnapshotStatus {
+	t.Helper()
+	saved, err := store.SaveSnapshot(context.Background(), id,
+		func(existing *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
+			if existing == nil {
+				return nil, nil
+			}
+			if existing.Status != exp.SnapshotStatusPending {
+				return existing, nil
+			}
+			updated := *existing
+			updated.Status = exp.SnapshotStatusAborted
+			updated.UpdatedAt = time.Now()
+			return &updated, nil
+		})
 	if err != nil {
-		t.Fatalf("NewFileSessionStore (writer): %v", err)
+		t.Fatalf("abortViaSave(%q): %v", id, err)
 	}
-	// A short poll interval keeps the test fast without changing the behavior.
-	watcher, err := NewFileSessionStore[testState](dir, WithPollInterval(5*time.Millisecond))
-	if err != nil {
-		t.Fatalf("NewFileSessionStore (watcher): %v", err)
+	if saved == nil {
+		return ""
 	}
-
-	if _, err := writer.SaveSnapshot(context.Background(), "snap-1",
-		func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
-			return &exp.SessionSnapshot[testState]{SessionID: "sess-1", Status: exp.SnapshotStatusPending}, nil
-		}); err != nil {
-		t.Fatalf("seed pending: %v", err)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	ch := watcher.OnSnapshotStatusChange(ctx, "snap-1")
-
-	if got := recvStatus(t, ch, time.Second); got != exp.SnapshotStatusPending {
-		t.Fatalf("initial status = %q, want %q", got, exp.SnapshotStatusPending)
-	}
-
-	// Abort through the writer instance; the watcher must see it via polling.
-	if status := abortViaSave(t, writer, "snap-1"); status != exp.SnapshotStatusAborted {
-		t.Fatalf("abort via writer: status = %q, want %q", status, exp.SnapshotStatusAborted)
-	}
-	if got := recvStatus(t, ch, 2*time.Second); got != exp.SnapshotStatusAborted {
-		t.Fatalf("cross-process status = %q, want %q", got, exp.SnapshotStatusAborted)
-	}
+	return saved.Status
 }
 
 // TestFileSessionStore_PollIntervalDisabled verifies that WithPollInterval(0)
@@ -493,74 +212,6 @@ func TestFileSessionStore_PollIntervalDisabled(t *testing.T) {
 		t.Fatalf("with polling disabled, unexpectedly observed status %q", got)
 	case <-time.After(150 * time.Millisecond):
 	}
-}
-
-// TestFileSessionStore_FinishReasonPersistsAcrossReopen verifies that a
-// snapshot's finish reason survives the disk round-trip: a second store
-// opened on the same directory (as after a process restart) reads it back.
-func TestFileSessionStore_FinishReasonPersistsAcrossReopen(t *testing.T) {
-	dir := t.TempDir()
-	store, err := NewFileSessionStore[testState](dir)
-	if err != nil {
-		t.Fatalf("NewFileSessionStore: %v", err)
-	}
-	saved, err := store.SaveSnapshot(context.Background(), "",
-		func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
-			return &exp.SessionSnapshot[testState]{
-				SessionID:    "sess-1",
-				Status:       exp.SnapshotStatusCompleted,
-				FinishReason: exp.AgentFinishReasonInterrupted,
-				State:        &exp.SessionState[testState]{Custom: testState{Counter: 1}},
-			}, nil
-		})
-	if err != nil {
-		t.Fatalf("SaveSnapshot: %v", err)
-	}
-
-	reopened, err := NewFileSessionStore[testState](dir)
-	if err != nil {
-		t.Fatalf("reopen NewFileSessionStore: %v", err)
-	}
-	got, err := reopened.GetSnapshot(context.Background(), saved.SnapshotID)
-	if err != nil {
-		t.Fatalf("GetSnapshot: %v", err)
-	}
-	if got == nil {
-		t.Fatalf("snapshot %q missing after reopen", saved.SnapshotID)
-	}
-	if got.FinishReason != exp.AgentFinishReasonInterrupted {
-		t.Errorf("FinishReason = %q, want %q", got.FinishReason, exp.AgentFinishReasonInterrupted)
-	}
-}
-
-func TestFileSessionStore_SessionIDs(t *testing.T) {
-	runSessionIDStoreTests(t, func(t *testing.T) exp.SessionStore[testState] {
-		store, err := NewFileSessionStore[testState](t.TempDir())
-		if err != nil {
-			t.Fatalf("NewFileSessionStore: %v", err)
-		}
-		return store
-	})
-}
-
-func TestFileSessionStore_Heartbeat(t *testing.T) {
-	runHeartbeatStoreTests(t, func(t *testing.T) exp.SessionStore[testState] {
-		store, err := NewFileSessionStore[testState](t.TempDir())
-		if err != nil {
-			t.Fatalf("NewFileSessionStore: %v", err)
-		}
-		return store
-	})
-}
-
-func TestFileSessionStore_Metadata(t *testing.T) {
-	runMetadataStoreTests(t, func(t *testing.T) exp.SessionStore[testState] {
-		store, err := NewFileSessionStore[testState](t.TempDir())
-		if err != nil {
-			t.Fatalf("NewFileSessionStore: %v", err)
-		}
-		return store
-	})
 }
 
 func TestFileSessionStore_GetLatestSnapshot_SkipsUnparseableFiles(t *testing.T) {
@@ -674,19 +325,16 @@ func prefixFromCtx(ctx context.Context) string {
 	return v
 }
 
-// TestFileSessionStore_PathPrefix verifies that a context-derived prefix scopes
-// both writes and reads: a snapshot lands under the tenant subdirectory and is
-// invisible to a different tenant, for both by-ID and by-session lookups.
+// TestFileSessionStore_PathPrefix verifies that a context-derived prefix names
+// the subdirectory a snapshot lands in. Isolation between prefixes is part of
+// the shared suite (see TestFileSessionStore).
 func TestFileSessionStore_PathPrefix(t *testing.T) {
 	dir := t.TempDir()
 	store, err := NewFileSessionStore[testState](dir, WithSnapshotPathPrefix(prefixFromCtx))
 	if err != nil {
 		t.Fatalf("NewFileSessionStore: %v", err)
 	}
-	ctxA := ctxWithPrefix("tenant-a")
-	ctxB := ctxWithPrefix("tenant-b")
-
-	if _, err := store.SaveSnapshot(ctxA, "s1",
+	if _, err := store.SaveSnapshot(ctxWithPrefix("tenant-a"), "s1",
 		func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
 			return &exp.SessionSnapshot[testState]{SessionID: "sess", Status: exp.SnapshotStatusCompleted}, nil
 		}); err != nil {
@@ -699,32 +347,6 @@ func TestFileSessionStore_PathPrefix(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "s1.json")); !os.IsNotExist(err) {
 		t.Errorf("snapshot must not land in store root, stat err = %v", err)
-	}
-
-	// Visible under the writing prefix.
-	got, err := store.GetSnapshot(ctxA, "s1")
-	if err != nil || got == nil {
-		t.Fatalf("GetSnapshot(ctxA): got=%v err=%v", got, err)
-	}
-	latestA, err := store.GetLatestSnapshot(ctxA, "sess")
-	if err != nil || latestA == nil || latestA.SnapshotID != "s1" {
-		t.Fatalf("GetLatestSnapshot(ctxA): got=%+v err=%v", latestA, err)
-	}
-
-	// Isolated from a different prefix, by ID and by session.
-	other, err := store.GetSnapshot(ctxB, "s1")
-	if err != nil {
-		t.Fatalf("GetSnapshot(ctxB): %v", err)
-	}
-	if other != nil {
-		t.Errorf("tenant-b must not see tenant-a's snapshot, got %+v", other)
-	}
-	latestB, err := store.GetLatestSnapshot(ctxB, "sess")
-	if err != nil {
-		t.Fatalf("GetLatestSnapshot(ctxB): %v", err)
-	}
-	if latestB != nil {
-		t.Errorf("expected nil latest for tenant-b, got %+v", latestB)
 	}
 }
 

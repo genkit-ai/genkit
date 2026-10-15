@@ -34,6 +34,15 @@ import (
 	"github.com/firebase/genkit/go/core/status"
 )
 
+// Compile-time checks that the store has the capabilities it documents. The
+// conformance suite skips the checks for a capability a store lacks, so losing
+// one would otherwise go unnoticed.
+var (
+	_ exp.SessionStore[any]           = (*FileSessionStore[any])(nil)
+	_ exp.SnapshotMetadataReader[any] = (*FileSessionStore[any])(nil)
+	_ exp.SnapshotSubscriber          = (*FileSessionStore[any])(nil)
+)
+
 // FileSessionStore is a snapshot store that persists snapshots as JSON files on
 // the local filesystem. Each snapshot is written to its own file named
 // "<snapshotID>.json", under a per-call subdirectory ("prefix"):
