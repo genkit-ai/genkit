@@ -776,7 +776,7 @@ type writePlan struct {
 // is the parent's chain when the save already read it, or nil.
 func (s *PostgresSessionStore[State]) plan(ctx context.Context, tx pgx.Tx, prefix, id, parentID string, stateJSON json.RawMessage, parentChain []row) (writePlan, error) {
 	checkpoint := writePlan{kind: kindCheckpoint, state: stateJSON}
-	if stateJSON == nil || parentID == "" || parentID == id {
+	if stateJSON == nil || parentID == "" || parentID == id || s.checkpointInterval == 1 {
 		return checkpoint, nil
 	}
 	// Lock the parent against a change of its state until this save commits:

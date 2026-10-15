@@ -136,8 +136,9 @@ func (o checkpointIntervalOption) applySessionStore(opts *sessionStoreOptions) e
 // checkpoints. Between checkpoints each row stores only the JSON Patch from its
 // parent's state, so a larger value writes less per turn and reads apply more
 // patches; a smaller value does the opposite. A read applies at most this many
-// patches, however long the session. Must be between 1 and 1000; defaults to
-// 25 when omitted.
+// patches, however long the session. With 1, every row is a checkpoint, and a
+// save does not read or lock the parent row. Must be between 1 and 1000;
+// defaults to 25 when omitted.
 func WithCheckpointInterval(turns int) SessionStoreOption {
 	return checkpointIntervalOption{turns}
 }
