@@ -35,7 +35,7 @@ import (
 	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal/registry"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"github.com/firebase/genkit/go/internal/tracingtest"
 )
 
 type testState struct {
@@ -263,57 +263,13 @@ func TestAgent_WithSessionStore(t *testing.T) {
 	}
 }
 
-// spanCollector is a minimal in-memory sdktrace.SpanExporter that records
-// finished spans so a test can assert on their attributes.
-type spanCollector struct {
-	mu    sync.Mutex
-	spans []sdktrace.ReadOnlySpan
-}
-
-func (c *spanCollector) ExportSpans(_ context.Context, spans []sdktrace.ReadOnlySpan) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.spans = append(c.spans, spans...)
-	return nil
-}
-
-func (c *spanCollector) Shutdown(context.Context) error { return nil }
-
-// byName returns the first recorded span with the given name, or nil.
-func (c *spanCollector) byName(name string) sdktrace.ReadOnlySpan {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for _, s := range c.spans {
-		if s.Name() == name {
-			return s
-		}
-	}
-	return nil
-}
-
-// collectSpans registers an in-memory exporter on the global tracer provider
-// (the one tracing.RunInNewSpan writes through) for the duration of the test.
-// The SimpleSpanProcessor exports each span synchronously as it ends, so by
-// the time a turn completes its span is already recorded.
-func collectSpans(t *testing.T) *spanCollector {
-	t.Helper()
-	c := &spanCollector{}
-	sp := sdktrace.NewSimpleSpanProcessor(c)
-	tp := tracing.TracerProvider()
-	tp.RegisterSpanProcessor(sp)
-	t.Cleanup(func() { tp.UnregisterSpanProcessor(sp) })
-	return c
-}
-
-// spanAttr returns the string value of the named span attribute, if present.
-func spanAttr(span sdktrace.ReadOnlySpan, key string) (string, bool) {
-	for _, kv := range span.Attributes() {
-		if string(kv.Key) == key {
-			return kv.Value.AsString(), true
-		}
-	}
-	return "", false
-}
+// The full span-attribute keys agent identifiers land under: agent.go records
+// them as custom metadata (agent:sessionId / agent:snapshotId), which the
+// instrumentation stores with the genkit:metadata: prefix.
+const (
+	sessionIDSpanAttrKey  = "genkit:metadata:" + sessionIDMetaKey
+	snapshotIDSpanAttrKey = "genkit:metadata:" + snapshotIDMetaKey
+)
 
 // TestAgent_RootSpanCarriesSessionID verifies the agent's root action span is
 // stamped with the invocation's session ID under
@@ -323,7 +279,7 @@ func spanAttr(span sdktrace.ReadOnlySpan, key string) (string, bool) {
 func TestAgent_RootSpanCarriesSessionID(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
-	spans := collectSpans(t)
+	spans := tracingtest.Capture(t)
 
 	const agentName = "tracedCounterFlow"
 	af := defineCounterAgent(reg, agentName)
@@ -347,11 +303,11 @@ func TestAgent_RootSpanCarriesSessionID(t *testing.T) {
 	const attrKey = "genkit:metadata:agent:sessionId"
 
 	// The root action span (named for the agent) carries the session ID.
-	root := spans.byName(agentName)
+	root := spans.First(agentName)
 	if root == nil {
 		t.Fatalf("missing root action span %q", agentName)
 	}
-	got, ok := spanAttr(root, attrKey)
+	got, ok := tracingtest.Attr(root, attrKey)
 	if !ok {
 		t.Fatalf("root span %q: missing attribute %q", agentName, attrKey)
 	}
@@ -363,17 +319,17 @@ func TestAgent_RootSpanCarriesSessionID(t *testing.T) {
 	// and no subtype, matching JS's run(); the session ID lives on the root
 	// span only.
 	for _, turn := range []string{"runTurn-1", "runTurn-2"} {
-		span := spans.byName(turn)
+		span := spans.First(turn)
 		if span == nil {
 			t.Fatalf("missing span %q", turn)
 		}
-		if v, ok := spanAttr(span, attrKey); ok {
+		if v, ok := tracingtest.Attr(span, attrKey); ok {
 			t.Errorf("turn span %q: unexpected attribute %q = %q (want it on the root span only)", turn, attrKey, v)
 		}
-		if v, _ := spanAttr(span, "genkit:type"); v != "flowStep" {
+		if v, _ := tracingtest.Attr(span, "genkit:type"); v != "flowStep" {
 			t.Errorf("turn span %q: genkit:type = %q, want %q", turn, v, "flowStep")
 		}
-		if v, ok := spanAttr(span, "genkit:metadata:subtype"); ok {
+		if v, ok := tracingtest.Attr(span, "genkit:metadata:subtype"); ok {
 			t.Errorf("turn span %q: unexpected genkit:metadata:subtype = %q (JS's run() sets no subtype)", turn, v)
 		}
 	}
@@ -1726,18 +1682,18 @@ func TestAgent_SetMessages(t *testing.T) {
 // turnSpanState parses a turn span's genkit:output attribute, which the agent
 // records as {"state": <session state>} (see turnSpanOutput), and returns the
 // embedded state.
-func turnSpanState(t *testing.T, span sdktrace.ReadOnlySpan) *SessionState[testState] {
+func turnSpanState(t *testing.T, span *tracing.SpanData) *SessionState[testState] {
 	t.Helper()
-	raw, ok := spanAttr(span, "genkit:output")
+	raw, ok := tracingtest.Attr(span, "genkit:output")
 	if !ok {
-		t.Fatalf("span %q: missing genkit:output attribute", span.Name())
+		t.Fatalf("span %q: missing genkit:output attribute", span.DisplayName)
 	}
 	var out turnSpanOutput[testState]
 	if err := json.Unmarshal([]byte(raw), &out); err != nil {
-		t.Fatalf("span %q: genkit:output %q is not valid turn output: %v", span.Name(), raw, err)
+		t.Fatalf("span %q: genkit:output %q is not valid turn output: %v", span.DisplayName, raw, err)
 	}
 	if out.State == nil {
-		t.Fatalf("span %q: genkit:output %q carries no state", span.Name(), raw)
+		t.Fatalf("span %q: genkit:output %q carries no state", span.DisplayName, raw)
 	}
 	return out.State
 }
@@ -1749,7 +1705,7 @@ func turnSpanState(t *testing.T, span sdktrace.ReadOnlySpan) *SessionState[testS
 func TestAgent_TurnSpanOutput(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
-	spans := collectSpans(t)
+	spans := tracingtest.Capture(t)
 
 	af := DefineCustomAgent(reg, "turnOutputFlow",
 		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
@@ -1791,7 +1747,7 @@ func TestAgent_TurnSpanOutput(t *testing.T) {
 	// the running counter and one user message plus one reply per turn.
 	for turn := range 2 {
 		name := fmt.Sprintf("runTurn-%d", turn+1)
-		span := spans.byName(name)
+		span := spans.First(name)
 		if span == nil {
 			t.Fatalf("missing span %q", name)
 		}
@@ -1810,7 +1766,7 @@ func TestAgent_TurnSpanOutput(t *testing.T) {
 			t.Errorf("%s: len(state.artifacts) = %d, want 1", name, got)
 		}
 		// Client-managed: no snapshot, so no snapshot-ID attribute.
-		if v, ok := spanAttr(span, snapshotIDSpanAttrKey); ok {
+		if v, ok := tracingtest.Attr(span, snapshotIDSpanAttrKey); ok {
 			t.Errorf("%s: unexpected %s = %q (client-managed writes no snapshot)", name, snapshotIDSpanAttrKey, v)
 		}
 	}
@@ -1824,7 +1780,7 @@ func TestAgent_TurnSpanOutput_WithSnapshots(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
 	store := newTestInMemStore[testState]()
-	spans := collectSpans(t)
+	spans := tracingtest.Capture(t)
 
 	af := defineCounterAgent(reg, "turnOutputSnapshotFlow", WithSessionStore(store))
 
@@ -1843,13 +1799,13 @@ func TestAgent_TurnSpanOutput_WithSnapshots(t *testing.T) {
 		t.Fatalf("Output failed: %v", err)
 	}
 
-	span := spans.byName("runTurn-1")
+	span := spans.First("runTurn-1")
 	if span == nil {
 		t.Fatal("missing span runTurn-1")
 	}
 
 	// The turn span is tagged with the turn-end snapshot's ID.
-	got, ok := spanAttr(span, snapshotIDSpanAttrKey)
+	got, ok := tracingtest.Attr(span, snapshotIDSpanAttrKey)
 	if !ok {
 		t.Fatalf("turn span: missing %s", snapshotIDSpanAttrKey)
 	}
@@ -1882,7 +1838,7 @@ func TestAgent_CommittedFailedTurn_TurnSpanCarriesSnapshotID(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
 	store := newTestInMemStore[testState]()
-	spans := collectSpans(t)
+	spans := tracingtest.Capture(t)
 
 	const agentName = "committedFailureSpanFlow"
 	af := defineCommittingFailureAgent(reg, agentName, WithSessionStore[testState](store))
@@ -1895,11 +1851,11 @@ func TestAgent_CommittedFailedTurn_TurnSpanCarriesSnapshotID(t *testing.T) {
 		t.Fatal("committed failure wrote no snapshot")
 	}
 
-	span := spans.byName("runTurn-1")
+	span := spans.First("runTurn-1")
 	if span == nil {
 		t.Fatal("missing span runTurn-1")
 	}
-	got, ok := spanAttr(span, snapshotIDSpanAttrKey)
+	got, ok := tracingtest.Attr(span, snapshotIDSpanAttrKey)
 	if !ok {
 		t.Fatalf("turn span: missing %s", snapshotIDSpanAttrKey)
 	}
@@ -1907,7 +1863,7 @@ func TestAgent_CommittedFailedTurn_TurnSpanCarriesSnapshotID(t *testing.T) {
 		t.Errorf("turn span %s = %q, want %q (the failed turn's snapshot)", snapshotIDSpanAttrKey, got, out.SnapshotID)
 	}
 	// The turn span still records the failure.
-	if v, _ := spanAttr(span, "genkit:state"); v != "error" {
+	if v, _ := tracingtest.Attr(span, "genkit:state"); v != "error" {
 		t.Errorf("turn span genkit:state = %q, want %q", v, "error")
 	}
 	// Its output is the state the failed turn's snapshot saved, as a
@@ -1924,11 +1880,11 @@ func TestAgent_CommittedFailedTurn_TurnSpanCarriesSnapshotID(t *testing.T) {
 		t.Errorf("turn span len(state.messages) = %d, want %d (the failed turn's snapshot)", got, want)
 	}
 
-	root := spans.byName(agentName)
+	root := spans.First(agentName)
 	if root == nil {
 		t.Fatalf("missing root action span %q", agentName)
 	}
-	if v, ok := spanAttr(root, snapshotIDSpanAttrKey); ok {
+	if v, ok := tracingtest.Attr(root, snapshotIDSpanAttrKey); ok {
 		t.Errorf("root span %q: unexpected %s = %q (want it on the turn span only)", agentName, snapshotIDSpanAttrKey, v)
 	}
 }
