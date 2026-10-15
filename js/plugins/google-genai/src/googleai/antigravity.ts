@@ -23,8 +23,9 @@ import {
   ensureToolIds,
   fromInteractionSync,
   toInteractionSteps,
+  toInteractionTool,
 } from './interaction-converters.js';
-import { ResponseModality } from './interaction-types.js';
+import { InteractionTool, ResponseModality } from './interaction-types.js';
 import {
   ClientOptions,
   CreateInteractionRequest,
@@ -77,6 +78,16 @@ export const AntigravityConfigSchema = z
       .array(z.enum(['TEXT', 'IMAGE']))
       .describe('The modalities to be used in response.')
       .optional(),
+    tools: z
+      .array(z.record(z.unknown()))
+      .describe(
+        'Raw Interactions tools, e.g. `{ type: "google_search" }`. Genkit ' +
+          'tools passed to generate() are appended after these. When any ' +
+          'tools are sent, the agent may be limited to exactly that list ' +
+          'rather than its default tools (code_execution, google_search, ' +
+          'url_context), so list the built-ins you want to keep.'
+      )
+      .optional(),
   })
   .passthrough();
 
@@ -87,6 +98,7 @@ type ConfigSchemaType = AntigravityConfigSchemaType;
 
 function commonRef(
   name: string,
+  functionCalling = false,
   info?: ModelInfo,
   configSchema: ConfigSchemaType = AntigravityConfigSchema
 ): ModelReference<ConfigSchemaType> {
@@ -99,7 +111,7 @@ function commonRef(
         supports: {
           multiturn: true,
           media: true,
-          tools: false, // function calling unsupported for antigravity
+          tools: functionCalling,
           toolChoice: false,
           systemRole: false,
           output: ['text'],
@@ -110,8 +122,11 @@ function commonRef(
 
 const GENERIC_MODEL = commonRef('antigravity');
 
+// Function calling is documented for the 09-2026 preview only; it is
+// unverified for 05-2026 and for unknown versions.
 const KNOWN_MODELS = {
   'antigravity-preview-05-2026': commonRef('antigravity-preview-05-2026'),
+  'antigravity-preview-09-2026': commonRef('antigravity-preview-09-2026', true),
 } as const;
 
 export type KnownModels = keyof typeof KNOWN_MODELS;
@@ -192,6 +207,7 @@ export function defineModel(
         store,
         environment,
         responseModalities,
+        tools: configTools,
         ...rest
       } = requestOptions;
 
@@ -216,6 +232,16 @@ export function defineModel(
         );
       }
 
+      // Genkit function tools are appended after any raw tools from config
+      // (built-ins such as google_search). When neither is set, `tools` stays
+      // undefined so the agent keeps its default tool set. An explicitly
+      // provided list is always forwarded, even if empty. Note that an
+      // explicit list likely replaces the agent's default tools.
+      const mergedTools: InteractionTool[] = [
+        ...((configTools ?? []) as InteractionTool[]),
+        ...(request.tools ?? []).map(toInteractionTool),
+      ];
+
       const req: CreateInteractionRequest = {
         agent: extractVersion(ref),
         input: toInteractionSteps(ensureToolIds(messages)),
@@ -224,6 +250,7 @@ export function defineModel(
         environment,
         response_modalities: responseModalitiesConverted,
         ...rest,
+        ...(configTools || mergedTools.length ? { tools: mergedTools } : {}),
       };
 
       const response = await createInteraction(apiKey, req, clientOpt);

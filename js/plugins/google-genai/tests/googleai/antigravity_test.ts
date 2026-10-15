@@ -20,6 +20,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import * as sinon from 'sinon';
 import {
   AntigravityConfigSchema,
+  model as antigravityModel,
   defineModel,
 } from '../../src/googleai/antigravity.js';
 import { GeminiInteraction } from '../../src/googleai/interaction-types.js';
@@ -152,6 +153,84 @@ describe('Antigravity', () => {
         { type: 'google_search' },
         { type: 'code_execution' },
       ]);
+    });
+
+    it('forwards request tools as function tools, after config tools', async () => {
+      const model = defineModel(
+        'antigravity-preview-05-2026',
+        defaultPluginOptions
+      );
+      mockFetchResponse(mockInteractionResponse);
+
+      await model(
+        {
+          ...minimalRequest,
+          config: { tools: [{ type: 'google_search' }] },
+          tools: [
+            {
+              name: 'getWeather',
+              description: 'Gets weather',
+              inputSchema: { type: 'object', properties: {} },
+            },
+          ],
+        } as any,
+        {} as any
+      );
+
+      const body = JSON.parse(fetchStub.lastCall.args[1].body);
+      assert.deepStrictEqual(body.tools, [
+        { type: 'google_search' },
+        {
+          type: 'function',
+          name: 'getWeather',
+          description: 'Gets weather',
+          parameters: { type: 'object', properties: {} },
+        },
+      ]);
+    });
+
+    it('forwards an explicit empty config.tools list', async () => {
+      const model = defineModel(
+        'antigravity-preview-05-2026',
+        defaultPluginOptions
+      );
+      mockFetchResponse(mockInteractionResponse);
+
+      await model(
+        { ...minimalRequest, config: { tools: [] } } as any,
+        {} as any
+      );
+
+      const body = JSON.parse(fetchStub.lastCall.args[1].body);
+      assert.deepStrictEqual(body.tools, []);
+    });
+
+    it('sends only function tools when config.tools is unset', async () => {
+      const model = defineModel(
+        'antigravity-preview-09-2026',
+        defaultPluginOptions
+      );
+      mockFetchResponse(mockInteractionResponse);
+
+      await model(
+        {
+          ...minimalRequest,
+          tools: [{ name: 'noSchema', description: 'd' }],
+        } as any,
+        {} as any
+      );
+
+      const body = JSON.parse(fetchStub.lastCall.args[1].body);
+      assert.deepStrictEqual(body.tools, [
+        { type: 'function', name: 'noSchema', description: 'd' },
+      ]);
+    });
+
+    it('advertises function calling only for verified versions', () => {
+      const tools = (v: string) => antigravityModel(v).info?.supports?.tools;
+      assert.strictEqual(tools('antigravity-preview-09-2026'), true);
+      assert.strictEqual(tools('antigravity-preview-05-2026'), false);
+      assert.strictEqual(tools('antigravity-unknown'), false);
     });
 
     it('adds interaction.id and environment_id to message metadata', async () => {
