@@ -288,6 +288,12 @@ describe('GoogleAI Plugin', () => {
       );
     });
 
+    it('should accept Gemma temperature up to 2.0', () => {
+      assert.ok(GemmaConfigSchema.safeParse({ temperature: 1.5 }).success);
+      assert.ok(GemmaConfigSchema.safeParse({ temperature: 2 }).success);
+      assert.ok(!GemmaConfigSchema.safeParse({ temperature: 2.1 }).success);
+    });
+
     it('should return an Imagen model reference with correct schema', () => {
       const modelRef = googleAI.model('imagen-new-model');
       assert.strictEqual(

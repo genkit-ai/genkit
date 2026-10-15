@@ -503,17 +503,7 @@ export const GeminiImageConfigSchema = GeminiConfigSchema.extend({
 export type GeminiImageConfigSchemaType = typeof GeminiImageConfigSchema;
 export type GeminiImageConfig = z.infer<GeminiImageConfigSchemaType>;
 
-export const GemmaConfigSchema = GeminiConfigSchema.extend({
-  temperature: z
-    .number()
-    .min(0.0)
-    .max(1.0)
-    .describe(
-      GenerationCommonConfigDescriptions.temperature +
-        ' The default value is 1.0.'
-    )
-    .optional(),
-}).passthrough();
+export const GemmaConfigSchema = GeminiConfigSchema.extend({}).passthrough();
 export type GemmaConfigSchemaType = typeof GemmaConfigSchema;
 export type GemmaConfig = z.infer<GemmaConfigSchemaType>;
 
