@@ -33,6 +33,20 @@ jobs:
     strategy:
       matrix:
         go-version: ['1.25.x', '1.26.x', '1.27.x']
+    # The PostgreSQL plugin's tests need a server; they skip without one.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: genkit_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - name: Checkout Repo
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -78,3 +92,5 @@ jobs:
 
       - name: Run tests
         run: go test -C go -v ./...
+        env:
+          GENKIT_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/genkit_test?sslmode=disable
