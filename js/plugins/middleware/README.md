@@ -157,6 +157,8 @@ const response = await ai.generate({
 
 Automatically scans a directory for `SKILL.md` files (and their YAML frontmatter) and injects them into the system prompt. It also provides a `use_skill` tool the model can use to retrieve more specific skills on demand.
 
+By default, it scans `.agents/skills` followed by `skills`. If both contain the same skill name, the later directory takes precedence. Set `skillPaths` to replace these defaults. If the model requests an unknown skill, the tool returns the available names so the model can retry.
+
 ```typescript
 import { genkit } from 'genkit';
 import { skills } from '@genkit-ai/middleware';
