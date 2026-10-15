@@ -152,6 +152,7 @@ func createPool(ctx context.Context, cfg engineConfig, usingIAMAuth bool) (*pgxp
 	if usingIAMAuth {
 		dialeropts = append(dialeropts, alloydbconn.WithIAMAuthN())
 	}
+	// TODO(#6811): keep the dialer and close it when the engine closes.
 	d, err := alloydbconn.NewDialer(ctx, dialeropts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize connection: %w", err)
