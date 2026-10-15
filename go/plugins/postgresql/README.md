@@ -140,14 +140,14 @@ import pgexp "github.com/firebase/genkit/go/plugins/postgresql/exp"
 
 engine, err := postgresql.NewPostgresEngine(ctx, postgresql.WithPool(pool))
 g := genkit.Init(ctx,
-    genkit.WithExperimental(),
-    genkit.WithPlugins(&postgresql.Postgres{Engine: engine}))
+	genkit.WithExperimental(),
+	genkit.WithPlugins(&postgresql.Postgres{Engine: engine}))
 
 store, err := pgexp.NewPostgresSessionStore[ChatState](ctx, g)
 chatAgent := genkitx.DefineAgent(g, "chat",
-    aix.InlinePrompt{ai.WithModelName("googleai/gemini-flash-latest")},
-    aix.WithSessionStore(store),
+	aix.InlinePrompt{ai.WithModelName("googleai/gemini-flash-latest")},
+	aix.WithSessionStore(store),
 )
 ```
 
-`WithTableName`, `WithSchemaName`, `WithCheckpointInterval`, `WithSnapshotPathPrefix` (per-tenant isolation), and `WithPollInterval` configure it. Connect directly or through a session-mode pooler: a transaction-mode pooler cannot deliver notifications, and subscriptions then rely on the poll.
+`WithTableName`, `WithSchemaName`, `WithCheckpointInterval`, `WithSnapshotPathPrefix` (per-tenant isolation), and `WithPollInterval` configure it. Connect directly or through a session-mode pooler: a transaction-mode pooler cannot deliver notifications, and subscriptions then rely on the poll. Each store holds one connection for LISTEN while runs are subscribed to it, so share one store among the agents with the same `State` type.

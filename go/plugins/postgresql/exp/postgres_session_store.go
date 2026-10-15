@@ -84,7 +84,8 @@ const (
 	// the rows it watches.
 	maxNotifyPayload = 7900
 	// layoutComment marks a table this store created, and the version of its
-	// layout, so a later version can recognize and migrate it.
+	// layout, so a later version can recognize and migrate it. The DDL quotes
+	// it as a string literal, so it must not contain a single quote.
 	layoutComment = "Genkit agent session snapshots, layout 1 (github.com/firebase/genkit/go/plugins/postgresql/exp)"
 )
 
