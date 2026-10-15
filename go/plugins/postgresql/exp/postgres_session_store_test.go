@@ -285,8 +285,10 @@ func TestTableSetup(t *testing.T) {
 		// not own this one, must find it rather than run the DDL again.
 		table := testTable(t, pool)
 		role := "genkit_test_" + strings.ReplaceAll(uuid.NewString(), "-", "")[:12]
+		// A server that authenticates TCP connections by password needs one.
+		password := uuid.NewString()
 		for _, stmt := range []string{
-			"CREATE ROLE " + role + " LOGIN",
+			"CREATE ROLE " + role + " LOGIN PASSWORD '" + password + "'",
 			"GRANT USAGE, CREATE ON SCHEMA public TO " + role,
 			"ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE ON TABLES TO " + role,
 		} {
@@ -298,7 +300,9 @@ func TestTableSetup(t *testing.T) {
 			pool.Exec(context.Background(), "DROP OWNED BY "+role)
 			pool.Exec(context.Background(), "DROP ROLE "+role)
 		})
-		other := testPool(t, func(cfg *pgxpool.Config) { cfg.ConnConfig.User = role })
+		other := testPool(t, func(cfg *pgxpool.Config) {
+			cfg.ConnConfig.User, cfg.ConnConfig.Password = role, password
+		})
 
 		// Hold the lock so both stores queue behind it, in order.
 		tx, err := pool.Begin(ctx)
@@ -322,7 +326,14 @@ func TestTableSetup(t *testing.T) {
 				_, err := newPostgresSessionStore[testState](ctx, p, WithTableName(table))
 				errs <- err
 			}()
-			eventually(t, "the store waits for the creation lock", waiting(i+1))
+			eventually(t, "the store waits for the creation lock", func() bool {
+				select {
+				case err := <-errs:
+					t.Fatalf("newPostgresSessionStore returned while the lock was held: %v", err)
+				default:
+				}
+				return waiting(i + 1)()
+			})
 		}
 		if err := tx.Commit(ctx); err != nil {
 			t.Fatalf("Commit: %v", err)
