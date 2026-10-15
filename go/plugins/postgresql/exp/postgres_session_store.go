@@ -689,8 +689,10 @@ func storedOf[State any](chain []row, current *aix.SessionSnapshot[State]) (*sto
 
 // write persists next over the row prev describes (nil for a new row). A write
 // that leaves the state, and for a diff the parent, as they were updates the
-// metadata alone, so a heartbeat or an abort rewrites no state. Any other write
-// plans the row afresh: a diff against its parent, or a checkpoint.
+// metadata alone, so a heartbeat or an abort rewrites no state. The state is
+// compared by its JSON value, so a State whose MarshalJSON output varies
+// between calls still takes this path. Any other write plans the row afresh: a
+// diff against its parent, or a checkpoint.
 func (s *PostgresSessionStore[State]) write(ctx context.Context, tx pgx.Tx, prefix string, prev *stored, next *aix.SessionSnapshot[State]) error {
 	stateJSON, err := marshalNullable(next.State)
 	if err != nil {
@@ -704,7 +706,7 @@ func (s *PostgresSessionStore[State]) write(ctx context.Context, tx pgx.Tx, pref
 		next.HeartbeatAt, string(next.Status), nullable(string(next.FinishReason)), errJSON}
 
 	if prev != nil {
-		sameState := bytes.Equal(prev.state, stateJSON)
+		sameState := sameJSON(prev.state, stateJSON)
 		if sameState && (prev.kind == kindCheckpoint || prev.parentID == next.ParentID) {
 			_, err := tx.Exec(ctx, fmt.Sprintf(`UPDATE %s SET session_id = $3, parent_id = $4, created_at = $5,
 				updated_at = $6, heartbeat_at = $7, status = $8, finish_reason = $9, error = $10
@@ -915,6 +917,15 @@ func hashKey(parts ...string) int64 {
 		h.Write([]byte(p))
 	}
 	return int64(h.Sum64())
+}
+
+// sameJSON reports whether a and b, each a JSON value or nil for none, hold
+// the same value. Equal bytes are the common case; the diff covers the rest.
+func sameJSON(a, b json.RawMessage) bool {
+	if bytes.Equal(a, b) {
+		return true
+	}
+	return a != nil && b != nil && len(aix.Diff(a, b)) == 0
 }
 
 // marshalNullable encodes v as JSON, or returns nil (SQL NULL) for a nil v. It

@@ -24,6 +24,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -478,6 +479,66 @@ func TestRejectsStateChangeUnderADiff(t *testing.T) {
 	child, err := store.GetSnapshot(ctx, "child")
 	if err != nil || child == nil || len(child.State.Custom.Topics) != 31 {
 		t.Errorf("child after the parent's rewrites = (%+v, %v), want its own 31 topics", child, err)
+	}
+}
+
+// shuffledState marshals its members in an order that alternates between
+// calls, as a MarshalJSON whose output varies would.
+type shuffledState struct {
+	Topics []string `json:"topics"`
+}
+
+var shuffledMarshals atomic.Int64
+
+func (s shuffledState) MarshalJSON() ([]byte, error) {
+	topics, err := json.Marshal(s.Topics)
+	if err != nil {
+		return nil, err
+	}
+	if shuffledMarshals.Add(1)%2 == 0 {
+		return fmt.Appendf(nil, `{"topics":%s,"kind":"shuffled"}`, topics), nil
+	}
+	return fmt.Appendf(nil, `{"kind":"shuffled","topics":%s}`, topics), nil
+}
+
+// TestMetadataRewriteComparesStateByValue checks that a heartbeat on a row with
+// a diff child succeeds when the state marshals to different bytes of the same
+// value, instead of being taken for a state change and rejected.
+func TestMetadataRewriteComparesStateByValue(t *testing.T) {
+	ctx := context.Background()
+	pool := testPool(t)
+	table := testTable(t, pool)
+	store, err := newPostgresSessionStore[shuffledState](ctx, pool, WithTableName(table))
+	if err != nil {
+		t.Fatalf("newPostgresSessionStore: %v", err)
+	}
+	at := time.Now()
+	for i, row := range []struct{ id, parentID string }{{"parent", ""}, {"child", "parent"}} {
+		if _, err := store.SaveSnapshot(ctx, row.id, func(*aix.SessionSnapshot[shuffledState]) (*aix.SessionSnapshot[shuffledState], error) {
+			created := at.Add(time.Duration(i) * time.Millisecond)
+			return &aix.SessionSnapshot[shuffledState]{
+				SessionID: "sess",
+				ParentID:  row.parentID,
+				Status:    aix.SnapshotStatusCompleted,
+				State:     &aix.SessionState[shuffledState]{Custom: shuffledState{Topics: append(largeTopics(), strings.Repeat("x", i))}},
+				CreatedAt: created,
+				UpdatedAt: created,
+			}, nil
+		}); err != nil {
+			t.Fatalf("SaveSnapshot(%q): %v", row.id, err)
+		}
+	}
+	var kind string
+	if err := pool.QueryRow(ctx, fmt.Sprintf(`SELECT kind FROM %s WHERE snapshot_id = 'child'`, pgx.Identifier{table}.Sanitize())).Scan(&kind); err != nil || kind != kindDiff {
+		t.Fatalf("child stored as (%q, %v), want a diff", kind, err)
+	}
+
+	if _, err := store.SaveSnapshot(ctx, "parent", func(existing *aix.SessionSnapshot[shuffledState]) (*aix.SessionSnapshot[shuffledState], error) {
+		beat := at.Add(time.Second)
+		existing.HeartbeatAt = &beat
+		return existing, nil
+	}); err != nil {
+		t.Errorf("heartbeat on the parent: %v", err)
 	}
 }
 
