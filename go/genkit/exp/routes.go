@@ -22,6 +22,7 @@ import (
 	aix "github.com/firebase/genkit/go/ai/exp"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/internal/wire"
 )
 
 // Base paths for the built-in serving layouts.
@@ -62,7 +63,8 @@ func (r Route) Handler(opts ...genkit.HandlerOption) http.HandlerFunc {
 }
 
 // AllAgentRoutes returns the default serving layout for every agent
-// registered with g, the iterate-over-all counterpart to [AgentRoutes].
+// registered with g, except remote agents ([DefineRemoteAgent]), the
+// iterate-over-all counterpart to [AgentRoutes].
 // Mount the result onto an [http.ServeMux] (range over it and call
 // [Route.Handler]) or hand it to a router of your choice. See
 // [AgentRoutes] for the per-agent layout and the route set each agent
@@ -70,6 +72,12 @@ func (r Route) Handler(opts ...genkit.HandlerOption) http.HandlerFunc {
 func AllAgentRoutes(g *genkit.Genkit) []Route {
 	var routes []Route
 	for _, act := range ListAgents(g) {
+		if act.Desc().Metadata[wire.RemoteAgentMetadataKey] == true {
+			// A remote agent (see DefineRemoteAgent) forwards to another
+			// service with this app's credentials; serving it here would
+			// hand those credentials to every caller of this app.
+			continue
+		}
 		name := act.Name()
 		// The snapshot-lifecycle companions register independently under
 		// their own action types, keyed by the agent's name (see the agent

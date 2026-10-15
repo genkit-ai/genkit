@@ -73,12 +73,12 @@ const taskStatusUnknown = "unknown"
 
 // reportSettled reports whether a task report's status can no longer change on
 // its own, which is the rule the wait tool counts by. Report statuses are the
-// runtime's snapshot statuses plus taskStatusUnknown, and the runtime's own
-// rule ([aix.SnapshotStatus.Terminal]) decides for all of them: a pending row
-// and an aborting one (winding down toward its finalize) are the two still in
-// flight, and unknown, like every other status, is settled (see above).
+// runtime's snapshot statuses plus taskStatusUnknown, which is settled (see
+// above). The runtime's own rule ([aix.SnapshotStatus.Terminal]) decides for
+// the rest: a pending row, an aborting one (winding down toward its finalize),
+// and a status the runtime does not know are still in flight.
 func reportSettled(reportStatus string) bool {
-	return aix.SnapshotStatus(reportStatus).Terminal()
+	return reportStatus == taskStatusUnknown || aix.SnapshotStatus(reportStatus).Terminal()
 }
 
 // noTaskIDsNote is the guidance returned when a background-task tool is called
@@ -715,13 +715,13 @@ func (a *Agents) reportTask(ctx context.Context, g *genkit.Genkit, st *agentsSta
 		// the companion action, so whatever surfaces here is worth reporting.
 		// The agent resolved above, so NOT_FOUND here is the snapshot and
 		// nothing else, and re-delegating is genuinely the way to get the
-		// work done; the other dead ends (see deadEndRead) are reported as
+		// work done; the other dead ends (see aix.IsRetryableReadError) are reported as
 		// they are, and anything else is presumed transient.
 		s, _ := status.Classified(err)
 		switch {
 		case s == status.NotFound:
 			report.Error = fmt.Sprintf("No record of this task exists (%v). Delegate the task again if the result is still needed.", err)
-		case deadEndRead(err):
+		case !aix.IsRetryableReadError(err):
 			report.Error = err.Error()
 		default:
 			report.Error = fmt.Sprintf("Could not read the task's status: %v. Check again later.", err)

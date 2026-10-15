@@ -544,6 +544,26 @@ func TestWaitSnapshot_DeadEndReadFailureFailsFast(t *testing.T) {
 	}
 }
 
+func TestWaitSnapshot_PermissionDeniedFailsFast(t *testing.T) {
+	restore := snapshotWaitPollInterval
+	snapshotWaitPollInterval = 10 * time.Millisecond
+	t.Cleanup(func() { snapshotWaitPollInterval = restore })
+
+	// A store that refuses the caller refuses every retry the same way.
+	denied := status.Errorf(status.ErrPermissionDenied, "store refused the read")
+	store := &scriptedStore{script: []scriptedRead{{snap: scriptedPending()}, {err: denied}}}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := waitSnapshot[any](ctx, store, nil, "waitForSnapshot", "job", "", 0)
+	if !errors.Is(err, denied) {
+		t.Fatalf("waitSnapshot error = %v, want the store's own error", err)
+	}
+	if got := store.readCount(); got != 2 {
+		t.Errorf("reads = %d, want 2 (a refused read is not retried)", got)
+	}
+}
+
 func TestWaitSnapshot_FirstReadBlipIsRetried(t *testing.T) {
 	restore := snapshotWaitPollInterval
 	snapshotWaitPollInterval = 10 * time.Millisecond

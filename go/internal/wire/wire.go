@@ -85,6 +85,12 @@ func ClientMessage(err error) (msg string, own bool) {
 // SSEDataPrefix starts every server-sent event line the handler writes.
 const SSEDataPrefix = "data: "
 
+// RemoteAgentMetadataKey is the action descriptor metadata key that marks an
+// agent action as a proxy for an agent in another process (see
+// AgentHandle.Register in ai/exp). Serving layouts skip such actions, so a
+// server does not expose another service's agent with its own credentials.
+const RemoteAgentMetadataKey = "remoteAgent"
+
 type servedActionKey struct{}
 
 // WithServedAction marks ctx as the context of a request that a transport
