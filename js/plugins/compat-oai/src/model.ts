@@ -296,10 +296,19 @@ export function toOpenAIMessages(
             },
           }));
         if (toolCalls.length > 0) {
+          const text = msg.text;
+          // Providers with thinking modes (e.g. DeepSeek, Qwen) require the
+          // reasoning of a tool-calling turn to be echoed back on later turns.
+          const reasoning = msg.content
+            .map((part) => part.reasoning)
+            .filter(Boolean)
+            .join('');
           apiMessages.push({
             role: role,
+            ...(text ? { content: text } : {}),
+            ...(reasoning ? { reasoning_content: reasoning } : {}),
             tool_calls: toolCalls,
-          });
+          } as ChatCompletionMessageParam);
         } else {
           apiMessages.push({
             role: role,
@@ -391,27 +400,29 @@ export function fromOpenAIChoice(
   );
 
   // Build content array based on what's present in the message
-  let content: Part[] = [];
+  const content: Part[] = [];
+  const hasToolRequests = !!toolRequestParts && toolRequestParts.length > 0;
 
-  if (toolRequestParts && toolRequestParts.length > 0) {
-    content = toolRequestParts as ToolRequestPart[];
-  } else {
-    // Handle reasoning_content if present
-    if (
-      'reasoning_content' in choice.message &&
-      choice.message.reasoning_content
-    ) {
-      content.push({ reasoning: choice.message.reasoning_content as string });
-    }
+  // Handle reasoning_content if present
+  if (
+    'reasoning_content' in choice.message &&
+    choice.message.reasoning_content
+  ) {
+    content.push({ reasoning: choice.message.reasoning_content as string });
+  }
 
-    // Handle regular content if present
-    if (choice.message.content) {
-      content.push(
-        jsonMode
-          ? { data: JSON.parse(choice.message.content!) }
-          : { text: choice.message.content! }
-      );
-    }
+  // Handle regular content if present. Text that accompanies tool calls is a
+  // preamble, not JSON output, so it is never parsed.
+  if (choice.message.content) {
+    content.push(
+      jsonMode && !hasToolRequests
+        ? { data: JSON.parse(choice.message.content!) }
+        : { text: choice.message.content! }
+    );
+  }
+
+  if (hasToolRequests) {
+    content.push(...(toolRequestParts as ToolRequestPart[]));
   }
 
   return {
@@ -518,24 +529,35 @@ export function fromOpenAIChunkChoice(
       );
 
   // Build content array based on what's present in the delta
-  let content: Part[] = [];
+  const content: Part[] = [];
+  const hasToolRequests = !!toolRequestParts && toolRequestParts.length > 0;
 
-  if (toolRequestParts && toolRequestParts.length > 0) {
-    content = toolRequestParts as ToolRequestPart[];
-  } else {
-    // Handle reasoning_content if present
-    if ('reasoning_content' in choice.delta && choice.delta.reasoning_content) {
-      content.push({ reasoning: choice.delta.reasoning_content as string });
-    }
+  // Handle reasoning_content if present
+  if ('reasoning_content' in choice.delta && choice.delta.reasoning_content) {
+    content.push({ reasoning: choice.delta.reasoning_content as string });
+  }
 
-    // Handle regular content if present
-    if (choice.delta.content) {
-      content.push(
-        jsonMode
-          ? { data: JSON.parse(choice.delta.content!) }
-          : { text: choice.delta.content! }
-      );
+  // Handle regular content if present. A streamed delta is usually only a
+  // fragment of the response, so it is emitted as `data` only when it happens
+  // to be a complete JSON object/array; anything else (partial JSON, or a
+  // preamble that accompanies tool calls) is emitted as text and the full
+  // response is parsed once streaming finishes.
+  if (choice.delta.content) {
+    const text = choice.delta.content;
+    let data: unknown;
+    if (jsonMode && !hasToolRequests) {
+      try {
+        const parsed = JSON.parse(text);
+        if (parsed !== null && typeof parsed === 'object') data = parsed;
+      } catch {
+        // Not a complete JSON value on its own; fall through to text.
+      }
     }
+    content.push(data !== undefined ? { data } : { text });
+  }
+
+  if (hasToolRequests) {
+    content.push(...(toolRequestParts as ToolRequestPart[]));
   }
 
   return {
