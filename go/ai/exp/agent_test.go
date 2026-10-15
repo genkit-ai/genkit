@@ -2148,8 +2148,9 @@ func TestDefinePromptAgent_DefaultAndNamed(t *testing.T) {
 	}
 }
 
-// TestDefinePromptAgent_Panics covers the definition-time failures: a prompt
-// that is not registered, and setting the prompt source more than once.
+// TestDefinePromptAgent_Panics covers the definition-time failure for a prompt
+// that is not registered, and checks that a repeated prompt source replaces the
+// earlier one rather than panicking.
 func TestDefinePromptAgent_Panics(t *testing.T) {
 	reg := setupPromptTestRegistry(t)
 	ai.DefinePrompt(reg, "present", ai.WithModelName("test/echo"))
@@ -2163,14 +2164,11 @@ func TestDefinePromptAgent_Panics(t *testing.T) {
 		DefinePromptAgent[testState](reg, "absent")
 	})
 
-	t.Run("duplicate prompt source", func(t *testing.T) {
-		defer func() {
-			if r := recover(); r == nil {
-				t.Fatal("expected panic for duplicate WithNamedPrompt")
-			}
-		}()
-		DefinePromptAgent[testState](reg, "present",
-			WithNamedPrompt[testState]("present", nil),
+	t.Run("later prompt source wins", func(t *testing.T) {
+		// The first source names a missing prompt, so the definition panics
+		// unless the later option replaced it.
+		DefinePromptAgent[testState](reg, "laterWins",
+			WithNamedPrompt[testState]("absent", nil),
 			WithNamedPrompt[testState]("present", nil))
 	})
 }
@@ -6169,20 +6167,18 @@ func TestAgent_Description(t *testing.T) {
 		}
 	})
 
-	t.Run("rejects a second WithDescription", func(t *testing.T) {
+	t.Run("later WithDescription wins", func(t *testing.T) {
 		reg := newTestRegistry(t)
-		defer func() {
-			if recover() == nil {
-				t.Error("expected a panic when WithDescription is set twice")
-			}
-		}()
-		DefineCustomAgent(reg, "twice", noopFn,
+		af := DefineCustomAgent(reg, "twice", noopFn,
 			WithDescription[testState]("first"), WithDescription[testState]("second"))
+		if got := af.Desc().Description; got != "second" {
+			t.Errorf("Desc().Description = %q, want %q", got, "second")
+		}
 	})
 }
 
 // TestWithMaxSnapshotWait_Rejects pins the option's validation: the limit must
-// be positive, and it can be set once.
+// be positive.
 func TestWithMaxSnapshotWait_Rejects(t *testing.T) {
 	noopFn := func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 		return nil, nil
@@ -6194,7 +6190,6 @@ func TestWithMaxSnapshotWait_Rejects(t *testing.T) {
 	}{
 		{"zero", []AgentOption[testState]{WithMaxSnapshotWait[testState](0)}, "must be positive"},
 		{"negative", []AgentOption[testState]{WithMaxSnapshotWait[testState](-time.Second)}, "must be positive"},
-		{"twice", []AgentOption[testState]{WithMaxSnapshotWait[testState](time.Second), WithMaxSnapshotWait[testState](time.Second)}, "more than once"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -8681,9 +8676,11 @@ func TestAgent_WithSessionID_OptionValidation(t *testing.T) {
 		!strings.Contains(err.Error(), "mutually exclusive") {
 		t.Errorf("WithState+WithSnapshotID: expected mutual-exclusion error, got %v", err)
 	}
-	if _, err := af.Connect(ctx, WithSessionID[testState]("s"), WithSessionID[testState]("s2")); err == nil ||
-		!strings.Contains(err.Error(), "more than once") {
-		t.Errorf("WithSessionID twice: expected duplicate-option error, got %v", err)
+	// A repeated option replaces the earlier one, as in the ai package.
+	if init, err := resolveInvocationInit("sessionOptFlow", []InvocationOption[testState]{
+		WithSessionID[testState]("s"), WithSessionID[testState]("s2"),
+	}); err != nil || init == nil || init.SessionID != "s2" {
+		t.Errorf("WithSessionID twice: got init %+v, err %v; want SessionID \"s2\"", init, err)
 	}
 	// An empty session ID is an explicit error, not a silent no-op: a
 	// pipelined AgentOutput.SessionID from a storeless invocation must not

@@ -182,13 +182,34 @@ func TestOptionValidation(t *testing.T) {
 		}
 	})
 
-	t.Run("rejects setting an option twice", func(t *testing.T) {
-		var cfg sessionStoreOptions
-		if err := WithCheckpointInterval(5).applySessionStore(&cfg); err != nil {
-			t.Fatalf("first set: %v", err)
+	t.Run("a repeated option replaces the earlier one", func(t *testing.T) {
+		var ss sessionStoreOptions
+		for _, opt := range []SessionStoreOption{
+			WithCollection("a"), WithCollection("b"),
+			WithCheckpointInterval(5), WithCheckpointInterval(7),
+			WithShardSize(1), WithShardSize(2),
+			WithSnapshotPathPrefix(func(context.Context) string { return "first" }),
+			WithSnapshotPathPrefix(func(context.Context) string { return "second" }),
+		} {
+			if err := opt.applySessionStore(&ss); err != nil {
+				t.Fatalf("applySessionStore: %v", err)
+			}
 		}
-		if err := WithCheckpointInterval(7).applySessionStore(&cfg); err == nil {
-			t.Error("expected error setting checkpoint interval twice")
+		if ss.collection != "b" || ss.checkpointInterval != 7 || ss.shardSize != 2 || ss.prefixFn(context.Background()) != "second" {
+			t.Errorf("session store options = %+v, want the later of each", ss)
+		}
+		var sm streamManagerOptions
+		for _, opt := range []StreamManagerOption{
+			WithCollection("a"), WithCollection("b"),
+			WithTimeout(time.Second), WithTimeout(2 * time.Second),
+			WithTTL(time.Minute), WithTTL(2 * time.Minute),
+		} {
+			if err := opt.applyStreamManager(&sm); err != nil {
+				t.Fatalf("applyStreamManager: %v", err)
+			}
+		}
+		if sm.collection != "b" || sm.timeout != 2*time.Second || sm.ttl != 2*time.Minute {
+			t.Errorf("stream manager options = %+v, want the later of each", sm)
 		}
 	})
 
