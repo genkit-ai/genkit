@@ -17,7 +17,7 @@
 <p align="center">
   Build production-ready AI-powered applications in Go with a unified interface for text generation, structured output, tool calling, and agentic workflows.
   <br><br>
-  One interface over Google AI and Vertex AI (Gemini), Anthropic (Claude), OpenAI (GPT), xAI (Grok), DeepSeek, DashScope (Qwen), Moonshot (Kimi), Z.ai (GLM), Vertex AI Model Garden (Llama, Mistral), Ollama for local models, and any OpenAI-compatible endpoint.
+  One interface over Google AI and Vertex AI (Gemini), Anthropic (Claude), OpenAI (GPT), xAI (Grok), DeepSeek, DashScope (Qwen), Moonshot (Kimi), Z.ai (GLM), Meta (Muse), Vertex AI Model Garden (Llama, Mistral), Ollama for local models, and any OpenAI-compatible endpoint.
 </p>
 
 <p align="center">
@@ -147,7 +147,7 @@ Multi-turn conversations with snapshots you can resume, branch, and run in the b
 
 **[Model Providers](#model-providers)**
 
-Gemini, Claude, GPT, Grok, DeepSeek, Qwen, Kimi, GLM, Llama, Mistral, local models, and anything OpenAI-compatible.
+Gemini, Claude, GPT, Grok, DeepSeek, Qwen, Kimi, GLM, Muse, Llama, Mistral, local models, and anything OpenAI-compatible.
 
 **[Development Tools](#development-tools)**
 
@@ -777,7 +777,7 @@ Genkit provides a unified interface across all major AI providers. Use whichever
 | **Anthropic** | `anthropic.Anthropic` | Claude Opus 5, Claude Sonnet 5, Claude Fable 5, Claude Haiku 4.5 |
 | **Vertex AI Model Garden** | `modelgarden.Anthropic`, `.Llama`, `.Mistral` | Claude, Llama, and Mistral via Google Cloud |
 | **Ollama** | `ollama.Ollama` | Llama 4, Qwen 3, DeepSeek, and other local models |
-| **OpenAI Compatible** | `compat_oai` | GPT-5.6, Grok, DeepSeek, Qwen, Kimi, GLM, the OpenRouter gateway, and any OpenAI-compatible API |
+| **OpenAI Compatible** | `compat_oai` | GPT-5.6, Grok, DeepSeek, Qwen, Kimi, GLM, Muse, the OpenRouter gateway, and any OpenAI-compatible API |
 | **System One** *(preview)* | `systemonex.SystemOne`, `systemonex.TypeSafe()`, `systemonex.OpenRouter()`, `systemonex.Ollama()`, `systemonex.WorkersAI("")` | Decision models such as TypeSafe's jev, Liquid AI's d1, and Cloudflare's Clef, with calibrated answers ([README](plugins/systemone/exp/README.md)) |
 
 ```go
