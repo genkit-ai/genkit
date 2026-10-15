@@ -17,7 +17,7 @@
 
 import type Anthropic from '@anthropic-ai/sdk';
 import type { CacheControlEphemeral } from '@anthropic-ai/sdk/resources/messages';
-import { z } from 'genkit';
+import { GenkitError, z } from 'genkit';
 import { GenerationCommonConfigSchema } from 'genkit/model';
 
 export type { CacheControlEphemeral as AnthropicCacheControl };
@@ -168,7 +168,13 @@ export const AnthropicConfigSchema = GenerationCommonConfigSchema.extend({
     .enum(['stable', 'beta'])
     .optional()
     .describe(
-      'The API version to use for the request. Both stable and beta features are available on the beta API surface.'
+      'The API version to use for the request. Both stable and beta features are available on the beta API surface. Setting `betas` selects the beta surface, even when the plugin default is stable.'
+    ),
+  betas: z
+    .array(z.string())
+    .optional()
+    .describe(
+      'Anthropic beta feature flags to send with the request. Requires the beta API, which is selected automatically when this is non-empty.'
     ),
   thinking: ThinkingConfigSchema.optional().describe(
     'The thinking configuration to use for the request. Thinking is a feature that allows the model to think about the request and provide a better response.'
@@ -235,16 +241,30 @@ export const MEDIA_TYPES = {
  * Resolve whether beta API should be used for this call.
  * Priority:
  *   1. request.config.apiVersion (per-request override - explicit stable or beta)
- *   2. pluginDefaultApiVersion (plugin-wide default)
- *   3. otherwise stable
+ *   2. request.config.betas (non-empty: only the beta surface can send them)
+ *   3. pluginDefaultApiVersion (plugin-wide default)
+ *   4. otherwise stable
+ *
+ * Throws when `betas` is set alongside an explicit per-request
+ * `apiVersion: 'stable'`, since the stable surface would silently drop them.
  */
 export function resolveBetaEnabled(
   cfg: ClaudeConfig | undefined,
   pluginDefaultApiVersion?: 'stable' | 'beta'
 ): boolean {
+  const hasBetas = Array.isArray(cfg?.betas) && cfg.betas.length > 0;
   if (cfg?.apiVersion !== undefined) {
+    if (hasBetas && cfg.apiVersion === 'stable') {
+      throw new GenkitError({
+        status: 'INVALID_ARGUMENT',
+        message:
+          "anthropic: 'betas' requires the beta API surface, but apiVersion is 'stable'. " +
+          "Remove apiVersion or set it to 'beta'.",
+      });
+    }
     return cfg.apiVersion === 'beta';
   }
+  if (hasBetas) return true;
   if (pluginDefaultApiVersion === 'beta') return true;
   return false;
 }
@@ -338,9 +358,7 @@ export interface ContentBlockLocationCitation {
 
 /** Union of all citation types for documents. */
 export type AnthropicCitation =
-  | CharLocationCitation
-  | PageLocationCitation
-  | ContentBlockLocationCitation;
+  CharLocationCitation | PageLocationCitation | ContentBlockLocationCitation;
 
 /**
  * Calculates the API key to use for a request.
