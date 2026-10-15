@@ -6181,6 +6181,35 @@ func TestAgent_Description(t *testing.T) {
 	})
 }
 
+// TestWithMaxSnapshotWait_Rejects pins the option's validation: the limit must
+// be positive, and it can be set once.
+func TestWithMaxSnapshotWait_Rejects(t *testing.T) {
+	noopFn := func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+		return nil, nil
+	}
+	tests := []struct {
+		name string
+		opts []AgentOption[testState]
+		want string
+	}{
+		{"zero", []AgentOption[testState]{WithMaxSnapshotWait[testState](0)}, "must be positive"},
+		{"negative", []AgentOption[testState]{WithMaxSnapshotWait[testState](-time.Second)}, "must be positive"},
+		{"twice", []AgentOption[testState]{WithMaxSnapshotWait[testState](time.Second), WithMaxSnapshotWait[testState](time.Second)}, "more than once"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			defer func() {
+				r := recover()
+				if r == nil || !strings.Contains(fmt.Sprint(r), tt.want) {
+					t.Errorf("panic = %v, want one containing %q", r, tt.want)
+				}
+			}()
+			DefineCustomAgent(newTestRegistry(t), "capped", noopFn,
+				append(tt.opts, WithSessionStore(newTestInMemStore[testState]()))...)
+		})
+	}
+}
+
 // TestAgent_RegisterCarriesCompanions verifies that registering an agent
 // ref into another registry brings the companion actions along, so the
 // agent travels as a unit (see Agent.Register).
@@ -9000,56 +9029,88 @@ func TestAgent_OutputUnblocksOnCancel(t *testing.T) {
 	}
 }
 
-// TestPromptAgent_FailedTurnReasonIsNotTheModelReason pins the one place the
-// generate loop's finish reason must not be forwarded verbatim. A response
-// the loop completed and post-processing then rejected keeps the model's own
-// reason ("stop") beside its ErrInvalidOutput, so a turn that failed would
-// otherwise report a success on its TurnEnd chunk and on its snapshot row.
-func TestPromptAgent_FailedTurnReasonIsNotTheModelReason(t *testing.T) {
-	ctx := context.Background()
-	reg := newTestRegistry(t)
-	ai.ConfigureFormats(reg)
-	defineTestModel(reg, "test/badjson", nil,
-		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
-			// Not the JSON the output type asks for, and the model itself
-			// finished cleanly: exactly the shape that carries "stop" out of
-			// a failed generate.
-			return &ai.ModelResponse{
-				Request:      req,
+// TestPromptAgent_RejectedCompletionCommitsTheSeam pins how a turn ends when
+// the model finished and the turn rejected what it returned: output off the
+// schema, or a blocked response. The model's message must not be committed,
+// since a re-attempt would send the model its own rejected output, so the
+// failed row holds the request's messages only. The reason is pinned too:
+// both responses carry the model's own finish reason ("stop", "blocked"),
+// and a failed turn must not forward it onto its TurnEnd chunk or its row.
+func TestPromptAgent_RejectedCompletionCommitsTheSeam(t *testing.T) {
+	tests := []struct {
+		name       string
+		resp       *ai.ModelResponse
+		wantStatus status.Name
+	}{
+		{
+			name: "output off the schema",
+			resp: &ai.ModelResponse{
 				Message:      ai.NewModelTextMessage("not json"),
 				FinishReason: ai.FinishReasonStop,
-			}, nil
+			},
+			wantStatus: status.Internal,
+		},
+		{
+			name: "blocked",
+			resp: &ai.ModelResponse{
+				Message:       ai.NewModelTextMessage("I can't help with that."),
+				FinishReason:  ai.FinishReasonBlocked,
+				FinishMessage: "safety",
+			},
+			wantStatus: status.FailedPrecondition,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			reg := newTestRegistry(t)
+			ai.ConfigureFormats(reg)
+			defineTestModel(reg, "test/rejected", nil,
+				func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+					resp := *tt.resp
+					resp.Request = req
+					return &resp, nil
+				})
+			ai.DefineGenerateAction(ctx, reg)
+
+			store := newTestInMemStore[testState]()
+			af := DefineAgent[testState](reg, "rejectedAgent", InlinePrompt{
+				ai.WithModelName("test/rejected"),
+				ai.WithOutputType(struct {
+					Name string `json:"name"`
+				}{}),
+			}, WithSessionStore(store))
+
+			out, err := af.RunText(ctx, "hi")
+			if err != nil {
+				t.Fatalf("RunText: %v", err)
+			}
+			if out.FinishReason != AgentFinishReasonFailed {
+				t.Errorf("output FinishReason = %q, want %q", out.FinishReason, AgentFinishReasonFailed)
+			}
+			if out.Error == nil || out.Error.Status != tt.wantStatus {
+				t.Errorf("output Error = %+v, want status %s", out.Error, tt.wantStatus)
+			}
+			if out.SnapshotID == "" {
+				t.Fatal("no snapshot: the turn committed the seam, so it must have one")
+			}
+			snap, err := af.GetSnapshot(ctx, out.SnapshotID)
+			if err != nil {
+				t.Fatalf("GetSnapshot: %v", err)
+			}
+			if snap.Status != SnapshotStatusFailed {
+				t.Errorf("snapshot Status = %q, want %q", snap.Status, SnapshotStatusFailed)
+			}
+			if snap.FinishReason != AgentFinishReasonFailed {
+				t.Errorf("snapshot FinishReason = %q, want %q: the model's own reason must not ride onto a failed row",
+					snap.FinishReason, AgentFinishReasonFailed)
+			}
+			msgs := snap.State.Messages
+			if len(msgs) != 1 || msgs[0].Role != ai.RoleUser || msgs[0].Content[0].Text != "hi" {
+				b, _ := json.Marshal(msgs)
+				t.Errorf("committed messages = %s, want only the user's \"hi\": the rejected message must not be a resume point", b)
+			}
 		})
-	ai.DefineGenerateAction(ctx, reg)
-
-	store := newTestInMemStore[testState]()
-	af := DefineAgent[testState](reg, "invalidOutputAgent", InlinePrompt{
-		ai.WithModelName("test/badjson"),
-		ai.WithOutputType(struct {
-			Name string `json:"name"`
-		}{}),
-	}, WithSessionStore(store))
-
-	out, err := af.RunText(ctx, "hi")
-	if err != nil {
-		t.Fatalf("RunText: %v", err)
-	}
-	if out.FinishReason != AgentFinishReasonFailed {
-		t.Errorf("output FinishReason = %q, want %q", out.FinishReason, AgentFinishReasonFailed)
-	}
-	if out.SnapshotID == "" {
-		t.Fatal("no snapshot: the turn committed the partial, so it must have one")
-	}
-	snap, err := af.GetSnapshot(ctx, out.SnapshotID)
-	if err != nil {
-		t.Fatalf("GetSnapshot: %v", err)
-	}
-	if snap.Status != SnapshotStatusFailed {
-		t.Errorf("snapshot Status = %q, want %q", snap.Status, SnapshotStatusFailed)
-	}
-	if snap.FinishReason != AgentFinishReasonFailed {
-		t.Errorf("snapshot FinishReason = %q, want %q: the model's own reason must not ride onto a failed row",
-			snap.FinishReason, AgentFinishReasonFailed)
 	}
 }
 

@@ -157,7 +157,7 @@ func TestWaitSnapshot_TerminalReturnsWithoutWaiting(t *testing.T) {
 	})
 
 	// No deadline: a wait that did not return at once would hang the test.
-	got, err := waitSnapshot(context.Background(), store, nil, "waitForSnapshot", "done", "")
+	got, err := waitSnapshot(context.Background(), store, nil, "waitForSnapshot", "done", "", 0)
 	if err != nil {
 		t.Fatalf("waitSnapshot: %v", err)
 	}
@@ -182,7 +182,7 @@ func TestWaitSnapshot_SubscriptionDeliversSettlement(t *testing.T) {
 	defer cancel()
 	done := make(chan *SessionSnapshot[any], 1)
 	go func() {
-		snap, err := waitSnapshot(ctx, store, nil, "waitForSnapshot", "running", "")
+		snap, err := waitSnapshot(ctx, store, nil, "waitForSnapshot", "running", "", 0)
 		if err != nil {
 			t.Errorf("waitSnapshot: %v", err)
 			close(done)
@@ -224,7 +224,7 @@ func TestWaitSnapshot_RereadsWithoutSubscriber(t *testing.T) {
 		settleSnapshot[any](t, store, "running", SnapshotStatusFailed)
 	}()
 
-	got, err := waitSnapshot[any](ctx, store, nil, "waitForSnapshot", "running", "")
+	got, err := waitSnapshot[any](ctx, store, nil, "waitForSnapshot", "running", "", 0)
 	if err != nil {
 		t.Fatalf("waitSnapshot: %v", err)
 	}
@@ -285,7 +285,7 @@ func TestWaitSnapshot_RereadsMetadataOnlyWhereTheStoreCan(t *testing.T) {
 		settleSnapshot[any](t, store, "running", SnapshotStatusCompleted)
 	}()
 
-	got, err := waitSnapshot[any](ctx, store, nil, "waitForSnapshot", "running", "")
+	got, err := waitSnapshot[any](ctx, store, nil, "waitForSnapshot", "running", "", 0)
 	if err != nil {
 		t.Fatalf("waitSnapshot: %v", err)
 	}
@@ -317,7 +317,7 @@ func TestWaitSnapshot_ExpiredHeartbeatEndsTheWait(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	got, err := waitSnapshot(ctx, store, nil, "waitForSnapshot", "orphan", "")
+	got, err := waitSnapshot(ctx, store, nil, "waitForSnapshot", "orphan", "", 0)
 	if err != nil {
 		t.Fatalf("waitSnapshot: %v", err)
 	}
@@ -352,7 +352,7 @@ func TestWaitSnapshot_LivenessRereadCatchesADeadWorker(t *testing.T) {
 		})
 	}()
 
-	got, err := waitSnapshot(ctx, store, nil, "waitForSnapshot", "running", "")
+	got, err := waitSnapshot(ctx, store, nil, "waitForSnapshot", "running", "", 0)
 	if err != nil {
 		t.Fatalf("waitSnapshot: %v", err)
 	}
@@ -370,14 +370,61 @@ func TestWaitSnapshot_ContextEndsTheWait(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	if _, err := waitSnapshot(ctx, store, nil, "waitForSnapshot", "running", ""); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := waitSnapshot(ctx, store, nil, "waitForSnapshot", "running", "", 0); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("waitSnapshot error = %v, want DeadlineExceeded", err)
+	}
+}
+
+// TestWaitSnapshot_LimitReturnsTheRowAsItStands pins the bound one
+// waitForSnapshot request holds for: once it passes, the wait answers with the
+// row as it stands rather than an error. The subscribed case leaves the
+// liveness re-read at its production cadence, so only the limit can wake it in
+// time. The metadata case pins that the row handed back is a full read, not
+// the metadata-only re-read the loop dispatches on.
+func TestWaitSnapshot_LimitReturnsTheRowAsItStands(t *testing.T) {
+	restore := snapshotWaitPollInterval
+	snapshotWaitPollInterval = 10 * time.Millisecond
+	t.Cleanup(func() { snapshotWaitPollInterval = restore })
+
+	tests := []struct {
+		name  string
+		store SessionStore[any]
+	}{
+		{"subscribed", newTestInMemStore[any]()},
+		{"metadata polled", &metadataPollStore{unsubscribableStore: unsubscribableStore[any]{SessionStore: newTestInMemStore[any]()}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			beat := time.Now()
+			putSnapshot(t, tt.store, &SessionSnapshot[any]{
+				SnapshotID: "running", SessionID: "s1", Status: SnapshotStatusPending, HeartbeatAt: &beat,
+				State: &SessionState[any]{Messages: []*ai.Message{ai.NewUserTextMessage("go")}},
+			})
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			const limit = 50 * time.Millisecond
+			start := time.Now()
+			got, err := waitSnapshot(ctx, tt.store, nil, "waitForSnapshot", "running", "", limit)
+			if err != nil {
+				t.Fatalf("waitSnapshot: %v", err)
+			}
+			if elapsed := time.Since(start); elapsed < limit {
+				t.Errorf("returned after %v, before the %v limit", elapsed, limit)
+			}
+			if got.Status != SnapshotStatusPending {
+				t.Errorf("status = %q, want %q", got.Status, SnapshotStatusPending)
+			}
+			if got.State == nil {
+				t.Error("state = nil, want the full row")
+			}
+		})
 	}
 }
 
 func TestWaitSnapshot_UnknownSnapshot(t *testing.T) {
 	store := newTestInMemStore[any]()
-	_, err := waitSnapshot(context.Background(), store, nil, "waitForSnapshot", "nope", "")
+	_, err := waitSnapshot(context.Background(), store, nil, "waitForSnapshot", "nope", "", 0)
 	if !errors.Is(err, ErrSnapshotNotFound) {
 		t.Fatalf("waitSnapshot error = %v, want ErrSnapshotNotFound", err)
 	}
@@ -445,7 +492,7 @@ func TestWaitSnapshot_TransientReadFailuresAreRetried(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	got, err := waitSnapshot[any](ctx, store, nil, "waitForSnapshot", "job", "")
+	got, err := waitSnapshot[any](ctx, store, nil, "waitForSnapshot", "job", "", 0)
 	if err != nil {
 		t.Fatalf("waitSnapshot: %v", err)
 	}
@@ -467,7 +514,7 @@ func TestWaitSnapshot_PersistentReadFailureSurfaces(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, err := waitSnapshot[any](ctx, store, nil, "waitForSnapshot", "job", "")
+	_, err := waitSnapshot[any](ctx, store, nil, "waitForSnapshot", "job", "", 0)
 	if !errors.Is(err, down) {
 		t.Fatalf("waitSnapshot error = %v, want the store's own error", err)
 	}
@@ -488,7 +535,7 @@ func TestWaitSnapshot_DeadEndReadFailureFailsFast(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, err := waitSnapshot[any](ctx, store, nil, "waitForSnapshot", "job", "")
+	_, err := waitSnapshot[any](ctx, store, nil, "waitForSnapshot", "job", "", 0)
 	if !errors.Is(err, ErrSnapshotNotFound) {
 		t.Fatalf("waitSnapshot error = %v, want ErrSnapshotNotFound", err)
 	}
@@ -513,7 +560,7 @@ func TestWaitSnapshot_FirstReadBlipIsRetried(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	got, err := waitSnapshot[any](ctx, store, nil, "waitForSnapshot", "job", "")
+	got, err := waitSnapshot[any](ctx, store, nil, "waitForSnapshot", "job", "", 0)
 	if err != nil {
 		t.Fatalf("waitSnapshot: %v", err)
 	}
@@ -573,7 +620,7 @@ func TestWaitSnapshot_NotificationAheadOfTheRowKeepsWaiting(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	start := time.Now()
-	got, err := waitSnapshot[any](ctx, store, nil, "waitForSnapshot", "job", "")
+	got, err := waitSnapshot[any](ctx, store, nil, "waitForSnapshot", "job", "", 0)
 	if err != nil {
 		t.Fatalf("waitSnapshot: %v", err)
 	}
@@ -593,7 +640,7 @@ func TestNewSnapshotActions_WaitAction(t *testing.T) {
 	putSnapshot(t, store, &SessionSnapshot[any]{
 		SnapshotID: "done", SessionID: "s1", Status: SnapshotStatusCompleted,
 	})
-	_, wait, _ := newSnapshotActions[any]("waiter", store, nil)
+	_, wait, _ := newSnapshotActions[any]("waiter", store, nil, 0)
 	if wait == nil {
 		t.Fatal("newSnapshotActions returned no wait action for a store-backed agent")
 	}
@@ -621,8 +668,29 @@ func TestNewSnapshotActions_WaitAction(t *testing.T) {
 		t.Errorf("status = %q, want %q", snap.Status, SnapshotStatusCompleted)
 	}
 
+	// One request holds for at most the limit and then answers with the row
+	// as it stands.
+	beat := time.Now()
+	putSnapshot(t, store, &SessionSnapshot[any]{
+		SnapshotID: "running", SessionID: "s1", Status: SnapshotStatusPending, HeartbeatAt: &beat,
+	})
+	_, capped, _ := newSnapshotActions[any]("capped", store, nil, 20*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	raw, err = capped.RunJSON(ctx, json.RawMessage(`{"snapshotId":"running"}`), nil)
+	if err != nil {
+		t.Fatalf("capped wait action: %v", err)
+	}
+	snap = SessionSnapshot[any]{}
+	if err := json.Unmarshal(raw, &snap); err != nil {
+		t.Fatalf("unmarshal snapshot: %v", err)
+	}
+	if snap.Status != SnapshotStatusPending {
+		t.Errorf("capped wait status = %q, want %q", snap.Status, SnapshotStatusPending)
+	}
+
 	// A client-managed agent keeps no snapshots, so it gets no wait action.
-	if _, clientWait, _ := newSnapshotActions[any]("clientManaged", nil, nil); clientWait != nil {
+	if _, clientWait, _ := newSnapshotActions[any]("clientManaged", nil, nil, 0); clientWait != nil {
 		t.Error("newSnapshotActions returned a wait action for a store-less agent")
 	}
 }

@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 )
 
 // --- AgentOption ---
@@ -30,7 +31,7 @@ import (
 //
 // Every AgentOption is also a [PromptAgentOption]: the shared options
 // ([WithSessionStore], [WithStateTransform], [WithStreamTransform],
-// [WithDescription]) configure all three constructors. The converse does not
+// [WithDescription], [WithMaxSnapshotWait]) configure all three constructors. The converse does not
 // hold. A prompt-source option such as [WithNamedPrompt] is a
 // [PromptAgentOption] but not an AgentOption, so passing it to [DefineAgent] or
 // [DefineCustomAgent] is a compile-time error.
@@ -112,6 +113,12 @@ type agentOptions[State any] struct {
 	transform       StateTransform[State]
 	streamTransform StreamTransform
 	description     string
+	// maxSnapshotWait bounds one waitForSnapshot companion request; see
+	// [WithMaxSnapshotWait]. Zero means the default.
+	maxSnapshotWait time.Duration
+	// maxSnapshotWaitSet records that WithMaxSnapshotWait was used, so a
+	// non-positive value is rejected rather than read as the default.
+	maxSnapshotWaitSet bool
 	// contextFunc decorates each invocation's context once before the turn
 	// loop runs. It has no public option: the registry-level constructors set
 	// it internally to seed the genkit instance (see genkitContextSeed in
@@ -143,6 +150,16 @@ func (o *agentOptions[State]) applyAgent(opts *agentOptions[State]) error {
 			return errors.New("cannot set description more than once (WithDescription)")
 		}
 		opts.description = o.description
+	}
+	if o.maxSnapshotWaitSet {
+		if opts.maxSnapshotWaitSet {
+			return errors.New("cannot set snapshot wait limit more than once (WithMaxSnapshotWait)")
+		}
+		if o.maxSnapshotWait <= 0 {
+			return fmt.Errorf("snapshot wait limit must be positive, got %v (WithMaxSnapshotWait)", o.maxSnapshotWait)
+		}
+		opts.maxSnapshotWait = o.maxSnapshotWait
+		opts.maxSnapshotWaitSet = true
 	}
 	if o.contextFunc != nil {
 		// Seeded internally by the registry-level constructors
@@ -221,6 +238,18 @@ func WithStreamTransform[State any](transform StreamTransform) AgentOption[State
 // action descriptor (read back via [Agent.Desc] and shown in the Dev UI).
 func WithDescription[State any](description string) AgentOption[State] {
 	return &agentOptions[State]{description: description}
+}
+
+// WithMaxSnapshotWait bounds how long one request to the agent's
+// waitForSnapshot companion action ([Agent.WaitForSnapshotAction]) holds. When
+// d passes, the action returns the snapshot as it stands, still pending or
+// aborting, and [AgentHandle.WaitForSnapshot] asks again, so its callers still
+// get the settled snapshot. Keep d under the shortest request or idle timeout
+// between clients and this server. d must be positive; without this option the
+// limit is 25 seconds. A wait in process ([Agent.WaitForSnapshot]) is not
+// limited.
+func WithMaxSnapshotWait[State any](d time.Duration) AgentOption[State] {
+	return &agentOptions[State]{maxSnapshotWait: d, maxSnapshotWaitSet: true}
 }
 
 // WithNamedPrompt points a [DefinePromptAgent] at the prompt registered under
