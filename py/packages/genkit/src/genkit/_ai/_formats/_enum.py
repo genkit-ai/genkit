@@ -16,7 +16,6 @@
 
 """Implementation of Enum output format."""
 
-import re
 from typing import Any
 
 from genkit._ai._formats._types import FormatDef, Formatter, FormatterConfig
@@ -85,13 +84,32 @@ class EnumFormat(FormatDef):
                 reason=RuntimeErrorReason.INVALID_SCHEMA,
             )
 
+        def parse_value(text: str, *, partial: bool = False) -> str:
+            value = text.strip()
+            enum_values = schema.get('enum') if schema else None
+            if isinstance(enum_values, list | tuple) and value in enum_values:
+                return value
+            if value and value[0] in ("'", '"'):
+                quote = value[0]
+                value = value[1:]
+                if value.endswith(quote) and isinstance(enum_values, list | tuple):
+                    unquoted = value[:-1].strip()
+                    if unquoted in enum_values:
+                        return unquoted
+                if partial and isinstance(enum_values, list | tuple):
+                    if any(isinstance(option, str) and option.startswith(value) for option in enum_values):
+                        return value.strip()
+                if value.endswith(quote):
+                    value = value[:-1]
+            return value.strip()
+
         def message_parser(msg: Message) -> str:
             """Parses a complete message, removing quotes."""
-            return re.sub(r'[\'"]', '', msg.text).strip()
+            return parse_value(msg.text)
 
         def chunk_parser(chunk: ModelResponseChunk) -> str:
             """Parses a chunk, removing quotes from accumulated text."""
-            return re.sub(r'[\'"]', '', chunk.accumulated_text).strip()
+            return parse_value(chunk.accumulated_text, partial=True)
 
         instructions = None
         if schema:

@@ -135,3 +135,46 @@ class TestEnumFormatInstructions:
         fmt = enum_fmt.handle(None)
 
         assert fmt.instructions is None
+
+
+@pytest.mark.parametrize('value', ["don't", 'say "yes"'])
+@pytest.mark.parametrize('quoted', [False, True])
+def test_message_preserves_quotes_inside_enum_value(value: str, quoted: bool) -> None:
+    """Removing surrounding quotes must not alter the enum value itself."""
+    fmt = EnumFormat().handle({'type': 'string', 'enum': [value]})
+    text = f'"{value}"' if quoted else value
+    assert fmt.parse_message(Message(role='model', content=[Part.from_text(text)])) == value
+
+
+def test_streaming_preserves_apostrophe_inside_enum_value() -> None:
+    """Accumulated enum text retains the apostrophe while dropping its wrapper."""
+    fmt = EnumFormat().handle({'type': 'string', 'enum': ["don't"]})
+    first = ModelResponseChunk(content=[Part.from_text('"don')])
+    second = ModelResponseChunk(content=[Part.from_text('\'t"')])
+    assert fmt.parse_chunk(chunk_for_stream(first, index=0, previous_chunks=[])) == 'don'
+    assert fmt.parse_chunk(chunk_for_stream(second, index=0, previous_chunks=[first])) == "don't"
+
+
+def test_trims_whitespace_inside_output_wrapper() -> None:
+    """The existing whitespace cleanup also applies inside output quotes."""
+    fmt = EnumFormat().handle({'type': 'string', 'enum': ['foo']})
+    assert fmt.parse_message(Message(role='model', content=[Part.from_text('" foo "')])) == 'foo'
+
+
+@pytest.mark.parametrize('quote', ["'", '"'])
+def test_streaming_prefers_complete_enum_over_longer_prefix(quote: str) -> None:
+    """A completed value is not mistaken for a prefix of another option."""
+    fmt = EnumFormat().handle({'type': 'string', 'enum': ['foo', f'foo{quote}bar']})
+    chunk = ModelResponseChunk(content=[Part.from_text(f'{quote}foo{quote}')])
+    assert fmt.parse_message(Message(role='model', content=chunk.content)) == 'foo'
+    assert fmt.parse_chunk(chunk_for_stream(chunk, index=0, previous_chunks=[])) == 'foo'
+
+
+@pytest.mark.parametrize('value', ['say "yes"', 'say "yes" please'])
+def test_streaming_preserves_inner_quote_before_wrapper_completes(value: str) -> None:
+    """A trailing inner quote is still data while the output wrapper is open."""
+    fmt = EnumFormat().handle({'type': 'string', 'enum': [value]})
+    first = ModelResponseChunk(content=[Part.from_text('"say "yes"')])
+    second = ModelResponseChunk(content=[Part.from_text(value[len('say "yes"') :] + '"')])
+    assert fmt.parse_chunk(chunk_for_stream(first, index=0, previous_chunks=[])) == 'say "yes"'
+    assert fmt.parse_chunk(chunk_for_stream(second, index=0, previous_chunks=[first])) == value
