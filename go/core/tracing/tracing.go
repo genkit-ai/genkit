@@ -267,7 +267,7 @@ func RunInNewSpan[I, O any](
 	// result, including when f (or a provider) panics. All backend-independent
 	// semantics (state, output, failure source) stay here so providers only
 	// encode.
-	chain := activeInstrumentations()
+	chain := spanChain(ctx)
 	spans := make([]Span, 0, len(chain))
 	res := &SpanResult{}
 	// Set once the span is open, so the deferred end log (which needs both)

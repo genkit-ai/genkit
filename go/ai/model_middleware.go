@@ -111,10 +111,16 @@ func addAutomaticTelemetry() ModelMiddleware {
 // generate loop, a hook that calls another model directly, a nested generate.
 // It wraps the telemetry middleware so the usage it reports carries the
 // character and media counts.
+//
+// It also sets the response's Request when the model left it unset, so the
+// field holds the request the model received for every model.
 func reportUsage() ModelMiddleware {
 	return func(fn ModelFunc) ModelFunc {
 		return func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 			resp, err := fn(ctx, req, cb)
+			if resp != nil && resp.Request == nil {
+				resp.Request = req
+			}
 			if resp != nil && resp.Usage != nil {
 				if sink := base.UsageSinkFromContext(ctx); sink != nil {
 					sink(resp.Usage)
@@ -122,6 +128,13 @@ func reportUsage() ModelMiddleware {
 			}
 			return resp, err
 		}
+	}
+}
+
+func init() {
+	base.FailedModelResponse = func(ctx context.Context, req any, err error) any {
+		r, _ := req.(*ModelRequest)
+		return failurePartial(ctx, nil, r, err)
 	}
 }
 

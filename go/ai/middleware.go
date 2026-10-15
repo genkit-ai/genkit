@@ -44,7 +44,10 @@ type Hooks struct {
 	// response to its request by Ref.
 	WrapGenerate func(ctx context.Context, params *GenerateParams, next GenerateNext) (*ModelResponse, error)
 	// WrapModel wraps each model API call. Retry, fallback, and caching
-	// middleware typically hook here.
+	// middleware typically hook here. It sees only the calls of the Generate
+	// it is attached to; to watch every model call under a context, nested
+	// generates and subagents included, add an Observer from the ai/exp
+	// package to the context with tracing.WithInstrumentation.
 	//
 	// Models record the request they ran on in the response's Request, and
 	// [ModelResponse.History] reads the conversation from it. A hook that

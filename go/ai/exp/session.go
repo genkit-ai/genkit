@@ -857,6 +857,29 @@ func SessionFromContext[State any](ctx context.Context) *Session[State] {
 	return session
 }
 
+// sessionUsageKey holds a getter for the usage of the server-managed session
+// a context runs under. The agent runtime installs it per invocation, and
+// clears it for a client-managed agent.
+var sessionUsageKey = base.NewContextKey[func() *ai.GenerationUsage]()
+
+// SessionUsageFromContext returns the usage that the agent session ctx runs
+// under has recorded so far, over all its turns and invocations, and false
+// when ctx runs under no agent session or under a client-managed one, whose
+// state, usage included, comes back from the caller. It does not require
+// knowing the session's State type, so middleware can enforce a limit on a
+// session's spend: read it once when a run starts, and add the calls the run
+// makes, which an [Observer] reports. The result is the caller's to keep.
+func SessionUsageFromContext(ctx context.Context) (*ai.GenerationUsage, bool) {
+	get := sessionUsageKey.FromContext(ctx)
+	if get == nil {
+		return nil, false
+	}
+	if u := get(); u != nil {
+		return ai.SumUsage(u), true
+	}
+	return &ai.GenerationUsage{}, true
+}
+
 // ArtifactStore is the State-agnostic view of a session's artifact collection.
 // Every [Session] satisfies it regardless of its State type, since artifact
 // operations do not touch custom state. Middleware and tools that work with

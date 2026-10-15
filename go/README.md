@@ -589,7 +589,7 @@ Also built in:
 
 Experimental, in `middleware/exp`: [`ContextCompression`](samples/basic-middleware/context-compression/main.go) keeps long conversations and tool loops inside a context budget.
 
-To build your own, implement [`ai.Middleware`](https://genkit.dev/docs/go/middleware/#building-your-own-custom-middleware) or wrap a function with `ai.MiddlewareFunc`.
+To build your own, implement [`ai.Middleware`](https://genkit.dev/docs/go/middleware/#building-your-own-custom-middleware) or wrap a function with `ai.MiddlewareFunc`. To watch every model call under a context, nested generates and subagents included, add the experimental [`aix.Observer`](ai/exp/observer.go) with `tracing.WithInstrumentation`.
 
 [Docs](https://genkit.dev/docs/go/middleware/) &middot; [Example](samples/basic-middleware/retry-fallback/main.go)
 
