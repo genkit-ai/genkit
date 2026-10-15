@@ -58,14 +58,9 @@ from genkit._core._model import (
     Part,
     ToolChoice,
 )
+from genkit._core._operation import Operation
 from genkit._core._tool import Tool
-from genkit._core._typing import (
-    Embedding,
-    FinishReason,
-    Media,
-    Operation,
-    Role,
-)
+from genkit._core._typing import Embedding, FinishReason, Media, Role
 
 __all__ = [
     'Genkit',

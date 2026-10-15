@@ -66,7 +66,7 @@ import genkit_google_genai._constants as const
 from genkit import ActionRunContext, GenkitError, ModelResponse, Operation
 from genkit.embedder import EmbedderRef, embedder, embedder_action_metadata
 from genkit.model import (
-    BackgroundAction,
+    BackgroundModel,
     ModelInfo,
     ModelRef,
     ModelRequest,
@@ -93,7 +93,7 @@ from genkit_google_genai._interactions._options import ClientOptions
 from genkit_google_genai._models._antigravity import AntigravityConfig, create_antigravity_action
 from genkit_google_genai._models._deep_research import (
     DeepResearchConfig,
-    create_deep_research_background_action,
+    create_deep_research_background_model,
     deep_research_model,
 )
 from genkit_google_genai._models._embedder import (
@@ -361,12 +361,12 @@ def _create_embedder_action(
     return embedder(full_name, _run, info=embed_info)
 
 
-def _create_veo_background_action(
+def _create_veo_background_model(
     name: str,
     client_getter: Callable[[], genai.Client],
     plugin_name: str,
     client_kwargs: dict[str, Any] | None = None,
-) -> BackgroundAction:
+) -> BackgroundModel:
     """Create the start/check action pair for a Veo video generation model.
 
     Veo runs as a background operation: callers start a generation and poll
@@ -382,7 +382,7 @@ def _create_veo_background_action(
             overrides the key or endpoint.
 
     Returns:
-        BackgroundAction pairing the start and check actions.
+        BackgroundModel pairing the start and check actions.
     """
     full_name = f'{plugin_name}/{name}'
 
@@ -474,7 +474,7 @@ class GoogleFamilyRefs:
         return family_embedder_ref(name, namespace=cls.name, plugin_class=cls.__name__, config=config, version=version)
 
 
-def _veo_background_action_metadata(name: str) -> ActionMetadata:
+def _veo_background_model_metadata(name: str) -> ActionMetadata:
     """Build list_actions metadata for a Veo model as a background model.
 
     The kind advertised here has to match what resolve() will actually hand
@@ -733,7 +733,7 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
         plugin_api_key = self._plugin_api_key()
         for name in list_known_deep_research_models():
             actions.extend(
-                create_deep_research_background_action(
+                create_deep_research_background_model(
                     name,
                     plugin_api_key=plugin_api_key,
                     client_options=client_options,
@@ -775,40 +775,40 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
         if action_type == ActionKind.MODEL:
             return self._resolve_model(name)
         if action_type == ActionKind.BACKGROUND_MODEL:
-            bg = self._resolve_background_action(name)
+            bg = self._resolve_background_model(name)
             return bg.start_action if bg else None
         if action_type == ActionKind.CHECK_OPERATION and name.endswith('/check'):
-            bg = self._resolve_background_action(name.removesuffix('/check'))
+            bg = self._resolve_background_model(name.removesuffix('/check'))
             return bg.check_action if bg else None
         if action_type == ActionKind.CANCEL_OPERATION and name.endswith('/cancel'):
-            bg = self._resolve_background_action(name.removesuffix('/cancel'))
+            bg = self._resolve_background_model(name.removesuffix('/cancel'))
             return bg.cancel_action if bg else None
         if action_type == ActionKind.EMBEDDER:
             return self._resolve_embedder(name)
         return None
 
-    def _resolve_background_action(self, name: str) -> BackgroundAction | None:
-        """Resolve a background action for Veo or Deep Research."""
+    def _resolve_background_model(self, name: str) -> BackgroundModel | None:
+        """Resolve a background model for Veo or Deep Research."""
         if is_veo_model(name):
             return self._resolve_veo_model(name)
         if is_deep_research_model_name(name):
-            return create_deep_research_background_action(
+            return create_deep_research_background_model(
                 deep_research_model(name),
                 plugin_api_key=self._plugin_api_key(),
                 client_options=self._interactions_client_options(),
             )
         return None
 
-    def _resolve_veo_model(self, name: str) -> BackgroundAction:
-        """Create a BackgroundAction for a Veo video generation model.
+    def _resolve_veo_model(self, name: str) -> BackgroundModel:
+        """Create a BackgroundModel for a Veo video generation model.
 
         Args:
             name: The model id without the ``googleai/`` prefix.
 
         Returns:
-            BackgroundAction for the Veo model.
+            BackgroundModel for the Veo model.
         """
-        return _create_veo_background_action(name, self._runtime_client, GOOGLEAI_PLUGIN_NAME, self._client_kwargs)
+        return _create_veo_background_model(name, self._runtime_client, GOOGLEAI_PLUGIN_NAME, self._client_kwargs)
 
     def _resolve_model(self, name: str) -> Action | None:
         """Create an Action object for a Google AI model.
@@ -909,7 +909,7 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
             )
 
         for name in genai_models.veo:
-            actions_list.append(_veo_background_action_metadata(googleai_name(name)))
+            actions_list.append(_veo_background_model_metadata(googleai_name(name)))
 
         for name in list_known_deep_research_models():
             actions_list.append(
@@ -1243,16 +1243,16 @@ class VertexAI(GoogleFamilyRefs, Plugin):
             return self._resolve_evaluator(name)
         return None
 
-    def _resolve_veo_model(self, name: str) -> BackgroundAction:
-        """Create a BackgroundAction for a Veo video generation model.
+    def _resolve_veo_model(self, name: str) -> BackgroundModel:
+        """Create a BackgroundModel for a Veo video generation model.
 
         Args:
             name: The model id without the ``vertexai/`` prefix.
 
         Returns:
-            BackgroundAction for the Veo model.
+            BackgroundModel for the Veo model.
         """
-        return _create_veo_background_action(name, self._runtime_client, VERTEXAI_PLUGIN_NAME, self._client_kwargs)
+        return _create_veo_background_model(name, self._runtime_client, VERTEXAI_PLUGIN_NAME, self._client_kwargs)
 
     def _resolve_evaluator(self, name: str) -> Action | None:
         """Create an Action object for a Vertex AI evaluator.
@@ -1396,7 +1396,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
             )
 
         for name in genai_models.veo:
-            actions_list.append(_veo_background_action_metadata(vertexai_name(name)))
+            actions_list.append(_veo_background_model_metadata(vertexai_name(name)))
 
         for name in VERTEX_KNOWN_VIRTUAL_TRY_ON:
             actions_list.append(

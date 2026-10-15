@@ -21,7 +21,8 @@ from genkit import FinishReason, Genkit, Message, ModelResponse, Part
 from genkit._core._action import ActionKind, ActionRunContext
 from genkit._core._error import GenkitError
 from genkit._core._model import ModelRef, ModelRequest
-from genkit._core._typing import GenerationCommonConfig, Operation, Role
+from genkit._core._operation import Operation
+from genkit._core._typing import GenerationCommonConfig, Role
 from genkit.model import ModelConfig, model_ref
 
 KEY = 'sk-tenant'

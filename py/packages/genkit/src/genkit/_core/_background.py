@@ -23,18 +23,16 @@ from collections.abc import Awaitable, Callable, Mapping
 from functools import wraps
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from genkit._core._action import Action, ActionKind, ActionRunContext, get_current_context
 from genkit._core._config_check import check_config_json_schema, check_request_config
-from genkit._core._error import GenkitError, RuntimeErrorReason
+from genkit._core._error import GenkitError, RuntimeErrorReason, StatusName
 from genkit._core._model import ModelRequest, ModelResponse
+from genkit._core._operation import Operation
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
-from genkit._core._typing import (
-    ModelInfo,
-    Operation,
-)
+from genkit._core._typing import ModelInfo
 
 
 def _make_action_key(action_type: ActionKind | str, name: str) -> str:
@@ -55,6 +53,31 @@ def stamp_operation_action(*, operation: Operation, name: str) -> None:
     if operation.action:
         return
     operation.action = _make_action_key(ActionKind.BACKGROUND_MODEL, name)
+
+
+def as_model_operation(operation: Operation, *, name: str, status: StatusName) -> Operation[ModelResponse]:
+    """The same handle as an ``Operation[ModelResponse]``, with ``output`` validated.
+
+    A model fn may return a plain ``Operation`` or set ``op.output = {...}``,
+    which skips validation; both are converted here. ``status`` says whose
+    mistake a bad output is: INTERNAL for what a model fn returned,
+    INVALID_ARGUMENT for a handle the caller passed in.
+
+    Raises:
+        GenkitError: ``status`` when ``output`` isn't a ModelResponse.
+    """
+    output: object = operation.output
+    # Assignment skips validation, so an Operation[ModelResponse] can still hold a dict.
+    if type(operation) is Operation[ModelResponse] and (output is None or isinstance(output, ModelResponse)):
+        return operation
+    fields = {field: getattr(operation, field) for field in operation.model_fields_set}
+    try:
+        return Operation[ModelResponse](**fields)
+    except ValidationError as e:
+        raise GenkitError(
+            status=status,
+            message=f"'{name}': Operation.output must be a ModelResponse, got {type(output).__name__}.",
+        ) from e
 
 
 def _operation_action(
@@ -91,9 +114,13 @@ def _operation_action(
             # Same check as a regular model action: the whole config, after
             # every middleware, before the provider starts an operation.
             check_request_config(input, schema=config_schema, model=action.name.removesuffix(suffix))
+        if isinstance(input, Operation):
+            # check/cancel: the caller's handle, often reloaded from storage.
+            input = as_model_operation(input, name=action.name, status='INVALID_ARGUMENT')  # noqa: A001
         op = await action.params.call(fn, input, ctx)
         if isinstance(op, Operation):
             stamp_operation_action(operation=op, name=action.name.removesuffix(suffix))
+            op = as_model_operation(op, name=action.name, status='INTERNAL')
         return op
 
     action = Action(
@@ -108,9 +135,10 @@ def _operation_action(
     return action
 
 
+# A fn may return a plain Operation; its output is validated as a ModelResponse.
 StartModelOpFn = Callable[[ModelRequest, ActionRunContext], Awaitable[Operation]]
-CheckModelOpFn = Callable[[Operation, ActionRunContext], Awaitable[Operation]]
-CancelModelOpFn = Callable[[Operation, ActionRunContext], Awaitable[Operation]]
+CheckModelOpFn = Callable[[Operation[ModelResponse], ActionRunContext], Awaitable[Operation]]
+CancelModelOpFn = Callable[[Operation[ModelResponse], ActionRunContext], Awaitable[Operation]]
 
 
 def operation_context(
@@ -137,18 +165,13 @@ def operation_context(
     return folded
 
 
-class BackgroundAction:
+class BackgroundModel:
     """A handle over a background model's start, check and cancel actions.
 
     Built on registered actions but isn't itself an ``Action``: each of
     start, check and cancel has its own registry key.
-    ``start`` returns an Operation; pass it to ``check`` until it's done.
-
-    Not generic: start, check and cancel always return an ``Operation``, and
-    ``Operation.output`` is untyped, so a type parameter would carry nothing.
-    If ``Operation`` gets a typed output, add one with a default
-    (``TypeVar('T', default=ModelResponse)``) so a bare ``BackgroundAction``
-    still type-checks.
+    ``start`` returns an ``Operation[ModelResponse]``; pass it to ``check`` until it's done.
+    A finished job's ``output`` is a ``ModelResponse``.
 
     Attributes:
         __action: Action metadata.
@@ -164,7 +187,7 @@ class BackgroundAction:
         check_action: Action,
         cancel_action: Action | None = None,
     ) -> None:
-        """Initialize a BackgroundAction.
+        """Initialize a BackgroundModel.
 
         Args:
             start_action: Action to start the operation.
@@ -185,12 +208,12 @@ class BackgroundAction:
 
     @property
     def name(self) -> str:
-        """The name of the background action."""
+        """The name of the background model."""
         return self.start_action.name
 
     @property
     def supports_cancel(self) -> bool:
-        """Whether this background action supports cancellation."""
+        """Whether this background model supports cancellation."""
         return self.cancel_action is not None
 
     @property
@@ -210,7 +233,7 @@ class BackgroundAction:
         input: ModelRequest | None = None,
         *,
         context: dict[str, Any] | None = None,
-    ) -> Operation:
+    ) -> Operation[ModelResponse]:
         """Start a background operation.
 
         Args:
@@ -228,22 +251,23 @@ class BackgroundAction:
 
     async def check(
         self,
-        operation: Operation,
+        operation: Operation | Mapping[str, Any],
         *,
         context: dict[str, Any] | None = None,
-    ) -> Operation:
+    ) -> Operation[ModelResponse]:
         """Check the status of a background operation.
 
         Args:
-            operation: The operation to check.
+            operation: The operation to check, or the dict a stored one
+                dumped to.
             context: Optional run context (secrets, folded client config).
 
         Returns:
             Updated Operation with current status.
 
         Raises:
-            GenkitError: INVALID_ARGUMENT if ``operation`` is not a live
-                ``Operation`` (e.g. a dump or a ``ModelResponse``).
+            GenkitError: INVALID_ARGUMENT if ``operation`` is not an
+                ``Operation`` or a dict that validates as one.
         """
         operation = require_operation(value=operation)
         result = await self.check_action.run(operation, context=context)
@@ -251,14 +275,15 @@ class BackgroundAction:
 
     async def cancel(
         self,
-        operation: Operation,
+        operation: Operation | Mapping[str, Any],
         *,
         context: dict[str, Any] | None = None,
-    ) -> Operation:
+    ) -> Operation[ModelResponse]:
         """Cancel a background operation.
 
         Args:
-            operation: The operation to cancel.
+            operation: The operation to cancel, or the dict a stored one
+                dumped to.
             context: Optional run context (secrets, folded client config).
 
         Returns:
@@ -266,8 +291,8 @@ class BackgroundAction:
 
         Raises:
             GenkitError: UNIMPLEMENTED if this action does not implement
-                cancel, INVALID_ARGUMENT if ``operation`` is not a live
-                ``Operation``.
+                cancel, INVALID_ARGUMENT if ``operation`` is not an
+                ``Operation`` or a dict that validates as one.
         """
         operation = require_operation(value=operation)
         # Raising here is deliberate: returning the operation unchanged would
@@ -275,7 +300,7 @@ class BackgroundAction:
         if self.cancel_action is None:
             raise GenkitError(
                 status='UNIMPLEMENTED',
-                message=f'Background action {operation.action} does not support cancellation.',
+                message=f'Background model {operation.action} does not support cancellation.',
                 reason=RuntimeErrorReason.UNSUPPORTED_BY_MODEL,
             )
         result = await self.cancel_action.run(operation, context=context)
@@ -283,7 +308,7 @@ class BackgroundAction:
 
 
 class MissingOperationError(GenkitError):
-    """A background action lost the operation handle it created."""
+    """A background model lost the operation handle it created."""
 
 
 def missing_operation_error(*, name: str) -> MissingOperationError:
@@ -294,10 +319,10 @@ def missing_operation_error(*, name: str) -> MissingOperationError:
     )
 
 
-def _ensure_operation(*, response: object, name: str) -> Operation:
+def _ensure_operation(*, response: object, name: str) -> Operation[ModelResponse]:
     """A start/check/cancel fn returns an Operation, not a dict."""
     if isinstance(response, Operation):
-        return response
+        return as_model_operation(response, name=name, status='INTERNAL')
     raise missing_operation_error(name=name)
 
 
@@ -311,7 +336,7 @@ def background_model(
     config_schema: type[BaseModel] | dict[str, Any] | None = None,
     metadata: dict[str, Any] | None = None,
     description: str | None = None,
-) -> BackgroundAction:
+) -> BackgroundModel:
     """Build a background model without registering it.
 
     Plugin ``init`` / ``resolve`` return this. ``define_background_model``
@@ -375,7 +400,7 @@ def background_model(
             description=f'Cancel operation for {label}',
         )
 
-    return BackgroundAction(
+    return BackgroundModel(
         start_action=start_action,
         check_action=check_action,
         cancel_action=cancel_action,
@@ -393,7 +418,7 @@ def define_background_model(
     config_schema: type[BaseModel] | dict[str, Any] | None = None,
     metadata: dict[str, Any] | None = None,
     description: str | None = None,
-) -> BackgroundAction:
+) -> BackgroundModel:
     """Register a background model for long-running AI operations."""
     action = background_model(
         name,
@@ -410,11 +435,11 @@ def define_background_model(
     return action
 
 
-async def lookup_background_action(
+async def lookup_background_model(
     registry: Registry,
     key: str,
-) -> BackgroundAction | None:
-    """Look up a background action by its action key.
+) -> BackgroundModel | None:
+    """Look up a background model by its action key.
 
     Matches JS lookupBackgroundAction from js/core/src/background-action.ts.
 
@@ -425,7 +450,7 @@ async def lookup_background_action(
         key: The action key (e.g., '/background-model/video-gen').
 
     Returns:
-        The BackgroundAction if found, None otherwise.
+        The BackgroundModel if found, None otherwise.
     """
     # Look up the start action
     start_action = await registry.resolve_action_by_key(key)
@@ -449,15 +474,33 @@ async def lookup_background_action(
     cancel_key = f'/cancel-operation/{action_name}/cancel'
     cancel_action = await registry.resolve_action_by_key(cancel_key)
 
-    return BackgroundAction(
+    return BackgroundModel(
         start_action=start_action,
         check_action=check_action,
         cancel_action=cancel_action,
     )
 
 
+# Keys a ModelResponse dump carries. An Operation dump always has 'id'.
+_MODEL_RESPONSE_KEYS = frozenset({'message', 'finishReason', 'finish_reason', 'operation'})
+
+
+def _first_validation_error(error: ValidationError) -> str:
+    """One line naming the first bad field, e.g. ``Done: Extra inputs are not permitted``."""
+    errors = error.errors()
+    first = errors[0]
+    loc = '.'.join(str(part) for part in first['loc']) or '<root>'
+    more = f' (+{len(errors) - 1} more)' if len(errors) > 1 else ''
+    return f'{loc}: {first["msg"]}{more}'
+
+
 def require_operation(*, value: object) -> Operation:
-    """A poll handle is an Operation. A dump or generate() box is not."""
+    """A poll handle: a live Operation, or the dict a stored one dumped to.
+
+    A dict is validated as strictly as the check/cancel action input
+    (``extra='forbid'``), so a typo'd key like ``Done`` fails here with the
+    field named instead of loading as ``done=None``.
+    """
     if isinstance(value, Operation):
         return value
     if isinstance(value, ModelResponse):
@@ -467,11 +510,20 @@ def require_operation(*, value: object) -> Operation:
             reason=RuntimeErrorReason.INVALID_INPUT,
         )
     if isinstance(value, Mapping):
-        raise GenkitError(
-            status='INVALID_ARGUMENT',
-            message='got a dump; pass Operation.model_validate(...)',
-            reason=RuntimeErrorReason.INVALID_INPUT,
-        )
+        if 'id' not in value and not _MODEL_RESPONSE_KEYS.isdisjoint(value):
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message='got a ModelResponse dump; pass response.operation',
+                reason=RuntimeErrorReason.INVALID_INPUT,
+            )
+        try:
+            return Operation.model_validate(dict(value))
+        except ValidationError as e:
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=f'invalid Operation: {_first_validation_error(e)}',
+                reason=RuntimeErrorReason.INVALID_INPUT,
+            ) from e
     raise GenkitError(
         status='INVALID_ARGUMENT',
         message=f'got {type(value).__name__}, expected Operation',
@@ -479,11 +531,11 @@ def require_operation(*, value: object) -> Operation:
     )
 
 
-async def resolve_operation_action(
+async def resolve_operation_model(
     registry: Registry,
     operation: Operation,
-) -> BackgroundAction:
-    """Turn a poll handle into the background action that owns it."""
+) -> BackgroundModel:
+    """Turn a poll handle into the background model that owns it."""
     operation = require_operation(value=operation)
     if not operation.action:
         raise GenkitError(
@@ -493,36 +545,36 @@ async def resolve_operation_action(
         )
 
     try:
-        background_action = await lookup_background_action(registry, operation.action)
+        bg_model = await lookup_background_model(registry, operation.action)
     except ValueError as e:
         # operation.action is caller data (often reloaded from storage), so a
         # mangled key is the caller's bad argument, not an internal failure.
         raise GenkitError(
             status='INVALID_ARGUMENT',
-            message=f'Failed to resolve background action from original request: {operation.action}',
+            message=f'Failed to resolve background model from original request: {operation.action}',
             reason=RuntimeErrorReason.ACTION_NOT_FOUND,
         ) from e
-    if background_action is None:
+    if bg_model is None:
         raise GenkitError(
             status='INVALID_ARGUMENT',
-            message=f'Failed to resolve background action from original request: {operation.action}',
+            message=f'Failed to resolve background model from original request: {operation.action}',
             reason=RuntimeErrorReason.ACTION_NOT_FOUND,
         )
-    return background_action
+    return bg_model
 
 
 async def check_operation(
     registry: Registry,
-    operation: Operation,
+    operation: Operation | Mapping[str, Any],
     *,
     context: dict[str, Any] | None = None,
     config: Mapping[str, Any] | None = None,
-) -> Operation:
+) -> Operation[ModelResponse]:
     """Check the status of a background operation.
 
     Args:
         registry: The registry to look up actions from.
-        operation: The poll handle.
+        operation: The poll handle, or the dict a stored one dumped to.
         context: Optional run context. Per-request keys go in
             ``context['secrets']``.
         config: Optional client knobs (``base_url``, ``location``). Folded
@@ -532,11 +584,13 @@ async def check_operation(
         Updated Operation with current status.
 
     Raises:
-        GenkitError: If the handle is missing action, or the action is
-            not found.
+        GenkitError: If the handle is not an Operation or a dict that
+            validates as one, is missing action, or the action is not found.
     """
-    background_action = await resolve_operation_action(registry, operation)
-    return await background_action.check(
+    # Validate a stored dict once; the action only ever sees an Operation.
+    operation = require_operation(value=operation)
+    bg_model = await resolve_operation_model(registry, operation)
+    return await bg_model.check(
         operation,
         context=operation_context(context=context, config=config),
     )
@@ -544,16 +598,16 @@ async def check_operation(
 
 async def cancel_operation(
     registry: Registry,
-    operation: Operation,
+    operation: Operation | Mapping[str, Any],
     *,
     context: dict[str, Any] | None = None,
     config: Mapping[str, Any] | None = None,
-) -> Operation:
+) -> Operation[ModelResponse]:
     """Cancel a background operation.
 
     Args:
         registry: The registry to look up actions from.
-        operation: The poll handle.
+        operation: The poll handle, or the dict a stored one dumped to.
         context: Optional run context. Per-request keys go in
             ``context['secrets']``.
         config: Optional client knobs (``base_url``, ``location``). Folded
@@ -563,12 +617,14 @@ async def cancel_operation(
         Updated Operation reflecting the cancel attempt.
 
     Raises:
-        GenkitError: If the handle is missing action, the action is not
-            found, or cancel is not implemented (UNIMPLEMENTED, raised by
-            ``BackgroundAction.cancel``).
+        GenkitError: If the handle is not an Operation or a dict that
+            validates as one, is missing action, the action is not found,
+            or cancel is not implemented (UNIMPLEMENTED, raised by
+            ``BackgroundModel.cancel``).
     """
-    background_action = await resolve_operation_action(registry, operation)
-    return await background_action.cancel(
+    operation = require_operation(value=operation)
+    bg_model = await resolve_operation_model(registry, operation)
+    return await bg_model.cancel(
         operation,
         context=operation_context(context=context, config=config),
     )

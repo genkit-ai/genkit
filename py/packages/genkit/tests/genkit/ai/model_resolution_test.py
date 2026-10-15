@@ -34,8 +34,9 @@ from genkit._ai._model import (
 from genkit._core._action import ActionRunContext
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import EmbedRequest, Message, ModelRequest, ModelResponse, Part
+from genkit._core._operation import Operation
 from genkit._core._registry import Registry
-from genkit._core._typing import EmbedResponse, Operation, Role
+from genkit._core._typing import EmbedResponse, Role
 from genkit.model import model_ref
 
 

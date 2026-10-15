@@ -95,6 +95,7 @@ from genkit._core._model import (
     reject_config_api_key,
     reject_unanswered_interrupts,
 )
+from genkit._core._operation import Operation
 from genkit._core._registry import Registry
 from genkit._core._schema import check_output_schema
 from genkit._core._telemetry._instrumentation import SpanContext, run_in_new_span, set_span_state
@@ -103,7 +104,6 @@ from genkit._core._typing import (
     FinishReason,
     GenerateActionOutputConfig,
     MiddlewareRef,
-    Operation,
     OperationError,
     Role,
     ToolDefinition,

@@ -34,7 +34,8 @@ from openai.types.chat import ChatCompletion, ChatCompletionChunk
 from pydantic import BaseModel
 
 from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
-from genkit._core._typing import GenerationUsage, Operation
+from genkit._core._operation import Operation
+from genkit._core._typing import GenerationUsage
 from genkit.model import ModelConfig, ModelRequest, OutputConfig, Supports, ToolRequest
 
 

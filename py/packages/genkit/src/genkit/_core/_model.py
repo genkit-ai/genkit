@@ -47,6 +47,7 @@ from genkit._core._base import GenkitModel, dump_keeping_unknown
 from genkit._core._error import GenkitError, GenkitRuntimeError, RuntimeErrorReason
 from genkit._core._extract_json import extract_json, extract_partial_json
 from genkit._core._logger import get_logger
+from genkit._core._operation import Operation
 from genkit._core._partial import construct_partial
 from genkit._core._schema import parse_schema
 from genkit._core._typing import (
@@ -62,7 +63,6 @@ from genkit._core._typing import (
     MessageData,
     MiddlewareRef,
     ModelInfo,
-    Operation,
     OutputConfig as OutputConfigData,
     PartData,
     Resource,

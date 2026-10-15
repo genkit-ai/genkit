@@ -49,14 +49,9 @@ from genkit._core._model import (
     ModelResponse,
     ModelResponseChunk,
 )
+from genkit._core._operation import Operation
 from genkit._core._plugin import Plugin, resolved_action_name
-from genkit._core._typing import (
-    ActionMetadata,
-    EmbedResponse,
-    EvalResponse,
-    EvaluatorRequest,
-    Operation,
-)
+from genkit._core._typing import ActionMetadata, EmbedResponse, EvalResponse, EvaluatorRequest
 
 logger = get_logger(__name__)
 

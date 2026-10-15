@@ -26,12 +26,12 @@ from genkit._ai._formats._types import FormatDef, Formatter, FormatterConfig
 from genkit._ai._model import text_from_message
 from genkit._core._action import ActionKind, ActionRunContext
 from genkit._core._model import ModelRequest, OutputConfig
+from genkit._core._operation import Operation
 from genkit._core._typing import (
     EvaluatorRequest,
     EvaluatorResponse,
     FinishReason,
     ModelInfo,
-    Operation,
     Role,
     Score,
     Supports,

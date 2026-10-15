@@ -67,7 +67,7 @@
 
 ## genkit.model
 
-::: genkit.model.BackgroundAction
+::: genkit.model.BackgroundModel
 
 ::: genkit.model.GenerateActionOptions
 

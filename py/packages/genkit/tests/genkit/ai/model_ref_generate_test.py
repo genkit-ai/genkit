@@ -17,7 +17,8 @@ from genkit._ai._prompt import GenerateCall, to_generate_options
 from genkit._core._action import ActionRunContext
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import ModelRequest, ModelResponse
-from genkit._core._typing import Operation, Role
+from genkit._core._operation import Operation
+from genkit._core._typing import Role
 from genkit.exp import Genkit as ExpGenkit
 from genkit.model import model, model_ref
 from genkit.testing import EchoModel, define_echo_model

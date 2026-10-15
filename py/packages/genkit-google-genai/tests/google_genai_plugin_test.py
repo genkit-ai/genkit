@@ -1115,7 +1115,7 @@ async def test_list_genai_models_async_does_not_block_event_loop() -> None:
 @patch('genkit_google_genai._google.genai.client.Client')
 @patch('genkit_google_genai._google._list_genai_models')
 @pytest.mark.asyncio
-async def test_veo_start_stamps_background_action_key(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
+async def test_veo_start_stamps_operation_action_key(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
     """Start and check stamp ``/background-model/{name}`` so a later check can resolve."""
     mock_list_models.return_value = GenaiModels()
     plugin = VertexAI(project='test-project')

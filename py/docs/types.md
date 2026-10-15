@@ -66,7 +66,7 @@ Types exported from genkit, genkit.model, genkit.embedder, genkit.plugin_api, ge
 
 ## genkit.model
 
-::: genkit.model.BackgroundAction
+::: genkit.model.BackgroundModel
 
 ::: genkit.model.GenerateActionOptions
 

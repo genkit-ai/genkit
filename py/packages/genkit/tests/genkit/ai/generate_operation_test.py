@@ -53,12 +53,8 @@ from genkit import Document, Genkit, Message, ModelResponse, Part
 from genkit._core._action import ActionRunContext
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import ModelRequest
-from genkit._core._typing import (
-    ModelInfo,
-    Operation,
-    Role,
-    Supports,
-)
+from genkit._core._operation import Operation
+from genkit._core._typing import ModelInfo, Role, Supports
 
 
 @pytest.fixture
