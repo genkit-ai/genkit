@@ -16,6 +16,7 @@
 
 """Tests for Veo video generation model helpers and lifecycle."""
 
+import base64
 from typing import Any, get_args
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -49,6 +50,23 @@ def _sdk_op(
     op.done = done
     op.error = error
     return op
+
+
+_NON_UTF8_VIDEO = b'\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00\xff\xfe\x80'
+
+
+def _inline_bytes_op() -> genai_types.GenerateVideosOperation:
+    return _sdk_op(
+        name='operations/inline-bytes',
+        done=True,
+        response=genai_types.GenerateVideosResponse(
+            generated_videos=[
+                genai_types.GeneratedVideo(
+                    video=genai_types.Video(video_bytes=_NON_UTF8_VIDEO, mime_type='video/mp4'),
+                ),
+            ],
+        ),
+    )
 
 
 def _media(output: object) -> list:
@@ -219,7 +237,7 @@ class TestFromVeoOperation:
         assert media.content_type == 'video/webm'
 
     def test_finished_operation_attaches_sdk_response_to_raw_field(self) -> None:
-        """The complete SDK response is attached to op.output.raw."""
+        """The SDK response is attached to op.output.raw."""
         sdk_response = genai_types.GenerateVideosResponse(
             generated_videos=[
                 genai_types.GeneratedVideo(video=genai_types.Video(uri='https://example.com/v1.mp4')),
@@ -232,6 +250,19 @@ class TestFromVeoOperation:
         assert isinstance(op.output, ModelResponse)
         assert op.output.raw is not None
         assert 'generatedVideos' in op.output.raw or 'generated_videos' in op.output.raw
+
+    def test_inline_video_bytes_stay_out_of_raw(self) -> None:
+        """Raw keeps the rest of the video but not its inline bytes."""
+        op = _from_veo_operation(api_op=_inline_bytes_op())
+        assert isinstance(op.output, ModelResponse)
+        assert op.output.raw == {'generatedVideos': [{'video': {'mimeType': 'video/mp4'}}]}
+
+    def test_inline_video_bytes_survive_json_round_trip_as_data_url(self) -> None:
+        """The media part still carries the bytes as a data URL after a JSON round trip."""
+        op = _from_veo_operation(api_op=_inline_bytes_op())
+        restored = Operation.model_validate_json(op.model_dump_json())
+        media = _media(ModelResponse.model_validate(restored.output))[0]
+        assert media.url == f'data:video/mp4;base64,{base64.b64encode(_NON_UTF8_VIDEO).decode()}'
 
     def test_empty_video_bytes_surfaces_empty_media_error(self) -> None:
         """An operation completing with empty bytes (b'') and no URI surfaces an explicit error."""
