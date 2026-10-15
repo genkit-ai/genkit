@@ -298,6 +298,8 @@ export function toOpenAIMessages(
         if (toolCalls.length > 0) {
           apiMessages.push({
             role: role,
+            // Preserve any text the model emitted alongside its tool calls.
+            ...(msg.text ? { content: msg.text } : {}),
             tool_calls: toolCalls,
           });
         } else {
@@ -393,25 +395,28 @@ export function fromOpenAIChoice(
   // Build content array based on what's present in the message
   let content: Part[] = [];
 
-  if (toolRequestParts && toolRequestParts.length > 0) {
-    content = toolRequestParts as ToolRequestPart[];
-  } else {
-    // Handle reasoning_content if present
-    if (
-      'reasoning_content' in choice.message &&
-      choice.message.reasoning_content
-    ) {
-      content.push({ reasoning: choice.message.reasoning_content as string });
-    }
+  const hasToolRequests = !!toolRequestParts && toolRequestParts.length > 0;
 
-    // Handle regular content if present
-    if (choice.message.content) {
-      content.push(
-        jsonMode
-          ? { data: JSON.parse(choice.message.content!) }
-          : { text: choice.message.content! }
-      );
-    }
+  // Handle reasoning_content if present
+  if (
+    'reasoning_content' in choice.message &&
+    choice.message.reasoning_content
+  ) {
+    content.push({ reasoning: choice.message.reasoning_content as string });
+  }
+
+  // Handle regular content if present. Text can accompany tool calls, in which
+  // case it is plain text rather than JSON output.
+  if (choice.message.content) {
+    content.push(
+      jsonMode && !hasToolRequests
+        ? { data: JSON.parse(choice.message.content!) }
+        : { text: choice.message.content! }
+    );
+  }
+
+  if (hasToolRequests) {
+    content.push(...(toolRequestParts as ToolRequestPart[]));
   }
 
   return {
@@ -520,22 +525,25 @@ export function fromOpenAIChunkChoice(
   // Build content array based on what's present in the delta
   let content: Part[] = [];
 
-  if (toolRequestParts && toolRequestParts.length > 0) {
-    content = toolRequestParts as ToolRequestPart[];
-  } else {
-    // Handle reasoning_content if present
-    if ('reasoning_content' in choice.delta && choice.delta.reasoning_content) {
-      content.push({ reasoning: choice.delta.reasoning_content as string });
-    }
+  const hasToolRequests = !!toolRequestParts && toolRequestParts.length > 0;
 
-    // Handle regular content if present
-    if (choice.delta.content) {
-      content.push(
-        jsonMode
-          ? { data: JSON.parse(choice.delta.content!) }
-          : { text: choice.delta.content! }
-      );
-    }
+  // Handle reasoning_content if present
+  if ('reasoning_content' in choice.delta && choice.delta.reasoning_content) {
+    content.push({ reasoning: choice.delta.reasoning_content as string });
+  }
+
+  // Handle regular content if present. Text can accompany tool calls, in which
+  // case it is plain text rather than JSON output.
+  if (choice.delta.content) {
+    content.push(
+      jsonMode && !hasToolRequests
+        ? { data: JSON.parse(choice.delta.content!) }
+        : { text: choice.delta.content! }
+    );
+  }
+
+  if (hasToolRequests) {
+    content.push(...(toolRequestParts as ToolRequestPart[]));
   }
 
   return {
