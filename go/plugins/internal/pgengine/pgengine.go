@@ -46,7 +46,8 @@ func PoolConfig(user, password, database string, iam bool) (*pgxpool.Config, err
 	config.ConnConfig.User = user
 	config.ConnConfig.Database = database
 	// Set the password even when it is empty: ParseConfig fills it from
-	// PGPASSWORD or a .pgpass file.
+	// PGPASSWORD or a .pgpass file. Other PG* environment variables, such as
+	// PGAPPNAME and PGOPTIONS, still apply, as they do for libpq.
 	config.ConnConfig.Password = password
 	if iam {
 		config.ConnConfig.Password = ""
