@@ -19,6 +19,7 @@ from genkit_mcp._tools import (
     mcp_tool_name,
     mcp_tool_to_action,
     mcp_tools_to_actions,
+    mcp_tools_to_handles,
     validate_provider_name,
     validate_tool_prefix,
 )
@@ -346,6 +347,26 @@ def test_mcp_tools_to_actions_maps_a_listing_in_order() -> None:
 
     assert [action.name for action in actions] == ['catalog_lookup', 'catalog_look_up']
     assert [server_tool_of(action) for action in actions] == ['lookup', 'look.up']
+
+
+@pytest.mark.asyncio
+async def test_mcp_tools_to_handles_wraps_each_action_with_the_server_output_schema() -> None:
+    """A handle carries the Genkit name, the server's output schema, and runs the tool."""
+    output_schema: dict[str, Any] = {'type': 'object', 'properties': {'hits': {'type': 'integer'}}}
+    tools = [
+        Tool(name='lookup', inputSchema={'type': 'object'}, outputSchema=output_schema),
+        Tool(name='look.up', inputSchema={'type': 'object'}),
+    ]
+
+    async def call(name: str, arguments: dict[str, Any], meta: dict[str, Any] | None) -> CallToolResult:
+        return CallToolResult(content=[text(name)])
+
+    handles = mcp_tools_to_handles(tools, 'catalog', call)
+
+    assert [handle.name for handle in handles] == ['catalog_lookup', 'catalog_look_up']
+    assert [handle.output_schema for handle in handles] == [output_schema, None]
+    assert [server_tool_of(handle.action()) for handle in handles] == ['lookup', 'look.up']
+    assert (await handles[1]({})).output == 'look.up'
 
 
 def test_mcp_tools_to_actions_refuses_a_listing_whose_sanitised_names_collide() -> None:

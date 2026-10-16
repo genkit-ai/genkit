@@ -26,12 +26,18 @@ from typing import Any
 
 from mcp.types import CallToolResult
 
-from genkit import DynamicActionProvider, Genkit
+from genkit import DynamicActionProvider, Genkit, Tool
 from genkit.plugin_api import Action
 from genkit_mcp._config import McpStdioServerConfig
 from genkit_mcp._connection import DEFAULT_REQUEST_TIMEOUT_MILLIS, McpConnection
 from genkit_mcp._errors import _ConnectionClosedError
-from genkit_mcp._tools import mcp_tool_name, mcp_tools_to_actions, validate_provider_name, validate_tool_prefix
+from genkit_mcp._tools import (
+    mcp_tool_name,
+    mcp_tools_to_actions,
+    mcp_tools_to_handles,
+    validate_provider_name,
+    validate_tool_prefix,
+)
 
 
 class McpClient:
@@ -116,18 +122,20 @@ class McpClient:
         """
         return mcp_tool_name(self._name, tool)
 
-    async def get_active_tools(self) -> list[Action[Any, Any]]:
-        """List the tools this server currently offers, as Genkit actions.
+    async def get_active_tools(self) -> list[Tool]:
+        """List the tools this server currently offers, as Genkit tools.
 
         Every call lists from the server, so the answer is what the server serves
-        now whether or not this client is registered, and ``action.name`` is the
-        namespaced name a model is shown.
+        now whether or not this client is registered, and ``tool.name`` is the
+        namespaced name a model is shown. Each tool's output schema is the one
+        the server declared, if any.
 
-        The actions are unregistered: a model reaches them through a dynamic
-        action provider serving them, which :func:`define_mcp_client` sets up.
+        The list can go straight into ``generate`` as ``tools=``, and each tool
+        can be awaited directly. A registered client's tools are also selected
+        as ``<name>:tool/*``, which is what an app and the Dev UI should use.
 
         Returns:
-            One action per tool, in server order.
+            One tool per server tool, in server order.
 
         Raises:
             GenkitError: ``FAILED_PRECONDITION`` if this client is closed, or
@@ -135,6 +143,11 @@ class McpClient:
             ValueError: If two of the server's tools share a Genkit tool name
                 once the characters the model providers reject are rewritten.
         """
+        tools = await self._connection().list_tools()
+        return mcp_tools_to_handles(tools, self._name, self._call_tool)
+
+    async def _list_actions(self) -> list[Action[Any, Any]]:
+        """List the server's tools as unregistered actions, for a provider to hand out."""
         tools = await self._connection().list_tools()
         return mcp_tools_to_actions(tools, self._name, self._call_tool)
 
@@ -155,7 +168,7 @@ class McpClient:
             self._refuse_when_closed()
         await self._disconnect_all()
         self._invalidate_listing()
-        await self.get_active_tools()
+        await self._list_actions()
 
     async def close(self) -> None:
         """Disconnect from the server, stop its process, and keep it that way.
@@ -280,7 +293,7 @@ def define_mcp_client(
 
     async def list_tools() -> dict[str, list[Action[Any, Any]]]:
         """Provide this client's tools to the dynamic action provider."""
-        return {'tool': await client.get_active_tools()}
+        return {'tool': await client._list_actions()}
 
     client._provider = ai.define_dynamic_action_provider(
         name,
