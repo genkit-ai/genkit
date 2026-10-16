@@ -36,9 +36,9 @@ one = f'{client.name}:tool/{client.tool_name("echo")}'
 result = await ai.generate(prompt='Echo "hello".', tools=[one])
 
 # The listing itself is a list of Genkit tools, so it can be handed to a
-# generate call or awaited directly.
+# generate call or called directly.
 result = await ai.generate(prompt='Echo "hello".', tools=tools)
-echoed = await tools[0]({'message': 'hello'})
+echoed = (await tools[0]({'message': 'hello'})).output
 ```
 
 ## Tool names

@@ -172,10 +172,10 @@ async def test_generate_calls_a_tool_and_receives_its_result(tmp_path: Path) -> 
 
 @pytest.mark.asyncio
 async def test_generate_accepts_the_listed_tools(tmp_path: Path) -> None:
-    """The listing is made of tool handles, so it goes into ``generate`` as it is."""
+    """The listing is made of tool handles, so it goes into ``generate`` as it is, provider or not."""
     ai = Genkit()
     pm, _ = define_scripted_model(ai)
-    client = define_mcp_client(ai, 'fake', **server(tmp_path))
+    client = McpClient('fake', **server(tmp_path))
     pm.responses = [
         tool_call_response('fake_echo', {'message': 'hello'}),
         text_response('done'),
@@ -193,6 +193,8 @@ async def test_generate_accepts_the_listed_tools(tmp_path: Path) -> None:
     tool_message = pm.last_request.messages[-1]
     assert tool_message.content[0].tool_response is not None
     assert tool_message.content[0].tool_response.output == 'hello'
+    sent = next(tool for tool in pm.last_request.tools or [] if tool.name == 'fake_bad_output')
+    assert sent.output_schema is None
     assert tools[0].output_schema is None
     assert tools[-1].name == 'fake_bad_output'
     assert tools[-1].output_schema == {
@@ -455,8 +457,8 @@ async def test_an_unregistered_client_registers_nothing(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_an_unregistered_client_lists_tools_a_host_could_serve(tmp_path: Path) -> None:
-    """An unregistered client still lists and runs its tools, which a host needs."""
+async def test_an_unregistered_client_lists_and_runs_its_tools(tmp_path: Path) -> None:
+    """An unregistered client still lists and runs its tools, with no provider involved."""
     client = McpClient('fake', **server(tmp_path))
     try:
         tools = await client.get_active_tools()

@@ -127,12 +127,12 @@ class McpClient:
 
         Every call lists from the server, so the answer is what the server serves
         now whether or not this client is registered, and ``tool.name`` is the
-        namespaced name a model is shown. Each tool's output schema is the one
+        namespaced name a model is shown. ``tool.output_schema`` is the schema
         the server declared, if any.
 
         The list can go straight into ``generate`` as ``tools=``, and each tool
-        can be awaited directly. A registered client's tools are also selected
-        as ``<name>:tool/*``, which is what an app and the Dev UI should use.
+        can be called directly. A registered client's tools are also selected
+        as ``<name>:tool/*``, which is how the Dev UI reaches them.
 
         Returns:
             One tool per server tool, in server order.
