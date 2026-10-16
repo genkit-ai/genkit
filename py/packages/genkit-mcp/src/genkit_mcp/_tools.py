@@ -293,8 +293,7 @@ def mcp_tools_to_handles(
     """Build one Genkit tool handle per tool in a server listing.
 
     A handle is what ``generate`` accepts in ``tools``, and what a caller can
-    invoke directly. Its output schema is the one the server declared, since
-    the action's own output schema is the multipart envelope.
+    invoke directly. Its ``output_schema`` is the one the server declared.
 
     Args:
         tools: Tools as listed by the server.
