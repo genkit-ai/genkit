@@ -1,0 +1,70 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""Errors raised by the MCP client.
+
+None of these is exported. Callers catch ``GenkitError`` and read its
+``status``; the classes exist so this package can tell its own failures apart.
+"""
+
+from typing import ClassVar
+
+from genkit import GenkitError
+from genkit.plugin_api import StatusName
+
+
+class _ClientError(GenkitError):
+    """Base class for every error this package raises.
+
+    It does not derive from ``RuntimeError``: the MCP SDK reports a tool result
+    that fails the server's own output schema as a bare ``RuntimeError``, and
+    that failure is reported to the model as a tool error while these are not.
+    """
+
+    _status: ClassVar[StatusName] = 'INTERNAL'
+
+    def __init__(self, message: str, *, status: StatusName | None = None) -> None:
+        """Build the error with this class's status unless ``status`` overrides it.
+
+        Args:
+            message: What went wrong.
+            status: Status to report instead of the class default.
+        """
+        super().__init__(message=message, status=status or self._status)
+
+
+class _ConnectionClosedError(_ClientError):
+    """The client was shut down by :meth:`McpClient.close`. Status ``FAILED_PRECONDITION``.
+
+    Closing is final: a closed client cannot be restarted. Build a new one with
+    :func:`define_mcp_client`.
+    """
+
+    _status: ClassVar[StatusName] = 'FAILED_PRECONDITION'
+
+
+class _ConnectionFailedError(_ClientError):
+    """The server could not be started, or its session died. Status ``UNAVAILABLE``.
+
+    ``__cause__`` carries what the transport or the server raised, when it is
+    known.
+    """
+
+    _status: ClassVar[StatusName] = 'UNAVAILABLE'
+
+
+class _ProtocolError(_ClientError):
+    """The server answered in a way the protocol does not allow. Status ``INTERNAL``."""
