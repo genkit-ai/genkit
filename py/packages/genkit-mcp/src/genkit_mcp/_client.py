@@ -16,41 +16,227 @@
 
 """Genkit client for a single MCP server."""
 
-import os
+from __future__ import annotations
 
-from genkit import Genkit
-from genkit_mcp._connection import DEFAULT_REQUEST_TIMEOUT_MILLIS
+import asyncio
+import os
+import threading
+import weakref
+from typing import Any
+
+from mcp.types import CallToolResult
+
+from genkit import DynamicActionProvider, Genkit, Tool
+from genkit.plugin_api import Action
+from genkit_mcp._config import McpStdioServerConfig
+from genkit_mcp._connection import DEFAULT_REQUEST_TIMEOUT_MILLIS, McpConnection
+from genkit_mcp._errors import _ConnectionClosedError
+from genkit_mcp._tools import (
+    mcp_tool_name,
+    mcp_tools_to_actions,
+    mcp_tools_to_handles,
+    validate_provider_name,
+    validate_tool_prefix,
+)
 
 
 class McpClient:
-    """One MCP server, registered with Genkit as a dynamic action provider.
+    """One MCP server, its connections, and the tools it serves as Genkit actions.
 
-    Obtain instances via :func:`define_mcp_client` rather than constructing directly.
+    A client holds no Genkit instance. It builds actions and manages the child
+    process; registering those actions is :func:`define_mcp_client`.
+
+    Obtain instances from :func:`define_mcp_client` rather than constructing
+    directly.
     """
+
+    _provider: DynamicActionProvider | None
+    """The provider serving this client's tools, or ``None`` when unregistered.
+
+    Dropping its cache is how this client tells Genkit that a listing it handed
+    out no longer holds.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        *,
+        command: str,
+        args: list[str] | None = None,
+        env: dict[str, str] | None = None,
+        cwd: str | os.PathLike[str] | None = None,
+        request_timeout_millis: int | None = DEFAULT_REQUEST_TIMEOUT_MILLIS,
+    ) -> None:
+        """Build a client. No process starts until its tools are listed.
+
+        Args:
+            name: Client name, which :func:`define_mcp_client` registers as the
+                provider name used in tool selectors. It also prefixes this
+                server's tool names.
+            command: Executable that runs the server.
+            args: Arguments passed to ``command``.
+            env: Extra environment for the server process, over the minimal set
+                the MCP SDK supplies.
+            cwd: Working directory for the server process.
+            request_timeout_millis: How long one MCP request may take before it
+                fails. ``None`` waits forever.
+
+        Raises:
+            ValueError: If ``name`` cannot appear in a tool selector or a
+                model-facing tool name.
+        """
+        validate_provider_name(name)
+        validate_tool_prefix(name)
+        self._provider = None
+        self._name = name
+        self._server = McpStdioServerConfig(command=command, args=args, env=env, cwd=cwd)
+        self._request_timeout_millis = request_timeout_millis
+        self._closed = False
+        self._connections: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, McpConnection] = (
+            weakref.WeakKeyDictionary()
+        )
+        self._connections_lock = threading.Lock()
 
     @property
     def name(self) -> str:
-        """Provider name used in tool selectors.
+        """Name this client was given.
 
-        For example, ``everything`` in the selector ``everything:tool/*``.
+        Once registered it is also the provider name in tool selectors, for
+        example ``everything`` in ``everything:tool/*``.
         """
-        raise NotImplementedError
+        return self._name
 
-    async def restart(self) -> None:
-        """Reconnect to the server, replacing any connection it already has.
+    def tool_name(self, tool: str) -> str:
+        """Return the Genkit name of one of this server's tools.
+
+        Use it to build a selector for ``generate`` without assembling the prefix
+        by hand::
+
+            tools = [f'{client.name}:tool/{client.tool_name("opening_hours")}']
+
+        Args:
+            tool: Tool name as the server lists it, without any prefix.
+
+        Returns:
+            The namespaced name, for example ``bookshop_opening_hours``.
+        """
+        return mcp_tool_name(self._name, tool)
+
+    async def get_active_tools(self) -> list[Tool]:
+        """List the tools this server currently offers, as Genkit tools.
+
+        Every call lists from the server, so the answer is what the server serves
+        now whether or not this client is registered, and ``tool.name`` is the
+        namespaced name a model is shown. ``tool.output_schema`` is the schema
+        the server declared, if any.
+
+        The list can go straight into ``generate`` as ``tools=``, and each tool
+        can be called directly. A registered client's tools are also selected
+        as ``<name>:tool/*``, which is how the Dev UI reaches them.
+
+        Returns:
+            One tool per server tool, in server order.
 
         Raises:
-            GenkitError: ``FAILED_PRECONDITION`` if this client is closed.
+            GenkitError: ``FAILED_PRECONDITION`` if this client is closed, or
+                ``UNAVAILABLE`` if the server cannot be started.
+            ValueError: If two of the server's tools share a Genkit tool name
+                once the characters the model providers reject are rewritten.
         """
-        raise NotImplementedError
+        tools = await self._connection().list_tools()
+        return mcp_tools_to_handles(tools, self._name, self._call_tool)
+
+    async def _list_actions(self) -> list[Action[Any, Any]]:
+        """List the server's tools as unregistered actions, for a provider to hand out."""
+        tools = await self._connection().list_tools()
+        return mcp_tools_to_actions(tools, self._name, self._call_tool)
+
+    async def restart(self) -> None:
+        """Reconnect a live client to the server, replacing any connection it has.
+
+        The calling loop reconnects and re-lists before this returns, so a server
+        which still cannot be started says so here rather than on the next
+        generate. Any other loop reconnects when it next asks for a tool.
+
+        Raises:
+            GenkitError: ``FAILED_PRECONDITION`` if this client is closed, or
+                ``UNAVAILABLE`` if the server cannot be started.
+            ValueError: If two of the server's tools share a Genkit tool name
+                once the characters the model providers reject are rewritten.
+        """
+        with self._connections_lock:
+            self._refuse_when_closed()
+        await self._disconnect_all()
+        self._invalidate_listing()
+        await self._list_actions()
 
     async def close(self) -> None:
-        """Disconnect from the server and stop its process.
+        """Disconnect from the server, stop its process, and keep it that way.
 
-        Closing is final: a closed client cannot be restarted. Build a new one
-        with :func:`define_mcp_client`.
+        A connection belongs to the event loop that opened it, so each one is
+        shut down on its own loop. A loop which has already stopped is skipped. A
+        loop run by ``asyncio.run`` cancelled its connection on the way out, taking
+        the server process with it; a loop stopped any other way did not, and this
+        call cannot reach its connection.
+
+        Closing is final, as it is for a file or an ``httpx.AsyncClient``: a
+        closed client cannot be restarted, so build a new one with
+        :func:`define_mcp_client`. A provider registered for this client stays
+        registered and its tools now fail as closed.
         """
-        raise NotImplementedError
+        with self._connections_lock:
+            self._closed = True
+        await self._disconnect_all()
+        self._invalidate_listing()
+
+    def _invalidate_listing(self) -> None:
+        """Drop the registered listing of this client's tools, if it has one."""
+        if self._provider is not None:
+            self._provider.invalidate_cache()
+
+    async def _disconnect_all(self) -> None:
+        """Shut every connection down on the loop which opened it."""
+        current = asyncio.get_running_loop()
+        with self._connections_lock:
+            connections = list(self._connections.items())
+            self._connections.clear()
+        for loop, connection in connections:
+            if loop is current:
+                await connection.close()
+            elif loop.is_running():
+                await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(connection.close(), loop))
+
+    def _refuse_when_closed(self) -> None:
+        """Raise if this client has been closed. Call under the connections lock."""
+        if self._closed:
+            raise _ConnectionClosedError(f'MCP client {self._name!r} is closed')
+
+    def _connection(self) -> McpConnection:
+        """Return the calling loop's connection, replacing one which has ended."""
+        loop = asyncio.get_running_loop()
+        with self._connections_lock:
+            self._refuse_when_closed()
+            existing = self._connections.get(loop)
+            if existing is not None and not existing.is_terminal:
+                return existing
+            connection = McpConnection(self._server, request_timeout_millis=self._request_timeout_millis)
+            self._connections[loop] = connection
+            return connection
+
+    async def _call_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        meta: dict[str, Any] | None,
+    ) -> CallToolResult:
+        """Invoke a tool on the connection belonging to the calling event loop."""
+        try:
+            return await self._connection().call_tool(name, arguments, meta)
+        except Exception:
+            # Any failure can mean the listing is stale, and re-listing costs one
+            # round trip, so drop the cache rather than classify the error.
+            self._invalidate_listing()
+            raise
 
 
 def define_mcp_client(
@@ -90,10 +276,29 @@ def define_mcp_client(
             fails. ``None`` waits forever.
 
     Returns:
-        A handle for disconnecting.
+        A handle for listing tools, restarting and disconnecting.
 
     Raises:
         ValueError: If ``name`` cannot appear in a tool selector or a
             model-facing tool name.
     """
-    raise NotImplementedError
+    client = McpClient(
+        name,
+        command=command,
+        args=args,
+        env=env,
+        cwd=cwd,
+        request_timeout_millis=request_timeout_millis,
+    )
+
+    async def list_tools() -> dict[str, list[Action[Any, Any]]]:
+        """Provide this client's tools to the dynamic action provider."""
+        return {'tool': await client._list_actions()}
+
+    client._provider = ai.define_dynamic_action_provider(
+        name,
+        list_tools,
+        description=f'Tools of the MCP server {name}.',
+        cache_ttl_millis=cache_ttl_millis,
+    )
+    return client

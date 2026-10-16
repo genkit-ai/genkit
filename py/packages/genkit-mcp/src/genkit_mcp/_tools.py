@@ -35,7 +35,7 @@ from mcp.types import (
 )
 
 import genkit
-from genkit import ActionRunContext, MultipartToolResponse, Part
+from genkit import ActionRunContext, MultipartToolResponse, Part, Tool
 from genkit._core._typing import Resource
 from genkit.plugin_api import Action
 from genkit_mcp._errors import _ToolResultError
@@ -51,6 +51,29 @@ TOOL_NAME_PATTERN = re.compile(r'[A-Za-z_][A-Za-z0-9_-]*')
 """What both Gemini and OpenAI accept in a function declaration name."""
 
 _TOOL_NAME_REJECTED_CHARS = re.compile(r'[^A-Za-z0-9_-]')
+
+SELECTOR_SEPARATORS = (':', '/')
+"""Characters a tool selector puts around a provider name, so a name cannot hold them."""
+
+
+def validate_provider_name(name: str) -> None:
+    """Reject a provider name no tool selector could carry.
+
+    Looser than the tool name rule a prefix has to meet: a provider name reaches
+    no model, so only the selector constrains it.
+
+    Args:
+        name: Candidate name for a client or host.
+
+    Raises:
+        ValueError: If ``<name>:tool/<tool>`` would not parse as a selector.
+    """
+    if name and not any(separator in name for separator in SELECTOR_SEPARATORS):
+        return
+    raise ValueError(
+        f'{name!r} cannot name an MCP provider: its tools are selected as '
+        f"'{name}:tool/<tool>', so the name must not be empty and must hold no ':' or '/'."
+    )
 
 
 def validate_tool_prefix(prefix: str) -> None:
@@ -70,8 +93,7 @@ def validate_tool_prefix(prefix: str) -> None:
         return
     raise ValueError(
         f'{prefix!r} cannot prefix an MCP tool name: a function declaration name must start with a '
-        'letter or an underscore and hold only letters, digits, underscores and hyphens. Pass '
-        'tool_prefix= to define_mcp_client with a name that can.'
+        'letter or an underscore and hold only letters, digits, underscores and hyphens.'
     )
 
 
@@ -261,3 +283,29 @@ def mcp_tools_to_actions(
         server_tool_by_name[action.name] = tool.name
         actions.append(action)
     return actions
+
+
+def mcp_tools_to_handles(
+    tools: Sequence[McpTool],
+    prefix: str,
+    call: McpToolCall,
+) -> list[Tool]:
+    """Build one Genkit tool handle per tool in a server listing.
+
+    A handle is what ``generate`` accepts in ``tools``, and what a caller can
+    invoke directly. Its ``output_schema`` is the one the server declared.
+
+    Args:
+        tools: Tools as listed by the server.
+        prefix: Namespace for the Genkit tool names.
+        call: Coroutine function invoking a tool on the live session.
+
+    Returns:
+        Handles in listing order.
+
+    Raises:
+        ValueError: If two tools in the listing share a Genkit tool name once
+            the characters the model providers reject are rewritten.
+    """
+    actions = mcp_tools_to_actions(tools, prefix, call)
+    return [Tool(action, original_output_schema=tool.outputSchema) for tool, action in zip(tools, actions, strict=True)]
