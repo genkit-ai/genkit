@@ -39,6 +39,8 @@ classifiers = [
   "Typing :: Typed",
 ]
 dependencies = [
+  "anyio>=4.9.0",
+  "exceptiongroup>=1.2.0; python_version < '3.11'",
   "genkit",
   "mcp>=1.26.0,<2",
   "pydantic>=2.10.5",
