@@ -1848,6 +1848,7 @@ source = { editable = "packages/genkit-mcp" }
 dependencies = [
     { name = "genkit" },
     { name = "mcp" },
+    { name = "pydantic" },
     { name = "structlog" },
 ]
 
@@ -1855,6 +1856,7 @@ dependencies = [
 requires-dist = [
     { name = "genkit", editable = "packages/genkit" },
     { name = "mcp", specifier = ">=1.26.0,<2" },
+    { name = "pydantic", specifier = ">=2.10.5" },
     { name = "structlog", specifier = ">=25.2.0" },
 ]
 
