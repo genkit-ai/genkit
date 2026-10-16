@@ -32,6 +32,7 @@ classifiers = [
 dependencies = [
   "genkit",
   "mcp>=1.26.0,<2",
+  "pydantic>=2.10.5",
   "structlog>=25.2.0",
 ]
 description = "Model Context Protocol client for Genkit. Exposes an MCP server's tools as Genkit tools."
