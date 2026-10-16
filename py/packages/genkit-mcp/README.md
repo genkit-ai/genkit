@@ -39,13 +39,13 @@ result = await ai.generate(prompt='Echo "hello".', tools=[one])
 
 Every tool is named `<prefix>_<tool>`, so the tool above is `everything_echo`. The prefix is the
 provider name you registered the server under, `everything` here. The separator is an underscore
-because Gemini and OpenAI reject a `/` in a function declaration name. The name is checked against
-the same rules when the client is defined, so a name a model would refuse fails there rather than
-on your first `generate`. A tool name the server lists with such a character, such as `look.up`, has it rewritten to an underscore with a warning. Two
-tools that then share a name, such as `look.up` and `look/up`, fail the listing. Length is not
-checked at definition, because the tool half of the name is unknown until the server lists it. A
-`<prefix>_<tool>` longer than 64 characters is warned about when the tools are listed and passed
-through, so the provider's 400 arrives on `generate`.
+because Gemini and OpenAI reject a `/` in a function declaration name. A prefix holding a character
+they reject fails when the client is defined, rather than on your first `generate`. A tool name the
+server lists with such a character, such as `look.up`, has it rewritten to an underscore with a
+warning. Two tools that then share a name, such as `look.up` and `look/up`, fail the listing. Length
+is not checked at definition, because the tool half of the name is unknown until the server lists
+it. A `<prefix>_<tool>` longer than 64 characters is warned about when the tools are listed and
+passed through, so the provider's 400 arrives on `generate`.
 
 The prefix is deliberately not the name the server advertises for itself, which is arbitrary
 server-controlled text: `@modelcontextprotocol/server-everything` above calls itself
