@@ -16,12 +16,33 @@
 
 """Dump a family config and translate SDK ValidationErrors into Genkit errors."""
 
+import copy
 from typing import Any, cast
 
 from google.genai import types as genai_types
 from pydantic import BaseModel, ValidationError
 
 from genkit import GenkitError
+
+
+def copy_http_options(opts: genai_types.HttpOptions) -> genai_types.HttpOptions:
+    """Copy ``opts`` so plugin edits never reach the caller's object.
+
+    Dict fields get fresh containers. Transport objects (``httpx_client``,
+    ``httpx_async_client``, ``aiohttp_client``) stay shared: they hold locks
+    and sockets that can't be deep-copied, and the caller expects every
+    request to go through them.
+    """
+    update: dict[str, Any] = {}
+    for field in ('headers', 'client_args', 'async_client_args'):
+        value = getattr(opts, field)
+        if value is not None:
+            update[field] = dict(value)
+    if opts.extra_body is not None:
+        update['extra_body'] = copy.deepcopy(opts.extra_body)
+    if opts.retry_options is not None:
+        update['retry_options'] = opts.retry_options.model_copy(deep=True)
+    return opts.model_copy(update=update)
 
 
 def unexpected_config_error(*, action_name: str) -> GenkitError:
