@@ -39,8 +39,9 @@ Then select them the way you select any tool. `browse_shelves` binds every
 tool and `ask_opening_hours` binds one:
 
 ```python
-tools=[f'{client.name}:tool/*']                              # every tool
-tools=[f'{client.name}:tool/{client.tool_name("opening_hours")}']  # one
+tools=[f'{client.name}:tool/*']  # every tool
+tools=[f'{client.name}:tool/{client.tool_name("opening_hours")}']
+# => ['bookshop:tool/bookshop_opening_hours']
 ```
 
 The name after `tool/` is `bookshop_<tool>`, where `bookshop` is the name you
