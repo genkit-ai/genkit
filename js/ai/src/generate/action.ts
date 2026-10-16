@@ -425,6 +425,7 @@ async function generateActionTurn(
     format,
     model
   );
+  const parser = format?.handler(request.output?.schema).parseChunk;
 
   let chunkRole: Role = 'model';
   // convenience method to create a full chunk from role and data, append the chunk
@@ -443,7 +444,7 @@ async function generateActionTurn(
       index: messageIndex,
       role,
       previousChunks: prevToSend,
-      parser: format?.handler(request.output?.schema).parseChunk,
+      parser,
     });
   };
 
