@@ -171,9 +171,33 @@ const embeddings = await ai.embed({
 });
 ```
 
+### Video Understanding (agentic processing)
+
+With `googleAI`, newer models (e.g. `gemini-4-argon`, `gemini-3.8-flash`) can
+explore a video and load only the parts they need, instead of reading frames
+at a fixed rate. This works better for long videos. Set it per video with
+`metadata.processing` (`'agentic'`, or `'static'`, the default):
+
+```typescript
+const response = await ai.generate({
+  model: googleAI.model('gemini-4-argon'),
+  prompt: [
+    {
+      media: { url: 'https://www.youtube.com/watch?v=QO30-W3b_vw' },
+      metadata: { processing: 'agentic' },
+    },
+    { text: 'What happens in this video? List the main moments with timestamps.' },
+  ],
+});
+```
+
+The model's loading steps come back as `custom.processingCall` and
+`custom.processingResult` parts. Keep them in the history for follow-up
+questions. `response.usage.custom.toolUseTokens` counts the tokens loaded.
+
 ### Image Generation
 
-**With `googleAI` (Imagen):**
+**With `googleAI` (Gemini Image):**
 ```typescript
 import { genkit } from 'genkit';
 import { googleAI } from '@genkit-ai/google-genai';
@@ -183,7 +207,7 @@ const ai = genkit({
 });
 
 const response = await ai.generate({
-  model: googleAI.model('imagen-4.0-generate-001'),
+  model: googleAI.model('gemini-nano-banana-2.1'),
   prompt: 'A beautiful watercolor painting of a castle in the mountains.',
 });
 
@@ -207,9 +231,9 @@ const response = await ai.generate({
 const generatedImage = response.media();
 ```
 
-### Video Generation (Veo)
+### Video Generation
 
-**With `googleAI`:**
+**With `googleAI` (Gemini Omni):**
 ```typescript
 import { genkit } from 'genkit';
 import { googleAI } from '@genkit-ai/google-genai';
@@ -218,22 +242,39 @@ const ai = genkit({
   plugins: [googleAI()],
 });
 
-let { operation } = await ai.generate({
-  model: googleAI.model('veo-3.1-generate-preview'),
+const response = await ai.generate({
+  model: googleAI.model('gemini-omni-1.1-flash'),
   prompt: 'An origami butterfly flaps its wings and flies out of the french doors into the garden.',
+  config: {
+    videoFormat: { aspectRatio: '16:9', resolution: '720p' },
+  },
 });
 
-// The generation is asynchronous and returns an operation.
-// You must poll the operation until it completes.
-while (!operation?.done) {
-  await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
-  operation = await ai.checkOperation(operation!);
-}
-
-// Once complete, the generated video is available in `operation.output`.
+// An MP4 video (video/mp4), returned inline.
+const video = response.media;
 ```
 
-**With `vertexAI`:**
+- Gemini Omni replaces the Veo 3.1 preview models on the Gemini API, which
+  shut down on October 22, 2026. Unlike Veo, it isn't a long-running
+  operation: `ai.generate()` returns the video directly.
+- Images and videos in the prompt are used as inputs (image to video, first
+  and last frame, subject references, editing or extending a video).
+- `config.videoFormat` sets `aspectRatio` (`16:9`, the default, or `9:16`)
+  and `resolution` (`360p`, `720p` (the default), `1080p` or `4k`).
+  `delivery: 'uri'` returns a Files API URI instead of inline data, which is
+  recommended for large videos (a 10 s 4k video is about 50 MB); it requires
+  `store: true`. Download the file with your API key (`x-goog-api-key`
+  header). It can take a few seconds after the response to become `ACTIVE`,
+  and it expires after 48 hours.
+- `config.videoConfig.task` (`text_to_video`, `image_to_video`,
+  `reference_to_video`, `edit`, `extend`) tells the model which kind of
+  generation to do; without it, the model infers it from the prompt.
+- To edit a generated video in a follow-up turn, set `store: true` and pass
+  the previous response's messages: the plugin continues the stored
+  interaction.
+- Tools aren't supported.
+
+**With `vertexAI` (Veo):**
 ```typescript
 import { genkit } from 'genkit';
 import { vertexAI } from '@genkit-ai/google-genai';
@@ -293,6 +334,71 @@ const response = await ai.generate({
 const generatedAudio = response.media();
 ```
 
+### Text-to-Speech
+
+**With `googleAI`:**
+```typescript
+import { genkit } from 'genkit';
+import { googleAI } from '@genkit-ai/google-genai';
+
+const ai = genkit({
+  plugins: [googleAI()],
+});
+
+const response = await ai.generate({
+  model: googleAI.model('gemini-3.8-flash-tts'),
+  prompt: [
+    {
+      text: 'Have a wonderful day! <laugh>',
+      // Delivery goes in metadata: the text itself is read verbatim.
+      metadata: { speechMetadata: { style: 'cheerful and friendly' } },
+    },
+  ],
+  config: {
+    speechConfig: {
+      voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } },
+    },
+  },
+});
+
+// A complete WAV file (audio/wav), ready to play or save.
+const audio = response.media;
+```
+
+**Audio format and streaming (`gemini-3.8-flash-tts`, `gemini-3.8-flash-lite-tts`):**
+
+- Without `audioFormat`, a non-streamed request returns one `audio/wav` file,
+  and a streamed request returns raw PCM: `audio/l16`, 24 kHz, mono, 16-bit,
+  with no header.
+- Set `config.audioFormat.mimeType` to choose the format: `audio/wav`,
+  `audio/l16`, `audio/mulaw` or `audio/alaw`. `audioFormat.sampleRate` is also
+  sent, but the models currently return 24 kHz regardless.
+- When streaming, audio chunks arrive as the speech is generated, so you can
+  start playing before it's finished. The final response joins them into one
+  media part in the requested format. Request `audio/wav` when streaming to
+  get a playable WAV file at the end (the chunks themselves are still mostly
+  raw PCM).
+
+```typescript
+const { stream, response } = ai.generateStream({
+  model: googleAI.model('gemini-3.8-flash-lite-tts'),
+  prompt: 'Have a wonderful day!',
+  config: {
+    speechConfig: {
+      voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } },
+    },
+    audioFormat: { mimeType: 'audio/wav' },
+  },
+});
+
+for await (const chunk of stream) {
+  // chunk.media: the next piece of audio.
+}
+
+// One complete WAV file.
+const audio = (await response).media;
+```
+
 ### Autonomous Agents (Deep Research & Antigravity - Gemini API Only)
 
 **Deep Research:**
@@ -324,7 +430,7 @@ import { googleAI } from '@genkit-ai/google-genai';
 const ai = genkit({ plugins: [googleAI()] });
 
 const response = await ai.generate({
-  model: googleAI.model('antigravity-preview-05-2026'),
+  model: googleAI.model('antigravity-preview-09-2026'),
   prompt: 'Read Hacker News, summarize the top 10 stories.',
 });
 ```
@@ -382,6 +488,7 @@ However, if your code directly inspects the underlying provider payload via `res
 1. **Safety Settings:** Custom safety settings are not supported on the Interactions path. These models apply no additional safety filters by default ([Gemini API safety settings](https://ai.google.dev/gemini-api/docs/safety-settings)); built-in protections against core harms always apply. `BLOCK_NONE` settings are ignored, since they can't block anything beyond that default. Blocking thresholds (`BLOCK_ONLY_HIGH` and stricter) throw an `INVALID_ARGUMENT` error, so a requested filter is never silently dropped.
 2. **Server-Side Tool Invocations:** The Interactions API always includes intermediate tool invocations in the execution steps, so `toolConfig.includeServerSideToolInvocations` is unnecessary.
 3. **Stateless by Default (Explicit Store Opt-In):** The upstream Interactions API defaults to storing conversations on Google's servers (`store: true`). To preserve the stateless, privacy-preserving behavior of Genkit's `generateContent`, the plugin explicitly defaults `store: false`. For Gemini models, server-side storage is an explicit opt-in: `store: true` must be specified via request config (`config: { store: true }`) or plugin configuration (`googleAI({ store: true })`). When an interaction is stored, its ID is accessible on `response.message?.metadata?.interactionId`. In multi-turn calls, passing `messages: previousResponse.messages` with `config: { store: true }` will automatically extract the previous interaction ID from message metadata and continue the session statefully. If setting `config: { previousInteractionId: "..." }` manually, `store: true` is also required (omitting `store` or passing `store: false` will throw an `INVALID_ARGUMENT` error).
+4. **Antigravity Requires Storage:** The Antigravity agent doesn't work with `store: false` (the server rejects it), so unlike Gemini models it doesn't default to `store: false`; `store` is only sent when you set it. If you set `store: false` (in the request config or `googleAI({ store: false })`), it's passed through and the server returns an error; to use Antigravity with plugin-level `store: false`, set `store: true` in the request config. The agent's work (files, installed packages) lives in a sandbox environment that persists across turns, so passing `messages: previousResponse.messages` continues the stored interaction automatically, in the same environment, sending only the new messages. Function tools work the same way: a tool result is sent as a continuation of the interaction that asked for it.
 
 ## Key Differences
 

@@ -97,6 +97,7 @@ function commonRef(
 const GENERIC_MODEL = commonRef('lyria-3');
 
 const KNOWN_MODELS = {
+  'lyria-3.5': commonRef('lyria-3.5'),
   'lyria-3-clip-preview': commonRef('lyria-3-clip-preview'),
   'lyria-3-pro-preview': commonRef('lyria-3-pro-preview'),
 } as const;

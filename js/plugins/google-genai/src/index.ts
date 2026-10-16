@@ -20,8 +20,8 @@ export {
   type GeminiConfig,
   type GeminiInteraction,
   type GeminiTtsConfig,
+  type GeminiVideoConfig,
   type GoogleAIPluginOptions,
-  type ImagenConfig,
   type TextAnnotation,
   type UrlCitation,
 } from './googleai/index.js';

@@ -119,12 +119,34 @@ function commonRef(
 
 const GENERIC_MODEL = commonRef('veo');
 
-const KNOWN_MODELS = {
-  'veo-3.1-lite-generate-preview': commonRef('veo-3.1-lite-generate-preview'),
-  'veo-3.1-generate-preview': commonRef('veo-3.1-generate-preview'),
-  'veo-3.1-fast-generate-preview': commonRef('veo-3.1-fast-generate-preview'),
-} as const;
+const KNOWN_MODELS = {} as const;
 export type KnownModels = keyof typeof KNOWN_MODELS; // For autocomplete
+
+// Models we no longer suggest, but that still work: they still resolve and
+// are still registered as actions, but aren't in the KnownModels type, so
+// they don't show up in autocomplete. Set `stage` on each one (keeping the
+// default `supports`): 'deprecated' for models that are deprecated or
+// < 1 month from shutdown.
+const HIDDEN_MODELS = {
+  // Shut down on Oct 22 2026.
+  'veo-3.1-lite-generate-preview': commonRef('veo-3.1-lite-generate-preview', {
+    ...GENERIC_MODEL.info,
+    stage: 'deprecated',
+  }),
+  'veo-3.1-generate-preview': commonRef('veo-3.1-generate-preview', {
+    ...GENERIC_MODEL.info,
+    stage: 'deprecated',
+  }),
+  'veo-3.1-fast-generate-preview': commonRef('veo-3.1-fast-generate-preview', {
+    ...GENERIC_MODEL.info,
+    stage: 'deprecated',
+  }),
+} as const;
+
+const ALL_MODELS = {
+  ...HIDDEN_MODELS,
+  ...KNOWN_MODELS,
+};
 
 export type VeoModelName = `veo-${string}`;
 export function isVeoModelName(value?: string): value is VeoModelName {
@@ -137,8 +159,8 @@ export function model(
 ): ModelReference<ConfigSchemaType> {
   const name = checkModelName(version);
 
-  if (isKnownKey(name, KNOWN_MODELS)) {
-    return KNOWN_MODELS[name].withConfig(config);
+  if (isKnownKey(name, ALL_MODELS)) {
+    return ALL_MODELS[name].withConfig(config);
   }
 
   return modelRef({
@@ -173,7 +195,7 @@ export function listActions(models: Model[]): ActionMetadata[] {
 }
 
 export function listKnownModels(options?: GoogleAIPluginOptions) {
-  return Object.keys(KNOWN_MODELS).map((name: string) =>
+  return Object.keys(ALL_MODELS).map((name: string) =>
     defineModel(name, options)
   );
 }
@@ -317,4 +339,6 @@ export const TEST_ONLY = {
   fromVeoOperation,
   GENERIC_MODEL,
   KNOWN_MODELS,
+  HIDDEN_MODELS,
+  ALL_MODELS,
 };

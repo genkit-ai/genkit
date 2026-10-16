@@ -20,7 +20,10 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import * as sinon from 'sinon';
 import {
   DeepResearchConfigSchema,
+  TEST_ONLY,
   defineModel,
+  listKnownModels,
+  model,
 } from '../../src/googleai/deep-research.js';
 import { GeminiInteraction } from '../../src/googleai/interaction-types.js';
 import { GoogleAIPluginOptions } from '../../src/googleai/types.js';
@@ -75,6 +78,36 @@ describe('Deep Research', () => {
       },
     ],
   };
+
+  describe('hidden models', () => {
+    it('keeps deep-research-pro-preview-12-2025 usable, with a stage', () => {
+      const ref = model('deep-research-pro-preview-12-2025');
+      assert.strictEqual(
+        ref.name,
+        'googleai/deep-research-pro-preview-12-2025'
+      );
+      assert.strictEqual(ref.info?.stage, 'deprecated');
+      assert.deepStrictEqual(
+        ref.info?.supports,
+        TEST_ONLY.GENERIC_MODEL.info?.supports
+      );
+      assert.ok(
+        !Object.keys(TEST_ONLY.KNOWN_MODELS).includes(
+          'deep-research-pro-preview-12-2025'
+        )
+      );
+    });
+
+    it('still registers hidden models', () => {
+      const names = listKnownModels(defaultPluginOptions).map(
+        (m) => m.__action.name
+      );
+      assert.ok(names.includes('googleai/deep-research-pro-preview-12-2025'));
+      for (const name of Object.keys(TEST_ONLY.KNOWN_MODELS)) {
+        assert.ok(names.includes(`googleai/${name}`), name);
+      }
+    });
+  });
 
   describe('defineModel', () => {
     it('passes responseModalities to the API', async () => {

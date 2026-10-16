@@ -20,13 +20,122 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import process from 'process';
 import {
   MISSING_API_KEY_ERROR,
+  appendToWavData,
   calculateApiKey,
   checkApiKey,
   convertObjectKeysToSnakeCase,
   extractVeoImage,
   extractVeoVideo,
   getApiKeyFromEnvVar,
+  stripLeadingId3Tags,
 } from '../../src/googleai/utils.js';
+
+/**
+ * An ID3v2.3 tag shaped like the one seen live: header
+ * `49 44 33 03 00 00 00 00 2f 63` (size 6,115, so 6,125 bytes in total), then
+ * a GEOB frame. The frame body is filler here.
+ */
+function testId3Tag(): Buffer {
+  const tag = Buffer.alloc(6125, 0x55);
+  Buffer.from([
+    0x49, 0x44, 0x33, 0x03, 0x00, 0x00, 0x00, 0x00, 0x2f, 0x63,
+  ]).copy(tag);
+  tag.write('GEOB', 10, 'ascii');
+  return tag;
+}
+
+describe('stripLeadingId3Tags', () => {
+  it('removes a leading ID3 tag and keeps the audio after it', () => {
+    const pcm = Buffer.alloc(5760, 0x07);
+    const result = stripLeadingId3Tags(Buffer.concat([testId3Tag(), pcm]));
+    assert.deepStrictEqual(result, pcm);
+  });
+
+  it('removes several tags in a row', () => {
+    const pcm = Buffer.from([1, 2]);
+    const result = stripLeadingId3Tags(
+      Buffer.concat([testId3Tag(), testId3Tag(), pcm])
+    );
+    assert.deepStrictEqual(result, pcm);
+  });
+
+  it('returns audio without a tag unchanged', () => {
+    const pcm = Buffer.from([0xf8, 0xff, 0xf9, 0xff]);
+    assert.strictEqual(stripLeadingId3Tags(pcm), pcm);
+  });
+
+  it('keeps audio that only starts with the letters "ID3"', () => {
+    // A size byte of 0x80 or more can't be a real tag header.
+    const notATag = Buffer.from([
+      0x49, 0x44, 0x33, 0x03, 0x00, 0x00, 0x00, 0x00, 0x80, 0x00, 1, 2,
+    ]);
+    assert.strictEqual(stripLeadingId3Tags(notATag), notATag);
+  });
+
+  it('keeps the bytes if the tag would run past the end', () => {
+    const truncated = testId3Tag().subarray(0, 100);
+    assert.strictEqual(stripLeadingId3Tags(truncated), truncated);
+  });
+});
+
+/**
+ * Builds a WAV file shaped like the ones the TTS models return: a canonical
+ * 44-byte header, the `data` chunk, then another chunk after the audio (the
+ * server's WAVs end with extra bytes after `data`; their content is unknown,
+ * so a generic chunk stands in for them).
+ */
+function testWav(audio: number[], trailing: number[] = [9, 9, 9, 9]): Buffer {
+  const data = Buffer.from(audio);
+  const extra = Buffer.from(trailing);
+  const header = Buffer.alloc(44);
+  header.write('RIFF', 0, 'ascii');
+  header.write('WAVE', 8, 'ascii');
+  header.write('fmt ', 12, 'ascii');
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20); // PCM
+  header.writeUInt16LE(1, 22); // mono
+  header.writeUInt32LE(24000, 24);
+  header.writeUInt32LE(48000, 28);
+  header.writeUInt16LE(2, 32);
+  header.writeUInt16LE(16, 34);
+  header.write('data', 36, 'ascii');
+  header.writeUInt32LE(data.length, 40);
+  const extraHeader = Buffer.alloc(8);
+  extraHeader.write('LIST', 0, 'ascii');
+  extraHeader.writeUInt32LE(extra.length, 4);
+  const wav = Buffer.concat([header, data, extraHeader, extra]);
+  wav.writeUInt32LE(wav.length - 8, 4);
+  return wav;
+}
+
+describe('appendToWavData', () => {
+  it('inserts the audio at the end of the data chunk and fixes the sizes', () => {
+    const result = appendToWavData(testWav([1, 2]), Buffer.from([3, 4, 5, 6]));
+    assert.ok(result);
+    assert.strictEqual(result.readUInt32LE(4), result.length - 8);
+    assert.strictEqual(result.readUInt32LE(40), 6);
+    assert.deepStrictEqual(
+      result.subarray(44, 50),
+      Buffer.from([1, 2, 3, 4, 5, 6])
+    );
+    // The chunk after `data` is kept, after the audio.
+    assert.strictEqual(result.toString('ascii', 50, 54), 'LIST');
+    assert.deepStrictEqual(result.subarray(58), Buffer.from([9, 9, 9, 9]));
+  });
+
+  it('returns undefined for data that is not a WAV file', () => {
+    assert.strictEqual(
+      appendToWavData(Buffer.from('not a wav file'), Buffer.from([1])),
+      undefined
+    );
+  });
+
+  it('returns undefined for a WAV without a data chunk', () => {
+    const noData = testWav([1, 2]).subarray(0, 36);
+    noData.writeUInt32LE(noData.length - 8, 4);
+    assert.strictEqual(appendToWavData(noData, Buffer.from([1])), undefined);
+  });
+});
 
 describe('Media Utils', () => {
   describe('extractVeoImage', () => {

@@ -34,15 +34,17 @@ import * as antigravity from './antigravity.js';
 import * as deepResearch from './deep-research.js';
 import * as embedder from './embedder.js';
 import * as gemini from './gemini.js';
-import * as imagen from './imagen.js';
 import * as lyria from './lyria.js';
 import * as veo from './veo.js';
 
 export { type AntigravityConfig } from './antigravity.js';
 export { type DeepResearchConfig } from './deep-research.js';
 export { type EmbeddingConfig } from './embedder.js';
-export { type GeminiConfig, type GeminiTtsConfig } from './gemini.js';
-export { type ImagenConfig } from './imagen.js';
+export {
+  type GeminiConfig,
+  type GeminiTtsConfig,
+  type GeminiVideoConfig,
+} from './gemini.js';
 export {
   type GeminiInteraction,
   type TextAnnotation,
@@ -53,7 +55,6 @@ export { type GoogleAIPluginOptions };
 
 async function initializer(options?: GoogleAIPluginOptions) {
   return [
-    ...imagen.listKnownModels(options),
     ...gemini.listKnownModels(options),
     ...embedder.listKnownModels(options),
     ...veo.listKnownModels(options),
@@ -76,14 +77,12 @@ async function resolver(
       ) {
         // These are background models. Do not define them here.
         return undefined;
-      } else if (imagen.isImagenModelName(actionName)) {
-        return imagen.defineModel(actionName, options);
       } else if (lyria.isLyriaModelName(actionName)) {
         return lyria.defineModel(actionName, options);
       } else if (antigravity.isAntigravityModelName(actionName)) {
         return antigravity.defineModel(actionName, options);
       } else {
-        // gemini, tts, image, gemma, unknown models
+        // gemini, tts, image, video, gemma, unknown models
         return gemini.defineModel(actionName, options);
       }
     case 'background-model':
@@ -115,7 +114,6 @@ async function listActions(
 
     return [
       ...gemini.listActions(allModels),
-      ...imagen.listActions(allModels),
       ...veo.listActions(allModels),
       ...deepResearch.listActions(allModels),
       ...lyria.listActions(allModels),
@@ -163,13 +161,13 @@ export type GoogleAIPlugin = {
     config: gemini.GeminiImageConfig
   ): ModelReference<gemini.GeminiImageConfigSchemaType>;
   model(
+    name: gemini.KnownVideoModels | (gemini.VideoModelName & {}),
+    config?: gemini.GeminiVideoConfig
+  ): ModelReference<gemini.GeminiVideoConfigSchemaType>;
+  model(
     name: gemini.KnownGeminiModels | (gemini.GeminiModelName & {}),
     config?: gemini.GeminiConfig
   ): ModelReference<gemini.GeminiConfigSchemaType>;
-  model(
-    name: imagen.KnownModels | (imagen.ImagenModelName & {}),
-    config?: imagen.ImagenConfig
-  ): ModelReference<imagen.ImagenConfigSchemaType>;
   model(
     name: veo.KnownModels | (veo.VeoModelName & {}),
     config?: veo.VeoConfig
@@ -214,10 +212,7 @@ export const googleAI = googleAIPlugin as GoogleAIPlugin;
   if (antigravity.isAntigravityModelName(name)) {
     return antigravity.model(name, config);
   }
-  if (imagen.isImagenModelName(name)) {
-    return imagen.model(name, config);
-  }
-  // gemma, tts, image, gemini and unknown model families.
+  // gemma, tts, image, video, gemini and unknown model families.
   return gemini.model(name, config);
 };
 googleAI.embedder = (

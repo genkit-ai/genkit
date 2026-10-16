@@ -39,8 +39,6 @@ import {
   GenerateContentRequest,
   GenerateContentResponse,
   GenerateContentStreamResult,
-  ImagenPredictRequest,
-  ImagenPredictResponse,
   ListModelsResponse,
   Model,
   VeoOperation,
@@ -317,32 +315,6 @@ export async function embedContent(
   return maybeTraceRequest<EmbedContentResponse>(url, fetchOptions, {
     model: model,
     request: embedContentRequest,
-    clientOptions,
-  });
-}
-
-export async function imagenPredict(
-  apiKey: string | undefined,
-  model: string,
-  imagenPredictRequest: ImagenPredictRequest,
-  clientOptions?: ClientOptions
-): Promise<ImagenPredictResponse> {
-  const url = getGoogleAIUrl({
-    resourcePath: `models/${model}`,
-    resourceMethod: 'predict',
-    clientOptions,
-  });
-
-  const fetchOptions = getFetchOptions({
-    method: 'POST',
-    apiKey,
-    clientOptions,
-    body: JSON.stringify(imagenPredictRequest),
-  });
-
-  return maybeTraceRequest<ImagenPredictResponse>(url, fetchOptions, {
-    model: model,
-    request: imagenPredictRequest,
     clientOptions,
   });
 }

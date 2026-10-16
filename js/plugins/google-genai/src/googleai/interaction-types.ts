@@ -315,7 +315,16 @@ export declare interface VideoContent {
   mime_type?: string;
   /** The resolution of the media. */
   resolution?: MediaResolution;
+  /**
+   * How the model reads the video: `static` (frames at 1 FPS, the default)
+   * or `agentic` (the model explores the timeline and loads only what it
+   * needs; supported by newer models).
+   */
+  processing?: VideoProcessing;
 }
+
+/** How the model reads a video input. */
+export type VideoProcessing = 'static' | 'agentic' | (string & {});
 
 /**
  * A thought content block.
@@ -432,6 +441,23 @@ export declare interface ThoughtStep {
   summary?: (TextContent | ImageContent)[];
 }
 
+/**
+ * Agentic video understanding: the model asked to load part of a video (a
+ * segment, frames or the transcript). Needs no reply.
+ */
+export declare interface ProcessingCallStep {
+  type: 'processing_call';
+  id: string;
+  signature?: string;
+}
+
+/** Agentic video understanding: the result of a `processing_call`. */
+export declare interface ProcessingResultStep {
+  type: 'processing_result';
+  call_id: string;
+  signature?: string;
+}
+
 export type Step =
   | ModelOutputStep
   | UserInputStep
@@ -442,7 +468,9 @@ export type Step =
   | CodeExecutionResultStep
   | FunctionCallStep
   | FunctionResultStep
-  | ThoughtStep;
+  | ThoughtStep
+  | ProcessingCallStep
+  | ProcessingResultStep;
 
 /**
  * A turn in a conversation.
@@ -515,6 +543,20 @@ export declare interface ImageConfig {
 }
 
 /**
+ * The configuration for video generation (e.g. gemini-omni-1.1-flash).
+ */
+export declare interface VideoConfig {
+  /** The kind of generation. Inferred from the prompt if not set. */
+  task?:
+    | 'text_to_video'
+    | 'image_to_video'
+    | 'reference_to_video'
+    | 'edit'
+    | 'extend'
+    | (string & {});
+}
+
+/**
  * Configuration parameters for model interactions.
  */
 export declare interface ModelGenerationConfig {
@@ -541,6 +583,8 @@ export declare interface ModelGenerationConfig {
   speech_config?: SpeechConfig[] | { speakers: SpeechConfig[] };
   /** Configuration for image interaction. */
   image_config?: ImageConfig;
+  /** Configuration for video generation. */
+  video_config?: VideoConfig;
 }
 
 /**
@@ -564,6 +608,15 @@ export declare interface DeepResearchAgentConfig {
 }
 
 /**
+ * Configuration for the Antigravity agent.
+ */
+export declare interface AntigravityAgentConfig {
+  type: 'antigravity';
+  /** The Gemini model the agent runs on (defaults to the agent's default). */
+  model?: string;
+}
+
+/**
  * Service Tier
  */
 export declare type ServiceTier =
@@ -577,7 +630,8 @@ export declare type ServiceTier =
  */
 export type InteractionsAgentConfig =
   | DynamicAgentConfig
-  | DeepResearchAgentConfig;
+  | DeepResearchAgentConfig
+  | AntigravityAgentConfig;
 
 /**
  * Indicates the model should return text, images, or audio.

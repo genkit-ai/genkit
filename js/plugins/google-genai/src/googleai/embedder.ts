@@ -85,11 +85,11 @@ function commonRef(
 
 const GENERIC_MODEL = commonRef('embedder');
 
-const DEPRECATED_MODELS = {
-  // When models are < 1 month from shutdown, move them here (with the
-  // shutdown date) instead. They can still be used, but no longer appear in
-  // autocomplete suggestions.
-} as const;
+// Models we no longer suggest, but that still work: they still resolve and
+// are still registered as actions, but aren't in the KnownModels type, so
+// they don't show up in autocomplete. Use this for models that are deprecated
+// or < 1 month from shutdown (note the shutdown date).
+const HIDDEN_MODELS = {} as const;
 
 const KNOWN_MODELS = {
   'gemini-embedding-001': commonRef('gemini-embedding-001'),
@@ -106,7 +106,7 @@ const KNOWN_MODELS = {
 } as const;
 
 const ALL_MODELS = {
-  ...DEPRECATED_MODELS,
+  ...HIDDEN_MODELS,
   ...KNOWN_MODELS,
 };
 export type KnownModels = keyof typeof KNOWN_MODELS; // For autocomplete

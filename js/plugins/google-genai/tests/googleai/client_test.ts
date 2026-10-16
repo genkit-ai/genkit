@@ -31,7 +31,6 @@ import {
   generateContent,
   generateContentStream,
   getGoogleAIUrl,
-  imagenPredict,
   listModels,
   veoCheckOperation,
   veoPredict,
@@ -43,8 +42,6 @@ import {
   GenerateContentRequest,
   GenerateContentResponse,
   GenerateContentStreamResult,
-  ImagenPredictRequest,
-  ImagenPredictResponse,
   Model,
   VeoOperation,
   VeoPredictRequest,
@@ -922,64 +919,6 @@ describe('Google AI Client', () => {
         capturedSignal!.aborted,
         true,
         'The passed signal should be aborted after the original controller is aborted'
-      );
-    });
-  });
-
-  describe('imagenPredict', () => {
-    const model = 'imagen-3.0-generate-001';
-    const request: ImagenPredictRequest = {
-      instances: [{ prompt: 'A cat sitting on a mat' }],
-      parameters: { sampleCount: 1 },
-    };
-
-    it('should return ImagenPredictResponse', async () => {
-      const mockResponse: ImagenPredictResponse = {
-        predictions: [
-          { bytesBase64Encoded: 'base64string', mimeType: 'image/png' },
-        ],
-      };
-      mockFetchResponse(mockResponse);
-
-      const result = await imagenPredict(apiKey, model, request);
-      assert.deepStrictEqual(result, mockResponse);
-
-      const expectedUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:predict`;
-      sinon.assert.calledOnceWithExactly(fetchSpy, expectedUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-goog-api-key': apiKey,
-          'x-goog-api-client': getGenkitClientHeader(),
-        },
-        redirect: 'manual',
-        body: JSON.stringify(request),
-      });
-    });
-
-    it('should throw on API error', async () => {
-      const errorResponse = { error: { message: 'Imagen failed' } };
-      mockFetchResponse(errorResponse, false, 400, 'Bad Request');
-
-      await assert.rejects(
-        imagenPredict(apiKey, model, request),
-        (err: any) => {
-          assert.strictEqual(err.name, 'GenkitError');
-          assert.strictEqual(err.status, 'INVALID_ARGUMENT');
-          assert.match(
-            err.message,
-            /Error fetching from .* \[400 Bad Request\] Imagen failed/
-          );
-          return true;
-        }
-      );
-    });
-
-    it('should throw on network error', async () => {
-      fetchSpy.rejects(new Error('Network issue'));
-      await assert.rejects(
-        imagenPredict(apiKey, model, request),
-        /Failed to fetch from .* Network issue/
       );
     });
   });

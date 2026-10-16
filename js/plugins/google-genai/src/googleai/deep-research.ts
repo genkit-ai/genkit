@@ -198,9 +198,6 @@ const ADVANCED_DEEP_RESEARCH_INFO = {
 } as ModelInfo;
 
 const KNOWN_MODELS = {
-  'deep-research-pro-preview-12-2025': commonRef(
-    'deep-research-pro-preview-12-2025'
-  ),
   'deep-research-preview-04-2026': commonRef(
     'deep-research-preview-04-2026',
     ADVANCED_DEEP_RESEARCH_INFO
@@ -211,6 +208,24 @@ const KNOWN_MODELS = {
   ),
 } as const;
 export type KnownModels = keyof typeof KNOWN_MODELS; // For autocomplete
+
+// Models we no longer suggest, but that still work: they still resolve and
+// are still registered as actions, but aren't in the KnownModels type, so
+// they don't show up in autocomplete. Set `stage` on each one (keeping the
+// default `supports`).
+const HIDDEN_MODELS = {
+  // Deprecated; shuts down on Oct 23 2026 (changelog, Oct 8 2026). Replaced
+  // by deep-research-preview-04-2026 and deep-research-max-preview-04-2026.
+  'deep-research-pro-preview-12-2025': commonRef(
+    'deep-research-pro-preview-12-2025',
+    { ...GENERIC_MODEL.info, stage: 'deprecated' }
+  ),
+} as const;
+
+const ALL_MODELS = {
+  ...HIDDEN_MODELS,
+  ...KNOWN_MODELS,
+};
 
 export type DeepResearchModelName = `deep-research-${string}`;
 export function isDeepResearchModelName(
@@ -225,8 +240,8 @@ export function model(
 ): ModelReference<ConfigSchemaType> {
   const name = checkModelName(version);
 
-  if (isKnownKey(name, KNOWN_MODELS)) {
-    return KNOWN_MODELS[name].withConfig(config);
+  if (isKnownKey(name, ALL_MODELS)) {
+    return ALL_MODELS[name].withConfig(config);
   }
 
   return modelRef({
@@ -255,7 +270,7 @@ export function listActions(models: Model[]): ActionMetadata[] {
 }
 
 export function listKnownModels(options?: GoogleAIPluginOptions) {
-  return Object.keys(KNOWN_MODELS).map((name: string) =>
+  return Object.keys(ALL_MODELS).map((name: string) =>
     defineModel(name, options)
   );
 }
@@ -457,4 +472,4 @@ export function defineModel(
   });
 }
 
-export const TEST_ONLY = { KNOWN_MODELS };
+export const TEST_ONLY = { KNOWN_MODELS, HIDDEN_MODELS, GENERIC_MODEL };

@@ -22,9 +22,11 @@ import { createInteraction } from './client.js';
 import {
   ensureToolIds,
   fromInteractionSync,
+  toInteractionConfigTool,
   toInteractionSteps,
+  toInteractionTool,
 } from './interaction-converters.js';
-import { ResponseModality } from './interaction-types.js';
+import { InteractionTool, ResponseModality } from './interaction-types.js';
 import {
   ClientOptions,
   CreateInteractionRequest,
@@ -77,6 +79,24 @@ export const AntigravityConfigSchema = z
       .array(z.enum(['TEXT', 'IMAGE']))
       .describe('The modalities to be used in response.')
       .optional(),
+    model: z
+      .union([
+        z.enum([
+          'gemini-4-argon',
+          'gemini-3.8-flash',
+          'gemini-3.6-flash',
+          'gemini-3.5-flash-lite',
+        ]),
+        // Allows newer models. `string & {}` (rather than z.string()) keeps
+        // the listed names in TypeScript autocomplete: a plain `string` in the
+        // union would absorb the literals.
+        z.custom<string & {}>((val) => typeof val === 'string'),
+      ])
+      .describe(
+        'The Gemini model the agent runs on. The server picks a default ' +
+          'if not set.'
+      )
+      .optional(),
   })
   .passthrough();
 
@@ -99,7 +119,7 @@ function commonRef(
         supports: {
           multiturn: true,
           media: true,
-          tools: false, // function calling unsupported for antigravity
+          tools: true,
           toolChoice: false,
           systemRole: false,
           output: ['text'],
@@ -111,7 +131,7 @@ function commonRef(
 const GENERIC_MODEL = commonRef('antigravity');
 
 const KNOWN_MODELS = {
-  'antigravity-preview-05-2026': commonRef('antigravity-preview-05-2026'),
+  'antigravity-preview-09-2026': commonRef('antigravity-preview-09-2026'),
 } as const;
 
 export type KnownModels = keyof typeof KNOWN_MODELS;
@@ -192,8 +212,21 @@ export function defineModel(
         store,
         environment,
         responseModalities,
+        // Sent as agent_config.model; a top-level `model` would conflict with
+        // `agent`.
+        model: agentModel,
+        tools: toolsFromConfig,
         ...rest
       } = requestOptions;
+
+      // Built-in tools from config.tools (e.g. { type: 'google_search' }),
+      // followed by the request's function tools.
+      const tools: InteractionTool[] = [
+        ...(Array.isArray(toolsFromConfig)
+          ? toolsFromConfig.map(toInteractionConfigTool)
+          : []),
+        ...(request.tools ?? []).map(toInteractionTool),
+      ];
 
       const apiKey = calculateApiKey(
         pluginOptions?.apiKey,
@@ -209,6 +242,50 @@ export function defineModel(
         }
       }
 
+      // Unlike Gemini models, Antigravity doesn't default to `store: false`:
+      // the agent doesn't work at all with `store: false` (the server rejects
+      // it), so that default would break every existing Antigravity app.
+      // `store` is only sent when set; an explicit `store: false` (request
+      // config, or else plugin options) is passed through as requested.
+      const storeSetting =
+        store ?? (pluginOptions?.store === false ? false : undefined);
+
+      // Continue from the last model message: send its interaction ID and only
+      // the messages after it, in the same environment (a new 'remote' sandbox
+      // wouldn't have the previous turn's files). The agent also rejects tool
+      // calls in `input`, so this is how a tool result is sent.
+      let previousId = previousInteractionId;
+      let newMessages = messages;
+      let environmentToUse = environment;
+      if (!previousId) {
+        for (let i = messages.length - 1; i >= 0; i--) {
+          const { role, metadata } = messages[i];
+          const prevId = metadata?.interactionId;
+          if (role === 'model' && typeof prevId === 'string' && prevId) {
+            previousId = prevId;
+            newMessages = messages.slice(i + 1);
+            const prevEnvironment = metadata?.environmentId;
+            if (
+              (environment === undefined || environment === 'remote') &&
+              typeof prevEnvironment === 'string' &&
+              prevEnvironment
+            ) {
+              environmentToUse = prevEnvironment;
+            }
+            break;
+          }
+        }
+      } else {
+        // As for Gemini models: an explicit previousInteractionId wins, but
+        // history up to the last model turn is already on the server.
+        for (let i = messages.length - 1; i >= 0; i--) {
+          if (messages[i].role === 'model') {
+            newMessages = messages.slice(i + 1);
+            break;
+          }
+        }
+      }
+
       let responseModalitiesConverted: ResponseModality[] | undefined;
       if (responseModalities) {
         responseModalitiesConverted = responseModalities.map(
@@ -218,11 +295,15 @@ export function defineModel(
 
       const req: CreateInteractionRequest = {
         agent: extractVersion(ref),
-        input: toInteractionSteps(ensureToolIds(messages)),
-        previous_interaction_id: previousInteractionId,
-        store,
-        environment,
+        input: toInteractionSteps(ensureToolIds(newMessages)),
+        previous_interaction_id: previousId,
+        store: storeSetting,
+        environment: environmentToUse,
         response_modalities: responseModalitiesConverted,
+        ...(agentModel
+          ? { agent_config: { type: 'antigravity', model: agentModel } }
+          : {}),
+        ...(tools.length > 0 ? { tools } : {}),
         ...rest,
       };
 

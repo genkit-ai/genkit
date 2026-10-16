@@ -25,6 +25,9 @@ import {
   fromInteractionDelta,
   fromInteractionStep,
   fromInteractionSync,
+  mergeStreamedAudio,
+  removeId3FromAudio,
+  toInteractionAudioResponseFormat,
   toInteractionConfigTool,
   toInteractionContent,
   toInteractionGenerationConfig,
@@ -33,6 +36,7 @@ import {
   toInteractionSpeechConfig,
   toInteractionSteps,
   toInteractionTool,
+  toInteractionVideoResponseFormat,
 } from '../../src/googleai/interaction-converters.js';
 import {
   Content,
@@ -42,6 +46,511 @@ import {
 } from '../../src/googleai/interaction-types.js';
 
 describe('Interaction Converters', () => {
+  describe('toInteractionAudioResponseFormat', () => {
+    it('maps mimeType and sampleRate', () => {
+      assert.deepStrictEqual(
+        toInteractionAudioResponseFormat({
+          mimeType: 'audio/l16',
+          sampleRate: 16000,
+        }),
+        { type: 'audio', mime_type: 'audio/l16', sample_rate: 16000 }
+      );
+    });
+
+    it('sends only the fields that are set', () => {
+      assert.deepStrictEqual(
+        toInteractionAudioResponseFormat({ mimeType: 'audio/wav' }),
+        { type: 'audio', mime_type: 'audio/wav' }
+      );
+    });
+
+    it('returns undefined when audioFormat is not set', () => {
+      assert.strictEqual(
+        toInteractionAudioResponseFormat(undefined),
+        undefined
+      );
+    });
+  });
+
+  describe('toInteractionVideoResponseFormat', () => {
+    it('maps aspectRatio and resolution', () => {
+      assert.deepStrictEqual(
+        toInteractionVideoResponseFormat({
+          aspectRatio: '9:16',
+          resolution: '4k',
+        }),
+        { type: 'video', aspect_ratio: '9:16', resolution: '4k' }
+      );
+    });
+
+    it('sends only the fields that are set', () => {
+      assert.deepStrictEqual(
+        toInteractionVideoResponseFormat({ resolution: '360p' }),
+        { type: 'video', resolution: '360p' }
+      );
+    });
+
+    it('maps delivery', () => {
+      assert.deepStrictEqual(
+        toInteractionVideoResponseFormat({ delivery: 'uri' }),
+        { type: 'video', delivery: 'uri' }
+      );
+    });
+
+    it('returns undefined when videoFormat is not set', () => {
+      assert.strictEqual(
+        toInteractionVideoResponseFormat(undefined),
+        undefined
+      );
+    });
+  });
+
+  describe('toInteractionGenerationConfig (video)', () => {
+    it('keeps videoFormat out of generation_config and sends videoConfig as video_config', () => {
+      const result = toInteractionGenerationConfig({
+        videoFormat: { resolution: '1080p' },
+        videoConfig: { task: 'extend' },
+      });
+      assert.deepStrictEqual(result, { video_config: { task: 'extend' } });
+    });
+  });
+
+  describe('computer use safety decisions', () => {
+    // The plugin doesn't run computer use actions; users run the loop
+    // themselves (returnToolRequests: true). The safety decision must reach
+    // them, and their acknowledgement must reach the server. Shapes from the
+    // computer use guide.
+    const safetyDecision = {
+      explanation: 'Must check check-box',
+      decision: 'require_confirmation',
+    };
+
+    it('passes safety_decision through to the toolRequest input', () => {
+      const result = fromInteractionSync({
+        status: 'requires_action',
+        steps: [
+          {
+            type: 'function_call',
+            id: 'call_123',
+            name: 'click',
+            arguments: { x: 60, y: 100, safety_decision: safetyDecision },
+          },
+        ],
+      });
+      const toolRequest = result.message?.content.find(
+        (p) => p.toolRequest
+      )?.toolRequest;
+      assert.deepStrictEqual(toolRequest, {
+        name: 'click',
+        ref: 'call_123',
+        input: { x: 60, y: 100, safety_decision: safetyDecision },
+      });
+    });
+
+    it('resends safety_decision and sends safety_acknowledgement back', () => {
+      const steps = toInteractionSteps([
+        {
+          role: 'model',
+          content: [
+            {
+              toolRequest: {
+                name: 'click',
+                ref: 'call_123',
+                input: { x: 60, y: 100, safety_decision: safetyDecision },
+              },
+            },
+          ],
+        },
+        {
+          role: 'tool',
+          content: [
+            {
+              toolResponse: {
+                name: 'click',
+                ref: 'call_123',
+                output: {
+                  url: 'https://example.com',
+                  safety_acknowledgement: true,
+                },
+              },
+            },
+          ],
+        },
+      ]);
+      assert.deepStrictEqual(steps, [
+        {
+          type: 'function_call',
+          name: 'click',
+          arguments: { x: 60, y: 100, safety_decision: safetyDecision },
+          id: 'call_123',
+        },
+        {
+          type: 'function_result',
+          name: 'click',
+          result: { url: 'https://example.com', safety_acknowledgement: true },
+          call_id: 'call_123',
+        },
+      ]);
+    });
+  });
+
+  describe('agentic video understanding', () => {
+    // Shapes seen live on gemini-4-argon (Oct 2026).
+    const processingCallStep: Step = {
+      type: 'processing_call',
+      id: 'call_598332',
+      signature: 'sig_call',
+    };
+    const processingResultStep: Step = {
+      type: 'processing_result',
+      call_id: 'call_598332',
+      signature: 'sig_result',
+    };
+
+    it('sends metadata.processing on a YouTube video', () => {
+      assert.deepStrictEqual(
+        toInteractionContent({
+          media: { url: 'https://www.youtube.com/watch?v=abc123' },
+          metadata: { processing: 'agentic' },
+        }),
+        {
+          type: 'video',
+          uri: 'https://www.youtube.com/watch?v=abc123',
+          processing: 'agentic',
+        }
+      );
+    });
+
+    it('sends metadata.processing on inline and URI videos', () => {
+      assert.deepStrictEqual(
+        toInteractionContent({
+          media: {
+            url: 'data:video/mp4;base64,AAAA',
+            contentType: 'video/mp4',
+          },
+          metadata: { processing: 'static' },
+        }),
+        {
+          type: 'video',
+          mime_type: 'video/mp4',
+          data: 'AAAA',
+          processing: 'static',
+        }
+      );
+      assert.deepStrictEqual(
+        toInteractionContent({
+          media: {
+            url: 'https://generativelanguage.googleapis.com/v1beta/files/abc123',
+            contentType: 'video/mp4',
+          },
+          metadata: { processing: 'agentic' },
+        }),
+        {
+          type: 'video',
+          mime_type: 'video/mp4',
+          uri: 'https://generativelanguage.googleapis.com/v1beta/files/abc123',
+          processing: 'agentic',
+        }
+      );
+    });
+
+    it('sends no processing field when it is not set', () => {
+      assert.deepStrictEqual(
+        toInteractionContent({
+          media: { url: 'https://www.youtube.com/watch?v=abc123' },
+        }),
+        { type: 'video', uri: 'https://www.youtube.com/watch?v=abc123' }
+      );
+    });
+
+    it('ignores metadata.processing on media that is not video', () => {
+      assert.deepStrictEqual(
+        toInteractionContent({
+          media: {
+            url: 'data:image/png;base64,AAAA',
+            contentType: 'image/png',
+          },
+          metadata: { processing: 'agentic' },
+        }),
+        { type: 'image', mime_type: 'image/png', data: 'AAAA' }
+      );
+    });
+
+    it('returns processing steps as custom parts with their signatures', () => {
+      assert.deepStrictEqual(fromInteractionStep(processingCallStep), [
+        {
+          custom: { processingCall: { id: 'call_598332' } },
+          metadata: { thoughtSignature: 'sig_call' },
+        },
+      ]);
+      assert.deepStrictEqual(fromInteractionStep(processingResultStep), [
+        {
+          custom: { processingResult: { callId: 'call_598332' } },
+          metadata: { thoughtSignature: 'sig_result' },
+        },
+      ]);
+    });
+
+    it('resends processing steps unchanged in the history', () => {
+      // Turn 1's response, converted to Genkit parts and sent back as history.
+      const modelContent = [
+        ...fromInteractionStep(processingCallStep),
+        ...fromInteractionStep(processingResultStep),
+        { text: 'The main moments are...' },
+      ];
+      const steps = toInteractionSteps([
+        {
+          role: 'user',
+          content: [
+            {
+              media: { url: 'https://www.youtube.com/watch?v=abc123' },
+              metadata: { processing: 'agentic' },
+            },
+            { text: 'What happens in this video?' },
+          ],
+        },
+        { role: 'model', content: modelContent },
+        { role: 'user', content: [{ text: 'What happens at the end?' }] },
+      ]);
+      assert.deepStrictEqual(steps, [
+        {
+          type: 'user_input',
+          content: [
+            {
+              type: 'video',
+              uri: 'https://www.youtube.com/watch?v=abc123',
+              processing: 'agentic',
+            },
+            { type: 'text', text: 'What happens in this video?' },
+          ],
+        },
+        processingCallStep,
+        processingResultStep,
+        {
+          type: 'model_output',
+          content: [{ type: 'text', text: 'The main moments are...' }],
+        },
+        {
+          type: 'user_input',
+          content: [{ type: 'text', text: 'What happens at the end?' }],
+        },
+      ]);
+    });
+
+    it('reports tool use tokens in usage.custom', () => {
+      const result = fromInteractionSync({
+        status: 'completed',
+        steps: [
+          processingCallStep,
+          processingResultStep,
+          { type: 'model_output', content: [{ type: 'text', text: 'done' }] },
+        ],
+        usage: {
+          total_input_tokens: 416,
+          total_output_tokens: 393,
+          total_tool_use_tokens: 2054,
+          total_thought_tokens: 2117,
+          total_tokens: 4980,
+        },
+      });
+      assert.deepStrictEqual(result.usage?.custom, { toolUseTokens: 2054 });
+    });
+
+    it('leaves usage.custom unset without tool use tokens', () => {
+      const result = fromInteractionSync({
+        status: 'completed',
+        usage: { total_input_tokens: 4, total_tokens: 4 },
+      });
+      assert.strictEqual(result.usage?.custom, undefined);
+    });
+  });
+
+  describe('removeId3FromAudio', () => {
+    // An ID3 tag holding a C2PA manifest, at the start of a streamed
+    // audio/l16 chunk, as seen live: 6,125-byte tag + 5,760 bytes of PCM.
+    const id3Tag = () => {
+      const tag = Buffer.alloc(6125, 0x55);
+      Buffer.from([
+        0x49, 0x44, 0x33, 0x03, 0x00, 0x00, 0x00, 0x00, 0x2f, 0x63,
+      ]).copy(tag);
+      tag.write('GEOB', 10, 'ascii');
+      return tag;
+    };
+    const part = (bytes: Buffer, contentType = 'audio/l16'): Part => ({
+      media: {
+        url: `data:${contentType};base64,${bytes.toString('base64')}`,
+        contentType,
+      },
+    });
+    const decode = (p: Part) => {
+      const url = p.media?.url ?? '';
+      return Buffer.from(url.substring(url.indexOf(',') + 1), 'base64');
+    };
+
+    it('removes the tag and keeps the audio after it', () => {
+      const pcm = Buffer.alloc(5760, 0x07);
+      const result = removeId3FromAudio(part(Buffer.concat([id3Tag(), pcm])));
+      assert.strictEqual(result.media?.contentType, 'audio/l16');
+      assert.deepStrictEqual(decode(result), pcm);
+    });
+
+    it('leaves chunks without a tag, and other parts, unchanged', () => {
+      const pcm = part(Buffer.from([1, 2, 3, 4]));
+      assert.strictEqual(removeId3FromAudio(pcm), pcm);
+      const text: Part = { text: 'hi' };
+      assert.strictEqual(removeId3FromAudio(text), text);
+    });
+
+    it('only changes headerless audio types', () => {
+      const wav = part(
+        Buffer.concat([id3Tag(), Buffer.from([1, 2])]),
+        'audio/wav'
+      );
+      assert.strictEqual(removeId3FromAudio(wav), wav);
+    });
+  });
+
+  describe('mergeStreamedAudio', () => {
+    // Streamed TTS sends headerless chunks (`audio/l16` by default, as seen
+    // live with gemini-3.8-flash-lite-tts).
+    const audioPart = (bytes: number[], contentType = 'audio/l16'): Part => ({
+      media: {
+        url: `data:${contentType};base64,${Buffer.from(bytes).toString('base64')}`,
+        contentType,
+      },
+    });
+    const decode = (part: Part) => {
+      const url = part.media?.url ?? '';
+      return Buffer.from(url.substring(url.indexOf(',') + 1), 'base64');
+    };
+
+    it('joins audio/l16 chunks into one audio/l16 part', () => {
+      const result = mergeStreamedAudio([
+        audioPart([1, 2]),
+        audioPart([3, 4]),
+        audioPart([5, 6]),
+      ]);
+
+      assert.strictEqual(result.length, 1);
+      assert.strictEqual(result[0].media?.contentType, 'audio/l16');
+      assert.deepStrictEqual(
+        decode(result[0]),
+        Buffer.from([1, 2, 3, 4, 5, 6])
+      );
+    });
+
+    it('keeps the requested headerless format', () => {
+      for (const type of ['audio/mulaw', 'audio/alaw']) {
+        const result = mergeStreamedAudio([
+          audioPart([1], type),
+          audioPart([2], type),
+        ]);
+        assert.strictEqual(result.length, 1);
+        assert.strictEqual(result[0].media?.contentType, type);
+        assert.deepStrictEqual(decode(result[0]), Buffer.from([1, 2]));
+      }
+    });
+
+    it('keeps content type parameters such as rate', () => {
+      const type = 'audio/L16;rate=16000';
+      const result = mergeStreamedAudio([
+        audioPart([1], type),
+        audioPart([2], type),
+      ]);
+      assert.strictEqual(result[0].media?.contentType, type);
+    });
+
+    it('does not join chunks of different types', () => {
+      const result = mergeStreamedAudio([
+        audioPart([1], 'audio/l16'),
+        audioPart([2], 'audio/mulaw'),
+      ]);
+      assert.strictEqual(result.length, 2);
+    });
+
+    // A streamed audio/wav request starts with a small complete WAV (header,
+    // a little audio, then extra bytes after `data`) and continues with
+    // audio/l16 chunks, as seen live.
+    const wavPart = (audio: number[]): Part => {
+      const data = Buffer.from(audio);
+      const extra = Buffer.from([9, 9, 9, 9]);
+      const header = Buffer.alloc(44);
+      header.write('RIFF', 0, 'ascii');
+      header.write('WAVE', 8, 'ascii');
+      header.write('fmt ', 12, 'ascii');
+      header.writeUInt32LE(16, 16);
+      header.writeUInt16LE(1, 20);
+      header.writeUInt16LE(1, 22);
+      header.writeUInt32LE(24000, 24);
+      header.writeUInt32LE(48000, 28);
+      header.writeUInt16LE(2, 32);
+      header.writeUInt16LE(16, 34);
+      header.write('data', 36, 'ascii');
+      header.writeUInt32LE(data.length, 40);
+      const extraHeader = Buffer.alloc(8);
+      extraHeader.write('LIST', 0, 'ascii');
+      extraHeader.writeUInt32LE(extra.length, 4);
+      const wav = Buffer.concat([header, data, extraHeader, extra]);
+      wav.writeUInt32LE(wav.length - 8, 4);
+      return {
+        media: {
+          url: `data:audio/wav;base64,${wav.toString('base64')}`,
+          contentType: 'audio/wav',
+        },
+      };
+    };
+
+    it('puts the audio/l16 chunks of a streamed WAV into one WAV', () => {
+      const result = mergeStreamedAudio([
+        wavPart([1, 2]),
+        audioPart([3, 4]),
+        audioPart([5, 6]),
+      ]);
+
+      assert.strictEqual(result.length, 1);
+      assert.strictEqual(result[0].media?.contentType, 'audio/wav');
+      const wav = decode(result[0]);
+      assert.strictEqual(wav.readUInt32LE(4), wav.length - 8);
+      assert.strictEqual(wav.readUInt32LE(40), 6);
+      assert.deepStrictEqual(
+        wav.subarray(44, 50),
+        Buffer.from([1, 2, 3, 4, 5, 6])
+      );
+      assert.strictEqual(wav.toString('ascii', 50, 54), 'LIST');
+    });
+
+    it('leaves a WAV without following chunks unchanged', () => {
+      const wav = wavPart([1, 2]);
+      assert.deepStrictEqual(mergeStreamedAudio([wav]), [wav]);
+    });
+
+    it('leaves media typed audio/wav that is not a WAV file unchanged', () => {
+      const notWav = audioPart([1, 2], 'audio/wav');
+      const pcm = audioPart([3, 4]);
+      assert.deepStrictEqual(mergeStreamedAudio([notWav, pcm]), [notWav, pcm]);
+    });
+
+    it('leaves other parts alone and joins each run separately', () => {
+      const text: Part = { text: 'hello' };
+      const result = mergeStreamedAudio([
+        audioPart([1, 2]),
+        audioPart([3, 4]),
+        text,
+        audioPart([5, 6]),
+      ]);
+
+      assert.strictEqual(result.length, 3);
+      assert.deepStrictEqual(decode(result[0]), Buffer.from([1, 2, 3, 4]));
+      assert.deepStrictEqual(result[1], text);
+      assert.deepStrictEqual(decode(result[2]), Buffer.from([5, 6]));
+    });
+
+    it('returns parts without audio unchanged', () => {
+      const parts: Part[] = [{ text: 'a' }, { text: 'b' }];
+      assert.deepStrictEqual(mergeStreamedAudio(parts), parts);
+    });
+  });
+
   describe('ensureToolIds', () => {
     it('should assign IDs to tool requests without refs', () => {
       const messages: MessageData[] = [
@@ -1824,6 +2333,47 @@ describe('Interaction Converters', () => {
         inputCharacters: 8,
         inputImages: 2,
       });
+    });
+
+    it('maps video usage and returns the generated video (shape seen live)', () => {
+      // gemini-omni-1.1-flash, text to video, store: false (no id).
+      const result = fromInteractionSync({
+        status: 'completed',
+        model: 'gemini-omni-1.1-flash',
+        steps: [
+          { type: 'thought', signature: 'sig123' },
+          {
+            type: 'model_output',
+            content: [{ type: 'video', mime_type: 'video/mp4', data: 'AAAA' }],
+          },
+        ],
+        usage: {
+          total_input_tokens: 16,
+          total_output_tokens: 58936,
+          total_thought_tokens: 383,
+          total_tokens: 59335,
+          input_tokens_by_modality: [{ modality: 'text', tokens: 16 }],
+          output_tokens_by_modality: [{ modality: 'video', tokens: 57920 }],
+        },
+      });
+      assert.strictEqual(result.finishReason, 'stop');
+      assert.strictEqual(result.usage?.outputVideos, 57920);
+      const video = result.message?.content.find((p) => p.media);
+      assert.deepStrictEqual(video?.media, {
+        url: 'data:video/mp4;base64,AAAA',
+        contentType: 'video/mp4',
+      });
+    });
+
+    it('maps video input usage', () => {
+      const result = fromInteractionSync({
+        status: 'completed',
+        usage: {
+          total_input_tokens: 30,
+          input_tokens_by_modality: [{ modality: 'video', tokens: 30 }],
+        },
+      });
+      assert.strictEqual(result.usage?.inputVideos, 30);
     });
 
     it('carries usage on a cancelled response', () => {

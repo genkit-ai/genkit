@@ -92,6 +92,20 @@ describe('Lyria 3', () => {
       assert.strictEqual(body.model, 'lyria-3-clip-preview');
     });
 
+    it('sends lyria-3.5 to the Interactions API', async () => {
+      const model = defineModel('lyria-3.5', defaultPluginOptions);
+      mockFetchResponse(mockInteractionResponse);
+
+      await model(minimalRequest, {} as any);
+
+      sinon.assert.calledOnce(fetchStub);
+      const [url, options] = fetchStub.lastCall.args;
+      assert.ok(String(url).endsWith('/interactions'), String(url));
+      const body = JSON.parse(options.body);
+      assert.strictEqual(body.model, 'lyria-3.5');
+      assert.deepStrictEqual(body.response_modalities, ['audio', 'text']);
+    });
+
     it('passes explicit responseModalities to the API', async () => {
       const model = defineModel('lyria-3-clip-preview', defaultPluginOptions);
       mockFetchResponse(mockInteractionResponse);
