@@ -578,7 +578,6 @@ describe('fromOpenAiChunkChoice', () => {
   const testCases: {
     should: string;
     chunkChoice: ChatCompletionChunk.Choice;
-    jsonMode?: boolean;
     expectedOutput: GenerateResponseData;
   }[] = [
     {
@@ -600,22 +599,23 @@ describe('fromOpenAiChunkChoice', () => {
       },
     },
     {
-      should: 'work with json',
+      // A streamed delta is only a fragment of the JSON document, so it must
+      // be passed through as text rather than parsed on its own.
+      should: 'pass a partial json fragment through as text',
       chunkChoice: {
         index: 0,
         delta: {
           role: 'assistant',
-          content: JSON.stringify({ json: 'test' }),
+          content: '{"na',
         },
         finish_reason: null,
         logprobs: null,
       },
-      jsonMode: true,
       expectedOutput: {
         finishReason: 'unknown',
         message: {
           role: 'model',
-          content: [{ data: { json: 'test' } }],
+          content: [{ text: '{"na' }],
         },
       },
     },
@@ -696,10 +696,7 @@ describe('fromOpenAiChunkChoice', () => {
 
   for (const test of testCases) {
     it(test.should, () => {
-      const actualOutput = fromOpenAIChunkChoice(
-        test.chunkChoice,
-        test.jsonMode
-      );
+      const actualOutput = fromOpenAIChunkChoice(test.chunkChoice);
       expect(actualOutput).toStrictEqual(test.expectedOutput);
     });
   }
@@ -1980,6 +1977,61 @@ describe('openAIModelRunner', () => {
 
       expect(streamedContent).toBe('chunk1chunk2');
       expect(result.message?.content[0].text).toBe('chunk1chunk2');
+    });
+
+    it('should stream json output as text fragments and return parsed data', async () => {
+      // The API streams a JSON document in fragments that are not valid JSON
+      // on their own.
+      const fragments = ['{"na', 'me": "Ada', '", "age": 36}'];
+      server.setNextResponse({
+        stream: true,
+        chunks: [
+          {
+            id: '1',
+            choices: [
+              {
+                index: 0,
+                delta: { role: 'assistant', content: '' },
+                finish_reason: null,
+              },
+            ],
+          },
+          ...fragments.map((content, i) => ({
+            id: `${i + 2}`,
+            choices: [{ index: 0, delta: { content }, finish_reason: null }],
+          })),
+          {
+            id: '5',
+            choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+          },
+        ],
+      });
+
+      const defaultClient = new OpenAI({ apiKey: 'default-key' });
+      const runner = openAIModelRunner('gpt-4o', defaultClient, undefined, {
+        name: 'openai',
+        baseURL: server.baseUrl,
+      });
+
+      const streamedParts: Part[] = [];
+      const result = await runner(
+        {
+          messages: [{ role: 'user', content: [{ text: 'who is Ada?' }] }],
+          output: { format: 'json' },
+          config: { apiKey: 'scoped-key' },
+        },
+        {
+          streamingRequested: true,
+          sendChunk: (chunk) => streamedParts.push(...chunk.content),
+        }
+      );
+
+      // Each fragment is forwarded as text for the json format to assemble.
+      expect(streamedParts).toStrictEqual(fragments.map((text) => ({ text })));
+      // The final response is parsed from the complete document.
+      expect(result.message?.content).toStrictEqual([
+        { data: { name: 'Ada', age: 36 } },
+      ]);
     });
 
     it('should fail when invalid apiKey is provided in request', async () => {

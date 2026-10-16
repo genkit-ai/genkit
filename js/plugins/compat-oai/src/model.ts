@@ -495,16 +495,17 @@ function fromOpenAIToolCallChunk(
  * Converts an OpenAI message stream event to a Genkit GenerateResponseData
  * object.
  * @param choice The OpenAI message stream event to convert.
- * @param jsonMode Whether the event is a JSON response.
  * @param toolCallAccumulators Optional per-message tool-call accumulators (keyed
  *   by tool call index) used to assemble streamed `arguments` fragments into
  *   partial tool requests. When omitted, tool-call deltas are converted
  *   statelessly (legacy behavior).
- * @returns The converted Genkit GenerateResponseData object.
+ * @returns The converted Genkit GenerateResponseData object. Text deltas are
+ *   always emitted as `text` parts, including for JSON output: a delta is only
+ *   a fragment of the JSON document and cannot be parsed on its own. The
+ *   output format's `parseChunk` assembles the fragments.
  */
 export function fromOpenAIChunkChoice(
   choice: ChatCompletionChunk.Choice,
-  jsonMode = false,
   toolCallAccumulators?: ToolCallAccumulator[]
 ): GenerateResponseData {
   const toolRequestParts = toolCallAccumulators
@@ -530,11 +531,7 @@ export function fromOpenAIChunkChoice(
 
     // Handle regular content if present
     if (choice.delta.content) {
-      content.push(
-        jsonMode
-          ? { data: JSON.parse(choice.delta.content!) }
-          : { text: choice.delta.content! }
-      );
+      content.push({ text: choice.delta.content });
     }
   }
 
@@ -689,7 +686,6 @@ export function openAIModelRunner(
         // tool calls incrementally: the first delta carries `name`/`id` and
         // subsequent deltas carry only fragments of the `arguments` JSON string.
         const toolCallAccumulators = new Map<number, ToolCallAccumulator[]>();
-        const jsonMode = request.output?.format === 'json';
         for await (const chunk of stream) {
           chunk.choices?.forEach((chunk) => {
             let accumulators = toolCallAccumulators.get(chunk.index);
@@ -697,7 +693,7 @@ export function openAIModelRunner(
               accumulators = [];
               toolCallAccumulators.set(chunk.index, accumulators);
             }
-            const c = fromOpenAIChunkChoice(chunk, jsonMode, accumulators);
+            const c = fromOpenAIChunkChoice(chunk, accumulators);
             options?.sendChunk!({
               index: chunk.index,
               content: c.message?.content ?? [],
