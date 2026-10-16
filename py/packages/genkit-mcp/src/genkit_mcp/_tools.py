@@ -34,7 +34,7 @@ from mcp.types import (
 )
 
 import genkit
-from genkit import MultipartToolResponse, Part, ToolContext, get_logger
+from genkit import MultipartToolResponse, Part, Tool, ToolContext, get_logger
 from genkit._core._typing import Resource
 from genkit.plugin_api import Action
 from genkit_mcp._errors import _ToolResultError
@@ -280,4 +280,31 @@ def mcp_tools_to_actions(
         mcp_tool_to_action(tool, prefix, call)
         for tool in tools
         if len(server_tools_by_name[mcp_tool_name(prefix, tool.name)]) == 1
+    ]
+
+
+def mcp_tools_to_handles(
+    tools: Sequence[McpTool],
+    prefix: str,
+    call: McpToolCall,
+) -> list[Tool]:
+    """Build one Genkit tool handle per tool in a server listing.
+
+    A handle is what ``generate`` accepts in ``tools``, and what a caller can
+    invoke directly. Its output schema is the one the server declared, since
+    the action's own output schema is the multipart envelope.
+
+    Args:
+        tools: Tools as listed by the server.
+        prefix: Namespace for the Genkit tool names.
+        call: Coroutine function invoking a tool on the live session.
+
+    Returns:
+        Handles in listing order, leaving out the tools
+        :func:`mcp_tools_to_actions` leaves out.
+    """
+    output_schemas = {tool.name: tool.outputSchema for tool in tools}
+    return [
+        Tool(action, original_output_schema=output_schemas[action.metadata['mcp']['tool']])
+        for action in mcp_tools_to_actions(tools, prefix, call)
     ]

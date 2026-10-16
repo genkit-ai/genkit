@@ -26,13 +26,19 @@ client = define_mcp_client(
 )
 
 # What the server offers, under the names a model is shown.
-for tool in await client.get_active_tools():
+tools = await client.get_active_tools()
+for tool in tools:
     print(tool.name, tool.description)
 
 # Every tool of this server, or just one.
 result = await ai.generate(prompt='Echo "hello".', tools=['everything:tool/*'])
 one = f'{client.name}:tool/{client.tool_name("echo")}'
 result = await ai.generate(prompt='Echo "hello".', tools=[one])
+
+# The listing itself is a list of Genkit tools, so it can be handed to a
+# generate call or awaited directly.
+result = await ai.generate(prompt='Echo "hello".', tools=tools)
+echoed = await tools[0]({'message': 'hello'})
 ```
 
 ## Tool names
