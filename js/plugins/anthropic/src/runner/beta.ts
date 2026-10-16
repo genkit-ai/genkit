@@ -160,7 +160,7 @@ export class BetaRunner extends BaseRunner<BetaRunnerTypes> {
     | BetaToolResultBlockParam
     | BetaThinkingBlockParam
     | BetaRedactedThinkingBlockParam {
-    if (part.reasoning) {
+    if (part.reasoning !== undefined) {
       const signature = this.getThinkingSignature(part);
       if (!signature) {
         throw new Error(

@@ -162,6 +162,19 @@ describe('toAnthropicMessageContent', () => {
     );
   });
 
+  it('should convert empty reasoning parts into thinking blocks', () => {
+    const result = testRunner.toAnthropicMessageContent({
+      reasoning: '',
+      metadata: { thoughtSignature: 'sig_empty' },
+    });
+
+    assert.deepStrictEqual(result, {
+      type: 'thinking',
+      thinking: '',
+      signature: 'sig_empty',
+    });
+  });
+
   it('should throw if the provided part is invalid', () => {
     assert.throws(
       () => testRunner.toAnthropicMessageContent({ fake: 'part' } as Part),

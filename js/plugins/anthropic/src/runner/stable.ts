@@ -97,7 +97,7 @@ export class Runner extends BaseRunner<RunnerTypes> {
     | ToolResultBlockParam
     | ThinkingBlockParam
     | RedactedThinkingBlockParam {
-    if (part.reasoning) {
+    if (part.reasoning !== undefined) {
       const signature = this.getThinkingSignature(part);
       if (!signature) {
         throw new Error(

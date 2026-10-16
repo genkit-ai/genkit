@@ -47,6 +47,22 @@ describe('BetaRunner.toAnthropicMessageContent', () => {
     assert.ok(result.source.data);
   });
 
+  it('converts empty reasoning parts into thinking blocks', () => {
+    const runner = createRunner();
+    const part: Part = {
+      reasoning: '',
+      metadata: { thoughtSignature: 'sig_empty' },
+    };
+
+    const result = (runner as any).toAnthropicMessageContent(part);
+
+    assert.deepStrictEqual(result, {
+      type: 'thinking',
+      thinking: '',
+      signature: 'sig_empty',
+    });
+  });
+
   it('throws when tool request ref is missing', () => {
     const runner = createRunner();
     const part: Part = {
