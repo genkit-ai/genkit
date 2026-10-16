@@ -65,3 +65,47 @@ Nothing needs closing at exit. Call `close()` when you are done with a server be
 is, not as cleanup on the way out: a process running under `genkit start` outlives your `main()`,
 and a closed client's tools can no longer be selected by a flow. Whether the Dev UI lists a
 provider's tools at all depends on core registry support, closed or not.
+
+## Several servers behind one name
+
+`define_mcp_host` registers one provider over any number of servers, so a single selector reaches
+all of them:
+
+```python
+from genkit import Genkit
+from genkit_mcp import define_mcp_host
+
+ai = Genkit()
+
+host = define_mcp_host(
+    ai,
+    'hosted',
+    mcp_servers={
+        'everything': {'command': 'npx', 'args': ['-y', '@modelcontextprotocol/server-everything']},
+        'git': {'command': 'uvx', 'args': ['mcp-server-git']},
+    },
+)
+
+result = await ai.generate(prompt='Echo "hello".', tools=['hosted:tool/*'])
+one = f'{host.name}:tool/{host.tool_name("everything", "echo")}'
+result = await ai.generate(prompt='Echo "hello".', tools=[one])
+```
+
+`mcp_servers` has the shape of the `mcpServers` block that Claude Desktop and Cursor read, so an
+existing one can be passed through: `mcp_servers=json.load(f)['mcpServers']`. Only stdio entries are
+accepted, and an entry with any key besides `command`, `args`, `env`, `cwd` and `type` fails.
+
+Each server keeps its own namespace, so the tools above are `everything_echo` and `git_git_log`. The
+key a server has in `mcp_servers` is its prefix. The host's own name is only the provider name, so
+it has to fit a selector but no model ever reads it.
+
+A server that cannot start, or whose process dies, fails with status `UNAVAILABLE`. The host logs
+it and skips it, so the other servers stay selectable. Any other failure fails the whole listing:
+a server that breaks the protocol, a server that answers the listing with an error, and two tools
+that share a name. Only the server you ask for is affected by `await host.connect(...)`,
+`await host.disconnect(...)` and `await host.reconnect(...)`. `await host.close()` disconnects every
+server the host holds, and like `McpClient.close()` it is final: afterwards the host fails with
+status `FAILED_PRECONDITION`, so define a new host to use those servers again.
+
+One provider means one listing. A tool call that fails on one server drops the listing for all of
+them, so the next `generate` lists every server again.

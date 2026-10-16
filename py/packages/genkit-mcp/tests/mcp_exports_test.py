@@ -20,6 +20,6 @@ import genkit_mcp
 
 
 def test_the_package_exports_exactly_its_public_surface() -> None:
-    assert genkit_mcp.__all__ == ['McpClient', 'define_mcp_client']
+    assert genkit_mcp.__all__ == ['McpClient', 'McpHost', 'define_mcp_client', 'define_mcp_host']
     for name in genkit_mcp.__all__:
         assert getattr(genkit_mcp, name) is not None
