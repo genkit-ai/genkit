@@ -67,7 +67,6 @@ OS_NAME=$(uname)
 
 PYTHON_CLI_TOOLS=(
   "httpie" # HTTP client.                  See: https://httpie.io/
-  "mypy"   # Static type checker.          See: https://mypy.readthedocs.io/en/stable/
   "ruff"   # Fast linter.                  See: https://github.com/astral-sh/ruff
 )
 
@@ -218,36 +217,21 @@ function genkit::install_google_cloud_sdk() {
 function genkit::install_go_cli_tools_ci() {
   go install github.com/google/go-licenses@latest
   go install golang.org/x/vuln/cmd/govulncheck@latest
-  go install oss.terrastruct.com/d2@latest
 }
 
 # Install all the required tools that have been written in Go.
 function genkit::install_go_cli_tools_eng() {
   go install github.com/Gelio/go-global-update@latest
-  go install github.com/captainhook-git/captainhook-bin/cmd/captainhook@latest
   go install github.com/google/addlicense@latest
   go install github.com/google/go-licenses@latest
   go install github.com/jesseduffield/lazygit@latest
   go install golang.org/x/vuln/cmd/govulncheck@latest
-  go install oss.terrastruct.com/d2@latest
-}
-
-# Install all the required tools that have been written in Rust.  We're assuming
-# that the user has already installed rust and cargo.
-function genkit::install_cargo_cli_tools_eng() {
-  cargo install --locked \
-    convco \
-    pylyzer \
-    rust-parallel \
-    taplo-cli
 }
 
 # Install NPM packages.
 function genkit::install_pnpm_cli_tools() {
   # Genkit CLI: https://genkit.dev/docs/devtools
-  # Biome: https://biomejs.dev/
   pnpm add -g \
-    @biomejs/biome \
     prettier
 }
 
@@ -258,39 +242,11 @@ function genkit::install_python_cli_tools() {
   done
 }
 
-# Install documentation site generator.
-function genkit::install_docs_cli_tools() {
-  # Install d2.
-  curl -fsSL https://d2lang.com/install.sh | sh -s --
-
-  # Engineering documentation site generator.
-  # See: https://squidfunk.github.io/mkdocs-material/
-  uv tool install \
-    mkdocs \
-    --with mkdocs-autorefs \
-    --with mkdocs-d2-plugin \
-    --with mkdocs-literate-nav \
-    --with mkdocs-material \
-    --with mkdocs-mermaid2-plugin \
-    --with mkdocs-minify-plugin \
-    --with mkdocstrings[python]
-}
-
 # Configure the commit message template.
 function genkit::configure_commit_template() {
   echo "Setting up commit message template..."
   ln -sf "${TOP_DIR}/COMMIT_MESSAGE_TEMPLATE" "${TOP_DIR}/.git/COMMIT_MESSAGE_TEMPLATE"
   git config commit.template "${TOP_DIR}/.git/COMMIT_MESSAGE_TEMPLATE"
-}
-
-# Install pre-commit hooks.
-function genkit::install_pre_commit_hooks() {
-  genkit::configure_commit_template
-  read -rp "Would you like to install git hooks (recommended to catch errors early)? [Y/n] " response
-  response=${response:-Y}
-  if [[ $response =~ ^[Yy]$ ]]; then
-    captainhook install -f -c "${TOP_DIR}/captainhook.json"
-  fi
 }
 
 # Setup genkit.
@@ -306,7 +262,6 @@ function genkit::install_common_packages() {
   export PNPM_HOME="$HOME/.local/share/pnpm"
   genkit::install_prerequisites
   genkit::install_python_cli_tools
-  genkit::install_docs_cli_tools
   genkit::install_pnpm_cli_tools
   genkit::install_golangci_lint
 }
@@ -321,8 +276,7 @@ function genkit::install_ci_packages() {
 function genkit::install_eng_packages() {
   genkit::install_common_packages
   genkit::install_go_cli_tools_eng
-  genkit::install_cargo_cli_tools_eng
-  genkit::install_pre_commit_hooks
+  genkit::configure_commit_template
   genkit::install_google_cloud_sdk
   genkit::setup_genkit
 }
