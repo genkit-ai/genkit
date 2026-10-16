@@ -53,7 +53,7 @@ tool name. That name is never used for naming, which is why `tool_name()` can
 answer without connecting.
 
 `check_stock` returns a dict, so it arrives as structured output. Text,
-images, audio and resource links all map across too.
+images and audio are passed on to Gemini too, but a resource link is not.
 
 The sample never calls `client.close()`. Under `genkit start` the flows run
 from the Dev UI after `main()` returns, and they need the client open. Closing
