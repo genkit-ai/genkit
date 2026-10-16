@@ -113,6 +113,7 @@ DEP002 = [
   "genkit-flask",
   "genkit-google-cloud",
   "genkit-google-genai",
+  "genkit-mcp",
   "genkit-middleware",
   "genkit-ollama",
   "genkit-openai",
