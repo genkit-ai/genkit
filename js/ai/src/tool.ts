@@ -180,23 +180,40 @@ export interface ToolConfig<I extends z.ZodTypeAny, O extends z.ZodTypeAny> {
 export type ToolArgument<
   I extends z.ZodTypeAny = z.ZodTypeAny,
   O extends z.ZodTypeAny = z.ZodTypeAny,
-> = string | ToolAction<I, O> | Action<I, O> | ExecutablePrompt<any, any, any>;
+> =
+  | string
+  | ToolAction<I, O>
+  | MultipartToolAction<I, O>
+  | Action<I, O>
+  | ExecutablePrompt<any, any, any>;
 
 /**
- * Converts an action to a tool action by setting the appropriate metadata.
+ * Converts an action to a tool action, preserving existing tool actions.
  */
+export function asTool<T extends ToolAction | MultipartToolAction>(
+  registry: Registry,
+  action: T
+): T;
 export function asTool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
   registry: Registry,
   action: Action<I, O>
-): ToolAction<I, O> {
+): ToolAction<I, O>;
+
+export function asTool(
+  registry: Registry,
+  action: Action
+): ToolAction | MultipartToolAction {
+  if (isMultipartTool(action)) {
+    return action;
+  }
   if (action.__action?.metadata?.type === 'tool') {
-    return action as ToolAction<I, O>;
+    return action as ToolAction;
   }
 
   const fn = ((input) => {
     setCustomMetadataAttributes({ subtype: 'tool' });
     return action(input);
-  }) as ToolAction<I, O>;
+  }) as ToolAction;
   fn.__action = {
     ...action.__action,
     metadata: { ...action.__action.metadata, type: 'tool' },
@@ -213,13 +230,13 @@ export async function resolveTools<
 >(
   registry: Registry,
   tools?: (ToolArgument | ToolDefinition)[]
-): Promise<ToolAction[]> {
+): Promise<(ToolAction | MultipartToolAction)[]> {
   if (!tools || tools.length === 0) {
     return [];
   }
 
   return await Promise.all(
-    tools.map(async (ref): Promise<ToolAction> => {
+    tools.map(async (ref): Promise<ToolAction | MultipartToolAction> => {
       if (typeof ref === 'string') {
         return await lookupToolByName(registry, ref);
       } else if (isAction(ref)) {
@@ -241,7 +258,7 @@ export async function resolveTools<
 export async function lookupToolByName(
   registry: Registry,
   name: string
-): Promise<ToolAction> {
+): Promise<ToolAction | MultipartToolAction> {
   const tool =
     (await registry.lookupAction(name)) ||
     (await registry.lookupAction(`/tool/${name}`)) ||
@@ -251,7 +268,7 @@ export async function lookupToolByName(
   if (!tool) {
     throw new Error(`Tool ${name} not found`);
   }
-  return tool as ToolAction;
+  return tool as ToolAction | MultipartToolAction;
 }
 
 /**
@@ -320,7 +337,7 @@ export type MultipartToolFn<I extends z.ZodTypeAny, O extends z.ZodTypeAny> = (
 export function defineTool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
   registry: Registry,
   config: { multipart: true } & ToolConfig<I, O>,
-  fn?: ToolFn<I, O>
+  fn?: MultipartToolFn<I, O>
 ): MultipartToolAction<I, O>;
 export function defineTool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
   registry: Registry,
@@ -545,7 +562,7 @@ function interruptTool(registry?: Registry) {
 
 export function tool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
   config: { multipart: true } & ToolConfig<I, O>,
-  fn?: ToolFn<I, O>
+  fn?: MultipartToolFn<I, O>
 ): MultipartToolAction<I, O>;
 export function tool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
   config: ToolConfig<I, O>,
