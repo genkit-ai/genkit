@@ -367,6 +367,13 @@ const res = await chat.send('Weather in Tokyo?');
 console.log(res.text);
 ```
 
+Request-scoped headers, such as a user's bearer token, can be bound to a chat or passed per call. A per-call `headers` replaces the chat's, and both are layered over the `headers` given to `remoteAgent`:
+
+```ts
+const chat = agent.chat({}, { headers: { Authorization: `Bearer ${userToken}` } });
+await chat.send('hi', { headers: { 'x-request-id': id } });
+```
+
 Learn more in the [Agents documentation](https://genkit.dev/docs/js/agents/overview/).
 
 ## Middleware
