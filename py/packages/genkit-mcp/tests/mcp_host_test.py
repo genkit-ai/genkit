@@ -664,7 +664,7 @@ async def test_an_unregistered_host_registers_nothing(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_an_mcp_servers_block_passes_through_unchanged(tmp_path: Path) -> None:
+async def test_an_mcp_servers_block_of_stdio_servers_is_accepted_as_it_is(tmp_path: Path) -> None:
     """A Claude Desktop or Cursor block, ``type`` marker included, is a valid mcp_servers value."""
     block = json.loads(json.dumps({'mcpServers': {'alpha': {'type': 'stdio', **server(tmp_path, pid_name='alpha')}}}))
     host = McpHost('hosted', mcp_servers=block['mcpServers'])
@@ -681,10 +681,28 @@ async def test_an_entry_with_an_unknown_key_is_refused_without_echoing_it(tmp_pa
     """A misspelt env must not launch the server without its secret, nor print the secret."""
     secret = 'sk-distinctive-secret-7f3a'
     loaded: dict[str, Any] = json.loads(json.dumps({'command': 'npx', 'enviroment': {'API_KEY': secret}}))
-    with pytest.raises(ValidationError) as raised:
+    with pytest.raises(ValueError, match="MCP host 'hosted': server 'alpha' is not a stdio entry") as raised:
         McpHost('hosted', mcp_servers={'alpha': loaded})
     assert 'enviroment' in str(raised.value)
     assert secret not in str(raised.value)
+    assert isinstance(raised.value.__cause__, ValidationError)
+    assert server_processes() == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'entry',
+    [
+        {'url': 'https://mcp.example.com/sse?token=sk-distinctive-secret-7f3a'},
+        {'type': 'sse', 'command': 'npx'},
+        {'command': 'npx', 'disabled': True},
+    ],
+)
+async def test_an_entry_which_is_not_stdio_is_refused_by_name(tmp_path: Path, entry: dict[str, Any]) -> None:
+    """In a block of many servers, the error has to say which one is not stdio, without echoing it."""
+    with pytest.raises(ValueError, match="MCP host 'hosted': server 'linear' is not a stdio entry") as raised:
+        McpHost('hosted', mcp_servers={**servers(tmp_path, 'alpha'), 'linear': json.loads(json.dumps(entry))})
+    assert 'sk-distinctive-secret-7f3a' not in str(raised.value)
     assert server_processes() == []
 
 

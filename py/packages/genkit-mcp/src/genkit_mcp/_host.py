@@ -22,6 +22,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, TypeVar
 
 import structlog
+from pydantic import ValidationError
 
 from genkit import DynamicActionProvider, Genkit, Tool
 from genkit.plugin_api import Action
@@ -85,7 +86,7 @@ class McpHost:
         self._clients: dict[str, McpClient] = {}
         self._closed = False
         for server_name, entry in mcp_servers.items():
-            config = McpStdioServerConfig.model_validate(entry)
+            config = self._stdio_config(server_name, entry)
             self._clients[server_name] = self._build_client(
                 server_name, command=config.command, args=config.args, env=config.env, cwd=config.cwd
             )
@@ -334,6 +335,15 @@ class McpHost:
         client._provider = self._provider
         return client
 
+    def _stdio_config(self, server_name: str, entry: McpServerEntry) -> McpStdioServerConfig:
+        """Validate one server's entry, naming the server when it is not a stdio entry."""
+        try:
+            return McpStdioServerConfig.model_validate(entry)
+        except ValidationError as error:
+            raise ValueError(
+                f'MCP host {self._name!r}: server {server_name!r} is not a stdio entry: {error}'
+            ) from error
+
     def _refuse_when_closed(self) -> None:
         """Raise if this host has been closed."""
         if self._closed:
@@ -367,8 +377,8 @@ def define_mcp_host(
     ``<name>:tool/*`` for all of them, or ``<name>:tool/<server>_<tool>`` for
     one. Connection is lazy: a child process starts on the first tool listing.
 
-    ``mcp_servers`` takes the shape of an ``mcpServers`` block from Claude
-    Desktop or Cursor, so one can be passed straight from its file::
+    ``mcp_servers`` takes an ``mcpServers`` block of stdio servers, as Claude
+    Desktop and Cursor write it, so such a block can be loaded from its file::
 
         host = define_mcp_host(ai, 'hosted', mcp_servers=json.load(f)['mcpServers'])
 

@@ -121,9 +121,11 @@ one = f'{host.name}:tool/{host.tool_name("everything", "echo")}'
 result = await ai.generate(prompt='Echo "hello".', tools=[one])
 ```
 
-`mcp_servers` has the shape of the `mcpServers` block that Claude Desktop and Cursor read, so an
-existing one can be passed through: `mcp_servers=json.load(f)['mcpServers']`. Only stdio entries are
-accepted, and an entry with any key besides `command`, `args`, `env`, `cwd` and `type` fails.
+`mcp_servers` takes an `mcpServers` block of stdio servers, as Claude Desktop and Cursor write it, so
+such a block can be loaded from its file: `mcp_servers=json.load(f)['mcpServers']`. An entry that is
+not a stdio entry, such as one with a `url`, `type: 'sse'` or `disabled: true`, fails the host with
+an error naming that server. So does an entry with any key besides `command`, `args`, `env`, `cwd`
+and `type`.
 
 Each server keeps its own namespace, so the tools above are `everything_echo` and `git_git_log`. The
 key a server has in `mcp_servers` is its prefix. The host's own name is only the provider name, so
