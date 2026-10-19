@@ -86,7 +86,8 @@ underneath you. A request still in flight when it restarts, on any event loop, f
 closed client cannot be restarted. To use that server again, define a new client. Afterwards
 `generate` with one of its tools, and `get_active_tools()`, fail with a `GenkitError` whose status
 is `FAILED_PRECONDITION`. A server that cannot start, or whose process dies, fails with status
-`UNAVAILABLE`. A connection that died on its own is replaced on next use, so one bad server start is
+`UNAVAILABLE`, and a request the server does not answer within `request_timeout_millis` fails with
+`DEADLINE_EXCEEDED`. A connection that died on its own is replaced on next use, so one bad server start is
 not permanent. Resolving a tool by its action key, as the Dev UI does to run one, reports neither
 status: core finds no action for a closed client or a server that cannot start.
 
@@ -128,8 +129,10 @@ Each server keeps its own namespace, so the tools above are `everything_echo` an
 key a server has in `mcp_servers` is its prefix. The host's own name is only the provider name, so
 it has to fit a selector but no model ever reads it.
 
-A server that cannot start, or whose process dies, fails with status `UNAVAILABLE`. The host logs
-it and skips it, so the other servers stay selectable. Any other failure fails the whole listing:
+A server that cannot start, or whose process dies, fails with status `UNAVAILABLE`, and one that
+does not answer a request in time fails with `DEADLINE_EXCEEDED`. The host logs either and skips it,
+so the other servers stay selectable. A server disconnected or replaced while the host was listing
+it is left out of that listing. Any other failure fails the whole listing:
 a server that breaks the protocol, a server that answers the listing with an error, and two tools
 that share a name. Only the server you ask for is affected by `await host.connect(...)`,
 `await host.disconnect(...)` and `await host.reconnect(...)`. `await host.close()` disconnects every

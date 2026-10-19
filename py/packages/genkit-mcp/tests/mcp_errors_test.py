@@ -17,7 +17,13 @@
 """Tests for the status each MCP client error reports."""
 
 import pytest
-from genkit_mcp._errors import _ClientError, _ConnectionClosedError, _ConnectionFailedError, _ProtocolError
+from genkit_mcp._errors import (
+    _ClientError,
+    _ConnectionClosedError,
+    _ConnectionFailedError,
+    _ProtocolError,
+    _RequestTimeoutError,
+)
 
 from genkit import GenkitError
 
@@ -27,6 +33,7 @@ from genkit import GenkitError
     [
         (_ConnectionClosedError, 'FAILED_PRECONDITION'),
         (_ConnectionFailedError, 'UNAVAILABLE'),
+        (_RequestTimeoutError, 'DEADLINE_EXCEEDED'),
         (_ProtocolError, 'INTERNAL'),
     ],
 )

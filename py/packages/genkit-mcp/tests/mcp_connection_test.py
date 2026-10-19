@@ -32,6 +32,7 @@ from genkit_mcp._errors import (
     _ConnectionClosedError,
     _ConnectionFailedError,
     _ProtocolError,
+    _RequestTimeoutError,
     _ToolResultError,
 )
 from mcp import ClientSession
@@ -962,9 +963,11 @@ async def test_a_request_timeout_fails_that_call_alone(tmp_path: Path) -> None:
     # The timeout also covers the handshake, which a loaded machine can take seconds to finish.
     connection = McpConnection(config(tmp_path), request_timeout_millis=8000)
     try:
-        with pytest.raises(McpError, match='Timed out') as timed_out:
+        with pytest.raises(_RequestTimeoutError, match='timed out') as timed_out:
             await asyncio.wait_for(connection.call_tool('stall', {}), timeout=LIMIT)
-        assert timed_out.value.error.code == 408
+        assert timed_out.value.status == 'DEADLINE_EXCEEDED'
+        assert isinstance(timed_out.value.__cause__, McpError)
+        assert timed_out.value.__cause__.error.code == 408
 
         assert connection._state is _ConnectionState.OPEN
         alive = await asyncio.wait_for(connection.call_tool('echo', {'message': 'alive'}), timeout=LIMIT)

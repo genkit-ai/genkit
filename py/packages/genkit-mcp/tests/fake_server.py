@@ -83,6 +83,11 @@ async def list_tools(req: ListToolsRequest) -> ListToolsResult:
         # a healthy server may use and the SDK also synthesises on transport death.
         raise McpError(ErrorData(code=CONNECTION_CLOSED, message='application-level failure'))
 
+    stall_list_marker = os.environ.get('MCP_FAKE_STALL_LIST')
+    if stall_list_marker:
+        await anyio.Path(stall_list_marker).write_text('stalled', encoding='utf-8')
+        await asyncio.Event().wait()
+
     if os.environ.get('MCP_FAKE_STUCK_CURSOR'):
         return ListToolsResult(tools=TOOLS[:1], nextCursor='stuck')
 

@@ -61,6 +61,16 @@ class _ConnectionFailedError(_ClientError):
     _status: ClassVar[StatusName] = 'UNAVAILABLE'
 
 
+class _RequestTimeoutError(_ClientError):
+    """The server did not answer one request in time. Status ``DEADLINE_EXCEEDED``.
+
+    The session stays open, since a slow server is not a dead one.
+    ``__cause__`` carries the timeout the MCP SDK raised.
+    """
+
+    _status: ClassVar[StatusName] = 'DEADLINE_EXCEEDED'
+
+
 class _ProtocolError(_ClientError):
     """The server answered in a way the protocol does not allow. Status ``INTERNAL``."""
 

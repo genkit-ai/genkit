@@ -46,6 +46,7 @@ from genkit_mcp._errors import (
     _ConnectionClosedError,
     _ConnectionFailedError,
     _ProtocolError,
+    _RequestTimeoutError,
     _ToolResultError,
 )
 
@@ -72,6 +73,9 @@ MAX_TOOL_PAGES = 1000
 
 DEFAULT_REQUEST_TIMEOUT_MILLIS = 60_000
 """How long one MCP request may take before the SDK fails it."""
+
+_REQUEST_TIMEOUT = 408
+"""The code on the ``McpError`` the SDK raises when a request outlives its read timeout."""
 
 LIVENESS_PROBE_SECONDS = 5.0
 """Bound on the ping that tells a dead transport from a server error reply.
@@ -148,6 +152,11 @@ async def _transport_is_dead(session: ClientSession, error: Exception) -> bool:
     except Exception:
         return True
     return False
+
+
+def _timed_out(error: Exception) -> bool:
+    """Report whether the SDK gave up waiting for the server to answer a request."""
+    return isinstance(error, McpError) and error.error.code == _REQUEST_TIMEOUT
 
 
 def _transport_cause(error: Exception) -> Exception:
@@ -290,6 +299,7 @@ class McpConnection:
 
         Raises:
             _ProtocolError: If the server's cursors never terminate.
+            _RequestTimeoutError: If the server does not answer a page in time.
         """
 
         async def list_all(session: ClientSession) -> list[McpTool]:
@@ -329,6 +339,7 @@ class McpConnection:
 
         Raises:
             _ToolResultError: If the result violates the tool's declared output schema.
+            _RequestTimeoutError: If the server does not answer in time.
         """
 
         async def call(session: ClientSession) -> CallToolResult:
@@ -490,7 +501,7 @@ class McpConnection:
                     self._settle(error)
                     serving.cancel()
                 elif not request.result.done():
-                    request.result.set_exception(error)
+                    request.result.set_exception(self._timed_out_error(error) if _timed_out(error) else error)
             else:
                 if not request.result.done():
                     request.result.set_result(value)
@@ -555,6 +566,12 @@ class McpConnection:
     def _closed_error(self) -> _ConnectionClosedError:
         """Build the error reported once this connection is shut down."""
         return _ConnectionClosedError(f'MCP connection to {self._config.command!r} is closed')
+
+    def _timed_out_error(self, timeout: Exception) -> _RequestTimeoutError:
+        """Build the error reported when the server did not answer one request in time."""
+        error = _RequestTimeoutError(f'MCP request to {self._config.command!r} timed out')
+        error.__cause__ = timeout
+        return error
 
     def _failed_error(self) -> _ConnectionFailedError:
         """Build the error reported when startup or the session died."""

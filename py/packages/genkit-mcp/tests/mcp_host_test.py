@@ -6,6 +6,7 @@
 
 """Integration tests for several MCP servers behind one dynamic action provider."""
 
+import asyncio
 import json
 import os
 import re
@@ -13,11 +14,13 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import anyio
 import psutil
 import pytest
 from genkit_mcp import McpClient, McpHost, define_mcp_host
 from mcp.shared.exceptions import McpError
 from pydantic import ValidationError
+from structlog.testing import capture_logs
 
 from genkit import Genkit, GenkitError, Message, ModelResponse, Part, Tool
 from genkit._ai._generate import expand_wildcard_tools
@@ -45,6 +48,13 @@ ALL_TOOLS = [
 # assert is one the host asked for.
 LONG_TTL_MILLIS = 600_000
 
+# Long enough for a healthy test server to start and answer on a slow machine,
+# since the same timeout bounds its handshake.
+STALL_TIMEOUT_MILLIS = 3_000
+
+# Bounds every wait on a test server, so a regression fails rather than hangs.
+LIMIT = 15
+
 
 def server(tmp_path: Path, pid_name: str = 'server', **env: str) -> dict[str, Any]:
     """One mcpServers entry, or connect() keyword arguments, for the test server."""
@@ -67,6 +77,20 @@ def servers(tmp_path: Path, *names: str, **env: str) -> dict[str, dict[str, Any]
 def missing_server(tmp_path: Path) -> dict[str, Any]:
     """A server whose command does not exist, so it can never start."""
     return {'command': str(tmp_path / 'no-such-server')}
+
+
+async def stalled(marker: Path) -> None:
+    """Wait until a server started with ``MCP_FAKE_STALL_LIST`` is stuck in its listing."""
+
+    async def poll() -> None:
+        while True:
+            try:
+                await anyio.Path(marker).read_text(encoding='utf-8')
+                return
+            except FileNotFoundError:
+                await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(poll(), timeout=LIMIT)
 
 
 def server_processes() -> list[psutil.Process]:
@@ -164,6 +188,65 @@ async def test_a_server_which_cannot_start_leaves_the_others_listed(tmp_path: Pa
         await host.close()
 
     assert tool_names(tools) == hosted('alpha')
+
+
+@pytest.mark.asyncio
+async def test_servers_which_do_not_answer_in_time_leave_the_others_listed(tmp_path: Path) -> None:
+    """A server stuck in its handshake or its listing is as unreachable as one that cannot start."""
+    host = McpHost(
+        'hosted',
+        mcp_servers={
+            **servers(tmp_path, 'alpha'),
+            **servers(tmp_path, 'handshake', MCP_FAKE_STALL='1'),
+            **servers(tmp_path, 'listing', MCP_FAKE_STALL_LIST=str(tmp_path / 'listing.stalled')),
+        },
+        request_timeout_millis=STALL_TIMEOUT_MILLIS,
+    )
+    try:
+        with capture_logs() as logs:
+            tools = await asyncio.wait_for(host.get_active_tools(), timeout=LIMIT)
+    finally:
+        await host.close()
+
+    assert tool_names(tools) == hosted('alpha')
+    skipped = {log['server']: log['status'] for log in logs if log['event'].startswith('MCP server could not be')}
+    assert skipped == {'handshake': 'UNAVAILABLE', 'listing': 'DEADLINE_EXCEEDED'}
+    assert server_processes() == []
+
+
+@pytest.mark.asyncio
+async def test_a_server_disconnected_during_a_listing_is_left_out_of_it(tmp_path: Path) -> None:
+    """The listing in flight still holds the old client, and that client's closed error is not a failure."""
+    marker = tmp_path / 'beta.stalled'
+    host = McpHost(
+        'hosted',
+        mcp_servers={**servers(tmp_path, 'alpha'), **servers(tmp_path, 'beta', MCP_FAKE_STALL_LIST=str(marker))},
+    )
+    try:
+        listing = asyncio.create_task(host.get_active_tools())
+        await stalled(marker)
+        await host.disconnect('beta')
+        tools = await asyncio.wait_for(listing, timeout=LIMIT)
+    finally:
+        await host.close()
+
+    assert tool_names(tools) == hosted('alpha')
+    assert server_processes() == []
+
+
+@pytest.mark.asyncio
+async def test_a_host_closed_during_a_listing_fails_it_as_closed(tmp_path: Path) -> None:
+    """Every server left the host, but the listing must not pass for an empty catalog."""
+    marker = tmp_path / 'alpha.stalled'
+    host = McpHost('hosted', mcp_servers=servers(tmp_path, 'alpha', MCP_FAKE_STALL_LIST=str(marker)))
+    listing = asyncio.create_task(host.get_active_tools())
+    await stalled(marker)
+    await host.close()
+
+    with pytest.raises(GenkitError, match="MCP host 'hosted' is closed") as raised:
+        await asyncio.wait_for(listing, timeout=LIMIT)
+    assert raised.value.status == 'FAILED_PRECONDITION'
+    assert server_processes() == []
 
 
 @pytest.mark.asyncio

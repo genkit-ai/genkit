@@ -28,7 +28,7 @@ from genkit.plugin_api import Action
 from genkit_mcp._client import McpClient
 from genkit_mcp._config import McpServerEntry, McpStdioServerConfig
 from genkit_mcp._connection import DEFAULT_REQUEST_TIMEOUT_MILLIS
-from genkit_mcp._errors import _ConnectionClosedError, _ConnectionFailedError
+from genkit_mcp._errors import _ConnectionClosedError, _ConnectionFailedError, _RequestTimeoutError
 from genkit_mcp._tools import TOOL_NAME_PATTERN, validate_provider_name
 
 logger = structlog.get_logger(__name__)
@@ -43,10 +43,11 @@ class McpHost:
     provider across all of them, so ``<host>:tool/*`` selects every tool of
     every server and ``<host>:tool/<server>_<tool>`` selects one of them.
 
-    A server that cannot start, or whose process dies, is logged and skipped,
-    so one such server leaves the rest selectable. Any other failure to list a
-    server, such as a protocol violation, an error the server returns, or two
-    of its tools sharing a name, fails the listing.
+    A server that cannot start, whose process dies, or that does not answer in
+    time is logged and skipped, so one such server leaves the rest selectable.
+    So is a server disconnected or replaced while it was being listed. Any
+    other failure to list a server, such as a protocol violation, an error the
+    server returns, or two of its tools sharing a name, fails the listing.
 
     A host holds no Genkit instance. Registering the provider is
     :func:`define_mcp_host`.
@@ -196,8 +197,9 @@ class McpHost:
 
         Raises:
             ValueError: If this host holds no such server.
-            GenkitError: ``FAILED_PRECONDITION`` if this host is closed, or
-                ``UNAVAILABLE`` if the server cannot be started.
+            GenkitError: ``FAILED_PRECONDITION`` if this host is closed,
+                ``UNAVAILABLE`` if the server cannot be started, or
+                ``DEADLINE_EXCEEDED`` if it does not answer in time.
         """
         self._refuse_when_closed()
         client = self._client(server_name)
@@ -210,9 +212,11 @@ class McpHost:
         """List the tools every server currently offers, as Genkit tools.
 
         Servers are listed concurrently, and each of them is listed afresh, as
-        :meth:`McpClient.get_active_tools` is. A server that cannot start, or
-        whose process dies, is logged and contributes nothing, so it cannot
-        empty this host's catalog. Any other failure fails the listing.
+        :meth:`McpClient.get_active_tools` is. A server that cannot start, whose
+        process dies, or that does not answer in time is logged and contributes
+        nothing, so it cannot empty this host's catalog. Neither does a server
+        disconnected or replaced during the listing. Any other failure fails
+        the listing.
 
         The list can go straight into ``generate`` as ``tools=``, and each tool
         can be awaited directly. The host's tools are also selected as
@@ -223,8 +227,9 @@ class McpHost:
             server order.
 
         Raises:
-            GenkitError: ``FAILED_PRECONDITION`` if this host is closed, or
-                ``INTERNAL`` if a server breaks the protocol.
+            GenkitError: ``FAILED_PRECONDITION`` if this host is closed, even
+                while it was listing, or ``INTERNAL`` if a server breaks the
+                protocol.
             McpError: If a server answers the listing with an error.
             ValueError: If two tools share a name, within one server or across
                 two. Distinct server names do not rule this out, because the
@@ -246,12 +251,16 @@ class McpHost:
         )
         tools: list[_Listed] = []
         served_by: dict[str, str] = {}
-        for (server_name, _), listing in zip(servers, listings, strict=True):
-            if isinstance(listing, _ConnectionFailedError):
+        self._refuse_when_closed()
+        for (server_name, client), listing in zip(servers, listings, strict=True):
+            if isinstance(listing, _ConnectionClosedError) and self._clients.get(server_name) is not client:
+                continue
+            if isinstance(listing, (_ConnectionFailedError, _RequestTimeoutError)):
                 logger.error(
                     'MCP server could not be reached, serving the other servers without it',
                     server=server_name,
                     host=self._name,
+                    status=listing.status,
                     exc_info=listing,
                 )
                 continue
