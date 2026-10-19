@@ -243,6 +243,7 @@ class McpConnection:
         self._closed = asyncio.Event()
         self._state_lock = asyncio.Lock()
         self._owner_task: asyncio.Task[None] | None = None
+        self._shutdown: anyio.CancelScope | None = None
         self._unwinding: list[_Request[Any]] = []
 
     @property
@@ -333,22 +334,19 @@ class McpConnection:
             await self._closed.wait()
             return
 
-        # Cancelling the owner before its body is ever scheduled skips the
-        # ``finally`` that normally releases callers parked in ``_start``.
+        # A connection closed before it started has no owner to open this gate.
         self._ready.set()
 
         try:
+            if self._shutdown is not None:
+                # A native ``task.cancel()`` ignores anyio shields, so it can abort the SDK reaping the child.
+                self._shutdown.cancel()
             if task is not None:
-                # Cancelling the owner makes its ``async with`` blocks exit in
-                # the same task that entered them.
-                task.cancel()
-                # ``gather`` reports the owner's cancellation as a result instead
-                # of raising, leaving this caller's own cancellation free to
-                # propagate.
-                await asyncio.gather(task, return_exceptions=True)
+                # Unlike ``gather``, ``wait`` leaves the owner reaping if this caller is cancelled.
+                await asyncio.wait({task})
         finally:
             # Runs even when this caller is cancelled mid-teardown: the owner is
-            # already cancelled, and leaving the gate shut would hang every
+            # already shutting down, and leaving the gate shut would hang every
             # later close instead.
             self._fail_queued(self._closed_error)
             self._closed.set()
@@ -377,11 +375,12 @@ class McpConnection:
         async with self._state_lock:
             if self._state is _ConnectionState.NEW:
                 self._state = _ConnectionState.CONNECTING
-                self._owner_task = asyncio.create_task(self._run(), name='genkit-mcp-connection')
+                self._shutdown = shutdown = anyio.CancelScope()
+                self._owner_task = asyncio.create_task(self._run(shutdown), name='genkit-mcp-connection')
         await self._ready.wait()
 
-    async def _run(self) -> None:
-        """Own the SDK context managers for the lifetime of this connection."""
+    async def _run(self, shutdown: anyio.CancelScope) -> None:
+        """Own the SDK context managers until the transport dies or ``shutdown`` is cancelled."""
         try:
             parameters = StdioServerParameters(
                 command=self._config.command,
@@ -392,19 +391,20 @@ class McpConnection:
                 # and with it every later request on this connection.
                 encoding_error_handler='replace',
             )
-            async with stdio_client(parameters) as (read_stream, write_stream):
-                async with ClientSession(
-                    read_stream,
-                    write_stream,
-                    read_timeout_seconds=self._request_timeout,
-                    client_info=CLIENT_INFO,
-                ) as session:
-                    await session.initialize()
-                    async with self._state_lock:
-                        if self._state is _ConnectionState.CONNECTING:
-                            self._state = _ConnectionState.OPEN
-                    self._ready.set()
-                    await self._serve(session)
+            with shutdown:
+                async with stdio_client(parameters) as (read_stream, write_stream):
+                    async with ClientSession(
+                        read_stream,
+                        write_stream,
+                        read_timeout_seconds=self._request_timeout,
+                        client_info=CLIENT_INFO,
+                    ) as session:
+                        await session.initialize()
+                        async with self._state_lock:
+                            if self._state is _ConnectionState.CONNECTING:
+                                self._state = _ConnectionState.OPEN
+                        self._ready.set()
+                        await self._serve(session)
         except BaseException as error:
             if not isinstance(error, Exception):
                 self._settle(None)
@@ -427,6 +427,10 @@ class McpConnection:
             while True:
                 request = await self._queue.get()
                 if request.result.cancelled():
+                    continue
+                if self._state is _ConnectionState.CLOSED:
+                    # Dequeued in the same step that close ran, before its cancellation reached this task.
+                    request.result.set_exception(self._closed_error())
                     continue
                 operations.start_soon(self._execute, session, request, operations.cancel_scope)
 

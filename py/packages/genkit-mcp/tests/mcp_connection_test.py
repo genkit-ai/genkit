@@ -448,6 +448,7 @@ async def test_close_while_the_owner_unwinds_releases_a_cut_off_caller_as_closed
     with pytest.raises(_ConnectionClosedError, match='closed') as closed:
         await asyncio.wait_for(caller, timeout=LIMIT)
     assert closed.value.__cause__ is None
+    assert not is_running(await server_pid(tmp_path / 'server.pid'))
 
 
 @pytest.mark.asyncio
