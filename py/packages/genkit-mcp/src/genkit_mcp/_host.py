@@ -18,12 +18,12 @@
 
 import asyncio
 import os
-from collections.abc import Mapping
-from typing import Any
+from collections.abc import Awaitable, Callable, Mapping
+from typing import Any, TypeVar
 
 import structlog
 
-from genkit import DynamicActionProvider, Genkit
+from genkit import DynamicActionProvider, Genkit, Tool
 from genkit.plugin_api import Action
 from genkit_mcp._client import McpClient
 from genkit_mcp._config import McpServerEntry, McpStdioServerConfig
@@ -32,6 +32,8 @@ from genkit_mcp._errors import _ConnectionClosedError, _ConnectionFailedError
 from genkit_mcp._tools import TOOL_NAME_PATTERN, validate_provider_name
 
 logger = structlog.get_logger(__name__)
+
+_Listed = TypeVar('_Listed', Tool, Action[Any, Any])
 
 
 class McpHost:
@@ -204,20 +206,21 @@ class McpHost:
         finally:
             self._invalidate_listing()
 
-    async def get_active_tools(self) -> list[Action[Any, Any]]:
-        """List the tools every server currently offers, as Genkit actions.
+    async def get_active_tools(self) -> list[Tool]:
+        """List the tools every server currently offers, as Genkit tools.
 
         Servers are listed concurrently, and each of them is listed afresh, as
         :meth:`McpClient.get_active_tools` is. A server that cannot start, or
         whose process dies, is logged and contributes nothing, so it cannot
         empty this host's catalog. Any other failure fails the listing.
 
-        The actions are unregistered: a model reaches them through a dynamic
-        action provider serving them, which :func:`define_mcp_host` sets up.
+        The list can go straight into ``generate`` as ``tools=``, and each tool
+        can be awaited directly. The host's tools are also selected as
+        ``<name>:tool/*``, which is what an app and the Dev UI should use.
 
         Returns:
-            One action per tool, servers in listing order and tools in server
-            order.
+            One tool per server tool, servers in listing order and tools in
+            server order.
 
         Raises:
             GenkitError: ``FAILED_PRECONDITION`` if this host is closed, or
@@ -228,13 +231,20 @@ class McpHost:
                 name and the tool name are joined by the underscore either of
                 them may hold.
         """
+        return await self._list(McpClient.get_active_tools)
+
+    async def _list_actions(self) -> list[Action[Any, Any]]:
+        """List every server's tools as unregistered actions, for the provider to hand out."""
+        return await self._list(McpClient._list_actions)
+
+    async def _list(self, list_server: Callable[[McpClient], Awaitable[list[_Listed]]]) -> list[_Listed]:
         self._refuse_when_closed()
         servers = list(self._clients.items())
         listings = await asyncio.gather(
-            *(client.get_active_tools() for _, client in servers),
+            *(list_server(client) for _, client in servers),
             return_exceptions=True,
         )
-        tools: list[Action[Any, Any]] = []
+        tools: list[_Listed] = []
         served_by: dict[str, str] = {}
         for (server_name, _), listing in zip(servers, listings, strict=True):
             if isinstance(listing, _ConnectionFailedError):
@@ -377,7 +387,7 @@ def define_mcp_host(
 
     async def list_tools() -> dict[str, list[Action[Any, Any]]]:
         """Provide every server's tools to the dynamic action provider."""
-        return {'tool': await host.get_active_tools()}
+        return {'tool': await host._list_actions()}
 
     host._set_provider(
         ai.define_dynamic_action_provider(

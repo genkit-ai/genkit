@@ -19,9 +19,9 @@ from genkit_mcp import McpClient, McpHost, define_mcp_host
 from mcp.shared.exceptions import McpError
 from pydantic import ValidationError
 
-from genkit import Genkit, GenkitError, Message, ModelResponse, Part
+from genkit import Genkit, GenkitError, Message, ModelResponse, Part, Tool
 from genkit._ai._generate import expand_wildcard_tools
-from genkit._core._action import Action, ActionKind
+from genkit._core._action import ActionKind
 from genkit._core._typing import (
     FinishReason,
     Role,
@@ -86,7 +86,7 @@ def server_process(tmp_path: Path, pid_name: str) -> psutil.Process:
     return psutil.Process(int((tmp_path / f'{pid_name}.pid').read_text(encoding='utf-8')))
 
 
-def tool_names(tools: list[Action[Any, Any]]) -> list[str]:
+def tool_names(tools: list[Tool]) -> list[str]:
     """Names of the listed tools, as a model is shown them."""
     return [tool.name for tool in tools]
 
@@ -201,6 +201,31 @@ async def test_generate_calls_a_tool_on_one_hosted_server(tmp_path: Path) -> Non
     assert sorted(tool.name for tool in pm.last_request.tools or []) == sorted(hosted('alpha', 'beta'))
     tool_message = pm.last_request.messages[-1]
     assert tool_message.role == Role.TOOL
+    assert tool_message.content[0].tool_response is not None
+    assert tool_message.content[0].tool_response.output == 'hello'
+
+
+@pytest.mark.asyncio
+async def test_generate_accepts_the_listed_tools(tmp_path: Path) -> None:
+    """The listing is made of tool handles, so it goes into ``generate`` as it is."""
+    ai = Genkit()
+    pm, _ = define_scripted_model(ai)
+    host = define_mcp_host(ai, 'hosted', mcp_servers=servers(tmp_path, 'alpha', 'beta'))
+    pm.responses = [
+        tool_call_response('beta_echo', {'message': 'hello'}),
+        text_response('done'),
+    ]
+
+    try:
+        tools = await host.get_active_tools()
+        response = await ai.generate(model='scriptedModel', prompt='echo hello', tools=tools)
+    finally:
+        await host.close()
+
+    assert response.text == 'done'
+    assert pm.last_request is not None
+    assert sorted(tool.name for tool in pm.last_request.tools or []) == sorted(hosted('alpha', 'beta'))
+    tool_message = pm.last_request.messages[-1]
     assert tool_message.content[0].tool_response is not None
     assert tool_message.content[0].tool_response.output == 'hello'
 
