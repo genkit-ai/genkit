@@ -134,8 +134,12 @@ class McpHost:
 
             await host.connect('git', config['mcpServers']['git'])
 
-        A replaced server is disconnected and its process stopped. Connection is
-        lazy: the new server starts on the next listing.
+        The calling loop starts the server and lists its tools before this
+        returns, so a server which cannot be started says so here rather than
+        on the next generate. A server that fails is stopped and leaves this
+        host as it was, a server it would have replaced included. Once the new
+        server is listed, a replaced server is disconnected and its process
+        stopped.
 
         Args:
             server_name: Name for this server within this host, which prefixes
@@ -146,11 +150,23 @@ class McpHost:
 
         Raises:
             ValueError: If ``server_name`` cannot appear in a model-facing tool
-                name, or if ``entry`` is not a stdio server entry.
-            GenkitError: ``FAILED_PRECONDITION`` if this host is closed.
+                name, if ``entry`` is not a stdio server entry, or if two of
+                the server's tools share a Genkit tool name.
+            GenkitError: ``FAILED_PRECONDITION`` if this host is closed, also
+                while the server was being listed, ``UNAVAILABLE`` if the
+                server cannot be started, ``DEADLINE_EXCEEDED`` if it does not
+                answer in time, or ``INTERNAL`` if it breaks the protocol.
+            McpError: If the server answers the listing with an error.
         """
         self._refuse_when_closed()
         client = self._build_client(server_name, entry)
+        try:
+            await client._list_actions()
+            self._refuse_when_closed()
+        except BaseException:
+            await client.close()
+            raise
+        client._provider = self._provider
         replaced = self._clients.pop(server_name, None)
         try:
             if replaced is not None:
@@ -300,7 +316,7 @@ class McpHost:
         await client.close()
 
     def _build_client(self, server_name: str, entry: McpServerEntry) -> McpClient:
-        """Build a client for one server, serving this host's provider."""
+        """Build a client for one server, which serves no provider until it is installed."""
         config = self._stdio_config(server_name, entry)
         if not TOOL_NAME_PATTERN.fullmatch(server_name):
             raise ValueError(
@@ -308,7 +324,7 @@ class McpHost:
                 'its tool names, so it must start with a letter or an underscore and hold only letters, '
                 'digits, underscores and hyphens.'
             )
-        client = McpClient(
+        return McpClient(
             server_name,
             command=config.command,
             args=config.args,
@@ -316,8 +332,6 @@ class McpHost:
             cwd=config.cwd,
             request_timeout_millis=self._request_timeout_millis,
         )
-        client._provider = self._provider
-        return client
 
     def _stdio_config(self, server_name: str, entry: McpServerEntry) -> McpStdioServerConfig:
         """Validate one server's entry, naming the server when it is not a stdio entry."""

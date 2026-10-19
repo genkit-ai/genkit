@@ -381,23 +381,68 @@ async def test_connect_refuses_an_entry_which_is_not_stdio_by_name(tmp_path: Pat
 
 @pytest.mark.asyncio
 async def test_connect_replaces_a_server_of_the_same_name(tmp_path: Path) -> None:
-    """Reconfiguring a name stops the server it replaces, and the new one starts lazily."""
+    """Reconfiguring a name starts the new server, then stops the one it replaces."""
     host = McpHost('hosted', mcp_servers=servers(tmp_path, 'alpha'))
     try:
         await host.get_active_tools()
         assert len(server_processes()) == 1
 
         await host.connect('alpha', server(tmp_path, pid_name='replacement'))
-        assert server_processes() == []
+        assert [process.pid for process in server_processes()] == [server_process(tmp_path, 'replacement').pid]
 
         tools = await host.get_active_tools()
         assert len(server_processes()) == 1
-        assert server_process(tmp_path, 'replacement').is_running()
         assert list(host._clients) == ['alpha']
     finally:
         await host.close()
 
     assert tool_names(tools) == hosted('alpha')
+
+
+@pytest.mark.asyncio
+async def test_connect_reports_a_server_which_cannot_be_started_and_keeps_the_host_as_it_was(tmp_path: Path) -> None:
+    """A typo in a command fails the call that added it, not a later generate, and costs nothing else."""
+    ai = Genkit()
+    host = define_mcp_host(ai, 'hosted', mcp_servers=servers(tmp_path, 'alpha'), cache_ttl_millis=LONG_TTL_MILLIS)
+    try:
+        await expand_wildcard_tools(ai._registry, ['hosted:tool/*'])
+        alpha = host._clients['alpha']
+        running = server_process(tmp_path, 'alpha')
+
+        with pytest.raises(GenkitError, match='failed') as adding:
+            await host.connect('beta', missing_server(tmp_path))
+        with pytest.raises(GenkitError, match='failed') as replacing:
+            await host.connect('alpha', missing_server(tmp_path))
+
+        assert adding.value.status == replacing.value.status == 'UNAVAILABLE'
+        assert host._clients == {'alpha': alpha}
+        assert [process.pid for process in server_processes()] == [running.pid]
+        expanded = await expand_wildcard_tools(ai._registry, ['hosted:tool/*'])
+    finally:
+        await host.close()
+
+    assert sorted(expanded) == sorted(f'/tool.v2/{name}' for name in hosted('alpha'))
+    assert server_processes() == []
+
+
+@pytest.mark.asyncio
+async def test_connect_to_a_host_closed_meanwhile_stops_the_new_server(tmp_path: Path) -> None:
+    """A server listed after the host closed would otherwise run with nothing left to stop it."""
+    host = McpHost('hosted', mcp_servers={})
+    list_actions = McpClient._list_actions
+
+    async def close_host_then_list(client: McpClient) -> list[Any]:
+        await host.close()
+        return await list_actions(client)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(McpClient, '_list_actions', close_host_then_list)
+        with pytest.raises(GenkitError, match="MCP host 'hosted' is closed") as raised:
+            await host.connect('alpha', server(tmp_path, pid_name='alpha'))
+
+    assert raised.value.status == 'FAILED_PRECONDITION'
+    assert host._clients == {}
+    assert server_processes() == []
 
 
 @pytest.mark.asyncio
@@ -418,10 +463,9 @@ async def test_connect_installs_the_replacement_when_the_replaced_server_fails_t
             with pytest.raises(RuntimeError, match='close failed after the fact'):
                 await host.connect('alpha', server(tmp_path, pid_name='replacement'))
         assert list(host._clients) == ['alpha']
-        assert server_processes() == []
+        assert [process.pid for process in server_processes()] == [server_process(tmp_path, 'replacement').pid]
 
         expanded = await expand_wildcard_tools(ai._registry, ['hosted:tool/*'])
-        assert server_process(tmp_path, 'replacement').is_running()
     finally:
         await host.close()
 

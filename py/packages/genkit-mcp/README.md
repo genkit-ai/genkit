@@ -138,7 +138,10 @@ so the other servers stay selectable. A server disconnected or replaced while th
 it is left out of that listing. Any other failure fails the whole listing:
 a server that breaks the protocol, a server that answers the listing with an error, and two tools
 that share a name. Only the server you ask for is affected by `await host.connect(...)`,
-`await host.disconnect(...)` and `await host.reconnect(...)`. `await host.close()` disconnects every
+`await host.disconnect(...)` and `await host.reconnect(...)`. `connect` and `reconnect` start the
+server and list it before they return, so a server that cannot start fails right there. A server
+that `connect` cannot list is stopped, and the host keeps what it held before, including any server
+of that name. `await host.close()` disconnects every
 server the host holds, and like `McpClient.close()` it is final: afterwards the host fails with
 status `FAILED_PRECONDITION`, so define a new host to use those servers again.
 
