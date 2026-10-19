@@ -533,7 +533,7 @@ async def test_reconnect_reports_a_server_which_cannot_be_started(tmp_path: Path
 
 @pytest.mark.asyncio
 async def test_close_is_final(tmp_path: Path) -> None:
-    """A closed host stops every server and refuses to list, connect or reconnect, as a client does."""
+    """A closed host stops every server and refuses every operation, as a client does."""
     ai = Genkit()
     host = define_mcp_host(ai, 'hosted', mcp_servers=servers(tmp_path, 'alpha', 'beta'))
     assert tool_names(await host.get_active_tools()) == hosted('alpha', 'beta')
@@ -554,7 +554,9 @@ async def test_close_is_final(tmp_path: Path) -> None:
         await host.reconnect('alpha')
     with pytest.raises(GenkitError, match=closed) as disconnecting:
         await host.disconnect('alpha')
-    for raised in (listing, selecting, connecting, reconnecting, disconnecting):
+    with pytest.raises(GenkitError, match=closed) as naming:
+        host.tool_name('alpha', 'echo')
+    for raised in (listing, selecting, connecting, reconnecting, disconnecting, naming):
         assert raised.value.status == 'FAILED_PRECONDITION'
     assert server_processes() == []
 
@@ -689,7 +691,7 @@ async def test_a_host_name_a_model_would_refuse_is_accepted(tmp_path: Path) -> N
 @pytest.mark.parametrize('server_name', ['my server', 'a:b', 'a/b', '9lives', ''])
 async def test_a_server_name_no_model_would_accept_is_refused(tmp_path: Path, server_name: str) -> None:
     """A server name becomes a tool prefix, and the host, not a provider, is what refuses it."""
-    refused = f"MCP host 'hosted' cannot hold a server named {server_name!r}: the name prefixes its tool names"
+    refused = f'{server_name!r} cannot prefix an MCP tool name'
     with pytest.raises(ValueError, match=re.escape(refused)):
         McpHost('hosted', mcp_servers={server_name: server(tmp_path)})
 

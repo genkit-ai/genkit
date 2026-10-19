@@ -29,7 +29,7 @@ from genkit_mcp._client import McpClient
 from genkit_mcp._config import McpServerEntry, McpStdioServerConfig
 from genkit_mcp._connection import DEFAULT_REQUEST_TIMEOUT_MILLIS
 from genkit_mcp._errors import _ConnectionClosedError, _ConnectionFailedError, _RequestTimeoutError
-from genkit_mcp._tools import TOOL_NAME_PATTERN, validate_provider_name
+from genkit_mcp._tools import validate_provider_name, validate_tool_prefix
 
 logger = structlog.get_logger(__name__)
 
@@ -123,7 +123,9 @@ class McpHost:
 
         Raises:
             ValueError: If this host holds no such server.
+            GenkitError: ``FAILED_PRECONDITION`` if this host is closed.
         """
+        self._refuse_when_closed()
         return self._client(server_name).tool_name(tool)
 
     async def connect(self, server_name: str, entry: McpServerEntry) -> None:
@@ -318,12 +320,7 @@ class McpHost:
     def _build_client(self, server_name: str, entry: McpServerEntry) -> McpClient:
         """Build a client for one server, which serves no provider until it is installed."""
         config = self._stdio_config(server_name, entry)
-        if not TOOL_NAME_PATTERN.fullmatch(server_name):
-            raise ValueError(
-                f'MCP host {self._name!r} cannot hold a server named {server_name!r}: the name prefixes '
-                'its tool names, so it must start with a letter or an underscore and hold only letters, '
-                'digits, underscores and hyphens.'
-            )
+        validate_tool_prefix(server_name)
         return McpClient(
             server_name,
             command=config.command,
