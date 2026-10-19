@@ -17,7 +17,7 @@ from typing import Any
 import anyio
 import psutil
 import pytest
-from genkit_mcp import McpClient, McpHost, define_mcp_host
+from genkit_mcp import McpClient, McpHost, McpServerEntry, define_mcp_host
 from mcp.shared.exceptions import McpError
 from pydantic import ValidationError
 from structlog.testing import capture_logs
@@ -56,8 +56,8 @@ STALL_TIMEOUT_MILLIS = 3_000
 LIMIT = 15
 
 
-def server(tmp_path: Path, pid_name: str = 'server', **env: str) -> dict[str, Any]:
-    """One mcpServers entry, or connect() keyword arguments, for the test server."""
+def server(tmp_path: Path, pid_name: str = 'server', **env: str) -> McpServerEntry:
+    """One mcpServers entry for the test server."""
     return {
         'command': sys.executable,
         'args': [str(Path(__file__).with_name('fake_server.py'))],
@@ -69,12 +69,12 @@ def server(tmp_path: Path, pid_name: str = 'server', **env: str) -> dict[str, An
     }
 
 
-def servers(tmp_path: Path, *names: str, **env: str) -> dict[str, dict[str, Any]]:
+def servers(tmp_path: Path, *names: str, **env: str) -> dict[str, McpServerEntry]:
     """An mcpServers mapping holding one test server per name, each writing its own pid file."""
     return {name: server(tmp_path, pid_name=name, **env) for name in names}
 
 
-def missing_server(tmp_path: Path) -> dict[str, Any]:
+def missing_server(tmp_path: Path) -> McpServerEntry:
     """A server whose command does not exist, so it can never start."""
     return {'command': str(tmp_path / 'no-such-server')}
 
@@ -343,7 +343,7 @@ async def test_connect_adds_a_server_and_drops_the_listing(tmp_path: Path) -> No
     host = define_mcp_host(ai, 'hosted', mcp_servers=servers(tmp_path, 'alpha'), cache_ttl_millis=LONG_TTL_MILLIS)
     try:
         before = await expand_wildcard_tools(ai._registry, ['hosted:tool/*'])
-        await host.connect('beta', **server(tmp_path, pid_name='beta'))
+        await host.connect('beta', server(tmp_path, pid_name='beta'))
         after = await expand_wildcard_tools(ai._registry, ['hosted:tool/*'])
         assert list(host._clients) == ['alpha', 'beta']
     finally:
@@ -354,6 +354,32 @@ async def test_connect_adds_a_server_and_drops_the_listing(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
+async def test_connect_takes_an_entry_of_an_mcp_servers_block(tmp_path: Path) -> None:
+    """One input shape: an entry the constructor accepts, ``type`` included, connects as it is."""
+    config = json.loads(json.dumps({'mcpServers': {'beta': {'type': 'stdio', **server(tmp_path, pid_name='beta')}}}))
+    host = McpHost('hosted', mcp_servers=servers(tmp_path, 'alpha'))
+    try:
+        await host.connect('beta', config['mcpServers']['beta'])
+        tools = await host.get_active_tools()
+    finally:
+        await host.close()
+
+    assert tool_names(tools) == hosted('alpha', 'beta')
+    assert server_processes() == []
+
+
+@pytest.mark.asyncio
+async def test_connect_refuses_an_entry_which_is_not_stdio_by_name(tmp_path: Path) -> None:
+    host = McpHost('hosted', mcp_servers=servers(tmp_path, 'alpha'))
+    try:
+        with pytest.raises(ValueError, match="MCP host 'hosted': server 'linear' is not a stdio entry"):
+            await host.connect('linear', json.loads(json.dumps({'url': 'https://mcp.example.com/sse'})))
+        assert list(host._clients) == ['alpha']
+    finally:
+        await host.close()
+
+
+@pytest.mark.asyncio
 async def test_connect_replaces_a_server_of_the_same_name(tmp_path: Path) -> None:
     """Reconfiguring a name stops the server it replaces, and the new one starts lazily."""
     host = McpHost('hosted', mcp_servers=servers(tmp_path, 'alpha'))
@@ -361,7 +387,7 @@ async def test_connect_replaces_a_server_of_the_same_name(tmp_path: Path) -> Non
         await host.get_active_tools()
         assert len(server_processes()) == 1
 
-        await host.connect('alpha', **server(tmp_path, pid_name='replacement'))
+        await host.connect('alpha', server(tmp_path, pid_name='replacement'))
         assert server_processes() == []
 
         tools = await host.get_active_tools()
@@ -390,7 +416,7 @@ async def test_connect_installs_the_replacement_when_the_replaced_server_fails_t
         with pytest.MonkeyPatch.context() as patch:
             patch.setattr(McpClient, 'close', close_and_complain)
             with pytest.raises(RuntimeError, match='close failed after the fact'):
-                await host.connect('alpha', **server(tmp_path, pid_name='replacement'))
+                await host.connect('alpha', server(tmp_path, pid_name='replacement'))
         assert list(host._clients) == ['alpha']
         assert server_processes() == []
 
@@ -479,7 +505,7 @@ async def test_close_is_final(tmp_path: Path) -> None:
     with pytest.raises(GenkitError, match=closed) as selecting:
         await expand_wildcard_tools(ai._registry, ['hosted:tool/*'])
     with pytest.raises(GenkitError, match=closed) as connecting:
-        await host.connect('gamma', **server(tmp_path, pid_name='gamma'))
+        await host.connect('gamma', server(tmp_path, pid_name='gamma'))
     with pytest.raises(GenkitError, match=closed) as reconnecting:
         await host.reconnect('alpha')
     with pytest.raises(GenkitError, match=closed) as disconnecting:
@@ -536,7 +562,7 @@ async def test_a_server_connected_later_shares_the_same_listing(tmp_path: Path) 
         cache_ttl_millis=LONG_TTL_MILLIS,
     )
     try:
-        await host.connect('beta', **server(tmp_path, pid_name='beta'))
+        await host.connect('beta', server(tmp_path, pid_name='beta'))
         await expand_wildcard_tools(ai._registry, ['hosted:tool/*'])
         counter = await ai._registry.resolve_action(ActionKind.TOOL, 'alpha_list_requests')
         beta_echo = await ai._registry.resolve_action(ActionKind.TOOL, 'beta_echo')
@@ -626,7 +652,7 @@ async def test_a_server_name_no_model_would_accept_is_refused(tmp_path: Path, se
     host = McpHost('hosted', mcp_servers={})
     try:
         with pytest.raises(ValueError, match=re.escape(refused)):
-            await host.connect(server_name, **server(tmp_path))
+            await host.connect(server_name, server(tmp_path))
         assert list(host._clients) == []
     finally:
         await host.close()

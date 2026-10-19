@@ -61,8 +61,10 @@ class _McpServerCommand(TypedDict):
 class McpServerEntry(_McpServerCommand, total=False):
     """One stdio entry of an ``mcpServers`` block, as Claude Desktop and Cursor write it.
 
-    Only ``command`` is required. A host validates each entry into
-    :class:`McpStdioServerConfig`, so an unknown key fails there.
+    The shape :func:`define_mcp_host` takes for each server and
+    :meth:`McpHost.connect` takes for one. Only ``command`` is required. A host
+    validates each entry into :class:`McpStdioServerConfig`, so an unknown key
+    fails there.
     """
 
     args: list[str]

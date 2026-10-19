@@ -125,7 +125,8 @@ result = await ai.generate(prompt='Echo "hello".', tools=[one])
 such a block can be loaded from its file: `mcp_servers=json.load(f)['mcpServers']`. An entry that is
 not a stdio entry, such as one with a `url`, `type: 'sse'` or `disabled: true`, fails the host with
 an error naming that server. So does an entry with any key besides `command`, `args`, `env`, `cwd`
-and `type`.
+and `type`. `McpServerEntry` types one entry, and `await host.connect(name, entry)` takes one too, so
+a server from the same file can be added later: `await host.connect('git', config['mcpServers']['git'])`.
 
 Each server keeps its own namespace, so the tools above are `everything_echo` and `git_git_log`. The
 key a server has in `mcp_servers` is its prefix. The host's own name is only the provider name, so

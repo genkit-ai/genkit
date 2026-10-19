@@ -17,7 +17,6 @@
 """Genkit host for several MCP servers behind one dynamic action provider."""
 
 import asyncio
-import os
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, TypeVar
 
@@ -86,10 +85,7 @@ class McpHost:
         self._clients: dict[str, McpClient] = {}
         self._closed = False
         for server_name, entry in mcp_servers.items():
-            config = self._stdio_config(server_name, entry)
-            self._clients[server_name] = self._build_client(
-                server_name, command=config.command, args=config.args, env=config.env, cwd=config.cwd
-            )
+            self._clients[server_name] = self._build_client(server_name, entry)
 
     @property
     def name(self) -> str:
@@ -130,16 +126,13 @@ class McpHost:
         """
         return self._client(server_name).tool_name(tool)
 
-    async def connect(
-        self,
-        server_name: str,
-        *,
-        command: str,
-        args: list[str] | None = None,
-        env: dict[str, str] | None = None,
-        cwd: str | os.PathLike[str] | None = None,
-    ) -> None:
+    async def connect(self, server_name: str, entry: McpServerEntry) -> None:
         """Add a server to this host, replacing any server of that name.
+
+        ``entry`` has the shape the constructor takes for each server, so one
+        entry of an ``mcpServers`` block can be passed as it is::
+
+            await host.connect('git', config['mcpServers']['git'])
 
         A replaced server is disconnected and its process stopped. Connection is
         lazy: the new server starts on the next listing.
@@ -147,19 +140,17 @@ class McpHost:
         Args:
             server_name: Name for this server within this host, which prefixes
                 its tool names.
-            command: Executable that runs the server.
-            args: Arguments passed to ``command``.
-            env: Extra environment for the server process, over the minimal set
-                the MCP SDK supplies.
-            cwd: Working directory for the server process.
+            entry: How to launch the server: ``command`` and optionally
+                ``args``, ``env``, ``cwd`` and ``type``, which can only be
+                ``stdio``.
 
         Raises:
             ValueError: If ``server_name`` cannot appear in a model-facing tool
-                name.
+                name, or if ``entry`` is not a stdio server entry.
             GenkitError: ``FAILED_PRECONDITION`` if this host is closed.
         """
         self._refuse_when_closed()
-        client = self._build_client(server_name, command=command, args=args, env=env, cwd=cwd)
+        client = self._build_client(server_name, entry)
         replaced = self._clients.pop(server_name, None)
         try:
             if replaced is not None:
@@ -308,16 +299,9 @@ class McpHost:
         client._provider = None
         await client.close()
 
-    def _build_client(
-        self,
-        server_name: str,
-        *,
-        command: str,
-        args: list[str] | None,
-        env: dict[str, str] | None,
-        cwd: str | os.PathLike[str] | None,
-    ) -> McpClient:
+    def _build_client(self, server_name: str, entry: McpServerEntry) -> McpClient:
         """Build a client for one server, serving this host's provider."""
+        config = self._stdio_config(server_name, entry)
         if not TOOL_NAME_PATTERN.fullmatch(server_name):
             raise ValueError(
                 f'MCP host {self._name!r} cannot hold a server named {server_name!r}: the name prefixes '
@@ -326,10 +310,10 @@ class McpHost:
             )
         client = McpClient(
             server_name,
-            command=command,
-            args=args,
-            env=env,
-            cwd=cwd,
+            command=config.command,
+            args=config.args,
+            env=config.env,
+            cwd=config.cwd,
             request_timeout_millis=self._request_timeout_millis,
         )
         client._provider = self._provider
