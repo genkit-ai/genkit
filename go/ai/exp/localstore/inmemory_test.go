@@ -28,3 +28,9 @@ func TestInMemorySessionStore(t *testing.T) {
 		return NewInMemorySessionStore[testState]()
 	}, nil)
 }
+
+func TestInMemorySessionStore_Delete(t *testing.T) {
+	runDeleteStoreTests(t, func(t *testing.T) exp.SessionStore[testState] {
+		return NewInMemorySessionStore[testState]()
+	})
+}

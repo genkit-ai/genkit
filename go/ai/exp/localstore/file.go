@@ -94,6 +94,10 @@ type FileSessionStore[State any] struct {
 	// snapshot files to detect cross-process status changes; <= 0 disables it.
 	poll time.Duration
 	subs map[string]*snapshotSubs
+	// deleted holds the sessions removed by DeleteSession, keyed by prefix and
+	// session ID; see SaveSnapshot. In-process only: a writer in another process
+	// sharing the directory is not stopped.
+	deleted map[string]struct{}
 	// pollCancel stops the background poller. It is non-nil exactly while the
 	// poller runs: while at least one subscription is active and poll > 0.
 	pollCancel context.CancelFunc
@@ -166,6 +170,7 @@ func NewFileSessionStore[State any](dir string, opts ...FileStoreOption) (*FileS
 		prefixFn: resolved.prefixFn,
 		poll:     poll,
 		subs:     make(map[string]*snapshotSubs),
+		deleted:  make(map[string]struct{}),
 	}, nil
 }
 
@@ -255,6 +260,15 @@ func (s *FileSessionStore[State]) SaveSnapshot(
 	if next.Status == "" {
 		next.Status = exp.SnapshotStatusCompleted
 	}
+	// A deleted session only accepts a fresh root snapshot; a late writer
+	// continuing the old chain must not bring it back.
+	tombstone := tombstoneKey(prefix, next.SessionID)
+	if _, gone := s.deleted[tombstone]; gone {
+		if existing != nil || next.ParentID != "" {
+			return nil, status.Errorf(exp.ErrSessionDeleted, "session %q was deleted", next.SessionID)
+		}
+		delete(s.deleted, tombstone)
+	}
 
 	if err := s.writeAt(prefix, next); err != nil {
 		return nil, err
@@ -273,6 +287,62 @@ func (s *FileSessionStore[State]) SaveSnapshot(
 		s.pruneLocked(prefix, next)
 	}
 	return next, nil
+}
+
+// tombstoneKey identifies a deleted session within its tenant prefix.
+func tombstoneKey(prefix, sessionID string) string {
+	return prefix + "\x00" + sessionID
+}
+
+// DeleteSession removes every snapshot file of the session, and its pointer,
+// under the call's prefix directory, per [exp.SessionDeleter]. Matching rows
+// are found by scanning the prefix directory, so the cost grows with the
+// number of rows in the prefix. Subscribers of a removed snapshot see
+// [exp.SnapshotStatusAborted] before their channel closes. Deletion across
+// processes sharing the directory is best effort: a row another process writes
+// after the scan is not removed.
+func (s *FileSessionStore[State]) DeleteSession(ctx context.Context, sessionID string) (bool, error) {
+	if sessionID == "" {
+		return false, status.Errorf(exp.ErrSessionIDRequired, "DeleteSession requires a session ID")
+	}
+	if err := validateSessionID(sessionID); err != nil {
+		return false, err
+	}
+	prefix, err := s.derivePrefix(ctx)
+	if err != nil {
+		return false, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	names, err := s.snapshotFileNames(s.prefixDir(prefix))
+	if err != nil {
+		return false, err
+	}
+	removed := false
+	for _, name := range names {
+		path := filepath.Join(s.prefixDir(prefix), name)
+		var header snapshotHeader
+		if ok, err := readJSONAt(path, &header); err != nil || !ok || header.SessionID != sessionID {
+			// Unreadable, vanished, or another session's row: not ours to remove.
+			continue
+		}
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return removed, fmt.Errorf("FileSessionStore: remove %s: %w", path, err)
+		}
+		removed = true
+		s.endSubsLocked(strings.TrimSuffix(name, ".json"), exp.SnapshotStatusAborted)
+	}
+	if err := os.Remove(s.pointerPathFor(prefix, sessionID)); err == nil {
+		removed = true
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return removed, fmt.Errorf("FileSessionStore: remove pointer: %w", err)
+	}
+	if removed {
+		s.deleted[tombstoneKey(prefix, sessionID)] = struct{}{}
+	}
+	return removed, nil
 }
 
 // snapshotHeader is the subset of snapshot fields needed to pick a session's
@@ -746,6 +816,25 @@ func (s *FileSessionStore[State]) removeSub(snapshotID string, ch chan exp.Snaps
 	close(ch)
 }
 
+// endSubsLocked delivers a final status to every subscriber of snapshotID and
+// closes their channels, dropping the snapshot's bookkeeping (and stopping the
+// poller once no subscriptions remain). Used when the row is gone. Caller must
+// hold s.mu.
+func (s *FileSessionStore[State]) endSubsLocked(snapshotID string, status exp.SnapshotStatus) {
+	sub := s.subs[snapshotID]
+	if sub == nil {
+		return
+	}
+	for _, ch := range sub.chans {
+		coalesceSend(ch, status)
+		close(ch)
+	}
+	delete(s.subs, snapshotID)
+	if len(s.subs) == 0 {
+		s.stopPollerLocked()
+	}
+}
+
 // maybeNotifyLocked fans status out to snapshotID's subscribers, but only when
 // it differs from the value they last saw. It is the shared dedup gate for both
 // the in-process write path ([SaveSnapshot]) and the cross-process poller, so
@@ -808,7 +897,8 @@ func (s *FileSessionStore[State]) pollLoop(ctx context.Context, interval time.Du
 // the lock, then reads each file under its own lock acquisition, so a tick never
 // blocks a write for longer than a single file read and the read pairs
 // atomically with the dedup check (ruling out delivering a status the file no
-// longer holds). A read error or vanished file is skipped.
+// longer holds). A read error is skipped; a vanished file means the row was
+// deleted, which ends its subscriptions as aborted.
 func (s *FileSessionStore[State]) pollOnce() {
 	type target struct{ id, path string }
 	s.mu.Lock()
@@ -820,8 +910,14 @@ func (s *FileSessionStore[State]) pollOnce() {
 
 	for _, t := range targets {
 		s.mu.Lock()
-		if snap, err := s.readAt(t.path); err == nil && snap != nil {
-			s.maybeNotifyLocked(t.id, snap.Status)
+		if snap, err := s.readAt(t.path); err == nil {
+			if snap != nil {
+				s.maybeNotifyLocked(t.id, snap.Status)
+			} else {
+				// Writes replace the file atomically, so a subscribed file that
+				// is gone was deleted (possibly by another process).
+				s.endSubsLocked(t.id, exp.SnapshotStatusAborted)
+			}
 		}
 		s.mu.Unlock()
 	}
