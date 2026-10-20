@@ -83,6 +83,7 @@ import {
 import { InMemorySessionStore } from './session-stores.js';
 import {
   Session,
+  SessionDeletedError,
   SessionSnapshot,
   SessionSnapshotSchema,
   SessionState,
@@ -678,11 +679,18 @@ function toErrorDetailsPayload(detail: unknown): unknown {
  * `input`. This prevents a "done"/"failed" write from clobbering an
  * "aborting" or "aborted" status set by a concurrent abort.
  */
-function abortAwareMutator<S>(input: SessionSnapshotInput<S>) {
-  return (current: SessionSnapshot<S> | undefined) =>
-    current?.status === 'aborting' || current?.status === 'aborted'
-      ? null
-      : input;
+function abortAwareMutator<S>(
+  input: SessionSnapshotInput<S>,
+  alreadyPersisted = false
+) {
+  return (current: SessionSnapshot<S> | undefined) => {
+    if (current?.status === 'aborting' || current?.status === 'aborted')
+      return null;
+    // Rewriting a row this runner already persisted, but it is gone: the
+    // session was deleted. Skip so we don't resurrect it.
+    if (!current && alreadyPersisted) return null;
+    return input;
+  };
 }
 
 /**
@@ -1216,14 +1224,26 @@ export class SessionRunner<State = unknown> {
       // Use the mutator-based saveSnapshot to atomically check the current
       // status before writing.  If the snapshot was concurrently aborted,
       // the mutator returns null and the write is skipped.
-      const assignedId = await this.store!.saveSnapshot(
-        effectiveId,
-        abortAwareMutator(snapshotInput),
-        { context: getContext() }
-      );
+      let assignedId: string | null;
+      try {
+        assignedId = await this.store!.saveSnapshot(
+          effectiveId,
+          abortAwareMutator(
+            snapshotInput,
+            !!effectiveId && effectiveId === this.lastSnapshot?.snapshotId
+          ),
+          { context: getContext() }
+        );
+      } catch (e) {
+        // The session was deleted while this invocation was running: stop
+        // persisting rather than fail the turn. The data stays deleted.
+        if (e instanceof SessionDeletedError)
+          return this.lastSnapshot?.snapshotId;
+        throw e;
+      }
       if (assignedId === null) {
-        // Snapshot was aborted concurrently; preserve the existing ID
-        // without overwriting.
+        // Snapshot was aborted concurrently (or its session deleted); preserve
+        // the existing ID without overwriting.
         return effectiveId;
       }
 
@@ -1345,7 +1365,10 @@ export class SessionRunner<State = unknown> {
         await store.saveSnapshot(
           snapshotId,
           (existing) => {
-            const { heartbeatAt: _, ...base } = existing ?? row;
+            // The pending row is gone: the session was deleted mid-run.
+            // Skip so we don't resurrect it.
+            if (!existing) return null;
+            const { heartbeatAt: _, ...base } = existing;
             if (base.status === 'aborted') return null;
             if (base.status === 'aborting') {
               return {
@@ -1370,6 +1393,7 @@ export class SessionRunner<State = unknown> {
         );
       });
     } catch (e) {
+      if (e instanceof SessionDeletedError) return;
       logger.error(
         `agent: failed to finalize detached snapshot ${snapshotId}: ${getErrorMessage(e)}`
       );
@@ -1539,6 +1563,24 @@ export interface Agent<State = unknown>
     snapshotId: string,
     options?: SessionStoreOptions
   ): Promise<SessionSnapshot['status'] | undefined>;
+
+  /**
+   * Permanently deletes every persisted snapshot of a session.
+   *
+   * A detached run still in flight is aborted first. Idempotent: resolves to
+   * `false` when the session has no persisted data. Resuming by `sessionId`
+   * afterwards starts a fresh session; resuming by `snapshotId` fails with
+   * `NOT_FOUND`. Traces, logs and streams are outside the store and are not
+   * touched.
+   *
+   * This is an in-process API only (no registered action or HTTP route); put it
+   * behind your own authorization. Throws `FAILED_PRECONDITION` when the agent
+   * has no store or the store does not implement `deleteSession`.
+   */
+  deleteSession(
+    sessionId: string,
+    options?: SessionStoreOptions
+  ): Promise<boolean>;
 
   readonly getSnapshotDataAction: GetSnapshotDataAction<State>;
   /**
@@ -2322,6 +2364,40 @@ export function defineCustomAgent<State = unknown>(
     return abortSnapshotInStore(config.store, snapshotId, options);
   };
 
+  const runDeleteSession = async (
+    sessionId: string,
+    options?: SessionStoreOptions
+  ): Promise<boolean> => {
+    requireStore(config.store, 'deleteSession', config.name);
+    if (typeof config.store.deleteSession !== 'function') {
+      throw new GenkitError({
+        status: 'FAILED_PRECONDITION',
+        message: `The session store of '${config.name}' does not support deleteSession.`,
+      });
+    }
+    if (!sessionId || !sessionId.trim()) {
+      throw new GenkitError({
+        status: 'INVALID_ARGUMENT',
+        message: 'deleteSession requires a non-empty sessionId.',
+      });
+    }
+    // Stop an in-flight detached run first so it doesn't keep working on data
+    // that is about to disappear. Best effort: the store also notifies
+    // subscribers on delete and rejects writers that continue a deleted chain.
+    try {
+      const latest = await config.store.getSnapshot({ sessionId, ...options });
+      if (latest?.status === 'pending') {
+        await abortSnapshotInStore(config.store, latest.snapshotId, options);
+      }
+    } catch (e) {
+      // A branched session has no single latest snapshot; skip the abort.
+      if (!(e instanceof GenkitError) || e.status !== 'FAILED_PRECONDITION') {
+        throw e;
+      }
+    }
+    return config.store.deleteSession(sessionId, options);
+  };
+
   const getSnapshotDataAction = defineAction(
     registry,
     {
@@ -2420,6 +2496,11 @@ export function defineCustomAgent<State = unknown>(
       runWait({ ...opts, context: opts.context ?? getContext() }),
     abort: (snapshotId: string, options?: SessionStoreOptions) =>
       runAbort(snapshotId, {
+        ...options,
+        context: options?.context ?? getContext(),
+      }),
+    deleteSession: (sessionId: string, options?: SessionStoreOptions) =>
+      runDeleteSession(sessionId, {
         ...options,
         context: options?.context ?? getContext(),
       }),
