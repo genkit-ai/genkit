@@ -589,6 +589,7 @@ export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
     let last: SessionSnapshot<S> | undefined;
     let seen = false;
     let reportedDeleted = false;
+    let lastSessionId: string | undefined;
     // A snapshot we watched disappearing means its session was deleted: report
     // it as aborted so a watching worker stops, even if we never managed to
     // load its content.
@@ -597,6 +598,7 @@ export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
       reportedDeleted = true;
       callback({
         createdAt: new Date().toISOString(),
+        sessionId: lastSessionId,
         ...last,
         snapshotId,
         status: 'aborted',
@@ -608,6 +610,7 @@ export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
         return;
       }
       seen = true;
+      lastSessionId = (docSnap.data() as SnapshotDoc | undefined)?.sessionId;
       try {
         const snapshot = await this.getSnapshot({
           snapshotId,
@@ -639,7 +642,7 @@ export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
    * A large session exceeds what one transaction can write, so the delete is a
    * sequence of steps that is safe to retry and never strands data:
    *
-   * 1. In a transaction, replace the pointer with a {@link TombstoneDoc}. Every
+   * 1. In a transaction, replace a live pointer with a {@link TombstoneDoc}. Every
    *    save reads the pointer in its own transaction, so this serializes the
    *    delete against concurrent saves and makes later writers that continue
    *    the old chain fail with {@link SessionDeletedError}.
@@ -652,9 +655,10 @@ export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
    *    re-run and still finds everything left over.
    *
    * The tombstone stays afterwards (it holds no session content) so a straggler
-   * cannot recreate the session; a new root snapshot clears it. Legacy rows
-   * outside the pointer's current chain that lack a top-level `sessionId` are
-   * not found.
+   * cannot recreate the session; a new root snapshot clears it. A session with
+   * no live pointer gets no tombstone. Rows outside the pointer's current chain
+   * that lack a top-level `sessionId` (written before snapshot-level ids
+   * existed) are not found.
    *
    * @returns `true` if any session data was removed.
    */
@@ -678,10 +682,16 @@ export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
       const data = snap.exists
         ? (snap.data() as PointerDoc | TombstoneDoc)
         : undefined;
-      tx.set(pointerRef, {
-        deletedAt: new Date().toISOString(),
-      } satisfies TombstoneDoc);
-      return data && !isTombstone(data) ? data : undefined;
+      const live = data && !isTombstone(data) ? data : undefined;
+      // Only a session that has a live pointer needs a tombstone. Writing one
+      // for an id that never existed (or is already tombstoned) would just
+      // leave a stray document behind.
+      if (live) {
+        tx.set(pointerRef, {
+          deletedAt: new Date().toISOString(),
+        } satisfies TombstoneDoc);
+      }
+      return live;
     });
 
     // Step 2: collect what to delete.

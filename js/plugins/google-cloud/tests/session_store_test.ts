@@ -964,6 +964,11 @@ describe('FirestoreSessionStore', () => {
 
     it('is idempotent', async () => {
       assert.strictEqual(await store.deleteSession('never-existed'), false);
+      // A session that never existed leaves nothing behind, not even a tombstone.
+      assert.strictEqual(
+        (await pointersCol(store).doc('never-existed').get()).exists,
+        false
+      );
       await saveChain(store, 'sess-twice', 2);
       assert.strictEqual(await store.deleteSession('sess-twice'), true);
       assert.strictEqual(await store.deleteSession('sess-twice'), false);

@@ -2387,7 +2387,15 @@ export function defineCustomAgent<State = unknown>(
     try {
       const latest = await config.store.getSnapshot({ sessionId, ...options });
       if (latest?.status === 'pending') {
-        await abortSnapshotInStore(config.store, latest.snapshotId, options);
+        try {
+          await abortSnapshotInStore(config.store, latest.snapshotId, options);
+        } catch (e) {
+          // Best effort: the delete below still stops the run.
+          logger.warn(
+            `deleteSession could not abort pending snapshot ${latest.snapshotId} of '${config.name}'; deleting anyway.`,
+            e
+          );
+        }
       }
     } catch (e) {
       // A branched session has no single latest snapshot; skip the abort.
