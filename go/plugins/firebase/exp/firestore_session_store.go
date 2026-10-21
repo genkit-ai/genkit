@@ -1012,7 +1012,7 @@ func (s *FirestoreSessionStore[State]) OnSnapshotStatusChange(ctx context.Contex
 // larger than one transaction can write, so the delete is a sequence of steps
 // that is safe to retry and never strands data:
 //
-//  1. In a transaction, replace the pointer with a tombstone. Every save reads
+//  1. In a transaction, replace a live pointer with a tombstone. Every save reads
 //     the pointer in its own transaction, so this serializes the delete
 //     against concurrent saves and makes writers that continue the old chain
 //     fail with [aix.ErrSessionDeleted].
@@ -1025,8 +1025,9 @@ func (s *FirestoreSessionStore[State]) OnSnapshotStatusChange(ctx context.Contex
 //     again and still finds everything left over.
 //
 // The tombstone stays afterwards (it holds no session content) so a straggler
-// cannot recreate the session; a new root snapshot replaces it. Rows outside the
-// pointer's current chain that predate the sessionId field are not found.
+// cannot recreate the session; a new root snapshot replaces it. A session with no
+// live pointer gets no tombstone. Rows outside the pointer's current chain that
+// predate the sessionId field are not found.
 // Subscribers of a deleted snapshot see [aix.SnapshotStatusAborted].
 func (s *FirestoreSessionStore[State]) DeleteSession(ctx context.Context, sessionID string) (bool, error) {
 	if sessionID == "" {
@@ -1044,6 +1045,13 @@ func (s *FirestoreSessionStore[State]) DeleteSession(ctx context.Context, sessio
 		p, err := s.readPointer(tx.Get, prefix, sessionID)
 		if err != nil {
 			return err
+		}
+		if p == nil {
+			// No live pointer: nothing to protect with a tombstone, and writing
+			// one for an ID that never existed (or is already tombstoned) would
+			// only leave a stray document behind. Rows left by an interrupted
+			// delete are still found by the query below.
+			return nil
 		}
 		previous = p
 		now := time.Now()
