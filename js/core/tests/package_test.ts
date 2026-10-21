@@ -12,8 +12,8 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  */
 
-import * as assert from 'assert';
-import { readFileSync } from 'fs';
+import * as assert from 'node:assert';
+import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 
 interface PackageManifest {
@@ -23,7 +23,7 @@ interface PackageManifest {
 }
 
 const packageManifest = JSON.parse(
-  readFileSync('package.json', 'utf8')
+  readFileSync(new URL('../package.json', import.meta.url), 'utf8')
 ) as PackageManifest;
 
 describe('core package metadata', () => {
