@@ -466,6 +466,10 @@ func TestDeleteSession(t *testing.T) {
 		if removed, err := store.DeleteSession(ctx, "never-existed"); err != nil || removed {
 			t.Errorf("DeleteSession(missing) = %v, %v; want false, nil", removed, err)
 		}
+		// A session that never existed leaves nothing behind, not even a tombstone.
+		if snap, err := store.pointerRef(defaultPrefix, "never-existed").Get(ctx); err == nil && snap.Exists() {
+			t.Error("DeleteSession of a missing session left a pointer document behind")
+		}
 		chain(t, store, "sess-b", 2)
 		if removed, err := store.DeleteSession(ctx, "sess-b"); err != nil || !removed {
 			t.Fatalf("first DeleteSession = %v, %v; want true, nil", removed, err)
