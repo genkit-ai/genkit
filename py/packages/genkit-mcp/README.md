@@ -64,14 +64,15 @@ event loop, and the Dev UI's reflection server has a loop of its own. So under `
 flow run from the Dev UI and your `main()` talk to two separate server processes. A server that
 keeps state, such as a session or an open file, keeps one copy of it for each.
 
-`await client.restart()` reconnects a live client, for a server whose configuration or state
-changed underneath you. A request still in flight when it restarts, on any event loop, fails with
-status `UNAVAILABLE` and can be retried. `await client.close()` disconnects and stops the child process: a
-closed client cannot be restarted, and anything that asks for a tool afterwards fails with a
-`GenkitError` whose status is `FAILED_PRECONDITION`. To use that server again, define a new
-client. A server that cannot start, or whose process dies, fails with status `UNAVAILABLE`. A
-connection that died on its own is replaced on next use, so one bad server start is not
-permanent.
+`await client.restart()` reconnects a live client, for a server whose configuration or state changed
+underneath you. A request still in flight when it restarts, on any event loop, fails with status
+`UNAVAILABLE` and can be retried. `await client.close()` disconnects and stops the child process: a
+closed client cannot be restarted. To use that server again, define a new client. Afterwards
+`generate` with one of its tools, and `get_active_tools()`, fail with a `GenkitError` whose status
+is `FAILED_PRECONDITION`. A server that cannot start, or whose process dies, fails with status
+`UNAVAILABLE`. A connection that died on its own is replaced on next use, so one bad server start is
+not permanent. Resolving a tool by its action key, as the Dev UI does to run one, reports neither
+status: core finds no action for a closed client or a server that cannot start.
 
 Nothing needs closing at exit. Call `close()` when you are done with a server before your process
 is, not as cleanup on the way out: a process running under `genkit start` outlives your `main()`,

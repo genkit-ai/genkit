@@ -368,6 +368,24 @@ async def test_a_closed_client_starts_no_server_on_a_new_loop(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
+async def test_a_closed_clients_tools_fail_as_closed_except_by_key(tmp_path: Path) -> None:
+    """Generate and listing report the closed client, while key resolution finds nothing."""
+    ai = Genkit()
+    pm, _ = define_scripted_model(ai)
+    client = define_mcp_client(ai, 'fake', **server(tmp_path))
+    await client.close()
+
+    with pytest.raises(GenkitError) as raised:
+        await ai.generate(model='scriptedModel', prompt='echo hello', tools=['fake:tool/*'])
+    assert raised.value.status == 'FAILED_PRECONDITION'
+    with pytest.raises(GenkitError) as raised:
+        await client.get_active_tools()
+    assert raised.value.status == 'FAILED_PRECONDITION'
+    assert await ai._registry.resolve_action_by_key('/dynamic-action-provider/fake:tool/fake_echo') is None
+    assert pm.request_count == 0
+
+
+@pytest.mark.asyncio
 async def test_a_closed_client_refuses_to_restart(tmp_path: Path) -> None:
     """Closing is the end of this client, not a pause."""
     ai = Genkit()
