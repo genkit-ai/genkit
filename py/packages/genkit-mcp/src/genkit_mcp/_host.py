@@ -85,7 +85,7 @@ class McpHost:
         self._clients: dict[str, McpClient] = {}
         self._closed = False
         for server_name, entry in mcp_servers.items():
-            self._clients[server_name] = self._build_client(server_name, entry)
+            self._clients[server_name] = self._build_client(server_name, self._stdio_config(server_name, entry))
 
     @property
     def name(self) -> str:
@@ -161,7 +161,12 @@ class McpHost:
             McpError: If the server answers the listing with an error.
         """
         self._refuse_when_closed()
-        client = self._build_client(server_name, entry)
+        try:
+            config = self._stdio_config(server_name, entry)
+        finally:
+            # An exc_info log prints every frame's locals, and the raw entry holds the server's env.
+            del entry
+        client = self._build_client(server_name, config)
         try:
             await client._list_actions()
             self._refuse_when_closed()
@@ -317,9 +322,8 @@ class McpHost:
         client._provider = None
         await client.close()
 
-    def _build_client(self, server_name: str, entry: McpServerEntry) -> McpClient:
+    def _build_client(self, server_name: str, config: McpStdioServerConfig) -> McpClient:
         """Build a client for one server, which serves no provider until it is installed."""
-        config = self._stdio_config(server_name, entry)
         validate_tool_prefix(server_name)
         return McpClient(
             server_name,
@@ -333,8 +337,10 @@ class McpHost:
     def _stdio_config(self, server_name: str, entry: McpServerEntry) -> McpStdioServerConfig:
         """Validate one server's entry, naming the server when it is not a stdio entry."""
         try:
-            return McpStdioServerConfig.model_validate(entry)
+            # model_validate's own frame would hold the entry, env included, on the error's traceback.
+            return McpStdioServerConfig.__pydantic_validator__.validate_python(entry)
         except ValidationError as error:
+            del entry
             raise ValueError(
                 f'MCP host {self._name!r}: server {server_name!r} is not a stdio entry: {error}'
             ) from error

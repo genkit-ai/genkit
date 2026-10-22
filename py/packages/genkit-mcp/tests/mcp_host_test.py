@@ -462,6 +462,46 @@ async def test_connect_reports_a_server_which_cannot_be_started_and_keeps_the_ho
 
 
 @pytest.mark.asyncio
+async def test_connect_keeps_the_env_of_a_server_which_cannot_be_started_out_of_its_traceback(tmp_path: Path) -> None:
+    """A flow awaiting connect fails with this error, and core logs a failed action with exc_info."""
+    host = McpHost('hosted', mcp_servers={})
+    try:
+        with pytest.raises(GenkitError, match='failed') as failure:
+            await asyncio.wait_for(
+                host.connect(
+                    'broken', {'command': str(tmp_path / 'no-such-server'), 'env': {'GENKIT_MCP_TEST_API_KEY': SECRET}}
+                ),
+                timeout=LIMIT,
+            )
+    finally:
+        await host.close()
+
+    assert failure.value.status == 'UNAVAILABLE'
+    assert SECRET not in rendered_for_logs(failure.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('server_name', 'extra'),
+    [('bad', {'bogus': 1}), ('bad name', {})],
+)
+async def test_connect_keeps_the_env_of_a_refused_entry_out_of_its_traceback(
+    tmp_path: Path, server_name: str, extra: dict[str, Any]
+) -> None:
+    host = McpHost('hosted', mcp_servers={})
+    try:
+        with pytest.raises(ValueError) as refused:
+            await host.connect(
+                server_name,
+                json.loads(json.dumps({'command': 'npx', 'env': {'GENKIT_MCP_TEST_API_KEY': SECRET}, **extra})),
+            )
+    finally:
+        await host.close()
+
+    assert SECRET not in rendered_for_logs(refused.value)
+
+
+@pytest.mark.asyncio
 async def test_connect_to_a_host_closed_meanwhile_stops_the_new_server(tmp_path: Path) -> None:
     """A server listed after the host closed would otherwise run with nothing left to stop it."""
     host = McpHost('hosted', mcp_servers={})
