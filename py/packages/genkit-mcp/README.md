@@ -65,7 +65,8 @@ flow run from the Dev UI and your `main()` talk to two separate server processes
 keeps state, such as a session or an open file, keeps one copy of it for each.
 
 `await client.restart()` reconnects a live client, for a server whose configuration or state
-changed underneath you. `await client.close()` disconnects and stops the child process: a
+changed underneath you. A request still in flight when it restarts, on any event loop, fails with
+status `UNAVAILABLE` and can be retried. `await client.close()` disconnects and stops the child process: a
 closed client cannot be restarted, and anything that asks for a tool afterwards fails with a
 `GenkitError` whose status is `FAILED_PRECONDITION`. To use that server again, define a new
 client. A server that cannot start, or whose process dies, fails with status `UNAVAILABLE`. A

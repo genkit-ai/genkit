@@ -355,6 +355,62 @@ async def test_restart_replaces_the_server_and_its_listing(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
+async def test_a_call_cut_off_by_restart_fails_as_unavailable(tmp_path: Path) -> None:
+    """The client is still live after a restart, so the cut-off call is one to retry, not a closed client."""
+    client = McpClient('fake', **server(tmp_path))
+    try:
+        tools = {tool.name: tool for tool in await client.get_active_tools()}
+        stalled = asyncio.create_task(tools['fake_stall']({}))
+        await tools['fake_await_stall']({})
+
+        await client.restart()
+
+        with pytest.raises(GenkitError, match="MCP client 'fake' restarted") as raised:
+            await stalled
+        assert raised.value.status == 'UNAVAILABLE'
+        assert (await tools['fake_echo']({'message': 'retried'})).output == 'retried'
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_a_call_on_another_loop_cut_off_by_restart_fails_as_unavailable(tmp_path: Path) -> None:
+    """A restart on one loop reaches a call in flight on another, such as the Dev UI's."""
+    client = McpClient('fake', **server(tmp_path))
+    background = BackgroundLoop()
+    try:
+        tools = {tool.name: tool for tool in await client.get_active_tools()}
+        stalled = asyncio.wrap_future(asyncio.run_coroutine_threadsafe(tools['fake_stall']({}), background.loop))
+        await background.run(tools['fake_await_stall']({}))
+
+        await client.restart()
+
+        with pytest.raises(GenkitError, match="MCP client 'fake' restarted") as raised:
+            await stalled
+        assert raised.value.status == 'UNAVAILABLE'
+        assert (await background.run(tools['fake_echo']({'message': 'retried'}))).output == 'retried'
+    finally:
+        await client.close()
+        background.stop()
+
+
+@pytest.mark.asyncio
+async def test_a_call_cut_off_by_close_fails_as_closed(tmp_path: Path) -> None:
+    """Close is final, so a call it cuts off reports the closed client."""
+    client = McpClient('fake', **server(tmp_path))
+    try:
+        tools = {tool.name: tool for tool in await client.get_active_tools()}
+        stalled = asyncio.create_task(tools['fake_stall']({}))
+        await tools['fake_await_stall']({})
+    finally:
+        await client.close()
+
+    with pytest.raises(GenkitError) as raised:
+        await stalled
+    assert raised.value.status == 'FAILED_PRECONDITION'
+
+
+@pytest.mark.asyncio
 async def test_restart_reports_a_server_which_cannot_be_started(tmp_path: Path) -> None:
     """The caller of restart hears about a broken server, not the next generate."""
     ai = Genkit()

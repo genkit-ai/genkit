@@ -22,7 +22,8 @@ import asyncio
 import os
 import threading
 import weakref
-from typing import Any
+from collections.abc import Awaitable, Callable
+from typing import Any, TypeVar
 
 from mcp.types import CallToolResult
 
@@ -30,7 +31,7 @@ from genkit import DynamicActionProvider, Genkit, Tool
 from genkit.plugin_api import Action
 from genkit_mcp._config import McpStdioServerConfig
 from genkit_mcp._connection import DEFAULT_REQUEST_TIMEOUT_MILLIS, McpConnection
-from genkit_mcp._errors import _ConnectionClosedError
+from genkit_mcp._errors import _ConnectionClosedError, _ConnectionFailedError
 from genkit_mcp._tools import (
     mcp_tool_name,
     mcp_tools_to_actions,
@@ -38,6 +39,8 @@ from genkit_mcp._tools import (
     validate_provider_name,
     validate_tool_prefix,
 )
+
+_T = TypeVar('_T')
 
 
 class McpClient:
@@ -143,12 +146,12 @@ class McpClient:
             ValueError: If two of the server's tools share a Genkit tool name
                 once the characters the model providers reject are rewritten.
         """
-        tools = await self._connection().list_tools()
+        tools = await self._on_connection(McpConnection.list_tools)
         return mcp_tools_to_handles(tools, self._name, self._call_tool)
 
     async def _list_actions(self) -> list[Action[Any, Any]]:
         """List the server's tools as unregistered actions, for a provider to hand out."""
-        tools = await self._connection().list_tools()
+        tools = await self._on_connection(McpConnection.list_tools)
         return mcp_tools_to_actions(tools, self._name, self._call_tool)
 
     async def restart(self) -> None:
@@ -157,6 +160,9 @@ class McpClient:
         The calling loop reconnects and re-lists before this returns, so a server
         which still cannot be started says so here rather than on the next
         generate. Any other loop reconnects when it next asks for a tool.
+
+        A request still running on any loop's connection fails with
+        ``UNAVAILABLE``, and can be retried once this returns.
 
         Raises:
             GenkitError: ``FAILED_PRECONDITION`` if this client is closed, or
@@ -223,6 +229,15 @@ class McpClient:
             self._connections[loop] = connection
             return connection
 
+    async def _on_connection(self, operation: Callable[[McpConnection], Awaitable[_T]]) -> _T:
+        """Run an operation on the calling loop's connection, reporting one a restart closed as unavailable."""
+        try:
+            return await operation(self._connection())
+        except _ConnectionClosedError:
+            if self._closed:
+                raise
+            raise _ConnectionFailedError(f'MCP client {self._name!r} restarted during the request; retry it') from None
+
     async def _call_tool(
         self,
         name: str,
@@ -231,7 +246,7 @@ class McpClient:
     ) -> CallToolResult:
         """Invoke a tool on the connection belonging to the calling event loop."""
         try:
-            return await self._connection().call_tool(name, arguments, meta)
+            return await self._on_connection(lambda connection: connection.call_tool(name, arguments, meta))
         except Exception:
             # Any failure can mean the listing is stale, and re-listing costs one
             # round trip, so drop the cache rather than classify the error.
