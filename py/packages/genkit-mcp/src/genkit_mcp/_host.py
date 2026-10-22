@@ -27,7 +27,7 @@ from genkit import DynamicActionProvider, Genkit, Tool
 from genkit.plugin_api import Action
 from genkit_mcp._client import McpClient
 from genkit_mcp._config import McpServerEntry, McpStdioServerConfig
-from genkit_mcp._connection import DEFAULT_REQUEST_TIMEOUT_MILLIS
+from genkit_mcp._connection import DEFAULT_REQUEST_TIMEOUT_MILLIS, validate_request_timeout
 from genkit_mcp._errors import _ConnectionClosedError, _ConnectionFailedError, _RequestTimeoutError
 from genkit_mcp._tools import validate_provider_name, validate_tool_prefix
 
@@ -71,14 +71,17 @@ class McpHost:
             mcp_servers: The servers this host manages, keyed by the name that
                 prefixes each server's tools, in the order it lists them.
             request_timeout_millis: How long one MCP request may take before it
-                fails, for every server. ``None`` waits forever.
+                fails, for every server. Must be positive. ``None`` is the only
+                way to disable the timeout.
 
         Raises:
             ValueError: If ``name`` cannot appear in a tool selector, if a
-                server name cannot appear in a model-facing tool name, or if an
-                entry is not a stdio server entry.
+                server name cannot appear in a model-facing tool name, if an
+                entry is not a stdio server entry, or if
+                ``request_timeout_millis`` is zero or negative.
         """
         validate_provider_name(name)
+        validate_request_timeout(request_timeout_millis)
         self._name = name
         self._request_timeout_millis = request_timeout_millis
         self._provider: DynamicActionProvider | None = None
@@ -399,18 +402,21 @@ def define_mcp_host(
             prefixes each server's tools, in the order it lists them. Each
             entry holds ``command`` and optionally ``args``, ``env``, ``cwd``
             and ``type``, which can only be ``stdio``.
-        cache_ttl_millis: How long a tool listing stays fresh. Defaults to the
-            core dynamic action provider default.
+        cache_ttl_millis: How long a tool listing stays fresh. ``None`` or
+            ``0`` uses the default of 3 seconds. A negative value disables the
+            cache, so every lookup lists the tools again.
         request_timeout_millis: How long one MCP request may take before it
-            fails, for every server. ``None`` waits forever.
+            fails, for every server. Must be positive. ``None`` is the only way
+            to disable the timeout.
 
     Returns:
         A handle for listing tools, connecting, reconnecting and disconnecting.
 
     Raises:
         ValueError: If ``name`` cannot appear in a tool selector, if a server
-            name cannot appear in a model-facing tool name, or if an entry is
-            not a stdio server entry.
+            name cannot appear in a model-facing tool name, if an entry is not
+            a stdio server entry, or if ``request_timeout_millis`` is zero or
+            negative.
     """
     host = McpHost(name, mcp_servers=mcp_servers, request_timeout_millis=request_timeout_millis)
 

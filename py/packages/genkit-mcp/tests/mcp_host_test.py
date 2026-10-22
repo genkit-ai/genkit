@@ -749,6 +749,13 @@ async def test_a_host_name_no_selector_could_carry_is_refused(tmp_path: Path, na
     assert server_processes() == []
 
 
+@pytest.mark.parametrize('timeout', [0, -1])
+def test_a_host_with_no_servers_yet_rejects_a_timeout_that_is_not_positive(timeout: int) -> None:
+    """Servers connected later would inherit it, so it is refused before the first one."""
+    with pytest.raises(ValueError, match='request_timeout_millis'):
+        define_mcp_host(Genkit(), 'hosted', mcp_servers={}, request_timeout_millis=timeout)
+
+
 @pytest.mark.asyncio
 async def test_a_host_name_a_model_would_refuse_is_accepted(tmp_path: Path) -> None:
     """A host name reaches no model, so the tool name rules do not apply to it."""
