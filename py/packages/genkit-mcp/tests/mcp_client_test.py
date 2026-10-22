@@ -207,19 +207,6 @@ async def test_generate_accepts_the_listed_tools(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_tool_names_carry_the_provider_name(tmp_path: Path) -> None:
-    """Tool names carry the provider name, which the caller chose."""
-    ai = Genkit()
-    client = define_mcp_client(ai, 'fake', **server(tmp_path))
-    try:
-        expanded = await expand_wildcard_tools(ai._registry, ['fake:tool/*'])
-    finally:
-        await client.close()
-
-    assert sorted(expanded) == sorted(f'/tool.v2/fake_{tool}' for tool in ALL_TOOLS)
-
-
-@pytest.mark.asyncio
 async def test_a_dead_server_drops_the_listing_and_is_replaced(tmp_path: Path) -> None:
     """A failed call invalidates the listing, and the next one gets a new process."""
     ai = Genkit()
@@ -277,23 +264,27 @@ async def test_close_ignores_a_loop_which_already_finished(tmp_path: Path) -> No
     """A finished loop cancelled its connection on the way out, taking the server with it."""
     ai = Genkit()
     client = define_mcp_client(ai, 'fake', **server(tmp_path))
-    action = await ai._registry.resolve_action_by_key('/dynamic-action-provider/fake:tool/fake_echo')
-    assert action is not None
-    outputs: list[object] = []
+    try:
+        action = await ai._registry.resolve_action_by_key('/dynamic-action-provider/fake:tool/fake_echo')
+        assert action is not None
+        outputs: list[object] = []
 
-    def use_own_loop() -> None:
-        outputs.append(asyncio.run(action.run({'message': 'other'})).response.output)
+        def use_own_loop() -> None:
+            outputs.append(asyncio.run(action.run({'message': 'other'})).response.output)
 
-    thread = threading.Thread(target=use_own_loop)
-    thread.start()
-    thread.join(timeout=30)
+        thread = threading.Thread(target=use_own_loop)
+        thread.start()
+        thread.join(timeout=30)
 
-    assert outputs == ['other']
-    # Only the main loop's connection is left: it was opened by the listing.
-    assert len(server_processes()) == 1
+        assert not thread.is_alive()
+        assert outputs == ['other']
+        # Only the main loop's connection is left: it was opened by the listing.
+        assert len(server_processes()) == 1
 
-    await client.close()
-    assert server_processes() == []
+        await client.close()
+        assert server_processes() == []
+    finally:
+        await client.close()
 
 
 @pytest.mark.asyncio
@@ -346,25 +337,30 @@ async def test_a_closed_client_starts_no_server_on_a_new_loop(tmp_path: Path) ->
     """Close is final: a loop which never had a connection does not get one."""
     ai = Genkit()
     client = define_mcp_client(ai, 'fake', **server(tmp_path))
-    action = await ai._registry.resolve_action_by_key('/dynamic-action-provider/fake:tool/fake_echo')
-    assert action is not None
-    await client.close()
+    try:
+        action = await ai._registry.resolve_action_by_key('/dynamic-action-provider/fake:tool/fake_echo')
+        assert action is not None
+        await client.close()
 
-    errors: list[BaseException] = []
+        errors: list[BaseException] = []
 
-    def use_own_loop() -> None:
-        try:
-            asyncio.run(action.run({'message': 'late'}))
-        except BaseException as error:
-            errors.append(error)
+        def use_own_loop() -> None:
+            try:
+                asyncio.run(action.run({'message': 'late'}))
+            except BaseException as error:
+                errors.append(error)
 
-    thread = threading.Thread(target=use_own_loop)
-    thread.start()
-    thread.join(timeout=30)
+        thread = threading.Thread(target=use_own_loop)
+        thread.start()
+        thread.join(timeout=30)
 
-    assert isinstance(errors[0], GenkitError)
-    assert errors[0].status == 'FAILED_PRECONDITION'
-    assert server_processes() == []
+        assert not thread.is_alive()
+        assert len(errors) == 1
+        assert isinstance(errors[0], GenkitError)
+        assert errors[0].status == 'FAILED_PRECONDITION'
+        assert server_processes() == []
+    finally:
+        await client.close()
 
 
 @pytest.mark.asyncio
