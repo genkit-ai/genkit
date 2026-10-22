@@ -10,10 +10,12 @@ import asyncio
 import os
 import sys
 import threading
+import time
 from collections.abc import Coroutine
 from pathlib import Path
 from typing import Any, TypeVar
 
+import genkit_mcp._client
 import psutil
 import pytest
 from genkit_mcp import McpClient, define_mcp_client
@@ -292,6 +294,51 @@ async def test_close_ignores_a_loop_which_already_finished(tmp_path: Path) -> No
 
     await client.close()
     assert server_processes() == []
+
+
+@pytest.mark.asyncio
+async def test_close_returns_when_another_loop_stops_before_closing_its_connection(tmp_path: Path) -> None:
+    """A loop which stops after close handed it the connection is skipped, not awaited forever."""
+    client = McpClient('fake', **server(tmp_path))
+    background = BackgroundLoop()
+    try:
+        tools = await client.get_active_tools()
+        assert (await background.run(tools[0]({'message': 'background'}))).output == 'background'
+        background.loop.call_soon_threadsafe(time.sleep, 0.5)
+        background.loop.call_soon_threadsafe(background.loop.stop)
+
+        await asyncio.wait_for(client.close(), 10)
+    finally:
+        await client.close()
+        background.stop()
+        # The stopped loop still holds its connection, and nothing can reach it to close it.
+        for process in server_processes():
+            process.kill()
+
+
+@pytest.mark.asyncio
+async def test_close_stops_waiting_on_a_loop_too_busy_to_close_its_connection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A blocked loop holds close up for the timeout only, and closes the connection once it is free."""
+    monkeypatch.setattr(genkit_mcp._client, '_CROSS_LOOP_CLOSE_TIMEOUT_SECONDS', 0.5)
+    client = McpClient('fake', **server(tmp_path))
+    background = BackgroundLoop()
+    try:
+        tools = await client.get_active_tools()
+        assert (await background.run(tools[0]({'message': 'background'}))).output == 'background'
+        background.loop.call_soon_threadsafe(time.sleep, 3)
+
+        started = time.monotonic()
+        await asyncio.wait_for(client.close(), 10)
+        assert time.monotonic() - started < 2.5
+
+        _, alive = psutil.wait_procs(server_processes(), timeout=10)
+        assert alive == []
+    finally:
+        await client.close()
+        background.stop()
 
 
 @pytest.mark.asyncio

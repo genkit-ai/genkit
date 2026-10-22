@@ -19,12 +19,15 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import os
 import threading
+import time
 import weakref
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
 
+import structlog
 from mcp.types import CallToolResult
 
 from genkit import DynamicActionProvider, Genkit, Tool
@@ -41,6 +44,13 @@ from genkit_mcp._tools import (
 )
 
 _T = TypeVar('_T')
+
+logger = structlog.get_logger(__name__)
+
+# Well past a graceful server shutdown, which can take seconds.
+_CROSS_LOOP_CLOSE_TIMEOUT_SECONDS = 30.0
+
+_LOOP_POLL_SECONDS = 0.1
 
 
 class McpClient:
@@ -180,10 +190,12 @@ class McpClient:
         """Disconnect from the server, stop its process, and keep it that way.
 
         A connection belongs to the event loop that opened it, so each one is
-        shut down on its own loop. A loop which has already stopped is skipped. A
-        loop run by ``asyncio.run`` cancelled its connection on the way out, taking
-        the server process with it; a loop stopped any other way did not, and this
-        call cannot reach its connection.
+        shut down on its own loop. A loop which has stopped, or stops before it
+        gets to the connection, is skipped. A loop run by ``asyncio.run`` cancelled
+        its connection on the way out, taking the server process with it; a loop
+        stopped any other way did not, and this call cannot reach its connection.
+        A loop still running is waited on for at most 30 seconds, and then left
+        to finish the shutdown on its own.
 
         Closing is final, as it is for a file or an ``httpx.AsyncClient``: a
         closed client cannot be restarted, so build a new one with
@@ -210,7 +222,31 @@ class McpClient:
             if loop is current:
                 await connection.close()
             elif loop.is_running():
-                await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(connection.close(), loop))
+                await self._close_on(loop, connection)
+
+    async def _close_on(self, loop: asyncio.AbstractEventLoop, connection: McpConnection) -> None:
+        """Close a connection on another loop, giving up if that loop stops or stalls."""
+        closing = connection.close()
+        future = asyncio.run_coroutine_threadsafe(closing, loop)
+        waiter = asyncio.wrap_future(future)
+        deadline = time.monotonic() + _CROSS_LOOP_CLOSE_TIMEOUT_SECONDS
+        while True:
+            done, _ = await asyncio.wait({waiter}, timeout=_LOOP_POLL_SECONDS)
+            if done:
+                break
+            if not loop.is_running():
+                future.cancel()
+                if inspect.getcoroutinestate(closing) == inspect.CORO_CREATED:
+                    closing.close()
+                return
+            if time.monotonic() >= deadline:
+                logger.warning(
+                    'MCP connection did not close on its event loop in time',
+                    client=self._name,
+                    timeout_seconds=_CROSS_LOOP_CLOSE_TIMEOUT_SECONDS,
+                )
+                return
+        await waiter
 
     def _refuse_when_closed(self) -> None:
         """Raise if this client has been closed. Call under the connections lock."""
