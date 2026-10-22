@@ -19,7 +19,7 @@
 import os
 
 from genkit import Genkit
-from genkit_mcp._connection import DEFAULT_REQUEST_TIMEOUT_MILLIS
+from genkit_mcp._connection import DEFAULT_REQUEST_TIMEOUT_MILLIS, validate_request_timeout
 
 
 class McpClient:
@@ -87,13 +87,16 @@ def define_mcp_client(
         cache_ttl_millis: How long a tool listing stays fresh. Defaults to the
             core dynamic action provider default.
         request_timeout_millis: How long one MCP request may take before it
-            fails. ``None`` waits forever.
+            fails. Must be positive. ``None`` is the only way to disable the
+            timeout.
 
     Returns:
         A handle for disconnecting.
 
     Raises:
         ValueError: If ``name`` cannot appear in a tool selector or a
-            model-facing tool name.
+            model-facing tool name, or if ``request_timeout_millis`` is zero
+            or negative.
     """
+    validate_request_timeout(request_timeout_millis)
     raise NotImplementedError

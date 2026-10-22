@@ -26,6 +26,21 @@ DEFAULT_REQUEST_TIMEOUT_MILLIS = 60_000
 """How long one MCP request may take before the SDK fails it."""
 
 
+def validate_request_timeout(request_timeout_millis: int | None) -> None:
+    """Reject a request timeout that is not positive.
+
+    Args:
+        request_timeout_millis: Timeout to check. ``None`` disables the timeout.
+
+    Raises:
+        ValueError: If ``request_timeout_millis`` is zero or negative.
+    """
+    if request_timeout_millis is not None and request_timeout_millis <= 0:
+        raise ValueError(
+            f'request_timeout_millis must be positive, got {request_timeout_millis}; pass None to disable the timeout'
+        )
+
+
 class McpConnection:
     """Owns the child process and session for one MCP server.
 
@@ -45,8 +60,13 @@ class McpConnection:
         Args:
             config: How to launch the server.
             request_timeout_millis: How long one request may take before it
-                fails. ``None`` waits forever.
+                fails. Must be positive. ``None`` is the only way to disable
+                the timeout.
+
+        Raises:
+            ValueError: If ``request_timeout_millis`` is zero or negative.
         """
+        validate_request_timeout(request_timeout_millis)
         raise NotImplementedError
 
     @property
