@@ -19,6 +19,8 @@ import genkit_mcp._client
 import psutil
 import pytest
 from genkit_mcp import McpClient, define_mcp_client
+from genkit_mcp._config import McpStdioServerConfig
+from genkit_mcp._connection import McpConnection
 
 from genkit import Genkit, GenkitError, Message, ModelResponse, Part
 from genkit._ai._generate import expand_wildcard_tools
@@ -693,3 +695,17 @@ async def test_tools_sharing_a_genkit_name_fail_the_listing(tmp_path: Path) -> N
             await expand_wildcard_tools(ai._registry, ['bookshop:tool/*'])
     finally:
         await client.close()
+
+
+@pytest.mark.parametrize('timeout', [0, -1])
+def test_define_mcp_client_rejects_a_timeout_that_is_not_positive(timeout: int) -> None:
+    """A zero timeout would fail every request at once instead of meaning no timeout."""
+    with pytest.raises(ValueError, match='request_timeout_millis'):
+        define_mcp_client(Genkit(), 'everything', command='npx', request_timeout_millis=timeout)
+
+
+@pytest.mark.parametrize('timeout', [0, -1])
+def test_connection_rejects_a_timeout_that_is_not_positive(timeout: int) -> None:
+    """The connection guards the timeout too, for callers that build one directly."""
+    with pytest.raises(ValueError, match='request_timeout_millis'):
+        McpConnection(McpStdioServerConfig(command='npx'), request_timeout_millis=timeout)

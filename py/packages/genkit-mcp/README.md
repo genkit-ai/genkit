@@ -25,20 +25,30 @@ client = define_mcp_client(
     args=['-y', '@modelcontextprotocol/server-everything'],
 )
 
-# What the server offers, under the names a model is shown.
-tools = await client.get_active_tools()
-for tool in tools:
-    print(tool.name, tool.description)
 
-# Every tool of this server, or just one.
-result = await ai.generate(prompt='Echo "hello".', tools=['everything:tool/*'])
-one = f'{client.name}:tool/{client.tool_name("echo")}'
-result = await ai.generate(prompt='Echo "hello".', tools=[one])
+async def main() -> None:
+    try:
+        # What the server offers, under the names a model is shown.
+        tools = await client.get_active_tools()
+        for tool in tools:
+            print(tool.name, tool.description)
 
-# The listing itself is a list of Genkit tools, so it can be handed to a
-# generate call or called directly.
-result = await ai.generate(prompt='Echo "hello".', tools=tools)
-echoed = (await tools[0]({'message': 'hello'})).output
+        # Every tool of this server, or just one.
+        result = await ai.generate(prompt='Echo "hello".', tools=['everything:tool/*'])
+        one = f'{client.name}:tool/{client.tool_name("echo")}'
+        result = await ai.generate(prompt='Echo "hello".', tools=[one])
+
+        # The listing itself is a list of Genkit tools, so it can be handed to a
+        # generate call or called directly.
+        result = await ai.generate(prompt='Echo "hello".', tools=tools)
+        print(result.text)
+        echoed = (await tools[0]({'message': 'hello'})).output
+        print(echoed)
+    finally:
+        await client.close()
+
+
+asyncio.run(main())
 ```
 
 ## Tool names
@@ -66,7 +76,8 @@ server-controlled text: `@modelcontextprotocol/server-everything` above calls it
 Connecting is lazy. The child process starts the first time something lists the tools, once per
 event loop, and the Dev UI's reflection server has a loop of its own. So under `genkit start`, a
 flow run from the Dev UI and your `main()` talk to two separate server processes. A server that
-keeps state, such as a session or an open file, keeps one copy of it for each.
+keeps state, such as a session or an open file, keeps one copy of it for each, and servers that bind
+a port, take a lock file or own a browser profile can clash.
 
 `await client.restart()` reconnects a live client, for a server whose configuration or state changed
 underneath you. A request still in flight when it restarts, on any event loop, fails with status

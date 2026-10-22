@@ -33,7 +33,7 @@ from mcp.types import CallToolResult
 from genkit import DynamicActionProvider, Genkit, Tool
 from genkit.plugin_api import Action, ActionKind
 from genkit_mcp._config import McpStdioServerConfig
-from genkit_mcp._connection import DEFAULT_REQUEST_TIMEOUT_MILLIS, McpConnection
+from genkit_mcp._connection import DEFAULT_REQUEST_TIMEOUT_MILLIS, McpConnection, validate_request_timeout
 from genkit_mcp._errors import _ConnectionClosedError, _ConnectionFailedError
 from genkit_mcp._tools import (
     mcp_tool_name,
@@ -92,17 +92,20 @@ class McpClient:
             command: Executable that runs the server.
             args: Arguments passed to ``command``.
             env: Extra environment for the server process, over the minimal set
-                the MCP SDK supplies.
+                that ``mcp.client.stdio.get_default_environment()`` returns.
             cwd: Working directory for the server process.
             request_timeout_millis: How long one MCP request may take before it
-                fails. ``None`` waits forever.
+                fails. Must be positive. ``None`` is the only way to disable the
+                timeout.
 
         Raises:
             ValueError: If ``name`` cannot appear in a tool selector or a
-                model-facing tool name.
+                model-facing tool name, or if ``request_timeout_millis`` is zero
+                or negative.
         """
         validate_provider_name(name)
         validate_tool_prefix(name)
+        validate_request_timeout(request_timeout_millis)
         self._provider = None
         self._name = name
         self._server = McpStdioServerConfig(command=command, args=args, env=env, cwd=cwd)
@@ -329,11 +332,14 @@ def define_mcp_client(
             this server's tool names.
         command: Executable that runs the server, for example ``npx`` or ``uv``.
         args: Arguments passed to ``command``.
-        env: Extra environment for the server process, over the minimal set the
-            MCP SDK supplies. The parent environment is not inherited.
+        env: Extra environment for the server process, over the minimal set
+            that ``mcp.client.stdio.get_default_environment()`` returns. The
+            parent environment is not inherited, so list every variable the
+            server needs, API keys included.
         cwd: Working directory for the server process.
-        cache_ttl_millis: How long a tool listing stays fresh. Defaults to the
-            core dynamic action provider default.
+        cache_ttl_millis: How long a tool listing stays fresh. ``None`` or
+            ``0`` uses the default of 3 seconds. A negative value disables the
+            cache, so every lookup lists the tools again.
         request_timeout_millis: How long one MCP request may take before it
             fails. Must be positive. ``None`` is the only way to disable the
             timeout.
@@ -343,8 +349,9 @@ def define_mcp_client(
 
     Raises:
         ValueError: If ``name`` cannot appear in a tool selector or a
-            model-facing tool name, or a dynamic action provider other than a
-            closed MCP client's is already registered under it.
+            model-facing tool name, if a dynamic action provider other than a
+            closed MCP client's is already registered under it, or if
+            ``request_timeout_millis`` is zero or negative.
     """
     client = McpClient(
         name,
