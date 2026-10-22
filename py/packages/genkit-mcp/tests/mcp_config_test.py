@@ -33,6 +33,14 @@ def test_repr_omits_env_values() -> None:
     assert SECRET not in str(config)
 
 
+def test_repr_omits_args() -> None:
+    """Args can carry credentials, such as a database URL, so repr and str omit them."""
+    config = McpStdioServerConfig(command='npx', args=[f'postgresql://user:{SECRET}@db/app'])
+
+    assert SECRET not in repr(config)
+    assert SECRET not in str(config)
+
+
 @pytest.mark.parametrize(
     'raw',
     [

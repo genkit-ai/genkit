@@ -34,7 +34,8 @@ class McpStdioServerConfig(BaseModel):
     Attributes:
         type: Transport marker some `mcpServers` blocks carry; only ``stdio``.
         command: Executable to run, for example ``npx`` or ``uv``.
-        args: Arguments passed to ``command``.
+        args: Arguments passed to ``command``. Omitted from ``repr``, since
+            some servers take credentials as arguments.
         env: Extra environment for the child process, merged over the minimal
             set the MCP SDK always supplies: ``HOME``, ``LOGNAME``, ``PATH``,
             ``SHELL``, ``TERM`` and ``USER`` on posix, and the ``APPDATA``,
@@ -52,6 +53,6 @@ class McpStdioServerConfig(BaseModel):
 
     type: Literal['stdio'] | None = None
     command: str
-    args: list[str] | None = None
+    args: list[str] | None = Field(default=None, repr=False)
     env: dict[str, str] | None = Field(default=None, repr=False)
     cwd: str | os.PathLike[str] | None = None
