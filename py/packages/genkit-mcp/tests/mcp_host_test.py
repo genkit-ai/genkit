@@ -7,16 +7,19 @@
 """Integration tests for several MCP servers behind one dynamic action provider."""
 
 import asyncio
+import io
 import json
 import os
 import re
 import sys
+import traceback
 from pathlib import Path
 from typing import Any
 
 import anyio
 import psutil
 import pytest
+import structlog
 from genkit_mcp import McpClient, McpHost, McpServerEntry, define_mcp_host
 from mcp.shared.exceptions import McpError
 from pydantic import ValidationError
@@ -55,6 +58,9 @@ STALL_TIMEOUT_MILLIS = 3_000
 # Bounds every wait on a test server, so a regression fails rather than hangs.
 LIMIT = 15
 
+# Module level, so no test frame's locals can put it into a rendered traceback.
+SECRET = 'genkit-mcp-redaction-canary-7f3a'
+
 
 def server(tmp_path: Path, pid_name: str = 'server', **env: str) -> McpServerEntry:
     """One mcpServers entry for the test server."""
@@ -77,6 +83,19 @@ def servers(tmp_path: Path, *names: str, **env: str) -> dict[str, McpServerEntry
 def missing_server(tmp_path: Path) -> McpServerEntry:
     """A server whose command does not exist, so it can never start."""
     return {'command': str(tmp_path / 'no-such-server')}
+
+
+def rendered_for_logs(error: BaseException) -> str:
+    """Print the error's whole chain with frame locals, as structlog's default renderer does for logger.exception."""
+    output = io.StringIO()
+    saved = structlog.get_config()
+    structlog.configure(logger_factory=structlog.PrintLoggerFactory(output))
+    try:
+        structlog.get_logger('test').exception('listing failed', exc_info=(type(error), error, error.__traceback__))
+    finally:
+        structlog.configure(**saved)
+    captured = traceback.TracebackException(type(error), error, error.__traceback__, capture_locals=True)
+    return output.getvalue() + ''.join(captured.format(chain=True))
 
 
 async def stalled(marker: Path) -> None:
@@ -212,6 +231,23 @@ async def test_servers_which_do_not_answer_in_time_leave_the_others_listed(tmp_p
     skipped = {log['server']: log['status'] for log in logs if log['event'].startswith('MCP server could not be')}
     assert skipped == {'handshake': 'UNAVAILABLE', 'listing': 'DEADLINE_EXCEEDED'}
     assert server_processes() == []
+
+
+@pytest.mark.asyncio
+async def test_a_skipped_server_is_logged_without_its_env(tmp_path: Path) -> None:
+    """The skip log carries the error, and structlog's default renderer prints every frame's locals in its chain."""
+    broken: McpServerEntry = {'command': str(tmp_path / 'no-such-server'), 'env': {'GENKIT_MCP_TEST_API_KEY': SECRET}}
+    host = McpHost('hosted', mcp_servers={'broken': broken})
+    try:
+        with capture_logs() as logs:
+            tools = await asyncio.wait_for(host.get_active_tools(), timeout=LIMIT)
+    finally:
+        await host.close()
+
+    assert tools == []
+    [skipped] = [log for log in logs if log['event'].startswith('MCP server could not be')]
+    assert skipped['status'] == 'UNAVAILABLE'
+    assert SECRET not in rendered_for_logs(skipped['exc_info'])
 
 
 @pytest.mark.asyncio
