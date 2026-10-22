@@ -51,7 +51,11 @@ server lists with such a character, such as `look.up`, has it rewritten to an un
 warning. Two tools that then share a name, such as `look.up` and `look/up`, fail the listing. Length
 is not checked at definition, because the tool half of the name is unknown until the server lists
 it. A `<prefix>_<tool>` longer than 64 characters is warned about when the tools are listed and
-passed through, so the provider's 400 arrives on `generate`.
+passed through, so the provider's 400 arrives on `generate`. Nor are names checked across servers: a
+prefix `fake` with a tool `await_stall` and a prefix `fake_await` with a tool `stall` both make
+`fake_await_stall`, and `generate` refuses to bind both. Each prefix names one provider, so a second
+client under a name already registered fails when it is defined, unless the client holding the name
+is closed.
 
 The prefix is deliberately not the name the server advertises for itself, which is arbitrary
 server-controlled text: `@modelcontextprotocol/server-everything` above calls itself

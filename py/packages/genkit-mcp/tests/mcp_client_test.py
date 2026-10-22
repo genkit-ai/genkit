@@ -525,6 +525,49 @@ async def test_a_name_no_selector_could_carry_is_refused_at_definition(
 
 
 @pytest.mark.asyncio
+async def test_a_name_a_live_client_holds_is_refused_at_definition(tmp_path: Path) -> None:
+    """A second provider under the same name would silently orphan the first client."""
+    ai = Genkit()
+    first = define_mcp_client(ai, 'fake', **server(tmp_path))
+    try:
+        with pytest.raises(ValueError, match="'fake' is already registered"):
+            define_mcp_client(ai, 'fake', **server(tmp_path))
+        registered = ai._registry.registered_action(ActionKind.DYNAMIC_ACTION_PROVIDER, 'fake')
+        assert first._provider is not None
+        assert registered is first._provider.action
+    finally:
+        await first.close()
+
+
+@pytest.mark.asyncio
+async def test_a_name_another_provider_holds_is_refused_at_definition(tmp_path: Path) -> None:
+    """The name is taken whoever registered the provider."""
+    ai = Genkit()
+
+    async def list_nothing() -> dict[str, list[Any]]:
+        return {}
+
+    ai.define_dynamic_action_provider('fake', list_nothing)
+    with pytest.raises(ValueError, match="'fake' is already registered"):
+        define_mcp_client(ai, 'fake', **server(tmp_path))
+
+
+@pytest.mark.asyncio
+async def test_a_closed_clients_name_can_be_defined_again(tmp_path: Path) -> None:
+    """A new client is how a closed one's server is used again, under the same selectors."""
+    ai = Genkit()
+    first = define_mcp_client(ai, 'fake', **server(tmp_path))
+    await first.close()
+    second = define_mcp_client(ai, 'fake', **server(tmp_path))
+    try:
+        action = await ai._registry.resolve_action_by_key('/dynamic-action-provider/fake:tool/fake_echo')
+        assert action is not None
+        assert (await action.run({'message': 'again'})).response.output == 'again'
+    finally:
+        await second.close()
+
+
+@pytest.mark.asyncio
 async def test_get_active_tools_lists_what_the_selector_binds(tmp_path: Path) -> None:
     """The listing is the one ``<name>:tool/*`` binds, namespaced names and all."""
     ai = Genkit()
