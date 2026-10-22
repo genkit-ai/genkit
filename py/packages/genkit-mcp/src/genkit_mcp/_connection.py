@@ -162,6 +162,28 @@ def _transport_cause(error: Exception) -> Exception:
     return error
 
 
+def _drop_tracebacks(error: BaseException) -> None:
+    """Detach every traceback reachable from ``error`` through its causes, contexts and task groups.
+
+    The frames under ``_run`` hold the server's env in their locals, and a
+    rendered traceback prints those locals.
+
+    Args:
+        error: What ended the session.
+    """
+    pending = [error]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        current.__traceback__ = None
+        if isinstance(current, BaseExceptionGroup):
+            pending.extend(cast('BaseExceptionGroup[BaseException]', current).exceptions)
+        pending.extend(linked for linked in (current.__cause__, current.__context__) if linked is not None)
+
+
 async def _call_tool(
     session: ClientSession,
     name: str,
@@ -486,7 +508,8 @@ class McpConnection:
             self._fail_queued(self._closed_error)
             return
         self._state = _ConnectionState.FAILED
-        if self._failure is None:
+        if self._failure is None and error is not None:
+            _drop_tracebacks(error)
             self._failure = error
         self._fail_queued(self._failed_error)
 

@@ -13,6 +13,7 @@ import os
 import signal
 import sys
 import threading
+import traceback
 from importlib import metadata
 from pathlib import Path
 from typing import cast
@@ -50,6 +51,9 @@ ALL_TOOLS = [
 # fails the suite rather than hanging it. There is no global pytest timeout, so
 # new awaits on a connection have to be wrapped too.
 LIMIT = 15
+
+# Module level, so no test frame's locals can put it into a rendered traceback.
+SECRET = 'genkit-mcp-redaction-canary-7f3a'
 
 
 def config(tmp_path: Path, pid_file: Path | None = None, **env: str) -> McpStdioServerConfig:
@@ -140,6 +144,19 @@ async def hold_in_flight(connection: McpConnection) -> Blocker:
     connection._queue.put_nowait(_Request(blocker.operation, blocker.result))
     await asyncio.wait_for(blocker.running.wait(), timeout=LIMIT)
     return blocker
+
+
+def rendered_for_logs(error: BaseException) -> str:
+    """Print the error's whole chain with frame locals, as structlog's default renderer does for logger.exception."""
+    output = io.StringIO()
+    saved = structlog.get_config()
+    structlog.configure(logger_factory=structlog.PrintLoggerFactory(output))
+    try:
+        structlog.get_logger('test').exception('listing failed', exc_info=(type(error), error, error.__traceback__))
+    finally:
+        structlog.configure(**saved)
+    captured = traceback.TracebackException(type(error), error, error.__traceback__, capture_locals=True)
+    return output.getvalue() + ''.join(captured.format(chain=True))
 
 
 async def close_with_queued(connection: McpConnection, *requests: _Request[list[McpTool]]) -> None:
@@ -453,19 +470,18 @@ async def test_close_while_the_owner_unwinds_releases_a_cut_off_caller_as_closed
 
 @pytest.mark.asyncio
 async def test_a_transport_failure_is_logged_without_the_server_env(tmp_path: Path) -> None:
-    secret = 'genkit-mcp-redaction-canary-7f3a'
     marker = tmp_path / 'stdin.closed'
     launch = config(tmp_path, MCP_FAKE_CLOSE_STDIN=str(marker))
     assert launch.env is not None
     # First, so the renderer's cap on how many dict entries it prints cannot hide it.
-    launch.env = {'GENKIT_MCP_TEST_API_KEY': secret, **launch.env}
+    launch.env = {'GENKIT_MCP_TEST_API_KEY': SECRET, **launch.env}
     connection = McpConnection(launch)
     output = io.StringIO()
     saved = structlog.get_config()
     structlog.configure(logger_factory=structlog.PrintLoggerFactory(output))
     try:
         owner = await start_with_closed_stdin(connection, marker)
-        with pytest.raises(_ConnectionFailedError, match='failed'):
+        with pytest.raises(_ConnectionFailedError, match='failed') as failure:
             await asyncio.wait_for(connection.call_tool('echo', {}), timeout=LIMIT)
         await settle(owner)
     finally:
@@ -475,7 +491,25 @@ async def test_a_transport_failure_is_logged_without_the_server_env(tmp_path: Pa
     logged = output.getvalue()
     assert 'MCP connection ended' in logged
     assert 'BrokenResourceError' in logged
-    assert secret not in logged
+    assert SECRET not in logged
+    assert isinstance(failure.value.__cause__, anyio.BrokenResourceError)
+    assert SECRET not in rendered_for_logs(failure.value)
+
+
+@pytest.mark.asyncio
+async def test_a_startup_failure_keeps_the_server_env_out_of_its_traceback(tmp_path: Path) -> None:
+    """Core renders a failed listing with logger.exception, which prints the locals of every frame in the chain."""
+    missing = tmp_path / 'no-such-mcp-server'
+    connection = McpConnection(McpStdioServerConfig(command=str(missing), env={'GENKIT_MCP_TEST_API_KEY': SECRET}))
+    try:
+        with pytest.raises(_ConnectionFailedError, match='failed') as failure:
+            await asyncio.wait_for(connection.list_tools(), timeout=LIMIT)
+    finally:
+        await asyncio.wait_for(connection.close(), timeout=LIMIT)
+
+    assert isinstance(failure.value.__cause__, OSError)
+    assert str(missing) in rendered_for_logs(failure.value)
+    assert SECRET not in rendered_for_logs(failure.value)
 
 
 @pytest.mark.asyncio

@@ -55,7 +55,7 @@ class _ConnectionFailedError(_ClientError):
     """The server could not be started, or its session died. Status ``UNAVAILABLE``.
 
     ``__cause__`` carries what the transport or the server raised, when it is
-    known.
+    known, without the traceback it was raised with.
     """
 
     _status: ClassVar[StatusName] = 'UNAVAILABLE'
