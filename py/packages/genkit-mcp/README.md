@@ -10,11 +10,16 @@ Tracking issue: <https://github.com/genkit-ai/genkit/issues/6194>
 
 ## Intended usage
 
+The example uses Gemini through `genkit-google-genai` and needs `GEMINI_API_KEY` set. Any model plugin works.
+
 ```python
+import asyncio
+
 from genkit import Genkit
+from genkit_google_genai import GoogleAI
 from genkit_mcp import define_mcp_client
 
-ai = Genkit()
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
 
 client = define_mcp_client(
     ai,
@@ -23,8 +28,16 @@ client = define_mcp_client(
     args=['-y', '@modelcontextprotocol/server-everything'],
 )
 
-result = await ai.generate(prompt='Echo "hello".', tools=['everything:tool/*'])
-await client.close()
+
+async def main() -> None:
+    try:
+        result = await ai.generate(prompt='Echo "hello".', tools=['everything:tool/*'])
+        print(result.text)
+    finally:
+        await client.close()
+
+
+asyncio.run(main())
 ```
 
 ## One server process per event loop
