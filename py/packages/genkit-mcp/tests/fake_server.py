@@ -84,6 +84,9 @@ async def list_tools(req: ListToolsRequest) -> ListToolsResult:
 
 @app.call_tool()
 async def call_tool(name: str, arguments: dict[str, object]) -> list[TextContent] | CallToolResult:
+    call_marker = os.environ.get('MCP_FAKE_CALL_MARKER')
+    if call_marker:
+        await anyio.Path(call_marker).write_text(name, encoding='utf-8')
     if name == 'wait':
         # Must stay under the SDK's PROCESS_TERMINATION_TIMEOUT of 2.0 seconds.
         await asyncio.sleep(0.25)

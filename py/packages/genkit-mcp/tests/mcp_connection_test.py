@@ -268,10 +268,10 @@ async def test_a_cancelled_caller_is_never_sent_to_the_server(tmp_path: Path) ->
 
 @pytest.mark.asyncio
 async def test_close_interrupts_an_in_flight_call(tmp_path: Path) -> None:
-    connection = McpConnection(config(tmp_path))
+    connection = McpConnection(config(tmp_path, MCP_FAKE_CALL_MARKER=str(tmp_path / 'call.started')))
     await asyncio.wait_for(connection.list_tools(), timeout=LIMIT)
     call = asyncio.create_task(connection.call_tool('wait', {}))
-    await asyncio.sleep(0.05)
+    assert await server_marker(tmp_path / 'call.started') == 'wait'
 
     await asyncio.wait_for(connection.close(), timeout=LIMIT)
     with pytest.raises(_ConnectionClosedError, match='closed'):
