@@ -84,8 +84,9 @@ def define_mcp_client(
         env: Extra environment for the server process, over the minimal set the
             MCP SDK supplies. The parent environment is not inherited.
         cwd: Working directory for the server process.
-        cache_ttl_millis: How long a tool listing stays fresh. Defaults to the
-            core dynamic action provider default.
+        cache_ttl_millis: How long a tool listing stays fresh. ``None`` or
+            ``0`` uses the default of 3 seconds. A negative value disables the
+            cache, so every lookup lists the tools again.
         request_timeout_millis: How long one MCP request may take before it
             fails. Must be positive. ``None`` is the only way to disable the
             timeout.
