@@ -37,15 +37,11 @@ class McpStdioServerConfig(BaseModel):
         args: Arguments passed to ``command``. Omitted from ``repr``, since
             some servers take credentials as arguments.
         env: Extra environment for the child process, merged over the minimal
-            set the MCP SDK always supplies: ``HOME``, ``LOGNAME``, ``PATH``,
-            ``SHELL``, ``TERM`` and ``USER`` on posix, and the ``APPDATA``,
-            ``HOMEDRIVE``, ``HOMEPATH``, ``LOCALAPPDATA``, ``PATH``,
-            ``PATHEXT``, ``PROCESSOR_ARCHITECTURE``, ``SYSTEMDRIVE``,
-            ``SYSTEMROOT``, ``TEMP``, ``USERNAME`` and ``USERPROFILE`` set on
-            Windows. ``None`` leaves the child with that minimal set alone: the
-            parent environment is never inherited, so a variable the server
-            needs, an API key for example, has to be listed here even when this
-            process already has it. Omitted from ``repr``.
+            set that ``mcp.client.stdio.get_default_environment()`` returns.
+            ``None`` leaves the child with that minimal set alone: the parent
+            environment is never inherited, so a variable the server needs, an
+            API key for example, has to be listed here even when this process
+            already has it. Omitted from ``repr``.
         cwd: Working directory for the child process.
     """
 

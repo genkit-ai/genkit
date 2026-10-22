@@ -87,8 +87,10 @@ def define_mcp_client(
             this server's tool names.
         command: Executable that runs the server, for example ``npx`` or ``uv``.
         args: Arguments passed to ``command``.
-        env: Extra environment for the server process, over the minimal set the
-            MCP SDK supplies. The parent environment is not inherited.
+        env: Extra environment for the server process, over the minimal set
+            that ``mcp.client.stdio.get_default_environment()`` returns. The
+            parent environment is not inherited, so list every variable the
+            server needs, API keys included.
         cwd: Working directory for the server process.
         cache_ttl_millis: How long a tool listing stays fresh. ``None`` or
             ``0`` uses the default of 3 seconds. A negative value disables the
