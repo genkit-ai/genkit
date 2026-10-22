@@ -334,6 +334,23 @@ async def test_close_kills_a_server_whose_shutdown_overruns_the_grace(
 
 
 @pytest.mark.asyncio
+async def test_a_close_after_a_cancelled_close_waits_for_the_server_to_exit(tmp_path: Path) -> None:
+    connection = McpConnection(config(tmp_path))
+    await asyncio.wait_for(connection.list_tools(), timeout=LIMIT)
+    pid = int((tmp_path / 'server.pid').read_text(encoding='utf-8'))
+
+    first = asyncio.create_task(connection.close())
+    await asyncio.sleep(0)
+    assert not first.done()
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(first, timeout=LIMIT)
+
+    await asyncio.wait_for(connection.close(), timeout=LIMIT)
+    assert not is_running(pid)
+
+
+@pytest.mark.asyncio
 async def test_close_releases_a_request_that_never_reached_the_server(tmp_path: Path) -> None:
     connection = McpConnection(config(tmp_path))
     await asyncio.wait_for(connection.list_tools(), timeout=LIMIT)
@@ -364,9 +381,9 @@ async def test_close_propagates_the_callers_own_cancellation(tmp_path: Path) -> 
 
     closing = asyncio.create_task(connection.close())
     await asyncio.sleep(0)
-    # close reaches its first suspension point, the owner's teardown, in one
-    # scheduler pass, because nothing before it awaits a contended primitive.
-    assert connection._owner_task is None
+    # close starts the teardown before its first suspension, because nothing
+    # before it awaits a contended primitive.
+    assert connection._state is _ConnectionState.CLOSED
     assert not closing.done()
     closing.cancel()
 
@@ -660,9 +677,9 @@ async def test_a_concurrent_close_waits_for_the_child_to_be_reaped(tmp_path: Pat
 
     first = asyncio.create_task(connection.close())
     await asyncio.sleep(0)
-    # close takes the owner handle before its first suspension, so the teardown
+    # close starts the teardown before its first suspension, so the teardown
     # this second caller must wait behind is provably under way.
-    assert connection._owner_task is None
+    assert connection._state is _ConnectionState.CLOSED
     assert not connection._closed.is_set()
     second = asyncio.create_task(connection.close())
     await asyncio.sleep(0)

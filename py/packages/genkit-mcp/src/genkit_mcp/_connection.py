@@ -274,6 +274,7 @@ class McpConnection:
         self._owner_task: asyncio.Task[None] | None = None
         self._shutdown: anyio.CancelScope | None = None
         self._stop: anyio.CancelScope | None = None
+        self._deadline: asyncio.TimerHandle | None = None
         self._unwinding: list[_Request[Any]] = []
 
     @property
@@ -339,51 +340,50 @@ class McpConnection:
         """Shut the session down and reap the child process.
 
         Safe to call when never connected, and safe to call twice. A closed
-        connection serves nothing more. The return waits until the server has
-        exited, which takes up to ``CLOSE_GRACE_SECONDS`` for a server that
-        ignores stdin EOF.
+        connection serves nothing more. In-flight and queued callers are
+        released at once; the return waits until the server has exited, which
+        takes up to ``CLOSE_GRACE_SECONDS`` for a server that ignores stdin EOF.
 
         Raises:
             GenkitError: ``FAILED_PRECONDITION`` if called from inside one of
                 this connection's own operations, which teardown would wait on
                 forever.
         """
-        task: asyncio.Task[None] | None = None
         async with self._state_lock:
             if _serving.get() is self:
                 raise _ClientError(
                     'MCP connection cannot be closed from inside one of its own requests', status='FAILED_PRECONDITION'
                 )
-            teardown_started = self._state is _ConnectionState.CLOSED
-            if not teardown_started:
-                self._state = _ConnectionState.CLOSED
-                task = self._owner_task
-                self._owner_task = None
+            if self._state is not _ConnectionState.CLOSED:
+                self._begin_close()
+        await self._closed.wait()
 
-        if teardown_started:
-            # Returning here while the first caller is still reaping would report
-            # a shutdown that has not happened.
-            await self._closed.wait()
-            return
+    def _begin_close(self) -> None:
+        """Release every caller and start the owner's teardown, without awaiting it.
 
+        Nothing here suspends, so cancelling a ``close`` caller cannot cut the
+        teardown short, and every caller waits on ``_closed`` alike.
+        """
+        self._state = _ConnectionState.CLOSED
         # A connection closed before it started has no owner to open this gate.
         self._ready.set()
-
-        try:
-            if self._stop is not None:
-                self._stop.cancel()
-            if task is not None and self._shutdown is not None:
-                # Not ``task.cancel()``: that ignores anyio shields, so it can abort the SDK reaping the child.
-                deadline = asyncio.get_running_loop().call_later(CLOSE_GRACE_SECONDS, self._shutdown.cancel)
-                # Unlike ``gather``, ``wait`` leaves the owner reaping if this caller is cancelled.
-                await asyncio.wait({task})
-                deadline.cancel()
-        finally:
-            # Runs even when this caller is cancelled mid-teardown: the owner is
-            # already shutting down, and leaving the gate shut would hang every
-            # later close instead.
-            self._fail_queued(self._closed_error)
+        self._fail_queued(self._closed_error)
+        task = self._owner_task
+        if task is None:
             self._closed.set()
+            return
+        if self._stop is not None:
+            self._stop.cancel()
+        if self._shutdown is not None:
+            # Not ``task.cancel()``: that ignores anyio shields, so it can abort the SDK reaping the child.
+            self._deadline = asyncio.get_running_loop().call_later(CLOSE_GRACE_SECONDS, self._shutdown.cancel)
+        task.add_done_callback(self._owner_done)
+
+    def _owner_done(self, _task: asyncio.Task[None]) -> None:
+        """Open the ``close`` gate once the owner has reaped the server."""
+        if self._deadline is not None:
+            self._deadline.cancel()
+        self._closed.set()
 
     async def _request(self, operation: Callable[[ClientSession], Awaitable[_T]]) -> _T:
         """Hand an operation to the owner and wait for its outcome."""
