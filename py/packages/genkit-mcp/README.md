@@ -128,6 +128,15 @@ an error naming that server. So does an entry with any key besides `command`, `a
 and `type`. `McpServerEntry` types one entry, and `await host.connect(name, entry)` takes one too, so
 a server from the same file can be added later: `await host.connect('git', config['mcpServers']['git'])`.
 
+An entry's `env` often holds secrets, and a traceback that renders frame locals, as Genkit's console
+logging does, can print them. Once a host is defined, the plugin keeps `env` out of its own frames.
+It cannot do that for your frames: in the `connect` call above, `config` stays a local of the
+calling function, so a failed connect logged with its traceback prints the whole block. The same
+goes for a `mcp_servers` mapping that fails validation when the host is defined. The child does not
+inherit this process's environment, so the secrets have to be in `env`. To keep them out of your
+frames, build the entry in a helper and pass its result straight on, as in
+`await host.connect('git', load_server('git'))`, so no frame that can still fail holds it.
+
 Each server keeps its own namespace, so the tools above are `everything_echo` and `git_git_log`. The
 key a server has in `mcp_servers` is its prefix. The host's own name is only the provider name, so
 it has to fit a selector but no model ever reads it.

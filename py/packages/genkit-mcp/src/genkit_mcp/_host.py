@@ -143,6 +143,11 @@ class McpHost:
         server is listed, a replaced server is disconnected and its process
         stopped.
 
+        This method keeps ``entry`` out of its own frames, but a traceback that
+        renders frame locals still prints a ``config`` the caller holds, ``env``
+        included. Building the entry in a helper whose result is passed straight
+        here keeps it out of the caller's frame.
+
         Args:
             server_name: Name for this server within this host, which prefixes
                 its tool names.
@@ -382,6 +387,10 @@ def define_mcp_host(
     Desktop and Cursor write it, so such a block can be loaded from its file::
 
         host = define_mcp_host(ai, 'hosted', mcp_servers=json.load(f)['mcpServers'])
+
+    If an entry or server name fails validation, this frame still holds
+    ``mcp_servers``, so a traceback that renders frame locals can print every
+    server's ``env``.
 
     Args:
         ai: The Genkit instance to register with.
