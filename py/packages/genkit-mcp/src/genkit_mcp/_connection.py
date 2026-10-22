@@ -81,6 +81,13 @@ dead one: the opposite reading tears down a healthy connection over one slow
 reply.
 """
 
+CLOSE_GRACE_SECONDS = 6.0
+"""How long ``close`` lets the SDK's stdio shutdown run before it kills the server outright.
+
+The SDK waits two seconds for the server to exit on stdin EOF, then two more
+after SIGTERM to the process group before it sends SIGKILL.
+"""
+
 
 def _client_info() -> Implementation:
     """Name this package and its version for the server's session log."""
@@ -266,6 +273,7 @@ class McpConnection:
         self._state_lock = asyncio.Lock()
         self._owner_task: asyncio.Task[None] | None = None
         self._shutdown: anyio.CancelScope | None = None
+        self._stop: anyio.CancelScope | None = None
         self._unwinding: list[_Request[Any]] = []
 
     @property
@@ -331,7 +339,9 @@ class McpConnection:
         """Shut the session down and reap the child process.
 
         Safe to call when never connected, and safe to call twice. A closed
-        connection serves nothing more.
+        connection serves nothing more. The return waits until the server has
+        exited, which takes up to ``CLOSE_GRACE_SECONDS`` for a server that
+        ignores stdin EOF.
 
         Raises:
             GenkitError: ``FAILED_PRECONDITION`` if called from inside one of
@@ -360,12 +370,14 @@ class McpConnection:
         self._ready.set()
 
         try:
-            if self._shutdown is not None:
-                # A native ``task.cancel()`` ignores anyio shields, so it can abort the SDK reaping the child.
-                self._shutdown.cancel()
-            if task is not None:
+            if self._stop is not None:
+                self._stop.cancel()
+            if task is not None and self._shutdown is not None:
+                # Not ``task.cancel()``: that ignores anyio shields, so it can abort the SDK reaping the child.
+                deadline = asyncio.get_running_loop().call_later(CLOSE_GRACE_SECONDS, self._shutdown.cancel)
                 # Unlike ``gather``, ``wait`` leaves the owner reaping if this caller is cancelled.
                 await asyncio.wait({task})
+                deadline.cancel()
         finally:
             # Runs even when this caller is cancelled mid-teardown: the owner is
             # already shutting down, and leaving the gate shut would hang every
@@ -398,11 +410,18 @@ class McpConnection:
             if self._state is _ConnectionState.NEW:
                 self._state = _ConnectionState.CONNECTING
                 self._shutdown = shutdown = anyio.CancelScope()
-                self._owner_task = asyncio.create_task(self._run(shutdown), name='genkit-mcp-connection')
+                self._stop = stop = anyio.CancelScope()
+                self._owner_task = asyncio.create_task(self._run(shutdown, stop), name='genkit-mcp-connection')
         await self._ready.wait()
 
-    async def _run(self, shutdown: anyio.CancelScope) -> None:
-        """Own the SDK context managers until the transport dies or ``shutdown`` is cancelled."""
+    async def _run(self, shutdown: anyio.CancelScope, stop: anyio.CancelScope) -> None:
+        """Own the SDK context managers until the transport dies or ``close`` cancels ``stop``.
+
+        Args:
+            shutdown: Cancelled only when the SDK's stdio shutdown overruns
+                ``CLOSE_GRACE_SECONDS``.
+            stop: Cancelled by ``close`` to end the session's work.
+        """
         try:
             parameters = StdioServerParameters(
                 command=self._config.command,
@@ -421,12 +440,14 @@ class McpConnection:
                         read_timeout_seconds=self._request_timeout,
                         client_info=CLIENT_INFO,
                     ) as session:
-                        await session.initialize()
-                        async with self._state_lock:
-                            if self._state is _ConnectionState.CONNECTING:
-                                self._state = _ConnectionState.OPEN
-                        self._ready.set()
-                        await self._serve(session)
+                        # The SDK's stdio shutdown is not shielded, so no scope around it may be cancelled.
+                        with stop:
+                            await session.initialize()
+                            async with self._state_lock:
+                                if self._state is _ConnectionState.CONNECTING:
+                                    self._state = _ConnectionState.OPEN
+                            self._ready.set()
+                            await self._serve(session)
         except BaseException as error:
             if not isinstance(error, Exception):
                 self._settle(None)

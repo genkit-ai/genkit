@@ -163,6 +163,11 @@ async def main() -> None:
         await asyncio.Event().wait()
     async with stdio_server() as (read_stream, write_stream):
         await app.run(read_stream, write_stream, app.create_initialization_options())
+    eof_marker = os.environ.get('MCP_FAKE_EOF_MARKER')
+    if eof_marker:
+        # Stands in for state a server flushes once stdin closes.
+        await anyio.sleep(0.3)
+        await anyio.Path(eof_marker).write_text('flushed', encoding='utf-8')
 
 
 if __name__ == '__main__':

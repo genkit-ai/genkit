@@ -10,9 +10,11 @@ import asyncio
 import gc
 import io
 import os
+import shlex
 import signal
 import sys
 import threading
+import time
 import traceback
 from importlib import metadata
 from pathlib import Path
@@ -97,8 +99,8 @@ def is_running(pid: int) -> bool:
     return True
 
 
-async def stdin_closed(marker: Path) -> None:
-    """Wait for the server to report that it closed its stdin."""
+async def server_marker(marker: Path) -> str:
+    """Wait for the server to write a marker file, and read it."""
 
     async def read() -> str:
         while True:
@@ -107,7 +109,21 @@ async def stdin_closed(marker: Path) -> None:
             except FileNotFoundError:
                 await asyncio.sleep(0.01)
 
-    await asyncio.wait_for(read(), timeout=LIMIT)
+    return await asyncio.wait_for(read(), timeout=LIMIT)
+
+
+async def stdin_closed(marker: Path) -> None:
+    """Wait for the server to report that it closed its stdin."""
+    await server_marker(marker)
+
+
+async def exited(pid: int) -> bool:
+    """Wait a bounded time for a process that is not this test's child to be reaped."""
+    for _ in range(200):
+        if not is_running(pid):
+            return True
+        await asyncio.sleep(0.01)
+    return False
 
 
 async def start_with_closed_stdin(connection: McpConnection, marker: Path) -> asyncio.Task[None]:
@@ -260,6 +276,61 @@ async def test_close_interrupts_an_in_flight_call(tmp_path: Path) -> None:
     await asyncio.wait_for(connection.close(), timeout=LIMIT)
     with pytest.raises(_ConnectionClosedError, match='closed'):
         await asyncio.wait_for(call, timeout=LIMIT)
+
+
+@pytest.mark.asyncio
+async def test_close_lets_the_server_finish_its_shutdown_after_eof(tmp_path: Path) -> None:
+    marker = tmp_path / 'eof.flushed'
+    connection = McpConnection(config(tmp_path, MCP_FAKE_EOF_MARKER=str(marker)))
+    await asyncio.wait_for(connection.list_tools(), timeout=LIMIT)
+
+    await asyncio.wait_for(connection.close(), timeout=LIMIT)
+    assert marker.read_text(encoding='utf-8') == 'flushed'
+
+
+@pytest.mark.asyncio
+async def test_close_reaps_what_a_wrapped_server_spawned(tmp_path: Path) -> None:
+    """The shape of ``npx`` or ``uv run``: a launcher whose own children outlive the server."""
+    grandchild_file = tmp_path / 'grandchild.pid'
+    server = Path(__file__).with_name('fake_server.py')
+    script = (
+        f'sleep 600 & echo $! > {shlex.quote(str(grandchild_file))}; '
+        f'{shlex.quote(sys.executable)} {shlex.quote(str(server))}; wait'
+    )
+    connection = McpConnection(
+        McpStdioServerConfig(
+            command='/bin/sh',
+            args=['-c', script],
+            env={**os.environ, 'MCP_FAKE_PID_FILE': str(tmp_path / 'server.pid')},
+        )
+    )
+    await asyncio.wait_for(connection.list_tools(), timeout=LIMIT)
+    grandchild = await server_pid(grandchild_file)
+    try:
+        await asyncio.wait_for(connection.close(), timeout=LIMIT)
+        assert await exited(grandchild)
+    finally:
+        if is_running(grandchild):
+            os.kill(grandchild, signal.SIGKILL)
+
+
+@pytest.mark.asyncio
+async def test_close_kills_a_server_whose_shutdown_overruns_the_grace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(_connection, 'CLOSE_GRACE_SECONDS', 0.1)
+    pid_file = tmp_path / 'stalled.pid'
+    connection = McpConnection(config(tmp_path, pid_file=pid_file, MCP_FAKE_STALL='1'))
+    waiter = asyncio.create_task(connection.list_tools())
+    pid = await server_pid(pid_file)
+
+    started = time.monotonic()
+    await asyncio.wait_for(connection.close(), timeout=LIMIT)
+    # The SDK alone waits two seconds for a server that never reads its stdin.
+    assert time.monotonic() - started < 1.5
+    assert not is_running(pid)
+    with pytest.raises(_ConnectionClosedError, match='closed'):
+        await asyncio.wait_for(waiter, timeout=LIMIT)
 
 
 @pytest.mark.asyncio
