@@ -26,3 +26,10 @@ client = define_mcp_client(
 result = await ai.generate(prompt='Echo "hello".', tools=['everything:tool/*'])
 await client.close()
 ```
+
+## One server process per event loop
+
+The client holds one connection, and so one server process, per event loop. While the Dev UI runs,
+its reflection server has its own loop, so a second process starts for the same server. The two
+processes do not share state, and servers that bind a port, take a lock file or own a browser profile
+can clash.

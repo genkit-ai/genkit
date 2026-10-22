@@ -71,6 +71,12 @@ def define_mcp_client(
     them, or ``<name>:tool/<name>_<tool>`` for one. Connection is lazy: the child
     process starts on the first tool listing.
 
+    The client holds one connection, and so one server process, per event loop.
+    While the Dev UI runs, its reflection server has its own loop, so a second
+    process starts for the same server. The two processes do not share state,
+    and servers that bind a port, take a lock file or own a browser profile can
+    clash.
+
     This is a function rather than a Genkit plugin because the registry rewrites a
     plugin's action names to ``<plugin>/<action>``, and a provider name cannot
     contain a slash.
