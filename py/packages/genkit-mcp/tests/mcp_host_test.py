@@ -20,7 +20,8 @@ import anyio
 import psutil
 import pytest
 import structlog
-from genkit_mcp import McpClient, McpHost, McpServerEntry, define_mcp_host
+from genkit_mcp import McpClient, McpHost, define_mcp_host
+from genkit_mcp._config import McpServerEntry
 from mcp.shared.exceptions import McpError
 from pydantic import ValidationError
 from structlog.testing import capture_logs
