@@ -48,7 +48,7 @@ func clientExample() {
 	}
 
 	// Get tools and generate response
-	tools, _ := client.GetActiveTools(ctx, g)
+	tools, _ := client.ActiveTools(ctx)
 	logger.FromContext(ctx).Info("Found MCP time tools", "count", len(tools), "client", "mcp-time")
 
 	var toolRefs []ai.ToolRef
@@ -82,7 +82,7 @@ func managerExample() {
 	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
 
 	// Create and connect to MCP time server
-	host, _ := mcp.NewMCPHost(g, mcp.MCPHostOptions{
+	host, err := mcp.NewHost(mcp.MCPHostOptions{
 		Name: "time-example",
 		MCPServers: []mcp.MCPServerConfig{
 			{
@@ -98,9 +98,17 @@ func managerExample() {
 			},
 		},
 	})
+	if err != nil {
+		logger.FromContext(ctx).Error("Failed to create MCP host", "error", err)
+		return
+	}
 
 	// Get tools and resources from MCP servers
-	tools, _ := host.GetActiveTools(ctx, g)
+	tools, err := host.ActiveTools(ctx)
+	if err != nil {
+		logger.FromContext(ctx).Error("Failed to get MCP tools", "error", err)
+		return
+	}
 	logger.FromContext(ctx).Info("Found MCP tools", "count", len(tools))
 
 	var toolRefs []ai.ToolRef
