@@ -55,6 +55,20 @@ describe('createMcpServer', async () => {
       },
       async (input) => `yep ${JSON.stringify(input)}`
     );
+
+    ai.defineFlow(
+      {
+        name: 'testTool',
+        inputSchema: z.object({ foo: z.string() }),
+        outputSchema: z.string(),
+      },
+      async ({ foo }) => `flow ${foo}`
+    );
+    ai.defineFlow(
+      { name: 'stringFlow', inputSchema: z.string(), outputSchema: z.string() },
+      async (input) => input.toUpperCase()
+    );
+    ai.defineFlow('emptyFlow', async () => 'empty flow');
     ai.defineResource(
       {
         name: 'testResouces',
@@ -147,6 +161,40 @@ describe('createMcpServer', async () => {
           },
           name: 'testTool',
         },
+        {
+          description: "Run the Genkit flow 'testTool'.",
+          inputSchema: {
+            $schema: 'http://json-schema.org/draft-07/schema#',
+            additionalProperties: true,
+            properties: {
+              foo: {
+                type: 'string',
+              },
+            },
+            required: ['foo'],
+            type: 'object',
+          },
+          name: 'flow_testTool',
+        },
+        {
+          description: "Run the Genkit flow 'stringFlow'.",
+          inputSchema: {
+            type: 'object',
+            properties: {
+              input: {
+                type: 'string',
+                $schema: 'http://json-schema.org/draft-07/schema#',
+              },
+            },
+            required: ['input'],
+          },
+          name: 'flow_stringFlow',
+        },
+        {
+          description: "Run the Genkit flow 'emptyFlow'.",
+          inputSchema: { type: 'object' },
+          name: 'flow_emptyFlow',
+        },
       ]);
     });
 
@@ -165,6 +213,49 @@ describe('createMcpServer', async () => {
           },
         ],
       });
+    });
+
+    it('should call a flow as a distinct MCP tool', async () => {
+      const response = await client.callTool({
+        name: 'flow_testTool',
+        arguments: { foo: 'bar' },
+      });
+      assert.deepStrictEqual(response, {
+        content: [{ text: 'flow bar', type: 'text' }],
+      });
+    });
+
+    it('should wrap a scalar flow input in an MCP object', async () => {
+      const response = await client.callTool({
+        name: 'flow_stringFlow',
+        arguments: { input: 'hello' },
+      });
+      assert.deepStrictEqual(response, {
+        content: [{ text: 'HELLO', type: 'text' }],
+      });
+    });
+
+    it('should call a flow without input', async () => {
+      const response = await client.callTool({
+        name: 'flow_emptyFlow',
+        arguments: {},
+      });
+      assert.deepStrictEqual(response, {
+        content: [{ text: 'empty flow', type: 'text' }],
+      });
+    });
+
+    it('should reject an MCP tool name collision', async () => {
+      ai.defineTool({ name: 'flow_testTool' }, async () => 'collision');
+      const collidingServer = createMcpServer(ai, { name: 'colliding-server' });
+      try {
+        await assert.rejects(
+          collidingServer.setup(),
+          /Multiple actions would be exposed as MCP tool 'flow_testTool'/
+        );
+      } finally {
+        await collidingServer.server?.close();
+      }
     });
   });
 
