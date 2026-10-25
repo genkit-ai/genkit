@@ -2990,3 +2990,30 @@ async def test_firestore_session_store_status_observed_via_watch_not_save() -> N
     with pytest.raises(StopAsyncIteration):
         await stream.__anext__()
     watches[0].unsubscribe.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_firestore_session_store_default_client_sets_genkit_user_agent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Default AsyncClient created by the store carries Genkit client attribution."""
+    from genkit.plugin_api import GENKIT_CLIENT_HEADER
+
+    captured_kwargs: list[dict[str, Any]] = []
+
+    def fake_async_client(**kwargs: Any) -> MagicMock:  # noqa: ANN401
+        captured_kwargs.append(kwargs)
+        return MagicMock(name='default-async-client')
+
+    monkeypatch.setattr(
+        'genkit_google_cloud._session_store._firestore.firestore.AsyncClient',
+        fake_async_client,
+    )
+
+    store = FirestoreSessionStore()
+    _ = store.client
+
+    assert len(captured_kwargs) == 1
+    client_info = captured_kwargs[0].get('client_info')
+    assert client_info is not None
+    assert client_info.user_agent == GENKIT_CLIENT_HEADER

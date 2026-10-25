@@ -43,6 +43,7 @@ from datetime import datetime, timezone
 from typing import Any, Generic, Literal
 
 from google.api_core import exceptions as google_exceptions
+from google.api_core.gapic_v1.client_info import ClientInfo
 from google.cloud import firestore
 from google.cloud.firestore import (
     AsyncClient,
@@ -75,7 +76,7 @@ from genkit.exp.agent import (
     require_one_selector,
     session_id_of,
 )
-from genkit.plugin_api import loop_local_client
+from genkit.plugin_api import GENKIT_CLIENT_HEADER, loop_local_client
 
 DEFAULT_COLLECTION = 'genkit-sessions'
 DEFAULT_PREFIX = 'global'
@@ -764,7 +765,9 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
             state.client = self._provided_client
             state.owns_async_client = False
             return state.client
-        state.client = firestore.AsyncClient()
+        state.client = firestore.AsyncClient(
+            client_info=ClientInfo(user_agent=GENKIT_CLIENT_HEADER),
+        )
         state.owns_async_client = True
         return state.client
 

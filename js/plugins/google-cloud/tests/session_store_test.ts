@@ -17,7 +17,12 @@
 import { Firestore } from '@google-cloud/firestore';
 import { afterEach, beforeEach, describe, it } from '@jest/globals';
 import * as assert from 'assert';
-import { AgentAPI, genkit, type SessionSnapshotInput } from 'genkit/beta';
+import {
+  AgentAPI,
+  GENKIT_VERSION,
+  genkit,
+  type SessionSnapshotInput,
+} from 'genkit/beta';
 import {
   FirestoreSessionStore,
   type FirestoreSessionStoreOptions,
@@ -108,6 +113,21 @@ describe('FirestoreSessionStore', () => {
       await db.recursiveDelete(db.collection(name));
     }
     await db.terminate();
+  });
+
+  it('sets Genkit client attribution on default Firestore instance', async () => {
+    const defaultStore = new FirestoreSessionStore<Custom>();
+    const defaultDb = (defaultStore as any).db as Firestore;
+    try {
+      const settings = (defaultDb as any)._settings;
+      assert.strictEqual(settings?.libName, 'gccl');
+      assert.ok(
+        settings?.libVersion?.endsWith(` genkit-node/${GENKIT_VERSION}`),
+        `expected libVersion to end with " genkit-node/${GENKIT_VERSION}", got "${settings?.libVersion}"`
+      );
+    } finally {
+      await defaultDb.terminate();
+    }
   });
 
   it('saves a snapshot and reads it back by snapshotId', async () => {
