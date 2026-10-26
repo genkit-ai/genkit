@@ -48,6 +48,12 @@ ALL_TOOLS = [
     'bad_output',
 ]
 
+BAD_OUTPUT_SCHEMA = {
+    'type': 'object',
+    'properties': {'value': {'type': 'integer'}},
+    'required': ['value'],
+}
+
 # A listing must not expire by the clock in these tests: every re-list they
 # assert is one the client asked for.
 LONG_TTL_MILLIS = 600_000
@@ -185,6 +191,9 @@ async def test_generate_calls_a_tool_and_receives_its_result(tmp_path: Path) -> 
     assert pm.request_count == 2
     assert pm.last_request is not None
     assert sorted(tool.name for tool in pm.last_request.tools or []) == sorted(f'fake_{tool}' for tool in ALL_TOOLS)
+    sent = {tool.name: tool.output_schema for tool in pm.last_request.tools or []}
+    assert sent['fake_echo'] is None
+    assert sent['fake_bad_output'] == BAD_OUTPUT_SCHEMA
     tool_message = pm.last_request.messages[-1]
     assert tool_message.role == Role.TOOL
     assert tool_message.content[0].tool_response is not None
@@ -214,15 +223,12 @@ async def test_generate_accepts_the_listed_tools(tmp_path: Path) -> None:
     tool_message = pm.last_request.messages[-1]
     assert tool_message.content[0].tool_response is not None
     assert tool_message.content[0].tool_response.output == 'hello'
-    sent = next(tool for tool in pm.last_request.tools or [] if tool.name == 'fake_bad_output')
-    assert sent.output_schema is None
+    sent = {tool.name: tool.output_schema for tool in pm.last_request.tools or []}
+    assert sent['fake_echo'] is None
+    assert sent['fake_bad_output'] == BAD_OUTPUT_SCHEMA
     assert tools[0].output_schema is None
     assert tools[-1].name == 'fake_bad_output'
-    assert tools[-1].output_schema == {
-        'type': 'object',
-        'properties': {'value': {'type': 'integer'}},
-        'required': ['value'],
-    }
+    assert tools[-1].output_schema == BAD_OUTPUT_SCHEMA
 
 
 @pytest.mark.asyncio

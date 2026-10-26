@@ -44,6 +44,7 @@ from pydantic import AnyUrl
 from structlog.testing import capture_logs
 
 from genkit import Part
+from genkit._ai._generate import to_tool_definition
 from genkit._core._typing import Resource
 from genkit.plugin_api import Action
 
@@ -357,6 +358,16 @@ def test_mcp_tool_to_action_warns_about_a_name_longer_than_a_model_accepts() -> 
     assert action.name == f'catalog_{tool_name}'
     assert [entry['log_level'] for entry in logs] == ['warning']
     assert logs[0]['tool'] == f'catalog_{tool_name}'
+
+
+@pytest.mark.parametrize('output_schema', [{'type': 'object', 'properties': {'hits': {'type': 'integer'}}}, None])
+def test_mcp_tool_to_action_sends_the_server_output_schema_to_the_model(output_schema: dict[str, Any] | None) -> None:
+    """The model is told what the server said the tool returns, not the multipart envelope."""
+    action = mcp_tool_to_action(
+        Tool(name='lookup', inputSchema={'type': 'object'}, outputSchema=output_schema), 'catalog', no_content
+    )
+
+    assert to_tool_definition(action).output_schema == output_schema
 
 
 def test_mcp_tools_to_actions_maps_a_listing_in_order() -> None:
