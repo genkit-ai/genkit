@@ -16,6 +16,7 @@ import sys
 import threading
 import time
 import traceback
+from collections.abc import Awaitable, Callable
 from datetime import timedelta
 from importlib import metadata
 from pathlib import Path
@@ -51,6 +52,7 @@ from mcp.types import (
     TextContent,
     Tool as McpTool,
 )
+from pydantic import ValidationError
 
 ALL_TOOLS = [
     'echo',
@@ -732,6 +734,57 @@ async def test_a_server_error_reply_reports_the_status_for_its_code(tmp_path: Pa
     assert error.cause is reply
     assert error.__cause__ is reply
     assert f'failed with error {code}: refused' in str(error)
+
+
+@pytest.mark.asyncio
+async def test_an_error_this_package_raised_is_reported_unchanged(tmp_path: Path) -> None:
+    raised = _ToolResultError('bad output')
+
+    assert McpConnection('fake', config(tmp_path))._answered_error(raised) is raised
+
+
+@pytest.mark.asyncio
+async def test_any_other_failure_is_reported_as_a_protocol_error(tmp_path: Path) -> None:
+    failure = RuntimeError('unexpected')
+
+    error = McpConnection('fake', config(tmp_path))._answered_error(failure)
+
+    assert isinstance(error, _ProtocolError)
+    assert error.status == 'INTERNAL'
+    assert error.cause is failure
+    assert error.__cause__ is failure
+    assert "MCP request to 'fake' (" in str(error)
+    assert 'failed with RuntimeError' in str(error)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'send',
+    [
+        pytest.param(lambda connection: connection.list_tools(), id='list_tools'),
+        pytest.param(lambda connection: connection.call_tool('echo', {}), id='call_tool'),
+    ],
+)
+async def test_a_malformed_reply_is_a_protocol_error_without_the_server_env(
+    tmp_path: Path, send: Callable[[McpConnection], Awaitable[object]]
+) -> None:
+    launch = config(tmp_path, MCP_FAKE_MALFORMED_REPLY='1')
+    assert launch.env is not None
+    # First, so the renderer's cap on how many dict entries it prints cannot hide it.
+    launch.env = {'GENKIT_MCP_TEST_API_KEY': SECRET, **launch.env}
+    connection = McpConnection('fake', launch)
+    try:
+        with pytest.raises(_ProtocolError, match="MCP request to 'fake' .* failed with ValidationError") as answered:
+            await asyncio.wait_for(send(connection), timeout=LIMIT)
+        assert answered.value.status == 'INTERNAL'
+        assert isinstance(answered.value.__cause__, ValidationError)
+        assert answered.value.cause is answered.value.__cause__
+        assert connection._state is _ConnectionState.OPEN
+        assert is_running(await server_pid(tmp_path / 'server.pid'))
+    finally:
+        await asyncio.wait_for(connection.close(), timeout=LIMIT)
+
+    assert SECRET not in rendered_for_logs(answered.value)
 
 
 @pytest.mark.asyncio

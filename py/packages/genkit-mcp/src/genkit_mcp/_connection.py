@@ -321,7 +321,9 @@ class McpConnection:
             capability.
 
         Raises:
-            _ProtocolError: If the server's cursors never terminate.
+            _ProtocolError: If the server's cursors never terminate, or a page
+                request fails without a JSON-RPC error, such as on a malformed
+                reply.
             _RequestTimeoutError: If the server does not answer a page in time.
             _ServerError: If the server answers a page with a JSON-RPC error.
         """
@@ -366,6 +368,8 @@ class McpConnection:
 
         Raises:
             _ToolResultError: If the result violates the tool's declared output schema.
+            _ProtocolError: If the request fails without a JSON-RPC error, such
+                as on a malformed reply.
             _RequestTimeoutError: If the server does not answer in time.
             _ServerError: If the server answers with a JSON-RPC error.
         """
@@ -604,12 +608,20 @@ class McpConnection:
         """Build the error reported once this connection is shut down."""
         return _ConnectionClosedError(f'MCP connection to {self._target} is closed')
 
-    def _answered_error(self, error: Exception) -> Exception:
+    def _answered_error(self, error: Exception) -> _ClientError:
         """Build the error reported for one operation that failed while the server stayed reachable."""
         if _timed_out(error):
             return self._timed_out_error(error)
         if isinstance(error, McpError):
             return self._server_error(error)
+        if isinstance(error, _ClientError):
+            return error
+        return self._protocol_error(error)
+
+    def _protocol_error(self, failure: Exception) -> _ProtocolError:
+        """Build the error reported when one request failed without a JSON-RPC error, such as on a malformed reply."""
+        error = _ProtocolError(f'MCP request to {self._target} failed with {type(failure).__name__}', cause=failure)
+        error.__cause__ = failure
         return error
 
     def _server_error(self, reply: McpError) -> _ServerError:
