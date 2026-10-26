@@ -165,8 +165,8 @@ class McpHost:
             GenkitError: ``FAILED_PRECONDITION`` if this host is closed, also
                 while the server was being listed, ``UNAVAILABLE`` if the
                 server cannot be started, ``DEADLINE_EXCEEDED`` if it does not
-                answer in time, or ``INTERNAL`` if it breaks the protocol.
-            McpError: If the server answers the listing with an error.
+                answer in time, ``INTERNAL`` if it breaks the protocol, or the
+                status for the JSON-RPC error code it answers the listing with.
         """
         self._refuse_when_closed()
         try:
@@ -221,8 +221,10 @@ class McpHost:
         Raises:
             ValueError: If this host holds no such server.
             GenkitError: ``FAILED_PRECONDITION`` if this host is closed,
-                ``UNAVAILABLE`` if the server cannot be started, or
-                ``DEADLINE_EXCEEDED`` if it does not answer in time.
+                ``UNAVAILABLE`` if the server cannot be started,
+                ``DEADLINE_EXCEEDED`` if it does not answer in time,
+                ``INTERNAL`` if it breaks the protocol, or the status for the
+                JSON-RPC error code it answers the listing with.
         """
         self._refuse_when_closed()
         client = self._client(server_name)
@@ -251,9 +253,9 @@ class McpHost:
 
         Raises:
             GenkitError: ``FAILED_PRECONDITION`` if this host is closed, even
-                while it was listing, or ``INTERNAL`` if a server breaks the
-                protocol.
-            McpError: If a server answers the listing with an error.
+                while it was listing, ``INTERNAL`` if a server breaks the
+                protocol, or the status for the JSON-RPC error code a server
+                answers the listing with.
             ValueError: If two tools share a name, within one server or across
                 two. Distinct server names do not rule this out, because the
                 name and the tool name are joined by the underscore either of

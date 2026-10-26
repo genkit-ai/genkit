@@ -23,6 +23,7 @@ from genkit_mcp._errors import (
     _ConnectionFailedError,
     _ProtocolError,
     _RequestTimeoutError,
+    _ServerError,
 )
 
 from genkit import GenkitError
@@ -34,6 +35,7 @@ from genkit import GenkitError
         (_ConnectionClosedError, 'FAILED_PRECONDITION'),
         (_ConnectionFailedError, 'UNAVAILABLE'),
         (_RequestTimeoutError, 'DEADLINE_EXCEEDED'),
+        (_ServerError, 'UNKNOWN'),
         (_ProtocolError, 'INTERNAL'),
     ],
 )

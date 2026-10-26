@@ -33,6 +33,11 @@ from mcp.client.stdio import stdio_client
 from mcp.shared.exceptions import McpError
 from mcp.types import (
     CONNECTION_CLOSED,
+    INTERNAL_ERROR,
+    INVALID_PARAMS,
+    INVALID_REQUEST,
+    METHOD_NOT_FOUND,
+    PARSE_ERROR,
     CallToolResult,
     Implementation,
     PaginatedRequestParams,
@@ -40,6 +45,7 @@ from mcp.types import (
 )
 
 from genkit import get_logger
+from genkit.plugin_api import StatusName
 from genkit_mcp._config import McpStdioServerConfig
 from genkit_mcp._errors import (
     _ClientError,
@@ -47,6 +53,7 @@ from genkit_mcp._errors import (
     _ConnectionFailedError,
     _ProtocolError,
     _RequestTimeoutError,
+    _ServerError,
     _ToolResultError,
 )
 
@@ -76,6 +83,15 @@ DEFAULT_REQUEST_TIMEOUT_MILLIS = 60_000
 
 _REQUEST_TIMEOUT = 408
 """The code on the ``McpError`` the SDK raises when a request outlives its read timeout."""
+
+_SERVER_ERROR_STATUS: dict[int, StatusName] = {
+    INVALID_PARAMS: 'INVALID_ARGUMENT',
+    METHOD_NOT_FOUND: 'UNIMPLEMENTED',
+    INVALID_REQUEST: 'INTERNAL',
+    PARSE_ERROR: 'INTERNAL',
+    INTERNAL_ERROR: 'INTERNAL',
+}
+"""Status for each JSON-RPC error code a server may answer with. Any other code is ``UNKNOWN``."""
 
 LIVENESS_PROBE_SECONDS = 5.0
 """Bound on the ping that tells a dead transport from a server error reply.
@@ -303,6 +319,7 @@ class McpConnection:
         Raises:
             _ProtocolError: If the server's cursors never terminate.
             _RequestTimeoutError: If the server does not answer a page in time.
+            _ServerError: If the server answers a page with a JSON-RPC error.
         """
 
         async def list_all(session: ClientSession) -> list[McpTool]:
@@ -346,6 +363,7 @@ class McpConnection:
         Raises:
             _ToolResultError: If the result violates the tool's declared output schema.
             _RequestTimeoutError: If the server does not answer in time.
+            _ServerError: If the server answers with a JSON-RPC error.
         """
 
         async def call(session: ClientSession) -> CallToolResult:
@@ -507,7 +525,7 @@ class McpConnection:
                     self._settle(error)
                     serving.cancel()
                 elif not request.result.done():
-                    request.result.set_exception(self._timed_out_error(error) if _timed_out(error) else error)
+                    request.result.set_exception(self._answered_error(error))
             else:
                 if not request.result.done():
                     request.result.set_result(value)
@@ -572,6 +590,25 @@ class McpConnection:
     def _closed_error(self) -> _ConnectionClosedError:
         """Build the error reported once this connection is shut down."""
         return _ConnectionClosedError(f'MCP connection to {self._config.command!r} is closed')
+
+    def _answered_error(self, error: Exception) -> Exception:
+        """Build the error reported for one operation that failed while the server stayed reachable."""
+        if _timed_out(error):
+            return self._timed_out_error(error)
+        if isinstance(error, McpError):
+            return self._server_error(error)
+        return error
+
+    def _server_error(self, reply: McpError) -> _ServerError:
+        """Build the error reported when the server answered one request with a JSON-RPC error."""
+        code = reply.error.code
+        error = _ServerError(
+            f'MCP request to {self._config.command!r} failed with error {code}: {reply.error.message}',
+            status=_SERVER_ERROR_STATUS.get(code, 'UNKNOWN'),
+            cause=reply,
+        )
+        error.__cause__ = reply
+        return error
 
     def _timed_out_error(self, timeout: Exception) -> _RequestTimeoutError:
         """Build the error reported when the server did not answer one request in time."""

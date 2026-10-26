@@ -22,7 +22,6 @@ import pytest
 import structlog
 from genkit_mcp import McpClient, McpHost, define_mcp_host
 from genkit_mcp._config import McpServerEntry
-from mcp.shared.exceptions import McpError
 from pydantic import ValidationError
 from structlog.testing import capture_logs
 
@@ -905,8 +904,9 @@ async def test_a_server_error_answering_the_listing_fails_it(tmp_path: Path) -> 
         mcp_servers={**servers(tmp_path, 'alpha'), **servers(tmp_path, 'beta', MCP_FAKE_APP_ERROR='1')},
     )
     try:
-        with pytest.raises(McpError, match='application-level failure'):
+        with pytest.raises(GenkitError, match='application-level failure') as answered:
             await expand_wildcard_tools(ai._registry, ['hosted:tool/*'])
+        assert answered.value.status == 'UNKNOWN'
     finally:
         await host.close()
 

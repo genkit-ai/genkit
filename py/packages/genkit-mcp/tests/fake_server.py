@@ -82,7 +82,8 @@ async def list_tools(req: ListToolsRequest) -> ListToolsResult:
     if os.environ.get('MCP_FAKE_APP_ERROR') and list_requests == 1:
         # -32000 is the JSON-RPC implementation-defined server error range, which
         # a healthy server may use and the SDK also synthesises on transport death.
-        raise McpError(ErrorData(code=CONNECTION_CLOSED, message='application-level failure'))
+        code = int(os.environ.get('MCP_FAKE_APP_ERROR_CODE', CONNECTION_CLOSED))
+        raise McpError(ErrorData(code=code, message='application-level failure'))
 
     stall_list_marker = os.environ.get('MCP_FAKE_STALL_LIST')
     if stall_list_marker:

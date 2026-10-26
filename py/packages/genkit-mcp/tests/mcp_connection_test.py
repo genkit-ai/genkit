@@ -33,11 +33,24 @@ from genkit_mcp._errors import (
     _ConnectionFailedError,
     _ProtocolError,
     _RequestTimeoutError,
+    _ServerError,
     _ToolResultError,
 )
 from mcp import ClientSession
 from mcp.shared.exceptions import McpError
-from mcp.types import CONNECTION_CLOSED, CallToolResult, ErrorData, TextContent, Tool as McpTool
+from mcp.types import (
+    CONNECTION_CLOSED,
+    INTERNAL_ERROR,
+    INVALID_PARAMS,
+    INVALID_REQUEST,
+    METHOD_NOT_FOUND,
+    PARSE_ERROR,
+    URL_ELICITATION_REQUIRED,
+    CallToolResult,
+    ErrorData,
+    TextContent,
+    Tool as McpTool,
+)
 
 ALL_TOOLS = [
     'echo',
@@ -657,12 +670,26 @@ async def test_a_caller_cancelled_after_dispatch_leaves_the_connection_open(tmp_
 
 
 @pytest.mark.asyncio
+async def test_a_server_error_reply_outside_the_server_error_range_reports_its_status(tmp_path: Path) -> None:
+    connection = McpConnection(config(tmp_path, MCP_FAKE_APP_ERROR='1', MCP_FAKE_APP_ERROR_CODE=str(INVALID_PARAMS)))
+    try:
+        with pytest.raises(_ServerError, match=f'failed with error {INVALID_PARAMS}') as answered:
+            await asyncio.wait_for(connection.list_tools(), timeout=LIMIT)
+        assert answered.value.status == 'INVALID_ARGUMENT'
+        assert connection._state is _ConnectionState.OPEN
+    finally:
+        await asyncio.wait_for(connection.close(), timeout=LIMIT)
+
+
+@pytest.mark.asyncio
 async def test_a_server_error_code_does_not_poison_a_live_connection(tmp_path: Path) -> None:
     connection = McpConnection(config(tmp_path, MCP_FAKE_APP_ERROR='1'))
     try:
         pid_file = tmp_path / 'server.pid'
-        with pytest.raises(McpError, match='application-level failure'):
+        with pytest.raises(_ServerError, match='failed with error -32000: application-level failure') as answered:
             await asyncio.wait_for(connection.list_tools(), timeout=LIMIT)
+        assert answered.value.status == 'UNKNOWN'
+        assert isinstance(answered.value.__cause__, McpError)
 
         assert connection._state is _ConnectionState.OPEN
         assert is_running(await server_pid(pid_file))
@@ -671,6 +698,32 @@ async def test_a_server_error_code_does_not_poison_a_live_connection(tmp_path: P
         assert [tool.name for tool in await asyncio.wait_for(connection.list_tools(), timeout=LIMIT)] == ALL_TOOLS
     finally:
         await asyncio.wait_for(connection.close(), timeout=LIMIT)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('code', 'status'),
+    [
+        (INVALID_PARAMS, 'INVALID_ARGUMENT'),
+        (METHOD_NOT_FOUND, 'UNIMPLEMENTED'),
+        (INVALID_REQUEST, 'INTERNAL'),
+        (PARSE_ERROR, 'INTERNAL'),
+        (INTERNAL_ERROR, 'INTERNAL'),
+        (CONNECTION_CLOSED, 'UNKNOWN'),
+        (URL_ELICITATION_REQUIRED, 'UNKNOWN'),
+        (0, 'UNKNOWN'),
+    ],
+)
+async def test_a_server_error_reply_reports_the_status_for_its_code(tmp_path: Path, code: int, status: str) -> None:
+    reply = McpError(ErrorData(code=code, message='refused'))
+
+    error = McpConnection(config(tmp_path))._answered_error(reply)
+
+    assert isinstance(error, _ServerError)
+    assert error.status == status
+    assert error.cause is reply
+    assert error.__cause__ is reply
+    assert f'failed with error {code}: refused' in str(error)
 
 
 @pytest.mark.asyncio
@@ -840,8 +893,10 @@ async def test_each_released_caller_gets_its_own_error(tmp_path: Path) -> None:
 async def test_a_tool_call_error_code_does_not_poison_a_live_connection(tmp_path: Path) -> None:
     connection = McpConnection(config(tmp_path, MCP_FAKE_APP_ERROR_CALL='1'))
     try:
-        with pytest.raises(McpError, match='application-level failure'):
+        with pytest.raises(_ServerError, match='failed with error -32000: application-level failure') as answered:
             await asyncio.wait_for(connection.call_tool('echo', {}), timeout=LIMIT)
+        assert answered.value.status == 'UNKNOWN'
+        assert isinstance(answered.value.__cause__, McpError)
         assert connection._state is _ConnectionState.OPEN
         assert is_running(await server_pid(tmp_path / 'server.pid'))
     finally:
