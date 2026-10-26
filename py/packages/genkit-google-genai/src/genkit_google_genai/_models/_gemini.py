@@ -23,6 +23,7 @@ from collections.abc import Callable, Collection, Iterable, Mapping
 from datetime import datetime, timedelta, timezone
 from functools import cached_property
 from typing import Annotated, Any, Any as JsonAny, Literal, TypeAlias, cast, get_args
+from urllib.parse import unquote
 
 from genkit_google_genai._auth import GOOGLE_AUTH_ERRORS, raise_auth_error
 from genkit_google_genai._constants import is_multi_regional_location, multi_regional_base_url
@@ -68,6 +69,7 @@ from genkit import (
     Part,
     Role,
     RuntimeErrorReason,
+    get_logger,
 )
 from genkit.model import (
     ConstrainedSupport,
@@ -79,6 +81,8 @@ from genkit.model import (
     ModelSupports,
     ToolDefinition,
 )
+
+logger = get_logger(__name__)
 
 
 def _to_dict(obj: JsonAny) -> JsonAny:  # noqa: ANN401
@@ -1555,12 +1559,19 @@ class GeminiModel:
                 required=[TOOL_INPUT_FIELD],
             )
 
+        response = None
+        if tool.output_schema:
+            try:
+                response = self._convert_schema_property(tool.output_schema)
+            except GenkitError as e:
+                logger.warning('Sending tool %s without its output schema: %s', tool.name, e.original_message)
+
         wire_name = tool.name.replace('/', '__')
         function = genai_types.FunctionDeclaration(
             name=wire_name,
             description=tool.description,
             parameters=params,
-            response=self._convert_schema_property(tool.output_schema) if tool.output_schema else None,
+            response=response,
         )
         return genai_types.Tool(function_declarations=[function]), ToolWire(
             original_name=tool.name,
@@ -1597,27 +1608,29 @@ class GeminiModel:
     def _convert_schema_property(
         self,
         input_schema: dict[str, object] | None,
-        defs: dict[str, object] | None = None,
+        root: dict[str, object] | None = None,
         *,
         strict: bool = False,
-        refs: frozenset[str] = frozenset(),
+        ancestors: frozenset[int] = frozenset(),
     ) -> genai_types.Schema | None:
         """Convert a JSON Schema dict into a Gemini ``Schema``.
 
-        Resolves local ``$ref``, maps ``anyOf`` and ``oneOf`` on a node with
-        no ``type`` to ``any_of``, folds a ``null`` branch of either or of a
-        ``type`` list into ``nullable``, maps the ``enum`` type to STRING and a
-        string ``const`` to a one-value ``enum``. An ``enum`` is kept only on a
-        STRING node whose members are all strings, dropping a ``null`` member;
-        a node with such an ``enum`` and no ``type`` is treated as a string.
+        Resolves a local ``$ref`` as a JSON pointer into ``root``, maps
+        ``anyOf`` and ``oneOf`` on a node with no ``type`` to ``any_of``, folds
+        a ``null`` branch of either or of a ``type`` list into ``nullable``,
+        maps the ``enum`` type to STRING and a string ``const`` to a one-value
+        ``enum``. An ``enum`` is kept only on a STRING node whose members are
+        all strings, dropping a ``null`` member; a node with such an ``enum``
+        and no ``type`` is treated as a string.
         Any other node with no ``type``, an array with no ``items`` object or
-        whose ``items`` convert to None, and a ``$ref`` back to a definition
-        that contains it convert to None and are left out of the parent's
+        whose ``items`` convert to None, and a ``$ref`` to a node that
+        contains it convert to None and are left out of the parent's
         ``properties`` and ``required``.
 
         Args:
             input_schema: A JSON Schema dict.
-            defs: Dictionary with definitions. Optional.
+            root: The document a ``$ref`` resolves against. Defaults to
+                ``input_schema``.
             strict: Raise ``INVALID_ARGUMENT`` for a node that constrains
                 without a ``type``, for a required property that converts to
                 None, for a ``type`` list, ``anyOf`` or ``oneOf`` that would
@@ -1625,7 +1638,7 @@ class GeminiModel:
                 keyword value that cannot be coerced, instead of leaving them
                 out. An object with ``additionalProperties`` and no
                 ``properties`` also converts to None.
-            refs: Names of the definitions being expanded on the current path.
+            ancestors: Ids of the nodes being converted on the current path.
 
         Returns:
             Schema or None
@@ -1633,28 +1646,20 @@ class GeminiModel:
         if input_schema is None:
             return None
 
-        if defs is None:
-            defs_value = input_schema.get('$defs')
-            defs = cast(dict[str, object], defs_value) if isinstance(defs_value, dict) else {}
+        if root is None:
+            root = input_schema
+        ancestors |= {id(input_schema)}
 
         if '$ref' in input_schema:
             ref_path = input_schema['$ref']
             if isinstance(ref_path, str):
-                ref_tokens = ref_path.split('/')
-                ref_name = ref_tokens[-1]
-
-                if defs is None or ref_name not in defs:
-                    raise GenkitError(
-                        status='INVALID_ARGUMENT',
-                        message=f'{self._version}: schema $ref {ref_path!r} cannot be resolved',
-                    )
-                if ref_name in refs:
+                ref_schema = self._resolve_ref(ref_path, root)
+                if id(ref_schema) in ancestors:
                     return None
 
-                ref_schema = defs[ref_name]
                 if isinstance(ref_schema, dict):
                     schema = self._convert_schema_property(
-                        cast(dict[str, object], ref_schema), defs, strict=strict, refs=refs | {ref_name}
+                        cast(dict[str, object], ref_schema), root, strict=strict, ancestors=ancestors
                     )
                 else:
                     schema = None
@@ -1669,13 +1674,13 @@ class GeminiModel:
                 branches = input_schema.get(keyword)
                 if isinstance(branches, list):
                     return self._convert_union(
-                        input_schema, keyword, cast(list[object], branches), defs, strict=strict, refs=refs
+                        input_schema, keyword, cast(list[object], branches), root, strict=strict, ancestors=ancestors
                     )
             enum = input_schema.get('enum')
             if isinstance(enum, list) and self._string_enum_members(cast(list[object], enum)) is not None:
                 nullable = any(m is None for m in cast(list[object], enum))
                 typed: dict[str, object] = {**input_schema, 'type': ['string', 'null'] if nullable else 'string'}
-                return self._convert_schema_property(typed, defs, strict=strict, refs=refs)
+                return self._convert_schema_property(typed, root, strict=strict, ancestors=ancestors)
             if strict:
                 unsupported = sorted(set(input_schema) - self._SCHEMA_ANNOTATION_KEYS)
                 if unsupported:
@@ -1726,7 +1731,7 @@ class GeminiModel:
             items_value = input_schema.get('items')
             if isinstance(items_value, dict):
                 schema.items = self._convert_schema_property(
-                    cast(dict[str, object], items_value), defs, strict=strict, refs=refs
+                    cast(dict[str, object], items_value), root, strict=strict, ancestors=ancestors
                 )
             if schema.items is None:
                 return None
@@ -1741,7 +1746,9 @@ class GeminiModel:
                 properties = cast(dict[str, object], properties_value)
                 for key, value in properties.items():
                     nested_schema = (
-                        self._convert_schema_property(cast(dict[str, object], value), defs, strict=strict, refs=refs)
+                        self._convert_schema_property(
+                            cast(dict[str, object], value), root, strict=strict, ancestors=ancestors
+                        )
                         if isinstance(value, dict)
                         else None
                     )
@@ -1762,10 +1769,10 @@ class GeminiModel:
         input_schema: dict[str, object],
         keyword: str,
         union: list[object],
-        defs: dict[str, object] | None,
+        root: dict[str, object],
         *,
         strict: bool,
-        refs: frozenset[str],
+        ancestors: frozenset[int],
     ) -> genai_types.Schema | None:
         """Convert an ``anyOf`` or ``oneOf`` node to ``any_of``; a ``null`` branch becomes ``nullable``.
 
@@ -1776,7 +1783,9 @@ class GeminiModel:
         branches = [cast(dict[str, object], b) for b in union if isinstance(b, dict)]
         typed = [b for b in branches if b.get('type') not in ('null', ['null'])]
         converted = [
-            s for b in typed if (s := self._convert_schema_property(b, defs, strict=strict, refs=refs)) is not None
+            s
+            for b in typed
+            if (s := self._convert_schema_property(b, root, strict=strict, ancestors=ancestors)) is not None
         ]
         if not converted:
             return None
@@ -1791,6 +1800,27 @@ class GeminiModel:
             schema.nullable = True
         self._copy_schema_keywords(input_schema, schema, strict=strict)
         return schema
+
+    def _resolve_ref(self, ref_path: str, root: dict[str, object]) -> object:
+        """Resolve a ``#`` or ``#/...`` JSON pointer ``$ref`` against ``root``."""
+        if ref_path == '#':
+            return root
+        if ref_path.startswith('#/'):
+            node: object = root
+            for token in unquote(ref_path[2:]).split('/'):
+                key = token.replace('~1', '/').replace('~0', '~')
+                if isinstance(node, dict) and key in node:
+                    node = cast(dict[str, object], node)[key]
+                elif isinstance(node, list) and key.isdecimal() and int(key) < len(node):
+                    node = cast(list[object], node)[int(key)]
+                else:
+                    break
+            else:
+                return node
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f'{self._version}: schema $ref {ref_path!r} cannot be resolved',
+        )
 
     def _copy_schema_keywords(
         self, input_schema: dict[str, object], schema: genai_types.Schema, *, strict: bool
