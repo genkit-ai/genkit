@@ -35,20 +35,44 @@ export function openAIImageModelRef<
   return compatOaiImageModelRef({ ...params, namespace: 'openai' });
 }
 
+const gptImageConfigSchema = ImageGenerationCommonConfigSchema.omit({
+  response_format: true,
+}).extend({
+  size: z
+    .enum(['1024x1024', '1536x1024', '1024x1536', 'auto'])
+    .optional(),
+  background: z.enum(['transparent', 'opaque', 'auto']).optional(),
+  moderation: z.enum(['low', 'auto']).optional(),
+  output_compression: z.number().int().min(1).max(100).optional(),
+  output_format: z.enum(['png', 'jpeg', 'webp']).optional(),
+  quality: z.enum(['low', 'medium', 'high', 'auto']).optional(),
+});
+
 export const SUPPORTED_IMAGE_MODELS = {
   'dall-e-3': openAIImageModelRef({ name: 'dall-e-3' }),
   'gpt-image-1': openAIImageModelRef({
     name: 'gpt-image-1',
-    configSchema: ImageGenerationCommonConfigSchema.omit({
-      response_format: true,
-    }).extend({
-      size: z.enum(['1024x1024', '1536x1024', '1024x1536', 'auto']).optional(),
-      background: z.enum(['transparent', 'opaque', 'auto']).optional(),
-      moderation: z.enum(['low', 'auto']).optional(),
-      output_compression: z.number().int().min(1).max(100).optional(),
-      output_format: z.enum(['png', 'jpeg', 'web']).optional(),
-      quality: z.enum(['low', 'medium', 'high']).optional(),
-    }),
+    configSchema: gptImageConfigSchema,
+  }),
+  'gpt-image-1.5': openAIImageModelRef({
+    name: 'gpt-image-1.5',
+    configSchema: gptImageConfigSchema,
+  }),
+  'gpt-image-1-mini': openAIImageModelRef({
+    name: 'gpt-image-1-mini',
+    configSchema: gptImageConfigSchema,
+  }),
+  'gpt-image-2': openAIImageModelRef({
+    name: 'gpt-image-2',
+    configSchema: gptImageConfigSchema,
+  }),
+  'gpt-image-2.5-sunburst': openAIImageModelRef({
+    name: 'gpt-image-2.5-sunburst',
+    configSchema: gptImageConfigSchema,
+  }),
+  'gpt-image-2.5-flare': openAIImageModelRef({
+    name: 'gpt-image-2.5-flare',
+    configSchema: gptImageConfigSchema,
   }),
 };
 
@@ -60,10 +84,11 @@ export const gptImage1RequestBuilder: ImageRequestBuilder = (req, params) => {
     output_compression,
     output_format,
     quality,
+    size,
     style,
     user,
   } = req.config ?? {};
-  // GPT Image 1 does not support response format
+  // GPT Image models do not support response format
   params.response_format = undefined;
   params.background = background;
   params.moderation = moderation;
@@ -71,6 +96,7 @@ export const gptImage1RequestBuilder: ImageRequestBuilder = (req, params) => {
   params.output_compression = output_compression;
   params.output_format = output_format;
   params.quality = quality;
+  params.size = size;
   params.style = style;
   params.user = user;
 };
