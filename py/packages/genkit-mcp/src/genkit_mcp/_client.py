@@ -323,7 +323,7 @@ class McpClient:
             existing = self._connections.get(loop)
             if existing is not None and not existing.is_terminal:
                 return existing
-            connection = McpConnection(self._server, request_timeout_millis=self._request_timeout_millis)
+            connection = McpConnection(self._name, self._server, request_timeout_millis=self._request_timeout_millis)
             self._connections[loop] = connection
             return connection
 

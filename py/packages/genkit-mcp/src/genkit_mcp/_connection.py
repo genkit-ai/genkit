@@ -271,12 +271,15 @@ class McpConnection:
 
     def __init__(
         self,
+        name: str,
         config: McpStdioServerConfig,
         request_timeout_millis: int | None = DEFAULT_REQUEST_TIMEOUT_MILLIS,
     ) -> None:
         """Prepare a connection. No process starts until the first call.
 
         Args:
+            name: Name of the client, or of the server within a host, that
+                errors and logs report this connection by.
             config: How to launch the server.
             request_timeout_millis: How long one request may take before it
                 fails. Must be positive. ``None`` is the only way to disable
@@ -286,6 +289,7 @@ class McpConnection:
             ValueError: If ``request_timeout_millis`` is zero or negative.
         """
         validate_request_timeout(request_timeout_millis)
+        self._name = name
         self._config = config
         self._request_timeout = (
             timedelta(milliseconds=request_timeout_millis) if request_timeout_millis is not None else None
@@ -338,9 +342,9 @@ class McpConnection:
                 if not cursor:
                     return tools
                 if cursor in seen:
-                    raise _ProtocolError(f'{self._config.command!r} repeated the tools/list cursor {cursor!r}')
+                    raise _ProtocolError(f'MCP server {self._target} repeated the tools/list cursor {cursor!r}')
                 seen.add(cursor)
-            raise _ProtocolError(f'{self._config.command!r} served over {MAX_TOOL_PAGES} tools/list pages')
+            raise _ProtocolError(f'MCP server {self._target} served over {MAX_TOOL_PAGES} tools/list pages')
 
         return await self._request(list_all)
 
@@ -490,7 +494,11 @@ class McpConnection:
             cause = _transport_cause(error)
             # A rendered traceback would print frame locals, and those hold the server's env.
             logger.warning(
-                'MCP connection ended', command=self._config.command, error=type(error).__name__, cause=repr(cause)
+                'MCP connection ended',
+                client=self._name,
+                command=self._config.command,
+                error=type(error).__name__,
+                cause=repr(cause),
             )
             self._settle(cause)
         finally:
@@ -587,9 +595,14 @@ class McpConnection:
             if not request.result.done():
                 request.result.set_exception(build_error())
 
+    @property
+    def _target(self) -> str:
+        """Name the server in a message by its name and the command that runs it."""
+        return f'{self._name!r} ({self._config.command!r})'
+
     def _closed_error(self) -> _ConnectionClosedError:
         """Build the error reported once this connection is shut down."""
-        return _ConnectionClosedError(f'MCP connection to {self._config.command!r} is closed')
+        return _ConnectionClosedError(f'MCP connection to {self._target} is closed')
 
     def _answered_error(self, error: Exception) -> Exception:
         """Build the error reported for one operation that failed while the server stayed reachable."""
@@ -603,7 +616,7 @@ class McpConnection:
         """Build the error reported when the server answered one request with a JSON-RPC error."""
         code = reply.error.code
         error = _ServerError(
-            f'MCP request to {self._config.command!r} failed with error {code}: {reply.error.message}',
+            f'MCP request to {self._target} failed with error {code}: {reply.error.message}',
             status=_SERVER_ERROR_STATUS.get(code, 'UNKNOWN'),
             cause=reply,
         )
@@ -612,12 +625,12 @@ class McpConnection:
 
     def _timed_out_error(self, timeout: Exception) -> _RequestTimeoutError:
         """Build the error reported when the server did not answer one request in time."""
-        error = _RequestTimeoutError(f'MCP request to {self._config.command!r} timed out')
+        error = _RequestTimeoutError(f'MCP request to {self._target} timed out', cause=timeout)
         error.__cause__ = timeout
         return error
 
     def _failed_error(self) -> _ConnectionFailedError:
         """Build the error reported when startup or the session died."""
-        error = _ConnectionFailedError(f'MCP connection to {self._config.command!r} failed')
+        error = _ConnectionFailedError(f'MCP connection to {self._target} failed', cause=self._failure)
         error.__cause__ = self._failure
         return error

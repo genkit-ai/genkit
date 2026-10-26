@@ -623,6 +623,18 @@ async def test_reconnect_reports_a_server_which_cannot_be_started(tmp_path: Path
 
 
 @pytest.mark.asyncio
+async def test_servers_sharing_a_command_are_told_apart_by_name(tmp_path: Path) -> None:
+    """Each server's error names that server, not just the command both run."""
+    host = McpHost('hosted', mcp_servers={'first': missing_server(tmp_path), 'second': missing_server(tmp_path)})
+    try:
+        for name in ('first', 'second'):
+            with pytest.raises(GenkitError, match=f"MCP connection to '{name}' .* failed"):
+                await host.reconnect(name)
+    finally:
+        await host.close()
+
+
+@pytest.mark.asyncio
 async def test_close_is_final(tmp_path: Path) -> None:
     """A closed host stops every server and refuses every operation, as a client does."""
     ai = Genkit()
