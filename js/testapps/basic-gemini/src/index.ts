@@ -488,6 +488,29 @@ ai.defineFlow('multimodal-input', async () => {
   return text;
 });
 
+// A Word document as inline media. Office documents (Word, Excel, ...) are
+// sent as `document` content with their content type.
+ai.defineFlow('word-document-input', async () => {
+  const docxBase64 = fs.readFileSync('story.docx', { encoding: 'base64' });
+  const contentType =
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+
+  const { text } = await ai.generate({
+    model: googleAI.model('gemini-3.8-flash'),
+    prompt: [
+      { text: 'Summarize this document in three sentences.' },
+      {
+        media: {
+          contentType,
+          url: `data:${contentType};base64,${docxBase64}`,
+        },
+      },
+    ],
+  });
+
+  return text;
+});
+
 // YouTube videos
 ai.defineFlow('youtube-videos', async (_, { sendChunk }) => {
   const { text } = await ai.generate({

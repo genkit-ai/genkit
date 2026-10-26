@@ -781,12 +781,10 @@ function toInteractionMedia(part: Part): Content {
   if (contentType.startsWith('video/')) {
     return { type: 'video', ...fields, ...videoProcessingOf(part) };
   }
-  // The Interactions API accepts PDF and CSV documents.
-  if (contentType === 'application/pdf' || contentType === 'text/csv') {
-    return { type: 'document', ...fields };
-  }
-
-  throw new Error(`Unsupported media type: ${contentType}`);
+  // Everything else is a document (PDF, CSV, Word, Excel, ...). The server
+  // decides which types it accepts and returns a clear error for the rest;
+  // its list has grown beyond the PDF and CSV in the published spec.
+  return { type: 'document', ...fields };
 }
 
 /**

@@ -1192,13 +1192,37 @@ describe('Interaction Converters', () => {
       );
     });
 
-    it('should throw for an unsupported contentType', () => {
-      assert.throws(
-        () =>
-          toInteractionContent({
-            media: { url: 'gs://bucket/notes.txt', contentType: 'text/plain' },
-          }),
-        /Unsupported media type: text\/plain/
+    it('sends Word and Excel files as documents', () => {
+      // User report: 1.43 threw "Unsupported media type" for these, although
+      // the server accepts them.
+      const docx =
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+      const xlsx =
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+      assert.deepStrictEqual(
+        toInteractionContent({
+          media: { url: `data:${docx};base64,DATA`, contentType: docx },
+        }),
+        { type: 'document', data: 'DATA', mime_type: docx }
+      );
+      assert.deepStrictEqual(
+        toInteractionContent({
+          media: { url: 'gs://bucket/sheet.xlsx', contentType: xlsx },
+        }),
+        { type: 'document', uri: 'gs://bucket/sheet.xlsx', mime_type: xlsx }
+      );
+    });
+
+    it('leaves other content types for the server to accept or reject', () => {
+      assert.deepStrictEqual(
+        toInteractionContent({
+          media: { url: 'gs://bucket/notes.txt', contentType: 'text/plain' },
+        }),
+        {
+          type: 'document',
+          uri: 'gs://bucket/notes.txt',
+          mime_type: 'text/plain',
+        }
       );
     });
   });
