@@ -227,6 +227,16 @@ async def test_list_tools_treats_an_empty_cursor_as_the_last_page(tmp_path: Path
 
 
 @pytest.mark.asyncio
+async def test_a_server_without_the_tools_capability_lists_no_tools(tmp_path: Path) -> None:
+    """Such a server answers tools/list with method not found, so it must not be asked."""
+    connection = McpConnection(config(tmp_path, MCP_FAKE_NO_TOOLS='1'))
+    try:
+        assert await asyncio.wait_for(connection.list_tools(), timeout=LIMIT) == []
+    finally:
+        await asyncio.wait_for(connection.close(), timeout=LIMIT)
+
+
+@pytest.mark.asyncio
 async def test_list_tools_rejects_a_non_advancing_cursor(tmp_path: Path) -> None:
     connection = McpConnection(config(tmp_path, MCP_FAKE_STUCK_CURSOR='1'))
     try:

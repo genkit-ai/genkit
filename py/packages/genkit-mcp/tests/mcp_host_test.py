@@ -211,6 +211,20 @@ async def test_a_server_which_cannot_start_leaves_the_others_listed(tmp_path: Pa
 
 
 @pytest.mark.asyncio
+async def test_a_server_without_the_tools_capability_leaves_the_others_listed(tmp_path: Path) -> None:
+    host = McpHost(
+        'hosted',
+        mcp_servers={**servers(tmp_path, 'resources', MCP_FAKE_NO_TOOLS='1'), **servers(tmp_path, 'alpha')},
+    )
+    try:
+        tools = await host.get_active_tools()
+    finally:
+        await host.close()
+
+    assert tool_names(tools) == hosted('alpha')
+
+
+@pytest.mark.asyncio
 async def test_servers_which_do_not_answer_in_time_leave_the_others_listed(tmp_path: Path) -> None:
     """A server stuck in its handshake or its listing is as unreachable as one that cannot start."""
     host = McpHost(

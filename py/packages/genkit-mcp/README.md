@@ -144,7 +144,8 @@ it has to fit a selector but no model ever reads it.
 A server that cannot start, or whose process dies, fails with status `UNAVAILABLE`, and one that
 does not answer a request in time fails with `DEADLINE_EXCEEDED`. The host logs either and skips it,
 so the other servers stay selectable. A server disconnected or replaced while the host was listing
-it is left out of that listing. Any other failure fails the whole listing:
+it is left out of that listing, and a server that does not advertise the tools capability is not
+asked for tools and lists none. Any other failure fails the whole listing:
 a server that breaks the protocol, a server that answers the listing with an error, and two tools
 that share a name. Only the server you ask for is affected by `await host.connect(...)`,
 `await host.disconnect(...)` and `await host.reconnect(...)`. `connect` and `reconnect` start the

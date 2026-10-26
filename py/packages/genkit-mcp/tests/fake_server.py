@@ -23,6 +23,7 @@ from mcp.types import (
     ErrorData,
     ListToolsRequest,
     ListToolsResult,
+    Resource,
     ServerResult,
     TextContent,
     Tool,
@@ -145,6 +146,15 @@ if os.environ.get('MCP_FAKE_APP_ERROR_CALL'):
         raise McpError(ErrorData(code=CONNECTION_CLOSED, message='application-level failure'))
 
     app.request_handlers[CallToolRequest] = failing_call
+
+if os.environ.get('MCP_FAKE_NO_TOOLS'):
+    # Without these handlers the server neither advertises tools nor answers tools/list.
+    del app.request_handlers[ListToolsRequest]
+    del app.request_handlers[CallToolRequest]
+
+    @app.list_resources()
+    async def list_resources() -> list[Resource]:
+        return []
 
 
 def close_stdin_after_handshake(marker: str) -> None:

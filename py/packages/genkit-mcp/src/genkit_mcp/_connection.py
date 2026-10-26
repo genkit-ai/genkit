@@ -294,8 +294,11 @@ class McpConnection:
     async def list_tools(self) -> list[McpTool]:
         """List every tool the server offers, following pagination cursors.
 
+        A server that does not advertise the tools capability is not asked.
+
         Returns:
-            All tools, in server order.
+            All tools, in server order. Empty for a server without the tools
+            capability.
 
         Raises:
             _ProtocolError: If the server's cursors never terminate.
@@ -303,6 +306,9 @@ class McpConnection:
         """
 
         async def list_all(session: ClientSession) -> list[McpTool]:
+            capabilities = session.get_server_capabilities()
+            if capabilities is None or capabilities.tools is None:
+                return []
             tools: list[McpTool] = []
             cursor: str | None = None
             seen: set[str] = set()
