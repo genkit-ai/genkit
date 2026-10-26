@@ -46,7 +46,7 @@ import {
 } from '../common/converters.js';
 import {
   applyLatLngToGoogleMapsTools,
-  fromInteractionDelta,
+  createInteractionChunkConverter,
   fromInteractionSync,
   mergeStreamedAudio,
   removeId3FromAudio,
@@ -1454,17 +1454,14 @@ export function defineModel(
             req,
             clientOpt
           );
+          const toChunkParts = createInteractionChunkConverter();
           for await (const event of result.stream) {
-            if (event.event_type === 'step.delta') {
-              const chunkParts = fromInteractionDelta(event.delta).map(
-                removeId3FromAudio
-              );
-              if (chunkParts.length > 0) {
-                sendChunk({
-                  index: 0,
-                  content: chunkParts,
-                });
-              }
+            const chunkParts = toChunkParts(event).map(removeId3FromAudio);
+            if (chunkParts.length > 0) {
+              sendChunk({
+                index: 0,
+                content: chunkParts,
+              });
             }
           }
           const response = await result.response;

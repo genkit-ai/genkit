@@ -380,7 +380,11 @@ export type Content =
 
 export declare interface ModelOutputStep {
   type: 'model_output';
-  content: Content[];
+  /**
+   * Optional in the spec: the server can end a response with an empty
+   * `{ type: 'model_output' }` step (seen live on vertexAI with Google Maps).
+   */
+  content?: Content[];
 }
 
 export declare interface UserInputStep {
@@ -388,10 +392,18 @@ export declare interface UserInputStep {
   content: Content[];
 }
 
+// Tool call/result steps: only `type` and the ids are required here. The spec
+// marks more fields as required, but the platform omits them at times (e.g.
+// a `google_search_call` without `arguments`, a `google_search_result`
+// without `result`, seen live on vertexAI), so every content field is
+// optional and only sent back when present.
+
 export declare interface GoogleSearchCallStep {
   type: 'google_search_call';
   id: string;
-  arguments: { queries: string[] };
+  arguments?: { queries?: string[] };
+  /** `web_search`, `image_search` or `enterprise_web_search`. */
+  search_type?: string;
   signature?: string;
 }
 
@@ -399,7 +411,7 @@ export declare interface GoogleSearchResultStep {
   type: 'google_search_result';
   call_id: string;
   /** The search results, e.g. `[{ search_suggestions }]`. */
-  result: Record<string, unknown>[] | Record<string, unknown>;
+  result?: Record<string, unknown>[] | Record<string, unknown>;
   is_error?: boolean;
   signature?: string;
 }
@@ -458,6 +470,84 @@ export declare interface ProcessingResultStep {
   signature?: string;
 }
 
+// Server-side built-in tool steps. The server runs these tools itself; the
+// steps (with their signatures) must be sent back in the history so the
+// model keeps the tool results in later turns.
+
+export declare interface UrlContextCallStep {
+  type: 'url_context_call';
+  id: string;
+  arguments?: { urls?: string[] };
+  signature?: string;
+}
+
+export declare interface UrlContextResultStep {
+  type: 'url_context_result';
+  call_id: string;
+  /** One entry per URL: `{ url, status }` (`success`, `error`, ...). */
+  result?: Record<string, unknown>[];
+  is_error?: boolean;
+  signature?: string;
+}
+
+export declare interface FileSearchCallStep {
+  type: 'file_search_call';
+  id: string;
+  signature?: string;
+}
+
+export declare interface FileSearchResultStep {
+  type: 'file_search_result';
+  call_id: string;
+  /**
+   * Not in the spec's step schema, but the streamed delta carries it (and
+   * the stream assembly copies it into the step), so it's kept.
+   */
+  result?: Record<string, unknown>[];
+  signature?: string;
+}
+
+export declare interface GoogleMapsCallStep {
+  type: 'google_maps_call';
+  id: string;
+  arguments?: { queries?: string[] };
+  signature?: string;
+}
+
+export declare interface GoogleMapsResultStep {
+  type: 'google_maps_result';
+  call_id: string;
+  /** e.g. `[{ places: [{ place_id, name, url }] }]`. */
+  result?: Record<string, unknown>[];
+  signature?: string;
+}
+
+export declare interface McpServerToolCallStep {
+  type: 'mcp_server_tool_call';
+  id: string;
+  name?: string;
+  server_name?: string;
+  arguments?: Record<string, unknown>;
+}
+
+export declare interface McpServerToolResultStep {
+  type: 'mcp_server_tool_result';
+  call_id: string;
+  name?: string;
+  server_name?: string;
+  result?: Record<string, unknown> | string | (ImageContent | TextContent)[];
+}
+
+export type BuiltInToolStep =
+  | UrlContextCallStep
+  | UrlContextResultStep
+  | FileSearchCallStep
+  | FileSearchResultStep
+  | GoogleMapsCallStep
+  | GoogleMapsResultStep
+  | McpServerToolCallStep
+  | McpServerToolResultStep;
+
 export type Step =
   | ModelOutputStep
   | UserInputStep
@@ -470,17 +560,8 @@ export type Step =
   | FunctionResultStep
   | ThoughtStep
   | ProcessingCallStep
-  | ProcessingResultStep;
-
-/**
- * A turn in a conversation.
- */
-export declare interface Turn {
-  /** The originator of this turn. Must be user for input or model for model output. */
-  role: string;
-  /** The content of the turn. */
-  content: string | Content[];
-}
+  | ProcessingResultStep
+  | BuiltInToolStep;
 
 /**
  * The token count for a single response modality.
@@ -490,6 +571,16 @@ export declare interface ModalityTokens {
   modality?: ResponseModality;
   /** Number of tokens for the modality. */
   tokens?: number;
+}
+
+/**
+ * The number of times a grounding tool was used.
+ */
+export declare interface GroundingToolCount {
+  /** The grounding tool, e.g. `google_search` or `google_maps`. */
+  type?: 'google_search' | 'google_maps' | (string & {});
+  /** The number of times the tool was used. */
+  count?: number;
 }
 
 /**
@@ -513,11 +604,13 @@ export declare interface Usage {
   /** Number of tokens present in tool-use prompt(s). */
   total_tool_use_tokens?: number;
   /** A breakdown of tool-use token usage by modality. */
-  tool_use_by_modality?: ModalityTokens[];
+  tool_use_tokens_by_modality?: ModalityTokens[];
   /** Number of tokens of thoughts for thinking models. */
   total_thought_tokens?: number;
   /** Total token count for the interaction request (prompt + responses + other internal tokens). */
   total_tokens?: number;
+  /** How many times each grounding tool was used. */
+  grounding_tool_count?: GroundingToolCount[];
 }
 
 /**
@@ -765,13 +858,6 @@ export interface ThoughtSignatureDelta {
   signature?: string;
 }
 
-export interface FunctionCallDelta {
-  type: 'function_call';
-  name: string;
-  arguments: Record<string, unknown>;
-  id: string;
-}
-
 export interface ArgumentsDelta {
   type: 'arguments_delta';
   arguments?: string;
@@ -861,6 +947,16 @@ export interface GoogleMapsResultDelta {
   signature?: string;
 }
 
+export interface ProcessingCallDelta {
+  type: 'processing_call';
+  signature?: string;
+}
+
+export interface ProcessingResultDelta {
+  type: 'processing_result';
+  signature?: string;
+}
+
 export interface TextAnnotationDelta {
   type: 'text_annotation_delta';
   annotations?: TextAnnotation[];
@@ -874,7 +970,6 @@ export type StepDeltaData =
   | VideoDelta
   | ThoughtSummaryDelta
   | ThoughtSignatureDelta
-  | FunctionCallDelta
   | ArgumentsDelta
   | CodeExecutionCallDelta
   | UrlContextCallDelta
@@ -889,6 +984,8 @@ export type StepDeltaData =
   | McpServerToolResultDelta
   | FileSearchResultDelta
   | GoogleMapsResultDelta
+  | ProcessingCallDelta
+  | ProcessingResultDelta
   | TextAnnotationDelta;
 
 export type InteractionSseEvent =
@@ -921,7 +1018,15 @@ export type InteractionSseEvent =
       delta: StepDeltaData;
       event_id?: string;
     }
-  | { event_type: 'step.stop'; index: number; event_id?: string };
+  | {
+      event_type: 'step.stop';
+      index: number;
+      /** Usage so far in the interaction (sent by vertexAI). */
+      usage?: Usage;
+      /** Usage of this step. */
+      step_usage?: Usage;
+      event_id?: string;
+    };
 
 export interface InteractionStreamResult {
   stream: AsyncGenerator<InteractionSseEvent>;

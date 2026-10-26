@@ -785,6 +785,43 @@ describe('Google AI Gemini', () => {
         assert.ok(String(budgetWarnings[0].args[0]).includes('thinkingLevel'));
       });
 
+      it('drops topK with one warning per model (Interactions API)', async () => {
+        const warnStub = sinon.stub(logger, 'warn');
+        // An unlisted model (routed to Interactions) not used by other tests,
+        // since the warning is only logged once per model and field.
+        const model = defineModel('gemini-top-k-test', defaultPluginOptions);
+        const request = {
+          ...minimalRequest,
+          config: { topK: 40, temperature: 0.5 },
+        };
+        mockFetchResponse(defaultApiResponse);
+        await model.run(request).catch(() => undefined);
+        mockFetchResponse(defaultApiResponse);
+        await model.run(request).catch(() => undefined);
+
+        const apiRequest: CreateInteractionRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.deepStrictEqual(apiRequest.generation_config, {
+          temperature: 0.5,
+        });
+        const topKWarnings = warnStub
+          .getCalls()
+          .filter((c) => String(c.args[0]).includes('topK'));
+        assert.strictEqual(topKWarnings.length, 1);
+      });
+
+      it('still sends topK to generateContent models', async () => {
+        const model = defineModel('gemini-2.5-flash', defaultPluginOptions);
+        mockFetchResponse(defaultApiResponse);
+        await model.run({ ...minimalRequest, config: { topK: 40 } });
+
+        const apiRequest: GenerateContentRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.strictEqual(apiRequest.generationConfig?.topK, 40);
+      });
+
       it('handles every config schema field explicitly (Interactions API)', () => {
         // The Interactions API rejects unknown `generation_config` fields with
         // a 400, so every field in the plugin's config schemas must be either
@@ -815,6 +852,8 @@ describe('Google AI Gemini', () => {
           'videoFormat',
           'thinkingConfig',
           'contextCache',
+          // Dropped with a warning (no `top_k` in generation_config).
+          'topK',
           'toolConfig',
           'tools',
         ];
@@ -822,7 +861,6 @@ describe('Google AI Gemini', () => {
         const acceptedByApi = [
           'temperature',
           'topP',
-          'topK',
           'maxOutputTokens',
           'stopSequences',
           'imageConfig',

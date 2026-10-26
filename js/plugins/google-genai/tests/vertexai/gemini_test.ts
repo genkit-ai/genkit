@@ -16,6 +16,7 @@
 
 import * as assert from 'assert';
 import { z } from 'genkit';
+import { logger } from 'genkit/logging';
 import { GenerateRequest, ModelReference } from 'genkit/model';
 import { GoogleAuth } from 'google-auth-library';
 import { afterEach, beforeEach, describe, it } from 'node:test';
@@ -1091,6 +1092,18 @@ describe('Vertex AI Gemini', () => {
         assert.deepStrictEqual(body.labels, { team: 'genkit' });
       });
 
+      it('does not send topK (the platform rejects top_k with a 400)', async () => {
+        mockFetchResponse(interactionResponse);
+        const model = defineModel(interactionsModel, clientOptions);
+        await model.run({
+          ...minimalRequest,
+          config: { topK: 40, temperature: 0.5 },
+        });
+        assert.deepStrictEqual(lastRequestBody().generation_config, {
+          temperature: 0.5,
+        });
+      });
+
       it('maps vertexRetrieval to a retrieval tool', async () => {
         mockFetchResponse(interactionResponse);
         const model = defineModel(interactionsModel, clientOptions);
@@ -1117,6 +1130,78 @@ describe('Vertex AI Gemini', () => {
             },
           },
         ]);
+      });
+
+      it('resends only code execution steps of the server-side tools, and warns once', async () => {
+        // The platform rejects resent Google Search, URL context and Google
+        // Maps steps with a 501 (seen live, Oct 2026); file search and MCP
+        // steps weren't seen working, so they're not resent either. Code
+        // execution steps are accepted, so they're kept.
+        TEST_ONLY.resetDroppedResentStepsWarning();
+        const warnStub = sinon.stub(logger, 'warn');
+        mockFetchResponse(interactionResponse);
+        const model = defineModel(interactionsModel, clientOptions);
+        const request = {
+          messages: [
+            { role: 'user' as const, content: [{ text: 'Research this.' }] },
+            {
+              role: 'model' as const,
+              content: [
+                {
+                  custom: { googleSearchCall: { id: 's1' } },
+                },
+                { custom: { googleSearchResult: { callId: 's1' } } },
+                { custom: { urlContextCall: { id: 'u1' } } },
+                { custom: { urlContextResult: { callId: 'u1' } } },
+                { custom: { googleMapsCall: { id: 'm1' } } },
+                { custom: { googleMapsResult: { callId: 'm1' } } },
+                { custom: { fileSearchCall: { id: 'f1' } } },
+                { custom: { fileSearchResult: { callId: 'f1' } } },
+                { custom: { mcpServerToolCall: { id: 'p1' } } },
+                { custom: { mcpServerToolResult: { callId: 'p1' } } },
+                {
+                  custom: {
+                    executableCode: { code: 'print(1)', language: 'PYTHON' },
+                  },
+                  metadata: { callId: 'c1' },
+                },
+                {
+                  custom: {
+                    codeExecutionResult: {
+                      output: '1\n',
+                      outcome: 'OUTCOME_OK',
+                    },
+                  },
+                  metadata: { callId: 'c1' },
+                },
+                { text: 'Done.' },
+              ],
+            },
+            { role: 'user' as const, content: [{ text: 'And then?' }] },
+          ],
+        };
+        await model.run(request);
+
+        const sentTypes = lastRequestBody().input.map(
+          (step: { type: string }) => step.type
+        );
+        assert.deepStrictEqual(sentTypes, [
+          'user_input',
+          'code_execution_call',
+          'code_execution_result',
+          'model_output',
+          'user_input',
+        ]);
+        const droppedWarnings = () =>
+          warnStub
+            .getCalls()
+            .filter((c) => String(c.args[0]).includes('store: true'));
+        assert.strictEqual(droppedWarnings().length, 1);
+
+        // Warned once, not on every request.
+        mockFetchResponse(interactionResponse);
+        await model.run(request);
+        assert.strictEqual(droppedWarnings().length, 1);
       });
 
       it('continues a stored interaction', async () => {
@@ -1247,6 +1332,74 @@ describe('Vertex AI Gemini', () => {
           'Hi there'
         );
       });
+
+      it('streams a function call as a tool request chunk', async () => {
+        // The event shapes seen live (gemini-3.8-flash): the call's
+        // arguments arrive in one arguments_delta.
+        const events = [
+          {
+            event_type: 'step.start',
+            index: 0,
+            step: {
+              id: 'call_7227796',
+              type: 'function_call',
+              name: 'getWeather',
+              arguments: {},
+            },
+          },
+          {
+            event_type: 'step.delta',
+            index: 0,
+            delta: {
+              type: 'arguments_delta',
+              arguments: '{"location":"Paris, France"}',
+            },
+          },
+          {
+            event_type: 'step.stop',
+            index: 0,
+            usage: { total_tokens: 210 },
+          },
+          {
+            event_type: 'interaction.completed',
+            interaction: { id: '', status: 'requires_action' },
+          },
+        ];
+        const encoder = new TextEncoder();
+        fetchStub.resolves(
+          new Response(
+            new ReadableStream({
+              start(controller) {
+                for (const event of events) {
+                  controller.enqueue(
+                    encoder.encode(
+                      `event: ${event.event_type}\ndata: ${JSON.stringify(event)}\n\n`
+                    )
+                  );
+                }
+                controller.close();
+              },
+            }),
+            { status: 200, headers: { 'Content-Type': 'text/event-stream' } }
+          )
+        );
+
+        const chunkParts: unknown[] = [];
+        const model = defineModel(interactionsModel, clientOptions);
+        const result = await model.run(minimalRequest, {
+          onChunk: (chunk) => chunkParts.push(...chunk.content),
+        });
+
+        const toolRequest = {
+          toolRequest: {
+            name: 'getWeather',
+            ref: 'call_7227796',
+            input: { location: 'Paris, France' },
+          },
+        };
+        assert.deepStrictEqual(chunkParts, [toolRequest]);
+        assert.deepStrictEqual(result.result.message?.content, [toolRequest]);
+      });
     });
   }
 
@@ -1302,12 +1455,13 @@ describe('Vertex AI Gemini', () => {
         'speechConfig',
         // Sent as `response_format` (video models).
         'videoFormat',
+        // Dropped with a warning: the platform rejects `top_k` with a 400.
+        'topK',
       ];
       // Accepted in `generation_config` (checked live on the Gemini API).
       const acceptedByApi = [
         'temperature',
         'topP',
-        'topK',
         'maxOutputTokens',
         'stopSequences',
         'imageConfig',

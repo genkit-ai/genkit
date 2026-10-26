@@ -26,6 +26,7 @@ import {
 import { ToolDefinition } from 'genkit/model';
 import {
   AudioContent,
+  BuiltInToolStep,
   CodeExecutionCallStep,
   CodeExecutionResultStep,
   Content,
@@ -42,6 +43,7 @@ import {
   InteractionFunctionTool,
   InteractionGoogleSearchTool,
   InteractionSafetySetting,
+  InteractionSseEvent,
   InteractionTool,
   InteractionToolChoiceConfig,
   ModelGenerationConfig,
@@ -60,12 +62,14 @@ import {
 import { isObject } from './types.js';
 import {
   appendToWavData,
+  applyInteractionStepEvent,
   camelToSnakeCase,
   cleanSchema,
   convertObjectKeysToSnakeCase,
   extractMimeType,
   interactionErrorCodeToGenkitStatus,
   isInteractionContentBlockCode,
+  snakeToCamelCase,
   stripLeadingId3Tags,
   toSnakeCaseObj,
 } from './utils.js';
@@ -584,7 +588,10 @@ export function toInteractionSpeechConfig(
  *  - `thinkingConfig.thinkingLevel` / `includeThoughts` become
  *    `thinking_level` / `thinking_summaries`. There is no `thinking_config`,
  *    so other thinking fields (e.g. `thinkingBudget`) are dropped;
- *  - `contextCache` (not implemented by this plugin) is dropped.
+ *  - `contextCache` (not implemented by this plugin) is dropped;
+ *  - `topK` is dropped: there's no `top_k` in the Interactions
+ *    `generation_config` (Gemini Enterprise Agent Platform rejects it with a
+ *    400; the Gemini API accepts and ignores it).
  * Everything else, including keys the user passes through that aren't in the
  * schema, is forwarded in snake_case.
  *
@@ -601,6 +608,8 @@ export function toInteractionGenerationConfig(
     thinking_config,
     contextCache,
     context_cache,
+    topK,
+    top_k,
     // Sent as `response_format` (see toInteractionAudioResponseFormat and
     // toInteractionVideoResponseFormat).
     audioFormat: _audioFormat,
@@ -631,6 +640,10 @@ export function toInteractionGenerationConfig(
 
   if (contextCache !== undefined || context_cache !== undefined) {
     onDropped?.('contextCache');
+  }
+
+  if (topK !== undefined || top_k !== undefined) {
+    onDropped?.('topK');
   }
 
   return result;
@@ -815,7 +828,9 @@ export function toInteractionRole(role: MessageData['role']): string {
   }
 }
 
-const GoogleSearchArgsSchema = z.object({ queries: z.array(z.string()) });
+const GoogleSearchArgsSchema = z
+  .object({ queries: z.array(z.string()).optional() })
+  .passthrough();
 const RecordUnknownSchema = z.record(z.unknown());
 
 const MediaResolutionSchema = z.enum(['low', 'medium', 'high', 'ultra_high']);
@@ -846,9 +861,12 @@ const RecordUnknownOrStringOrArraySchema = z.union([
 
 const OptionalStringSchema = z.string().optional();
 
+// `arguments`, `searchType` and `result` are optional: the platform sometimes
+// omits them (seen live on vertexAI), and they're only sent back when present.
 const GoogleSearchCallSchema = z.object({
   id: z.string(),
-  arguments: GoogleSearchArgsSchema,
+  arguments: GoogleSearchArgsSchema.optional(),
+  searchType: z.string().optional(),
 });
 
 // The API returns `result` as an array of items (e.g.
@@ -857,7 +875,10 @@ const GoogleSearchCallSchema = z.object({
 // still accepted for parts saved before this was fixed.
 const GoogleSearchResultSchema = z.object({
   callId: z.string(),
-  result: z.union([z.array(RecordUnknownSchema), RecordUnknownSchema]),
+  result: z
+    .union([z.array(RecordUnknownSchema), RecordUnknownSchema])
+    .optional(),
+  isError: z.boolean().optional(),
 });
 
 const ExecutableCodeSchema = z.object({
@@ -874,6 +895,139 @@ const ProcessingCallSchema = z.object({ id: z.string() });
 
 const ProcessingResultSchema = z.object({ callId: z.string() });
 
+// Custom parts for the server-side built-in tool steps (url context, file
+// search, Google Maps, MCP servers), in camelCase like
+// `googleSearchCall`. `.passthrough()` keeps fields the server may add.
+// Only the ids are required: the platform can omit other fields (as it does
+// for Google Search steps), and missing fields are not sent back.
+const UrlsArgsSchema = z
+  .object({ urls: z.array(z.string()).optional() })
+  .passthrough();
+const QueriesArgsSchema = z
+  .object({ queries: z.array(z.string()).optional() })
+  .passthrough();
+const UrlContextCallPartSchema = z.object({
+  id: z.string(),
+  arguments: UrlsArgsSchema.optional(),
+});
+const UrlContextResultPartSchema = z.object({
+  callId: z.string(),
+  result: z.array(RecordUnknownSchema).optional(),
+  isError: z.boolean().optional(),
+});
+const FileSearchCallPartSchema = z.object({ id: z.string() });
+const FileSearchResultPartSchema = z.object({
+  callId: z.string(),
+  result: z.array(RecordUnknownSchema).optional(),
+});
+const GoogleMapsCallPartSchema = z.object({
+  id: z.string(),
+  arguments: QueriesArgsSchema.optional(),
+});
+const GoogleMapsResultPartSchema = z.object({
+  callId: z.string(),
+  result: z.array(RecordUnknownSchema).optional(),
+});
+const McpServerToolCallPartSchema = z.object({
+  id: z.string(),
+  name: z.string().optional(),
+  serverName: z.string().optional(),
+  arguments: RecordUnknownSchema.optional(),
+});
+const McpServerToolResultPartSchema = z.object({
+  callId: z.string(),
+  name: z.string().optional(),
+  serverName: z.string().optional(),
+  result: RecordUnknownOrStringOrArraySchema.optional(),
+});
+
+/**
+ * Converts a built-in tool custom part (see `fromBuiltInToolStep`) back into
+ * its step, with its signature, so the tool call and result are resent in
+ * the history. Returns `undefined` for any other part.
+ */
+function toBuiltInToolStep(part: Part): BuiltInToolStep | undefined {
+  const custom = part.custom;
+  if (!custom) return undefined;
+  const signature = OptionalStringSchema.parse(part.metadata?.thoughtSignature);
+  const withSignature = signature ? { signature } : {};
+
+  if (custom.urlContextCall) {
+    const call = UrlContextCallPartSchema.parse(custom.urlContextCall);
+    return {
+      type: 'url_context_call',
+      id: call.id,
+      ...(call.arguments ? { arguments: call.arguments } : {}),
+      ...withSignature,
+    };
+  }
+  if (custom.urlContextResult) {
+    const result = UrlContextResultPartSchema.parse(custom.urlContextResult);
+    return {
+      type: 'url_context_result',
+      call_id: result.callId,
+      ...(result.result ? { result: result.result } : {}),
+      ...(result.isError !== undefined ? { is_error: result.isError } : {}),
+      ...withSignature,
+    };
+  }
+  if (custom.fileSearchCall) {
+    const call = FileSearchCallPartSchema.parse(custom.fileSearchCall);
+    return { type: 'file_search_call', id: call.id, ...withSignature };
+  }
+  if (custom.fileSearchResult) {
+    const result = FileSearchResultPartSchema.parse(custom.fileSearchResult);
+    return {
+      type: 'file_search_result',
+      call_id: result.callId,
+      ...(result.result ? { result: result.result } : {}),
+      ...withSignature,
+    };
+  }
+  if (custom.googleMapsCall) {
+    const call = GoogleMapsCallPartSchema.parse(custom.googleMapsCall);
+    return {
+      type: 'google_maps_call',
+      id: call.id,
+      ...(call.arguments ? { arguments: call.arguments } : {}),
+      ...withSignature,
+    };
+  }
+  if (custom.googleMapsResult) {
+    const result = GoogleMapsResultPartSchema.parse(custom.googleMapsResult);
+    return {
+      type: 'google_maps_result',
+      call_id: result.callId,
+      ...(result.result ? { result: result.result } : {}),
+      ...withSignature,
+    };
+  }
+  if (custom.mcpServerToolCall) {
+    // MCP steps have no signature in the spec.
+    const call = McpServerToolCallPartSchema.parse(custom.mcpServerToolCall);
+    return {
+      type: 'mcp_server_tool_call',
+      id: call.id,
+      ...(call.name ? { name: call.name } : {}),
+      ...(call.serverName ? { server_name: call.serverName } : {}),
+      ...(call.arguments ? { arguments: call.arguments } : {}),
+    };
+  }
+  if (custom.mcpServerToolResult) {
+    const result = McpServerToolResultPartSchema.parse(
+      custom.mcpServerToolResult
+    );
+    return {
+      type: 'mcp_server_tool_result',
+      call_id: result.callId,
+      ...(result.name ? { name: result.name } : {}),
+      ...(result.serverName ? { server_name: result.serverName } : {}),
+      ...(result.result !== undefined ? { result: result.result } : {}),
+    };
+  }
+  return undefined;
+}
+
 /**
  * Converts an array of Genkit MessageData objects into an array of Interaction Steps.
  */
@@ -884,6 +1038,11 @@ export function toInteractionSteps(messages: MessageData[]): Step[] {
     const normalContent: Content[] = [];
 
     for (const part of message.content) {
+      const builtInToolStep = toBuiltInToolStep(part);
+      if (builtInToolStep) {
+        steps.push(builtInToolStep);
+        continue;
+      }
       if (part.toolRequest) {
         const signature = OptionalStringSchema.parse(
           part.metadata?.thoughtSignature
@@ -946,7 +1105,8 @@ export function toInteractionSteps(messages: MessageData[]): Step[] {
         steps.push({
           type: 'google_search_call',
           id: gsCall.id,
-          arguments: gsCall.arguments,
+          ...(gsCall.arguments ? { arguments: gsCall.arguments } : {}),
+          ...(gsCall.searchType ? { search_type: gsCall.searchType } : {}),
           signature: OptionalStringSchema.parse(
             part.metadata?.thoughtSignature
           ),
@@ -958,7 +1118,10 @@ export function toInteractionSteps(messages: MessageData[]): Step[] {
         steps.push({
           type: 'google_search_result',
           call_id: gsResult.callId,
-          result: gsResult.result,
+          ...(gsResult.result ? { result: gsResult.result } : {}),
+          ...(gsResult.isError !== undefined
+            ? { is_error: gsResult.isError }
+            : {}),
           signature: OptionalStringSchema.parse(
             part.metadata?.thoughtSignature
           ),
@@ -1062,12 +1225,84 @@ export function toInteractionSteps(messages: MessageData[]): Step[] {
   return steps;
 }
 
+/** Steps whose content streams as deltas (text, media, thought summaries). */
+const STREAMED_CONTENT_STEP_TYPES = new Set(['model_output', 'thought']);
+
+/** Steps streamed when the interaction completes (see below). */
+const FUNCTION_STEP_TYPES = new Set(['function_call', 'function_result']);
+
 /**
- * Converts a streamed step delta into Genkit Parts for a stream chunk.
+ * Creates a converter from stream events to the parts of stream chunks.
+ *
+ * Content (text, media, thought summaries and signatures) is emitted as each
+ * delta arrives. Tool steps (Google Search, code execution, URL context,
+ * ...) are emitted once complete, at `step.stop`: the server sends their ids
+ * in `step.start` and everything else in a single delta, so waiting for the
+ * end gives the same parts as the final response. Function calls (and
+ * function results, to keep them in order) are emitted when the interaction
+ * completes, because only then is it known whether a call is for Genkit to
+ * run (a `toolRequest`) or was already run by the server.
+ *
+ * @returns A function that takes each stream event, in order, and returns the
+ *   parts to stream for it (often none).
+ */
+export function createInteractionChunkConverter(): (
+  event: InteractionSseEvent
+) => Part[] {
+  // Each event is applied to this converter's own copy of the steps, the same
+  // way the final response is assembled.
+  const steps: Step[] = [];
+  const partialArguments = new Map<number, string>();
+  let status: GeminiInteraction['status'];
+  return (event) => {
+    applyInteractionStepEvent(steps, partialArguments, event);
+    if (event.event_type === 'interaction.status_update') {
+      status = event.status;
+    }
+    if (event.event_type === 'step.delta') {
+      return fromInteractionDelta(event.delta);
+    }
+    if (event.event_type === 'step.stop') {
+      const step = steps[event.index];
+      if (
+        !step ||
+        FUNCTION_STEP_TYPES.has(step.type) ||
+        STREAMED_CONTENT_STEP_TYPES.has(step.type)
+      ) {
+        return [];
+      }
+      return withoutEmptyParts(fromInteractionStep(step));
+    }
+    if (event.event_type === 'interaction.completed') {
+      const pendingIds = getPendingFunctionCallIds(
+        steps,
+        event.interaction.status ?? status
+      );
+      return withoutEmptyParts(
+        steps.flatMap((step) => {
+          if (!FUNCTION_STEP_TYPES.has(step.type)) return [];
+          const isPending =
+            step.type === 'function_call' && pendingIds.has(step.id);
+          return fromInteractionStep(step, isPending);
+        })
+      );
+    }
+    return [];
+  };
+}
+
+function withoutEmptyParts(parts: Part[]): Part[] {
+  return parts.filter((p) => p && Object.keys(p).length > 0);
+}
+
+/**
+ * Converts a streamed content delta (text, media, thought summary or
+ * signature) into Genkit Parts for a stream chunk. Tool step deltas return no
+ * parts: `createInteractionChunkConverter` emits those steps once complete.
  *
  * @param delta - The `delta` of a `step.delta` SSE event.
  * @returns The corresponding Genkit Parts (empty for deltas with nothing to
- *   emit, such as partial function call arguments).
+ *   emit on their own, such as function call arguments).
  */
 export function fromInteractionDelta(delta: StepDeltaData): Part[] {
   switch (delta.type) {
@@ -1113,88 +1348,6 @@ export function fromInteractionDelta(delta: StepDeltaData): Part[] {
       return [{ reasoning: thoughtContentPlaceholder(delta.content) }];
     case 'thought_signature':
       return [{ metadata: { thoughtSignature: delta.signature } }];
-    case 'function_call':
-      return [
-        {
-          toolRequest: {
-            name: delta.name,
-            ref: delta.id,
-            input: delta.arguments || {},
-            partial: true,
-          },
-        },
-      ];
-    case 'arguments_delta':
-      return [];
-    case 'code_execution_call': {
-      const part: Part = {
-        custom: {
-          executableCode: {
-            code: delta.arguments.code || '',
-            language: delta.arguments.language || 'PYTHON',
-          },
-        },
-      };
-      if (delta.signature) {
-        part.metadata = { thoughtSignature: delta.signature };
-      }
-      return [part];
-    }
-    case 'code_execution_result': {
-      const part: Part = {
-        custom: {
-          codeExecutionResult: {
-            output: delta.result,
-            outcome: delta.is_error ? 'OUTCOME_FAILED' : 'OUTCOME_OK',
-          },
-        },
-      };
-      if (delta.signature) {
-        part.metadata = { thoughtSignature: delta.signature };
-      }
-      return [part];
-    }
-    case 'google_search_call': {
-      const part: Part = {
-        custom: {
-          googleSearchCall: {
-            id: '',
-            arguments: delta.arguments,
-          },
-        },
-      };
-      if (delta.signature) {
-        part.metadata = { thoughtSignature: delta.signature };
-      }
-      return [part];
-    }
-    case 'google_search_result': {
-      const part: Part = {
-        custom: {
-          googleSearchResult: {
-            callId: '',
-            result: delta.result || [],
-          },
-        },
-      };
-      if (delta.signature) {
-        part.metadata = { thoughtSignature: delta.signature };
-      }
-      return [part];
-    }
-    case 'function_result':
-      return [
-        {
-          custom: {
-            serverFunctionResult: {
-              callId: delta.call_id,
-              name: delta.name || '',
-              result: delta.result,
-              isError: delta.is_error,
-            },
-          },
-        },
-      ];
     default:
       return [];
   }
@@ -1252,7 +1405,8 @@ export function fromGoogleSearchCall(step: GoogleSearchCallStep): Part {
     custom: {
       googleSearchCall: {
         id: step.id,
-        arguments: step.arguments,
+        ...(step.arguments ? { arguments: step.arguments } : {}),
+        ...(step.search_type ? { searchType: step.search_type } : {}),
       },
     },
   };
@@ -1264,7 +1418,8 @@ export function fromGoogleSearchResult(step: GoogleSearchResultStep): Part {
     custom: {
       googleSearchResult: {
         callId: step.call_id,
-        result: step.result,
+        ...(step.result ? { result: step.result } : {}),
+        ...(step.is_error !== undefined ? { isError: step.is_error } : {}),
       },
     },
   };
@@ -1346,7 +1501,7 @@ export function fromServerFunctionResult(
 export function fromInteractionStep(step: Step, isPending?: boolean): Part[] {
   switch (step.type) {
     case 'model_output':
-      return step.content.map(fromInteractionContent);
+      return (step.content ?? []).map(fromInteractionContent);
     case 'user_input':
       return [];
     case 'google_search_call':
@@ -1377,9 +1532,103 @@ export function fromInteractionStep(step: Step, isPending?: boolean): Part[] {
           custom: { processingResult: { callId: step.call_id } },
         }),
       ];
+    case 'url_context_call':
+    case 'url_context_result':
+    case 'file_search_call':
+    case 'file_search_result':
+    case 'google_maps_call':
+    case 'google_maps_result':
+    case 'mcp_server_tool_call':
+    case 'mcp_server_tool_result':
+      return [fromBuiltInToolStep(step)];
   }
 
   return [{ custom: { unknownStep: step } }];
+}
+
+/**
+ * Converts a server-side built-in tool step (url context, file search,
+ * Google Maps, MCP server) into a custom part, with the step's
+ * `signature` in `metadata.thoughtSignature`. `toBuiltInToolStep` turns it
+ * back into the step when the history is resent. These are never
+ * `toolRequest` parts: the server ran the tool, so there's nothing for
+ * Genkit to run.
+ */
+export function fromBuiltInToolStep(step: BuiltInToolStep): Part {
+  switch (step.type) {
+    case 'url_context_call':
+      return maybeAddGeminiThoughtSignature(step, {
+        custom: {
+          urlContextCall: {
+            id: step.id,
+            ...(step.arguments ? { arguments: step.arguments } : {}),
+          },
+        },
+      });
+    case 'url_context_result':
+      return maybeAddGeminiThoughtSignature(step, {
+        custom: {
+          urlContextResult: {
+            callId: step.call_id,
+            ...(step.result ? { result: step.result } : {}),
+            ...(step.is_error !== undefined ? { isError: step.is_error } : {}),
+          },
+        },
+      });
+    case 'file_search_call':
+      return maybeAddGeminiThoughtSignature(step, {
+        custom: { fileSearchCall: { id: step.id } },
+      });
+    case 'file_search_result':
+      return maybeAddGeminiThoughtSignature(step, {
+        custom: {
+          fileSearchResult: {
+            callId: step.call_id,
+            ...(step.result ? { result: step.result } : {}),
+          },
+        },
+      });
+    case 'google_maps_call':
+      return maybeAddGeminiThoughtSignature(step, {
+        custom: {
+          googleMapsCall: {
+            id: step.id,
+            ...(step.arguments ? { arguments: step.arguments } : {}),
+          },
+        },
+      });
+    case 'google_maps_result':
+      return maybeAddGeminiThoughtSignature(step, {
+        custom: {
+          googleMapsResult: {
+            callId: step.call_id,
+            ...(step.result ? { result: step.result } : {}),
+          },
+        },
+      });
+    case 'mcp_server_tool_call':
+      return {
+        custom: {
+          mcpServerToolCall: {
+            id: step.id,
+            ...(step.name ? { name: step.name } : {}),
+            ...(step.server_name ? { serverName: step.server_name } : {}),
+            ...(step.arguments ? { arguments: step.arguments } : {}),
+          },
+        },
+      };
+    case 'mcp_server_tool_result':
+      return {
+        custom: {
+          mcpServerToolResult: {
+            callId: step.call_id,
+            ...(step.name ? { name: step.name } : {}),
+            ...(step.server_name ? { serverName: step.server_name } : {}),
+            ...(step.result !== undefined ? { result: step.result } : {}),
+          },
+        },
+      };
+  }
 }
 
 function getPendingFunctionCallIds(
@@ -1568,10 +1817,22 @@ function fromInteractionUsage(usage: Usage): GenerationUsage {
         break;
     }
   }
+  // Genkit has no standard fields for these.
+  const custom: Record<string, number> = {};
   // Tokens loaded by tools, e.g. video frames read during agentic video
-  // understanding. Genkit has no standard field for these.
+  // understanding.
   if (usage.total_tool_use_tokens) {
-    result.custom = { toolUseTokens: usage.total_tool_use_tokens };
+    custom.toolUseTokens = usage.total_tool_use_tokens;
+  }
+  // How many times each grounding tool was used, e.g. `googleSearchCount`.
+  for (const { type, count } of usage.grounding_tool_count ?? []) {
+    if (type && typeof count === 'number') {
+      const key = `${snakeToCamelCase(type)}Count`;
+      custom[key] = (custom[key] ?? 0) + count;
+    }
+  }
+  if (Object.keys(custom).length > 0) {
+    result.custom = custom;
   }
   return result;
 }

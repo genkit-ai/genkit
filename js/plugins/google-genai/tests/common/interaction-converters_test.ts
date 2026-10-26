@@ -19,6 +19,7 @@ import { GenkitError, MessageData, Part } from 'genkit';
 import { ToolDefinition } from 'genkit/model';
 import { describe, it } from 'node:test';
 import {
+  createInteractionChunkConverter,
   ensureToolIds,
   fromInteraction,
   fromInteractionContent,
@@ -42,6 +43,7 @@ import {
 import {
   Content,
   GeminiInteraction,
+  InteractionSseEvent,
   Step,
   StepDeltaData,
 } from '../../src/common/interaction-types.js';
@@ -413,12 +415,290 @@ describe('Interaction Converters', () => {
       assert.deepStrictEqual(result.usage?.custom, { toolUseTokens: 2054 });
     });
 
+    it('reports grounding tool counts in usage.custom', () => {
+      // `grounding_tool_count` as seen live (googleAI, Google Search).
+      const result = fromInteractionSync({
+        status: 'completed',
+        usage: {
+          total_tokens: 1011,
+          total_tool_use_tokens: 0,
+          grounding_tool_count: [
+            { type: 'google_search', count: 2 },
+            { type: 'google_maps', count: 1 },
+          ],
+        },
+      });
+      assert.deepStrictEqual(result.usage?.custom, {
+        googleSearchCount: 2,
+        googleMapsCount: 1,
+      });
+    });
+
     it('leaves usage.custom unset without tool use tokens', () => {
       const result = fromInteractionSync({
         status: 'completed',
         usage: { total_input_tokens: 4, total_tokens: 4 },
       });
       assert.strictEqual(result.usage?.custom, undefined);
+    });
+  });
+
+  describe('server-side built-in tool steps', () => {
+    // Shapes seen live (Oct 2026): Google Maps on vertexAI gemini-3.8-flash
+    // (no arguments, no signature) and URL context on googleAI
+    // gemini-3.8-flash (with signatures).
+    const mapsCall: Step = { type: 'google_maps_call', id: 'qpo3tzzp' };
+    const place = {
+      place_id: 'ChIJefTaTQZD04kRzuh2lpwlV-A',
+      name: 'Queen Victoria Park - Google Maps',
+      url: 'https://maps.google.com/maps?cid=16165430741939185870',
+    };
+    const mapsResult: Step = {
+      type: 'google_maps_result',
+      call_id: 'qpo3tzzp',
+      result: [{ places: [place] }],
+    };
+    const changelog = 'https://ai.google.dev/gemini-api/docs/changelog';
+    const urlCall: Step = {
+      type: 'url_context_call',
+      id: 'call_178104',
+      signature: 'sig_url_call',
+      arguments: { urls: [changelog] },
+    };
+    const urlResult: Step = {
+      type: 'url_context_result',
+      call_id: 'call_178104',
+      signature: 'sig_url_result',
+      result: [{ url: changelog, status: 'success' }],
+      is_error: false,
+    };
+    // The other built-in tools, from the spec's examples.
+    const otherSteps: Step[] = [
+      { type: 'file_search_call', id: 'file_call_1', signature: 'sig_f1' },
+      {
+        type: 'file_search_result',
+        call_id: 'file_call_1',
+        signature: 'sig_f2',
+      },
+      {
+        type: 'mcp_server_tool_call',
+        id: 'mcp_call_1',
+        name: 'calculate_tax',
+        server_name: 'financial_mcp_server',
+        arguments: { income: 120000, state: 'CA' },
+      },
+      {
+        type: 'mcp_server_tool_result',
+        call_id: 'mcp_call_1',
+        name: 'calculate_tax',
+        server_name: 'financial_mcp_server',
+        result: { tax_due: 32400 },
+      },
+    ];
+    const allSteps = [mapsCall, mapsResult, urlCall, urlResult, ...otherSteps];
+
+    it('converts Google Maps steps into custom parts', () => {
+      assert.deepStrictEqual(fromInteractionStep(mapsCall), [
+        { custom: { googleMapsCall: { id: 'qpo3tzzp' } } },
+      ]);
+      assert.deepStrictEqual(fromInteractionStep(mapsResult), [
+        {
+          custom: {
+            googleMapsResult: {
+              callId: 'qpo3tzzp',
+              result: [{ places: [place] }],
+            },
+          },
+        },
+      ]);
+    });
+
+    it('converts URL context steps into custom parts with their signatures', () => {
+      assert.deepStrictEqual(fromInteractionStep(urlCall), [
+        {
+          custom: {
+            urlContextCall: {
+              id: 'call_178104',
+              arguments: { urls: [changelog] },
+            },
+          },
+          metadata: { thoughtSignature: 'sig_url_call' },
+        },
+      ]);
+      assert.deepStrictEqual(fromInteractionStep(urlResult), [
+        {
+          custom: {
+            urlContextResult: {
+              callId: 'call_178104',
+              result: [{ url: changelog, status: 'success' }],
+              isError: false,
+            },
+          },
+          metadata: { thoughtSignature: 'sig_url_result' },
+        },
+      ]);
+    });
+
+    it('never produces tool requests (nothing for Genkit to run)', () => {
+      // Even with isPending, which turns client function calls into tool
+      // requests: the server already ran these tools.
+      const parts = allSteps.flatMap((step) => fromInteractionStep(step, true));
+      assert.strictEqual(parts.length, allSteps.length);
+      assert.ok(parts.every((p) => p.toolRequest === undefined));
+      assert.ok(parts.every((p) => p.custom?.unknownStep === undefined));
+    });
+
+    it('sends every built-in tool step back unchanged in the history', () => {
+      // The live bug: these steps (and their signatures) were dropped when
+      // the history was resent, so the model lost the tool results.
+      const history: MessageData[] = [
+        { role: 'user', content: [{ text: 'Name two sights near me.' }] },
+        {
+          role: 'model',
+          content: [
+            ...allSteps.flatMap((step) => fromInteractionStep(step)),
+            { text: 'Queen Victoria Park.' },
+          ],
+        },
+        { role: 'user', content: [{ text: 'Which one is closer?' }] },
+      ];
+      assert.deepStrictEqual(toInteractionSteps(history), [
+        {
+          type: 'user_input',
+          content: [{ type: 'text', text: 'Name two sights near me.' }],
+        },
+        ...allSteps,
+        {
+          type: 'model_output',
+          content: [{ type: 'text', text: 'Queen Victoria Park.' }],
+        },
+        {
+          type: 'user_input',
+          content: [{ type: 'text', text: 'Which one is closer?' }],
+        },
+      ]);
+    });
+
+    it('keeps the custom parts in the final response', () => {
+      const result = fromInteractionSync({
+        status: 'completed',
+        steps: [
+          mapsCall,
+          mapsResult,
+          {
+            type: 'model_output',
+            content: [{ type: 'text', text: 'Queen Victoria Park.' }],
+          },
+        ],
+      });
+      const customKeys = (result.message?.content ?? []).flatMap((p) =>
+        p.custom ? Object.keys(p.custom) : []
+      );
+      assert.deepStrictEqual(customKeys, [
+        'googleMapsCall',
+        'googleMapsResult',
+      ]);
+    });
+
+    it('round-trips Google Search steps without arguments or result', () => {
+      // Seen live on vertexAI (gemini-3.8-flash, url context turn): the
+      // model also searched, and the platform sent these steps without
+      // `arguments` / `result`. Resending the history used to throw.
+      const searchCall: Step = {
+        type: 'google_search_call',
+        id: 'ssg39wjg',
+        search_type: 'web_search',
+      };
+      const searchResult: Step = {
+        type: 'google_search_result',
+        call_id: 'ssg39wjg',
+        is_error: false,
+      };
+      assert.deepStrictEqual(fromInteractionStep(searchCall), [
+        {
+          custom: {
+            googleSearchCall: { id: 'ssg39wjg', searchType: 'web_search' },
+          },
+        },
+      ]);
+      assert.deepStrictEqual(fromInteractionStep(searchResult), [
+        {
+          custom: {
+            googleSearchResult: { callId: 'ssg39wjg', isError: false },
+          },
+        },
+      ]);
+
+      const history: MessageData[] = [
+        { role: 'user', content: [{ text: 'Read the changelog.' }] },
+        {
+          role: 'model',
+          content: [
+            ...fromInteractionStep(searchCall),
+            ...fromInteractionStep(searchResult),
+            { text: 'October 13, 2026.' },
+          ],
+        },
+        { role: 'user', content: [{ text: 'And the entry before?' }] },
+      ];
+      const steps = toInteractionSteps(history);
+      // Sent back as received: no empty arguments or result added.
+      assert.deepStrictEqual(steps[1], {
+        type: 'google_search_call',
+        id: 'ssg39wjg',
+        search_type: 'web_search',
+        signature: undefined,
+      });
+      assert.deepStrictEqual(steps[2], {
+        type: 'google_search_result',
+        call_id: 'ssg39wjg',
+        is_error: false,
+        signature: undefined,
+      });
+    });
+
+    it('round-trips built-in tool steps with only their ids', () => {
+      // The platform can omit fields the spec marks as required; only the ids
+      // are needed to round-trip.
+      const bareSteps: Step[] = [
+        { type: 'url_context_call', id: 'u1' },
+        { type: 'url_context_result', call_id: 'u1' },
+        { type: 'google_maps_call', id: 'm1' },
+        { type: 'google_maps_result', call_id: 'm1' },
+        { type: 'mcp_server_tool_call', id: 'p1' },
+        { type: 'mcp_server_tool_result', call_id: 'p1' },
+      ];
+      const history: MessageData[] = [
+        {
+          role: 'model',
+          content: bareSteps.flatMap((step) => fromInteractionStep(step)),
+        },
+      ];
+      assert.deepStrictEqual(toInteractionSteps(history), bareSteps);
+    });
+
+    it('accepts an empty trailing model_output step', () => {
+      // Seen live on vertexAI (Google Maps, store: true): the response ended
+      // with `{ type: 'model_output' }` and no content, which used to throw
+      // "Cannot read properties of undefined (reading 'map')".
+      const result = fromInteractionSync({
+        status: 'completed',
+        steps: [
+          { type: 'thought', signature: 'sig_thought' },
+          {
+            type: 'model_output',
+            content: [{ type: 'text', text: 'Queen Victoria Park.' }],
+          },
+          mapsCall,
+          mapsResult,
+          { type: 'model_output' },
+        ],
+      });
+      const content = result.message?.content ?? [];
+      assert.strictEqual(content.length, 4);
+      assert.strictEqual(content[1].text, 'Queen Victoria Park.');
+      assert.ok(content[2].custom?.googleMapsCall);
+      assert.ok(content[3].custom?.googleMapsResult);
     });
   });
 
@@ -789,6 +1069,23 @@ describe('Interaction Converters', () => {
       );
       assert.deepStrictEqual(result, { temperature: 0.5 });
       assert.deepStrictEqual(dropped, ['contextCache']);
+    });
+
+    it('should drop topK (no top_k in generation_config) and report it', () => {
+      // vertexAI rejects `top_k` with a 400 ("Unknown parameter 'top_k' at
+      // 'generation_config'", seen live Oct 2026); the Gemini API ignores it.
+      // temperature and top_p are still sent (in the spec, deprecated).
+      for (const config of [
+        { topK: 40, temperature: 0.5, topP: 0.9 },
+        { top_k: 40, temperature: 0.5, topP: 0.9 },
+      ]) {
+        const dropped: string[] = [];
+        const result = toInteractionGenerationConfig(config, (field) =>
+          dropped.push(field)
+        );
+        assert.deepStrictEqual(result, { temperature: 0.5, top_p: 0.9 });
+        assert.deepStrictEqual(dropped, ['topK']);
+      }
     });
 
     it('should forward unknown passthrough keys in snake_case', () => {
@@ -1977,24 +2274,16 @@ describe('Interaction Converters', () => {
       ]);
     });
 
-    it('should convert function_call delta', () => {
-      const delta: StepDeltaData = {
-        type: 'function_call',
-        name: 'myTool',
-        id: 'ref1',
-        arguments: { a: 1 },
-      };
-      const result = fromInteractionDelta(delta);
-      assert.deepStrictEqual(result, [
-        {
-          toolRequest: {
-            name: 'myTool',
-            ref: 'ref1',
-            input: { a: 1 },
-            partial: true,
-          },
-        },
-      ]);
+    it('returns no parts for tool step deltas (emitted when the step stops)', () => {
+      const deltas: StepDeltaData[] = [
+        { type: 'google_search_call', arguments: { queries: ['q'] } },
+        { type: 'code_execution_result', result: '1\n' },
+        { type: 'url_context_result', result: [] },
+        { type: 'processing_call', signature: 'sig' },
+      ];
+      for (const delta of deltas) {
+        assert.deepStrictEqual(fromInteractionDelta(delta), [], delta.type);
+      }
     });
 
     it('should ignore arguments_delta', () => {
@@ -2042,6 +2331,277 @@ describe('Interaction Converters', () => {
       assert.deepStrictEqual(fromInteractionDelta(functionCall), [
         { reasoning: '[Function call]' },
       ]);
+    });
+  });
+
+  describe('createInteractionChunkConverter', () => {
+    // Event sequences seen live (Oct 2026); signatures and text shortened.
+    // Every tool step streams the same way: step.start with the ids, one
+    // delta with everything else, then step.stop.
+    const start = (index: number, step: Step): InteractionSseEvent => ({
+      event_type: 'step.start',
+      index,
+      step,
+    });
+    const delta = (index: number, d: StepDeltaData): InteractionSseEvent => ({
+      event_type: 'step.delta',
+      index,
+      delta: d,
+    });
+    const stop = (index: number): InteractionSseEvent => ({
+      event_type: 'step.stop',
+      index,
+    });
+    const completed = (
+      interaction: Partial<GeminiInteraction>
+    ): InteractionSseEvent => ({
+      event_type: 'interaction.completed',
+      interaction,
+    });
+    const thoughtEvents = (index: number): InteractionSseEvent[] => [
+      start(index, { type: 'thought' }),
+      delta(index, { type: 'thought_signature', signature: 'sig_thought' }),
+      stop(index),
+    ];
+    /** The chunk parts for each event, in order. */
+    const chunksFor = (events: InteractionSseEvent[]): Part[][] => {
+      const toChunkParts = createInteractionChunkConverter();
+      return events.map((event) => toChunkParts(event));
+    };
+
+    it('streams a function call as a tool request when the interaction completes', () => {
+      // vertexAI gemini-3.8-flash (tool-calling flow).
+      const chunks = chunksFor([
+        ...thoughtEvents(0),
+        start(1, {
+          id: 'call_7227796',
+          type: 'function_call',
+          name: 'getWeather',
+          arguments: {},
+        }),
+        delta(1, {
+          type: 'arguments_delta',
+          arguments: '{"location":"Paris, France"}',
+        }),
+        {
+          event_type: 'step.stop',
+          index: 1,
+          usage: { total_tokens: 210 },
+        },
+        completed({ id: '', status: 'requires_action' }),
+      ]);
+      assert.deepStrictEqual(chunks, [
+        [],
+        [{ metadata: { thoughtSignature: 'sig_thought' } }],
+        [],
+        [],
+        [],
+        [],
+        [
+          {
+            toolRequest: {
+              name: 'getWeather',
+              ref: 'call_7227796',
+              input: { location: 'Paris, France' },
+            },
+          },
+        ],
+      ]);
+    });
+
+    it('streams a long function call argument from a single arguments_delta', () => {
+      // googleAI gemini-3.8-flash (streaming-tool-calling flow): a 300+ word
+      // argument still came as one delta.
+      const longText = 'In the misty heart of the Whispering Woods. '.repeat(
+        40
+      );
+      const args = { longText, nestedData: { arrayItems: ['a'], id: 101 } };
+      const chunks = chunksFor([
+        ...thoughtEvents(0),
+        start(1, {
+          id: 'call_958433',
+          type: 'function_call',
+          name: 'getCharacterName',
+          arguments: {},
+        }),
+        delta(1, { type: 'arguments_delta', arguments: JSON.stringify(args) }),
+        stop(1),
+        completed({ status: 'requires_action' }),
+      ]);
+      assert.deepStrictEqual(chunks[chunks.length - 1], [
+        {
+          toolRequest: {
+            name: 'getCharacterName',
+            ref: 'call_958433',
+            input: args,
+          },
+        },
+      ]);
+    });
+
+    it('does not stream a server-side function call as a tool request', () => {
+      // Seen live with MCP on googleAI: the call and its result in the same
+      // response, with status requires_action. Nothing for Genkit to run.
+      const chunks = chunksFor([
+        start(0, {
+          id: 'call_1',
+          type: 'function_call',
+          name: 'complex_server:analyze_data',
+          arguments: {},
+        }),
+        delta(0, { type: 'arguments_delta', arguments: '{"x":1}' }),
+        stop(0),
+        start(1, {
+          type: 'function_result',
+          call_id: 'call_1',
+          name: 'complex_server:analyze_data',
+          result: 'ok',
+        }),
+        stop(1),
+        completed({ status: 'requires_action' }),
+      ]);
+      const parts = chunks.flat();
+      assert.ok(parts.every((p) => p.toolRequest === undefined));
+      assert.deepStrictEqual(
+        parts.map((p) => Object.keys(p.custom ?? {})),
+        [['serverFunctionCall'], ['serverFunctionResult']]
+      );
+    });
+
+    it('streams Google Search steps with their ids when each step stops, matching the final response', () => {
+      // googleAI gemini-3.6-flash (streaming-google-search flow).
+      const queries = ['Nobel Prize in Physics 2026 winner'];
+      const result = [{ search_suggestions: '<div>...</div>' }];
+      const chunks = chunksFor([
+        start(0, {
+          id: 'call_1725402',
+          signature: '',
+          type: 'google_search_call',
+          search_type: 'web_search',
+        }),
+        delta(0, {
+          type: 'google_search_call',
+          signature: 'sig_call',
+          arguments: { queries },
+        }),
+        stop(0),
+        start(1, {
+          call_id: 'call_1725402',
+          signature: '',
+          type: 'google_search_result',
+        }),
+        delta(1, {
+          type: 'google_search_result',
+          signature: 'sig_result',
+          result,
+          is_error: false,
+        }),
+        stop(1),
+        ...thoughtEvents(2),
+        start(3, { type: 'model_output' }),
+        delta(3, { type: 'text', text: 'The 2026 Nobel Prize ' }),
+        delta(3, { type: 'text', text: 'in Physics...' }),
+        stop(3),
+        completed({ status: 'completed' }),
+      ]);
+      const final = fromInteractionSync({
+        status: 'completed',
+        steps: [
+          {
+            id: 'call_1725402',
+            signature: 'sig_call',
+            type: 'google_search_call',
+            search_type: 'web_search',
+            arguments: { queries },
+          },
+          {
+            call_id: 'call_1725402',
+            signature: 'sig_result',
+            type: 'google_search_result',
+            result,
+            is_error: false,
+          },
+        ],
+      });
+      const [searchCall, searchResult] = final.message?.content ?? [];
+      assert.deepStrictEqual(searchCall, {
+        custom: {
+          googleSearchCall: {
+            id: 'call_1725402',
+            arguments: { queries },
+            searchType: 'web_search',
+          },
+        },
+        metadata: { thoughtSignature: 'sig_call' },
+      });
+      // Nothing at the deltas; each step's part (as in the final response)
+      // when it stops.
+      assert.deepStrictEqual(chunks.slice(0, 6), [
+        [],
+        [],
+        [searchCall],
+        [],
+        [],
+        [searchResult],
+      ]);
+      // Text still streams as it arrives.
+      assert.deepStrictEqual(chunks[10], [{ text: 'The 2026 Nobel Prize ' }]);
+      assert.deepStrictEqual(chunks[11], [{ text: 'in Physics...' }]);
+      assert.deepStrictEqual(chunks[12], []);
+      assert.deepStrictEqual(chunks[13], []);
+    });
+
+    it('streams other built-in tool steps when they stop', () => {
+      const chunks = chunksFor([
+        start(0, { id: 'call_1', type: 'url_context_call', signature: '' }),
+        delta(0, {
+          type: 'url_context_call',
+          signature: 'sig_url',
+          arguments: { urls: ['https://example.com'] },
+        }),
+        stop(0),
+        start(1, { id: 'proc_1', type: 'processing_call', signature: '' }),
+        delta(1, { type: 'processing_call', signature: 'sig_proc' }),
+        stop(1),
+      ]);
+      assert.deepStrictEqual(chunks, [
+        [],
+        [],
+        [
+          {
+            custom: {
+              urlContextCall: {
+                id: 'call_1',
+                arguments: { urls: ['https://example.com'] },
+              },
+            },
+            metadata: { thoughtSignature: 'sig_url' },
+          },
+        ],
+        [],
+        [],
+        [
+          {
+            custom: { processingCall: { id: 'proc_1' } },
+            metadata: { thoughtSignature: 'sig_proc' },
+          },
+        ],
+      ]);
+    });
+
+    it('does not change the events it reads', () => {
+      // The final response is assembled from the same event objects.
+      const startEvent = start(0, { id: 'c1', type: 'google_search_call' });
+      chunksFor([
+        startEvent,
+        delta(0, { type: 'google_search_call', arguments: { queries: ['q'] } }),
+        stop(0),
+      ]);
+      assert.deepStrictEqual(startEvent, {
+        event_type: 'step.start',
+        index: 0,
+        step: { id: 'c1', type: 'google_search_call' },
+      });
     });
   });
 

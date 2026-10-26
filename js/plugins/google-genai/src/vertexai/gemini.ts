@@ -50,7 +50,7 @@ import {
 } from '../common/converters.js';
 import {
   applyLatLngToGoogleMapsTools,
-  fromInteractionDelta,
+  createInteractionChunkConverter,
   fromInteractionSync,
   mergeStreamedAudio,
   selectInteractionInput,
@@ -67,6 +67,7 @@ import {
 import {
   CreateInteractionRequest,
   InteractionTool,
+  Step,
 } from '../common/interaction-types.js';
 import { isObject } from '../common/types.js';
 import {
@@ -1067,6 +1068,57 @@ function toVertexAISearchDatastore(
 }
 
 /**
+ * Server-side tool step types that are intentionally NOT sent back in a
+ * stateless history (`input`) on this platform.
+ *
+ * Resending them makes the platform return 501 "Operation is not
+ * implemented, or supported, or enabled" (seen live, Oct 2026, whatever the
+ * step order, arguments or signature), while the Gemini API (googleAI)
+ * accepts the same history. `store: true` conversations work, because the
+ * steps stay on the server. Without them the model loses the earlier tool
+ * results (it may call the tool again). Only step types seen working are
+ * resent; code execution steps are accepted and are not listed here.
+ * Remove an entry once the platform accepts it.
+ */
+const UNSUPPORTED_RESENT_STEP_TYPES: ReadonlySet<string> = new Set([
+  // Rejected with 501 (seen live).
+  'google_search_call',
+  'google_search_result',
+  'url_context_call',
+  'url_context_result',
+  'google_maps_call',
+  'google_maps_result',
+  // Not seen working here (untestable or not available for models).
+  'file_search_call',
+  'file_search_result',
+  'mcp_server_tool_call',
+  'mcp_server_tool_result',
+]);
+
+/** Whether the dropped-steps warning has been logged (once per process). */
+let warnedDroppedResentSteps = false;
+
+/**
+ * Removes the steps listed in `UNSUPPORTED_RESENT_STEP_TYPES`, warning once
+ * when any were removed.
+ */
+function withoutUnsupportedResentSteps(steps: Step[]): Step[] {
+  const kept = steps.filter(
+    (step) => !UNSUPPORTED_RESENT_STEP_TYPES.has(step.type)
+  );
+  if (kept.length < steps.length && !warnedDroppedResentSteps) {
+    warnedDroppedResentSteps = true;
+    logger.warn(
+      'Earlier server-side tool results (e.g. Google Search, URL context, ' +
+        'Google Maps) are not sent back in this conversation history, ' +
+        'because the server rejects them. The model may call those tools ' +
+        'again. Set store: true to keep the full tool history on the server.'
+    );
+  }
+  return kept;
+}
+
+/**
  * Converts the request's tools and tool config fields to Interactions tools.
  */
 function toVertexInteractionTools(
@@ -1220,7 +1272,7 @@ async function generateWithInteractions(params: {
     tools: tools.length ? tools : undefined,
     generation_config: generationConfig,
     stream: params.streamingRequested,
-    input: toInteractionSteps(messages),
+    input: withoutUnsupportedResentSteps(toInteractionSteps(messages)),
     store,
     safety_settings: toInteractionSafetySettings(safetySettings),
     labels: toGeminiLabels(labels),
@@ -1261,12 +1313,11 @@ async function generateWithInteractions(params: {
     req,
     params.requestClientOptions
   );
+  const toChunkParts = createInteractionChunkConverter();
   for await (const event of result.stream) {
-    if (event.event_type === 'step.delta') {
-      const content = fromInteractionDelta(event.delta);
-      if (content.length > 0) {
-        params.sendChunk({ index: 0, content });
-      }
+    const content = toChunkParts(event);
+    if (content.length > 0) {
+      params.sendChunk({ index: 0, content });
     }
   }
   return fromInteractionSync(await result.response);
@@ -1583,4 +1634,7 @@ export const TEST_ONLY = {
   HIDDEN_MODELS,
   ALL_MODELS,
   KNOWN_MODELS,
+  resetDroppedResentStepsWarning: () => {
+    warnedDroppedResentSteps = false;
+  },
 };
