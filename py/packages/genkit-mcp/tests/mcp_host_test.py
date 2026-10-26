@@ -185,9 +185,10 @@ async def test_two_servers_whose_tool_names_collide_cannot_be_listed(tmp_path: P
     try:
         assert host.tool_name('alpha_beta', 'echo') == host.tool_name('alpha', 'beta_echo')
         with pytest.raises(
-            ValueError, match="servers 'alpha_beta' and 'alpha' together: both serve a tool named 'alpha_beta_echo'"
-        ):
+            GenkitError, match="servers 'alpha_beta' and 'alpha' together: both serve a tool named 'alpha_beta_echo'"
+        ) as refused:
             await host.get_active_tools()
+        assert refused.value.status == 'INVALID_ARGUMENT'
     finally:
         await host.close()
 
@@ -920,8 +921,9 @@ async def test_tools_of_one_server_sharing_a_genkit_name_fail_the_listing(tmp_pa
     )
     try:
         with pytest.raises(
-            ValueError, match=r"MCP tools 'look\.up' and 'look/up' both map to the Genkit tool name 'beta_look_up'"
-        ):
+            GenkitError, match=r"MCP tools 'look\.up' and 'look/up' both map to the Genkit tool name 'beta_look_up'"
+        ) as refused:
             await host.get_active_tools()
+        assert refused.value.status == 'INVALID_ARGUMENT'
     finally:
         await host.close()

@@ -28,7 +28,7 @@ from genkit.plugin_api import Action
 from genkit_mcp._client import McpClient
 from genkit_mcp._config import McpServerEntry, McpStdioServerConfig
 from genkit_mcp._connection import DEFAULT_REQUEST_TIMEOUT_MILLIS, validate_request_timeout
-from genkit_mcp._errors import _ConnectionClosedError, _ConnectionFailedError, _RequestTimeoutError
+from genkit_mcp._errors import _ClientError, _ConnectionClosedError, _ConnectionFailedError, _RequestTimeoutError
 from genkit_mcp._tools import validate_provider_name, validate_tool_prefix
 
 logger = structlog.get_logger(__name__)
@@ -160,13 +160,14 @@ class McpHost:
 
         Raises:
             ValueError: If ``server_name`` cannot appear in a model-facing tool
-                name, if ``entry`` is not a stdio server entry, or if two of
-                the server's tools share a Genkit tool name.
+                name, or if ``entry`` is not a stdio server entry.
             GenkitError: ``FAILED_PRECONDITION`` if this host is closed, also
                 while the server was being listed, ``UNAVAILABLE`` if the
                 server cannot be started, ``DEADLINE_EXCEEDED`` if it does not
-                answer in time, ``INTERNAL`` if it breaks the protocol, or the
-                status for the JSON-RPC error code it answers the listing with.
+                answer in time, ``INVALID_ARGUMENT`` if two of the server's
+                tools share a Genkit tool name, ``INTERNAL`` if it breaks the
+                protocol, or the status for the JSON-RPC error code it answers
+                the listing with.
         """
         self._refuse_when_closed()
         try:
@@ -223,8 +224,10 @@ class McpHost:
             GenkitError: ``FAILED_PRECONDITION`` if this host is closed,
                 ``UNAVAILABLE`` if the server cannot be started,
                 ``DEADLINE_EXCEEDED`` if it does not answer in time,
-                ``INTERNAL`` if it breaks the protocol, or the status for the
-                JSON-RPC error code it answers the listing with.
+                ``INVALID_ARGUMENT`` if two of the server's tools share a
+                Genkit tool name, ``INTERNAL`` if it breaks the protocol, or
+                the status for the JSON-RPC error code it answers the listing
+                with.
         """
         self._refuse_when_closed()
         client = self._client(server_name)
@@ -253,13 +256,12 @@ class McpHost:
 
         Raises:
             GenkitError: ``FAILED_PRECONDITION`` if this host is closed, even
-                while it was listing, ``INTERNAL`` if a server breaks the
-                protocol, or the status for the JSON-RPC error code a server
-                answers the listing with.
-            ValueError: If two tools share a name, within one server or across
-                two. Distinct server names do not rule this out, because the
-                name and the tool name are joined by the underscore either of
-                them may hold.
+                while it was listing, ``INVALID_ARGUMENT`` if two tools share a
+                name, within one server or across two, ``INTERNAL`` if a server
+                breaks the protocol, or the status for the JSON-RPC error code
+                a server answers the listing with. Distinct server names do not
+                rule out a shared tool name, because the name and the tool name
+                are joined by the underscore either of them may hold.
         """
         return await self._list(McpClient.get_active_tools)
 
@@ -294,10 +296,11 @@ class McpHost:
             for tool in listing:
                 other = served_by.setdefault(tool.name, server_name)
                 if other != server_name:
-                    raise ValueError(
+                    raise _ClientError(
                         f'MCP host {self._name!r} cannot serve servers {other!r} and {server_name!r} '
                         f'together: both serve a tool named {tool.name!r}. Rename one of them so '
-                        'their tool names stay apart.'
+                        'their tool names stay apart.',
+                        status='INVALID_ARGUMENT',
                     )
             tools.extend(listing)
         return tools
