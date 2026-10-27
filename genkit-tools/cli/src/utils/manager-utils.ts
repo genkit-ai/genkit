@@ -290,24 +290,38 @@ export async function startDevProcessManager(
 export async function waitForRuntime(
   manager: BaseRuntimeManager,
   processPromise: Promise<void>,
-  timeoutMs: number = 30000
+  timeoutMs: number = 30000,
+  existingRuntimeIds?: ReadonlySet<string>
 ): Promise<void> {
   let unsubscribe: (() => void) | undefined;
   let timeoutId: NodeJS.Timeout | undefined;
 
-  if (manager.listRuntimes().length > 0) {
+  const hasNewRuntime = () =>
+    manager
+      .listRuntimes()
+      .some(
+        (rt) =>
+          !existingRuntimeIds ||
+          (rt?.id !== undefined && !existingRuntimeIds.has(rt.id))
+      );
+
+  if (hasNewRuntime()) {
     return;
   }
 
   try {
     const runtimeAddedPromise = new Promise<void>((resolve) => {
-      unsubscribe = manager.onRuntimeEvent((event) => {
-        // Just listen for a new runtime, not for a specific ID.
-        if (event === RuntimeEvent.ADD) {
+      unsubscribe = manager.onRuntimeEvent((event, rt) => {
+        // Listen for a new runtime (ignoring pre-restart IDs if provided).
+        if (
+          event === RuntimeEvent.ADD &&
+          (!existingRuntimeIds ||
+            (rt?.id !== undefined && !existingRuntimeIds.has(rt.id)))
+        ) {
           resolve();
         }
       });
-      if (manager.listRuntimes().length > 0) {
+      if (hasNewRuntime()) {
         resolve();
       }
     });

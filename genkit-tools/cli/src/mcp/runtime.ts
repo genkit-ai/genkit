@@ -18,6 +18,7 @@ import { GenkitToolsError } from '@genkit-ai/tools-common/manager';
 import { record } from '@genkit-ai/tools-common/utils';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp';
 import { z } from 'zod';
+import { waitForRuntime } from '../utils/manager-utils';
 import { McpRunToolEvent } from './analytics';
 import { McpToolOptions, getCommonSchema, resolveProjectRoot } from './utils';
 
@@ -123,7 +124,24 @@ export function defineRuntimeTools(server: McpServer, options: McpToolOptions) {
         }
 
         try {
-          await runtimeManager.processManager[action]();
+          if (action === 'restart') {
+            const existingRuntimeIds = new Set(
+              runtimeManager.listRuntimes().map((r) => r.id)
+            );
+            await runtimeManager.processManager.restart();
+            const processPromise =
+              runtimeManager.processManager.waitForProcess?.();
+            if (options.timeout !== 0 && processPromise) {
+              await waitForRuntime(
+                runtimeManager,
+                processPromise,
+                options.timeout,
+                existingRuntimeIds
+              );
+            }
+          } else {
+            await runtimeManager.processManager.kill();
+          }
         } catch (err) {
           return {
             isError: true,

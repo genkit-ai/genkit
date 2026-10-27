@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { RuntimeEvent } from '@genkit-ai/tools-common/manager';
 import {
   afterEach,
   beforeEach,
@@ -75,6 +76,63 @@ describe('MCP runtime tools', () => {
       command: 'npm',
       args: ['run', 'dev'],
     });
+
+    expect(res).toEqual({
+      isError: true,
+      content: [
+        {
+          type: 'text',
+          text: 'Error: app process exited with code 1',
+        },
+      ],
+    });
+  });
+
+  it('restart_runtime restarts the process and waits for the new runtime to register', async () => {
+    let runtimeEventListener:
+      | ((event: RuntimeEvent, rt: any) => void)
+      | undefined;
+    const processPromise = new Promise<void>(() => {});
+    const mockRuntimeManager = {
+      listRuntimes: jest.fn().mockReturnValue([{ id: 'old-runtime' }]),
+      onRuntimeEvent: jest.fn((cb: any) => {
+        runtimeEventListener = cb;
+        return jest.fn();
+      }),
+      processManager: {
+        restart: jest.fn(async () => {
+          setTimeout(() => {
+            runtimeEventListener?.(RuntimeEvent.ADD, { id: 'new-runtime' });
+          }, 10);
+        }),
+        waitForProcess: jest.fn(() => processPromise),
+      },
+    };
+    mockMcpManager.getManager.mockResolvedValue(mockRuntimeManager);
+
+    const res = await registeredTools['restart_runtime']({});
+
+    expect(mockRuntimeManager.processManager.restart).toHaveBeenCalledTimes(1);
+    expect(mockRuntimeManager.onRuntimeEvent).toHaveBeenCalledTimes(1);
+    expect(res).toEqual({
+      content: [{ type: 'text', text: 'Done.' }],
+    });
+  });
+
+  it('restart_runtime returns an error if the restarted process exits before registering', async () => {
+    const mockRuntimeManager = {
+      listRuntimes: jest.fn().mockReturnValue([{ id: 'old-runtime' }]),
+      onRuntimeEvent: jest.fn(() => jest.fn()),
+      processManager: {
+        restart: jest.fn(async () => {}),
+        waitForProcess: jest.fn(() =>
+          Promise.reject(new Error('app process exited with code 1'))
+        ),
+      },
+    };
+    mockMcpManager.getManager.mockResolvedValue(mockRuntimeManager);
+
+    const res = await registeredTools['restart_runtime']({});
 
     expect(res).toEqual({
       isError: true,
