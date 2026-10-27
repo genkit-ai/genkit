@@ -202,8 +202,10 @@ def mcp_tool_to_action(
 
     The returned action carries its own name under the ``name`` metadata key,
     which is what a dynamic action provider matches a wildcard selector against,
-    the server's own tool name under ``metadata['mcp']['tool']``, and the
-    server's output schema, if any, as the one the model is sent.
+    the server's own tool name under ``metadata['mcp']['tool']``, its display
+    title and behaviour hints under ``metadata['mcp']['title']`` and
+    ``metadata['mcp']['annotations']``, and the server's output schema, if
+    any, as the one the model is sent. A hint the server left out stays out.
 
     Args:
         tool: Tool as listed by the server.
@@ -248,7 +250,13 @@ def mcp_tool_to_action(
     ).action()
     action.metadata['name'] = action.name
     action.metadata[ORIGINAL_OUTPUT_SCHEMA_KEY] = tool.outputSchema
-    action.metadata['mcp'] = {'prefix': prefix, 'tool': tool.name, '_meta': mcp_meta}
+    action.metadata['mcp'] = {
+        'prefix': prefix,
+        'tool': tool.name,
+        'title': tool.title,
+        'annotations': tool.annotations.model_dump(exclude_none=True) if tool.annotations is not None else None,
+        '_meta': mcp_meta,
+    }
     return action
 
 

@@ -39,6 +39,7 @@ from mcp.types import (
     TextContent,
     TextResourceContents,
     Tool,
+    ToolAnnotations,
 )
 from pydantic import AnyUrl
 from structlog.testing import capture_logs
@@ -215,7 +216,13 @@ async def test_mcp_tool_to_action_preserves_schema_metadata_and_context_meta() -
     assert action.name == 'catalog_lookup'
     assert action.input_schema == awkward_schema
     assert action.metadata['name'] == 'catalog_lookup'
-    assert action.metadata['mcp'] == {'prefix': 'catalog', 'tool': 'lookup', '_meta': {'audience': 'internal'}}
+    assert action.metadata['mcp'] == {
+        'prefix': 'catalog',
+        'tool': 'lookup',
+        'title': None,
+        'annotations': None,
+        '_meta': {'audience': 'internal'},
+    }
     assert calls == [('lookup', {'q': 'coffee'}, {'progressToken': 7})]
     assert response.output == 'ok'
 
@@ -358,6 +365,33 @@ def test_mcp_tool_to_action_warns_about_a_name_longer_than_a_model_accepts() -> 
     assert action.name == f'catalog_{tool_name}'
     assert [entry['log_level'] for entry in logs] == ['warning']
     assert logs[0]['tool'] == f'catalog_{tool_name}'
+
+
+def test_mcp_tool_to_action_keeps_the_server_title_and_annotations() -> None:
+    """Hints the server sent are kept as given, including ones the SDK has no field for."""
+    tool = Tool(
+        name='delete_record',
+        title='Delete record',
+        inputSchema={'type': 'object'},
+        annotations=ToolAnnotations.model_validate({
+            'title': 'Delete a record',
+            'destructiveHint': True,
+            'openWorldHint': False,
+            'costHint': 'high',
+        }),
+    )
+
+    action = mcp_tool_to_action(tool, 'catalog', no_content)
+
+    mcp = action.metadata['mcp']
+    assert isinstance(mcp, dict)
+    assert mcp['title'] == 'Delete record'
+    assert mcp['annotations'] == {
+        'title': 'Delete a record',
+        'destructiveHint': True,
+        'openWorldHint': False,
+        'costHint': 'high',
+    }
 
 
 @pytest.mark.parametrize('output_schema', [{'type': 'object', 'properties': {'hits': {'type': 'integer'}}}, None])

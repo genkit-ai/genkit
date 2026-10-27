@@ -832,6 +832,25 @@ async def test_an_unregistered_client_lists_and_runs_its_tools(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
+async def test_a_tool_keeps_the_title_and_annotations_the_server_listed(tmp_path: Path) -> None:
+    """A selected tool and a listed handle both carry the server's title and hints."""
+    ai = Genkit()
+    client = define_mcp_client(ai, 'fake', **server(tmp_path))
+    try:
+        selected = await ai.lookup_tool('fake:tool/fake_echo')
+        listed = (await client.get_active_tools())[0]
+    finally:
+        await client.close()
+
+    assert selected is not None
+    for tool in (selected, listed):
+        mcp = tool.action().metadata['mcp']
+        assert isinstance(mcp, dict)
+        assert mcp['title'] == 'Echo'
+        assert mcp['annotations'] == {'readOnlyHint': True, 'costHint': 'free'}
+
+
+@pytest.mark.asyncio
 async def test_an_unregistered_client_restarts_and_closes_without_a_provider(tmp_path: Path) -> None:
     """Restart and close do not need a provider, and close is still final."""
     client = McpClient('fake', **server(tmp_path))
