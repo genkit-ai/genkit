@@ -357,7 +357,7 @@ async def test_close_reaps_what_a_wrapped_server_spawned(tmp_path: Path) -> None
 async def test_close_kills_a_server_whose_shutdown_overruns_the_grace(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(_connection, 'CLOSE_GRACE_SECONDS', 0.1)
+    monkeypatch.setattr(_connection, '_CLOSE_GRACE_SECONDS', 0.1)
     pid_file = tmp_path / 'stalled.pid'
     connection = McpConnection('fake', config(tmp_path, pid_file=pid_file, MCP_FAKE_STALL='1'))
     waiter = asyncio.create_task(connection.list_tools())
@@ -789,7 +789,7 @@ async def test_a_malformed_reply_is_a_protocol_error_without_the_server_env(
 
 @pytest.mark.asyncio
 async def test_list_tools_rejects_endlessly_advancing_cursors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(_connection, 'MAX_TOOL_PAGES', 3)
+    monkeypatch.setattr(_connection, '_MAX_TOOL_PAGES', 3)
     connection = McpConnection('fake', config(tmp_path, MCP_FAKE_ENDLESS_CURSOR='1'))
     try:
         with pytest.raises(_ProtocolError, match="MCP server 'fake' .* served over 3 tools/list pages"):
@@ -899,7 +899,7 @@ async def test_an_ambiguous_code_is_decided_by_the_probe(outcome: Exception | No
 
 @pytest.mark.asyncio
 async def test_a_probe_that_times_out_reads_the_server_as_alive(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(_connection, 'LIVENESS_PROBE_SECONDS', 0.01)
+    monkeypatch.setattr(_connection, '_LIVENESS_PROBE_SECONDS', 0.01)
     session = _ProbeSession(delay=LIMIT)
     assert await _connection._transport_is_dead(cast(ClientSession, session), closed_mcp_error()) is False
 

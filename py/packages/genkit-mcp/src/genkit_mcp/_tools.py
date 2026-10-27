@@ -43,15 +43,15 @@ McpToolCall = Callable[[str, dict[str, Any], dict[str, Any] | None], Awaitable[C
 
 logger = get_logger(__name__)
 
-MAX_TOOL_NAME_LENGTH = 64
+_MAX_TOOL_NAME_LENGTH = 64
 """Longest function declaration name both Gemini and OpenAI accept."""
 
-TOOL_NAME_PATTERN = re.compile(r'[A-Za-z_][A-Za-z0-9_-]*')
+_TOOL_NAME_PATTERN = re.compile(r'[A-Za-z_][A-Za-z0-9_-]*')
 """What both Gemini and OpenAI accept in a function declaration name."""
 
 _TOOL_NAME_REJECTED_CHARS = re.compile(r'[^A-Za-z0-9_-]')
 
-SELECTOR_SEPARATORS = (':', '/')
+_SELECTOR_SEPARATORS = (':', '/')
 """Characters a tool selector puts around a provider name, so a name cannot hold them."""
 
 
@@ -67,7 +67,7 @@ def validate_provider_name(name: str) -> None:
     Raises:
         ValueError: If ``<name>:tool/<tool>`` would not parse as a selector.
     """
-    if name and not any(separator in name for separator in SELECTOR_SEPARATORS):
+    if name and not any(separator in name for separator in _SELECTOR_SEPARATORS):
         return
     raise ValueError(
         f'{name!r} cannot name an MCP provider: its tools are selected as '
@@ -88,7 +88,7 @@ def validate_tool_prefix(prefix: str) -> None:
         ValueError: If a name built from this prefix would be rejected by the
             model providers.
     """
-    if TOOL_NAME_PATTERN.fullmatch(prefix):
+    if _TOOL_NAME_PATTERN.fullmatch(prefix):
         return
     raise ValueError(
         f'{prefix!r} cannot prefix an MCP tool name: a function declaration name must start with a '
@@ -114,7 +114,7 @@ def mcp_tool_name(prefix: str, tool_name: str) -> str:
         The namespaced name sent to the model.
     """
     name = _TOOL_NAME_REJECTED_CHARS.sub('_', f'{prefix}_{tool_name}')
-    if not TOOL_NAME_PATTERN.fullmatch(name):
+    if not _TOOL_NAME_PATTERN.fullmatch(name):
         name = f'_{name}'
     return name
 
@@ -218,7 +218,7 @@ def mcp_tool_to_action(
             tool=tool_name,
             server_tool=tool.name,
         )
-    if len(tool_name) > MAX_TOOL_NAME_LENGTH:
+    if len(tool_name) > _MAX_TOOL_NAME_LENGTH:
         logger.warning(
             'MCP tool name is longer than most model providers accept',
             tool=tool_name,

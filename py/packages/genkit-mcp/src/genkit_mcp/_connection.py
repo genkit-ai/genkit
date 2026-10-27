@@ -75,7 +75,7 @@ _OUTPUT_SCHEMA_VIOLATIONS = (
 
 _PACKAGE = 'genkit-mcp'
 
-MAX_TOOL_PAGES = 1000
+_MAX_TOOL_PAGES = 1000
 """Ceiling on ``tools/list`` pages followed before a server is called broken."""
 
 DEFAULT_REQUEST_TIMEOUT_MILLIS = 60_000
@@ -93,7 +93,7 @@ _SERVER_ERROR_STATUS: dict[int, StatusName] = {
 }
 """Status for each JSON-RPC error code a server may answer with. Any other code is ``UNKNOWN``."""
 
-LIVENESS_PROBE_SECONDS = 5.0
+_LIVENESS_PROBE_SECONDS = 5.0
 """Bound on the ping that tells a dead transport from a server error reply.
 
 A ping which does not return inside this window is read as a slow server, not a
@@ -101,7 +101,7 @@ dead one: the opposite reading tears down a healthy connection over one slow
 reply.
 """
 
-CLOSE_GRACE_SECONDS = 6.0
+_CLOSE_GRACE_SECONDS = 6.0
 """How long ``close`` lets the SDK's stdio shutdown run before it kills the server outright.
 
 The SDK waits two seconds for the server to exit on stdin EOF, then two more
@@ -117,7 +117,7 @@ def _client_info() -> Implementation:
         return Implementation(name=_PACKAGE, version='0.0.0')
 
 
-CLIENT_INFO = _client_info()
+_CLIENT_INFO = _client_info()
 """What servers see in the ``clientInfo`` of every initialize request."""
 
 _serving: contextvars.ContextVar['McpConnection | None'] = contextvars.ContextVar('genkit_mcp_serving', default=None)
@@ -160,7 +160,7 @@ async def _transport_is_dead(session: ClientSession, error: Exception) -> bool:
     if not isinstance(error, McpError) or error.error.code != CONNECTION_CLOSED:
         return False
     try:
-        await asyncio.wait_for(session.send_ping(), timeout=LIVENESS_PROBE_SECONDS)
+        await asyncio.wait_for(session.send_ping(), timeout=_LIVENESS_PROBE_SECONDS)
     except McpError as probe:
         return probe.error.code == CONNECTION_CLOSED
     except asyncio.TimeoutError:
@@ -335,7 +335,7 @@ class McpConnection:
             tools: list[McpTool] = []
             cursor: str | None = None
             seen: set[str] = set()
-            for _ in range(MAX_TOOL_PAGES):
+            for _ in range(_MAX_TOOL_PAGES):
                 result = await session.list_tools(
                     params=PaginatedRequestParams(cursor=cursor) if cursor is not None else None
                 )
@@ -346,7 +346,7 @@ class McpConnection:
                 if cursor in seen:
                     raise _ProtocolError(f'MCP server {self._target} repeated the tools/list cursor {cursor!r}')
                 seen.add(cursor)
-            raise _ProtocolError(f'MCP server {self._target} served over {MAX_TOOL_PAGES} tools/list pages')
+            raise _ProtocolError(f'MCP server {self._target} served over {_MAX_TOOL_PAGES} tools/list pages')
 
         return await self._request(list_all)
 
@@ -385,7 +385,7 @@ class McpConnection:
         Safe to call when never connected, and safe to call twice. A closed
         connection serves nothing more. In-flight and queued callers are
         released at once; the return waits until the server has exited, which
-        takes up to ``CLOSE_GRACE_SECONDS`` for a server that ignores stdin EOF.
+        takes up to ``_CLOSE_GRACE_SECONDS`` for a server that ignores stdin EOF.
 
         Raises:
             GenkitError: ``FAILED_PRECONDITION`` if called from inside one of
@@ -419,7 +419,7 @@ class McpConnection:
             self._stop.cancel()
         if self._shutdown is not None:
             # Not ``task.cancel()``: that ignores anyio shields, so it can abort the SDK reaping the child.
-            self._deadline = asyncio.get_running_loop().call_later(CLOSE_GRACE_SECONDS, self._shutdown.cancel)
+            self._deadline = asyncio.get_running_loop().call_later(_CLOSE_GRACE_SECONDS, self._shutdown.cancel)
         task.add_done_callback(self._owner_done)
 
     def _owner_done(self, _task: asyncio.Task[None]) -> None:
@@ -462,7 +462,7 @@ class McpConnection:
 
         Args:
             shutdown: Cancelled only when the SDK's stdio shutdown overruns
-                ``CLOSE_GRACE_SECONDS``.
+                ``_CLOSE_GRACE_SECONDS``.
             stop: Cancelled by ``close`` to end the session's work.
         """
         try:
@@ -481,7 +481,7 @@ class McpConnection:
                         read_stream,
                         write_stream,
                         read_timeout_seconds=self._request_timeout,
-                        client_info=CLIENT_INFO,
+                        client_info=_CLIENT_INFO,
                     ) as session:
                         # The SDK's stdio shutdown is not shielded, so no scope around it may be cancelled.
                         with stop:
