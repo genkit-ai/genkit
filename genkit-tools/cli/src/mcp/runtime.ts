@@ -18,12 +18,18 @@ import { GenkitToolsError } from '@genkit-ai/tools-common/manager';
 import { record } from '@genkit-ai/tools-common/utils';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp';
 import { z } from 'zod';
-import { McpRunToolEvent } from './analytics.js';
-import {
-  McpToolOptions,
-  getCommonSchema,
-  resolveProjectRoot,
-} from './utils.js';
+import { McpRunToolEvent } from './analytics';
+import { McpToolOptions, getCommonSchema, resolveProjectRoot } from './utils';
+
+function formatRuntimeError(err: unknown): string {
+  if (err instanceof GenkitToolsError) {
+    return err.formatError();
+  }
+  if (err instanceof Error) {
+    return err.message;
+  }
+  return typeof err === 'string' ? err : (JSON.stringify(err) ?? String(err));
+}
 
 export function defineRuntimeTools(server: McpServer, options: McpToolOptions) {
   server.registerTool(
@@ -63,16 +69,12 @@ export function defineRuntimeTools(server: McpServer, options: McpToolOptions) {
           timeout: options.timeout,
         });
       } catch (err) {
-        const errStr =
-          err instanceof GenkitToolsError
-            ? err.formatError()
-            : JSON.stringify(err);
         return {
           isError: true,
           content: [
             {
               type: 'text',
-              text: `Error: ${errStr}`,
+              text: `Error: ${formatRuntimeError(err)}`,
             },
           ],
         };
@@ -120,7 +122,19 @@ export function defineRuntimeTools(server: McpServer, options: McpToolOptions) {
           };
         }
 
-        await runtimeManager.processManager[action]();
+        try {
+          await runtimeManager.processManager[action]();
+        } catch (err) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: 'text',
+                text: `Error: ${formatRuntimeError(err)}`,
+              },
+            ],
+          };
+        }
         return {
           content: [{ type: 'text', text: `Done.` }],
         };
