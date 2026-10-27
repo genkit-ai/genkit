@@ -15,113 +15,67 @@
  */
 
 import { describe, expect, it } from '@jest/globals';
-import {
-  Doc,
-  normalizeDoc,
-  resolveDocField,
-  searchDocs,
-} from '../../src/utils/docs';
+import { Doc, searchDocs } from '../../src/utils/docs';
 
 describe('docs utils', () => {
-  describe('resolveDocField', () => {
-    it('returns plain strings directly', () => {
-      expect(resolveDocField('Plain description', 'js')).toBe(
-        'Plain description'
-      );
-    });
-
-    it('resolves language-specific entry from a localized object map', () => {
-      const localized = {
-        default: 'Build an Angular app powered by Genkit.',
-        js: 'Add Genkit to an Angular app with SSR server routes.',
-        go: 'Connect an Angular UI to your Genkit Go backend.',
-      };
-      expect(resolveDocField(localized, 'js')).toBe(
-        'Add Genkit to an Angular app with SSR server routes.'
-      );
-      expect(resolveDocField(localized, 'go')).toBe(
-        'Connect an Angular UI to your Genkit Go backend.'
-      );
-    });
-
-    it('falls back to default or first string when language key is missing', () => {
-      expect(
-        resolveDocField(
-          { default: 'Default summary', js: 'JS summary' },
-          'rust'
-        )
-      ).toBe('Default summary');
-      expect(resolveDocField({ py: 'Python summary' }, 'rust')).toBe(
-        'Python summary'
-      );
-      expect(resolveDocField(undefined, 'js')).toBe('');
-      expect(resolveDocField(null, 'js')).toBe('');
-    });
-  });
-
-  describe('normalizeDoc & searchDocs', () => {
+  describe('searchDocs', () => {
     const sampleDocs: Record<string, Doc> = {
       'js/app-frameworks/angular.md': {
         title: 'Angular',
-        description: {
-          default: 'Build an Angular app powered by Genkit.',
-          js: 'Add Genkit to an Angular app with SSR server routes.',
-          go: 'Connect an Angular UI to your Genkit Go backend.',
-        } as unknown as string,
+        description: 'Add Genkit to an Angular app with SSR server routes.',
         text: '# Angular guide',
         lang: 'js',
         headers: 'Setup\nServer Routes',
       },
       'go/app-frameworks/angular.md': {
         title: 'Angular',
-        description: {
-          default: 'Build an Angular app powered by Genkit.',
-          js: 'Add Genkit to an Angular app with SSR server routes.',
-          go: 'Connect an Angular UI to your Genkit Go backend.',
-        } as unknown as string,
+        description: 'Connect an Angular UI to your Genkit Go backend.',
         text: '# Go Angular guide',
         lang: 'go',
         headers: 'Setup\nGo Backend',
       },
       'js/flows.md': {
         title: 'Defining Flows',
-        description: 'Learn how to define and run Genkit flows.',
+        description: 'Learn how to define and run Genkit workflow functions.',
         text: '# Flows',
         lang: 'js',
-        headers: 'Basic Flows\nStreaming',
+        headers: 'Basic Flows\nStreaming\nSSR',
+      },
+      'js/minimal.md': {
+        title: 'Minimal Doc',
+        text: '# Minimal',
+        lang: 'js',
+        headers: '',
       },
     };
 
-    it('normalizes language-keyed description objects into strings', () => {
-      const normalized = normalizeDoc(
-        sampleDocs['js/app-frameworks/angular.md'],
-        'js'
-      );
-      expect(normalized.description).toBe(
-        'Add Genkit to an Angular app with SSR server routes.'
-      );
-    });
-
-    it('searches across normalized docs with object descriptions without throwing', () => {
-      const normalizedDocs = Object.fromEntries(
-        Object.entries(sampleDocs).map(([file, doc]) => [
-          file,
-          normalizeDoc(doc, file.split('/')[0]),
-        ])
-      );
-      const jsResults = searchDocs(normalizedDocs, 'SSR', 'js');
+    it('filters search results to the requested language', () => {
+      const jsResults = searchDocs(sampleDocs, 'angular', 'js');
       expect(jsResults).toHaveLength(1);
       expect(jsResults[0].file).toBe('js/app-frameworks/angular.md');
-      expect(jsResults[0].doc.description).toBe(
-        'Add Genkit to an Angular app with SSR server routes.'
-      );
 
-      const goResults = searchDocs(normalizedDocs, 'backend', 'go');
+      const goResults = searchDocs(sampleDocs, 'angular', 'go');
       expect(goResults).toHaveLength(1);
       expect(goResults[0].file).toBe('go/app-frameworks/angular.md');
-      expect(goResults[0].doc.description).toBe(
-        'Connect an Angular UI to your Genkit Go backend.'
-      );
+    });
+
+    it('ranks title and description matches higher than header-only matches', () => {
+      const results = searchDocs(sampleDocs, 'SSR', 'js');
+      expect(results.map((r) => r.file)).toEqual([
+        'js/app-frameworks/angular.md',
+        'js/flows.md',
+      ]);
+      expect(results[0].score).toBeGreaterThan(results[1].score);
+    });
+
+    it('ignores stop words and two-character terms', () => {
+      expect(searchDocs(sampleDocs, 'and the for to js', 'js')).toEqual([]);
+    });
+
+    it('handles documents with missing optional description', () => {
+      const results = searchDocs(sampleDocs, 'minimal', 'js');
+      expect(results).toHaveLength(1);
+      expect(results[0].file).toBe('js/minimal.md');
     });
   });
 });
