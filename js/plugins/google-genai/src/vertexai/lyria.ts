@@ -27,12 +27,10 @@ import { model as pluginModel } from 'genkit/plugin';
 import {
   ensureToolIds,
   fromInteractionSync,
+  toInteractionResponseFormat,
   toInteractionSteps,
 } from '../common/interaction-converters.js';
-import {
-  CreateInteractionRequest,
-  ResponseModality,
-} from '../common/interaction-types.js';
+import { CreateInteractionRequest } from '../common/interaction-types.js';
 import { isKnownKey } from '../common/utils.js';
 import { createInteraction, lyriaPredict } from './client.js';
 import { fromLyriaResponse, toLyriaPredictRequest } from './converters.js';
@@ -87,7 +85,7 @@ export const Lyria3ConfigSchema = z
     responseModalities: z
       .array(z.enum(['TEXT', 'IMAGE', 'AUDIO']))
       .describe(
-        'The modalities to be used in response. Defaults to AUDIO and TEXT for Lyria.'
+        "The modalities to be used in response. When not set, the server's default (AUDIO and TEXT) is used."
       )
       .optional(),
   })
@@ -264,17 +262,16 @@ export function defineModel(
         const messages = [...request.messages];
         if (messages.length === 0) throw new Error('No messages provided');
 
-        let responseModalitiesConverted: ResponseModality[] = ['audio', 'text'];
-        if (request.config?.responseModalities) {
-          responseModalitiesConverted = request.config.responseModalities.map(
-            (m) => m.toLowerCase() as ResponseModality
-          );
-        }
-
         const req: CreateInteractionRequest = {
           model: extractVersion(ref),
           input: toInteractionSteps(ensureToolIds(messages)),
-          response_modalities: responseModalitiesConverted,
+          // Nothing by default: the server returns the lyrics, caption and
+          // audio. An audio entry without a `bit_rate` is rejected here
+          // with a 400 ("bit_rate must be positive", seen live Oct 2026),
+          // although the Gemini API accepts it.
+          response_format: toInteractionResponseFormat({
+            modalities: request.config?.responseModalities,
+          }),
         };
 
         // Lyria 3 is only on global: a defaulted location becomes global.

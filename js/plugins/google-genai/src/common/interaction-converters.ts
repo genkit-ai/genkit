@@ -47,7 +47,6 @@ import {
   InteractionTool,
   InteractionToolChoiceConfig,
   ModelGenerationConfig,
-  ResponseModality,
   SpeechAnnotation,
   SpeechConfig,
   Step,
@@ -515,12 +514,6 @@ export function toInteractionSafetySettings(
   return result.length ? result : undefined;
 }
 
-export function toInteractionResponseModalities(
-  modalities: string[]
-): ResponseModality[] {
-  return modalities.map((m) => m.toLowerCase());
-}
-
 /**
  * Converts a Genkit/generateContent-style `speechConfig` to the Interactions
  * API `speech_config`.
@@ -591,7 +584,9 @@ export function toInteractionSpeechConfig(
  *  - `contextCache` (not implemented by this plugin) is dropped;
  *  - `topK` is dropped: there's no `top_k` in the Interactions
  *    `generation_config` (Gemini Enterprise Agent Platform rejects it with a
- *    400; the Gemini API accepts and ignores it).
+ *    400; the Gemini API accepts and ignores it);
+ *  - `imageConfig`, `audioFormat` and `videoFormat` are left out: they're
+ *    sent as `response_format` entries (see toInteractionResponseFormat).
  * Everything else, including keys the user passes through that aren't in the
  * schema, is forwarded in snake_case.
  *
@@ -610,10 +605,11 @@ export function toInteractionGenerationConfig(
     context_cache,
     topK,
     top_k,
-    // Sent as `response_format` (see toInteractionAudioResponseFormat and
-    // toInteractionVideoResponseFormat).
+    // Sent as `response_format` entries (see toInteractionResponseFormat).
     audioFormat: _audioFormat,
     videoFormat: _videoFormat,
+    imageConfig: _imageConfig,
+    image_config: _image_config,
     ...rest
   } = config;
   const result = convertObjectKeysToSnakeCase(rest);
@@ -681,6 +677,77 @@ export function toInteractionVideoResponseFormat(
     return undefined;
   }
   return { type: 'video', ...toSnakeCaseObj(videoFormat) };
+}
+
+/** What `toInteractionResponseFormat` builds the `response_format` from. */
+export interface InteractionResponseFormatOptions {
+  /**
+   * The requested output types, e.g. `['TEXT', 'IMAGE']` (the config's
+   * `responseModalities`, or the model's default). One entry each.
+   */
+  modalities?: string[];
+  /** The `imageConfig` config (`{ aspectRatio, imageSize }`). */
+  imageConfig?: unknown;
+  /** The `audioFormat` config (`{ mimeType, sampleRate }`). */
+  audioFormat?: unknown;
+  /** The `videoFormat` config (`{ aspectRatio, resolution, ... }`). */
+  videoFormat?: unknown;
+  /** JSON output: the text entry gets `application/json` (and a schema). */
+  json?: { schema?: unknown };
+}
+
+/**
+ * Builds the Interactions `response_format`: one entry per output type
+ * (`text`, `image`, `audio`, `video`), each with its settings. This replaces
+ * the deprecated `response_modalities` and `generation_config.image_config`.
+ *
+ * - Each requested modality gets an entry.
+ * - `imageConfig`, `audioFormat` and `videoFormat` go on the image, audio and
+ *   video entries (adding the entry if needed).
+ * - JSON output goes on the text entry (adding it if needed).
+ *
+ * Returns a single entry when there's one, an array when there are more, and
+ * `undefined` when nothing is set (the server's defaults apply).
+ */
+export function toInteractionResponseFormat(
+  options: InteractionResponseFormatOptions
+): Record<string, unknown> | Record<string, unknown>[] | undefined {
+  const entries = new Map<string, Record<string, unknown>>();
+  const entry = (type: string) => {
+    let existing = entries.get(type);
+    if (!existing) {
+      existing = { type };
+      entries.set(type, existing);
+    }
+    return existing;
+  };
+
+  for (const modality of options.modalities ?? []) {
+    entry(modality.toLowerCase());
+  }
+  if (isObject(options.imageConfig)) {
+    Object.assign(entry('image'), toSnakeCaseObj(options.imageConfig));
+  }
+  const audio = toInteractionAudioResponseFormat(options.audioFormat);
+  if (audio) {
+    Object.assign(entry('audio'), audio);
+  }
+  const video = toInteractionVideoResponseFormat(options.videoFormat);
+  if (video) {
+    Object.assign(entry('video'), video);
+  }
+  if (options.json) {
+    Object.assign(entry('text'), {
+      mime_type: 'application/json',
+      ...(options.json.schema !== undefined
+        ? { schema: options.json.schema }
+        : {}),
+    });
+  }
+
+  const result = [...entries.values()];
+  if (result.length === 0) return undefined;
+  return result.length === 1 ? result[0] : result;
 }
 
 /**

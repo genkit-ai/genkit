@@ -57,12 +57,11 @@ import {
   toInteractionConfigTool,
   toInteractionGenerationConfig,
   toInteractionGoogleSearch,
-  toInteractionResponseModalities,
+  toInteractionResponseFormat,
   toInteractionSafetySettings,
   toInteractionSteps,
   toInteractionTool,
   toInteractionToolChoice,
-  toInteractionVideoResponseFormat,
 } from '../common/interaction-converters.js';
 import {
   CreateInteractionRequest,
@@ -1208,8 +1207,9 @@ async function generateWithInteractions(params: {
     store: storeFromConfig,
     previousInteractionId: previousInteractionIdFromConfig,
     responseModalities,
-    // Sent as `response_format` below.
+    // Sent as `response_format` entries below.
     videoFormat,
+    imageConfig,
     // TTS models don't use the Interactions API.
     audioFormat,
     ...generationFields
@@ -1281,27 +1281,31 @@ async function generateWithInteractions(params: {
     req.previous_interaction_id = previousInteractionId;
   }
 
+  // One `response_format` with an entry per output type (the deprecated
+  // `response_modalities` and `generation_config.image_config` aren't sent).
   const jsonMode =
     request.output?.format === 'json' || !!request.output?.schema;
-  if (jsonMode) {
-    req.response_format = { type: 'text', mime_type: 'application/json' };
-    if (request.output?.constrained) {
-      req.response_format.schema = pluginOptions?.legacyResponseSchema
-        ? cleanSchema(request.output.schema)
-        : request.output.schema;
-    }
-  }
-
-  const videoResponseFormat = toInteractionVideoResponseFormat(videoFormat);
-  if (videoResponseFormat) {
-    req.response_format = videoResponseFormat;
-  }
-
-  if (Array.isArray(responseModalities) && isStringArray(responseModalities)) {
-    req.response_modalities =
-      toInteractionResponseModalities(responseModalities);
-  } else if (isImageModelName(modelVersion)) {
-    req.response_modalities = ['text', 'image'];
+  const responseFormat = toInteractionResponseFormat({
+    modalities:
+      Array.isArray(responseModalities) && isStringArray(responseModalities)
+        ? responseModalities
+        : isImageModelName(modelVersion)
+          ? ['TEXT', 'IMAGE']
+          : undefined,
+    imageConfig,
+    videoFormat,
+    json: jsonMode
+      ? {
+          schema: request.output?.constrained
+            ? pluginOptions?.legacyResponseSchema
+              ? cleanSchema(request.output.schema)
+              : request.output.schema
+            : undefined,
+        }
+      : undefined,
+  });
+  if (responseFormat) {
+    req.response_format = responseFormat;
   }
 
   if (!params.streamingRequested) {

@@ -21,13 +21,11 @@ import {
   ensureToolIds,
   fromInteractionSync,
   toInteractionConfigTool,
+  toInteractionResponseFormat,
   toInteractionSteps,
   toInteractionTool,
 } from '../common/interaction-converters.js';
-import {
-  InteractionTool,
-  ResponseModality,
-} from '../common/interaction-types.js';
+import { InteractionTool } from '../common/interaction-types.js';
 import { isKnownKey } from '../common/utils.js';
 import { createInteraction } from './client.js';
 import {
@@ -294,20 +292,15 @@ export function defineModel(
         }
       }
 
-      let responseModalitiesConverted: ResponseModality[] | undefined;
-      if (responseModalities) {
-        responseModalitiesConverted = responseModalities.map(
-          (m) => m.toLowerCase() as ResponseModality
-        );
-      }
-
       const req: CreateInteractionRequest = {
         agent: extractVersion(ref),
         input: toInteractionSteps(ensureToolIds(newMessages)),
         previous_interaction_id: previousId,
         store: storeSetting,
         environment: environmentToUse,
-        response_modalities: responseModalitiesConverted,
+        response_format: toInteractionResponseFormat({
+          modalities: responseModalities,
+        }),
         ...(agentModel
           ? { agent_config: { type: 'antigravity', model: agentModel } }
           : {}),

@@ -33,6 +33,7 @@ import {
   toInteractionContent,
   toInteractionGenerationConfig,
   toInteractionGoogleSearch,
+  toInteractionResponseFormat,
   toInteractionRole,
   toInteractionSafetySettings,
   toInteractionSpeechConfig,
@@ -164,6 +165,95 @@ describe('Interaction Converters', () => {
     });
   });
 
+  describe('toInteractionResponseFormat', () => {
+    it('returns undefined when nothing is set (server defaults apply)', () => {
+      assert.strictEqual(toInteractionResponseFormat({}), undefined);
+    });
+
+    it('returns a single entry when there is one', () => {
+      assert.deepStrictEqual(
+        toInteractionResponseFormat({ modalities: ['AUDIO'] }),
+        { type: 'audio' }
+      );
+    });
+
+    it('makes one entry per modality, in order', () => {
+      assert.deepStrictEqual(
+        toInteractionResponseFormat({ modalities: ['TEXT', 'IMAGE'] }),
+        [{ type: 'text' }, { type: 'image' }]
+      );
+    });
+
+    it('puts imageConfig on the image entry', () => {
+      assert.deepStrictEqual(
+        toInteractionResponseFormat({
+          modalities: ['TEXT', 'IMAGE'],
+          imageConfig: { aspectRatio: '9:16', imageSize: '2K' },
+        }),
+        [
+          { type: 'text' },
+          { type: 'image', aspect_ratio: '9:16', image_size: '2K' },
+        ]
+      );
+    });
+
+    it('adds an image entry for imageConfig when no modalities are given', () => {
+      assert.deepStrictEqual(
+        toInteractionResponseFormat({ imageConfig: { aspectRatio: '1:1' } }),
+        { type: 'image', aspect_ratio: '1:1' }
+      );
+    });
+
+    it('puts audioFormat and videoFormat on their entries', () => {
+      assert.deepStrictEqual(
+        toInteractionResponseFormat({
+          modalities: ['AUDIO'],
+          audioFormat: { mimeType: 'audio/l16', sampleRate: 24000 },
+        }),
+        { type: 'audio', mime_type: 'audio/l16', sample_rate: 24000 }
+      );
+      assert.deepStrictEqual(
+        toInteractionResponseFormat({
+          videoFormat: { aspectRatio: '9:16', resolution: '1080p' },
+        }),
+        { type: 'video', aspect_ratio: '9:16', resolution: '1080p' }
+      );
+    });
+
+    it('puts JSON output on the text entry, alongside other entries', () => {
+      const schema = { type: 'object', properties: { a: { type: 'string' } } };
+      assert.deepStrictEqual(
+        toInteractionResponseFormat({
+          modalities: ['TEXT', 'IMAGE'],
+          json: { schema },
+        }),
+        [
+          { type: 'text', mime_type: 'application/json', schema },
+          { type: 'image' },
+        ]
+      );
+      // JSON output alone (no modalities): one text entry.
+      assert.deepStrictEqual(toInteractionResponseFormat({ json: {} }), {
+        type: 'text',
+        mime_type: 'application/json',
+      });
+    });
+
+    it('keeps JSON output when audioFormat is set too', () => {
+      // Used to be lost: the audio entry replaced the JSON text entry.
+      assert.deepStrictEqual(
+        toInteractionResponseFormat({
+          audioFormat: { mimeType: 'audio/wav' },
+          json: {},
+        }),
+        [
+          { type: 'audio', mime_type: 'audio/wav' },
+          { type: 'text', mime_type: 'application/json' },
+        ]
+      );
+    });
+  });
+
   describe('toInteractionGenerationConfig (video)', () => {
     it('keeps videoFormat out of generation_config and sends videoConfig as video_config', () => {
       const result = toInteractionGenerationConfig({
@@ -171,6 +261,14 @@ describe('Interaction Converters', () => {
         videoConfig: { task: 'extend' },
       });
       assert.deepStrictEqual(result, { video_config: { task: 'extend' } });
+    });
+
+    it('keeps imageConfig out of generation_config (sent as a response_format entry)', () => {
+      const result = toInteractionGenerationConfig({
+        imageConfig: { aspectRatio: '16:9' },
+        temperature: 0.5,
+      });
+      assert.deepStrictEqual(result, { temperature: 0.5 });
     });
   });
 

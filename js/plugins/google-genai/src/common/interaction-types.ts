@@ -674,7 +674,10 @@ export declare interface ModelGenerationConfig {
    * `{ speakers: [...] }` for multi-speaker.
    */
   speech_config?: SpeechConfig[] | { speakers: SpeechConfig[] };
-  /** Configuration for image interaction. */
+  /**
+   * Deprecated by the API: image settings go in a `response_format` image
+   * entry. The plugin doesn't send it.
+   */
   image_config?: ImageConfig;
   /** Configuration for video generation. */
   video_config?: VideoConfig;
@@ -783,10 +786,17 @@ export declare interface CreateInteractionRequest {
   /** A list of tool declarations the model may call during interaction. */
   tools?: InteractionTool[];
 
-  /** Enforces that the generated response is a JSON object that complies with the JSON schema specified in this field */
+  /**
+   * The output types and their settings: one entry (`{ type: 'text' |
+   * 'image' | 'audio' | 'video', ... }`) or an array of them. See
+   * toInteractionResponseFormat.
+   */
   response_format?: Record<string, unknown> | Record<string, unknown>[];
 
-  /** The requested modalities of the response (TEXT, IMAGE, AUDIO). */
+  /**
+   * Deprecated by the API in favor of `response_format` entries; the plugin
+   * doesn't send it.
+   */
   response_modalities?: ResponseModality[];
 
   /** Whether the interaction will be streamed. */

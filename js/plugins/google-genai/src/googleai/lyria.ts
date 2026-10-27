@@ -20,9 +20,9 @@ import { model as pluginModel } from 'genkit/plugin';
 import {
   ensureToolIds,
   fromInteractionSync,
+  toInteractionResponseFormat,
   toInteractionSteps,
 } from '../common/interaction-converters.js';
-import { ResponseModality } from '../common/interaction-types.js';
 import { isKnownKey } from '../common/utils.js';
 import { createInteraction } from './client.js';
 import {
@@ -185,17 +185,13 @@ export function defineModel(
 
       const messages = structuredClone(request.messages);
 
-      let responseModalitiesConverted: ResponseModality[] = ['audio', 'text'];
-      if (responseModalities) {
-        responseModalitiesConverted = responseModalities.map(
-          (m) => m.toLowerCase() as ResponseModality
-        );
-      }
-
       const req: CreateInteractionRequest = {
         model: extractVersion(ref),
         input: toInteractionSteps(ensureToolIds(messages)),
-        response_modalities: responseModalitiesConverted,
+        // Audio and the lyrics/caption text by default.
+        response_format: toInteractionResponseFormat({
+          modalities: responseModalities ?? ['AUDIO', 'TEXT'],
+        }),
         ...rest,
       };
 

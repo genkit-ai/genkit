@@ -1453,8 +1453,9 @@ describe('Vertex AI Gemini', () => {
         // be checked too. Dropped with a warning on the Interactions path.
         'audioFormat',
         'speechConfig',
-        // Sent as `response_format` (video models).
+        // Sent as `response_format` entries.
         'videoFormat',
+        'imageConfig',
         // Dropped with a warning: the platform rejects `top_k` with a 400.
         'topK',
       ];
@@ -1464,7 +1465,6 @@ describe('Vertex AI Gemini', () => {
         'topP',
         'maxOutputTokens',
         'stopSequences',
-        'imageConfig',
       ];
       // A `generation_config` field in the Omni guide (video models); not
       // yet verified live on the platform.

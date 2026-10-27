@@ -51,14 +51,12 @@ import {
   mergeStreamedAudio,
   removeId3FromAudio,
   selectInteractionInput,
-  toInteractionAudioResponseFormat,
   toInteractionConfigTool,
   toInteractionGenerationConfig,
-  toInteractionResponseModalities,
+  toInteractionResponseFormat,
   toInteractionSteps,
   toInteractionTool,
   toInteractionToolChoice,
-  toInteractionVideoResponseFormat,
 } from '../common/interaction-converters.js';
 import {
   InteractionTool,
@@ -749,9 +747,15 @@ const KNOWN_IMAGE_MODELS = {
   ),
 } as const;
 export type KnownImageModels = keyof typeof KNOWN_IMAGE_MODELS;
-export type ImageModelName = `gemini-${string}-image${string}`;
+export type ImageModelName =
+  | `gemini-${string}-image${string}`
+  | `gemini-nano-banana-${string}`;
+/** Image models: `-image` names and the Nano Banana names (as in vertexAI). */
 export function isImageModelName(value: string): value is ImageModelName {
-  return value.startsWith('gemini-') && value.includes('-image');
+  return (
+    value.startsWith('gemini-') &&
+    (value.includes('-image') || value.startsWith('gemini-nano-banana-'))
+  );
 }
 
 const KNOWN_VIDEO_MODELS = {
@@ -1398,40 +1402,36 @@ export function defineModel(
           store,
         };
 
-        if (jsonMode) {
-          req.response_format = {
-            type: 'text',
-            mime_type: 'application/json',
-          };
-          if (request.output?.constrained) {
-            req.response_format.schema = pluginOptions?.legacyResponseSchema
-              ? cleanSchema(request.output.schema)
-              : request.output.schema;
-          }
-        }
-
-        const audioResponseFormat = toInteractionAudioResponseFormat(
-          audioFormatFromConfig
-        );
-        if (audioResponseFormat) {
-          req.response_format = audioResponseFormat;
-        }
-
-        const videoResponseFormat = toInteractionVideoResponseFormat(
-          videoFormatFromConfig
-        );
-        if (videoResponseFormat) {
-          req.response_format = videoResponseFormat;
-        }
-
-        if (responseModalitiesFromConfig) {
-          req.response_modalities = toInteractionResponseModalities(
-            responseModalitiesFromConfig
-          );
-        } else if (isTTSModelName(modelVersion)) {
-          req.response_modalities = ['audio'];
-        } else if (isImageModelName(modelVersion)) {
-          req.response_modalities = ['text', 'image'];
+        // One `response_format` with an entry per output type (the
+        // deprecated `response_modalities` and `generation_config
+        // .image_config` aren't sent). TTS and image models ask for the same
+        // outputs as before by default.
+        const responseFormat = toInteractionResponseFormat({
+          modalities:
+            responseModalitiesFromConfig ??
+            (isTTSModelName(modelVersion)
+              ? ['AUDIO']
+              : isImageModelName(modelVersion)
+                ? ['TEXT', 'IMAGE']
+                : undefined),
+          imageConfig:
+            'imageConfig' in requestOptions
+              ? requestOptions.imageConfig
+              : undefined,
+          audioFormat: audioFormatFromConfig,
+          videoFormat: videoFormatFromConfig,
+          json: jsonMode
+            ? {
+                schema: request.output?.constrained
+                  ? pluginOptions?.legacyResponseSchema
+                    ? cleanSchema(request.output.schema)
+                    : request.output.schema
+                  : undefined,
+              }
+            : undefined,
+        });
+        if (responseFormat) {
+          req.response_format = responseFormat;
         }
 
         if (

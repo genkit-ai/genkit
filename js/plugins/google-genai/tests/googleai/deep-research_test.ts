@@ -110,7 +110,7 @@ describe('Deep Research', () => {
   });
 
   describe('defineModel', () => {
-    it('passes responseModalities to the API', async () => {
+    it('sends responseModalities as response_format entries', async () => {
       const model = defineModel(
         'deep-research-pro-preview-12-2025',
         defaultPluginOptions
@@ -131,7 +131,11 @@ describe('Deep Research', () => {
       const options = fetchArgs[1];
       const body = JSON.parse(options.body);
 
-      assert.deepStrictEqual(body.response_modalities, ['text', 'image']);
+      assert.deepStrictEqual(body.response_format, [
+        { type: 'text' },
+        { type: 'image' },
+      ]);
+      assert.strictEqual(body.response_modalities, undefined);
     });
 
     it('passes agent_config options to the API', async () => {

@@ -77,7 +77,7 @@ describe('Lyria 3', () => {
   };
 
   describe('defineModel', () => {
-    it('passes default responseModalities to the API', async () => {
+    it('asks for audio and text by default, as response_format entries', async () => {
       const model = defineModel('lyria-3-clip-preview', defaultPluginOptions);
       mockFetchResponse(mockInteractionResponse);
 
@@ -88,7 +88,11 @@ describe('Lyria 3', () => {
       const options = fetchArgs[1];
       const body = JSON.parse(options.body);
 
-      assert.deepStrictEqual(body.response_modalities, ['audio', 'text']);
+      assert.deepStrictEqual(body.response_format, [
+        { type: 'audio' },
+        { type: 'text' },
+      ]);
+      assert.strictEqual(body.response_modalities, undefined);
       assert.strictEqual(body.model, 'lyria-3-clip-preview');
     });
 
@@ -103,10 +107,13 @@ describe('Lyria 3', () => {
       assert.ok(String(url).endsWith('/interactions'), String(url));
       const body = JSON.parse(options.body);
       assert.strictEqual(body.model, 'lyria-3.5');
-      assert.deepStrictEqual(body.response_modalities, ['audio', 'text']);
+      assert.deepStrictEqual(body.response_format, [
+        { type: 'audio' },
+        { type: 'text' },
+      ]);
     });
 
-    it('passes explicit responseModalities to the API', async () => {
+    it('sends explicit responseModalities as response_format entries', async () => {
       const model = defineModel('lyria-3-clip-preview', defaultPluginOptions);
       mockFetchResponse(mockInteractionResponse);
 
@@ -124,7 +131,7 @@ describe('Lyria 3', () => {
       const options = fetchArgs[1];
       const body = JSON.parse(options.body);
 
-      assert.deepStrictEqual(body.response_modalities, ['audio']);
+      assert.deepStrictEqual(body.response_format, { type: 'audio' });
     });
 
     it('maps usage statistics correctly', async () => {
