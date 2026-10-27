@@ -979,6 +979,8 @@ class TestExpressModeLocation:
             'GCLOUD_LOCATION',
             'GOOGLE_CLOUD_PROJECT',
             'GCLOUD_PROJECT',
+            'GOOGLE_API_KEY',
+            'GEMINI_API_KEY',
         ):
             monkeypatch.delenv(var, raising=False)
 
@@ -988,6 +990,21 @@ class TestExpressModeLocation:
             plugin = VertexAI(api_key='test-key')
         assert plugin._location == 'global'
         assert plugin._client_kwargs['location'] == 'global'
+
+    def test_api_key_from_the_environment_uses_the_global_endpoint(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The SDK falls back to GEMINI_API_KEY, so the plugin has to see Express Mode there too."""
+        monkeypatch.setenv('GEMINI_API_KEY', 'env-key')
+        with patch('genkit_google_genai._google.genai.client.Client'):
+            plugin = VertexAI()
+        assert plugin._location == 'global'
+
+    def test_google_api_key_wins_over_gemini_api_key_in_the_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """GOOGLE_API_KEY precedes GEMINI_API_KEY in the SDK, so it does here as well."""
+        monkeypatch.setenv('GOOGLE_API_KEY', 'google-env-key')
+        monkeypatch.setenv('GEMINI_API_KEY', 'gemini-env-key')
+        with patch('genkit_google_genai._google.genai.client.Client'):
+            plugin = VertexAI()
+        assert plugin._location == 'global'
 
     def test_explicit_location_wins_in_express_mode(self) -> None:
         with patch('genkit_google_genai._google.genai.client.Client'):
