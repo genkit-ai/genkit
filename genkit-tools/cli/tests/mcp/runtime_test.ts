@@ -23,7 +23,9 @@ import {
   it,
   jest,
 } from '@jest/globals';
+import { defineFlowTools } from '../../src/mcp/flows';
 import { defineRuntimeTools } from '../../src/mcp/runtime';
+import { defineTraceTools } from '../../src/mcp/trace';
 import type { McpToolOptions } from '../../src/mcp/utils';
 
 jest.mock('@genkit-ai/tools-common/utils', () => {
@@ -61,6 +63,8 @@ describe('MCP runtime tools', () => {
       manager: mockMcpManager,
     };
     defineRuntimeTools(mockServer, options);
+    defineFlowTools(mockServer, options);
+    defineTraceTools(mockServer, options);
   });
 
   afterEach(() => {
@@ -140,6 +144,38 @@ describe('MCP runtime tools', () => {
         {
           type: 'text',
           text: 'Error: app process exited with code 1',
+        },
+      ],
+    });
+  });
+
+  it('run_flow and get_trace format standard Error messages', async () => {
+    mockMcpManager.getManager.mockRejectedValue(
+      new Error('No runtime found at /workspace')
+    );
+
+    const flowRes = await registeredTools['run_flow']({
+      flowName: 'myFlow',
+    });
+    expect(flowRes).toEqual({
+      isError: true,
+      content: [
+        {
+          type: 'text',
+          text: 'Error: No runtime found at /workspace',
+        },
+      ],
+    });
+
+    const traceRes = await registeredTools['get_trace']({
+      traceId: 'trace-123',
+    });
+    expect(traceRes).toEqual({
+      isError: true,
+      content: [
+        {
+          type: 'text',
+          text: 'Error: No runtime found at /workspace',
         },
       ],
     });

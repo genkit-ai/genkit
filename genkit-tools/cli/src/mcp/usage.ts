@@ -18,10 +18,9 @@ import { record } from '@genkit-ai/tools-common/utils';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp';
 import { ContentBlock } from '@modelcontextprotocol/sdk/types';
 import z from 'zod';
-import { McpRunToolEvent } from './analytics.js';
-
-import { GENKIT_CONTEXT as GoContext } from '../commands/init-ai-tools/context/go.js';
-import { GENKIT_CONTEXT as JsContext } from '../commands/init-ai-tools/context/nodejs.js';
+import { GENKIT_CONTEXT as GoContext } from '../commands/init-ai-tools/context/go';
+import { GENKIT_CONTEXT as JsContext } from '../commands/init-ai-tools/context/nodejs';
+import { McpRunToolEvent } from './analytics';
 
 export async function defineUsageGuideTool(server: McpServer) {
   server.registerTool(

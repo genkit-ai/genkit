@@ -14,23 +14,17 @@
  * limitations under the License.
  */
 
-import { GenkitToolsError } from '@genkit-ai/tools-common/manager';
 import { record } from '@genkit-ai/tools-common/utils';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp';
 import { z } from 'zod';
 import { waitForRuntime } from '../utils/manager-utils';
 import { McpRunToolEvent } from './analytics';
-import { McpToolOptions, getCommonSchema, resolveProjectRoot } from './utils';
-
-function formatRuntimeError(err: unknown): string {
-  if (err instanceof GenkitToolsError) {
-    return err.formatError();
-  }
-  if (err instanceof Error) {
-    return err.message;
-  }
-  return typeof err === 'string' ? err : (JSON.stringify(err) ?? String(err));
-}
+import {
+  McpToolOptions,
+  formatMcpError,
+  getCommonSchema,
+  resolveProjectRoot,
+} from './utils';
 
 export function defineRuntimeTools(server: McpServer, options: McpToolOptions) {
   server.registerTool(
@@ -75,7 +69,7 @@ export function defineRuntimeTools(server: McpServer, options: McpToolOptions) {
           content: [
             {
               type: 'text',
-              text: `Error: ${formatRuntimeError(err)}`,
+              text: `Error: ${formatMcpError(err)}`,
             },
           ],
         };
@@ -148,7 +142,7 @@ export function defineRuntimeTools(server: McpServer, options: McpToolOptions) {
             content: [
               {
                 type: 'text',
-                text: `Error: ${formatRuntimeError(err)}`,
+                text: `Error: ${formatMcpError(err)}`,
               },
             ],
           };

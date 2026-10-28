@@ -19,7 +19,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp';
 import { ContentBlock } from '@modelcontextprotocol/sdk/types';
 import z from 'zod';
 import { loadDocs, searchDocs } from '../utils/docs';
-import { McpRunToolEvent } from './analytics.js';
+import { McpRunToolEvent } from './analytics';
 
 export async function defineDocsTool(server: McpServer) {
   const documents = await loadDocs();
