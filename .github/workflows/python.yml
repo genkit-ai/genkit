@@ -21,8 +21,6 @@ on:
     paths:
       - "py/**"
       - "genkit-tools/genkit-schema.json"
-      - "genkit-tools/common/src/types/**"
-      - "genkit-tools/scripts/schema-exporter.ts"
       - ".github/workflows/python.yml"
 
 permissions:
