@@ -3063,14 +3063,15 @@ describe('Interaction Converters', () => {
         },
       });
       assert.strictEqual(result.finishReason, 'blocked');
+      // Per-modality counts are tokens: they go in `custom`, not in
+      // Genkit's character / media-count fields.
       assert.deepStrictEqual(result.usage, {
         inputTokens: 10,
         outputTokens: 0,
         totalTokens: 10,
         cachedContentTokens: undefined,
         thoughtsTokens: undefined,
-        inputCharacters: 8,
-        inputImages: 2,
+        custom: { inputTextTokens: 8, inputImageTokens: 2 },
       });
     });
 
@@ -3096,7 +3097,11 @@ describe('Interaction Converters', () => {
         },
       });
       assert.strictEqual(result.finishReason, 'stop');
-      assert.strictEqual(result.usage?.outputVideos, 57920);
+      assert.deepStrictEqual(result.usage?.custom, {
+        inputTextTokens: 16,
+        outputVideoTokens: 57920,
+      });
+      assert.strictEqual(result.usage?.outputVideos, undefined);
       const video = result.message?.content.find((p) => p.media);
       assert.deepStrictEqual(video?.media, {
         url: 'data:video/mp4;base64,AAAA',
@@ -3112,7 +3117,8 @@ describe('Interaction Converters', () => {
           input_tokens_by_modality: [{ modality: 'video', tokens: 30 }],
         },
       });
-      assert.strictEqual(result.usage?.inputVideos, 30);
+      assert.strictEqual(result.usage?.custom?.inputVideoTokens, 30);
+      assert.strictEqual(result.usage?.inputVideos, undefined);
     });
 
     it('carries usage on a cancelled response', () => {

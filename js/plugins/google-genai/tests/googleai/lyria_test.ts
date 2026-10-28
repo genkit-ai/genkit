@@ -161,9 +161,11 @@ describe('Lyria 3', () => {
         totalTokens: 515,
         cachedContentTokens: 0,
         thoughtsTokens: 0,
-        inputCharacters: 15,
-        outputCharacters: 100,
-        outputAudioFiles: 400,
+        custom: {
+          inputTextTokens: 15,
+          outputTextTokens: 100,
+          outputAudioTokens: 400,
+        },
       });
     });
 

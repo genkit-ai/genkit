@@ -1126,6 +1126,113 @@ describe('Google AI Gemini', () => {
         assert.strictEqual(apiRequest.serviceTier, 'flex');
       });
 
+      it('sends an empty schema for JSON output without a schema (Interactions API)', async () => {
+        // Without a schema the server answers in prose (seen live).
+        const model = defineModel('gemini-flash-latest', defaultPluginOptions);
+        mockFetchResponse(defaultApiResponse);
+        await model.run({ ...minimalRequest, output: { format: 'json' } });
+
+        const apiRequest: CreateInteractionRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.deepStrictEqual(apiRequest.response_format, {
+          type: 'text',
+          mime_type: 'application/json',
+          schema: {},
+        });
+      });
+
+      it("treats config responseMimeType 'application/json' as JSON output (Interactions API)", async () => {
+        const model = defineModel('gemini-flash-latest', defaultPluginOptions);
+        mockFetchResponse(defaultApiResponse);
+        await model.run({
+          ...minimalRequest,
+          config: { responseMimeType: 'application/json' },
+        });
+
+        const apiRequest: CreateInteractionRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.deepStrictEqual(apiRequest.response_format, {
+          type: 'text',
+          mime_type: 'application/json',
+          schema: {},
+        });
+        // The Interactions API rejects `response_mime_type` with a 400.
+        assert.strictEqual(
+          'response_mime_type' in (apiRequest.generation_config ?? {}),
+          false
+        );
+      });
+
+      it('drops other config responseMimeType values with a warning (Interactions API)', async () => {
+        const warnStub = sinon.stub(logger, 'warn');
+        // An unlisted model (routed to Interactions) not used by other tests,
+        // since the warning is only logged once per model and field.
+        const model = defineModel(
+          'gemini-response-mime-type-test',
+          defaultPluginOptions
+        );
+        mockFetchResponse(defaultApiResponse);
+        await model.run({
+          ...minimalRequest,
+          config: { responseMimeType: 'text/plain' },
+        });
+
+        const apiRequest: CreateInteractionRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.strictEqual(
+          'response_mime_type' in (apiRequest.generation_config ?? {}),
+          false
+        );
+        assert.strictEqual(apiRequest.response_format, undefined);
+        assert.ok(
+          warnStub
+            .getCalls()
+            .some((c) =>
+              String(c.args[0]).includes('responseMimeType is not supported')
+            ),
+          'expected a warning about responseMimeType'
+        );
+      });
+
+      it('sends config responseMimeType as is to generateContent models', async () => {
+        const model = defineModel('gemini-2.5-flash', defaultPluginOptions);
+        mockFetchResponse(defaultApiResponse);
+        await model.run({
+          ...minimalRequest,
+          config: { responseMimeType: 'text/x.enum' },
+        });
+
+        const apiRequest: GenerateContentRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.strictEqual(
+          apiRequest.generationConfig?.responseMimeType,
+          'text/x.enum'
+        );
+      });
+
+      it('maps tool-use tokens to custom.toolUseTokens on generateContent models (same key as Interactions)', async () => {
+        const model = defineModel('gemini-2.5-flash', defaultPluginOptions);
+        mockFetchResponse({
+          ...defaultApiResponse,
+          usageMetadata: {
+            promptTokenCount: 10,
+            candidatesTokenCount: 5,
+            totalTokenCount: 115,
+            toolUsePromptTokenCount: 100,
+          },
+        });
+        const result = await model.run(minimalRequest);
+
+        assert.strictEqual(result.result.usage?.inputTokens, 10);
+        assert.deepStrictEqual(result.result.usage?.custom, {
+          toolUseTokens: 100,
+        });
+      });
+
       it('passes serviceTier to the API (Interactions API)', async () => {
         const model = defineModel('gemini-flash-latest', defaultPluginOptions); // Uses Interactions API
         mockFetchResponse(defaultApiResponse);
@@ -1946,6 +2053,48 @@ describe('Google AI Gemini', () => {
         });
         mockFetchResponse(defaultApiResponse);
         await model.run(minimalRequest);
+
+        const apiRequest: CreateInteractionRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.strictEqual(apiRequest.store, true);
+      });
+
+      it('lets a request store: false override plugin store: true (Interactions API)', async () => {
+        const model = defineModel('gemini-flash-latest', {
+          ...defaultPluginOptions,
+          store: true,
+        });
+        mockFetchResponse(defaultApiResponse);
+        await model.run({
+          messages: [
+            { role: 'user', content: [{ text: 'Hello' }] },
+            {
+              role: 'model',
+              content: [{ text: 'Hi' }],
+              metadata: { interactionId: 'v1_abc123' },
+            },
+            { role: 'user', content: [{ text: 'How are you?' }] },
+          ],
+          config: { store: false },
+        });
+
+        const apiRequest: CreateInteractionRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        // Stateless: no continuation, the whole history is sent.
+        assert.strictEqual(apiRequest.store, false);
+        assert.strictEqual(apiRequest.previous_interaction_id, undefined);
+        assert.strictEqual((apiRequest.input as any[]).length, 3);
+      });
+
+      it('lets a request store: true override plugin store: false (Interactions API)', async () => {
+        const model = defineModel('gemini-flash-latest', {
+          ...defaultPluginOptions,
+          store: false,
+        });
+        mockFetchResponse(defaultApiResponse);
+        await model.run({ ...minimalRequest, config: { store: true } });
 
         const apiRequest: CreateInteractionRequest = JSON.parse(
           fetchStub.lastCall.args[1].body

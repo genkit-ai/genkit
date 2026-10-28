@@ -1089,6 +1089,8 @@ export function defineModel(
         previousInteractionId: previousInteractionIdFromConfig,
         store: storeFromConfig,
         responseModalities: responseModalitiesFromConfig,
+        // Not in the schema (passthrough); see jsonMode below.
+        responseMimeType: responseMimeTypeFromConfig,
         // Interactions-only: sent as `response_format` below.
         audioFormat: audioFormatFromConfig,
         videoFormat: videoFormatFromConfig,
@@ -1272,9 +1274,16 @@ export function defineModel(
         };
       }
 
+      // A config `responseMimeType` (the generateContent field) of
+      // 'application/json' asks for JSON output, like `output.format: 'json'`.
+      const configResponseMimeType =
+        typeof responseMimeTypeFromConfig === 'string'
+          ? responseMimeTypeFromConfig
+          : undefined;
       const jsonMode =
         request.output?.format === 'json' ||
-        request.output?.contentType === 'application/json';
+        request.output?.contentType === 'application/json' ||
+        configResponseMimeType === 'application/json';
 
       const sanitizedConfigOptions = {
         ...removeClientOptionOverrides(restOfConfigOptions),
@@ -1296,6 +1305,13 @@ export function defineModel(
         if (toolChoice) {
           interactionGenerationConfig.tool_choice = toolChoice;
         }
+        // There's no `response_mime_type` in the Interactions
+        // `generation_config` (400 "Unknown parameter"). JSON is asked for
+        // with a `response_format` text entry; other values have no
+        // equivalent.
+        if (configResponseMimeType && !jsonMode) {
+          warnDroppedConfigField(modelVersion, 'responseMimeType');
+        }
       }
 
       const generationConfig: GenerationConfig = {
@@ -1304,7 +1320,9 @@ export function defineModel(
           ? { responseModalities: responseModalitiesFromConfig }
           : {}),
         candidateCount: request.candidates || undefined,
-        responseMimeType: jsonMode ? 'application/json' : undefined,
+        responseMimeType: jsonMode
+          ? 'application/json'
+          : configResponseMimeType,
       };
 
       if (isTTSModelName(modelVersion)) {
@@ -1331,7 +1349,9 @@ export function defineModel(
       );
 
       if (useInteractions) {
-        const store = storeFromConfig === true || pluginOptions?.store === true;
+        // The request's `store` wins over the plugin option (so a request
+        // can turn off a plugin-wide `store: true`); stateless by default.
+        const store = storeFromConfig ?? pluginOptions?.store ?? false;
         const { messages: newMessages, previousInteractionId } =
           selectInteractionInput(
             messages,
@@ -1425,11 +1445,14 @@ export function defineModel(
           videoFormat: videoFormatFromConfig,
           json: jsonMode
             ? {
-                schema: request.output?.constrained
-                  ? pluginOptions?.legacyResponseSchema
-                    ? cleanSchema(request.output.schema)
-                    : request.output.schema
-                  : undefined,
+                // Without a schema the server answers in prose (seen live);
+                // an empty schema gives JSON of any shape.
+                schema:
+                  (request.output?.constrained
+                    ? pluginOptions?.legacyResponseSchema
+                      ? cleanSchema(request.output.schema)
+                      : request.output.schema
+                    : undefined) ?? {},
               }
             : undefined,
         });
@@ -1560,6 +1583,14 @@ export function defineModel(
           thoughtsTokens: response.usageMetadata?.thoughtsTokenCount,
           totalTokens: response.usageMetadata?.totalTokenCount,
           cachedContentTokens: response.usageMetadata?.cachedContentTokenCount,
+          // Same key as on the Interactions API.
+          ...(response.usageMetadata?.toolUsePromptTokenCount
+            ? {
+                custom: {
+                  toolUseTokens: response.usageMetadata.toolUsePromptTokenCount,
+                },
+              }
+            : {}),
         },
       };
     }
