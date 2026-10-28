@@ -80,6 +80,11 @@ def test_claude_desktop_stdio_block_passes_through() -> None:
     assert config.env == {'API_KEY': SECRET}
 
 
+def test_disabled_defaults_to_false() -> None:
+    assert McpStdioServerConfig(command='npx').disabled is False
+    assert McpStdioServerConfig.model_validate({'command': 'npx', 'disabled': True}).disabled is True
+
+
 def test_non_stdio_type_fails_validation() -> None:
     """A remote transport block is rejected rather than run as a command."""
     with pytest.raises(ValidationError):

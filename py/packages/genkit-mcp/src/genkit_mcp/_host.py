@@ -68,7 +68,8 @@ class McpHost:
             name: Host name, which :func:`define_mcp_host` registers as the
                 provider name used in tool selectors.
             mcp_servers: The servers this host manages, keyed by the name that
-                prefixes each server's tools, in the order it lists them.
+                prefixes each server's tools, in the order it lists them. An
+                entry with ``disabled`` set is validated but left out.
             request_timeout_millis: How long one MCP request may take before it
                 fails, for every server. Must be positive. ``None`` is the only
                 way to disable the timeout.
@@ -87,7 +88,9 @@ class McpHost:
         self._clients: dict[str, McpClient] = {}
         self._closed = False
         for server_name, entry in mcp_servers.items():
-            self._clients[server_name] = self._build_client(server_name, self._stdio_config(server_name, entry))
+            config = self._stdio_config(server_name, entry)
+            if not config.disabled:
+                self._clients[server_name] = self._build_client(server_name, config)
 
     @property
     def name(self) -> str:
@@ -143,7 +146,8 @@ class McpHost:
         on the next generate. A server that fails is stopped and leaves this
         host as it was, a server it would have replaced included. Once the new
         server is listed, a replaced server is disconnected and its process
-        stopped.
+        stopped. An entry with ``disabled`` set starts nothing and removes any
+        server of that name.
 
         This method keeps ``entry`` out of its own frames, but a traceback that
         renders frame locals still prints a ``config`` the caller holds, ``env``
@@ -154,8 +158,8 @@ class McpHost:
             server_name: Name for this server within this host, which prefixes
                 its tool names.
             entry: How to launch the server: ``command`` and optionally
-                ``args``, ``env``, ``cwd`` and ``type``, which can only be
-                ``stdio``.
+                ``args``, ``env``, ``cwd``, ``type``, which can only be
+                ``stdio``, and ``disabled``.
 
         Raises:
             ValueError: If ``server_name`` cannot appear in a model-facing tool
@@ -172,6 +176,10 @@ class McpHost:
         finally:
             # An exc_info log prints every frame's locals, and the raw entry holds the server's env.
             del entry
+        if config.disabled:
+            if server_name in self._clients:
+                await self.disconnect(server_name)
+            return
         client = self._build_client(server_name, config)
         try:
             await client._list_actions()
@@ -333,7 +341,6 @@ class McpHost:
 
     def _build_client(self, server_name: str, config: McpStdioServerConfig) -> McpClient:
         """Build a client for one server, which serves no provider until it is installed."""
-        validate_tool_prefix(server_name)
         return McpClient(
             server_name,
             command=config.command,
@@ -344,15 +351,18 @@ class McpHost:
         )
 
     def _stdio_config(self, server_name: str, entry: McpServerEntry) -> McpStdioServerConfig:
-        """Validate one server's entry, naming the server when it is not a stdio entry."""
+        """Validate one server's name and entry, naming the server when it is not a stdio entry."""
         try:
             # model_validate's own frame would hold the entry, env included, on the error's traceback.
-            return McpStdioServerConfig.__pydantic_validator__.validate_python(entry)
+            config = McpStdioServerConfig.__pydantic_validator__.validate_python(entry)
         except ValidationError as error:
-            del entry
             raise ValueError(
                 f'MCP host {self._name!r}: server {server_name!r} is not a stdio entry: {error}'
             ) from error
+        finally:
+            del entry
+        validate_tool_prefix(server_name)
+        return config
 
     def _refuse_when_closed(self) -> None:
         """Raise if this host has been closed."""
@@ -401,8 +411,9 @@ def define_mcp_host(
         name: Provider name, used in tool selectors.
         mcp_servers: The servers this host manages, keyed by the name that
             prefixes each server's tools, in the order it lists them. Each
-            entry holds ``command`` and optionally ``args``, ``env``, ``cwd``
-            and ``type``, which can only be ``stdio``.
+            entry holds ``command`` and optionally ``args``, ``env``, ``cwd``,
+            ``type``, which can only be ``stdio``, and ``disabled``, which
+            leaves the server out.
         cache_ttl_millis: How long a tool listing stays fresh. ``None`` or
             ``0`` uses the default of 3 seconds. A negative value disables the
             cache, so every lookup lists the tools again.

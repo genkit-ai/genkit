@@ -123,9 +123,10 @@ result = await ai.generate(prompt='Echo "hello".', tools=[one])
 
 `mcp_servers` takes an `mcpServers` block of stdio servers, as Claude Desktop and Cursor write it, so
 such a block can be loaded from its file: `mcp_servers=json.load(f)['mcpServers']`. An entry that is
-not a stdio entry, such as one with a `url`, `type: 'sse'` or `disabled: true`, fails the host with
-an error naming that server. So does an entry with any key besides `command`, `args`, `env`, `cwd`
-and `type`. `await host.connect(name, entry)` takes one entry too, so a server from the same file
+not a stdio entry, such as one with a `url` or `type: 'sse'`, fails the host with an error naming
+that server. So does an entry with any key besides `command`, `args`, `env`, `cwd`, `type` and
+`disabled`. An entry with `disabled: true` is checked the same way, but its server is never started
+or listed. `await host.connect(name, entry)` takes one entry too, so a server from the same file
 can be added later: `await host.connect('git', config['mcpServers']['git'])`.
 
 An entry's `env` often holds secrets, and a traceback that renders frame locals, as Genkit's console
