@@ -229,7 +229,7 @@ cd js && pnpm build && pnpm typedoc-html && open api-refs-js/index.html
     - `fix(go/plugins/googlegenai): default ResponseModalities for image models`
     - `chore(global): update root formatting configuration`
 
-    Allowed types (enforced by [`commitlint.config.js`](./commitlint.config.js)):
+    Common types include:
 
     - `feat`: A new feature
     - `fix`: A bug fix
@@ -243,7 +243,7 @@ cd js && pnpm build && pnpm typedoc-html && open api-refs-js/index.html
     - `chore`: Changes to the build process or auxiliary tools and libraries that don't modify source or test files
     - `revert`: Reverts a previous commit
 
-4.  **Open a Pull Request**: Submit your pull request to the `main` branch. Ensure your PR title follows the `<type>(<scope>): <description>` format (maximum 120 characters), provide a clear description of the changes, and link to any related issues.
+4.  **Open a Pull Request**: Submit your pull request to the `main` branch. Provide a clear description of the changes and link to any related issues.
 
 ## Pull Request Guidelines
 
