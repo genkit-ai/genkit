@@ -204,7 +204,7 @@ cd js && pnpm build && pnpm typedoc-html && open api-refs-js/index.html
 
 ## Submitting Changes
 
-1.  **Create a Branch**: Create a new branch for your feature or bug fix (by convention, name the branch `your-name/feature-something`).
+1.  **Create a Branch**: Create a new branch for your feature or bug fix.
 
     ```bash
     git checkout -b your-name/my-feature-branch
