@@ -34,10 +34,6 @@ information on using pull requests.
 
 ## Setup
 
-**Note:** If you want to setup all runtime environments at the same time
-(js/go/py), you may want to run the `bin/setup` script. Beware, this script may
-break other setup you may already have in your project environment.
-
 Genkit supports JavaScript, Go, and Python. Before contributing in any of these languages, complete these prerequisites:
 
 1. Install Node.js 20 or later using [nvm](https://nodejs.org/en/download)
