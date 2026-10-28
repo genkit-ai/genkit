@@ -20,7 +20,9 @@ on:
   pull_request:
     paths:
       - "go/**"
-      - "genkit-tools/**"
+      - "genkit-tools/genkit-schema.json"
+      - "genkit-tools/common/src/types/**"
+      - "genkit-tools/scripts/schema-exporter.ts"
       - "tests/specs/**"
       - ".github/workflows/go.yml"
 
