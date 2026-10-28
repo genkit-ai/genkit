@@ -9,6 +9,7 @@
 import asyncio
 import gc
 import io
+import json
 import os
 import shlex
 import signal
@@ -125,6 +126,13 @@ async def server_marker(marker: Path) -> str:
                 await asyncio.sleep(0.01)
 
     return await asyncio.wait_for(read(), timeout=LIMIT)
+
+
+def cancellations(log: Path) -> list[dict[str, object]]:
+    """Read the notifications/cancelled params the server has received, in order."""
+    if not log.exists():
+        return []
+    return [json.loads(line) for line in log.read_text(encoding='utf-8').splitlines()]
 
 
 async def stdin_closed(marker: Path) -> None:
@@ -637,34 +645,72 @@ async def test_a_startup_failure_keeps_the_server_env_out_of_its_traceback(tmp_p
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('raises', [False, True])
-async def test_a_caller_cancelled_after_dispatch_leaves_the_connection_open(tmp_path: Path, raises: bool) -> None:
+@pytest.mark.parametrize('ending', ['cancelled', 'raises', 'returns'])
+async def test_a_caller_cancelled_after_dispatch_cancels_its_operation_alone(tmp_path: Path, ending: str) -> None:
     connection = McpConnection(config(tmp_path))
     try:
         await asyncio.wait_for(connection.list_tools(), timeout=LIMIT)
-        running, release, returned = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        running, stopped = asyncio.Event(), asyncio.Event()
 
         async def abandoned(session: ClientSession) -> list[McpTool]:
             running.set()
-            await release.wait()
-            # Nothing awaits between here and the outcome reaching the caller's future.
-            returned.set()
-            if raises:
-                raise ValueError('abandoned')
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                # Nothing suspends between here and the operation ending.
+                stopped.set()
+                if ending == 'cancelled':
+                    raise
+                if ending == 'raises':
+                    raise ValueError('abandoned') from None
             return []
 
         caller = asyncio.create_task(connection._request(abandoned))
         await asyncio.wait_for(running.wait(), timeout=LIMIT)
         caller.cancel()
         with pytest.raises(asyncio.CancelledError):
-            await caller
-        release.set()
-        await asyncio.wait_for(returned.wait(), timeout=LIMIT)
+            await asyncio.wait_for(caller, timeout=LIMIT)
+        await asyncio.wait_for(stopped.wait(), timeout=LIMIT)
 
         assert connection._state is _ConnectionState.OPEN
         assert connection._failure is None
         alive = await asyncio.wait_for(connection.call_tool('echo', {'message': 'alive'}), timeout=LIMIT)
         assert text_of(alive) == 'alive'
+    finally:
+        await asyncio.wait_for(connection.close(), timeout=LIMIT)
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_call_is_cancelled_on_the_server(tmp_path: Path) -> None:
+    """With no request timeout, only the notice stops a call on the server before close."""
+    stalls = tmp_path / 'stalls'
+    stalls.mkdir()
+    log = tmp_path / 'cancellations.jsonl'
+    connection = McpConnection(
+        config(tmp_path, MCP_FAKE_STALL_DIR=str(stalls), MCP_FAKE_CANCEL_LOG=str(log)), request_timeout_millis=None
+    )
+    try:
+        cancelled = asyncio.create_task(connection.call_tool('stall', {'message': 'cancelled'}))
+        await server_marker(stalls / 'cancelled.started')
+        kept = asyncio.create_task(connection.call_tool('stall', {'message': 'kept'}))
+        await server_marker(stalls / 'kept.started')
+
+        cancelled.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(cancelled, timeout=LIMIT)
+        await server_marker(stalls / 'cancelled.cancelled')
+
+        assert cancellations(log) == [{'requestId': 1, 'reason': 'Request cancelled'}]
+        assert not (stalls / 'kept.cancelled').exists()
+        assert not kept.done()
+        assert connection._state is _ConnectionState.OPEN
+        alive = await asyncio.wait_for(connection.call_tool('echo', {'message': 'alive'}), timeout=LIMIT)
+        assert text_of(alive) == 'alive'
+        kept.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(kept, timeout=LIMIT)
+        await server_marker(stalls / 'kept.cancelled')
+        assert cancellations(log)[1:] == [{'requestId': 2, 'reason': 'Request cancelled'}]
     finally:
         await asyncio.wait_for(connection.close(), timeout=LIMIT)
 
@@ -1039,6 +1085,56 @@ async def test_a_request_timeout_fails_that_call_alone(tmp_path: Path) -> None:
         assert text_of(alive) == 'alive'
     finally:
         await asyncio.wait_for(connection.close(), timeout=LIMIT)
+
+
+@pytest.mark.asyncio
+async def test_a_timed_out_call_is_cancelled_on_the_server(tmp_path: Path) -> None:
+    stalls = tmp_path / 'stalls'
+    stalls.mkdir()
+    log = tmp_path / 'cancellations.jsonl'
+    connection = McpConnection(
+        config(tmp_path, MCP_FAKE_STALL_DIR=str(stalls), MCP_FAKE_CANCEL_LOG=str(log)), request_timeout_millis=3000
+    )
+    try:
+        with pytest.raises(_RequestTimeoutError, match='timed out'):
+            await asyncio.wait_for(connection.call_tool('stall', {'message': 'late'}), timeout=LIMIT)
+
+        await server_marker(stalls / 'late.cancelled')
+        assert cancellations(log) == [{'requestId': 1, 'reason': 'Request timed out'}]
+        assert connection._state is _ConnectionState.OPEN
+    finally:
+        await asyncio.wait_for(connection.close(), timeout=LIMIT)
+
+
+@pytest.mark.asyncio
+async def test_close_sends_no_cancellation_for_a_call_in_flight(tmp_path: Path) -> None:
+    log = tmp_path / 'cancellations.jsonl'
+    connection = McpConnection(config(tmp_path, MCP_FAKE_CANCEL_LOG=str(log)), request_timeout_millis=None)
+    stalled = asyncio.create_task(connection.call_tool('stall', {}))
+    await asyncio.wait_for(connection.call_tool('await_stall', {}), timeout=LIMIT)
+
+    await asyncio.wait_for(connection.close(), timeout=LIMIT)
+
+    with pytest.raises(_ConnectionClosedError):
+        await asyncio.wait_for(stalled, timeout=LIMIT)
+    assert cancellations(log) == []
+
+
+@pytest.mark.asyncio
+async def test_a_caller_cancelled_in_the_same_step_as_close_sends_no_cancellation(tmp_path: Path) -> None:
+    log = tmp_path / 'cancellations.jsonl'
+    connection = McpConnection(config(tmp_path, MCP_FAKE_CANCEL_LOG=str(log)), request_timeout_millis=None)
+    caller = asyncio.create_task(connection.call_tool('stall', {}))
+    await asyncio.wait_for(connection.call_tool('await_stall', {}), timeout=LIMIT)
+
+    # Close is scheduled first, so the operation is already ending when the caller's cancellation reaches it.
+    closing = asyncio.ensure_future(connection.close())
+    caller.cancel()
+    await asyncio.wait_for(closing, timeout=LIMIT)
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(caller, timeout=LIMIT)
+    assert cancellations(log) == []
 
 
 @pytest.mark.asyncio
