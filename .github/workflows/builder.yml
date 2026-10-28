@@ -52,7 +52,9 @@ jobs:
       with:
         node-version: 20.x
         cache: pnpm
-    - name: Install dependencies and build js
+    - name: Install dependencies
+      run: pnpm install
+    - name: Run build script
       run: pnpm build:js
     - name: Run js tests
       run: pnpm test:js
