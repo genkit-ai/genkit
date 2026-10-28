@@ -15,7 +15,7 @@
  */
 
 import { record } from '@genkit-ai/tools-common/utils';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { waitForRuntime } from '../utils/manager-utils';
 import { McpRunToolEvent } from './analytics';

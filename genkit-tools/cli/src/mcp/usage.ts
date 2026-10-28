@@ -15,8 +15,8 @@
  */
 
 import { record } from '@genkit-ai/tools-common/utils';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp';
-import { ContentBlock } from '@modelcontextprotocol/sdk/types';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { ContentBlock } from '@modelcontextprotocol/sdk/types.js';
 import z from 'zod';
 import { GENKIT_CONTEXT as GoContext } from '../commands/init-ai-tools/context/go';
 import { GENKIT_CONTEXT as JsContext } from '../commands/init-ai-tools/context/nodejs';

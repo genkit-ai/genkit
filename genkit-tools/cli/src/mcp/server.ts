@@ -15,8 +15,8 @@
  */
 
 import { logger } from '@genkit-ai/tools-common/utils';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { defineDocsTool } from '../mcp/docs';
 import { defineFlowTools } from './flows';
 import { defineInitPrompt } from './prompts/init';
