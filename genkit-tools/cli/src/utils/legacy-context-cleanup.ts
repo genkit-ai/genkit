@@ -105,9 +105,6 @@ async function removeKnownFile(
       return false;
     }
 
-    if ((await readRegularFile(filePath)) !== content) {
-      return false;
-    }
     await unlink(filePath);
     return true;
   } catch (error) {
@@ -144,17 +141,6 @@ async function cleanupGeminiContextCopy(
         return;
       }
 
-      const currentStats = await lstat(copyPath);
-      if (!currentStats.isSymbolicLink()) {
-        return;
-      }
-      const currentTarget = await readlink(copyPath);
-      if (
-        path.resolve(path.dirname(copyPath), currentTarget) !==
-        path.resolve(rootContextPath)
-      ) {
-        return;
-      }
       await unlink(copyPath);
       return;
     }
@@ -164,9 +150,6 @@ async function cleanupGeminiContextCopy(
     }
     const content = await readFile(copyPath, 'utf8');
     if (!GENERATED_CONTEXT_HASHES.has(calculateHash(content))) {
-      return;
-    }
-    if ((await readRegularFile(copyPath)) !== content) {
       return;
     }
     await unlink(copyPath);
@@ -212,7 +195,7 @@ async function removeGeminiContextFileName(projectRoot: string): Promise<void> {
       }
     }
 
-    if (!changed || (await readRegularFile(settingsPath)) !== content) {
+    if (!changed) {
       return;
     }
 
@@ -264,15 +247,11 @@ async function cleanupPromptBlocks(
     }
 
     if (updated.trim().length === 0) {
-      if ((await readRegularFile(filePath)) === content) {
-        await unlink(filePath);
-      }
+      await unlink(filePath);
       return;
     }
 
-    if ((await readRegularFile(filePath)) === content) {
-      await writeFile(filePath, updated, 'utf8');
-    }
+    await writeFile(filePath, updated, 'utf8');
   } catch (error) {
     logCleanupError(filePath, error);
   }
@@ -325,14 +304,6 @@ async function hasSymlinkedParent(
   }
 
   return false;
-}
-
-async function readRegularFile(filePath: string): Promise<string | undefined> {
-  const stats = await lstat(filePath);
-  if (!stats.isFile() || stats.nlink > 1) {
-    return undefined;
-  }
-  return await readFile(filePath, 'utf8');
 }
 
 function calculateHash(content: string): string {
