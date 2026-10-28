@@ -243,15 +243,7 @@ cd js && pnpm build && pnpm typedoc-html && open api-refs-js/index.html
     - `chore`: Changes to the build process or auxiliary tools and libraries that don't modify source or test files
     - `revert`: Reverts a previous commit
 
-    **Scope Requirement**: A non-empty scope in parentheses is **required** (for example: `js`, `go/ai`, `py/plugins/google-genai`, `cli`, `genkit-tools`, or `global` for repository-wide changes). Pull requests without a scope in the PR title will fail the `Commit Lint` CI check.
-
-4.  **Push Your Branch**:
-
-    ```bash
-    git push origin your-name/my-feature-branch
-    ```
-
-5.  **Open a Pull Request**: Submit your pull request to the `main` branch. Ensure your PR title follows the `<type>(<scope>): <description>` format (maximum 120 characters), provide a clear description of the changes, and link to any related issues.
+4.  **Open a Pull Request**: Submit your pull request to the `main` branch. Ensure your PR title follows the `<type>(<scope>): <description>` format (maximum 120 characters), provide a clear description of the changes, and link to any related issues.
 
 ## Pull Request Guidelines
 
