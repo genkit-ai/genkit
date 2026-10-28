@@ -51,6 +51,11 @@ _CROSS_LOOP_CLOSE_TIMEOUT_SECONDS = 30.0
 
 _LOOP_POLL_SECONDS = 0.1
 
+# How long a server that failed before completing a request after its handshake
+# waits to be started again. The wait doubles with each such failure in a row, up to the maximum.
+_RESPAWN_DELAY_SECONDS = 1.0
+_MAX_RESPAWN_DELAY_SECONDS = 30.0
+
 _registered_clients: weakref.WeakKeyDictionary[Action[Any, Any], weakref.ref[McpClient]] = weakref.WeakKeyDictionary()
 """The client behind each provider :func:`define_mcp_client` registered."""
 
@@ -63,6 +68,11 @@ class McpClient:
 
     A client built directly is unregistered: no selector reaches it, and its
     tools come from :meth:`get_active_tools`.
+
+    A server that fails before it completes a request after its handshake is
+    not started again for one second, and each such failure in a row doubles
+    that wait, up to 30 seconds. Until then its tools and listings fail at once with
+    ``UNAVAILABLE``. :meth:`restart` starts it again without waiting.
     """
 
     _provider: DynamicActionProvider | None
@@ -117,6 +127,7 @@ class McpClient:
             McpConnection, tuple[asyncio.AbstractEventLoop, concurrent.futures.Future[None]]
         ] = weakref.WeakKeyDictionary()
         self._close_tasks: set[asyncio.Task[None]] = set()
+        self._respawn_delays: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, float] = weakref.WeakKeyDictionary()
         self._connections_lock = threading.Lock()
 
     @property
@@ -239,6 +250,7 @@ class McpClient:
             for loop, connection in self._connections.items():
                 self._start_close(loop, connection)
             self._connections.clear()
+            self._respawn_delays.clear()
             closing = list(self._closing.values())
         results = await asyncio.gather(
             *(self._wait_for_close(loop, closed) for loop, closed in closing),
@@ -304,6 +316,8 @@ class McpClient:
         """
         for loop in [loop for loop in self._connections if loop.is_closed()]:
             del self._connections[loop]
+        for loop in [loop for loop in self._respawn_delays if loop.is_closed()]:
+            del self._respawn_delays[loop]
         for connection, (loop, _) in list(self._closing.items()):
             if loop.is_closed():
                 del self._closing[connection]
@@ -315,7 +329,7 @@ class McpClient:
             raise _ConnectionClosedError(f'MCP client {self._name!r} is closed')
 
     def _connection(self) -> McpConnection:
-        """Return the calling loop's connection, replacing one which has ended."""
+        """Return the calling loop's connection, replacing one which has ended, after a wait if it served nothing."""
         loop = asyncio.get_running_loop()
         with self._connections_lock:
             self._refuse_when_closed()
@@ -323,6 +337,15 @@ class McpClient:
             existing = self._connections.get(loop)
             if existing is not None and not existing.is_terminal:
                 return existing
+            delay = self._respawn_delays.get(loop, _RESPAWN_DELAY_SECONDS)
+            if existing is not None and existing.failed_at is not None and not existing.answered:
+                if time.monotonic() < existing.failed_at + delay:
+                    # A failed connection fails its requests at once, without starting the server.
+                    return existing
+                delay = min(delay * 2, _MAX_RESPAWN_DELAY_SECONDS)
+            else:
+                delay = _RESPAWN_DELAY_SECONDS
+            self._respawn_delays[loop] = delay
             connection = McpConnection(self._server, request_timeout_millis=self._request_timeout_millis)
             self._connections[loop] = connection
             return connection

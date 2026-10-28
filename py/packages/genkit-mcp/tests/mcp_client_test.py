@@ -66,6 +66,22 @@ def server(tmp_path: Path, **env: str) -> dict[str, Any]:
     }
 
 
+def exiting_server(starts: Path) -> dict[str, Any]:
+    """Keyword arguments for a server that records each start in ``starts`` and exits before the handshake."""
+    return {
+        'command': sys.executable,
+        'args': ['-c', 'import sys; open(sys.argv[1], "a").write("x")', str(starts)],
+    }
+
+
+def start_count(starts: Path) -> int:
+    """How many times a server from :func:`exiting_server` has been started."""
+    try:
+        return len(starts.read_text(encoding='utf-8'))
+    except FileNotFoundError:
+        return 0
+
+
 def server_processes(tmp_path: Path) -> list[psutil.Process]:
     """Every fake MCP server this test started that is still running."""
     pid_file = str(tmp_path / 'server.pid')
@@ -678,6 +694,136 @@ async def test_restart_reports_a_server_which_cannot_be_started(tmp_path: Path) 
         with pytest.raises(GenkitError, match='failed') as raised:
             await client.restart()
         assert raised.value.status == 'UNAVAILABLE'
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_a_server_that_fails_before_answering_is_not_started_on_every_listing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Until its delay is up, a broken server's listing fails at once with the same status."""
+    monkeypatch.setattr(genkit_mcp._client, '_RESPAWN_DELAY_SECONDS', 600.0)
+    starts = tmp_path / 'starts'
+    client = McpClient('fake', **exiting_server(starts))
+    try:
+        for _ in range(3):
+            with pytest.raises(GenkitError, match='failed') as raised:
+                await client.get_active_tools()
+            assert raised.value.status == 'UNAVAILABLE'
+            assert raised.value.__cause__ is not None
+    finally:
+        await client.close()
+
+    assert start_count(starts) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_server_that_dies_after_the_handshake_but_before_answering_waits_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The handshake alone does not count as an answer, so a server that dies on its first request waits."""
+    monkeypatch.setattr(genkit_mcp._client, '_RESPAWN_DELAY_SECONDS', 600.0)
+    exits = tmp_path / 'exits'
+    client = McpClient('fake', **server(tmp_path, MCP_FAKE_EXIT_ON_LIST=str(exits)))
+    try:
+        for _ in range(3):
+            with pytest.raises(GenkitError) as raised:
+                await client.get_active_tools()
+            assert raised.value.status == 'UNAVAILABLE'
+    finally:
+        await client.close()
+
+    assert start_count(exits) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_broken_server_waits_twice_as_long_after_each_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each failure in a row doubles the wait before the next start."""
+    monkeypatch.setattr(genkit_mcp._client, '_RESPAWN_DELAY_SECONDS', 1.0)
+    starts = tmp_path / 'starts'
+    client = McpClient('fake', **exiting_server(starts))
+
+    async def list_once() -> int:
+        with pytest.raises(GenkitError):
+            await client.get_active_tools()
+        return start_count(starts)
+
+    try:
+        assert await list_once() == 1
+        await asyncio.sleep(1.2)
+        assert await list_once() == 2
+        await asyncio.sleep(1.0)
+        assert await list_once() == 2
+        await asyncio.sleep(1.2)
+        assert await list_once() == 3
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_the_wait_before_starting_a_broken_server_again_stops_growing_at_its_maximum(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Once the wait reaches its maximum, every later failure waits the same."""
+    monkeypatch.setattr(genkit_mcp._client, '_RESPAWN_DELAY_SECONDS', 0.4)
+    monkeypatch.setattr(genkit_mcp._client, '_MAX_RESPAWN_DELAY_SECONDS', 0.4)
+    starts = tmp_path / 'starts'
+    client = McpClient('fake', **exiting_server(starts))
+    try:
+        for expected in (1, 2, 3):
+            with pytest.raises(GenkitError):
+                await client.get_active_tools()
+            assert start_count(starts) == expected
+            await asyncio.sleep(0.5)
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_a_server_that_dies_after_answering_is_started_again_at_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only a server that never answered waits: one that worked and then died is replaced on next use."""
+    monkeypatch.setattr(genkit_mcp._client, '_RESPAWN_DELAY_SECONDS', 600.0)
+    client = McpClient('fake', **server(tmp_path))
+    try:
+        listed = [tool.name for tool in await client.get_active_tools()]
+        killed = server_processes(tmp_path)
+        assert len(killed) == 1
+        killed[0].kill()
+        killed[0].wait(timeout=30)
+        with pytest.raises(GenkitError) as raised:
+            await client.get_active_tools()
+        assert raised.value.status == 'UNAVAILABLE'
+
+        assert [tool.name for tool in await client.get_active_tools()] == listed
+        replaced = server_processes(tmp_path)
+        assert len(replaced) == 1
+        assert replaced[0].pid != killed[0].pid
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_restart_starts_a_broken_server_without_waiting(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Restart starts the server at once, and a failed restart begins a new wait."""
+    monkeypatch.setattr(genkit_mcp._client, '_RESPAWN_DELAY_SECONDS', 600.0)
+    starts = tmp_path / 'starts'
+    client = McpClient('fake', **exiting_server(starts))
+    try:
+        with pytest.raises(GenkitError):
+            await client.get_active_tools()
+        with pytest.raises(GenkitError) as raised:
+            await client.restart()
+        assert raised.value.status == 'UNAVAILABLE'
+        assert start_count(starts) == 2
+
+        with pytest.raises(GenkitError):
+            await client.get_active_tools()
+        assert start_count(starts) == 2
     finally:
         await client.close()
 

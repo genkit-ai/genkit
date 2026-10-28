@@ -88,8 +88,11 @@ closed client cannot be restarted. To use that server again, define a new client
 is `FAILED_PRECONDITION`. A server that cannot start, or whose process dies, fails with status
 `UNAVAILABLE`, and a request the server does not answer within `request_timeout_millis` fails with
 `DEADLINE_EXCEEDED`. A connection that died on its own is replaced on next use, so one bad server start is
-not permanent. Resolving a tool by its action key, as the Dev UI does to run one, reports neither
-status: core finds no action for a closed client or a server that cannot start.
+not permanent. A server that fails before it completes a request after its handshake waits one second
+before it is started again, and each such failure in a row doubles the wait, up to 30 seconds. Meanwhile its tools fail at
+once with `UNAVAILABLE`, and `restart()` skips the wait. Resolving a tool by its action key, as the
+Dev UI does to run one, reports neither status: core finds no action for a closed client or a server
+that cannot start.
 
 Nothing needs closing at exit. Call `close()` when you are done with a server before your process
 is, not as cleanup on the way out: a process running under `genkit start` outlives your `main()`,
@@ -156,4 +159,5 @@ server the host holds, and like `McpClient.close()` it is final: afterwards the 
 status `FAILED_PRECONDITION`, so define a new host to use those servers again.
 
 One provider means one listing. A tool call that fails on one server drops the listing for all of
-them, so the next `generate` lists every server again.
+them, so the next `generate` lists every server again. A server that cannot start is not started
+again for those listings until its wait is up, as for a single client.
