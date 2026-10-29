@@ -360,7 +360,7 @@ async def test_generate_claude_secrets_key_on_client_that_cannot_swap_key_fails(
         ('auto', True, {'type': 'auto', 'disable_parallel_tool_use': True}),
         ('required', False, {'type': 'any'}),
         ('required', True, {'type': 'any', 'disable_parallel_tool_use': True}),
-        # 'none' used to be dropped, leaving Claude free to call the tools.
+        # 'none' is sent as {'type': 'none'}, so Claude can't call the tools.
         ('none', False, {'type': 'none'}),
         # Anthropic's none variant has no disable_parallel_tool_use field.
         ('none', True, {'type': 'none'}),
@@ -421,8 +421,13 @@ async def test_generate_claude_tool_choice_dropped_without_tools() -> None:
 
 
 @pytest.mark.asyncio
-async def test_generate_claude_thinking_enabled_rejects_tool_choice_required() -> None:
-    """Manual thinking only supports tool_choice auto or none, so required fails before sending."""
+@pytest.mark.parametrize(
+    'config',
+    [AnthropicConfig(thinking='enabled', thinking_budget=2048), AnthropicConfig(thinking='adaptive')],
+    ids=['enabled', 'adaptive'],
+)
+async def test_generate_claude_thinking_rejects_tool_choice_required(config: AnthropicConfig) -> None:
+    """Thinking only supports tool_choice auto or none, so required fails before sending."""
     api = FakeClaudeApi()
     ai = _genkit(api)
 
@@ -435,13 +440,13 @@ async def test_generate_claude_thinking_enabled_rejects_tool_choice_required() -
         prompt='hi',
         tools=['lookup_menu'],
         tool_choice='required',
-        config=AnthropicConfig(thinking='enabled', thinking_budget=2048),
+        config=config,
     )
 
     assert response.finish_reason == FinishReason.FAILED
     assert response.error is not None
     assert response.error.status == 'INVALID_ARGUMENT'
-    assert "thinking='enabled' only supports tool_choice='auto' or 'none'" in response.error.message
+    assert f"thinking='{config.thinking}' only supports tool_choice='auto' or 'none'" in response.error.message
     assert api.requests == []
 
 

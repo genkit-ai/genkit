@@ -185,14 +185,19 @@ class AnthropicConfig(ModelConfig):
     level of the request body and win over the declared settings; a nested
     value such as ``extra={'thinking': {...}}`` replaces the whole built
     object rather than merging into it. A beta-only field in ``extra`` sends
-    the call to the beta API, the same as ``betas`` does.
+    the call to the beta API, the same as ``betas`` does. One exception:
+    ``extra={'tool_choice': ...}`` is dropped on a request with no tools, the
+    same as ``generate(tool_choice=)``, because the API rejects tool_choice
+    without tools.
     """
 
     model_config = ConfigDict(json_schema_extra=_anthropic_config_schema_extra)
 
-    # Config fields that are never create() kwargs. api_version picks the API
-    # surface. (api_key was removed from ModelConfig in #6597).
-    SDK_UNSUPPORTED_KEYS: ClassVar[frozenset[str]] = frozenset({'api_version'})
+    # Fields sent to messages.create() under their own name. Every other field
+    # is built into a request field by the plugin (thinking, output_config,
+    # metadata, tool_choice, model, max_tokens, betas) or picks the API surface
+    # (api_version).
+    CREATE_KWARGS: ClassVar[frozenset[str]] = frozenset({'temperature', 'top_k', 'top_p', 'stop_sequences'})
 
     thinking: ThinkingMode | None = Field(
         default=None,

@@ -489,26 +489,17 @@ class AnthropicModel:
         config = config or _normalize_config(request.config)
         if use_beta is None:
             use_beta = self._uses_beta_api(config)
-        params = config.model_dump(exclude_none=True)
-        extra = params.pop('extra', None)
+        # Only the fields create() takes as is; a new config field stays out
+        # of the request until it's listed here or built below.
+        params = config.model_dump(include=set(AnthropicConfig.CREATE_KWARGS), exclude_none=True)
+        extra = config.extra
+        max_tokens = config.max_output_tokens if config.max_output_tokens is not None else DEFAULT_MAX_OUTPUT_TOKENS
+        betas = config.betas
+        disable_parallel_tool_use = bool(config.disable_parallel_tool_use)
 
-        # Handle mapped parameters
-        max_tokens = params.pop('max_output_tokens', DEFAULT_MAX_OUTPUT_TOKENS)
-
-        # Flat fields the plugin builds Anthropic's nested objects from.
-        for key in ('thinking', 'thinking_budget', 'thinking_display', 'effort', 'task_budget', 'user_id'):
-            params.pop(key, None)
-        version = params.pop('version', None)
-        betas = params.pop('betas', None)
-        disable_parallel_tool_use = bool(params.pop('disable_parallel_tool_use', False))
-
-        params['model'] = version or self.model_name
+        params['model'] = config.version or self.model_name
         params['messages'] = self._to_anthropic_messages(request.messages)
         params['max_tokens'] = int(max_tokens)
-
-        # Not create() kwargs; see AnthropicConfig.SDK_UNSUPPORTED_KEYS.
-        for key in AnthropicConfig.SDK_UNSUPPORTED_KEYS:
-            params.pop(key, None)
 
         if use_beta:
             # Resold surfaces (Vertex, Bedrock) do not offer every default beta, so only the direct API gets them.
@@ -562,14 +553,20 @@ class AnthropicModel:
             params['system'] = system
 
         if request.tools:
+            thinking_mode = config.thinking_mode()
             if (
                 request.tool_choice == 'required'
-                and config.thinking_mode() == 'enabled'
+                and thinking_mode in ('enabled', 'adaptive')
                 and 'thinking' not in (extra or {})
                 and 'tool_choice' not in (extra or {})
             ):
-                raise ValueError(
-                    "anthropic: thinking='enabled' only supports tool_choice='auto' or 'none', not 'required'"
+                # Anthropic: tool use with thinking supports tool_choice auto or none only.
+                raise GenkitError(
+                    status='INVALID_ARGUMENT',
+                    message=(
+                        f"anthropic: thinking='{thinking_mode}' only supports tool_choice='auto' or 'none', "
+                        "not 'required'"
+                    ),
                 )
             params['tools'] = [
                 {

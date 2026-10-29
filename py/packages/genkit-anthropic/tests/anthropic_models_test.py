@@ -1118,6 +1118,47 @@ def test_build_params_default_max_tokens() -> None:
     assert {'temperature', 'top_p', 'top_k', 'stop_sequences'}.isdisjoint(params)
 
 
+# Every AnthropicConfig field the plugin builds into a request field (or uses
+# to pick the API surface) instead of passing to create() as is.
+_BUILT_FIELDS = frozenset({
+    'version',
+    'max_output_tokens',
+    'extra',
+    'thinking',
+    'thinking_budget',
+    'thinking_display',
+    'effort',
+    'task_budget',
+    'user_id',
+    'disable_parallel_tool_use',
+    'api_version',
+    'betas',
+})
+
+
+def test_every_config_field_is_a_create_kwarg_or_built() -> None:
+    """A new AnthropicConfig field must be classified, so it can't reach create() by accident."""
+    assert set(AnthropicConfig.model_fields) == AnthropicConfig.CREATE_KWARGS | _BUILT_FIELDS
+    assert AnthropicConfig.CREATE_KWARGS.isdisjoint(_BUILT_FIELDS)
+
+
+def test_build_params_sends_only_create_kwargs_from_config() -> None:
+    """A config field not listed in CREATE_KWARGS stays out of messages.create() kwargs."""
+
+    class TaggedConfig(AnthropicConfig):
+        menu_tag: str | None = None
+
+    model = AnthropicModel(model_name='claude-sonnet-4', client=MagicMock())
+
+    params = model._build_params(
+        _text_request({}), config=TaggedConfig(menu_tag='brunch', temperature=0.2, stop_sequences=['END'])
+    )
+
+    assert 'menu_tag' not in params
+    assert params['temperature'] == 0.2
+    assert params['stop_sequences'] == ['END']
+
+
 @pytest.mark.asyncio
 async def test_dict_config_extra_reaches_sdk() -> None:
     """Keys under `extra` in a dict config pass through the SDK body escape hatch."""
@@ -1405,7 +1446,7 @@ async def test_finish_reason_mapping(stop_reason: str, expected: FinishReason) -
     ],
 )
 def test_thinking_object_keeps_main_key_order(config: AnthropicConfig, expected: dict) -> None:
-    """display, type, budget_tokens: the order main sent, so the request body is byte-identical."""
+    """thinking keys go out in display, type, budget_tokens order, so the request body is stable."""
     thinking = _to_anthropic_thinking(config)
 
     assert thinking == expected
