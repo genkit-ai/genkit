@@ -20,13 +20,18 @@
 
 from __future__ import annotations
 
-from typing import Any, ClassVar, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 from pydantic import ConfigDict, Field, RootModel, field_validator
 from pydantic.alias_generators import to_camel
 
 from genkit._core._base import GenkitModel
 from genkit._core._compat import StrEnum
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from genkit._core import _model
 
 
 class AgentFinishReason(StrEnum):
@@ -493,6 +498,13 @@ class GenerationUsage(GenkitModel):
     thoughts_tokens: float | None = None
     cached_content_tokens: float | None = None
     cache_write_tokens: float | None = None
+
+    @classmethod
+    def from_messages(cls, messages: Sequence[_model.Message], response: _model.Message) -> GenerationUsage:
+        """Character and media counts for the request messages and the model reply."""
+        from genkit._core._model import count_message_usage  # noqa: PLC0415 - _model imports this module
+
+        return cls.model_validate(count_message_usage(messages, response))
 
 
 class MediaPart(GenkitModel):

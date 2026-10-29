@@ -12,9 +12,10 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from genkit import FinishReason, Message, ModelResponse, ModelResponseChunk, Part, Role
 from genkit._ai._model import text_from_content
+from genkit._core import _typing as wire
 from genkit._core._action import ActionRunContext
 from genkit._core._error import GenkitError, RuntimeErrorReason
-from genkit._core._model import OutputConfig, chunk_for_stream
+from genkit._core._model import ABNORMAL_FINISH_REASONS, OutputConfig, SessionState, chunk_for_stream
 from genkit._core._schema import InvalidOutputSchemaError, to_json_schema
 from genkit._core._typing import (
     ActionMetadata,
@@ -273,6 +274,19 @@ def test_generation_usage_from_messages(
     """Test GenerationUsage.from_messages utility."""
     assert GenerationUsage.from_messages(test_input, test_response) == expected_output
     assert GenerationUsage.from_messages(messages=test_input, response=test_response) == expected_output
+
+
+def test_generation_usage_is_one_class_across_wire_and_public_types() -> None:
+    """A usage built from the wire module is the public GenerationUsage, so SessionState accepts it."""
+    usage = wire.GenerationUsage(input_tokens=1)
+
+    assert isinstance(usage, GenerationUsage)
+    assert SessionState(usage=usage).usage is usage
+
+
+def test_abnormal_finish_reasons_match_is_abnormal() -> None:
+    """Core output validation and FinishReason.is_abnormal agree on every reason."""
+    assert ABNORMAL_FINISH_REASONS == {reason for reason in FinishReason if reason.is_abnormal()}
 
 
 def test_finish_reason_is_abnormal() -> None:
@@ -773,3 +787,33 @@ def test_schema_check_passes_when_json_format_no_schema_valid() -> None:
     assert response.finish_reason == FinishReason.STOP
     assert response.error is None
     assert response.output == {'item': 'bread'}
+
+
+def test_candidates_only_response_promotes_candidate_zero() -> None:
+    """A legacy or JS-shaped payload with only candidates keeps candidate 0's reply."""
+    response = ModelResponse.model_validate({
+        'candidates': [
+            {'index': 1, 'message': {'role': 'model', 'content': [{'text': 'second'}]}, 'finishReason': 'length'},
+            {
+                'index': 0,
+                'message': {'role': 'model', 'content': [{'text': 'Smoked Salmon Tartine'}]},
+                'finishReason': 'stop',
+                'finishMessage': 'done',
+            },
+        ]
+    })
+
+    assert response.text == 'Smoked Salmon Tartine'
+    assert response.finish_reason == FinishReason.STOP
+    assert response.finish_message == 'done'
+
+
+def test_candidates_are_dropped_when_the_top_level_reply_is_set() -> None:
+    """The top-level message wins; candidates are only a fallback."""
+    response = ModelResponse.model_validate({
+        'message': {'role': 'model', 'content': [{'text': 'top'}]},
+        'finishReason': 'stop',
+        'candidates': [{'index': 0, 'message': {'role': 'model', 'content': [{'text': 'cand'}]}}],
+    })
+
+    assert response.text == 'top'

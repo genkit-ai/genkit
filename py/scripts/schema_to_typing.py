@@ -129,13 +129,18 @@ HEADER = '''# Copyright {year} Google LLC
 
 from __future__ import annotations
 
-from typing import Any, ClassVar, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 from pydantic import ConfigDict, Field, RootModel, field_validator
 from pydantic.alias_generators import to_camel
 
 from genkit._core._base import GenkitModel
 from genkit._core._compat import StrEnum
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from genkit._core import _model
 
 '''
 
@@ -414,6 +419,19 @@ def _emit_model(
             '    # Store Pydantic type for runtime validation (excluded from JSON)',
             '    schema_type: Any = Field(default=None, exclude=True)',
         ])
+    if name == 'GenerationUsage':
+        # One GenerationUsage class: a hand-written subclass would leave wire
+        # instances (SessionState.usage, AgentOutput.usage) rejected by the
+        # public type. The counting lives in _model, which imports this module.
+        lines.extend([
+            '',
+            '    @classmethod',
+            '    def from_messages(cls, messages: Sequence[_model.Message], response: _model.Message) -> GenerationUsage:',
+            '        """Character and media counts for the request messages and the model reply."""',
+            '        from genkit._core._model import count_message_usage  # noqa: PLC0415 - _model imports this module',
+            '',
+            '        return cls.model_validate(count_message_usage(messages, response))',
+        ])
     if name in ('EvalFnResponse', 'EvaluatorResponse'):
         lines.extend([
             '',
@@ -555,7 +573,8 @@ def generate(schema_path: Path, _out: Path) -> str:
     ])
 
     content = '\n'.join(out)
-    content = re.sub(r'\bMessage\b(?!Data)', 'MessageData', content)
+    # _model.Message is the public Message (GenerationUsage.from_messages), not the wire type.
+    content = re.sub(r'(?<!_model\.)\bMessage\b(?!Data)', 'MessageData', content)
     return content + '\n'
 
 

@@ -1429,12 +1429,33 @@ async def test_check_that_assigns_a_non_response_output_fails_naming_the_action(
     ai.define_background_model(name='render', start=start, check=check)
     op = await ai.generate_operation(model='render', prompt='15s promo')
 
-    with pytest.raises(
-        GenkitError, match="'render/check': Operation.output must be a ModelResponse, got dict"
-    ) as raised:
+    with pytest.raises(GenkitError, match="'render/check': invalid Operation: output") as raised:
         await ai.check_operation(op)
 
     assert raised.value.status == 'INTERNAL'
+    assert raised.value.reason is RuntimeErrorReason.INVALID_OUTPUT
+
+
+@pytest.mark.asyncio
+async def test_check_that_assigns_a_bad_error_blames_error_not_output(ai: Genkit) -> None:
+    """The message names the field that failed, even when output is None and valid."""
+
+    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+        return Operation(id='render-1', done=False)
+
+    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+        op.done = True
+        op.error = cast(Any, 'boom')
+        return op
+
+    ai.define_background_model(name='render', start=start, check=check)
+    op = await ai.generate_operation(model='render', prompt='15s promo')
+
+    with pytest.raises(GenkitError, match="'render/check': invalid Operation: error") as raised:
+        await ai.check_operation(op)
+
+    assert raised.value.status == 'INTERNAL'
+    assert raised.value.reason is RuntimeErrorReason.INVALID_OUTPUT
 
 
 @pytest.mark.asyncio
@@ -1451,7 +1472,35 @@ async def test_check_with_a_handle_whose_output_is_not_a_model_response_is_inval
     op = await ai.generate_operation(model='render', prompt='15s promo')
     stale = Operation(id=op.id, action=op.action, done=True, output={'video_url': 'https://cdn.example/r1.mp4'})
 
-    with pytest.raises(GenkitError) as raised:
+    with pytest.raises(GenkitError, match='invalid Operation: output') as raised:
         await ai.check_operation(stale)
 
     assert raised.value.status == 'INVALID_ARGUMENT'
+    assert raised.value.reason is RuntimeErrorReason.INVALID_INPUT
+
+
+@pytest.mark.asyncio
+async def test_check_with_a_bad_output_dict_fails_before_a_plain_action_check_runs(ai: Genkit) -> None:
+    """A BackgroundModel built from plain Actions still rejects a stored handle with a bad output."""
+    calls: list[Operation] = []
+
+    async def start(_request: ModelRequest) -> Operation:
+        return Operation(id='research-1', action='/background-model/research', done=False)
+
+    async def check(op: Operation) -> Operation:
+        calls.append(op)
+        return op
+
+    ai._registry.register_action(name='research', kind=ActionKind.BACKGROUND_MODEL, fn=start)
+    ai._registry.register_action(name='research/check', kind=ActionKind.CHECK_OPERATION, fn=check)
+
+    with pytest.raises(GenkitError, match='invalid Operation: output') as raised:
+        await ai.check_operation({
+            'id': 'research-1',
+            'action': '/background-model/research',
+            'output': {'video_url': 1},
+        })
+
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    assert raised.value.reason is RuntimeErrorReason.INVALID_INPUT
+    assert calls == []

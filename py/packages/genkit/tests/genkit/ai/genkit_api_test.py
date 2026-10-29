@@ -351,7 +351,7 @@ async def test_check_operation_stored_dict_output_reaches_check_as_model_respons
 
 @pytest.mark.asyncio
 async def test_check_operation_typod_key_is_invalid_argument() -> None:
-    """A typo'd key fails with the field named instead of loading as done=None (the #6131 extra='ignore' bug)."""
+    """A typo'd key fails INVALID_ARGUMENT with the field named instead of loading as done=None."""
     ai = Genkit()
 
     with pytest.raises(GenkitError, match='invalid Operation: Done: Extra inputs are not permitted') as exc_info:
