@@ -641,13 +641,15 @@ async def test_close_is_final(tmp_path: Path) -> None:
         await expand_wildcard_tools(ai._registry, ['hosted:tool/*'])
     with pytest.raises(GenkitError, match=closed) as connecting:
         await host.connect('gamma', server(tmp_path, pid_name='gamma'))
+    with pytest.raises(GenkitError, match=closed) as connecting_disabled:
+        await host.connect('gamma', {'command': 'npx', 'disabled': True})
     with pytest.raises(GenkitError, match=closed) as reconnecting:
         await host.reconnect('alpha')
     with pytest.raises(GenkitError, match=closed) as disconnecting:
         await host.disconnect('alpha')
     with pytest.raises(GenkitError, match=closed) as naming:
         host.tool_name('alpha', 'echo')
-    for raised in (listing, selecting, connecting, reconnecting, disconnecting, naming):
+    for raised in (listing, selecting, connecting, connecting_disabled, reconnecting, disconnecting, naming):
         assert raised.value.status == 'FAILED_PRECONDITION'
     assert server_processes() == []
 

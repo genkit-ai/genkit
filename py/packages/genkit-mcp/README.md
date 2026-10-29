@@ -127,7 +127,8 @@ not a stdio entry, such as one with a `url` or `type: 'sse'`, fails the host wit
 that server. So does an entry with any key besides `command`, `args`, `env`, `cwd`, `type` and
 `disabled`. An entry with `disabled: true` is checked the same way, but its server is never started
 or listed. `await host.connect(name, entry)` takes one entry too, so a server from the same file
-can be added later: `await host.connect('git', config['mcpServers']['git'])`.
+can be added later: `await host.connect('git', config['mcpServers']['git'])`. Connecting a disabled
+entry stops any server of that name.
 
 An entry's `env` often holds secrets, and a traceback that renders frame locals, as Genkit's console
 logging does, can print them. Once a host is defined, the plugin keeps `env` out of its own frames.
