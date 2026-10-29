@@ -46,7 +46,7 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from pydantic import BaseModel, Field
 
-from genkit import ActionRunContext, Genkit, PublicError
+from genkit import FlowContext, Genkit, PublicError
 from genkit._core._action import ActionKind
 from genkit._core._middleware import BaseMiddleware
 from genkit._core._model import ModelConfig
@@ -157,7 +157,7 @@ async def test_run_action_standard(asgi_client: AsyncClient, mock_registry: Magi
             await on_trace_start('test_trace_id', 'test_span_id')
         return mock_output
 
-    mock_action.run.side_effect = side_effect
+    mock_action._run.side_effect = side_effect
 
     async def mock_resolve_action_by_key(key: str) -> AsyncMock:
         return mock_action
@@ -174,7 +174,7 @@ async def test_run_action_standard(asgi_client: AsyncClient, mock_registry: Magi
     assert response_data['telemetry']['spanId'] == 'test_span_id'
     assert response.headers['X-Genkit-Trace-Id'] == 'test_trace_id'
     assert response.headers['X-Genkit-Span-Id'] == 'test_span_id'
-    mock_action.run.assert_called_once_with(
+    mock_action._run.assert_called_once_with(
         input={'data': 'test'},
         context={},
         on_trace_start=ANY,
@@ -191,11 +191,11 @@ async def test_run_action_context_reaches_flow_and_subflow() -> None:
     caller = {'auth': {'uid': 'u_42', 'tier': 'gold'}, 'locale': 'en-US'}
 
     @ai.flow()
-    async def allergy_check(dish: str, ctx: ActionRunContext) -> dict[str, Any]:
+    async def allergy_check(dish: str, ctx: FlowContext) -> dict[str, Any]:
         return dict(ctx.context)
 
     @ai.flow()
-    async def order_dish(dish: str, ctx: ActionRunContext) -> dict[str, Any]:
+    async def order_dish(dish: str, ctx: FlowContext) -> dict[str, Any]:
         return {'flow': dict(ctx.context), 'subflow': await allergy_check(dish)}
 
     app = create_reflection_asgi_app(ai._registry)
@@ -260,7 +260,7 @@ async def test_run_action_streaming(
         mock_output.span_id = 'stream_span_id'
         return mock_output
 
-    mock_action.run.side_effect = mock_streaming
+    mock_action._run.side_effect = mock_streaming
     mock_registry.resolve_action_by_key.return_value = mock_action
 
     response = await asgi_client.post(
@@ -313,7 +313,7 @@ async def test_run_action_streaming_primitive_types(
         mock_output.span_id = 'stream_span_id'
         return mock_output
 
-    mock_action.run.side_effect = mock_streaming
+    mock_action._run.side_effect = mock_streaming
     mock_registry.resolve_action_by_key.return_value = mock_action
 
     response = await asgi_client.post(

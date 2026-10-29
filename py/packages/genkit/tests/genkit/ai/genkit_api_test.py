@@ -19,12 +19,13 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from genkit import Genkit, Message, Part, Role, get_logger
-from genkit._core._action import ActionKind, ActionRunContext, _action_context
+from genkit._core._action import ActionKind, _action_context
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import ModelRequest, ModelResponse
 from genkit._core._operation import Operation
 from genkit._core._telemetry._log_exporter import build_log_record
 from genkit.evaluator import BaseDataPoint, EvaluatorResponse, Score
+from genkit.model import ModelContext
 from genkit.telemetry import (
     SpanMetadata,
     SpanNext,
@@ -281,10 +282,10 @@ async def test_check_operation_round_trips_persisted_dump() -> None:
     """model_dump(by_alias=True) -> model_validate still works next to passing the dict."""
     ai = Genkit()
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
         return Operation(id='job-1', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return Operation(id=op.id, done=True)
 
     ai.define_background_model(name='bg-rt', start=start, check=check)
@@ -305,10 +306,10 @@ async def test_check_operation_accepts_stored_dict() -> None:
     """generate_operation -> JSON -> json.loads -> check_operation, no model_validate step."""
     ai = Genkit()
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
         return Operation(id='job-1', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return Operation(id=op.id, done=True, output=_text_response('rendered'))
 
     ai.define_background_model(name='bg-dict', start=start, check=check)
@@ -330,10 +331,10 @@ async def test_check_operation_stored_dict_output_reaches_check_as_model_respons
     ai = Genkit()
     seen: list[object] = []
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
         return Operation(id='job-1', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         seen.append(op.output)
         return op
 
@@ -388,10 +389,10 @@ async def test_check_action_input_schema_stays_closed() -> None:
     """Dicts are validated before the action runs, so the published input schema is still a closed Operation."""
     ai = Genkit()
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
         return Operation(id='job-1', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
     ai.define_background_model(name='bg-schema', start=start, check=check, cancel=check)
@@ -436,13 +437,13 @@ async def test_cancel_operation_round_trips_persisted_dump() -> None:
     """Cancel accepts the same save/reload path as check."""
     ai = Genkit()
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
         return Operation(id='job-1', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
-    async def cancel(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def cancel(op: Operation, _ctx: ModelContext) -> Operation:
         return Operation(id=op.id, done=True)
 
     ai.define_background_model(name='bg-cancel-rt', start=start, check=check, cancel=cancel)
@@ -459,13 +460,13 @@ async def test_cancel_operation_accepts_stored_dict() -> None:
     """The dict a started handle dumped to cancels without a model_validate step."""
     ai = Genkit()
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
         return Operation(id='job-1', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
-    async def cancel(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def cancel(op: Operation, _ctx: ModelContext) -> Operation:
         return Operation(id=op.id, done=True, output=_text_response('cancelled'))
 
     ai.define_background_model(name='bg-cancel-dict', start=start, check=check, cancel=cancel)
@@ -483,10 +484,10 @@ async def test_cancel_operation_accepts_stored_dict() -> None:
 async def test_cancel_operation_without_cancel_is_unimplemented() -> None:
     """The wrapper's UNIMPLEMENTED propagates through the veneer unchanged."""
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
         return Operation(id='123', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
     ai = Genkit()
@@ -504,10 +505,10 @@ async def test_cancel_operation_without_cancel_is_unimplemented() -> None:
 async def test_background_model_cancel_without_fn_is_unimplemented() -> None:
     """A real no-cancel BackgroundModel raises UNIMPLEMENTED from .cancel."""
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
         return Operation(id='1', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
     ai = Genkit()
@@ -525,10 +526,10 @@ async def test_background_model_cancel_without_fn_is_unimplemented() -> None:
 async def test_background_model_check_gate() -> None:
     """BackgroundModel.check uses the same require_operation gate as the veneer: dict in, boxes and strings out."""
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
         return Operation(id='1', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return Operation(id=op.id, done=True)
 
     ai = Genkit()
@@ -557,10 +558,10 @@ async def test_background_model_check_gate() -> None:
 async def test_background_model_cancel_validates_dict_before_unimplemented() -> None:
     """A stored dict is validated first, so a bad one is INVALID_ARGUMENT and a good one reaches UNIMPLEMENTED."""
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
         return Operation(id='1', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
     ai = Genkit()
@@ -583,7 +584,7 @@ async def test_current_context() -> None:
 
     context: dict[str, object] = {'auth': {'uid': '123'}}
 
-    # Simulate being inside an action run using ActionRunContext internal mechanism
+    # Simulate being inside an action run using ModelContext internal mechanism
     token = _action_context.set(context)
     try:
         assert Genkit.current_context() == context

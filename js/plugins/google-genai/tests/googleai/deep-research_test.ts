@@ -18,11 +18,14 @@ import * as assert from 'assert';
 import { GenerateRequest } from 'genkit/model';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import * as sinon from 'sinon';
+import { GeminiInteraction } from '../../src/common/interaction-types.js';
 import {
   DeepResearchConfigSchema,
+  TEST_ONLY,
   defineModel,
+  listKnownModels,
+  model,
 } from '../../src/googleai/deep-research.js';
-import { GeminiInteraction } from '../../src/googleai/interaction-types.js';
 import { GoogleAIPluginOptions } from '../../src/googleai/types.js';
 
 describe('Deep Research', () => {
@@ -76,8 +79,38 @@ describe('Deep Research', () => {
     ],
   };
 
+  describe('hidden models', () => {
+    it('keeps deep-research-pro-preview-12-2025 usable, with a stage', () => {
+      const ref = model('deep-research-pro-preview-12-2025');
+      assert.strictEqual(
+        ref.name,
+        'googleai/deep-research-pro-preview-12-2025'
+      );
+      assert.strictEqual(ref.info?.stage, 'deprecated');
+      assert.deepStrictEqual(
+        ref.info?.supports,
+        TEST_ONLY.GENERIC_MODEL.info?.supports
+      );
+      assert.ok(
+        !Object.keys(TEST_ONLY.KNOWN_MODELS).includes(
+          'deep-research-pro-preview-12-2025'
+        )
+      );
+    });
+
+    it('still registers hidden models', () => {
+      const names = listKnownModels(defaultPluginOptions).map(
+        (m) => m.__action.name
+      );
+      assert.ok(names.includes('googleai/deep-research-pro-preview-12-2025'));
+      for (const name of Object.keys(TEST_ONLY.KNOWN_MODELS)) {
+        assert.ok(names.includes(`googleai/${name}`), name);
+      }
+    });
+  });
+
   describe('defineModel', () => {
-    it('passes responseModalities to the API', async () => {
+    it('sends responseModalities as response_format entries', async () => {
       const model = defineModel(
         'deep-research-pro-preview-12-2025',
         defaultPluginOptions
@@ -98,7 +131,11 @@ describe('Deep Research', () => {
       const options = fetchArgs[1];
       const body = JSON.parse(options.body);
 
-      assert.deepStrictEqual(body.response_modalities, ['text', 'image']);
+      assert.deepStrictEqual(body.response_format, [
+        { type: 'text' },
+        { type: 'image' },
+      ]);
+      assert.strictEqual(body.response_modalities, undefined);
     });
 
     it('passes agent_config options to the API', async () => {

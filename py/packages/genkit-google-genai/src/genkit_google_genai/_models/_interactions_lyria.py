@@ -43,8 +43,8 @@ from pydantic import BaseModel, ConfigDict, field_validator
 from pydantic.alias_generators import to_camel
 from typing_extensions import Never
 
-from genkit import ActionRunContext, ModelResponse
-from genkit.model import ModelRequest, model_action_metadata
+from genkit import ModelResponse
+from genkit.model import ModelContext, ModelRequest, model_action_metadata
 from genkit.plugin_api import Action, ActionKind
 
 CREATE_OPTION_KEYS = ('response_modalities',)
@@ -78,7 +78,7 @@ def create_lyria_action(
     version = extract_version(name)
     info = lyria_model_info(version)
 
-    async def run(request: ModelRequest[LyriaConfig], ctx: ActionRunContext) -> ModelResponse:
+    async def run(request: ModelRequest[LyriaConfig], ctx: ModelContext) -> ModelResponse:
         reject_request_config_api_key(request.config)
         config = request.config or LyriaConfig()
         api_key = api_key_for_context(ctx.context, plugin_api_key)

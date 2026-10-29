@@ -34,7 +34,6 @@ import (
 	aix "github.com/firebase/genkit/go/ai/exp"
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
-	"github.com/firebase/genkit/go/core/tracing"
 )
 
 // fakeManager is a test double for the CLI's reflection V2 manager. It accepts
@@ -136,7 +135,8 @@ func (m *fakeManager) ackRegister(t *testing.T, ctx context.Context, conn *webso
 // and waits for the WebSocket dial to succeed.
 func startRuntime(t *testing.T, g *Genkit, m *fakeManager) (context.Context, func()) {
 	t.Helper()
-	tracing.WriteTelemetryImmediate(tracing.NewTestOnlyTelemetryClient())
+	// Spans carry real trace ids via the Direct instrumentation configured in
+	// TestMain; no OpenTelemetry SDK involved.
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)

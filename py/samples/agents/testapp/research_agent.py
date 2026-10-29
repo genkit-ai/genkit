@@ -32,8 +32,9 @@ from typing import Any
 from _ai import LITE_MODEL, ai, reply_text
 from pydantic import BaseModel
 
-from genkit import ActionRunContext
+from genkit import FlowContext
 from genkit.exp.agent import (
+    AgentContext,
     AgentFinishReason,
     AgentInput,
     AgentResult,
@@ -59,7 +60,7 @@ def _text(parts: list[Any] | None) -> str:
     return ''.join((p.text or '') or '' for p in (parts or []))
 
 
-async def research_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
+async def research_fn(sess: SessionRunner, ctx: AgentContext) -> AgentResult:
     async def handle_turn(inp: AgentInput, _: TurnContext) -> TurnResult | None:
         question = _text(inp.message.content) if inp.message else ''
 
@@ -110,7 +111,7 @@ research_agent = ai.define_custom_agent(name='researchAgent', fn=research_fn, st
 
 
 @ai.flow()
-async def test_research_agent(text: str, ctx: ActionRunContext) -> str:
+async def test_research_agent(text: str, ctx: FlowContext) -> str:
     """Watch the status line advance (chunk.custom) while the answer streams in."""
     chat = research_agent.chat(state={'custom': {'status': '', 'sub_questions': []}, 'messages': [], 'artifacts': []})
     turn = chat.send_stream(text or 'What are the environmental and economic impacts of electric vehicles?')

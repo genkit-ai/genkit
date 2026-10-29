@@ -29,7 +29,7 @@ from __future__ import annotations
 from _ai import ai, reply_text
 from pydantic import BaseModel
 
-from genkit import ActionRunContext
+from genkit import FlowContext
 from genkit.exp.agent import FileSessionStore
 
 
@@ -71,7 +71,7 @@ trip_planner_agent = ai.define_agent(
 
 
 @ai.flow()
-async def test_trip_planner_agent(text: str, ctx: ActionRunContext) -> str:
+async def test_trip_planner_agent(text: str, ctx: FlowContext) -> str:
     chat = trip_planner_agent.chat()
     turn = chat.send_stream(text or 'I want to plan a trip to Paris. What should I see there?')
     async for chunk in turn:

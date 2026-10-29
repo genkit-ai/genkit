@@ -23,11 +23,12 @@
 import pytest
 
 from genkit import Genkit, Message, ModelResponse, Part, Role
-from genkit._core._action import Action, ActionRunContext
+from genkit._core._action import Action
 from genkit._core._model import ModelRequest
 from genkit._core._registry import ActionKind
 from genkit._core._typing import ActionMetadata, FinishReason
 from genkit.middleware import BaseMiddleware, GenerateMiddleware
+from genkit.model import ModelContext
 from genkit.plugin_api import Plugin
 
 
@@ -48,7 +49,7 @@ class AsyncResolveOnlyPlugin(Plugin):
         if name != 'lazy-model':
             return None
 
-        async def _generate(req: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        async def _generate(req: ModelRequest, ctx: ModelContext) -> ModelResponse:
             return ModelResponse(
                 message=Message(role=Role.MODEL, content=[Part.from_text('OK: lazy')]),
                 finish_reason=FinishReason.STOP,
@@ -87,7 +88,7 @@ class AsyncInitPlugin(Plugin):
         if name != f'{self.name}/init-model':
             return None
 
-        async def _generate(req: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        async def _generate(req: ModelRequest, ctx: ModelContext) -> ModelResponse:
             return ModelResponse(
                 message=Message(role=Role.MODEL, content=[Part.from_text('OK: resolve')]),
                 finish_reason=FinishReason.STOP,

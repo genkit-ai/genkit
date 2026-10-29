@@ -25,8 +25,8 @@ from urllib.parse import urlsplit
 import structlog
 from anthropic import AsyncAnthropic
 
-from genkit import ActionRunContext, GenkitError, ModelResponse
-from genkit.model import ModelRef, ModelRequest, model as create_model, model_action_metadata
+from genkit import GenkitError, ModelResponse
+from genkit.model import ModelContext, ModelRef, ModelRequest, model as create_model, model_action_metadata
 from genkit.plugin_api import (
     Action,
     ActionKind,
@@ -194,8 +194,12 @@ class Anthropic(Plugin):
         else:
             _reject_v1_suffix(os.environ.get('ANTHROPIC_BASE_URL'), source='ANTHROPIC_BASE_URL')
         self._default_api_version: Literal['stable', 'beta'] | None = api_version
-        self._runtime_client = loop_local_client(lambda: AsyncAnthropic(**options))
+        self._options = options
         self._list_actions_cache: list[ActionMetadata] | None = None
+
+    @loop_local_client
+    def _runtime_client(self) -> AsyncAnthropic:
+        return AsyncAnthropic(**self._options)
 
     async def init(self) -> list[Action]:
         """Initialize plugin.
@@ -231,7 +235,7 @@ class Anthropic(Plugin):
         """
         model_info = get_model_info(name)
 
-        async def _generate(request: ModelRequest[AnthropicConfig], ctx: ActionRunContext) -> ModelResponse:
+        async def _generate(request: ModelRequest[AnthropicConfig], ctx: ModelContext) -> ModelResponse:
             # A key in config is the more specific error, so it wins over a missing plugin key.
             reject_config_api_key(request.config)
             client = self._runtime_client()

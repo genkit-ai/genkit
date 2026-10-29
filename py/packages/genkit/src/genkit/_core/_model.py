@@ -27,7 +27,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from functools import cached_property
 from importlib import import_module
-from typing import Any, ClassVar, Generic, Literal, TypeGuard, cast, get_args
+from typing import Any, ClassVar, Final, Generic, Literal, TypeGuard, cast, get_args
 
 from pydantic import (
     BaseModel,
@@ -120,7 +120,9 @@ ToolChoice = Literal['auto', 'required', 'none']
 #
 # Mirrors Go's FinishReason.isAbnormal (go/ai/generate.go). Derived from
 # FinishReason.is_abnormal so the two can't drift.
-ABNORMAL_FINISH_REASONS = frozenset(reason for reason in FinishReason if reason.is_abnormal())
+ABNORMAL_FINISH_REASONS: Final[frozenset[FinishReason]] = frozenset(
+    reason for reason in FinishReason if reason.is_abnormal()
+)
 
 logger = get_logger(__name__)
 

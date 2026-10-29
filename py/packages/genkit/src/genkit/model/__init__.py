@@ -21,6 +21,7 @@ from genkit._ai._model import (
     model,
     model_action_metadata,
 )
+from genkit._core._action import ModelContext
 from genkit._core._background import BackgroundModel, background_model
 from genkit._core._model import (
     GenerateActionOptions,
@@ -44,9 +45,10 @@ from genkit._core._typing import (
 __all__ = [
     # Errors
     'StreamingCallbackError',
-    # Request types
+    # Request and context types
     'BackgroundModel',
     'GenerateActionOptions',
+    'ModelContext',
     'ModelRequest',
     'OutputConfig',
     # Usage and metadata
