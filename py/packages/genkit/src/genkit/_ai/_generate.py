@@ -314,7 +314,7 @@ def register_middleware(
                     mw_cls._middleware_metadata(reg_name),
                 )
             # Dump keys that match the schema and that the config class validates.
-            config = _dump_middleware_ref_config(cast(BaseModel, entry.config))
+            config = _dump_middleware_ref_config(entry.config)
             refs.append(MiddlewareRef(name=reg_name, config=config))
         else:
             refs.append(entry)
