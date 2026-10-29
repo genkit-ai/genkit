@@ -201,10 +201,18 @@ OutputT_co = TypeVar('OutputT_co', covariant=True)
 
 
 class StreamResponse(Generic[ChunkT_co, OutputT_co]):
-    """Chunks from a running flow, then its result.
+    """Chunks from a running action, then its result.
 
-    Returned by ``flow.stream()``. If the flow raises, both the loop and
-    ``.response`` raise.
+    Returned by ``Action.stream()`` for every action kind: flows, tools,
+    models, and the rest.
+
+    - Chunks are single-pass. Once a loop has read them, a second ``async for``
+      yields nothing (or re-raises, if the run failed).
+    - ``.response`` can be awaited any number of times, before or after
+      iterating. Chunks sent before you iterate are buffered.
+    - If the run raises, both the loop and ``.response`` raise it.
+      ``ModelStreamResponse`` (``generate_stream``, ``prompt.stream``) reports
+      model failures on ``.response`` instead; see its docstring.
 
     Example:
         ```python

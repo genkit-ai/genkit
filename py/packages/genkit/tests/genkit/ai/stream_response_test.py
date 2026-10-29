@@ -23,7 +23,8 @@ from genkit import (
     Part,
     StreamResponse,
 )
-from genkit._core._typing import FinishReason, Role
+from genkit._core._typing import FinishReason, Role, ToolRequest
+from genkit.model import ModelContext, ModelRequest
 from genkit.testing import define_scripted_model
 
 
@@ -161,3 +162,108 @@ async def test_generate_stream_unknown_model_leaves_no_unretrieved_future() -> N
 
     assert statuses == ['NOT_FOUND', 'NOT_FOUND']
     assert seen == []
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_first_turn_failure_ends_loop_and_resolves_failed() -> None:
+    """A model that fails on turn 1 before any chunk ends the loop normally; `.response` is FAILED with error set."""
+    ai = Genkit()
+
+    async def broken(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
+        raise RuntimeError('kitchen closed')
+
+    ai.define_model(name='broken', fn=broken)
+
+    result = ai.generate_stream(model='broken', prompt='Suggest a dish.')
+    chunks = [chunk async for chunk in result]
+    response = await result.response
+
+    assert chunks == []
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.error is not None
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_tool_failure_resolves_failed() -> None:
+    """A tool that raises ends the loop normally; `.response` is FAILED with error set."""
+    ai = Genkit()
+
+    @ai.tool()
+    async def check_pantry(dish: str) -> str:
+        raise RuntimeError(f'pantry offline for {dish}')
+
+    define_scripted_model(
+        ai,
+        responses=[
+            ModelResponse(
+                finish_reason=FinishReason.STOP,
+                message=Message(
+                    role=Role.MODEL,
+                    content=[Part(tool_request=ToolRequest(name='check_pantry', input='soup', ref='r1'))],
+                ),
+            ),
+        ],
+    )
+
+    result = ai.generate_stream(model='scriptedModel', prompt='Can you make soup?', tools=['check_pantry'])
+    _ = [chunk async for chunk in result]
+    response = await result.response
+
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.error is not None
+
+
+@pytest.mark.asyncio
+async def test_stream_response_chunks_are_single_pass_and_response_rereads() -> None:
+    """A second `async for` yields nothing; `.response` awaits any number of times, before or after iterating."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def track_order(order_id: str, ctx: FlowContext[str]) -> str:
+        ctx.send_chunk('Packed')
+        ctx.send_chunk('Out for delivery')
+        return f'Order {order_id} delivered'
+
+    result = track_order.stream('A-1042')
+    before = await result.response
+    first = [update async for update in result]
+    second = [update async for update in result]
+
+    assert before == 'Order A-1042 delivered'
+    assert first == ['Packed', 'Out for delivery']
+    assert second == []
+    assert await result.response == 'Order A-1042 delivered'
+    assert await result.response == 'Order A-1042 delivered'
+
+
+@pytest.mark.asyncio
+async def test_failed_stream_second_loop_reraises() -> None:
+    """After a failed run, a second `async for` raises the same error again."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def track_order(order_id: str) -> str:
+        raise ValueError(f'no courier for {order_id}')
+
+    result = track_order.stream('A-1042')
+    for _ in range(2):
+        with pytest.raises(ValueError, match='no courier'):
+            async for _ in result:
+                pass
+
+
+@pytest.mark.asyncio
+async def test_model_action_stream_returns_stream_response() -> None:
+    """`Action.stream` returns a StreamResponse for non-flow kinds too, e.g. a model action."""
+    ai = Genkit()
+
+    async def chef(_request: ModelRequest, ctx: ModelContext) -> ModelResponse:
+        ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('Tartine')]))
+        return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('Tartine')]))
+
+    action = ai.define_model(name='chef', fn=chef)
+    result = action.stream(ModelRequest(messages=[]))
+
+    assert isinstance(result, StreamResponse)
+    assert [chunk.text async for chunk in result] == ['Tartine']
+    assert (await result.response).text == 'Tartine'
