@@ -204,6 +204,10 @@ class StreamResponse(Generic[ChunkT_co, OutputT_co]):
     ``.stream`` is the same reader every time you touch it, and ``async for
     chunk in flow.stream(x)`` reads through that reader too, so you can pull
     a chunk off ``.stream`` and keep going with ``async for`` on either.
+
+    Leaving an ``async for`` early (``break``, an exception, or a cancel) stops
+    the run, and ``.response`` raises ``GenkitError`` with status ``CANCELLED``.
+    Reading to the end doesn't. See ``Action.stream``.
     """
 
     def __init__(
