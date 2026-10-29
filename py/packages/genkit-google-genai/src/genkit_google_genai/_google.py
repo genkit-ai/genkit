@@ -62,7 +62,7 @@ from google.genai.types import HttpOptions, HttpRetryOptions, Model as GenaiMode
 from pydantic import BaseModel
 
 import genkit_google_genai._constants as const
-from genkit import GenkitError, ModelResponse, Operation, get_logger
+from genkit import GenkitError, ModelResponse, Operation
 from genkit.embedder import Embedder, EmbedderRef, EmbedRequest, EmbedResponse
 from genkit.model import (
     BackgroundModel,
@@ -81,10 +81,6 @@ from genkit.plugin_api import (
     loop_local_client,
 )
 from genkit_google_genai._auth import GOOGLE_AUTH_ERRORS, raise_auth_error
-from genkit_google_genai._evaluators._evaluation import (
-    VertexAIEvaluationMetricType,
-    create_vertex_evaluators,
-)
 from genkit_google_genai._interactions._options import ClientOptions
 from genkit_google_genai._models._antigravity import AntigravityConfig, create_antigravity_action
 from genkit_google_genai._models._deep_research import (
@@ -157,8 +153,6 @@ from genkit_google_genai._models._virtual_try_on import (
     virtual_try_on_model_info,
 )
 from genkit_google_genai._provider_errors import TRANSPORT_ERRORS, api_error, transport_error
-
-logger = get_logger(__name__)
 
 
 class GenaiModels:
@@ -1126,8 +1120,8 @@ class VertexAI(GoogleFamilyRefs, Plugin):
                 only works on the loop that first used it, and Genkit runs on
                 more than one: ``genkit start`` serves the Dev UI from its own
                 thread and loop. Genkit never closes these clients.
-                OAuth token refresh, Vertex evaluators and downloads of media
-                URLs in prompts don't use them.
+                OAuth token refresh and downloads of media URLs in prompts
+                don't use them.
 
                 ```python
                 VertexAI(http_client_factory=lambda: httpx.AsyncClient(proxy='http://proxy.internal:3128'))
@@ -1137,8 +1131,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
                 converted to its format; a schema that cannot be converted
                 raises ``INVALID_ARGUMENT``. Defaults to False.
         """
-        # Store project and location on the plugin for evaluator registration
-        # and multi-region routing. This avoids reaching into client internals.
+        # Store project and location on the plugin for multi-region routing. This avoids reaching into client internals.
         self._project = project or os.getenv(const.GCLOUD_PROJECT) or os.getenv(const.GOOGLE_CLOUD_PROJECT)
         self._location = (
             location
@@ -1164,9 +1157,8 @@ class VertexAI(GoogleFamilyRefs, Plugin):
             opts.base_url = const.multi_regional_base_url(self._location)
 
         # Resolve the project here rather than leaving it to the SDK: with any
-        # base_url set the SDK skips its own ADC lookup, evaluator registration
-        # needs a concrete project, and doing it now keeps the blocking ADC IO
-        # off the event loop. Express mode (api_key) needs no project, so it
+        # base_url set the SDK skips its own ADC lookup, and doing it now keeps
+        # the blocking ADC IO off the event loop. Express mode (api_key) needs no project, so it
         # only pays for the probe where a multi-region demands one.
         if not self._project and (api_key is None or multi_region):
             if credentials is not None:
@@ -1226,20 +1218,6 @@ class VertexAI(GoogleFamilyRefs, Plugin):
         for name in VERTEX_KNOWN_EMBEDDERS:
             actions.append(self._resolve_embedder(name))
 
-        # Vertex evaluators talk to a project-scoped Evaluation API. Express
-        # mode (api_key, no project) can still start the app; those evaluators
-        # simply are not registered.
-        if not self._project:
-            logger.debug('VertexAI has no project; skipping Vertex evaluator registration')
-        else:
-            actions.extend(
-                create_vertex_evaluators(
-                    list(VertexAIEvaluationMetricType),
-                    project=self._project,
-                    location=self._location,
-                )
-            )
-
         return actions
 
     def _list_known_embedders(self) -> list[Action]:
@@ -1273,8 +1251,6 @@ class VertexAI(GoogleFamilyRefs, Plugin):
             return None
         elif action_type == ActionKind.EMBEDDER:
             return self._resolve_embedder(name)
-        elif action_type == ActionKind.EVALUATOR:
-            return self._resolve_evaluator(name)
         return None
 
     def _resolve_veo_model(self, name: str) -> BackgroundModel:
@@ -1287,44 +1263,6 @@ class VertexAI(GoogleFamilyRefs, Plugin):
             BackgroundModel for the Veo model.
         """
         return _create_veo_background_model(name, self._runtime_client, VERTEXAI_PLUGIN_NAME, self._loop_client_kwargs)
-
-    def _resolve_evaluator(self, name: str) -> Action | None:
-        """Create an Action object for a Vertex AI evaluator.
-
-        Args:
-            name: The evaluator id without the ``vertexai/`` prefix.
-
-        Returns:
-            Action object for the evaluator.
-        """
-        # Iterate instead of calling VertexAIEvaluationMetricType(value): on
-        # Python 3.10 StrEnum comes from `strenum`, whose stub types __new__
-        # as returning the base StrEnum, so the constructor loses the subtype.
-        value = name.upper()
-        metric_type = next((m for m in VertexAIEvaluationMetricType if m.value == value), None)
-        if metric_type is None:
-            return None
-
-        # The name is a real Vertex metric, so "not found" would send people
-        # hunting for a typo. Say what's actually missing instead. The
-        # evaluators authenticate with ADC only (api_key and credentials are
-        # not used), so name both requirements.
-        if not self._project:
-            raise GenkitError(
-                message=(
-                    'Vertex evaluators need a project and Application Default Credentials; '
-                    'pass VertexAI(project=...) or set GOOGLE_CLOUD_PROJECT, '
-                    'and run `gcloud auth application-default login`'
-                ),
-                status='FAILED_PRECONDITION',
-            )
-
-        [action] = create_vertex_evaluators(
-            [metric_type],
-            project=self._project,
-            location=self._location,
-        )
-        return action
 
     def _resolve_model(self, name: str) -> Action | None:
         """Create an Action object for a Vertex AI model.
@@ -1443,15 +1381,6 @@ class VertexAI(GoogleFamilyRefs, Plugin):
 
         for name in VERTEX_KNOWN_EMBEDDERS:
             actions_list.append(_create_embedder_action(name, self._runtime_client, VERTEXAI_PLUGIN_NAME))
-
-        if self._project:
-            actions_list.extend(
-                create_vertex_evaluators(
-                    list(VertexAIEvaluationMetricType),
-                    project=self._project,
-                    location=self._location,
-                )
-            )
 
         self._list_actions_cache = actions_list
         return actions_list

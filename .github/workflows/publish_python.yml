@@ -62,7 +62,6 @@ jobs:
             py/packages/genkit-amazon-bedrock
             py/packages/genkit-anthropic
             py/packages/genkit-django
-            py/packages/genkit-evaluators
             py/packages/genkit-fastapi
             py/packages/genkit-flask
             py/packages/genkit-google-cloud

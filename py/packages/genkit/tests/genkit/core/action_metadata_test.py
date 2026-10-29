@@ -25,9 +25,8 @@ from pydantic import BaseModel, ValidationError
 from genkit import Genkit, Message, ModelResponse, Part, Role
 from genkit._core._reflection import create_reflection_asgi_app
 from genkit._core._schema import to_json_schema
-from genkit._core._typing import ActionMetadata, EvalResponse
+from genkit._core._typing import ActionMetadata
 from genkit.embedder import Embedder, EmbedRequest, EmbedResponse
-from genkit.evaluator import BaseDataPoint, Evaluator, EvaluatorRequest, EvaluatorResponse, Score
 from genkit.model import Model, ModelContext, ModelRequest
 from genkit.plugin_api import Action, ActionKind, Plugin
 
@@ -124,8 +123,8 @@ def test_action_metadata_input_schema_class_raises_validation_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_listed_model_embedder_evaluator_send_request_schema() -> None:
-    """Rows from Model/Embedder/Evaluator carry their request schema to /api/actions."""
+async def test_listed_model_embedder_send_request_schema() -> None:
+    """Rows from Model/Embedder carry their request schema to /api/actions."""
 
     async def generate_row(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))
@@ -133,14 +132,10 @@ async def test_listed_model_embedder_evaluator_send_request_schema() -> None:
     async def embed_row(request: EmbedRequest) -> EmbedResponse:
         return EmbedResponse(embeddings=[])
 
-    async def score_row(datapoint: BaseDataPoint, _options: object | None = None) -> EvaluatorResponse:
-        return EvaluatorResponse(test_case_id=datapoint.test_case_id or '', evaluation=[Score(score=True)])
-
     model_row = Model('acme/m', generate_row)
     embedder_row = Embedder('acme/e', embed_row)
-    evaluator_row = Evaluator('acme/ev', score_row, display_name='Acme', definition='Scores acme rows.')
 
-    listed = await api_actions(Genkit(plugins=[ListingPlugin([model_row, embedder_row, evaluator_row])]))
+    listed = await api_actions(Genkit(plugins=[ListingPlugin([model_row, embedder_row])]))
 
     assert model_row._action_metadata().input_schema == to_json_schema(ModelRequest)
     assert model_row._action_metadata().output_schema == to_json_schema(ModelResponse)
@@ -151,11 +146,6 @@ async def test_listed_model_embedder_evaluator_send_request_schema() -> None:
     assert embedder_row._action_metadata().output_schema == to_json_schema(EmbedResponse)
     assert listed['/embedder/acme/e']['inputSchema'] == to_json_schema(EmbedRequest)
     assert listed['/embedder/acme/e']['outputSchema'] == to_json_schema(EmbedResponse)
-
-    assert evaluator_row._action_metadata().input_schema == to_json_schema(EvaluatorRequest)
-    assert evaluator_row._action_metadata().output_schema == to_json_schema(EvalResponse)
-    assert listed['/evaluator/acme/ev']['inputSchema'] == to_json_schema(EvaluatorRequest)
-    assert listed['/evaluator/acme/ev']['outputSchema'] == to_json_schema(EvalResponse)
 
 
 @pytest.mark.asyncio

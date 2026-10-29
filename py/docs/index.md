@@ -23,10 +23,6 @@
 
 ::: genkit.plugin_api
 
-## genkit.evaluator
-
-::: genkit.evaluator
-
 ## genkit.telemetry
 
 ::: genkit.telemetry
