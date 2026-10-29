@@ -25,7 +25,7 @@ import pytest
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from genkit_fastapi import genkit_fastapi_handler, serve_flow
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from genkit import ActionRunContext, Genkit, GenkitError, PublicError
@@ -147,6 +147,35 @@ def test_fastapi_nested_flow_called_with_bad_input_is_500_not_400() -> None:
 
     assert response.status_code == 500
     assert response.json() == {'message': 'Internal Error', 'status': 'INTERNAL'}
+
+
+def test_fastapi_custom_validator_text_never_reaches_the_400() -> None:
+    """A field_validator's ValueError naming the value and a tenant is 'Invalid value' on the wire."""
+    ai = Genkit()
+
+    class Card(BaseModel):
+        number: str
+
+        @field_validator('number')
+        @classmethod
+        def known_card(cls, v: str) -> str:
+            raise ValueError(f'card {v} rejected for tenant acme-internal-db-7')
+
+    @ai.flow()
+    async def pay(card: Card) -> str:
+        return card.number
+
+    app = FastAPI()
+    app.include_router(serve_flow(pay, base_path='/pay'))
+    response = TestClient(app).post('/pay', json={'data': {'number': '4111111111111111'}})
+
+    assert response.status_code == 400
+    assert response.json() == {
+        'message': "Invalid input for flow 'pay': number: Invalid value",
+        'status': 'INVALID_ARGUMENT',
+    }
+    assert '4111' not in response.text
+    assert 'acme' not in response.text
 
 
 def test_unknown_body_shape_still_returns_400() -> None:

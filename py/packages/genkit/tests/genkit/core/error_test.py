@@ -20,7 +20,7 @@ from typing import Any, Literal
 from unittest.mock import MagicMock
 
 import pytest
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError, field_validator
 
 from genkit._core import _error as error_mod
 from genkit._core._error import (
@@ -242,6 +242,63 @@ def test_error_body_bad_flow_input_names_fields_not_values() -> None:
     }
     assert error_status(error) == 400
     assert 'lots' not in str(error_body(error))
+
+
+class _Card(BaseModel):
+    number: str
+
+    @field_validator('number')
+    @classmethod
+    def _known_card(cls, v: str) -> str:
+        raise ValueError(f'card {v} rejected for tenant acme-internal-db-7')
+
+
+class _StrictOrder(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    prices: dict[str, int]
+
+
+def _served_request_error(schema: Any, value: object) -> GenkitError:  # noqa: ANN401
+    cause = _validation_error(schema, value)
+    return mark_request_error(
+        error=GenkitError(status='INVALID_ARGUMENT', message="Invalid input for flow 'pay'", cause=cause)
+    )
+
+
+def test_error_body_bad_flow_input_hides_custom_validator_text() -> None:
+    """A field_validator's ValueError text stays in-process; the 400 says the field and 'Invalid value'."""
+    error = _served_request_error(_Card, {'number': '4111111111111111'})
+
+    assert error_body(error) == {
+        'message': "Invalid input for flow 'pay': number: Invalid value",
+        'status': 'INVALID_ARGUMENT',
+    }
+    assert error_status(error) == 400
+    # In-process code still sees the validator's sentence.
+    assert 'acme-internal-db-7' in str(error)
+
+
+def test_error_body_bad_flow_input_hides_keys_the_caller_made_up() -> None:
+    """An extra field name and a non-identifier dict key aren't echoed back."""
+    error = _served_request_error(_StrictOrder, {'prices': {'sk-live 99': 'x'}, 'sk_live_extra': 1})
+
+    assert error_body(error)['message'] == (
+        "Invalid input for flow 'pay': "
+        'prices.*: Input should be a valid integer, unable to parse string as an integer; '
+        'Extra inputs are not permitted'
+    )
+
+
+def test_served_and_in_process_messages_share_path_format_and_cap() -> None:
+    """Five bad items: both messages list the same three paths and 'and 2 more'."""
+    cause = _validation_error(list[_Item], [{'dish': 'x'}] * 5)
+    served = error_body(_served_request_error(list[_Item], [{'dish': 'x'}] * 5))['message']
+    in_process = format_validation_error(cause)
+
+    expected = '[0].qty: Field required; [1].qty: Field required; [2].qty: Field required; and 2 more'
+    assert served == f"Invalid input for flow 'pay': {expected}"
+    assert in_process == expected
 
 
 def test_error_body_plain_exception_is_internal_error() -> None:
