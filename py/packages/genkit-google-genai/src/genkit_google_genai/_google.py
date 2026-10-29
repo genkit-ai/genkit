@@ -1309,7 +1309,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
         # keep the family unroutable while Vertex actually serves it.
         if is_virtual_try_on_model(name):
 
-            async def _run_try_on(request: ModelRequest[VirtualTryOnConfig], ctx: ActionRunContext) -> ModelResponse:
+            async def _run_try_on(request: ModelRequest[VirtualTryOnConfig], ctx: ModelContext) -> ModelResponse:
                 model = VirtualTryOnModel(
                     name,
                     self._runtime_client(),

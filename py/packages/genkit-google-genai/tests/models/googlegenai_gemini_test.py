@@ -2149,7 +2149,7 @@ async def test_generate_json_output_pins_request_body(mocker: MockerFixture, leg
     )
     gemini = GeminiModel(version, googleai_client_mock, legacy_response_schema=legacy_response_schema)
 
-    response = await gemini.generate(request, ActionRunContext())
+    response = await gemini.generate(request, ModelContext())
 
     if legacy_response_schema:
         expected_config = genai.types.GenerateContentConfig(
@@ -3023,7 +3023,7 @@ async def test_generate_blocked_prompt(mocker: MockerFixture) -> None:
     )
     gemini = GeminiModel('gemini-2.5-flash', client)
 
-    response = await gemini.generate(_hi_request(), ActionRunContext())
+    response = await gemini.generate(_hi_request(), ModelContext())
 
     assert response.finish_reason == FinishReason.BLOCKED
     assert response.finish_message == 'unsafe prompt'
@@ -3046,7 +3046,7 @@ async def test_generate_blocked_prompt_default_message(mocker: MockerFixture) ->
     client.aio.models.generate_content.return_value = genai_types.GenerateContentResponse(prompt_feedback=feedback)
     gemini = GeminiModel('gemini-2.5-flash', client)
 
-    response = await gemini.generate(_hi_request(), ActionRunContext())
+    response = await gemini.generate(_hi_request(), ModelContext())
 
     assert response.finish_reason == FinishReason.BLOCKED
     assert response.finish_message == 'prompt blocked: PROHIBITED_CONTENT'
@@ -3071,7 +3071,7 @@ async def test_generate_no_candidates_without_block_is_internal(
     gemini = GeminiModel('gemini-2.5-flash', client)
 
     with pytest.raises(GenkitError) as raised:
-        await gemini.generate(_hi_request(), ActionRunContext())
+        await gemini.generate(_hi_request(), ModelContext())
     assert raised.value.status == 'INTERNAL'
     assert raised.value.original_message == 'Model returned no candidates.'
     assert raised.value.cause is None
@@ -3086,7 +3086,7 @@ async def test_generate_candidate_without_content(mocker: MockerFixture) -> None
     )
     gemini = GeminiModel('gemini-2.5-flash', client)
 
-    response = await gemini.generate(_hi_request(), ActionRunContext())
+    response = await gemini.generate(_hi_request(), ModelContext())
 
     assert response.finish_reason == FinishReason.LENGTH
     assert response.message is not None
@@ -3103,7 +3103,7 @@ async def test_generate_with_candidates_ignores_block_reason(mocker: MockerFixtu
     client.aio.models.generate_content.return_value = answer
     gemini = GeminiModel('gemini-2.5-flash', client)
 
-    response = await gemini.generate(_hi_request(), ActionRunContext())
+    response = await gemini.generate(_hi_request(), ModelContext())
 
     assert response.finish_reason == FinishReason.STOP
     assert response.message is not None
@@ -3118,7 +3118,7 @@ async def test_generate_without_prompt_feedback_leaves_custom_empty(mocker: Mock
     client.aio.models.generate_content.return_value = _text_chunk('Hello', genai_types.FinishReason.STOP)
     gemini = GeminiModel('gemini-2.5-flash', client)
 
-    response = await gemini.generate(_hi_request(), ActionRunContext())
+    response = await gemini.generate(_hi_request(), ModelContext())
 
     assert response.custom == {}
 
@@ -3138,7 +3138,7 @@ async def test_streaming_generate_blocked_prompt(mocker: MockerFixture) -> None:
     gemini = GeminiModel('gemini-2.5-flash', client)
     on_chunk = mocker.MagicMock()
 
-    response = await gemini.generate(_hi_request(), ActionRunContext(streaming_callback=on_chunk))
+    response = await gemini.generate(_hi_request(), ModelContext(streaming_callback=on_chunk))
 
     assert response.finish_reason == FinishReason.BLOCKED
     assert response.finish_message == 'prompt blocked: SAFETY'
@@ -3173,7 +3173,7 @@ async def test_streaming_generate_no_candidates_without_block_is_internal(mocker
     on_chunk = mocker.MagicMock()
 
     with pytest.raises(GenkitError) as raised:
-        await gemini.generate(_hi_request(), ActionRunContext(streaming_callback=on_chunk))
+        await gemini.generate(_hi_request(), ModelContext(streaming_callback=on_chunk))
     assert raised.value.status == 'INTERNAL'
     assert raised.value.original_message == 'Model returned no candidates.'
     on_chunk.assert_not_called()
@@ -3192,7 +3192,7 @@ async def test_streaming_generate_empty_stream_is_unavailable(mocker: MockerFixt
     gemini = GeminiModel('gemini-2.5-flash', client)
 
     with pytest.raises(GenkitError) as raised:
-        await gemini.generate(_hi_request(), ActionRunContext(streaming_callback=mocker.MagicMock()))
+        await gemini.generate(_hi_request(), ModelContext(streaming_callback=mocker.MagicMock()))
     assert raised.value.status == 'UNAVAILABLE'
     assert raised.value.original_message == 'Model stream returned no responses.'
 
@@ -3211,7 +3211,7 @@ async def test_streaming_generate_candidate_without_content(mocker: MockerFixtur
     gemini = GeminiModel('gemini-2.5-flash', client)
     on_chunk = mocker.MagicMock()
 
-    response = await gemini.generate(_hi_request(), ActionRunContext(streaming_callback=on_chunk))
+    response = await gemini.generate(_hi_request(), ModelContext(streaming_callback=on_chunk))
 
     assert response.finish_reason == FinishReason.LENGTH
     on_chunk.assert_not_called()
@@ -3231,7 +3231,7 @@ async def test_streaming_generate_block_reason_after_candidates_is_not_blocked(m
     gemini = GeminiModel('gemini-2.5-flash', client)
     on_chunk = mocker.MagicMock()
 
-    response = await gemini.generate(_hi_request(), ActionRunContext(streaming_callback=on_chunk))
+    response = await gemini.generate(_hi_request(), ModelContext(streaming_callback=on_chunk))
 
     assert response.finish_reason == FinishReason.STOP
     assert response.message is not None
@@ -3261,7 +3261,7 @@ async def test_streaming_generate_exposes_prompt_feedback_without_block(mocker: 
     client.aio.models.generate_content_stream.return_value = single_chunk()
     gemini = GeminiModel('gemini-2.5-flash', client)
 
-    response = await gemini.generate(_hi_request(), ActionRunContext(streaming_callback=mocker.MagicMock()))
+    response = await gemini.generate(_hi_request(), ModelContext(streaming_callback=mocker.MagicMock()))
 
     assert response.finish_reason == FinishReason.STOP
     assert response.message is not None
