@@ -543,6 +543,39 @@ async def test_await_tool_return_types_match_annotation() -> None:
 
 
 @pytest.mark.asyncio
+async def test_tool_constructor_infers_types_from_function() -> None:
+    """`Tool(fn)` infers `Tool[In, Out, Chunk]` for every handler shape, same as `@ai.tool()`."""
+
+    async def add_pair(pair: Pair, ctx: ToolContext[str]) -> int:
+        ctx.send_chunk('adding')
+        return pair.a + pair.b
+
+    async def add_pair_ctx_first(ctx: ToolContext[str], pair: Pair) -> int:
+        return pair.a + pair.b
+
+    async def whoami(ctx: ToolContext[str]) -> str:
+        return str(ctx.context.get('user'))
+
+    async def double(n: int) -> int:
+        return n * 2
+
+    async def shot() -> ShotOut:
+        return ShotOut(ok=True, label='lab')
+
+    # pyright and pyrefly enforce these. ty doesn't solve overloaded generic
+    # constructors yet and infers Tool[Any, Any, Any]; @ai.tool() is typed for it.
+    assert_type(Tool(add_pair), Tool[Pair, int, str])  # ty: ignore[type-assertion-failure]
+    assert_type(Tool(add_pair_ctx_first), Tool[Pair, int, str])  # ty: ignore[type-assertion-failure]
+    assert_type(Tool(whoami), Tool[Any, str, str])  # ty: ignore[type-assertion-failure]
+    assert_type(Tool(double), Tool[int, int, Any])  # ty: ignore[type-assertion-failure]
+    assert_type(Tool(shot, name='shot'), Tool[None, ShotOut, Any])  # ty: ignore[type-assertion-failure]
+
+    assert await Tool(add_pair)(Pair(a=2, b=3)) == 5
+    assert await Tool(double)(4) == 8
+    assert await Tool(shot, name='shot')() == ShotOut(ok=True, label='lab')
+
+
+@pytest.mark.asyncio
 async def test_await_tool_with_unserializable_output_raises_invalid_argument() -> None:
     """`await snap()` returning something a model can't receive raises INVALID_ARGUMENT, same message as generate."""
     ai = Genkit(model='scriptedModel')
