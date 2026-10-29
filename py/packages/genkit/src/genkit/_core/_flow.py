@@ -47,6 +47,17 @@ class Flow(Action[InputT, OutputT, ChunkT, None]):
     Constructing ``Flow(fn)`` directly builds a standalone (unregistered) flow.
     """
 
+    # `(ctx, x: Any)` would match the (input, ctx) shape with the ctx as the
+    # input; catch it first. InputT isn't bound here, so it defaults to Any.
+    @overload
+    def __init__(
+        self,
+        func: Callable[[ActionRunContext[ChunkT], object], Awaitable[OutputT]],
+        *,
+        name: str | None = None,
+        description: str | None = None,
+    ) -> None: ...
+
     @overload
     def __init__(
         self,
@@ -130,6 +141,17 @@ class Flow(Action[InputT, OutputT, ChunkT, None]):
         )
 
 
+# Same order as _FlowDecorator.__call__; the `object` shapes catch
+# `(x: Any)` / `(x: object)` before the ctx-only shape can.
+@overload
+def define_flow(
+    registry: Registry,
+    func: Callable[[ActionRunContext[_FlowChunkT], object], Awaitable[_FlowOutputT]],
+    name: str | None = None,
+    description: str | None = None,
+) -> Flow[Any, _FlowOutputT, _FlowChunkT]: ...
+
+
 @overload
 def define_flow(
     registry: Registry,
@@ -146,6 +168,15 @@ def define_flow(
     name: str | None = None,
     description: str | None = None,
 ) -> Flow[_FlowInputT, _FlowOutputT, _FlowChunkT]: ...
+
+
+@overload
+def define_flow(
+    registry: Registry,
+    func: Callable[[object], Awaitable[_FlowOutputT]],
+    name: str | None = None,
+    description: str | None = None,
+) -> Flow[Any, _FlowOutputT]: ...
 
 
 @overload
