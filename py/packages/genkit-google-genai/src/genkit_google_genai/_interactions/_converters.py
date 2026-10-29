@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import copy
 import json
-import logging
 from typing import Any, Literal, cast
 
 from google.genai.interactions import (
@@ -68,9 +67,9 @@ from genkit.model import (
     ToolRequest,
     ToolResponse,
 )
-from genkit.plugin_api import StatusName, provider_error
+from genkit.plugin_api import StatusName, get_logger, provider_error
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 InteractionRole = Literal['user', 'model']
 
