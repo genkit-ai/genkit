@@ -267,3 +267,33 @@ async def test_model_action_stream_returns_stream_response() -> None:
     assert isinstance(result, StreamResponse)
     assert [chunk.text async for chunk in result] == ['Tartine']
     assert (await result.response).text == 'Tartine'
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_cancelling_one_response_waiter_does_not_cancel_run() -> None:
+    """Cancelling one `await stream.response` waiter on ModelStreamResponse does not cancel another waiter."""
+    ai = Genkit()
+    release = asyncio.Event()
+
+    async def slow_model(_request: ModelRequest, ctx: ModelContext) -> ModelResponse:
+        ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('Simmering')]))
+        await release.wait()
+        return ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('Simmering done')]),
+        )
+
+    ai.define_model(name='slow', fn=slow_model)
+
+    async with ai.generate_stream(model='slow', prompt='Cook') as stream:
+        waiter_1 = asyncio.create_task(stream.response)
+        waiter_2 = asyncio.create_task(stream.response)
+        await asyncio.sleep(0.01)
+
+        waiter_1.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiter_1
+
+        release.set()
+        res = await waiter_2
+        assert res.text == 'Simmering done'
