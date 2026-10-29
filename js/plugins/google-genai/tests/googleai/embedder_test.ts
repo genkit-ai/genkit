@@ -255,7 +255,7 @@ describe('defineGoogleAIEmbedder', () => {
 
     it('calls embedContent with multimodal input', async () => {
       const embedder = defineEmbedder(
-        'gemini-embedding-2-preview',
+        'gemini-embedding-2',
         defaultPluginOptions
       );
       mockFetchResponse({ embedding: { values: [0.5, 0.6] } });
@@ -276,7 +276,7 @@ describe('defineGoogleAIEmbedder', () => {
       sinon.assert.calledOnce(fetchStub);
       const fetchArgs = fetchStub.firstCall.args;
       const expectedUrl =
-        'https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2-preview:embedContent';
+        'https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:embedContent';
       assert.strictEqual(fetchArgs[0], expectedUrl);
 
       const expectedRequest = {

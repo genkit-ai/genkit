@@ -621,7 +621,7 @@ func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 		}
 		fn = backgroundModelToModelFn(bm.Start)
 	} else {
-		fn = m.Generate
+		fn = fillRequest()(m.Generate)
 	}
 
 	// The run's total counts every model action call made under it: model
@@ -816,7 +816,8 @@ func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 					// The response rides back with its original message and
 					// finish reason, not marked aborted: the model finished,
 					// post-processing did not, and the raw output is often
-					// exactly what the caller needs to see.
+					// exactly what the caller needs to see. A background
+					// model's response is the one that leaves Request unset.
 					if resp.Request == nil {
 						resp.Request = req
 					}

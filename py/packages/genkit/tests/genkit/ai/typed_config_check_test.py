@@ -19,11 +19,10 @@ from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
 
 from genkit import Genkit, Part
-from genkit._core._action import ActionRunContext
 from genkit._core._error import GenkitError
 from genkit._core._model import Message, ModelRequest, ModelResponse
 from genkit._core._typing import Role
-from genkit.model import GenerateActionOptions
+from genkit.model import GenerateActionOptions, ModelContext
 from genkit.plugin_api import ActionKind
 
 QUALITY_SCHEMA: dict[str, object] = {
@@ -45,12 +44,12 @@ class OtherConfig(BaseModel):
 
 
 def sketch_model() -> tuple[
-    Callable[[ModelRequest[SketchConfig], ActionRunContext], Awaitable[ModelResponse]], list[object]
+    Callable[[ModelRequest[SketchConfig], ModelContext], Awaitable[ModelResponse]], list[object]
 ]:
     """A typed model function, plus the configs it was called with."""
     configs: list[object] = []
 
-    async def sketch(request: ModelRequest[SketchConfig], ctx: ActionRunContext) -> ModelResponse:
+    async def sketch(request: ModelRequest[SketchConfig], ctx: ModelContext) -> ModelResponse:
         configs.append(request.config)
         return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('sketch')]))
 
@@ -204,7 +203,7 @@ async def test_prompt_folds_aliases_with_annotation_class() -> None:
     ai = Genkit()
     configs: list[object] = []
 
-    async def summarize(request: ModelRequest[TokenBudgetConfig], ctx: ActionRunContext) -> ModelResponse:
+    async def summarize(request: ModelRequest[TokenBudgetConfig], ctx: ModelContext) -> ModelResponse:
         configs.append(request.config)
         return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('summary')]))
 

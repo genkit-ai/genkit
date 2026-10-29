@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from genkit import (
     Document,
+    FlowContext,
     Genkit,
     GenkitError,
     Interrupt,
@@ -24,7 +25,7 @@ from genkit import (
 )
 from genkit._ai._formats._types import FormatDef, Formatter, FormatterConfig
 from genkit._ai._model import text_from_message
-from genkit._core._action import ActionKind, ActionRunContext
+from genkit._core._action import ActionKind
 from genkit._core._model import ModelRequest, OutputConfig
 from genkit._core._typing import (
     EvaluatorRequest,
@@ -46,6 +47,7 @@ from genkit.evaluator import (
     ScoreStatus,
 )
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, MiddlewareRef, ModelHookParams
+from genkit.model import ModelContext
 from genkit.testing import (
     EchoModel,
     ScriptedModel,
@@ -1521,7 +1523,7 @@ def test_define_model_default_metadata(setup_test: SetupFixture) -> None:
     """Test that the define model function works."""
     ai, _, _, *_ = setup_test
 
-    async def foo_model_fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def foo_model_fn(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('banana!')]))
 
     action = ai.define_model(
@@ -1542,7 +1544,7 @@ def test_define_model_with_schema(setup_test: SetupFixture) -> None:
         field_a: str = Field(description='a field')
         field_b: str = Field(description='b field')
 
-    async def foo_model_fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def foo_model_fn(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('banana!')]))
 
     action = ai.define_model(
@@ -1579,7 +1581,7 @@ def test_define_model_with_info(setup_test: SetupFixture) -> None:
     """Test that the define model function with info works."""
     ai, _, _, *_ = setup_test
 
-    async def foo_model_fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def foo_model_fn(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('banana!')]))
 
     action = ai.define_model(
@@ -1785,7 +1787,7 @@ async def test_define_sync_flow(setup_test: SetupFixture) -> None:
     ai, _, _, *_ = setup_test
 
     @ai.flow()
-    async def my_flow(input: str, ctx: ActionRunContext) -> str:
+    async def my_flow(input: str, ctx: FlowContext[int]) -> str:
         # Use ctx.send_chunk() for streaming
         ctx.send_chunk(1)
         ctx.send_chunk(2)
@@ -1810,7 +1812,7 @@ async def test_define_async_flow(setup_test: SetupFixture) -> None:
     ai, _, _, *_ = setup_test
 
     @ai.flow()
-    async def my_flow(input: str, ctx: ActionRunContext) -> str:
+    async def my_flow(input: str, ctx: FlowContext[int]) -> str:
         # Use ctx.send_chunk() for streaming
         ctx.send_chunk(1)
         ctx.send_chunk(2)
@@ -2164,10 +2166,10 @@ def test_define_background_model_with_info(setup_test: SetupFixture) -> None:
     """Test that define_background_model correctly serializes info by alias and excludes None."""
     ai, _, _, *_ = setup_test
 
-    async def start_fn(request: ModelRequest, ctx: ActionRunContext) -> Operation:
+    async def start_fn(request: ModelRequest, ctx: ModelContext) -> Operation:
         return Operation(id='123', done=False)
 
-    async def check_fn(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check_fn(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
     action = ai.define_background_model(
@@ -2198,10 +2200,10 @@ def test_background_model_factory_stashes_class_without_registering(setup_test: 
     class BgConfig(BaseModel):
         duration: int | None = None
 
-    async def start_fn(request: ModelRequest, ctx: ActionRunContext) -> Operation:
+    async def start_fn(request: ModelRequest, ctx: ModelContext) -> Operation:
         return Operation(id='123', done=False)
 
-    async def check_fn(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check_fn(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
     action = background_model('veo-style', start=start_fn, check=check_fn, config_schema=BgConfig)
@@ -2217,10 +2219,10 @@ async def test_generate_operation_with_model_info_long_running(
     """Verify generate_operation succeeds for a define_background_model."""
     ai, _, _, *_ = setup_test
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
         return Operation(id='op123', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
     ai.define_background_model(name='lr_model', start=start, check=check)

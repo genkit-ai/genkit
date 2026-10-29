@@ -21,21 +21,11 @@ from collections.abc import Awaitable, Callable
 
 import pytest
 
-from genkit import (
-    ActionRunContext,
-    FinishReason,
-    Genkit,
-    Message,
-    ModelResponse,
-    Part,
-    Role,
-    Tool,
-    tool,
-)
+from genkit import FinishReason, Genkit, Message, ModelResponse, Part, Role, Tool, tool
 from genkit._ai._generate import CallScope
 from genkit.exp import Genkit as ExpGenkit
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
-from genkit.model import ModelRequest, ToolRequest
+from genkit.model import ModelContext, ModelRequest, ToolRequest
 from genkit.plugin_api import ActionKind
 
 NextModel = Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]]
@@ -44,7 +34,7 @@ NextModel = Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[Mod
 def _define_tool_caller(ai: Genkit, name: str = 'caller') -> None:
     """Model that asks for `lookup` once, then answers with whatever the tool returned."""
 
-    async def fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def fn(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         last = request.messages[-1]
         for part in last.content:
             if part.tool_response is not None:
@@ -141,7 +131,7 @@ async def test_middleware_ctx_ai_is_the_app_inside_an_agent_turn() -> None:
     ai = ExpGenkit()
     seen: list[object] = []
 
-    async def echo(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def echo(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         return ModelResponse(
             finish_reason=FinishReason.STOP,
             message=Message(role=Role.MODEL, content=[Part.from_text('ok')]),
