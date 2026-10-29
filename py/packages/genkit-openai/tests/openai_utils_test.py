@@ -828,7 +828,6 @@ def test_reraise_openai_error_classifies_known_in_band_errors(
     assert raised.value.status == expected_status
     assert raised.value.message == body['message']
     assert raised.value.__cause__ is error
-    assert raised.value.__cause__ is error
 
 
 @pytest.mark.parametrize(

@@ -94,7 +94,6 @@ async def test_generate_maps_anthropic_status_errors(status_code: int, expected_
     assert error.status == expected_status
     assert error.message == _ERROR_MESSAGE
     assert error.__cause__ is api_error
-    assert error.__cause__ is api_error
     assert error.retry_after_ms is None
 
 
@@ -138,7 +137,6 @@ async def test_connection_refused_is_unavailable() -> None:
 
     assert error.status == 'UNAVAILABLE'
     assert isinstance(error.__cause__, APIConnectionError)
-    assert error.__cause__ is error.__cause__
     assert get_http_status(error) == 500
 
 
@@ -153,7 +151,6 @@ async def test_timeout_is_deadline_exceeded() -> None:
 
     assert error.status == 'DEADLINE_EXCEEDED'
     assert isinstance(error.__cause__, APITimeoutError)
-    assert error.__cause__ is error.__cause__
 
 
 @pytest.mark.asyncio
@@ -217,7 +214,6 @@ async def test_unmapped_4xx_is_unknown_genkit_error() -> None:
     assert exc_info.value.status == 'UNKNOWN'
     assert exc_info.value.message == _ERROR_MESSAGE
     assert exc_info.value.__cause__ is api_error
-    assert exc_info.value.__cause__ is api_error
 
 
 @pytest.mark.asyncio
@@ -247,7 +243,6 @@ async def test_429_retry_after_header_sets_retry_delay() -> None:
     error = exc_info.value
     assert error.status == 'RESOURCE_EXHAUSTED'
     assert error.retry_after_ms == 2500.0
-    assert error.__cause__ is api_error
     assert error.__cause__ is api_error
 
 
@@ -292,7 +287,6 @@ async def test_generate_maps_streaming_anthropic_errors() -> None:
     error = exc_info.value
     assert error.status == 'UNAVAILABLE'
     assert error.retry_after_ms == 1000.0
-    assert error.__cause__ is api_error
     assert error.__cause__ is api_error
 
 
@@ -431,7 +425,6 @@ async def test_generate_marks_unsendable_history_invalid_argument(part: Part, me
     assert exc_info.value.status == 'INVALID_ARGUMENT'
     assert message_fragment in exc_info.value.message
     assert isinstance(exc_info.value.__cause__, ValueError)
-    assert exc_info.value.__cause__ is exc_info.value.__cause__
     client.messages.create.assert_not_called()
 
 

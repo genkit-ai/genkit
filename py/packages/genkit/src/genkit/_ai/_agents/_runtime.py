@@ -1144,7 +1144,8 @@ def to_error_details(exc: BaseException) -> Failure:
     else:
         if isinstance(exc, asyncio.CancelledError):
             status = 'CANCELLED'
-        elif isinstance(exc, TimeoutError):
+        # asyncio.TimeoutError is a separate class until 3.11.
+        elif isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
             status = 'DEADLINE_EXCEEDED'
         else:
             status = 'INTERNAL'

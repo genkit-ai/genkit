@@ -699,7 +699,6 @@ async def test_await_flow_that_raises_interrupt_raises_internal_genkit_error() -
     assert exc.value.status == 'INTERNAL'
     assert exc.value.message == 'Interrupt raised outside a tool'
     assert exc.value.__cause__ is interrupt
-    assert exc.value.__cause__ is interrupt
 
 
 @pytest.mark.asyncio

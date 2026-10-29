@@ -200,7 +200,6 @@ async def test_botocore_errors_map_to_genkit_statuses(error: BotoCoreError, expe
     assert excinfo.value.status == expected_status
     assert 'bedrock converse failed' in excinfo.value.message
     assert excinfo.value.__cause__ is error
-    assert excinfo.value.__cause__ is error
 
 
 @pytest.mark.parametrize(

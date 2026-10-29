@@ -154,11 +154,9 @@ def test_provider_error_keeps_provider_message_and_cause() -> None:
     assert error.status == 'UNAUTHENTICATED'
     assert error.message == 'API key not valid'
     assert error.__cause__ is cause
-    assert error.__cause__ is cause
     assert str(error) == 'UNAUTHENTICATED: API key not valid'
     assert renamed.status == 'UNAUTHENTICATED'
     assert renamed.message == 'gemini rejected the key'
-    assert renamed.__cause__ is cause
     assert renamed.__cause__ is cause
     assert str(renamed) == 'UNAUTHENTICATED: gemini rejected the key: API key not valid'
 

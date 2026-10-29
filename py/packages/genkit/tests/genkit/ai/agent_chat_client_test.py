@@ -2286,6 +2286,7 @@ class _ClientResponseError(Exception):
         (GenkitError(status='ABORTED', message='stopped'), 'ABORTED', 'stopped', None),
         (asyncio.CancelledError(), 'CANCELLED', 'Internal failure', None),
         (TimeoutError('kitchen printer timed out'), 'DEADLINE_EXCEEDED', 'kitchen printer timed out', None),
+        (asyncio.TimeoutError('kitchen printer timed out'), 'DEADLINE_EXCEEDED', 'kitchen printer timed out', None),
         (_ClientResponseError(), 'INTERNAL', '429, message=Too Many Requests', None),
         (ValueError('bad table number'), 'INTERNAL', 'bad table number', None),
     ],
