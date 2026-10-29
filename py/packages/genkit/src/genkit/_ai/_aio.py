@@ -175,7 +175,13 @@ def init_keyword_example(value: object) -> str:
 class Genkit:
     """The main entry point for building AI-powered applications.
 
-    Registers plugins, defines flows and tools, and runs generation.
+    Registers plugins, defines flows and tools, and runs generation. Both
+    ``Genkit(model=...)`` and ``ai.generate(model=...)`` accept a typed
+    ``ModelRef`` from a plugin constructor (recommended, e.g.
+    ``GoogleAI.gemini_model('gemini-flash-latest')``) or a plugin-prefixed
+    string (``'googleai/gemini-flash-latest'``). Plugins resolve models lazily
+    on demand when ``ai.generate()`` is called, without needing pre-registration
+    or SDK updates.
 
     Example:
         from genkit import Genkit
@@ -217,13 +223,23 @@ class Genkit:
         # Type checkers see the keyword-only signature above. Runtime still
         # accepts *args so we can raise a TypeError that names the keyword they
         # probably meant, instead of silently binding a model id as plugins.
-        def __init__(
+        def __init__(  # noqa: D417
             self,
             *args: object,
             plugins: list[Plugin] | None = None,
             model: ModelArg | None = None,
             prompt_dir: str | Path | None = None,
         ) -> None:
+            """Initialize a Genkit instance.
+
+            Args:
+                plugins: Plugins to register (e.g. ``[GoogleAI()]``). Plugins resolve
+                    models lazily on demand when ``ai.generate()`` is called.
+                model: Default model for ``ai.generate()``. Accepts a typed ``ModelRef``
+                    (recommended, e.g. ``GoogleAI.gemini_model('gemini-flash-latest')``) or
+                    a plugin-prefixed string (``'googleai/gemini-flash-latest'``).
+                prompt_dir: Optional directory for loading ``.prompt`` files.
+            """
             if args:
                 raise TypeError(
                     f'Genkit() takes no positional arguments, got {len(args)}. '
@@ -1551,6 +1567,19 @@ class Genkit:
         docs: list[Document] | None = None,
     ) -> ModelResponse[Any]:
         """Generate text or structured data using a language model.
+
+        ``model`` accepts a typed ``ModelRef`` from a plugin constructor
+        (recommended, e.g. ``GoogleAI.gemini_model('gemini-flash-latest')``,
+        which takes the bare model ID, stamps the ``'googleai/'`` namespace
+        prefix, and type-checks ``config``), a plugin-prefixed string
+        (``'googleai/gemini-flash-latest'``), a registered model ``Action``, or
+        ``None`` to use the default ``model=`` passed to ``Genkit(...)``. When
+        passing a plain ``str`` for a plugin model, the ``<plugin>/`` prefix
+        (such as ``'googleai/'`` or ``'vertexai/'``) is required; passing an
+        unprefixed string raises ``GenkitError`` with ``NOT_FOUND``. Any model
+        ID served by the provider (including newly released models) is resolved
+        lazily on demand at call time without needing pre-registration or SDK
+        updates.
 
         ``tools`` is typed as ``Sequence`` rather than ``list`` because ``Sequence``
         is covariant: ``list[Tool]`` or ``list[str]`` are both assignable to

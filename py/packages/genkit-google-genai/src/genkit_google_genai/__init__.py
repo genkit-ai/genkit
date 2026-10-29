@@ -18,8 +18,24 @@
 """Google GenAI plugin for Genkit.
 
 This plugin provides integration with Google's generative AI models through
-either Google AI (Gemini API) or Google Cloud Vertex AI. It dynamically discovers
-and registers available models and embedders at runtime.
+either Google AI (Gemini API) or Google Cloud Vertex AI. Any model ID served by
+the Gemini API (including newly released models) is resolved lazily on demand
+when ``ai.generate()`` is called, without needing pre-registration or SDK
+updates.
+
+Specifying Models (``ModelRef`` vs. Prefixed String):
+    Both ``Genkit(model=...)`` and ``ai.generate(model=...)`` accept either form:
+
+    - **Typed ``ModelRef`` (recommended)**: ``GoogleAI.gemini_model('gemini-flash-latest')``
+      (or ``VertexAI.gemini_model('gemini-4-argon')``) — pass the bare model ID;
+      returns a ``ModelRef[GeminiConfig]`` with the ``'googleai/'`` (or
+      ``'vertexai/'``) namespace stamped automatically and static config
+      type-checking.
+    - **Prefixed string shorthand**: ``'googleai/gemini-flash-latest'`` (or
+      ``'vertexai/gemini-4-argon'``) — when passing a plain ``str`` to
+      ``Genkit(model=...)`` or ``ai.generate(model=...)``, the ``'googleai/'``
+      (or ``'vertexai/'``) prefix is required; passing an unprefixed string
+      raises ``NOT_FOUND``.
 
 Example:
     Using GoogleAI (Gemini API):
@@ -52,9 +68,9 @@ Example:
     # 1. Initialize with your GCP project and location
     ai = Genkit(plugins=[VertexAI(project='my-project', location='us-central1')])
 
-    # 2. Generate content with Gemini Pro on Vertex AI
+    # 2. Generate content with Gemini on Vertex AI
     res = await ai.generate(
-        model=VertexAI.gemini_model('gemini-2.5-pro'),
+        model=VertexAI.gemini_model('gemini-4-argon'),
         prompt='Explain quantum entanglement in one sentence.',
     )
 
