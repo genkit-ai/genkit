@@ -242,6 +242,7 @@ AgentFn = Callable[
     [SessionRunner, ActionRunContext],
     Awaitable[AgentResult],
 ]
+"""Custom agent entrypoint: takes a `SessionRunner` and the run context, returns an `AgentResult`."""
 
 
 # ---------------------------------------------------------------------------
