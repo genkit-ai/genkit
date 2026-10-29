@@ -56,7 +56,7 @@ class FormatHandler(Generic[OutputT, ChunkT]):
         self,
         message_parser: Callable[[Message], OutputT],
         chunk_parser: Callable[[ModelResponseChunk], ChunkT],
-        instructions: str | None,
+        instructions: str | None = None,
     ) -> None:
         """Initializes a FormatHandler.
 
@@ -78,7 +78,7 @@ class FormatHandler(Generic[OutputT, ChunkT]):
         return self.__chunk_parser(chunk)
 
 
-class Formatter:
+class Formatter(abc.ABC):
     """A named output format. Subclass it, implement `handle()`, register with `ai.define_format()`.
 
     `handle()` runs once per generate call with the request's JSON schema (or None).

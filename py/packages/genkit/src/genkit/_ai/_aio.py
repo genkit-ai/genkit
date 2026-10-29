@@ -605,9 +605,9 @@ class Genkit:
         """Register a custom embedder action."""
         return define_embedder(self._registry, name, fn, info, metadata, description)
 
-    def define_format(self, format: Formatter) -> None:
+    def define_format(self, formatter: Formatter) -> None:
         """Register a custom output format. See `genkit.formats.Formatter`."""
-        self._registry.register_value('format', format.name, format)
+        self._registry.register_value('format', formatter.name, formatter)
 
     async def lookup_model(self, name: str) -> Action[ModelRequest, ModelResponse, ModelResponseChunk] | None:
         """Return the model action registered under ``name``, or None.
