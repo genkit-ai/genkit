@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
-from collections.abc import AsyncIterator, Coroutine
+from collections.abc import AsyncIterator, Callable, Coroutine
 from typing import Any, Generic, TypeVar
 
 from typing_extensions import TypeVar as TypeVarExt
@@ -43,6 +43,10 @@ logger = get_logger(__name__)
 T = TypeVar('T')
 T_co = TypeVarExt('T_co')
 R = TypeVarExt('R', default=Any)
+# No defaults, so they can sit in any order in the helpers' signatures.
+_ChunkT = TypeVar('_ChunkT')
+_ResultT = TypeVar('_ResultT')
+_PickedT = TypeVar('_PickedT')
 
 
 class Channel(Generic[T_co, R]):
@@ -98,6 +102,11 @@ class Channel(Generic[T_co, R]):
                 _ = self.closed.cancel()
             elif (exc := v.exception()) is not None:
                 self.closed.set_exception(exc)
+                # `closed` only mirrors the run. The error reaches the caller
+                # through `async for` and the response future, so mark this
+                # copy retrieved or GC logs "Future exception was never
+                # retrieved" even when the caller handled it.
+                _ = self.closed.exception()
             else:
                 self.closed.set_result(v.result())
 
@@ -111,6 +120,45 @@ class Channel(Generic[T_co, R]):
         if r is None:
             raise StopAsyncIteration
         return r
+
+
+def start_stream(
+    run: Callable[[Callable[[_ChunkT], None]], Coroutine[Any, Any, _ResultT]],
+) -> tuple[Channel[_ChunkT, _ResultT], asyncio.Task[_ResultT]]:
+    """Run ``run(send_chunk)`` as a task that feeds a Channel; return both.
+
+    The channel ends when the task does and re-raises its error in the
+    ``async for``. Every StreamResponse is built from this pair: models hand
+    out the task as ``.response``, actions a ``mirror_result`` of it.
+    """
+    channel: Channel[_ChunkT, _ResultT] = Channel()
+    task = asyncio.create_task(run(channel.send))
+    channel.set_close_future(task)
+    return channel, task
+
+
+def mirror_result(task: asyncio.Future[_ResultT], pick: Callable[[_ResultT], _PickedT]) -> asyncio.Future[_PickedT]:
+    """A future that settles like ``task``, with ``pick`` applied to a result.
+
+    Cancelling an awaiter of the mirror doesn't cancel the run. The mirror's
+    error is marked retrieved: a caller that only ran the ``async for``
+    already saw it there.
+    """
+    mirror: asyncio.Future[_PickedT] = asyncio.get_running_loop().create_future()
+
+    def _settle(done: asyncio.Future[_ResultT]) -> None:
+        if mirror.done():
+            return
+        if done.cancelled():
+            _ = mirror.cancel()
+        elif (exc := done.exception()) is not None:
+            mirror.set_exception(exc)
+            _ = mirror.exception()
+        else:
+            mirror.set_result(pick(done.result()))
+
+    task.add_done_callback(_settle)
+    return mirror
 
 
 def run_loop(coro: Coroutine[object, object, T], *, debug: bool | None = None) -> T:
