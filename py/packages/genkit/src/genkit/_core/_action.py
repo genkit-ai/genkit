@@ -1411,10 +1411,10 @@ class BidiConnection(Generic[StreamInT, StreamOutT_co, BidiOutT_co]):
 class BidiAction(Action[InputT, OutputT, ChunkT, InitT]):
     """An Action extended with bidirectional streaming via stream_bidi().
 
-    Both one-shot calls and live sessions run through the same Action.run() /
-    stream() path: run() drives the fn with a single input, while stream_bidi()
-    is sugar that hands run() a live input stream and returns a connection
-    handle for sending per-turn inputs and receiving chunks.
+    One-shot calls and live sessions run the same fn: run() and stream() hand
+    it a single input as a one-item stream, while stream_bidi() starts the
+    stream path with a live input stream and returns a connection handle for
+    sending per-turn inputs and receiving chunks.
     """
 
     def __init__(
@@ -1471,6 +1471,7 @@ class BidiAction(Action[InputT, OutputT, ChunkT, InitT]):
     async def stream_bidi(
         self,
         init: InitT | None = None,
+        *,
         context: dict[str, Any] | None = None,
         telemetry_labels: dict[str, object] | None = None,
     ) -> BidiConnection[InputT, ChunkT, OutputT]:
