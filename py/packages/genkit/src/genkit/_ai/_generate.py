@@ -2172,7 +2172,10 @@ async def resolve_tool_requests(
             logger.debug('tool triggered an interrupt', tool=trp.tool_request.name)
             return (None, interrupt_request_part(trp, intr))
 
-    outs = await asyncio.gather(*[run_one_tool(tool, trp) for _, tool, trp in work])
+    outs = await gather_turn(
+        [run_one_tool(tool, trp) for _, tool, trp in work],
+        watched_abort=mw_pipeline.ctx.abort_signal,
+    )
 
     has_interrupts = False
     response_parts: list[Part] = []
@@ -2201,6 +2204,35 @@ async def resolve_tool_requests(
         return (revised_model_message, None)
 
     return (None, Message(role=Role.TOOL, content=response_parts))
+
+
+async def gather_turn(
+    coros: Sequence[Awaitable[T]],
+    *,
+    watched_abort: asyncio.Event | None,
+) -> list[T]:
+    """Run one turn's tools concurrently. If one fails, cancel and await the rest.
+
+    ``asyncio.gather`` raises the first failure but leaves the other tools
+    running, so they would keep committing side effects after generate
+    returned. This is TaskGroup semantics on the 3.10 floor: the first
+    exception is the one raised, and no tool outlives the turn.
+
+    ``watched_abort`` is the abort signal when a watcher already cancels
+    each tool on abort (``execute_tool_request``). A second cancel would
+    interrupt the tool's own cleanup, so once it's set we only wait.
+    """
+    tasks = [asyncio.ensure_future(c) for c in coros]
+    try:
+        return await asyncio.gather(*tasks)
+    except BaseException:
+        if watched_abort is None or not watched_abort.is_set():
+            for t in tasks:
+                t.cancel()
+        # return_exceptions retrieves every sibling's outcome (including a
+        # sibling's Interrupt) so none masks the original or goes unretrieved.
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
 
 
 def to_pending_response(request: Part, response: Part) -> Part:
@@ -2369,15 +2401,20 @@ async def resolve_resume_options(
     indexed_requests = [
         (index, part) for index, part in enumerate(last_message.content) if part.tool_request is not None
     ]
-    resolved_tools = await asyncio.gather(*[
-        resolve_resumed_tool(
-            options=options,
-            tool_request_part=part,
-            mw_pipeline=mw_pipeline,
-            tools=resolved.tools,
-        )
-        for _, part in indexed_requests
-    ])
+    # Restarts run without execute_tool_request's abort watcher, so nothing
+    # else cancels them: always cancel the rest when one fails.
+    resolved_tools = await gather_turn(
+        [
+            resolve_resumed_tool(
+                options=options,
+                tool_request_part=part,
+                mw_pipeline=mw_pipeline,
+                tools=resolved.tools,
+            )
+            for _, part in indexed_requests
+        ],
+        watched_abort=None,
+    )
 
     tool_responses = []
     has_interrupts = False

@@ -7,6 +7,7 @@
 
 import asyncio
 import contextvars
+import gc
 import json
 import pathlib
 import time
@@ -2324,6 +2325,209 @@ async def test_parallel_tool_requests_all_complete() -> None:
         ('tool_b', 'ref-b', 'b_ok'),
         ('tool_c', 'ref-c', 'c_ok'),
     ]
+
+
+def _model_calls_tools(*names: str) -> ModelResponse:
+    return ModelResponse(
+        finish_reason=FinishReason.STOP,
+        message=Message(
+            role=Role.MODEL,
+            content=[Part(tool_request=ToolRequest(name=n, ref=f'ref-{n}', input={})) for n in names],
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_failing_tool_cancels_and_awaits_other_tools_in_turn() -> None:
+    """One tool fails: the other is cancelled before generate returns and never commits."""
+    ai = Genkit()
+    pm, _ = define_scripted_model(ai)
+    charges: list[str] = []
+    charge_started = asyncio.Event()
+    charge_cancelled = asyncio.Event()
+
+    @ai.tool(name='check_allergens')
+    async def check_allergens() -> str:
+        await charge_started.wait()
+        raise GenkitError(status='UNAVAILABLE', message='allergen db down')
+
+    @ai.tool(name='charge_card')
+    async def charge_card() -> str:
+        charge_started.set()
+        try:
+            await asyncio.sleep(0.05)
+        except asyncio.CancelledError:
+            charge_cancelled.set()
+            raise
+        charges.append('order-42')
+        return 'charged'
+
+    pm.responses.append(_model_calls_tools('check_allergens', 'charge_card'))
+
+    response = await generate_action(
+        CallScope(ai),
+        GenerateActionOptions(
+            model='scriptedModel',
+            messages=[Message(role=Role.USER, content=[Part.from_text('order')])],
+            tools=['check_allergens', 'charge_card'],
+        ),
+    )
+
+    assert response.error is not None
+    assert response.error.message == 'allergen db down'
+    assert charge_cancelled.is_set()
+    await asyncio.sleep(0.1)
+    assert charges == []
+
+
+@pytest.mark.asyncio
+async def test_abort_during_parallel_tools_lets_each_cleanup_finish() -> None:
+    """Abort while two tools run: each finally completes before generate returns (no second cancel)."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    abort_signal = asyncio.Event()
+    started: list[str] = []
+    both_started = asyncio.Event()
+    released: list[str] = []
+
+    async def hold(name: str, cleanup_s: float) -> str:
+        started.append(name)
+        if len(started) == 2:
+            both_started.set()
+        try:
+            # Ignores abort_signal; execute_tool_request's watcher cancels it.
+            await asyncio.sleep(10)
+        finally:
+            await asyncio.sleep(cleanup_s)
+            released.append(name)
+        return 'held'
+
+    @ai.tool(name='hold_table')
+    async def hold_table() -> str:
+        return await hold('table', 0)
+
+    @ai.tool(name='hold_inventory')
+    async def hold_inventory() -> str:
+        return await hold('inventory', 0.05)
+
+    pm.responses = [_model_calls_tools('hold_table', 'hold_inventory')]
+
+    task = asyncio.create_task(
+        generate_action(
+            CallScope(ai),
+            GenerateActionOptions(
+                model='scriptedModel',
+                messages=[Message(role=Role.USER, content=[Part.from_text('book')])],
+                tools=['hold_table', 'hold_inventory'],
+            ),
+            abort_signal=abort_signal,
+        )
+    )
+    await asyncio.wait_for(both_started.wait(), timeout=2.0)
+    abort_signal.set()
+    response = await asyncio.wait_for(task, timeout=2.0)
+
+    assert response.finish_reason == FinishReason.ABORTED
+    assert sorted(released) == ['inventory', 'table']
+
+
+@pytest.mark.asyncio
+async def test_failed_tool_turn_leaves_no_unretrieved_task_exceptions() -> None:
+    """A sibling that fails during teardown is retrieved; the first failure is the one raised."""
+    loop = asyncio.get_running_loop()
+    reported: list[dict[str, Any]] = []
+    previous = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _loop, context: reported.append(context))
+    try:
+        ai = Genkit()
+        pm, _ = define_scripted_model(ai)
+        void_started = asyncio.Event()
+
+        @ai.tool(name='check_allergens')
+        async def check_allergens() -> str:
+            await void_started.wait()
+            raise GenkitError(status='UNAVAILABLE', message='allergen db down')
+
+        @ai.tool(name='void_order')
+        async def void_order() -> str:
+            void_started.set()
+            try:
+                await asyncio.sleep(10)
+            except asyncio.CancelledError:
+                raise RuntimeError('void failed during cleanup') from None
+            return 'voided'
+
+        pm.responses.append(_model_calls_tools('check_allergens', 'void_order'))
+
+        response = await generate_action(
+            CallScope(ai),
+            GenerateActionOptions(
+                model='scriptedModel',
+                messages=[Message(role=Role.USER, content=[Part.from_text('order')])],
+                tools=['check_allergens', 'void_order'],
+            ),
+        )
+        assert response.error is not None
+        assert response.error.message == 'allergen db down'
+        await asyncio.sleep(0)
+        gc.collect()
+        await asyncio.sleep(0)
+    finally:
+        loop.set_exception_handler(previous)
+
+    assert [c.get('message') for c in reported] == []
+
+
+@pytest.mark.asyncio
+async def test_failing_restart_cancels_and_awaits_other_restarts() -> None:
+    """Resume with two restarts: one fails, the other is cancelled before generate returns."""
+    ai = Genkit()
+    define_scripted_model(ai)
+    receipts: list[str] = []
+    receipt_started = asyncio.Event()
+    receipt_cancelled = asyncio.Event()
+
+    @ai.tool(name='confirm_booking')
+    async def confirm_booking() -> str:
+        await receipt_started.wait()
+        raise GenkitError(status='UNAVAILABLE', message='booking gone')
+
+    @ai.tool(name='send_receipt')
+    async def send_receipt() -> str:
+        receipt_started.set()
+        try:
+            await asyncio.sleep(0.05)
+        except asyncio.CancelledError:
+            receipt_cancelled.set()
+            raise
+        receipts.append('order-42')
+        return 'sent'
+
+    names = ('confirm_booking', 'send_receipt')
+    response = await generate_action(
+        CallScope(ai),
+        GenerateActionOptions(
+            model='scriptedModel',
+            messages=[
+                Message(role=Role.USER, content=[Part.from_text('book')]),
+                Message(
+                    role=Role.MODEL,
+                    content=[
+                        Part.from_tool_request(name=n, input={}, ref=f'ref-{n}', metadata={'interrupt': True})
+                        for n in names
+                    ],
+                ),
+            ],
+            tools=list(names),
+            resume=Resume(restart=[Part.from_tool_request(name=n, input={}, ref=f'ref-{n}') for n in names]),
+        ),
+    )
+
+    assert response.error is not None
+    assert response.error.message == 'booking gone'
+    assert receipt_cancelled.is_set()
+    await asyncio.sleep(0.1)
+    assert receipts == []
 
 
 @pytest.mark.asyncio
