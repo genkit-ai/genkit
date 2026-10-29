@@ -19,7 +19,6 @@
 import asyncio
 import base64
 import json
-import logging
 from collections.abc import Awaitable, Callable
 from typing import Any, get_args
 from unittest.mock import AsyncMock
@@ -39,6 +38,7 @@ from google import genai
 from google.auth.exceptions import DefaultCredentialsError, RefreshError
 from google.genai.errors import APIError
 from pytest_mock import MockerFixture
+from structlog.testing import capture_logs
 
 from genkit import Document, GenkitError, Part
 from genkit.embedder import EmbedRequest, EmbedResponse
@@ -163,15 +163,6 @@ async def test_vertex_only_options_are_not_forwarded_on_gemini_api(mocker: Mocke
     assert config == genai.types.EmbedContentConfig(task_type='CLUSTERING')
 
 
-def _embedder_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
-    """Warnings logged by the embedder module, as formatted messages."""
-    return [
-        record.getMessage()
-        for record in caplog.records
-        if record.name == Embedder.__module__ and record.levelno == logging.WARNING
-    ]
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ('options', 'expected'),
@@ -182,35 +173,35 @@ def _embedder_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
     ids=['one_key', 'several_keys'],
 )
 async def test_gemini_api_warns_about_dropped_vertex_only_options(
-    mocker: MockerFixture, caplog: pytest.LogCaptureFixture, options: dict[str, object], expected: str
+    mocker: MockerFixture, options: dict[str, object], expected: str
 ) -> None:
     """A Gemini API embedder names the Vertex-only options it drops instead of ignoring them silently."""
     client = _single_embedding_client(mocker)
     embedder = Embedder('gemini-embedding-001', client)
 
-    with caplog.at_level(logging.WARNING, logger=Embedder.__module__):
+    with capture_logs() as entries:
         await embedder.generate(EmbedRequest(input=[Document.from_text('text')], options=options))
 
-    assert _embedder_warnings(caplog) == [
+    warnings = [e['event'] for e in entries if e.get('log_level') == 'warning']
+    assert warnings == [
         f'Dropping {expected} from the gemini-embedding-001 embed config: '
         'Vertex AI only, not accepted by the Gemini Developer API.'
     ]
 
 
 @pytest.mark.asyncio
-async def test_vertex_does_not_warn_about_vertex_only_options(
-    mocker: MockerFixture, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_vertex_does_not_warn_about_vertex_only_options(mocker: MockerFixture) -> None:
     """Vertex embedders type mimeType and autoTruncate, so nothing is dropped and nothing is logged."""
     client = _single_embedding_client(mocker)
     embedder = Embedder('text-embedding-005', client, is_vertex=True)
 
-    with caplog.at_level(logging.WARNING, logger=Embedder.__module__):
+    with capture_logs() as entries:
         await embedder.generate(
             EmbedRequest(input=[Document.from_text('text')], options={'mimeType': 'text/plain', 'autoTruncate': False})
         )
 
-    assert _embedder_warnings(caplog) == []
+    warnings = [e['event'] for e in entries if e.get('log_level') == 'warning']
+    assert warnings == []
 
 
 @pytest.mark.asyncio
