@@ -253,6 +253,25 @@ print(f'\nTotal tokens: {response.usage.total_tokens}')
 # => Total tokens: 34
 ```
 
+#### Stream Cancellation & Early Exit
+
+Exiting an `async for chunk in stream:` loop early via `break` or using the `async with stream:` context manager immediately cancels the background model task and closes the stream channel:
+
+```python
+# 1. Manage stream lifecycle with context manager
+async with ai.generate_stream(prompt='Explain quantum entanglement.') as stream:
+    # 2. Break early once condition is met
+    async for chunk in stream.stream:
+        print(chunk.text, end='')
+        if 'paradox' in chunk.text.lower():
+            break
+
+# 3. Final response settles as aborted without leaking background connections
+final = await stream.response
+print(final.finish_reason)
+# => FinishReason.ABORTED
+```
+
 ### Streaming Structured Output: Typed Partials (feedback wanted)
 
 With `output_schema=Recipe`, each `chunk.output` is typed `Recipe`, but it's built from the JSON received so far without validation (`model_construct`). Genkit parses the accumulated text as partial JSON and fills the fields that have arrived. The rest are `None`, even when the field is typed `str` or `int`. Nested models and list items get the same treatment. Only `(await stream.response).output` is validated.
@@ -651,6 +670,79 @@ except GenkitError as e:
     # Only setup errors raised before the turn starts (bad config, unknown model).
     # A failed turn comes back as finish_reason == FAILED, not an exception.
     print(e.status, e.message)
+```
+
+### Parallel Tool Failure & Partial Preservation
+
+When multiple tools execute in parallel during a single turn and one tool fails, completed sibling tool calls are preserved rather than lost.
+
+The model turn is marked as failed (`finish_reason == FinishReason.FAILED`). Completed tool outputs are staged with `pendingOutput` on `response.message` (`call.pending_message`), while `response.messages` retains the committed conversation history up to the user turn. This ensures non-idempotent completed side effects (like charging a credit card) are preserved and never repeated when resuming or retrying.
+
+```python
+# 1. Multi-tool turn where charge_card succeeds but reserve_table fails
+response = await ai.generate(
+    prompt='Charge $100 and reserve table 7.',
+    tools=[charge_card, reserve_table],
+)
+
+# 2. Inspect partial completion on failed turn
+if response.finish_reason == FinishReason.FAILED:
+    # 3. Completed sibling output is preserved on response.message
+    for part in response.message.content:
+        if part.tool_request and 'pendingOutput' in (part.tool_request.metadata or {}):
+            print(f'Committed tool: {part.tool_request.name}')
+            # => Committed tool: charge_card
+
+    # 4. Resume or restart without re-executing completed tools
+    response = await ai.generate(
+        messages=[*response.messages, response.message],
+        tools=[charge_card, reserve_table],
+        resume_respond=[response.message.content[1].respond('table-11')],
+    )
+    print(response.text)
+    # => Reservation confirmed for table-11. Card already charged $100.
+```
+
+### Cancellation & Timeouts (asyncio-native)
+
+Genkit relies entirely on Python standard library `asyncio` concurrency primitives. There is no Genkit-specific `abort_signal` parameter on `ai.generate()` or `action.run()`.
+
+- **Ambient Timeouts**: Bounding generation with `async with asyncio.timeout(...)` or cancelling via `task.cancel()` cancels in-flight provider HTTP connections and tool execution.
+- **Side-Effect Preservation on Cancel**: If cancelled mid-tool-turn, the raised `asyncio.CancelledError` attaches `.message` (the partial turn with completed sibling tool `pendingOutput`) and `.messages` (committed dialogue history). Callers can catch `CancelledError` and access `.message` / `.messages` to persist state or resume later.
+
+```python
+import asyncio
+from genkit import Genkit, GoogleAI
+
+# 1. Initialize plugin and model
+ai = Genkit(plugins=[GoogleAI()], model='googleai/gemini-flash-latest')
+
+# 2. Bound execution with standard asyncio timeouts
+try:
+    async with asyncio.timeout(10.0):
+        response = await ai.generate(prompt='Draft an executive summary.')
+    print(response.text)
+    # => Executive Summary: Q4 Performance
+
+except TimeoutError:
+    print('Generation exceeded 10s deadline')
+
+# 3. Task cancellation mid-turn preserves completed side effects
+task = asyncio.create_task(ai.generate(prompt='Book flights and hotel.', tools=[book_flight, book_hotel]))
+# ... caller cancels task mid-flight ...
+task.cancel()
+
+try:
+    await task
+except asyncio.CancelledError as exc:
+    # 4. History and completed tools are attached to the exception
+    saved_history = getattr(exc, 'messages', [])
+    saved_partial = getattr(exc, 'message', None)
+    print([m.role for m in saved_history])
+    # => ['user']
+    if saved_partial:
+        print(f'Preserved completed tool: {saved_partial.content[0].tool_request.name}')
+        # => Preserved completed tool: book_flight
 ```
 
 ### Handling Interrupt in Tools
