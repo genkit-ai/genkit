@@ -1593,13 +1593,12 @@ async def run_model_until_aborted(
         )
 
     this_task = asyncio.current_task()
-    cancelled_by_abort = False
+    cancelled_by_abort = asyncio.Event()
 
     async def watch_abort() -> None:
-        nonlocal cancelled_by_abort
         await abort_signal.wait()
         if this_task is not None:
-            cancelled_by_abort = True
+            cancelled_by_abort.set()
             this_task.cancel()
 
     watcher_task = asyncio.create_task(watch_abort())
@@ -1614,7 +1613,7 @@ async def run_model_until_aborted(
         watcher_task.cancel()
         # generate turns our own cancel into an ABORTED reply, so it mustn't
         # count against an enclosing asyncio.timeout() or TaskGroup.
-        if cancelled_by_abort and this_task is not None and sys.version_info >= (3, 11):
+        if cancelled_by_abort.is_set() and this_task is not None and sys.version_info >= (3, 11):
             this_task.uncancel()
 
 

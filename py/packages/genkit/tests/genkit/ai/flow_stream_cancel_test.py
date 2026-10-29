@@ -9,8 +9,8 @@ from typing import TypeVar
 
 import pytest
 
-from genkit import ActionRunContext, Genkit, GenkitError
-from genkit._core._action import Action
+from genkit import Genkit, GenkitError
+from genkit._core._action import Action, ActionRunContext
 
 T = TypeVar('T')
 

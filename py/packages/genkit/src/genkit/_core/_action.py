@@ -1121,13 +1121,12 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         )
         run_task = asyncio.create_task(resp)
         channel.set_close_future(run_task)
-        reader_stopped = False
+        reader_stopped = asyncio.Event()
 
         async def stop() -> None:
-            nonlocal reader_stopped
             if run_task.done():
                 return
-            reader_stopped = True
+            reader_stopped.set()
             run_task.cancel()
             # waiting here is what lets aclosing(...) promise the run is over
             # once the block exits.
@@ -1142,7 +1141,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             if result_future.done():
                 return
             if closed.cancelled():
-                if reader_stopped:
+                if reader_stopped.is_set():
                     result_future.set_exception(
                         GenkitError(status='CANCELLED', message='The stream was closed before the run finished.')
                     )

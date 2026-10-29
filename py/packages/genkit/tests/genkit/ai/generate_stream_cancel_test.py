@@ -9,7 +9,8 @@ from typing import TypeVar
 
 import pytest
 
-from genkit import ActionRunContext, FinishReason, Genkit, Message, ModelResponse, ModelResponseChunk, Part, Role
+from genkit import FinishReason, Genkit, Message, ModelResponse, ModelResponseChunk, Part, Role
+from genkit._core._action import ActionRunContext
 from genkit._core._model import ModelRequest
 
 T = TypeVar('T')
