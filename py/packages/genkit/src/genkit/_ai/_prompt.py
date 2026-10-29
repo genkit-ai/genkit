@@ -72,7 +72,7 @@ from genkit._core._channel import Channel
 from genkit._core._config_check import check_config_values, config_field_names
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._logger import get_logger
-from genkit._core._middleware import BaseMiddleware, middleware_class_index
+from genkit._core._middleware import BaseMiddleware, _dump_middleware_ref_config, middleware_class_index
 from genkit._core._model import (
     Document,
     GenerateActionOptions,
@@ -1371,7 +1371,7 @@ def _use_to_wire_metadata(
             name = cls_index.get(type(entry))
             if not name:
                 continue
-            config = entry.config.model_dump(exclude_none=True, by_alias=True, mode='json')
+            config = _dump_middleware_ref_config(entry.config)
             item = {'name': name}
             if config:
                 item['config'] = config

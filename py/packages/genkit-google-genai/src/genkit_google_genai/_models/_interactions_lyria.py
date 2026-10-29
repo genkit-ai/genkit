@@ -82,7 +82,8 @@ def create_lyria_action(
         api_key = api_key_for_context(ctx.context, plugin_api_key)
         merged_options = client_options.merge(client_overrides_from_config(config))
         dumped = remove_client_option_overrides(config.model_dump(exclude_none=True))
-        create_options, passthrough = partition_keys(dumped, CREATE_OPTION_KEYS)
+        # GenkitConfig rejects undeclared keys, so nothing is left over.
+        create_options, _ = partition_keys(dumped, CREATE_OPTION_KEYS)
         modalities = create_options.get('response_modalities') or ['audio', 'text']
         system_instruction, turns = split_system_instruction(request.messages or [])
         steps = to_interaction_steps(ensure_tool_ids(turns))
@@ -90,7 +91,6 @@ def create_lyria_action(
             'model': version,
             'input': steps,
             'response_modalities': modalities,
-            **passthrough,
         }
         if system_instruction:
             create_kwargs['system_instruction'] = system_instruction

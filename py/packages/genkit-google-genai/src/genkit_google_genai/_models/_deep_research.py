@@ -224,7 +224,8 @@ def create_deep_research_background_action(
         options = client_options.merge(client_overrides_from_config(config))
 
         dumped = remove_client_option_overrides(config.model_dump(exclude_none=True))
-        agent_fields, _tool_fields, create_options, passthrough = partition_keys(
+        # GenkitConfig rejects undeclared keys, so nothing is left over.
+        agent_fields, _tool_fields, create_options, _ = partition_keys(
             dumped,
             AGENT_CONFIG_KEYS,
             TOOL_CONFIG_KEYS,
@@ -239,7 +240,6 @@ def create_deep_research_background_action(
             'background': True,
             'agent_config': agent_config,
             **create_options,
-            **passthrough,
         }
         if tools:
             create_kwargs['tools'] = tools

@@ -3050,8 +3050,9 @@ async def test_request_client_unknown_failure_stays_raw() -> None:
         ({}, _gemini.DEFAULT_TTL),
         ({'ttlSeconds': 600}, 600.0),
         ({'ttl_seconds': 600}, 600.0),
+        ({'ttlSeconds': None, 'ttl_seconds': 600}, 600.0),
     ],
-    ids=['true', 'empty', 'camel', 'snake'],
+    ids=['true', 'empty', 'camel', 'snake', 'camel-null-snake-set'],
 )
 def test_cache_metadata_ttl(cache: object, expected: float) -> None:
     """`metadata.cache` takes `true` or the JS `{ttlSeconds: N}`; snake_case also works."""
@@ -3064,6 +3065,16 @@ def test_cache_metadata_of_wrong_type_is_invalid_argument() -> None:
         _gemini._cache_ttl_seconds(600)
 
     assert raised.value.status == 'INVALID_ARGUMENT'
+
+
+@pytest.mark.parametrize('ttl', ['5m', True, 0, -1, float('nan')], ids=['string', 'bool', 'zero', 'negative', 'nan'])
+def test_cache_metadata_bad_ttl_is_invalid_argument(ttl: object) -> None:
+    """A TTL that isn't a positive number of seconds is INVALID_ARGUMENT, not a bare ValueError."""
+    with pytest.raises(GenkitError) as raised:
+        _gemini._cache_ttl_seconds({'ttlSeconds': ttl})
+
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    assert 'ttlSeconds' in raised.value.original_message
 
 
 # ---------------------------------------------------------------------------
