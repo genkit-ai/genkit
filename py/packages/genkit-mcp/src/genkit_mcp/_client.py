@@ -77,10 +77,6 @@ def define_mcp_client(
     and servers that bind a port, take a lock file or own a browser profile can
     clash.
 
-    This is a function rather than a Genkit plugin because the registry rewrites a
-    plugin's action names to ``<plugin>/<action>``, and a provider name cannot
-    contain a slash.
-
     Args:
         ai: The Genkit instance to register with.
         name: Provider name, used in tool selectors and as the namespace of

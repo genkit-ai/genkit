@@ -17,7 +17,4 @@
 """Model Context Protocol client for Genkit.
 
 Exposes the tools of a stdio MCP server as Genkit ``tool.v2`` actions.
-
-This package has no public API yet. The entry point is exported once it is
-implemented, so that no release can ship a name that raises on use.
 """

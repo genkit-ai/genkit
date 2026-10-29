@@ -26,10 +26,10 @@ class McpStdioServerConfig(BaseModel):
     """How to launch an MCP server as a child process over stdio.
 
     Not exported: the public functions take these fields as keyword arguments
-    or as one ``mcpServers`` entry and build this model from them. Field names
-    match the stdio ``mcpServers`` entries used by Claude Desktop and Cursor, so
-    an existing entry passes through unchanged. Any other key fails validation,
-    and validation errors never echo input values.
+    and build this model from them. Field names match the stdio ``mcpServers``
+    entries used by Claude Desktop and Cursor, so an existing entry passes
+    through unchanged. Any other key fails validation, and validation error
+    messages never echo input values.
 
     Attributes:
         type: Transport marker some `mcpServers` blocks carry; only ``stdio``.
