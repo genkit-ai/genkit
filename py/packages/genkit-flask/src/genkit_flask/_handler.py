@@ -113,7 +113,7 @@ def genkit_flask_handler(
     """A decorator for serving Genkit flows via a flask sever.
 
     ```python
-    from genkit import ActionRunContext
+    from genkit import FlowContext
     from genkit_flask import genkit_flask_handler
 
     app = Flask(__name__)
@@ -122,7 +122,7 @@ def genkit_flask_handler(
     @app.post('/chat')
     @genkit_flask_handler(ai)
     @ai.flow()
-    async def say_hi(name: str, ctx: ActionRunContext) -> str:
+    async def say_hi(name: str, ctx: FlowContext) -> str:
         stream = ai.generate_stream(prompt=f'tell a joke about {name}')
         async for chunk in stream.stream:
             if chunk.text:

@@ -25,9 +25,9 @@ from collections.abc import Callable
 
 import pytest
 
-from genkit import ActionRunContext, Genkit, GenkitError, Message, ModelResponse, Operation, Part, Role
+from genkit import Genkit, GenkitError, Message, ModelResponse, Operation, Part, Role
 from genkit.embedder import EmbedRequest, EmbedResponse, embedder
-from genkit.model import ModelRequest, background_model, model
+from genkit.model import ModelContext, ModelRequest, background_model, model
 from genkit.plugin_api import Action, ActionKind, ActionMetadata, Plugin
 
 
@@ -77,13 +77,13 @@ class VideoPlugin(Plugin):
         self.seen: list[tuple[ActionKind, str]] = []
 
     def _video(self, model_id: str):  # noqa: ANN202
-        async def start(request: ModelRequest, ctx: ActionRunContext) -> Operation:
+        async def start(request: ModelRequest, ctx: ModelContext) -> Operation:
             return Operation(id='job-1', done=False)
 
-        async def check(op: Operation, ctx: ActionRunContext) -> Operation:
+        async def check(op: Operation, ctx: ModelContext) -> Operation:
             return Operation(id=op.id, done=True)
 
-        async def cancel(op: Operation, ctx: ActionRunContext) -> Operation:
+        async def cancel(op: Operation, ctx: ModelContext) -> Operation:
             return Operation(id=op.id, done=True, metadata={'cancelled': True})
 
         return background_model(model_id, start=start, check=check, cancel=cancel)

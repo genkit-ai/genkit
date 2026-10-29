@@ -28,8 +28,8 @@ from genkit_anthropic import AnthropicConfig
 # model class instead of copying it.
 from genkit_anthropic._models import AnthropicModel
 
-from genkit import ActionRunContext, ModelResponse
-from genkit.model import ModelConfig, ModelInfo, ModelRequest, Supports
+from genkit import ModelResponse
+from genkit.model import ModelConfig, ModelContext, ModelInfo, ModelRequest, Supports
 from genkit.plugin_api import loop_local_client
 
 
@@ -63,14 +63,14 @@ class AnthropicModelGarden:
     def _runtime_client(self) -> AsyncAnthropicVertex:
         return AsyncAnthropicVertex(region=self._location, project_id=self._project)
 
-    def get_handler(self) -> Callable[[ModelRequest, ActionRunContext], Awaitable[ModelResponse]]:
+    def get_handler(self) -> Callable[[ModelRequest, ModelContext], Awaitable[ModelResponse]]:
         """Returns the generate handler function for this model.
 
         Returns:
             The handler function that can be used as an Action's fn parameter.
         """
 
-        async def _generate(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        async def _generate(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
             model = AnthropicModel(
                 model_name=self._model_name,
                 client=cast(AsyncAnthropic, self._runtime_client()),

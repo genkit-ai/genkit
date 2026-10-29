@@ -27,7 +27,7 @@ from openai import APIError, AsyncOpenAI
 from openai.types import Model
 from pydantic import BaseModel
 
-from genkit import ActionRunContext, Embedding, GenkitError, ModelResponse
+from genkit import Embedding, GenkitError, ModelResponse
 from genkit.embedder import (
     EmbedderInfo,
     EmbedderSupports,
@@ -37,6 +37,7 @@ from genkit.embedder import (
     embedder_action_metadata,
 )
 from genkit.model import (
+    ModelContext,
     ModelInfo,
     ModelRef,
     ModelRequest,
@@ -481,7 +482,7 @@ class OpenAI(Plugin):
 
         return None
 
-    def _client_for_call(self, request: ModelRequest, ctx: ActionRunContext) -> AsyncOpenAI:
+    def _client_for_call(self, request: ModelRequest, ctx: ModelContext) -> AsyncOpenAI:
         """The plugin's client, or a copy carrying the caller's ``context.secrets`` key.
 
         A tenant who passed their own key is the one who should be billed. The
@@ -548,7 +549,7 @@ class OpenAI(Plugin):
         """
         model_info = self.get_model_info(name) or {}
 
-        async def _generate(request: ModelRequest[OpenAIConfig], ctx: ActionRunContext) -> ModelResponse:
+        async def _generate(request: ModelRequest[OpenAIConfig], ctx: ModelContext) -> ModelResponse:
             catalog = SUPPORTED_OPENAI_MODELS.get(cast(KnownGpt, name))
             supports = catalog.supports if catalog is not None else get_default_openai_model_info(name).supports
             openai_model = OpenAIModelHandler(OpenAIModel(name, self._client_for_call(request, ctx), supports=supports))
@@ -586,7 +587,7 @@ class OpenAI(Plugin):
         """
         info_dict, config_schema = _get_multimodal_info_dict(name, model_type, supported_models)
 
-        async def _generate(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        async def _generate(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
             model_instance = model_class(name, self._client_for_call(request, ctx))
             return await model_instance.generate(request, ctx)
 

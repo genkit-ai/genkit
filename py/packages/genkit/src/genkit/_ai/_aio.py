@@ -77,7 +77,7 @@ from genkit._ai._prompt import (
     to_generate_options,
 )
 from genkit._ai._tools import ORIGINAL_OUTPUT_SCHEMA_KEY, define_interrupt, define_tool
-from genkit._core._action import Action, ActionKind, get_current_context
+from genkit._core._action import Action, ActionKind, ActionRunContext, get_current_context
 from genkit._core._background import (
     BackgroundAction,
     CancelModelOpFn,
@@ -92,6 +92,7 @@ from genkit._core._channel import Channel, run_loop
 from genkit._core._dap import DapFn, DynamicActionProvider
 from genkit._core._environment import is_dev_environment
 from genkit._core._error import GenkitError, RuntimeErrorReason, StatusName
+from genkit._core._flow import Flow
 from genkit._core._logger import configure_logging, get_logger, resolve_level
 from genkit._core._middleware import (
     BaseMiddleware,
@@ -133,7 +134,7 @@ from genkit._core._typing import (
     Role,
 )
 
-from ._decorators import _FlowDecorator, _FlowDecoratorWithChunk
+from ._decorators import _FlowDecorator
 from ._runtime import RuntimeManager, setup_signal_handlers
 
 logger = get_logger(__name__)
@@ -288,55 +289,104 @@ class Genkit:
         name: str | None = None,
         *,
         description: str | None = None,
-        chunk_type: None = None,
     ) -> _FlowDecorator: ...
+
+    # Overload order matters; see _FlowDecorator.__call__ for why the
+    # `object` shapes come before the context shapes.
+    @overload
+    def flow(
+        self,
+        func: Callable[[ActionRunContext[ChunkT], object], Awaitable[OutputT]],
+        /,
+    ) -> Flow[Any, OutputT, ChunkT]: ...
 
     @overload
     def flow(
         self,
-        name: str | None = None,
-        *,
-        description: str | None = None,
-        chunk_type: type[ChunkT],
-    ) -> _FlowDecoratorWithChunk[ChunkT]: ...
+        func: Callable[[InputT, ActionRunContext[ChunkT]], Awaitable[OutputT]],
+        /,
+    ) -> Flow[InputT, OutputT, ChunkT]: ...
+
+    @overload
+    def flow(
+        self,
+        func: Callable[[ActionRunContext[ChunkT], InputT], Awaitable[OutputT]],
+        /,
+    ) -> Flow[InputT, OutputT, ChunkT]: ...
+
+    @overload
+    def flow(
+        self,
+        func: Callable[[object], Awaitable[OutputT]],
+        /,
+    ) -> Flow[Any, OutputT]: ...
+
+    @overload
+    def flow(
+        self,
+        func: Callable[[ActionRunContext[ChunkT]], Awaitable[OutputT]],
+        /,
+    ) -> Flow[None, OutputT, ChunkT]: ...
+
+    @overload
+    def flow(
+        self,
+        func: Callable[[InputT], Awaitable[OutputT]],
+        /,
+    ) -> Flow[InputT, OutputT]: ...
+
+    @overload
+    def flow(
+        self,
+        func: Callable[[], Awaitable[OutputT]],
+        /,
+    ) -> Flow[None, OutputT]: ...
+
+    @overload
+    def flow(
+        self,
+        func: Callable[..., Awaitable[OutputT]],
+        /,
+    ) -> Flow[Any, OutputT, Any]: ...
 
     def flow(
         self,
-        name: str | None = None,
+        name: str | Callable[..., Awaitable[Any]] | None = None,
         *,
         description: str | None = None,
-        chunk_type: type[Any] | None = None,
-    ) -> _FlowDecorator | _FlowDecoratorWithChunk[Any]:
+    ) -> _FlowDecorator | Flow[Any, Any, Any]:
         """Decorator to register an async function as a flow.
 
+        Can be used bare (``@ai.flow``) or with arguments (``@ai.flow()``,
+        ``@ai.flow('custom_name', description='...')``).
+
         A flow takes at most one input. To read the request context or stream
-        chunks, add a parameter annotated ``ActionRunContext``, in any position.
+        chunks, add a parameter annotated ``FlowContext``, in any position.
         Any other second parameter raises ``TypeError`` when the flow is defined.
 
         Args:
-            name: Optional name for the flow. Defaults to the function name.
+            name: Optional name for the flow (or the function itself when used
+                as ``@ai.flow``). Defaults to the function name.
             description: Optional description for the flow.
-            chunk_type: Optional type for streaming chunks. When provided,
-                the returned Action will be typed as Action[InputT, OutputT, ChunkT].
 
         Example:
-            from genkit import Genkit
+            from genkit import FlowContext, Genkit
             from genkit_google_genai import GoogleAI
 
             ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
 
-            @ai.flow()
+            @ai.flow
             async def my_flow(prompt: str) -> str:
                 res = await ai.generate(prompt=prompt)
                 return res.text
 
-            @ai.flow(chunk_type=str)
-            async def streaming_flow(x: int, ctx: ActionRunContext) -> str:
+            @ai.flow
+            async def streaming_flow(x: int, ctx: FlowContext[str]) -> str:
                 ctx.send_chunk('progress')
                 return 'done'
         """
-        if chunk_type is not None:
-            return _FlowDecoratorWithChunk(self._registry, name, description, chunk_type)
+        if not isinstance(name, str) and name is not None:
+            return _FlowDecorator(self._registry, None, description)(name)
         return _FlowDecorator(self._registry, name, description)
 
     def define_helper(self, name: str, fn: Callable[..., Any]) -> None:
@@ -376,25 +426,44 @@ class Genkit:
             metadata=metadata,
         )
 
+    @overload
     def tool(
         self,
         name: str | None = None,
         *,
         description: str | None = None,
         input_schema: type[BaseModel] | dict[str, object] | None = None,
-    ) -> Callable[[Callable[..., Any]], Tool]:
+    ) -> Callable[[Callable[..., Any]], Tool]: ...
+
+    @overload
+    def tool(
+        self,
+        func: Callable[..., Any],
+        /,
+    ) -> Tool: ...
+
+    def tool(
+        self,
+        name: str | Callable[..., Any] | None = None,
+        *,
+        description: str | None = None,
+        input_schema: type[BaseModel] | dict[str, object] | None = None,
+    ) -> Callable[[Callable[..., Any]], Tool] | Tool:
         """Decorator to register a function as a tool.
+
+        Can be used bare (``@ai.tool``) or with arguments (``@ai.tool()``,
+        ``@ai.tool('custom_name', description='...')``).
 
         The return annotation is what the model binds as ``outputSchema``.
 
         A tool takes at most one input, and that input's type is the schema the
         model fills in. For several fields, use one Pydantic model. To read the
         request context or interrupt, add a parameter annotated
-        ``ToolRunContext``, in any position. Any other second parameter raises
+        ``ToolContext``, in any position. Any other second parameter raises
         ``TypeError`` when the tool is defined.
 
         Example:
-            @ai.tool()
+            @ai.tool
             async def current_weather(city: str) -> str:
                 return f'Sunny in {city}'
 
@@ -402,19 +471,29 @@ class Genkit:
                 city: str
                 days: int = 3
 
-            @ai.tool()
-            async def forecast(input: Forecast, ctx: ToolRunContext) -> str:
+            @ai.tool
+            async def forecast(input: Forecast, ctx: ToolContext) -> str:
                 user = ctx.context.get('user_id')
                 return f'{input.days}-day forecast for {input.city} ({user})'
 
             res = await ai.generate(prompt='Weather in Paris?', tools=['current_weather', 'forecast'])
         """
+        if callable(name):
+            return define_tool(
+                self._registry,
+                name,
+                None,
+                description,
+                input_schema=input_schema,
+            )
+
+        tool_name: str | None = name
 
         def wrapper(func: Callable[..., Any]) -> Tool:
             return define_tool(
                 self._registry,
                 func,
-                name,
+                tool_name,
                 description,
                 input_schema=input_schema,
             )

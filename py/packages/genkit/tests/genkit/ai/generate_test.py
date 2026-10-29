@@ -29,8 +29,7 @@ from genkit._ai._generate import (
     generate_action,
 )
 from genkit._ai._model import text_from_content, text_from_message
-from genkit._ai._tools import Interrupt, ToolRunContext, define_tool
-from genkit._core._action import ActionRunContext
+from genkit._ai._tools import Interrupt, ToolContext, define_tool
 from genkit._core._error import GenkitError, PublicError, RuntimeErrorReason
 from genkit._core._model import GenerateActionOptions, ModelRequest, Resume
 from genkit._core._protocols import RegistryLike
@@ -51,6 +50,7 @@ from genkit.middleware import (
     ModelHookParams,
     ToolHookParams,
 )
+from genkit.model import ModelContext
 from genkit.plugin_api import ActionKind, MiddlewarePlugin, provider_error
 from genkit.testing import (
     ScriptedModel,
@@ -1505,14 +1505,14 @@ def test_wrap_tool_params_text_part_raises() -> None:
 
 @pytest.mark.asyncio
 async def test_generate_context_reaches_tool_run() -> None:
-    """``generate(context=...)`` is piped into ``tool.run`` as ``ToolRunContext.context``."""
+    """``generate(context=...)`` is piped into ``tool.run`` as ``ToolContext.context``."""
     seen: list[dict[str, object]] = []
 
     ai = Genkit()
     pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='ctxTool')
-    async def ctx_tool(_: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
+    async def ctx_tool(_: dict, ctx: ToolContext) -> str:  # noqa: ARG001
         seen.append(dict(ctx.context))
         return 'ok'
 
@@ -1568,7 +1568,7 @@ async def test_generate_without_context_uses_enclosing_flow_context() -> None:
             return await next_fn(params, ctx)
 
     @ai.tool(name='check_allergies')
-    async def check_allergies(_: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
+    async def check_allergies(_: dict, ctx: ToolContext) -> str:  # noqa: ARG001
         seen.append(('tool', dict(ctx.context)))
         return 'no nuts'
 
@@ -1605,13 +1605,13 @@ async def test_generate_without_context_uses_enclosing_flow_context() -> None:
 
 @pytest.mark.asyncio
 async def test_generate_resume_context_reaches_tool_run() -> None:
-    """``generate(resume=..., context=...)`` pipes ``context`` to ``ToolRunContext.context``."""
+    """``generate(resume=..., context=...)`` pipes ``context`` to ``ToolContext.context``."""
     seen: list[dict[str, object]] = []
 
     ai = Genkit()
 
     @ai.tool(name='ctx_res_tool')
-    async def ctx_res_tool(inp: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
+    async def ctx_res_tool(inp: dict, ctx: ToolContext) -> str:  # noqa: ARG001
         seen.append(dict(ctx.context))
         return 'resumed_value'
 
@@ -1648,7 +1648,7 @@ async def test_generate_resume_context_reaches_tool_run() -> None:
 
 @pytest.mark.asyncio
 async def test_wrap_tool_middleware_custom_context_reaches_tool_run() -> None:
-    """Mutations to ``ctx.custom_context`` in ``wrap_tool`` are visible in ``ToolRunContext``."""
+    """Mutations to ``ctx.custom_context`` in ``wrap_tool`` are visible in ``ToolContext``."""
     seen: list[dict[str, object]] = []
 
     ai = Genkit()
@@ -1667,7 +1667,7 @@ async def test_wrap_tool_middleware_custom_context_reaches_tool_run() -> None:
     pm, _ = define_scripted_model(ai)
 
     @ai.tool(name='ctxTool')
-    async def ctx_tool(_: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
+    async def ctx_tool(_: dict, ctx: ToolContext) -> str:  # noqa: ARG001
         seen.append(dict(ctx.context))
         return 'ok'
 
@@ -4429,7 +4429,7 @@ async def test_generate_chat_model_returning_dict_after_tool_keeps_closed_rounds
     ai = Genkit()
     seen = {'n': 0}
 
-    async def model_fn(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse | dict[str, object]:
+    async def model_fn(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse | dict[str, object]:
         seen['n'] += 1
         if seen['n'] == 1:
             return _model_calls_tool(name='lookup', ref='r1')
@@ -4664,7 +4664,7 @@ async def test_generate_stream_closes_with_structured_max_turns_response() -> No
         tool_calls += 1
         return '72F'
 
-    async def stream_limit_model(_request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def stream_limit_model(_request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         nonlocal model_calls
         model_calls += 1
         ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('first')]))
@@ -4700,7 +4700,7 @@ async def test_generate_stream_closes_with_structured_max_turns_response() -> No
 
 
 def _model_dies_after_hello_wor(ai: Genkit, name: str) -> None:
-    async def model(_request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def model(_request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('Hello, ')]))
         ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('wor')]))
         raise RuntimeError('stream died')
@@ -4753,7 +4753,7 @@ async def test_generate_stream_fails_midway_with_schema_output_is_none() -> None
 
     ai = Genkit(model='diesMidJson')
 
-    async def model(_request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def model(_request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('{"name": "Pa')]))
         ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('ris", "population": 21')]))
         raise RuntimeError('stream died')
@@ -4787,7 +4787,7 @@ async def test_generate_stream_fails_after_tool_turn_keeps_closed_round() -> Non
         tool_calls += 1
         return '72F'
 
-    async def model(_request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def model(_request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         nonlocal model_calls
         model_calls += 1
         if model_calls == 1:
@@ -4958,7 +4958,7 @@ async def test_first_turn_task_cancel_raises() -> None:
     started = asyncio.Event()
     model_calls = 0
 
-    async def waiting_model(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+    async def waiting_model(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
         nonlocal model_calls
         model_calls += 1
         started.set()
@@ -4979,7 +4979,7 @@ async def test_wait_for_generate_raises_timeout() -> None:
     """asyncio.wait_for around generate still raises TimeoutError."""
     ai = Genkit(model='slow')
 
-    async def slow_model(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+    async def slow_model(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
         await asyncio.sleep(5)
         raise AssertionError('unreachable')
 
@@ -5001,7 +5001,7 @@ async def test_task_cancel_after_tool_turn_raises() -> None:
     async def lookup() -> str:
         return '72F'
 
-    async def cancel_after_tool(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+    async def cancel_after_tool(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
         nonlocal model_calls
         model_calls += 1
         if model_calls == 1:
@@ -5246,7 +5246,7 @@ async def test_generate_error_on_a_later_turn_returns_failed_with_that_error() -
     async def step() -> str:
         return 'ok'
 
-    async def later_boom(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+    async def later_boom(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
         nonlocal model_calls
         model_calls += 1
         if model_calls <= 2:
@@ -5331,7 +5331,7 @@ async def test_generate_cancelled_during_a_later_turn_stops_calling_the_model() 
     async def step() -> str:
         return 'ok'
 
-    async def hang_on_turn_3(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+    async def hang_on_turn_3(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
         nonlocal model_calls
         model_calls += 1
         if model_calls < 4:
@@ -5381,7 +5381,7 @@ def test_generate_system_exit_on_a_later_turn_unwinds_middleware_before_the_loop
         async def step() -> str:
             return 'ok'
 
-        async def exit_on_turn_2(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+        async def exit_on_turn_2(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
             nonlocal model_calls
             model_calls += 1
             if model_calls == 1:
@@ -5501,7 +5501,7 @@ async def test_generate_with_400_middleware_cancelled_while_the_model_hangs_rais
     ai = Genkit(model='hangModel')
     started = asyncio.Event()
 
-    async def hang(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+    async def hang(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
         started.set()
         await asyncio.Event().wait()
         raise AssertionError('unreachable')
@@ -6115,7 +6115,7 @@ async def test_generate_with_400_middleware_times_out_while_the_model_hangs() ->
     """asyncio.wait_for around a 400-middleware generate raises TimeoutError and leaves nothing running."""
     ai = Genkit(model='hangModel')
 
-    async def hang(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+    async def hang(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
         await asyncio.Event().wait()
         raise AssertionError('unreachable')
 
@@ -6136,7 +6136,7 @@ async def test_generate_cancelled_with_400_middleware_finishes_inner_cleanup_bef
     started = asyncio.Event()
     cleanup: list[str] = []
 
-    async def hang(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+    async def hang(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
         started.set()
         await asyncio.Event().wait()
         raise AssertionError('unreachable')
@@ -6231,7 +6231,7 @@ async def test_generate_with_400_middleware_cancelled_on_a_later_turn_raises_can
     async def step() -> str:
         return 'ok'
 
-    async def hang_on_turn_2(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+    async def hang_on_turn_2(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
         nonlocal model_calls
         model_calls += 1
         if model_calls == 1:
@@ -6265,7 +6265,7 @@ async def test_generate_stream_with_400_middleware_cancelled_while_the_model_han
     ai = Genkit(model='hangModel')
     started = asyncio.Event()
 
-    async def hang(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+    async def hang(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
         started.set()
         await asyncio.Event().wait()
         raise AssertionError('unreachable')
@@ -6589,7 +6589,7 @@ async def test_abort_during_first_model_call_returns_prompt() -> None:
     abort_signal = asyncio.Event()
     started = asyncio.Event()
 
-    async def hang(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+    async def hang(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
         started.set()
         await abort_signal.wait()
         raise GenkitError(status='ABORTED', message='Generation aborted.')
@@ -6633,7 +6633,7 @@ async def test_abort_during_later_model_call_keeps_closed_round() -> None:
     async def lookup() -> str:
         return '72F'
 
-    async def hang_after_tool(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+    async def hang_after_tool(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
         nonlocal model_calls
         model_calls += 1
         if model_calls == 1:
@@ -6677,7 +6677,7 @@ async def test_generate_user_retry_middleware_makes_no_model_call_after_stop() -
     ai = Genkit()
     calls: list[str] = []
 
-    async def flaky(_request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def flaky(_request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         calls.append('flaky')
         ctx.abort_signal.set()
         raise GenkitError(status='UNAVAILABLE', message='primary down')
@@ -8834,7 +8834,7 @@ async def test_generate_with_model_raising_wrapped_provider_500_returns_internal
     """A model raising provider_error(..., http_status=500) keeps provider text off finish_message."""
     ai = Genkit()
 
-    async def down(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def down(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         raise provider_error(
             RuntimeError('upstream said: db password rejected'),
             http_status=500,
@@ -8856,7 +8856,7 @@ async def test_generate_with_genkit_error_wrapping_public_error_uses_outer_messa
     """A hand-built GenkitError(cause=PublicError) uses the outer message, not the inner one."""
     ai = Genkit()
 
-    async def down(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def down(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         raise GenkitError(
             status='INTERNAL',
             message='outer wrapper',

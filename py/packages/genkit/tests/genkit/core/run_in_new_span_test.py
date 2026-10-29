@@ -14,7 +14,7 @@ import pytest
 from pydantic import BaseModel
 
 from genkit import Genkit, Message, ModelResponse, Part, Role
-from genkit._ai._tools import Interrupt, ToolRunContext
+from genkit._ai._tools import Interrupt, ToolContext
 from genkit._core._action import Action, ActionRunContext
 from genkit._core._telemetry._attrs import metadata_key
 from genkit._core._telemetry._http import ActiveSpan
@@ -267,7 +267,7 @@ async def test_tool_interrupt_is_not_recorded_as_span_error(exporter, caplog: py
     ai = Genkit()
 
     @ai.tool(name='transfer')
-    async def transfer(inp: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
+    async def transfer(inp: dict, ctx: ToolContext) -> str:  # noqa: ARG001
         raise Interrupt({'reason': 'needs_approval'})
 
     action = await ai._registry.resolve_action(kind=ActionKind.TOOL, name='transfer')

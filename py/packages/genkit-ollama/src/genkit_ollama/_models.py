@@ -98,8 +98,8 @@ import structlog
 from pydantic import ConfigDict, ValidationError
 from pydantic.alias_generators import to_camel, to_snake
 
-from genkit import ActionRunContext, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
-from genkit.model import ModelConfig, ModelRequest, ModelUsage, ToolRequest, get_basic_usage_stats
+from genkit import GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
+from genkit.model import ModelConfig, ModelContext, ModelRequest, ModelUsage, ToolRequest, get_basic_usage_stats
 from genkit.plugin_api import loop_local_client, provider_error
 from genkit_ollama._constants import DEFAULT_OLLAMA_SERVER_URL
 from genkit_ollama._errors import wrap_connection_errors
@@ -293,7 +293,7 @@ class OllamaModel:
     async def generate(
         self,
         request: ModelRequest,
-        ctx: ActionRunContext | None = None,
+        ctx: ModelContext | None = None,
         client: ollama_api.AsyncClient | None = None,
     ) -> ModelResponse:
         """Generate a response from Ollama.
@@ -336,7 +336,7 @@ class OllamaModel:
         self,
         *,
         request: ModelRequest,
-        ctx: ActionRunContext | None,
+        ctx: ModelContext | None,
         client: ollama_api.AsyncClient | None,
         content: list[Part],
     ) -> ModelResponse:
@@ -379,7 +379,7 @@ class OllamaModel:
     async def _chat_with_ollama(
         self,
         request: ModelRequest,
-        ctx: ActionRunContext | None = None,
+        ctx: ModelContext | None = None,
         client: ollama_api.AsyncClient | None = None,
     ) -> ollama_api.ChatResponse | None:
         """Chat with Ollama.
@@ -817,7 +817,7 @@ class OllamaModel:
                 raise ValueError(f'Unknown role: {role}')
 
     @staticmethod
-    def is_streaming_request(ctx: ActionRunContext | None) -> bool:
+    def is_streaming_request(ctx: ModelContext | None) -> bool:
         """Determines if streaming mode is requested."""
         return bool(ctx and ctx.is_streaming)
 

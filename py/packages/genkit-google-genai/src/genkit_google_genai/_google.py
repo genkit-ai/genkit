@@ -63,10 +63,11 @@ from google.genai.types import HttpOptions, HttpOptionsDict, Model as GenaiModel
 from pydantic import BaseModel
 
 import genkit_google_genai._constants as const
-from genkit import ActionRunContext, GenkitError, ModelResponse, Operation
+from genkit import GenkitError, ModelResponse, Operation
 from genkit.embedder import EmbedderRef, embedder, embedder_action_metadata
 from genkit.model import (
     BackgroundAction,
+    ModelContext,
     ModelInfo,
     ModelRef,
     ModelRequest,
@@ -386,11 +387,11 @@ def _create_veo_background_action(
     """
     full_name = f'{plugin_name}/{name}'
 
-    async def _start(request: ModelRequest[VeoConfig], ctx: ActionRunContext) -> Operation:
+    async def _start(request: ModelRequest[VeoConfig], ctx: ModelContext) -> Operation:
         veo = VeoModel(name, client_getter(), client_kwargs=client_kwargs)
         return await veo.start(request, ctx)
 
-    async def _check(op: Operation, ctx: ActionRunContext) -> Operation:
+    async def _check(op: Operation, ctx: ModelContext) -> Operation:
         veo = VeoModel(name, client_getter(), client_kwargs=client_kwargs)
         return await veo.check(op, ctx)
 
@@ -852,26 +853,26 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
 
         if is_tts_model(name):
 
-            async def _run_tts(request: ModelRequest[GeminiTtsConfig], ctx: ActionRunContext) -> ModelResponse:
+            async def _run_tts(request: ModelRequest[GeminiTtsConfig], ctx: ModelContext) -> ModelResponse:
                 return await _new_gemini(self, name).generate(request, ctx)
 
             return _model_action(action_name, _run_tts, model_info, GeminiTtsConfig)
 
         if is_image_model(name):
 
-            async def _run_image(request: ModelRequest[GeminiImageConfig], ctx: ActionRunContext) -> ModelResponse:
+            async def _run_image(request: ModelRequest[GeminiImageConfig], ctx: ModelContext) -> ModelResponse:
                 return await _new_gemini(self, name).generate(request, ctx)
 
             return _model_action(action_name, _run_image, model_info, GeminiImageConfig)
 
         if is_gemma_model(name):
 
-            async def _run_gemma(request: ModelRequest[GemmaConfig], ctx: ActionRunContext) -> ModelResponse:
+            async def _run_gemma(request: ModelRequest[GemmaConfig], ctx: ModelContext) -> ModelResponse:
                 return await _new_gemini(self, name).generate(request, ctx)
 
             return _model_action(action_name, _run_gemma, model_info, GemmaConfig)
 
-        async def _run(request: ModelRequest[GeminiConfig], ctx: ActionRunContext) -> ModelResponse:
+        async def _run(request: ModelRequest[GeminiConfig], ctx: ModelContext) -> ModelResponse:
             return await _new_gemini(self, name).generate(request, ctx)
 
         return _model_action(action_name, _run, model_info, GeminiConfig)
@@ -1314,7 +1315,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
         # keep the family unroutable while Vertex actually serves it.
         if is_virtual_try_on_model(name):
 
-            async def _run_try_on(request: ModelRequest[VirtualTryOnConfig], ctx: ActionRunContext) -> ModelResponse:
+            async def _run_try_on(request: ModelRequest[VirtualTryOnConfig], ctx: ModelContext) -> ModelResponse:
                 model = VirtualTryOnModel(
                     name,
                     self._runtime_client(),
@@ -1339,7 +1340,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
                 supports=google_model_info('gemini').supports,
             )
 
-            async def _run_tuned(request: ModelRequest[GeminiConfig], ctx: ActionRunContext) -> ModelResponse:
+            async def _run_tuned(request: ModelRequest[GeminiConfig], ctx: ModelContext) -> ModelResponse:
                 return await _new_gemini(self, name).generate(request, ctx)
 
             return _model_action(action_name, _run_tuned, model_info, GeminiConfig)
@@ -1349,26 +1350,26 @@ class VertexAI(GoogleFamilyRefs, Plugin):
 
         if is_tts_model(name):
 
-            async def _run_tts(request: ModelRequest[GeminiTtsConfig], ctx: ActionRunContext) -> ModelResponse:
+            async def _run_tts(request: ModelRequest[GeminiTtsConfig], ctx: ModelContext) -> ModelResponse:
                 return await _new_gemini(self, name).generate(request, ctx)
 
             return _model_action(action_name, _run_tts, model_info, GeminiTtsConfig)
 
         if is_image_model(name):
 
-            async def _run_image(request: ModelRequest[GeminiImageConfig], ctx: ActionRunContext) -> ModelResponse:
+            async def _run_image(request: ModelRequest[GeminiImageConfig], ctx: ModelContext) -> ModelResponse:
                 return await _new_gemini(self, name).generate(request, ctx)
 
             return _model_action(action_name, _run_image, model_info, GeminiImageConfig)
 
         if is_gemma_model(name):
 
-            async def _run_gemma(request: ModelRequest[GemmaConfig], ctx: ActionRunContext) -> ModelResponse:
+            async def _run_gemma(request: ModelRequest[GemmaConfig], ctx: ModelContext) -> ModelResponse:
                 return await _new_gemini(self, name).generate(request, ctx)
 
             return _model_action(action_name, _run_gemma, model_info, GemmaConfig)
 
-        async def _run(request: ModelRequest[GeminiConfig], ctx: ActionRunContext) -> ModelResponse:
+        async def _run(request: ModelRequest[GeminiConfig], ctx: ModelContext) -> ModelResponse:
             return await _new_gemini(self, name).generate(request, ctx)
 
         return _model_action(action_name, _run, model_info, GeminiConfig)

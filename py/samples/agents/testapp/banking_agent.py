@@ -32,7 +32,7 @@ from uuid import uuid4
 from _ai import ai, reply_text
 from pydantic import BaseModel, Field
 
-from genkit import ActionRunContext
+from genkit import FlowContext
 from genkit.exp.agent import InMemorySessionStore
 
 
@@ -80,7 +80,7 @@ banking_agent = ai.define_agent(
 
 
 @ai.flow()
-async def test_banking_agent(text: str, ctx: ActionRunContext) -> dict[str, Any]:
+async def test_banking_agent(text: str, ctx: FlowContext) -> dict[str, Any]:
     """Run a turn that pauses for approval, approve it, then let the transfer land."""
     chat = banking_agent.chat()
     turn = chat.send_stream(text or 'Transfer $500 to my savings account.')

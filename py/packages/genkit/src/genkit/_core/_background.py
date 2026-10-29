@@ -25,7 +25,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from genkit._core._action import Action, ActionKind, ActionRunContext, get_current_context
+from genkit._core._action import Action, ActionKind, ActionRunContext, ModelContext, get_current_context
 from genkit._core._config_check import check_config_json_schema, check_request_config
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import ModelRequest, ModelResponse
@@ -108,9 +108,9 @@ def _operation_action(
     return action
 
 
-StartModelOpFn = Callable[[ModelRequest, ActionRunContext], Awaitable[Operation]]
-CheckModelOpFn = Callable[[Operation, ActionRunContext], Awaitable[Operation]]
-CancelModelOpFn = Callable[[Operation, ActionRunContext], Awaitable[Operation]]
+StartModelOpFn = Callable[[ModelRequest, ModelContext], Awaitable[Operation]]
+CheckModelOpFn = Callable[[Operation, ModelContext], Awaitable[Operation]]
+CancelModelOpFn = Callable[[Operation, ModelContext], Awaitable[Operation]]
 
 
 def operation_context(
