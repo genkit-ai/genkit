@@ -214,3 +214,36 @@ async def test_prompt_stream_iterated_to_end_returns_completed_response() -> Non
     assert response.finish_reason == FinishReason.STOP
     assert [m.role for m in response.messages] == [Role.USER, Role.MODEL]
     assert response.text == 'one two'
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_consumer_exception_cancels_model_and_response_is_aborted() -> None:
+    """An unhandled exception in consumer loop body drops the iterator and cancels the model."""
+    ai, model = setup()
+    stream = ai.generate_stream(model='slow', prompt='hi')
+
+    with pytest.raises(RuntimeError, match='consumer crash'):
+        async for _ in stream:
+            raise RuntimeError('consumer crash')
+
+    response = await settle(stream.response)
+
+    assert model.cancelled.is_set()
+    assert response.finish_reason == FinishReason.ABORTED
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_timeout_cancels_model_and_response_is_aborted() -> None:
+    """An enclosing asyncio.timeout cancels the reader task and cancels the model."""
+    ai, model = setup()
+    stream = ai.generate_stream(model='slow', prompt='hi')
+
+    with pytest.raises(TimeoutError):
+        async with asyncio.timeout(0.02):
+            async for _ in stream:
+                await asyncio.sleep(1)
+
+    response = await settle(stream.response)
+
+    assert model.cancelled.is_set()
+    assert response.finish_reason == FinishReason.ABORTED

@@ -158,3 +158,38 @@ async def test_flow_stream_await_response_without_iterating_runs_to_completion()
 
     assert await settle(count.stream(1).response) == 'done'
     assert not body.cancelled.is_set()
+
+
+@pytest.mark.asyncio
+async def test_flow_stream_consumer_exception_cancels_flow() -> None:
+    """An unhandled exception in consumer loop body drops the iterator and cancels the flow."""
+    count, body = setup()
+    stream = count.stream(1)
+
+    with pytest.raises(RuntimeError, match='consumer crash'):
+        async for _ in stream:
+            raise RuntimeError('consumer crash')
+
+    with pytest.raises(GenkitError) as err:
+        await settle(stream.response)
+
+    assert body.cancelled.is_set()
+    assert err.value.status == 'CANCELLED'
+
+
+@pytest.mark.asyncio
+async def test_flow_stream_timeout_cancels_flow() -> None:
+    """An enclosing asyncio.timeout cancels the reader task and cancels the flow."""
+    count, body = setup()
+    stream = count.stream(1)
+
+    with pytest.raises(TimeoutError):
+        async with asyncio.timeout(0.02):
+            async for _ in stream:
+                await asyncio.sleep(1)
+
+    with pytest.raises(GenkitError) as err:
+        await settle(stream.response)
+
+    assert body.cancelled.is_set()
+    assert err.value.status == 'CANCELLED'
