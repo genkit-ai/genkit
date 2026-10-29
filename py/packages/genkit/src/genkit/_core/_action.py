@@ -44,7 +44,7 @@ from pydantic.alias_generators import to_camel
 from pydantic.errors import PydanticInvalidForJsonSchema, PydanticSchemaGenerationError, PydanticUserError
 from typing_extensions import TypeVar
 
-from genkit._core._channel import Channel, CloseableQueue
+from genkit._core._channel import CloseableQueue, mirror_result, start_stream
 from genkit._core._compat import StrEnum
 from genkit._core._error import GenkitError, Interrupt, RuntimeErrorReason, mark_request_error
 from genkit._core._model import (
@@ -1086,40 +1086,20 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         input_stream: AsyncIterator[InputT] | None = None,
     ) -> StreamResponse[ChunkT, OutputT]:
         """``stream`` plus ``input_stream``, which ``BidiAction.stream_bidi`` feeds."""
-        channel: Channel[ChunkT, ActionResponse[OutputT]] = Channel()
 
-        def send_chunk(c: ChunkT) -> None:
-            channel.send(c)
+        async def run(send_chunk: Callable[[ChunkT], None]) -> ActionResponse[OutputT]:
+            return await self._run(
+                input,
+                on_chunk=send_chunk,
+                context=context,
+                telemetry_labels=telemetry_labels,
+                abort_signal=abort_signal,
+                init=init,
+                input_stream=input_stream,
+            )
 
-        resp = self._run(
-            input,
-            on_chunk=send_chunk,
-            context=context,
-            telemetry_labels=telemetry_labels,
-            abort_signal=abort_signal,
-            init=init,
-            input_stream=input_stream,
-        )
-        channel.set_close_future(asyncio.create_task(resp))
-
-        # Mirror the run's terminal state onto .response so a caller awaiting it
-        # sees the same success/error/cancel the run ended with, instead of
-        # hanging (or dropping the error on the floor) when the run raises.
-        result_future: asyncio.Future[OutputT] = asyncio.Future()
-
-        def _resolve_response(closed: asyncio.Future[ActionResponse[OutputT]]) -> None:
-            if result_future.done():
-                return
-            if closed.cancelled():
-                result_future.cancel()
-            elif (exc := closed.exception()) is not None:
-                result_future.set_exception(exc)
-            else:
-                result_future.set_result(closed.result().response)
-
-        channel.closed.add_done_callback(_resolve_response)
-
-        return StreamResponse(stream=channel, response=result_future)
+        channel, task = start_stream(run)
+        return StreamResponse(stream=channel, response=mirror_result(task, lambda result: result.response))
 
     def _initialize_io_schemas(self, annotations: dict[str, Any]) -> None:
         if self._params.input is not None:

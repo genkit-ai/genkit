@@ -19,7 +19,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import os
 import weakref
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -69,7 +68,7 @@ from genkit._core._action import (
     create_action_key,
     get_current_context,
 )
-from genkit._core._channel import Channel
+from genkit._core._channel import start_stream
 from genkit._core._config_check import check_config_values, config_field_names
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._logger import get_logger
@@ -477,11 +476,10 @@ class Prompt(Generic[InputT, OutputT]):
         Iterate the returned stream for chunks; there's no callback here so
         chunks only arrive one way.
         """
-        channel: Channel[ModelResponseChunk[OutputT], ModelResponse[OutputT]] = Channel()
 
         # Same run path as __call__; only the chunk sink differs.
-        response_future: asyncio.Future[ModelResponse[OutputT]] = asyncio.create_task(
-            self(
+        async def run(send_chunk: Callable[[ModelResponseChunk[OutputT]], None]) -> ModelResponse[OutputT]:
+            return await self(
                 input,
                 model=model,
                 config=config,
@@ -496,12 +494,12 @@ class Prompt(Generic[InputT, OutputT]):
                 resume_respond=resume_respond,
                 resume_restart=resume_restart,
                 resume_metadata=resume_metadata,
-                on_chunk=lambda c: channel.send(cast('ModelResponseChunk[OutputT]', c)),
+                on_chunk=lambda c: send_chunk(cast('ModelResponseChunk[OutputT]', c)),
             )
-        )
-        channel.set_close_future(response_future)
 
-        return ModelStreamResponse[OutputT](stream=channel, response=response_future)
+        channel, task = start_stream(run)
+
+        return ModelStreamResponse[OutputT](stream=channel, response=task)
 
     async def render(
         self,
