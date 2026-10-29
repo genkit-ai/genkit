@@ -16,6 +16,7 @@
 
 """GoogleAI / VertexAI network arguments: headers, timeout_seconds, http_client."""
 
+import math
 from typing import Any
 
 import httpx
@@ -262,7 +263,26 @@ def test_sync_httpx_client_raises_type_error_naming_async_client(plugin_class: A
 
 
 @pytest.mark.parametrize('plugin_class', [GoogleAI, vertex_ai])
-def test_negative_timeout_seconds_raises_value_error(plugin_class: Any) -> None:  # noqa: ANN401
-    """timeout_seconds=-1 raises ValueError at construction."""
-    with pytest.raises(ValueError, match='timeout_seconds must be non-negative'):
-        plugin_class(api_key='k', timeout_seconds=-1)
+@pytest.mark.parametrize('timeout_seconds', [0, -1, math.nan, math.inf])
+def test_timeout_seconds_not_positive_and_finite_raises_value_error(
+    plugin_class: Any,  # noqa: ANN401
+    timeout_seconds: float,
+) -> None:
+    """timeout_seconds=0, -1, nan or inf raises ValueError at construction."""
+    with pytest.raises(ValueError, match='timeout_seconds must be a positive, finite number'):
+        plugin_class(api_key='k', timeout_seconds=timeout_seconds)
+
+
+@pytest.mark.asyncio
+async def test_sub_millisecond_timeout_seconds_rounds_up_to_one_millisecond() -> None:
+    """timeout_seconds=0.0001 sends a 1 ms timeout on Gemini and Interactions instead of none or zero."""
+    api = FakeGoogleApi()
+    ai = Genkit(plugins=[GoogleAI(api_key='k', timeout_seconds=0.0001, http_client=api.client())])
+
+    await ai.generate(model='googleai/gemini-2.5-flash', prompt='Suggest a dish.')
+    gemini_timeout = api.last_post().extensions['timeout']
+    await ai.generate(model='googleai/antigravity-preview-05-2026', prompt='Build a landing page.')
+    interactions_timeout = api.last_post().extensions['timeout']
+
+    assert gemini_timeout['read'] == 0.001
+    assert interactions_timeout['read'] == 0.001

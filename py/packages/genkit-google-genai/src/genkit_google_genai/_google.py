@@ -49,6 +49,7 @@ Example:
 from __future__ import annotations
 
 import logging
+import math
 import os
 from collections.abc import Callable, Mapping
 from typing import Any, NoReturn
@@ -1451,8 +1452,10 @@ def _plugin_http_options(
             f'http_client must be an httpx.AsyncClient, got {type(http_client).__name__}. '
             'Genkit calls models asynchronously.'
         )
-    if timeout_seconds is not None and timeout_seconds < 0:
-        raise ValueError('timeout_seconds must be non-negative')
+    # 0 would mean no timeout to google-genai but an instant failure to the
+    # Interactions client, so only a positive, finite budget is accepted.
+    if timeout_seconds is not None and not (math.isfinite(timeout_seconds) and timeout_seconds > 0):
+        raise ValueError(f'timeout_seconds must be a positive, finite number, got {timeout_seconds!r}')
 
     merged = dict(headers or {})
     for name in ('x-goog-api-client', 'user-agent'):
@@ -1465,6 +1468,6 @@ def _plugin_http_options(
         base_url=base_url or None,
         api_version=api_version or None,
         headers=merged,
-        timeout=round(timeout_seconds * 1000) if timeout_seconds is not None else None,
+        timeout=math.ceil(timeout_seconds * 1000) if timeout_seconds is not None else None,
         httpx_async_client=http_client,
     )
