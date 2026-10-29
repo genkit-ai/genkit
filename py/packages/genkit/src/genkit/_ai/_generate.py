@@ -1627,7 +1627,7 @@ async def call_model(
     # to a bare request (the config didn't fit), the model action reports it.
     config_class = annotated_config_class(turn_model)
     on_handoff: Callable[[ModelHookParams, MiddlewareDef], None] | None = None
-    if config_class is not None and isinstance(request.config, BaseModel) and isinstance(request.config, config_class):
+    if config_class is not None and isinstance(request.config, config_class):
         config_check = MiddlewareConfigCheck(config=request.config, schema=config_class, model=turn_model.name)
 
         def check_handoff(params: ModelHookParams, mw: MiddlewareDef) -> None:
