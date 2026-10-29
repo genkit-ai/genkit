@@ -97,9 +97,9 @@ import ollama as ollama_api
 from pydantic import ValidationError
 from pydantic.alias_generators import to_snake
 
-from genkit import GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
+from genkit import GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role, get_logger
 from genkit.model import ModelConfig, ModelContext, ModelRequest, ModelUsage, ToolRequest, get_basic_usage_stats
-from genkit.plugin_api import get_logger, loop_local_client, provider_error
+from genkit.plugin_api import loop_local_client, provider_error
 from genkit_ollama._constants import DEFAULT_OLLAMA_SERVER_URL
 from genkit_ollama._errors import wrap_connection_errors
 

@@ -24,14 +24,13 @@ from urllib.parse import urlsplit
 
 from anthropic import AsyncAnthropic
 
-from genkit import GenkitError, ModelResponse
+from genkit import GenkitError, ModelResponse, get_logger
 from genkit.model import ModelContext, ModelRef, ModelRequest, model as create_model, model_action_metadata, model_ref
 from genkit.plugin_api import (
     Action,
     ActionKind,
     ActionMetadata,
     Plugin,
-    get_logger,
     loop_local_client,
     to_json_schema,
 )

@@ -62,7 +62,7 @@ from google.genai.types import HttpOptions, HttpOptionsDict, Model as GenaiModel
 from pydantic import BaseModel
 
 import genkit_google_genai._constants as const
-from genkit import GenkitError, ModelResponse, Operation
+from genkit import GenkitError, ModelResponse, Operation, get_logger
 from genkit.embedder import EmbedderRef, embedder, embedder_action_metadata
 from genkit.model import (
     BackgroundAction,
@@ -80,7 +80,6 @@ from genkit.plugin_api import (
     ActionKind,
     ActionMetadata,
     Plugin,
-    get_logger,
     loop_local_client,
     to_json_schema,
 )

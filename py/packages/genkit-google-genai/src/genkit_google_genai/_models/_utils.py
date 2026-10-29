@@ -56,9 +56,9 @@ from urllib.parse import urlparse, urlsplit, urlunsplit
 import httpx
 from google import genai
 
-from genkit import GenkitError, Part
+from genkit import GenkitError, Part, get_logger
 from genkit.model import ToolRequest, ToolResponse
-from genkit.plugin_api import get_logger, loop_local_client
+from genkit.plugin_api import loop_local_client
 
 logger = get_logger(__name__)
 

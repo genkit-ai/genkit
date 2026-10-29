@@ -38,9 +38,9 @@ from anthropic import (
 )
 from anthropic.types import Message as AnthropicMessage
 
-from genkit import FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
+from genkit import FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role, get_logger
 from genkit.model import Constrained, ModelContext, ModelRequest, ModelUsage, ToolRequest, get_basic_usage_stats
-from genkit.plugin_api import StatusName, get_logger, provider_error
+from genkit.plugin_api import StatusName, provider_error
 from genkit_anthropic._config import AnthropicConfig
 from genkit_anthropic._model_info import get_model_info
 from genkit_anthropic._secrets import context_api_key

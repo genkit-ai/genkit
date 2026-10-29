@@ -29,9 +29,8 @@ from opentelemetry.trace import Span, SpanKind, StatusCode, Tracer
 from opentelemetry.util.types import AttributeValue
 from pydantic import BaseModel
 
-from genkit import Interrupt, ModelResponse
+from genkit import Interrupt, ModelResponse, get_logger as get_genkit_logger
 from genkit.model import ModelRequest
-from genkit.plugin_api import get_logger as get_genkit_logger
 from genkit.telemetry import Instrumentation, SpanContext, SpanMetadata, SpanNext
 from genkit_otel._gen_ai_attributes import (
     CAPTURE_CONTENT_ENV_VAR,

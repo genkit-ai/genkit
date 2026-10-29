@@ -32,9 +32,8 @@ from typing import Any, Literal, cast
 
 from botocore.exceptions import BotoCoreError, ClientError
 
-from genkit import FinishReason, GenkitError, Message, ModelResponse, Part, Role
+from genkit import FinishReason, GenkitError, Message, ModelResponse, Part, Role, get_logger
 from genkit.model import ModelConfig, ModelContext, ModelRequest
-from genkit.plugin_api import get_logger
 from genkit_amazon_bedrock._embedders import InvokeModelTransport
 from genkit_amazon_bedrock._model_info import strip_inference_profile_prefix
 from genkit_amazon_bedrock._models import _from_botocore_error, _from_client_error

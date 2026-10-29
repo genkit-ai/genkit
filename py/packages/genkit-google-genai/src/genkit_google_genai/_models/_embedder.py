@@ -32,9 +32,9 @@ from google.genai.errors import APIError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from pydantic.alias_generators import to_camel
 
-from genkit import Document, Embedding, GenkitError, Part
+from genkit import Document, Embedding, GenkitError, Part, get_logger
 from genkit.embedder import EmbedderInfo, EmbedderSupports, EmbedRequest, EmbedResponse
-from genkit.plugin_api import get_logger, to_json_schema
+from genkit.plugin_api import to_json_schema
 
 logger = get_logger(__name__)
 

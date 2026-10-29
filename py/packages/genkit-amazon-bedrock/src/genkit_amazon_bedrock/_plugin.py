@@ -24,7 +24,7 @@ InvokeModel.
 
 from typing import TYPE_CHECKING, Literal
 
-from genkit import ModelResponse
+from genkit import ModelResponse, get_logger
 from genkit.embedder import EmbedRequest, EmbedResponse, embedder, embedder_action_metadata
 from genkit.model import ModelContext, ModelRequest, model as create_model, model_action_metadata
 from genkit.plugin_api import (
@@ -32,7 +32,6 @@ from genkit.plugin_api import (
     ActionKind,
     ActionMetadata,
     Plugin,
-    get_logger,
     to_json_schema,
 )
 from genkit_amazon_bedrock._config import (

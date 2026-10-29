@@ -59,7 +59,7 @@ from google.genai.interactions import (
 )
 from pydantic import BaseModel
 
-from genkit import FinishReason, GenkitError, Media, Message, ModelResponse, Operation, Part
+from genkit import FinishReason, GenkitError, Media, Message, ModelResponse, Operation, Part, get_logger
 from genkit.model import (
     ModelUsage,
     OperationError,
@@ -67,7 +67,7 @@ from genkit.model import (
     ToolRequest,
     ToolResponse,
 )
-from genkit.plugin_api import StatusName, get_logger, provider_error
+from genkit.plugin_api import StatusName, provider_error
 
 logger = get_logger(__name__)
 

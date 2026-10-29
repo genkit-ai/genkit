@@ -49,6 +49,7 @@ from genkit._core._action import FlowContext, StreamResponse
 from genkit._core._context import ContextProvider, RequestData
 from genkit._core._error import GenkitError, GenkitRuntimeError, Interrupt, PublicError, RuntimeErrorReason
 from genkit._core._flow import Flow
+from genkit._core._logger import get_logger
 from genkit._core._model import (
     Document,
     Message,
@@ -104,4 +105,6 @@ __all__ = [
     # Custom output formats
     'FormatDef',
     'FormatterConfig',
+    # Log lines that reach the Dev UI trace panel
+    'get_logger',
 ]

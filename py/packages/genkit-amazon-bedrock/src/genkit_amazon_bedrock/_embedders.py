@@ -41,14 +41,14 @@ from typing import Any, Literal, Protocol, TypeVar, cast
 
 from botocore.exceptions import BotoCoreError, ClientError
 
-from genkit import Document, Embedding, GenkitError
+from genkit import Document, Embedding, GenkitError, get_logger
 from genkit.embedder import (
     EmbedderInfo,
     EmbedderSupports,
     EmbedRequest,
     EmbedResponse,
 )
-from genkit.plugin_api import get_logger, provider_error
+from genkit.plugin_api import provider_error
 from genkit_amazon_bedrock._model_info import model_label, strip_inference_profile_prefix
 from genkit_amazon_bedrock._models import _from_botocore_error, _from_client_error
 

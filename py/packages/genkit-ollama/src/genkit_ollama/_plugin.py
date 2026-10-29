@@ -28,7 +28,7 @@ from urllib.parse import urlsplit
 import httpx
 import ollama as ollama_api
 
-from genkit import ModelResponse
+from genkit import ModelResponse, get_logger
 from genkit.embedder import (
     EmbedderInfo,
     EmbedderSupports,
@@ -51,7 +51,6 @@ from genkit.plugin_api import (
     ActionKind,
     ActionMetadata,
     Plugin,
-    get_logger,
     loop_local_client,
     provider_error,
     to_json_schema,
