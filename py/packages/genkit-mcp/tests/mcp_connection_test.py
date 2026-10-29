@@ -16,6 +16,7 @@ import sys
 import threading
 import time
 import traceback
+from datetime import timedelta
 from importlib import metadata
 from pathlib import Path
 from typing import cast
@@ -951,10 +952,15 @@ def test_a_connection_belongs_to_the_loop_that_opened_it(tmp_path: Path) -> None
     assert [is_running(pid) for pid in pids] == [False, False]
 
 
+def test_the_request_timeout_defaults_to_sixty_seconds(tmp_path: Path) -> None:
+    assert McpConnection(config(tmp_path))._request_timeout == timedelta(seconds=60)
+
+
 @pytest.mark.asyncio
 async def test_a_request_timeout_fails_that_call_alone(tmp_path: Path) -> None:
     """A tool which never replies gives up without taking the connection with it."""
-    connection = McpConnection(config(tmp_path), request_timeout_millis=3000)
+    # The timeout also covers the handshake, which a loaded machine can take seconds to finish.
+    connection = McpConnection(config(tmp_path), request_timeout_millis=8000)
     try:
         with pytest.raises(McpError, match='Timed out') as timed_out:
             await asyncio.wait_for(connection.call_tool('stall', {}), timeout=LIMIT)
