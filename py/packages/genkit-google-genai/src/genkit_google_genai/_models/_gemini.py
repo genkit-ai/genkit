@@ -35,7 +35,6 @@ from genkit_google_genai._models._sdk_config import (
     attach_leftovers,
     copy_http_options,
     dump_family_config,
-    keep_client_extra_body,
     sdk_config_error,
     split_sdk_fields,
 )
@@ -2392,14 +2391,13 @@ class GeminiModel:
 
             cfg.system_instruction = genai_types.Content(parts=system_instruction) if system_instruction else None
             cfg = attach_leftovers(cfg, leftovers, nest='generationConfig')
-            cfg = attach_config_extra(
+            return attach_config_extra(
                 cfg,
                 extra,
                 action_name=self._version,
                 managed_body_fields=GEMINI_MANAGED_BODY_FIELDS,
                 managed_generation_fields=GEMINI_MANAGED_GENERATION_FIELDS,
             )
-            return keep_client_extra_body(cfg, (self._client_kwargs or {}).get('http_options'))
 
         return None
 

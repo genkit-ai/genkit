@@ -325,20 +325,6 @@ class TestRequestShape:
         client.aio.models.recontext_image.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_request_extra_body_keeps_the_plugin_one(self) -> None:
-        """The plugin's http_options.extra_body still reaches the wire when the request adds its own."""
-        client = _client()
-        plugin_options = genai_types.HttpOptions(extra_body={'parameters': {'enhancePrompt': True}})
-        model = VirtualTryOnModel('virtual-try-on-001', client, client_kwargs={'http_options': plugin_options})
-        config = VirtualTryOnConfig.model_validate({'personGeneration': 'allow_adult'})
-        await _generate(model, _request(config=config))
-
-        sent = client.aio.models.recontext_image.await_args.kwargs['config']
-        assert sent.http_options.extra_body == {
-            'parameters': {'enhancePrompt': True, 'personGeneration': 'allow_adult'}
-        }
-
-    @pytest.mark.asyncio
     async def test_no_config_sends_no_config(self) -> None:
         """A request with no config leaves the parameters block off."""
         client = _client()
