@@ -3,14 +3,25 @@
 # Copyright 2026 Google LLC
 # SPDX-License-Identifier: Apache-2.0
 
-"""What app code and middleware get back from lookup_model, lookup_tool, lookup_value, and define_value."""
+"""What app code and middleware get back from lookup_model, lookup_tool, list_tools, lookup_value, and define_value."""
 
 import re
 from collections.abc import Awaitable, Callable
 
 import pytest
 
-from genkit import ActionRunContext, FinishReason, Genkit, Message, ModelResponse, Operation, Part, Role, Tool
+from genkit import (
+    ActionRunContext,
+    FinishReason,
+    Genkit,
+    Message,
+    ModelResponse,
+    Operation,
+    Part,
+    Role,
+    Tool,
+    tool as genkit_tool,
+)
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, MiddlewareRef, ModelHookParams
 from genkit.model import GenerateActionOptions, ModelRequest, model
 from genkit.plugin_api import Action, ActionKind, ActionMetadata, Plugin
@@ -140,6 +151,163 @@ async def test_lookup_tool_finds_interrupts() -> None:
 
     assert found is not None
     assert found.name == 'confirm_order'
+
+
+class ToolPlugin(Plugin):
+    """Registers `catalog/stock` from init, the way a plugin ships tools."""
+
+    name = 'catalog'
+
+    async def init(self) -> list[Action]:
+        async def stock(sku: str) -> int:
+            return 3
+
+        return [genkit_tool(stock, name='catalog/stock').action()]
+
+    async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
+        return None
+
+    async def list_actions(self) -> list[ActionMetadata]:
+        return []
+
+
+@pytest.mark.asyncio
+async def test_list_tools_returns_every_defined_tool_as_a_callable_tool() -> None:
+    """`ai.list_tools()` gives one Tool per defined tool, each describing and running like the decorated one."""
+    ai = Genkit()
+
+    @ai.tool()
+    async def menu_price(dish: str) -> float:
+        """Price of a dish in dollars."""
+        return 14.5
+
+    @ai.tool()
+    async def opening_hours() -> str:
+        """When the restaurant is open."""
+        return '9-5'
+
+    tools = {tool.name: tool for tool in await ai.list_tools()}
+
+    assert sorted(tools) == ['menu_price', 'opening_hours']
+    assert all(isinstance(tool, Tool) for tool in tools.values())
+    assert tools['menu_price'].definition() == menu_price.definition()
+    assert (await tools['menu_price']('ramen')).output == 14.5
+
+
+@pytest.mark.asyncio
+async def test_list_tools_on_an_app_without_tools_is_empty() -> None:
+    """An app that defines no tools lists none."""
+    assert await Genkit().list_tools() == []
+
+
+@pytest.mark.asyncio
+async def test_list_tools_reads_the_app_again_on_every_call() -> None:
+    """A tool defined after one listing is in the next one."""
+    ai = Genkit()
+    assert await ai.list_tools() == []
+
+    @ai.tool()
+    async def menu_price(dish: str) -> float:
+        return 14.5
+
+    assert [tool.name for tool in await ai.list_tools()] == ['menu_price']
+
+
+@pytest.mark.asyncio
+async def test_list_tools_includes_interrupts() -> None:
+    """An interrupt is a tool, so `list_tools` lists it, as `lookup_tool` finds it."""
+    ai = Genkit()
+    ai.define_interrupt('confirm_order', description='Ask the diner to confirm.')
+
+    assert [tool.name for tool in await ai.list_tools()] == ['confirm_order']
+
+
+@pytest.mark.asyncio
+async def test_list_tools_includes_tools_a_plugin_registers_at_init() -> None:
+    """A plugin's tools are listed before anything has used the plugin."""
+    ai = Genkit(plugins=[ToolPlugin()])
+
+    assert [tool.name for tool in await ai.list_tools()] == ['catalog/stock']
+
+
+class FailingPlugin(Plugin):
+    """Fails to start, as a plugin with a bad API key does."""
+
+    name = 'failing'
+
+    async def init(self) -> list[Action]:
+        raise RuntimeError('no API key')
+
+    async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
+        return None
+
+    async def list_actions(self) -> list[ActionMetadata]:
+        return []
+
+
+@pytest.mark.asyncio
+async def test_list_tools_raises_when_a_plugin_fails_to_start() -> None:
+    """A listing that silently dropped a plugin's tools would look complete, so a failed start raises."""
+    ai = Genkit(plugins=[FailingPlugin()])
+
+    @ai.tool()
+    async def menu_price(dish: str) -> float:
+        return 14.5
+
+    with pytest.raises(RuntimeError, match='no API key'):
+        await ai.list_tools()
+
+
+class AdvertisingToolPlugin(Plugin):
+    """Advertises `shelf/count` and builds it only when resolved."""
+
+    name = 'shelf'
+
+    async def init(self) -> list[Action]:
+        return []
+
+    async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
+        if action_type != ActionKind.TOOL or name != 'count':
+            return None
+
+        async def count(sku: str) -> int:
+            return 7
+
+        return genkit_tool(count, name='shelf/count').action()
+
+    async def list_actions(self) -> list[ActionMetadata]:
+        return [ActionMetadata(name='shelf/count', action_type=ActionKind.TOOL)]
+
+
+@pytest.mark.asyncio
+async def test_list_tools_includes_an_advertised_plugin_tool_only_once_looked_up() -> None:
+    """Listing does not build tools a plugin only advertises; a lookup registers them."""
+    ai = Genkit(plugins=[AdvertisingToolPlugin()])
+
+    assert await ai.list_tools() == []
+    assert await ai.lookup_tool('shelf/count') is not None
+    assert [tool.name for tool in await ai.list_tools()] == ['shelf/count']
+
+
+@pytest.mark.asyncio
+async def test_list_tools_leaves_out_dynamic_action_provider_tools() -> None:
+    """A provider's tools are not defined on the app, so listing never reaches the provider."""
+    ai = Genkit()
+    listed = 0
+
+    async def provide() -> dict[str, list[Action]]:
+        nonlocal listed
+        listed += 1
+
+        async def remote_search(query: str) -> str:
+            return query
+
+        return {'tool': [genkit_tool(remote_search, name='remote_search').action()]}
+
+    ai.define_dynamic_action_provider('remote', provide)
+
+    assert await ai.list_tools() == []
+    assert listed == 0
 
 
 def test_define_value_then_lookup_value_returns_it() -> None:

@@ -171,6 +171,12 @@ def init_keyword_example(value: object) -> str:
     return 'Genkit(plugins=[...], model="...")'
 
 
+def _tool_handle(action: Action) -> Tool:
+    """Wrap a registered tool action in the handle ``@ai.tool()`` returns."""
+    schema = action.metadata.get(ORIGINAL_OUTPUT_SCHEMA_KEY)
+    return Tool(action, original_output_schema=cast(dict[str, object], schema) if isinstance(schema, dict) else None)
+
+
 class Genkit:
     """The main entry point for building AI-powered applications.
 
@@ -644,12 +650,32 @@ class Genkit:
             ```
         """
         action = await self._registry.resolve_action(ActionKind.TOOL, name)
-        if action is None:
-            return None
-        schema = action.metadata.get(ORIGINAL_OUTPUT_SCHEMA_KEY)
-        return Tool(
-            action, original_output_schema=cast(dict[str, object], schema) if isinstance(schema, dict) else None
-        )
+        return _tool_handle(action) if action is not None else None
+
+    async def list_tools(self) -> list[Tool]:
+        """Return every tool registered on this app, in no particular order.
+
+        Each is the same handle ``lookup_tool`` returns. Every plugin is started
+        first, so tools a plugin registers in ``init()`` are included, and a plugin
+        whose ``init()`` fails makes this raise. Tools a plugin only advertises and
+        builds on first lookup are included once something has looked them up.
+        Tools a dynamic action provider serves are not defined on the app and are
+        left out; select those as ``<provider>:tool/*``.
+
+        Example:
+            ```python
+            @ai.tool()
+            async def menu_price(dish: str) -> float:
+                return 14.5
+
+
+            [tool.name for tool in await ai.list_tools()]
+            # => ['menu_price']
+            ```
+        """
+        await self._registry.initialize_all_plugins()
+        actions = await self._registry.resolve_actions_by_kind(ActionKind.TOOL)
+        return [_tool_handle(action) for action in actions.values()]
 
     def lookup_value(self, *, kind: str, name: str) -> object | None:
         """Return the value defined under ``kind`` and ``name``, or None."""
